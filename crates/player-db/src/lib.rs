@@ -1,4 +1,4 @@
 mod database;
 mod locator;
 
-pub use database::{Database, DatabaseError, LibrarySyncState};
+pub use database::{Database, DatabaseError, LibrarySyncState, ThemePreferences};

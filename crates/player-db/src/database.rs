@@ -18,7 +18,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const MAX_PAGE_SIZE: u32 = 500;
 const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT track_id) FROM source_mappings";
 const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
@@ -174,6 +174,16 @@ CREATE TABLE playlist_entries (
 CREATE INDEX playlist_entries_track_id ON playlist_entries(track_id);
 "#;
 
+const SCHEMA_V3: &str = r#"
+CREATE TABLE theme_preferences (
+    singleton_id INTEGER PRIMARY KEY NOT NULL CHECK (singleton_id = 1),
+    background_hex TEXT NOT NULL CHECK (length(background_hex) = 7),
+    accent_hex TEXT NOT NULL CHECK (length(accent_hex) = 7)
+);
+INSERT INTO theme_preferences (singleton_id, background_hex, accent_hex)
+VALUES (1, '#000000', '#55D9FF');
+"#;
+
 pub struct Database {
     connection: Mutex<Connection>,
 }
@@ -198,6 +208,7 @@ pub enum DatabaseError {
     NoEnabledTrackMapping(TrackId),
     NonFilesystemTrackLocator(TrackId),
     TrackFileUnavailable(TrackId),
+    InvalidThemeColor(&'static str),
 }
 
 impl fmt::Display for DatabaseError {
@@ -232,6 +243,10 @@ impl fmt::Display for DatabaseError {
                 f,
                 "track {track_id} has no currently accessible filesystem file; its source may be offline or the file may have been removed"
             ),
+            Self::InvalidThemeColor(field) => write!(
+                f,
+                "theme preference {field} must be a six-digit hexadecimal color such as #55D9FF"
+            ),
         }
     }
 }
@@ -265,6 +280,28 @@ pub struct LibrarySyncState {
     pub state: String,
     pub error_count: u64,
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThemePreferences {
+    pub background_hex: String,
+    pub accent_hex: String,
+}
+
+impl Default for ThemePreferences {
+    fn default() -> Self {
+        Self {
+            background_hex: "#000000".to_owned(),
+            accent_hex: "#55D9FF".to_owned(),
+        }
+    }
+}
+
+impl ThemePreferences {
+    fn validate(&self) -> Result<(), DatabaseError> {
+        validate_theme_color(&self.background_hex, "backgroundHex")?;
+        validate_theme_color(&self.accent_hex, "accentHex")
+    }
 }
 
 impl Database {
@@ -316,6 +353,13 @@ impl Database {
             tx.execute_batch(SCHEMA_V2)?;
             tx.pragma_update(None, "user_version", 2)?;
             tx.commit()?;
+            version = 2;
+        }
+        if version == 2 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V3)?;
+            tx.pragma_update(None, "user_version", 3)?;
+            tx.commit()?;
         }
         connection.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS sync_seen_items (
@@ -330,6 +374,45 @@ impl Database {
         Ok(self
             .lock()?
             .pragma_query_value(None, "journal_mode", |row| row.get(0))?)
+    }
+
+    pub fn get_theme_preferences(&self) -> Result<ThemePreferences, DatabaseError> {
+        let connection = self.lock()?;
+        let preferences = connection
+            .query_row(
+                "SELECT background_hex, accent_hex FROM theme_preferences WHERE singleton_id=1",
+                [],
+                |row| {
+                    Ok(ThemePreferences {
+                        background_hex: row.get(0)?,
+                        accent_hex: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_default();
+        preferences.validate().map_err(|_| {
+            DatabaseError::CorruptData(
+                "stored theme colors are not six-digit hexadecimal values".to_owned(),
+            )
+        })?;
+        Ok(preferences)
+    }
+
+    pub fn set_theme_preferences(
+        &self,
+        preferences: &ThemePreferences,
+    ) -> Result<(), DatabaseError> {
+        preferences.validate()?;
+        self.lock()?.execute(
+            "INSERT INTO theme_preferences (singleton_id, background_hex, accent_hex)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(singleton_id) DO UPDATE SET
+                background_hex=excluded.background_hex,
+                accent_hex=excluded.accent_hex",
+            params![preferences.background_hex, preferences.accent_hex],
+        )?;
+        Ok(())
     }
 
     pub fn add_library_root(
@@ -1298,6 +1381,14 @@ fn query_limit(limit: u32) -> u32 {
     limit.clamp(1, MAX_PAGE_SIZE)
 }
 
+fn validate_theme_color(value: &str, field: &'static str) -> Result<(), DatabaseError> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 7 || bytes[0] != b'#' || !bytes[1..].iter().all(u8::is_ascii_hexdigit) {
+        return Err(DatabaseError::InvalidThemeColor(field));
+    }
+    Ok(())
+}
+
 fn query_limit_i64(value: u64) -> i64 {
     value.min(i64::MAX as u64) as i64
 }
@@ -1319,7 +1410,8 @@ mod tests {
     use rusqlite::OptionalExtension;
 
     use super::{
-        Database, DatabaseError, LibraryRepository, COUNT_LIBRARY_SQL, SCHEMA_V1, TRACKS_PAGE_SQL,
+        Database, DatabaseError, LibraryRepository, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1,
+        SCHEMA_V2, TRACKS_PAGE_SQL,
     };
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -1467,11 +1559,15 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 2);
+            assert_eq!(version, 3);
         }
         {
             let db = Database::open(&path).expect("reopen migrated database");
             assert!(db.library_roots().expect("read roots").is_empty());
+            assert_eq!(
+                db.get_theme_preferences().expect("theme preferences"),
+                ThemePreferences::default()
+            );
         }
         for suffix in ["", "-wal", "-shm"] {
             let mut file = path.as_os_str().to_os_string();
@@ -1484,7 +1580,7 @@ mod tests {
     }
 
     #[test]
-    fn version_one_database_migrates_additively_to_playlist_schema() {
+    fn version_one_database_migrates_additively_to_current_schema() {
         let connection = rusqlite::Connection::open_in_memory().expect("legacy database");
         connection
             .execute_batch(SCHEMA_V1)
@@ -1507,7 +1603,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 2);
+        assert_eq!(current_version, 3);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -1527,6 +1623,97 @@ mod tests {
         assert_eq!(
             locator_index.as_deref(),
             Some("source_mappings_locator_exact")
+        );
+        assert_eq!(
+            db.get_theme_preferences().expect("theme preferences"),
+            ThemePreferences::default()
+        );
+    }
+
+    #[test]
+    fn version_two_database_migrates_theme_preferences_with_defaults() {
+        let connection = rusqlite::Connection::open_in_memory().expect("legacy database");
+        connection
+            .execute_batch(SCHEMA_V1)
+            .expect("create schema v1");
+        connection
+            .pragma_update(None, "user_version", 1)
+            .expect("mark schema v1");
+        connection
+            .execute_batch(SCHEMA_V2)
+            .expect("create schema v2");
+        connection
+            .pragma_update(None, "user_version", 2)
+            .expect("mark schema v2");
+
+        let db = Database::from_connection(connection).expect("migrate schema v2");
+        let version: i64 = db
+            .lock()
+            .expect("connection")
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("schema version");
+        assert_eq!(version, 3);
+        assert_eq!(
+            db.get_theme_preferences().expect("theme preferences"),
+            ThemePreferences::default()
+        );
+    }
+
+    #[test]
+    fn theme_preferences_round_trip_after_reopening_database() {
+        let path = std::env::temp_dir().join(format!(
+            "moemusic-theme-preferences-{}.sqlite",
+            player_core::TrackId::new()
+        ));
+        let preferences = ThemePreferences {
+            background_hex: "#102030".to_owned(),
+            accent_hex: "#A0b1C2".to_owned(),
+        };
+        {
+            let db = Database::open(&path).expect("open theme database");
+            assert_eq!(
+                db.get_theme_preferences().expect("default theme"),
+                ThemePreferences::default()
+            );
+            db.set_theme_preferences(&preferences)
+                .expect("save theme preferences");
+            assert_eq!(
+                db.get_theme_preferences().expect("saved theme"),
+                preferences
+            );
+        }
+        {
+            let db = Database::open(&path).expect("reopen theme database");
+            assert_eq!(
+                db.get_theme_preferences().expect("reopened theme"),
+                preferences
+            );
+        }
+        for suffix in ["", "-wal", "-shm"] {
+            let mut file = path.as_os_str().to_os_string();
+            file.push(suffix);
+            let file = PathBuf::from(file);
+            if file.exists() {
+                std::fs::remove_file(file).expect("remove generated theme database");
+            }
+        }
+    }
+
+    #[test]
+    fn theme_preferences_reject_invalid_hex_without_changing_saved_values() {
+        let db = Database::open_in_memory().expect("database");
+        let original = db.get_theme_preferences().expect("default theme");
+        let invalid = ThemePreferences {
+            background_hex: "#000000".to_owned(),
+            accent_hex: "#55D9FG".to_owned(),
+        };
+        assert!(matches!(
+            db.set_theme_preferences(&invalid),
+            Err(DatabaseError::InvalidThemeColor("accentHex"))
+        ));
+        assert_eq!(
+            db.get_theme_preferences().expect("unchanged theme"),
+            original
         );
     }
 
