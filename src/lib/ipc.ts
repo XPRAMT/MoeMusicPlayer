@@ -28,6 +28,7 @@ export interface LibrarySource {
   id: string;
   kind: string;
   displayName: string;
+  location: string;
   enabled: boolean;
   syncState: string | null;
   lastAttemptUtcMs: number | null;
@@ -181,6 +182,10 @@ export interface PlaybackSnapshot {
 }
 
 interface IpcContract {
+  settings_get_recovery_warning: {
+    args: Record<string, never>;
+    result: string | null;
+  };
   theme_get_preferences: {
     args: Record<string, never>;
     result: ThemePreferences;
@@ -208,6 +213,14 @@ interface IpcContract {
   library_pick_windows_folder: {
     args: Record<string, never>;
     result: LibrarySource | null;
+  };
+  library_set_source_enabled: {
+    args: { sourceId: string; enabled: boolean };
+    result: LibrarySource[];
+  };
+  library_remove_source: {
+    args: { sourceId: string };
+    result: LibrarySource[];
   };
   android_media_request_permission: {
     args: Record<string, never>;

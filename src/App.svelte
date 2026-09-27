@@ -63,6 +63,7 @@
   let themePreferences = $state<ThemePreferences>({ ...DEFAULT_THEME_PREFERENCES });
   let themeSaveState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let themeSaveError = $state<string | null>(null);
+  let settingsRecoveryWarning = $state<string | null>(null);
   let capabilities = $state<RuntimeCapabilities | null>(null);
   let runtimeError = $state<string | null>(null);
   let libraryTrackCount = $state<number | null>(null);
@@ -207,7 +208,7 @@
 
       unlistenSyncProgress = unlistenProgress;
       unlistenSyncFinished = unlistenFinished;
-      await Promise.all([loadCapabilities(), loadThemePreferences()]);
+      await Promise.all([loadCapabilities(), loadThemePreferences(), loadSettingsRecoveryWarning()]);
       if (!disposed && sourceSyncReady) void syncLibrary();
     }
 
@@ -241,6 +242,14 @@
       if (revision !== themeRevision) return;
       themeSaveState = 'error';
       themeSaveError = `無法讀取已保存的外觀設定：${getErrorText(error)}`;
+    }
+  }
+
+  async function loadSettingsRecoveryWarning(): Promise<void> {
+    try {
+      settingsRecoveryWarning = await invokeCommand('settings_get_recovery_warning', {});
+    } catch (error) {
+      settingsRecoveryWarning = `無法確認設定檔狀態：${getErrorText(error)}`;
     }
   }
 
@@ -547,6 +556,7 @@
       if (!result) return;
       activeView = 'playlists';
       await loadPlaylists(result.playlist.id);
+      await loadSources();
       playlistMessage = `已匯入「${result.playlist.name}」：${result.playlist.entryCount.toLocaleString()} 個項目，其中 ${result.matchedEntries.toLocaleString()} 個對應到曲庫。`;
     } catch (error) {
       playlistError = getErrorText(error);
@@ -599,6 +609,38 @@
       }
     } catch (error) {
       sourceError = getErrorText(error);
+    } finally {
+      isUpdatingSource = false;
+    }
+  }
+
+  async function setSourceEnabled(source: LibrarySource, enabled: boolean): Promise<void> {
+    if (isUpdatingSource) return;
+    isUpdatingSource = true;
+    sourceError = null;
+    try {
+      sources = await invokeCommand('library_set_source_enabled', { sourceId: source.id, enabled });
+      if (enabled) await syncLibrary();
+    } catch (error) {
+      sourceError = getErrorText(error);
+      await loadSources();
+    } finally {
+      isUpdatingSource = false;
+    }
+  }
+
+  async function removeSource(source: LibrarySource): Promise<void> {
+    if (isUpdatingSource) return;
+    isUpdatingSource = true;
+    sourceError = null;
+    try {
+      sources = await invokeCommand('library_remove_source', { sourceId: source.id });
+      sourceSyncSummary = source.kind === 'playlist_file'
+        ? '已移除播放清單檔案同步來源；原有播放清單內容仍會保留。'
+        : '已移除音樂來源；曲庫資料仍會保留，之後不再同步此位置。';
+    } catch (error) {
+      sourceError = getErrorText(error);
+      await loadSources();
     } finally {
       isUpdatingSource = false;
     }
@@ -673,6 +715,17 @@
       case 'permission_revoked':
       case 'permissionRevoked': return '需要重新授權，保留既有曲目';
       default: return '尚未同步';
+    }
+  }
+
+  function sourceKindLabel(kind: string): string {
+    switch (kind) {
+      case 'playlist_file': return '播放清單檔案';
+      case 'androidMediaStore':
+      case 'android_media_store': return 'Android MediaStore';
+      case 'androidSaf':
+      case 'android_saf': return 'Android 文件資料夾';
+      default: return 'Windows 音樂資料夾';
     }
   }
 
@@ -1286,6 +1339,10 @@
               >音樂來源</button>
             </div>
 
+            {#if settingsRecoveryWarning}
+              <div class="source-error-message" role="status">設定檔修復通知：{settingsRecoveryWarning}</div>
+            {/if}
+
             {#if settingsSection === 'appearance'}
               <div id="appearance-panel" class="settings-panel" role="tabpanel" aria-labelledby="appearance-tab" tabindex="0">
                 <div class="settings-panel-header">
@@ -1410,8 +1467,12 @@
               {:else}
                 {#each sources as source (source.id)}
                   <div class="configured-source">
-                    <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{source.kind === 'androidMediaStore' ? 'Android MediaStore' : source.kind === 'androidSaf' ? 'Android 文件資料夾' : 'Windows 資料夾'}</small></div>
-                    <div class="configured-source-state"><span>{sourceStateLabel(source.syncState)}</span>{#if source.errorCount > 0}<small>{source.errorCount} 個項目需要留意</small>{/if}</div>
+                    <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{sourceKindLabel(source.kind)}</small><small class="configured-source-location" title={source.location}>{source.location}</small></div>
+                    <div class="configured-source-state"><span>{source.enabled ? sourceStateLabel(source.syncState) : '已停用'}</span>{#if source.enabled && source.errorCount > 0}<small>{source.errorCount} 個項目需要留意</small>{/if}</div>
+                    <div class="configured-source-actions">
+                      <label><input type="checkbox" checked={source.enabled} disabled={isUpdatingSource} onchange={(event) => void setSourceEnabled(source, event.currentTarget.checked)} />啟用</label>
+                      <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeSource(source)}>移除</button>
+                    </div>
                   </div>
                 {/each}
               {/if}
