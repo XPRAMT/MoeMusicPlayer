@@ -329,8 +329,10 @@ impl SettingsStore {
                             true,
                         ),
                         Err(_) => {
-                            let mut settings = AppSettings::default();
-                            settings.source_registry_authoritative = false;
+                            let settings = AppSettings {
+                                source_registry_authoritative: false,
+                                ..AppSettings::default()
+                            };
                             (
                                 settings,
                                 Some(format!(
@@ -353,8 +355,10 @@ impl SettingsStore {
                     return Err(SettingsError::UnsupportedVersion(version));
                 }
                 Err(backup_error) => {
-                    let mut settings = AppSettings::default();
-                    settings.source_registry_authoritative = false;
+                    let settings = AppSettings {
+                        source_registry_authoritative: false,
+                        ..AppSettings::default()
+                    };
                     (
                         settings,
                         Some(format!(
@@ -365,8 +369,10 @@ impl SettingsStore {
                 }
             }
         } else if migration_marker.exists() {
-            let mut settings = AppSettings::default();
-            settings.source_registry_authoritative = false;
+            let settings = AppSettings {
+                source_registry_authoritative: false,
+                ..AppSettings::default()
+            };
             (
                 settings,
                 Some(
