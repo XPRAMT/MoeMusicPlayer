@@ -259,6 +259,16 @@ pub fn write_m3u8(
     Ok(output.into_bytes())
 }
 
+/// Write `.m3u` as UTF-8 too. The format name does not imply a locale-dependent ANSI codepage;
+/// UTF-8 keeps Unicode paths intact and can be decoded by `parse_m3u`.
+pub fn write_m3u(
+    playlist: &Playlist,
+    playlist_file: &Path,
+    options: &M3uExportOptions,
+) -> Result<Vec<u8>, PlaylistError> {
+    write_m3u8(playlist, playlist_file, options)
+}
+
 fn decode_m3u(bytes: &[u8]) -> Result<String, PlaylistError> {
     if bytes.starts_with(&[0xFF, 0xFE]) {
         return decode_utf16(&bytes[2..], true);
@@ -420,7 +430,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        parse_m3u, parse_m3u8, write_m3u8, M3uExportOptions, Playlist, PlaylistEntry, PlaylistError,
+        parse_m3u, parse_m3u8, write_m3u, write_m3u8, M3uExportOptions, Playlist, PlaylistEntry,
+        PlaylistError,
     };
     use crate::MediaLocator;
 
@@ -522,6 +533,24 @@ mod tests {
         assert_eq!(parsed.entries[0].title, source.entries[0].title);
         assert_eq!(parsed.entries[0].duration_ms, source.entries[0].duration_ms);
         assert_eq!(parsed.entries[0].locator, source.entries[0].locator);
+    }
+
+    #[test]
+    fn m3u_writer_uses_utf8_for_unicode_without_a_locale_codepage() {
+        let playlist_file = PathBuf::from(r"C:\Music\日本語.m3u");
+        let mut playlist = Playlist::new("日本語のプレイリスト 🎧");
+        playlist.entries.push(PlaylistEntry {
+            track_id: None,
+            locator: MediaLocator::FileSystem(PathBuf::from(r"C:\音樂\專輯 🎵\曲目.flac")),
+            title: None,
+            duration_ms: None,
+        });
+        let bytes = write_m3u(&playlist, &playlist_file, &M3uExportOptions::default())
+            .expect("write UTF-8 M3U");
+        assert!(std::str::from_utf8(&bytes).is_ok());
+        let parsed = parse_m3u(&bytes, &playlist_file).expect("read written M3U");
+        assert_eq!(parsed.name, playlist.name);
+        assert_eq!(parsed.entries[0].locator, playlist.entries[0].locator);
     }
 
     #[test]

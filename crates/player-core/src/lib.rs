@@ -8,7 +8,7 @@ pub use library::{
     TrackIdentity, TrackMetadata, TrackMetadataError, TrackSummary, UserMetadataField,
 };
 pub use playlist::{
-    parse_m3u, parse_m3u8, write_m3u8, M3uExportOptions, Playlist, PlaylistEntry,
+    parse_m3u, parse_m3u8, write_m3u, write_m3u8, M3uExportOptions, Playlist, PlaylistEntry,
     PlaylistEntrySummary, PlaylistError, PlaylistId, PlaylistPage, PlaylistSummary,
 };
 pub use sync::{
