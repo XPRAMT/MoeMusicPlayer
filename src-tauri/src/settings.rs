@@ -191,6 +191,9 @@ pub struct AppSettings {
     pub theme: ThemeSettings,
     pub shuffle: bool,
     pub repeat_mode: RepeatMode,
+    /// False means the source registry came from defaults after both JSON copies failed.
+    /// Sync must remain paused until the user rebuilds and confirms the registry.
+    pub source_registry_authoritative: bool,
     pub sources: Vec<SourceEntry>,
 }
 
@@ -201,6 +204,7 @@ impl Default for AppSettings {
             theme: ThemeSettings::default(),
             shuffle: false,
             repeat_mode: RepeatMode::Off,
+            source_registry_authoritative: true,
             sources: Vec::new(),
         }
     }
@@ -294,7 +298,6 @@ impl From<serde_json::Error> for SettingsError {
 
 pub struct SettingsStore {
     path: PathBuf,
-    migration_marker: PathBuf,
     settings: Mutex<AppSettings>,
     recovery_warning: Option<String>,
 }
@@ -311,7 +314,7 @@ impl SettingsStore {
         }
         let migration_marker = path.with_extension("migration-v1-done");
         let backup_path = backup_path(&path);
-        let (settings, recovery_warning, must_persist) = if path.exists() {
+        let (settings, mut recovery_warning, must_persist) = if path.exists() {
             match read_settings(&path) {
                 Ok((settings, migrated)) => (settings, None, migrated),
                 Err(SettingsError::UnsupportedVersion(version)) => {
@@ -325,21 +328,49 @@ impl SettingsStore {
                             Some("設定檔無法讀取，已從上次有效備份還原。".to_owned()),
                             true,
                         ),
-                        Err(_) => (
-                            AppSettings::default(),
-                            Some(format!(
-                                "設定檔損毀且沒有可用備份，已載入預設值；原檔已保留。詳情：{primary_error}"
-                            )),
-                            true,
-                        ),
+                        Err(_) => {
+                            let mut settings = AppSettings::default();
+                            settings.source_registry_authoritative = false;
+                            (
+                                settings,
+                                Some(format!(
+                                    "設定檔損毀且沒有可用備份，已載入預設值；來源同步暫停，請重新登記並確認來源。原檔已保留。詳情：{primary_error}"
+                                )),
+                                true,
+                            )
+                        }
                     }
                 }
             }
+        } else if backup_path.exists() {
+            match read_settings(&backup_path) {
+                Ok((settings, _)) => (
+                    settings,
+                    Some("設定檔遺失，已從上次有效備份還原。".to_owned()),
+                    true,
+                ),
+                Err(SettingsError::UnsupportedVersion(version)) => {
+                    return Err(SettingsError::UnsupportedVersion(version));
+                }
+                Err(backup_error) => {
+                    let mut settings = AppSettings::default();
+                    settings.source_registry_authoritative = false;
+                    (
+                        settings,
+                        Some(format!(
+                            "設定檔遺失且備份無效，已載入預設值；來源同步暫停，請重新登記並確認來源。未從 SQLite 還原可能已移除的來源。詳情：{backup_error}"
+                        )),
+                        true,
+                    )
+                }
+            }
         } else if migration_marker.exists() {
+            let mut settings = AppSettings::default();
+            settings.source_registry_authoritative = false;
             (
-                AppSettings::default(),
+                settings,
                 Some(
-                    "設定檔遺失且舊版遷移已完成，已載入預設值；未從 SQLite 還原可能已移除的來源。"
+                    "設定檔遺失且沒有可用備份，已載入預設值；來源同步暫停，請重新登記並確認來源。未從 SQLite 還原可能已移除的來源。"
                         .to_owned(),
                 ),
                 true,
@@ -347,6 +378,12 @@ impl SettingsStore {
         } else {
             (legacy, None, true)
         };
+        if !settings.source_registry_authoritative && recovery_warning.is_none() {
+            recovery_warning = Some(
+                "來源清單尚未確認，來源同步暫停以保留既有曲庫。請重新登記所有來源並確認來源清單。"
+                    .to_owned(),
+            );
+        }
         settings.validate()?;
         if must_persist {
             persist_settings(&path, &settings)?;
@@ -354,7 +391,6 @@ impl SettingsStore {
         write_migration_marker(&migration_marker)?;
         Ok(Self {
             path,
-            migration_marker,
             settings: Mutex::new(settings),
             recovery_warning,
         })
@@ -371,6 +407,21 @@ impl SettingsStore {
         self.recovery_warning.clone()
     }
 
+    pub fn source_registry_authoritative(&self) -> Result<bool, SettingsError> {
+        self.settings
+            .lock()
+            .map(|settings| settings.source_registry_authoritative)
+            .map_err(|_| SettingsError::Poisoned)
+    }
+
+    pub fn confirm_source_registry(&self) -> Result<AppSettings, SettingsError> {
+        self.update(|settings| {
+            settings.source_registry_authoritative = true;
+            Ok(())
+        })
+    }
+
+    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -434,8 +485,9 @@ impl SettingsStore {
         Ok((settings, removed.expect("source removed in update")))
     }
 
-    pub fn migration_marker(&self) -> &Path {
-        &self.migration_marker
+    #[cfg(test)]
+    pub fn migration_marker(&self) -> PathBuf {
+        self.path.with_extension("migration-v1-done")
     }
 }
 
@@ -446,6 +498,7 @@ struct RawSettings {
     theme: Option<ThemeSettings>,
     shuffle: Option<bool>,
     repeat_mode: Option<RepeatMode>,
+    source_registry_authoritative: Option<bool>,
     sources: Option<Vec<SourceEntry>>,
 }
 
@@ -462,6 +515,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         theme: raw.theme.unwrap_or_default(),
         shuffle: raw.shuffle.unwrap_or(false),
         repeat_mode: raw.repeat_mode.unwrap_or(RepeatMode::Off),
+        source_registry_authoritative: raw.source_registry_authoritative.unwrap_or(true),
         sources: raw.sources.unwrap_or_default(),
     };
     settings.validate()?;
@@ -768,7 +822,52 @@ mod tests {
             .push(source(StoredPath::Utf8("removed-folder".into())));
         let store = SettingsStore::open(&path, legacy).expect("recover with defaults");
         assert!(store.snapshot().unwrap().sources.is_empty());
+        assert!(!store.snapshot().unwrap().source_registry_authoritative);
         assert!(store.recovery_warning().unwrap().contains("沒有可用備份"));
+    }
+
+    #[test]
+    fn missing_primary_restores_valid_backup_before_considering_defaults() {
+        let directory = test_directory("missing-primary-with-backup");
+        let path = directory.join("settings.json");
+        let expected = AppSettings {
+            sources: vec![source(StoredPath::Utf8("D:/Music".into()))],
+            shuffle: true,
+            ..AppSettings::default()
+        };
+        fs::write(
+            backup_path(&path),
+            serde_json::to_vec_pretty(&expected).expect("serialize backup"),
+        )
+        .expect("write valid backup");
+        let store = SettingsStore::open(&path, AppSettings::default())
+            .expect("restore missing primary from backup");
+
+        assert_eq!(store.snapshot().unwrap(), expected);
+        assert!(store.source_registry_authoritative().unwrap());
+        assert!(store.recovery_warning().unwrap().contains("備份"));
+        assert!(read_settings(&path).is_ok());
+    }
+
+    #[test]
+    fn missing_primary_and_invalid_backup_pause_registry_until_user_confirmation() {
+        let directory = test_directory("missing-primary-no-backup");
+        let path = directory.join("settings.json");
+        fs::write(backup_path(&path), b"{invalid backup").expect("write invalid backup");
+        fs::write(path.with_extension("migration-v1-done"), b"1\n")
+            .expect("write completed migration marker");
+
+        let store = SettingsStore::open(&path, AppSettings::default())
+            .expect("recover missing primary with defaults");
+
+        assert!(!store.source_registry_authoritative().unwrap());
+        assert!(store.recovery_warning().unwrap().contains("來源同步暫停"));
+        let confirmed = store
+            .confirm_source_registry()
+            .expect("persist explicit registry confirmation");
+        assert!(confirmed.source_registry_authoritative);
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert!(reopened.source_registry_authoritative().unwrap());
     }
 
     #[test]
@@ -841,6 +940,7 @@ mod tests {
         });
         let json = serde_json::to_value(&settings).expect("serialize settings");
         assert_eq!(json["schemaVersion"], SETTINGS_SCHEMA_VERSION);
+        assert_eq!(json["sourceRegistryAuthoritative"], true);
         assert_eq!(json["repeatMode"], "one");
         assert_eq!(json["sources"][0]["kind"]["type"], "playlistFile");
         assert_eq!(

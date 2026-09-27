@@ -64,6 +64,7 @@
   let themeSaveState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let themeSaveError = $state<string | null>(null);
   let settingsRecoveryWarning = $state<string | null>(null);
+  let settingsSourceRegistryAuthoritative = $state(true);
   let capabilities = $state<RuntimeCapabilities | null>(null);
   let runtimeError = $state<string | null>(null);
   let libraryTrackCount = $state<number | null>(null);
@@ -247,9 +248,29 @@
 
   async function loadSettingsRecoveryWarning(): Promise<void> {
     try {
-      settingsRecoveryWarning = await invokeCommand('settings_get_recovery_warning', {});
+      const [warning, authoritative] = await Promise.all([
+        invokeCommand('settings_get_recovery_warning', {}),
+        invokeCommand('settings_source_registry_authoritative', {})
+      ]);
+      settingsRecoveryWarning = warning;
+      settingsSourceRegistryAuthoritative = authoritative;
     } catch (error) {
       settingsRecoveryWarning = `無法確認設定檔狀態：${getErrorText(error)}`;
+      settingsSourceRegistryAuthoritative = false;
+    }
+  }
+
+  async function confirmSourceRegistry(): Promise<void> {
+    if (isUpdatingSource || settingsSourceRegistryAuthoritative) return;
+    isUpdatingSource = true;
+    sourceError = null;
+    try {
+      settingsSourceRegistryAuthoritative = await invokeCommand('settings_confirm_source_registry', {});
+      if (settingsSourceRegistryAuthoritative) await syncLibrary();
+    } catch (error) {
+      sourceError = getErrorText(error);
+    } finally {
+      isUpdatingSource = false;
     }
   }
 
@@ -1340,7 +1361,13 @@
             </div>
 
             {#if settingsRecoveryWarning}
-              <div class="source-error-message" role="status">設定檔修復通知：{settingsRecoveryWarning}</div>
+              <div class="source-error-message" role="status">
+                設定檔修復通知：{settingsRecoveryWarning}
+                {#if !settingsSourceRegistryAuthoritative}
+                  <p>為保留原有曲庫，來源同步已暫停。請重新登記全部音樂資料夾與播放清單檔案，再確認恢復同步。</p>
+                  <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void confirmSourceRegistry()}>我已確認來源清單，恢復同步</button>
+                {/if}
+              </div>
             {/if}
 
             {#if settingsSection === 'appearance'}

@@ -186,6 +186,14 @@ interface IpcContract {
     args: Record<string, never>;
     result: string | null;
   };
+  settings_source_registry_authoritative: {
+    args: Record<string, never>;
+    result: boolean;
+  };
+  settings_confirm_source_registry: {
+    args: Record<string, never>;
+    result: boolean;
+  };
   theme_get_preferences: {
     args: Record<string, never>;
     result: ThemePreferences;
