@@ -84,7 +84,7 @@ impl SyncEngine {
         synced_at_utc_ms: i64,
     ) -> Result<SyncReport, SyncError<R::Error>>
     where
-        I: MediaIndex,
+        I: MediaIndex + ?Sized,
         R: LibraryRepository,
     {
         let mut scan = index.scan(root);
@@ -329,6 +329,20 @@ mod tests {
         assert!(index.reads.is_empty());
         assert_eq!(repository.observed, ["same"]);
         assert!(repository.changed.is_empty());
+    }
+
+    #[test]
+    fn sync_accepts_media_index_trait_object() {
+        let root = root();
+        let mut concrete_index = index(&root, Vec::new(), SourceScanState::Complete);
+        let index: &mut dyn MediaIndex = &mut concrete_index;
+        let mut repository = FakeRepository::default();
+
+        let report = SyncEngine::sync(&root, index, &mut repository, 1_800_000_000_100)
+            .expect("trait object adapter sync succeeds");
+
+        assert_eq!(report.state, Some(SourceScanState::Complete));
+        assert_eq!(repository.applied_state, Some(SourceScanState::Complete));
     }
 
     #[test]
