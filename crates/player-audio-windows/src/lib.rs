@@ -609,6 +609,46 @@ mod tests {
     }
 
     #[test]
+    fn seek_updates_worker_snapshot_while_playing_and_paused() {
+        let player = player();
+        wait_for(&player, PlaybackState::Empty);
+        player.load(PathBuf::from("fixture.wav")).unwrap();
+        wait_for(&player, PlaybackState::Ready);
+
+        player.play().unwrap();
+        wait_for(&player, PlaybackState::Playing);
+        player.seek(Duration::from_secs(2)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let snapshot = player.snapshot();
+            if snapshot.state == PlaybackState::Playing
+                && snapshot.position == Duration::from_secs(2)
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(player.snapshot().state, PlaybackState::Playing);
+        assert_eq!(player.snapshot().position, Duration::from_secs(2));
+
+        player.pause().unwrap();
+        wait_for(&player, PlaybackState::Paused);
+        player.seek(Duration::from_secs(4)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let snapshot = player.snapshot();
+            if snapshot.state == PlaybackState::Paused
+                && snapshot.position == Duration::from_secs(4)
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(player.snapshot().state, PlaybackState::Paused);
+        assert_eq!(player.snapshot().position, Duration::from_secs(4));
+    }
+
+    #[test]
     fn invalid_volume_is_rejected_before_queueing() {
         let player = player();
         assert_eq!(player.set_volume(f32::NAN), Err(AudioError::InvalidVolume));
