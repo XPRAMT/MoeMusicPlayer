@@ -51,6 +51,40 @@ export interface LibrarySyncResult {
   sources: SourceSyncResult[];
 }
 
+export type LibrarySyncProgressStage = 'enumerating' | 'metadata' | 'persisting' | 'finished';
+export type LibrarySyncProgressUnit = 'filesystemEntries' | 'tracks';
+export type LibrarySyncProgressOutcome =
+  | 'complete'
+  | 'incomplete'
+  | 'unavailable'
+  | 'permissionRevoked'
+  | 'cancelled'
+  | 'failed';
+
+export interface LibrarySyncProgressEvent {
+  runId: string;
+  sourceIndex: number;
+  sourceCount: number;
+  displayName: string;
+  sourceId: string;
+  stage: LibrarySyncProgressStage;
+  processed: number;
+  total: number | null;
+  unit: LibrarySyncProgressUnit;
+  observed: number;
+  metadataReads: number;
+  unchanged: number;
+  errorCount: number;
+  outcome: LibrarySyncProgressOutcome | null;
+}
+
+export interface LibrarySyncFinishedEvent {
+  runId: string;
+  sourceCount: number;
+  sources: SourceSyncResult[];
+  error: string | null;
+}
+
 export interface TrackSummary {
   id: string;
   title: string | null;

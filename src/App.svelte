@@ -6,6 +6,8 @@
     getErrorText,
     invokeCommand,
     isReady,
+    type LibrarySyncFinishedEvent,
+    type LibrarySyncProgressEvent,
     type LibrarySource,
     type MediaStoreVolumeOption,
     type FeatureCapability,
@@ -21,6 +23,14 @@
   import { formatDuration, formatTrackIndex, formatVolume } from './lib/format';
 
   type View = 'library' | 'now-playing' | 'playlists' | 'settings';
+  type SyncProgressViewState = {
+    runId: string;
+    sourceCount: number;
+    sources: Record<string, LibrarySyncProgressEvent>;
+    active: boolean;
+    summary: string | null;
+    error: string | null;
+  };
 
   const PAGE_SIZE = 40;
 
@@ -34,6 +44,7 @@
   let sources = $state<LibrarySource[]>([]);
   let sourceError = $state<string | null>(null);
   let sourceSyncSummary = $state<string | null>(null);
+  let syncProgress = $state<SyncProgressViewState | null>(null);
   let mediaStoreVolumes = $state<MediaStoreVolumeOption[]>([]);
   let mediaPermissionGranted = $state<boolean | null>(null);
   let playlists = $state<PlaylistSummary[]>([]);
@@ -62,7 +73,8 @@
   let playlistPageRequestVersion = 0;
   let capabilityRefreshInFlight = false;
   let nextCapabilityRefreshAt = 0;
-  let unlistenSync: UnlistenFn | undefined;
+  let unlistenSyncFinished: UnlistenFn | undefined;
+  let unlistenSyncProgress: UnlistenFn | undefined;
 
   const libraryReady = $derived(isReady(capabilities?.library));
   const sourceSyncReady = $derived(isReady(capabilities?.sourceSync));
@@ -93,6 +105,14 @@
     const last = Math.min(playlistPage.offset + playlistPage.items.length, playlistPage.totalCount);
     return `${first}–${last} 項，共 ${playlistPage.totalCount.toLocaleString()} 項`;
   });
+  const syncProgressSources = $derived.by(() =>
+    syncProgress
+      ? Object.values(syncProgress.sources).sort((left, right) => left.sourceIndex - right.sourceIndex)
+      : [],
+  );
+  const syncProgressDoneCount = $derived(
+    syncProgressSources.filter((source) => source.outcome !== null).length,
+  );
 
   onMount(() => {
     void loadCapabilities();
@@ -105,31 +125,158 @@
     }
     let disposed = false;
     if (isTauri()) {
-      void listen('library-sync-finished', () => {
-        if (isSyncing) return;
+      void listen<LibrarySyncProgressEvent>('library-sync-progress', (event) => {
+        handleLibrarySyncProgress(event.payload);
+      })
+        .then((unlisten) => {
+          if (disposed) unlisten();
+          else unlistenSyncProgress = unlisten;
+        })
+        .catch(() => undefined);
+      void listen<LibrarySyncFinishedEvent>('library-sync-finished', (event) => {
+        handleLibrarySyncFinished(event.payload);
         if (libraryReady) void loadPage(0);
         if (libraryReady) void loadPlaylists();
         if (sourceSyncReady) void loadSources();
       })
         .then((unlisten) => {
           if (disposed) unlisten();
-          else unlistenSync = unlisten;
+          else unlistenSyncFinished = unlisten;
         })
         .catch(() => undefined);
     }
     return () => {
       disposed = true;
-      unlistenSync?.();
+      unlistenSyncProgress?.();
+      unlistenSyncFinished?.();
     };
   });
 
   onDestroy(() => {
     if (searchTimer !== undefined) clearTimeout(searchTimer);
     if (playbackPollTimer !== undefined) clearInterval(playbackPollTimer);
-    unlistenSync?.();
+    unlistenSyncProgress?.();
+    unlistenSyncFinished?.();
     pageRequestVersion += 1;
     playlistPageRequestVersion += 1;
   });
+
+  function handleLibrarySyncProgress(event: LibrarySyncProgressEvent): void {
+    const current = syncProgress?.runId === event.runId
+      ? syncProgress
+      : {
+          runId: event.runId,
+          sourceCount: event.sourceCount,
+          sources: {},
+          active: true,
+          summary: null,
+          error: null,
+        };
+    const sources = { ...current.sources, [event.sourceId]: event };
+    const completedSources = Object.values(sources).filter((source) => source.outcome !== null);
+    const isComplete = event.sourceCount > 0 && completedSources.length >= event.sourceCount;
+    const summary = isComplete ? formatProgressSummary(completedSources) : null;
+    syncProgress = {
+      ...current,
+      sourceCount: event.sourceCount,
+      sources,
+      active: !isComplete,
+      summary,
+      error: null,
+    };
+    isSyncing = !isComplete;
+    if (summary) sourceSyncSummary = summary;
+  }
+
+  function handleLibrarySyncFinished(event: LibrarySyncFinishedEvent): void {
+    const current = syncProgress?.runId === event.runId
+      ? syncProgress
+      : {
+          runId: event.runId,
+          sourceCount: event.sourceCount,
+          sources: {},
+          active: false,
+          summary: null,
+          error: null,
+        };
+    const sources = { ...current.sources };
+    event.sources.forEach((source, sourceIndex) => {
+      if (sources[source.sourceId]) return;
+      const outcome = source.state === 'complete'
+        ? 'complete'
+        : source.state === 'incomplete'
+          ? 'incomplete'
+          : source.state === 'unavailable'
+            ? 'unavailable'
+            : source.state === 'permissionRevoked'
+              ? 'permissionRevoked'
+              : 'failed';
+      sources[source.sourceId] = {
+        runId: event.runId,
+        sourceIndex,
+        sourceCount: event.sourceCount,
+        displayName: source.displayName,
+        sourceId: source.sourceId,
+        stage: 'finished',
+        processed: source.observed,
+        total: source.observed,
+        unit: 'tracks',
+        observed: source.observed,
+        metadataReads: source.metadataReads,
+        unchanged: source.unchanged,
+        errorCount: source.errorCount,
+        outcome,
+      };
+    });
+    const summary = event.error
+      ? `同步失敗：${event.error}`
+      : event.sources.length === 0
+        ? '尚未加入可同步的音樂來源。'
+        : formatProgressSummary(Object.values(sources));
+    syncProgress = {
+      ...current,
+      sourceCount: event.sourceCount,
+      sources,
+      active: false,
+      summary,
+      error: event.error,
+    };
+    sourceSyncSummary = summary;
+    if (event.error) sourceError = event.error;
+    isSyncing = false;
+  }
+
+  function formatProgressSummary(sources: LibrarySyncProgressEvent[]): string {
+    const complete = sources.filter((source) => source.outcome === 'complete').length;
+    const errorCount = sources.reduce((sum, source) => sum + source.errorCount, 0);
+    return `${sources.length} 個來源已檢查；${complete} 個完整，${sources.length - complete} 個需要留意；${errorCount} 個項目錯誤。`;
+  }
+
+  function syncProgressLine(progress: LibrarySyncProgressEvent): string {
+    if (progress.stage === 'finished') {
+      const outcome = progress.outcome === 'complete'
+        ? '同步完成'
+        : progress.outcome === 'cancelled'
+          ? '已取消'
+          : progress.outcome === 'unavailable'
+            ? '來源暫不可用'
+            : progress.outcome === 'permissionRevoked'
+              ? '需要重新授權'
+              : progress.outcome === 'failed'
+                ? '同步失敗'
+                : '掃描未完成';
+      return `${outcome}；${progress.errorCount.toLocaleString()} 個項目錯誤`;
+    }
+    if (progress.stage === 'enumerating') {
+      const count = progress.processed.toLocaleString();
+      return progress.total === null
+        ? `掃描中，已檢查 ${count} 個檔案系統項目；總數尚未確定`
+        : `掃描中，已檢查 ${count} / ${progress.total.toLocaleString()} 個檔案系統項目`;
+    }
+    const stage = progress.stage === 'metadata' ? '讀取曲目資訊' : '寫入曲庫';
+    const total = progress.total === null ? '—' : progress.total.toLocaleString();
+    return `${stage}，${progress.processed.toLocaleString()} / ${total} 首曲目`;
+  }
 
   async function loadCapabilities(): Promise<void> {
     runtimeError = null;
@@ -654,6 +801,48 @@
           </div>
           <div class="banner-index" aria-hidden="true">01 <span>/ 04</span></div>
         </section>
+
+        {#if syncProgress}
+          <section
+            class="sync-progress-banner"
+            class:sync-progress-finished={!syncProgress.active}
+            class:sync-progress-error={Boolean(syncProgress.error)}
+            data-testid="sync-progress-banner"
+            role="status"
+            aria-live="polite"
+            aria-label="音樂來源同步狀態"
+          >
+            <div class="sync-progress-heading">
+              <div>
+                <span class="section-kicker">LIBRARY SYNC</span>
+                <strong>{syncProgress.active ? '背景同步進行中' : '最近一次同步摘要'}</strong>
+              </div>
+              {#if syncProgress.active}
+                <span class="sync-progress-count">{syncProgressDoneCount} / {syncProgress.sourceCount} 個來源完成</span>
+              {/if}
+            </div>
+            {#if syncProgress.summary}
+              <p class="sync-progress-summary">{syncProgress.summary}</p>
+            {/if}
+            {#if syncProgressSources.length > 0}
+              <ul class="sync-progress-sources">
+                {#each syncProgressSources as source (source.sourceId)}
+                  <li data-source-id={source.sourceId}>
+                    <span class="sync-progress-source-name">{source.displayName}</span>
+                    <span class="sync-progress-source-detail">{syncProgressLine(source)}</span>
+                    {#if source.total !== null && source.stage !== 'finished'}
+                      <progress
+                        aria-label={`${source.displayName} 階段進度`}
+                        max={Math.max(1, source.total)}
+                        value={Math.min(source.processed, Math.max(1, source.total))}
+                      ></progress>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </section>
+        {/if}
 
         {#if activeView === 'library'}
           <section class="library-section" aria-labelledby="library-heading">

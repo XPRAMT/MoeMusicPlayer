@@ -8,7 +8,7 @@ use std::{
 
 use player_core::{
     LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaylistId, PlaylistPage,
-    PlaylistSummary, SourceScanState, SyncEngine, SyncReport, TrackSummary,
+    PlaylistSummary, SourceId, SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackSummary,
 };
 use player_db::Database;
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,7 @@ use player_audio_windows::{
 use player_core::TrackId;
 
 const LIBRARY_SYNC_FINISHED_EVENT: &str = "library-sync-finished";
+const LIBRARY_SYNC_PROGRESS_EVENT: &str = "library-sync-progress";
 
 struct AppState {
     database: Option<Database>,
@@ -420,6 +421,26 @@ struct SourceSyncResult {
 #[serde(rename_all = "camelCase")]
 struct LibrarySyncResult {
     sources: Vec<SourceSyncResult>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibrarySyncProgressEvent {
+    run_id: String,
+    source_index: usize,
+    source_count: usize,
+    display_name: String,
+    #[serde(flatten)]
+    progress: SyncProgress,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibrarySyncFinishedEvent {
+    run_id: String,
+    source_count: usize,
+    sources: Vec<SourceSyncResult>,
+    error: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1029,26 +1050,47 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
             .clone()
             .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
     })?;
+    let run_id = SourceId::new().to_string();
+    let progress_run_id = run_id.clone();
     let sync_app = app.clone();
     let event_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mut database = Database::open(database_path).map_err(|error| error.to_string())?;
-        sync_configured_sources(&sync_app, &mut database)
+        let mut on_progress = |root: &LibraryRoot,
+                               source_index: usize,
+                               source_count: usize,
+                               progress: SyncProgress| {
+            emit_library_sync_progress(
+                &sync_app,
+                &progress_run_id,
+                root,
+                source_index,
+                source_count,
+                progress,
+            );
+        };
+        sync_configured_sources(&sync_app, &mut database, &mut on_progress)
     })
     .await
-    .map_err(|error| format!("曲庫同步工作失敗：{error}"))??;
-    let _ = event_app.emit(LIBRARY_SYNC_FINISHED_EVENT, ());
-    Ok(result)
+    .map_err(|error| format!("曲庫同步工作失敗：{error}"))
+    .and_then(|result| result);
+    let finished = library_sync_finished_event(run_id, &result);
+    let _ = event_app.emit(LIBRARY_SYNC_FINISHED_EVENT, finished);
+    result
 }
 
-fn sync_configured_sources(
+fn sync_configured_sources<F>(
     app: &AppHandle,
     database: &mut Database,
-) -> Result<LibrarySyncResult, String> {
+    on_progress: &mut F,
+) -> Result<LibrarySyncResult, String>
+where
+    F: FnMut(&LibraryRoot, usize, usize, SyncProgress),
+{
     #[cfg(target_os = "windows")]
     {
         let _ = app;
-        sync_windows_sources(database)
+        sync_windows_sources_with_progress(database, on_progress)
     }
 
     #[cfg(target_os = "android")]
@@ -1057,18 +1099,31 @@ fn sync_configured_sources(
             .library_roots()
             .map_err(|error| error.to_string())?;
         let synced_at_utc_ms = now_utc_epoch_ms()?;
+        let roots: Vec<_> = roots
+            .into_iter()
+            .filter(|root| {
+                root.enabled
+                    && matches!(
+                        root.kind,
+                        MediaSourceKind::AndroidMediaStore | MediaSourceKind::AndroidSaf
+                    )
+            })
+            .collect();
+        let source_count = roots.len();
         let mut sources = Vec::new();
         app.media_index()
             .with_adapter(|index| -> Result<(), String> {
-                for root in roots.iter().filter(|root| {
-                    root.enabled
-                        && matches!(
-                            root.kind,
-                            MediaSourceKind::AndroidMediaStore | MediaSourceKind::AndroidSaf
-                        )
-                }) {
-                    let report = SyncEngine::sync(root, index, database, synced_at_utc_ms)
-                        .map_err(|error| error.to_string())?;
+                for (source_index, root) in roots.iter().enumerate() {
+                    let report = SyncEngine::sync_with_progress(
+                        root,
+                        index,
+                        database,
+                        synced_at_utc_ms,
+                        |progress| {
+                            on_progress(root, source_index, source_count, progress);
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
                     sources.push(sync_summary(root, report));
                 }
                 Ok(())
@@ -1083,26 +1138,88 @@ fn sync_configured_sources(
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", test))]
 fn sync_windows_sources(database: &mut Database) -> Result<LibrarySyncResult, String> {
+    sync_windows_sources_with_progress(database, &mut |_, _, _, _| {})
+}
+
+#[cfg(target_os = "windows")]
+fn sync_windows_sources_with_progress<F>(
+    database: &mut Database,
+    on_progress: &mut F,
+) -> Result<LibrarySyncResult, String>
+where
+    F: FnMut(&LibraryRoot, usize, usize, SyncProgress),
+{
     let roots = database
         .library_roots()
         .map_err(|error| error.to_string())?;
     let synced_at_utc_ms = now_utc_epoch_ms()?;
+    let roots: Vec<_> = roots
+        .into_iter()
+        .filter(|root| {
+            root.enabled
+                && matches!(
+                    root.kind,
+                    MediaSourceKind::WindowsFilesystem | MediaSourceKind::WindowsSystemIndex
+                )
+        })
+        .collect();
+    let source_count = roots.len();
     let mut sources = Vec::new();
     let mut index = WindowsMediaIndex::new();
-    for root in roots.iter().filter(|root| {
-        root.enabled
-            && matches!(
-                root.kind,
-                MediaSourceKind::WindowsFilesystem | MediaSourceKind::WindowsSystemIndex
-            )
-    }) {
-        let report = SyncEngine::sync(root, &mut index, database, synced_at_utc_ms)
-            .map_err(|error| error.to_string())?;
+    for (source_index, root) in roots.iter().enumerate() {
+        let report = SyncEngine::sync_with_progress(
+            root,
+            &mut index,
+            database,
+            synced_at_utc_ms,
+            |progress| on_progress(root, source_index, source_count, progress),
+        )
+        .map_err(|error| error.to_string())?;
         sources.push(sync_summary(root, report));
     }
     Ok(LibrarySyncResult { sources })
+}
+
+fn emit_library_sync_progress(
+    app: &AppHandle,
+    run_id: &str,
+    root: &LibraryRoot,
+    source_index: usize,
+    source_count: usize,
+    progress: SyncProgress,
+) {
+    let _ = app.emit(
+        LIBRARY_SYNC_PROGRESS_EVENT,
+        LibrarySyncProgressEvent {
+            run_id: run_id.to_owned(),
+            source_index,
+            source_count,
+            display_name: root.display_name.clone(),
+            progress,
+        },
+    );
+}
+
+fn library_sync_finished_event(
+    run_id: String,
+    result: &Result<LibrarySyncResult, String>,
+) -> LibrarySyncFinishedEvent {
+    match result {
+        Ok(result) => LibrarySyncFinishedEvent {
+            run_id,
+            source_count: result.sources.len(),
+            sources: result.sources.clone(),
+            error: None,
+        },
+        Err(error) => LibrarySyncFinishedEvent {
+            run_id,
+            source_count: 0,
+            sources: Vec::new(),
+            error: Some(error.clone()),
+        },
+    }
 }
 
 fn sync_summary(root: &LibraryRoot, report: SyncReport) -> SourceSyncResult {
@@ -1443,16 +1560,33 @@ pub fn run() {
             if let Some(database_path) = stored_path {
                 let app_handle = app.handle().clone();
                 let event_handle = app_handle.clone();
+                let run_id = SourceId::new().to_string();
                 tauri::async_runtime::spawn_blocking(move || {
+                    let progress_run_id = run_id.clone();
                     let result = Database::open(database_path)
                         .map_err(|error| error.to_string())
                         .and_then(|mut database| {
-                            sync_configured_sources(&app_handle, &mut database)
+                            let mut on_progress =
+                                |root: &LibraryRoot,
+                                 source_index: usize,
+                                 source_count: usize,
+                                 progress: SyncProgress| {
+                                    emit_library_sync_progress(
+                                        &event_handle,
+                                        &progress_run_id,
+                                        root,
+                                        source_index,
+                                        source_count,
+                                        progress,
+                                    );
+                                };
+                            sync_configured_sources(&app_handle, &mut database, &mut on_progress)
                         });
-                    if let Err(error) = result {
+                    if let Err(error) = &result {
                         eprintln!("startup library sync failed: {error}");
                     }
-                    let _ = event_handle.emit(LIBRARY_SYNC_FINISHED_EVENT, ());
+                    let finished = library_sync_finished_event(run_id, &result);
+                    let _ = event_handle.emit(LIBRARY_SYNC_FINISHED_EVENT, finished);
                 });
             }
 

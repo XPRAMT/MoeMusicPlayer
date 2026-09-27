@@ -3,6 +3,8 @@
     window.__progressCalls = [];
     window.__progressListeners = {};
     window.__progressHandlerId = 0;
+    window.__progressRunNumber = 0;
+    window.__sourcePickerResponse = null;
     window.isTauri = true;
     window.__TAURI_INTERNALS__ = {
       transformCallback: handler => {
@@ -37,9 +39,14 @@
               durationMs: null, volume: 0.7, lastError: null, repeatMode: 'off', shuffle: false,
             };
           case 'library_sync':
+            window.__queueProgressRun(window.__nextSyncDisplayName ?? '手動同步來源');
+            window.__nextSyncDisplayName = null;
             return { sources: [] };
           case 'library_pick_windows_folder':
-            return null;
+            if (window.__sourcePickerResponse) {
+              window.__nextSyncDisplayName = window.__sourcePickerResponse.displayName;
+            }
+            return window.__sourcePickerResponse;
           default:
             return null;
         }
@@ -51,6 +58,19 @@
       const handler = window.__progressListeners[callbackId];
       if (!handler) throw new Error('The sync progress callback was not registered.');
       handler({ event: 'library-sync-progress', id: 1, payload });
+    };
+    window.__queueProgressRun = displayName => {
+      const run = ++window.__progressRunNumber;
+      const base = {
+        runId: `run-${run}`, sourceId: `source-${run}`, sourceIndex: 0, sourceCount: 1,
+        displayName, processed: 2, total: null, unit: 'filesystemEntries',
+        observed: 0, metadataReads: 0, unchanged: 0, errorCount: 0, outcome: null,
+      };
+      window.__emitSyncProgress({ ...base, stage: 'enumerating' });
+      window.__finishCurrentProgress = () => window.__emitSyncProgress({
+        ...base, stage: 'finished', processed: 1, total: 1, unit: 'tracks',
+        observed: 1, metadataReads: 1, errorCount: 0, outcome: 'complete',
+      });
     };
   });
 
@@ -111,6 +131,31 @@
   if (!(await page.locator('[data-testid="sync-progress-banner"]').isVisible())) {
     throw new Error('The same sync summary should remain visible on the library page.');
   }
+
+  await page.getByRole('button', { name: '重新整理' }).click();
+  const manualProgress = page.locator('[data-testid="sync-progress-banner"]');
+  await page.getByText('手動同步來源').waitFor({ timeout: 2000 });
+  if (!(await manualProgress.innerText()).includes('背景同步進行中')) {
+    throw new Error('The manual refresh entry point should show active progress.');
+  }
+  await page.evaluate(() => window.__finishCurrentProgress());
+  await page.getByText('最近一次同步摘要').waitFor({ timeout: 2000 });
+
+  await page.getByRole('button', { name: '來源設定' }).click();
+  await page.evaluate(() => {
+    window.__sourcePickerResponse = {
+      id: 'selected-source', kind: 'windowsFilesystem', displayName: '新增的音樂資料夾',
+      enabled: true, syncState: null, lastAttemptUtcMs: null, lastSuccessUtcMs: null, errorCount: 0,
+    };
+  });
+  await page.getByRole('button', { name: '選擇資料夾並同步' }).click();
+  await page.getByText('新增的音樂資料夾', { exact: true }).waitFor({ timeout: 2000 });
+  const selectedSourceProgress = page.locator('[data-testid="sync-progress-banner"]');
+  if (!(await selectedSourceProgress.innerText()).includes('背景同步進行中')) {
+    throw new Error('The selected-folder entry point should show active progress.');
+  }
+  await page.evaluate(() => window.__finishCurrentProgress());
+  await page.getByText('最近一次同步摘要').waitFor({ timeout: 2000 });
 
   const registeredEvents = await page.evaluate(() => Object.keys(window.__progressEventHandlers ?? {}));
   if (!registeredEvents.includes('library-sync-progress')) {
