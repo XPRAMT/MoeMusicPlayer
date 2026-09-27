@@ -2,7 +2,7 @@
 
 # MoeMusicPlayer
 
-MoeMusicPlayer is a local-first music library for Windows and Android. It stores a library projection in SQLite and loads tracks in pages, so the whole collection is not sent to the interface.
+MoeMusicPlayer is a local-first music library for Windows and Android. User preferences and registered source paths are stored in a versioned `settings.json`; tracks, playlist contents, source mappings, and scan state are stored in SQLite. The interface loads tracks in pages, so the whole collection is not sent to the renderer.
 
 ## Features
 
@@ -10,13 +10,14 @@ MoeMusicPlayer is a local-first music library for Windows and Android. It stores
 - On Android, select shared-audio storage through MediaStore or choose a folder with the system document picker (SAF).
 - Keep previously indexed tracks when a source is unavailable or a scan is incomplete.
 - Browse and search the saved library with paginated results; the interface never loads the whole collection.
-- Customize the background and accent colors in Settings. Preferences are saved in the app database, and text colors adjust for contrast.
+- Customize the background and accent colors in Settings. Preferences are saved to `settings.json`, and text colors adjust for contrast.
 - On Windows, play local WAV, MP3, FLAC, and Ogg Vorbis files with play/pause, seek, and volume controls.
 - Show the current track's embedded artwork, then same-folder `cover.jpg` or `folder.jpg`, using the original image bytes in Now Playing and the player bar.
-- Import and export M3U and UTF-8 M3U8 playlists on Windows. Unmatched entries are retained; relative exports are limited to the selected shared root.
-- Windows system media controls show the current track and support play, pause, stop, and seek. Previous/next remain disabled until queue navigation is implemented.
+- Import and export M3U and UTF-8 M3U8 playlists on Windows. A newly imported playlist file is registered as a source; older static playlists are not linked to a guessed file path. Unmatched entries are retained, and relative exports are limited to the selected shared root.
+- Use queue navigation, shuffle, and repeat off/all/one modes on Windows. Playlist queue order retains repeated entries.
+- Windows system media controls show the current track and support play, pause, stop, seek, and queue navigation when available.
 
-The playback queue, previous/next track, repeat, shuffle, and Android playback are not available yet.
+Android playback is not available yet. Real Tauri window, system media flyout, and hardware media-key behavior still need platform acceptance.
 
 ## Run on Windows
 
@@ -24,7 +25,7 @@ The playback queue, previous/next track, repeat, shuffle, and Android playback a
 2. Run `npm install`.
 3. Run `npm run tauri -- dev`.
 4. Open **Settings → Music Sources**, choose **Select folder and sync**, and select an existing music folder. Canceling leaves the source list unchanged.
-5. Open **Settings → Appearance** to choose a background and accent color. The defaults are pure black and water blue.
+5. Open **Settings → Appearance** to choose a background and accent color. The defaults are pure black and water blue. Settings and registered source paths are saved in the app data directory as `settings.json`; SQLite stores the music library.
 
 To build the Windows executable, run `npm run tauri -- build --ci`. It is written to `target/release/moemusicplayer.exe`.
 

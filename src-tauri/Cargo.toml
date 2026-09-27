@@ -18,10 +18,9 @@ player-core = { path = "../crates/player-core" }
 player-db = { path = "../crates/player-db" }
 tauri-plugin-media-index = { path = "../plugins/tauri-plugin-media-index" }
 serde = { version = "1", features = ["derive"] }
-tauri = { version = "2.12.0", features = [] }
-
-[dev-dependencies]
 serde_json = "1"
+sha2 = "0.10"
+tauri = { version = "2.12.0", features = [] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 player-audio-windows = { path = "../crates/player-audio-windows" }
