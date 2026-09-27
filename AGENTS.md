@@ -7,6 +7,8 @@
 目前已完成：
 
 - Windows 可新增來源資料夾，透過 Core 增量同步與 Lofty 讀取標籤；SQLite 保存曲目、來源映射與同步狀態，前端只取分頁結果。
+- Windows 來源設定使用原生資料夾選擇器；取消不新增來源。Tauri picker 及 M3U/M3U8 檔案對話框都以呼叫端 WebviewWindow 設為 owner，主視窗 config 與啟動時也明確關閉 always-on-top。
+- 啟動同步由 renderer 在註冊 `library-sync-progress` 與 `library-sync-finished` 後觸發，避免空來源或快速掃描在 listener 建立前完成；不定總數的列舉只顯示已處理數。前端 call-site regression 與來源事件彙整測試通過。
 - 對 `WindowsSystemIndex` root 會探測 WSearch 服務、範圍規則與 catalog 狀態供診斷；目前不把 Search 查詢結果當完整清單，曲目與刪除對帳只依完整檔案系統走訪。
 - Android MediaStore/SAF 外掛、Rust IPC 與來源管理畫面已接線；Android ARM64 Debug APK 曾成功建置。最新版 insets 修正尚未在裝置複驗。
 - Windows 音訊 crate 使用 Rodio/CPAL；14 項單元與 2 項隱藏 HWND 系統媒體測試、Windows 目標檢查、Clippy 與自產 WAV 的預設輸出裝置 smoke 均通過。Tauri 已將 `TrackId` 解析為 SQLite 中啟用來源的本機路徑，再呼叫 `PlayerHandle`；前端的播放/暫停、跳轉與音量接有真實引擎快照。播放錯誤不回傳本機路徑；佇列、前後首、隨機與循環仍未實作且保持停用。
@@ -16,13 +18,13 @@
 
 仍未完成或未驗證：
 
-- Windows Tauri 視窗的實際來源表單、播放清單原生對話框操作與畫面尚未驗收；上述來源／清單測試呼叫的是 UI command 共用的 Rust helper，並非 GUI/IPC 操作。系統媒體控制尚未由實際 Tauri HWND、Windows 媒體 flyout 或硬體媒體按鍵端到端驗收。
+- Windows 原生來源／播放清單對話框的 owner 修正已建置，實際 Cancel、modal z-order、選取後來源建立與同步仍待使用者手動驗收；正式 AppData 與 `D:\Music` 尚未由本輪 GUI 測試觸碰。上述服務測試仍不是 GUI/IPC 驗收。系統媒體控制尚未由實際 Tauri HWND、Windows 媒體 flyout 或硬體媒體按鍵端到端驗收。
 - Windows 應用播放尚未由桌面 GUI 實際驗收；Tauri IPC 指令本身尚未經 GUI 傳輸驗證。音訊 crate 的輸出裝置 smoke 與 shell 的注入式測試後端分開驗證，不代表已聽感驗收應用播放。
 - 播放佇列、前後首、隨機、循環與 Android 音訊尚未實作；因此 Windows 系統媒體控制不宣告前後首能力。
 - Android 最新頂部/底部 system insets 修正及 MediaStore/SAF 真機掃描尚未驗證。先前 ARM64 APK 建置早於本輪共用 shell 變更；本輪直接 `cargo check --target aarch64-linux-android` 因目前 shell 找不到 `clang.exe` 而停在 SQLite native build，未得到 Android app 編譯結果。Android 播放未實作。
 - 100,000 首效能及完整 Windows SystemIndex 使用判準尚無實測結論。
 
-下一步在允許使用桌面視窗驗收時，實際操作 Windows 曲庫來源、播放清單對話框及系統媒體 flyout/按鍵，並確認真實應用音訊輸出。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
+下一步由使用者在隔離 app-data 的 Windows Debug 視窗手動驗收原生資料夾對話框：先 Cancel 確認來源數不變，再選資料夾確認同步進度與摘要；若測 `D:\Music`，只能使用隔離 app-data 並將音樂來源唯讀。之後再驗 Windows 播放清單對話框、系統媒體 flyout/按鍵及真實應用音訊輸出。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
 
 產品以 Windows 11 與 Android 的大型本地音樂庫為核心，目標規模為 100,000 首。啟動、搜尋與播放不得等待全庫掃描；封面、歌詞與動畫不得造成記憶體或 DOM 持續成長。使用者資料須可攜；本地音樂庫與本地播放永遠優先，線上串流服務不屬於核心目標。
 

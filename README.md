@@ -6,7 +6,7 @@ MoeMusicPlayer is a local-first music library for Windows and Android. It stores
 
 ## Features
 
-- Add Windows music folders and incrementally scan them in the background.
+- Choose Windows music folders with the native folder picker and incrementally scan them in the background. Canceling the picker does not add a source.
 - On Android, select shared-audio storage through MediaStore or choose a folder with the system document picker (SAF).
 - Keep previously indexed tracks when a source is unavailable or a scan is incomplete.
 - Browse and search the saved library with paginated results; the interface never loads the whole collection.
@@ -21,7 +21,7 @@ The playback queue, previous/next track, repeat, shuffle, and Android playback a
 1. Install Node.js 20.19+ (or 22.12+), Rust 1.90+, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 2. Run `npm install`.
 3. Run `npm run tauri -- dev`.
-4. Open **Source Settings**, enter an existing music folder path, and choose **Add and scan**.
+4. Open **Source Settings**, choose **Select folder and sync**, and select an existing music folder. Canceling leaves the source list unchanged.
 
 To build the Windows executable, run `npm run tauri -- build --ci`. It is written to `target/release/moemusicplayer.exe`.
 

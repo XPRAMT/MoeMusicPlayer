@@ -115,36 +115,51 @@
   );
 
   onMount(() => {
-    void loadCapabilities();
+    let disposed = false;
     if (isTauri()) {
       playbackPollTimer = setInterval(() => {
         if (playbackReady && !isSendingPlaybackCommand) {
           void loadPlaybackSnapshot(false);
         }
       }, 250);
+      void initializeTauri();
+    } else {
+      void loadCapabilities();
     }
-    let disposed = false;
-    if (isTauri()) {
-      void listen<LibrarySyncProgressEvent>('library-sync-progress', (event) => {
-        handleLibrarySyncProgress(event.payload);
-      })
-        .then((unlisten) => {
-          if (disposed) unlisten();
-          else unlistenSyncProgress = unlisten;
-        })
-        .catch(() => undefined);
-      void listen<LibrarySyncFinishedEvent>('library-sync-finished', (event) => {
-        handleLibrarySyncFinished(event.payload);
-        if (libraryReady) void loadPage(0);
-        if (libraryReady) void loadPlaylists();
-        if (sourceSyncReady) void loadSources();
-      })
-        .then((unlisten) => {
-          if (disposed) unlisten();
-          else unlistenSyncFinished = unlisten;
-        })
-        .catch(() => undefined);
+
+    async function initializeTauri(): Promise<void> {
+      let unlistenProgress: (() => void) | null = null;
+      let unlistenFinished: (() => void) | null = null;
+      try {
+        unlistenProgress = await listen<LibrarySyncProgressEvent>('library-sync-progress', (event) => {
+          handleLibrarySyncProgress(event.payload);
+        });
+        unlistenFinished = await listen<LibrarySyncFinishedEvent>('library-sync-finished', (event) => {
+          handleLibrarySyncFinished(event.payload);
+          if (libraryReady) void loadPage(0);
+          if (libraryReady) void loadPlaylists();
+          if (sourceSyncReady) void loadSources();
+        });
+      } catch (error) {
+        unlistenProgress?.();
+        unlistenFinished?.();
+        await loadCapabilities();
+        if (!disposed) runtimeError = `無法訂閱曲庫同步狀態：${getErrorText(error)}`;
+        return;
+      }
+
+      if (disposed) {
+        unlistenProgress();
+        unlistenFinished();
+        return;
+      }
+
+      unlistenSyncProgress = unlistenProgress;
+      unlistenSyncFinished = unlistenFinished;
+      await loadCapabilities();
+      if (!disposed && sourceSyncReady) void syncLibrary();
     }
+
     return () => {
       disposed = true;
       unlistenSyncProgress?.();

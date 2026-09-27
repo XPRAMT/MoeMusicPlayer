@@ -6,7 +6,7 @@ MoeMusicPlayer 是以本機優先為設計方向的 Windows 與 Android 音樂�
 
 ## 功能
 
-- 加入 Windows 音樂資料夾並在背景增量掃描。
+- 使用 Windows 原生資料夾選擇器加入音樂資料夾並在背景增量掃描；取消不會新增來源。
 - Android 可透過 MediaStore 選擇共享音樂儲存空間，或用系統文件選擇器（SAF）選擇資料夾。
 - 來源暫時不可用或掃描未完成時，保留先前已索引的曲目。
 - 以分頁結果瀏覽及搜尋已保存曲庫；介面不會載入整個曲庫。
@@ -21,7 +21,7 @@ MoeMusicPlayer 是以本機優先為設計方向的 Windows 與 Android 音樂�
 1. 安裝 Node.js 20.19+（或 22.12+）、Rust 1.90+，以及 [Tauri 先決條件](https://v2.tauri.app/start/prerequisites/)。
 2. 執行 `npm install`。
 3. 執行 `npm run tauri -- dev`。
-4. 開啟「來源設定」，輸入現有音樂資料夾路徑，選擇「加入並掃描」。
+4. 開啟「來源設定」，選擇「選擇資料夾並同步」，再選取現有音樂資料夾；取消不會變更來源清單。
 
 建置 Windows 執行檔請執行 `npm run tauri -- build --ci`，產物位於 `target/release/moemusicplayer.exe`。
 

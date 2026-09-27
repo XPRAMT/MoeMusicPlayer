@@ -8,6 +8,7 @@
     window.__startupProgressSent = false;
     window.__startupProgressMissed = false;
     window.__startupListenerEvents = [];
+    window.__startupSyncListenerEvents = [];
     window.__sourcePickerResponse = null;
     window.isTauri = true;
     window.__TAURI_INTERNALS__ = {
@@ -64,6 +65,9 @@
             };
           case 'library_sync':
             window.__syncCallCount += 1;
+            if (window.__syncCallCount === 1) {
+              window.__startupSyncListenerEvents = Object.keys(window.__progressEventHandlers ?? {}).sort();
+            }
             if (window.__syncCallCount > 1) {
               window.__queueProgressRun(window.__nextSyncDisplayName ?? '手動同步來源');
               window.__nextSyncDisplayName = null;
@@ -118,6 +122,11 @@
   }
   if (await page.evaluate(() => window.__startupProgressMissed)) {
     throw new Error('The startup progress event was emitted before the renderer subscribed.');
+  }
+  await page.waitForFunction(() => window.__syncCallCount > 0, undefined, { timeout: 1500 });
+  const startupSyncListenerEvents = await page.evaluate(() => window.__startupSyncListenerEvents);
+  if (!startupSyncListenerEvents.includes('library-sync-progress') || !startupSyncListenerEvents.includes('library-sync-finished')) {
+    throw new Error(`Startup synchronization command began before both listeners were ready: ${startupSyncListenerEvents.join(', ')}`);
   }
   const startupBanner = page.locator('[data-testid="sync-progress-banner"]');
   await startupBanner.waitFor({ timeout: 2000 });

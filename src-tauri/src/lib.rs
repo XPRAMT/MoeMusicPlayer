@@ -1564,39 +1564,6 @@ pub fn run() {
                 system_media_error,
             });
 
-            if let Some(database_path) = stored_path {
-                let app_handle = app.handle().clone();
-                let event_handle = app_handle.clone();
-                let run_id = SourceId::new().to_string();
-                tauri::async_runtime::spawn_blocking(move || {
-                    let progress_run_id = run_id.clone();
-                    let result = Database::open(database_path)
-                        .map_err(|error| error.to_string())
-                        .and_then(|mut database| {
-                            let mut on_progress =
-                                |root: &LibraryRoot,
-                                 source_index: usize,
-                                 source_count: usize,
-                                 progress: SyncProgress| {
-                                    emit_library_sync_progress(
-                                        &event_handle,
-                                        &progress_run_id,
-                                        root,
-                                        source_index,
-                                        source_count,
-                                        progress,
-                                    );
-                                };
-                            sync_configured_sources(&app_handle, &mut database, &mut on_progress)
-                        });
-                    if let Err(error) = &result {
-                        eprintln!("startup library sync failed: {error}");
-                    }
-                    let finished = library_sync_finished_event(run_id, &result);
-                    let _ = event_handle.emit(LIBRARY_SYNC_FINISHED_EVENT, finished);
-                });
-            }
-
             if let Some(window) = app.get_webview_window("main") {
                 window.set_title("MoeMusicPlayer")?;
                 window.set_always_on_top(false)?;
