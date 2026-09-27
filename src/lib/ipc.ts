@@ -19,6 +19,11 @@ export interface RuntimeCapabilities {
   systemMediaControls: FeatureCapability;
 }
 
+export interface ThemePreferences {
+  backgroundHex: string;
+  accentHex: string;
+}
+
 export interface LibrarySource {
   id: string;
   kind: string;
@@ -170,6 +175,14 @@ export interface PlaybackSnapshot {
 }
 
 interface IpcContract {
+  theme_get_preferences: {
+    args: Record<string, never>;
+    result: ThemePreferences;
+  };
+  theme_set_preferences: {
+    args: { preferences: ThemePreferences };
+    result: ThemePreferences;
+  };
   get_runtime_capabilities: {
     args: Record<string, never>;
     result: RuntimeCapabilities;

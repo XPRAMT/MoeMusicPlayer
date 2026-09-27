@@ -7,25 +7,28 @@
 目前已完成：
 
 - Windows 可新增來源資料夾，透過 Core 增量同步與 Lofty 讀取標籤；SQLite 保存曲目、來源映射與同步狀態，前端只取分頁結果。
-- Windows 來源設定使用原生資料夾選擇器；取消不新增來源。Tauri picker 及 M3U/M3U8 檔案對話框都以呼叫端 WebviewWindow 設為 owner，主視窗 config 與啟動時也明確關閉 always-on-top。
+- Windows 來源設定使用原生資料夾選擇器；程式在取消時不新增來源。使用者已在隔離 app-data 實際選取資料夾並完成掃描；Cancel 不新增來源尚未單獨確認。Tauri picker 及 M3U/M3U8 檔案對話框都以呼叫端 WebviewWindow 設為 owner，主視窗 config 與啟動時也明確關閉 always-on-top。
 - 啟動同步由 renderer 在註冊 `library-sync-progress` 與 `library-sync-finished` 後觸發，避免空來源或快速掃描在 listener 建立前完成；不定總數的列舉只顯示已處理數。前端 call-site regression 與來源事件彙整測試通過。
 - 對 `WindowsSystemIndex` root 會探測 WSearch 服務、範圍規則與 catalog 狀態供診斷；目前不把 Search 查詢結果當完整清單，曲目與刪除對帳只依完整檔案系統走訪。
 - Android MediaStore/SAF 外掛、Rust IPC 與來源管理畫面已接線；Android ARM64 Debug APK 曾成功建置。最新版 insets 修正尚未在裝置複驗。
 - Windows 音訊 crate 使用 Rodio/CPAL；15 項單元與 2 項隱藏 HWND 系統媒體測試、Windows 目標檢查、Clippy 與自產 WAV 的預設輸出裝置 smoke 均通過。Tauri 已將 `TrackId` 解析為 SQLite 中啟用來源的本機路徑，再呼叫 `PlayerHandle`；前端的播放/暫停、跳轉與音量接有真實引擎快照。進度滑桿拖曳期間維持本機草稿，放開後提交一次 seek，並等待較新引擎快照追上；前端回歸、播放中／暫停 actor seek 與自產 WAV 預設輸出裝置 smoke 均通過。播放錯誤不回傳本機路徑；佇列、前後首、隨機與循環仍未實作且保持停用。
 - 曲庫列表已接入獨立 `src/lib/TrackList.svelte`：每次只取後端 40 首頁面，虛擬化可見列並以六頁／最多 240 首作 LRU 快取；查詢重置、過期回應隔離、錯誤重試與鍵盤瀏覽都已實作。七項 Node 測試涵蓋分頁競態與 100,000 首合成捲動；模擬 2,778 個捲動位置時最多 28 列、六頁快取。這是資料窗格測試，不代表 WebView 畫面影格效能；瀏覽器 DOM 掃描仍待執行。
-- SQLite v3 保存播放清單及順序項目與背景／主色偏好。Windows 前端以分頁 IPC 瀏覽清單，透過 Rust 原生對話框匯入 M3U/M3U8、匯出 UTF-8 M3U/M3U8；未匹配曲目保留原 locator。相對匯出會拒絕逃出所選共同根目錄的路徑。Unicode M3U/M3U8 匯入、分頁及匯出 helper 整合測試通過；原生對話框仍未以 GUI 驗收。
-- Windows 系統媒體控制已從 Tauri 主視窗 HWND 接入 WinRT worker；Shell 以播放器快照每 750 ms 至少間隔更新標題、演出者、專輯與播放狀態，並把 Play/Pause/Stop/Seek 事件送回音訊服務。Next/Previous 保持停用。crate 的 15 項單元與 2 項隱藏 HWND 整合測試通過；Shell fake-event 測試涵蓋控制映射、停用佇列事件及 attach/update 失敗與音訊隔離。
+- SQLite v3 保存播放清單及順序項目與背景／主色偏好。Windows 前端以分頁 IPC 瀏覽清單，透過 Rust 原生對話框匯入 M3U/M3U8、匯出 UTF-8 M3U/M3U8；未匹配曲目保留原 locator。相對匯出會拒絕逃出所選共同根目錄的路徑。Unicode M3U/M3U8 匯入、分頁及匯出 helper 整合測試通過；播放清單原生對話框仍未以 GUI 驗收。
+- 設定頁將來源管理收在「設定 → 音樂來源」，另有「設定 → 外觀」可自訂背景色與主色；預設純黑 `#000000`、水藍 `#55D9FF`。外觀只透過窄 Tauri IPC 讀寫 SQLite typed `ThemePreferences`，不使用 localStorage；Renderer 依對比度選擇黑／白文字、主色按鈕文字及焦點色。十六進位色值驗證、黑白背景／低亮度主色對比測試通過；`player-db` 21 項測試包含非法值不改寫、預設 migration 與關閉重開後偏好一致。設定頁的實際 GUI 視覺、縮放及偏好重啟回讀尚未由使用者驗收。
+- 使用者已在隔離 Tauri/app-data 中透過原生資料夾選擇器選取唯讀來源 `\\?\D:\Music`；隔離資料庫保存 1 個 root、5,362 個曲目與來源映射，掃描狀態為 complete，另有 3 項 WSearch 診斷。正式 App SQLite 未觸碰。原生對話框的取消路徑尚未單獨確認。
+- Windows 系統媒體控制已從 Tauri 主視窗 HWND 接入 WinRT worker；Shell 以播放器快照每 750 ms 至少間隔更新標題、演出者、專輯與播放狀態，並把 Play/Pause/Stop/Seek 事件送回音訊服務。Next/Previous 保持停用。crate 的 15 項單元與 2 項隱藏 HWND 整合測試通過；Shell fake-event 測試涵蓋控制映射、停用佇列事件及 attach/update 失敗與音訊隔離。實際 Tauri 視窗、媒體 flyout 與硬體按鍵仍未驗收。
 - Svelte 型別檢查、Vite 正式版建置、完整 `cargo test --workspace`（82 項測試）、嚴格 Clippy 與 Windows Tauri release 建置均通過；輸出為 `target/release/moemusicplayer.exe`。Windows shell 整合測試涵蓋 Unicode 資料夾新增、合成 MP3 同步、SQLite 分頁/搜尋、關閉重開，以及 TrackId 到保存路徑再到播放 handle 的命令流程；另以 fake SMTC event 測試播放控制映射。
 
 仍未完成或未驗證：
 
-- Windows 原生來源／播放清單對話框的 owner 修正已建置，實際 Cancel、modal z-order、選取後來源建立與同步仍待使用者手動驗收；正式 AppData 與 `D:\Music` 尚未由本輪 GUI 測試觸碰。上述服務測試仍不是 GUI/IPC 驗收。系統媒體控制尚未由實際 Tauri HWND、Windows 媒體 flyout 或硬體媒體按鍵端到端驗收。
+- Windows 原生資料夾選擇器已由使用者在隔離 app-data 選取 `D:\Music` 並完成唯讀同步；正式 AppData 未觸碰。Cancel 不新增來源的路徑尚未單獨確認；播放清單原生對話框仍待使用者驗收。系統媒體控制尚未由實際 Tauri 視窗、Windows 媒體 flyout 或硬體媒體按鍵端到端驗收。
 - Windows 應用播放尚未由桌面 GUI 實際驗收；Tauri IPC 指令本身尚未經 GUI 傳輸驗證。音訊 crate 的輸出裝置 smoke 與 shell 的注入式測試後端分開驗證，不代表已聽感驗收應用播放。
+- 設定頁與真實 Tauri 視窗的自訂色對比、重啟回讀及多視窗尺寸版面尚未人工驗收；目前只通過前端 helper、SQLite 重開測試、Svelte 型別檢查與正式版建置。
 - 播放佇列、前後首、隨機、循環與 Android 音訊尚未實作；因此 Windows 系統媒體控制不宣告前後首能力。
 - Android 最新頂部/底部 system insets 修正及 MediaStore/SAF 真機掃描尚未驗證。先前 ARM64 APK 建置早於本輪共用 shell 變更；本輪直接 `cargo check --target aarch64-linux-android` 因目前 shell 找不到 `clang.exe` 而停在 SQLite native build，未得到 Android app 編譯結果。Android 播放未實作。
 - 100,000 首真實曲庫端到端效能、WebView 實際 DOM／捲動影格表現及完整 Windows SystemIndex 使用判準尚無實測結論；目前只有列表資料窗格的合成測試。
 
-下一步由使用者在隔離 app-data 的 Windows Debug 視窗手動驗收原生資料夾對話框：先 Cancel 確認來源數不變，再選資料夾確認同步進度與摘要；若測 `D:\Music`，只能使用隔離 app-data 並將音樂來源唯讀。之後再驗 Windows 播放清單對話框、系統媒體 flyout/按鍵及真實應用音訊輸出；另於 `tests/track-list-harness.html` 確認 100,000 首列表的實際 DOM 列數、整段捲動與鍵盤操作。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
+下一步由使用者在隔離 Tauri/app-data 驗收資料夾選擇器的 Cancel 不新增來源，並確認同步期間進度與完成摘要；`D:\Music` 已掃描完成，不重複掃描或寫入音樂檔。接著驗收外觀頁的極端黑／白背景、低亮度主色、重啟回讀及響應式版面，再驗 Windows 播放清單對話框、系統媒體 flyout/按鍵及真實應用音訊輸出；另於 `tests/track-list-harness.html` 確認 100,000 首列表的實際 DOM 列數、捲動與鍵盤操作。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
 
 產品以 Windows 11 與 Android 的大型本地音樂庫為核心，目標規模為 100,000 首。啟動、搜尋與播放不得等待全庫掃描；封面、歌詞與動畫不得造成記憶體或 DOM 持續成長。使用者資料須可攜；本地音樂庫與本地播放永遠優先，線上串流服務不屬於核心目標。
 
@@ -119,4 +122,4 @@
 4. Windows 系統整合、Android Media3/MediaSession 背景播放與 SAF 來源。
 5. 核心穩定後評估無縫播放、進階音訊裝置、DSP/EQ、遠端曲庫/同步與插件；Phase 1 不先投入大量視覺特效。
 
-目前可重現的驗證命令為 `npm run check`、`npm run build`、`node --test tests/track-list-data.test.mjs`、`cargo check --workspace --locked`、`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 與 `npm run tauri -- build --ci`。虛擬曲庫的本機瀏覽器測試頁為 `tests/track-list-harness.html`，提供合成 100,000 首分頁來源、DOM 列數/捲動和鍵盤播放檢查；目前只確認 Vite 能供應頁面與轉換入口，尚未完成瀏覽器互動驗收。Windows shell E2E 是 Rust 服務層測試，會建立臨時 Unicode 音樂資料夾與合成 MP3，將來源及曲目存入臨時 SQLite、驗證分頁/搜尋，再關閉並重新開啟資料庫核對來源路徑與 TrackId；播放測試從該 TrackId 查詢啟用來源路徑，將其交給 `PlayerHandle`，並驗證播放、暫停、跳轉與音量命令。Fake SMTC event 測試確認 Play/Pause/Stop/Seek 路由到既有播放命令、Next/Previous 不操作佇列，以及 attach/update 失敗只降低系統媒體控制能力，不會阻塞獨立播放器。以上均不驗證實際 Tauri HWND、Windows 媒體 flyout/硬體按鍵、原生檔案對話框或應用音訊輸出；Rodio/CPAL 自產 WAV 預設裝置 smoke 是獨立測試。桌面 GUI 與 Android 最新安全區、裝置媒體掃描仍待驗收；直接 Android Cargo target check 需先配置 NDK Clang，不能把其失敗當成 app code 編譯錯誤。
+目前可重現的驗證命令為 `npm run check`、`npm run build`、`node --test tests/playback-progress.test.mjs tests/theme-preferences.test.mjs tests/track-list-data.test.mjs tests/windows-native-dialog-owner.test.mjs`、`cargo check -p moemusicplayer --locked`、`cargo test -p player-db --locked`、`cargo check --workspace --locked`、`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 與 `npm run tauri -- build --ci`。本輪前端檢查與建置通過，Node 測試 19/19、`cargo check -p moemusicplayer --locked` 通過，`cargo test -p player-db --locked` 21/21。虛擬曲庫的本機瀏覽器測試頁為 `tests/track-list-harness.html`，提供合成 100,000 首分頁來源、DOM 列數/捲動和鍵盤播放檢查；Node 資料窗格測試最高 28 列、240 個快取項，尚未完成瀏覽器互動驗收。Windows shell E2E 是 Rust 服務層測試，會建立臨時 Unicode 音樂資料夾與合成 MP3，將來源及曲目存入臨時 SQLite、驗證分頁/搜尋，再關閉並重新開啟資料庫核對來源路徑與 TrackId；播放測試從該 TrackId 查詢啟用來源路徑，將其交給 `PlayerHandle`，並驗證播放、暫停、跳轉與音量命令。Fake SMTC event 測試確認 Play/Pause/Stop/Seek 路由到既有播放命令、Next/Previous 不操作佇列，以及 attach/update 失敗只降低系統媒體控制能力，不會阻塞獨立播放器。`D:\Music` 已由使用者在隔離 app-data 透過原生資料夾選擇器唯讀掃描完成，正式資料庫未碰觸；取消流程、播放清單原生對話框、實際 Tauri SMTC 視窗／flyout／硬體按鍵與應用音訊輸出仍未完整驗證。Rodio/CPAL 自產 WAV 預設裝置 smoke 是獨立測試。Android 最新安全區與裝置媒體掃描仍待驗收；直接 Android Cargo target check 需先配置 NDK Clang，不能把其失敗當成 app code 編譯錯誤。

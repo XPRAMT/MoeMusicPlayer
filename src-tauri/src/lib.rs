@@ -10,7 +10,7 @@ use player_core::{
     LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaylistId, PlaylistPage,
     PlaylistSummary, SourceId, SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackSummary,
 };
-use player_db::Database;
+use player_db::{Database, ThemePreferences};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_media_index::MediaIndexExt;
@@ -37,6 +37,31 @@ use player_core::TrackId;
 
 const LIBRARY_SYNC_FINISHED_EVENT: &str = "library-sync-finished";
 const LIBRARY_SYNC_PROGRESS_EVENT: &str = "library-sync-progress";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThemePreferencesDto {
+    background_hex: String,
+    accent_hex: String,
+}
+
+impl From<ThemePreferences> for ThemePreferencesDto {
+    fn from(preferences: ThemePreferences) -> Self {
+        Self {
+            background_hex: preferences.background_hex,
+            accent_hex: preferences.accent_hex,
+        }
+    }
+}
+
+impl From<ThemePreferencesDto> for ThemePreferences {
+    fn from(preferences: ThemePreferencesDto) -> Self {
+        Self {
+            background_hex: preferences.background_hex,
+            accent_hex: preferences.accent_hex,
+        }
+    }
+}
 
 struct AppState {
     database: Option<Database>,
@@ -781,6 +806,38 @@ fn library_list_sources(state: State<'_, AppState>) -> Result<Vec<LibrarySource>
 }
 
 #[tauri::command]
+fn theme_get_preferences(state: State<'_, AppState>) -> Result<ThemePreferencesDto, String> {
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database
+        .get_theme_preferences()
+        .map(ThemePreferencesDto::from)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn theme_set_preferences(
+    state: State<'_, AppState>,
+    preferences: ThemePreferencesDto,
+) -> Result<ThemePreferencesDto, String> {
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    let preferences = ThemePreferences::from(preferences);
+    database
+        .set_theme_preferences(&preferences)
+        .map_err(|error| error.to_string())?;
+    Ok(preferences.into())
+}
+
+#[tauri::command]
 fn library_add_windows_folder(
     state: State<'_, AppState>,
     path: String,
@@ -1507,6 +1564,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            theme_get_preferences,
+            theme_set_preferences,
             get_runtime_capabilities,
             library_get_page,
             playlist_list,

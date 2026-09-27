@@ -17,10 +17,17 @@
     type PlaybackSnapshot,
     type PlaybackState,
     type RuntimeCapabilities,
-    type TrackPage,
+    type ThemePreferences,
     type TrackSummary,
   } from './lib/ipc';
-  import { formatDuration, formatTrackIndex, formatVolume } from './lib/format';
+  import {
+    applyTheme,
+    DEFAULT_THEME_PREFERENCES,
+    isHexColor,
+    normalizeThemePreferences,
+  } from './lib/theme';
+  import { formatDuration, formatVolume } from './lib/format';
+  import TrackList from './lib/TrackList.svelte';
   import {
     beginPlaybackSeekDraft,
     commitPlaybackSeekDraft,
@@ -33,6 +40,7 @@
   } from './lib/playback-scrubber';
 
   type View = 'library' | 'now-playing' | 'playlists' | 'settings';
+  type SettingsSection = 'appearance' | 'sources';
   type SyncProgressViewState = {
     runId: string;
     sourceCount: number;
@@ -45,10 +53,14 @@
   const PAGE_SIZE = 40;
 
   let activeView = $state<View>('library');
+  let settingsSection = $state<SettingsSection>('appearance');
+  let themePreferences = $state<ThemePreferences>({ ...DEFAULT_THEME_PREFERENCES });
+  let themeSaveState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
+  let themeSaveError = $state<string | null>(null);
   let capabilities = $state<RuntimeCapabilities | null>(null);
   let runtimeError = $state<string | null>(null);
-  let page = $state<TrackPage | null>(null);
-  let pageError = $state<string | null>(null);
+  let libraryTrackCount = $state<number | null>(null);
+  let libraryListRevision = $state(0);
   let playbackError = $state<string | null>(null);
   let playback = $state<PlaybackSnapshot | null>(null);
   let playbackSeekDraft = $state<PlaybackSeekDraft | null>(null);
@@ -67,9 +79,7 @@
   let playlistExportFormat = $state<'m3u' | 'm3u8'>('m3u8');
   let playlistExportRelativePaths = $state(false);
   let query = $state('');
-  let offset = $state(0);
   let selectedTrackId = $state<string | null>(null);
-  let isLoadingPage = $state(false);
   let isSyncing = $state(false);
   let isLoadingSources = $state(false);
   let isUpdatingSource = $state(false);
@@ -80,9 +90,10 @@
   let isLoadingPlaybackSnapshot = false;
   let isSendingPlaybackCommand = $state(false);
   let playbackSnapshotRequestVersion = 0;
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  let themeSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let themeSaveQueue: Promise<void> = Promise.resolve();
+  let themeRevision = 0;
   let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
-  let pageRequestVersion = 0;
   let playlistPageRequestVersion = 0;
   let capabilityRefreshInFlight = false;
   let nextCapabilityRefreshAt = 0;
@@ -105,16 +116,6 @@
   const selectedPlaylist = $derived(
     playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null,
   );
-  const hasPreviousPage = $derived((page?.offset ?? 0) > 0);
-  const hasNextPage = $derived(
-    page !== null && page.offset + page.items.length < page.totalCount,
-  );
-  const pageRangeLabel = $derived.by(() => {
-    if (!page || page.totalCount === 0) return '0 首';
-    const first = page.offset + 1;
-    const last = Math.min(page.offset + page.items.length, page.totalCount);
-    return `${first}–${last} 首，共 ${page.totalCount.toLocaleString()} 首`;
-  });
   const hasPreviousPlaylistPage = $derived((playlistPage?.offset ?? 0) > 0);
   const hasNextPlaylistPage = $derived(
     playlistPage !== null && playlistPage.offset + playlistPage.items.length < playlistPage.totalCount,
@@ -144,6 +145,7 @@
       }, 250);
       void initializeTauri();
     } else {
+      themeSaveState = 'preview';
       void loadCapabilities();
     }
 
@@ -156,7 +158,7 @@
         });
         unlistenFinished = await listen<LibrarySyncFinishedEvent>('library-sync-finished', (event) => {
           handleLibrarySyncFinished(event.payload);
-          if (libraryReady) void loadPage(0);
+          libraryListRevision += 1;
           if (libraryReady) void loadPlaylists();
           if (sourceSyncReady) void loadSources();
         });
@@ -176,7 +178,7 @@
 
       unlistenSyncProgress = unlistenProgress;
       unlistenSyncFinished = unlistenFinished;
-      await loadCapabilities();
+      await Promise.all([loadCapabilities(), loadThemePreferences()]);
       if (!disposed && sourceSyncReady) void syncLibrary();
     }
 
@@ -188,12 +190,93 @@
   });
 
   onDestroy(() => {
-    if (searchTimer !== undefined) clearTimeout(searchTimer);
+    if (themeSaveTimer !== undefined) clearTimeout(themeSaveTimer);
+    themeRevision += 1;
     if (playbackPollTimer !== undefined) clearInterval(playbackPollTimer);
     unlistenSyncProgress?.();
     unlistenSyncFinished?.();
-    pageRequestVersion += 1;
     playlistPageRequestVersion += 1;
+  });
+
+  async function loadThemePreferences(): Promise<void> {
+    const revision = themeRevision;
+    try {
+      const stored = await invokeCommand('theme_get_preferences', {});
+      if (revision !== themeRevision) return;
+      themePreferences = normalizeThemePreferences(stored);
+      applyTheme(document.documentElement, themePreferences);
+      themeSaveState = 'saved';
+      themeSaveError = null;
+    } catch (error) {
+      if (revision !== themeRevision) return;
+      themeSaveState = 'error';
+      themeSaveError = `無法讀取已保存的外觀設定：${getErrorText(error)}`;
+    }
+  }
+
+  function updateThemeColor(key: keyof ThemePreferences, value: string): void {
+    if (!isHexColor(value)) return;
+    const next = normalizeThemePreferences({ ...themePreferences, [key]: value });
+    themePreferences = next;
+    applyTheme(document.documentElement, next);
+    themeSaveError = null;
+    themeSaveState = isTauri() ? 'saving' : 'preview';
+    const revision = ++themeRevision;
+    if (themeSaveTimer !== undefined) clearTimeout(themeSaveTimer);
+    themeSaveTimer = setTimeout(() => {
+      themeSaveTimer = undefined;
+      queueThemeSave(next, revision);
+    }, 300);
+  }
+
+  function saveThemePreferencesNow(): void {
+    if (themeSaveTimer !== undefined) clearTimeout(themeSaveTimer);
+    themeSaveTimer = undefined;
+    queueThemeSave({ ...themePreferences }, themeRevision);
+  }
+
+  function queueThemeSave(preferences: ThemePreferences, revision: number): void {
+    if (!isTauri()) {
+      themeSaveState = 'preview';
+      themeSaveError = '瀏覽器預覽不會保存外觀設定。';
+      return;
+    }
+
+    themeSaveQueue = themeSaveQueue.then(async () => {
+      if (revision !== themeRevision) return;
+      themeSaveState = 'saving';
+      try {
+        const saved = await invokeCommand('theme_set_preferences', { preferences });
+        if (revision !== themeRevision) return;
+        themePreferences = normalizeThemePreferences(saved);
+        applyTheme(document.documentElement, themePreferences);
+        themeSaveState = 'saved';
+        themeSaveError = null;
+      } catch (error) {
+        if (revision !== themeRevision) return;
+        themeSaveState = 'error';
+        themeSaveError = `無法保存外觀設定：${getErrorText(error)}`;
+      }
+    });
+  }
+
+  function resetThemePreferences(): void {
+    themePreferences = { ...DEFAULT_THEME_PREFERENCES };
+    applyTheme(document.documentElement, themePreferences);
+    themeSaveError = null;
+    themeSaveState = isTauri() ? 'saving' : 'preview';
+    const revision = ++themeRevision;
+    if (themeSaveTimer !== undefined) clearTimeout(themeSaveTimer);
+    themeSaveTimer = undefined;
+    queueThemeSave({ ...themePreferences }, revision);
+  }
+
+  const themeSaveMessage = $derived.by(() => {
+    if (themeSaveError) return themeSaveError;
+    if (themeSaveState === 'loading') return '正在讀取外觀設定…';
+    if (themeSaveState === 'saving') return '正在保存到此裝置…';
+    if (themeSaveState === 'preview') return '目前為預覽；桌面版會將設定保存到此裝置。';
+    return '外觀設定已保存到此裝置。';
   });
 
   function handleLibrarySyncProgress(event: LibrarySyncProgressEvent): void {
@@ -317,7 +400,6 @@
     runtimeError = null;
     try {
       capabilities = await invokeCommand('get_runtime_capabilities', {});
-      if (isReady(capabilities.library)) void loadPage(0);
       if (isReady(capabilities.library)) void loadPlaylists();
       if (isReady(capabilities.sourceSync)) void loadSources();
       if (isReady(capabilities.playback)) void loadPlaybackSnapshot();
@@ -341,40 +423,13 @@
     }
   }
 
-  async function loadPage(nextOffset: number): Promise<void> {
-    if (!libraryReady) return;
-
-    const requestVersion = ++pageRequestVersion;
-    isLoadingPage = true;
-    pageError = null;
-    try {
-      const nextPage = await invokeCommand('library_get_page', {
-        query: query.trim() || null,
-        offset: nextOffset,
-        limit: PAGE_SIZE,
-      });
-      if (requestVersion !== pageRequestVersion) return;
-      page = nextPage;
-      offset = nextPage.offset;
-    } catch (error) {
-      if (requestVersion !== pageRequestVersion) return;
-      page = null;
-      pageError = getErrorText(error);
-    } finally {
-      if (requestVersion === pageRequestVersion) isLoadingPage = false;
-    }
-  }
-
   function handleSearchInput(event: Event): void {
     query = (event.currentTarget as HTMLInputElement).value;
-    if (searchTimer !== undefined) clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => void loadPage(0), 240);
   }
 
   async function syncLibrary(): Promise<void> {
     if (!sourceSyncReady) return;
     isSyncing = true;
-    pageError = null;
     sourceError = null;
     try {
       const result = await invokeCommand('library_sync', {});
@@ -383,7 +438,7 @@
       sourceSyncSummary = result.sources.length === 0
         ? '尚未加入可同步的音樂來源。'
         : `${result.sources.length} 個來源已檢查；${completed} 個完整，${partial} 個需要留意。`;
-      await Promise.all([loadPage(0), loadSources()]);
+      await loadSources();
     } catch (error) {
       sourceError = getErrorText(error);
     } finally {
@@ -760,14 +815,6 @@
     }
   }
 
-  function nextPage(): void {
-    if (hasNextPage && page) void loadPage(page.offset + PAGE_SIZE);
-  }
-
-  function previousPage(): void {
-    if (hasPreviousPage && page) void loadPage(Math.max(0, page.offset - PAGE_SIZE));
-  }
-
   function nextPlaylistPage(): void {
     if (hasNextPlaylistPage && playlistPage && selectedPlaylistId) {
       void loadPlaylistPage(selectedPlaylistId, playlistPage.offset + PAGE_SIZE);
@@ -835,7 +882,7 @@
         onclick={() => (activeView = 'settings')}
       >
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8.7a3.3 3.3 0 1 0 0 6.6 3.3 3.3 0 0 0 0-6.6Z" stroke="currentColor" stroke-width="1.55" /><path d="m19.4 13.6 1.2.9-1.5 2.6-1.4-.7a7.5 7.5 0 0 1-1.5.9l-.2 1.6h-3l-.2-1.6a7.5 7.5 0 0 1-1.5-.9l-1.4.7-1.5-2.6 1.2-.9a7 7 0 0 1 0-1.8l-1.2-.9 1.5-2.6 1.4.7a7.5 7.5 0 0 1 1.5-.9l.2-1.6h3l.2 1.6a7.5 7.5 0 0 1 1.5.9l1.4-.7 1.5 2.6-1.2.9a7 7 0 0 1 0 1.8Z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" /></svg>
-        <span class="nav-label">來源設定</span>
+        <span class="nav-label">設定</span>
         <span class="nav-arrow" aria-hidden="true">›</span>
       </button>
     </nav>
@@ -946,7 +993,7 @@
                 <h2 id="library-heading">我的曲庫</h2>
               </div>
               <div class="section-heading-actions">
-                <span class="page-count">{page?.totalCount.toLocaleString() ?? '—'} <small>首曲目</small></span>
+                <span class="page-count">{libraryTrackCount?.toLocaleString() ?? '—'} <small>首曲目</small></span>
                 <button
                   class="outline-button"
                   type="button"
@@ -991,64 +1038,16 @@
                 </div>
                 <div class="not-ready-meta"><span class="status-dot" aria-hidden="true"></span> 尚未載入曲目</div>
               </div>
-            {:else if pageError}
-              <div class="inline-message" role="status">
-                <span class="message-mark">!</span>
-                <div><strong>無法載入這一頁</strong><p>{pageError}</p></div>
-                <button class="text-button" type="button" onclick={() => void loadPage(offset)}>再試一次</button>
-              </div>
-            {:else if isLoadingPage && !page}
-              <div class="loading-panel"><span class="loader-ring"></span><span>正在載入曲庫頁面…</span></div>
-            {:else if page && page.items.length === 0}
-              <div class="empty-panel">
-                <div class="empty-wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
-                <h3>{query.trim() ? '找不到相符曲目' : '曲庫目前是空的'}</h3>
-                <p>{query.trim() ? '試著縮短關鍵字，或搜尋歌名、演出者與專輯。' : '加入本機音樂來源並完成首次同步後，曲目會顯示在這裡。'}</p>
-              </div>
-            {:else if page}
-      <div class="track-table" role="table" aria-label="曲庫曲目">
-                <div class="track-table-head">
-                  <span class="column-index">#</span>
-                  <span>曲目</span>
-                  <span class="column-album">專輯</span>
-                  <span class="column-duration">長度</span>
-                  <span class="column-action"></span>
-                </div>
-                <div class="track-table-body" aria-live="polite">
-                  {#each page.items as track (track.id)}
-                    <div class="track-row" class:selected={selectedTrackId === track.id}>
-                      <span class="track-index">{formatTrackIndex(track.trackNumber, track.discNumber)}</span>
-                      <div class="track-main">
-                        <span class="track-title">{track.title?.trim() || '未命名曲目'}</span>
-                        <span class="track-artist">{track.artist?.trim() || '未知演出者'}</span>
-                      </div>
-                      <span class="track-album column-album">{track.album?.trim() || '未知專輯'}</span>
-                      <span class="track-duration column-duration">{formatDuration(track.durationMs)}</span>
-                      <button
-                        class="row-play column-action"
-                        type="button"
-                        aria-label={`播放 ${track.title?.trim() || '未命名曲目'}`}
-                        title={playbackReady ? '播放曲目' : showCapabilityDetail(capabilities?.playback)}
-                        disabled={!playbackReady || isSendingPlaybackCommand}
-                        onclick={() => void playTrack(track)}
-                      >
-                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7.3 5.8 7 4.2-7 4.2V5.8Z" fill="currentColor" /></svg>
-                      </button>
-                    </div>
-                  {/each}
-                </div>
-              </div>
-              <div class="pagination-bar">
-                <span>{pageRangeLabel}</span>
-                <div class="pagination-actions">
-                  <button type="button" class="page-button" onclick={previousPage} disabled={!hasPreviousPage || isLoadingPage} aria-label="上一頁">
-                    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m12.5 4.5-5 5.5 5 5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                  </button>
-                  <button type="button" class="page-button" onclick={nextPage} disabled={!hasNextPage || isLoadingPage} aria-label="下一頁">
-                    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7.5 4.5 5 5.5-5 5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                  </button>
-                </div>
-              </div>
+            {:else}
+              <TrackList
+                query={query}
+                resetKey={libraryListRevision}
+                selectedTrackId={selectedTrackId}
+                playbackReady={playbackReady}
+                isSendingPlaybackCommand={isSendingPlaybackCommand}
+                onPlay={playTrack}
+                onTotalCount={(count) => (libraryTrackCount = count)}
+              />
             {/if}
           </section>
         {:else if activeView === 'playlists'}
@@ -1203,13 +1202,86 @@
             </div>
           </section>
         {:else}
-          <section class="settings-view" aria-labelledby="settings-heading">
+          <section class="settings-page" aria-labelledby="settings-heading">
             <div class="section-heading settings-heading">
-              <div><p class="section-kicker">SOURCES</p><h2 id="settings-heading">管理音樂來源</h2></div>
-              <button class="outline-button" type="button" onclick={() => void loadSources()} disabled={!sourceSyncReady || isLoadingSources}>
-                {isLoadingSources ? '載入中' : '重新載入'}
-              </button>
+              <div><p class="section-kicker">SETTINGS</p><h2 id="settings-heading">設定</h2></div>
             </div>
+            <div class="settings-tabs" role="tablist" aria-label="設定分類">
+              <button
+                id="appearance-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'appearance'}
+                aria-controls="appearance-panel"
+                onclick={() => (settingsSection = 'appearance')}
+              >外觀</button>
+              <button
+                id="sources-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'sources'}
+                aria-controls="sources-panel"
+                onclick={() => (settingsSection = 'sources')}
+              >音樂來源</button>
+            </div>
+
+            {#if settingsSection === 'appearance'}
+              <div id="appearance-panel" class="settings-panel" role="tabpanel" aria-labelledby="appearance-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>顏色</h3>
+                    <p>自訂背景與主色。文字會依背景自動選擇黑色或白色，保持清楚對比。</p>
+                  </div>
+                  <button class="outline-button" type="button" onclick={resetThemePreferences}>恢復預設</button>
+                </div>
+                <div class="appearance-color-grid">
+                  <label class="theme-color-control">
+                    <input
+                      type="color"
+                      aria-label="背景色"
+                      value={themePreferences.backgroundHex}
+                      oninput={(event) => updateThemeColor('backgroundHex', event.currentTarget.value)}
+                      onchange={saveThemePreferencesNow}
+                    />
+                    <span class="theme-color-copy">
+                      <strong>背景色</strong>
+                      <code>{themePreferences.backgroundHex}</code>
+                    </span>
+                  </label>
+                  <label class="theme-color-control">
+                    <input
+                      type="color"
+                      aria-label="主色"
+                      value={themePreferences.accentHex}
+                      oninput={(event) => updateThemeColor('accentHex', event.currentTarget.value)}
+                      onchange={saveThemePreferencesNow}
+                    />
+                    <span class="theme-color-copy">
+                      <strong>主色</strong>
+                      <code>{themePreferences.accentHex}</code>
+                    </span>
+                  </label>
+                </div>
+                <div class="theme-preview" role="img" aria-label="顏色即時預覽">
+                  <div class="theme-preview-copy">
+                    <strong>外觀預覽</strong>
+                    <small>文字會自動調整對比</small>
+                  </div>
+                  <span class="theme-preview-chip">主色按鈕</span>
+                </div>
+                <p class="theme-save-status" class:error={themeSaveState === 'error'} role="status">{themeSaveMessage}</p>
+              </div>
+            {:else}
+              <div id="sources-panel" class="settings-source-panel" role="tabpanel" aria-labelledby="sources-tab" tabindex="0">
+                <section class="settings-view" aria-labelledby="source-settings-heading">
+                  <div class="section-heading settings-heading">
+                    <div><p class="section-kicker">SOURCES</p><h2 id="source-settings-heading">管理音樂來源</h2></div>
+                    <button class="outline-button" type="button" onclick={() => void loadSources()} disabled={!sourceSyncReady || isLoadingSources}>
+                      {isLoadingSources ? '載入中' : '重新載入'}
+                    </button>
+                  </div>
             <div class="source-status-card">
               <div class="source-status-icon" aria-hidden="true">
                 <svg viewBox="0 0 28 28" fill="none"><path d="M4.5 7.5h7l2.2 2.3h9.8v10.1a1.6 1.6 0 0 1-1.6 1.6H6.1a1.6 1.6 0 0 1-1.6-1.6V7.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /><path d="M4.5 11h19" stroke="currentColor" stroke-width="1.5" /></svg>
@@ -1285,7 +1357,10 @@
                 {/each}
               {/if}
             </div>
-            <div class="settings-footnote"><span>保留既有曲庫與人工資料</span><span>來源暫時離線時不會當成刪除</span></div>
+                  <div class="settings-footnote"><span>保留既有曲庫與人工資料</span><span>來源暫時離線時不會當成刪除</span></div>
+                </section>
+              </div>
+            {/if}
           </section>
         {/if}
       </div>

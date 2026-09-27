@@ -10,6 +10,7 @@ MoeMusicPlayer 是以本機優先為設計方向的 Windows 與 Android 音樂�
 - Android 可透過 MediaStore 選擇共享音樂儲存空間，或用系統文件選擇器（SAF）選擇資料夾。
 - 來源暫時不可用或掃描未完成時，保留先前已索引的曲目。
 - 以分頁結果瀏覽及搜尋已保存曲庫；介面不會載入整個曲庫。
+- 可在「設定」自訂背景色與主色，設定保存在 App 資料庫，文字顏色會依背景自動調整對比。
 - Windows 可播放本機 WAV、MP3、FLAC 與 Ogg Vorbis，並提供播放/暫停、跳轉與音量控制。
 - Windows 可匯入與匯出 M3U、UTF-8 M3U8 播放清單；尚未對應曲庫的項目會保留，相對路徑匯出限於所選共同根目錄內。
 - Windows 系統媒體控制會顯示目前曲目，並支援播放、暫停、停止與跳轉；佇列功能完成前不啟用前後首。
@@ -21,7 +22,8 @@ MoeMusicPlayer 是以本機優先為設計方向的 Windows 與 Android 音樂�
 1. 安裝 Node.js 20.19+（或 22.12+）、Rust 1.90+，以及 [Tauri 先決條件](https://v2.tauri.app/start/prerequisites/)。
 2. 執行 `npm install`。
 3. 執行 `npm run tauri -- dev`。
-4. 開啟「來源設定」，選擇「選擇資料夾並同步」，再選取現有音樂資料夾；取消不會變更來源清單。
+4. 開啟「設定 → 音樂來源」，選擇「選擇資料夾並同步」，再選取現有音樂資料夾；取消不會變更來源清單。
+5. 開啟「設定 → 外觀」選擇背景色與主色；預設為純黑背景與水藍主色。
 
 建置 Windows 執行檔請執行 `npm run tauri -- build --ci`，產物位於 `target/release/moemusicplayer.exe`。
 
@@ -34,4 +36,4 @@ npm install
 npm run android:build:arm64
 ```
 
-Debug APK 輸出至 `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`。在裝置上開啟「來源設定」，授權 MediaStore 或選擇 SAF 資料夾。
+Debug APK 輸出至 `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`。在裝置上開啟「設定 → 音樂來源」，授權 MediaStore 或選擇 SAF 資料夾。外觀設定會保存在 App 資料庫中。
