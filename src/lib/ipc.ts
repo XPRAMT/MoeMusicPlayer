@@ -151,6 +151,10 @@ export interface PlaylistExportResult {
 }
 
 export type RepeatMode = 'off' | 'one' | 'all';
+
+export type PlaybackQueueSource =
+  | { kind: 'library'; query: string | null }
+  | { kind: 'playlist'; playlistId: string; entryPosition: number };
 export type PlaybackState =
   | 'initializing'
   | 'empty'
@@ -172,6 +176,8 @@ export interface PlaybackSnapshot {
   lastError: string | null;
   repeatMode: RepeatMode;
   shuffle: boolean;
+  canNext: boolean;
+  canPrevious: boolean;
 }
 
 interface IpcContract {
@@ -244,7 +250,7 @@ interface IpcContract {
     result: PlaybackSnapshot;
   };
   playback_play: {
-    args: { trackId: string };
+    args: { trackId: string; queueSource?: PlaybackQueueSource };
     result: PlaybackSnapshot;
   };
   playback_pause: {

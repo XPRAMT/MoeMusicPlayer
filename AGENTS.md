@@ -11,7 +11,7 @@
 - 啟動同步由 renderer 在註冊 `library-sync-progress` 與 `library-sync-finished` 後觸發，避免空來源或快速掃描在 listener 建立前完成；不定總數的列舉只顯示已處理數。前端 call-site regression 與來源事件彙整測試通過。
 - 對 `WindowsSystemIndex` root 會探測 WSearch 服務、範圍規則與 catalog 狀態供診斷；目前不把 Search 查詢結果當完整清單，曲目與刪除對帳只依完整檔案系統走訪。
 - Android MediaStore/SAF 外掛、Rust IPC 與來源管理畫面已接線；Android ARM64 Debug APK 曾成功建置。最新版 insets 修正尚未在裝置複驗。
-- Windows 音訊 crate 使用 Rodio/CPAL；目前 17 項單元與 2 項隱藏 HWND 系統媒體測試通過。Tauri 已將 `TrackId` 解析為 SQLite 中啟用來源的本機路徑，再呼叫 `PlayerHandle`。actor 現提供非阻塞命令 ticket，Play/Pause/Seek/Volume ACK 於 worker 更新後快照；等待逾時會回明確錯誤，Tauri IPC 使用 `spawn_blocking` 等待，避免阻塞 async runtime。播放進度滑桿由 window 層 pointerup/cancel 收束拖曳，CSS 命中高度 24px、可視軌道 3px；headless Svelte DOM/鼠標合成橋接測試通過。這些測試不代表實際 Tauri 視窗或音訊輸出驗收。隨機、循環、佇列與前後首尚未實作，相關 capability 未就緒時按鈕保持停用。
+- Windows 音訊 crate 使用 Rodio/CPAL；目前 17 項單元與 2 項隱藏 HWND 系統媒體測試通過。Tauri 已將 `TrackId` 解析為 SQLite 中啟用來源的本機路徑，再呼叫 `PlayerHandle`。actor 現提供非阻塞命令 ticket，Play/Pause/Seek/Volume ACK 於 worker 更新後快照；等待逾時會回明確錯誤，Tauri IPC 使用 `spawn_blocking` 等待，避免阻塞 async runtime。播放進度滑桿由 window 層 pointerup/cancel 收束拖曳，CSS 命中高度 24px、可視軌道 3px；headless Svelte DOM/鼠標合成橋接測試通過。Rust session queue 已接上曲庫查詢與播放清單來源、自然播完、前後首、隨機及 off/all/one 循環；播放清單佇列保留重複項，並以 entry position 選取所點項目。系統媒體控制的 Next/Previous 能力依目前 queue 狀態提供。這些測試不代表實際 Tauri 視窗或音訊輸出驗收。
 - 曲庫列表已接入獨立 `src/lib/TrackList.svelte`：每次只取後端 40 首頁面，虛擬化可見列並以六頁／最多 240 首作 LRU 快取；查詢重置、過期回應隔離、錯誤重試與鍵盤瀏覽都已實作。七項 Node 測試涵蓋分頁競態與 100,000 首合成捲動；模擬 2,778 個捲動位置時最多 28 列、六頁快取。這是資料窗格測試，不代表 WebView 畫面影格效能；瀏覽器 DOM 掃描仍待執行。
 - SQLite v3 保存播放清單及順序項目與背景／主色偏好。Windows 前端以分頁 IPC 瀏覽清單，透過 Rust 原生對話框匯入 M3U/M3U8、匯出 UTF-8 M3U/M3U8；未匹配曲目保留原 locator。相對匯出會拒絕逃出所選共同根目錄的路徑。Unicode M3U/M3U8 匯入、分頁及匯出 helper 整合測試通過；播放清單原生對話框仍未以 GUI 驗收。
 - 設定頁將來源管理收在「設定 → 音樂來源」，另有「設定 → 外觀」可自訂背景色與主色；預設純黑 `#000000`、水藍 `#55D9FF`。外觀只透過窄 Tauri IPC 讀寫 SQLite typed `ThemePreferences`，不使用 localStorage；Renderer 依對比度選擇黑／白文字、主色按鈕文字及焦點色。十六進位色值驗證、黑白背景／低亮度主色對比測試通過；`player-db` 21 項測試包含非法值不改寫、預設 migration 與關閉重開後偏好一致。設定頁的實際 GUI 視覺、縮放及偏好重啟回讀尚未由使用者驗收。
@@ -23,14 +23,14 @@
 仍未完成或未驗證：
 
 - Windows 原生資料夾選擇器已由使用者在隔離 app-data 選取 `D:\Music` 並完成唯讀同步；正式 AppData 未觸碰。Cancel 不新增來源的路徑尚未單獨確認；播放清單原生對話框仍待使用者驗收。系統媒體控制尚未由實際 Tauri 視窗、Windows 媒體 flyout 或硬體媒體按鍵端到端驗收。
-- Windows Tauri/音訊 IPC 的命令 ACK 已接線並由服務整合測試覆蓋 TrackId 播放與音量；實際 Tauri 視窗／音訊輸出仍待隔離 app-data 驗收。headless DOM probe 確認滑桿 hit box 24px 且滑桿外 pointerup 可送 seek。worker 超時會回錯誤，但正在執行中的命令不會取消，之後仍可能完成；UI 尚需確認錯誤回報與後續快照更新行為。使用者回報底部控制不穩；隨機、循環、佇列與前後首目前尚未完成，需與已實作的播放/暫停分開驗收。合成 DOM/輸出裝置測試不代表實際 Tauri 音訊或聽感驗收。
+- Windows Tauri/音訊 IPC 的命令 ACK 與 queue/mode 已接線；`npm run check/build`、workspace Rust tests、嚴格 Tauri Clippy 及 Windows release build 通過。服務整合測試以臨時 Unicode 音樂資料夾與合成 MP3 驗證 TrackId 路徑、worker 播放、暫停與音量，並驗證重複 playlist TrackId 依 entry position 建 queue。實際 Tauri 視窗／音訊輸出、手動滑桿及 SMTC flyout/硬體鍵仍待隔離 app-data 驗收。headless DOM probe 確認滑桿 hit box 24px 且滑桿外 pointerup 可送 seek。worker 超時會回錯誤，但正在執行中的命令不會取消，之後仍可能完成；UI 尚需確認錯誤回報與後續快照更新行為。合成 DOM/輸出裝置測試不代表實際 Tauri 音訊或聽感驗收。
 - 設定頁與真實 Tauri 視窗的自訂色對比、重啟回讀及多視窗尺寸版面尚未人工驗收；目前只通過前端 helper、SQLite 重開測試、Svelte 型別檢查與正式版建置。
-- 播放佇列、前後首、隨機、循環與 Android 音訊尚未實作；因此 Windows 系統媒體控制不宣告前後首能力。
+- Hanser `hanser.m3u8` 雖可保存並在重開後保留 176 項，但目前 0/176 項匹配已掃描曲庫；播放清單 queue 只會納入已匹配且有啟用來源的項目。Windows locator 的 `\\?\D:\...` 與 M3U 的 `D:\...` 正規化匹配修正待完成，未修復前不得宣稱 Hanser 播放清單可播放。Android 音訊與播放佇列仍未實作。
 - Android 最新頂部/底部 system insets 修正及 MediaStore/SAF 真機掃描尚未驗證。先前 ARM64 APK 建置早於本輪共用 shell 變更；本輪直接 `cargo check --target aarch64-linux-android` 因目前 shell 找不到 `clang.exe` 而停在 SQLite native build，未得到 Android app 編譯結果。Android 播放未實作。
 - Windows 封面目前只讀取已啟用本機檔案來源；Android MediaStore/SAF 封面、使用者實際 Tauri 視窗圖片解碼／縮放與封面載入失敗畫面仍待平台接線及驗收。封面上限內仍可能遇到瀏覽器無法解碼的容器資料，該路徑會回到占位圖。
 - 100,000 首真實曲庫端到端效能、WebView 實際 DOM／捲動影格表現及完整 Windows SystemIndex 使用判準尚無實測結論；目前只有列表資料窗格的合成測試。
 
-下一步在隔離 app-data、合成音訊及真正 Tauri IPC 重驗 ACK 命令與輪詢；不得操作使用者正在使用的視窗或正式曲庫。接續完成 Rust 佇列、前後首、shuffle 與 repeat，再由使用者手動確認滑桿 thumb、拖曳 seek 與底部控制穩定性。另續驗來源選擇器 Cancel、外觀頁、播放清單對話框、系統媒體 flyout/按鍵、封面真實畫面與應用音訊輸出；`D:\Music` 已掃描完成，不重複掃描或寫入音樂檔。另於 `tests/track-list-harness.html` 確認 100,000 首列表的實際 DOM 列數、捲動與鍵盤操作。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
+下一步修復 Hanser playlist locator 身份匹配後，以隔離 app-data 重驗 176 項匹配率及重複項目播放；再用合成音訊及真正 Tauri IPC 驗收 queue next/previous、自然播完、off/all/one、shuffle 與 ACK 輪詢，不得操作使用者正在使用的視窗或正式曲庫。之後由使用者手動確認滑桿 thumb、拖曳 seek 與底部控制穩定性。另續驗來源選擇器 Cancel、外觀頁、播放清單對話框、系統媒體 flyout/按鍵、封面真實畫面與應用音訊輸出；`D:\Music` 已掃描完成，不重複掃描或寫入音樂檔。另於 `tests/track-list-harness.html` 確認 100,000 首列表的實際 DOM 列數、捲動與鍵盤操作。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
 
 下一輪待辦：曲目資訊顯示 codec、sample rate、bitrate；只有無損格式且來源 bit depth 可可靠辨識時才顯示 bit depth，不得把 AAC/MP3 等有損格式的解碼 PCM depth 當來源深度。統計每首實際播放累計毫秒；未來 shuffle 優先較小的 `played_ms / track_duration_ms`，duration 為 null 或 0 的處理方式須另行定義並測試。以上均為未實作規劃。
 

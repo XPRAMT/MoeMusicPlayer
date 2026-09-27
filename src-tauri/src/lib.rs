@@ -7,8 +7,9 @@ use std::{
 };
 
 use player_core::{
-    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaylistId, PlaylistPage,
-    PlaylistSummary, SourceId, SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackSummary,
+    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaybackQueue, PlaylistId,
+    PlaylistPage, PlaylistSummary, QueueRepeatMode, SourceId, SourceScanState, SyncEngine,
+    SyncProgress, SyncReport, TrackId, TrackSummary,
 };
 use player_db::{Database, ThemePreferences};
 use serde::{Deserialize, Serialize};
@@ -33,9 +34,6 @@ use player_audio_windows::{
     },
     AudioError, CommandTicket, PlaybackState as AudioPlaybackState, PlayerHandle,
 };
-
-#[cfg(target_os = "windows")]
-use player_core::TrackId;
 
 const LIBRARY_SYNC_FINISHED_EVENT: &str = "library-sync-finished";
 const LIBRARY_SYNC_PROGRESS_EVENT: &str = "library-sync-progress";
@@ -84,6 +82,10 @@ struct WindowsPlaybackService {
     player: PlayerHandle,
     current_track: Mutex<Option<TrackSummary>>,
     command_gate: Mutex<()>,
+    queue: Mutex<Option<PlaybackQueue>>,
+    repeat_mode: Mutex<RepeatMode>,
+    shuffle: Mutex<bool>,
+    queue_advance_pending: Mutex<bool>,
 }
 
 #[cfg(target_os = "windows")]
@@ -110,6 +112,10 @@ impl WindowsPlaybackService {
             player,
             current_track: Mutex::new(None),
             command_gate: Mutex::new(()),
+            queue: Mutex::new(None),
+            repeat_mode: Mutex::new(RepeatMode::Off),
+            shuffle: Mutex::new(false),
+            queue_advance_pending: Mutex::new(false),
         }
     }
 
@@ -120,6 +126,20 @@ impl WindowsPlaybackService {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        let repeat_mode = *self
+            .repeat_mode
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let shuffle = *self
+            .shuffle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let queue = self
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let can_next = queue.as_ref().is_some_and(PlaybackQueue::can_next);
+        let can_previous = queue.as_ref().is_some_and(PlaybackQueue::can_previous);
         PlaybackSnapshot {
             current_track,
             state: audio_state_name(audio.state).to_owned(),
@@ -128,8 +148,10 @@ impl WindowsPlaybackService {
             duration_ms: audio.duration.map(duration_millis),
             volume: f64::from(audio.volume),
             last_error: audio.last_error.as_ref().map(playback_audio_error_message),
-            repeat_mode: RepeatMode::Off,
-            shuffle: false,
+            repeat_mode,
+            shuffle,
+            can_next,
+            can_previous,
         }
     }
 }
@@ -248,10 +270,18 @@ impl WindowsSystemMediaService {
             artist: track.artist,
             album: track.album,
         });
+        let queue = playback
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let capabilities = player_audio_windows::system_media::MediaControlCapabilities {
+            can_next: queue.as_ref().is_some_and(PlaybackQueue::can_next),
+            can_previous: queue.as_ref().is_some_and(PlaybackQueue::can_previous),
+        };
         let update = MediaControlUpdate {
             snapshot: playback.player.snapshot(),
             metadata,
-            capabilities: Default::default(),
+            capabilities,
         };
         match controller.update(update) {
             Ok(()) => {
@@ -295,7 +325,7 @@ fn apply_system_media_event(
                 .as_ref()
                 .map(|track| track.id)
                 .ok_or_else(|| "目前沒有可播放的曲目。".to_owned())?;
-            let _ = play_track_from_database(database, playback, &track_id.to_string())?;
+            let _ = play_track_from_database(database, playback, &track_id.to_string(), None)?;
         }
         SystemMediaEvent::PauseRequested => {
             let _ = pause_playback(playback)?;
@@ -306,7 +336,24 @@ fn apply_system_media_event(
         SystemMediaEvent::SeekRequested(position) => {
             let _ = seek_playback(playback, duration_millis(*position))?;
         }
-        SystemMediaEvent::NextRequested | SystemMediaEvent::PreviousRequested => {}
+        SystemMediaEvent::NextRequested => {
+            if let Some(database) = database {
+                if let Some(ticket) = navigate_queue(database, playback, true)? {
+                    ticket
+                        .wait(Duration::from_secs(2))
+                        .map_err(|error| playback_audio_error_message(&error))?;
+                }
+            }
+        }
+        SystemMediaEvent::PreviousRequested => {
+            if let Some(database) = database {
+                if let Some(ticket) = navigate_queue(database, playback, false)? {
+                    ticket
+                        .wait(Duration::from_secs(2))
+                        .map_err(|error| playback_audio_error_message(&error))?;
+                }
+            }
+        }
         SystemMediaEvent::Ready | SystemMediaEvent::Error(_) => {}
     }
     Ok(())
@@ -471,12 +518,24 @@ struct LibrarySyncFinishedEvent {
     error: Option<String>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum RepeatMode {
     Off,
     One,
     All,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum PlaybackQueueSource {
+    Library {
+        query: Option<String>,
+    },
+    Playlist {
+        playlist_id: String,
+        entry_position: u64,
+    },
 }
 
 #[derive(Clone, Serialize)]
@@ -491,6 +550,8 @@ struct PlaybackSnapshot {
     last_error: Option<String>,
     repeat_mode: RepeatMode,
     shuffle: bool,
+    can_next: bool,
+    can_previous: bool,
 }
 
 fn feature(state: FeatureState, detail: Option<String>) -> FeatureCapability {
@@ -582,15 +643,9 @@ fn get_runtime_capabilities(state: State<'_, AppState>) -> RuntimeCapabilities {
         desktop_runtime: feature(FeatureState::Ready, None),
         library,
         source_sync,
-        playback,
-        playback_navigation: feature(
-            FeatureState::NotReady,
-            Some("播放佇列與前後首尚未實作。".to_owned()),
-        ),
-        playback_modes: feature(
-            FeatureState::NotReady,
-            Some("隨機與循環播放尚未實作。".to_owned()),
-        ),
+        playback: playback.clone(),
+        playback_navigation: playback.clone(),
+        playback_modes: playback.clone(),
         playlist_exchange,
         system_media_controls,
     }
@@ -1326,10 +1381,22 @@ fn now_utc_epoch_ms() -> Result<i64, String> {
 }
 
 #[tauri::command]
-fn playback_get_snapshot(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
+async fn playback_get_snapshot(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
     #[cfg(target_os = "windows")]
     {
         let playback = windows_playback_service(&state)?;
+        if let Some(database) = state.database.as_ref() {
+            if let Some(ticket) = advance_ended_playback(database, playback)? {
+                let result = await_playback_ack(ticket).await;
+                if playback.player.snapshot().state != AudioPlaybackState::Ended {
+                    *playback
+                        .queue_advance_pending
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+                }
+                result?;
+            }
+        }
         if let Some(system_media) = state.system_media.as_ref() {
             system_media.pump(playback, state.database.as_ref());
         }
@@ -1381,6 +1448,7 @@ async fn library_get_track_artwork(
 async fn playback_play(
     state: State<'_, AppState>,
     track_id: String,
+    queue_source: Option<PlaybackQueueSource>,
 ) -> Result<PlaybackSnapshot, String> {
     #[cfg(target_os = "windows")]
     {
@@ -1391,7 +1459,7 @@ async fn playback_play(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         let service = windows_playback_service(&state)?;
-        let (ticket, track) = play_track_from_database(database, service, &track_id)?;
+        let (ticket, track) = play_track_from_database(database, service, &track_id, queue_source)?;
         await_playback_ack(ticket).await?;
         *service
             .current_track
@@ -1401,7 +1469,7 @@ async fn playback_play(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (state, track_id);
+        let _ = (state, track_id, queue_source);
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
     }
 }
@@ -1422,13 +1490,49 @@ async fn playback_pause(state: State<'_, AppState>) -> Result<PlaybackSnapshot, 
 }
 
 #[tauri::command]
-fn playback_next() -> Result<PlaybackSnapshot, String> {
-    Err("曲目佇列與下一首播放尚未實作。".to_owned())
+async fn playback_next(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let service = windows_playback_service(&state)?;
+        if let Some(ticket) = navigate_queue(database, service, true)? {
+            await_playback_ack(ticket).await?;
+        }
+        Ok(service.snapshot())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = state;
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
 }
 
 #[tauri::command]
-fn playback_previous() -> Result<PlaybackSnapshot, String> {
-    Err("曲目佇列與上一首播放尚未實作。".to_owned())
+async fn playback_previous(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let service = windows_playback_service(&state)?;
+        if let Some(ticket) = navigate_queue(database, service, false)? {
+            await_playback_ack(ticket).await?;
+        }
+        Ok(service.snapshot())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = state;
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
 }
 
 #[tauri::command]
@@ -1468,13 +1572,69 @@ async fn playback_set_volume(
 }
 
 #[tauri::command]
-fn playback_set_repeat(_mode: RepeatMode) -> Result<PlaybackSnapshot, String> {
-    Err("循環播放尚未實作。".to_owned())
+fn playback_set_repeat(
+    state: State<'_, AppState>,
+    mode: RepeatMode,
+) -> Result<PlaybackSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let service = windows_playback_service(&state)?;
+        let _gate = service
+            .command_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *service
+            .repeat_mode
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = mode;
+        if let Some(queue) = service
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            queue.set_repeat_mode(queue_repeat_mode(mode));
+        }
+        Ok(service.snapshot())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, mode);
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
 }
 
 #[tauri::command]
-fn playback_set_shuffle(_enabled: bool) -> Result<PlaybackSnapshot, String> {
-    Err("隨機播放尚未實作。".to_owned())
+fn playback_set_shuffle(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<PlaybackSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let service = windows_playback_service(&state)?;
+        let _gate = service
+            .command_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *service
+            .shuffle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = enabled;
+        if let Some(queue) = service
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            queue.set_shuffle(enabled);
+        }
+        Ok(service.snapshot())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, enabled);
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1485,6 +1645,173 @@ fn windows_playback_service(state: &AppState) -> Result<&WindowsPlaybackService,
             .clone()
             .unwrap_or_else(|| "Windows 音訊服務尚未啟動。".to_owned())
     })
+}
+
+#[cfg(target_os = "windows")]
+fn queue_repeat_mode(mode: RepeatMode) -> QueueRepeatMode {
+    match mode {
+        RepeatMode::Off => QueueRepeatMode::Off,
+        RepeatMode::One => QueueRepeatMode::One,
+        RepeatMode::All => QueueRepeatMode::All,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn queue_for_track(
+    database: &Database,
+    track_id: TrackId,
+    source: Option<PlaybackQueueSource>,
+) -> Result<PlaybackQueue, String> {
+    let (track_ids, selected_index) = match source {
+        Some(PlaybackQueueSource::Library { query }) => {
+            let track_ids = database
+                .list_track_ids(query.as_deref())
+                .map_err(|error| error.to_string())?;
+            let selected = track_ids
+                .iter()
+                .position(|candidate| *candidate == track_id)
+                .ok_or_else(|| "所選曲目已不在目前的曲庫查詢結果中。".to_owned())?;
+            (track_ids, selected)
+        }
+        Some(PlaybackQueueSource::Playlist {
+            playlist_id,
+            entry_position,
+        }) => {
+            let playlist_id = PlaylistId::parse(&playlist_id)
+                .map_err(|error| format!("播放清單 ID 無效：{error}"))?;
+            let entries = database
+                .playlist_track_ids(playlist_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "播放清單已不存在，請重新整理。".to_owned())?;
+            let selected = entries
+                .iter()
+                .position(|(position, candidate)| {
+                    *position == entry_position && *candidate == track_id
+                })
+                .ok_or_else(|| "所選播放清單項目已無法播放。".to_owned())?;
+            (entries.into_iter().map(|(_, id)| id).collect(), selected)
+        }
+        None => {
+            let track_ids = database
+                .list_track_ids(None)
+                .map_err(|error| error.to_string())?;
+            let selected = track_ids
+                .iter()
+                .position(|candidate| *candidate == track_id)
+                .ok_or_else(|| "所選曲目已不在曲庫中。".to_owned())?;
+            (track_ids, selected)
+        }
+    };
+    PlaybackQueue::new(track_ids, selected_index)
+        .ok_or_else(|| "播放清單沒有可播放的曲目。".to_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn enqueue_track_locked(
+    database: &Database,
+    service: &WindowsPlaybackService,
+    track_id: TrackId,
+) -> Result<CommandTicket, String> {
+    let track = database
+        .get_track_summary(track_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
+    let path = database
+        .resolve_playable_filesystem_locator(track_id)
+        .map_err(|error| error.to_string())?;
+    service
+        .player
+        .load(path)
+        .map_err(|error| playback_audio_error_message(&error))?;
+    let ticket = service
+        .player
+        .request_play()
+        .map_err(|error| playback_audio_error_message(&error))?;
+    *service
+        .current_track
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(track);
+    Ok(ticket)
+}
+
+#[cfg(target_os = "windows")]
+fn navigate_queue(
+    database: &Database,
+    service: &WindowsPlaybackService,
+    next: bool,
+) -> Result<Option<CommandTicket>, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let target = {
+        let mut queue = service
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(queue) = queue.as_mut() else {
+            return Ok(None);
+        };
+        if next {
+            queue.next(true)
+        } else {
+            queue.previous()
+        }
+    };
+    target
+        .map(|track_id| enqueue_track_locked(database, service, track_id))
+        .transpose()
+}
+
+#[cfg(target_os = "windows")]
+fn advance_ended_playback(
+    database: &Database,
+    service: &WindowsPlaybackService,
+) -> Result<Option<CommandTicket>, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if service.player.snapshot().state != AudioPlaybackState::Ended {
+        *service
+            .queue_advance_pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+        return Ok(None);
+    }
+    let mut pending = service
+        .queue_advance_pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *pending {
+        return Ok(None);
+    }
+    *pending = true;
+    drop(pending);
+
+    let target = service
+        .queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+        .and_then(|queue| queue.next(false));
+    let Some(track_id) = target else {
+        *service
+            .queue_advance_pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+        return Ok(None);
+    };
+    match enqueue_track_locked(database, service, track_id) {
+        Ok(ticket) => Ok(Some(ticket)),
+        Err(error) => {
+            *service
+                .queue_advance_pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+            Err(error)
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1556,6 +1883,7 @@ fn play_track_from_database(
     database: &Database,
     service: &WindowsPlaybackService,
     track_id: &str,
+    source: Option<PlaybackQueueSource>,
 ) -> Result<(CommandTicket, TrackSummary), String> {
     let track_id = TrackId::parse(track_id).map_err(|error| format!("曲目 ID 無效：{error}"))?;
     let track = database
@@ -1576,6 +1904,30 @@ fn play_track_from_database(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
         .map(|current| current.id);
+    let preserve_queue = source.is_none()
+        && service
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|queue| queue.current() == track_id);
+    if !preserve_queue {
+        let mut queue = queue_for_track(database, track_id, source)?;
+        let repeat_mode = *service
+            .repeat_mode
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let shuffle = *service
+            .shuffle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        queue.set_repeat_mode(queue_repeat_mode(repeat_mode));
+        queue.set_shuffle(shuffle);
+        *service
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(queue);
+    }
     let audio_snapshot = service.player.snapshot();
     let ticket = if current_track_id == Some(track_id)
         && matches!(
@@ -1699,13 +2051,15 @@ mod windows_library_integration_tests {
     };
     use super::{
         apply_system_media_event, play_track_from_database, playback_audio_error_message,
-        set_playback_volume, WindowsPlaybackService,
+        queue_for_track, set_playback_volume, PlaybackQueueSource, WindowsPlaybackService,
     };
     use player_audio_windows::{
         system_media::{SystemMediaController, SystemMediaEvent},
         AudioBackend, AudioError, PlayerHandle,
     };
-    use player_core::{ListTracksQuery, MediaLocator, MediaSourceKind, SourceId};
+    use player_core::{
+        ListTracksQuery, MediaLocator, MediaSourceKind, Playlist, PlaylistEntry, SourceId,
+    };
     use player_db::Database;
     use std::{
         fs,
@@ -2043,8 +2397,9 @@ mod windows_library_integration_tests {
         })
         .expect("create test audio worker");
         let service = WindowsPlaybackService::new(player);
-        let (ticket, track) = play_track_from_database(&database, &service, &track_id.to_string())
-            .expect("resolve internal ID and enqueue playback");
+        let (ticket, track) =
+            play_track_from_database(&database, &service, &track_id.to_string(), None)
+                .expect("resolve internal ID and enqueue playback");
         assert_eq!(track.id, track_id);
         ticket
             .wait(Duration::from_secs(2))
@@ -2071,7 +2426,7 @@ mod windows_library_integration_tests {
         };
         assert_eq!(
             player_platform_windows::windows_locator_key(&actual_path),
-            player_platform_windows::windows_locator_key(&fs::canonicalize(track_path).unwrap())
+            player_platform_windows::windows_locator_key(&fs::canonicalize(&track_path).unwrap())
         );
 
         let playing_deadline = Instant::now() + Duration::from_secs(2);
@@ -2105,6 +2460,47 @@ mod windows_library_integration_tests {
                 .map(|track| track.id),
             active_track_id
         );
+
+        let mut playlist = Playlist::new("duplicate queue positions");
+        let locator = MediaLocator::FileSystem(track_path.clone());
+        playlist.entries = vec![
+            PlaylistEntry {
+                track_id: Some(track_id),
+                locator: locator.clone(),
+                title: None,
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: Some(track_id),
+                locator,
+                title: None,
+                duration_ms: None,
+            },
+        ];
+        database
+            .save_playlist(&playlist)
+            .expect("save duplicate playlist entries");
+        let first_entry_queue = queue_for_track(
+            &database,
+            track_id,
+            Some(PlaybackQueueSource::Playlist {
+                playlist_id: playlist.id.to_string(),
+                entry_position: 0,
+            }),
+        )
+        .expect("resolve first duplicate entry by position");
+        assert!(first_entry_queue.can_next());
+        let last_entry_queue = queue_for_track(
+            &database,
+            track_id,
+            Some(PlaybackQueueSource::Playlist {
+                playlist_id: playlist.id.to_string(),
+                entry_position: 1,
+            }),
+        )
+        .expect("resolve second duplicate entry by position");
+        assert!(!last_entry_queue.can_next());
+        assert!(last_entry_queue.can_previous());
 
         apply_system_media_event(&SystemMediaEvent::PauseRequested, Some(&database), &service)
             .expect("apply SMTC pause request");

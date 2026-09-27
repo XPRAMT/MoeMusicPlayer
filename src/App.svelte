@@ -16,6 +16,7 @@
     type PlaylistPage,
     type PlaylistSummary,
     type PlaybackSnapshot,
+    type PlaybackQueueSource,
     type PlaybackState,
     type RuntimeCapabilities,
     type ThemePreferences,
@@ -577,7 +578,12 @@
 
   async function playPlaylistEntry(entry: PlaylistEntrySummary): Promise<void> {
     if (!entry.trackId || !entry.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand) return;
-    await sendPlaybackCommand(() => invokeCommand('playback_play', { trackId: entry.trackId! }));
+    const queueSource: PlaybackQueueSource = {
+      kind: 'playlist',
+      playlistId: selectedPlaylistId!,
+      entryPosition: entry.position,
+    };
+    await sendPlaybackCommand(() => invokeCommand('playback_play', { trackId: entry.trackId!, queueSource }));
     if (!playbackError) activeView = 'now-playing';
   }
 
@@ -691,7 +697,11 @@
   async function playTrack(track: TrackSummary): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand) return;
     selectedTrackId = track.id;
-    await sendPlaybackCommand(() => invokeCommand('playback_play', { trackId: track.id }));
+    const queueSource: PlaybackQueueSource = {
+      kind: 'library',
+      query: query.trim() || null,
+    };
+    await sendPlaybackCommand(() => invokeCommand('playback_play', { trackId: track.id, queueSource }));
     if (!playbackError) activeView = 'now-playing';
   }
 
@@ -1439,7 +1449,7 @@
         <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} onclick={toggleShuffle}>
           <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M16 4h3v3M19 4l-6.5 7.2M5 6h2.2c1 0 1.9.5 2.5 1.2l5.6 7.6c.5.7 1.4 1.2 2.4 1.2H19m-3-3 3 3-3 3M5 16h2.2c.8 0 1.6-.4 2.1-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
-        <button class="control-button" type="button" aria-label="上一首" title={showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
+        <button class="control-button" type="button" aria-label="上一首" title={playback?.canPrevious ? '播放佇列上一首' : showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || !playback?.canPrevious || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
           <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M6 5v12m11-11-8 5 8 5V6Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
         <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} title={showCapabilityDetail(capabilities?.playback)} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
@@ -1449,7 +1459,7 @@
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m8.5 5.8 10 6.2-10 6.2V5.8Z" fill="currentColor" /></svg>
           {/if}
         </button>
-        <button class="control-button" type="button" aria-label="下一首" title={showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
+        <button class="control-button" type="button" aria-label="下一首" title={playback?.canNext ? '播放佇列下一首' : showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
           <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M16 5v12M5 6l8 5-8 5V6Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
         <button class="control-button secondary-control" type="button" aria-label="循環播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
