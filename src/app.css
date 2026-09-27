@@ -1835,6 +1835,29 @@ input:focus-visible {
   font-size: 8px;
 }
 
+.configured-source-copy .configured-source-location {
+  max-width: 34vw;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.configured-source-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-soft);
+  font-size: 8px;
+}
+
+.configured-source-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .configured-source-state {
   flex: 0 1 auto;
   align-items: flex-end;
@@ -2624,3 +2647,4 @@ input:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
