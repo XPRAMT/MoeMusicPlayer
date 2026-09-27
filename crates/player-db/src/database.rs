@@ -41,6 +41,13 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
  ORDER BY t.sort_title, t.track_id
  LIMIT ?2 OFFSET ?3";
+const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
+    t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz
+ FROM tracks t WHERE t.track_id=?1";
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE library_roots (
@@ -129,6 +136,10 @@ pub enum DatabaseError {
     CorruptData(String),
     InvalidNumber(&'static str),
     SourceMismatch,
+    TrackNotFound(TrackId),
+    NoEnabledTrackMapping(TrackId),
+    NonFilesystemTrackLocator(TrackId),
+    TrackFileUnavailable(TrackId),
 }
 
 impl fmt::Display for DatabaseError {
@@ -151,6 +162,18 @@ impl fmt::Display for DatabaseError {
             Self::SourceMismatch => {
                 f.write_str("a source scan contains an identity from a different library root")
             }
+            Self::TrackNotFound(track_id) => write!(f, "track {track_id} was not found"),
+            Self::NoEnabledTrackMapping(track_id) => {
+                write!(f, "track {track_id} has no enabled source mapping")
+            }
+            Self::NonFilesystemTrackLocator(track_id) => write!(
+                f,
+                "track {track_id} has no enabled filesystem locator; its available locator is not a local path"
+            ),
+            Self::TrackFileUnavailable(track_id) => write!(
+                f,
+                "track {track_id} has no currently accessible filesystem file; its source may be offline or the file may have been removed"
+            ),
         }
     }
 }
@@ -365,6 +388,87 @@ impl Database {
         let connection = self.lock()?;
         let query = query.filter(|text| !text.trim().is_empty());
         fetch_tracks_window(&connection, query, offset, query_limit(limit))
+    }
+
+    /// Return the current user-facing metadata for one internal track ID.
+    /// User overrides are applied just as they are for paginated library results.
+    pub fn get_track_summary(
+        &self,
+        track_id: TrackId,
+    ) -> Result<Option<TrackSummary>, DatabaseError> {
+        let connection = self.lock()?;
+        Ok(connection
+            .query_row(
+                TRACK_SUMMARY_SQL,
+                [track_id.to_string()],
+                row_to_track_summary,
+            )
+            .optional()?)
+    }
+
+    /// Return native locators for enabled mappings of a track, with filesystem paths first.
+    /// Paths stay as `PathBuf` and are decoded using the platform-native representation.
+    pub fn track_locators(&self, track_id: TrackId) -> Result<Vec<MediaLocator>, DatabaseError> {
+        let connection = self.lock()?;
+        let track_exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tracks WHERE track_id=?1)",
+            [track_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !track_exists {
+            return Err(DatabaseError::TrackNotFound(track_id));
+        }
+
+        let mut statement = connection.prepare_cached(
+            "SELECT m.locator_kind, m.locator_encoding, m.locator_data
+             FROM source_mappings m
+             JOIN library_roots r ON r.source_id=m.source_id
+             WHERE m.track_id=?1 AND r.enabled=1
+             ORDER BY CASE WHEN m.locator_kind='filesystem_path' THEN 0 ELSE 1 END,
+                      r.source_id, m.source_item_id",
+        )?;
+        let rows = statement.query_map([track_id.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (kind, encoding, data) = row?;
+            locator::decode(&kind, &encoding, &data)
+        })
+        .collect()
+    }
+
+    /// Select an existing regular filesystem file from this track's enabled source mappings.
+    /// The returned path remains a native `PathBuf`; a later file open can still fail if the
+    /// source changes after this check.
+    pub fn resolve_playable_filesystem_locator(
+        &self,
+        track_id: TrackId,
+    ) -> Result<std::path::PathBuf, DatabaseError> {
+        let locators = self.track_locators(track_id)?;
+        if locators.is_empty() {
+            return Err(DatabaseError::NoEnabledTrackMapping(track_id));
+        }
+
+        let mut has_filesystem_locator = false;
+        for locator in locators {
+            let MediaLocator::FileSystem(path) = locator else {
+                continue;
+            };
+            has_filesystem_locator = true;
+            if std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
+                return Ok(path);
+            }
+        }
+
+        if has_filesystem_locator {
+            Err(DatabaseError::TrackFileUnavailable(track_id))
+        } else {
+            Err(DatabaseError::NonFilesystemTrackLocator(track_id))
+        }
     }
 
     pub fn set_user_override(
@@ -582,42 +686,40 @@ fn fetch_tracks_window(
     let items = statement
         .query_map(
             params![query, i64::from(limit), query_limit_i64(offset)],
-            |row| {
-                let raw_id: String = row.get(0)?;
-                let id = TrackId::parse(&raw_id).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })?;
-                Ok(TrackSummary {
-                    id,
-                    title: row.get(1)?,
-                    artist: row.get(2)?,
-                    album: row.get(3)?,
-                    album_artist: row.get(4)?,
-                    track_number: row
-                        .get::<_, Option<i64>>(5)?
-                        .map(|value| value.max(0) as u32),
-                    disc_number: row
-                        .get::<_, Option<i64>>(6)?
-                        .map(|value| value.max(0) as u32),
-                    duration_ms: row
-                        .get::<_, Option<i64>>(7)?
-                        .map(|value| value.max(0) as u64),
-                    codec: row.get(8)?,
-                    bitrate_bps: row
-                        .get::<_, Option<i64>>(9)?
-                        .map(|value| value.max(0) as u32),
-                    sample_rate_hz: row
-                        .get::<_, Option<i64>>(10)?
-                        .map(|value| value.max(0) as u32),
-                })
-            },
+            row_to_track_summary,
         )?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(items)
+}
+
+fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummary> {
+    let raw_id: String = row.get(0)?;
+    let id = TrackId::parse(&raw_id).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(TrackSummary {
+        id,
+        title: row.get(1)?,
+        artist: row.get(2)?,
+        album: row.get(3)?,
+        album_artist: row.get(4)?,
+        track_number: row
+            .get::<_, Option<i64>>(5)?
+            .map(|value| value.max(0) as u32),
+        disc_number: row
+            .get::<_, Option<i64>>(6)?
+            .map(|value| value.max(0) as u32),
+        duration_ms: row
+            .get::<_, Option<i64>>(7)?
+            .map(|value| value.max(0) as u64),
+        codec: row.get(8)?,
+        bitrate_bps: row
+            .get::<_, Option<i64>>(9)?
+            .map(|value| value.max(0) as u32),
+        sample_rate_hz: row
+            .get::<_, Option<i64>>(10)?
+            .map(|value| value.max(0) as u32),
+    })
 }
 
 fn resolve_track_id(
@@ -826,11 +928,11 @@ mod tests {
 
     use player_core::{
         FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaSourceKind,
-        MediaTrackRecord, SourceId, SourceScan, SourceScanState, SyncEngine, TrackIdentity,
-        TrackMetadata, TrackMetadataError, UserMetadataField,
+        MediaTrackRecord, SourceId, SourceScan, SourceScanState, SyncEngine, TrackId,
+        TrackIdentity, TrackMetadata, TrackMetadataError, UserMetadataField,
     };
 
-    use super::{Database, LibraryRepository, COUNT_LIBRARY_SQL, TRACKS_PAGE_SQL};
+    use super::{Database, DatabaseError, LibraryRepository, COUNT_LIBRARY_SQL, TRACKS_PAGE_SQL};
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
         db.add_library_root(
@@ -900,6 +1002,20 @@ mod tests {
             query: None,
         })
         .expect("list tracks")
+    }
+
+    fn track_id_for_query(db: &Database, query: &str) -> TrackId {
+        db.list_tracks_page(ListTracksQuery {
+            offset: 0,
+            limit: 20,
+            query: Some(query.to_owned()),
+        })
+        .expect("find track")
+        .items
+        .into_iter()
+        .next()
+        .expect("matching track")
+        .id
     }
 
     #[test]
@@ -1094,6 +1210,260 @@ mod tests {
             .expect("text filter");
         assert_eq!(filtered.total_count, 1);
         assert_eq!(filtered.items[0].title.as_deref(), Some("Alpha"));
+    }
+
+    #[test]
+    fn track_locator_candidates_are_enabled_filesystem_first_and_keep_manual_metadata() {
+        let mut db = Database::open_in_memory().expect("database");
+        let fs_a_path = PathBuf::from(r"C:\音樂\甲\曲目 🎧.flac");
+        let fs_b_path = PathBuf::from(r"D:\Music\乙\Track.flac");
+        let uri_value = "content://media/external/audio/42".to_owned();
+        let fs_a_root = db
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "filesystem A",
+                MediaLocator::FileSystem(PathBuf::from(r"C:\音樂\甲")),
+            )
+            .expect("add filesystem A root");
+        let fs_b_root = db
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "filesystem B",
+                MediaLocator::FileSystem(PathBuf::from(r"D:\Music\乙")),
+            )
+            .expect("add filesystem B root");
+        let uri_root = db
+            .add_library_root(
+                MediaSourceKind::AndroidMediaStore,
+                "MediaStore",
+                MediaLocator::ContentUri(uri_value.clone()),
+            )
+            .expect("add content URI root");
+        let mut disabled_root = db
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "disabled filesystem",
+                MediaLocator::FileSystem(PathBuf::from(r"E:\Music\disabled")),
+            )
+            .expect("add disabled root");
+        disabled_root.enabled = false;
+        db.save_library_root(&disabled_root).expect("disable root");
+
+        let shared_key = "shared-canonical-track-key";
+        for (root, item, title, locator) in [
+            (
+                &fs_a_root,
+                "filesystem-a-item",
+                "automatic title A",
+                MediaLocator::FileSystem(fs_a_path.clone()),
+            ),
+            (
+                &fs_b_root,
+                "filesystem-b-item",
+                "automatic title B",
+                MediaLocator::FileSystem(fs_b_path.clone()),
+            ),
+            (
+                &uri_root,
+                "mediastore-item",
+                "automatic title URI",
+                MediaLocator::ContentUri(uri_value.clone()),
+            ),
+            (
+                &disabled_root,
+                "disabled-item",
+                "automatic title disabled",
+                MediaLocator::FileSystem(PathBuf::from(r"E:\Music\disabled\track.flac")),
+            ),
+        ] {
+            let mut mapped = record(root, item, shared_key, title, 20, 100);
+            mapped.locator = locator;
+            apply(
+                &mut db,
+                root,
+                SourceScanState::Complete,
+                std::slice::from_ref(&mapped),
+                std::slice::from_ref(&mapped),
+                1000,
+            );
+        }
+
+        let track_id = track_id_for_query(&db, "automatic title disabled");
+        assert_eq!(list(&db, 0, 20).total_count, 1);
+        db.set_user_override(track_id, UserMetadataField::Title, Some("手動標題"))
+            .expect("set manual title");
+
+        let locators = db.track_locators(track_id).expect("read locators");
+        let mut expected_files = [
+            (fs_a_root.id.to_string(), fs_a_path),
+            (fs_b_root.id.to_string(), fs_b_path),
+        ];
+        expected_files.sort_by(|left, right| left.0.cmp(&right.0));
+        assert_eq!(
+            locators,
+            vec![
+                MediaLocator::FileSystem(expected_files[0].1.clone()),
+                MediaLocator::FileSystem(expected_files[1].1.clone()),
+                MediaLocator::ContentUri(uri_value),
+            ]
+        );
+        assert_eq!(
+            db.get_track_summary(track_id)
+                .expect("read track summary")
+                .expect("track summary")
+                .title
+                .as_deref(),
+            Some("手動標題")
+        );
+        assert!(db
+            .get_track_summary(TrackId::new())
+            .expect("unknown track summary")
+            .is_none());
+        assert!(matches!(
+            db.track_locators(TrackId::new()),
+            Err(DatabaseError::TrackNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn filesystem_locator_resolution_preserves_unicode_and_reports_unavailable_sources() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root_path = std::env::temp_dir()
+            .join(format!("moemusic-resolve-{}", TrackId::new()))
+            .join("音樂 資料夾 🎧");
+        std::fs::create_dir_all(&root_path).expect("create Unicode source directory");
+        let audio_path = root_path.join("夜色 - 曲目 🎵.flac");
+        std::fs::write(&audio_path, b"fixture").expect("create local fixture file");
+
+        let local_root = db
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "Unicode filesystem",
+                MediaLocator::FileSystem(root_path.clone()),
+            )
+            .expect("add local root");
+        let mut local_record = record(
+            &local_root,
+            "unicode-local-item",
+            "unicode-local-key",
+            "Unicode local track",
+            7,
+            100,
+        );
+        local_record.locator = MediaLocator::FileSystem(audio_path.clone());
+        apply(
+            &mut db,
+            &local_root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&local_record),
+            std::slice::from_ref(&local_record),
+            1000,
+        );
+        let local_track_id = track_id_for_query(&db, "Unicode local track");
+        assert_eq!(
+            db.resolve_playable_filesystem_locator(local_track_id)
+                .expect("resolve Unicode local path"),
+            audio_path
+        );
+
+        let uri_value = "content://media/external/audio/99".to_owned();
+        let uri_root = db
+            .add_library_root(
+                MediaSourceKind::AndroidMediaStore,
+                "URI only source",
+                MediaLocator::ContentUri(uri_value.clone()),
+            )
+            .expect("add URI source");
+        let mut uri_record = record(
+            &uri_root,
+            "uri-only-item",
+            "uri-only-key",
+            "URI only track",
+            5,
+            100,
+        );
+        uri_record.locator = MediaLocator::ContentUri(uri_value);
+        apply(
+            &mut db,
+            &uri_root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&uri_record),
+            std::slice::from_ref(&uri_record),
+            1000,
+        );
+        let uri_track_id = track_id_for_query(&db, "URI only track");
+        assert!(matches!(
+            db.resolve_playable_filesystem_locator(uri_track_id),
+            Err(DatabaseError::NonFilesystemTrackLocator(id)) if id == uri_track_id
+        ));
+
+        let mut disabled_root = db
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "disabled source",
+                MediaLocator::FileSystem(root_path.clone()),
+            )
+            .expect("add disabled source");
+        disabled_root.enabled = false;
+        db.save_library_root(&disabled_root)
+            .expect("disable filesystem root");
+        let mut disabled_record = record(
+            &disabled_root,
+            "disabled-only-item",
+            "disabled-only-key",
+            "Disabled only track",
+            8,
+            100,
+        );
+        disabled_record.locator = MediaLocator::FileSystem(root_path.join("disabled.flac"));
+        apply(
+            &mut db,
+            &disabled_root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&disabled_record),
+            std::slice::from_ref(&disabled_record),
+            1000,
+        );
+        let disabled_track_id = track_id_for_query(&db, "Disabled only track");
+        assert!(matches!(
+            db.resolve_playable_filesystem_locator(disabled_track_id),
+            Err(DatabaseError::NoEnabledTrackMapping(id)) if id == disabled_track_id
+        ));
+
+        let offline_root = db
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "offline source",
+                MediaLocator::FileSystem(root_path.clone()),
+            )
+            .expect("add offline source");
+        let missing_path = root_path.join("不存在的檔案.flac");
+        assert!(!missing_path.exists());
+        let mut offline_record = record(
+            &offline_root,
+            "offline-item",
+            "offline-key",
+            "Offline track",
+            9,
+            100,
+        );
+        offline_record.locator = MediaLocator::FileSystem(missing_path);
+        apply(
+            &mut db,
+            &offline_root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&offline_record),
+            std::slice::from_ref(&offline_record),
+            1000,
+        );
+        let offline_track_id = track_id_for_query(&db, "Offline track");
+        assert!(matches!(
+            db.resolve_playable_filesystem_locator(offline_track_id),
+            Err(DatabaseError::TrackFileUnavailable(id)) if id == offline_track_id
+        ));
+
+        std::fs::remove_dir_all(root_path.parent().expect("temporary parent"))
+            .expect("remove temporary Unicode fixture");
     }
 
     #[test]
