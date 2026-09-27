@@ -1,4 +1,4 @@
-﻿use std::{
+use std::{
     collections::HashSet,
     error::Error,
     fmt,
@@ -11,8 +11,8 @@ use player_core::{
     FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, MediaLocator,
     MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, Playlist, PlaylistEntry,
     PlaylistEntrySummary, PlaylistId, PlaylistPage, PlaylistSummary, SourceId, SourceScanState,
-    SyncApplyStats, TrackId, TrackIdentity, TrackMetadata, TrackSummary, TrackSyncState,
-    UserMetadataField,
+    SyncApplyOutcome, SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackId, TrackIdentity,
+    TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
@@ -889,84 +889,153 @@ impl LibraryRepository for Database {
         errors: &[MediaSourceError],
         synced_at_utc_ms: i64,
     ) -> Result<SyncApplyStats, Self::Error> {
-        let changed_items = changed
-            .iter()
-            .map(|record| record.identity.source_item_id.as_str())
-            .collect::<HashSet<_>>();
-        let mut connection = self.lock()?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute("DELETE FROM sync_seen_items", [])?;
-        let mut seen_statement = tx.prepare_cached(
-            "INSERT OR IGNORE INTO sync_seen_items (source_id, source_item_id) VALUES (?1, ?2)",
-        )?;
-
-        for record in observed {
-            if record.identity.source_id != root.id {
-                return Err(DatabaseError::SourceMismatch);
-            }
-            seen_statement.execute(params![root.id.to_string(), record.identity.source_item_id])?;
-
-            let track_id = resolve_track_id(&tx, record)?;
-            if changed_items.contains(record.identity.source_item_id.as_str()) {
-                persist_metadata(&tx, track_id, record.metadata.as_ref())?;
-            } else {
-                tx.execute(
-                    "INSERT OR IGNORE INTO tracks (track_id) VALUES (?1)",
-                    [track_id.to_string()],
-                )?;
-            }
-            persist_mapping(&tx, root.id, track_id, record)?;
-        }
-        drop(seen_statement);
-
-        let removed_source_mappings = if state.allows_reconciliation() {
-            tx.execute(
-                "DELETE FROM source_mappings
-                 WHERE source_id=?1 AND NOT EXISTS (
-                    SELECT 1 FROM sync_seen_items seen
-                    WHERE seen.source_id=source_mappings.source_id
-                      AND seen.source_item_id=source_mappings.source_item_id
-                 )",
-                [root.id.to_string()],
-            )? as u64
-        } else {
-            0
-        };
-
-        let state_name = scan_state_name(state);
-        let last_error = errors
-            .first()
-            .map(|error| error.message.as_str())
-            .or(match state {
-                SourceScanState::Incomplete { reason }
-                | SourceScanState::Unavailable { reason }
-                | SourceScanState::PermissionRevoked { reason } => Some(reason.as_str()),
-                SourceScanState::Complete => None,
-            });
-        let last_success = state.allows_reconciliation().then_some(synced_at_utc_ms);
-        tx.execute(
-            "INSERT INTO library_sync_state
-                (source_id, last_attempt_utc_ms, last_success_utc_ms, last_state, error_count, last_error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(source_id) DO UPDATE SET
-                last_attempt_utc_ms=excluded.last_attempt_utc_ms,
-                last_success_utc_ms=COALESCE(excluded.last_success_utc_ms, library_sync_state.last_success_utc_ms),
-                last_state=excluded.last_state, error_count=excluded.error_count, last_error=excluded.last_error",
-            params![
-                root.id.to_string(),
+        apply_source_scan_transaction(
+            self,
+            SyncApplyRequest {
+                root,
+                state,
+                observed,
+                changed,
+                errors,
                 synced_at_utc_ms,
-                last_success,
-                state_name,
-                errors.len() as i64,
-                last_error,
-            ],
-        )?;
-        tx.commit()?;
-        Ok(SyncApplyStats {
+            },
+            &mut |_| {},
+            &SyncCancellation::default(),
+        )
+        .map(|outcome| outcome.stats)
+    }
+
+    fn apply_source_scan_with_progress(
+        &mut self,
+        request: SyncApplyRequest<'_>,
+        progress: &mut dyn FnMut(u64),
+        cancellation: &SyncCancellation,
+    ) -> Result<SyncApplyOutcome, Self::Error> {
+        apply_source_scan_transaction(self, request, progress, cancellation)
+    }
+}
+
+fn apply_source_scan_transaction(
+    database: &Database,
+    request: SyncApplyRequest<'_>,
+    progress: &mut dyn FnMut(u64),
+    cancellation: &SyncCancellation,
+) -> Result<SyncApplyOutcome, DatabaseError> {
+    let SyncApplyRequest {
+        root,
+        state,
+        observed,
+        changed,
+        errors,
+        synced_at_utc_ms,
+    } = request;
+    if cancellation.is_cancelled() {
+        return Ok(SyncApplyOutcome {
+            cancelled: true,
+            ..SyncApplyOutcome::default()
+        });
+    }
+
+    let changed_items = changed
+        .iter()
+        .map(|record| record.identity.source_item_id.as_str())
+        .collect::<HashSet<_>>();
+    let mut connection = database.lock()?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute("DELETE FROM sync_seen_items", [])?;
+    let mut seen_statement = tx.prepare_cached(
+        "INSERT OR IGNORE INTO sync_seen_items (source_id, source_item_id) VALUES (?1, ?2)",
+    )?;
+
+    for (index, record) in observed.iter().enumerate() {
+        if cancellation.is_cancelled() {
+            return Ok(SyncApplyOutcome {
+                cancelled: true,
+                ..SyncApplyOutcome::default()
+            });
+        }
+        if record.identity.source_id != root.id {
+            return Err(DatabaseError::SourceMismatch);
+        }
+        seen_statement.execute(params![root.id.to_string(), record.identity.source_item_id])?;
+
+        let track_id = resolve_track_id(&tx, record)?;
+        if changed_items.contains(record.identity.source_item_id.as_str()) {
+            persist_metadata(&tx, track_id, record.metadata.as_ref())?;
+        } else {
+            tx.execute(
+                "INSERT OR IGNORE INTO tracks (track_id) VALUES (?1)",
+                [track_id.to_string()],
+            )?;
+        }
+        persist_mapping(&tx, root.id, track_id, record)?;
+        progress((index + 1) as u64);
+    }
+    drop(seen_statement);
+
+    if cancellation.is_cancelled() {
+        return Ok(SyncApplyOutcome {
+            cancelled: true,
+            ..SyncApplyOutcome::default()
+        });
+    }
+
+    let removed_source_mappings = if state.allows_reconciliation() {
+        tx.execute(
+            "DELETE FROM source_mappings
+             WHERE source_id=?1 AND NOT EXISTS (
+                SELECT 1 FROM sync_seen_items seen
+                WHERE seen.source_id=source_mappings.source_id
+                  AND seen.source_item_id=source_mappings.source_item_id
+             )",
+            [root.id.to_string()],
+        )? as u64
+    } else {
+        0
+    };
+
+    let state_name = scan_state_name(state);
+    let last_error = errors
+        .first()
+        .map(|error| error.message.as_str())
+        .or(match state {
+            SourceScanState::Incomplete { reason }
+            | SourceScanState::Unavailable { reason }
+            | SourceScanState::PermissionRevoked { reason } => Some(reason.as_str()),
+            SourceScanState::Complete => None,
+        });
+    let last_success = state.allows_reconciliation().then_some(synced_at_utc_ms);
+    tx.execute(
+        "INSERT INTO library_sync_state
+            (source_id, last_attempt_utc_ms, last_success_utc_ms, last_state, error_count, last_error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(source_id) DO UPDATE SET
+            last_attempt_utc_ms=excluded.last_attempt_utc_ms,
+            last_success_utc_ms=COALESCE(excluded.last_success_utc_ms, library_sync_state.last_success_utc_ms),
+            last_state=excluded.last_state, error_count=excluded.error_count, last_error=excluded.last_error",
+        params![
+            root.id.to_string(),
+            synced_at_utc_ms,
+            last_success,
+            state_name,
+            errors.len() as i64,
+            last_error,
+        ],
+    )?;
+    if cancellation.is_cancelled() {
+        return Ok(SyncApplyOutcome {
+            cancelled: true,
+            ..SyncApplyOutcome::default()
+        });
+    }
+    tx.commit()?;
+    Ok(SyncApplyOutcome {
+        stats: SyncApplyStats {
             inserted_or_updated: changed_items.len() as u64,
             removed_source_mappings,
-        })
-    }
+        },
+        cancelled: false,
+    })
 }
 
 fn count_tracks_in(connection: &Connection, query: Option<&str>) -> Result<i64, DatabaseError> {
@@ -1244,7 +1313,8 @@ mod tests {
     use player_core::{
         FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaSourceKind,
         MediaTrackRecord, PlaylistEntry, PlaylistId, SourceId, SourceScan, SourceScanState,
-        SyncEngine, TrackId, TrackIdentity, TrackMetadata, TrackMetadataError, UserMetadataField,
+        SyncApplyRequest, SyncCancellation, SyncEngine, TrackId, TrackIdentity, TrackMetadata,
+        TrackMetadataError, UserMetadataField,
     };
     use rusqlite::OptionalExtension;
 
@@ -1307,6 +1377,49 @@ mod tests {
     ) {
         db.apply_source_scan(root, &state, observed, changed, &[], at)
             .expect("apply source scan");
+    }
+
+    #[test]
+    fn cancelling_during_persistence_rolls_back_without_reconciling_mappings() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "cancel rollback");
+        let old_one = record(&root, "one", "key-one", "before", 10, 1_800_000_000_001);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&old_one),
+            std::slice::from_ref(&old_one),
+            1,
+        );
+
+        let updated_one = record(&root, "one", "key-one", "after", 11, 1_800_000_000_002);
+        let new_two = record(&root, "two", "key-two", "new", 12, 1_800_000_000_003);
+        let cancellation = SyncCancellation::default();
+        let outcome = db
+            .apply_source_scan_with_progress(
+                SyncApplyRequest {
+                    root: &root,
+                    state: &SourceScanState::Complete,
+                    observed: &[updated_one.clone(), new_two.clone()],
+                    changed: &[updated_one, new_two],
+                    errors: &[],
+                    synced_at_utc_ms: 2,
+                },
+                &mut |processed| {
+                    if processed == 1 {
+                        cancellation.cancel();
+                    }
+                },
+                &cancellation,
+            )
+            .expect("cancellation is a reported outcome");
+
+        assert!(outcome.cancelled);
+        assert_eq!(outcome.stats, player_core::SyncApplyStats::default());
+        let page = list(&db, 0, 10);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].title.as_deref(), Some("before"));
     }
 
     fn list(

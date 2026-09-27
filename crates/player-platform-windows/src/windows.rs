@@ -11,9 +11,9 @@ use lofty::{
     tag::ItemKey,
 };
 use player_core::{
-    FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaSourceError, MediaSourceKind,
-    MediaTrackRecord, SourceScan, SourceScanState, TrackIdentity, TrackMetadata,
-    TrackMetadataError,
+    FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
+    MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, SourceScan,
+    SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata, TrackMetadataError,
 };
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
@@ -31,7 +31,22 @@ impl WindowsMediaIndex {
 
 impl MediaIndex for WindowsMediaIndex {
     fn scan(&mut self, root: &LibraryRoot) -> SourceScan {
+        self.scan_with_progress(root, &mut |_| {}, &SyncCancellation::default())
+    }
+
+    fn scan_with_progress(
+        &mut self,
+        root: &LibraryRoot,
+        progress: &mut dyn FnMut(MediaScanProgress),
+        cancellation: &SyncCancellation,
+    ) -> SourceScan {
         let mut scan = empty_scan(root.id);
+        if cancellation.is_cancelled() {
+            scan.state = SourceScanState::Incomplete {
+                reason: "filesystem scan cancelled before traversal started".to_owned(),
+            };
+            return scan;
+        }
         if !root.enabled {
             scan.state = SourceScanState::Unavailable {
                 reason: "library root is disabled".to_owned(),
@@ -105,7 +120,18 @@ impl MediaIndex for WindowsMediaIndex {
         let mut directories = vec![canonical_root.clone()];
         let mut opened_root = false;
         let mut complete = true;
+        let mut processed_entries = 0_u64;
         while let Some(directory) = directories.pop() {
+            if cancellation.is_cancelled() {
+                scan.state = SourceScanState::Incomplete {
+                    reason: "filesystem scan cancelled before traversal completed".to_owned(),
+                };
+                scan.errors.push(MediaSourceError {
+                    source_item_id: None,
+                    message: "filesystem scan cancelled".to_owned(),
+                });
+                return scan;
+            }
             let entries = match fs::read_dir(&directory) {
                 Ok(entries) => {
                     if directory == canonical_root {
@@ -131,6 +157,23 @@ impl MediaIndex for WindowsMediaIndex {
             };
 
             for entry in entries {
+                processed_entries = processed_entries.saturating_add(1);
+                progress(MediaScanProgress {
+                    processed: processed_entries,
+                    total: None,
+                    unit: MediaScanProgressUnit::FilesystemEntries,
+                });
+                if cancellation.is_cancelled() {
+                    scan.state = SourceScanState::Incomplete {
+                        reason: "filesystem scan cancelled before traversal completed".to_owned(),
+                    };
+                    scan.errors.push(MediaSourceError {
+                        source_item_id: None,
+                        message: "filesystem scan cancelled".to_owned(),
+                    });
+                    return scan;
+                }
+
                 let entry = match entry {
                     Ok(entry) => entry,
                     Err(error) => {
@@ -387,7 +430,8 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 mod tests {
     use super::{to_extended_path, windows_locator_key, WindowsMediaIndex};
     use player_core::{
-        LibraryRoot, MediaIndex, MediaLocator, MediaSourceKind, SourceScanState, UserMetadataField,
+        LibraryRoot, MediaIndex, MediaLocator, MediaScanProgressUnit, MediaSourceKind,
+        SourceScanState, SyncCancellation, UserMetadataField,
     };
     use player_db::Database;
     use std::{
@@ -735,5 +779,41 @@ mod tests {
         assert_eq!(metadata.track_number, Some(4));
         assert_eq!(metadata.album_artist.as_deref(), Some("專輯演出者"));
         fs::remove_dir_all(base).expect("cleanup");
+    }
+
+    #[test]
+    fn filesystem_scan_reports_multiple_unknown_total_progress_updates() {
+        let base = temp_path("scan-progress");
+        fs::create_dir_all(&base).expect("root");
+        for index in 0..512 {
+            fs::write(base.join(format!("track-{index:04}.mp3")), []).expect("audio placeholder");
+        }
+
+        let root = LibraryRoot {
+            id: player_core::SourceId::new(),
+            kind: MediaSourceKind::WindowsFilesystem,
+            display_name: "progress test".to_owned(),
+            locator: MediaLocator::FileSystem(base.clone()),
+            enabled: true,
+        };
+        let mut progress = Vec::new();
+        let cancellation = SyncCancellation::default();
+        let scan = WindowsMediaIndex::new().scan_with_progress(
+            &root,
+            &mut |value| progress.push(value),
+            &cancellation,
+        );
+        fs::remove_dir_all(&base).expect("cleanup");
+
+        assert_eq!(scan.tracks.len(), 512);
+        assert!(
+            progress.len() > 1,
+            "expected intermediate enumeration updates, got {progress:?}"
+        );
+        assert!(progress.iter().all(|value| value.total.is_none()));
+        assert!(progress
+            .iter()
+            .all(|value| value.unit == MediaScanProgressUnit::FilesystemEntries));
+        assert_eq!(progress.last().map(|value| value.processed), Some(512));
     }
 }
