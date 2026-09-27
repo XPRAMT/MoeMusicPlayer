@@ -4,6 +4,10 @@
     window.__progressListeners = {};
     window.__progressHandlerId = 0;
     window.__progressRunNumber = 0;
+    window.__syncCallCount = 0;
+    window.__startupProgressSent = false;
+    window.__startupProgressMissed = false;
+    window.__startupListenerEvents = [];
     window.__sourcePickerResponse = null;
     window.isTauri = true;
     window.__TAURI_INTERNALS__ = {
@@ -22,12 +26,32 @@
         }
         if (command === 'plugin:event|unlisten') return null;
         switch (command) {
-          case 'get_runtime_capabilities':
+          case 'get_runtime_capabilities': {
+            if (!window.__startupProgressSent) {
+              window.__startupProgressSent = true;
+              window.__startupListenerEvents = Object.keys(window.__progressEventHandlers ?? {}).sort();
+              const callbackId = window.__progressEventHandlers?.['library-sync-progress'];
+              const handler = callbackId ? window.__progressListeners[callbackId] : null;
+              if (!handler) {
+                window.__startupProgressMissed = true;
+              } else {
+                handler({
+                  event: 'library-sync-progress', id: 1,
+                  payload: {
+                    runId: 'startup-probe', sourceId: 'startup-source', sourceIndex: 0,
+                    sourceCount: 1, displayName: '啟動來源', stage: 'enumerating',
+                    processed: 7, total: null, unit: 'filesystemEntries', observed: 0,
+                    metadataReads: 0, unchanged: 0, errorCount: 0, outcome: null,
+                  },
+                });
+              }
+            }
             return {
               platform: 'windows', desktopRuntime: ready, library: ready, sourceSync: ready,
               playback: ready, playbackNavigation: ready, playbackModes: ready,
               playlistExchange: ready, systemMediaControls: ready,
             };
+          }
           case 'library_get_page':
             return { items: [], offset: args.offset, limit: args.limit, totalCount: 0 };
           case 'library_list_sources':
@@ -39,8 +63,11 @@
               durationMs: null, volume: 0.7, lastError: null, repeatMode: 'off', shuffle: false,
             };
           case 'library_sync':
-            window.__queueProgressRun(window.__nextSyncDisplayName ?? '手動同步來源');
-            window.__nextSyncDisplayName = null;
+            window.__syncCallCount += 1;
+            if (window.__syncCallCount > 1) {
+              window.__queueProgressRun(window.__nextSyncDisplayName ?? '手動同步來源');
+              window.__nextSyncDisplayName = null;
+            }
             return { sources: [] };
           case 'library_pick_windows_folder':
             if (window.__sourcePickerResponse) {
@@ -83,6 +110,19 @@
   ).then(() => true, () => false);
   if (!progressListenerReady) {
     throw new Error('The app must subscribe to library-sync-progress for startup and manual scans.');
+  }
+  await page.waitForFunction(() => window.__startupProgressSent, undefined, { timeout: 1500 });
+  const startupListenerEvents = await page.evaluate(() => window.__startupListenerEvents);
+  if (!startupListenerEvents.includes('library-sync-progress') || !startupListenerEvents.includes('library-sync-finished')) {
+    throw new Error(`Startup synchronization began before both listeners were ready: ${startupListenerEvents.join(', ')}`);
+  }
+  if (await page.evaluate(() => window.__startupProgressMissed)) {
+    throw new Error('The startup progress event was emitted before the renderer subscribed.');
+  }
+  const startupBanner = page.locator('[data-testid="sync-progress-banner"]');
+  await startupBanner.waitFor({ timeout: 2000 });
+  if (!(await startupBanner.innerText()).includes('啟動來源')) {
+    throw new Error('The startup progress event emitted during capability loading must remain visible.');
   }
 
   const first = {
