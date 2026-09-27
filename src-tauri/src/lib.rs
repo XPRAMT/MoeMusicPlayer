@@ -1,7 +1,10 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "windows")]
-use std::{sync::Mutex, time::Duration};
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use player_core::{
     LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaylistId, PlaylistPage,
@@ -21,7 +24,13 @@ use playlist_exchange::{
 use player_platform_windows::{windows_locator_key, WindowsMediaIndex};
 
 #[cfg(target_os = "windows")]
-use player_audio_windows::{AudioError, PlaybackState as AudioPlaybackState, PlayerHandle};
+use player_audio_windows::{
+    system_media::{
+        MediaControlMetadata, MediaControlUpdate, SystemMediaController, SystemMediaError,
+        SystemMediaEvent,
+    },
+    AudioError, PlaybackState as AudioPlaybackState, PlayerHandle,
+};
 
 #[cfg(target_os = "windows")]
 use player_core::TrackId;
@@ -36,6 +45,10 @@ struct AppState {
     playback: Option<WindowsPlaybackService>,
     #[cfg(target_os = "windows")]
     playback_error: Option<String>,
+    #[cfg(target_os = "windows")]
+    system_media: Option<WindowsSystemMediaService>,
+    #[cfg(target_os = "windows")]
+    system_media_error: Option<String>,
 }
 
 #[cfg(target_os = "windows")]
@@ -43,6 +56,23 @@ struct WindowsPlaybackService {
     player: PlayerHandle,
     current_track: Mutex<Option<TrackSummary>>,
     command_gate: Mutex<()>,
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsSystemMediaService {
+    controller: Mutex<Option<SystemMediaController>>,
+    status: Mutex<WindowsSystemMediaStatus>,
+    pump_gate: Mutex<()>,
+    last_update: Mutex<Option<Instant>>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone)]
+enum WindowsSystemMediaStatus {
+    Starting,
+    Ready,
+    Unavailable(String),
+    Closed,
 }
 
 #[cfg(target_os = "windows")]
@@ -73,6 +103,214 @@ impl WindowsPlaybackService {
             repeat_mode: RepeatMode::Off,
             shuffle: false,
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsSystemMediaService {
+    fn new(controller: SystemMediaController) -> Self {
+        Self {
+            controller: Mutex::new(Some(controller)),
+            status: Mutex::new(WindowsSystemMediaStatus::Starting),
+            pump_gate: Mutex::new(()),
+            last_update: Mutex::new(None),
+        }
+    }
+
+    fn capability(&self) -> FeatureCapability {
+        match self
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+        {
+            WindowsSystemMediaStatus::Starting => feature(
+                FeatureState::NotReady,
+                Some("正在連接 Windows 系統媒體控制。".to_owned()),
+            ),
+            WindowsSystemMediaStatus::Ready => feature(FeatureState::Ready, None),
+            WindowsSystemMediaStatus::Unavailable(detail) => {
+                feature(FeatureState::Unavailable, Some(detail))
+            }
+            WindowsSystemMediaStatus::Closed => feature(
+                FeatureState::Unavailable,
+                Some("主視窗已關閉，系統媒體控制已停止。".to_owned()),
+            ),
+        }
+    }
+
+    fn shutdown(&self) {
+        let controller = self
+            .controller
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        drop(controller);
+        *self
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = WindowsSystemMediaStatus::Closed;
+    }
+
+    fn pump(&self, playback: &WindowsPlaybackService, database: Option<&Database>) {
+        let _pump = self
+            .pump_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let controller_guard = self
+            .controller
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(controller) = controller_guard.as_ref() else {
+            return;
+        };
+
+        loop {
+            match controller.try_recv_event() {
+                Ok(Some(SystemMediaEvent::Ready)) => {
+                    *self
+                        .status
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        WindowsSystemMediaStatus::Ready;
+                }
+                Ok(Some(SystemMediaEvent::Error(error))) => {
+                    self.mark_unavailable(error);
+                    return;
+                }
+                Ok(Some(event)) => {
+                    let _ = apply_system_media_event(&event, database, playback);
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    self.mark_unavailable(error);
+                    return;
+                }
+            }
+        }
+
+        if matches!(
+            &*self
+                .status
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            WindowsSystemMediaStatus::Unavailable(_) | WindowsSystemMediaStatus::Closed
+        ) {
+            return;
+        }
+
+        let now = Instant::now();
+        let should_update = self
+            .last_update
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .map(|last| now.duration_since(last) >= Duration::from_millis(750))
+            .unwrap_or(true);
+        if !should_update {
+            return;
+        }
+
+        let current_track = playback
+            .current_track
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let metadata = current_track.map(|track| MediaControlMetadata {
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+        });
+        let update = MediaControlUpdate {
+            snapshot: playback.player.snapshot(),
+            metadata,
+            capabilities: Default::default(),
+        };
+        match controller.update(update) {
+            Ok(()) => {
+                *self
+                    .last_update
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(now);
+            }
+            Err(error) => self.handle_update_error(error),
+        }
+    }
+
+    fn mark_unavailable(&self, error: SystemMediaError) {
+        *self
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            WindowsSystemMediaStatus::Unavailable(format!("Windows 系統媒體控制無法使用：{error}"));
+    }
+
+    fn handle_update_error(&self, error: SystemMediaError) {
+        if !matches!(error, SystemMediaError::CommandQueueFull) {
+            self.mark_unavailable(error);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn apply_system_media_event(
+    event: &SystemMediaEvent,
+    database: Option<&Database>,
+    playback: &WindowsPlaybackService,
+) -> Result<(), String> {
+    match event {
+        SystemMediaEvent::PlayRequested => {
+            let database = database.ok_or_else(|| "曲庫資料庫尚未開啟。".to_owned())?;
+            let track_id = playback
+                .current_track
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .map(|track| track.id)
+                .ok_or_else(|| "目前沒有可播放的曲目。".to_owned())?;
+            let _ = play_track_from_database(database, playback, &track_id.to_string())?;
+        }
+        SystemMediaEvent::PauseRequested => {
+            let _ = pause_playback(playback)?;
+        }
+        SystemMediaEvent::StopRequested => {
+            let _ = stop_playback(playback)?;
+        }
+        SystemMediaEvent::SeekRequested(position) => {
+            let _ = seek_playback(playback, duration_millis(*position))?;
+        }
+        SystemMediaEvent::NextRequested | SystemMediaEvent::PreviousRequested => {}
+        SystemMediaEvent::Ready | SystemMediaEvent::Error(_) => {}
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn create_windows_system_media_service(
+    app: &AppHandle,
+) -> (Option<WindowsSystemMediaService>, Option<String>) {
+    let result = app
+        .get_webview_window("main")
+        .ok_or_else(|| "找不到 Tauri 主視窗，無法連接 Windows 系統媒體控制。".to_owned())
+        .and_then(|window| {
+            window
+                .hwnd()
+                .map_err(|error| format!("無法取得 Tauri 主視窗 HWND：{error}"))
+        })
+        .and_then(|hwnd| {
+            SystemMediaController::attach(hwnd.0 as isize)
+                .map_err(|error| format!("無法啟動 Windows 系統媒體控制：{error}"))
+        });
+
+    windows_system_media_service_from_attach_result(result)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_system_media_service_from_attach_result(
+    result: Result<SystemMediaController, String>,
+) -> (Option<WindowsSystemMediaService>, Option<String>) {
+    match result {
+        Ok(controller) => (Some(WindowsSystemMediaService::new(controller)), None),
+        Err(error) => (None, Some(error)),
     }
 }
 
@@ -288,10 +526,7 @@ fn get_runtime_capabilities(state: State<'_, AppState>) -> RuntimeCapabilities {
         )
     };
 
-    let system_media_controls = feature(
-        FeatureState::NotReady,
-        Some("Windows 系統媒體控制尚未接入 Tauri 外殼。".to_owned()),
-    );
+    let system_media_controls = system_media_controls_capability(&state);
 
     RuntimeCapabilities {
         platform: platform_name().to_owned(),
@@ -310,6 +545,31 @@ fn get_runtime_capabilities(state: State<'_, AppState>) -> RuntimeCapabilities {
         playlist_exchange,
         system_media_controls,
     }
+}
+
+#[cfg(target_os = "windows")]
+fn system_media_controls_capability(state: &AppState) -> FeatureCapability {
+    state
+        .system_media
+        .as_ref()
+        .map(WindowsSystemMediaService::capability)
+        .unwrap_or_else(|| unavailable_system_media_capability(state.system_media_error.clone()))
+}
+
+#[cfg(target_os = "windows")]
+fn unavailable_system_media_capability(detail: Option<String>) -> FeatureCapability {
+    feature(
+        FeatureState::Unavailable,
+        detail.or_else(|| Some("Windows 系統媒體控制尚未啟動。".to_owned())),
+    )
+}
+
+#[cfg(not(target_os = "windows"))]
+fn system_media_controls_capability(_state: &AppState) -> FeatureCapability {
+    feature(
+        FeatureState::NotReady,
+        Some("目前只有 Windows 提供系統媒體控制。".to_owned()),
+    )
 }
 
 #[tauri::command]
@@ -838,7 +1098,11 @@ fn now_utc_epoch_ms() -> Result<i64, String> {
 fn playback_get_snapshot(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
     #[cfg(target_os = "windows")]
     {
-        Ok(windows_playback_service(&state)?.snapshot())
+        let playback = windows_playback_service(&state)?;
+        if let Some(system_media) = state.system_media.as_ref() {
+            system_media.pump(playback, state.database.as_ref());
+        }
+        Ok(playback.snapshot())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -956,6 +1220,19 @@ fn pause_playback(service: &WindowsPlaybackService) -> Result<PlaybackSnapshot, 
 }
 
 #[cfg(target_os = "windows")]
+fn stop_playback(service: &WindowsPlaybackService) -> Result<PlaybackSnapshot, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    service
+        .player
+        .stop()
+        .map_err(|error| playback_audio_error_message(&error))?;
+    Ok(service.snapshot())
+}
+
+#[cfg(target_os = "windows")]
 fn seek_playback(
     service: &WindowsPlaybackService,
     position_ms: u64,
@@ -1047,6 +1324,17 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_dialog::init());
 
     builder
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "windows")]
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                let state = window.app_handle().state::<AppState>();
+                if let Some(system_media) = state.system_media.as_ref() {
+                    system_media.shutdown();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_runtime_capabilities,
             library_get_page,
@@ -1087,6 +1375,9 @@ pub fn run() {
                 Ok(player) => (Some(WindowsPlaybackService::new(player)), None),
                 Err(error) => (None, Some(playback_audio_error_message(&error))),
             };
+            #[cfg(target_os = "windows")]
+            let (system_media, system_media_error) =
+                create_windows_system_media_service(app.handle());
             app.manage(AppState {
                 database,
                 database_path: stored_path.clone(),
@@ -1095,6 +1386,10 @@ pub fn run() {
                 playback,
                 #[cfg(target_os = "windows")]
                 playback_error,
+                #[cfg(target_os = "windows")]
+                system_media,
+                #[cfg(target_os = "windows")]
+                system_media_error,
             });
 
             if let Some(database_path) = stored_path {
@@ -1126,10 +1421,13 @@ pub fn run() {
 mod windows_library_integration_tests {
     use super::{add_windows_folder_to_database, sync_windows_sources};
     use super::{
-        pause_playback, play_track_from_database, playback_audio_error_message, seek_playback,
+        apply_system_media_event, play_track_from_database, playback_audio_error_message,
         set_playback_volume, WindowsPlaybackService,
     };
-    use player_audio_windows::{AudioBackend, AudioError, PlayerHandle};
+    use player_audio_windows::{
+        system_media::{SystemMediaController, SystemMediaEvent},
+        AudioBackend, AudioError, PlayerHandle,
+    };
     use player_core::{ListTracksQuery, MediaLocator, MediaSourceKind, SourceId};
     use player_db::Database;
     use std::{
@@ -1421,8 +1719,30 @@ mod windows_library_integration_tests {
         }
         assert_eq!(service.snapshot().state, "playing");
         assert!(service.snapshot().last_error.is_none());
+        let active_track_id = service
+            .snapshot()
+            .current_track
+            .as_ref()
+            .map(|track| track.id);
+        for event in [
+            SystemMediaEvent::NextRequested,
+            SystemMediaEvent::PreviousRequested,
+        ] {
+            apply_system_media_event(&event, Some(&database), &service)
+                .expect("ignore disabled queue navigation request");
+        }
+        assert!(service.snapshot().is_playing);
+        assert_eq!(
+            service
+                .snapshot()
+                .current_track
+                .as_ref()
+                .map(|track| track.id),
+            active_track_id
+        );
 
-        pause_playback(&service).expect("queue pause command");
+        apply_system_media_event(&SystemMediaEvent::PauseRequested, Some(&database), &service)
+            .expect("apply SMTC pause request");
         let paused_deadline = Instant::now() + Duration::from_secs(2);
         while service.snapshot().state != "paused" {
             assert!(
@@ -1432,7 +1752,12 @@ mod windows_library_integration_tests {
             thread::sleep(Duration::from_millis(5));
         }
 
-        seek_playback(&service, 1_250).expect("queue seek command");
+        apply_system_media_event(
+            &SystemMediaEvent::SeekRequested(Duration::from_millis(1_250)),
+            Some(&database),
+            &service,
+        )
+        .expect("apply SMTC seek request");
         let seek_deadline = Instant::now() + Duration::from_secs(2);
         while service.snapshot().position_ms != 1_250 {
             assert!(
@@ -1451,6 +1776,28 @@ mod windows_library_integration_tests {
             );
             thread::sleep(Duration::from_millis(5));
         }
+
+        apply_system_media_event(&SystemMediaEvent::StopRequested, Some(&database), &service)
+            .expect("apply SMTC stop request");
+        let stopped_deadline = Instant::now() + Duration::from_secs(2);
+        while service.snapshot().state != "stopped" {
+            assert!(
+                Instant::now() < stopped_deadline,
+                "player worker did not enter Stopped state"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        apply_system_media_event(&SystemMediaEvent::PlayRequested, Some(&database), &service)
+            .expect("apply SMTC play request");
+        let resumed_deadline = Instant::now() + Duration::from_secs(2);
+        while !service.snapshot().is_playing {
+            assert!(
+                Instant::now() < resumed_deadline,
+                "player worker did not resume after an SMTC play request"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 
     #[test]
@@ -1462,5 +1809,55 @@ mod windows_library_integration_tests {
         };
         let message = playback_audio_error_message(&error);
         assert!(!message.contains(private_path.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn system_media_attach_and_update_failures_only_degrade_system_capability() {
+        let attach_error = match SystemMediaController::attach(0) {
+            Ok(_) => panic!("null HWND must not attach"),
+            Err(error) => error.to_string(),
+        };
+        let (attached, attach_error) =
+            super::windows_system_media_service_from_attach_result(Err(attach_error));
+        assert!(attached.is_none());
+        let attach_capability = super::unavailable_system_media_capability(attach_error.clone());
+        assert!(matches!(
+            attach_capability.state,
+            super::FeatureState::Unavailable
+        ));
+
+        let playback_error_service = super::WindowsSystemMediaService {
+            controller: Mutex::new(None),
+            status: Mutex::new(super::WindowsSystemMediaStatus::Starting),
+            pump_gate: Mutex::new(()),
+            last_update: Mutex::new(None),
+        };
+        playback_error_service.handle_update_error(super::SystemMediaError::WorkerStopped);
+        assert!(matches!(
+            playback_error_service.capability().state,
+            super::FeatureState::Unavailable
+        ));
+
+        let player = PlayerHandle::with_backend_factory({
+            let loaded_path = Arc::new(Mutex::new(None));
+            move || {
+                Ok(Box::new(CapturingAudioBackend {
+                    loaded_path: Arc::clone(&loaded_path),
+                    position: Duration::ZERO,
+                }) as Box<dyn AudioBackend>)
+            }
+        })
+        .expect("start independent test audio worker");
+        player
+            .set_volume(0.4)
+            .expect("local audio commands remain available");
+        let volume_deadline = Instant::now() + Duration::from_secs(2);
+        while (player.snapshot().volume - 0.4).abs() > 0.000_01 {
+            assert!(
+                Instant::now() < volume_deadline,
+                "SMTC failures affected or blocked the local audio worker"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 }

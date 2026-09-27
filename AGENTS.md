@@ -9,20 +9,20 @@
 - Windows 可新增來源資料夾，透過 Core 增量同步與 Lofty 讀取標籤；SQLite 保存曲目、來源映射與同步狀態，前端只取分頁結果。
 - 對 `WindowsSystemIndex` root 會探測 WSearch 服務、範圍規則與 catalog 狀態供診斷；目前不把 Search 查詢結果當完整清單，曲目與刪除對帳只依完整檔案系統走訪。
 - Android MediaStore/SAF 外掛、Rust IPC 與來源管理畫面已接線；Android ARM64 Debug APK 曾成功建置。最新版 insets 修正尚未在裝置複驗。
-- Windows 音訊 crate 使用 Rodio/CPAL；7 項 crate 測試、Windows 目標檢查、Clippy 與自產 WAV 的預設輸出裝置 smoke 均通過。Tauri 已將 `TrackId` 解析為 SQLite 中啟用來源的本機路徑，再呼叫 `PlayerHandle`；前端的播放/暫停、跳轉與音量接有真實引擎快照。播放錯誤不回傳本機路徑；佇列、前後首、隨機與循環仍未實作且保持停用。
-- SQLite v2 已保存播放清單及順序項目。Windows 前端以分頁 IPC 瀏覽清單，透過 Rust 原生對話框匯入 M3U/M3U8、匯出 UTF-8 M3U/M3U8；未匹配曲目保留原 locator，選擇共同資料夾時可做相對路徑輸出。Unicode M3U/M3U8 匯入、分頁及匯出 helper 整合測試通過；原生對話框仍未以 GUI 驗收。
-- Windows 系統媒體控制 crate 已實作 WinRT worker、播放中繼資料投影及依播放器狀態開啟控制；14 項單元與 2 項隱藏 HWND 整合測試由 crate 驗證。Tauri 外殼目前尚未接線；不可將 crate 測試描述成應用層媒體按鍵驗收。
-- Svelte 型別檢查、Vite 正式版建置、完整 `cargo test --workspace`（65 項測試）與 `cargo clippy --workspace --all-targets -- -D warnings` 均通過。Windows shell 整合測試涵蓋 Unicode 資料夾新增、合成 MP3 同步、SQLite 分頁/搜尋、關閉重開，以及 TrackId 到保存路徑再到播放 handle 的命令流程。
+- Windows 音訊 crate 使用 Rodio/CPAL；14 項單元與 2 項隱藏 HWND 系統媒體測試、Windows 目標檢查、Clippy 與自產 WAV 的預設輸出裝置 smoke 均通過。Tauri 已將 `TrackId` 解析為 SQLite 中啟用來源的本機路徑，再呼叫 `PlayerHandle`；前端的播放/暫停、跳轉與音量接有真實引擎快照。播放錯誤不回傳本機路徑；佇列、前後首、隨機與循環仍未實作且保持停用。
+- SQLite v2 已保存播放清單及順序項目。Windows 前端以分頁 IPC 瀏覽清單，透過 Rust 原生對話框匯入 M3U/M3U8、匯出 UTF-8 M3U/M3U8；未匹配曲目保留原 locator。相對匯出會拒絕逃出所選共同根目錄的路徑。Unicode M3U/M3U8 匯入、分頁及匯出 helper 整合測試通過；原生對話框仍未以 GUI 驗收。
+- Windows 系統媒體控制已從 Tauri 主視窗 HWND 接入 WinRT worker；Shell 以播放器快照每 750 ms 至少間隔更新標題、演出者、專輯與播放狀態，並把 Play/Pause/Stop/Seek 事件送回音訊服務。Next/Previous 保持停用。crate 的 14 項單元與 2 項隱藏 HWND 整合測試通過；Shell fake-event 測試涵蓋控制映射、停用佇列事件及 attach/update 失敗與音訊隔離。
+- Svelte 型別檢查、Vite 正式版建置、完整 `cargo test --workspace`（67 項測試）、嚴格 Clippy 與 Windows Tauri release 建置均通過；輸出為 `target/release/moemusicplayer.exe`。Windows shell 整合測試涵蓋 Unicode 資料夾新增、合成 MP3 同步、SQLite 分頁/搜尋、關閉重開，以及 TrackId 到保存路徑再到播放 handle 的命令流程；另以 fake SMTC event 測試播放控制映射。
 
 仍未完成或未驗證：
 
-- Windows Tauri 視窗的實際來源表單、播放清單原生對話框操作與畫面尚未驗收；上述來源／清單測試呼叫的是 UI command 共用的 Rust helper，並非 GUI/IPC 操作。
+- Windows Tauri 視窗的實際來源表單、播放清單原生對話框操作與畫面尚未驗收；上述來源／清單測試呼叫的是 UI command 共用的 Rust helper，並非 GUI/IPC 操作。系統媒體控制尚未由實際 Tauri HWND、Windows 媒體 flyout 或硬體媒體按鍵端到端驗收。
 - Windows 應用播放尚未由桌面 GUI 實際驗收；Tauri IPC 指令本身尚未經 GUI 傳輸驗證。音訊 crate 的輸出裝置 smoke 與 shell 的注入式測試後端分開驗證，不代表已聽感驗收應用播放。
-- 播放佇列、前後首、隨機、循環與 Android 音訊尚未實作。Windows 系統媒體控制 crate 有獨立測試，但 Tauri 外殼尚未接線，實際系統控制回呼與媒體 flyout 尚未驗收。
+- 播放佇列、前後首、隨機、循環與 Android 音訊尚未實作；因此 Windows 系統媒體控制不宣告前後首能力。
 - Android 最新頂部/底部 system insets 修正及 MediaStore/SAF 真機掃描尚未驗證。先前 ARM64 APK 建置早於本輪共用 shell 變更；本輪直接 `cargo check --target aarch64-linux-android` 因目前 shell 找不到 `clang.exe` 而停在 SQLite native build，未得到 Android app 編譯結果。Android 播放未實作。
 - 100,000 首效能及完整 Windows SystemIndex 使用判準尚無實測結論。
 
-下一步先把已測試的 Windows SMTC crate 接入 Tauri 播放服務並做非互動檢查；之後在允許使用桌面視窗驗收時，實際操作 Windows 曲庫來源、播放清單對話框與系統媒體控制，再確認真實音訊輸出。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
+下一步在允許使用桌面視窗驗收時，實際操作 Windows 曲庫來源、播放清單對話框及系統媒體 flyout/按鍵，並確認真實應用音訊輸出。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
 
 產品以 Windows 11 與 Android 的大型本地音樂庫為核心，目標規模為 100,000 首。啟動、搜尋與播放不得等待全庫掃描；封面、歌詞與動畫不得造成記憶體或 DOM 持續成長。使用者資料須可攜；本地音樂庫與本地播放永遠優先，線上串流服務不屬於核心目標。
 
@@ -116,4 +116,4 @@
 4. Windows 系統整合、Android Media3/MediaSession 背景播放與 SAF 來源。
 5. 核心穩定後評估無縫播放、進階音訊裝置、DSP/EQ、遠端曲庫/同步與插件；Phase 1 不先投入大量視覺特效。
 
-目前可重現的驗證命令為 `npm run check`、`npm run build`、`cargo check --workspace`、`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 與 `npm run tauri -- build --ci`。Windows shell E2E 是 Rust 服務層測試，會建立臨時 Unicode 音樂資料夾與合成 MP3，將來源及曲目存入臨時 SQLite、驗證分頁/搜尋，再關閉並重新開啟資料庫核對來源路徑與 TrackId；播放測試從該 TrackId 查詢啟用來源路徑，將其交給 `PlayerHandle`，並驗證播放、暫停、跳轉與音量命令。路徑交接測試只在測試中注入 `AudioBackend` 以避免播放聲音，不驗證 Tauri IPC 傳輸或應用音訊輸出；Rodio/CPAL 自產 WAV 預設裝置 smoke 是獨立測試。Windows Tauri release 產物為 `target/release/moemusicplayer.exe`，`bundle.active` 目前關閉。桌面 GUI 的來源操作與應用播放、Android 最新安全區與裝置媒體掃描仍待驗收；直接 Android Cargo target check 需先配置 NDK Clang，不能把其失敗當成 app code 編譯錯誤。
+目前可重現的驗證命令為 `npm run check`、`npm run build`、`cargo check --workspace --locked`、`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 與 `npm run tauri -- build --ci`。Windows shell E2E 是 Rust 服務層測試，會建立臨時 Unicode 音樂資料夾與合成 MP3，將來源及曲目存入臨時 SQLite、驗證分頁/搜尋，再關閉並重新開啟資料庫核對來源路徑與 TrackId；播放測試從該 TrackId 查詢啟用來源路徑，將其交給 `PlayerHandle`，並驗證播放、暫停、跳轉與音量命令。Fake SMTC event 測試確認 Play/Pause/Stop/Seek 路由到既有播放命令、Next/Previous 不操作佇列，以及 attach/update 失敗只降低系統媒體控制能力，不會阻塞獨立播放器。以上均不驗證實際 Tauri HWND、Windows 媒體 flyout/硬體按鍵、原生檔案對話框或應用音訊輸出；Rodio/CPAL 自產 WAV 預設裝置 smoke 是獨立測試。桌面 GUI 與 Android 最新安全區、裝置媒體掃描仍待驗收；直接 Android Cargo target check 需先配置 NDK Clang，不能把其失敗當成 app code 編譯錯誤。
