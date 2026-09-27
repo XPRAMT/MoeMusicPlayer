@@ -533,7 +533,9 @@ enum PlaybackQueueSource {
         query: Option<String>,
     },
     Playlist {
+        #[serde(rename = "playlistId")]
         playlist_id: String,
+        #[serde(rename = "entryPosition")]
         entry_position: u64,
     },
 }
@@ -552,6 +554,96 @@ struct PlaybackSnapshot {
     shuffle: bool,
     can_next: bool,
     can_previous: bool,
+}
+
+#[cfg(test)]
+mod playback_queue_ipc_tests {
+    use super::{
+        feature, FeatureState, PlaybackQueueSource, PlaybackSnapshot, RepeatMode,
+        RuntimeCapabilities,
+    };
+
+    #[test]
+    fn queue_source_deserializes_camel_case_ipc_fields() {
+        let source: PlaybackQueueSource = serde_json::from_value(serde_json::json!({
+            "kind": "playlist",
+            "playlistId": "test-playlist-id",
+            "entryPosition": 7
+        }))
+        .expect("deserialize renderer queue source");
+        assert!(matches!(
+            source,
+            PlaybackQueueSource::Playlist {
+                playlist_id,
+                entry_position: 7
+            } if playlist_id == "test-playlist-id"
+        ));
+    }
+
+    #[test]
+    fn queue_source_deserializes_library_context() {
+        let source: PlaybackQueueSource = serde_json::from_value(serde_json::json!({
+            "kind": "library",
+            "query": "ambient"
+        }))
+        .expect("deserialize library query source");
+        assert!(matches!(
+            source,
+            PlaybackQueueSource::Library { query: Some(query) } if query == "ambient"
+        ));
+    }
+
+    #[test]
+    fn playback_snapshot_and_capabilities_serialize_renderer_camel_case() {
+        let snapshot = PlaybackSnapshot {
+            current_track: None,
+            state: "paused".to_owned(),
+            is_playing: false,
+            position_ms: 42,
+            duration_ms: Some(100),
+            volume: 0.5,
+            last_error: None,
+            repeat_mode: RepeatMode::One,
+            shuffle: true,
+            can_next: true,
+            can_previous: false,
+        };
+        let value = serde_json::to_value(snapshot).expect("serialize playback snapshot");
+        for key in [
+            "currentTrack",
+            "isPlaying",
+            "positionMs",
+            "durationMs",
+            "repeatMode",
+            "shuffle",
+            "canNext",
+            "canPrevious",
+        ] {
+            assert!(value.get(key).is_some(), "missing camelCase field {key}");
+        }
+        assert_eq!(value["repeatMode"], "one");
+
+        let ready = || feature(FeatureState::Ready, None);
+        let capabilities = RuntimeCapabilities {
+            platform: "windows".to_owned(),
+            desktop_runtime: ready(),
+            library: ready(),
+            source_sync: ready(),
+            playback: ready(),
+            playback_navigation: ready(),
+            playback_modes: ready(),
+            playlist_exchange: ready(),
+            system_media_controls: ready(),
+        };
+        let value = serde_json::to_value(capabilities).expect("serialize capabilities");
+        for key in [
+            "playbackNavigation",
+            "playbackModes",
+            "systemMediaControls",
+        ] {
+            assert!(value.get(key).is_some(), "missing camelCase field {key}");
+        }
+    }
 }
 
 fn feature(state: FeatureState, detail: Option<String>) -> FeatureCapability {

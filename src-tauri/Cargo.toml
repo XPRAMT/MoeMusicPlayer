@@ -20,6 +20,9 @@ tauri-plugin-media-index = { path = "../plugins/tauri-plugin-media-index" }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2.12.0", features = [] }
 
+[dev-dependencies]
+serde_json = "1"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 player-audio-windows = { path = "../crates/player-audio-windows" }
 player-platform-windows = { path = "../crates/player-platform-windows" }
