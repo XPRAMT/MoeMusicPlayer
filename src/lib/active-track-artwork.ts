@@ -57,6 +57,15 @@ export function detectArtworkMimeType(bytes: ArrayBuffer): string | null {
   return null;
 }
 
+export function isArtworkTooLargeError(error: unknown): boolean {
+  if (error === 'ARTWORK_TOO_LARGE') return true;
+  if (error instanceof Error) return error.message === 'ARTWORK_TOO_LARGE';
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return error.message === 'ARTWORK_TOO_LARGE';
+  }
+  return false;
+}
+
 export function createActiveTrackArtworkController(
   options: ActiveTrackArtworkOptions,
 ): ActiveTrackArtworkController {
@@ -107,9 +116,13 @@ export function createActiveTrackArtworkController(
         }
         const objectUrl = options.createObjectUrl(bytes, mimeType);
         publish({ trackId: requestTrackId, status: 'ready', objectUrl });
-      } catch {
+      } catch (error) {
         if (!disposed && requestGeneration === generation && requestTrackId === currentTrackId) {
-          publish({ trackId: requestTrackId, status: 'error', objectUrl: null });
+          publish({
+            trackId: requestTrackId,
+            status: isArtworkTooLargeError(error) ? 'too-large' : 'error',
+            objectUrl: null,
+          });
         }
       } finally {
         requestInFlight = false;

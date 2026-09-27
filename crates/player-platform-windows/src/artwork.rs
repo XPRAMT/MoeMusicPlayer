@@ -15,6 +15,13 @@ const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 const SIDE_CAR_NAMES: [&str; 2] = ["cover.jpg", "folder.jpg"];
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ArtworkLookup {
+    Found(ArtworkImage),
+    Missing,
+    Oversized,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ImageHeader {
     mime_type: &'static str,
@@ -32,7 +39,7 @@ struct ImageHeader {
 /// The work is synchronous filesystem and metadata I/O. Callers should run it on a blocking worker
 /// and discard the result when the active TrackId changes. Malformed, unsupported, inaccessible,
 /// or over-limit candidates are skipped and lookup continues.
-pub fn find_artwork(locators: &[MediaLocator]) -> Option<ArtworkImage> {
+pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
     let paths = locators
         .iter()
         .filter_map(|locator| match locator {
@@ -41,24 +48,29 @@ pub fn find_artwork(locators: &[MediaLocator]) -> Option<ArtworkImage> {
         })
         .collect::<Vec<_>>();
 
+    let mut oversized = false;
     for path in &paths {
-        if let Some(image) = embedded_artwork(path) {
-            return Some(image);
+        if let Some(image) = embedded_artwork(path, &mut oversized) {
+            return ArtworkLookup::Found(image);
         }
     }
 
     for sidecar_name in SIDE_CAR_NAMES {
         for path in &paths {
-            if let Some(image) = sidecar_artwork(path, sidecar_name) {
-                return Some(image);
+            if let Some(image) = sidecar_artwork(path, sidecar_name, &mut oversized) {
+                return ArtworkLookup::Found(image);
             }
         }
     }
 
-    None
+    if oversized {
+        ArtworkLookup::Oversized
+    } else {
+        ArtworkLookup::Missing
+    }
 }
 
-fn embedded_artwork(path: &Path) -> Option<ArtworkImage> {
+fn embedded_artwork(path: &Path, oversized: &mut bool) -> Option<ArtworkImage> {
     let native_path = to_extended_path(path).ok()?;
     let file = open_regular_file_without_following_reparse_points(&native_path)?;
     let options = ParseOptions::new().read_properties(false);
@@ -75,7 +87,7 @@ fn embedded_artwork(path: &Path) -> Option<ArtworkImage> {
         .flat_map(|tag| tag.pictures())
         .filter(|picture| picture.pic_type() == PictureType::CoverFront)
     {
-        if let Some(image) = image_from_raw_bytes(picture.data()) {
+        if let Some(image) = image_from_raw_bytes(picture.data(), oversized) {
             return Some(image);
         }
     }
@@ -84,7 +96,7 @@ fn embedded_artwork(path: &Path) -> Option<ArtworkImage> {
         .flat_map(|tag| tag.pictures())
         .filter(|picture| picture.pic_type() != PictureType::CoverFront)
     {
-        if let Some(image) = image_from_raw_bytes(picture.data()) {
+        if let Some(image) = image_from_raw_bytes(picture.data(), oversized) {
             return Some(image);
         }
     }
@@ -92,7 +104,7 @@ fn embedded_artwork(path: &Path) -> Option<ArtworkImage> {
     None
 }
 
-fn sidecar_artwork(audio_path: &Path, name: &str) -> Option<ArtworkImage> {
+fn sidecar_artwork(audio_path: &Path, name: &str, oversized: &mut bool) -> Option<ArtworkImage> {
     let audio_parent = audio_path.parent()?;
     let native_parent = to_extended_path(audio_parent).ok()?;
     let canonical_parent = fs::canonicalize(&native_parent).ok()?;
@@ -107,7 +119,11 @@ fn sidecar_artwork(audio_path: &Path, name: &str) -> Option<ArtworkImage> {
     }
 
     let metadata = file.metadata().ok()?;
-    if metadata.len() == 0 || metadata.len() > MAX_ARTWORK_BYTES as u64 {
+    if metadata.len() == 0 {
+        return None;
+    }
+    if metadata.len() > MAX_ARTWORK_BYTES as u64 {
+        *oversized = true;
         return None;
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
@@ -115,14 +131,18 @@ fn sidecar_artwork(audio_path: &Path, name: &str) -> Option<ArtworkImage> {
         .take(MAX_ARTWORK_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .ok()?;
-    image_from_raw_bytes(&bytes)
+    image_from_raw_bytes(&bytes, oversized)
 }
 
-fn image_from_raw_bytes(bytes: &[u8]) -> Option<ArtworkImage> {
-    if bytes.is_empty() || bytes.len() > MAX_ARTWORK_BYTES {
+fn image_from_raw_bytes(bytes: &[u8], oversized: &mut bool) -> Option<ArtworkImage> {
+    if bytes.is_empty() {
         return None;
     }
-    let header = inspect_image_header(bytes)?;
+    if bytes.len() > MAX_ARTWORK_BYTES {
+        *oversized = true;
+        return None;
+    }
+    let header = inspect_image_header(bytes, oversized)?;
     ArtworkImage::try_new(
         header.mime_type,
         bytes.to_vec(),
@@ -132,7 +152,7 @@ fn image_from_raw_bytes(bytes: &[u8]) -> Option<ArtworkImage> {
 }
 
 /// Inspect dimensions and container structure without decoding or rewriting any pixels.
-fn inspect_image_header(bytes: &[u8]) -> Option<ImageHeader> {
+fn inspect_image_header(bytes: &[u8], oversized: &mut bool) -> Option<ImageHeader> {
     let header = if bytes.starts_with(&[0xff, 0xd8]) {
         inspect_jpeg(bytes)?
     } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -148,12 +168,14 @@ fn inspect_image_header(bytes: &[u8]) -> Option<ImageHeader> {
     };
 
     let pixels = u64::from(header.width).checked_mul(u64::from(header.height))?;
-    if header.width == 0
-        || header.height == 0
-        || header.width > player_core::MAX_ARTWORK_DIMENSION
+    if header.width == 0 || header.height == 0 {
+        return None;
+    }
+    if header.width > player_core::MAX_ARTWORK_DIMENSION
         || header.height > player_core::MAX_ARTWORK_DIMENSION
         || pixels > player_core::MAX_ARTWORK_PIXELS
     {
+        *oversized = true;
         return None;
     }
     Some(header)
@@ -444,6 +466,13 @@ mod tests {
         vec![MediaLocator::FileSystem(path)]
     }
 
+    fn expect_found(locators: &[MediaLocator]) -> ArtworkImage {
+        match find_artwork(locators) {
+            ArtworkLookup::Found(image) => image,
+            other => panic!("expected artwork, got {other:?}"),
+        }
+    }
+
     #[test]
     fn embedded_cover_is_returned_unchanged_before_sidecars() {
         let dir = TestDirectory::new("embedded");
@@ -452,7 +481,7 @@ mod tests {
         write_tagged_mp3(&audio, &embedded);
         fs::write(dir.path().join("cover.jpg"), tiny_png()).expect("sidecar");
 
-        let artwork = find_artwork(&only_locator(audio)).expect("embedded picture");
+        let artwork = expect_found(&only_locator(audio));
         assert_eq!(artwork.mime_type(), "image/png");
         assert_eq!(artwork.bytes(), embedded);
         assert_eq!(artwork.dimensions(), (1, 1));
@@ -467,16 +496,16 @@ mod tests {
         fs::write(dir.path().join("cover.jpg"), &cover).expect("write cover fallback");
         fs::write(dir.path().join("folder.jpg"), tiny_png()).expect("write folder fallback");
 
-        let artwork = find_artwork(&only_locator(audio.clone())).expect("cover fallback");
+        let artwork = expect_found(&only_locator(audio.clone()));
         assert_eq!(artwork.bytes(), cover);
 
         fs::write(dir.path().join("cover.jpg"), b"truncated").expect("corrupt cover");
-        let artwork = find_artwork(&only_locator(audio)).expect("folder fallback");
+        let artwork = expect_found(&only_locator(audio));
         assert_eq!(artwork.bytes(), tiny_png());
     }
 
     #[test]
-    fn missing_cover_returns_none_and_content_uri_is_not_opened() {
+    fn missing_cover_returns_missing_and_content_uri_is_not_opened() {
         let dir = TestDirectory::new("missing");
         let audio = dir.path().join("track.mp3");
         fs::write(&audio, b"invalid audio").expect("audio placeholder");
@@ -484,7 +513,7 @@ mod tests {
             MediaLocator::ContentUri("content://no/path/access".to_owned()),
             MediaLocator::FileSystem(audio),
         ];
-        assert!(find_artwork(&locators).is_none());
+        assert_eq!(find_artwork(&locators), ArtworkLookup::Missing);
     }
 
     #[test]
@@ -497,13 +526,13 @@ mod tests {
         let cover = tiny_png();
         fs::write(unicode.join("cover.jpg"), &cover).expect("unicode path sidecar");
 
-        let artwork = find_artwork(&only_locator(audio)).expect("unicode sidecar");
+        let artwork = expect_found(&only_locator(audio));
         assert_eq!(artwork.bytes(), cover);
         assert_eq!(artwork.dimensions(), (1, 1));
     }
 
     #[test]
-    fn oversized_sidecar_is_rejected_without_reading_full_file() {
+    fn oversized_sidecar_is_reported_without_reading_full_file() {
         let dir = TestDirectory::new("oversize");
         let audio = dir.path().join("track.mp3");
         fs::write(&audio, b"invalid audio").expect("audio placeholder");
@@ -512,7 +541,22 @@ mod tests {
         file.set_len(MAX_ARTWORK_BYTES as u64 + 1)
             .expect("make oversize sidecar");
 
-        assert!(find_artwork(&only_locator(audio)).is_none());
+        assert_eq!(find_artwork(&only_locator(audio)), ArtworkLookup::Oversized);
+    }
+
+    #[test]
+    fn oversized_embedded_image_falls_back_to_valid_sidecar() {
+        let dir = TestDirectory::new("oversize-embedded-fallback");
+        let audio = dir.path().join("track.mp3");
+        let mut oversized_embedded = tiny_png();
+        oversized_embedded[16..20].copy_from_slice(&20_000_u32.to_be_bytes());
+        oversized_embedded[20..24].copy_from_slice(&20_000_u32.to_be_bytes());
+        write_tagged_mp3(&audio, &oversized_embedded);
+        let sidecar = tiny_png();
+        fs::write(dir.path().join("cover.jpg"), &sidecar).expect("write sidecar");
+
+        let artwork = expect_found(&only_locator(audio));
+        assert_eq!(artwork.bytes(), sidecar);
     }
 
     #[test]
@@ -528,7 +572,7 @@ mod tests {
             return;
         }
 
-        assert!(find_artwork(&only_locator(audio)).is_none());
+        assert_eq!(find_artwork(&only_locator(audio)), ArtworkLookup::Missing);
     }
 
     #[test]
@@ -545,17 +589,21 @@ mod tests {
         let cover = tiny_png();
         fs::write(native_long_dir.join("cover.jpg"), &cover).expect("long-path sidecar");
 
-        let artwork = find_artwork(&only_locator(audio)).expect("long-path art");
+        let artwork = expect_found(&only_locator(audio));
         assert_eq!(artwork.bytes(), cover);
     }
 
     #[test]
     fn unsupported_and_corrupt_headers_are_skipped() {
-        assert!(image_from_raw_bytes(b"not an image").is_none());
-        assert!(image_from_raw_bytes(b"\x89PNG\r\n\x1a\nshort").is_none());
+        let mut oversized = false;
+        assert!(image_from_raw_bytes(b"not an image", &mut oversized).is_none());
+        assert!(!oversized);
+        assert!(image_from_raw_bytes(b"\x89PNG\r\n\x1a\nshort", &mut oversized).is_none());
+        assert!(!oversized);
         let mut too_large = tiny_png();
         too_large[16..20].copy_from_slice(&20_000_u32.to_be_bytes());
         too_large[20..24].copy_from_slice(&20_000_u32.to_be_bytes());
-        assert!(inspect_image_header(&too_large).is_none());
+        assert!(inspect_image_header(&too_large, &mut oversized).is_none());
+        assert!(oversized);
     }
 }

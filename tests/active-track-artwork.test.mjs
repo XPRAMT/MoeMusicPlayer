@@ -133,6 +133,16 @@ test('missing, unsupported, and oversized artwork leave the placeholder availabl
   assert.equal(oversized.created.length, 0);
 });
 
+test('the native oversized-result code is shown as too-large instead of missing or generic error', async () => {
+  for (const error of ['ARTWORK_TOO_LARGE', new Error('ARTWORK_TOO_LARGE')]) {
+    const fixture = controllerWith({ fetchBytes: async () => { throw error; } });
+    fixture.controller.setTrack('oversized-at-source');
+    await nextTurn();
+    assert.equal(fixture.controller.snapshot().status, 'too-large');
+    assert.equal(fixture.created.length, 0);
+  }
+});
+
 test('a stale image error cannot revoke or clear the newer track', async () => {
   const fixture = controllerWith();
   fixture.controller.setTrack('track-a');

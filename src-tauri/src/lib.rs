@@ -21,7 +21,9 @@ use playlist_exchange::{
 };
 
 #[cfg(target_os = "windows")]
-use player_platform_windows::{find_artwork, windows_locator_key, WindowsMediaIndex};
+use player_platform_windows::{
+    find_artwork, windows_locator_key, ArtworkLookup, WindowsMediaIndex,
+};
 
 #[cfg(target_os = "windows")]
 use player_audio_windows::{
@@ -1359,12 +1361,14 @@ async fn library_get_track_artwork(
         let locators = database
             .track_locators(id)
             .map_err(|error| error.to_string())?;
-        let image = tauri::async_runtime::spawn_blocking(move || find_artwork(&locators))
+        let artwork = tauri::async_runtime::spawn_blocking(move || find_artwork(&locators))
             .await
             .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
-        Ok(Response::new(
-            image.map(|image| image.into_bytes()).unwrap_or_default(),
-        ))
+        match artwork {
+            ArtworkLookup::Found(image) => Ok(Response::new(image.into_bytes())),
+            ArtworkLookup::Missing => Ok(Response::new(Vec::new())),
+            ArtworkLookup::Oversized => Err("ARTWORK_TOO_LARGE".to_owned()),
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {

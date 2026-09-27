@@ -17,4 +17,4 @@ mod system_index;
 pub use windows::{windows_locator_key, WindowsMediaIndex};
 
 #[cfg(windows)]
-pub use artwork::find_artwork;
+pub use artwork::{find_artwork, ArtworkLookup};
