@@ -7,3 +7,6 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 player-core = { path = "../player-core" }
 lofty = "0.25.4"
+
+[dev-dependencies]
+player-db = { path = "../player-db" }

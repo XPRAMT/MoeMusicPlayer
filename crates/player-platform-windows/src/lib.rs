@@ -8,4 +8,4 @@
 mod windows;
 
 #[cfg(windows)]
-pub use windows::WindowsMediaIndex;
+pub use windows::{windows_locator_key, WindowsMediaIndex};
