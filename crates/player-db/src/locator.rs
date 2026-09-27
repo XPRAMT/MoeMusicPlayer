@@ -88,7 +88,7 @@ pub(crate) fn decode(
 fn decode_path(encoding: &str, data: &[u8]) -> Result<PathBuf, DatabaseError> {
     use std::os::windows::ffi::OsStringExt;
 
-    if encoding != "windows_utf16le" || data.len() % 2 != 0 {
+    if encoding != "windows_utf16le" || !data.len().is_multiple_of(2) {
         return Err(DatabaseError::UnsupportedLocatorEncoding(
             encoding.to_owned(),
         ));

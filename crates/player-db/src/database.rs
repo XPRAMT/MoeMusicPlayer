@@ -572,7 +572,7 @@ impl LibraryRepository for Database {
         statement
             .query_row(
                 [identity.locator_key.as_deref().unwrap_or_default()],
-                |row| row_to_sync_state(row),
+                row_to_sync_state,
             )
             .optional()
             .map_err(DatabaseError::from)
@@ -632,16 +632,15 @@ impl LibraryRepository for Database {
         };
 
         let state_name = scan_state_name(state);
-        let last_error =
-            errors
-                .first()
-                .map(|error| error.message.as_str())
-                .or_else(|| match state {
-                    SourceScanState::Incomplete { reason }
-                    | SourceScanState::Unavailable { reason }
-                    | SourceScanState::PermissionRevoked { reason } => Some(reason.as_str()),
-                    SourceScanState::Complete => None,
-                });
+        let last_error = errors
+            .first()
+            .map(|error| error.message.as_str())
+            .or(match state {
+                SourceScanState::Incomplete { reason }
+                | SourceScanState::Unavailable { reason }
+                | SourceScanState::PermissionRevoked { reason } => Some(reason.as_str()),
+                SourceScanState::Complete => None,
+            });
         let last_success = state.allows_reconciliation().then_some(synced_at_utc_ms);
         tx.execute(
             "INSERT INTO library_sync_state
@@ -1068,8 +1067,8 @@ mod tests {
             &mut db,
             &root,
             SourceScanState::Complete,
-            &[record.clone()],
-            &[record],
+            std::slice::from_ref(&record),
+            std::slice::from_ref(&record),
             1000,
         );
         assert_eq!(list(&db, 0, 10).total_count, 1);
@@ -1116,8 +1115,8 @@ mod tests {
             &mut db,
             &index_root,
             SourceScanState::Complete,
-            &[index_record.clone()],
-            &[index_record],
+            std::slice::from_ref(&index_record),
+            std::slice::from_ref(&index_record),
             1000,
         );
         let first = list(&db, 0, 10).items.remove(0);
@@ -1137,8 +1136,8 @@ mod tests {
             &mut db,
             &filesystem_root,
             SourceScanState::Complete,
-            &[fallback_record.clone()],
-            &[fallback_record],
+            std::slice::from_ref(&fallback_record),
+            std::slice::from_ref(&fallback_record),
             2000,
         );
 
@@ -1162,8 +1161,8 @@ mod tests {
             &mut db,
             &index_root,
             SourceScanState::Complete,
-            &[updated_index_record.clone()],
-            &[updated_index_record],
+            std::slice::from_ref(&updated_index_record),
+            std::slice::from_ref(&updated_index_record),
             3000,
         );
         let after_metadata_update = list(&db, 0, 10);
