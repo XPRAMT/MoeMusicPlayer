@@ -1,6 +1,7 @@
 ﻿async page => {
   await page.addInitScript(() => {
     window.__sourcePickerCalls = [];
+    window.isTauri = true;
     window.__TAURI_INTERNALS__ = {
       invoke: async (command, args) => {
         window.__sourcePickerCalls.push({ command, args });
