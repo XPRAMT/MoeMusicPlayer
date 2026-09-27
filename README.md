@@ -10,8 +10,9 @@ MoeMusicPlayer is a local-first music library for Windows and Android. It stores
 - On Android, select shared-audio storage through MediaStore or choose a folder with the system document picker (SAF).
 - Keep previously indexed tracks when a source is unavailable or a scan is incomplete.
 - Browse and search the saved library with paginated results; the interface never loads the whole collection.
+- On Windows, play local WAV, MP3, FLAC, and Ogg Vorbis files with play/pause, seek, and volume controls.
 
-Playback controls are shown, but audio playback is not available yet and the controls remain disabled.
+The playback queue, previous/next track, repeat, shuffle, and Android playback are not available yet.
 
 ## Run on Windows
 

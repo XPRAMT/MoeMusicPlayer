@@ -21,4 +21,5 @@ serde = { version = "1", features = ["derive"] }
 tauri = { version = "2.12.0", features = [] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+player-audio-windows = { path = "../crates/player-audio-windows" }
 player-platform-windows = { path = "../crates/player-platform-windows" }

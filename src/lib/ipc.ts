@@ -13,6 +13,8 @@ export interface RuntimeCapabilities {
   library: FeatureCapability;
   sourceSync: FeatureCapability;
   playback: FeatureCapability;
+  playbackNavigation: FeatureCapability;
+  playbackModes: FeatureCapability;
 }
 
 export interface LibrarySource {
@@ -75,13 +77,25 @@ export interface TrackPageRequest {
 }
 
 export type RepeatMode = 'off' | 'one' | 'all';
+export type PlaybackState =
+  | 'initializing'
+  | 'empty'
+  | 'loading'
+  | 'ready'
+  | 'playing'
+  | 'paused'
+  | 'stopped'
+  | 'ended'
+  | 'error';
 
 export interface PlaybackSnapshot {
   currentTrack: TrackSummary | null;
+  state: PlaybackState;
   isPlaying: boolean;
   positionMs: number;
   durationMs: number | null;
   volume: number;
+  lastError: string | null;
   repeatMode: RepeatMode;
   shuffle: boolean;
 }

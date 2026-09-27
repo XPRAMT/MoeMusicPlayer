@@ -1,5 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "windows")]
+use std::{sync::Mutex, time::Duration};
+
 use player_core::{
     LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, SourceScanState, SyncEngine,
     SyncReport, TrackSummary,
@@ -12,12 +15,99 @@ use tauri_plugin_media_index::MediaIndexExt;
 #[cfg(target_os = "windows")]
 use player_platform_windows::{windows_locator_key, WindowsMediaIndex};
 
+#[cfg(target_os = "windows")]
+use player_audio_windows::{AudioError, PlaybackState as AudioPlaybackState, PlayerHandle};
+
+#[cfg(target_os = "windows")]
+use player_core::TrackId;
+
 const LIBRARY_SYNC_FINISHED_EVENT: &str = "library-sync-finished";
 
 struct AppState {
     database: Option<Database>,
     database_path: Option<std::path::PathBuf>,
     database_error: Option<String>,
+    #[cfg(target_os = "windows")]
+    playback: Option<WindowsPlaybackService>,
+    #[cfg(target_os = "windows")]
+    playback_error: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsPlaybackService {
+    player: PlayerHandle,
+    current_track: Mutex<Option<TrackSummary>>,
+    command_gate: Mutex<()>,
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsPlaybackService {
+    fn new(player: PlayerHandle) -> Self {
+        Self {
+            player,
+            current_track: Mutex::new(None),
+            command_gate: Mutex::new(()),
+        }
+    }
+
+    fn snapshot(&self) -> PlaybackSnapshot {
+        let audio = self.player.snapshot();
+        let current_track = self
+            .current_track
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        PlaybackSnapshot {
+            current_track,
+            state: audio_state_name(audio.state).to_owned(),
+            is_playing: audio.state == AudioPlaybackState::Playing,
+            position_ms: duration_millis(audio.position),
+            duration_ms: audio.duration.map(duration_millis),
+            volume: f64::from(audio.volume),
+            last_error: audio.last_error.as_ref().map(playback_audio_error_message),
+            repeat_mode: RepeatMode::Off,
+            shuffle: false,
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn audio_state_name(state: AudioPlaybackState) -> &'static str {
+    match state {
+        AudioPlaybackState::Initializing => "initializing",
+        AudioPlaybackState::Empty => "empty",
+        AudioPlaybackState::Loading => "loading",
+        AudioPlaybackState::Ready => "ready",
+        AudioPlaybackState::Playing => "playing",
+        AudioPlaybackState::Paused => "paused",
+        AudioPlaybackState::Stopped => "stopped",
+        AudioPlaybackState::Ended => "ended",
+        AudioPlaybackState::Error => "error",
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(target_os = "windows")]
+fn playback_audio_error_message(error: &AudioError) -> String {
+    match error {
+        AudioError::OutputDevice(_) => "無法連線到預設音訊輸出裝置。".to_owned(),
+        AudioError::WorkerStart(_) => "無法啟動音訊背景工作。".to_owned(),
+        AudioError::WorkerStopped => "音訊工作階段已結束。".to_owned(),
+        AudioError::CommandQueueFull => "音訊服務忙碌，請稍後再試。".to_owned(),
+        AudioError::UnsupportedPlatform => "此平台尚未提供本機音訊播放服務。".to_owned(),
+        AudioError::FileOpen { .. } => "無法開啟曲目檔案，請確認檔案仍可讀取。".to_owned(),
+        AudioError::UnsupportedFormat { .. } => "此音訊格式目前尚未支援。".to_owned(),
+        AudioError::Decode { .. } => "曲目解碼失敗。".to_owned(),
+        AudioError::Seek(_) => "無法移動到指定播放位置。".to_owned(),
+        AudioError::Backend(_) => "音訊輸出發生錯誤。".to_owned(),
+        AudioError::BackendUnavailable => "音訊輸出裝置目前無法使用。".to_owned(),
+        AudioError::NoTrackLoaded => "尚未載入曲目。".to_owned(),
+        AudioError::InvalidVolume => "音量設定值無效。".to_owned(),
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -43,6 +133,8 @@ struct RuntimeCapabilities {
     library: FeatureCapability,
     source_sync: FeatureCapability,
     playback: FeatureCapability,
+    playback_navigation: FeatureCapability,
+    playback_modes: FeatureCapability,
 }
 
 #[derive(Clone, Serialize)]
@@ -97,10 +189,12 @@ enum RepeatMode {
 #[serde(rename_all = "camelCase")]
 struct PlaybackSnapshot {
     current_track: Option<TrackSummary>,
+    state: String,
     is_playing: bool,
     position_ms: u64,
     duration_ms: Option<u64>,
     volume: f64,
+    last_error: Option<String>,
     repeat_mode: RepeatMode,
     shuffle: bool,
 }
@@ -142,14 +236,45 @@ fn get_runtime_capabilities(state: State<'_, AppState>) -> RuntimeCapabilities {
         )
     };
 
+    let playback = {
+        #[cfg(target_os = "windows")]
+        {
+            if state.database.is_some() && state.playback.is_some() {
+                feature(FeatureState::Ready, None)
+            } else {
+                feature(
+                    FeatureState::NotReady,
+                    state.database_error.clone().or_else(|| {
+                        state
+                            .playback_error
+                            .clone()
+                            .or_else(|| Some("Windows 音訊服務尚未啟動。".to_owned()))
+                    }),
+                )
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            feature(
+                FeatureState::NotReady,
+                Some("此平台尚未提供本機音訊播放服務。".to_owned()),
+            )
+        }
+    };
+
     RuntimeCapabilities {
         platform: platform_name().to_owned(),
         desktop_runtime: feature(FeatureState::Ready, None),
         library,
         source_sync,
-        playback: feature(
+        playback,
+        playback_navigation: feature(
             FeatureState::NotReady,
-            Some("本機播放引擎尚未接通。".to_owned()),
+            Some("播放佇列與前後首尚未實作。".to_owned()),
+        ),
+        playback_modes: feature(
+            FeatureState::NotReady,
+            Some("隨機與循環播放尚未實作。".to_owned()),
         ),
     }
 }
@@ -206,7 +331,7 @@ fn library_add_windows_folder(
                 .clone()
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
-        return add_windows_folder_to_database(database, &path);
+        add_windows_folder_to_database(database, &path)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -440,7 +565,7 @@ fn sync_configured_sources(
     #[cfg(target_os = "windows")]
     {
         let _ = app;
-        return sync_windows_sources(database);
+        sync_windows_sources(database)
     }
 
     #[cfg(target_os = "android")]
@@ -534,48 +659,209 @@ fn now_utc_epoch_ms() -> Result<i64, String> {
 }
 
 #[tauri::command]
-fn playback_get_snapshot() -> Result<PlaybackSnapshot, String> {
-    Err("本機播放引擎尚未接通。".to_owned())
+fn playback_get_snapshot(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        Ok(windows_playback_service(&state)?.snapshot())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = state;
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
 }
 
 #[tauri::command]
-fn playback_play(_track_id: String) -> Result<PlaybackSnapshot, String> {
-    Err("本機播放引擎尚未接通。".to_owned())
+fn playback_play(state: State<'_, AppState>, track_id: String) -> Result<PlaybackSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let service = windows_playback_service(&state)?;
+        play_track_from_database(database, service, &track_id)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, track_id);
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
 }
 
 #[tauri::command]
-fn playback_pause() -> Result<PlaybackSnapshot, String> {
-    Err("本機播放引擎尚未接通。".to_owned())
+fn playback_pause(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let service = windows_playback_service(&state)?;
+        pause_playback(service)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = state;
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
 }
 
 #[tauri::command]
 fn playback_next() -> Result<PlaybackSnapshot, String> {
-    Err("本機播放引擎尚未接通。".to_owned())
+    Err("曲目佇列與下一首播放尚未實作。".to_owned())
 }
 
 #[tauri::command]
 fn playback_previous() -> Result<PlaybackSnapshot, String> {
-    Err("本機播放引擎尚未接通。".to_owned())
+    Err("曲目佇列與上一首播放尚未實作。".to_owned())
 }
 
 #[tauri::command]
-fn playback_seek(_position_ms: u64) -> Result<PlaybackSnapshot, String> {
-    Err("本機播放引擎尚未接通。".to_owned())
+fn playback_seek(state: State<'_, AppState>, position_ms: u64) -> Result<PlaybackSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let service = windows_playback_service(&state)?;
+        seek_playback(service, position_ms)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, position_ms);
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
 }
 
 #[tauri::command]
-fn playback_set_volume(_volume: f64) -> Result<PlaybackSnapshot, String> {
-    Err("本機播放引擎尚未接通。".to_owned())
+fn playback_set_volume(
+    state: State<'_, AppState>,
+    volume: f64,
+) -> Result<PlaybackSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let service = windows_playback_service(&state)?;
+        set_playback_volume(service, volume)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, volume);
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
 }
 
 #[tauri::command]
 fn playback_set_repeat(_mode: RepeatMode) -> Result<PlaybackSnapshot, String> {
-    Err("本機播放引擎尚未接通。".to_owned())
+    Err("循環播放尚未實作。".to_owned())
 }
 
 #[tauri::command]
 fn playback_set_shuffle(_enabled: bool) -> Result<PlaybackSnapshot, String> {
-    Err("本機播放引擎尚未接通。".to_owned())
+    Err("隨機播放尚未實作。".to_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_playback_service(state: &AppState) -> Result<&WindowsPlaybackService, String> {
+    state.playback.as_ref().ok_or_else(|| {
+        state
+            .playback_error
+            .clone()
+            .unwrap_or_else(|| "Windows 音訊服務尚未啟動。".to_owned())
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn pause_playback(service: &WindowsPlaybackService) -> Result<PlaybackSnapshot, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    service
+        .player
+        .pause()
+        .map_err(|error| playback_audio_error_message(&error))?;
+    Ok(service.snapshot())
+}
+
+#[cfg(target_os = "windows")]
+fn seek_playback(
+    service: &WindowsPlaybackService,
+    position_ms: u64,
+) -> Result<PlaybackSnapshot, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    service
+        .player
+        .seek(Duration::from_millis(position_ms))
+        .map_err(|error| playback_audio_error_message(&error))?;
+    Ok(service.snapshot())
+}
+
+#[cfg(target_os = "windows")]
+fn set_playback_volume(
+    service: &WindowsPlaybackService,
+    volume: f64,
+) -> Result<PlaybackSnapshot, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    service
+        .player
+        .set_volume(volume as f32)
+        .map_err(|error| playback_audio_error_message(&error))?;
+    Ok(service.snapshot())
+}
+
+#[cfg(target_os = "windows")]
+fn play_track_from_database(
+    database: &Database,
+    service: &WindowsPlaybackService,
+    track_id: &str,
+) -> Result<PlaybackSnapshot, String> {
+    let track_id = TrackId::parse(track_id).map_err(|error| format!("曲目 ID 無效：{error}"))?;
+    let track = database
+        .get_track_summary(track_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
+    let path = database
+        .resolve_playable_filesystem_locator(track_id)
+        .map_err(|error| error.to_string())?;
+
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let current_track_id = service
+        .current_track
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .map(|current| current.id);
+    let audio_snapshot = service.player.snapshot();
+    if current_track_id == Some(track_id)
+        && matches!(
+            audio_snapshot.state,
+            AudioPlaybackState::Ready | AudioPlaybackState::Paused
+        )
+    {
+        service
+            .player
+            .play()
+            .map_err(|error| playback_audio_error_message(&error))?;
+    } else {
+        service
+            .player
+            .load(path)
+            .map_err(|error| playback_audio_error_message(&error))?;
+        service
+            .player
+            .play()
+            .map_err(|error| playback_audio_error_message(&error))?;
+    }
+    *service
+        .current_track
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(track);
+    Ok(service.snapshot())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -613,10 +899,19 @@ pub fn run() {
                 Ok(database) => (Some(database), Some(database_path), None),
                 Err(error) => (None, None, Some(error)),
             };
+            #[cfg(target_os = "windows")]
+            let (playback, playback_error) = match PlayerHandle::new() {
+                Ok(player) => (Some(WindowsPlaybackService::new(player)), None),
+                Err(error) => (None, Some(playback_audio_error_message(&error))),
+            };
             app.manage(AppState {
                 database,
                 database_path: stored_path.clone(),
                 database_error,
+                #[cfg(target_os = "windows")]
+                playback,
+                #[cfg(target_os = "windows")]
+                playback_error,
             });
 
             if let Some(database_path) = stored_path {
@@ -647,9 +942,20 @@ pub fn run() {
 #[cfg(all(test, target_os = "windows"))]
 mod windows_library_integration_tests {
     use super::{add_windows_folder_to_database, sync_windows_sources};
+    use super::{
+        pause_playback, play_track_from_database, playback_audio_error_message, seek_playback,
+        set_playback_volume, WindowsPlaybackService,
+    };
+    use player_audio_windows::{AudioBackend, AudioError, PlayerHandle};
     use player_core::{ListTracksQuery, MediaLocator, MediaSourceKind, SourceId};
     use player_db::Database;
-    use std::{fs, path::PathBuf};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex},
+        thread,
+        time::{Duration, Instant},
+    };
 
     struct TestDirectory(PathBuf);
 
@@ -662,6 +968,52 @@ mod windows_library_integration_tests {
     impl Drop for TestDirectory {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct CapturingAudioBackend {
+        loaded_path: Arc<Mutex<Option<PathBuf>>>,
+        position: Duration,
+    }
+
+    impl AudioBackend for CapturingAudioBackend {
+        fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
+            *self
+                .loaded_path
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(path.to_path_buf());
+            self.position = Duration::ZERO;
+            Ok(Some(Duration::from_secs(3)))
+        }
+
+        fn play(&mut self) -> Result<(), AudioError> {
+            Ok(())
+        }
+
+        fn pause(&mut self) -> Result<(), AudioError> {
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), AudioError> {
+            self.position = Duration::ZERO;
+            Ok(())
+        }
+
+        fn seek(&mut self, position: Duration) -> Result<Duration, AudioError> {
+            self.position = position.min(Duration::from_secs(3));
+            Ok(self.position)
+        }
+
+        fn set_volume(&mut self, _volume: f32) -> Result<(), AudioError> {
+            Ok(())
+        }
+
+        fn position(&self) -> Duration {
+            self.position
+        }
+
+        fn is_empty(&self) -> bool {
+            false
         }
     }
 
@@ -809,5 +1161,123 @@ mod windows_library_integration_tests {
             reopened_page.items[0].album.as_deref(),
             Some("Acceptance Album")
         );
+    }
+
+    #[test]
+    fn playback_resolves_internal_track_id_to_saved_path_and_loads_player_handle() {
+        let temporary = TestDirectory::new();
+        let source_path = temporary.0.join("東京🌸 音樂");
+        fs::create_dir_all(&source_path).expect("create Unicode source folder");
+        let track_path = source_path.join("夜色 - Sample Track.mp3");
+        write_tagged_mp3(&track_path);
+        let database_path = temporary.0.join("app-data").join("library.sqlite3");
+
+        let mut database = Database::open(&database_path).expect("open app database");
+        let source = add_windows_folder_to_database(
+            &database,
+            source_path.to_str().expect("Unicode Windows path"),
+        )
+        .expect("add Windows folder through command helper");
+        assert_eq!(source.kind, "windowsSystemIndex");
+        let sync = sync_windows_sources(&mut database).expect("sync source before playback");
+        assert_eq!(sync.sources[0].state, "complete");
+        let page = database
+            .list_tracks_page(ListTracksQuery {
+                query: None,
+                offset: 0,
+                limit: 10,
+            })
+            .expect("read track page");
+        assert_eq!(page.total_count, 1);
+        let track_id = page.items[0].id;
+
+        let loaded_path = Arc::new(Mutex::new(None));
+        let backend_path = Arc::clone(&loaded_path);
+        let player = PlayerHandle::with_backend_factory(move || {
+            Ok(Box::new(CapturingAudioBackend {
+                loaded_path: backend_path,
+                position: Duration::ZERO,
+            }) as Box<dyn AudioBackend>)
+        })
+        .expect("create test audio worker");
+        let service = WindowsPlaybackService::new(player);
+        let response = play_track_from_database(&database, &service, &track_id.to_string())
+            .expect("resolve internal ID and enqueue playback");
+        assert_eq!(
+            response.current_track.as_ref().map(|track| track.id),
+            Some(track_id)
+        );
+
+        let path_deadline = Instant::now() + Duration::from_secs(2);
+        let actual_path = loop {
+            if let Some(path) = loaded_path
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+            {
+                break path;
+            }
+            assert!(
+                Instant::now() < path_deadline,
+                "player worker did not receive a file path"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(
+            player_platform_windows::windows_locator_key(&actual_path),
+            player_platform_windows::windows_locator_key(&fs::canonicalize(track_path).unwrap())
+        );
+
+        let playing_deadline = Instant::now() + Duration::from_secs(2);
+        while !service.snapshot().is_playing {
+            assert!(
+                Instant::now() < playing_deadline,
+                "player worker did not enter Playing state"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(service.snapshot().state, "playing");
+        assert!(service.snapshot().last_error.is_none());
+
+        pause_playback(&service).expect("queue pause command");
+        let paused_deadline = Instant::now() + Duration::from_secs(2);
+        while service.snapshot().state != "paused" {
+            assert!(
+                Instant::now() < paused_deadline,
+                "player worker did not enter Paused state"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        seek_playback(&service, 1_250).expect("queue seek command");
+        let seek_deadline = Instant::now() + Duration::from_secs(2);
+        while service.snapshot().position_ms != 1_250 {
+            assert!(
+                Instant::now() < seek_deadline,
+                "player worker did not apply seek position"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        set_playback_volume(&service, 0.35).expect("queue volume command");
+        let volume_deadline = Instant::now() + Duration::from_secs(2);
+        while (service.snapshot().volume - 0.35).abs() > 0.000_01 {
+            assert!(
+                Instant::now() < volume_deadline,
+                "player worker did not apply volume"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn playback_error_text_does_not_include_native_file_path() {
+        let private_path = PathBuf::from(r"C:\Users\Private\Music\secret-track.mp3");
+        let error = AudioError::FileOpen {
+            path: private_path.clone(),
+            message: "access denied".to_owned(),
+        };
+        let message = playback_audio_error_message(&error);
+        assert!(!message.contains(private_path.to_string_lossy().as_ref()));
     }
 }

@@ -2002,6 +2002,7 @@ dependencies = [
 name = "moemusicplayer"
 version = "0.1.0"
 dependencies = [
+ "player-audio-windows",
  "player-core",
  "player-db",
  "player-platform-windows",

@@ -10,6 +10,7 @@
     type MediaStoreVolumeOption,
     type FeatureCapability,
     type PlaybackSnapshot,
+    type PlaybackState,
     type RuntimeCapabilities,
     type TrackPage,
     type TrackSummary,
@@ -41,14 +42,18 @@
   let isLoadingSources = $state(false);
   let isUpdatingSource = $state(false);
   let isLoadingVolumes = $state(false);
+  let isLoadingPlaybackSnapshot = false;
   let isSendingPlaybackCommand = $state(false);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
   let pageRequestVersion = 0;
   let unlistenSync: UnlistenFn | undefined;
 
   const libraryReady = $derived(isReady(capabilities?.library));
   const sourceSyncReady = $derived(isReady(capabilities?.sourceSync));
   const playbackReady = $derived(isReady(capabilities?.playback));
+  const playbackNavigationReady = $derived(isReady(capabilities?.playbackNavigation));
+  const playbackModesReady = $derived(isReady(capabilities?.playbackModes));
   const hasPreviousPage = $derived((page?.offset ?? 0) > 0);
   const hasNextPage = $derived(
     page !== null && page.offset + page.items.length < page.totalCount,
@@ -62,6 +67,13 @@
 
   onMount(() => {
     void loadCapabilities();
+    if (isTauri()) {
+      playbackPollTimer = setInterval(() => {
+        if (playbackReady && !isSendingPlaybackCommand) {
+          void loadPlaybackSnapshot(false);
+        }
+      }, 250);
+    }
     let disposed = false;
     if (isTauri()) {
       void listen('library-sync-finished', () => {
@@ -83,6 +95,7 @@
 
   onDestroy(() => {
     if (searchTimer !== undefined) clearTimeout(searchTimer);
+    if (playbackPollTimer !== undefined) clearInterval(playbackPollTimer);
     unlistenSync?.();
     pageRequestVersion += 1;
   });
@@ -252,13 +265,16 @@
     }
   }
 
-  async function loadPlaybackSnapshot(): Promise<void> {
-    if (!playbackReady) return;
-    playbackError = null;
+  async function loadPlaybackSnapshot(clearError = true): Promise<void> {
+    if (!playbackReady || isLoadingPlaybackSnapshot) return;
+    isLoadingPlaybackSnapshot = true;
+    if (clearError) playbackError = null;
     try {
       playback = await invokeCommand('playback_get_snapshot', {});
     } catch (error) {
       playbackError = getErrorText(error);
+    } finally {
+      isLoadingPlaybackSnapshot = false;
     }
   }
 
@@ -345,7 +361,22 @@
   }
 
   function currentTrackArtist(track: TrackSummary | null | undefined): string {
-    return track?.artist?.trim() || '播放引擎接通後即可播放本機音樂';
+    return track?.artist?.trim() || '選取曲庫中的曲目開始播放';
+  }
+
+  function playbackStateLabel(state: PlaybackState | undefined): string {
+    switch (state) {
+      case 'initializing': return '啟動播放引擎';
+      case 'empty': return '尚未選擇曲目';
+      case 'loading': return '載入中';
+      case 'ready': return '已就緒';
+      case 'playing': return '播放中';
+      case 'paused': return '已暫停';
+      case 'stopped': return '已停止';
+      case 'ended': return '播放完畢';
+      case 'error': return '播放發生錯誤';
+      default: return '等待播放狀態';
+    }
   }
 
   function nextPage(): void {
@@ -590,9 +621,9 @@
                 <p class="now-playing-artist">{currentTrackArtist(playback?.currentTrack)}</p>
                 <div class="play-state-chip" class:ready={playbackReady}>
                   <span class="status-dot" aria-hidden="true"></span>
-                  {playbackReady ? playback?.isPlaying ? '播放中' : '已暫停' : '播放引擎尚未就緒'}
+                  {playbackReady ? playbackStateLabel(playback?.state) : '播放引擎尚未就緒'}
                 </div>
-                {#if playbackError}<p class="error-note" role="status">{playbackError}</p>{/if}
+                {#if playbackError || playback?.lastError}<p class="error-note" role="status">{playbackError ?? playback?.lastError}</p>{/if}
                 <button class="outline-button now-playing-return" type="button" onclick={() => (activeView = 'library')}>返回曲庫</button>
               </div>
             </div>
@@ -710,10 +741,10 @@
 
     <div class="dock-center">
       <div class="dock-controls">
-        <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={playbackReady ? '切換隨機播放' : showCapabilityDetail(capabilities?.playback)} disabled={!playbackReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} onclick={toggleShuffle}>
+        <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} onclick={toggleShuffle}>
           <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M16 4h3v3M19 4l-6.5 7.2M5 6h2.2c1 0 1.9.5 2.5 1.2l5.6 7.6c.5.7 1.4 1.2 2.4 1.2H19m-3-3 3 3-3 3M5 16h2.2c.8 0 1.6-.4 2.1-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
-        <button class="control-button" type="button" aria-label="上一首" title={showCapabilityDetail(capabilities?.playback)} disabled={!playbackReady || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
+        <button class="control-button" type="button" aria-label="上一首" title={showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
           <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M6 5v12m11-11-8 5 8 5V6Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
         <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} title={showCapabilityDetail(capabilities?.playback)} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
@@ -723,10 +754,10 @@
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m8.5 5.8 10 6.2-10 6.2V5.8Z" fill="currentColor" /></svg>
           {/if}
         </button>
-        <button class="control-button" type="button" aria-label="下一首" title={showCapabilityDetail(capabilities?.playback)} disabled={!playbackReady || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
+        <button class="control-button" type="button" aria-label="下一首" title={showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
           <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M16 5v12M5 6l8 5-8 5V6Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
-        <button class="control-button secondary-control" type="button" aria-label="循環播放" title={playbackReady ? '切換循環模式' : showCapabilityDetail(capabilities?.playback)} disabled={!playbackReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
+        <button class="control-button secondary-control" type="button" aria-label="循環播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
           <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M17 8h2.5l-3-3-3 3H16v6a3 3 0 0 1-3 3h-1M5 14H2.5l3 3 3-3H6V8a3 3 0 0 1 3-3h1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /><circle cx="16" cy="15" r="3" fill="var(--dock-bg)" /><path d="M16 13.4v1.7l1.1.7" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
       </div>
@@ -744,7 +775,7 @@
         />
         <span>{formatDuration(playback?.durationMs)}</span>
       </div>
-      {#if playbackError}<span class="dock-error" role="status">{playbackError}</span>{/if}
+      {#if playbackError || playback?.lastError}<span class="dock-error" role="status">{playbackError ?? playback?.lastError}</span>{/if}
     </div>
 
     <div class="dock-volume">
