@@ -1,6 +1,7 @@
 ﻿async page => {
   await page.addInitScript(() => {
     window.__sourcePickerCalls = [];
+    window.__sourcePickerResponse = null;
     window.isTauri = true;
     window.__TAURI_INTERNALS__ = {
       invoke: async (command, args) => {
@@ -32,7 +33,7 @@
           case 'library_sync':
             return { sources: [] };
           case 'library_pick_windows_folder':
-            return null;
+            return window.__sourcePickerResponse;
           case 'library_add_windows_folder':
             return {
               id: 'test-source', kind: 'windowsSystemIndex', displayName: 'Test',
@@ -60,13 +61,31 @@
   }
 
   await page.waitForTimeout(250);
-  const calls = await page.evaluate(() => window.__sourcePickerCalls);
-  const commands = calls.map(call => call.command);
-  if (!commands.includes('library_pick_windows_folder')) {
-    throw new Error(`Expected source action to invoke library_pick_windows_folder; got: ${commands.join(', ')}`);
+  const cancelCommands = await page.evaluate(() => window.__sourcePickerCalls.map(call => call.command));
+  if (!cancelCommands.includes('library_pick_windows_folder')) {
+    throw new Error(`Expected source action to invoke library_pick_windows_folder; got: ${cancelCommands.join(', ')}`);
   }
-  if (commands.includes('library_add_windows_folder') || commands.includes('library_sync')) {
+  if (cancelCommands.includes('library_add_windows_folder') || cancelCommands.includes('library_sync')) {
     throw new Error('Canceling the native folder picker must not add a source or start a sync.');
+  }
+
+  await page.evaluate(() => {
+    window.__sourcePickerResponse = {
+      id: 'test-source', kind: 'windowsSystemIndex', displayName: '音樂🌸', enabled: true,
+      syncState: null, lastAttemptUtcMs: null, lastSuccessUtcMs: null, errorCount: 0,
+    };
+  });
+  await pickerButton.click();
+  await page.waitForFunction(() => window.__sourcePickerCalls.some(call => call.command === 'library_sync'));
+  const commands = await page.evaluate(() => window.__sourcePickerCalls.map(call => call.command));
+  if (commands.filter(command => command === 'library_pick_windows_folder').length !== 2) {
+    throw new Error('The folder picker should be called once for cancel and once for selection.');
+  }
+  if (commands.includes('library_add_windows_folder')) {
+    throw new Error('The Renderer must not handle or submit a selected filesystem path.');
+  }
+  if (commands.filter(command => command === 'library_sync').length !== 1) {
+    throw new Error('A selected folder should trigger exactly one library sync after the picker returns a source.');
   }
   return { result: 'pass', commands };
 }
