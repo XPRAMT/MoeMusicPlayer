@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 use player_core::{
-    parse_m3u, parse_m3u8, write_m3u, write_m3u8, M3uExportOptions, PlaylistId, PlaylistSummary,
+    M3uExportOptions, PlaylistId, PlaylistSummary, parse_m3u, parse_m3u8, write_m3u, write_m3u8,
 };
 use player_db::Database;
 use serde::Serialize;
@@ -24,7 +24,16 @@ pub fn import_playlist_file(
     database: &Database,
     path: &Path,
 ) -> Result<PlaylistImportResult, String> {
+    let playlist = read_playlist_file(path)?;
+    save_imported_playlist(database, playlist)
+}
+
+pub fn read_playlist_file(path: &Path) -> Result<player_core::Playlist, String> {
     let bytes = fs::read(path).map_err(|error| format!("無法讀取選擇的播放清單：{error}"))?;
+    read_playlist_bytes(&bytes, path)
+}
+
+pub fn read_playlist_bytes(bytes: &[u8], path: &Path) -> Result<player_core::Playlist, String> {
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -47,6 +56,23 @@ pub fn import_playlist_file(
             .to_owned();
     }
 
+    Ok(playlist)
+}
+
+pub fn import_playlist_file_with_id(
+    database: &Database,
+    path: &Path,
+    playlist_id: PlaylistId,
+) -> Result<PlaylistImportResult, String> {
+    let mut playlist = read_playlist_file(path)?;
+    playlist.id = playlist_id;
+    save_imported_playlist(database, playlist)
+}
+
+fn save_imported_playlist(
+    database: &Database,
+    playlist: player_core::Playlist,
+) -> Result<PlaylistImportResult, String> {
     let playlist_id = playlist.id;
     database
         .save_playlist(&playlist)

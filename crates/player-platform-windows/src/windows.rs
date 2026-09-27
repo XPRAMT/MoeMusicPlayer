@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     ffi::{OsStr, OsString},
     fs, io,
     path::{Path, PathBuf},
@@ -11,9 +12,10 @@ use lofty::{
     tag::ItemKey,
 };
 use player_core::{
-    windows_locator_key, FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
+    FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
     MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, SourceScan,
     SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata, TrackMetadataError,
+    windows_locator_key,
 };
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
@@ -26,6 +28,93 @@ pub struct WindowsMediaIndex;
 impl WindowsMediaIndex {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Inspect the unique audio files referenced by a parsed M3U/M3U8 source. The playlist
+    /// itself is the complete membership list; one unavailable song is reported by its stable
+    /// lexical item ID so the database can preserve only that old mapping during reconciliation.
+    pub fn scan_playlist_paths(
+        &mut self,
+        source_id: player_core::SourceId,
+        paths: &[PathBuf],
+    ) -> SourceScan {
+        let mut scan = SourceScan {
+            source_id,
+            state: SourceScanState::Complete,
+            tracks: Vec::with_capacity(paths.len()),
+            errors: Vec::new(),
+        };
+        let mut seen = HashSet::with_capacity(paths.len());
+        for path in paths {
+            let item_id = windows_locator_key(path);
+            if !seen.insert(item_id.clone()) {
+                continue;
+            }
+            // Resolve relative `..` components before adding the Windows verbatim prefix;
+            // extended paths reject dot segments even though normal Win32 paths accept them.
+            let canonical_path = fs::canonicalize(path)
+                .or_else(|_| to_extended_path(path).and_then(fs::canonicalize));
+            let canonical_path = match canonical_path {
+                Ok(path) => path,
+                Err(error) => {
+                    scan.errors.push(MediaSourceError {
+                        source_item_id: Some(item_id),
+                        message: format!("playlist media file is unavailable: {error}"),
+                    });
+                    continue;
+                }
+            };
+            let metadata = match fs::metadata(&canonical_path) {
+                Ok(metadata) if metadata.is_file() => metadata,
+                Ok(_) => continue,
+                Err(error) => {
+                    scan.errors.push(MediaSourceError {
+                        source_item_id: Some(item_id),
+                        message: format!("could not inspect playlist media file: {error}"),
+                    });
+                    continue;
+                }
+            };
+            if !is_supported_audio_file(&canonical_path) {
+                continue;
+            }
+            let modified_at_utc_ms = match metadata.modified() {
+                Ok(modified) => match system_time_to_utc_ms(modified) {
+                    Some(value) => Some(value),
+                    None => {
+                        scan.errors.push(MediaSourceError {
+                            source_item_id: Some(item_id.clone()),
+                            message: "playlist media modification time is outside the supported UTC epoch range".to_owned(),
+                        });
+                        None
+                    }
+                },
+                Err(error) => {
+                    scan.errors.push(MediaSourceError {
+                        source_item_id: Some(item_id.clone()),
+                        message: format!(
+                            "could not read playlist media modification time: {error}"
+                        ),
+                    });
+                    None
+                }
+            };
+            let canonical_key = windows_locator_key(&canonical_path);
+            scan.tracks.push(MediaTrackRecord {
+                identity: TrackIdentity {
+                    source_id,
+                    source_item_id: item_id,
+                    locator_key: Some(canonical_key),
+                },
+                locator: MediaLocator::FileSystem(canonical_path),
+                fingerprint: FileFingerprint {
+                    size_bytes: metadata.len(),
+                    modified_at_utc_ms,
+                },
+                metadata: None,
+            });
+        }
+        scan
     }
 }
 
@@ -282,7 +371,7 @@ impl MediaIndex for WindowsMediaIndex {
             MediaLocator::ContentUri(_) => {
                 return Err(TrackMetadataError {
                     message: "Windows metadata reader requires a filesystem path".to_owned(),
-                })
+                });
             }
         };
 
@@ -376,9 +465,9 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{to_extended_path, windows_locator_key, WindowsMediaIndex};
+    use super::{WindowsMediaIndex, to_extended_path, windows_locator_key};
     use player_core::{
-        LibraryRoot, MediaIndex, MediaLocator, MediaScanProgressUnit, MediaSourceKind,
+        LibraryRoot, MediaIndex, MediaLocator, MediaScanProgressUnit, MediaSourceKind, SourceId,
         SourceScanState, SyncCancellation, UserMetadataField,
     };
     use player_db::Database;
@@ -546,6 +635,29 @@ mod tests {
     }
 
     #[test]
+    fn playlist_path_scan_deduplicates_unicode_entries_and_reports_missing_individually() {
+        let base = temp_path("playlist-source");
+        fs::create_dir_all(&base).expect("create playlist media directory");
+        let media_path = base.join("音樂 東京 🎧.mp3");
+        write_tagged_mp3(&media_path, "Playlist source track");
+        let missing_path = base.join("暫時缺席.flac");
+        let mut index = WindowsMediaIndex::new();
+        let scan = index.scan_playlist_paths(
+            SourceId::new(),
+            &[media_path.clone(), media_path, missing_path],
+        );
+        assert_eq!(scan.state, SourceScanState::Complete);
+        assert_eq!(scan.tracks.len(), 1);
+        assert_eq!(scan.errors.len(), 1);
+        assert!(scan.errors[0].source_item_id.is_some());
+        assert!(matches!(
+            &scan.tracks[0].locator,
+            MediaLocator::FileSystem(path) if path.file_name().is_some_and(|name| name == "音樂 東京 🎧.mp3")
+        ));
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn bad_file_isolated_and_only_complete_scan_removes_missing_items() {
         let base = temp_path("diff");
         fs::create_dir_all(&base).expect("root");
@@ -685,10 +797,12 @@ mod tests {
         let fallback = player_core::SyncEngine::sync(&systemindex_root, &mut index, &mut db, 2)
             .expect("filesystem fallback sync");
         assert_eq!(fallback.state, Some(SourceScanState::Complete));
-        assert!(fallback
-            .source_errors
-            .iter()
-            .any(|error| error.message.contains("filesystem fallback")));
+        assert!(
+            fallback
+                .source_errors
+                .iter()
+                .any(|error| error.message.contains("filesystem fallback"))
+        );
 
         let after_fallback = db
             .list_tracks_page(player_core::ListTracksQuery {
@@ -759,9 +873,11 @@ mod tests {
             "expected intermediate enumeration updates, got {progress:?}"
         );
         assert!(progress.iter().all(|value| value.total.is_none()));
-        assert!(progress
-            .iter()
-            .all(|value| value.unit == MediaScanProgressUnit::FilesystemEntries));
+        assert!(
+            progress
+                .iter()
+                .all(|value| value.unit == MediaScanProgressUnit::FilesystemEntries)
+        );
         assert_eq!(progress.last().map(|value| value.processed), Some(512));
     }
 }

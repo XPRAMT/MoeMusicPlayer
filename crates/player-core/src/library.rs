@@ -1,8 +1,8 @@
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -76,6 +76,7 @@ impl std::fmt::Display for SourceId {
 pub enum MediaSourceKind {
     WindowsSystemIndex,
     WindowsFilesystem,
+    PlaylistFile,
     AndroidMediaStore,
     AndroidSaf,
     Other,

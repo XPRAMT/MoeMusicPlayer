@@ -14,11 +14,11 @@ use player_core::{
     SyncApplyOutcome, SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackId, TrackIdentity,
     TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const MAX_PAGE_SIZE: u32 = 500;
 const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT track_id) FROM source_mappings";
 const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
@@ -189,6 +189,27 @@ CREATE INDEX playlist_entries_unmatched
     ON playlist_entries(playlist_id, position)
     WHERE track_id IS NULL;
 "#;
+
+const SCHEMA_V5: &str = r#"
+CREATE TABLE playlist_file_sync_state (
+    source_id TEXT PRIMARY KEY NOT NULL,
+    playlist_id TEXT NOT NULL,
+    locator_kind TEXT NOT NULL,
+    locator_encoding TEXT NOT NULL,
+    locator_data BLOB NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+    modified_at_utc_ms INTEGER,
+    content_sha256 BLOB NOT NULL CHECK (length(content_sha256) = 32)
+);
+"#;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlaylistFileSyncState {
+    pub playlist_id: PlaylistId,
+    pub locator: MediaLocator,
+    pub fingerprint: FileFingerprint,
+    pub content_sha256: [u8; 32],
+}
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -373,6 +394,13 @@ impl Database {
             tx.execute_batch(SCHEMA_V4)?;
             tx.pragma_update(None, "user_version", 4)?;
             tx.commit()?;
+            version = 4;
+        }
+        if version == 4 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V5)?;
+            tx.pragma_update(None, "user_version", 5)?;
+            tx.commit()?;
         }
         connection.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS sync_seen_items (
@@ -513,6 +541,124 @@ impl Database {
             })
         })
         .collect()
+    }
+
+    pub fn playlist_file_sync_state(
+        &self,
+        source_id: SourceId,
+    ) -> Result<Option<PlaylistFileSyncState>, DatabaseError> {
+        let connection = self.lock()?;
+        let stored = connection
+            .query_row(
+                "SELECT playlist_id, locator_kind, locator_encoding, locator_data,
+                        size_bytes, modified_at_utc_ms, content_sha256
+                 FROM playlist_file_sync_state WHERE source_id=?1",
+                [source_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, Option<i64>>(5)?,
+                        row.get::<_, Vec<u8>>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        stored
+            .map(
+                |(playlist_id, kind, encoding, data, size_bytes, modified_at_utc_ms, hash)| {
+                    let playlist_id = PlaylistId::parse(&playlist_id)
+                        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+                    let size_bytes = u64::try_from(size_bytes).map_err(|_| {
+                        DatabaseError::CorruptData("negative playlist size".to_owned())
+                    })?;
+                    let content_sha256: [u8; 32] = hash.try_into().map_err(|_| {
+                        DatabaseError::CorruptData(
+                            "playlist source digest is not a SHA-256 value".to_owned(),
+                        )
+                    })?;
+                    Ok(PlaylistFileSyncState {
+                        playlist_id,
+                        locator: locator::decode(&kind, &encoding, &data)?,
+                        fingerprint: FileFingerprint {
+                            size_bytes,
+                            modified_at_utc_ms,
+                        },
+                        content_sha256,
+                    })
+                },
+            )
+            .transpose()
+    }
+
+    pub fn record_playlist_file_sync_state(
+        &self,
+        source_id: SourceId,
+        state: &PlaylistFileSyncState,
+    ) -> Result<(), DatabaseError> {
+        let stored = locator::encode(&state.locator);
+        let size_bytes = to_sql_i64(state.fingerprint.size_bytes, "playlist size_bytes")?;
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO playlist_file_sync_state
+                (source_id, playlist_id, locator_kind, locator_encoding, locator_data,
+                 size_bytes, modified_at_utc_ms, content_sha256)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(source_id) DO UPDATE SET
+                playlist_id=excluded.playlist_id,
+                locator_kind=excluded.locator_kind,
+                locator_encoding=excluded.locator_encoding,
+                locator_data=excluded.locator_data,
+                size_bytes=excluded.size_bytes,
+                modified_at_utc_ms=excluded.modified_at_utc_ms,
+                content_sha256=excluded.content_sha256",
+            params![
+                source_id.to_string(),
+                state.playlist_id.to_string(),
+                stored.kind,
+                stored.encoding,
+                stored.data,
+                size_bytes,
+                state.fingerprint.modified_at_utc_ms,
+                state.content_sha256.as_slice(),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Remove only mappings owned by a playlist-file source. Other source mappings and the
+    /// shared Track rows remain intact, so a track referenced by a folder or another playlist
+    /// keeps its identity and library visibility.
+    pub fn remove_playlist_file_source(&self, source_id: SourceId) -> Result<(), DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM source_mappings WHERE source_id=?1",
+            [source_id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM playlist_file_sync_state WHERE source_id=?1",
+            [source_id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Resolve a unique TrackId from an already-normalized media locator. Windows callers may
+    /// canonicalize filesystem paths first while preserving the original locator in playlist
+    /// entries.
+    pub fn resolve_track_id_for_locator(
+        &self,
+        locator_value: &MediaLocator,
+    ) -> Result<Option<TrackId>, DatabaseError> {
+        let connection = self.lock()?;
+        let stored = locator::encode(locator_value);
+        resolve_track_id_by_locator_connection(&connection, &stored)
     }
 
     /// Save a playlist and replace its ordered entries atomically. Entries without an explicit
@@ -1150,6 +1296,16 @@ fn apply_source_scan_transaction(
         persist_mapping(&tx, root.id, track_id, record)?;
         progress((index + 1) as u64);
     }
+    if state.allows_reconciliation() {
+        for source_item_id in errors
+            .iter()
+            .filter_map(|error| error.source_item_id.as_deref())
+        {
+            // A complete source can still contain an individually missing/unreadable item.
+            // Keep its old mapping while reconciling other successfully observed items.
+            seen_statement.execute(params![root.id.to_string(), source_item_id])?;
+        }
+    }
     drop(seen_statement);
 
     if cancellation.is_cancelled() {
@@ -1422,7 +1578,14 @@ fn resolve_track_id_by_locator(
     tx: &Transaction<'_>,
     stored: &locator::StoredLocator,
 ) -> Result<Option<TrackId>, DatabaseError> {
-    let matched = tx.query_row(
+    resolve_track_id_by_locator_connection(tx, stored)
+}
+
+fn resolve_track_id_by_locator_connection(
+    connection: &Connection,
+    stored: &locator::StoredLocator,
+) -> Result<Option<TrackId>, DatabaseError> {
+    let matched = connection.query_row(
         "SELECT CASE WHEN COUNT(DISTINCT track_id)=1 THEN MIN(track_id) END
          FROM source_mappings
          WHERE locator_kind=?1 AND locator_encoding=?2 AND locator_data=?3",
@@ -1441,7 +1604,7 @@ fn resolve_track_id_by_locator(
             return Ok(None);
         };
         let lookup_key = player_core::windows_locator_key(&path);
-        let matched = tx.query_row(
+        let matched = connection.query_row(
             "SELECT CASE WHEN COUNT(DISTINCT track_id)=1 THEN MIN(track_id) END
              FROM source_mappings WHERE locator_key=?1",
             [lookup_key],
@@ -1513,6 +1676,7 @@ fn source_kind_name(kind: MediaSourceKind) -> &'static str {
     match kind {
         MediaSourceKind::WindowsSystemIndex => "windows_system_index",
         MediaSourceKind::WindowsFilesystem => "windows_filesystem",
+        MediaSourceKind::PlaylistFile => "playlist_file",
         MediaSourceKind::AndroidMediaStore => "android_media_store",
         MediaSourceKind::AndroidSaf => "android_saf",
         MediaSourceKind::Other => "other",
@@ -1523,6 +1687,7 @@ fn parse_source_kind(value: &str) -> Result<MediaSourceKind, DatabaseError> {
     match value {
         "windows_system_index" => Ok(MediaSourceKind::WindowsSystemIndex),
         "windows_filesystem" => Ok(MediaSourceKind::WindowsFilesystem),
+        "playlist_file" => Ok(MediaSourceKind::PlaylistFile),
         "android_media_store" => Ok(MediaSourceKind::AndroidMediaStore),
         "android_saf" => Ok(MediaSourceKind::AndroidSaf),
         "other" => Ok(MediaSourceKind::Other),
@@ -1575,16 +1740,16 @@ mod tests {
     use std::{path::PathBuf, time::SystemTime};
 
     use player_core::{
-        FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaSourceKind,
-        MediaTrackRecord, PlaylistEntry, PlaylistId, SourceId, SourceScan, SourceScanState,
-        SyncApplyRequest, SyncCancellation, SyncEngine, TrackId, TrackIdentity, TrackMetadata,
-        TrackMetadataError, UserMetadataField,
+        FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaSourceError,
+        MediaSourceKind, MediaTrackRecord, PlaylistEntry, PlaylistId, SourceId, SourceScan,
+        SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackId, TrackIdentity,
+        TrackMetadata, TrackMetadataError, UserMetadataField,
     };
-    use rusqlite::{params, OptionalExtension};
+    use rusqlite::{OptionalExtension, params};
 
     use super::{
-        Database, DatabaseError, LibraryRepository, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1,
-        SCHEMA_V2, SCHEMA_V3, TRACKS_PAGE_SQL,
+        COUNT_LIBRARY_SQL, Database, DatabaseError, LibraryRepository, PlaylistFileSyncState,
+        SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, TRACKS_PAGE_SQL, ThemePreferences,
     };
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -1732,7 +1897,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 4);
+            assert_eq!(version, 5);
         }
         {
             let db = Database::open(&path).expect("reopen migrated database");
@@ -1776,7 +1941,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 4);
+        assert_eq!(current_version, 5);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -1825,7 +1990,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -1865,8 +2030,74 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
+    }
+
+    #[test]
+    fn version_four_migration_adds_playlist_file_sync_state() {
+        let connection = rusqlite::Connection::open_in_memory().expect("legacy database");
+        connection
+            .execute_batch(SCHEMA_V1)
+            .expect("create schema v1");
+        connection
+            .execute_batch(SCHEMA_V2)
+            .expect("create schema v2");
+        connection
+            .execute_batch(SCHEMA_V3)
+            .expect("create schema v3");
+        connection
+            .execute_batch(SCHEMA_V4)
+            .expect("create schema v4");
+        connection
+            .pragma_update(None, "user_version", 4)
+            .expect("mark schema v4");
+
+        let db = Database::from_connection(connection).expect("migrate schema v4");
+        let (version, table): (i64, Option<String>) = {
+            let connection = db.lock().expect("database connection");
+            (
+                connection
+                    .pragma_query_value(None, "user_version", |row| row.get(0))
+                    .expect("schema version"),
+                connection
+                    .query_row(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='playlist_file_sync_state'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .expect("sync-state table lookup"),
+            )
+        };
+        assert_eq!(version, 5);
+        assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
+    }
+
+    #[test]
+    fn playlist_file_sync_state_round_trips_native_locator_and_digest() {
+        let db = Database::open_in_memory().expect("database");
+        let source_id = SourceId::new();
+        let state = PlaylistFileSyncState {
+            playlist_id: PlaylistId::new(),
+            locator: MediaLocator::FileSystem(PathBuf::from(r"C:\音樂\清單.m3u8")),
+            fingerprint: FileFingerprint {
+                size_bytes: 11_487,
+                modified_at_utc_ms: Some(1_800_000_000_001),
+            },
+            content_sha256: [0x5a; 32],
+        };
+        assert!(
+            db.playlist_file_sync_state(source_id)
+                .expect("no prior state")
+                .is_none()
+        );
+        db.record_playlist_file_sync_state(source_id, &state)
+            .expect("save state");
+        assert_eq!(
+            db.playlist_file_sync_state(source_id).expect("load state"),
+            Some(state)
+        );
     }
 
     #[test]
@@ -2005,10 +2236,11 @@ mod tests {
         );
         assert_eq!(stored.entries[1].track_id, None);
         assert_eq!(stored.entries[1].locator, playlist.entries[1].locator);
-        assert!(db
-            .get_playlist_page(PlaylistId::new(), 0, 10)
-            .expect("missing playlist query")
-            .is_none());
+        assert!(
+            db.get_playlist_page(PlaylistId::new(), 0, 10)
+                .expect("missing playlist query")
+                .is_none()
+        );
         assert!(db.delete_playlist(playlist.id).expect("delete playlist"));
         assert!(db.list_playlists().expect("list after delete").is_empty());
     }
@@ -2083,10 +2315,11 @@ mod tests {
         assert_eq!(queue[0].1, queue[1].1);
         assert_eq!(queue[1].0, 2);
         assert_eq!(queue[2].0, 3);
-        assert!(db
-            .playlist_track_ids(PlaylistId::new())
-            .expect("unknown playlist query")
-            .is_none());
+        assert!(
+            db.playlist_track_ids(PlaylistId::new())
+                .expect("unknown playlist query")
+                .is_none()
+        );
     }
 
     #[test]
@@ -2455,6 +2688,144 @@ mod tests {
     }
 
     #[test]
+    fn complete_scan_preserves_only_individually_failed_items_until_they_are_removed() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::PlaylistFile, "playlist source");
+        let kept = record(&root, "kept", "kept-key", "kept", 10, 1_800_000_000_001);
+        let temporarily_missing = record(
+            &root,
+            "missing",
+            "missing-key",
+            "missing",
+            11,
+            1_800_000_000_002,
+        );
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &[kept.clone(), temporarily_missing.clone()],
+            &[kept.clone(), temporarily_missing.clone()],
+            1,
+        );
+
+        db.apply_source_scan(
+            &root,
+            &SourceScanState::Complete,
+            std::slice::from_ref(&kept),
+            &[],
+            &[MediaSourceError {
+                source_item_id: Some("missing".to_owned()),
+                message: "one playlist track is temporarily unavailable".to_owned(),
+            }],
+            2,
+        )
+        .expect("apply partial per-item result");
+        assert_eq!(list(&db, 0, 10).items.len(), 2);
+
+        db.apply_source_scan(
+            &root,
+            &SourceScanState::Complete,
+            std::slice::from_ref(&kept),
+            &[],
+            &[],
+            3,
+        )
+        .expect("remove item after it disappears from the playlist");
+        let tracks = list(&db, 0, 10).items;
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].title.as_deref(), Some("kept"));
+    }
+
+    #[test]
+    fn removing_playlist_source_keeps_track_when_another_source_still_maps_it() {
+        let mut db = Database::open_in_memory().expect("database");
+        let playlist_root = add_root(&db, MediaSourceKind::PlaylistFile, "playlist");
+        let second_playlist_root = add_root(&db, MediaSourceKind::PlaylistFile, "second playlist");
+        let folder_root = add_root(&db, MediaSourceKind::WindowsFilesystem, "folder");
+        let playlist_record = record(
+            &playlist_root,
+            "same-song",
+            "same-file",
+            "same-song",
+            10,
+            1_800_000_000_001,
+        );
+        let mut folder_record = record(
+            &folder_root,
+            "same-song",
+            "same-file",
+            "same-song",
+            10,
+            1_800_000_000_001,
+        );
+        let playable_path = std::env::temp_dir().join(format!(
+            "moemusic-shared-playlist-track-{}.mp3",
+            SourceId::new()
+        ));
+        std::fs::write(&playable_path, b"playable test placeholder")
+            .expect("create remaining source media file");
+        folder_record.locator = MediaLocator::FileSystem(playable_path.clone());
+        let second_playlist_record = record(
+            &second_playlist_root,
+            "same-song",
+            "same-file",
+            "same-song",
+            10,
+            1_800_000_000_001,
+        );
+        apply(
+            &mut db,
+            &playlist_root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&playlist_record),
+            std::slice::from_ref(&playlist_record),
+            1,
+        );
+        apply(
+            &mut db,
+            &folder_root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&folder_record),
+            std::slice::from_ref(&folder_record),
+            2,
+        );
+        apply(
+            &mut db,
+            &second_playlist_root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&second_playlist_record),
+            std::slice::from_ref(&second_playlist_record),
+            3,
+        );
+        let shared_track = list(&db, 0, 10).items[0].id;
+        db.remove_playlist_file_source(playlist_root.id)
+            .expect("remove playlist source mappings");
+        let page = list(&db, 0, 10);
+        assert_eq!(page.total_count, 1);
+        assert_eq!(page.items[0].id, shared_track);
+        let mappings: i64 = db
+            .lock()
+            .expect("connection")
+            .query_row(
+                "SELECT COUNT(*) FROM source_mappings WHERE track_id=?1",
+                [shared_track.to_string()],
+                |row| row.get(0),
+            )
+            .expect("remaining mappings");
+        assert_eq!(
+            mappings, 2,
+            "folder and second playlist still map the track"
+        );
+        assert_eq!(
+            db.resolve_playable_filesystem_locator(shared_track)
+                .expect("resolve remaining enabled source"),
+            playable_path
+        );
+        std::fs::remove_file(playable_path).expect("remove test media file");
+    }
+
+    #[test]
     fn unavailable_incomplete_and_revoked_scans_never_remove_mappings() {
         let mut db = Database::open_in_memory().expect("database");
         let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "source");
@@ -2717,10 +3088,11 @@ mod tests {
                 .as_deref(),
             Some("手動標題")
         );
-        assert!(db
-            .get_track_summary(TrackId::new())
-            .expect("unknown track summary")
-            .is_none());
+        assert!(
+            db.get_track_summary(TrackId::new())
+                .expect("unknown track summary")
+                .is_none()
+        );
         assert!(matches!(
             db.track_locators(TrackId::new()),
             Err(DatabaseError::TrackNotFound(_))
