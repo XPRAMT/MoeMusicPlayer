@@ -32,7 +32,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let parent = database_path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
     let canonical_parent = fs::canonicalize(parent)?;
     let file_name = database_path
         .file_name()
