@@ -28,10 +28,13 @@ test('playback progress drag stays local until the user commits it', () => {
   assert.match(slider, /value=\{playbackSeekPositionMs\}/);
   assert.match(slider, /onpointerdown=\{beginPlaybackSeek\}/);
   assert.match(slider, /oninput=\{updatePlaybackSeek\}/);
-  assert.match(slider, /onpointerup=\{\(\) => void commitPlaybackSeek\(\)\}/);
+  assert.doesNotMatch(slider, /onpointer(?:up|cancel)=/);
   assert.match(slider, /onchange=\{\(\) => void commitPlaybackSeek\(\)\}/);
   assert.match(slider, /onblur=\{\(\) => void commitPlaybackSeek\(\)\}/);
   assert.match(slider, /disabled=[^\n]*isPlaybackSeekableDuration/);
+
+  assert.match(appSource, /<svelte:window[\s\S]*onpointerup=\{handlePlaybackSeekPointerEnd\}[\s\S]*onpointercancel=\{handlePlaybackSeekPointerEnd\}/);
+  assert.match(appSource, /function handlePlaybackSeekPointerEnd\(\): void \{\s*if \(playbackSeekDraft\) void commitPlaybackSeek\(\);\s*\}/);
 
   const updateStart = appSource.indexOf('function updatePlaybackSeek(');
   const commitStart = appSource.indexOf('async function commitPlaybackSeek(');
@@ -41,6 +44,17 @@ test('playback progress drag stays local until the user commits it', () => {
   const commitBlock = appSource.slice(commitStart, appSource.indexOf('function applyPlaybackSnapshot(', commitStart));
   assert.doesNotMatch(updateBlock, /playback_seek/);
   assert.match(commitBlock, /invokeCommand\('playback_seek', \{ positionMs \}\)/);
+});
+
+test('playback progress slider keeps a thin rail inside a usable hit area', () => {
+  const css = readFileSync(path.join(root, 'src/app.css'), 'utf8');
+  const sliderStyleStart = css.indexOf('.progress-slider,\n.volume-slider {');
+  assert.notEqual(sliderStyleStart, -1);
+  const sliderStyleEnd = css.indexOf('\n}', sliderStyleStart);
+  assert.notEqual(sliderStyleEnd, -1);
+  const sliderStyle = css.slice(sliderStyleStart, sliderStyleEnd);
+  assert.match(sliderStyle, /height:\s*24px/);
+  assert.match(sliderStyle, /background-size:\s*100%\s+3px/);
 });
 
 test('drag draft survives playback ticks and commits only its final position', () => {

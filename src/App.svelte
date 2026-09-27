@@ -703,6 +703,10 @@
     );
   }
 
+  function handlePlaybackSeekPointerEnd(): void {
+    if (playbackSeekDraft) void commitPlaybackSeek();
+  }
+
   async function commitPlaybackSeek(): Promise<void> {
     const draft = playbackSeekDraft;
     playbackSeekDraft = null;
@@ -827,6 +831,11 @@
     }
   }
 </script>
+
+<svelte:window
+  onpointerup={handlePlaybackSeekPointerEnd}
+  onpointercancel={handlePlaybackSeekPointerEnd}
+/>
 
 <div class="app-shell">
   <aside class="sidebar" aria-label="主要導覽">
@@ -1415,8 +1424,6 @@
           disabled={!playbackReady || !isPlaybackSeekableDuration(playback?.durationMs ?? null) || isSendingPlaybackCommand}
           onpointerdown={beginPlaybackSeek}
           oninput={updatePlaybackSeek}
-          onpointerup={() => void commitPlaybackSeek()}
-          onpointercancel={() => void commitPlaybackSeek()}
           onchange={() => void commitPlaybackSeek()}
           onblur={() => void commitPlaybackSeek()}
         />
