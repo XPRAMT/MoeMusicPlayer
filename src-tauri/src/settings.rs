@@ -160,6 +160,21 @@ impl SourceEntry {
         }
     }
 
+    /// Build the SQLite synchronization projection for either a folder or a playlist file.
+    pub fn database_projection(&self) -> Result<LibraryRoot, SettingsError> {
+        let kind = match &self.kind {
+            SourceEntryKind::Folder { media_kind, .. } => *media_kind,
+            SourceEntryKind::PlaylistFile { .. } => MediaSourceKind::PlaylistFile,
+        };
+        Ok(LibraryRoot {
+            id: self.id,
+            kind,
+            display_name: self.display_name.clone(),
+            locator: self.path().to_media_locator()?,
+            enabled: self.enabled,
+        })
+    }
+
     pub fn path(&self) -> &StoredPath {
         match &self.kind {
             SourceEntryKind::Folder { path, .. } | SourceEntryKind::PlaylistFile { path, .. } => {
@@ -662,13 +677,15 @@ mod tests {
         let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
         let source = source(StoredPath::Utf8("D:/Playlists/憨色.m3u8".into()));
         let id = source.id;
-        store.upsert_source(source.clone()).expect("register playlist file");
+        store
+            .upsert_source(source.clone())
+            .expect("register playlist file");
         let mut updated = source;
         updated.display_name = "renamed".into();
-        store.upsert_source(updated).expect("update existing source");
         store
-            .set_source_enabled(id, false)
-            .expect("disable source");
+            .upsert_source(updated)
+            .expect("update existing source");
+        store.set_source_enabled(id, false).expect("disable source");
         assert_eq!(store.snapshot().unwrap().sources.len(), 1);
         assert!(!store.snapshot().unwrap().sources[0].enabled);
         assert_eq!(store.snapshot().unwrap().sources[0].display_name, "renamed");
