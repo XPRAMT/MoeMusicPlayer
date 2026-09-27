@@ -12,7 +12,7 @@ use player_core::{
 };
 use player_db::Database;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_media_index::MediaIndexExt;
 
 mod playlist_exchange;
@@ -651,6 +651,7 @@ fn playlist_get_page(
 #[tauri::command]
 async fn playlist_import_m3u(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<PlaylistImportResult>, String> {
     #[cfg(target_os = "windows")]
@@ -660,6 +661,7 @@ async fn playlist_import_m3u(
         let selected = app
             .dialog()
             .file()
+            .set_parent(&window)
             .set_title("匯入播放清單")
             .add_filter("M3U / M3U8 播放清單", &["m3u", "m3u8"])
             .blocking_pick_file();
@@ -680,7 +682,7 @@ async fn playlist_import_m3u(
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, state);
+        let _ = (app, window, state);
         Err("M3U/M3U8 原生檔案匯入目前只支援 Windows。".to_owned())
     }
 }
@@ -688,6 +690,7 @@ async fn playlist_import_m3u(
 #[tauri::command]
 async fn playlist_export_m3u(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     playlist_id: String,
     format: String,
@@ -707,6 +710,7 @@ async fn playlist_export_m3u(
             let selected = app
                 .dialog()
                 .file()
+                .set_parent(&window)
                 .set_title("選擇播放清單與音樂共用的資料夾")
                 .blocking_pick_folder();
             let Some(selected) = selected else {
@@ -724,6 +728,7 @@ async fn playlist_export_m3u(
         let mut dialog = app
             .dialog()
             .file()
+            .set_parent(&window)
             .set_title("匯出播放清單")
             .set_file_name(default_file_name)
             .add_filter("M3U / M3U8 播放清單", &["m3u", "m3u8"]);
@@ -754,7 +759,7 @@ async fn playlist_export_m3u(
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, state, playlist_id, format, relative_paths);
+        let _ = (app, window, state, playlist_id, format, relative_paths);
         Err("M3U/M3U8 原生檔案匯出目前只支援 Windows。".to_owned())
     }
 }
@@ -801,6 +806,7 @@ fn library_add_windows_folder(
 #[tauri::command]
 async fn library_pick_windows_folder(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<LibrarySource>, String> {
     #[cfg(target_os = "windows")]
@@ -816,6 +822,7 @@ async fn library_pick_windows_folder(
         let selected = app
             .dialog()
             .file()
+            .set_parent(&window)
             .set_title("選擇音樂來源資料夾")
             .blocking_pick_folder();
         let Some(selected) = selected else {
@@ -829,7 +836,7 @@ async fn library_pick_windows_folder(
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, state);
+        let _ = (app, window, state);
         Err("Windows 資料夾選擇器只適用於 Windows。".to_owned())
     }
 }
@@ -1592,6 +1599,7 @@ pub fn run() {
 
             if let Some(window) = app.get_webview_window("main") {
                 window.set_title("MoeMusicPlayer")?;
+                window.set_always_on_top(false)?;
             }
             Ok(())
         })
