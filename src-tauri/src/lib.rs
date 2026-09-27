@@ -636,11 +636,7 @@ mod playback_queue_ipc_tests {
             system_media_controls: ready(),
         };
         let value = serde_json::to_value(capabilities).expect("serialize capabilities");
-        for key in [
-            "playbackNavigation",
-            "playbackModes",
-            "systemMediaControls",
-        ] {
+        for key in ["playbackNavigation", "playbackModes", "systemMediaControls"] {
             assert!(value.get(key).is_some(), "missing camelCase field {key}");
         }
     }

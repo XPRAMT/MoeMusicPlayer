@@ -11,7 +11,7 @@ use lofty::{
     tag::ItemKey,
 };
 use player_core::{
-    FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
+    windows_locator_key, FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
     MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, SourceScan,
     SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata, TrackMetadataError,
 };
@@ -313,34 +313,6 @@ impl MediaIndex for WindowsMediaIndex {
     }
 }
 
-/// Return a stable, lossless Windows locator key. This is an adapter comparison token, not a
-/// display path or a path that can be passed to a filesystem API. UTF-16 code units are hex
-/// encoded so even unpaired surrogates remain representable in SQLite's UTF-8 text column.
-///
-/// Callers should pass absolute paths with `.` and `..` already resolved. Separators and the
-/// extended-length prefix are normalized; component case is preserved to avoid collisions in
-/// Windows directories configured for case-sensitive lookup.
-pub fn windows_locator_key(path: &Path) -> String {
-    let mut units = path.as_os_str().encode_wide().collect::<Vec<_>>();
-    for unit in &mut units {
-        if *unit == b'/' as u16 {
-            *unit = b'\\' as u16;
-        }
-    }
-    normalize_verbatim_prefix(&mut units);
-    if units.len() >= 2 && units[1] == b':' as u16 && units[0] <= 0x7f {
-        units[0] = (units[0] as u8).to_ascii_uppercase() as u16;
-    }
-
-    let mut key = String::with_capacity("windows-u16-v1:".len() + units.len() * 4);
-    key.push_str("windows-u16-v1:");
-    for unit in units {
-        use std::fmt::Write as _;
-        let _ = write!(key, "{unit:04x}");
-    }
-    key
-}
-
 fn empty_scan(source_id: player_core::SourceId) -> SourceScan {
     SourceScan {
         source_id,
@@ -396,30 +368,6 @@ pub(crate) fn to_extended_path(path: &Path) -> io::Result<PathBuf> {
         extended.extend(units);
     }
     Ok(PathBuf::from(OsString::from_wide(&extended)))
-}
-
-fn normalize_verbatim_prefix(units: &mut Vec<u16>) {
-    const VERBATIM: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
-    const UNC: [u16; 4] = [b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
-    if units.len() >= 8
-        && units[..4] == VERBATIM
-        && units[4..8]
-            .iter()
-            .zip(UNC)
-            .all(|(left, right)| ascii_u16_eq_ignore_case(*left, right))
-    {
-        let remainder = units[8..].to_vec();
-        *units = [b'\\' as u16, b'\\' as u16]
-            .into_iter()
-            .chain(remainder)
-            .collect();
-    } else if units.len() >= 4 && units[..4] == VERBATIM {
-        units.drain(..4);
-    }
-}
-
-fn ascii_u16_eq_ignore_case(left: u16, right: u16) -> bool {
-    left <= 0x7f && right <= 0x7f && (left as u8).eq_ignore_ascii_case(&(right as u8))
 }
 
 fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {

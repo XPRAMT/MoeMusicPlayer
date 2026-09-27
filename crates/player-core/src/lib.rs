@@ -3,6 +3,8 @@ pub mod library;
 pub mod playback_queue;
 pub mod playlist;
 pub mod sync;
+#[cfg(windows)]
+mod windows_locator;
 
 pub use artwork::{ArtworkImage, MAX_ARTWORK_BYTES, MAX_ARTWORK_DIMENSION, MAX_ARTWORK_PIXELS};
 pub use library::{
@@ -21,3 +23,5 @@ pub use sync::{
     SyncProgress, SyncProgressOutcome, SyncProgressStage, SyncProgressUnit, SyncReport,
     TrackSyncState,
 };
+#[cfg(windows)]
+pub use windows_locator::windows_locator_key;

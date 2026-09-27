@@ -14,7 +14,10 @@ mod artwork;
 mod system_index;
 
 #[cfg(windows)]
-pub use windows::{windows_locator_key, WindowsMediaIndex};
+pub use player_core::windows_locator_key;
+
+#[cfg(windows)]
+pub use windows::WindowsMediaIndex;
 
 #[cfg(windows)]
 pub use artwork::{find_artwork, ArtworkLookup};
