@@ -11,10 +11,10 @@
 - 啟動同步由 renderer 在註冊 `library-sync-progress` 與 `library-sync-finished` 後觸發，避免空來源或快速掃描在 listener 建立前完成；不定總數的列舉只顯示已處理數。前端 call-site regression 與來源事件彙整測試通過。
 - 對 `WindowsSystemIndex` root 會探測 WSearch 服務、範圍規則與 catalog 狀態供診斷；目前不把 Search 查詢結果當完整清單，曲目與刪除對帳只依完整檔案系統走訪。
 - Android MediaStore/SAF 外掛、Rust IPC 與來源管理畫面已接線；Android ARM64 Debug APK 曾成功建置。最新版 insets 修正尚未在裝置複驗。
-- Windows 音訊 crate 使用 Rodio/CPAL；14 項單元與 2 項隱藏 HWND 系統媒體測試、Windows 目標檢查、Clippy 與自產 WAV 的預設輸出裝置 smoke 均通過。Tauri 已將 `TrackId` 解析為 SQLite 中啟用來源的本機路徑，再呼叫 `PlayerHandle`；前端的播放/暫停、跳轉與音量接有真實引擎快照。播放錯誤不回傳本機路徑；佇列、前後首、隨機與循環仍未實作且保持停用。
+- Windows 音訊 crate 使用 Rodio/CPAL；15 項單元與 2 項隱藏 HWND 系統媒體測試、Windows 目標檢查、Clippy 與自產 WAV 的預設輸出裝置 smoke 均通過。Tauri 已將 `TrackId` 解析為 SQLite 中啟用來源的本機路徑，再呼叫 `PlayerHandle`；前端的播放/暫停、跳轉與音量接有真實引擎快照。進度滑桿拖曳期間維持本機草稿，放開後提交一次 seek，並等待較新引擎快照追上；前端回歸、播放中／暫停 actor seek 與自產 WAV 預設輸出裝置 smoke 均通過。播放錯誤不回傳本機路徑；佇列、前後首、隨機與循環仍未實作且保持停用。
 - SQLite v2 已保存播放清單及順序項目。Windows 前端以分頁 IPC 瀏覽清單，透過 Rust 原生對話框匯入 M3U/M3U8、匯出 UTF-8 M3U/M3U8；未匹配曲目保留原 locator。相對匯出會拒絕逃出所選共同根目錄的路徑。Unicode M3U/M3U8 匯入、分頁及匯出 helper 整合測試通過；原生對話框仍未以 GUI 驗收。
-- Windows 系統媒體控制已從 Tauri 主視窗 HWND 接入 WinRT worker；Shell 以播放器快照每 750 ms 至少間隔更新標題、演出者、專輯與播放狀態，並把 Play/Pause/Stop/Seek 事件送回音訊服務。Next/Previous 保持停用。crate 的 14 項單元與 2 項隱藏 HWND 整合測試通過；Shell fake-event 測試涵蓋控制映射、停用佇列事件及 attach/update 失敗與音訊隔離。
-- Svelte 型別檢查、Vite 正式版建置、完整 `cargo test --workspace`（67 項測試）、嚴格 Clippy 與 Windows Tauri release 建置均通過；輸出為 `target/release/moemusicplayer.exe`。Windows shell 整合測試涵蓋 Unicode 資料夾新增、合成 MP3 同步、SQLite 分頁/搜尋、關閉重開，以及 TrackId 到保存路徑再到播放 handle 的命令流程；另以 fake SMTC event 測試播放控制映射。
+- Windows 系統媒體控制已從 Tauri 主視窗 HWND 接入 WinRT worker；Shell 以播放器快照每 750 ms 至少間隔更新標題、演出者、專輯與播放狀態，並把 Play/Pause/Stop/Seek 事件送回音訊服務。Next/Previous 保持停用。crate 的 15 項單元與 2 項隱藏 HWND 整合測試通過；Shell fake-event 測試涵蓋控制映射、停用佇列事件及 attach/update 失敗與音訊隔離。
+- Svelte 型別檢查、Vite 正式版建置、完整 `cargo test --workspace`（82 項測試）、嚴格 Clippy 與 Windows Tauri release 建置均通過；輸出為 `target/release/moemusicplayer.exe`。Windows shell 整合測試涵蓋 Unicode 資料夾新增、合成 MP3 同步、SQLite 分頁/搜尋、關閉重開，以及 TrackId 到保存路徑再到播放 handle 的命令流程；另以 fake SMTC event 測試播放控制映射。
 
 仍未完成或未驗證：
 
