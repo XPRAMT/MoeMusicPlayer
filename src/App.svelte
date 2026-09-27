@@ -36,7 +36,6 @@
   let sourceSyncSummary = $state<string | null>(null);
   let mediaStoreVolumes = $state<MediaStoreVolumeOption[]>([]);
   let mediaPermissionGranted = $state<boolean | null>(null);
-  let windowsFolderPath = $state('');
   let playlists = $state<PlaylistSummary[]>([]);
   let playlistPage = $state<PlaylistPage | null>(null);
   let selectedPlaylistId = $state<string | null>(null);
@@ -316,16 +315,16 @@
     if (!playbackError) activeView = 'now-playing';
   }
 
-  async function addWindowsFolder(): Promise<void> {
-    const path = windowsFolderPath.trim();
-    if (!path || isUpdatingSource) return;
+  async function pickWindowsFolder(): Promise<void> {
+    if (!sourceSyncReady || isUpdatingSource) return;
     isUpdatingSource = true;
     sourceError = null;
     try {
-      await invokeCommand('library_add_windows_folder', { path });
-      windowsFolderPath = '';
-      await loadSources();
-      await syncLibrary();
+      const source = await invokeCommand('library_pick_windows_folder', {});
+      if (source) {
+        await loadSources();
+        await syncLibrary();
+      }
     } catch (error) {
       sourceError = getErrorText(error);
     } finally {
@@ -937,16 +936,13 @@
             </div>
 
             {#if capabilities?.platform === 'windows'}
-              <form class="source-action-card source-folder-form" onsubmit={(event) => { event.preventDefault(); void addWindowsFolder(); }}>
-                <label for="windows-folder-path">Windows 音樂資料夾</label>
-                <div class="source-action-row">
-                  <input id="windows-folder-path" bind:value={windowsFolderPath} type="text" placeholder="例如 D:\\Music" autocomplete="off" spellcheck="false" disabled={!sourceSyncReady || isUpdatingSource} />
-                  <button class="primary-button" type="submit" disabled={!sourceSyncReady || !windowsFolderPath.trim() || isUpdatingSource}>
-                    {isUpdatingSource ? '處理中' : '加入並掃描'}
-                  </button>
-                </div>
-                <p>輸入現有資料夾的完整路徑。路徑保存在本機 SQLite，不會傳到前端以外的服務。</p>
-              </form>
+              <div class="source-action-card source-folder-picker">
+                <div class="source-action-heading"><strong>Windows 音樂資料夾</strong><span>本機</span></div>
+                <p>使用 Windows 原生資料夾選擇器；取消時不會加入來源或開始同步。</p>
+                <button class="primary-button" type="button" onclick={() => void pickWindowsFolder()} disabled={!sourceSyncReady || isUpdatingSource}>
+                  {isUpdatingSource ? '處理中' : '選擇資料夾並同步'}
+                </button>
+              </div>
             {:else if capabilities?.platform === 'android'}
               <div class="source-action-card android-source-actions">
                 <div class="source-action-heading"><strong>共享音樂</strong><span>MediaStore</span></div>

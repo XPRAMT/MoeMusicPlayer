@@ -152,6 +152,10 @@ interface IpcContract {
     args: { path: string };
     result: LibrarySource;
   };
+  library_pick_windows_folder: {
+    args: Record<string, never>;
+    result: LibrarySource | null;
+  };
   android_media_request_permission: {
     args: Record<string, never>;
     result: boolean;

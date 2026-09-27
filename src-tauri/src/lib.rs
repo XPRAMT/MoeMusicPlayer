@@ -777,16 +777,63 @@ fn library_add_windows_folder(
     }
 }
 
+#[tauri::command]
+async fn library_pick_windows_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<LibrarySource>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let selected = app
+            .dialog()
+            .file()
+            .set_title("選擇音樂來源資料夾")
+            .blocking_pick_folder();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| format!("無法取得選取的資料夾路徑：{error}"))?;
+        add_windows_folder_path_to_database(database, &path).map(Some)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, state);
+        Err("Windows 資料夾選擇器只適用於 Windows。".to_owned())
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn add_windows_folder_to_database(
     database: &Database,
     path: &str,
 ) -> Result<LibrarySource, String> {
-    let requested_path = std::path::PathBuf::from(path.trim());
-    if requested_path.as_os_str().is_empty() {
-        return Err("請輸入音樂資料夾路徑。".to_owned());
+    let requested_path = path.trim();
+    if requested_path.is_empty() {
+        return Err("請選擇音樂資料夾。".to_owned());
     }
-    let canonical_path = std::fs::canonicalize(&requested_path)
+    add_windows_folder_path_to_database(database, std::path::Path::new(requested_path))
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_folder_path_to_database(
+    database: &Database,
+    requested_path: &std::path::Path,
+) -> Result<LibrarySource, String> {
+    if requested_path.as_os_str().is_empty() {
+        return Err("請選擇音樂資料夾。".to_owned());
+    }
+    let canonical_path = std::fs::canonicalize(requested_path)
         .map_err(|error| format!("無法開啟指定資料夾：{error}"))?;
     if !canonical_path.is_dir() {
         return Err("指定路徑不是資料夾。".to_owned());
@@ -1344,6 +1391,7 @@ pub fn run() {
             playlist_export_m3u,
             library_list_sources,
             library_add_windows_folder,
+            library_pick_windows_folder,
             android_media_request_permission,
             android_media_list_volumes,
             android_media_add_volume,
@@ -1419,7 +1467,9 @@ pub fn run() {
 
 #[cfg(all(test, target_os = "windows"))]
 mod windows_library_integration_tests {
-    use super::{add_windows_folder_to_database, sync_windows_sources};
+    use super::{
+        add_windows_folder_path_to_database, add_windows_folder_to_database, sync_windows_sources,
+    };
     use super::{
         apply_system_media_event, play_track_from_database, playback_audio_error_message,
         set_playback_volume, WindowsPlaybackService,
@@ -1433,6 +1483,7 @@ mod windows_library_integration_tests {
     use std::{
         fs,
         path::{Path, PathBuf},
+        process::Command,
         sync::{Arc, Mutex},
         thread,
         time::{Duration, Instant},
@@ -1450,6 +1501,89 @@ mod windows_library_integration_tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn selected_windows_folder_keeps_unicode_path_and_rejects_invalid_roots() {
+        let temporary = TestDirectory::new();
+        let selected_path = temporary.0.join("東京🌸 音樂");
+        fs::create_dir_all(&selected_path).expect("create Unicode source folder");
+        let database = Database::open(temporary.0.join("picker-test.sqlite3"))
+            .expect("open isolated source database");
+
+        let source = add_windows_folder_path_to_database(&database, &selected_path)
+            .expect("add native Unicode PathBuf");
+        assert_eq!(source.display_name, "東京🌸 音樂");
+        let canonical_path = fs::canonicalize(&selected_path).expect("canonicalize test folder");
+        let roots = database.library_roots().expect("read persisted source");
+        assert_eq!(roots.len(), 1);
+        assert!(matches!(
+            &roots[0].locator,
+            MediaLocator::FileSystem(saved_path) if saved_path == &canonical_path
+        ));
+
+        let missing_path = temporary.0.join("does-not-exist");
+        let missing_error = match add_windows_folder_path_to_database(&database, &missing_path) {
+            Ok(_) => panic!("missing folders must not become sources"),
+            Err(error) => error,
+        };
+        assert!(missing_error.contains("無法開啟指定資料夾"));
+
+        let file_path = temporary.0.join("not-a-folder.txt");
+        fs::write(&file_path, "test").expect("write a regular file for invalid-root test");
+        let file_error = match add_windows_folder_path_to_database(&database, &file_path) {
+            Ok(_) => panic!("files must not become folder sources"),
+            Err(error) => error,
+        };
+        assert!(file_error.contains("指定路徑不是資料夾"));
+        assert_eq!(
+            database
+                .library_roots()
+                .expect("read sources after errors")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn inaccessible_windows_folder_returns_error_without_adding_a_source() {
+        let temporary = TestDirectory::new();
+        let protected_path = temporary.0.join("inaccessible");
+        fs::create_dir_all(&protected_path).expect("create isolated permission-test folder");
+        let database = Database::open(temporary.0.join("permission-test.sqlite3"))
+            .expect("open isolated source database");
+        let denied = Command::new("icacls.exe")
+            .arg(&protected_path)
+            .args(["/deny", "*S-1-1-0:(RX)"])
+            .output()
+            .expect("run Windows ACL tool against disposable test folder");
+        assert!(
+            denied.status.success(),
+            "icacls deny failed: {}",
+            String::from_utf8_lossy(&denied.stderr)
+        );
+
+        let result = add_windows_folder_path_to_database(&database, &protected_path);
+        let restored = Command::new("icacls.exe")
+            .arg(&protected_path)
+            .args(["/remove:d", "*S-1-1-0"])
+            .output()
+            .expect("restore inherited ACL on disposable test folder");
+        assert!(
+            restored.status.success(),
+            "icacls ACL restoration failed: {}",
+            String::from_utf8_lossy(&restored.stderr)
+        );
+
+        let error = match result {
+            Ok(_) => panic!("an inaccessible folder must not become a source"),
+            Err(error) => error,
+        };
+        assert!(error.contains("無法開啟指定資料夾"));
+        assert!(database
+            .library_roots()
+            .expect("read sources after permission error")
+            .is_empty());
     }
 
     struct CapturingAudioBackend {
