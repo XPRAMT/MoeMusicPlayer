@@ -17,3 +17,13 @@ This glossary defines the music-library identity and playback terms shared by th
 **Playback session**: The currently selected track together with the state reported by the audio backend. It is separate from the full library and any future queue.
 
 **Playback snapshot**: A point-in-time view of the current playback session, including state, position, duration, volume, and any current error. The audio backend is authoritative for these values.
+
+## Playlists
+
+**Playlist**: A user-owned ordered set of media entries. An entry may link to a stable Track ID and retains its imported media locator when it has no current library mapping.
+
+**M3U/M3U8**: Text interchange formats for ordered playlist entries, including path and optional display metadata. A playlist file can include entries that are not currently present in the application library.
+
+## Operating-system media controls
+
+**System media control**: Windows' operating-system-facing representation of the current playback session. It shows supported metadata and sends transport requests; the application audio backend remains authoritative for playback state.
