@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default window access for the MoeMusicPlayer desktop shell.","local":true,"windows":["main"],"permissions":["core:default"]}}

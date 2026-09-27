@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "src-tauri",
+    "crates/player-core",
+    "crates/player-db",
+    "crates/player-platform-windows",
+    "crates/player-audio-windows",
+    "plugins/tauri-plugin-media-index",
+]
+default-members = ["src-tauri"]
+resolver = "2"

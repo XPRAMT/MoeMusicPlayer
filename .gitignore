@@ -1,0 +1,30 @@
+# Generated frontend dependencies and builds
+/node_modules/
+/dist/
+/.vite/
+/.svelte-check/
+/.playwright-cli/
+
+# Generated native build output
+/target/
+/src-tauri/target/
+/src-tauri/gen/android/.gradle/
+/src-tauri/gen/android/app/build/
+/src-tauri/gen/android/build/
+
+# Local databases and user settings
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+*.local
+
+# Local code index and operating-system files
+/.codegraph/
+.DS_Store
+Thumbs.db
+*.log

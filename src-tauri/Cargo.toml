@@ -1,0 +1,24 @@
+[package]
+name = "moemusicplayer"
+version = "0.1.0"
+description = "Local-first music player"
+authors = ["MoeMusicPlayer contributors"]
+edition = "2021"
+rust-version = "1.90"
+
+[lib]
+name = "moemusicplayer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.0", features = [] }
+
+[dependencies]
+player-core = { path = "../crates/player-core" }
+player-db = { path = "../crates/player-db" }
+tauri-plugin-media-index = { path = "../plugins/tauri-plugin-media-index" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2.12.0", features = [] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+player-platform-windows = { path = "../crates/player-platform-windows" }

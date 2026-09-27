@@ -2,7 +2,24 @@
 
 ## 專案現況與目標
 
-目前只有本規格文件，尚無程式碼、測試、README 或 ADR。下一步是建立最小可執行骨架，先驗證資料來源、持久化與播放路徑；本文件描述目標，不代表功能已完成。
+專案已有可建置的 Tauri 2、Svelte 5、TypeScript 與 Vite 骨架，並包含 Rust Core、SQLite 曲庫、Windows 與 Android 媒體來源 adapter，以及雙語 README。
+
+目前已完成：
+
+- Windows 可新增來源資料夾，透過 Core 增量同步與 Lofty 讀取標籤；SQLite 保存曲目、來源映射與同步狀態，前端只取分頁結果。
+- 對 `WindowsSystemIndex` root 會探測 WSearch 服務、範圍規則與 catalog 狀態供診斷；目前不把 Search 查詢結果當完整清單，曲目與刪除對帳只依完整檔案系統走訪。
+- Android MediaStore/SAF 外掛、Rust IPC 與來源管理畫面已接線；Android ARM64 Debug APK 曾成功建置。最新版 insets 修正尚未在裝置複驗。
+- Windows 音訊 crate 已加入 workspace，Rodio/CPAL 後端的 7 項測試、Windows 目標檢查、Clippy 與合成 WAV 輸出裝置 smoke 均通過；目前尚未接入 Tauri IPC，應用內播放仍未就緒。
+- Svelte 型別檢查、Vite 正式版建置、Windows Tauri release 建置及完整 `cargo test --workspace`（37 項測試）均通過。Windows shell 服務層整合測試涵蓋新增 Unicode 資料夾、掃描合成 ID3 MP3、分頁/搜尋及關閉重開 SQLite。
+
+仍未完成或未驗證：
+
+- Windows Tauri 視窗的實際來源表單操作與畫面尚未驗收；上述來源測試呼叫的是 UI command 共用的 Rust helper，並非 GUI/IPC 操作。
+- Windows 播放引擎 crate 尚未接入 Tauri IPC/前端；應用內播放、佇列、前後首、隨機與循環目前不可視為可用功能。
+- Android 最新頂部/底部 system insets 修正、MediaStore/SAF 真機掃描與播放尚未驗證。
+- 100,000 首效能及完整 Windows SystemIndex 使用判準尚無實測結論。
+
+下一步將 Windows 音訊服務接入 Tauri IPC，僅啟用已實作的播放、暫停、跳轉與音量控制，其他控制維持停用；接著用 CLI 整合測試驗證 TrackId 到保存 locator 再到引擎命令的流程。Windows 桌面真實來源操作/重啟及應用播放仍待 GUI 實測；之後重新驗證 Android 真機操作。
 
 產品以 Windows 11 與 Android 的大型本地音樂庫為核心，目標規模為 100,000 首。啟動、搜尋與播放不得等待全庫掃描；封面、歌詞與動畫不得造成記憶體或 DOM 持續成長。使用者資料須可攜；本地音樂庫與本地播放永遠優先，線上串流服務不屬於核心目標。
 
@@ -39,7 +56,9 @@
 - **Rust Core**負責跨平台 Library、播放清單、歌詞匹配、播放政策及佇列。平台系統索引、檔案 API、SQLite 交易與同步細節由媒體資料層及平台介面封裝；Core 不直接依賴 SystemIndex、MediaStore、Android Cursor 或 Windows Property Key。
 - **媒體資料層**提供統一的曲目查詢、搜尋、增量變更、專輯/演出者與同步介面；負責系統索引查詢、來源可用性、metadata 補全、系統 ID ↔ internal ID 映射、schema migration、交易、FTS 投影、快取失效與診斷。Core 不用平台分支實作兩套 Library 邏輯。
 - **Windows 媒體來源**對已索引且結果完整、及時的指定資料夾優先使用 SystemIndex；未索引、服務停用、NAS/卸除式磁碟或欄位缺失時使用檔案系統掃描與必要的中繼資料解析。是否要求使用者加入索引範圍須明確告知並保留 fallback；不可把 SystemIndex 當成唯一真相。USN 僅在實測需要時以 ADR 引入。
+- **Windows 現況：**SystemIndex 目前只有唯讀健康/範圍診斷用途，尚未採用其曲目列舉結果。`WindowsSystemIndex` root 仍由完整檔案系統走訪產生 seen-set；只有完整走訪才可確認缺席並刪除映射，部分或不可用時保留既有資料。
 - **Android 媒體來源**一般共享媒體使用 MediaStore；未涵蓋或需授權的來源使用 SAF，並在平台允許時保存持久 URI 權限。MediaStore 欄位不足時才針對檔案補解析。
+- **Android 現況：**native `WindowInsetsCompat` 以 system bars、display cutout 與 mandatory system gestures 計算動態安全區，CSS 不再重複加 safe-area padding；最新修正未經 NX809J 直橫向幾何驗收，不得宣稱已解決遮擋。
 - 系統索引失效或回退掃描時，不能要求使用者重建整個 App SQLite；平台 adapter 需將 SystemIndex/MediaStore/SAF 結果正規化為共同的曲目模型，再由同步層與 App 資料合併。
 - **App SQLite**保存內部 ID、啟動/離線顯示所需的曲目投影、來源映射、使用者覆寫、播放清單、歌詞/封面快取、設定與同步狀態。系統媒體索引用於確認來源現況，但不得覆蓋使用者資料。使用 migration、批次交易、索引與必要的 FTS；不得逐曲提交交易。快取有上限、可清除、可觀察。
 - SQLite 建議 WAL、prepared statements 與分頁查詢；啟動投影要足夠顯示上次曲庫，但不無條件複製系統資料庫所有欄位。播放次數、最後播放時間、收藏、歷史及人工匹配若實作，均屬 App 資料，不得被系統 metadata 更新清掉。
@@ -94,4 +113,4 @@
 4. Windows 系統整合、Android Media3/MediaSession 背景播放與 SAF 來源。
 5. 核心穩定後評估無縫播放、進階音訊裝置、DSP/EQ、遠端曲庫/同步與插件；Phase 1 不先投入大量視覺特效。
 
-目前下一步：建立最小可執行骨架與雙語 README；先做 Windows 的來源同步、SQLite 持久化、分頁列表和基本播放端到端驗證，再完成同階段的 Android MediaStore 適配。已知未解：SystemIndex 的覆蓋率與 metadata 品質、100,000 首效能、Windows 音訊選型及 Android 背景服務均尚無原型或實測；不要將文件中的預設方案視為已驗證。每一步以可運作功能與測量結果更新本文件。
+目前可重現的驗證命令為 `npm run check`、`npm run build`、`cargo check --workspace`、`cargo test --workspace` 與 `npm run tauri -- build --ci`。Windows shell E2E 是 Rust 服務層測試，會建立臨時 Unicode 音樂資料夾與合成 MP3，將來源及曲目存入臨時 SQLite、驗證分頁/搜尋，再關閉並重新開啟資料庫核對來源路徑與 TrackId；它不驗證 GUI/IPC 傳輸。Windows 音訊 crate 另有合成 WAV 的預設輸出裝置 smoke，但尚未經應用 IPC 驗證。Tauri release 產物為 `target/release/moemusicplayer.exe`，`bundle.active` 目前關閉。桌面 GUI 的真實來源操作與應用播放、Android 最新安全區與裝置媒體掃描仍待驗收。
