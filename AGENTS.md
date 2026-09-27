@@ -33,6 +33,8 @@
 
 預設使用 **Svelte 5 + TypeScript + Vite → Tauri 2 IPC → Rust Core → 媒體索引與 App SQLite 層**。Tauri 2 的選擇服務於 Windows/Android 共用 Web UI、原生核心、較低基礎記憶體與安裝體積；Windows 音訊評估 Symphonia、cpal 與 WASAPI，Android 音訊由 Kotlin 插件接 Media3/MediaSessionService。改用其他主框架或改變重大邊界前，須有原型、效能證據與 ADR；不得僅因方便改用 Electron。
 
+前三者同屬前端工具組合：Svelte 5 建立介面元件，TypeScript 檢查前端資料與 IPC 型別，Vite 提供開發伺服器並建置正式版靜態檔案；正式執行時由 Tauri WebView 載入前端，Vite 不是播放或資料處理層。
+
 - **前端**只處理畫面、輸入、少量檢視狀態、虛擬列表與動畫；不直接遍歷檔案、解析標籤、讀寫 SQLite、解碼音訊或持有全庫。IPC 命令需窄、明確、可版本化，回傳分頁資料並節流高頻事件；不可暴露任意檔案或 SQL 能力，也不可批量傳回曲庫或封面 BLOB。
 - **Rust Core**負責跨平台 Library、播放清單、歌詞匹配、播放政策及佇列。平台系統索引、檔案 API、SQLite 交易與同步細節由媒體資料層及平台介面封裝；Core 不直接依賴 SystemIndex、MediaStore、Android Cursor 或 Windows Property Key。
 - **媒體資料層**提供統一的曲目查詢、搜尋、增量變更、專輯/演出者與同步介面；負責系統索引查詢、來源可用性、metadata 補全、系統 ID ↔ internal ID 映射、schema migration、交易、FTS 投影、快取失效與診斷。Core 不用平台分支實作兩套 Library 邏輯。
@@ -81,7 +83,7 @@
 
 1. 開工先閱讀本文件、相關程式碼與 ADR；以最新需求、程式和測試結果修正過時敘述。較大修改先說明目標、落點層級與硬限制，區分平台硬限制、工程限制和慣例假設；比較至少兩種方案，必要時用原型或 benchmark 找瓶頸。重大架構變更寫入 `docs/adr/`，優先修正根因，不以 UI 權宜作法掩蓋後端問題。
 2. 變更保持聚焦，不自行改變硬性需求或更換核心框架。引入依賴前確認必要性、重量、維護狀況與授權；參考外部專案時遵守上節邊界。臨時做法要標記 temporary、建立 issue/TODO 並避免成為長期依賴。
-3. 每次修改程式碼後提交 Git，僅納入程式碼與 `AGENTS.md`；產物和暫存資料加入 `.gitignore`。新文字檔優先 UTF-8 with BOM，除非工具鏈要求其他編碼。README 使用英文 `README.md` 與繁體中文 `README_TW.md`，頂端皆放 `[English](README.md) | [繁體中文](README_TW.md)`，內容保持同步且只寫使用者需要的用途、功能、安裝與基本用法。技術文件的時間紀錄必須帶時區。
+3. 每次修改後提交 Git，包含程式碼、`AGENTS.md`、雙語 README 與必要 ADR；執行暫存資料和使用者設定加入 `.gitignore`。新文字檔優先 UTF-8 with BOM，除非工具鏈要求其他編碼。README 使用英文 `README.md` 與繁體中文 `README_TW.md`，頂端皆放 `[English](README.md) | [繁體中文](README_TW.md)`，內容保持同步且只寫使用者需要的用途、功能、安裝與基本用法。技術文件的時間紀錄必須帶時區。
 4. 每次收尾更新本文件的**目前狀態、未解問題與下一步**；不累積版本歷史。需要重啟任何裝置時，先說明原因並取得使用者明確同意，或由使用者親自操作。
 
 階段順序保留原規劃的範圍：
@@ -93,5 +95,3 @@
 5. 核心穩定後評估無縫播放、進階音訊裝置、DSP/EQ、遠端曲庫/同步與插件；Phase 1 不先投入大量視覺特效。
 
 目前下一步：建立最小可執行骨架與雙語 README；先做 Windows 的來源同步、SQLite 持久化、分頁列表和基本播放端到端驗證，再完成同階段的 Android MediaStore 適配。已知未解：SystemIndex 的覆蓋率與 metadata 品質、100,000 首效能、Windows 音訊選型及 Android 背景服務均尚無原型或實測；不要將文件中的預設方案視為已驗證。每一步以可運作功能與測量結果更新本文件。
-
-規範待釐清：上層 Git 規則要求只提交程式碼與 `AGENTS.md`，但本專案又要求維護雙語 README 與 ADR；正式建立這些文件前，需決定它們是否屬於可提交的必要專案文件。此項不可用忽略必要文件或提交執行產物的方式默默處理。
