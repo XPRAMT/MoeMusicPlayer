@@ -53,10 +53,30 @@
 - 媒體資料層需分別驗證 Windows 索引完整/未索引/停用/未完成/欄位缺失、卸除式來源與 fallback；Android MediaStore 新增/修改/刪除、SAF 文件樹、URI 權限失效與來源暫不可用；兩平台皆檢查 playlist reference、lyrics cache 與人工資料在同步後仍穩定。
 - 功能完成須驗證正常與失敗路徑、不阻塞 UI、不破壞本地播放、快取與資源用量有界，且文件與實際行為一致。跨平台整合需在相應系統上驗收；編譯成功不等於播放或畫面驗收。
 
+## 可參考專案與授權邊界
+
+以下連結是研究行為、架構與使用體驗的來源，不是本專案的程式碼基底。新增依賴、改作或引用程式碼前，需重新查看對應版本的 `LICENSE` 及第三方授權；在 GitHub 能看到原始碼不代表可自由複製。若正式公開原創程式碼，優先評估 MIT 或 Apache-2.0，並在選用 GPL/AGPL 類元件前確認對分發方式的影響。
+
+### [ECHO](https://github.com/Moekotori/ECHO)
+
+- 可研究 Library Core／Audio Core／Renderer／Native Host 的責任分離、SQLite 曲庫、`path + size + mtime` 增量掃描、大型列表分頁、背景任務降載與診斷方式；以實測檢查哪些做法適合 100,000 首及跨平台目標。
+- 不沿用 Electron 作為預設框架，也不照搬高 DOM 或高 GPU 合成成本的逐字動畫歌詞實作。
+- [ECHO NEXT 授權檔](https://github.com/Moekotori/ECHO/blob/main/LICENSE)標示為 source-available，並非一般開源授權；不得直接複製其原始碼，亦不得以其 fork 作為本專案可公開分發的基底，除非取得作者明確許可。
+
+### [Any Listen](https://github.com/any-listen/any-listen)
+
+- 可研究 Provider／擴充套件分層、本地列表同步的操作體驗、現代 Web 播放器介面，以及跨模組共用資料模型；須自行驗證對本地優先與低資源用量的適用性。
+- [Any Listen 授權檔](https://github.com/any-listen/any-listen/blob/main/LICENSE)以 AGPLv3 為基礎並加入商業使用限制；不要直接複製程式碼，除非已確認授權範圍及本專案分發方式可接受。
+
+### [MusicPlayer2](https://github.com/zhongyang219/MusicPlayer2)
+
+- 可研究 M3U/M3U8 匯入匯出行為、本地播放器功能完整度、網易雲／QQ 歌詞來源的使用體驗，以及 Windows 桌面播放控制細節；以行為測試重新實作，不移植其程式碼。
+- [MusicPlayer2 授權檔](https://github.com/zhongyang219/MusicPlayer2/blob/master/LICENSE)為 GPLv3；如考慮使用其程式碼，須先評估 GPL 義務與本專案的授權策略。
+
 ## 工作方式與下一步
 
 1. 開工先閱讀本文件、相關程式碼與 ADR；以最新需求、程式和測試結果修正過時敘述。遇到衝突，先釐清目標、平台硬限制與工程限制，再比較方案；重大架構變更寫入 `docs/adr/`。
-2. 變更保持聚焦。引入依賴前確認必要性、維護狀況與授權；不得複製 ECHO、Any Listen、MusicPlayer2 等外部專案程式碼而忽略授權。臨時做法要標記、追蹤並避免成為長期依賴。
+2. 變更保持聚焦。引入依賴前確認必要性、維護狀況與授權；參考外部專案時遵守上節邊界。臨時做法要標記、追蹤並避免成為長期依賴。
 3. 每次修改程式碼後提交 Git，僅納入程式碼與 `AGENTS.md`；產物和暫存資料加入 `.gitignore`。新文字檔優先 UTF-8 with BOM，除非工具鏈要求其他編碼。README 使用英文 `README.md` 與繁體中文 `README_TW.md`，頂端皆放 `[English](README.md) | [繁體中文](README_TW.md)`，內容保持同步。
 4. 每次收尾更新本文件的**目前狀態、未解問題與下一步**；不累積版本歷史。需要重啟任何裝置時，先說明原因並取得使用者明確同意，或由使用者親自操作。
 
