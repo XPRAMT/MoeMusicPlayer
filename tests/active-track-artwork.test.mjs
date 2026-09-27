@@ -129,7 +129,7 @@ test('missing, unsupported, and oversized artwork leave the placeholder availabl
   });
   oversized.controller.setTrack('large');
   await nextTurn();
-  assert.equal(oversized.controller.snapshot().status, 'error');
+  assert.equal(oversized.controller.snapshot().status, 'too-large');
   assert.equal(oversized.created.length, 0);
 });
 

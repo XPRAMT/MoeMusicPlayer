@@ -4,6 +4,7 @@
   import { isTauri } from '@tauri-apps/api/core';
   import {
     getErrorText,
+    getTrackArtworkBytes,
     invokeCommand,
     isReady,
     type LibrarySyncFinishedEvent,
@@ -38,6 +39,10 @@
     type PendingPlaybackSeek,
     type PlaybackSeekDraft,
   } from './lib/playback-scrubber';
+  import {
+    createActiveTrackArtworkController,
+    type ActiveArtworkState,
+  } from './lib/active-track-artwork';
 
   type View = 'library' | 'now-playing' | 'playlists' | 'settings';
   type SettingsSection = 'appearance' | 'sources';
@@ -63,6 +68,7 @@
   let libraryListRevision = $state(0);
   let playbackError = $state<string | null>(null);
   let playback = $state<PlaybackSnapshot | null>(null);
+  let activeArtwork = $state<ActiveArtworkState>({ trackId: null, status: 'empty', objectUrl: null });
   let playbackSeekDraft = $state<PlaybackSeekDraft | null>(null);
   let pendingPlaybackSeek = $state<PendingPlaybackSeek | null>(null);
   let sources = $state<LibrarySource[]>([]);
@@ -100,6 +106,19 @@
   let unlistenSyncFinished: UnlistenFn | undefined;
   let unlistenSyncProgress: UnlistenFn | undefined;
 
+  const artworkController = createActiveTrackArtworkController({
+    fetchBytes: getTrackArtworkBytes,
+    createObjectUrl(bytes, mimeType) {
+      return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    },
+    revokeObjectUrl(objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+    },
+    onChange(state) {
+      activeArtwork = state;
+    },
+  });
+
   const libraryReady = $derived(isReady(capabilities?.library));
   const sourceSyncReady = $derived(isReady(capabilities?.sourceSync));
   const playbackReady = $derived(isReady(capabilities?.playback));
@@ -134,6 +153,15 @@
   const syncProgressDoneCount = $derived(
     syncProgressSources.filter((source) => source.outcome !== null).length,
   );
+
+  $effect(() => {
+    const snapshot = playback;
+    if (!snapshot?.currentTrack || snapshot.state === 'stopped' || snapshot.state === 'empty') {
+      artworkController.setTrack(null);
+    } else {
+      artworkController.setTrack(snapshot.currentTrack.id);
+    }
+  });
 
   onMount(() => {
     let disposed = false;
@@ -190,6 +218,7 @@
   });
 
   onDestroy(() => {
+    artworkController.dispose();
     if (themeSaveTimer !== undefined) clearTimeout(themeSaveTimer);
     themeRevision += 1;
     if (playbackPollTimer !== undefined) clearInterval(playbackPollTimer);
@@ -1187,11 +1216,22 @@
         {:else if activeView === 'now-playing'}
           <section class="now-playing-view" aria-labelledby="now-playing-heading">
             <div class="now-playing-card">
-              <div class="cover-stage" aria-hidden="true">
-                <div class="cover-orbit cover-orbit-a"></div>
-                <div class="cover-orbit cover-orbit-b"></div>
-                <div class="cover-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-                <span class="cover-stage-label">MOE / LOCAL</span>
+              <div class="cover-stage" class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
+                {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
+                  <img class="cover-stage-image" src={activeArtwork.objectUrl} alt={`${currentTrackTitle(playback?.currentTrack)} 封面`} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
+                {:else}
+                  <div class="cover-orbit cover-orbit-a"></div>
+                  <div class="cover-orbit cover-orbit-b"></div>
+                  <div class="cover-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                  <span class="cover-stage-label">MOE / LOCAL</span>
+                  {#if activeArtwork.status === 'too-large'}
+                    <span class="cover-fallback-message">原圖超過 32 MiB 或 64 百萬像素上限</span>
+                  {:else if activeArtwork.status === 'error'}
+                    <span class="cover-fallback-message">封面格式不支援或無法讀取</span>
+                  {:else if activeArtwork.status === 'missing' && playback?.currentTrack}
+                    <span class="cover-fallback-message">沒有可用封面</span>
+                  {/if}
+                {/if}
               </div>
               <div class="now-playing-copy">
                 <p class="section-kicker">NOW PLAYING</p>
@@ -1378,8 +1418,12 @@
 
   <footer class="player-dock" aria-label="播放控制">
     <div class="dock-track">
-      <div class="dock-art" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M9 17V5l9-2v12M9 17a2.8 2.8 0 1 1-2.8-2.8A2.8 2.8 0 0 1 9 17Zm9-2a2.8 2.8 0 1 1-2.8-2.8A2.8 2.8 0 0 1 18 15Z" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <div class="dock-art">
+        {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
+          <img class="dock-art-image" src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
+        {:else}
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 17V5l9-2v12M9 17a2.8 2.8 0 1 1-2.8-2.8A2.8 2.8 0 0 1 9 17Zm9-2a2.8 2.8 0 1 1-2.8-2.8A2.8 2.8 0 0 1 18 15Z" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        {/if}
       </div>
       <div class="dock-track-copy">
         <strong>{currentTrackTitle(playback?.currentTrack)}</strong>

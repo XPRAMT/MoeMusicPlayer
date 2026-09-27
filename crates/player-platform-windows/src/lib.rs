@@ -8,7 +8,13 @@
 mod windows;
 
 #[cfg(windows)]
+mod artwork;
+
+#[cfg(windows)]
 mod system_index;
 
 #[cfg(windows)]
 pub use windows::{windows_locator_key, WindowsMediaIndex};
+
+#[cfg(windows)]
+pub use artwork::find_artwork;

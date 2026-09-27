@@ -1,7 +1,9 @@
+pub mod artwork;
 pub mod library;
 pub mod playlist;
 pub mod sync;
 
+pub use artwork::{ArtworkImage, MAX_ARTWORK_BYTES, MAX_ARTWORK_DIMENSION, MAX_ARTWORK_PIXELS};
 pub use library::{
     FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaScanProgress,
     MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, SourceId,

@@ -295,6 +295,16 @@ export function invokeCommand<Command extends IpcCommand>(
   );
 }
 
+/** Fetch one active track's raw binary cover payload without JSON/base64 conversion. */
+export function getTrackArtworkBytes(trackId: string): Promise<ArrayBuffer> {
+  if (!isTauri()) {
+    return Promise.reject(
+      new Error('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。'),
+    );
+  }
+  return invoke<ArrayBuffer>('library_get_track_artwork', { trackId });
+}
+
 export function isReady(capability: FeatureCapability | undefined): boolean {
   return capability?.state === 'ready';
 }

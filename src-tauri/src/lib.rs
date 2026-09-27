@@ -12,7 +12,7 @@ use player_core::{
 };
 use player_db::{Database, ThemePreferences};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{ipc::Response, AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_media_index::MediaIndexExt;
 
 mod playlist_exchange;
@@ -21,7 +21,7 @@ use playlist_exchange::{
 };
 
 #[cfg(target_os = "windows")]
-use player_platform_windows::{windows_locator_key, WindowsMediaIndex};
+use player_platform_windows::{find_artwork, windows_locator_key, WindowsMediaIndex};
 
 #[cfg(target_os = "windows")]
 use player_audio_windows::{
@@ -29,7 +29,7 @@ use player_audio_windows::{
         MediaControlMetadata, MediaControlUpdate, SystemMediaController, SystemMediaError,
         SystemMediaEvent,
     },
-    AudioError, PlaybackState as AudioPlaybackState, PlayerHandle,
+    AudioError, CommandTicket, PlaybackState as AudioPlaybackState, PlayerHandle,
 };
 
 #[cfg(target_os = "windows")]
@@ -367,6 +367,7 @@ fn playback_audio_error_message(error: &AudioError) -> String {
         AudioError::WorkerStart(_) => "無法啟動音訊背景工作。".to_owned(),
         AudioError::WorkerStopped => "音訊工作階段已結束。".to_owned(),
         AudioError::CommandQueueFull => "音訊服務忙碌，請稍後再試。".to_owned(),
+        AudioError::CommandTimeout => "音訊命令逾時，請查看播放器狀態後重試。".to_owned(),
         AudioError::UnsupportedPlatform => "此平台尚未提供本機音訊播放服務。".to_owned(),
         AudioError::FileOpen { .. } => "無法開啟曲目檔案，請確認檔案仍可讀取。".to_owned(),
         AudioError::UnsupportedFormat { .. } => "此音訊格式目前尚未支援。".to_owned(),
@@ -1339,8 +1340,44 @@ fn playback_get_snapshot(state: State<'_, AppState>) -> Result<PlaybackSnapshot,
     }
 }
 
+/// Read the active track's original encoded cover bytes on a blocking worker.
+/// An empty binary response means that no supported cover is available.
 #[tauri::command]
-fn playback_play(state: State<'_, AppState>, track_id: String) -> Result<PlaybackSnapshot, String> {
+async fn library_get_track_artwork(
+    state: State<'_, AppState>,
+    track_id: String,
+) -> Result<Response, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let id = TrackId::parse(&track_id).map_err(|error| format!("曲目 ID 無效：{error}"))?;
+        let locators = database
+            .track_locators(id)
+            .map_err(|error| error.to_string())?;
+        let image = tauri::async_runtime::spawn_blocking(move || find_artwork(&locators))
+            .await
+            .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
+        Ok(Response::new(
+            image.map(|image| image.into_bytes()).unwrap_or_default(),
+        ))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, track_id);
+        Err("此平台尚未提供本機封面讀取服務。".to_owned())
+    }
+}
+
+#[tauri::command]
+async fn playback_play(
+    state: State<'_, AppState>,
+    track_id: String,
+) -> Result<PlaybackSnapshot, String> {
     #[cfg(target_os = "windows")]
     {
         let database = state.database.as_ref().ok_or_else(|| {
@@ -1350,7 +1387,13 @@ fn playback_play(state: State<'_, AppState>, track_id: String) -> Result<Playbac
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         let service = windows_playback_service(&state)?;
-        play_track_from_database(database, service, &track_id)
+        let (ticket, track) = play_track_from_database(database, service, &track_id)?;
+        await_playback_ack(ticket).await?;
+        *service
+            .current_track
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(track);
+        Ok(service.snapshot())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1360,11 +1403,12 @@ fn playback_play(state: State<'_, AppState>, track_id: String) -> Result<Playbac
 }
 
 #[tauri::command]
-fn playback_pause(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
+async fn playback_pause(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
     #[cfg(target_os = "windows")]
     {
         let service = windows_playback_service(&state)?;
-        pause_playback(service)
+        await_playback_ack(pause_playback(service)?).await?;
+        Ok(service.snapshot())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1384,11 +1428,15 @@ fn playback_previous() -> Result<PlaybackSnapshot, String> {
 }
 
 #[tauri::command]
-fn playback_seek(state: State<'_, AppState>, position_ms: u64) -> Result<PlaybackSnapshot, String> {
+async fn playback_seek(
+    state: State<'_, AppState>,
+    position_ms: u64,
+) -> Result<PlaybackSnapshot, String> {
     #[cfg(target_os = "windows")]
     {
         let service = windows_playback_service(&state)?;
-        seek_playback(service, position_ms)
+        await_playback_ack(seek_playback(service, position_ms)?).await?;
+        Ok(service.snapshot())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1398,14 +1446,15 @@ fn playback_seek(state: State<'_, AppState>, position_ms: u64) -> Result<Playbac
 }
 
 #[tauri::command]
-fn playback_set_volume(
+async fn playback_set_volume(
     state: State<'_, AppState>,
     volume: f64,
 ) -> Result<PlaybackSnapshot, String> {
     #[cfg(target_os = "windows")]
     {
         let service = windows_playback_service(&state)?;
-        set_playback_volume(service, volume)
+        await_playback_ack(set_playback_volume(service, volume)?).await?;
+        Ok(service.snapshot())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1435,16 +1484,15 @@ fn windows_playback_service(state: &AppState) -> Result<&WindowsPlaybackService,
 }
 
 #[cfg(target_os = "windows")]
-fn pause_playback(service: &WindowsPlaybackService) -> Result<PlaybackSnapshot, String> {
+fn pause_playback(service: &WindowsPlaybackService) -> Result<CommandTicket, String> {
     let _gate = service
         .command_gate
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     service
         .player
-        .pause()
-        .map_err(|error| playback_audio_error_message(&error))?;
-    Ok(service.snapshot())
+        .request_pause()
+        .map_err(|error| playback_audio_error_message(&error))
 }
 
 #[cfg(target_os = "windows")]
@@ -1464,32 +1512,39 @@ fn stop_playback(service: &WindowsPlaybackService) -> Result<PlaybackSnapshot, S
 fn seek_playback(
     service: &WindowsPlaybackService,
     position_ms: u64,
-) -> Result<PlaybackSnapshot, String> {
+) -> Result<CommandTicket, String> {
     let _gate = service
         .command_gate
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     service
         .player
-        .seek(Duration::from_millis(position_ms))
-        .map_err(|error| playback_audio_error_message(&error))?;
-    Ok(service.snapshot())
+        .request_seek(Duration::from_millis(position_ms))
+        .map_err(|error| playback_audio_error_message(&error))
 }
 
 #[cfg(target_os = "windows")]
 fn set_playback_volume(
     service: &WindowsPlaybackService,
     volume: f64,
-) -> Result<PlaybackSnapshot, String> {
+) -> Result<CommandTicket, String> {
     let _gate = service
         .command_gate
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     service
         .player
-        .set_volume(volume as f32)
-        .map_err(|error| playback_audio_error_message(&error))?;
-    Ok(service.snapshot())
+        .request_set_volume(volume as f32)
+        .map_err(|error| playback_audio_error_message(&error))
+}
+
+#[cfg(target_os = "windows")]
+async fn await_playback_ack(ticket: CommandTicket) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || ticket.wait(Duration::from_secs(2)))
+        .await
+        .map_err(|error| format!("等待播放命令工作失敗：{error}"))?
+        .map(|_| ())
+        .map_err(|error| playback_audio_error_message(&error))
 }
 
 #[cfg(target_os = "windows")]
@@ -1497,7 +1552,7 @@ fn play_track_from_database(
     database: &Database,
     service: &WindowsPlaybackService,
     track_id: &str,
-) -> Result<PlaybackSnapshot, String> {
+) -> Result<(CommandTicket, TrackSummary), String> {
     let track_id = TrackId::parse(track_id).map_err(|error| format!("曲目 ID 無效：{error}"))?;
     let track = database
         .get_track_summary(track_id)
@@ -1518,16 +1573,15 @@ fn play_track_from_database(
         .as_ref()
         .map(|current| current.id);
     let audio_snapshot = service.player.snapshot();
-    if current_track_id == Some(track_id)
+    let ticket = if current_track_id == Some(track_id)
         && matches!(
             audio_snapshot.state,
             AudioPlaybackState::Ready | AudioPlaybackState::Paused
-        )
-    {
+        ) {
         service
             .player
-            .play()
-            .map_err(|error| playback_audio_error_message(&error))?;
+            .request_play()
+            .map_err(|error| playback_audio_error_message(&error))?
     } else {
         service
             .player
@@ -1535,14 +1589,14 @@ fn play_track_from_database(
             .map_err(|error| playback_audio_error_message(&error))?;
         service
             .player
-            .play()
-            .map_err(|error| playback_audio_error_message(&error))?;
-    }
+            .request_play()
+            .map_err(|error| playback_audio_error_message(&error))?
+    };
     *service
         .current_track
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(track);
-    Ok(service.snapshot())
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(track.clone());
+    Ok((ticket, track))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1581,6 +1635,7 @@ pub fn run() {
             android_saf_pick_source,
             library_sync,
             playback_get_snapshot,
+            library_get_track_artwork,
             playback_play,
             playback_pause,
             playback_next,
@@ -1984,12 +2039,16 @@ mod windows_library_integration_tests {
         })
         .expect("create test audio worker");
         let service = WindowsPlaybackService::new(player);
-        let response = play_track_from_database(&database, &service, &track_id.to_string())
+        let (ticket, track) = play_track_from_database(&database, &service, &track_id.to_string())
             .expect("resolve internal ID and enqueue playback");
-        assert_eq!(
-            response.current_track.as_ref().map(|track| track.id),
-            Some(track_id)
-        );
+        assert_eq!(track.id, track_id);
+        ticket
+            .wait(Duration::from_secs(2))
+            .expect("worker should acknowledge playback");
+        *service
+            .current_track
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(track);
 
         let path_deadline = Instant::now() + Duration::from_secs(2);
         let actual_path = loop {
@@ -2069,7 +2128,10 @@ mod windows_library_integration_tests {
             thread::sleep(Duration::from_millis(5));
         }
 
-        set_playback_volume(&service, 0.35).expect("queue volume command");
+        set_playback_volume(&service, 0.35)
+            .expect("queue volume command")
+            .wait(Duration::from_secs(2))
+            .expect("worker should acknowledge volume");
         let volume_deadline = Instant::now() + Duration::from_secs(2);
         while (service.snapshot().volume - 0.35).abs() > 0.000_01 {
             assert!(

@@ -371,7 +371,7 @@ fn system_time_to_utc_ms(time: SystemTime) -> Option<i64> {
     }
 }
 
-fn to_extended_path(path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn to_extended_path(path: &Path) -> io::Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {

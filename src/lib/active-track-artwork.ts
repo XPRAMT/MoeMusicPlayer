@@ -1,6 +1,6 @@
 export const MAX_ACTIVE_ARTWORK_BYTES = 32 * 1024 * 1024;
 
-export type ActiveArtworkStatus = 'empty' | 'loading' | 'ready' | 'missing' | 'error';
+export type ActiveArtworkStatus = 'empty' | 'loading' | 'ready' | 'missing' | 'too-large' | 'error';
 
 export interface ActiveArtworkState {
   trackId: string | null;
@@ -97,7 +97,7 @@ export function createActiveTrackArtworkController(
           return;
         }
         if (bytes.byteLength > maxBytes) {
-          publish({ trackId: requestTrackId, status: 'error', objectUrl: null });
+          publish({ trackId: requestTrackId, status: 'too-large', objectUrl: null });
           return;
         }
         const mimeType = detectArtworkMimeType(bytes);

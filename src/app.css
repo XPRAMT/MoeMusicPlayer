@@ -1273,6 +1273,31 @@ input:focus-visible {
     linear-gradient(145deg, #282c30, #161a20 66%, #22221d);
 }
 
+.cover-stage.has-artwork {
+  border-color: rgba(var(--accent-rgb), 0.28);
+  background: #101216;
+}
+
+.cover-stage-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.cover-fallback-message {
+  z-index: 2;
+  max-width: 80%;
+  padding: 6px 9px;
+  border-radius: 6px;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.7);
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: center;
+}
+
 .cover-orbit {
   position: absolute;
   width: 75%;
@@ -1878,6 +1903,13 @@ input:focus-visible {
 .dock-art svg {
   width: 22px;
   height: 22px;
+}
+
+.dock-art-image {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
 }
 
 .dock-track-copy {

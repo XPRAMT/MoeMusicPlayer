@@ -12,6 +12,7 @@ MoeMusicPlayer is a local-first music library for Windows and Android. It stores
 - Browse and search the saved library with paginated results; the interface never loads the whole collection.
 - Customize the background and accent colors in Settings. Preferences are saved in the app database, and text colors adjust for contrast.
 - On Windows, play local WAV, MP3, FLAC, and Ogg Vorbis files with play/pause, seek, and volume controls.
+- Show the current track's embedded artwork, then same-folder `cover.jpg` or `folder.jpg`, using the original image bytes in Now Playing and the player bar.
 - Import and export M3U and UTF-8 M3U8 playlists on Windows. Unmatched entries are retained; relative exports are limited to the selected shared root.
 - Windows system media controls show the current track and support play, pause, stop, and seek. Previous/next remain disabled until queue navigation is implemented.
 
