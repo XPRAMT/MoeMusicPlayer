@@ -1,0 +1,14 @@
+﻿[package]
+name = "player-audio-windows"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[target.'cfg(windows)'.dependencies]
+rodio = { version = "=0.22.2", default-features = false, features = [
+    "playback",
+    "claxon",
+    "hound",
+    "lewton",
+    "minimp3",
+] }
