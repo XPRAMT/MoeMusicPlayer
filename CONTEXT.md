@@ -14,9 +14,15 @@ This glossary defines the music-library identity and playback terms shared by th
 
 ## Playback
 
-**Playback session**: The currently selected track together with the state reported by the audio backend. It is separate from the full library and any future queue.
+**Playback session**: The currently selected track together with the state reported by the audio backend. It is separate from the full library and from the ordered Playback queue.
 
 **Playback snapshot**: A point-in-time view of the current playback session, including state, position, duration, volume, and any current error. The audio backend is authoritative for these values.
+
+**Playback queue**: A session-local ordered sequence of stable Track IDs drawn from the active library query or a user playlist. Library order follows the visible library sort; playlist order follows entry order and keeps repeated playable entries. Queue IDs stay in Rust and are not copied into the Renderer.
+
+**Shuffle**: A queue traversal order that keeps the current entry in place, visits each remaining entry once per cycle, and supports previous/next traversal through the same order. Turning shuffle off resumes source order at the current entry.
+
+**Repeat mode**: `off` stops after the final queue entry, `all` wraps the queue at its ends, and `one` repeats the current track only when it reaches its natural end. Manual next still advances in every mode.
 
 ## Playlists
 

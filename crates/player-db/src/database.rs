@@ -758,6 +758,87 @@ impl Database {
         })
     }
 
+    /// Return stable IDs in exactly the same filter and order as library pages.
+    /// Playback queue setup keeps these compact IDs inside Rust.
+    pub fn list_track_ids(&self, query: Option<&str>) -> Result<Vec<TrackId>, DatabaseError> {
+        let connection = self.lock()?;
+        let query = query.filter(|text| !text.trim().is_empty());
+        let mut statement = connection.prepare(
+            "SELECT t.track_id
+             FROM tracks t
+             WHERE EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=t.track_id)
+               AND (?1 IS NULL
+                    OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
+                    OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
+                    OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
+                    OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
+             ORDER BY t.sort_title, t.track_id",
+        )?;
+        let rows = statement.query_map([query], |row| row.get::<_, String>(0))?;
+        let ids = rows
+            .map(|row| {
+                let value = row?;
+                parse_track_id(&value)
+            })
+            .collect();
+        ids
+    }
+
+    /// Return playable playlist Track IDs with their original entry positions.
+    /// Duplicate Track IDs remain separate queue entries; unmatched and disabled
+    /// entries are omitted while the rest of the playlist remains ordered.
+    pub fn playlist_track_ids(
+        &self,
+        playlist_id: PlaylistId,
+    ) -> Result<Option<Vec<(u64, TrackId)>>, DatabaseError> {
+        let connection = self.lock()?;
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM playlists WHERE playlist_id=?1)",
+            [playlist_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(None);
+        }
+        let mut statement = connection.prepare(
+            "WITH resolved_entries AS (
+                 SELECT pe.position,
+                        CASE WHEN pe.track_id IS NOT NULL THEN pe.track_id
+                             ELSE (
+                                 SELECT CASE WHEN COUNT(DISTINCT sm.track_id)=1 THEN MIN(sm.track_id) END
+                                 FROM source_mappings sm
+                                 WHERE sm.locator_kind=pe.locator_kind
+                                   AND sm.locator_encoding=pe.locator_encoding
+                                   AND sm.locator_data=pe.locator_data
+                             )
+                        END AS track_id
+                 FROM playlist_entries pe
+                 WHERE pe.playlist_id=?1
+             )
+             SELECT e.position, e.track_id
+             FROM resolved_entries e
+             WHERE e.track_id IS NOT NULL
+               AND EXISTS (
+                   SELECT 1 FROM source_mappings m
+                   JOIN library_roots r ON r.source_id=m.source_id
+                   WHERE m.track_id=e.track_id AND r.enabled=1
+               )
+             ORDER BY e.position",
+        )?;
+        let rows = statement.query_map([playlist_id.to_string()], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (position, raw_id) = row?;
+            let position = u64::try_from(position).map_err(|_| {
+                DatabaseError::CorruptData("negative playlist entry position".to_owned())
+            })?;
+            Ok((position, parse_track_id(&raw_id)?))
+        })
+        .collect::<Result<Vec<_>, DatabaseError>>()
+        .map(Some)
+    }
+
     pub fn count_tracks(&self, query: Option<&str>) -> Result<u64, DatabaseError> {
         let connection = self.lock()?;
         let query = query.filter(|text| !text.trim().is_empty());
@@ -1801,6 +1882,82 @@ mod tests {
             .is_none());
         assert!(db.delete_playlist(playlist.id).expect("delete playlist"));
         assert!(db.list_playlists().expect("list after delete").is_empty());
+    }
+
+    #[test]
+    fn queue_ids_match_library_page_order_and_playlist_order_keeps_duplicates() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "queue source");
+        let first = record(&root, "one", "queue-one", "Beta", 10, 100);
+        let second = record(&root, "two", "queue-two", "Alpha", 10, 100);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &[first.clone(), second.clone()],
+            &[first.clone(), second.clone()],
+            1000,
+        );
+
+        let page_ids = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 20,
+                query: Some("a".to_owned()),
+            })
+            .expect("query matching library page")
+            .items
+            .into_iter()
+            .map(|track| track.id)
+            .collect::<Vec<_>>();
+        assert_eq!(db.list_track_ids(Some("a")).expect("queue query"), page_ids);
+        assert_eq!(
+            db.list_track_ids(Some("  ")).expect("all queue IDs").len(),
+            2
+        );
+
+        let mut playlist = player_core::Playlist::new("duplicates");
+        playlist.entries = vec![
+            PlaylistEntry {
+                track_id: None,
+                locator: first.locator.clone(),
+                title: None,
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::FileSystem(PathBuf::from(r"C:\Missing\not-indexed.flac")),
+                title: None,
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: None,
+                locator: first.locator,
+                title: None,
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: None,
+                locator: second.locator,
+                title: None,
+                duration_ms: None,
+            },
+        ];
+        db.save_playlist(&playlist)
+            .expect("save duplicate playlist");
+        let queue = db
+            .playlist_track_ids(playlist.id)
+            .expect("playlist queue query")
+            .expect("playlist exists");
+        assert_eq!(queue.len(), 3);
+        assert_eq!(queue[0].0, 0);
+        assert_eq!(queue[0].1, queue[1].1);
+        assert_eq!(queue[1].0, 2);
+        assert_eq!(queue[2].0, 3);
+        assert!(db
+            .playlist_track_ids(PlaylistId::new())
+            .expect("unknown playlist query")
+            .is_none());
     }
 
     #[test]
