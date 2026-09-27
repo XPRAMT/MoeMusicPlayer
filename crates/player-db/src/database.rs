@@ -14,7 +14,7 @@ use player_core::{
     SyncApplyOutcome, SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackId, TrackIdentity,
     TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::locator;
 
@@ -456,6 +456,15 @@ impl Database {
         Ok(())
     }
 
+    /// Remove the pre-JSON theme value after it has been imported into settings.json.
+    /// The table remains as a schema migration compatibility shell; it is no longer
+    /// an authoritative settings store.
+    pub fn clear_legacy_theme_preferences(&self) -> Result<(), DatabaseError> {
+        self.lock()?
+            .execute("DELETE FROM theme_preferences WHERE singleton_id=1", [])?;
+        Ok(())
+    }
+
     pub fn add_library_root(
         &self,
         kind: MediaSourceKind,
@@ -776,6 +785,28 @@ impl Database {
             name,
             entries,
         }))
+    }
+
+    /// Return a legacy playlist identity only when its name is unique. Playlist-file import uses
+    /// this to attach an existing static projection on first registration without creating a
+    /// duplicate; ambiguous names always receive a new identity.
+    pub fn unique_playlist_id_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<PlaylistId>, DatabaseError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT CASE WHEN COUNT(*)=1 THEN MIN(playlist_id) END
+                 FROM playlists WHERE name=?1",
+                [name],
+                |row| row.get::<_, Option<String>>(0),
+            )?
+            .map(|value| {
+                PlaylistId::parse(&value)
+                    .map_err(|error| DatabaseError::CorruptData(error.to_string()))
+            })
+            .transpose()
     }
 
     /// List playlist names and counts without reading entry locators.
@@ -1745,11 +1776,11 @@ mod tests {
         SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackId, TrackIdentity,
         TrackMetadata, TrackMetadataError, UserMetadataField,
     };
-    use rusqlite::{OptionalExtension, params};
+    use rusqlite::{params, OptionalExtension};
 
     use super::{
-        COUNT_LIBRARY_SQL, Database, DatabaseError, LibraryRepository, PlaylistFileSyncState,
-        SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, TRACKS_PAGE_SQL, ThemePreferences,
+        Database, DatabaseError, LibraryRepository, PlaylistFileSyncState, ThemePreferences,
+        COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, TRACKS_PAGE_SQL,
     };
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -2087,11 +2118,10 @@ mod tests {
             },
             content_sha256: [0x5a; 32],
         };
-        assert!(
-            db.playlist_file_sync_state(source_id)
-                .expect("no prior state")
-                .is_none()
-        );
+        assert!(db
+            .playlist_file_sync_state(source_id)
+            .expect("no prior state")
+            .is_none());
         db.record_playlist_file_sync_state(source_id, &state)
             .expect("save state");
         assert_eq!(
@@ -2155,6 +2185,29 @@ mod tests {
         assert_eq!(
             db.get_theme_preferences().expect("unchanged theme"),
             original
+        );
+    }
+
+    #[test]
+    fn clearing_legacy_theme_preferences_keeps_music_source_projection() {
+        let db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "legacy-theme-test");
+        db.set_theme_preferences(&ThemePreferences {
+            background_hex: "#102030".to_owned(),
+            accent_hex: "#A0B1C2".to_owned(),
+        })
+        .expect("save legacy preference");
+
+        db.clear_legacy_theme_preferences()
+            .expect("clear migrated preference");
+
+        assert_eq!(
+            db.get_theme_preferences().expect("empty legacy preference"),
+            ThemePreferences::default()
+        );
+        assert_eq!(
+            db.library_roots().expect("music source remains"),
+            vec![root]
         );
     }
 
@@ -2236,11 +2289,10 @@ mod tests {
         );
         assert_eq!(stored.entries[1].track_id, None);
         assert_eq!(stored.entries[1].locator, playlist.entries[1].locator);
-        assert!(
-            db.get_playlist_page(PlaylistId::new(), 0, 10)
-                .expect("missing playlist query")
-                .is_none()
-        );
+        assert!(db
+            .get_playlist_page(PlaylistId::new(), 0, 10)
+            .expect("missing playlist query")
+            .is_none());
         assert!(db.delete_playlist(playlist.id).expect("delete playlist"));
         assert!(db.list_playlists().expect("list after delete").is_empty());
     }
@@ -2315,11 +2367,10 @@ mod tests {
         assert_eq!(queue[0].1, queue[1].1);
         assert_eq!(queue[1].0, 2);
         assert_eq!(queue[2].0, 3);
-        assert!(
-            db.playlist_track_ids(PlaylistId::new())
-                .expect("unknown playlist query")
-                .is_none()
-        );
+        assert!(db
+            .playlist_track_ids(PlaylistId::new())
+            .expect("unknown playlist query")
+            .is_none());
     }
 
     #[test]
@@ -3088,11 +3139,10 @@ mod tests {
                 .as_deref(),
             Some("手動標題")
         );
-        assert!(
-            db.get_track_summary(TrackId::new())
-                .expect("unknown track summary")
-                .is_none()
-        );
+        assert!(db
+            .get_track_summary(TrackId::new())
+            .expect("unknown track summary")
+            .is_none());
         assert!(matches!(
             db.track_locators(TrackId::new()),
             Err(DatabaseError::TrackNotFound(_))
