@@ -2,6 +2,7 @@
 import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 import {
+  buildVirtualRows,
   getVirtualRange,
   PagedTrackList,
   TRACK_LIST_MAX_CACHED_PAGES,
@@ -126,6 +127,32 @@ test('page count changes during scrolling are reported instead of mixing snapsho
   assert.match(data.snapshot().errors[0]?.message ?? '', /有變更/);
   assert.equal(data.trackAt(0)?.id, 'track-0');
   assert.equal(data.trackAt(TRACK_PAGE_SIZE), null);
+});
+
+test('a visible page load refreshes the same virtual range without scrolling', async () => {
+  let resolveNextPage;
+  const data = new PagedTrackList(({ offset, limit }) => {
+    if (offset === 40) return new Promise((resolve) => { resolveNextPage = resolve; });
+    return Promise.resolve(makePage(offset, limit, 100));
+  });
+  data.reset('', 'same-range-refresh');
+  await data.ensureRange(0, 20);
+
+  const visibleRange = { start: 40, end: 50 };
+  const beforeSnapshot = data.snapshot();
+  const before = buildVirtualRows(data, visibleRange, beforeSnapshot.revision);
+  assert.ok(before.rows.every((row) => row.track === null));
+  assert.equal(beforeSnapshot.totalCount, 100);
+
+  const loadingVisiblePage = data.ensureRange(visibleRange.start, visibleRange.end);
+  resolveNextPage(makePage(40, TRACK_PAGE_SIZE, 100));
+  await loadingVisiblePage;
+
+  const afterSnapshot = data.snapshot();
+  const after = buildVirtualRows(data, visibleRange, afterSnapshot.revision);
+  assert.deepEqual(visibleRange, { start: 40, end: 50 });
+  assert.ok(after.revision > before.revision);
+  assert.ok(after.rows.every((row, index) => row.track?.id === `track-${40 + index}`));
 });
 
 test('synthetic 100k scrolling keeps fetched cache and rendered rows bounded', async (t) => {

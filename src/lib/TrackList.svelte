@@ -9,6 +9,7 @@
   } from './ipc';
   import { formatDuration, formatTrackIndex } from './format';
   import {
+    buildVirtualRows,
     getVirtualRange,
     PagedTrackList,
     TRACK_PAGE_SIZE,
@@ -37,7 +38,6 @@
   }: Props = $props();
 
   type ListSnapshot = ReturnType<PagedTrackList['snapshot']>;
-  type VirtualRow = { index: number; track: TrackSummary | null };
 
   let snapshot = $state<ListSnapshot>({
     query: '',
@@ -47,6 +47,7 @@
     pendingPageCount: 0,
     errors: [],
     generation: 0,
+    revision: 0,
   });
   let scrollElement: HTMLDivElement | undefined = $state();
   let scrollTop = $state(0);
@@ -80,13 +81,10 @@
       headerHeight,
     ),
   );
-  let virtualRows = $derived.by(() => {
-    const rows: VirtualRow[] = [];
-    for (let index = virtualRange.start; index < virtualRange.end; index += 1) {
-      rows.push({ index, track: listData.trackAt(index) });
-    }
-    return rows;
-  });
+  let virtualRowWindow = $derived.by(() =>
+    buildVirtualRows(listData, virtualRange, snapshot.revision),
+  );
+  let virtualRows = $derived(virtualRowWindow.rows);
   let activeDescendantId = $derived.by(() => {
     const activeRow = virtualRows.find((row) => row.index === activeIndex && row.track !== null);
     return activeRow ? `library-track-row-${activeRow.index}` : undefined;

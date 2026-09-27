@@ -55,6 +55,24 @@ export function getVirtualRange(
 }
 
 /**
+ * Build the rendered window while carrying the source revision into Svelte's
+ * dependency graph. The revision changes even when page lengths and totals do
+ * not, so a visible range is rebuilt as its cached page is populated.
+ *
+ * @param {PagedTrackList} data
+ * @param {VirtualRange} range
+ * @param {number} revision
+ * @returns {{ revision: number, rows: Array<{ index: number, track: TrackSummary | null }> }}
+ */
+export function buildVirtualRows(data, range, revision) {
+  const rows = [];
+  for (let index = range.start; index < range.end; index += 1) {
+    rows.push({ index, track: data.trackAt(index) });
+  }
+  return { revision, rows };
+}
+
+/**
  * @typedef {Object} LoadState
  * @property {number} offset
  * @property {number} generation
@@ -95,6 +113,8 @@ export class PagedTrackList {
     this.totalCount = null;
     /** @type {number} */
     this.generation = 0;
+    /** @type {number} */
+    this.revision = 0;
     /** @type {Map<number, TrackPage>} */
     this.pages = new Map();
     /** @type {Map<number, string>} */
@@ -132,7 +152,7 @@ export class PagedTrackList {
     return true;
   }
 
-  /** @returns {{ query: string, totalCount: number | null, cachedPageCount: number, cachedItemCount: number, pendingPageCount: number, errors: Array<{ offset: number, message: string }>, generation: number }} */
+  /** @returns {{ query: string, totalCount: number | null, cachedPageCount: number, cachedItemCount: number, pendingPageCount: number, errors: Array<{ offset: number, message: string }>, generation: number, revision: number }} */
   snapshot() {
     let cachedItemCount = 0;
     for (const page of this.pages.values()) cachedItemCount += page.items.length;
@@ -147,6 +167,7 @@ export class PagedTrackList {
         .map(([offset, message]) => ({ offset, message }))
         .sort((left, right) => left.offset - right.offset),
       generation: this.generation,
+      revision: this.revision,
     };
   }
 
@@ -348,6 +369,7 @@ export class PagedTrackList {
   }
 
   notify() {
+    this.revision += 1;
     this.onChange();
   }
 }
