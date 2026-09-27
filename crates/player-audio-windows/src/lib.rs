@@ -15,6 +15,9 @@ use std::time::Duration;
 #[cfg(windows)]
 mod rodio_backend;
 
+#[cfg(windows)]
+pub mod system_media;
+
 const COMMAND_CAPACITY: usize = 64;
 const EVENT_CAPACITY: usize = 128;
 const POSITION_POLL_INTERVAL: Duration = Duration::from_millis(40);

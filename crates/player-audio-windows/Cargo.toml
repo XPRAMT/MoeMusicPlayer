@@ -12,3 +12,9 @@ rodio = { version = "=0.22.2", default-features = false, features = [
     "lewton",
     "minimp3",
 ] }
+windows = { version = "=0.62.2", features = [
+    "Media",
+    "Win32_Foundation",
+    "Win32_System_WinRT",
+    "Win32_UI_WindowsAndMessaging",
+] }

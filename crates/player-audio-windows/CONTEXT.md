@@ -13,6 +13,12 @@ track identity, metadata, or renderer state.
 - **Playback snapshot:** The latest state, position, duration, volume, and error.
 - **Playback event:** A bounded state-change or error notification. The snapshot
   remains authoritative if an event is dropped because the event queue is full.
+- **System Media Transport Controls (SMTC) session:** Windows' media controls
+  and now-playing display associated with this app's top-level window.
+- **Media-control capability:** A declaration that the current playback state
+  or queue can honor a command; unsupported commands stay disabled.
+- **Now-playing metadata:** The track title, artist, and album shown in system
+  media surfaces, separate from the track's stable app identity.
 
 ## Constraints
 
