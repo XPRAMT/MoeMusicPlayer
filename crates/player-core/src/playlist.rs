@@ -1,4 +1,4 @@
-use std::{
+﻿use std::{
     error::Error,
     fmt,
     path::{Path, PathBuf},
@@ -362,7 +362,9 @@ fn parse_locator(value: &str, base_dir: &Path) -> MediaLocator {
     }
 
     let path = PathBuf::from(value);
-    let path = if path.is_absolute() {
+    // Keep a Windows absolute path intact when this core is running on Android. It cannot be
+    // opened there, but must not become a relative path under the playlist directory.
+    let path = if path.is_absolute() || is_windows_absolute_path(value) {
         path
     } else {
         base_dir.join(path)
@@ -383,6 +385,15 @@ fn is_uri_reference(value: &str) -> bool {
         return false;
     }
     true
+}
+
+fn is_windows_absolute_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/'))
+        || value.starts_with(r"\\")
 }
 
 fn parse_duration(value: &str) -> Option<Option<u64>> {
@@ -472,6 +483,17 @@ mod tests {
             playlist.entries[1].locator,
             MediaLocator::ContentUri("content://media/external/audio/media/42".to_owned())
         );
+
+        let windows_path = r"C:\音樂\跨平台匯入.flac";
+        let cross_platform = parse_m3u8(
+            format!("{windows_path}\n").as_bytes(),
+            Path::new("/music/lists/favorites.m3u8"),
+        )
+        .expect("preserve Windows absolute path on any host");
+        assert_eq!(
+            cross_platform.entries[0].locator,
+            MediaLocator::FileSystem(PathBuf::from(windows_path))
+        );
     }
 
     #[test]
@@ -503,7 +525,7 @@ mod tests {
     fn writer_emits_utf8_and_relative_unicode_long_paths_that_round_trip() {
         let root = PathBuf::from(r"C:\音樂庫\專輯");
         let playlist_file = root.join("清單.m3u8");
-        let long_name = format!("曲目 {}.flac", "長路徑🎧".repeat(24));
+        let long_name = format!("曲目 {}.flac", "長路徑🎧".repeat(80));
         let source = Playlist {
             id: crate::PlaylistId::new(),
             name: "我的清單 🎶".to_owned(),
@@ -514,6 +536,13 @@ mod tests {
                 duration_ms: Some(2012),
             }],
         };
+        let encoded_path_length = match &source.entries[0].locator {
+            MediaLocator::FileSystem(path) => {
+                path.to_str().expect("Unicode path").encode_utf16().count()
+            }
+            MediaLocator::ContentUri(_) => unreachable!("test entry is a filesystem path"),
+        };
+        assert!(encoded_path_length > 260);
         let bytes = write_m3u8(
             &source,
             &playlist_file,
