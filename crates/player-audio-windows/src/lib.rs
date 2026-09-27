@@ -75,6 +75,7 @@ pub enum AudioError {
     WorkerStart(String),
     WorkerStopped,
     CommandQueueFull,
+    CommandTimeout,
     UnsupportedPlatform,
     FileOpen { path: PathBuf, message: String },
     UnsupportedFormat { path: PathBuf },
@@ -95,6 +96,9 @@ impl fmt::Display for AudioError {
             Self::WorkerStart(message) => write!(f, "could not start the audio worker: {message}"),
             Self::WorkerStopped => f.write_str("the audio worker has stopped"),
             Self::CommandQueueFull => f.write_str("the audio command queue is full"),
+            Self::CommandTimeout => {
+                f.write_str("the audio worker did not acknowledge the command in time")
+            }
             Self::UnsupportedPlatform => {
                 f.write_str("the Windows audio backend is only available on Windows")
             }
@@ -139,7 +143,7 @@ pub struct PlayerHandle {
 }
 
 struct PlayerInner {
-    commands: SyncSender<Command>,
+    commands: SyncSender<QueuedCommand>,
     snapshot: Arc<RwLock<PlaybackSnapshot>>,
     events: Mutex<Receiver<AudioEvent>>,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -153,6 +157,23 @@ enum Command {
     Seek(Duration),
     SetVolume(f32),
     Shutdown,
+}
+
+/// A queued command acknowledgement. Submitting a request is non-blocking;
+/// callers choose where to wait for the worker's authoritative post-command
+/// snapshot.
+pub struct CommandTicket {
+    response: Receiver<Result<PlaybackSnapshot, AudioError>>,
+}
+
+impl CommandTicket {
+    pub fn wait(self, timeout: Duration) -> Result<PlaybackSnapshot, AudioError> {
+        match self.response.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(AudioError::CommandTimeout),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(AudioError::WorkerStopped),
+        }
+    }
 }
 
 impl PlayerHandle {
@@ -227,6 +248,25 @@ impl PlayerHandle {
         self.enqueue(Command::SetVolume(volume))
     }
 
+    pub fn request_play(&self) -> Result<CommandTicket, AudioError> {
+        self.enqueue_with_ack(Command::Play)
+    }
+
+    pub fn request_pause(&self) -> Result<CommandTicket, AudioError> {
+        self.enqueue_with_ack(Command::Pause)
+    }
+
+    pub fn request_seek(&self, position: Duration) -> Result<CommandTicket, AudioError> {
+        self.enqueue_with_ack(Command::Seek(position))
+    }
+
+    pub fn request_set_volume(&self, volume: f32) -> Result<CommandTicket, AudioError> {
+        if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+            return Err(AudioError::InvalidVolume);
+        }
+        self.enqueue_with_ack(Command::SetVolume(volume))
+    }
+
     /// Return the most recent playback snapshot. Audio operations never hold
     /// this lock while opening files, decoding, or talking to the device.
     pub fn snapshot(&self) -> PlaybackSnapshot {
@@ -244,7 +284,26 @@ impl PlayerHandle {
     }
 
     fn enqueue(&self, command: Command) -> Result<(), AudioError> {
-        match self.inner.commands.try_send(command) {
+        self.enqueue_message(command, None)
+    }
+
+    fn enqueue_with_ack(&self, command: Command) -> Result<CommandTicket, AudioError> {
+        let (response_tx, response_rx) = mpsc::sync_channel(1);
+        self.enqueue_message(command, Some(response_tx))?;
+        Ok(CommandTicket {
+            response: response_rx,
+        })
+    }
+
+    fn enqueue_message(
+        &self,
+        command: Command,
+        acknowledgement: Option<SyncSender<Result<PlaybackSnapshot, AudioError>>>,
+    ) -> Result<(), AudioError> {
+        match self.inner.commands.try_send(QueuedCommand {
+            command,
+            acknowledgement,
+        }) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(AudioError::CommandQueueFull),
             Err(TrySendError::Disconnected(_)) => Err(AudioError::WorkerStopped),
@@ -252,11 +311,19 @@ impl PlayerHandle {
     }
 }
 
+struct QueuedCommand {
+    command: Command,
+    acknowledgement: Option<SyncSender<Result<PlaybackSnapshot, AudioError>>>,
+}
+
 impl Drop for PlayerInner {
     fn drop(&mut self) {
         // Sending shutdown through the bounded queue may wait for the worker to
         // drain earlier commands, but public playback methods remain non-blocking.
-        let _ = self.commands.send(Command::Shutdown);
+        let _ = self.commands.send(QueuedCommand {
+            command: Command::Shutdown,
+            acknowledgement: None,
+        });
         if let Some(worker) = self
             .worker
             .get_mut()
@@ -270,7 +337,7 @@ impl Drop for PlayerInner {
 
 fn worker_loop<F>(
     factory: F,
-    commands: Receiver<Command>,
+    commands: Receiver<QueuedCommand>,
     snapshot: Arc<RwLock<PlaybackSnapshot>>,
     events: SyncSender<AudioEvent>,
 ) where
@@ -295,10 +362,22 @@ fn worker_loop<F>(
 
     loop {
         match commands.recv_timeout(POSITION_POLL_INTERVAL) {
-            Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Ok(command) => {
-                handle_command(command, &mut backend, &mut current_path, &snapshot, &events)
+            Ok(queued) if matches!(queued.command, Command::Shutdown) => break,
+            Ok(queued) => {
+                let result = handle_command(
+                    queued.command,
+                    &mut backend,
+                    &mut current_path,
+                    &snapshot,
+                    &events,
+                );
+                update_position(&mut backend, &snapshot, &events);
+                if let Some(acknowledgement) = queued.acknowledgement {
+                    let response = result.map(|()| read_snapshot(&snapshot));
+                    let _ = acknowledgement.try_send(response);
+                }
             }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         update_position(&mut backend, &snapshot, &events);
@@ -311,10 +390,11 @@ fn handle_command(
     current_path: &mut Option<PathBuf>,
     snapshot: &Arc<RwLock<PlaybackSnapshot>>,
     events: &SyncSender<AudioEvent>,
-) {
+) -> Result<(), AudioError> {
     let Some(backend) = backend.as_mut() else {
-        set_error(snapshot, events, AudioError::BackendUnavailable);
-        return;
+        let error = AudioError::BackendUnavailable;
+        set_error(snapshot, events, error.clone());
+        return Err(error);
     };
 
     match command {
@@ -338,14 +418,16 @@ fn handle_command(
                 Err(error) => {
                     let _ = backend.stop();
                     *current_path = None;
-                    set_error(snapshot, events, error);
+                    set_error(snapshot, events, error.clone());
+                    return Err(error);
                 }
             }
         }
         Command::Play => {
             let Some(path) = current_path.as_deref() else {
-                set_error(snapshot, events, AudioError::NoTrackLoaded);
-                return;
+                let error = AudioError::NoTrackLoaded;
+                set_error(snapshot, events, error.clone());
+                return Err(error);
             };
             let state = read_snapshot(snapshot).state;
             if matches!(state, PlaybackState::Stopped | PlaybackState::Ended) {
@@ -355,8 +437,8 @@ fn handle_command(
                         state.duration = duration;
                     }),
                     Err(error) => {
-                        set_error(snapshot, events, error);
-                        return;
+                        set_error(snapshot, events, error.clone());
+                        return Err(error);
                     }
                 }
             }
@@ -365,14 +447,20 @@ fn handle_command(
                     state.state = PlaybackState::Playing;
                     state.last_error = None;
                 }),
-                Err(error) => set_error(snapshot, events, error),
+                Err(error) => {
+                    set_error(snapshot, events, error.clone());
+                    return Err(error);
+                }
             }
         }
         Command::Pause => {
             if read_snapshot(snapshot).state == PlaybackState::Playing {
                 match backend.pause() {
                     Ok(()) => set_state(snapshot, events, PlaybackState::Paused),
-                    Err(error) => set_error(snapshot, events, error),
+                    Err(error) => {
+                        set_error(snapshot, events, error.clone());
+                        return Err(error);
+                    }
                 }
             }
         }
@@ -389,12 +477,16 @@ fn handle_command(
                     snapshot.last_error = None;
                 });
             }
-            Err(error) => set_error(snapshot, events, error),
+            Err(error) => {
+                set_error(snapshot, events, error.clone());
+                return Err(error);
+            }
         },
         Command::Seek(position) => {
             if current_path.is_none() {
-                set_error(snapshot, events, AudioError::NoTrackLoaded);
-                return;
+                let error = AudioError::NoTrackLoaded;
+                set_error(snapshot, events, error.clone());
+                return Err(error);
             }
             let state = read_snapshot(snapshot).state;
             if matches!(state, PlaybackState::Stopped | PlaybackState::Ended) {
@@ -406,8 +498,8 @@ fn handle_command(
                         snapshot.duration = duration;
                     }),
                     Err(error) => {
-                        set_error(snapshot, events, error);
-                        return;
+                        set_error(snapshot, events, error.clone());
+                        return Err(error);
                     }
                 }
             }
@@ -418,15 +510,22 @@ fn handle_command(
                     snapshot.position = actual_position;
                     snapshot.last_error = None;
                 }),
-                Err(error) => set_error(snapshot, events, error),
+                Err(error) => {
+                    set_error(snapshot, events, error.clone());
+                    return Err(error);
+                }
             }
         }
         Command::SetVolume(volume) => match backend.set_volume(volume) {
             Ok(()) => update_snapshot(snapshot, events, |snapshot| snapshot.volume = volume),
-            Err(error) => set_error(snapshot, events, error),
+            Err(error) => {
+                set_error(snapshot, events, error.clone());
+                return Err(error);
+            }
         },
         Command::Shutdown => {}
     }
+    Ok(())
 }
 
 fn update_position(
@@ -649,6 +748,112 @@ mod tests {
     }
 
     #[test]
+    fn acknowledged_commands_return_post_command_snapshots() {
+        let player = player();
+        wait_for(&player, PlaybackState::Empty);
+        player.load(PathBuf::from("fixture.wav")).unwrap();
+        wait_for(&player, PlaybackState::Ready);
+
+        let playing = player
+            .request_play()
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(playing.state, PlaybackState::Playing);
+
+        let sought = player
+            .request_seek(Duration::from_secs(3))
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(sought.state, PlaybackState::Playing);
+        assert_eq!(sought.position, Duration::from_secs(3));
+
+        let paused = player
+            .request_pause()
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(paused.state, PlaybackState::Paused);
+
+        let volume = player
+            .request_set_volume(0.4)
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(volume.volume, 0.4);
+        assert_eq!(volume.state, PlaybackState::Paused);
+    }
+
+    #[test]
+    fn command_ticket_timeout_does_not_block_submission_or_hide_later_state() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let player = PlayerHandle::with_backend_factory(move || {
+            Ok(Box::new(BlockingPlayBackend {
+                started: started_tx,
+                release: release_rx,
+                loaded: false,
+            }) as Box<dyn AudioBackend>)
+        })
+        .unwrap();
+        wait_for(&player, PlaybackState::Empty);
+        player.load(PathBuf::from("fixture.wav")).unwrap();
+        wait_for(&player, PlaybackState::Ready);
+
+        let started = Instant::now();
+        let ticket = player.request_play().unwrap();
+        assert!(started.elapsed() < Duration::from_millis(100));
+        let started_result = started_rx.recv_timeout(Duration::from_secs(1));
+        let timeout_result = ticket.wait(Duration::from_millis(10));
+        release_tx.send(()).unwrap();
+        started_result.expect("worker should begin playback");
+        assert_eq!(timeout_result, Err(AudioError::CommandTimeout));
+        let paused = player
+            .request_pause()
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(paused.state, PlaybackState::Paused);
+    }
+
+    struct BlockingPlayBackend {
+        started: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+        loaded: bool,
+    }
+
+    impl AudioBackend for BlockingPlayBackend {
+        fn load(&mut self, _path: &Path) -> Result<Option<Duration>, AudioError> {
+            self.loaded = true;
+            Ok(Some(Duration::from_secs(5)))
+        }
+        fn play(&mut self) -> Result<(), AudioError> {
+            self.started.send(()).unwrap();
+            self.release.recv().unwrap();
+            Ok(())
+        }
+        fn pause(&mut self) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn seek(&mut self, position: Duration) -> Result<Duration, AudioError> {
+            Ok(position)
+        }
+        fn set_volume(&mut self, _volume: f32) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+        fn is_empty(&self) -> bool {
+            !self.loaded
+        }
+    }
+
+    #[test]
     fn invalid_volume_is_rejected_before_queueing() {
         let player = player();
         assert_eq!(player.set_volume(f32::NAN), Err(AudioError::InvalidVolume));
@@ -733,6 +938,10 @@ mod tests {
         assert_eq!(
             player.snapshot().last_error,
             Some(AudioError::NoTrackLoaded)
+        );
+        assert_eq!(
+            player.request_play().unwrap().wait(Duration::from_secs(1)),
+            Err(AudioError::NoTrackLoaded)
         );
     }
 
