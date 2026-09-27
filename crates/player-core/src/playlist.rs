@@ -219,8 +219,7 @@ pub fn write_m3u8(
         let reference = match &entry.locator {
             MediaLocator::FileSystem(path) => {
                 let path = if let Some(root) = &options.relative_root {
-                    path.strip_prefix(root)
-                        .map_err(|_| PlaylistError::EntryOutsideRelativeRoot { entry_index })?
+                    relative_path_within_root(path, root, entry_index)?
                 } else {
                     path.as_path()
                 };
@@ -267,6 +266,31 @@ pub fn write_m3u(
     options: &M3uExportOptions,
 ) -> Result<Vec<u8>, PlaylistError> {
     write_m3u8(playlist, playlist_file, options)
+}
+
+// `strip_prefix` checks the initial components but leaves later `..` components untouched.
+fn relative_path_within_root<'a>(
+    path: &'a Path,
+    root: &Path,
+    entry_index: usize,
+) -> Result<&'a Path, PlaylistError> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| PlaylistError::EntryOutsideRelativeRoot { entry_index })?;
+    let mut depth = 0usize;
+    for component in relative.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(_) => depth += 1,
+            std::path::Component::ParentDir if depth > 0 => depth -= 1,
+            std::path::Component::ParentDir
+            | std::path::Component::Prefix(_)
+            | std::path::Component::RootDir => {
+                return Err(PlaylistError::EntryOutsideRelativeRoot { entry_index });
+            }
+        }
+    }
+    Ok(relative)
 }
 
 fn decode_m3u(bytes: &[u8]) -> Result<String, PlaylistError> {
@@ -615,6 +639,46 @@ mod tests {
             write_m3u8(&playlist, &file, &options),
             Err(PlaylistError::LineBreakInMetadata { entry_index: 0 })
         ));
+    }
+
+    #[test]
+    fn writer_rejects_parent_traversal_outside_relative_root_but_keeps_safe_unmatched_entries() {
+        let root = PathBuf::from(r"C:\Music");
+        let file = root.join("list.m3u8");
+        let options = M3uExportOptions {
+            relative_root: Some(root.clone()),
+        };
+
+        for outside in [
+            root.join("..").join("outside.flac"),
+            root.join("sub").join("..").join("..").join("outside.flac"),
+        ] {
+            let mut playlist = Playlist::new("unmatched");
+            playlist.entries.push(PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::FileSystem(outside),
+                title: None,
+                duration_ms: None,
+            });
+            assert!(matches!(
+                write_m3u8(&playlist, &file, &options),
+                Err(PlaylistError::EntryOutsideRelativeRoot { entry_index: 0 })
+            ));
+        }
+
+        let mut playlist = Playlist::new("unmatched");
+        playlist.entries.push(PlaylistEntry {
+            track_id: None,
+            locator: MediaLocator::FileSystem(root.join("sub").join("..").join("inside.flac")),
+            title: None,
+            duration_ms: None,
+        });
+        let output = write_m3u8(&playlist, &file, &options).expect("safe in-root path exports");
+        let text = std::str::from_utf8(&output).expect("UTF-8 output");
+        assert!(text.contains("inside.flac"));
+        assert!(text.contains("sub"));
+        let parsed = parse_m3u8(&output, &file).expect("safe in-root path round-trips");
+        assert_eq!(parsed.entries[0].locator, playlist.entries[0].locator);
     }
 
     #[test]
