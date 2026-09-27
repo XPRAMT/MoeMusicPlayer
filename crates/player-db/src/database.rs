@@ -9,7 +9,8 @@ use std::{
 
 use player_core::{
     FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, MediaLocator,
-    MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, SourceId, SourceScanState,
+    MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, Playlist, PlaylistEntry,
+    PlaylistEntrySummary, PlaylistId, PlaylistPage, PlaylistSummary, SourceId, SourceScanState,
     SyncApplyStats, TrackId, TrackIdentity, TrackMetadata, TrackSummary, TrackSyncState,
     UserMetadataField,
 };
@@ -17,7 +18,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const MAX_PAGE_SIZE: u32 = 500;
 const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT track_id) FROM source_mappings";
 const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
@@ -48,6 +49,40 @@ const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz
  FROM tracks t WHERE t.track_id=?1";
+const PLAYLIST_PAGE_SQL: &str = r#"
+WITH resolved_entries AS (
+    SELECT pe.position,
+           CASE WHEN pe.track_id IS NOT NULL THEN pe.track_id
+                ELSE (
+                    SELECT CASE WHEN COUNT(DISTINCT sm.track_id)=1 THEN MIN(sm.track_id) END
+                    FROM source_mappings sm
+                    WHERE sm.locator_kind=pe.locator_kind
+                      AND sm.locator_encoding=pe.locator_encoding
+                      AND sm.locator_data=pe.locator_data
+                )
+           END AS track_id,
+           pe.title AS entry_title,
+           pe.duration_ms AS entry_duration_ms
+    FROM playlist_entries pe
+    WHERE pe.playlist_id=?1
+)
+SELECT e.position, e.track_id,
+       COALESCE(e.entry_title,
+           (SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='title'),
+           t.title),
+       COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist),
+       COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album),
+       COALESCE(e.entry_duration_ms, t.duration_ms),
+       EXISTS (
+           SELECT 1 FROM source_mappings m
+           JOIN library_roots r ON r.source_id=m.source_id
+           WHERE m.track_id=e.track_id AND r.enabled=1
+       )
+FROM resolved_entries e
+LEFT JOIN tracks t ON t.track_id=e.track_id
+ORDER BY e.position
+LIMIT ?2 OFFSET ?3
+"#;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE library_roots (
@@ -114,6 +149,29 @@ CREATE TEMP TABLE IF NOT EXISTS sync_seen_items (
     source_item_id TEXT NOT NULL,
     PRIMARY KEY (source_id, source_item_id)
 );
+"#;
+
+const SCHEMA_V2: &str = r#"
+CREATE INDEX source_mappings_locator_exact
+    ON source_mappings(locator_kind, locator_encoding, locator_data);
+
+CREATE TABLE playlists (
+    playlist_id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE playlist_entries (
+    playlist_id TEXT NOT NULL REFERENCES playlists(playlist_id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    track_id TEXT REFERENCES tracks(track_id),
+    locator_kind TEXT NOT NULL,
+    locator_encoding TEXT NOT NULL,
+    locator_data BLOB NOT NULL,
+    title TEXT,
+    duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    PRIMARY KEY (playlist_id, position)
+);
+CREATE INDEX playlist_entries_track_id ON playlist_entries(track_id);
 "#;
 
 pub struct Database {
@@ -241,24 +299,30 @@ impl Database {
 
     pub fn migrate(&self) -> Result<(), DatabaseError> {
         let mut connection = self.lock()?;
-        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let mut version: i64 =
+            connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version > SCHEMA_VERSION {
             return Err(DatabaseError::UnsupportedSchemaVersion(version));
         }
-        if version == SCHEMA_VERSION {
-            connection.execute_batch(
-                "CREATE TEMP TABLE IF NOT EXISTS sync_seen_items (
-                    source_id TEXT NOT NULL, source_item_id TEXT NOT NULL,
-                    PRIMARY KEY (source_id, source_item_id)
-                );",
-            )?;
-            return Ok(());
+        if version == 0 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V1)?;
+            tx.pragma_update(None, "user_version", 1)?;
+            tx.commit()?;
+            version = 1;
         }
-
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute_batch(SCHEMA_V1)?;
-        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        tx.commit()?;
+        if version == 1 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V2)?;
+            tx.pragma_update(None, "user_version", 2)?;
+            tx.commit()?;
+        }
+        connection.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS sync_seen_items (
+                source_id TEXT NOT NULL, source_item_id TEXT NOT NULL,
+                PRIMARY KEY (source_id, source_item_id)
+            );",
+        )?;
         Ok(())
     }
 
@@ -353,6 +417,244 @@ impl Database {
             })
         })
         .collect()
+    }
+
+    /// Save a playlist and replace its ordered entries atomically. Entries without an explicit
+    /// TrackId are matched only when their exact stored locator maps to one internal TrackId.
+    pub fn save_playlist(&self, playlist: &Playlist) -> Result<(), DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO playlists (playlist_id, name) VALUES (?1, ?2)
+             ON CONFLICT(playlist_id) DO UPDATE SET name=excluded.name",
+            params![playlist.id.to_string(), playlist.name],
+        )?;
+        tx.execute(
+            "DELETE FROM playlist_entries WHERE playlist_id=?1",
+            [playlist.id.to_string()],
+        )?;
+
+        for (index, entry) in playlist.entries.iter().enumerate() {
+            let position = i64::try_from(index)
+                .map_err(|_| DatabaseError::InvalidNumber("playlist entry position"))?;
+            let duration_ms = entry
+                .duration_ms
+                .map(|value| to_sql_i64(value, "playlist entry duration"))
+                .transpose()?;
+            let stored = locator::encode(&entry.locator);
+            let track_id = match entry.track_id {
+                Some(track_id) => {
+                    let exists: bool = tx.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM tracks WHERE track_id=?1)",
+                        [track_id.to_string()],
+                        |row| row.get(0),
+                    )?;
+                    if !exists {
+                        return Err(DatabaseError::TrackNotFound(track_id));
+                    }
+                    Some(track_id)
+                }
+                None => resolve_track_id_by_locator(&tx, &stored)?,
+            };
+            tx.execute(
+                "INSERT INTO playlist_entries
+                    (playlist_id, position, track_id, locator_kind, locator_encoding,
+                     locator_data, title, duration_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    playlist.id.to_string(),
+                    position,
+                    track_id.map(|id| id.to_string()),
+                    stored.kind,
+                    stored.encoding,
+                    stored.data,
+                    entry.title,
+                    duration_ms,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Load a playlist for backend export or editing. Native locators remain inside Rust.
+    pub fn get_playlist(&self, playlist_id: PlaylistId) -> Result<Option<Playlist>, DatabaseError> {
+        let connection = self.lock()?;
+        let name = connection
+            .query_row(
+                "SELECT name FROM playlists WHERE playlist_id=?1",
+                [playlist_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(name) = name else {
+            return Ok(None);
+        };
+
+        let mut statement = connection.prepare_cached(
+            "SELECT track_id, locator_kind, locator_encoding, locator_data, title, duration_ms
+             FROM playlist_entries WHERE playlist_id=?1 ORDER BY position",
+        )?;
+        let rows = statement.query_map([playlist_id.to_string()], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+            ))
+        })?;
+        let entries = rows
+            .map(|row| {
+                let (track_id, kind, encoding, data, title, duration_ms) = row?;
+                let locator = locator::decode(&kind, &encoding, &data)?;
+                let track_id = track_id.map(|value| parse_track_id(&value)).transpose()?;
+                let duration_ms = duration_ms
+                    .map(|value| {
+                        u64::try_from(value).map_err(|_| {
+                            DatabaseError::CorruptData(
+                                "playlist duration is negative in the database".to_owned(),
+                            )
+                        })
+                    })
+                    .transpose()?;
+                Ok(PlaylistEntry {
+                    track_id,
+                    locator,
+                    title,
+                    duration_ms,
+                })
+            })
+            .collect::<Result<Vec<_>, DatabaseError>>()?;
+
+        Ok(Some(Playlist {
+            id: playlist_id,
+            name,
+            entries,
+        }))
+    }
+
+    /// List playlist names and counts without reading entry locators.
+    pub fn list_playlists(&self) -> Result<Vec<PlaylistSummary>, DatabaseError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT p.playlist_id, p.name, COUNT(e.position)
+             FROM playlists p
+             LEFT JOIN playlist_entries e ON e.playlist_id=p.playlist_id
+             GROUP BY p.playlist_id, p.name
+             ORDER BY p.name COLLATE NOCASE, p.playlist_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (id, name, count) = row?;
+            let id = PlaylistId::parse(&id)
+                .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+            let entry_count = u64::try_from(count)
+                .map_err(|_| DatabaseError::CorruptData("negative playlist count".to_owned()))?;
+            Ok(PlaylistSummary {
+                id,
+                name,
+                entry_count,
+            })
+        })
+        .collect()
+    }
+
+    /// Return one IPC-safe window. Exact locator matching uses the migration-created index and
+    /// considers a reference resolved only when it points to one unique internal TrackId.
+    pub fn get_playlist_page(
+        &self,
+        playlist_id: PlaylistId,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Option<PlaylistPage>, DatabaseError> {
+        let connection = self.lock()?;
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM playlists WHERE playlist_id=?1)",
+            [playlist_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(None);
+        }
+
+        let total_count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM playlist_entries WHERE playlist_id=?1",
+            [playlist_id.to_string()],
+            |row| row.get(0),
+        )?;
+        let limit = query_limit(limit);
+        let mut statement = connection.prepare_cached(PLAYLIST_PAGE_SQL)?;
+        let rows = statement.query_map(
+            params![
+                playlist_id.to_string(),
+                i64::from(limit),
+                query_limit_i64(offset)
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, bool>(6)?,
+                ))
+            },
+        )?;
+        let items = rows
+            .map(|row| {
+                let (position, track_id, title, artist, album, duration_ms, has_enabled_mapping) =
+                    row?;
+                let position = u64::try_from(position).map_err(|_| {
+                    DatabaseError::CorruptData("negative playlist entry position".to_owned())
+                })?;
+                let track_id = track_id.map(|value| parse_track_id(&value)).transpose()?;
+                let duration_ms = duration_ms
+                    .map(|value| {
+                        u64::try_from(value).map_err(|_| {
+                            DatabaseError::CorruptData(
+                                "playlist duration is negative in the database".to_owned(),
+                            )
+                        })
+                    })
+                    .transpose()?;
+                Ok(PlaylistEntrySummary {
+                    position,
+                    track_id,
+                    title,
+                    artist,
+                    album,
+                    duration_ms,
+                    has_enabled_mapping,
+                })
+            })
+            .collect::<Result<Vec<_>, DatabaseError>>()?;
+
+        Ok(Some(PlaylistPage {
+            items,
+            offset,
+            limit,
+            total_count: u64::try_from(total_count)
+                .map_err(|_| DatabaseError::CorruptData("negative playlist count".to_owned()))?,
+        }))
+    }
+
+    pub fn delete_playlist(&self, playlist_id: PlaylistId) -> Result<bool, DatabaseError> {
+        let connection = self.lock()?;
+        Ok(connection.execute(
+            "DELETE FROM playlists WHERE playlist_id=?1",
+            [playlist_id.to_string()],
+        )? > 0)
     }
 
     pub fn list_tracks_page(
@@ -868,6 +1170,20 @@ fn parse_track_id(value: &str) -> Result<TrackId, DatabaseError> {
     TrackId::parse(value).map_err(|error| DatabaseError::CorruptData(error.to_string()))
 }
 
+fn resolve_track_id_by_locator(
+    tx: &Transaction<'_>,
+    stored: &locator::StoredLocator,
+) -> Result<Option<TrackId>, DatabaseError> {
+    let matched = tx.query_row(
+        "SELECT CASE WHEN COUNT(DISTINCT track_id)=1 THEN MIN(track_id) END
+         FROM source_mappings
+         WHERE locator_kind=?1 AND locator_encoding=?2 AND locator_data=?3",
+        params![stored.kind, stored.encoding, stored.data],
+        |row| row.get::<_, Option<String>>(0),
+    )?;
+    matched.map(|value| parse_track_id(&value)).transpose()
+}
+
 fn source_kind_name(kind: MediaSourceKind) -> &'static str {
     match kind {
         MediaSourceKind::WindowsSystemIndex => "windows_system_index",
@@ -927,11 +1243,14 @@ mod tests {
 
     use player_core::{
         FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaSourceKind,
-        MediaTrackRecord, SourceId, SourceScan, SourceScanState, SyncEngine, TrackId,
-        TrackIdentity, TrackMetadata, TrackMetadataError, UserMetadataField,
+        MediaTrackRecord, PlaylistEntry, PlaylistId, SourceId, SourceScan, SourceScanState,
+        SyncEngine, TrackId, TrackIdentity, TrackMetadata, TrackMetadataError, UserMetadataField,
     };
+    use rusqlite::OptionalExtension;
 
-    use super::{Database, DatabaseError, LibraryRepository, COUNT_LIBRARY_SQL, TRACKS_PAGE_SQL};
+    use super::{
+        Database, DatabaseError, LibraryRepository, COUNT_LIBRARY_SQL, SCHEMA_V1, TRACKS_PAGE_SQL,
+    };
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
         db.add_library_root(
@@ -1035,7 +1354,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 1);
+            assert_eq!(version, 2);
         }
         {
             let db = Database::open(&path).expect("reopen migrated database");
@@ -1049,6 +1368,298 @@ mod tests {
                 std::fs::remove_file(file).expect("remove generated test database");
             }
         }
+    }
+
+    #[test]
+    fn version_one_database_migrates_additively_to_playlist_schema() {
+        let connection = rusqlite::Connection::open_in_memory().expect("legacy database");
+        connection
+            .execute_batch(SCHEMA_V1)
+            .expect("create version one schema");
+        connection
+            .execute(
+                "INSERT INTO library_roots
+                    (source_id, source_kind, display_name, locator_kind, locator_encoding, locator_data)
+                 VALUES ('legacy-source', 'other', 'legacy', 'content_uri', 'utf8', X'6C6567616379')",
+                [],
+            )
+            .expect("insert legacy root");
+        connection
+            .pragma_update(None, "user_version", 1)
+            .expect("mark legacy schema version");
+
+        let db = Database::from_connection(connection).expect("migrate version one");
+        let current_version: i64 = db
+            .lock()
+            .expect("connection")
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("current schema version");
+        assert_eq!(current_version, 2);
+        let preserved_roots: i64 = db
+            .lock()
+            .expect("connection")
+            .query_row("SELECT COUNT(*) FROM library_roots", [], |row| row.get(0))
+            .expect("legacy roots remain");
+        assert_eq!(preserved_roots, 1);
+        let locator_index: Option<String> = db
+            .lock()
+            .expect("connection")
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='source_mappings_locator_exact'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .expect("locator index lookup");
+        assert_eq!(
+            locator_index.as_deref(),
+            Some("source_mappings_locator_exact")
+        );
+    }
+
+    #[test]
+    fn playlist_save_matches_only_exact_locator_and_returns_ipc_safe_pages() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "source");
+        let record = record(&root, "one", "path-key:one", "曲庫標題", 10, 100);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&record),
+            std::slice::from_ref(&record),
+            1000,
+        );
+
+        let mut playlist = player_core::Playlist::new("中文清單 🎵");
+        playlist.entries = vec![
+            PlaylistEntry {
+                track_id: None,
+                locator: record.locator.clone(),
+                title: Some("清單顯示標題".to_owned()),
+                duration_ms: Some(1_234),
+            },
+            PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::FileSystem(PathBuf::from(
+                    r"C:\音樂\未索引 專輯 🎧\曲目 02.flac",
+                )),
+                title: Some("曲庫標題".to_owned()),
+                duration_ms: None,
+            },
+        ];
+        db.save_playlist(&playlist).expect("save playlist");
+
+        let summaries = db.list_playlists().expect("list playlists");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, playlist.id);
+        assert_eq!(summaries[0].name, "中文清單 🎵");
+        assert_eq!(summaries[0].entry_count, 2);
+
+        let page = db
+            .get_playlist_page(playlist.id, 0, 1)
+            .expect("load first page")
+            .expect("playlist exists");
+        assert_eq!(page.offset, 0);
+        assert_eq!(page.limit, 1);
+        assert_eq!(page.total_count, 2);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].track_id, Some(list(&db, 0, 10).items[0].id));
+        assert_eq!(page.items[0].title.as_deref(), Some("清單顯示標題"));
+        assert_eq!(page.items[0].artist.as_deref(), Some("artist"));
+        assert_eq!(page.items[0].album.as_deref(), Some("album"));
+        assert_eq!(page.items[0].duration_ms, Some(1_234));
+        assert!(page.items[0].has_enabled_mapping);
+
+        let second_page = db
+            .get_playlist_page(playlist.id, 1, 10)
+            .expect("load second page")
+            .expect("playlist exists");
+        assert_eq!(second_page.total_count, 2);
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(second_page.items[0].position, 1);
+        assert_eq!(second_page.items[0].track_id, None);
+        assert_eq!(second_page.items[0].title.as_deref(), Some("曲庫標題"));
+        assert!(!second_page.items[0].has_enabled_mapping);
+
+        let stored = db
+            .get_playlist(playlist.id)
+            .expect("load playlist for export")
+            .expect("playlist exists");
+        assert_eq!(stored.entries[0].track_id, page.items[0].track_id);
+        assert_eq!(stored.entries[0].locator, playlist.entries[0].locator);
+        assert_eq!(stored.entries[0].title, playlist.entries[0].title);
+        assert_eq!(
+            stored.entries[0].duration_ms,
+            playlist.entries[0].duration_ms
+        );
+        assert_eq!(stored.entries[1].track_id, None);
+        assert_eq!(stored.entries[1].locator, playlist.entries[1].locator);
+        assert!(db
+            .get_playlist_page(PlaylistId::new(), 0, 10)
+            .expect("missing playlist query")
+            .is_none());
+        assert!(db.delete_playlist(playlist.id).expect("delete playlist"));
+        assert!(db.list_playlists().expect("list after delete").is_empty());
+    }
+
+    #[test]
+    fn ambiguous_exact_locator_is_not_guessed_from_title_or_source_order() {
+        let mut db = Database::open_in_memory().expect("database");
+        let first_root = add_root(&db, MediaSourceKind::WindowsFilesystem, "first");
+        let second_root = add_root(&db, MediaSourceKind::WindowsFilesystem, "second");
+        let path = MediaLocator::FileSystem(PathBuf::from(r"C:\Music\same.flac"));
+        let mut first = record(&first_root, "one", "path-key:first", "same title", 10, 100);
+        first.locator = path.clone();
+        let mut second = record(
+            &second_root,
+            "two",
+            "path-key:second",
+            "same title",
+            10,
+            100,
+        );
+        second.locator = path.clone();
+        apply(
+            &mut db,
+            &first_root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&first),
+            1000,
+        );
+        apply(
+            &mut db,
+            &second_root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&second),
+            std::slice::from_ref(&second),
+            1000,
+        );
+
+        let mut playlist = player_core::Playlist::new("ambiguous");
+        playlist.entries.push(PlaylistEntry {
+            track_id: None,
+            locator: path,
+            title: Some("same title".to_owned()),
+            duration_ms: None,
+        });
+        db.save_playlist(&playlist).expect("save unresolved entry");
+        let page = db
+            .get_playlist_page(playlist.id, 0, 10)
+            .expect("page query")
+            .expect("playlist exists");
+        assert_eq!(page.items[0].track_id, None);
+        assert!(!page.items[0].has_enabled_mapping);
+    }
+
+    #[test]
+    fn unresolved_playlist_locator_resolves_after_a_later_library_sync() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "source");
+        let path = PathBuf::from(r"C:\音樂\稍後索引 🎧\曲目.flac");
+        let mut playlist = player_core::Playlist::new("later sync");
+        playlist.entries.push(PlaylistEntry {
+            track_id: None,
+            locator: MediaLocator::FileSystem(path.clone()),
+            title: Some("清單標題".to_owned()),
+            duration_ms: None,
+        });
+        db.save_playlist(&playlist)
+            .expect("save before library sync");
+
+        let unresolved = db
+            .get_playlist_page(playlist.id, 0, 10)
+            .expect("read unresolved page")
+            .expect("playlist exists");
+        assert_eq!(unresolved.items[0].track_id, None);
+        assert!(!unresolved.items[0].has_enabled_mapping);
+
+        let mut record = record(&root, "later", "later-path-key", "曲庫標題", 10, 100);
+        record.locator = MediaLocator::FileSystem(path.clone());
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&record),
+            std::slice::from_ref(&record),
+            2000,
+        );
+
+        let resolved = db
+            .get_playlist_page(playlist.id, 0, 10)
+            .expect("read resolved page")
+            .expect("playlist exists");
+        assert!(resolved.items[0].track_id.is_some());
+        assert_eq!(resolved.items[0].title.as_deref(), Some("清單標題"));
+        assert!(resolved.items[0].has_enabled_mapping);
+        let stored = db
+            .get_playlist(playlist.id)
+            .expect("load playlist")
+            .expect("playlist exists");
+        assert_eq!(stored.entries[0].locator, MediaLocator::FileSystem(path));
+        assert_eq!(stored.entries[0].track_id, None);
+    }
+
+    #[test]
+    fn file_database_reopens_unicode_playlist_entries() {
+        let path =
+            std::env::temp_dir().join(format!("moemusic-playlist-{}.sqlite", PlaylistId::new()));
+        let mut playlist = player_core::Playlist::new("重開後保留 🎵");
+        playlist.entries.push(PlaylistEntry {
+            track_id: None,
+            locator: MediaLocator::FileSystem(PathBuf::from(r"C:\音樂\長路徑 專輯 🎧\曲目.flac")),
+            title: Some("手動清單標題".to_owned()),
+            duration_ms: Some(12_345),
+        });
+        {
+            let db = Database::open(&path).expect("open file database");
+            db.save_playlist(&playlist).expect("save playlist");
+        }
+        {
+            let db = Database::open(&path).expect("reopen file database");
+            let restored = db
+                .get_playlist(playlist.id)
+                .expect("load playlist")
+                .expect("playlist exists");
+            assert_eq!(restored.id, playlist.id);
+            assert_eq!(restored.name, playlist.name);
+            assert_eq!(restored.entries, playlist.entries);
+        }
+        for suffix in ["", "-wal", "-shm"] {
+            let mut file = path.as_os_str().to_os_string();
+            file.push(suffix);
+            let file = PathBuf::from(file);
+            if file.exists() {
+                std::fs::remove_file(file).expect("remove temporary playlist database");
+            }
+        }
+    }
+
+    #[test]
+    fn exact_locator_resolution_uses_the_migration_index() {
+        let db = Database::open_in_memory().expect("database");
+        let connection = db.lock().expect("connection");
+        let mut statement = connection
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT CASE WHEN COUNT(DISTINCT track_id)=1 THEN MIN(track_id) END
+                 FROM source_mappings
+                 WHERE locator_kind='filesystem_path'
+                   AND locator_encoding='windows_utf16le'
+                   AND locator_data=X'0000'",
+            )
+            .expect("query plan");
+        let details = statement
+            .query_map([], |row| row.get::<_, String>(3))
+            .expect("query plan rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("query plan details")
+            .join(" ");
+        assert!(
+            details.contains("source_mappings_locator_exact"),
+            "{details}"
+        );
     }
 
     #[test]
