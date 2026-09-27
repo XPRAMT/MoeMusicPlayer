@@ -8,5 +8,13 @@ license = "MIT OR Apache-2.0"
 player-core = { path = "../player-core" }
 lofty = "0.25.4"
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Search",
+    "Win32_System_Services",
+] }
+
 [dev-dependencies]
 player-db = { path = "../player-db" }

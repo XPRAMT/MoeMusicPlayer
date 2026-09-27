@@ -59,15 +59,6 @@ impl MediaIndex for WindowsMediaIndex {
             }
         };
 
-        if root.kind == MediaSourceKind::WindowsSystemIndex {
-            scan.errors.push(MediaSourceError {
-                source_item_id: None,
-                message:
-                    "SystemIndex coverage is not yet verified; using a complete filesystem fallback"
-                        .to_owned(),
-            });
-        }
-
         let root_path = match to_extended_path(configured_path) {
             Ok(path) => path,
             Err(error) => {
@@ -103,6 +94,13 @@ impl MediaIndex for WindowsMediaIndex {
                 return scan;
             }
         };
+
+        if root.kind == MediaSourceKind::WindowsSystemIndex {
+            scan.errors.push(MediaSourceError {
+                source_item_id: None,
+                message: crate::system_index::diagnostic(&canonical_root),
+            });
+        }
 
         let mut directories = vec![canonical_root.clone()];
         let mut opened_root = false;
