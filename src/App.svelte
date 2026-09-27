@@ -21,6 +21,16 @@
     type TrackSummary,
   } from './lib/ipc';
   import { formatDuration, formatTrackIndex, formatVolume } from './lib/format';
+  import {
+    beginPlaybackSeekDraft,
+    commitPlaybackSeekDraft,
+    isPlaybackSeekableDuration,
+    playbackSeekDisplayPosition,
+    shouldClearPendingPlaybackSeek,
+    updatePlaybackSeekDraft,
+    type PendingPlaybackSeek,
+    type PlaybackSeekDraft,
+  } from './lib/playback-scrubber';
 
   type View = 'library' | 'now-playing' | 'playlists' | 'settings';
   type SyncProgressViewState = {
@@ -41,6 +51,8 @@
   let pageError = $state<string | null>(null);
   let playbackError = $state<string | null>(null);
   let playback = $state<PlaybackSnapshot | null>(null);
+  let playbackSeekDraft = $state<PlaybackSeekDraft | null>(null);
+  let pendingPlaybackSeek = $state<PendingPlaybackSeek | null>(null);
   let sources = $state<LibrarySource[]>([]);
   let sourceError = $state<string | null>(null);
   let sourceSyncSummary = $state<string | null>(null);
@@ -67,6 +79,7 @@
   let isPlaylistOperation = $state(false);
   let isLoadingPlaybackSnapshot = false;
   let isSendingPlaybackCommand = $state(false);
+  let playbackSnapshotRequestVersion = 0;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
   let pageRequestVersion = 0;
@@ -81,6 +94,13 @@
   const playbackReady = $derived(isReady(capabilities?.playback));
   const playbackNavigationReady = $derived(isReady(capabilities?.playbackNavigation));
   const playbackModesReady = $derived(isReady(capabilities?.playbackModes));
+  const playbackSeekPositionMs = $derived(playbackSeekDisplayPosition(
+    playback?.positionMs ?? 0,
+    playback?.durationMs ?? null,
+    playback?.currentTrack?.id ?? null,
+    playbackSeekDraft,
+    pendingPlaybackSeek,
+  ));
   const playlistExchangeReady = $derived(isReady(capabilities?.playlistExchange));
   const selectedPlaylist = $derived(
     playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null,
@@ -568,10 +588,14 @@
 
   async function loadPlaybackSnapshot(clearError = true): Promise<void> {
     if (!playbackReady || isLoadingPlaybackSnapshot) return;
+    const requestVersion = ++playbackSnapshotRequestVersion;
     isLoadingPlaybackSnapshot = true;
     if (clearError) playbackError = null;
     try {
-      playback = await invokeCommand('playback_get_snapshot', {});
+      applyPlaybackSnapshot(
+        await invokeCommand('playback_get_snapshot', {}),
+        requestVersion,
+      );
       void refreshCapabilitiesInBackground();
     } catch (error) {
       playbackError = getErrorText(error);
@@ -606,10 +630,65 @@
     await sendPlaybackCommand(() => invokeCommand(command, {}));
   }
 
-  async function seekPlayback(event: Event): Promise<void> {
+  function beginPlaybackSeek(): void {
+    playbackSeekDraft = beginPlaybackSeekDraft(
+      playback?.currentTrack?.id ?? null,
+      playback?.positionMs ?? 0,
+      playback?.durationMs ?? null,
+    );
+  }
+
+  function updatePlaybackSeek(event: Event): void {
+    playbackSeekDraft = updatePlaybackSeekDraft(
+      playbackSeekDraft,
+      playback?.currentTrack?.id ?? null,
+      playback?.positionMs ?? 0,
+      playback?.durationMs ?? null,
+      Number((event.currentTarget as HTMLInputElement).value),
+    );
+  }
+
+  async function commitPlaybackSeek(): Promise<void> {
+    const draft = playbackSeekDraft;
+    playbackSeekDraft = null;
     if (!playbackReady || isSendingPlaybackCommand) return;
-    const positionMs = Number((event.currentTarget as HTMLInputElement).value);
+
+    const trackId = playback?.currentTrack?.id ?? null;
+    const positionMs = commitPlaybackSeekDraft(
+      draft,
+      trackId,
+      playback?.durationMs ?? null,
+    );
+    if (positionMs === null || !trackId) return;
+
+    pendingPlaybackSeek = {
+      trackId,
+      positionMs,
+      requestedAtMs: Date.now(),
+      snapshotVersionAtRequest: playbackSnapshotRequestVersion,
+    };
     await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs }));
+    if (playbackError) pendingPlaybackSeek = null;
+  }
+
+  function applyPlaybackSnapshot(next: PlaybackSnapshot, snapshotVersion?: number): void {
+    playback = next;
+    const pending = pendingPlaybackSeek;
+    if (pending) {
+      if (pending.trackId !== next.currentTrack?.id) {
+        pendingPlaybackSeek = null;
+      } else if (snapshotVersion !== undefined && shouldClearPendingPlaybackSeek(pending, {
+        trackId: next.currentTrack?.id ?? null,
+        positionMs: next.positionMs,
+        durationMs: next.durationMs,
+        isPlaying: next.isPlaying,
+      }, snapshotVersion, Date.now())) {
+        pendingPlaybackSeek = null;
+      }
+    }
+    if (playbackSeekDraft && playbackSeekDraft.trackId !== next.currentTrack?.id) {
+      playbackSeekDraft = null;
+    }
   }
 
   async function setPlaybackVolume(event: Event): Promise<void> {
@@ -639,7 +718,7 @@
     isSendingPlaybackCommand = true;
     playbackError = null;
     try {
-      playback = await request();
+      applyPlaybackSnapshot(await request());
     } catch (error) {
       playbackError = getErrorText(error);
     } finally {
@@ -1250,16 +1329,21 @@
         </button>
       </div>
       <div class="progress-row">
-        <span>{formatDuration(playback?.positionMs)}</span>
+        <span>{formatDuration(playbackSeekPositionMs)}</span>
         <input
           class="progress-slider"
           type="range"
           min="0"
           max={Math.max(1, playback?.durationMs ?? 0)}
-          value={Math.min(playback?.positionMs ?? 0, playback?.durationMs ?? 0)}
+          value={playbackSeekPositionMs}
           aria-label="播放進度"
-          disabled={!playbackReady || !playback?.durationMs || isSendingPlaybackCommand}
-          oninput={seekPlayback}
+          disabled={!playbackReady || !isPlaybackSeekableDuration(playback?.durationMs ?? null) || isSendingPlaybackCommand}
+          onpointerdown={beginPlaybackSeek}
+          oninput={updatePlaybackSeek}
+          onpointerup={() => void commitPlaybackSeek()}
+          onpointercancel={() => void commitPlaybackSeek()}
+          onchange={() => void commitPlaybackSeek()}
+          onblur={() => void commitPlaybackSeek()}
         />
         <span>{formatDuration(playback?.durationMs)}</span>
       </div>
