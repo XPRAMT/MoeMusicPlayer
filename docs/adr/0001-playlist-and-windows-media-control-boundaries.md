@@ -12,7 +12,7 @@ M3U/M3U8 import and export must preserve ordered entries, Unicode paths, and ent
 
 - Parse and write playlist files in Rust. Import and export use Tauri's native file dialog from the Rust boundary; Renderer commands carry playlist IDs and bounded page data, never playlist locators or file contents.
 - Persist playlist order and entry metadata in SQLite. Store an optional stable Track ID plus the imported native locator so unmatched or temporarily offline entries survive import and export. Resolve a Track ID only from a unique exact locator mapping; do not guess identity from tags or filenames.
-- Resolve relative M3U paths against the imported playlist file's parent directory. Export M3U8 as UTF-8; use absolute paths unless a user-selected relative root can safely express every entry.
+- Resolve relative M3U paths against the imported playlist file's parent directory. Export M3U and M3U8 as UTF-8; M3U8 uses UTF-8 explicitly. Use absolute paths unless a user-selected relative root can safely express every entry.
 - Keep the audio backend authoritative. The Windows SMTC adapter runs its WinRT integration on its own thread and reports transport requests through a bounded event channel. The Tauri shell translates supported requests into existing player commands and periodically publishes the backend snapshot and safe metadata.
 - Do not enable previous/next system controls until queue navigation exists. Enable seek only while a loaded track has a usable duration. Do not send paths, Track IDs, or artwork through SMTC.
 - Report SMTC as ready only when its Windows controller attaches successfully; an audio engine starting does not imply that operating-system controls are available.

@@ -4,13 +4,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{sync::Mutex, time::Duration};
 
 use player_core::{
-    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, SourceScanState, SyncEngine,
-    SyncReport, TrackSummary,
+    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaylistId, PlaylistPage,
+    PlaylistSummary, SourceScanState, SyncEngine, SyncReport, TrackSummary,
 };
 use player_db::Database;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_media_index::MediaIndexExt;
+
+mod playlist_exchange;
+use playlist_exchange::{
+    export_playlist_file, import_playlist_file, PlaylistExportResult, PlaylistImportResult,
+};
 
 #[cfg(target_os = "windows")]
 use player_platform_windows::{windows_locator_key, WindowsMediaIndex};
@@ -135,6 +140,8 @@ struct RuntimeCapabilities {
     playback: FeatureCapability,
     playback_navigation: FeatureCapability,
     playback_modes: FeatureCapability,
+    playlist_exchange: FeatureCapability,
+    system_media_controls: FeatureCapability,
 }
 
 #[derive(Clone, Serialize)]
@@ -262,6 +269,30 @@ fn get_runtime_capabilities(state: State<'_, AppState>) -> RuntimeCapabilities {
         }
     };
 
+    let playlist_exchange = if cfg!(target_os = "windows") {
+        if state.database.is_some() {
+            feature(FeatureState::Ready, None)
+        } else {
+            feature(
+                FeatureState::Unavailable,
+                state
+                    .database_error
+                    .clone()
+                    .or_else(|| Some("曲庫資料庫尚未開啟。".to_owned())),
+            )
+        }
+    } else {
+        feature(
+            FeatureState::NotReady,
+            Some("M3U/M3U8 原生檔案匯入與匯出目前只支援 Windows。".to_owned()),
+        )
+    };
+
+    let system_media_controls = feature(
+        FeatureState::NotReady,
+        Some("Windows 系統媒體控制尚未接入 Tauri 外殼。".to_owned()),
+    );
+
     RuntimeCapabilities {
         platform: platform_name().to_owned(),
         desktop_runtime: feature(FeatureState::Ready, None),
@@ -276,6 +307,8 @@ fn get_runtime_capabilities(state: State<'_, AppState>) -> RuntimeCapabilities {
             FeatureState::NotReady,
             Some("隨機與循環播放尚未實作。".to_owned()),
         ),
+        playlist_exchange,
+        system_media_controls,
     }
 }
 
@@ -300,6 +333,149 @@ fn library_get_page(
             limit,
         })
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn playlist_list(state: State<'_, AppState>) -> Result<Vec<PlaylistSummary>, String> {
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database.list_playlists().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn playlist_get_page(
+    state: State<'_, AppState>,
+    playlist_id: String,
+    offset: u64,
+    limit: u32,
+) -> Result<PlaylistPage, String> {
+    let playlist_id = PlaylistId::parse(&playlist_id)
+        .map_err(|_| "播放清單識別碼無效，請重新載入清單。".to_owned())?;
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database
+        .get_playlist_page(playlist_id, offset, limit)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "找不到這份播放清單，請重新載入清單。".to_owned())
+}
+
+#[tauri::command]
+async fn playlist_import_m3u(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<PlaylistImportResult>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let selected = app
+            .dialog()
+            .file()
+            .set_title("匯入播放清單")
+            .add_filter("M3U / M3U8 播放清單", &["m3u", "m3u8"])
+            .blocking_pick_file();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| format!("無法取得選取的本機播放清單路徑：{error}"))?;
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        Ok(Some(import_playlist_file(database, &path)?))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, state);
+        Err("M3U/M3U8 原生檔案匯入目前只支援 Windows。".to_owned())
+    }
+}
+
+#[tauri::command]
+async fn playlist_export_m3u(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    playlist_id: String,
+    format: String,
+    relative_paths: bool,
+) -> Result<Option<PlaylistExportResult>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let default_file_name = match format.as_str() {
+            "m3u" => "playlist.m3u",
+            "m3u8" => "playlist.m3u8",
+            _ => return Err("匯出格式必須是 M3U 或 M3U8。".to_owned()),
+        };
+
+        let relative_root = if relative_paths {
+            let selected = app
+                .dialog()
+                .file()
+                .set_title("選擇播放清單與音樂共用的資料夾")
+                .blocking_pick_folder();
+            let Some(selected) = selected else {
+                return Ok(None);
+            };
+            Some(
+                selected
+                    .into_path()
+                    .map_err(|error| format!("無法取得選取的共同資料夾：{error}"))?,
+            )
+        } else {
+            None
+        };
+
+        let mut dialog = app
+            .dialog()
+            .file()
+            .set_title("匯出播放清單")
+            .set_file_name(default_file_name)
+            .add_filter("M3U / M3U8 播放清單", &["m3u", "m3u8"]);
+        if let Some(root) = relative_root.as_deref() {
+            dialog = dialog.set_directory(root);
+        }
+        let selected = dialog.blocking_save_file();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| format!("無法取得匯出檔案路徑：{error}"))?;
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        Ok(Some(export_playlist_file(
+            database,
+            &playlist_id,
+            &path,
+            &format,
+            relative_root.as_deref(),
+        )?))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, state, playlist_id, format, relative_paths);
+        Err("M3U/M3U8 原生檔案匯出目前只支援 Windows。".to_owned())
+    }
 }
 
 #[tauri::command]
@@ -866,11 +1042,18 @@ fn play_track_from_database(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_media_index::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_media_index::init());
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             get_runtime_capabilities,
             library_get_page,
+            playlist_list,
+            playlist_get_page,
+            playlist_import_m3u,
+            playlist_export_m3u,
             library_list_sources,
             library_add_windows_folder,
             android_media_request_permission,

@@ -9,6 +9,9 @@
     type LibrarySource,
     type MediaStoreVolumeOption,
     type FeatureCapability,
+    type PlaylistEntrySummary,
+    type PlaylistPage,
+    type PlaylistSummary,
     type PlaybackSnapshot,
     type PlaybackState,
     type RuntimeCapabilities,
@@ -17,7 +20,7 @@
   } from './lib/ipc';
   import { formatDuration, formatTrackIndex, formatVolume } from './lib/format';
 
-  type View = 'library' | 'now-playing' | 'settings';
+  type View = 'library' | 'now-playing' | 'playlists' | 'settings';
 
   const PAGE_SIZE = 40;
 
@@ -34,6 +37,13 @@
   let mediaStoreVolumes = $state<MediaStoreVolumeOption[]>([]);
   let mediaPermissionGranted = $state<boolean | null>(null);
   let windowsFolderPath = $state('');
+  let playlists = $state<PlaylistSummary[]>([]);
+  let playlistPage = $state<PlaylistPage | null>(null);
+  let selectedPlaylistId = $state<string | null>(null);
+  let playlistError = $state<string | null>(null);
+  let playlistMessage = $state<string | null>(null);
+  let playlistExportFormat = $state<'m3u' | 'm3u8'>('m3u8');
+  let playlistExportRelativePaths = $state(false);
   let query = $state('');
   let offset = $state(0);
   let selectedTrackId = $state<string | null>(null);
@@ -42,11 +52,17 @@
   let isLoadingSources = $state(false);
   let isUpdatingSource = $state(false);
   let isLoadingVolumes = $state(false);
+  let isLoadingPlaylists = $state(false);
+  let isLoadingPlaylistPage = $state(false);
+  let isPlaylistOperation = $state(false);
   let isLoadingPlaybackSnapshot = false;
   let isSendingPlaybackCommand = $state(false);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
   let pageRequestVersion = 0;
+  let playlistPageRequestVersion = 0;
+  let capabilityRefreshInFlight = false;
+  let nextCapabilityRefreshAt = 0;
   let unlistenSync: UnlistenFn | undefined;
 
   const libraryReady = $derived(isReady(capabilities?.library));
@@ -54,6 +70,10 @@
   const playbackReady = $derived(isReady(capabilities?.playback));
   const playbackNavigationReady = $derived(isReady(capabilities?.playbackNavigation));
   const playbackModesReady = $derived(isReady(capabilities?.playbackModes));
+  const playlistExchangeReady = $derived(isReady(capabilities?.playlistExchange));
+  const selectedPlaylist = $derived(
+    playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null,
+  );
   const hasPreviousPage = $derived((page?.offset ?? 0) > 0);
   const hasNextPage = $derived(
     page !== null && page.offset + page.items.length < page.totalCount,
@@ -63,6 +83,16 @@
     const first = page.offset + 1;
     const last = Math.min(page.offset + page.items.length, page.totalCount);
     return `${first}–${last} 首，共 ${page.totalCount.toLocaleString()} 首`;
+  });
+  const hasPreviousPlaylistPage = $derived((playlistPage?.offset ?? 0) > 0);
+  const hasNextPlaylistPage = $derived(
+    playlistPage !== null && playlistPage.offset + playlistPage.items.length < playlistPage.totalCount,
+  );
+  const playlistPageRangeLabel = $derived.by(() => {
+    if (!playlistPage || playlistPage.totalCount === 0) return '0 個項目';
+    const first = playlistPage.offset + 1;
+    const last = Math.min(playlistPage.offset + playlistPage.items.length, playlistPage.totalCount);
+    return `${first}–${last} 項，共 ${playlistPage.totalCount.toLocaleString()} 項`;
   });
 
   onMount(() => {
@@ -79,6 +109,7 @@
       void listen('library-sync-finished', () => {
         if (isSyncing) return;
         if (libraryReady) void loadPage(0);
+        if (libraryReady) void loadPlaylists();
         if (sourceSyncReady) void loadSources();
       })
         .then((unlisten) => {
@@ -98,6 +129,7 @@
     if (playbackPollTimer !== undefined) clearInterval(playbackPollTimer);
     unlistenSync?.();
     pageRequestVersion += 1;
+    playlistPageRequestVersion += 1;
   });
 
   async function loadCapabilities(): Promise<void> {
@@ -105,11 +137,26 @@
     try {
       capabilities = await invokeCommand('get_runtime_capabilities', {});
       if (isReady(capabilities.library)) void loadPage(0);
+      if (isReady(capabilities.library)) void loadPlaylists();
       if (isReady(capabilities.sourceSync)) void loadSources();
       if (isReady(capabilities.playback)) void loadPlaybackSnapshot();
     } catch (error) {
       capabilities = null;
       runtimeError = getErrorText(error);
+    }
+  }
+
+  async function refreshCapabilitiesInBackground(): Promise<void> {
+    const now = Date.now();
+    if (capabilityRefreshInFlight || now < nextCapabilityRefreshAt) return;
+    capabilityRefreshInFlight = true;
+    nextCapabilityRefreshAt = now + 3000;
+    try {
+      capabilities = await invokeCommand('get_runtime_capabilities', {});
+    } catch {
+      // Playback polling remains authoritative for playback errors.
+    } finally {
+      capabilityRefreshInFlight = false;
     }
   }
 
@@ -174,6 +221,99 @@
     } finally {
       isLoadingSources = false;
     }
+  }
+
+  async function loadPlaylists(preferredId?: string): Promise<void> {
+    if (!libraryReady) return;
+    isLoadingPlaylists = true;
+    playlistError = null;
+    try {
+      playlists = await invokeCommand('playlist_list', {});
+      const requestedId = preferredId ?? selectedPlaylistId;
+      const nextId = playlists.some((playlist) => playlist.id === requestedId)
+        ? requestedId
+        : playlists[0]?.id ?? null;
+      selectedPlaylistId = nextId;
+      if (nextId) await loadPlaylistPage(nextId, 0);
+      else playlistPage = null;
+    } catch (error) {
+      playlistError = getErrorText(error);
+    } finally {
+      isLoadingPlaylists = false;
+    }
+  }
+
+  async function loadPlaylistPage(playlistId: string, nextOffset: number): Promise<void> {
+    const requestVersion = ++playlistPageRequestVersion;
+    isLoadingPlaylistPage = true;
+    playlistError = null;
+    try {
+      const nextPage = await invokeCommand('playlist_get_page', {
+        playlistId,
+        offset: nextOffset,
+        limit: PAGE_SIZE,
+      });
+      if (requestVersion !== playlistPageRequestVersion || selectedPlaylistId !== playlistId) return;
+      playlistPage = nextPage;
+    } catch (error) {
+      if (requestVersion === playlistPageRequestVersion) {
+        playlistPage = null;
+        playlistError = getErrorText(error);
+      }
+    } finally {
+      if (requestVersion === playlistPageRequestVersion) isLoadingPlaylistPage = false;
+    }
+  }
+
+  async function selectPlaylist(playlistId: string): Promise<void> {
+    selectedPlaylistId = playlistId;
+    playlistMessage = null;
+    await loadPlaylistPage(playlistId, 0);
+  }
+
+  async function importPlaylist(): Promise<void> {
+    if (!playlistExchangeReady || isPlaylistOperation) return;
+    isPlaylistOperation = true;
+    playlistError = null;
+    playlistMessage = null;
+    try {
+      const result = await invokeCommand('playlist_import_m3u', {});
+      if (!result) return;
+      activeView = 'playlists';
+      await loadPlaylists(result.playlist.id);
+      playlistMessage = `已匯入「${result.playlist.name}」：${result.playlist.entryCount.toLocaleString()} 個項目，其中 ${result.matchedEntries.toLocaleString()} 個對應到曲庫。`;
+    } catch (error) {
+      playlistError = getErrorText(error);
+    } finally {
+      isPlaylistOperation = false;
+    }
+  }
+
+  async function exportPlaylist(playlistId: string): Promise<void> {
+    if (!playlistExchangeReady || isPlaylistOperation) return;
+    isPlaylistOperation = true;
+    playlistError = null;
+    playlistMessage = null;
+    try {
+      const result = await invokeCommand('playlist_export_m3u', {
+        playlistId,
+        format: playlistExportFormat,
+        relativePaths: playlistExportRelativePaths,
+      });
+      if (result) {
+        playlistMessage = `已匯出「${result.playlistName}」的 ${result.entryCount.toLocaleString()} 個項目。`;
+      }
+    } catch (error) {
+      playlistError = getErrorText(error);
+    } finally {
+      isPlaylistOperation = false;
+    }
+  }
+
+  async function playPlaylistEntry(entry: PlaylistEntrySummary): Promise<void> {
+    if (!entry.trackId || !entry.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand) return;
+    await sendPlaybackCommand(() => invokeCommand('playback_play', { trackId: entry.trackId! }));
+    if (!playbackError) activeView = 'now-playing';
   }
 
   async function addWindowsFolder(): Promise<void> {
@@ -271,6 +411,7 @@
     if (clearError) playbackError = null;
     try {
       playback = await invokeCommand('playback_get_snapshot', {});
+      void refreshCapabilitiesInBackground();
     } catch (error) {
       playbackError = getErrorText(error);
     } finally {
@@ -386,6 +527,18 @@
   function previousPage(): void {
     if (hasPreviousPage && page) void loadPage(Math.max(0, page.offset - PAGE_SIZE));
   }
+
+  function nextPlaylistPage(): void {
+    if (hasNextPlaylistPage && playlistPage && selectedPlaylistId) {
+      void loadPlaylistPage(selectedPlaylistId, playlistPage.offset + PAGE_SIZE);
+    }
+  }
+
+  function previousPlaylistPage(): void {
+    if (hasPreviousPlaylistPage && playlistPage && selectedPlaylistId) {
+      void loadPlaylistPage(selectedPlaylistId, Math.max(0, playlistPage.offset - PAGE_SIZE));
+    }
+  }
 </script>
 
 <div class="app-shell">
@@ -427,6 +580,16 @@
       </button>
       <button
         class="nav-link"
+        class:active={activeView === 'playlists'}
+        aria-current={activeView === 'playlists' ? 'page' : undefined}
+        onclick={() => (activeView = 'playlists')}
+      >
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 5.5h14M5 10h14M5 14.5h9M5 19h7" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" /></svg>
+        <span class="nav-label">播放清單</span>
+        <span class="nav-arrow" aria-hidden="true">›</span>
+      </button>
+      <button
+        class="nav-link"
         class:active={activeView === 'settings'}
         aria-current={activeView === 'settings' ? 'page' : undefined}
         onclick={() => (activeView = 'settings')}
@@ -457,7 +620,7 @@
 
   <main class="workspace">
     <header class="topbar">
-      <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>{activeView === 'library' ? 'LIBRARY' : activeView === 'now-playing' ? 'NOW PLAYING' : 'SOURCES'}</strong></div>
+      <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>{activeView === 'library' ? 'LIBRARY' : activeView === 'now-playing' ? 'NOW PLAYING' : activeView === 'playlists' ? 'PLAYLISTS' : 'SOURCES'}</strong></div>
       <div class="topbar-actions">
         <div class="runtime-pill" class:ready={isReady(capabilities?.desktopRuntime)}>
           <span class="status-dot" class:ready={isReady(capabilities?.desktopRuntime)} aria-hidden="true"></span>
@@ -474,7 +637,7 @@
         <section class="welcome-banner">
           <div class="welcome-copy">
             <p class="eyebrow"><span class="eyebrow-line"></span> PERSONAL AUDIO LIBRARY</p>
-            <h1>{activeView === 'library' ? '把喜歡的聲音，留在身邊。' : activeView === 'now-playing' ? '正在播放' : '音樂來源'}</h1>
+            <h1>{activeView === 'library' ? '把喜歡的聲音，留在身邊。' : activeView === 'now-playing' ? '正在播放' : activeView === 'playlists' ? '整理想聽的曲目。' : '音樂來源'}</h1>
             <p class="welcome-description">以本機音樂為核心，曲庫先分頁查詢；來源與播放服務就緒後才會開放操作。</p>
             <div class="welcome-tags">
               <span><i></i> 本機優先</span>
@@ -603,6 +766,131 @@
                     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7.5 4.5 5 5.5-5 5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
                   </button>
                 </div>
+              </div>
+            {/if}
+          </section>
+        {:else if activeView === 'playlists'}
+          <section class="playlist-section" aria-labelledby="playlists-heading">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">PLAYLISTS</p>
+                <h2 id="playlists-heading">我的播放清單</h2>
+              </div>
+              <div class="section-heading-actions">
+                <span class="page-count">{playlists.length.toLocaleString()} <small>份清單</small></span>
+                <button
+                  class="primary-button playlist-import-button"
+                  type="button"
+                  onclick={() => void importPlaylist()}
+                  disabled={!playlistExchangeReady || isPlaylistOperation}
+                  title={showCapabilityDetail(capabilities?.playlistExchange)}
+                >
+                  {isPlaylistOperation ? '處理中' : '匯入 M3U/M3U8'}
+                </button>
+              </div>
+            </div>
+
+            {#if playlistError}
+              <div class="inline-message" role="alert">
+                <span class="message-mark">!</span>
+                <div><strong>播放清單操作失敗</strong><p>{playlistError}</p></div>
+                <button class="text-button" type="button" onclick={() => { if (selectedPlaylistId) void loadPlaylistPage(selectedPlaylistId, playlistPage?.offset ?? 0); else void loadPlaylists(); }}>再試一次</button>
+              </div>
+            {/if}
+            {#if playlistMessage}
+              <div class="source-result-message playlist-result-message" role="status">{playlistMessage}</div>
+            {/if}
+
+            {#if !libraryReady}
+              <div class="not-ready-panel">
+                <div class="not-ready-icon" aria-hidden="true"><span>♪</span></div>
+                <div class="not-ready-copy"><span class="state-label">NATIVE SERVICE</span><h3>播放清單服務尚未就緒</h3><p>{showCapabilityDetail(capabilities?.library)}</p></div>
+              </div>
+            {:else if isLoadingPlaylists && playlists.length === 0}
+              <div class="loading-panel"><span class="loader-ring"></span><span>正在載入播放清單…</span></div>
+            {:else if playlists.length === 0}
+              <div class="empty-panel">
+                <div class="empty-wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+                <h3>尚無播放清單</h3>
+                <p>{playlistExchangeReady ? '匯入 M3U 或 M3U8 檔案；不在目前曲庫中的項目也會保留。' : showCapabilityDetail(capabilities?.playlistExchange)}</p>
+              </div>
+            {:else}
+              <div class="playlist-browser">
+                <div class="playlist-list" aria-label="播放清單">
+                  {#each playlists as playlist (playlist.id)}
+                    <div class="playlist-list-item" class:selected={selectedPlaylistId === playlist.id}>
+                      <button
+                        class="playlist-select"
+                        type="button"
+                        aria-pressed={selectedPlaylistId === playlist.id}
+                        onclick={() => void selectPlaylist(playlist.id)}
+                      >
+                        <span class="playlist-select-icon" aria-hidden="true">♫</span>
+                        <span class="playlist-select-copy"><strong>{playlist.name.trim() || '未命名播放清單'}</strong><small>{playlist.entryCount.toLocaleString()} 個項目</small></span>
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+
+                {#if selectedPlaylist}
+                  <section class="playlist-detail" aria-labelledby="selected-playlist-heading">
+                    <div class="playlist-detail-heading">
+                      <div><p class="section-kicker">SELECTED PLAYLIST</p><h3 id="selected-playlist-heading">{selectedPlaylist.name.trim() || '未命名播放清單'}</h3></div>
+                      <div class="playlist-export-actions">
+                        <label class="playlist-export-format">
+                          <span>格式</span>
+                          <select bind:value={playlistExportFormat} disabled={!playlistExchangeReady || isPlaylistOperation}>
+                            <option value="m3u8">M3U8</option>
+                            <option value="m3u">M3U</option>
+                          </select>
+                        </label>
+                        <label class="playlist-relative-toggle">
+                          <input type="checkbox" bind:checked={playlistExportRelativePaths} disabled={!playlistExchangeReady || isPlaylistOperation} />
+                          <span>相對路徑</span>
+                        </label>
+                        <button
+                          class="outline-button"
+                          type="button"
+                          onclick={() => void exportPlaylist(selectedPlaylist.id)}
+                          disabled={!playlistExchangeReady || isPlaylistOperation}
+                          title={showCapabilityDetail(capabilities?.playlistExchange)}
+                        >
+                          {isPlaylistOperation ? '處理中' : `匯出 ${playlistExportFormat.toUpperCase()}`}
+                        </button>
+                      </div>
+                    </div>
+
+                    {#if isLoadingPlaylistPage && !playlistPage}
+                      <div class="loading-panel"><span class="loader-ring"></span><span>正在載入項目…</span></div>
+                    {:else if playlistPage && playlistPage.items.length === 0}
+                      <div class="empty-panel playlist-empty"><h3>這份清單沒有項目</h3><p>可以重新匯入其他播放清單。</p></div>
+                    {:else if playlistPage}
+                      <div class="playlist-entry-table" role="table" aria-label="播放清單項目">
+                        <div class="playlist-entry-head" role="row"><span>#</span><span>曲目</span><span class="playlist-entry-album">專輯／演出者</span><span class="playlist-entry-duration">長度</span><span></span></div>
+                        <div class="playlist-entry-body" aria-live="polite">
+                          {#each playlistPage.items as entry (entry.position)}
+                            <div class="playlist-entry-row" role="row">
+                              <span class="playlist-entry-index">{entry.position + 1}</span>
+                              <div class="playlist-entry-title"><strong>{entry.title?.trim() || '未命名項目'}</strong><small>{entry.artist?.trim() || (entry.hasEnabledMapping ? '未知演出者' : '目前未對應到曲庫')}</small></div>
+                              <span class="playlist-entry-album">{entry.album?.trim() || '—'}</span>
+                              <span class="playlist-entry-duration">{formatDuration(entry.durationMs)}</span>
+                              <button class="row-play" type="button" aria-label={`播放 ${entry.title?.trim() || '播放清單項目'}`} title={entry.hasEnabledMapping ? '播放曲目' : '這個項目尚未對應到可播放的曲庫曲目'} disabled={!entry.trackId || !entry.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand} onclick={() => void playPlaylistEntry(entry)}>
+                                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7.3 5.8 7 4.2-7 4.2V5.8Z" fill="currentColor" /></svg>
+                              </button>
+                            </div>
+                          {/each}
+                        </div>
+                      </div>
+                      <div class="pagination-bar">
+                        <span>{playlistPageRangeLabel}</span>
+                        <div class="pagination-actions">
+                          <button type="button" class="page-button" onclick={previousPlaylistPage} disabled={!hasPreviousPlaylistPage || isLoadingPlaylistPage} aria-label="播放清單上一頁"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m12.5 4.5-5 5.5 5 5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+                          <button type="button" class="page-button" onclick={nextPlaylistPage} disabled={!hasNextPlaylistPage || isLoadingPlaylistPage} aria-label="播放清單下一頁"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7.5 4.5 5 5.5-5 5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+                        </div>
+                      </div>
+                    {/if}
+                  </section>
+                {/if}
               </div>
             {/if}
           </section>

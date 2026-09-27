@@ -11,6 +11,7 @@ MoeMusicPlayer is a local-first music library for Windows and Android. It stores
 - Keep previously indexed tracks when a source is unavailable or a scan is incomplete.
 - Browse and search the saved library with paginated results; the interface never loads the whole collection.
 - On Windows, play local WAV, MP3, FLAC, and Ogg Vorbis files with play/pause, seek, and volume controls.
+- Import and export M3U and UTF-8 M3U8 playlists on Windows. Unmatched entries are retained, and exports can use absolute or shared-root relative paths.
 
 The playback queue, previous/next track, repeat, shuffle, and Android playback are not available yet.
 

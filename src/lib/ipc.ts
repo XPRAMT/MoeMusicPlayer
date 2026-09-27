@@ -15,6 +15,8 @@ export interface RuntimeCapabilities {
   playback: FeatureCapability;
   playbackNavigation: FeatureCapability;
   playbackModes: FeatureCapability;
+  playlistExchange: FeatureCapability;
+  systemMediaControls: FeatureCapability;
 }
 
 export interface LibrarySource {
@@ -74,6 +76,39 @@ export interface TrackPageRequest {
   query: string | null;
   offset: number;
   limit: number;
+}
+
+export interface PlaylistSummary {
+  id: string;
+  name: string;
+  entryCount: number;
+}
+
+export interface PlaylistEntrySummary {
+  position: number;
+  trackId: string | null;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  durationMs: number | null;
+  hasEnabledMapping: boolean;
+}
+
+export interface PlaylistPage {
+  items: PlaylistEntrySummary[];
+  offset: number;
+  limit: number;
+  totalCount: number;
+}
+
+export interface PlaylistImportResult {
+  playlist: PlaylistSummary;
+  matchedEntries: number;
+}
+
+export interface PlaylistExportResult {
+  playlistName: string;
+  entryCount: number;
 }
 
 export type RepeatMode = 'off' | 'one' | 'all';
@@ -136,6 +171,22 @@ interface IpcContract {
   library_sync: {
     args: Record<string, never>;
     result: LibrarySyncResult;
+  };
+  playlist_list: {
+    args: Record<string, never>;
+    result: PlaylistSummary[];
+  };
+  playlist_get_page: {
+    args: { playlistId: string; offset: number; limit: number };
+    result: PlaylistPage;
+  };
+  playlist_import_m3u: {
+    args: Record<string, never>;
+    result: PlaylistImportResult | null;
+  };
+  playlist_export_m3u: {
+    args: { playlistId: string; format: 'm3u' | 'm3u8'; relativePaths: boolean };
+    result: PlaylistExportResult | null;
   };
   playback_get_snapshot: {
     args: Record<string, never>;

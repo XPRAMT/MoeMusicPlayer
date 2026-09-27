@@ -10,17 +10,19 @@
 - 對 `WindowsSystemIndex` root 會探測 WSearch 服務、範圍規則與 catalog 狀態供診斷；目前不把 Search 查詢結果當完整清單，曲目與刪除對帳只依完整檔案系統走訪。
 - Android MediaStore/SAF 外掛、Rust IPC 與來源管理畫面已接線；Android ARM64 Debug APK 曾成功建置。最新版 insets 修正尚未在裝置複驗。
 - Windows 音訊 crate 使用 Rodio/CPAL；7 項 crate 測試、Windows 目標檢查、Clippy 與自產 WAV 的預設輸出裝置 smoke 均通過。Tauri 已將 `TrackId` 解析為 SQLite 中啟用來源的本機路徑，再呼叫 `PlayerHandle`；前端的播放/暫停、跳轉與音量接有真實引擎快照。播放錯誤不回傳本機路徑；佇列、前後首、隨機與循環仍未實作且保持停用。
-- Svelte 型別檢查、Vite 正式版建置、Windows Tauri release 建置、完整 `cargo test --workspace`（41 項測試）與 `cargo clippy --workspace --all-targets -- -D warnings` 均通過。Windows shell 整合測試涵蓋 Unicode 資料夾新增、合成 MP3 同步、SQLite 分頁/搜尋、關閉重開，以及 TrackId 到保存路徑再到播放 handle 的命令流程。
+- SQLite v2 已保存播放清單及順序項目。Windows 前端以分頁 IPC 瀏覽清單，透過 Rust 原生對話框匯入 M3U/M3U8、匯出 UTF-8 M3U/M3U8；未匹配曲目保留原 locator，選擇共同資料夾時可做相對路徑輸出。Unicode M3U/M3U8 匯入、分頁及匯出 helper 整合測試通過；原生對話框仍未以 GUI 驗收。
+- Windows 系統媒體控制 crate 已實作 WinRT worker、播放中繼資料投影及依播放器狀態開啟控制；14 項單元與 2 項隱藏 HWND 整合測試由 crate 驗證。Tauri 外殼目前尚未接線；不可將 crate 測試描述成應用層媒體按鍵驗收。
+- Svelte 型別檢查、Vite 正式版建置、完整 `cargo test --workspace`（65 項測試）與 `cargo clippy --workspace --all-targets -- -D warnings` 均通過。Windows shell 整合測試涵蓋 Unicode 資料夾新增、合成 MP3 同步、SQLite 分頁/搜尋、關閉重開，以及 TrackId 到保存路徑再到播放 handle 的命令流程。
 
 仍未完成或未驗證：
 
-- Windows Tauri 視窗的實際來源表單操作與畫面尚未驗收；上述來源測試呼叫的是 UI command 共用的 Rust helper，並非 GUI/IPC 操作。
+- Windows Tauri 視窗的實際來源表單、播放清單原生對話框操作與畫面尚未驗收；上述來源／清單測試呼叫的是 UI command 共用的 Rust helper，並非 GUI/IPC 操作。
 - Windows 應用播放尚未由桌面 GUI 實際驗收；Tauri IPC 指令本身尚未經 GUI 傳輸驗證。音訊 crate 的輸出裝置 smoke 與 shell 的注入式測試後端分開驗證，不代表已聽感驗收應用播放。
-- 播放佇列、前後首、隨機、循環、Android 音訊與系統媒體控制目前未實作。
+- 播放佇列、前後首、隨機、循環與 Android 音訊尚未實作。Windows 系統媒體控制 crate 有獨立測試，但 Tauri 外殼尚未接線，實際系統控制回呼與媒體 flyout 尚未驗收。
 - Android 最新頂部/底部 system insets 修正及 MediaStore/SAF 真機掃描尚未驗證。先前 ARM64 APK 建置早於本輪共用 shell 變更；本輪直接 `cargo check --target aarch64-linux-android` 因目前 shell 找不到 `clang.exe` 而停在 SQLite native build，未得到 Android app 編譯結果。Android 播放未實作。
 - 100,000 首效能及完整 Windows SystemIndex 使用判準尚無實測結論。
 
-下一步在允許使用桌面視窗驗收時，實際操作 Windows 曲庫來源、重新啟動後讀回，並透過 UI 播放真實曲目確認音訊輸出。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
+下一步先把已測試的 Windows SMTC crate 接入 Tauri 播放服務並做非互動檢查；之後在允許使用桌面視窗驗收時，實際操作 Windows 曲庫來源、播放清單對話框與系統媒體控制，再確認真實音訊輸出。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
 
 產品以 Windows 11 與 Android 的大型本地音樂庫為核心，目標規模為 100,000 首。啟動、搜尋與播放不得等待全庫掃描；封面、歌詞與動畫不得造成記憶體或 DOM 持續成長。使用者資料須可攜；本地音樂庫與本地播放永遠優先，線上串流服務不屬於核心目標。
 
