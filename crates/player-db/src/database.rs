@@ -14,7 +14,7 @@ use player_core::{
     SyncApplyOutcome, SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackId, TrackIdentity,
     TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::locator;
 
@@ -787,26 +787,56 @@ impl Database {
         }))
     }
 
-    /// Return a legacy playlist identity only when its name is unique. Playlist-file import uses
-    /// this to attach an existing static projection on first registration without creating a
-    /// duplicate; ambiguous names always receive a new identity.
-    pub fn unique_playlist_id_by_name(
+    /// Adopt a legacy static playlist only when one same-name candidate has the exact same
+    /// ordered locator sequence. This avoids replacing unrelated same-name user playlists.
+    pub fn unique_playlist_id_matching_locators(
         &self,
         name: &str,
+        imported_locators: &[MediaLocator],
     ) -> Result<Option<PlaylistId>, DatabaseError> {
         let connection = self.lock()?;
-        connection
-            .query_row(
-                "SELECT CASE WHEN COUNT(*)=1 THEN MIN(playlist_id) END
-                 FROM playlists WHERE name=?1",
-                [name],
-                |row| row.get::<_, Option<String>>(0),
-            )?
-            .map(|value| {
-                PlaylistId::parse(&value)
-                    .map_err(|error| DatabaseError::CorruptData(error.to_string()))
-            })
-            .transpose()
+        let candidate_ids = {
+            let mut statement =
+                connection.prepare("SELECT playlist_id FROM playlists WHERE name=?1")?;
+            let rows = statement.query_map([name], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let mut matched = Vec::new();
+        for candidate_id in candidate_ids {
+            let mut statement = connection.prepare(
+                "SELECT locator_kind, locator_encoding, locator_data
+                 FROM playlist_entries WHERE playlist_id=?1 ORDER BY position",
+            )?;
+            let rows = statement.query_map([&candidate_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })?;
+            let stored = rows.collect::<Result<Vec<_>, _>>()?;
+            if stored.len() != imported_locators.len() {
+                continue;
+            }
+            let mut same_ordered_locators = true;
+            for ((kind, encoding, data), imported) in stored.iter().zip(imported_locators) {
+                let existing = locator::decode(kind, encoding, data)?;
+                if !locators_have_same_identity(&existing, imported) {
+                    same_ordered_locators = false;
+                    break;
+                }
+            }
+            if same_ordered_locators {
+                matched.push(
+                    PlaylistId::parse(&candidate_id)
+                        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?,
+                );
+            }
+            if matched.len() > 1 {
+                return Ok(None);
+            }
+        }
+        Ok(matched.pop())
     }
 
     /// List playlist names and counts without reading entry locators.
@@ -1612,6 +1642,17 @@ fn resolve_track_id_by_locator(
     resolve_track_id_by_locator_connection(tx, stored)
 }
 
+fn locators_have_same_identity(left: &MediaLocator, right: &MediaLocator) -> bool {
+    if left == right {
+        return true;
+    }
+    #[cfg(windows)]
+    if let (MediaLocator::FileSystem(left), MediaLocator::FileSystem(right)) = (left, right) {
+        return player_core::windows_locator_key(left) == player_core::windows_locator_key(right);
+    }
+    false
+}
+
 fn resolve_track_id_by_locator_connection(
     connection: &Connection,
     stored: &locator::StoredLocator,
@@ -1776,11 +1817,11 @@ mod tests {
         SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackId, TrackIdentity,
         TrackMetadata, TrackMetadataError, UserMetadataField,
     };
-    use rusqlite::{params, OptionalExtension};
+    use rusqlite::{OptionalExtension, params};
 
     use super::{
-        Database, DatabaseError, LibraryRepository, PlaylistFileSyncState, ThemePreferences,
-        COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, TRACKS_PAGE_SQL,
+        COUNT_LIBRARY_SQL, Database, DatabaseError, LibraryRepository, PlaylistFileSyncState,
+        SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, TRACKS_PAGE_SQL, ThemePreferences,
     };
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -2118,10 +2159,11 @@ mod tests {
             },
             content_sha256: [0x5a; 32],
         };
-        assert!(db
-            .playlist_file_sync_state(source_id)
-            .expect("no prior state")
-            .is_none());
+        assert!(
+            db.playlist_file_sync_state(source_id)
+                .expect("no prior state")
+                .is_none()
+        );
         db.record_playlist_file_sync_state(source_id, &state)
             .expect("save state");
         assert_eq!(
@@ -2289,10 +2331,11 @@ mod tests {
         );
         assert_eq!(stored.entries[1].track_id, None);
         assert_eq!(stored.entries[1].locator, playlist.entries[1].locator);
-        assert!(db
-            .get_playlist_page(PlaylistId::new(), 0, 10)
-            .expect("missing playlist query")
-            .is_none());
+        assert!(
+            db.get_playlist_page(PlaylistId::new(), 0, 10)
+                .expect("missing playlist query")
+                .is_none()
+        );
         assert!(db.delete_playlist(playlist.id).expect("delete playlist"));
         assert!(db.list_playlists().expect("list after delete").is_empty());
     }
@@ -2367,10 +2410,11 @@ mod tests {
         assert_eq!(queue[0].1, queue[1].1);
         assert_eq!(queue[1].0, 2);
         assert_eq!(queue[2].0, 3);
-        assert!(db
-            .playlist_track_ids(PlaylistId::new())
-            .expect("unknown playlist query")
-            .is_none());
+        assert!(
+            db.playlist_track_ids(PlaylistId::new())
+                .expect("unknown playlist query")
+                .is_none()
+        );
     }
 
     #[test]
@@ -3139,10 +3183,11 @@ mod tests {
                 .as_deref(),
             Some("手動標題")
         );
-        assert!(db
-            .get_track_summary(TrackId::new())
-            .expect("unknown track summary")
-            .is_none());
+        assert!(
+            db.get_track_summary(TrackId::new())
+                .expect("unknown track summary")
+                .is_none()
+        );
         assert!(matches!(
             db.track_locators(TrackId::new()),
             Err(DatabaseError::TrackNotFound(_))
