@@ -1,4 +1,10 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -165,6 +171,35 @@ pub struct SourceScan {
     pub errors: Vec<MediaSourceError>,
 }
 
+/// Cooperative cancellation shared by the sync engine and a platform scanner.
+#[derive(Clone, Default)]
+pub struct SyncCancellation(Arc<AtomicBool>);
+
+impl SyncCancellation {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaScanProgressUnit {
+    /// Number of filesystem directory entries visited. The final total is not known in advance.
+    FilesystemEntries,
+    /// Number of source rows returned by a media provider.
+    Tracks,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaScanProgress {
+    pub processed: u64,
+    pub total: Option<u64>,
+    pub unit: MediaScanProgressUnit,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackMetadataError {
     pub message: String,
@@ -173,6 +208,45 @@ pub struct TrackMetadataError {
 /// Platform boundary: enumerate stable source records, then parse metadata on demand.
 pub trait MediaIndex {
     fn scan(&mut self, root: &LibraryRoot) -> SourceScan;
+
+    /// Enumerate a source while reporting optional progress. Adapters with a blocking or
+    /// incremental API should override this method and check cancellation between work units.
+    fn scan_with_progress(
+        &mut self,
+        root: &LibraryRoot,
+        progress: &mut dyn FnMut(MediaScanProgress),
+        cancellation: &SyncCancellation,
+    ) -> SourceScan {
+        if cancellation.is_cancelled() {
+            return SourceScan {
+                source_id: root.id,
+                state: SourceScanState::Incomplete {
+                    reason: "scan cancelled before enumeration".to_owned(),
+                },
+                tracks: Vec::new(),
+                errors: Vec::new(),
+            };
+        }
+
+        let mut scan = self.scan(root);
+        if cancellation.is_cancelled() && scan.state.allows_reconciliation() {
+            scan.state = SourceScanState::Incomplete {
+                reason: "scan cancelled before a complete result was available".to_owned(),
+            };
+        }
+        if !matches!(
+            scan.state,
+            SourceScanState::Unavailable { .. } | SourceScanState::PermissionRevoked { .. }
+        ) {
+            let tracks = scan.tracks.len() as u64;
+            progress(MediaScanProgress {
+                processed: tracks,
+                total: Some(tracks),
+                unit: MediaScanProgressUnit::Tracks,
+            });
+        }
+        scan
+    }
 
     fn read_metadata(
         &mut self,
