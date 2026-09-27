@@ -1,4 +1,6 @@
-use std::{fs, path::PathBuf, time::UNIX_EPOCH};
+#[cfg(target_os = "windows")]
+use std::path::PathBuf;
+use std::{fs, time::UNIX_EPOCH};
 
 use player_core::{
     FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaTrackRecord, SourceId, SyncEngine,
@@ -21,7 +23,7 @@ use player_platform_windows::WindowsMediaIndex;
 pub fn source_ids_for_path(
     sources: &[SourceEntry],
     requested_path: &std::path::Path,
-) -> Result<(SourceId, player_core::PlaylistId, PathBuf), String> {
+) -> Result<(SourceId, Option<player_core::PlaylistId>, PathBuf), String> {
     let canonical = fs::canonicalize(requested_path)
         .map_err(|error| format!("無法確認播放清單路徑：{error}"))?;
     let requested_key = player_core::windows_locator_key(&canonical);
@@ -37,10 +39,10 @@ pub fn source_ids_for_path(
             .is_some_and(|path| player_core::windows_locator_key(&path) == requested_key)
     }) {
         if let SourceEntryKind::PlaylistFile { playlist_id, .. } = &source.kind {
-            return Ok((source.id, *playlist_id, canonical));
+            return Ok((source.id, Some(*playlist_id), canonical));
         }
     }
-    Ok((SourceId::new(), player_core::PlaylistId::new(), canonical))
+    Ok((SourceId::new(), None, canonical))
 }
 
 /// Synchronize a registered playlist-file source on Windows. `None` means the playlist file was
@@ -224,7 +226,7 @@ pub fn sync_playlist_file_source(
 mod tests {
     use std::{fs, path::PathBuf, time::SystemTime};
 
-    use player_core::{ListTracksQuery, MediaSourceKind, PlaylistId, SourceId};
+    use player_core::{ListTracksQuery, MediaSourceKind, Playlist, PlaylistId, SourceId};
     use player_db::Database;
 
     use crate::settings::{SourceEntry, SourceEntryKind, StoredPath};
@@ -431,8 +433,8 @@ mod tests {
             .expect("resolve first import");
         let second = source_ids_for_path(std::slice::from_ref(&existing), &alias)
             .expect("resolve repeated import through path alias");
-        assert_eq!((first.0, first.1), (source_id, playlist_id));
-        assert_eq!((second.0, second.1), (source_id, playlist_id));
+        assert_eq!((first.0, first.1), (source_id, Some(playlist_id)));
+        assert_eq!((second.0, second.1), (source_id, Some(playlist_id)));
     }
 
     #[test]
@@ -476,5 +478,38 @@ mod tests {
             &saved.entries[0].locator,
             player_core::MediaLocator::FileSystem(path) if path.file_name().is_some_and(|name| name == "song-b.mp3")
         ));
+    }
+
+    #[test]
+    fn first_registration_reuses_unique_legacy_hanser_playlist_identity() {
+        let directory = TestDirectory::new();
+        let playlist_path = directory.0.join("hanser.m3u8");
+        fs::write(&playlist_path, "#EXTM3U\n#PLAYLIST:Hanser\n").expect("write playlist");
+        let database = Database::open_in_memory().expect("database");
+        let legacy = Playlist::new("Hanser");
+        let legacy_id = legacy.id;
+        database
+            .save_playlist(&legacy)
+            .expect("save existing static playlist");
+        let (source_id, registered_id, canonical_path) =
+            source_ids_for_path(&[], &playlist_path).expect("new path has new source id");
+        assert!(registered_id.is_none());
+
+        let parsed = crate::playlist_exchange::read_playlist_file(&canonical_path)
+            .expect("parse imported M3U8");
+        let playlist_id = database
+            .unique_playlist_id_by_name(&parsed.name)
+            .expect("look up legacy playlist")
+            .unwrap_or(parsed.id);
+        assert_eq!(playlist_id, legacy_id);
+        let imported = crate::playlist_exchange::import_playlist_file_with_id(
+            &database,
+            &canonical_path,
+            playlist_id,
+        )
+        .expect("upgrade existing playlist projection");
+        assert_eq!(imported.playlist.id, legacy_id);
+        assert_eq!(database.list_playlists().expect("list playlists").len(), 1);
+        assert_ne!(source_id, SourceId::new());
     }
 }
