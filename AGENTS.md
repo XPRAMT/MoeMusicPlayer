@@ -33,9 +33,15 @@
 - Windows 封面目前只讀取已啟用本機檔案來源；Android MediaStore/SAF 封面、使用者實際 Tauri 視窗圖片解碼／縮放與封面載入失敗畫面仍待平台接線及驗收。封面上限內仍可能遇到瀏覽器無法解碼的容器資料，該路徑會回到占位圖。
 - 100,000 首真實曲庫端到端效能、真實 Tauri WebView 的捲動影格表現及完整 Windows SystemIndex 使用判準尚無實測結論；目前共用列表的 Node 與 headless Chrome harness 已驗證合成 100,000 項、虛擬 DOM 最多 25 列、LRU 最多 240 項，不能替代正式 Tauri 視窗效能量測。
 
-下一步先修復並驗收底部右側音量滑桿拖曳僅改變約 1% 的問題（由 shell_ui 負責 UI 調查）；保持已確認正常的進度 seek 與點歌／封面導覽行為。隔離 app-data/Tauri 視窗仍需驗收播放清單來源啟動同步與外部變更更新、原生匯入對話框，以及 degraded registry 的重新登記確認流程；另外驗收舊 Hanser 清單播放與 queue 控制。本輪 Rust 測試驗證舊清單 0→176、新匯入 176/176、順序與重開持久性。再驗收 queue next/previous、自然播完、off/all/one、shuffle、封面與 ACK 輪詢；不得操作使用者正在使用的視窗或正式曲庫。進度條點擊／拖曳、已知時長播放速度及點歌／底部封面導航已由使用者在最新隔離 Tauri debug 視窗人工驗收；加速現象未再重現但根因未定位。另續驗來源選擇器 Cancel、外觀頁、系統媒體 flyout/按鍵、封面真實畫面與應用音訊輸出；`D:\Music` 已掃描完成，不重複掃描或寫入音樂檔。兩個列表 harness 已完成 100,000 項 DOM／鍵盤 smoke；仍需在正式 Tauri WebView 實際確認捲動與縮放表現。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
+下一步先修復並驗收底部右側音量滑桿拖曳僅改變約 1% 的問題（由 shell_ui 負責 UI 調查）；保持已確認正常的進度 seek 與點歌／封面導覽行為。另需先釐清下列使用者新增介面與曲目資訊需求，再決定資料模型、設定形式、響應式行為及驗收案例；它們目前均未實作。隔離 app-data/Tauri 視窗仍需驗收播放清單來源啟動同步與外部變更更新、原生匯入對話框，以及 degraded registry 的重新登記確認流程；另外驗收舊 Hanser 清單播放與 queue 控制。本輪 Rust 測試驗證舊清單 0→176、新匯入 176/176、順序與重開持久性。再驗收 queue next/previous、自然播完、off/all/one、shuffle、封面與 ACK 輪詢；不得操作使用者正在使用的視窗或正式曲庫。進度條點擊／拖曳、已知時長播放速度及點歌／底部封面導航已由使用者在最新隔離 Tauri debug 視窗人工驗收；加速現象未再重現但根因未定位。另續驗來源選擇器 Cancel、外觀頁、系統媒體 flyout/按鍵、封面真實畫面與應用音訊輸出；`D:\Music` 已掃描完成，不重複掃描或寫入音樂檔。兩個列表 harness 已完成 100,000 項 DOM／鍵盤 smoke；仍需在正式 Tauri WebView 實際確認捲動與縮放表現。Android 驗收時以 Tauri Android CLI/NDK 環境重新建置目前 shell，確認安全區與 MediaStore/SAF 真機掃描。
 
-下一輪待辦：曲目資訊顯示 codec、sample rate、bitrate；只有無損格式且來源 bit depth 可可靠辨識時才顯示 bit depth，不得把 AAC/MP3 等有損格式的解碼 PCM depth 當來源深度。統計每首實際播放累計毫秒；未來 shuffle 優先較小的 `played_ms / track_duration_ms`，duration 為 null 或 0 的處理方式須另行定義並測試。以上均為未實作規劃。
+待設計確認的新需求（全部未實作）：
+
+- 曲目資訊需評估加入參與演出者、年份及音訊格式摘要；示例顯示為 `FLAC 48 kHz/16-bit/1024 kbps`。需先定義「參與演出者」如何對應現有演出者欄位，以及技術摘要各項的來源、缺值與可信度顯示；bit depth 僅在無損格式且來源深度可可靠辨識時顯示，不得把有損格式解碼後的 PCM depth 當成來源深度。
+- 設定需讓使用者調整曲庫欄位的顯示順序與可見性；實作前確認設定保存範圍、不同列表的欄位差異及窄視窗行為。
+- 「正在播放」頁需提供封面在左、歌詞在右，以及歌詞在左、封面在右兩種排列；實作前確認偏好是否持久保存，以及窄視窗下的堆疊方式。
+
+下一輪待辦：完成上述需求的設計確認後，再規劃曲目資訊資料欄位（含 codec、sample rate、bitrate；bit depth 僅限可信來源），並評估每首實際播放累計毫秒與依較小 `played_ms / track_duration_ms` 優先的 shuffle；duration 為 null 或 0 的處理方式須另行定義並測試。以上均為未實作規劃。
 
 產品以 Windows 11 與 Android 的大型本地音樂庫為核心，目標規模為 100,000 首。啟動、搜尋與播放不得等待全庫掃描；封面、歌詞與動畫不得造成記憶體或 DOM 持續成長。使用者資料須可攜；本地音樂庫與本地播放永遠優先，線上串流服務不屬於核心目標。
 
