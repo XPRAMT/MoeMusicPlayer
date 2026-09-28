@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, VecDeque};
 use unicode_normalization::UnicodeNormalization;
 
 pub const MAX_LYRIC_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
@@ -13,7 +14,7 @@ pub enum LyricProvider {
     Embedded,
     #[serde(rename = "netease")]
     NetEase,
-    #[serde(rename = "qq")]
+    #[serde(rename = "qqmusic", alias = "qq")]
     Qq,
 }
 
@@ -31,6 +32,16 @@ pub enum LyricFormat {
 pub struct LyricLine {
     pub start_ms: Option<u64>,
     pub text: String,
+    #[serde(default)]
+    pub translation: Option<String>,
+    #[serde(default)]
+    pub romanization: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LyricAuxiliaryKind {
+    Translation,
+    Romanization,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -142,12 +153,16 @@ pub fn parse_lrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
                 lines.extend(timestamps.into_iter().map(|start_ms| LyricLine {
                     start_ms: Some(start_ms),
                     text: text.clone(),
+                    translation: None,
+                    romanization: None,
                 }));
             }
         } else if !text.is_empty() && !is_lrc_metadata_tag(text.as_str()) {
             plain_lines.push(LyricLine {
                 start_ms: None,
                 text,
+                translation: None,
+                romanization: None,
             });
         }
     }
@@ -188,6 +203,8 @@ pub fn parse_yrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
                 lines.push(LyricLine {
                     start_ms: Some(start_ms),
                     text,
+                    translation: None,
+                    romanization: None,
                 });
             }
         }
@@ -220,6 +237,48 @@ pub fn preserve_qrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
 pub fn with_raw_karaoke(mut lyrics: ParsedLyrics, raw_karaoke: Option<String>) -> ParsedLyrics {
     lyrics.raw_karaoke = raw_karaoke;
     lyrics
+}
+
+/// Attach translation or romanization only when its parsed LRC start timestamp matches a primary
+/// line. Mismatched or untimed auxiliary text is left unattached instead of shifting line pairs.
+pub fn merge_lrc_auxiliary(
+    primary: &mut ParsedLyrics,
+    auxiliary_text: &str,
+    kind: LyricAuxiliaryKind,
+) -> Result<(), LyricsParseError> {
+    if !primary.synced {
+        return Ok(());
+    }
+    let auxiliary = parse_lrc(auxiliary_text)?;
+    if !auxiliary.synced {
+        return Ok(());
+    }
+
+    let mut lines_by_time = BTreeMap::<u64, VecDeque<String>>::new();
+    for line in auxiliary.lines {
+        if let Some(start_ms) = line.start_ms {
+            lines_by_time
+                .entry(start_ms)
+                .or_default()
+                .push_back(line.text);
+        }
+    }
+    for line in &mut primary.lines {
+        let Some(start_ms) = line.start_ms else {
+            continue;
+        };
+        let Some(auxiliary_text) = lines_by_time
+            .get_mut(&start_ms)
+            .and_then(VecDeque::pop_front)
+        else {
+            continue;
+        };
+        match kind {
+            LyricAuxiliaryKind::Translation => line.translation = Some(auxiliary_text),
+            LyricAuxiliaryKind::Romanization => line.romanization = Some(auxiliary_text),
+        }
+    }
+    Ok(())
 }
 
 pub fn rank_lyric_candidates(
@@ -282,6 +341,46 @@ pub fn score_lyric_candidate(
     LyricMatchScore {
         value: score.clamp(0.0, 1.0),
     }
+}
+
+/// Human-readable factors behind the same normalized comparisons used for candidate scoring.
+pub fn explain_lyric_candidate_match(
+    local: &LyricsTrackMetadata,
+    candidate: &LyricCandidate,
+) -> Vec<String> {
+    let mut reasons = Vec::with_capacity(4);
+    match (&local.title, &candidate.title) {
+        (Some(local), Some(remote)) if text_similarity(local, remote) >= 0.88 => {
+            reasons.push("標題相符（高權重）".to_owned());
+        }
+        (Some(_), Some(_)) => reasons.push("標題或版本資訊有差異（高權重）".to_owned()),
+        _ => reasons.push("缺少標題，無法充分比較".to_owned()),
+    }
+    match (&local.artist, &candidate.artist) {
+        (Some(local), Some(remote)) if text_similarity(local, remote) >= 0.88 => {
+            reasons.push("演出者相符（高權重）".to_owned());
+        }
+        (Some(_), Some(_)) => reasons.push("演出者有差異（高權重）".to_owned()),
+        _ => reasons.push("缺少演出者資料".to_owned()),
+    }
+    match (local.duration_ms, candidate.duration_ms) {
+        (Some(local), Some(remote)) if local.abs_diff(remote) <= 2_000 => {
+            reasons.push("長度相差不超過 2 秒".to_owned());
+        }
+        (Some(local), Some(remote)) if local.abs_diff(remote) > 5_000 => {
+            reasons.push("長度差異超過 5 秒".to_owned());
+        }
+        (Some(_), Some(_)) => reasons.push("長度有小幅差異".to_owned()),
+        _ => reasons.push("缺少曲目長度，無法比較".to_owned()),
+    }
+    if let (Some(local), Some(remote)) = (&local.album, &candidate.album) {
+        if text_similarity(local, remote) >= 0.88 {
+            reasons.push("專輯相符（低權重）".to_owned());
+        } else {
+            reasons.push("專輯不同（低權重）".to_owned());
+        }
+    }
+    reasons
 }
 
 fn check_payload_size(input: &str) -> Result<(), LyricsParseError> {
@@ -524,14 +623,20 @@ mod tests {
                 LyricLine {
                     start_ms: Some(950),
                     text: "line".into(),
+                    translation: None,
+                    romanization: None,
                 },
                 LyricLine {
                     start_ms: Some(3_150),
                     text: "line".into(),
+                    translation: None,
+                    romanization: None,
                 },
                 LyricLine {
                     start_ms: Some(4_750),
                     text: "next".into(),
+                    translation: None,
+                    romanization: None,
                 },
             ]
         );
@@ -550,6 +655,8 @@ mod tests {
             vec![LyricLine {
                 start_ms: Some(1_200),
                 text: "早安世界".into(),
+                translation: None,
+                romanization: None,
             }]
         );
     }
@@ -563,6 +670,41 @@ mod tests {
         assert!(!parsed.synced);
         assert!(parsed.lines.is_empty());
         assert_eq!(parsed.raw_karaoke.as_deref(), Some(raw));
+    }
+
+    #[test]
+    fn auxiliary_lrc_rows_are_matched_by_time_not_position() {
+        let mut primary = parse_lrc("[00:01.00]one\n[00:02.00]two").expect("primary LRC");
+        merge_lrc_auxiliary(
+            &mut primary,
+            "[00:02.00]第二行\n[00:01.00]第一行",
+            LyricAuxiliaryKind::Translation,
+        )
+        .expect("translation LRC");
+        merge_lrc_auxiliary(
+            &mut primary,
+            "[00:01.00]ichi\n[00:03.00]missing",
+            LyricAuxiliaryKind::Romanization,
+        )
+        .expect("romanization LRC");
+
+        assert_eq!(primary.lines[0].translation.as_deref(), Some("第一行"));
+        assert_eq!(primary.lines[1].translation.as_deref(), Some("第二行"));
+        assert_eq!(primary.lines[0].romanization.as_deref(), Some("ichi"));
+        assert_eq!(primary.lines[1].romanization, None);
+    }
+
+    #[test]
+    fn untimed_auxiliary_text_is_not_guessed_into_timed_rows() {
+        let mut primary = parse_lrc("[00:01.00]one\n[00:02.00]two").expect("primary LRC");
+        merge_lrc_auxiliary(
+            &mut primary,
+            "first\nsecond",
+            LyricAuxiliaryKind::Translation,
+        )
+        .expect("plain translation");
+
+        assert!(primary.lines.iter().all(|line| line.translation.is_none()));
     }
 
     #[test]
@@ -614,6 +756,24 @@ mod tests {
                 < score_lyric_candidate(&local, &wrong_album).value
         );
         assert!(score_lyric_candidate(&local, &wrong_album).value > 0.9);
+    }
+
+    #[test]
+    fn match_explanations_name_title_artist_duration_and_weak_album_factors() {
+        let local = LyricsTrackMetadata {
+            title: Some("Song".into()),
+            artist: Some("Artist".into()),
+            album: Some("Original Album".into()),
+            duration_ms: Some(180_000),
+        };
+        let candidate = candidate("same", "Song", "Artist", Some("Other Album"), Some(187_000));
+        let reasons = explain_lyric_candidate_match(&local, &candidate);
+        assert!(reasons.iter().any(|reason| reason.contains("標題相符")));
+        assert!(reasons.iter().any(|reason| reason.contains("演出者相符")));
+        assert!(reasons.iter().any(|reason| reason.contains("超過 5 秒")));
+        assert!(reasons
+            .iter()
+            .any(|reason| reason.contains("專輯不同（低權重）")));
     }
 
     #[test]

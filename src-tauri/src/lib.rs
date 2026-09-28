@@ -26,6 +26,8 @@ use settings::{
     AppSettings, NowPlayingLayout, RepeatMode, SettingsStore, SourceEntry, SourceEntryKind,
     ThemeSettings, TrackListColumnSettings,
 };
+mod lyrics_provider;
+mod lyrics_service;
 mod playlist_source_sync;
 
 #[cfg(target_os = "windows")]
@@ -84,6 +86,7 @@ struct AppState {
     database_path: Option<std::path::PathBuf>,
     database_error: Option<String>,
     settings: SettingsStore,
+    lyrics_service: lyrics_service::LyricsService,
     #[cfg(target_os = "windows")]
     playback: Option<WindowsPlaybackService>,
     #[cfg(target_os = "windows")]
@@ -2673,6 +2676,10 @@ pub fn run() {
             playback_set_volume,
             playback_set_repeat,
             playback_set_shuffle,
+            lyrics_service::lyrics_get_track,
+            lyrics_service::lyrics_search,
+            lyrics_service::lyrics_select_candidate,
+            lyrics_service::lyrics_cancel_search,
         ])
         .setup(|app| {
             let database_path = app
@@ -2733,6 +2740,7 @@ pub fn run() {
                 database_path: stored_path.clone(),
                 database_error,
                 settings,
+                lyrics_service: lyrics_service::LyricsService::default(),
                 #[cfg(target_os = "windows")]
                 playback,
                 #[cfg(target_os = "windows")]

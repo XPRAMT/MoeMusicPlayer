@@ -11,6 +11,9 @@ mod windows;
 mod artwork;
 
 #[cfg(windows)]
+mod lyrics;
+
+#[cfg(windows)]
 mod system_index;
 
 #[cfg(windows)]
@@ -21,3 +24,6 @@ pub use windows::WindowsMediaIndex;
 
 #[cfg(windows)]
 pub use artwork::{find_artwork, ArtworkLookup};
+
+#[cfg(windows)]
+pub use lyrics::{find_lyrics, LyricsLookup};
