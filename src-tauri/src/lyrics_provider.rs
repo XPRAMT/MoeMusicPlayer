@@ -65,6 +65,8 @@ pub struct RawLyricCandidate {
     pub plain_lyrics: Option<String>,
     pub translation: Option<String>,
     pub romanization: Option<String>,
+    /// NetEase's original word-timed payload, retained even when line-synced LRC is preferred.
+    pub raw_yrc: Option<String>,
     pub raw_karaoke: Option<RawKaraokeData>,
 }
 
@@ -302,8 +304,20 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
         for query in variants {
             let primary = self
                 .netease_search_request(NETEASE_SEARCH_URL, &query, cancellation)
-                .await?;
-            let mut hits = parse_netease_search(&parse_json(&primary.body)?)?;
+                .await;
+            let primary_hits = match primary {
+                Ok(response) => {
+                    match parse_json(&response.body).and_then(|json| parse_netease_search(&json)) {
+                        Ok(hits) => Some(hits),
+                        Err(error) if is_fallback_error(&error) => None,
+                        Err(error) => return Err(error),
+                    }
+                }
+                Err(ProviderError::Cancelled) => return Err(ProviderError::Cancelled),
+                Err(error) if is_fallback_error(&error) => None,
+                Err(error) => return Err(error),
+            };
+            let mut hits = primary_hits.unwrap_or_default();
             if hits.is_empty() {
                 let fallback = self
                     .netease_search_request(NETEASE_CLOUD_SEARCH_URL, &query, cancellation)
@@ -424,6 +438,16 @@ fn ensure_provider_ok(root: &Value) -> Result<(), ProviderError> {
     Ok(())
 }
 
+fn is_fallback_error(error: &ProviderError) -> bool {
+    matches!(
+        error,
+        ProviderError::Timeout
+            | ProviderError::Transport(_)
+            | ProviderError::HttpStatus(_)
+            | ProviderError::InvalidResponse(_)
+    )
+}
+
 fn parse_netease_search(root: &Value) -> Result<Vec<ProviderCandidate>, ProviderError> {
     ensure_provider_ok(root)?;
     let songs = root
@@ -514,6 +538,7 @@ fn parse_netease_lyrics(
     ensure_provider_ok(root)?;
     let yrc = nested_lyric(root, "yrc");
     let lrc = nested_lyric(root, "lrc");
+    let raw_yrc = yrc.clone();
     let (synced_lyrics, lrc_plain) = match lrc {
         Some(lrc) if contains_lrc_timestamp(&lrc) => (Some(lrc), None),
         Some(lrc) => (yrc, Some(lrc)),
@@ -528,6 +553,7 @@ fn parse_netease_lyrics(
         plain_lyrics,
         translation,
         romanization,
+        raw_yrc,
         None,
     ))
 }
@@ -562,6 +588,7 @@ fn parse_qq_lyrics(
         plain,
         translation.as_deref().and_then(decode_base64_or_plain),
         romanization.as_deref().and_then(decode_base64_or_plain),
+        None,
         raw_karaoke,
     ))
 }
@@ -589,6 +616,7 @@ fn raw_candidate(
     plain_lyrics: Option<String>,
     translation: Option<String>,
     romanization: Option<String>,
+    raw_yrc: Option<String>,
     raw_karaoke: Option<RawKaraokeData>,
 ) -> RawLyricCandidate {
     RawLyricCandidate {
@@ -604,6 +632,7 @@ fn raw_candidate(
         plain_lyrics,
         translation,
         romanization,
+        raw_yrc,
         raw_karaoke,
     }
 }
@@ -690,8 +719,14 @@ mod tests {
 
     impl MockTransport {
         fn with_responses(responses: impl IntoIterator<Item = HttpResponse>) -> Self {
+            Self::with_results(responses.into_iter().map(Ok))
+        }
+
+        fn with_results(
+            responses: impl IntoIterator<Item = Result<HttpResponse, ProviderError>>,
+        ) -> Self {
             Self {
-                responses: Arc::new(Mutex::new(responses.into_iter().map(Ok).collect())),
+                responses: Arc::new(Mutex::new(responses.into_iter().collect())),
                 requests: Arc::new(Mutex::new(Vec::new())),
             }
         }
@@ -822,7 +857,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn netease_prefers_yrc_and_returns_translation_romanization_and_lrc_fallback() {
+    async fn netease_uses_cloudsearch_after_primary_transport_http_or_parse_failure() {
+        let failures = [
+            Err(ProviderError::Transport("fixture transport failure".into())),
+            Ok(HttpResponse {
+                status: 503,
+                body: b"upstream unavailable".to_vec(),
+            }),
+            Ok(response("not json")),
+        ];
+        for failure in failures {
+            let transport = MockTransport::with_results([
+                failure,
+                Ok(response(
+                    r#"{"code":200,"result":{"songs":[{"id":6,"name":"Recovered","artists":[],"album":{},"duration":1000}]}}"#,
+                )),
+            ]);
+            let mut local = metadata();
+            local.artist = None;
+            let client = LyricsProviderClient::new(transport.clone());
+            let hits = client
+                .search(LyricProvider::NetEase, &local, &CancellationToken::new())
+                .await
+                .unwrap();
+            assert_eq!(hits[0].candidate_id, "netease:6");
+            let requests = transport.requests.lock().unwrap();
+            assert!(requests[0].url.starts_with(NETEASE_SEARCH_URL));
+            assert!(requests[1].url.starts_with(NETEASE_CLOUD_SEARCH_URL));
+        }
+    }
+
+    #[tokio::test]
+    async fn netease_prefers_lrc_and_retains_yrc_translation_and_romanization() {
         let transport = MockTransport::with_responses([
             response(
                 r#"{"code":200,"yrc":{"lyric":"[1200,1000](1200,1000,0)word"},"lrc":{"lyric":"[00:01.00]line"},"tlyric":{"lyric":"[00:01.00]譯文"},"romalrc":{"lyric":"[00:01.00]roma"}}"#,
@@ -836,6 +902,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(yrc.synced_lyrics.as_deref(), Some("[00:01.00]line"));
+        assert_eq!(yrc.raw_yrc.as_deref(), Some("[1200,1000](1200,1000,0)word"));
         assert_eq!(yrc.translation.as_deref(), Some("[00:01.00]譯文"));
         assert_eq!(yrc.romanization.as_deref(), Some("[00:01.00]roma"));
         let lrc = client
@@ -973,11 +1040,7 @@ mod tests {
         }]));
         assert_eq!(
             client
-                .search(
-                    LyricProvider::NetEase,
-                    &metadata(),
-                    &CancellationToken::new()
-                )
+                .search(LyricProvider::Qq, &metadata(), &CancellationToken::new())
                 .await,
             Err(ProviderError::HttpStatus(503))
         );
