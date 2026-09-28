@@ -161,12 +161,16 @@ impl WindowsPlaybackService {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let can_next = queue.as_ref().is_some_and(PlaybackQueue::can_next);
         let can_previous = queue.as_ref().is_some_and(PlaybackQueue::can_previous);
+        let duration_ms = playback_duration_ms(
+            audio.duration,
+            current_track.as_ref().and_then(|track| track.duration_ms),
+        );
         PlaybackSnapshot {
             current_track,
             state: audio_state_name(audio.state).to_owned(),
             is_playing: audio.state == AudioPlaybackState::Playing,
             position_ms: duration_millis(audio.position),
-            duration_ms: audio.duration.map(duration_millis),
+            duration_ms,
             volume: f64::from(audio.volume),
             last_error: audio.last_error.as_ref().map(playback_audio_error_message),
             repeat_mode,
@@ -425,9 +429,17 @@ fn audio_state_name(state: AudioPlaybackState) -> &'static str {
     }
 }
 
-#[cfg(target_os = "windows")]
 fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn playback_duration_ms(
+    audio_duration: Option<Duration>,
+    track_duration_ms: Option<u64>,
+) -> Option<u64> {
+    audio_duration
+        .map(duration_millis)
+        .or(track_duration_ms.filter(|duration| *duration > 0))
 }
 
 #[cfg(target_os = "windows")]
@@ -573,9 +585,24 @@ struct PlaybackSnapshot {
 #[cfg(test)]
 mod playback_queue_ipc_tests {
     use super::{
-        feature, FeatureState, LibrarySource, PlaybackQueueSource, PlaybackSnapshot, RepeatMode,
-        RuntimeCapabilities,
+        feature, playback_duration_ms, FeatureState, LibrarySource, PlaybackQueueSource,
+        PlaybackSnapshot, RepeatMode, RuntimeCapabilities,
     };
+
+    #[test]
+    fn playback_snapshot_uses_track_metadata_when_audio_duration_is_unknown() {
+        assert_eq!(playback_duration_ms(None, Some(184_000)), Some(184_000));
+        assert_eq!(
+            playback_duration_ms(
+                Some(std::time::Duration::from_millis(183_500)),
+                Some(184_000)
+            ),
+            Some(183_500),
+            "a decoder duration remains preferred when it is available",
+        );
+        assert_eq!(playback_duration_ms(None, Some(0)), None);
+        assert_eq!(playback_duration_ms(None, None), None);
+    }
 
     #[test]
     fn queue_source_deserializes_camel_case_ipc_fields() {

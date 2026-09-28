@@ -13,7 +13,6 @@
     type MediaStoreVolumeOption,
     type FeatureCapability,
     type PlaylistEntrySummary,
-    type PlaylistPage,
     type PlaylistSummary,
     type PlaybackSnapshot,
     type PlaybackQueueSource,
@@ -28,18 +27,11 @@
     isHexColor,
     normalizeThemePreferences,
   } from './lib/theme';
-  import { formatDuration, formatVolume } from './lib/format';
+  import { formatVolume } from './lib/format';
+  import { effectivePlaybackDurationMs } from './lib/playback-duration';
   import TrackList from './lib/TrackList.svelte';
-  import {
-    beginPlaybackSeekDraft,
-    commitPlaybackSeekDraft,
-    isPlaybackSeekableDuration,
-    playbackSeekDisplayPosition,
-    shouldClearPendingPlaybackSeek,
-    updatePlaybackSeekDraft,
-    type PendingPlaybackSeek,
-    type PlaybackSeekDraft,
-  } from './lib/playback-scrubber';
+  import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
+  import PlaybackProgress from './lib/PlaybackProgress.svelte';
   import {
     createActiveTrackArtworkController,
     type ActiveArtworkState,
@@ -56,7 +48,6 @@
     error: string | null;
   };
 
-  const PAGE_SIZE = 40;
 
   let activeView = $state<View>('library');
   let settingsSection = $state<SettingsSection>('appearance');
@@ -72,8 +63,6 @@
   let playbackError = $state<string | null>(null);
   let playback = $state<PlaybackSnapshot | null>(null);
   let activeArtwork = $state<ActiveArtworkState>({ trackId: null, status: 'empty', objectUrl: null });
-  let playbackSeekDraft = $state<PlaybackSeekDraft | null>(null);
-  let pendingPlaybackSeek = $state<PendingPlaybackSeek | null>(null);
   let sources = $state<LibrarySource[]>([]);
   let sourceError = $state<string | null>(null);
   let sourceSyncSummary = $state<string | null>(null);
@@ -81,8 +70,8 @@
   let mediaStoreVolumes = $state<MediaStoreVolumeOption[]>([]);
   let mediaPermissionGranted = $state<boolean | null>(null);
   let playlists = $state<PlaylistSummary[]>([]);
-  let playlistPage = $state<PlaylistPage | null>(null);
   let selectedPlaylistId = $state<string | null>(null);
+  let playlistListRevision = $state(0);
   let playlistError = $state<string | null>(null);
   let playlistMessage = $state<string | null>(null);
   let playlistExportFormat = $state<'m3u' | 'm3u8'>('m3u8');
@@ -94,16 +83,16 @@
   let isUpdatingSource = $state(false);
   let isLoadingVolumes = $state(false);
   let isLoadingPlaylists = $state(false);
-  let isLoadingPlaylistPage = $state(false);
   let isPlaylistOperation = $state(false);
   let isLoadingPlaybackSnapshot = false;
   let isSendingPlaybackCommand = $state(false);
   let playbackSnapshotRequestVersion = 0;
+  let playbackSnapshotFence = 0;
   let themeSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let themeSaveQueue: Promise<void> = Promise.resolve();
   let themeRevision = 0;
   let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
-  let playlistPageRequestVersion = 0;
+  let playlistListRequestVersion = 0;
   let capabilityRefreshInFlight = false;
   let nextCapabilityRefreshAt = 0;
   let unlistenSyncFinished: UnlistenFn | undefined;
@@ -127,27 +116,14 @@
   const playbackReady = $derived(isReady(capabilities?.playback));
   const playbackNavigationReady = $derived(isReady(capabilities?.playbackNavigation));
   const playbackModesReady = $derived(isReady(capabilities?.playbackModes));
-  const playbackSeekPositionMs = $derived(playbackSeekDisplayPosition(
-    playback?.positionMs ?? 0,
-    playback?.durationMs ?? null,
-    playback?.currentTrack?.id ?? null,
-    playbackSeekDraft,
-    pendingPlaybackSeek,
+  const playbackDurationMs = $derived(effectivePlaybackDurationMs(
+    playback?.durationMs,
+    playback?.currentTrack?.durationMs,
   ));
   const playlistExchangeReady = $derived(isReady(capabilities?.playlistExchange));
   const selectedPlaylist = $derived(
     playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null,
   );
-  const hasPreviousPlaylistPage = $derived((playlistPage?.offset ?? 0) > 0);
-  const hasNextPlaylistPage = $derived(
-    playlistPage !== null && playlistPage.offset + playlistPage.items.length < playlistPage.totalCount,
-  );
-  const playlistPageRangeLabel = $derived.by(() => {
-    if (!playlistPage || playlistPage.totalCount === 0) return '0 個項目';
-    const first = playlistPage.offset + 1;
-    const last = Math.min(playlistPage.offset + playlistPage.items.length, playlistPage.totalCount);
-    return `${first}–${last} 項，共 ${playlistPage.totalCount.toLocaleString()} 項`;
-  });
   const syncProgressSources = $derived.by(() =>
     syncProgress
       ? Object.values(syncProgress.sources).sort((left, right) => left.sourceIndex - right.sourceIndex)
@@ -227,7 +203,7 @@
     if (playbackPollTimer !== undefined) clearInterval(playbackPollTimer);
     unlistenSyncProgress?.();
     unlistenSyncFinished?.();
-    playlistPageRequestVersion += 1;
+    playlistListRequestVersion += 1;
   });
 
   async function loadThemePreferences(): Promise<void> {
@@ -521,50 +497,34 @@
 
   async function loadPlaylists(preferredId?: string): Promise<void> {
     if (!libraryReady) return;
+    const requestVersion = ++playlistListRequestVersion;
     isLoadingPlaylists = true;
     playlistError = null;
     try {
-      playlists = await invokeCommand('playlist_list', {});
+      const nextPlaylists = await invokeCommand('playlist_list', {});
+      if (requestVersion !== playlistListRequestVersion) return;
+      playlists = nextPlaylists;
       const requestedId = preferredId ?? selectedPlaylistId;
       const nextId = playlists.some((playlist) => playlist.id === requestedId)
         ? requestedId
         : playlists[0]?.id ?? null;
       selectedPlaylistId = nextId;
-      if (nextId) await loadPlaylistPage(nextId, 0);
-      else playlistPage = null;
+      playlistListRevision += 1;
     } catch (error) {
-      playlistError = getErrorText(error);
+      if (requestVersion === playlistListRequestVersion) playlistError = getErrorText(error);
     } finally {
-      isLoadingPlaylists = false;
-    }
-  }
-
-  async function loadPlaylistPage(playlistId: string, nextOffset: number): Promise<void> {
-    const requestVersion = ++playlistPageRequestVersion;
-    isLoadingPlaylistPage = true;
-    playlistError = null;
-    try {
-      const nextPage = await invokeCommand('playlist_get_page', {
-        playlistId,
-        offset: nextOffset,
-        limit: PAGE_SIZE,
-      });
-      if (requestVersion !== playlistPageRequestVersion || selectedPlaylistId !== playlistId) return;
-      playlistPage = nextPage;
-    } catch (error) {
-      if (requestVersion === playlistPageRequestVersion) {
-        playlistPage = null;
-        playlistError = getErrorText(error);
-      }
-    } finally {
-      if (requestVersion === playlistPageRequestVersion) isLoadingPlaylistPage = false;
+      if (requestVersion === playlistListRequestVersion) isLoadingPlaylists = false;
     }
   }
 
   async function selectPlaylist(playlistId: string): Promise<void> {
     selectedPlaylistId = playlistId;
+    playlistListRevision += 1;
     playlistMessage = null;
-    await loadPlaylistPage(playlistId, 0);
+  }
+
+  function refreshPlaylistEntries(): void {
+    playlistListRevision += 1;
   }
 
   async function importPlaylist(): Promise<void> {
@@ -607,11 +567,11 @@
     }
   }
 
-  async function playPlaylistEntry(entry: PlaylistEntrySummary): Promise<void> {
+  async function playPlaylistEntry(entry: PlaylistEntrySummary, playlistId: string): Promise<void> {
     if (!entry.trackId || !entry.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand) return;
     const queueSource: PlaybackQueueSource = {
       kind: 'playlist',
-      playlistId: selectedPlaylistId!,
+      playlistId,
       entryPosition: entry.position,
     };
     await sendPlaybackCommand(() => invokeCommand('playback_play', { trackId: entry.trackId!, queueSource }));
@@ -798,69 +758,14 @@
     await sendPlaybackCommand(() => invokeCommand(command, {}));
   }
 
-  function beginPlaybackSeek(): void {
-    playbackSeekDraft = beginPlaybackSeekDraft(
-      playback?.currentTrack?.id ?? null,
-      playback?.positionMs ?? 0,
-      playback?.durationMs ?? null,
-    );
-  }
-
-  function updatePlaybackSeek(event: Event): void {
-    playbackSeekDraft = updatePlaybackSeekDraft(
-      playbackSeekDraft,
-      playback?.currentTrack?.id ?? null,
-      playback?.positionMs ?? 0,
-      playback?.durationMs ?? null,
-      Number((event.currentTarget as HTMLInputElement).value),
-    );
-  }
-
-  function handlePlaybackSeekPointerEnd(): void {
-    if (playbackSeekDraft) void commitPlaybackSeek();
-  }
-
-  async function commitPlaybackSeek(): Promise<void> {
-    const draft = playbackSeekDraft;
-    playbackSeekDraft = null;
+  async function commitPlaybackSeek(positionMs: number): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand) return;
-
-    const trackId = playback?.currentTrack?.id ?? null;
-    const positionMs = commitPlaybackSeekDraft(
-      draft,
-      trackId,
-      playback?.durationMs ?? null,
-    );
-    if (positionMs === null || !trackId) return;
-
-    pendingPlaybackSeek = {
-      trackId,
-      positionMs,
-      requestedAtMs: Date.now(),
-      snapshotVersionAtRequest: playbackSnapshotRequestVersion,
-    };
     await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs }));
-    if (playbackError) pendingPlaybackSeek = null;
   }
 
   function applyPlaybackSnapshot(next: PlaybackSnapshot, snapshotVersion?: number): void {
+    if (snapshotVersion !== undefined && snapshotVersion <= playbackSnapshotFence) return;
     playback = next;
-    const pending = pendingPlaybackSeek;
-    if (pending) {
-      if (pending.trackId !== next.currentTrack?.id) {
-        pendingPlaybackSeek = null;
-      } else if (snapshotVersion !== undefined && shouldClearPendingPlaybackSeek(pending, {
-        trackId: next.currentTrack?.id ?? null,
-        positionMs: next.positionMs,
-        durationMs: next.durationMs,
-        isPlaying: next.isPlaying,
-      }, snapshotVersion, Date.now())) {
-        pendingPlaybackSeek = null;
-      }
-    }
-    if (playbackSeekDraft && playbackSeekDraft.trackId !== next.currentTrack?.id) {
-      playbackSeekDraft = null;
-    }
   }
 
   async function setPlaybackVolume(event: Event): Promise<void> {
@@ -887,6 +792,7 @@
   async function sendPlaybackCommand(
     request: () => Promise<PlaybackSnapshot>,
   ): Promise<void> {
+    playbackSnapshotFence = ++playbackSnapshotRequestVersion;
     isSendingPlaybackCommand = true;
     playbackError = null;
     try {
@@ -932,23 +838,7 @@
     }
   }
 
-  function nextPlaylistPage(): void {
-    if (hasNextPlaylistPage && playlistPage && selectedPlaylistId) {
-      void loadPlaylistPage(selectedPlaylistId, playlistPage.offset + PAGE_SIZE);
-    }
-  }
-
-  function previousPlaylistPage(): void {
-    if (hasPreviousPlaylistPage && playlistPage && selectedPlaylistId) {
-      void loadPlaylistPage(selectedPlaylistId, Math.max(0, playlistPage.offset - PAGE_SIZE));
-    }
-  }
 </script>
-
-<svelte:window
-  onpointerup={handlePlaybackSeekPointerEnd}
-  onpointercancel={handlePlaybackSeekPointerEnd}
-/>
 
 <div class="app-shell">
   <aside class="sidebar" aria-label="主要導覽">
@@ -1197,7 +1087,7 @@
               <div class="inline-message" role="alert">
                 <span class="message-mark">!</span>
                 <div><strong>播放清單操作失敗</strong><p>{playlistError}</p></div>
-                <button class="text-button" type="button" onclick={() => { if (selectedPlaylistId) void loadPlaylistPage(selectedPlaylistId, playlistPage?.offset ?? 0); else void loadPlaylists(); }}>再試一次</button>
+                <button class="text-button" type="button" onclick={() => { if (selectedPlaylistId) refreshPlaylistEntries(); else void loadPlaylists(); }}>再試一次</button>
               </div>
             {/if}
             {#if playlistMessage}
@@ -1263,35 +1153,15 @@
                       </div>
                     </div>
 
-                    {#if isLoadingPlaylistPage && !playlistPage}
-                      <div class="loading-panel"><span class="loader-ring"></span><span>正在載入項目…</span></div>
-                    {:else if playlistPage && playlistPage.items.length === 0}
-                      <div class="empty-panel playlist-empty"><h3>這份清單沒有項目</h3><p>可以重新匯入其他播放清單。</p></div>
-                    {:else if playlistPage}
-                      <div class="playlist-entry-table" role="table" aria-label="播放清單項目">
-                        <div class="playlist-entry-head" role="row"><span>#</span><span>曲目</span><span class="playlist-entry-album">專輯／演出者</span><span class="playlist-entry-duration">長度</span><span></span></div>
-                        <div class="playlist-entry-body" aria-live="polite">
-                          {#each playlistPage.items as entry (entry.position)}
-                            <div class="playlist-entry-row" role="row">
-                              <span class="playlist-entry-index">{entry.position + 1}</span>
-                              <div class="playlist-entry-title"><strong>{entry.title?.trim() || '未命名項目'}</strong><small>{entry.artist?.trim() || (entry.hasEnabledMapping ? '未知演出者' : '目前未對應到曲庫')}</small></div>
-                              <span class="playlist-entry-album">{entry.album?.trim() || '—'}</span>
-                              <span class="playlist-entry-duration">{formatDuration(entry.durationMs)}</span>
-                              <button class="row-play" type="button" aria-label={`播放 ${entry.title?.trim() || '播放清單項目'}`} title={entry.hasEnabledMapping ? '播放曲目' : '這個項目尚未對應到可播放的曲庫曲目'} disabled={!entry.trackId || !entry.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand} onclick={() => void playPlaylistEntry(entry)}>
-                                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7.3 5.8 7 4.2-7 4.2V5.8Z" fill="currentColor" /></svg>
-                              </button>
-                            </div>
-                          {/each}
-                        </div>
-                      </div>
-                      <div class="pagination-bar">
-                        <span>{playlistPageRangeLabel}</span>
-                        <div class="pagination-actions">
-                          <button type="button" class="page-button" onclick={previousPlaylistPage} disabled={!hasPreviousPlaylistPage || isLoadingPlaylistPage} aria-label="播放清單上一頁"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m12.5 4.5-5 5.5 5 5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
-                          <button type="button" class="page-button" onclick={nextPlaylistPage} disabled={!hasNextPlaylistPage || isLoadingPlaylistPage} aria-label="播放清單下一頁"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7.5 4.5 5 5.5-5 5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
-                        </div>
-                      </div>
-                    {/if}
+                    {#key selectedPlaylist.id}
+                      <PlaylistEntryList
+                        playlistId={selectedPlaylist.id}
+                        resetKey={playlistListRevision}
+                        {playbackReady}
+                        {isSendingPlaybackCommand}
+                        onPlay={playPlaylistEntry}
+                      />
+                    {/key}
                   </section>
                 {/if}
               </div>
@@ -1554,23 +1424,14 @@
           <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M17 8h2.5l-3-3-3 3H16v6a3 3 0 0 1-3 3h-1M5 14H2.5l3 3 3-3H6V8a3 3 0 0 1 3-3h1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /><circle cx="16" cy="15" r="3" fill="var(--dock-bg)" /><path d="M16 13.4v1.7l1.1.7" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
       </div>
-      <div class="progress-row">
-        <span>{formatDuration(playbackSeekPositionMs)}</span>
-        <input
-          class="progress-slider"
-          type="range"
-          min="0"
-          max={Math.max(1, playback?.durationMs ?? 0)}
-          value={playbackSeekPositionMs}
-          aria-label="播放進度"
-          disabled={!playbackReady || !isPlaybackSeekableDuration(playback?.durationMs ?? null) || isSendingPlaybackCommand}
-          onpointerdown={beginPlaybackSeek}
-          oninput={updatePlaybackSeek}
-          onchange={() => void commitPlaybackSeek()}
-          onblur={() => void commitPlaybackSeek()}
-        />
-        <span>{formatDuration(playback?.durationMs)}</span>
-      </div>
+      <PlaybackProgress
+        positionMs={playback?.positionMs ?? 0}
+        durationMs={playbackDurationMs}
+        trackId={playback?.currentTrack?.id ?? null}
+        canControl={playbackReady}
+        isSending={isSendingPlaybackCommand}
+        onSeek={commitPlaybackSeek}
+      />
       {#if playbackError || playback?.lastError}<span class="dock-error" role="status">{playbackError ?? playback?.lastError}</span>{/if}
     </div>
 
