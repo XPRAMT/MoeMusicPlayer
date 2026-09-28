@@ -12,6 +12,10 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **Media locator**: A platform-specific address for reading media, such as a filesystem path or a content URI. It belongs to the native side of the application and is not a renderer-facing track identity.
 
+**「演出者」 (artist)**: The user-facing artist value sourced from the embedded `ARTIST` tag. It is distinct from the separate `PERFORMER` tag; `PERFORMER` is not a substitute for `ARTIST`.
+
+**Year**: The displayed year is derived only from the embedded `YEAR` value. Accepted forms are a four-digit year (`YYYY`) or a valid full date (`YYYY-MM-DD`); other forms do not define a display year.
+
 **App settings**: User-owned preferences stored in a versioned JSON document, including theme colors, shuffle, repeat mode, and the source registry. JSON is the authority for these values; SQLite rows are rebuildable music-data projections.
 
 **Source registry**: The stable list of enabled or disabled folders and explicitly registered playlist files. A playlist-file entry associates its source ID and native path with the internal Playlist ID; static playlists do not imply a source-file path.
