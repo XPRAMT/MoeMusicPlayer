@@ -12,7 +12,7 @@ use std::{
 use player_core::{LibraryRoot, MediaLocator, MediaSourceKind, PlaylistId, SourceId};
 use serde::{Deserialize, Serialize};
 
-const SETTINGS_SCHEMA_VERSION: u32 = 2;
+const SETTINGS_SCHEMA_VERSION: u32 = 3;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -36,6 +36,49 @@ impl Default for ThemeSettings {
             background_hex: "#000000".to_owned(),
             accent_hex: "#55D9FF".to_owned(),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricsPreferences {
+    pub show_translation: bool,
+    pub show_romanization: bool,
+    pub inactive_opacity_percent: u8,
+    pub primary_font_size_px: u8,
+    pub auxiliary_font_size_px: u8,
+}
+
+impl Default for LyricsPreferences {
+    fn default() -> Self {
+        Self {
+            show_translation: false,
+            show_romanization: false,
+            inactive_opacity_percent: 70,
+            primary_font_size_px: 14,
+            auxiliary_font_size_px: 10,
+        }
+    }
+}
+
+impl LyricsPreferences {
+    fn validate(&self) -> Result<(), SettingsError> {
+        if !(10..=100).contains(&self.inactive_opacity_percent) {
+            return Err(SettingsError::InvalidData(
+                "inactiveOpacityPercent must be between 10 and 100".into(),
+            ));
+        }
+        if !(12..=36).contains(&self.primary_font_size_px) {
+            return Err(SettingsError::InvalidData(
+                "primaryFontSizePx must be between 12 and 36".into(),
+            ));
+        }
+        if !(9..=24).contains(&self.auxiliary_font_size_px) {
+            return Err(SettingsError::InvalidData(
+                "auxiliaryFontSizePx must be between 9 and 24".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -264,6 +307,7 @@ impl SourceEntry {
 pub struct AppSettings {
     pub schema_version: u32,
     pub theme: ThemeSettings,
+    pub lyrics_preferences: LyricsPreferences,
     pub shuffle: bool,
     pub repeat_mode: RepeatMode,
     pub track_list_columns: TrackListColumnSettings,
@@ -279,6 +323,7 @@ impl Default for AppSettings {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
             theme: ThemeSettings::default(),
+            lyrics_preferences: LyricsPreferences::default(),
             shuffle: false,
             repeat_mode: RepeatMode::Off,
             track_list_columns: TrackListColumnSettings::default(),
@@ -315,6 +360,7 @@ impl AppSettings {
         }
         validate_color(&self.theme.background_hex, "backgroundHex")?;
         validate_color(&self.theme.accent_hex, "accentHex")?;
+        self.lyrics_preferences.validate()?;
         self.track_list_columns.validate()?;
         let mut ids = std::collections::HashSet::new();
         for source in &self.sources {
@@ -582,6 +628,7 @@ impl SettingsStore {
 struct RawSettings {
     schema_version: Option<u32>,
     theme: Option<ThemeSettings>,
+    lyrics_preferences: Option<LyricsPreferences>,
     shuffle: Option<bool>,
     repeat_mode: Option<RepeatMode>,
     track_list_columns: Option<TrackListColumnSettings>,
@@ -601,6 +648,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
     let settings = AppSettings {
         schema_version: SETTINGS_SCHEMA_VERSION,
         theme: raw.theme.unwrap_or_default(),
+        lyrics_preferences: raw.lyrics_preferences.unwrap_or_default(),
         shuffle: raw.shuffle.unwrap_or(false),
         repeat_mode: raw.repeat_mode.unwrap_or(RepeatMode::Off),
         track_list_columns: raw.track_list_columns.unwrap_or_default(),
@@ -1074,6 +1122,136 @@ mod tests {
     }
 
     #[test]
+    fn lyrics_preferences_defaults_and_json_use_the_ipc_contract_names() {
+        let preferences = LyricsPreferences::default();
+        assert_eq!(
+            preferences,
+            LyricsPreferences {
+                show_translation: false,
+                show_romanization: false,
+                inactive_opacity_percent: 70,
+                primary_font_size_px: 14,
+                auxiliary_font_size_px: 10,
+            }
+        );
+
+        let value = serde_json::to_value(preferences).expect("serialize lyric preferences");
+        assert_eq!(value["showTranslation"], false);
+        assert_eq!(value["showRomanization"], false);
+        assert_eq!(value["inactiveOpacityPercent"], 70);
+        assert_eq!(value["primaryFontSizePx"], 14);
+        assert_eq!(value["auxiliaryFontSizePx"], 10);
+        assert!(value.get("show_translation").is_none());
+        assert_eq!(
+            serde_json::from_value::<LyricsPreferences>(value).unwrap(),
+            preferences
+        );
+    }
+
+    #[test]
+    fn lyrics_preference_numeric_ranges_are_inclusive_and_reject_out_of_range_values() {
+        let mut minimum = LyricsPreferences {
+            inactive_opacity_percent: 10,
+            primary_font_size_px: 12,
+            auxiliary_font_size_px: 9,
+            ..LyricsPreferences::default()
+        };
+        minimum.validate().expect("accept lower bounds");
+
+        let maximum = LyricsPreferences {
+            inactive_opacity_percent: 100,
+            primary_font_size_px: 36,
+            auxiliary_font_size_px: 24,
+            ..LyricsPreferences::default()
+        };
+        maximum.validate().expect("accept upper bounds");
+
+        minimum.inactive_opacity_percent = 9;
+        assert!(minimum.validate().is_err());
+        minimum.inactive_opacity_percent = 101;
+        assert!(minimum.validate().is_err());
+
+        minimum.inactive_opacity_percent = 70;
+        minimum.primary_font_size_px = 11;
+        assert!(minimum.validate().is_err());
+        minimum.primary_font_size_px = 37;
+        assert!(minimum.validate().is_err());
+
+        minimum.primary_font_size_px = 14;
+        minimum.auxiliary_font_size_px = 8;
+        assert!(minimum.validate().is_err());
+        minimum.auxiliary_font_size_px = 25;
+        assert!(minimum.validate().is_err());
+    }
+
+    #[test]
+    fn invalid_lyrics_preference_update_does_not_change_memory_or_json() {
+        let directory = test_directory("invalid-lyrics-preferences");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        let original = fs::read(&path).expect("read original settings");
+
+        let result = store.update(|settings| {
+            settings.lyrics_preferences = LyricsPreferences {
+                auxiliary_font_size_px: 25,
+                ..LyricsPreferences::default()
+            };
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            store.snapshot().unwrap().lyrics_preferences,
+            LyricsPreferences::default()
+        );
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn schema_two_json_migrates_additively_and_preserves_existing_settings() {
+        let directory = test_directory("schema-two-upgrade");
+        let path = directory.join("settings.json");
+        let source = source(StoredPath::Utf8("D:/Music".into()));
+        let mut previous = AppSettings {
+            theme: ThemeSettings {
+                background_hex: "#123456".into(),
+                accent_hex: "#ABCDEF".into(),
+            },
+            sources: vec![source.clone()],
+            shuffle: true,
+            repeat_mode: RepeatMode::All,
+            source_registry_authoritative: false,
+            ..AppSettings::default()
+        };
+        previous.schema_version = 2;
+        let mut value = serde_json::to_value(previous).expect("serialize schema-two settings");
+        value.as_object_mut().unwrap().remove("lyricsPreferences");
+        fs::write(&path, serde_json::to_vec_pretty(&value).unwrap())
+            .expect("write schema-two settings");
+
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("migrate schema two");
+        let migrated = store.snapshot().unwrap();
+        assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(migrated.lyrics_preferences, LyricsPreferences::default());
+        assert_eq!(migrated.theme.background_hex, "#123456");
+        assert_eq!(migrated.theme.accent_hex, "#ABCDEF");
+        assert_eq!(migrated.sources, vec![source]);
+        assert!(migrated.shuffle);
+        assert_eq!(migrated.repeat_mode, RepeatMode::All);
+        assert!(!migrated.source_registry_authoritative);
+
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(persisted["schemaVersion"], 3);
+        assert_eq!(persisted["lyricsPreferences"]["showTranslation"], false);
+        assert_eq!(persisted["lyricsPreferences"]["showRomanization"], false);
+        assert_eq!(persisted["lyricsPreferences"]["inactiveOpacityPercent"], 70);
+        assert_eq!(persisted["lyricsPreferences"]["primaryFontSizePx"], 14);
+        assert_eq!(persisted["lyricsPreferences"]["auxiliaryFontSizePx"], 10);
+        assert_eq!(persisted["sourceRegistryAuthoritative"], false);
+    }
+
+    #[test]
     fn schema_one_json_migrates_with_new_preferences_defaulted_and_registry_preserved() {
         let directory = test_directory("schema-one-upgrade");
         let path = directory.join("settings.json");
@@ -1089,6 +1267,7 @@ mod tests {
         let mut value = serde_json::to_value(previous).expect("serialize schema-one settings");
         value.as_object_mut().unwrap().remove("trackListColumns");
         value.as_object_mut().unwrap().remove("nowPlayingLayout");
+        value.as_object_mut().unwrap().remove("lyricsPreferences");
         fs::write(&path, serde_json::to_vec_pretty(&value).unwrap())
             .expect("write schema-one settings");
 
