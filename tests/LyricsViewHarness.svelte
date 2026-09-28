@@ -23,6 +23,8 @@
       searchCount: number;
       cancelCount: number;
       selectedSource: string | null;
+      qrcNoticeVisible: boolean;
+      candidateActionEnabled: boolean;
       documentWidth: number;
       viewportWidth: number;
       isPlaying: string | null;
@@ -64,7 +66,7 @@
 
   const candidate: LyricsCandidate = {
     id: 'candidate-hanser',
-    provider: 'netease',
+    provider: 'qqmusic',
     title: '候選歌詞',
     artist: '測試演出者',
     album: null,
@@ -72,8 +74,8 @@
     score: 0.88,
     confidence: 'medium',
     reasons: ['標題與演出者相符'],
-    previewLines: ['候選第一行', '候選第二行'],
-    hasSyncedLyrics: true,
+    previewLines: [],
+    hasSyncedLyrics: false,
   };
 
   const api = {
@@ -132,6 +134,8 @@
       searchCount,
       cancelCount,
       selectedSource,
+      qrcNoticeVisible: document.querySelector('.candidate-preview-note') !== null,
+      candidateActionEnabled: [...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === '使用這份' && !button.disabled),
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
       isPlaying: document.querySelector<HTMLElement>('[data-testid="lyrics-view"]')?.dataset.playing ?? null,

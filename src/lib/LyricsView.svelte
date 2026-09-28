@@ -7,6 +7,7 @@
     TrackLyrics,
   } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
+  import { getCandidatePresentation } from './lyrics-candidate-preview.js';
   import {
     buildTimedLyricTimeline,
     findActiveLyricIndex,
@@ -287,13 +288,16 @@
         <h4>選擇歌詞</h4>
         <ul>
           {#each viewState.candidates as candidate (candidate.id)}
+            {@const presentation = getCandidatePresentation(candidate)}
             <li class="lyrics-candidate">
               <div class="candidate-copy">
                 <strong>{candidate.title}</strong>
                 <span>{candidate.artist}{candidate.album ? ` · ${candidate.album}` : ''}</span>
-                <small>{providerLabel(candidate.provider)} · {confidenceLabel(candidate.confidence)} · 分數 {candidate.score.toFixed(2)} · {formatCandidateDuration(candidate.durationMs)} · {candidate.hasSyncedLyrics ? '同步歌詞' : '純歌詞'}</small>
+                <small>{providerLabel(candidate.provider)} · {confidenceLabel(candidate.confidence)} · 分數 {candidate.score.toFixed(2)} · {formatCandidateDuration(candidate.durationMs)} · {presentation.formatLabel}</small>
                 {#if candidate.previewLines.length > 0}
                   <span class="candidate-preview">{candidate.previewLines.slice(0, 2).join(' / ')}</span>
+                {:else if presentation.previewNotice}
+                  <span class="candidate-preview-note" role="note">{presentation.previewNotice}</span>
                 {/if}
                 {#if candidate.reasons.length > 0}
                   <small>{candidate.reasons.join('；')}</small>
@@ -539,6 +543,12 @@
 
   .candidate-preview {
     color: var(--text-soft) !important;
+  }
+
+  .candidate-preview-note {
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.5;
   }
 
   @media (max-width: 560px) {

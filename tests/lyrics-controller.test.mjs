@@ -9,6 +9,7 @@ import {
   TIMED_LYRIC_ROW_HEIGHT,
 } from '../src/lib/lyrics-window.js';
 import { createLyricsController } from '../src/lib/lyrics-controller.js';
+import { getCandidatePresentation } from '../src/lib/lyrics-candidate-preview.js';
 
 function lyric(trackId, source = 'local', text = '歌詞') {
   return {
@@ -197,6 +198,48 @@ test('manual candidate selection saves only for the still-active track', async (
   assert.deepEqual(calls, [['select', { trackId: 'track-candidate', candidateId: 'candidate-1' }]]);
   assert.equal(controller.getState().lyrics?.source, 'manual');
   assert.equal(controller.getState().lyrics?.lines[0].text, '手動指定');
+  controller.dispose();
+});
+
+test('QQ QRC-only candidates explain unavailable preview and remain manually selectable', async () => {
+  const candidate = {
+    id: 'qrc-only',
+    provider: 'qqmusic',
+    title: 'QRC 歌詞',
+    artist: '歌手',
+    album: null,
+    durationMs: null,
+    score: 0.72,
+    confidence: 'medium',
+    reasons: ['標題相符'],
+    previewLines: [],
+    hasSyncedLyrics: false,
+  };
+  assert.deepEqual(getCandidatePresentation(candidate), {
+    formatLabel: 'QRC 尚未解碼',
+    previewNotice: '原始 QRC 尚未解碼，目前無法預覽；仍可使用「使用這份」保存。',
+  });
+
+  const calls = [];
+  const controller = createLyricsController({
+    api: {
+      getTrack: async () => emptyResult(),
+      search: async () => ({ lyrics: null, candidates: [candidate], status: 'candidates', error: null }),
+      selectCandidate: async (args) => {
+        calls.push(args);
+        return { ...lyric(args.trackId, 'manual', ''), synced: false, lines: [] };
+      },
+      cancelSearch: async () => {},
+    },
+    onChange() {},
+    createRequestId: () => 'qrc-request',
+  });
+
+  await controller.setTrack('qrc-track');
+  await controller.selectCandidate(candidate.id);
+  assert.deepEqual(calls, [{ trackId: 'qrc-track', candidateId: 'qrc-only' }]);
+  assert.equal(controller.getState().lyrics?.source, 'manual');
+  assert.equal(controller.getState().lyrics?.lines.length, 0);
   controller.dispose();
 });
 

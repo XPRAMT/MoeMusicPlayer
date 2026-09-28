@@ -39,6 +39,8 @@
   const candidateState = await page.evaluate(() => window.lyricsViewHarness.snapshot());
   assert.equal(candidateState.getCount, 2);
   assert.equal(candidateState.searchCount, 1, 'remote lookup begins after local miss in Now Playing');
+  assert.equal(candidateState.qrcNoticeVisible, true, 'QQ QRC without a preview is explained as undecoded');
+  assert.equal(candidateState.candidateActionEnabled, true, 'QRC-only candidates remain selectable');
   await page.getByRole('button', { name: '使用這份' }).click();
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().selectedSource === 'manual');
   const selected = await page.evaluate(() => window.lyricsViewHarness.snapshot());
