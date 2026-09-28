@@ -247,7 +247,7 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
                     form_component(&candidate.provider_track_id)
                 ),
                 body: None,
-                headers: Vec::new(),
+                headers: netease_headers(),
             },
             LyricProvider::Qq => HttpRequest {
                 method: HttpMethod::Get,
@@ -343,7 +343,7 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
                     form_component(query)
                 ),
                 body: None,
-                headers: Vec::new(),
+                headers: netease_headers(),
             },
             cancellation,
         )
@@ -417,7 +417,16 @@ fn qq_headers() -> Vec<(String, String)> {
         ("Referer".into(), QQ_REFERER.into()),
         ("Origin".into(), "https://y.qq.com".into()),
         ("User-Agent".into(), QQ_USER_AGENT.into()),
+        ("Accept".into(), "application/json, text/plain, */*".into()),
+        (
+            "Content-Type".into(),
+            "application/json;charset=UTF-8".into(),
+        ),
     ]
+}
+
+fn netease_headers() -> Vec<(String, String)> {
+    vec![("Referer".into(), "https://music.163.com/".into())]
 }
 
 fn parse_json(bytes: &[u8]) -> Result<Value, ProviderError> {
@@ -851,6 +860,10 @@ mod tests {
         let requests = transport.requests.lock().unwrap();
         assert!(requests[0].url.starts_with(NETEASE_SEARCH_URL));
         assert!(requests[1].url.starts_with(NETEASE_CLOUD_SEARCH_URL));
+        assert!(requests.iter().all(|request| request
+            .headers
+            .iter()
+            .any(|(name, value)| name == "Referer" && value == "https://music.163.com/")));
         assert!(requests
             .iter()
             .all(|request| request.url.contains("limit=5")));
@@ -917,6 +930,10 @@ mod tests {
         assert!(requests
             .iter()
             .all(|request| request.url.contains("lv=1&kv=1&tv=1&yv=1&rv=1")));
+        assert!(requests.iter().all(|request| request
+            .headers
+            .iter()
+            .any(|(name, value)| name == "Referer" && value == "https://music.163.com/")));
     }
 
     #[tokio::test]
@@ -1002,6 +1019,13 @@ mod tests {
             .headers
             .iter()
             .any(|(name, value)| name == "Origin" && value == "https://y.qq.com"));
+        assert!(request
+            .headers
+            .iter()
+            .any(|(name, value)| name == "Accept" && value == "application/json, text/plain, */*"));
+        assert!(request.headers.iter().any(
+            |(name, value)| name == "Content-Type" && value == "application/json;charset=UTF-8"
+        ));
     }
 
     #[tokio::test]
