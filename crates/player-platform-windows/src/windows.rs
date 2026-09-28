@@ -12,10 +12,9 @@ use lofty::{
     tag::ItemKey,
 };
 use player_core::{
-    FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
+    windows_locator_key, FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
     MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, SourceScan,
     SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata, TrackMetadataError,
-    windows_locator_key,
 };
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
@@ -465,7 +464,7 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{WindowsMediaIndex, to_extended_path, windows_locator_key};
+    use super::{to_extended_path, windows_locator_key, WindowsMediaIndex};
     use player_core::{
         LibraryRoot, MediaIndex, MediaLocator, MediaScanProgressUnit, MediaSourceKind, SourceId,
         SourceScanState, SyncCancellation, UserMetadataField,
@@ -797,12 +796,10 @@ mod tests {
         let fallback = player_core::SyncEngine::sync(&systemindex_root, &mut index, &mut db, 2)
             .expect("filesystem fallback sync");
         assert_eq!(fallback.state, Some(SourceScanState::Complete));
-        assert!(
-            fallback
-                .source_errors
-                .iter()
-                .any(|error| error.message.contains("filesystem fallback"))
-        );
+        assert!(fallback
+            .source_errors
+            .iter()
+            .any(|error| error.message.contains("filesystem fallback")));
 
         let after_fallback = db
             .list_tracks_page(player_core::ListTracksQuery {
@@ -873,11 +870,9 @@ mod tests {
             "expected intermediate enumeration updates, got {progress:?}"
         );
         assert!(progress.iter().all(|value| value.total.is_none()));
-        assert!(
-            progress
-                .iter()
-                .all(|value| value.unit == MediaScanProgressUnit::FilesystemEntries)
-        );
+        assert!(progress
+            .iter()
+            .all(|value| value.unit == MediaScanProgressUnit::FilesystemEntries));
         assert_eq!(progress.last().map(|value| value.processed), Some(512));
     }
 }

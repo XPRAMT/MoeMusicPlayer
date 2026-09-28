@@ -14,7 +14,7 @@ use player_core::{
     SyncApplyOutcome, SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackId, TrackIdentity,
     TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::locator;
 
@@ -1817,11 +1817,11 @@ mod tests {
         SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackId, TrackIdentity,
         TrackMetadata, TrackMetadataError, UserMetadataField,
     };
-    use rusqlite::{OptionalExtension, params};
+    use rusqlite::{params, OptionalExtension};
 
     use super::{
-        COUNT_LIBRARY_SQL, Database, DatabaseError, LibraryRepository, PlaylistFileSyncState,
-        SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, TRACKS_PAGE_SQL, ThemePreferences,
+        Database, DatabaseError, LibraryRepository, PlaylistFileSyncState, ThemePreferences,
+        COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, TRACKS_PAGE_SQL,
     };
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -2159,11 +2159,10 @@ mod tests {
             },
             content_sha256: [0x5a; 32],
         };
-        assert!(
-            db.playlist_file_sync_state(source_id)
-                .expect("no prior state")
-                .is_none()
-        );
+        assert!(db
+            .playlist_file_sync_state(source_id)
+            .expect("no prior state")
+            .is_none());
         db.record_playlist_file_sync_state(source_id, &state)
             .expect("save state");
         assert_eq!(
@@ -2331,11 +2330,10 @@ mod tests {
         );
         assert_eq!(stored.entries[1].track_id, None);
         assert_eq!(stored.entries[1].locator, playlist.entries[1].locator);
-        assert!(
-            db.get_playlist_page(PlaylistId::new(), 0, 10)
-                .expect("missing playlist query")
-                .is_none()
-        );
+        assert!(db
+            .get_playlist_page(PlaylistId::new(), 0, 10)
+            .expect("missing playlist query")
+            .is_none());
         assert!(db.delete_playlist(playlist.id).expect("delete playlist"));
         assert!(db.list_playlists().expect("list after delete").is_empty());
     }
@@ -2410,11 +2408,10 @@ mod tests {
         assert_eq!(queue[0].1, queue[1].1);
         assert_eq!(queue[1].0, 2);
         assert_eq!(queue[2].0, 3);
-        assert!(
-            db.playlist_track_ids(PlaylistId::new())
-                .expect("unknown playlist query")
-                .is_none()
-        );
+        assert!(db
+            .playlist_track_ids(PlaylistId::new())
+            .expect("unknown playlist query")
+            .is_none());
     }
 
     #[test]
@@ -3183,11 +3180,10 @@ mod tests {
                 .as_deref(),
             Some("手動標題")
         );
-        assert!(
-            db.get_track_summary(TrackId::new())
-                .expect("unknown track summary")
-                .is_none()
-        );
+        assert!(db
+            .get_track_summary(TrackId::new())
+            .expect("unknown track summary")
+            .is_none());
         assert!(matches!(
             db.track_locators(TrackId::new()),
             Err(DatabaseError::TrackNotFound(_))

@@ -25,3 +25,5 @@ A registered playlist file owns its projected playlist entries and one source ma
 - A fully readable source update removes stale references from that source without deleting a Track still referenced elsewhere.
 - Per-source and per-track fingerprints are needed to keep startup work incremental; content digest protects against same-size, same-timestamp playlist edits.
 - Removing the playlist source registration must detach only that source's mapping; ordinary playlist rows and media from other sources remain independent.
+- Re-importing the same canonical file path reuses its registered Source ID and Playlist ID. A legacy static playlist is reused only when its name and complete ordered locator sequence match; same-name content that differs is preserved as a separate playlist.
+- If neither the settings JSON nor its backup is valid, the source registry is non-authoritative. Startup skips synchronization and destructive reconciliation until the user re-registers sources and confirms the recovered registry.

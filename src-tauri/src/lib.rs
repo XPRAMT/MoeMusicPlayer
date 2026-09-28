@@ -18,8 +18,14 @@ use tauri_plugin_media_index::MediaIndexExt;
 
 mod playlist_exchange;
 use playlist_exchange::{
-    export_playlist_file, import_playlist_file, PlaylistExportResult, PlaylistImportResult,
+    export_playlist_file, import_playlist_file_with_id, read_playlist_file, PlaylistExportResult,
+    PlaylistImportResult,
 };
+mod settings;
+use settings::{
+    AppSettings, RepeatMode, SettingsStore, SourceEntry, SourceEntryKind, ThemeSettings,
+};
+mod playlist_source_sync;
 
 #[cfg(target_os = "windows")]
 use player_platform_windows::{
@@ -63,10 +69,20 @@ impl From<ThemePreferencesDto> for ThemePreferences {
     }
 }
 
+impl From<ThemeSettings> for ThemePreferencesDto {
+    fn from(preferences: ThemeSettings) -> Self {
+        Self {
+            background_hex: preferences.background_hex,
+            accent_hex: preferences.accent_hex,
+        }
+    }
+}
+
 struct AppState {
     database: Option<Database>,
     database_path: Option<std::path::PathBuf>,
     database_error: Option<String>,
+    settings: SettingsStore,
     #[cfg(target_os = "windows")]
     playback: Option<WindowsPlaybackService>,
     #[cfg(target_os = "windows")]
@@ -107,14 +123,19 @@ enum WindowsSystemMediaStatus {
 
 #[cfg(target_os = "windows")]
 impl WindowsPlaybackService {
+    #[cfg(test)]
     fn new(player: PlayerHandle) -> Self {
+        Self::with_modes(player, false, RepeatMode::Off)
+    }
+
+    fn with_modes(player: PlayerHandle, shuffle: bool, repeat_mode: RepeatMode) -> Self {
         Self {
             player,
             current_track: Mutex::new(None),
             command_gate: Mutex::new(()),
             queue: Mutex::new(None),
-            repeat_mode: Mutex::new(RepeatMode::Off),
-            shuffle: Mutex::new(false),
+            repeat_mode: Mutex::new(repeat_mode),
+            shuffle: Mutex::new(shuffle),
             queue_advance_pending: Mutex::new(false),
         }
     }
@@ -464,6 +485,7 @@ struct LibrarySource {
     id: String,
     kind: String,
     display_name: String,
+    location: String,
     enabled: bool,
     sync_state: Option<String>,
     last_attempt_utc_ms: Option<i64>,
@@ -518,14 +540,6 @@ struct LibrarySyncFinishedEvent {
     error: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum RepeatMode {
-    Off,
-    One,
-    All,
-}
-
 #[derive(Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum PlaybackQueueSource {
@@ -559,7 +573,7 @@ struct PlaybackSnapshot {
 #[cfg(test)]
 mod playback_queue_ipc_tests {
     use super::{
-        feature, FeatureState, PlaybackQueueSource, PlaybackSnapshot, RepeatMode,
+        feature, FeatureState, LibrarySource, PlaybackQueueSource, PlaybackSnapshot, RepeatMode,
         RuntimeCapabilities,
     };
 
@@ -639,6 +653,33 @@ mod playback_queue_ipc_tests {
         for key in ["playbackNavigation", "playbackModes", "systemMediaControls"] {
             assert!(value.get(key).is_some(), "missing camelCase field {key}");
         }
+    }
+
+    #[test]
+    fn source_summary_serializes_renderer_camel_case_fields() {
+        let source = LibrarySource {
+            id: "source-id".to_owned(),
+            kind: "playlistFile".to_owned(),
+            display_name: "測試清單".to_owned(),
+            location: r"C:\音樂\清單.m3u8".to_owned(),
+            enabled: true,
+            sync_state: Some("complete".to_owned()),
+            last_attempt_utc_ms: Some(1_800_000_000_001),
+            last_success_utc_ms: Some(1_800_000_000_002),
+            error_count: 0,
+        };
+        let value = serde_json::to_value(source).expect("serialize library source summary");
+        for key in [
+            "displayName",
+            "location",
+            "syncState",
+            "lastAttemptUtcMs",
+            "lastSuccessUtcMs",
+            "errorCount",
+        ] {
+            assert!(value.get(key).is_some(), "missing camelCase field {key}");
+        }
+        assert_eq!(value["location"], r"C:\音樂\清單.m3u8");
     }
 }
 
@@ -848,7 +889,65 @@ async fn playlist_import_m3u(
                 .clone()
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
-        Ok(Some(import_playlist_file(database, &path)?))
+        let settings = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        let (source_id, registered_playlist_id, path) =
+            playlist_source_sync::source_ids_for_path(&settings.sources, &path)?;
+        let parsed = read_playlist_file(&path)?;
+        let playlist_id = match registered_playlist_id {
+            Some(playlist_id) => playlist_id,
+            None => database
+                .unique_playlist_id_matching_locators(
+                    &parsed.name,
+                    &parsed
+                        .entries
+                        .iter()
+                        .map(|entry| entry.locator.clone())
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|error| error.to_string())?
+                .unwrap_or(parsed.id),
+        };
+        let mut imported = import_playlist_file_with_id(database, &path, playlist_id)?;
+        state
+            .settings
+            .upsert_source(SourceEntry {
+                id: source_id,
+                display_name: imported.playlist.name.clone(),
+                enabled: true,
+                kind: SourceEntryKind::PlaylistFile {
+                    playlist_id,
+                    path: settings::StoredPath::from_path(&path)
+                        .map_err(|error| error.to_string())?,
+                },
+            })
+            .map_err(|error| error.to_string())?;
+        let root = LibraryRoot {
+            id: source_id,
+            kind: MediaSourceKind::PlaylistFile,
+            display_name: imported.playlist.name.clone(),
+            locator: MediaLocator::FileSystem(path),
+            enabled: true,
+        };
+        database
+            .save_library_root(&root)
+            .map_err(|error| error.to_string())?;
+        let _ = library_sync(app.clone()).await;
+        if let Some(database) = app.state::<AppState>().database.as_ref() {
+            if let Some(saved) = database
+                .get_playlist(playlist_id)
+                .map_err(|error| error.to_string())?
+            {
+                imported.matched_entries = saved
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.track_id.is_some())
+                    .count() as u64;
+            }
+        }
+        Ok(Some(imported))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -937,31 +1036,45 @@ async fn playlist_export_m3u(
 
 #[tauri::command]
 fn library_list_sources(state: State<'_, AppState>) -> Result<Vec<LibrarySource>, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    database
-        .library_roots()
-        .map_err(|error| error.to_string())?
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    settings
+        .sources
         .iter()
-        .map(|root| source_summary(database, root))
+        .map(|source| source_entry_summary(state.database.as_ref(), source))
         .collect()
 }
 
 #[tauri::command]
+fn settings_get_recovery_warning(state: State<'_, AppState>) -> Option<String> {
+    state.settings.recovery_warning()
+}
+
+#[tauri::command]
+fn settings_source_registry_authoritative(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .settings
+        .source_registry_authoritative()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_confirm_source_registry(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .settings
+        .confirm_source_registry()
+        .map(|settings| settings.source_registry_authoritative)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn theme_get_preferences(state: State<'_, AppState>) -> Result<ThemePreferencesDto, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    database
-        .get_theme_preferences()
-        .map(ThemePreferencesDto::from)
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.theme.into())
         .map_err(|error| error.to_string())
 }
 
@@ -970,17 +1083,18 @@ fn theme_set_preferences(
     state: State<'_, AppState>,
     preferences: ThemePreferencesDto,
 ) -> Result<ThemePreferencesDto, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    let preferences = ThemePreferences::from(preferences);
-    database
-        .set_theme_preferences(&preferences)
-        .map_err(|error| error.to_string())?;
-    Ok(preferences.into())
+    let preferences = ThemeSettings {
+        background_hex: preferences.background_hex,
+        accent_hex: preferences.accent_hex,
+    };
+    state
+        .settings
+        .update(|settings| {
+            settings.theme = preferences.clone();
+            Ok(())
+        })
+        .map(|settings| settings.theme.into())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -996,7 +1110,7 @@ fn library_add_windows_folder(
                 .clone()
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
-        add_windows_folder_to_database(database, &path)
+        add_windows_folder_to_settings(database, &state.settings, &path)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -1034,7 +1148,7 @@ async fn library_pick_windows_folder(
         let path = selected
             .into_path()
             .map_err(|error| format!("無法取得選取的資料夾路徑：{error}"))?;
-        add_windows_folder_path_to_database(database, &path).map(Some)
+        add_windows_folder_path_to_settings(database, &state.settings, &path).map(Some)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -1044,7 +1158,7 @@ async fn library_pick_windows_folder(
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", test))]
 fn add_windows_folder_to_database(
     database: &Database,
     path: &str,
@@ -1056,7 +1170,7 @@ fn add_windows_folder_to_database(
     add_windows_folder_path_to_database(database, std::path::Path::new(requested_path))
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", test))]
 fn add_windows_folder_path_to_database(
     database: &Database,
     requested_path: &std::path::Path,
@@ -1099,6 +1213,175 @@ fn add_windows_folder_path_to_database(
         }
     };
     source_summary(database, &root)
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_folder_to_settings(
+    database: &Database,
+    settings: &SettingsStore,
+    path: &str,
+) -> Result<LibrarySource, String> {
+    let requested_path = path.trim();
+    if requested_path.is_empty() {
+        return Err("請選擇音樂資料夾。".to_owned());
+    }
+    add_windows_folder_path_to_settings(database, settings, std::path::Path::new(requested_path))
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_folder_path_to_settings(
+    database: &Database,
+    settings: &SettingsStore,
+    requested_path: &std::path::Path,
+) -> Result<LibrarySource, String> {
+    let canonical_path = std::fs::canonicalize(requested_path)
+        .map_err(|error| format!("無法開啟指定資料夾：{error}"))?;
+    if !canonical_path.is_dir() {
+        return Err("指定路徑不是資料夾。".to_owned());
+    }
+    let canonical_key = windows_locator_key(&canonical_path);
+    let current = settings.snapshot().map_err(|error| error.to_string())?;
+    let existing = current.sources.iter().find(|source| {
+        matches!(source.kind, SourceEntryKind::Folder { .. })
+            && source
+                .path()
+                .to_path_buf()
+                .is_ok_and(|path| windows_locator_key(&path) == canonical_key)
+    });
+    let mut root = if let Some(source) = existing {
+        source
+            .library_root()
+            .map_err(|error| error.to_string())?
+            .expect("folder source")
+    } else {
+        let database_root = database
+            .library_roots()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|root| {
+                matches!(root.kind, MediaSourceKind::WindowsFilesystem | MediaSourceKind::WindowsSystemIndex)
+                    && matches!(&root.locator, MediaLocator::FileSystem(path) if windows_locator_key(path) == canonical_key)
+            });
+        if let Some(root) = database_root {
+            root
+        } else {
+            let display_name = canonical_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "本機音樂資料夾".to_owned());
+            LibraryRoot {
+                id: SourceId::new(),
+                kind: MediaSourceKind::WindowsSystemIndex,
+                display_name,
+                locator: MediaLocator::FileSystem(canonical_path.clone()),
+                enabled: true,
+            }
+        }
+    };
+    root.enabled = true;
+    let entry = SourceEntry::from_library_root(&root).map_err(|error| error.to_string())?;
+    settings
+        .upsert_source(entry.clone())
+        .map_err(|error| error.to_string())?;
+    database
+        .save_library_root(&root)
+        .map_err(|error| error.to_string())?;
+    source_entry_summary(Some(database), &entry)
+}
+
+#[tauri::command]
+fn library_set_source_enabled(
+    state: State<'_, AppState>,
+    source_id: String,
+    enabled: bool,
+) -> Result<Vec<LibrarySource>, String> {
+    let id = SourceId::parse(&source_id).map_err(|error| format!("來源 ID 無效：{error}"))?;
+    state
+        .settings
+        .set_source_enabled(id, enabled)
+        .map_err(|error| error.to_string())?;
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    if let Some(database) = state.database.as_ref() {
+        if let Some(source) = settings.sources.iter().find(|source| source.id == id) {
+            let root = source
+                .database_projection()
+                .map_err(|error| error.to_string())?;
+            database
+                .save_library_root(&root)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    settings
+        .sources
+        .iter()
+        .map(|source| source_entry_summary(state.database.as_ref(), source))
+        .collect()
+}
+
+fn source_entry_summary(
+    database: Option<&Database>,
+    source: &SourceEntry,
+) -> Result<LibrarySource, String> {
+    let (kind, location) = match &source.kind {
+        SourceEntryKind::Folder { media_kind, path } => (
+            source_kind_name(*media_kind).to_owned(),
+            path.display_lossy(),
+        ),
+        SourceEntryKind::PlaylistFile { path, .. } => {
+            ("playlist_file".to_owned(), path.display_lossy())
+        }
+    };
+    let sync = database
+        .map(|database| database.sync_state(source.id))
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .flatten();
+    Ok(LibrarySource {
+        id: source.id.to_string(),
+        kind,
+        display_name: source.display_name.clone(),
+        location,
+        enabled: source.enabled,
+        sync_state: sync.as_ref().map(|state| state.state.clone()),
+        last_attempt_utc_ms: sync.as_ref().and_then(|state| state.last_attempt_utc_ms),
+        last_success_utc_ms: sync.as_ref().and_then(|state| state.last_success_utc_ms),
+        error_count: sync.map_or(0, |state| state.error_count),
+    })
+}
+
+#[tauri::command]
+fn library_remove_source(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<LibrarySource>, String> {
+    let id = SourceId::parse(&source_id).map_err(|error| format!("來源 ID 無效：{error}"))?;
+    let (settings, removed) = state
+        .settings
+        .remove_source(id)
+        .map_err(|error| error.to_string())?;
+    if let Some(database) = state.database.as_ref() {
+        if matches!(removed.kind, SourceEntryKind::PlaylistFile { .. }) {
+            database
+                .remove_playlist_file_source(id)
+                .map_err(|error| error.to_string())?;
+        }
+        let mut root = removed
+            .database_projection()
+            .map_err(|error| error.to_string())?;
+        root.enabled = false;
+        database
+            .save_library_root(&root)
+            .map_err(|error| error.to_string())?;
+    }
+    settings
+        .sources
+        .iter()
+        .map(|source| source_entry_summary(state.database.as_ref(), source))
+        .collect()
 }
 
 #[tauri::command]
@@ -1154,12 +1437,14 @@ fn android_media_add_volume(
     }
 
     let locator = MediaLocator::ContentUri(format!("content://media/{volume_name}/audio/media"));
-    let root = add_or_get_root(
+    let mut root = add_or_get_root(
         database,
         MediaSourceKind::AndroidMediaStore,
         media_volume_display_name(volume_name),
         locator,
     )?;
+    root.enabled = true;
+    register_folder_source(database, &state.settings, &root)?;
     source_summary(database, &root)
 }
 
@@ -1189,13 +1474,29 @@ fn android_saf_pick_source(
         return Err("Android 未保留這個資料夾的讀取授權。".to_owned());
     }
 
-    let root = add_or_get_root(
+    let mut root = add_or_get_root(
         database,
         MediaSourceKind::AndroidSaf,
         "Android 文件資料夾".to_owned(),
         MediaLocator::ContentUri(uri),
     )?;
+    root.enabled = true;
+    register_folder_source(database, &state.settings, &root)?;
     source_summary(database, &root).map(Some)
+}
+
+fn register_folder_source(
+    database: &Database,
+    settings: &SettingsStore,
+    root: &LibraryRoot,
+) -> Result<(), String> {
+    let source = SourceEntry::from_library_root(root).map_err(|error| error.to_string())?;
+    settings
+        .upsert_source(source)
+        .map_err(|error| error.to_string())?;
+    database
+        .save_library_root(root)
+        .map_err(|error| error.to_string())
 }
 
 fn add_or_get_root(
@@ -1225,6 +1526,10 @@ fn source_summary(database: &Database, root: &LibraryRoot) -> Result<LibrarySour
         id: root.id.to_string(),
         kind: source_kind_name(root.kind).to_owned(),
         display_name: root.display_name.clone(),
+        location: match &root.locator {
+            MediaLocator::FileSystem(path) => path.to_string_lossy().into_owned(),
+            MediaLocator::ContentUri(uri) => uri.clone(),
+        },
         enabled: root.enabled,
         sync_state: sync.as_ref().map(|state| state.state.clone()),
         last_attempt_utc_ms: sync.as_ref().and_then(|state| state.last_attempt_utc_ms),
@@ -1237,6 +1542,7 @@ fn source_kind_name(kind: MediaSourceKind) -> &'static str {
     match kind {
         MediaSourceKind::WindowsSystemIndex => "windowsSystemIndex",
         MediaSourceKind::WindowsFilesystem => "windowsFilesystem",
+        MediaSourceKind::PlaylistFile => "playlistFile",
         MediaSourceKind::AndroidMediaStore => "androidMediaStore",
         MediaSourceKind::AndroidSaf => "androidSaf",
         MediaSourceKind::Other => "other",
@@ -1254,6 +1560,17 @@ fn media_volume_display_name(volume_name: &str) -> String {
 #[tauri::command]
 async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
     let state = app.state::<AppState>();
+    let source_settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    let source_registry_authoritative = source_settings.source_registry_authoritative;
+    if !source_registry_authoritative {
+        return Err(
+            "來源清單尚未確認，已暫停同步以保留既有曲庫資料。請重新登記所有音樂資料夾與播放清單來源，再確認來源清單。"
+                .to_owned(),
+        );
+    }
     let database_path = state.database_path.clone().ok_or_else(|| {
         state
             .database_error
@@ -1279,7 +1596,13 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
                 progress,
             );
         };
-        sync_configured_sources(&sync_app, &mut database, &mut on_progress)
+        sync_configured_sources(
+            &sync_app,
+            &mut database,
+            &source_settings.sources,
+            source_registry_authoritative,
+            &mut on_progress,
+        )
     })
     .await
     .map_err(|error| format!("曲庫同步工作失敗：{error}"))
@@ -1292,22 +1615,33 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
 fn sync_configured_sources<F>(
     app: &AppHandle,
     database: &mut Database,
+    configured_sources: &[SourceEntry],
+    source_registry_authoritative: bool,
     on_progress: &mut F,
 ) -> Result<LibrarySyncResult, String>
 where
     F: FnMut(&LibraryRoot, usize, usize, SyncProgress),
 {
+    if !source_registry_authoritative {
+        return Err("設定來源清單尚未確認；為保護現有曲庫，本次已略過所有來源同步。".to_owned());
+    }
     #[cfg(target_os = "windows")]
     {
         let _ = app;
-        sync_windows_sources_with_progress(database, on_progress)
+        sync_windows_configured_sources(
+            database,
+            configured_sources,
+            source_registry_authoritative,
+            on_progress,
+        )
     }
 
     #[cfg(target_os = "android")]
     {
-        let roots = database
-            .library_roots()
-            .map_err(|error| error.to_string())?;
+        let roots = configured_sources
+            .iter()
+            .filter_map(|source| source.library_root().ok().flatten())
+            .collect::<Vec<_>>();
         let synced_at_utc_ms = now_utc_epoch_ms()?;
         let roots: Vec<_> = roots
             .into_iter()
@@ -1348,12 +1682,162 @@ where
     }
 }
 
+#[cfg(target_os = "windows")]
+fn sync_windows_configured_sources<F>(
+    database: &mut Database,
+    configured_sources: &[SourceEntry],
+    source_registry_authoritative: bool,
+    on_progress: &mut F,
+) -> Result<LibrarySyncResult, String>
+where
+    F: FnMut(&LibraryRoot, usize, usize, SyncProgress),
+{
+    if !source_registry_authoritative {
+        return Err("設定來源清單尚未確認；為保護現有曲庫，本次已略過所有來源同步。".to_owned());
+    }
+    let synced_at_utc_ms = now_utc_epoch_ms()?;
+    let configured_ids = configured_sources
+        .iter()
+        .map(|source| source.id)
+        .collect::<std::collections::HashSet<_>>();
+    for mut root in database
+        .library_roots()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|root| {
+            root.kind == MediaSourceKind::PlaylistFile && !configured_ids.contains(&root.id)
+        })
+    {
+        database
+            .remove_playlist_file_source(root.id)
+            .map_err(|error| error.to_string())?;
+        root.enabled = false;
+        database
+            .save_library_root(&root)
+            .map_err(|error| error.to_string())?;
+    }
+    let sources: Vec<_> = configured_sources
+        .iter()
+        .filter(|source| source.enabled)
+        .filter(|source| match source.kind {
+            SourceEntryKind::Folder { media_kind, .. } => matches!(
+                media_kind,
+                MediaSourceKind::WindowsFilesystem | MediaSourceKind::WindowsSystemIndex
+            ),
+            SourceEntryKind::PlaylistFile { .. } => true,
+        })
+        .cloned()
+        .collect();
+    let source_count = sources.len();
+    let mut results = Vec::new();
+    for (source_index, source) in sources.iter().enumerate() {
+        match &source.kind {
+            SourceEntryKind::Folder { .. } => {
+                let root = source
+                    .library_root()
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "folder source has no library root".to_owned())?;
+                database
+                    .save_library_root(&root)
+                    .map_err(|error| error.to_string())?;
+                let mut index = WindowsMediaIndex::new();
+                let report = SyncEngine::sync_with_progress(
+                    &root,
+                    &mut index,
+                    database,
+                    synced_at_utc_ms,
+                    |progress| on_progress(&root, source_index, source_count, progress),
+                )
+                .map_err(|error| error.to_string())?;
+                results.push(sync_summary(&root, report));
+            }
+            SourceEntryKind::PlaylistFile { .. } => {
+                let root = LibraryRoot {
+                    id: source.id,
+                    kind: MediaSourceKind::PlaylistFile,
+                    display_name: source.display_name.clone(),
+                    locator: source
+                        .path()
+                        .to_media_locator()
+                        .map_err(|error| error.to_string())?,
+                    enabled: source.enabled,
+                };
+                database
+                    .save_library_root(&root)
+                    .map_err(|error| error.to_string())?;
+                if let Some(report) = playlist_source_sync::sync_playlist_file_source(
+                    database,
+                    source,
+                    synced_at_utc_ms,
+                )? {
+                    on_progress(
+                        &root,
+                        source_index,
+                        source_count,
+                        SyncProgress {
+                            source_id: source.id,
+                            stage: player_core::SyncProgressStage::Finished,
+                            processed: report.observed,
+                            total: Some(report.observed),
+                            unit: player_core::SyncProgressUnit::Tracks,
+                            observed: report.observed,
+                            metadata_reads: report.metadata_reads,
+                            unchanged: report.unchanged,
+                            error_count: report.source_errors.len() as u64
+                                + report.metadata_errors.len() as u64,
+                            outcome: report.state.as_ref().map(|state| match state {
+                                player_core::SourceScanState::Complete => {
+                                    player_core::SyncProgressOutcome::Complete
+                                }
+                                player_core::SourceScanState::Incomplete { .. } => {
+                                    player_core::SyncProgressOutcome::Incomplete
+                                }
+                                player_core::SourceScanState::Unavailable { .. } => {
+                                    player_core::SyncProgressOutcome::Unavailable
+                                }
+                                player_core::SourceScanState::PermissionRevoked { .. } => {
+                                    player_core::SyncProgressOutcome::PermissionRevoked
+                                }
+                            }),
+                        },
+                    );
+                    results.push(sync_summary(&root, report));
+                }
+            }
+        }
+    }
+    // Disabled sources remain registered for re-enabling but cannot keep their mappings active.
+    for source in configured_sources.iter().filter(|source| !source.enabled) {
+        if let Some(mut root) = source.library_root().map_err(|error| error.to_string())? {
+            root.enabled = false;
+            database
+                .save_library_root(&root)
+                .map_err(|error| error.to_string())?;
+        } else if let SourceEntryKind::PlaylistFile { .. } = source.kind {
+            let root = LibraryRoot {
+                id: source.id,
+                kind: MediaSourceKind::PlaylistFile,
+                display_name: source.display_name.clone(),
+                locator: source
+                    .path()
+                    .to_media_locator()
+                    .map_err(|error| error.to_string())?,
+                enabled: false,
+            };
+            database
+                .save_library_root(&root)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(LibrarySyncResult { sources: results })
+}
+
 #[cfg(all(target_os = "windows", test))]
 fn sync_windows_sources(database: &mut Database) -> Result<LibrarySyncResult, String> {
     sync_windows_sources_with_progress(database, &mut |_, _, _, _| {})
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", test))]
 fn sync_windows_sources_with_progress<F>(
     database: &mut Database,
     on_progress: &mut F,
@@ -1664,6 +2148,13 @@ fn playback_set_repeat(
     state: State<'_, AppState>,
     mode: RepeatMode,
 ) -> Result<PlaybackSnapshot, String> {
+    state
+        .settings
+        .update(|settings| {
+            settings.repeat_mode = mode;
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
     #[cfg(target_os = "windows")]
     {
         let service = windows_playback_service(&state)?;
@@ -1697,6 +2188,13 @@ fn playback_set_shuffle(
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<PlaybackSnapshot, String> {
+    state
+        .settings
+        .update(|settings| {
+            settings.shuffle = enabled;
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
     #[cfg(target_os = "windows")]
     {
         let service = windows_playback_service(&state)?;
@@ -2062,6 +2560,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            settings_get_recovery_warning,
+            settings_source_registry_authoritative,
+            settings_confirm_source_registry,
             theme_get_preferences,
             theme_set_preferences,
             get_runtime_capabilities,
@@ -2073,6 +2574,8 @@ pub fn run() {
             library_list_sources,
             library_add_windows_folder,
             library_pick_windows_folder,
+            library_set_source_enabled,
+            library_remove_source,
             android_media_request_permission,
             android_media_list_volumes,
             android_media_add_volume,
@@ -2095,14 +2598,49 @@ pub fn run() {
                 .app_data_dir()
                 .map_err(|error| error.to_string())?
                 .join("moemusicplayer.sqlite3");
+            let settings_path = database_path.with_file_name("settings.json");
             let database_result = Database::open(&database_path).map_err(|error| error.to_string());
             let (database, stored_path, database_error) = match database_result {
                 Ok(database) => (Some(database), Some(database_path), None),
                 Err(error) => (None, None, Some(error)),
             };
+            let legacy_settings = if SettingsStore::needs_legacy_import(&settings_path) {
+                if let Some(database) = database.as_ref() {
+                    let theme = database
+                        .get_theme_preferences()
+                        .map_err(|error| format!("讀取舊版外觀設定失敗：{error}"))?;
+                    let roots = database
+                        .library_roots()
+                        .map_err(|error| format!("讀取舊版音樂來源失敗：{error}"))?;
+                    AppSettings::from_legacy(theme, roots)
+                        .map_err(|error| format!("轉換舊版設定失敗：{error}"))?
+                } else {
+                    AppSettings::default()
+                }
+            } else {
+                AppSettings::default()
+            };
+            let settings = SettingsStore::open(&settings_path, legacy_settings)
+                .map_err(|error| format!("開啟使用者設定失敗：{error}"))?;
+            if let Some(database) = database.as_ref() {
+                if let Err(error) = database.clear_legacy_theme_preferences() {
+                    eprintln!("無法清除已遷移的 SQLite 外觀偏好：{error}");
+                }
+            }
+            #[cfg(target_os = "windows")]
+            let initial_settings = settings
+                .snapshot()
+                .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::new() {
-                Ok(player) => (Some(WindowsPlaybackService::new(player)), None),
+                Ok(player) => (
+                    Some(WindowsPlaybackService::with_modes(
+                        player,
+                        initial_settings.shuffle,
+                        initial_settings.repeat_mode,
+                    )),
+                    None,
+                ),
                 Err(error) => (None, Some(playback_audio_error_message(&error))),
             };
             #[cfg(target_os = "windows")]
@@ -2112,6 +2650,7 @@ pub fn run() {
                 database,
                 database_path: stored_path.clone(),
                 database_error,
+                settings,
                 #[cfg(target_os = "windows")]
                 playback,
                 #[cfg(target_os = "windows")]
@@ -2212,6 +2751,62 @@ mod windows_library_integration_tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn non_authoritative_settings_skip_orphan_cleanup_and_keep_playlist_mapping() {
+        let temporary = TestDirectory::new();
+        let media_folder = temporary.0.join("曲目");
+        fs::create_dir_all(&media_folder).expect("create media folder");
+        let media_path = media_folder.join("保持資料.mp3");
+        write_tagged_mp3(&media_path);
+        let playlist_path = temporary.0.join("保留清單.m3u8");
+        fs::write(
+            &playlist_path,
+            format!("#EXTM3U\n{}\n", media_path.display()),
+        )
+        .expect("write playlist source");
+        let source = super::SourceEntry {
+            id: SourceId::new(),
+            display_name: "保留清單".to_owned(),
+            enabled: true,
+            kind: super::SourceEntryKind::PlaylistFile {
+                playlist_id: super::PlaylistId::new(),
+                path: super::settings::StoredPath::from_path(&playlist_path)
+                    .expect("store native playlist path"),
+            },
+        };
+        let mut database = Database::open_in_memory().expect("database");
+        super::playlist_source_sync::sync_playlist_file_source(
+            &mut database,
+            &source,
+            1_800_000_000_000,
+        )
+        .expect("create an existing playlist projection")
+        .expect("playlist source is readable");
+        assert_eq!(
+            database.count_tracks(None).expect("initial track mapping"),
+            1
+        );
+
+        let result =
+            super::sync_windows_configured_sources(&mut database, &[], false, &mut |_, _, _, _| {});
+        let error = match result {
+            Ok(_) => panic!("non-authoritative registry must stop cleanup"),
+            Err(error) => error,
+        };
+        assert!(error.contains("設定來源清單尚未確認"));
+        assert_eq!(
+            database.count_tracks(None).expect("mapping is preserved"),
+            1
+        );
+        let root = database
+            .library_roots()
+            .expect("read preserved source projection")
+            .into_iter()
+            .find(|root| root.id == source.id)
+            .expect("source root remains");
+        assert!(root.enabled);
     }
 
     #[test]

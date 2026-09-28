@@ -12,6 +12,10 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **Media locator**: A platform-specific address for reading media, such as a filesystem path or a content URI. It belongs to the native side of the application and is not a renderer-facing track identity.
 
+**App settings**: User-owned preferences stored in a versioned JSON document, including theme colors, shuffle, repeat mode, and the source registry. JSON is the authority for these values; SQLite rows are rebuildable music-data projections.
+
+**Source registry**: The stable list of enabled or disabled folders and explicitly registered playlist files. A playlist-file entry associates its source ID and native path with the internal Playlist ID; static playlists do not imply a source-file path.
+
 ## Playback
 
 **Playback session**: The currently selected track together with the state reported by the audio backend. It is separate from the full library and from the ordered Playback queue.
@@ -26,9 +30,15 @@ This glossary defines the music-library identity and playback terms shared by th
 
 ## Playlists
 
-**Playlist**: A user-owned ordered set of media entries. An entry may link to a stable Track ID and retains its imported media locator when it has no current library mapping.
+**Playlist**: An ordered set of media entries with a stable Playlist ID. A playlist can be a static in-app list or the current projection of a registered playlist-file source.
 
-**M3U/M3U8**: Text interchange formats for ordered playlist entries, including path and optional display metadata. A playlist file can include entries that are not currently present in the application library.
+**Playlist-file source**: A registered M3U/M3U8 file with a stable Source ID and Playlist ID. The external file is authoritative for its projected entries; synchronization reads it and never writes changes back automatically.
+
+**Playlist projection**: The last successfully parsed ordered entries from a playlist-file source. A file-level read or parse failure preserves the previous projection. A missing or unreadable individual track preserves its locator and any prior source mapping while other entries continue syncing.
+
+**Playlist media reference**: A local media locator listed by a playlist source. Repeated references remain repeated at their original positions, while their source mapping is deduplicated by canonical locator identity and reuses the same Track ID as folder or other playlist sources.
+
+**M3U/M3U8**: Text interchange formats for ordered playlist entries, including path and optional display metadata. A playlist file can include entries that are not currently present in a folder source and can therefore contribute playable library tracks itself.
 
 ## Operating-system media controls
 

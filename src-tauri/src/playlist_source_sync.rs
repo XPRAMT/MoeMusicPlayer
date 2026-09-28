@@ -481,12 +481,18 @@ mod tests {
     }
 
     #[test]
-    fn first_registration_reuses_unique_legacy_hanser_playlist_identity() {
+    fn first_registration_reuses_only_full_locator_match_of_legacy_hanser_playlist() {
         let directory = TestDirectory::new();
         let playlist_path = directory.0.join("hanser.m3u8");
-        fs::write(&playlist_path, "#EXTM3U\n#PLAYLIST:Hanser\n").expect("write playlist");
+        fs::write(&playlist_path, "#EXTM3U\n#PLAYLIST:Hanser\nsong.mp3\n").expect("write playlist");
         let database = Database::open_in_memory().expect("database");
-        let legacy = Playlist::new("Hanser");
+        let mut legacy = Playlist::new("Hanser");
+        legacy.entries.push(player_core::PlaylistEntry {
+            track_id: None,
+            locator: player_core::MediaLocator::FileSystem(directory.0.join("song.mp3")),
+            title: None,
+            duration_ms: None,
+        });
         let legacy_id = legacy.id;
         database
             .save_playlist(&legacy)
@@ -497,9 +503,14 @@ mod tests {
 
         let parsed = crate::playlist_exchange::read_playlist_file(&canonical_path)
             .expect("parse imported M3U8");
+        let parsed_locators = parsed
+            .entries
+            .iter()
+            .map(|entry| entry.locator.clone())
+            .collect::<Vec<_>>();
         let playlist_id = database
-            .unique_playlist_id_by_name(&parsed.name)
-            .expect("look up legacy playlist")
+            .unique_playlist_id_matching_locators(&parsed.name, &parsed_locators)
+            .expect("compare complete legacy locators")
             .unwrap_or(parsed.id);
         assert_eq!(playlist_id, legacy_id);
         let imported = crate::playlist_exchange::import_playlist_file_with_id(
@@ -511,5 +522,44 @@ mod tests {
         assert_eq!(imported.playlist.id, legacy_id);
         assert_eq!(database.list_playlists().expect("list playlists").len(), 1);
         assert_ne!(source_id, SourceId::new());
+
+        let other_path = directory.0.join("other-hanser.m3u8");
+        fs::write(&other_path, "#EXTM3U\n#PLAYLIST:Hanser\nother-song.mp3\n")
+            .expect("write same-name different-content playlist");
+        let other = crate::playlist_exchange::read_playlist_file(&other_path)
+            .expect("parse unrelated list");
+        let other_locators = other
+            .entries
+            .iter()
+            .map(|entry| entry.locator.clone())
+            .collect::<Vec<_>>();
+        assert!(database
+            .unique_playlist_id_matching_locators(&other.name, &other_locators)
+            .expect("reject same-name unrelated legacy playlist")
+            .is_none());
+        let unrelated = crate::playlist_exchange::import_playlist_file_with_id(
+            &database,
+            &other_path,
+            other.id,
+        )
+        .expect("save new same-name list without overwriting legacy list");
+        assert_ne!(unrelated.playlist.id, legacy_id);
+        assert_eq!(
+            database.list_playlists().expect("both lists remain").len(),
+            2
+        );
+        let preserved_locator = database
+            .get_playlist(legacy_id)
+            .expect("legacy playlist remains readable")
+            .expect("legacy list preserved")
+            .entries[0]
+            .locator
+            .clone();
+        assert!(matches!(
+            preserved_locator,
+            player_core::MediaLocator::FileSystem(path)
+                if player_core::windows_locator_key(&path)
+                    == player_core::windows_locator_key(&directory.0.join("song.mp3"))
+        ));
     }
 }

@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 use player_core::{
-    M3uExportOptions, PlaylistId, PlaylistSummary, parse_m3u, parse_m3u8, write_m3u, write_m3u8,
+    parse_m3u, parse_m3u8, write_m3u, write_m3u8, M3uExportOptions, PlaylistId, PlaylistSummary,
 };
 use player_db::Database;
 use serde::Serialize;
@@ -20,6 +20,7 @@ pub struct PlaylistExportResult {
     pub entry_count: u64,
 }
 
+#[cfg(test)]
 pub fn import_playlist_file(
     database: &Database,
     path: &Path,
@@ -39,9 +40,9 @@ pub fn read_playlist_bytes(bytes: &[u8], path: &Path) -> Result<player_core::Pla
         .and_then(|extension| extension.to_str())
         .ok_or_else(|| "播放清單必須使用 .m3u 或 .m3u8 副檔名。".to_owned())?;
     let mut playlist = if extension.eq_ignore_ascii_case("m3u8") {
-        parse_m3u8(&bytes, path)
+        parse_m3u8(bytes, path)
     } else if extension.eq_ignore_ascii_case("m3u") {
-        parse_m3u(&bytes, path)
+        parse_m3u(bytes, path)
     } else {
         return Err("只支援匯入 .m3u 或 .m3u8 播放清單。".to_owned());
     }
