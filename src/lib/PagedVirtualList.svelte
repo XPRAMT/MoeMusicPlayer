@@ -36,6 +36,7 @@
     listId: string;
     ariaLabel: string;
     columnCount: number;
+    gridTemplate?: string;
     className?: string;
     rowClassName?: string;
     listName: string;
@@ -63,6 +64,7 @@
     listId,
     ariaLabel,
     columnCount,
+    gridTemplate = '42px minmax(0,1fr) 42px',
     className = '',
     rowClassName = '',
     listName,
@@ -183,7 +185,7 @@
   aria-activedescendant={activeDescendantId}
   aria-busy={pending || totalCount === null}
   tabindex="0"
-  style={`height:${viewportPixelHeight}px;--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px`}
+  style={`height:${viewportPixelHeight}px;--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate}`}
   onscroll={updateViewport}
   onkeydown={handleKeydown}
 >

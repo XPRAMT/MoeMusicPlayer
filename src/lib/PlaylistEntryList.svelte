@@ -1,6 +1,15 @@
 <script lang="ts">
-  import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistPage } from './ipc';
-  import { formatDuration } from './format';
+import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistPage, type TrackListColumnPreference } from './ipc';
+import { formatDuration } from './format';
+import {
+  DEFAULT_TRACK_COLUMN_PREFERENCES,
+  TRACK_COLUMN_DEFINITIONS,
+  formatTrackColumnValue,
+  normalizeTrackColumnPreferences,
+  trackListColumnCount,
+  trackListGridTemplate,
+  visibleTrackColumns,
+} from './track-columns.js';
   import { PagedListController, TRACK_PAGE_SIZE } from './track-list-data.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
@@ -12,6 +21,7 @@
     isSendingPlaybackCommand: boolean;
     onPlay: (entry: PlaylistEntrySummary, playlistId: string) => void;
     fetchPage?: (request: { playlistId: string; offset: number; limit: number }) => Promise<PlaylistPage>;
+    columns?: TrackListColumnPreference[];
   }
 
   let {
@@ -21,7 +31,15 @@
     isSendingPlaybackCommand,
     onPlay,
     fetchPage,
+    columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
   }: Props = $props();
+
+  let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
+  let visibleColumns = $derived(visibleTrackColumns(normalizedColumns).map(({ id }) =>
+    TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
+  ));
+  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns));
+  let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
 
   type ListSnapshot = ReturnType<PagedListController<PlaylistEntrySummary, string>['snapshot']>;
   let snapshot = $state<ListSnapshot>({
@@ -103,31 +121,33 @@
     maxViewportHeight={680}
     listId={`playlist-${playlistId}`}
     ariaLabel="播放清單項目；使用方向鍵瀏覽，按 Enter 播放目前項目"
-    columnCount={5}
+    columnCount={listColumnCount}
+    gridTemplate={listGridTemplate}
     className="playlist-entry-table"
-    rowClassName="playlist-entry-row"
+    rowClassName="playlist-entry-row configurable-track-grid"
     listName="播放清單"
     onRange={handleRange}
     onPlay={(entry) => playEntry(entry)}
   >
     {#snippet header()}
-      <div class="playlist-entry-head" role="row" aria-rowindex="1">
+      <div class="playlist-entry-head configurable-track-grid" role="row" aria-rowindex="1">
         <span role="columnheader">#</span>
-        <span role="columnheader">曲目</span>
-        <span class="playlist-entry-album" role="columnheader">專輯／演出者</span>
-        <span class="playlist-entry-duration" role="columnheader">長度</span>
+        {#each visibleColumns as column (column.id)}
+          <span class={`list-column list-column-${column.id}`} role="columnheader">{column.label}</span>
+        {/each}
         <span role="columnheader" aria-label="播放操作"></span>
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<PlaylistEntrySummary>)}
       {#if row.item}
         <span class="playlist-entry-index" role="gridcell">{row.item.position + 1}</span>
-        <div class="playlist-entry-title" role="gridcell">
-          <strong>{row.item.title?.trim() || '未命名項目'}</strong>
-          <small>{row.item.artist?.trim() || (row.item.hasEnabledMapping ? '未知演出者' : '目前未對應到曲庫')}</small>
-        </div>
-        <span class="playlist-entry-album" role="gridcell">{row.item.album?.trim() || '—'}</span>
-        <span class="playlist-entry-duration" role="gridcell">{formatDuration(row.item.durationMs)}</span>
+        {#each visibleColumns as column (column.id)}
+          <span
+            class={`list-column list-column-${column.id}`}
+            role="gridcell"
+            title={column.id === 'title' && !row.item.hasEnabledMapping ? '目前未對應到可播放的曲庫曲目' : undefined}
+          >{formatTrackColumnValue(column.id, row.item, formatDuration, '未命名項目')}</span>
+        {/each}
         <button
           class="row-play"
           type="button"
@@ -141,9 +161,11 @@
         </button>
       {:else}
         <span class="playlist-entry-index" role="gridcell" aria-hidden="true">—</span>
-        <div class="playlist-entry-title" role="gridcell" aria-hidden="true"><strong class="track-loading-label">正在載入項目…</strong></div>
-        <span class="playlist-entry-album" role="gridcell" aria-hidden="true">—</span>
-        <span class="playlist-entry-duration" role="gridcell" aria-hidden="true">—:—</span>
+        {#each visibleColumns as column (column.id)}
+          <span class={`list-column list-column-${column.id}`} role="gridcell" aria-hidden="true">
+            {column.id === 'title' ? '正在載入項目…' : '—'}
+          </span>
+        {/each}
         <span role="gridcell" aria-hidden="true"></span>
       {/if}
     {/snippet}

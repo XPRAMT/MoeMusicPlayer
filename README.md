@@ -10,6 +10,8 @@ MoeMusicPlayer is a local-first music library for Windows and Android. User pref
 - On Android, select shared-audio storage through MediaStore or choose a folder with the system document picker (SAF).
 - Keep previously indexed tracks when a source is unavailable or a scan is incomplete.
 - Browse and search the saved library with paginated results; the interface never loads the whole collection.
+- Configure one shared metadata-column order and visibility for the library and playlists; row numbers and play actions stay fixed.
+- Choose Now Playing layout A or B from the page or Settings; the default is artwork first, and the preference is saved.
 - Customize the background and accent colors in Settings. Preferences are saved to `settings.json`, and text colors adjust for contrast.
 - If settings cannot be recovered from the JSON backup, source synchronization pauses until you re-register and confirm the intended sources; existing indexed music remains available.
 - On Windows, play local WAV, MP3, FLAC, and Ogg Vorbis files with play/pause, seek, and volume controls.
@@ -26,7 +28,7 @@ Android playback is not available yet. Real Tauri window, system media flyout, a
 2. Run `npm install`.
 3. Run `npm run tauri -- dev`.
 4. Open **Settings → Music Sources**, choose **Select folder and sync**, and select an existing music folder. Canceling leaves the source list unchanged.
-5. Open **Settings → Appearance** to choose a background and accent color. The defaults are pure black and water blue. Settings and registered source paths are saved in the app data directory as `settings.json`; SQLite stores the music library.
+5. Open **Settings → Appearance** to choose a background and accent color. The defaults are pure black and water blue. Open **Settings → Track Columns** to reorder or hide metadata columns for both lists. Choose layout A or B on the Now Playing page or in **Settings → Now Playing**. Preferences and registered source paths are saved in the app data directory as `settings.json`; SQLite stores the music library.
 
 To build the Windows executable, run `npm run tauri -- build --ci`. It is written to `target/release/moemusicplayer.exe`.
 
@@ -39,4 +41,4 @@ npm install
 npm run android:build:arm64
 ```
 
-The debug APK is written to `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`. On the device, open **Settings → Music Sources** to grant MediaStore access or select a SAF folder. Appearance preferences are saved in the app database.
+The debug APK is written to `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`. On the device, open **Settings → Music Sources** to grant MediaStore access or select a SAF folder. Preferences are saved in `settings.json` in the app data directory.

@@ -24,6 +24,19 @@ export interface ThemePreferences {
   accentHex: string;
 }
 
+export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration';
+
+export interface TrackListColumnPreference {
+  id: TrackListColumnId;
+  visible: boolean;
+}
+
+export interface TrackListColumnSettings {
+  columns: TrackListColumnPreference[];
+}
+
+export type NowPlayingLayout = 'a' | 'b';
+
 export interface LibrarySource {
   id: string;
   kind: string;
@@ -103,6 +116,8 @@ export interface TrackSummary {
   codec: string | null;
   bitrateBps: number | null;
   sampleRateHz: number | null;
+  year?: number | null;
+  bitDepth?: number | null;
 }
 
 export interface TrackPage {
@@ -132,6 +147,11 @@ export interface PlaylistEntrySummary {
   album: string | null;
   durationMs: number | null;
   hasEnabledMapping: boolean;
+  year?: number | null;
+  codec?: string | null;
+  sampleRateHz?: number | null;
+  bitDepth?: number | null;
+  bitrateBps?: number | null;
 }
 
 export interface PlaylistPage {
@@ -201,6 +221,22 @@ interface IpcContract {
   theme_set_preferences: {
     args: { preferences: ThemePreferences };
     result: ThemePreferences;
+  };
+  settings_get_track_list_columns: {
+    args: Record<string, never>;
+    result: TrackListColumnSettings;
+  };
+  settings_set_track_list_columns: {
+    args: { preferences: TrackListColumnSettings };
+    result: TrackListColumnSettings;
+  };
+  settings_get_now_playing_layout: {
+    args: Record<string, never>;
+    result: NowPlayingLayout;
+  };
+  settings_set_now_playing_layout: {
+    args: { layout: NowPlayingLayout };
+    result: NowPlayingLayout;
   };
   get_runtime_capabilities: {
     args: Record<string, never>;

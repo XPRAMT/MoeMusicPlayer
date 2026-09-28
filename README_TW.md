@@ -10,6 +10,8 @@ MoeMusicPlayer 是以本機優先為設計方向的 Windows 與 Android 音樂�
 - Android 可透過 MediaStore 選擇共享音樂儲存空間，或用系統文件選擇器（SAF）選擇資料夾。
 - 來源暫時不可用或掃描未完成時，保留先前已索引的曲目。
 - 以分頁結果瀏覽及搜尋已保存曲庫；介面不會載入整個曲庫。
+- 曲庫與播放清單共用資訊欄順序及顯示設定；序號與播放操作固定不動。
+- 可在「正在播放」頁或設定中選擇 A/B 排列；預設為封面在前，設定會保存。
 - 可在「設定」自訂背景色與主色，偏好保存在 `settings.json`，文字顏色會依背景自動調整對比。
 - 若設定檔與備份都無法復原，來源同步會暫停，直到重新登記並確認預期來源；已索引曲目仍會保留。
 - Windows 可播放本機 WAV、MP3、FLAC 與 Ogg Vorbis，並提供播放/暫停、跳轉與音量控制。
@@ -26,7 +28,7 @@ Android 播放目前尚未提供。實際 Tauri 視窗、系統媒體飛出面�
 2. 執行 `npm install`。
 3. 執行 `npm run tauri -- dev`。
 4. 開啟「設定 → 音樂來源」，選擇「選擇資料夾並同步」，再選取現有音樂資料夾；取消不會變更來源清單。
-5. 開啟「設定 → 外觀」選擇背景色與主色；預設為純黑背景與水藍主色。設定與來源路徑保存在 App 資料目錄的 `settings.json`，SQLite 保存音樂曲庫。
+5. 開啟「設定 → 外觀」選擇背景色與主色；預設為純黑背景與水藍主色。在「設定 → 曲目欄位」可調整曲庫與播放清單共用欄位的順序及顯示狀態；也可在「正在播放」頁或「設定 → 正在播放」切換 A/B 排列。偏好與來源路徑保存在 App 資料目錄的 `settings.json`，SQLite 保存音樂曲庫。
 
 建置 Windows 執行檔請執行 `npm run tauri -- build --ci`，產物位於 `target/release/moemusicplayer.exe`。
 
@@ -39,4 +41,4 @@ npm install
 npm run android:build:arm64
 ```
 
-Debug APK 輸出至 `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`。在裝置上開啟「設定 → 音樂來源」，授權 MediaStore 或選擇 SAF 資料夾。使用者偏好及來源註冊保存在 `settings.json`，曲庫資料保存在 SQLite。
+Debug APK 輸出至 `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`。在裝置上開啟「設定 → 音樂來源」，授權 MediaStore 或選擇 SAF 資料夾。使用者偏好及來源註冊保存在 App 資料目錄的 `settings.json`，曲庫資料保存在 SQLite。

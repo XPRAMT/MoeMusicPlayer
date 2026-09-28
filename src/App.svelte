@@ -12,6 +12,7 @@
     type LibrarySource,
     type MediaStoreVolumeOption,
     type FeatureCapability,
+    type NowPlayingLayout,
     type PlaylistEntrySummary,
     type PlaylistSummary,
     type PlaybackSnapshot,
@@ -19,6 +20,7 @@
     type PlaybackState,
     type RuntimeCapabilities,
     type ThemePreferences,
+    type TrackListColumnPreference,
     type TrackSummary,
   } from './lib/ipc';
   import {
@@ -28,9 +30,18 @@
     normalizeThemePreferences,
   } from './lib/theme';
   import { formatVolume } from './lib/format';
+  import {
+    DEFAULT_TRACK_COLUMN_PREFERENCES,
+    TRACK_COLUMN_DEFINITIONS,
+    moveTrackColumn,
+    normalizeTrackColumnPreferences,
+    setTrackColumnVisibility,
+  } from './lib/track-columns.js';
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
   import TrackList from './lib/TrackList.svelte';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
+  import NowPlayingArrangement from './lib/NowPlayingArrangement.svelte';
+  import NowPlayingLayoutSwitch from './lib/NowPlayingLayoutSwitch.svelte';
   import PlaybackProgress from './lib/PlaybackProgress.svelte';
   import {
     createActiveTrackArtworkController,
@@ -39,7 +50,7 @@
   import { createVolumeCommandQueue } from './lib/volume-command-queue';
 
   type View = 'library' | 'now-playing' | 'playlists' | 'settings';
-  type SettingsSection = 'appearance' | 'sources';
+  type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'sources';
   type SyncProgressViewState = {
     runId: string;
     sourceCount: number;
@@ -52,6 +63,14 @@
 
   let activeView = $state<View>('library');
   let settingsSection = $state<SettingsSection>('appearance');
+  let trackColumnPreferences = $state<TrackListColumnPreference[]>(
+    normalizeTrackColumnPreferences(DEFAULT_TRACK_COLUMN_PREFERENCES),
+  );
+  let trackColumnSettingsState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
+  let trackColumnSettingsError = $state<string | null>(null);
+  let nowPlayingLayout = $state<NowPlayingLayout>('a');
+  let nowPlayingLayoutState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
+  let nowPlayingLayoutError = $state<string | null>(null);
   let themePreferences = $state<ThemePreferences>({ ...DEFAULT_THEME_PREFERENCES });
   let themeSaveState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let themeSaveError = $state<string | null>(null);
@@ -97,6 +116,10 @@
   let themeSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let themeSaveQueue: Promise<void> = Promise.resolve();
   let themeRevision = 0;
+  let trackColumnSettingsRevision = 0;
+  let nowPlayingLayoutRevision = 0;
+  let trackColumnSettingsQueue: Promise<void> = Promise.resolve();
+  let nowPlayingLayoutQueue: Promise<void> = Promise.resolve();
   let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
   let playlistListRequestVersion = 0;
   let capabilityRefreshInFlight = false;
@@ -169,6 +192,8 @@
       void initializeTauri();
     } else {
       themeSaveState = 'preview';
+      trackColumnSettingsState = 'preview';
+      nowPlayingLayoutState = 'preview';
       void loadCapabilities();
     }
 
@@ -201,7 +226,13 @@
 
       unlistenSyncProgress = unlistenProgress;
       unlistenSyncFinished = unlistenFinished;
-      await Promise.all([loadCapabilities(), loadThemePreferences(), loadSettingsRecoveryWarning()]);
+      await Promise.all([
+        loadCapabilities(),
+        loadThemePreferences(),
+        loadSettingsRecoveryWarning(),
+        loadTrackColumnSettings(),
+        loadNowPlayingLayout(),
+      ]);
       if (!disposed && sourceSyncReady) void syncLibrary();
     }
 
@@ -237,6 +268,100 @@
       themeSaveState = 'error';
       themeSaveError = `無法讀取已保存的外觀設定：${getErrorText(error)}`;
     }
+  }
+
+  async function loadTrackColumnSettings(): Promise<void> {
+    const revision = trackColumnSettingsRevision;
+    try {
+      const stored = await invokeCommand('settings_get_track_list_columns', {});
+      if (revision !== trackColumnSettingsRevision) return;
+      trackColumnPreferences = normalizeTrackColumnPreferences(stored.columns);
+      trackColumnSettingsState = 'saved';
+      trackColumnSettingsError = null;
+    } catch (error) {
+      if (revision !== trackColumnSettingsRevision) return;
+      trackColumnSettingsState = 'error';
+      trackColumnSettingsError = `無法讀取曲目欄位設定：${getErrorText(error)}`;
+    }
+  }
+
+  function updateTrackColumnSettings(next: TrackListColumnPreference[]): void {
+    trackColumnPreferences = normalizeTrackColumnPreferences(next);
+    trackColumnSettingsError = null;
+    const revision = ++trackColumnSettingsRevision;
+    if (!isTauri()) {
+      trackColumnSettingsState = 'preview';
+      trackColumnSettingsError = '瀏覽器預覽不會保存曲目欄位設定。';
+      return;
+    }
+
+    trackColumnSettingsState = 'saving';
+    trackColumnSettingsQueue = trackColumnSettingsQueue.catch(() => undefined).then(async () => {
+      if (revision !== trackColumnSettingsRevision) return;
+      try {
+        const saved = await invokeCommand('settings_set_track_list_columns', {
+          preferences: { columns: trackColumnPreferences.map((column) => ({ ...column })) },
+        });
+        if (revision !== trackColumnSettingsRevision) return;
+        trackColumnPreferences = normalizeTrackColumnPreferences(saved.columns);
+        trackColumnSettingsState = 'saved';
+        trackColumnSettingsError = null;
+      } catch (error) {
+        if (revision !== trackColumnSettingsRevision) return;
+        trackColumnSettingsState = 'error';
+        trackColumnSettingsError = `無法保存曲目欄位設定：${getErrorText(error)}`;
+      }
+    });
+  }
+
+  function setTrackColumnVisible(id: TrackListColumnPreference['id'], visible: boolean): void {
+    updateTrackColumnSettings(setTrackColumnVisibility(trackColumnPreferences, id, visible));
+  }
+
+  function moveConfiguredTrackColumn(id: TrackListColumnPreference['id'], direction: 'up' | 'down'): void {
+    updateTrackColumnSettings(moveTrackColumn(trackColumnPreferences, id, direction));
+  }
+
+  async function loadNowPlayingLayout(): Promise<void> {
+    const revision = nowPlayingLayoutRevision;
+    try {
+      const stored = await invokeCommand('settings_get_now_playing_layout', {});
+      if (revision !== nowPlayingLayoutRevision) return;
+      nowPlayingLayout = stored === 'b' ? 'b' : 'a';
+      nowPlayingLayoutState = 'saved';
+      nowPlayingLayoutError = null;
+    } catch (error) {
+      if (revision !== nowPlayingLayoutRevision) return;
+      nowPlayingLayoutState = 'error';
+      nowPlayingLayoutError = `無法讀取正在播放版面設定：${getErrorText(error)}`;
+    }
+  }
+
+  function setNowPlayingLayout(layout: NowPlayingLayout): void {
+    nowPlayingLayout = layout;
+    nowPlayingLayoutError = null;
+    const revision = ++nowPlayingLayoutRevision;
+    if (!isTauri()) {
+      nowPlayingLayoutState = 'preview';
+      nowPlayingLayoutError = '瀏覽器預覽不會保存正在播放版面設定。';
+      return;
+    }
+
+    nowPlayingLayoutState = 'saving';
+    nowPlayingLayoutQueue = nowPlayingLayoutQueue.catch(() => undefined).then(async () => {
+      if (revision !== nowPlayingLayoutRevision) return;
+      try {
+        const saved = await invokeCommand('settings_set_now_playing_layout', { layout });
+        if (revision !== nowPlayingLayoutRevision) return;
+        nowPlayingLayout = saved;
+        nowPlayingLayoutState = 'saved';
+        nowPlayingLayoutError = null;
+      } catch (error) {
+        if (revision !== nowPlayingLayoutRevision) return;
+        nowPlayingLayoutState = 'error';
+        nowPlayingLayoutError = `無法保存正在播放版面設定：${getErrorText(error)}`;
+      }
+    });
   }
 
   async function loadSettingsRecoveryWarning(): Promise<void> {
@@ -1115,6 +1240,7 @@
                 selectedTrackId={selectedTrackId}
                 playbackReady={playbackReady}
                 isSendingPlaybackCommand={isSendingPlaybackCommand}
+                columns={trackColumnPreferences}
                 onPlay={playTrack}
                 onTotalCount={(count) => (libraryTrackCount = count)}
               />
@@ -1217,6 +1343,7 @@
                         resetKey={playlistListRevision}
                         {playbackReady}
                         {isSendingPlaybackCommand}
+                        columns={trackColumnPreferences}
                         onPlay={playPlaylistEntry}
                       />
                     {/key}
@@ -1227,36 +1354,46 @@
           </section>
         {:else if activeView === 'now-playing'}
           <section class="now-playing-view" aria-labelledby="now-playing-heading">
-            <div class="now-playing-card">
-              <div class="cover-stage" class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
-                {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
-                  <img class="cover-stage-image" src={activeArtwork.objectUrl} alt={`${currentTrackTitle(playback?.currentTrack)} 封面`} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
-                {:else}
-                  <div class="cover-orbit cover-orbit-a"></div>
-                  <div class="cover-orbit cover-orbit-b"></div>
-                  <div class="cover-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-                  <span class="cover-stage-label">MOE / LOCAL</span>
-                  {#if activeArtwork.status === 'too-large'}
-                    <span class="cover-fallback-message">原圖超過 32 MiB 或 64 百萬像素上限</span>
-                  {:else if activeArtwork.status === 'error'}
-                    <span class="cover-fallback-message">封面格式不支援或無法讀取</span>
-                  {:else if activeArtwork.status === 'missing' && playback?.currentTrack}
-                    <span class="cover-fallback-message">沒有可用封面</span>
+            <NowPlayingLayoutSwitch layout={nowPlayingLayout} variant="compact" onChange={setNowPlayingLayout} />
+            <NowPlayingArrangement layout={nowPlayingLayout}>
+              {#snippet artwork()}
+                <div class="cover-stage" class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
+                  {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
+                    <img class="cover-stage-image" src={activeArtwork.objectUrl} alt={`${currentTrackTitle(playback?.currentTrack)} 封面`} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
+                  {:else}
+                    <div class="cover-orbit cover-orbit-a"></div>
+                    <div class="cover-orbit cover-orbit-b"></div>
+                    <div class="cover-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                    <span class="cover-stage-label">MOE / LOCAL</span>
+                    {#if activeArtwork.status === 'too-large'}
+                      <span class="cover-fallback-message">原圖超過 32 MiB 或 64 百萬像素上限</span>
+                    {:else if activeArtwork.status === 'error'}
+                      <span class="cover-fallback-message">封面格式不支援或無法讀取</span>
+                    {:else if activeArtwork.status === 'missing' && playback?.currentTrack}
+                      <span class="cover-fallback-message">沒有可用封面</span>
+                    {/if}
                   {/if}
-                {/if}
-              </div>
-              <div class="now-playing-copy">
-                <p class="section-kicker">NOW PLAYING</p>
-                <h2 id="now-playing-heading">{currentTrackTitle(playback?.currentTrack)}</h2>
-                <p class="now-playing-artist">{currentTrackArtist(playback?.currentTrack)}</p>
-                <div class="play-state-chip" class:ready={playbackReady}>
-                  <span class="status-dot" aria-hidden="true"></span>
-                  {playbackReady ? playbackStateLabel(playback?.state) : '播放引擎尚未就緒'}
                 </div>
-                {#if playbackError || playback?.lastError}<p class="error-note" role="status">{playbackError ?? playback?.lastError}</p>{/if}
-                <button class="outline-button now-playing-return" type="button" onclick={() => (activeView = 'library')}>返回曲庫</button>
-              </div>
-            </div>
+                <div class="now-playing-copy">
+                  <p class="section-kicker">NOW PLAYING</p>
+                  <h2 id="now-playing-heading">{currentTrackTitle(playback?.currentTrack)}</h2>
+                  <p class="now-playing-artist">{currentTrackArtist(playback?.currentTrack)}</p>
+                  <div class="play-state-chip" class:ready={playbackReady}>
+                    <span class="status-dot" aria-hidden="true"></span>
+                    {playbackReady ? playbackStateLabel(playback?.state) : '播放引擎尚未就緒'}
+                  </div>
+                  {#if playbackError || playback?.lastError}<p class="error-note" role="status">{playbackError ?? playback?.lastError}</p>{/if}
+                  <button class="outline-button now-playing-return" type="button" onclick={() => (activeView = 'library')}>返回曲庫</button>
+                </div>
+              {/snippet}
+              {#snippet lyrics()}
+                <div class="lyrics-panel-heading">
+                  <p class="section-kicker">LYRICS</p>
+                  <h3 id="lyrics-heading">歌詞</h3>
+                </div>
+                <p class="lyrics-placeholder" role="status">尚無可顯示歌詞；歌詞載入功能尚未接通。</p>
+              {/snippet}
+            </NowPlayingArrangement>
             <div class="playback-note">
               <span class="note-icon" aria-hidden="true">i</span>
               <p>{playbackReady ? '播放狀態由原生音訊服務提供。' : showCapabilityDetail(capabilities?.playback)}</p>
@@ -1277,6 +1414,24 @@
                 aria-controls="appearance-panel"
                 onclick={() => (settingsSection = 'appearance')}
               >外觀</button>
+              <button
+                id="track-columns-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'track-columns'}
+                aria-controls="track-columns-panel"
+                onclick={() => (settingsSection = 'track-columns')}
+              >曲目欄位</button>
+              <button
+                id="now-playing-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'now-playing'}
+                aria-controls="now-playing-layout-panel"
+                onclick={() => (settingsSection = 'now-playing')}
+              >正在播放</button>
               <button
                 id="sources-tab"
                 class="settings-tab"
@@ -1343,6 +1498,52 @@
                   <span class="theme-preview-chip">主色按鈕</span>
                 </div>
                 <p class="theme-save-status" class:error={themeSaveState === 'error'} role="status">{themeSaveMessage}</p>
+              </div>
+            {:else if settingsSection === 'track-columns'}
+              <div id="track-columns-panel" class="settings-panel" role="tabpanel" aria-labelledby="track-columns-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>曲庫與播放清單欄位</h3>
+                    <p>兩種列表共用欄位順序與顯示設定；序號與播放操作固定在兩側。</p>
+                  </div>
+                </div>
+                <ol class="track-column-settings" aria-label="曲目資訊欄位設定">
+                  {#each trackColumnPreferences as preference, index (preference.id)}
+                    {@const definition = TRACK_COLUMN_DEFINITIONS.find((column) => column.id === preference.id)!}
+                    <li class="track-column-setting-row">
+                      <label class="track-column-setting-label">
+                        <input
+                          type="checkbox"
+                          checked={preference.visible}
+                          aria-label={`顯示${definition.label}欄`}
+                          onchange={(event) => setTrackColumnVisible(preference.id, event.currentTarget.checked)}
+                        />
+                        <span>{definition.label}</span>
+                      </label>
+                      <div class="track-column-order-actions">
+                        <span aria-label={`第 ${index + 1} 欄`}>{index + 1}</span>
+                        <button type="button" aria-label={`${definition.label}欄上移`} title="上移欄位" disabled={index === 0} onclick={() => moveConfiguredTrackColumn(preference.id, 'up')}>↑</button>
+                        <button type="button" aria-label={`${definition.label}欄下移`} title="下移欄位" disabled={index === trackColumnPreferences.length - 1} onclick={() => moveConfiguredTrackColumn(preference.id, 'down')}>↓</button>
+                      </div>
+                    </li>
+                  {/each}
+                </ol>
+                <p class="settings-preference-status" class:error={trackColumnSettingsState === 'error'} role="status">
+                  {trackColumnSettingsError ?? (trackColumnSettingsState === 'loading' ? '正在讀取欄位設定…' : trackColumnSettingsState === 'saving' ? '正在保存欄位設定…' : trackColumnSettingsState === 'preview' ? '瀏覽器預覽不會保存欄位設定。' : '欄位設定已保存。')}
+                </p>
+              </div>
+            {:else if settingsSection === 'now-playing'}
+              <div id="now-playing-layout-panel" class="settings-panel" role="tabpanel" aria-labelledby="now-playing-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>正在播放排列</h3>
+                    <p>只調整封面與歌詞區域的排列，不會重新載入播放或歌詞狀態。窄視窗會依選項順序堆疊。</p>
+                  </div>
+                </div>
+                <NowPlayingLayoutSwitch layout={nowPlayingLayout} onChange={setNowPlayingLayout} />
+                <p class="settings-preference-status" class:error={nowPlayingLayoutState === 'error'} role="status">
+                  {nowPlayingLayoutError ?? (nowPlayingLayoutState === 'loading' ? '正在讀取正在播放排列…' : nowPlayingLayoutState === 'saving' ? '正在保存排列…' : nowPlayingLayoutState === 'preview' ? '瀏覽器預覽不會保存排列。' : `排列 ${nowPlayingLayout.toUpperCase()} 已保存。`)}
+                </p>
               </div>
             {:else}
               <div id="sources-panel" class="settings-source-panel" role="tabpanel" aria-labelledby="sources-tab" tabindex="0">

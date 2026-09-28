@@ -5,8 +5,18 @@
     type TrackPage,
     type TrackPageRequest,
     type TrackSummary,
+    type TrackListColumnPreference,
   } from './ipc';
   import { formatDuration, formatTrackIndex } from './format';
+  import {
+    DEFAULT_TRACK_COLUMN_PREFERENCES,
+    TRACK_COLUMN_DEFINITIONS,
+    formatTrackColumnValue,
+    normalizeTrackColumnPreferences,
+    trackListColumnCount,
+    trackListGridTemplate,
+    visibleTrackColumns,
+  } from './track-columns.js';
   import {
     PagedListController,
     TRACK_PAGE_SIZE,
@@ -23,6 +33,7 @@
     onPlay: (track: TrackSummary) => void | Promise<void>;
     onTotalCount?: (count: number | null) => void;
     fetchPage?: (request: TrackPageRequest) => Promise<TrackPage>;
+    columns?: TrackListColumnPreference[];
   }
 
   let {
@@ -34,7 +45,15 @@
     onPlay,
     onTotalCount,
     fetchPage,
+    columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
   }: Props = $props();
+
+  let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
+  let visibleColumns = $derived(visibleTrackColumns(normalizedColumns).map(({ id }) =>
+    TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
+  ));
+  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns));
+  let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
 
   type ListSnapshot = ReturnType<PagedListController<TrackSummary, string>['snapshot']>;
 
@@ -120,31 +139,31 @@
     maxViewportHeight={680}
     listId="library-track"
     ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目"
-    columnCount={5}
+    columnCount={listColumnCount}
+    gridTemplate={listGridTemplate}
     className="track-list-viewport"
-    rowClassName="track-row virtual-track-row"
+    rowClassName="track-row virtual-track-row configurable-track-grid"
     listName="曲庫"
     onRange={handleRange}
     onPlay={(track) => playRow(track)}
   >
     {#snippet header()}
-      <div class="track-table-head track-list-header" role="row" aria-rowindex="1">
+      <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
         <span class="column-index" role="columnheader">#</span>
-        <span role="columnheader">曲目</span>
-        <span class="column-album" role="columnheader">專輯</span>
-        <span class="column-duration" role="columnheader">長度</span>
+        {#each visibleColumns as column (column.id)}
+          <span class={`list-column list-column-${column.id}`} role="columnheader">{column.label}</span>
+        {/each}
         <span class="column-action" role="columnheader" aria-label="播放操作"></span>
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<TrackSummary>)}
       {#if row.item}
         <span class="track-index column-index" role="gridcell">{formatTrackIndex(row.item.trackNumber, row.item.discNumber)}</span>
-        <div class="track-main" role="gridcell">
-          <span class="track-title">{row.item.title?.trim() || '未命名曲目'}</span>
-          <span class="track-artist">{row.item.artist?.trim() || '未知演出者'}</span>
-        </div>
-        <span class="track-album column-album" role="gridcell">{row.item.album?.trim() || '未知專輯'}</span>
-        <span class="track-duration column-duration" role="gridcell">{formatDuration(row.item.durationMs)}</span>
+        {#each visibleColumns as column (column.id)}
+          <span class={`list-column list-column-${column.id}`} role="gridcell" title={column.id === 'title' && !row.item.title?.trim() ? '未命名曲目' : undefined}>
+            {formatTrackColumnValue(column.id, row.item, formatDuration)}
+          </span>
+        {/each}
           <button
             class="row-play column-action"
             type="button"
@@ -158,9 +177,11 @@
           </button>
       {:else}
           <span class="track-index column-index" role="gridcell" aria-hidden="true">—</span>
-          <div class="track-main" role="gridcell" aria-hidden="true"><span class="track-title track-loading-label">正在載入曲目…</span></div>
-          <span class="track-album column-album" role="gridcell" aria-hidden="true">—</span>
-          <span class="track-duration column-duration" role="gridcell" aria-hidden="true">—:—</span>
+          {#each visibleColumns as column (column.id)}
+            <span class={`list-column list-column-${column.id}`} role="gridcell" aria-hidden="true">
+              {column.id === 'title' ? '正在載入曲目…' : '—'}
+            </span>
+          {/each}
           <span class="column-action" role="gridcell" aria-hidden="true"></span>
       {/if}
     {/snippet}
