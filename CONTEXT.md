@@ -47,3 +47,20 @@ This glossary defines the music-library identity and playback terms shared by th
 ## Operating-system media controls
 
 **System media control**: Windows' operating-system-facing representation of the current playback session. It shows supported metadata and sends transport requests; the application audio backend remains authoritative for playback state.
+
+## Lyrics
+
+**Lyrics document (歌詞文件)**: One lyric text associated with a track. It may contain line timing or untimed text and may come from a local file, embedded track content, or an online provider.
+_Avoid_: lyrics file, when referring to embedded or provider content.
+
+**Line timing (逐行時間)**: The playback position associated with the start of one lyric line. It supports line-level synchronization and does not imply word-level timing.
+_Avoid_: word timing.
+
+**Provider candidate (Provider 候選)**: An alternate lyric document returned by an online lyrics provider for a track, available for evaluation or user selection.
+_Avoid_: search hit, when referring to a candidate that includes lyric content.
+
+**Manual selection (手動選取)**: The user's explicit choice of a provider candidate for a track. It records a deliberate preference distinct from a result selected automatically.
+_Avoid_: automatic match.
+
+**Automatic lyrics cache (自動歌詞快取)**: A provider result saved after the track match meets the automatic-selection policy. It is replaceable cache data and does not represent an explicit user choice.
+_Avoid_: manual selection.
