@@ -23,7 +23,8 @@ use playlist_exchange::{
 };
 mod settings;
 use settings::{
-    AppSettings, RepeatMode, SettingsStore, SourceEntry, SourceEntryKind, ThemeSettings,
+    AppSettings, NowPlayingLayout, RepeatMode, SettingsStore, SourceEntry, SourceEntryKind,
+    ThemeSettings, TrackListColumnSettings,
 };
 mod playlist_source_sync;
 
@@ -1121,6 +1122,56 @@ fn theme_set_preferences(
             Ok(())
         })
         .map(|settings| settings.theme.into())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_get_track_list_columns(
+    state: State<'_, AppState>,
+) -> Result<TrackListColumnSettings, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.track_list_columns)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_set_track_list_columns(
+    state: State<'_, AppState>,
+    preferences: TrackListColumnSettings,
+) -> Result<TrackListColumnSettings, String> {
+    state
+        .settings
+        .update(|settings| {
+            settings.track_list_columns = preferences.clone();
+            Ok(())
+        })
+        .map(|settings| settings.track_list_columns)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_get_now_playing_layout(state: State<'_, AppState>) -> Result<NowPlayingLayout, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.now_playing_layout)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_set_now_playing_layout(
+    state: State<'_, AppState>,
+    layout: NowPlayingLayout,
+) -> Result<NowPlayingLayout, String> {
+    state
+        .settings
+        .update(|settings| {
+            settings.now_playing_layout = layout;
+            Ok(())
+        })
+        .map(|settings| settings.now_playing_layout)
         .map_err(|error| error.to_string())
 }
 
@@ -2592,6 +2643,10 @@ pub fn run() {
             settings_confirm_source_registry,
             theme_get_preferences,
             theme_set_preferences,
+            settings_get_track_list_columns,
+            settings_set_track_list_columns,
+            settings_get_now_playing_layout,
+            settings_set_now_playing_layout,
             get_runtime_capabilities,
             library_get_page,
             playlist_list,

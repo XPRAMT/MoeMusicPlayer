@@ -12,7 +12,7 @@ use std::{
 use player_core::{LibraryRoot, MediaLocator, MediaSourceKind, PlaylistId, SourceId};
 use serde::{Deserialize, Serialize};
 
-const SETTINGS_SCHEMA_VERSION: u32 = 1;
+const SETTINGS_SCHEMA_VERSION: u32 = 2;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -37,6 +37,81 @@ impl Default for ThemeSettings {
             accent_hex: "#55D9FF".to_owned(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrackListColumnId {
+    Title,
+    /// Renderer label for the tag-derived `ARTIST` value.
+    Artist,
+    Album,
+    Year,
+    AudioFormat,
+    Duration,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackListColumnPreference {
+    pub id: TrackListColumnId,
+    pub visible: bool,
+}
+
+/// Configurable information columns. Row index and play action are deliberately absent.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackListColumnSettings {
+    /// Column order is represented by array order and must contain every information column once.
+    pub columns: Vec<TrackListColumnPreference>,
+}
+
+impl Default for TrackListColumnSettings {
+    fn default() -> Self {
+        Self {
+            columns: [
+                TrackListColumnId::Title,
+                TrackListColumnId::Artist,
+                TrackListColumnId::Album,
+                TrackListColumnId::Year,
+                TrackListColumnId::AudioFormat,
+                TrackListColumnId::Duration,
+            ]
+            .into_iter()
+            .map(|id| TrackListColumnPreference { id, visible: true })
+            .collect(),
+        }
+    }
+}
+
+impl TrackListColumnSettings {
+    fn validate(&self) -> Result<(), SettingsError> {
+        use TrackListColumnId::{Album, Artist, AudioFormat, Duration, Title, Year};
+
+        const REQUIRED: [TrackListColumnId; 6] =
+            [Title, Artist, Album, Year, AudioFormat, Duration];
+        let actual = self
+            .columns
+            .iter()
+            .map(|column| column.id)
+            .collect::<std::collections::HashSet<_>>();
+        if self.columns.len() != REQUIRED.len()
+            || actual.len() != REQUIRED.len()
+            || REQUIRED.iter().any(|id| !actual.contains(id))
+        {
+            return Err(SettingsError::InvalidData(
+                "track list columns must contain title, artist, album, year, audioFormat, and duration exactly once".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NowPlayingLayout {
+    A,
+    B,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -191,6 +266,8 @@ pub struct AppSettings {
     pub theme: ThemeSettings,
     pub shuffle: bool,
     pub repeat_mode: RepeatMode,
+    pub track_list_columns: TrackListColumnSettings,
+    pub now_playing_layout: NowPlayingLayout,
     /// False means the source registry came from defaults after both JSON copies failed.
     /// Sync must remain paused until the user rebuilds and confirms the registry.
     pub source_registry_authoritative: bool,
@@ -204,6 +281,8 @@ impl Default for AppSettings {
             theme: ThemeSettings::default(),
             shuffle: false,
             repeat_mode: RepeatMode::Off,
+            track_list_columns: TrackListColumnSettings::default(),
+            now_playing_layout: NowPlayingLayout::A,
             source_registry_authoritative: true,
             sources: Vec::new(),
         }
@@ -236,6 +315,7 @@ impl AppSettings {
         }
         validate_color(&self.theme.background_hex, "backgroundHex")?;
         validate_color(&self.theme.accent_hex, "accentHex")?;
+        self.track_list_columns.validate()?;
         let mut ids = std::collections::HashSet::new();
         for source in &self.sources {
             if !ids.insert(source.id) {
@@ -504,6 +584,8 @@ struct RawSettings {
     theme: Option<ThemeSettings>,
     shuffle: Option<bool>,
     repeat_mode: Option<RepeatMode>,
+    track_list_columns: Option<TrackListColumnSettings>,
+    now_playing_layout: Option<NowPlayingLayout>,
     source_registry_authoritative: Option<bool>,
     sources: Option<Vec<SourceEntry>>,
 }
@@ -521,6 +603,8 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         theme: raw.theme.unwrap_or_default(),
         shuffle: raw.shuffle.unwrap_or(false),
         repeat_mode: raw.repeat_mode.unwrap_or(RepeatMode::Off),
+        track_list_columns: raw.track_list_columns.unwrap_or_default(),
+        now_playing_layout: raw.now_playing_layout.unwrap_or(NowPlayingLayout::A),
         source_registry_authoritative: raw.source_registry_authoritative.unwrap_or(true),
         sources: raw.sources.unwrap_or_default(),
     };
@@ -956,5 +1040,128 @@ mod tests {
         assert_eq!(json["sources"][0]["kind"]["path"]["encoding"], "utf8");
         let decoded: AppSettings = serde_json::from_value(json).expect("deserialize settings");
         assert_eq!(decoded, settings);
+    }
+
+    #[test]
+    fn new_display_preferences_have_conventional_defaults_and_wire_names() {
+        let defaults = AppSettings::default();
+        assert_eq!(defaults.now_playing_layout, NowPlayingLayout::A);
+        assert_eq!(
+            defaults
+                .track_list_columns
+                .columns
+                .iter()
+                .map(|column| (column.id, column.visible))
+                .collect::<Vec<_>>(),
+            [
+                TrackListColumnId::Title,
+                TrackListColumnId::Artist,
+                TrackListColumnId::Album,
+                TrackListColumnId::Year,
+                TrackListColumnId::AudioFormat,
+                TrackListColumnId::Duration,
+            ]
+            .map(|id| (id, true))
+        );
+
+        let value = serde_json::to_value(defaults).expect("serialize defaults");
+        assert_eq!(value["schemaVersion"], SETTINGS_SCHEMA_VERSION);
+        assert_eq!(value["nowPlayingLayout"], "a");
+        assert_eq!(serde_json::to_value(NowPlayingLayout::B).unwrap(), "b");
+        assert_eq!(value["trackListColumns"]["columns"][4]["id"], "audioFormat");
+        assert_eq!(value["trackListColumns"]["columns"][4]["visible"], true);
+        assert!(serde_json::from_value::<AppSettings>(value).is_ok());
+    }
+
+    #[test]
+    fn schema_one_json_migrates_with_new_preferences_defaulted_and_registry_preserved() {
+        let directory = test_directory("schema-one-upgrade");
+        let path = directory.join("settings.json");
+        let source = source(StoredPath::Utf8("D:/Music".into()));
+        let mut previous = AppSettings {
+            sources: vec![source.clone()],
+            shuffle: true,
+            repeat_mode: RepeatMode::All,
+            source_registry_authoritative: false,
+            ..AppSettings::default()
+        };
+        previous.schema_version = 1;
+        let mut value = serde_json::to_value(previous).expect("serialize schema-one settings");
+        value.as_object_mut().unwrap().remove("trackListColumns");
+        value.as_object_mut().unwrap().remove("nowPlayingLayout");
+        fs::write(&path, serde_json::to_vec_pretty(&value).unwrap())
+            .expect("write schema-one settings");
+
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("migrate schema one");
+        let migrated = store.snapshot().unwrap();
+        assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(
+            migrated.track_list_columns,
+            TrackListColumnSettings::default()
+        );
+        assert_eq!(migrated.now_playing_layout, NowPlayingLayout::A);
+        assert_eq!(migrated.sources, vec![source]);
+        assert!(migrated.shuffle);
+        assert_eq!(migrated.repeat_mode, RepeatMode::All);
+        assert!(!migrated.source_registry_authoritative);
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(persisted["schemaVersion"], SETTINGS_SCHEMA_VERSION);
+        assert_eq!(persisted["sourceRegistryAuthoritative"], false);
+    }
+
+    #[test]
+    fn column_order_can_change_but_missing_or_duplicate_ids_are_rejected() {
+        let mut reordered = TrackListColumnSettings::default();
+        reordered.columns.swap(0, 3);
+        reordered.columns[0].visible = false;
+        reordered.validate().expect("valid permutation");
+        let encoded = serde_json::to_string(&reordered).unwrap();
+        let decoded: TrackListColumnSettings = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, reordered);
+
+        let mut duplicate = reordered.clone();
+        duplicate.columns[0].id = duplicate.columns[1].id;
+        assert!(duplicate.validate().is_err());
+
+        let mut missing = reordered;
+        missing.columns.pop();
+        assert!(missing.validate().is_err());
+
+        let unknown = serde_json::json!({
+            "columns": [{ "id": "rowIndex", "visible": true }]
+        });
+        assert!(serde_json::from_value::<TrackListColumnSettings>(unknown).is_err());
+    }
+
+    #[test]
+    fn display_preferences_persist_and_reopen_without_promoting_degraded_registry() {
+        let directory = test_directory("display-preferences-restart");
+        let path = directory.join("settings.json");
+        let source = source(StoredPath::Utf8("D:/Music".into()));
+        let initial = AppSettings {
+            source_registry_authoritative: false,
+            sources: vec![source.clone()],
+            ..AppSettings::default()
+        };
+        let store = SettingsStore::open(&path, initial).expect("create degraded settings");
+        let mut columns = TrackListColumnSettings::default();
+        columns.columns.swap(0, 2);
+        columns.columns[1].visible = false;
+        store
+            .update(|settings| {
+                settings.track_list_columns = columns.clone();
+                settings.now_playing_layout = NowPlayingLayout::B;
+                Ok(())
+            })
+            .expect("persist display preferences");
+
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        let settings = reopened.snapshot().unwrap();
+        assert_eq!(settings.track_list_columns, columns);
+        assert_eq!(settings.now_playing_layout, NowPlayingLayout::B);
+        assert_eq!(settings.sources, vec![source]);
+        assert!(!settings.source_registry_authoritative);
+        assert!(!reopened.source_registry_authoritative().unwrap());
     }
 }
