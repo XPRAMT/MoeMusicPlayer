@@ -20,7 +20,9 @@ pub use lyrics::{
     LyricFormat, LyricLine, LyricMatchScore, LyricProvider, LyricsTrackMetadata, ParsedLyrics,
     TrackLyrics, MAX_LYRIC_PAYLOAD_BYTES,
 };
-pub use playback_queue::{PlaybackQueue, QueueRepeatMode};
+pub use playback_queue::{
+    PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, QueueRepeatMode,
+};
 pub use playlist::{
     parse_m3u, parse_m3u8, write_m3u, write_m3u8, M3uExportOptions, Playlist, PlaylistEntry,
     PlaylistEntrySummary, PlaylistError, PlaylistId, PlaylistPage, PlaylistSummary,

@@ -151,6 +151,7 @@ struct PlayerInner {
 
 enum Command {
     Load(PathBuf),
+    LoadAndPlay(PathBuf),
     Play,
     Pause,
     Stop,
@@ -250,6 +251,14 @@ impl PlayerHandle {
 
     pub fn request_play(&self) -> Result<CommandTicket, AudioError> {
         self.enqueue_with_ack(Command::Play)
+    }
+
+    /// Atomically load and start a track as one bounded worker command.
+    pub fn request_load_and_play(
+        &self,
+        path: impl Into<PathBuf>,
+    ) -> Result<CommandTicket, AudioError> {
+        self.enqueue_with_ack(Command::LoadAndPlay(path.into()))
     }
 
     pub fn request_pause(&self) -> Result<CommandTicket, AudioError> {
@@ -423,6 +432,36 @@ fn handle_command(
                 }
             }
         }
+        Command::LoadAndPlay(path) => {
+            update_snapshot(snapshot, events, |state| {
+                state.state = PlaybackState::Loading;
+                state.position = Duration::ZERO;
+                state.duration = None;
+                state.last_error = None;
+            });
+            match backend.load(&path) {
+                Ok(duration) => {
+                    *current_path = Some(path);
+                    update_snapshot(snapshot, events, |state| {
+                        state.state = PlaybackState::Ready;
+                        state.position = Duration::ZERO;
+                        state.duration = duration;
+                        state.last_error = None;
+                    });
+                }
+                Err(error) => {
+                    let _ = backend.stop();
+                    *current_path = None;
+                    set_error(snapshot, events, error.clone());
+                    return Err(error);
+                }
+            }
+            if let Err(error) = backend.play() {
+                set_error(snapshot, events, error.clone());
+                return Err(error);
+            }
+            set_state(snapshot, events, PlaybackState::Playing);
+        }
         Command::Play => {
             let Some(path) = current_path.as_deref() else {
                 let error = AudioError::NoTrackLoaded;
@@ -454,7 +493,8 @@ fn handle_command(
             }
         }
         Command::Pause => {
-            if read_snapshot(snapshot).state == PlaybackState::Playing {
+            let state = read_snapshot(snapshot).state;
+            if state == PlaybackState::Playing {
                 match backend.pause() {
                     Ok(()) => set_state(snapshot, events, PlaybackState::Paused),
                     Err(error) => {

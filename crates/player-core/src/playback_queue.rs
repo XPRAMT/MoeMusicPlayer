@@ -1,19 +1,47 @@
-﻿use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::TrackId;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum QueueRepeatMode {
     Off,
     One,
     All,
 }
 
-/// A stable, session-local traversal over Track IDs. `track_ids` retains source
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlaybackQueueContext {
+    Library { query: Option<String> },
+    Playlist { playlist_id: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PlaybackQueueEntry {
+    pub track_id: TrackId,
+    /// Original playlist entry position, retained to identify duplicate tracks.
+    pub source_position: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PlaybackQueueSnapshot {
+    pub context: PlaybackQueueContext,
+    pub entries: Vec<PlaybackQueueEntry>,
+    pub play_order: Vec<usize>,
+    pub cursor: usize,
+    pub shuffle: bool,
+    pub repeat: QueueRepeatMode,
+    pub random_state: u64,
+}
+
+/// A stable, session-local traversal over entries. `entries` retain source
 /// order; `play_order` stores the active shuffled or natural traversal.
 #[derive(Clone, Debug)]
 pub struct PlaybackQueue {
-    track_ids: Vec<TrackId>,
+    context: PlaybackQueueContext,
+    entries: Vec<PlaybackQueueEntry>,
     play_order: Vec<usize>,
     cursor: usize,
     shuffle: bool,
@@ -31,12 +59,42 @@ impl PlaybackQueue {
         selected_index: usize,
         random_state: u64,
     ) -> Option<Self> {
-        if track_ids.is_empty() || selected_index >= track_ids.len() {
+        let entries = track_ids
+            .into_iter()
+            .map(|track_id| PlaybackQueueEntry {
+                track_id,
+                source_position: None,
+            })
+            .collect();
+        Self::with_entries_and_seed(
+            entries,
+            PlaybackQueueContext::Library { query: None },
+            selected_index,
+            random_state,
+        )
+    }
+
+    pub fn with_entries(
+        entries: Vec<PlaybackQueueEntry>,
+        context: PlaybackQueueContext,
+        selected_index: usize,
+    ) -> Option<Self> {
+        Self::with_entries_and_seed(entries, context, selected_index, random_seed())
+    }
+
+    fn with_entries_and_seed(
+        entries: Vec<PlaybackQueueEntry>,
+        context: PlaybackQueueContext,
+        selected_index: usize,
+        random_state: u64,
+    ) -> Option<Self> {
+        if entries.is_empty() || selected_index >= entries.len() {
             return None;
         }
-        let length = track_ids.len();
+        let length = entries.len();
         Some(Self {
-            track_ids,
+            context,
+            entries,
             play_order: (0..length).collect(),
             cursor: selected_index,
             shuffle: false,
@@ -46,15 +104,23 @@ impl PlaybackQueue {
     }
 
     pub fn current(&self) -> TrackId {
-        self.track_ids[self.play_order[self.cursor]]
+        self.entries[self.play_order[self.cursor]].track_id
+    }
+
+    pub fn current_entry_index(&self) -> usize {
+        self.play_order[self.cursor]
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
     }
 
     pub fn len(&self) -> usize {
-        self.track_ids.len()
+        self.entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.track_ids.is_empty()
+        self.entries.is_empty()
     }
 
     pub fn shuffle(&self) -> bool {
@@ -78,13 +144,13 @@ impl PlaybackQueue {
     }
 
     pub fn set_shuffle(&mut self, enabled: bool) {
-        if self.shuffle == enabled || self.track_ids.len() < 2 {
+        if self.shuffle == enabled || self.entries.len() < 2 {
             self.shuffle = enabled;
             return;
         }
 
         let current_source_index = self.play_order[self.cursor];
-        self.play_order = (0..self.track_ids.len()).collect();
+        self.play_order = (0..self.entries.len()).collect();
         if enabled {
             self.shuffle_from(current_source_index);
         } else {
@@ -96,33 +162,116 @@ impl PlaybackQueue {
     /// Move to the next queue entry. Natural completion repeats the current
     /// entry in Repeat One; manual navigation always proceeds through the queue.
     pub fn next(&mut self, manual: bool) -> Option<TrackId> {
+        let (_, target_cursor) = self.preview_next(manual)?;
+        self.cursor = target_cursor;
+        Some(self.current())
+    }
+
+    pub fn preview_next(&self, manual: bool) -> Option<(TrackId, usize)> {
         if self.repeat == QueueRepeatMode::One && !manual {
-            return Some(self.current());
+            return Some((self.current(), self.cursor));
         }
 
         if self.cursor + 1 < self.play_order.len() {
-            self.cursor += 1;
-            return Some(self.current());
+            let cursor = self.cursor + 1;
+            return Some((self.entries[self.play_order[cursor]].track_id, cursor));
         }
 
         if self.repeat == QueueRepeatMode::All {
-            self.cursor = 0;
-            return Some(self.current());
+            return Some((self.entries[self.play_order[0]].track_id, 0));
         }
 
         None
     }
 
     pub fn previous(&mut self) -> Option<TrackId> {
+        let (_, target_cursor) = self.preview_previous()?;
+        self.cursor = target_cursor;
+        Some(self.current())
+    }
+
+    pub fn preview_previous(&self) -> Option<(TrackId, usize)> {
         if self.cursor > 0 {
-            self.cursor -= 1;
-            return Some(self.current());
+            let cursor = self.cursor - 1;
+            return Some((self.entries[self.play_order[cursor]].track_id, cursor));
         }
         if self.repeat == QueueRepeatMode::All {
-            self.cursor = self.play_order.len() - 1;
-            return Some(self.current());
+            let cursor = self.play_order.len() - 1;
+            return Some((self.entries[self.play_order[cursor]].track_id, cursor));
         }
         None
+    }
+
+    pub fn snapshot(&self) -> PlaybackQueueSnapshot {
+        PlaybackQueueSnapshot {
+            context: self.context.clone(),
+            entries: self.entries.clone(),
+            play_order: self.play_order.clone(),
+            cursor: self.cursor,
+            shuffle: self.shuffle,
+            repeat: self.repeat,
+            random_state: self.random_state,
+        }
+    }
+
+    pub fn restore(snapshot: PlaybackQueueSnapshot) -> Result<Self, &'static str> {
+        let length = snapshot.entries.len();
+        if length == 0 || snapshot.play_order.len() != length || snapshot.cursor >= length {
+            return Err("queue size or cursor is invalid");
+        }
+        let mut seen = vec![false; length];
+        for index in &snapshot.play_order {
+            let Some(slot) = seen.get_mut(*index) else {
+                return Err("queue traversal index is out of range");
+            };
+            if *slot {
+                return Err("queue traversal index is duplicated");
+            }
+            *slot = true;
+        }
+        if seen.iter().any(|value| !value) || snapshot.random_state == 0 {
+            return Err("queue snapshot is incomplete");
+        }
+        match &snapshot.context {
+            PlaybackQueueContext::Library { .. }
+                if snapshot
+                    .entries
+                    .iter()
+                    .any(|entry| entry.source_position.is_some()) =>
+            {
+                return Err("library queue entries cannot have playlist positions");
+            }
+            PlaybackQueueContext::Playlist { .. } => {
+                let mut previous = None;
+                for entry in &snapshot.entries {
+                    let Some(position) = entry.source_position else {
+                        return Err("playlist queue entry has no source position");
+                    };
+                    if previous.is_some_and(|previous| position <= previous) {
+                        return Err("playlist queue positions are not strictly increasing");
+                    }
+                    previous = Some(position);
+                }
+            }
+            _ => {}
+        }
+        Ok(Self {
+            context: snapshot.context,
+            entries: snapshot.entries,
+            play_order: snapshot.play_order,
+            cursor: snapshot.cursor,
+            shuffle: snapshot.shuffle,
+            repeat: snapshot.repeat,
+            random_state: snapshot.random_state,
+        })
+    }
+
+    pub fn set_cursor(&mut self, cursor: usize) -> Result<(), &'static str> {
+        if cursor >= self.play_order.len() {
+            return Err("queue cursor is out of range");
+        }
+        self.cursor = cursor;
+        Ok(())
     }
 
     fn shuffle_from(&mut self, current_source_index: usize) {
@@ -229,13 +378,78 @@ mod tests {
     fn one_hundred_thousand_entry_queue_stores_only_compact_ids_and_indices() {
         let tracks = ids(100_000);
         let mut queue = PlaybackQueue::new(tracks, 50_000).unwrap();
-        let storage_bytes = queue.track_ids.capacity() * std::mem::size_of::<TrackId>()
+        let storage_bytes = queue.entries.capacity() * std::mem::size_of::<PlaybackQueueEntry>()
             + queue.play_order.capacity() * std::mem::size_of::<usize>();
         assert_eq!(queue.len(), 100_000);
         assert!(storage_bytes <= 4 * 1024 * 1024, "{storage_bytes} bytes");
         queue.set_shuffle(true);
-        let shuffled_bytes = queue.track_ids.capacity() * std::mem::size_of::<TrackId>()
+        let shuffled_bytes = queue.entries.capacity() * std::mem::size_of::<PlaybackQueueEntry>()
             + queue.play_order.capacity() * std::mem::size_of::<usize>();
         assert_eq!(shuffled_bytes, storage_bytes);
+    }
+
+    #[test]
+    fn snapshot_restores_duplicate_playlist_entries_and_exact_shuffle_cursor() {
+        let duplicate = TrackId::new();
+        let entries = vec![
+            PlaybackQueueEntry {
+                track_id: TrackId::new(),
+                source_position: Some(0),
+            },
+            PlaybackQueueEntry {
+                track_id: duplicate,
+                source_position: Some(1),
+            },
+            PlaybackQueueEntry {
+                track_id: duplicate,
+                source_position: Some(2),
+            },
+            PlaybackQueueEntry {
+                track_id: TrackId::new(),
+                source_position: Some(3),
+            },
+        ];
+        let context = PlaybackQueueContext::Playlist {
+            playlist_id: "playlist-id".into(),
+        };
+        let mut queue = PlaybackQueue::with_entries_and_seed(entries, context, 1, 0x1234).unwrap();
+        queue.set_shuffle(true);
+        queue.next(true);
+        let before = queue.snapshot();
+        let restored = PlaybackQueue::restore(before.clone()).unwrap();
+        assert_eq!(restored.snapshot(), before);
+        assert_eq!(restored.entries[1].track_id, restored.entries[2].track_id);
+        assert_ne!(
+            restored.entries[1].source_position,
+            restored.entries[2].source_position
+        );
+        assert_eq!(
+            restored.current(),
+            before.entries[before.play_order[before.cursor]].track_id
+        );
+    }
+
+    #[test]
+    fn restore_rejects_out_of_range_cursor_and_invalid_traversal() {
+        let queue = PlaybackQueue::new(ids(3), 0).unwrap();
+        let mut snapshot = queue.snapshot();
+        snapshot.cursor = 3;
+        assert!(PlaybackQueue::restore(snapshot).is_err());
+
+        let mut snapshot = queue.snapshot();
+        snapshot.play_order[1] = 0;
+        assert!(PlaybackQueue::restore(snapshot).is_err());
+    }
+
+    #[test]
+    fn one_hundred_thousand_entry_snapshot_restores_exact_order() {
+        let mut queue = PlaybackQueue::new(ids(100_000), 51_234).unwrap();
+        queue.set_shuffle(true);
+        for _ in 0..321 {
+            queue.next(true);
+        }
+        let snapshot = queue.snapshot();
+        let restored = PlaybackQueue::restore(snapshot.clone()).unwrap();
+        assert_eq!(restored.snapshot(), snapshot);
     }
 }

@@ -10,16 +10,17 @@ use std::{
 use player_core::{
     FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, LyricCandidate,
     LyricProvider, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page,
-    Playlist, PlaylistEntry, PlaylistEntrySummary, PlaylistId, PlaylistPage, PlaylistSummary,
-    SourceId, SourceScanState, SyncApplyOutcome, SyncApplyRequest, SyncApplyStats,
-    SyncCancellation, TrackId, TrackIdentity, TrackLyrics, TrackMetadata, TrackSummary,
-    TrackSyncState, UserMetadataField, TRACK_METADATA_VERSION,
+    PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, Playlist, PlaylistEntry,
+    PlaylistEntrySummary, PlaylistId, PlaylistPage, PlaylistSummary, QueueRepeatMode, SourceId,
+    SourceScanState, SyncApplyOutcome, SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackId,
+    TrackIdentity, TrackLyrics, TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField,
+    TRACK_METADATA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const MAX_PAGE_SIZE: u32 = 500;
 const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
@@ -241,12 +242,56 @@ CREATE INDEX lyric_candidates_cache_lru
     ON lyric_candidates(fetched_at_utc_ms, track_id, candidate_id);
 "#;
 
+const SCHEMA_V8: &str = r#"
+CREATE TABLE playback_session (
+    singleton_id INTEGER PRIMARY KEY NOT NULL CHECK (singleton_id = 1),
+    source_kind TEXT NOT NULL CHECK (source_kind IN ('library', 'playlist')),
+    source_playlist_id TEXT,
+    source_query TEXT,
+    cursor INTEGER NOT NULL CHECK (cursor >= 0),
+    position_ms INTEGER NOT NULL CHECK (position_ms >= 0),
+    shuffle INTEGER NOT NULL CHECK (shuffle IN (0, 1)),
+    repeat_mode TEXT NOT NULL CHECK (repeat_mode IN ('off', 'one', 'all')),
+    random_state TEXT NOT NULL,
+    entry_count INTEGER NOT NULL CHECK (entry_count > 0)
+);
+CREATE TABLE playback_session_entries (
+    source_index INTEGER PRIMARY KEY NOT NULL CHECK (source_index >= 0),
+    track_id TEXT NOT NULL,
+    source_position INTEGER CHECK (source_position IS NULL OR source_position >= 0),
+    traversal_order INTEGER NOT NULL UNIQUE CHECK (traversal_order >= 0)
+);
+"#;
+
+fn repeat_mode_name(mode: QueueRepeatMode) -> &'static str {
+    match mode {
+        QueueRepeatMode::Off => "off",
+        QueueRepeatMode::One => "one",
+        QueueRepeatMode::All => "all",
+    }
+}
+
+fn parse_repeat_mode(value: &str) -> Option<QueueRepeatMode> {
+    match value {
+        "off" => Some(QueueRepeatMode::Off),
+        "one" => Some(QueueRepeatMode::One),
+        "all" => Some(QueueRepeatMode::All),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlaylistFileSyncState {
     pub playlist_id: PlaylistId,
     pub locator: MediaLocator,
     pub fingerprint: FileFingerprint,
     pub content_sha256: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlaybackSessionCheckpoint {
+    pub queue: PlaybackQueueSnapshot,
+    pub position_ms: u64,
 }
 
 pub struct Database {
@@ -452,6 +497,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V7)?;
             tx.pragma_update(None, "user_version", 7)?;
+            tx.commit()?;
+            version = 7;
+        }
+        if version == 7 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V8)?;
+            tx.pragma_update(None, "user_version", 8)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -1522,6 +1574,261 @@ impl Database {
             .map_err(DatabaseError::from)
     }
 
+    /// Replace the exact queue traversal and its playback checkpoint atomically.
+    /// Queue entries are normalized so progress checkpoints never rewrite a large queue.
+    pub fn save_playback_session(
+        &self,
+        checkpoint: &PlaybackSessionCheckpoint,
+    ) -> Result<(), DatabaseError> {
+        player_core::PlaybackQueue::restore(checkpoint.queue.clone())
+            .map_err(|error| DatabaseError::CorruptData(error.to_owned()))?;
+        let entry_count = i64::try_from(checkpoint.queue.entries.len())
+            .map_err(|_| DatabaseError::InvalidNumber("playback queue length"))?;
+        let cursor = i64::try_from(checkpoint.queue.cursor)
+            .map_err(|_| DatabaseError::InvalidNumber("playback queue cursor"))?;
+        let position_ms = i64::try_from(checkpoint.position_ms)
+            .map_err(|_| DatabaseError::InvalidNumber("playback position"))?;
+        let mut traversal = vec![0_i64; checkpoint.queue.entries.len()];
+        for (rank, source_index) in checkpoint.queue.play_order.iter().copied().enumerate() {
+            traversal[source_index] = i64::try_from(rank)
+                .map_err(|_| DatabaseError::InvalidNumber("playback traversal rank"))?;
+        }
+        let (source_kind, source_playlist_id, source_query) = match &checkpoint.queue.context {
+            PlaybackQueueContext::Library { query } => ("library", None, query.as_deref()),
+            PlaybackQueueContext::Playlist { playlist_id } => {
+                ("playlist", Some(playlist_id.as_str()), None)
+            }
+        };
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM playback_session_entries", [])?;
+        tx.execute(
+            "INSERT INTO playback_session(
+                singleton_id, source_kind, source_playlist_id, source_query, cursor,
+                position_ms, shuffle, repeat_mode, random_state, entry_count
+             ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(singleton_id) DO UPDATE SET
+                source_kind=excluded.source_kind,
+                source_playlist_id=excluded.source_playlist_id,
+                source_query=excluded.source_query,
+                cursor=excluded.cursor,
+                position_ms=excluded.position_ms,
+                shuffle=excluded.shuffle,
+                repeat_mode=excluded.repeat_mode,
+                random_state=excluded.random_state,
+                entry_count=excluded.entry_count",
+            params![
+                source_kind,
+                source_playlist_id,
+                source_query,
+                cursor,
+                position_ms,
+                checkpoint.queue.shuffle,
+                repeat_mode_name(checkpoint.queue.repeat),
+                checkpoint.queue.random_state.to_string(),
+                entry_count,
+            ],
+        )?;
+        {
+            let mut statement = tx.prepare_cached(
+                "INSERT INTO playback_session_entries(source_index, track_id, source_position, traversal_order)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for (source_index, entry) in checkpoint.queue.entries.iter().enumerate() {
+                statement.execute(params![
+                    i64::try_from(source_index)
+                        .map_err(|_| DatabaseError::InvalidNumber("playback source index"))?,
+                    entry.track_id.to_string(),
+                    entry
+                        .source_position
+                        .map(i64::try_from)
+                        .transpose()
+                        .map_err(|_| DatabaseError::InvalidNumber("playlist entry position"))?,
+                    traversal[source_index],
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Load without resolving any media locator; unavailable sources must not erase a session.
+    pub fn load_playback_session(
+        &self,
+    ) -> Result<Option<PlaybackSessionCheckpoint>, DatabaseError> {
+        let connection = self.lock()?;
+        let header = connection
+            .query_row(
+                "SELECT source_kind, source_playlist_id, source_query, cursor, position_ms,
+                        shuffle, repeat_mode, random_state, entry_count
+                 FROM playback_session WHERE singleton_id=1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, bool>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, i64>(8)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((kind, playlist_id, query, cursor, position_ms, shuffle, repeat, random, count)) =
+            header
+        else {
+            return Ok(None);
+        };
+        if count <= 0 || count > 1_000_000 || cursor < 0 || position_ms < 0 {
+            return Err(DatabaseError::CorruptData(
+                "playback session header is out of range".into(),
+            ));
+        }
+        let context = match kind.as_str() {
+            "library" if playlist_id.is_none() => PlaybackQueueContext::Library { query },
+            "playlist" if query.is_none() => PlaybackQueueContext::Playlist {
+                playlist_id: playlist_id.ok_or_else(|| {
+                    DatabaseError::CorruptData("playlist session has no playlist ID".into())
+                })?,
+            },
+            _ => {
+                return Err(DatabaseError::CorruptData(
+                    "playback session source is invalid".into(),
+                ))
+            }
+        };
+        let repeat = parse_repeat_mode(&repeat)
+            .ok_or_else(|| DatabaseError::CorruptData("playback repeat mode is invalid".into()))?;
+        let random_state = random
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| DatabaseError::CorruptData("playback random state is invalid".into()))?;
+        let capacity = usize::try_from(count)
+            .map_err(|_| DatabaseError::InvalidNumber("playback queue length"))?;
+        let mut entries = Vec::with_capacity(capacity);
+        let mut play_order = vec![usize::MAX; capacity];
+        {
+            let mut statement = connection.prepare_cached(
+                "SELECT source_index, track_id, source_position, traversal_order
+                 FROM playback_session_entries ORDER BY source_index",
+            )?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                let source_index = usize::try_from(row.get::<_, i64>(0)?).map_err(|_| {
+                    DatabaseError::CorruptData("playback entry index is negative".into())
+                })?;
+                if source_index != entries.len() || source_index >= capacity {
+                    return Err(DatabaseError::CorruptData(
+                        "playback entry indices are incomplete".into(),
+                    ));
+                }
+                let id = row.get::<_, String>(1)?;
+                let track_id = TrackId::parse(&id).map_err(|error| {
+                    DatabaseError::CorruptData(format!("invalid playback TrackId: {error}"))
+                })?;
+                let source_position = row
+                    .get::<_, Option<i64>>(2)?
+                    .map(u64::try_from)
+                    .transpose()
+                    .map_err(|_| {
+                        DatabaseError::CorruptData("playlist entry position is negative".into())
+                    })?;
+                let rank = usize::try_from(row.get::<_, i64>(3)?).map_err(|_| {
+                    DatabaseError::CorruptData("playback traversal rank is negative".into())
+                })?;
+                if rank >= capacity || play_order[rank] != usize::MAX {
+                    return Err(DatabaseError::CorruptData(
+                        "playback traversal is invalid".into(),
+                    ));
+                }
+                play_order[rank] = source_index;
+                entries.push(PlaybackQueueEntry {
+                    track_id,
+                    source_position,
+                });
+            }
+        }
+        if entries.len() != capacity || play_order.contains(&usize::MAX) {
+            return Err(DatabaseError::CorruptData(
+                "playback queue entries are incomplete".into(),
+            ));
+        }
+        let queue = PlaybackQueueSnapshot {
+            context,
+            entries,
+            play_order,
+            cursor: usize::try_from(cursor)
+                .map_err(|_| DatabaseError::CorruptData("playback cursor is negative".into()))?,
+            shuffle,
+            repeat,
+            random_state,
+        };
+        player_core::PlaybackQueue::restore(queue.clone())
+            .map_err(|error| DatabaseError::CorruptData(error.to_owned()))?;
+        Ok(Some(PlaybackSessionCheckpoint {
+            queue,
+            position_ms: u64::try_from(position_ms)
+                .map_err(|_| DatabaseError::InvalidNumber("playback position"))?,
+        }))
+    }
+
+    /// Update only cursor and position after a track transition or bounded progress interval.
+    pub fn checkpoint_playback_position(
+        &self,
+        queue: &PlaybackQueueSnapshot,
+        position_ms: u64,
+    ) -> Result<(), DatabaseError> {
+        player_core::PlaybackQueue::restore(queue.clone())
+            .map_err(|error| DatabaseError::CorruptData(error.to_owned()))?;
+        let position_ms = i64::try_from(position_ms)
+            .map_err(|_| DatabaseError::InvalidNumber("playback position"))?;
+        let cursor = i64::try_from(queue.cursor)
+            .map_err(|_| DatabaseError::InvalidNumber("playback queue cursor"))?;
+        let source_index = queue.play_order[queue.cursor];
+        let connection = self.lock()?;
+        let tx = connection.unchecked_transaction()?;
+        let persisted: Option<(String, Option<i64>, i64)> = tx
+            .query_row(
+                "SELECT track_id, source_position, traversal_order
+                 FROM playback_session_entries WHERE source_index=?1",
+                [i64::try_from(source_index)
+                    .map_err(|_| DatabaseError::InvalidNumber("playback source index"))?],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let expected = &queue.entries[source_index];
+        let expected_position = expected
+            .source_position
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| DatabaseError::InvalidNumber("playlist entry position"))?;
+        if !persisted.is_some_and(|(track_id, source_position, rank)| {
+            track_id == expected.track_id.to_string()
+                && source_position == expected_position
+                && usize::try_from(rank).ok() == Some(queue.cursor)
+        }) {
+            return Err(DatabaseError::CorruptData(
+                "playback queue changed before progress checkpoint".into(),
+            ));
+        }
+        let changed = tx.execute(
+            "UPDATE playback_session SET cursor=?1, position_ms=?2 WHERE singleton_id=1 AND entry_count=?3",
+            params![cursor, position_ms, queue.entries.len() as i64],
+        )?;
+        if changed != 1 {
+            return Err(DatabaseError::CorruptData(
+                "playback session disappeared before checkpoint".into(),
+            ));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, DatabaseError> {
         self.connection.lock().map_err(|_| DatabaseError::Poisoned)
     }
@@ -2212,17 +2519,18 @@ mod tests {
 
     use player_core::{
         parse_lrc, FileFingerprint, LibraryRoot, ListTracksQuery, LyricCandidate, LyricProvider,
-        MediaIndex, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord, Playlist,
-        PlaylistEntry, PlaylistId, SourceId, SourceScan, SourceScanState, SyncApplyRequest,
+        MediaIndex, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord,
+        PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, Playlist, PlaylistEntry,
+        PlaylistId, QueueRepeatMode, SourceId, SourceScan, SourceScanState, SyncApplyRequest,
         SyncCancellation, SyncEngine, TrackId, TrackIdentity, TrackLyrics, TrackMetadata,
         TrackMetadataError, UserMetadataField,
     };
     use rusqlite::{params, OptionalExtension};
 
     use super::{
-        Database, DatabaseError, LibraryRepository, PlaylistFileSyncState, ThemePreferences,
-        COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
-        TRACKS_PAGE_SQL,
+        Database, DatabaseError, LibraryRepository, PlaybackSessionCheckpoint,
+        PlaylistFileSyncState, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2,
+        SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, TRACKS_PAGE_SQL,
     };
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -2372,7 +2680,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 7);
+            assert_eq!(version, 8);
         }
         {
             let db = Database::open(&path).expect("reopen migrated database");
@@ -2416,7 +2724,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 7);
+        assert_eq!(current_version, 8);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -2465,7 +2773,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -2505,7 +2813,7 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
     }
 
@@ -2545,7 +2853,7 @@ mod tests {
                     .expect("sync-state table lookup"),
             )
         };
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
     }
 
@@ -2721,7 +3029,7 @@ mod tests {
                     .expect("lyric candidates table"),
             )
         };
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         assert_eq!(lyric_table, "track_lyrics");
         assert_eq!(candidate_table, "lyric_candidates");
         assert_eq!(
@@ -2732,6 +3040,34 @@ mod tests {
                 .as_deref(),
             Some("persisted title")
         );
+    }
+
+    #[test]
+    fn version_seven_migration_adds_normalized_playback_session_tables() {
+        let connection = rusqlite::Connection::open_in_memory().expect("schema v7 database");
+        connection.execute_batch(SCHEMA_V1).expect("schema v1");
+        connection.execute_batch(SCHEMA_V2).expect("schema v2");
+        connection.execute_batch(SCHEMA_V3).expect("schema v3");
+        connection.execute_batch(SCHEMA_V4).expect("schema v4");
+        connection.execute_batch(SCHEMA_V5).expect("schema v5");
+        connection.execute_batch(SCHEMA_V6).expect("schema v6");
+        connection.execute_batch(SCHEMA_V7).expect("schema v7");
+        connection
+            .pragma_update(None, "user_version", 7)
+            .expect("mark schema v7");
+
+        let db = Database::from_connection(connection).expect("migrate schema v7");
+        let connection = db.lock().expect("connection");
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("schema version");
+        let tables: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('playback_session', 'playback_session_entries')",
+            [],
+            |row| row.get(0),
+        ).expect("playback session tables");
+        assert_eq!(version, 8);
+        assert_eq!(tables, 2);
     }
 
     #[test]
@@ -4252,5 +4588,139 @@ mod tests {
                 .last_success_utc_ms,
             Some(at)
         );
+    }
+
+    #[test]
+    fn playback_session_reopens_exact_hundred_thousand_entry_traversal_and_position() {
+        let path =
+            std::env::temp_dir().join(format!("moe-playback-session-{}.sqlite3", TrackId::new()));
+        let duplicate = TrackId::new();
+        let entries = (0..100_000)
+            .map(|position| PlaybackQueueEntry {
+                track_id: if position == 71 || position == 72 {
+                    duplicate
+                } else {
+                    TrackId::new()
+                },
+                source_position: Some(position),
+            })
+            .collect();
+        let mut queue = PlaybackQueue::with_entries(
+            entries,
+            PlaybackQueueContext::Playlist {
+                playlist_id: "playlist-that-may-be-offline".to_owned(),
+            },
+            71,
+        )
+        .expect("queue");
+        queue.set_repeat_mode(QueueRepeatMode::All);
+        queue.set_shuffle(true);
+        for _ in 0..173 {
+            queue.next(true);
+        }
+        let expected = PlaybackSessionCheckpoint {
+            queue: queue.snapshot(),
+            position_ms: 93_417,
+        };
+        {
+            let db = Database::open(&path).expect("isolated file database");
+            db.save_playback_session(&expected)
+                .expect("save exact session");
+            db.checkpoint_playback_position(&expected.queue, 93_417)
+                .expect("checkpoint position");
+        }
+        {
+            let db = Database::open(&path).expect("reopen isolated database");
+            let actual = db
+                .load_playback_session()
+                .expect("load session")
+                .expect("saved session");
+            assert_eq!(actual, expected);
+            assert_eq!(
+                actual.queue.entries[71].track_id,
+                actual.queue.entries[72].track_id
+            );
+            assert_ne!(
+                actual.queue.entries[71].source_position,
+                actual.queue.entries[72].source_position
+            );
+            let current_index = actual.queue.play_order[actual.queue.cursor];
+            assert_eq!(
+                actual.queue.entries[current_index].track_id,
+                expected.queue.entries[expected.queue.play_order[expected.queue.cursor]].track_id
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn playback_checkpoint_rejects_corrupt_cursor_without_deleting_saved_queue() {
+        let db = Database::open_in_memory().expect("database");
+        let queue = PlaybackQueue::new(vec![TrackId::new(), TrackId::new()], 1).expect("queue");
+        db.save_playback_session(&PlaybackSessionCheckpoint {
+            queue: queue.snapshot(),
+            position_ms: 6_000,
+        })
+        .expect("save session");
+        db.lock()
+            .expect("connection")
+            .execute("UPDATE playback_session SET cursor=2", [])
+            .expect("corrupt cursor fixture");
+        assert!(matches!(
+            db.load_playback_session(),
+            Err(DatabaseError::CorruptData(_))
+        ));
+        let count: i64 = db
+            .lock()
+            .expect("connection")
+            .query_row("SELECT COUNT(*) FROM playback_session_entries", [], |row| {
+                row.get(0)
+            })
+            .expect("preserved queue entries");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn unavailable_track_ids_are_preserved_without_stored_paths_or_track_rows() {
+        let db = Database::open_in_memory().expect("database");
+        let offline_id = TrackId::new();
+        let queue = PlaybackQueue::with_entries(
+            vec![PlaybackQueueEntry {
+                track_id: offline_id,
+                source_position: Some(9),
+            }],
+            PlaybackQueueContext::Playlist {
+                playlist_id: "offline-playlist".to_owned(),
+            },
+            0,
+        )
+        .expect("queue");
+        db.save_playback_session(&PlaybackSessionCheckpoint {
+            queue: queue.snapshot(),
+            position_ms: 4_321,
+        })
+        .expect("save while offline");
+        let restored = db
+            .load_playback_session()
+            .expect("load while offline")
+            .expect("session retained");
+        assert_eq!(restored.queue.entries[0].track_id, offline_id);
+        assert_eq!(restored.position_ms, 4_321);
+        let columns: Vec<String> = {
+            let connection = db.lock().expect("connection");
+            let mut statement = connection
+                .prepare("PRAGMA table_info(playback_session_entries)")
+                .expect("columns");
+            statement
+                .query_map([], |row| row.get(1))
+                .expect("column names")
+                .collect::<Result<_, _>>()
+                .expect("column list")
+        };
+        assert!(!columns
+            .iter()
+            .any(|column| column.contains("path") || column.contains("locator")));
     }
 }

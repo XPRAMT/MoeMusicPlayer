@@ -22,7 +22,7 @@ This glossary defines the music-library identity and playback terms shared by th
 
 ## Playback
 
-**Playback session**: The currently selected track together with the state reported by the audio backend. It is separate from the full library and from the ordered Playback queue.
+**Playback session**: The restorable state of a listening session: its ordered queue traversal, selected queue entry and track, and saved playback position. It is separate from the full library; playable file paths are resolved from current source mappings rather than treated as session identity.
 
 **Playback snapshot**: A point-in-time view of the current playback session, including state, position, duration, volume, and any current error. The audio backend is authoritative for these values.
 
