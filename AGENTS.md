@@ -19,7 +19,7 @@
 - Windows 正在播放曲目封面透過 `library_get_track_artwork` 單首二進位 IPC 延遲讀取，只使用啟用來源映射；優先 Lofty 內嵌圖片，再找同資料夾 `cover.jpg`、`folder.jpg`。保留原始編碼位元組與像素尺寸，不經 JSON/base64、不重編碼；單一 Blob URL 共用於「正在播放」與底部播放列，切歌、停止或元件卸載時釋放，過期回應會丟棄。上限 32 MiB、單邊 16,384、64 百萬像素；後端會以 `ARTWORK_TOO_LARGE` 區分超限與缺圖，前端顯示對應說明；有效 sidecar 仍可作為超限內嵌圖的 fallback。封面 Rust 測試 20 項、前端測試 7 項通過；真實 Tauri 畫面尚未驗收，Android Content URI artwork 尚未接線。
 - 使用者已在隔離 Tauri/app-data 中透過原生資料夾選擇器選取唯讀來源 `\\?\D:\Music`；隔離資料庫保存 1 個 root、5,362 個曲目與來源映射，掃描狀態為 complete，另有 3 項 WSearch 診斷。正式 App SQLite 未觸碰。原生對話框的取消路徑尚未單獨確認。
 - Windows 系統媒體控制已從 Tauri 主視窗 HWND 接入 WinRT worker；Shell 以播放器快照每 750 ms 至少間隔更新標題、演出者、專輯與播放狀態，並把 Play/Pause/Stop/Seek/Next/Previous 事件送回音訊服務。Next/Previous 能力依 active queue 狀態更新。crate 的 17 項單元與 2 項隱藏 HWND 整合測試通過；Shell fake-event 測試涵蓋控制映射、無佇列能力時停用佇列事件及 attach/update 失敗與音訊隔離。實際 Tauri 視窗、媒體 flyout 與硬體按鍵仍未驗收。
-- Svelte 型別檢查、Vite 正式版建置、Node 27/27、`cargo test --workspace --locked`（Tauri 29、Audio 17、DB 30、Windows platform 21 等）與 `cargo clippy --workspace --all-targets --locked -- -D warnings` 均通過；`cargo fmt --all -- --check` 亦通過。Windows shell 整合測試涵蓋 Unicode 資料夾新增、合成 MP3 同步、SQLite 分頁/搜尋、關閉重開，以及 TrackId 到保存路徑再到播放 handle 的命令流程；另有 queue IPC JSON camelCase 測試。Windows Tauri release build 仍須由本輪整合代理完成確認。
+- Svelte 型別檢查、Vite 正式版建置、Node 27/27、`cargo test --workspace --locked`（Tauri 29、Audio 17、DB 30、Windows platform 21 等）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all -- --check` 與 Windows Tauri release build 均通過。root 已在隔離 app-data identifier 啟動最新版並確認 JSON/DB migration 正常；實際匯入與播放操作等待使用者回報。Windows shell 整合測試涵蓋 Unicode 資料夾新增、合成 MP3 同步、SQLite 分頁/搜尋、關閉重開，以及 TrackId 到保存路徑再到播放 handle 的命令流程；另有 queue IPC JSON camelCase 測試。
 
 仍未完成或未驗證：
 
