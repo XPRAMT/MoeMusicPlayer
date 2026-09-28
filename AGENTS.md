@@ -27,6 +27,7 @@
 
 仍未完成或未驗證：
 
+- Windows AAC/M4A：唯讀檢查 `D:\Music\Loss\[hanser]\hanser - Cyberangel(純真夢歌).m4a` 得到 AAC-LC、48 kHz、雙聲道、約 317 kb/s；ffprobe 成功，FFmpeg 對音訊串流完整解碼成功且無錯誤。Windows Cargo feature tree 缺少 Rodio `mp4` 帶入的 Symphonia ISO-MP4 demuxer 與 AAC decoder，`Cargo.lock` 亦無相關套件。此 feature 缺口是目前高信心根因；依 `rodio_backend.rs`，預期 `UnrecognizedFormat` 會回報為 `UnsupportedFormat`，但尚未捕獲目標曲目的 Rodio runtime 錯誤。沒有執行會經預設輸出裝置播放音訊的 smoke test，也未改動程式或音檔。建議後續啟用 Rodio `mp4` feature 並新增不初始化音訊輸出的解碼回歸測試。
 - 本輪 Now Playing 版面與 Tabler 圖示尚未由使用者在真實 Tauri WebView 複驗；Headless 幾何和 DOM 測試不等同正式視窗驗收。
 - 頂部宣傳 Banner 已移除並通過 Svelte 型別檢查、正式前端建置與 Node 58/58；新版 Tauri 視窗尚未人工確認各頁內容起始位置與同步資訊布局。
 - Windows 原生資料夾選擇器已由使用者在隔離 app-data 選取 `D:\Music` 並完成唯讀同步；正式 AppData 未觸碰。Cancel 不新增來源的路徑尚未單獨確認；播放清單原生對話框仍待使用者驗收。系統媒體控制尚未由實際 Tauri 視窗、Windows 媒體 flyout 或硬體媒體按鍵端到端驗收。
