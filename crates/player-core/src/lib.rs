@@ -1,5 +1,6 @@
 pub mod artwork;
 pub mod library;
+pub mod lyrics;
 pub mod playback_queue;
 pub mod playlist;
 pub mod sync;
@@ -12,6 +13,11 @@ pub use library::{
     MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, SourceId,
     SourceScan, SourceScanState, SyncCancellation, TrackId, TrackIdentity, TrackMetadata,
     TrackMetadataError, TrackSummary, UserMetadataField, TRACK_METADATA_VERSION,
+};
+pub use lyrics::{
+    auto_lyric_candidate, parse_lrc, parse_yrc, rank_lyric_candidates, LyricCandidate, LyricFormat,
+    LyricLine, LyricMatchScore, LyricProvider, LyricsTrackMetadata, ParsedLyrics, TrackLyrics,
+    MAX_LYRIC_PAYLOAD_BYTES,
 };
 pub use playback_queue::{PlaybackQueue, QueueRepeatMode};
 pub use playlist::{

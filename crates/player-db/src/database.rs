@@ -8,18 +8,24 @@ use std::{
 };
 
 use player_core::{
-    FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, MediaLocator,
-    MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, Playlist, PlaylistEntry,
-    PlaylistEntrySummary, PlaylistId, PlaylistPage, PlaylistSummary, SourceId, SourceScanState,
-    SyncApplyOutcome, SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackId, TrackIdentity,
-    TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField, TRACK_METADATA_VERSION,
+    FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, LyricCandidate,
+    LyricProvider, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page,
+    Playlist, PlaylistEntry, PlaylistEntrySummary, PlaylistId, PlaylistPage, PlaylistSummary,
+    SourceId, SourceScanState, SyncApplyOutcome, SyncApplyRequest, SyncApplyStats,
+    SyncCancellation, TrackId, TrackIdentity, TrackLyrics, TrackMetadata, TrackSummary,
+    TrackSyncState, UserMetadataField, TRACK_METADATA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const MAX_PAGE_SIZE: u32 = 500;
+const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
+const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
+const MAX_LYRIC_CANDIDATE_JSON_BYTES: usize = 4 * 1024 * 1024;
+const MAX_LYRIC_CANDIDATES_PER_TRACK: usize = 20;
+const MAX_LYRIC_CANDIDATE_CACHE_BYTES: i64 = 16 * 1024 * 1024;
 const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT track_id) FROM source_mappings";
 const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
     JOIN tracks t ON t.track_id=m.track_id
@@ -210,6 +216,29 @@ const SCHEMA_V6: &str = r#"
 ALTER TABLE tracks ADD COLUMN year INTEGER CHECK (year IS NULL OR (year >= 1 AND year <= 9999));
 ALTER TABLE tracks ADD COLUMN bit_depth INTEGER CHECK (bit_depth IS NULL OR (bit_depth >= 1 AND bit_depth <= 64));
 ALTER TABLE tracks ADD COLUMN metadata_version INTEGER NOT NULL DEFAULT 0 CHECK (metadata_version >= 0);
+"#;
+
+const SCHEMA_V7: &str = r#"
+CREATE TABLE track_lyrics (
+    track_id TEXT PRIMARY KEY NOT NULL REFERENCES tracks(track_id) ON DELETE CASCADE,
+    lyrics_json TEXT NOT NULL,
+    manually_selected INTEGER NOT NULL CHECK (manually_selected IN (0, 1)),
+    updated_at_utc_ms INTEGER NOT NULL,
+    payload_bytes INTEGER NOT NULL CHECK (payload_bytes >= 0)
+);
+CREATE INDEX track_lyrics_auto_cache_lru
+    ON track_lyrics(manually_selected, updated_at_utc_ms);
+
+CREATE TABLE lyric_candidates (
+    track_id TEXT NOT NULL REFERENCES tracks(track_id) ON DELETE CASCADE,
+    candidate_id TEXT NOT NULL,
+    candidate_json TEXT NOT NULL,
+    fetched_at_utc_ms INTEGER NOT NULL,
+    payload_bytes INTEGER NOT NULL CHECK (payload_bytes >= 0),
+    PRIMARY KEY (track_id, candidate_id)
+);
+CREATE INDEX lyric_candidates_cache_lru
+    ON lyric_candidates(fetched_at_utc_ms, track_id, candidate_id);
 "#;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -416,6 +445,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V6)?;
             tx.pragma_update(None, "user_version", 6)?;
+            tx.commit()?;
+            version = 6;
+        }
+        if version == 6 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V7)?;
+            tx.pragma_update(None, "user_version", 7)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -1134,6 +1170,227 @@ impl Database {
                 row_to_track_summary,
             )
             .optional()?)
+    }
+
+    /// Read the selected lyrics cache for one internal track identity.
+    pub fn get_track_lyrics(
+        &self,
+        track_id: TrackId,
+    ) -> Result<Option<TrackLyrics>, DatabaseError> {
+        let connection = self.lock()?;
+        let json = connection
+            .query_row(
+                "SELECT lyrics_json FROM track_lyrics WHERE track_id=?1",
+                [track_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        json.map(|value| {
+            let lyrics: TrackLyrics = serde_json::from_str(&value)
+                .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+            if lyrics.track_id != track_id {
+                return Err(DatabaseError::CorruptData(
+                    "stored lyrics TrackId does not match its database key".to_owned(),
+                ));
+            }
+            Ok(lyrics)
+        })
+        .transpose()
+    }
+
+    /// Save a network result unless a person has already selected lyrics for this track.
+    /// Automatic cache entries are LRU-evicted once their serialized size exceeds the cap.
+    pub fn save_automatic_track_lyrics(&self, lyrics: &TrackLyrics) -> Result<bool, DatabaseError> {
+        if lyrics.manually_selected
+            || !matches!(lyrics.provider, LyricProvider::NetEase | LyricProvider::Qq)
+            || !lyrics.lyrics.synced
+        {
+            return Err(DatabaseError::CorruptData(
+                "automatic lyric cache accepts only synced provider results".to_owned(),
+            ));
+        }
+        let json = serde_json::to_string(lyrics)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        if json.len() > MAX_TRACK_LYRICS_JSON_BYTES {
+            return Err(DatabaseError::CorruptData(
+                "serialized lyrics exceed the supported size limit".to_owned(),
+            ));
+        }
+
+        let payload_bytes = i64::try_from(json.len())
+            .map_err(|_| DatabaseError::InvalidNumber("lyric payload bytes"))?;
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let manually_selected: Option<bool> = tx
+            .query_row(
+                "SELECT manually_selected FROM track_lyrics WHERE track_id=?1",
+                [lyrics.track_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if manually_selected == Some(true) {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO track_lyrics
+                 (track_id, lyrics_json, manually_selected, updated_at_utc_ms, payload_bytes)
+             VALUES (?1, ?2, 0, ?3, ?4)
+             ON CONFLICT(track_id) DO UPDATE SET
+                 lyrics_json=excluded.lyrics_json,
+                 manually_selected=0,
+                 updated_at_utc_ms=excluded.updated_at_utc_ms,
+                 payload_bytes=excluded.payload_bytes",
+            params![
+                lyrics.track_id.to_string(),
+                json,
+                lyrics.updated_at_utc_ms,
+                payload_bytes,
+            ],
+        )?;
+        prune_automatic_lyrics_cache(&tx)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Persist an explicit candidate selection. This row is protected from automatic updates
+    /// and automatic-cache eviction.
+    pub fn save_manual_track_lyrics(&self, lyrics: &TrackLyrics) -> Result<(), DatabaseError> {
+        let mut selected = lyrics.clone();
+        selected.manually_selected = true;
+        let json = serde_json::to_string(&selected)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        if json.len() > MAX_TRACK_LYRICS_JSON_BYTES {
+            return Err(DatabaseError::CorruptData(
+                "serialized lyrics exceed the supported size limit".to_owned(),
+            ));
+        }
+        let payload_bytes = i64::try_from(json.len())
+            .map_err(|_| DatabaseError::InvalidNumber("lyric payload bytes"))?;
+        self.lock()?.execute(
+            "INSERT INTO track_lyrics
+                 (track_id, lyrics_json, manually_selected, updated_at_utc_ms, payload_bytes)
+             VALUES (?1, ?2, 1, ?3, ?4)
+             ON CONFLICT(track_id) DO UPDATE SET
+                 lyrics_json=excluded.lyrics_json,
+                 manually_selected=1,
+                 updated_at_utc_ms=excluded.updated_at_utc_ms,
+                 payload_bytes=excluded.payload_bytes",
+            params![
+                selected.track_id.to_string(),
+                json,
+                selected.updated_at_utc_ms,
+                payload_bytes,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Keep candidate rows only long enough for the follow-up pick command. The cache is bounded
+    /// by candidate count per track, serialized payload size per candidate, and total bytes.
+    pub fn cache_lyric_candidates(
+        &self,
+        track_id: TrackId,
+        candidates: &[LyricCandidate],
+        fetched_at_utc_ms: i64,
+    ) -> Result<(), DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM lyric_candidates WHERE track_id=?1",
+            [track_id.to_string()],
+        )?;
+        for candidate in candidates.iter().take(MAX_LYRIC_CANDIDATES_PER_TRACK) {
+            let json = serde_json::to_string(candidate)
+                .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+            if json.len() > MAX_LYRIC_CANDIDATE_JSON_BYTES {
+                continue;
+            }
+            let payload_bytes = i64::try_from(json.len())
+                .map_err(|_| DatabaseError::InvalidNumber("lyric candidate bytes"))?;
+            tx.execute(
+                "INSERT INTO lyric_candidates
+                     (track_id, candidate_id, candidate_json, fetched_at_utc_ms, payload_bytes)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(track_id, candidate_id) DO UPDATE SET
+                     candidate_json=excluded.candidate_json,
+                     fetched_at_utc_ms=excluded.fetched_at_utc_ms,
+                     payload_bytes=excluded.payload_bytes",
+                params![
+                    track_id.to_string(),
+                    candidate.candidate_id,
+                    json,
+                    fetched_at_utc_ms,
+                    payload_bytes,
+                ],
+            )?;
+        }
+        prune_lyric_candidate_cache(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Resolve a candidate returned by an earlier search and make it the durable manual choice.
+    pub fn select_lyric_candidate(
+        &self,
+        track_id: TrackId,
+        candidate_id: &str,
+        selected_at_utc_ms: i64,
+    ) -> Result<TrackLyrics, DatabaseError> {
+        let mut connection = self.lock()?;
+        let candidate_json = connection
+            .query_row(
+                "SELECT candidate_json FROM lyric_candidates
+                 WHERE track_id=?1 AND candidate_id=?2",
+                params![track_id.to_string(), candidate_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                DatabaseError::CorruptData("lyric candidate is missing or expired".to_owned())
+            })?;
+        let candidate: LyricCandidate = serde_json::from_str(&candidate_json)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        if candidate.candidate_id != candidate_id {
+            return Err(DatabaseError::CorruptData(
+                "stored candidate ID does not match its database key".to_owned(),
+            ));
+        }
+        let selected = TrackLyrics {
+            track_id,
+            provider: candidate.provider,
+            candidate_id: Some(candidate.candidate_id),
+            lyrics: candidate.lyrics,
+            manually_selected: true,
+            updated_at_utc_ms: selected_at_utc_ms,
+        };
+        let json = serde_json::to_string(&selected)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        if json.len() > MAX_TRACK_LYRICS_JSON_BYTES {
+            return Err(DatabaseError::CorruptData(
+                "serialized lyrics exceed the supported size limit".to_owned(),
+            ));
+        }
+        let payload_bytes = i64::try_from(json.len())
+            .map_err(|_| DatabaseError::InvalidNumber("lyric payload bytes"))?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO track_lyrics
+                 (track_id, lyrics_json, manually_selected, updated_at_utc_ms, payload_bytes)
+             VALUES (?1, ?2, 1, ?3, ?4)
+             ON CONFLICT(track_id) DO UPDATE SET
+                 lyrics_json=excluded.lyrics_json,
+                 manually_selected=1,
+                 updated_at_utc_ms=excluded.updated_at_utc_ms,
+                 payload_bytes=excluded.payload_bytes",
+            params![
+                track_id.to_string(),
+                json,
+                selected_at_utc_ms,
+                payload_bytes
+            ],
+        )?;
+        tx.commit()?;
+        Ok(selected)
     }
 
     /// Return native locators for enabled mappings of a track, with filesystem paths first.
@@ -1886,6 +2143,53 @@ fn query_limit(limit: u32) -> u32 {
     limit.clamp(1, MAX_PAGE_SIZE)
 }
 
+fn prune_automatic_lyrics_cache(tx: &Transaction<'_>) -> Result<(), DatabaseError> {
+    loop {
+        let cached_bytes: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(payload_bytes), 0) FROM track_lyrics WHERE manually_selected=0",
+            [],
+            |row| row.get(0),
+        )?;
+        if cached_bytes <= MAX_AUTOMATIC_LYRICS_CACHE_BYTES {
+            return Ok(());
+        }
+        let removed = tx.execute(
+            "DELETE FROM track_lyrics WHERE track_id=(
+                 SELECT track_id FROM track_lyrics
+                 WHERE manually_selected=0
+                 ORDER BY updated_at_utc_ms ASC, track_id ASC LIMIT 1
+             ) AND manually_selected=0",
+            [],
+        )?;
+        if removed == 0 {
+            return Ok(());
+        }
+    }
+}
+
+fn prune_lyric_candidate_cache(tx: &Transaction<'_>) -> Result<(), DatabaseError> {
+    loop {
+        let cached_bytes: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(payload_bytes), 0) FROM lyric_candidates",
+            [],
+            |row| row.get(0),
+        )?;
+        if cached_bytes <= MAX_LYRIC_CANDIDATE_CACHE_BYTES {
+            return Ok(());
+        }
+        let removed = tx.execute(
+            "DELETE FROM lyric_candidates WHERE (track_id, candidate_id)=(
+                 SELECT track_id, candidate_id FROM lyric_candidates
+                 ORDER BY fetched_at_utc_ms ASC, track_id ASC, candidate_id ASC LIMIT 1
+             )",
+            [],
+        )?;
+        if removed == 0 {
+            return Ok(());
+        }
+    }
+}
+
 fn validate_theme_color(value: &str, field: &'static str) -> Result<(), DatabaseError> {
     let bytes = value.as_bytes();
     if bytes.len() != 7 || bytes[0] != b'#' || !bytes[1..].iter().all(u8::is_ascii_hexdigit) {
@@ -1907,16 +2211,18 @@ mod tests {
     use std::{path::PathBuf, time::SystemTime};
 
     use player_core::{
-        FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaSourceError,
-        MediaSourceKind, MediaTrackRecord, Playlist, PlaylistEntry, PlaylistId, SourceId,
-        SourceScan, SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackId,
-        TrackIdentity, TrackMetadata, TrackMetadataError, UserMetadataField,
+        parse_lrc, FileFingerprint, LibraryRoot, ListTracksQuery, LyricCandidate, LyricProvider,
+        MediaIndex, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord, Playlist,
+        PlaylistEntry, PlaylistId, SourceId, SourceScan, SourceScanState, SyncApplyRequest,
+        SyncCancellation, SyncEngine, TrackId, TrackIdentity, TrackLyrics, TrackMetadata,
+        TrackMetadataError, UserMetadataField,
     };
     use rusqlite::{params, OptionalExtension};
 
     use super::{
         Database, DatabaseError, LibraryRepository, PlaylistFileSyncState, ThemePreferences,
-        COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, TRACKS_PAGE_SQL,
+        COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+        TRACKS_PAGE_SQL,
     };
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -2066,7 +2372,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 6);
+            assert_eq!(version, 7);
         }
         {
             let db = Database::open(&path).expect("reopen migrated database");
@@ -2110,7 +2416,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 6);
+        assert_eq!(current_version, 7);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -2159,7 +2465,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -2199,7 +2505,7 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
     }
 
@@ -2239,7 +2545,7 @@ mod tests {
                     .expect("sync-state table lookup"),
             )
         };
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
     }
 
@@ -2357,6 +2663,141 @@ mod tests {
                 .year,
             Some(2001)
         );
+    }
+
+    #[test]
+    fn version_six_migration_adds_track_lyrics_and_candidate_cache_tables() {
+        let connection = rusqlite::Connection::open_in_memory().expect("legacy database");
+        connection
+            .execute_batch(SCHEMA_V1)
+            .expect("create schema v1");
+        connection
+            .execute_batch(SCHEMA_V2)
+            .expect("create schema v2");
+        connection
+            .execute_batch(SCHEMA_V3)
+            .expect("create schema v3");
+        connection
+            .execute_batch(SCHEMA_V4)
+            .expect("create schema v4");
+        connection
+            .execute_batch(SCHEMA_V5)
+            .expect("create schema v5");
+        connection
+            .execute_batch(SCHEMA_V6)
+            .expect("create schema v6");
+        let track_id = TrackId::new();
+        connection
+            .execute(
+                "INSERT INTO tracks (track_id, metadata_loaded, sort_title, title)
+                 VALUES (?1, 1, 'persisted title', 'persisted title')",
+                [track_id.to_string()],
+            )
+            .expect("insert v6 track");
+        connection
+            .pragma_update(None, "user_version", 6)
+            .expect("mark schema v6");
+
+        let db = Database::from_connection(connection).expect("migrate schema v6");
+        let (version, lyric_table, candidate_table) = {
+            let connection = db.lock().expect("database lock");
+            (
+                connection
+                    .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                    .expect("schema version"),
+                connection
+                    .query_row(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='track_lyrics'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .expect("track lyrics table"),
+                connection
+                    .query_row(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='lyric_candidates'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .expect("lyric candidates table"),
+            )
+        };
+        assert_eq!(version, 7);
+        assert_eq!(lyric_table, "track_lyrics");
+        assert_eq!(candidate_table, "lyric_candidates");
+        assert_eq!(
+            db.get_track_summary(track_id)
+                .expect("query migrated track")
+                .expect("track remains")
+                .title
+                .as_deref(),
+            Some("persisted title")
+        );
+    }
+
+    #[test]
+    fn selected_lyric_candidate_is_persisted_and_blocks_later_automatic_results() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "lyrics");
+        let track = record(&root, "lyrics-track", "lyrics-path", "Song", 10, 1);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&track),
+            std::slice::from_ref(&track),
+            1,
+        );
+        let track_id = track_id_for_query(&db, "Song");
+        let initial = TrackLyrics {
+            track_id,
+            provider: LyricProvider::NetEase,
+            candidate_id: Some("net-1".into()),
+            lyrics: parse_lrc("[00:01.00]automatic").expect("automatic LRC"),
+            manually_selected: false,
+            updated_at_utc_ms: 10,
+        };
+        assert!(db
+            .save_automatic_track_lyrics(&initial)
+            .expect("save automatic result"));
+
+        let candidate = LyricCandidate {
+            candidate_id: "qq-2".into(),
+            provider: LyricProvider::Qq,
+            provider_track_id: Some("2".into()),
+            title: Some("Song".into()),
+            artist: Some("Artist".into()),
+            album: None,
+            duration_ms: Some(180_000),
+            lyrics: parse_lrc("[00:02.00]manually selected").expect("candidate LRC"),
+            score: 0.91,
+        };
+        db.cache_lyric_candidates(track_id, std::slice::from_ref(&candidate), 20)
+            .expect("cache candidate");
+        let selected = db
+            .select_lyric_candidate(track_id, "qq-2", 30)
+            .expect("select candidate");
+        assert!(selected.manually_selected);
+        assert_eq!(selected.provider, LyricProvider::Qq);
+        assert_eq!(selected.lyrics.lines[0].text, "manually selected");
+
+        let future_automatic = TrackLyrics {
+            track_id,
+            provider: LyricProvider::NetEase,
+            candidate_id: Some("net-3".into()),
+            lyrics: parse_lrc("[00:03.00]later result").expect("later LRC"),
+            manually_selected: false,
+            updated_at_utc_ms: 40,
+        };
+        assert!(!db
+            .save_automatic_track_lyrics(&future_automatic)
+            .expect("preserve manual result"));
+        let stored = db
+            .get_track_lyrics(track_id)
+            .expect("read lyrics")
+            .expect("manual lyrics remain");
+        assert!(stored.manually_selected);
+        assert_eq!(stored.candidate_id.as_deref(), Some("qq-2"));
+        assert_eq!(stored.lyrics.lines[0].text, "manually selected");
     }
 
     #[test]
