@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::num::{NonZeroU16, NonZeroU32};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rodio::buffer::SamplesBuffer;
@@ -58,6 +58,56 @@ fn supported_file_decoders_report_duration_and_seek_with_audio_timebase() {
             "seeked {name} position should remain near 700 ms, got {actual:?}"
         );
     }
+}
+
+#[test]
+fn aac_lc_m4a_decoder_reports_duration_and_decodes_frames_without_output_device() {
+    let fixture_path = fixture("aac-lc.m4a");
+    let mut inputs = vec![(fixture_path, Some(Duration::from_secs(1)))];
+    if let Some(path) = std::env::var_os("MOEMUSICPLAYER_AAC_M4A_PATH") {
+        inputs.push((PathBuf::from(path), None));
+    }
+
+    for (path, expected_duration) in inputs {
+        assert_aac_lc_m4a_decodes(&path, expected_duration);
+    }
+}
+
+fn assert_aac_lc_m4a_decodes(path: &Path, expected_duration: Option<Duration>) {
+    let file = File::open(path)
+        .unwrap_or_else(|error| panic!("could not open AAC-LC M4A input {path:?}: {error}"));
+    let decoder = Decoder::try_from(file)
+        .unwrap_or_else(|error| panic!("could not decode AAC-LC M4A input {path:?}: {error}"));
+    let duration = decoder
+        .total_duration()
+        .unwrap_or_else(|| panic!("AAC-LC M4A input {path:?} should report a duration"));
+
+    if let Some(expected_duration) = expected_duration {
+        assert!(
+            duration.abs_diff(expected_duration) <= Duration::from_millis(100),
+            "expected AAC-LC M4A input {path:?} duration near {expected_duration:?}, got {duration:?}"
+        );
+    }
+
+    let mut decoded_samples = 0u64;
+    let mut nonzero_samples = 0u64;
+    for sample in decoder {
+        decoded_samples += 1;
+        if sample != 0.0 {
+            nonzero_samples += 1;
+        }
+    }
+    assert!(
+        decoded_samples > 0,
+        "AAC-LC M4A input {path:?} should decode samples"
+    );
+    assert!(
+        nonzero_samples > 0,
+        "AAC-LC M4A input {path:?} should contain nonzero decoded samples"
+    );
+    eprintln!(
+        "decoded AAC-LC M4A: path={path:?}, duration={duration:?}, decoded_samples={decoded_samples}, nonzero_samples={nonzero_samples}"
+    );
 }
 
 #[test]

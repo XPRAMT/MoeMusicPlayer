@@ -9,6 +9,7 @@ const appSource = readFileSync(path.join(root, 'src/App.svelte'), 'utf8');
 const appStyles = readFileSync(path.join(root, 'src/app.css'), 'utf8');
 const trackListSource = readFileSync(path.join(root, 'src/lib/TrackList.svelte'), 'utf8');
 const playlistEntrySource = readFileSync(path.join(root, 'src/lib/PlaylistEntryList.svelte'), 'utf8');
+const playlistTreeSource = readFileSync(path.join(root, 'src/lib/PlaylistTree.svelte'), 'utf8');
 
 function functionSource(startText, endText) {
   const start = appSource.indexOf(startText);
@@ -51,8 +52,23 @@ test('the footer artwork is the only Now Playing navigation control', () => {
   assert.match(navigationHandler, /activeView\s*=\s*'now-playing'/);
 });
 
+test('the sidebar playlist group is the single playlist navigation entry and works when empty', () => {
+  const navStart = appSource.indexOf('<nav class="primary-nav"');
+  const navEnd = appSource.indexOf('</nav>', navStart);
+  assert.ok(navStart >= 0 && navEnd > navStart, 'primary navigation must remain available');
+  assert.doesNotMatch(appSource.slice(navStart, navEnd), /播放清單/);
+
+  const treeHost = /<div class="sidebar-playlist-tree-host">\s*<PlaylistTree([\s\S]*?)\/>\s*<\/div>/.exec(appSource);
+  assert.ok(treeHost, 'playlist tree must always render in the sidebar');
+  assert.match(treeHost[1], /onOpen=/, 'playlist group heading must open the playlist page');
+  assert.match(playlistTreeSource, /aria-label=\{expanded \? '收合播放清單' : '展開播放清單'\}/);
+  assert.match(appSource, /class="primary-button playlist-import-button"/, 'the playlist page must retain its import action');
+  assert.doesNotMatch(appSource, /\{#if playlists\.length > 0\}\s*<div class="sidebar-playlist-tree-host"/);
+});
+
 test('Now Playing hides library sync details and the native playback note', () => {
-  const pageContentStart = appSource.indexOf('<div class="page-content">');
+  const pageContentElement = /<div\b(?=[^>]*\bclass="[^"]*\bpage-content\b[^"]*")[^>]*>/.exec(appSource);
+  const pageContentStart = pageContentElement?.index ?? -1;
   const syncBannerStart = appSource.indexOf('class="sync-progress-banner"', pageContentStart);
   assert.ok(pageContentStart >= 0 && syncBannerStart > pageContentStart, 'library sync banner should remain in the shared page content');
   const syncCondition = appSource.slice(pageContentStart, syncBannerStart);
@@ -108,11 +124,12 @@ test('visible UI icons use Tabler components except the original brand mark', ()
 
   for (const name of [
     'IconAlertCircle', 'IconArrowDown', 'IconArrowUp', 'IconCheck', 'IconChevronRight',
-    'IconFilter', 'IconFolder', 'IconHeart', 'IconLibrary', 'IconMusic', 'IconPlaylist',
+    'IconFilter', 'IconFolder', 'IconHeart', 'IconLibrary', 'IconMusic',
     'IconRefresh', 'IconSearch', 'IconVolume2',
   ]) {
     assert.match(appSource, new RegExp(`<${name}\\b`), `${name} should be used by the interface`);
   }
+  assert.match(playlistTreeSource, /<IconPlaylist\b/);
   assert.match(trackListSource, /<IconPlayerPlayFilled\b/);
   assert.match(playlistEntrySource, /<IconPlayerPlayFilled\b/);
 

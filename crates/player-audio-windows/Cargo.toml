@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 rodio = { version = "=0.22.2", default-features = false, features = [
     "playback",
     "mp3",
+    "mp4",
     "flac",
     "vorbis",
     "wav",

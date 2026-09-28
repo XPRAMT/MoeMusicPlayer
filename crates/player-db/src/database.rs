@@ -1224,6 +1224,25 @@ impl Database {
             .optional()?)
     }
 
+    /// Resolve a bounded batch of Track IDs to their current user-facing metadata.
+    /// The output retains the input order, duplicate IDs, and missing-track slots.
+    pub fn get_track_summaries(
+        &self,
+        track_ids: &[TrackId],
+    ) -> Result<Vec<Option<TrackSummary>>, DatabaseError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare_cached(TRACK_SUMMARY_SQL)?;
+        track_ids
+            .iter()
+            .map(|track_id| {
+                statement
+                    .query_row([track_id.to_string()], row_to_track_summary)
+                    .optional()
+                    .map_err(DatabaseError::from)
+            })
+            .collect()
+    }
+
     /// Read the selected lyrics cache for one internal track identity.
     pub fn get_track_lyrics(
         &self,
@@ -3573,6 +3592,59 @@ mod tests {
             .playlist_track_ids(PlaylistId::new())
             .expect("unknown playlist query")
             .is_none());
+    }
+
+    #[test]
+    fn track_summary_batch_preserves_order_duplicate_ids_and_missing_slots() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "summary source");
+        let track = record(
+            &root,
+            "summary-item",
+            "summary-track",
+            "Summary Song",
+            10,
+            100,
+        );
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&track),
+            std::slice::from_ref(&track),
+            1000,
+        );
+
+        let track_id = db
+            .list_track_ids(None)
+            .expect("list inserted track")
+            .into_iter()
+            .next()
+            .expect("inserted track ID");
+        let missing_id = TrackId::new();
+        let summaries = db
+            .get_track_summaries(&[track_id, missing_id, track_id])
+            .expect("resolve metadata batch");
+
+        assert_eq!(summaries.len(), 3);
+        assert_eq!(
+            summaries[0].as_ref().map(|summary| summary.id),
+            Some(track_id)
+        );
+        assert_eq!(
+            summaries[0]
+                .as_ref()
+                .and_then(|summary| summary.title.as_deref()),
+            Some("Summary Song")
+        );
+        assert!(
+            summaries[1].is_none(),
+            "missing Track IDs keep an empty slot"
+        );
+        assert_eq!(
+            summaries[2].as_ref().map(|summary| summary.id),
+            Some(track_id)
+        );
     }
 
     #[test]

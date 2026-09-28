@@ -161,6 +161,24 @@ export interface PlaylistPage {
   totalCount: number;
 }
 
+export interface PlaybackQueuePageItem {
+  traversalPosition: number;
+  entryPosition: number;
+  sourcePosition: number | null;
+  trackId: string;
+  track: TrackSummary | null;
+  isCurrent: boolean;
+}
+
+export interface PlaybackQueuePage {
+  revision: number;
+  total: number;
+  offset: number;
+  cursor: number | null;
+  currentEntryPosition: number | null;
+  items: PlaybackQueuePageItem[];
+}
+
 export interface PlaylistImportResult {
   playlist: PlaylistSummary;
   matchedEntries: number;
@@ -368,6 +386,10 @@ interface IpcContract {
   playback_get_snapshot: {
     args: Record<string, never>;
     result: PlaybackSnapshot;
+  };
+  playback_get_queue_page: {
+    args: { offset: number; limit: number };
+    result: PlaybackQueuePage;
   };
   playback_play: {
     args: { trackId: string; queueSource?: PlaybackQueueSource };

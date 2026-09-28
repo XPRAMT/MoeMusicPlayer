@@ -11,8 +11,8 @@
     IconFolder,
     IconHeart,
     IconLibrary,
+    IconList,
     IconMusic,
-    IconPlaylist,
     IconPlayerPause,
     IconPlayerPlay,
     IconPlayerTrackNext,
@@ -66,6 +66,8 @@
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
   import TrackList from './lib/TrackList.svelte';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
+  import PlaylistTree from './lib/PlaylistTree.svelte';
+  import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import NowPlayingArrangement from './lib/NowPlayingArrangement.svelte';
   import NowPlayingLayoutSwitch from './lib/NowPlayingLayoutSwitch.svelte';
   import PlaybackProgress from './lib/PlaybackProgress.svelte';
@@ -80,7 +82,7 @@
     normalizeLyricsPreferences,
   } from './lib/lyrics-preferences.js';
 
-  type View = 'library' | 'now-playing' | 'playlists' | 'settings';
+  type View = 'library' | 'now-playing' | 'playlists' | 'queue' | 'settings';
   type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'sources';
   type SyncProgressViewState = {
     runId: string;
@@ -116,6 +118,8 @@
   let libraryListRevision = $state(0);
   let playbackError = $state<string | null>(null);
   let playback = $state<PlaybackSnapshot | null>(null);
+  let playbackQueueResetKey = $state(0);
+  let playbackQueueCursorChangeKey = $state(0);
   let volumeDraft = $state<number | null>(null);
   let activeArtwork = $state<ActiveArtworkState>({ trackId: null, status: 'empty', objectUrl: null });
   let sources = $state<LibrarySource[]>([]);
@@ -761,6 +765,7 @@
 
   async function selectPlaylist(playlistId: string): Promise<void> {
     selectedPlaylistId = playlistId;
+    activeView = 'playlists';
     playlistListRevision += 1;
     playlistMessage = null;
   }
@@ -816,7 +821,10 @@
       playlistId,
       entryPosition: entry.position,
     };
-    await sendPlaybackCommand(() => invokeCommand('playback_play', { trackId: entry.trackId!, queueSource }));
+    await sendPlaybackCommand(
+      () => invokeCommand('playback_play', { trackId: entry.trackId!, queueSource }),
+      { refreshQueueList: true },
+    );
   }
 
   async function pickWindowsFolder(): Promise<void> {
@@ -978,7 +986,10 @@
       kind: 'library',
       query: query.trim() || null,
     };
-    await sendPlaybackCommand(() => invokeCommand('playback_play', { trackId: track.id, queueSource }));
+    await sendPlaybackCommand(
+      () => invokeCommand('playback_play', { trackId: track.id, queueSource }),
+      { refreshQueueList: true },
+    );
   }
 
   function openNowPlaying(): void {
@@ -1001,7 +1012,9 @@
     command: 'playback_pause' | 'playback_next' | 'playback_previous',
   ): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand) return;
-    await sendPlaybackCommand(() => invokeCommand(command, {}));
+    await sendPlaybackCommand(() => invokeCommand(command, {}), {
+      forceQueueCursorProbe: command === 'playback_next' || command === 'playback_previous',
+    });
   }
 
   async function commitPlaybackSeek(positionMs: number): Promise<void> {
@@ -1013,6 +1026,7 @@
     next: PlaybackSnapshot,
     snapshotVersion?: number,
     volumeGenerationAtRequest?: number,
+    forceQueueCursorProbe = false,
   ): void {
     if (snapshotVersion !== undefined && snapshotVersion <= playbackSnapshotFence) return;
     const volumeIsStale = volumeGenerationAtRequest !== undefined
@@ -1021,8 +1035,18 @@
     const resolved = volumeIsStale && volumeToPreserve !== null
       ? { ...next, volume: volumeToPreserve }
       : next;
+    const previous = playback;
+    const previousTrackId = previous?.currentTrack?.id ?? null;
+    const nextTrackId = resolved.currentTrack?.id ?? null;
+    const trackChanged = nextTrackId !== null && previousTrackId !== null && nextTrackId !== previousTrackId;
+    const positionReset = nextTrackId !== null
+      && previousTrackId === nextTrackId
+      && previous !== null
+      && previous.positionMs > resolved.positionMs + 50
+      && resolved.positionMs < 1500;
     playback = resolved;
     confirmedVolume = resolved.volume;
+    if (trackChanged || positionReset || forceQueueCursorProbe) playbackQueueCursorChangeKey += 1;
   }
 
   function setPlaybackVolume(event: Event): void {
@@ -1075,19 +1099,27 @@
 
   async function toggleShuffle(): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand) return;
-    await sendPlaybackCommand(() =>
-      invokeCommand('playback_set_shuffle', { enabled: !playback?.shuffle }),
+    await sendPlaybackCommand(
+      () => invokeCommand('playback_set_shuffle', { enabled: !playback?.shuffle }),
+      { refreshQueueList: true },
     );
+  }
+
+  interface PlaybackCommandOptions {
+    refreshQueueList?: boolean;
+    forceQueueCursorProbe?: boolean;
   }
 
   async function sendPlaybackCommand(
     request: () => Promise<PlaybackSnapshot>,
+    options: PlaybackCommandOptions = {},
   ): Promise<void> {
     playbackSnapshotFence = ++playbackSnapshotRequestVersion;
     isSendingPlaybackCommand = true;
     playbackError = null;
     try {
-      applyPlaybackSnapshot(await request());
+      applyPlaybackSnapshot(await request(), undefined, undefined, options.forceQueueCursorProbe);
+      if (options.refreshQueueList) playbackQueueResetKey += 1;
     } catch (error) {
       playbackError = getErrorText(error);
     } finally {
@@ -1162,12 +1194,12 @@
       </button>
       <button
         class="nav-link"
-        class:active={activeView === 'playlists'}
-        aria-current={activeView === 'playlists' ? 'page' : undefined}
-        onclick={() => (activeView = 'playlists')}
+        class:active={activeView === 'queue'}
+        aria-current={activeView === 'queue' ? 'page' : undefined}
+        onclick={() => (activeView = 'queue')}
       >
-        <IconPlaylist size={20} stroke={1.6} aria-hidden="true" />
-        <span class="nav-label">播放清單</span>
+        <IconList size={20} stroke={1.6} aria-hidden="true" />
+        <span class="nav-label">播放佇列</span>
         <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
       <button
@@ -1181,6 +1213,16 @@
         <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
     </nav>
+
+    <div class="sidebar-playlist-tree-host">
+      <PlaylistTree
+        {playlists}
+        {selectedPlaylistId}
+        active={activeView === 'playlists'}
+        onOpen={() => (activeView = 'playlists')}
+        onSelect={selectPlaylist}
+      />
+    </div>
 
     <div class="sidebar-rule"></div>
     <div class="sidebar-source">
@@ -1202,7 +1244,7 @@
 
   <main class="workspace">
     <header class="topbar">
-      <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>{activeView === 'library' ? 'LIBRARY' : activeView === 'now-playing' ? 'NOW PLAYING' : activeView === 'playlists' ? 'PLAYLISTS' : 'SOURCES'}</strong></div>
+      <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>{activeView === 'library' ? 'LIBRARY' : activeView === 'now-playing' ? 'NOW PLAYING' : activeView === 'playlists' ? 'PLAYLISTS' : activeView === 'queue' ? 'QUEUE' : 'SOURCES'}</strong></div>
       <div class="topbar-actions">
         <div class="runtime-pill" class:ready={isReady(capabilities?.desktopRuntime)}>
           <span class="status-dot" class:ready={isReady(capabilities?.desktopRuntime)} aria-hidden="true"></span>
@@ -1215,7 +1257,7 @@
     </header>
 
     <div class="page-scroll">
-      <div class="page-content">
+      <div class="page-content" class:wide-list-page={activeView === 'playlists' || activeView === 'queue'}>
         {#if syncProgress && activeView !== 'now-playing'}
           <section
             class="sync-progress-banner"
@@ -1371,26 +1413,17 @@
               </div>
             {:else}
               <div class="playlist-browser">
-                <div class="playlist-list" aria-label="播放清單">
-                  {#each playlists as playlist (playlist.id)}
-                    <div class="playlist-list-item" class:selected={selectedPlaylistId === playlist.id}>
-                      <button
-                        class="playlist-select"
-                        type="button"
-                        aria-pressed={selectedPlaylistId === playlist.id}
-                        onclick={() => void selectPlaylist(playlist.id)}
-                      >
-                        <span class="playlist-select-icon" aria-hidden="true"><IconPlaylist size={19} stroke={1.6} aria-hidden="true" /></span>
-                        <span class="playlist-select-copy"><strong>{playlist.name.trim() || '未命名播放清單'}</strong><small>{playlist.entryCount.toLocaleString()} 個項目</small></span>
-                      </button>
-                    </div>
-                  {/each}
-                </div>
-
                 {#if selectedPlaylist}
                   <section class="playlist-detail" aria-labelledby="selected-playlist-heading">
                     <div class="playlist-detail-heading">
-                      <div><p class="section-kicker">SELECTED PLAYLIST</p><h3 id="selected-playlist-heading">{selectedPlaylist.name.trim() || '未命名播放清單'}</h3></div>
+                      <div class="playlist-detail-title">
+                        <span class="playlist-detail-artwork" aria-hidden="true"><IconMusic size={27} stroke={1.5} aria-hidden="true" /></span>
+                        <div>
+                          <p class="section-kicker">PLAYLIST</p>
+                          <h3 id="selected-playlist-heading">{selectedPlaylist.name.trim() || '未命名播放清單'}</h3>
+                          <p class="playlist-detail-count">{selectedPlaylist.entryCount.toLocaleString()} 個項目</p>
+                        </div>
+                      </div>
                       <div class="playlist-export-actions">
                         <label class="playlist-export-format">
                           <span>格式</span>
@@ -1428,6 +1461,34 @@
                   </section>
                 {/if}
               </div>
+            {/if}
+          </section>
+        {:else if activeView === 'queue'}
+          <section class="queue-page" aria-labelledby="queue-heading">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">PLAYBACK QUEUE</p>
+                <h2 id="queue-heading">播放佇列</h2>
+                <p class="queue-current-track">
+                  {#if playback?.currentTrack}
+                    目前播放：{currentTrackTitle(playback.currentTrack)}
+                  {:else}
+                    尚未選擇曲目
+                  {/if}
+                </p>
+              </div>
+            </div>
+            {#if !playbackReady}
+              <div class="not-ready-panel" role="status">
+                <div class="not-ready-icon" aria-hidden="true"><IconList size={22} stroke={1.6} /></div>
+                <div class="not-ready-copy"><span class="state-label">PLAYBACK</span><h3>播放佇列服務尚未就緒</h3><p>{showCapabilityDetail(capabilities?.playback)}</p></div>
+              </div>
+            {:else}
+              <PlaybackQueueList
+                resetKey={playbackQueueResetKey}
+                cursorChangeKey={playbackQueueCursorChangeKey}
+                columns={trackColumnPreferences}
+              />
             {/if}
           </section>
         {:else if activeView === 'now-playing'}

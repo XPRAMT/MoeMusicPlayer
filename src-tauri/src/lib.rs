@@ -2,15 +2,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "windows")]
 use std::{
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::{Duration, Instant},
 };
 
 use player_core::{
     LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaybackQueue,
-    PlaybackQueueContext, PlaybackQueueEntry, PlaylistId, PlaylistPage, PlaylistSummary,
-    QueueRepeatMode, SourceId, SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackId,
-    TrackSummary,
+    PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId, PlaylistPage,
+    PlaylistSummary, QueueRepeatMode, SourceId, SourceScanState, SyncEngine, SyncProgress,
+    SyncReport, TrackId, TrackSummary,
 };
 use player_db::{Database, PlaybackSessionCheckpoint, ThemePreferences};
 use serde::{Deserialize, Serialize};
@@ -47,6 +50,7 @@ use player_audio_windows::{
 
 const LIBRARY_SYNC_FINISHED_EVENT: &str = "library-sync-finished";
 const LIBRARY_SYNC_PROGRESS_EVENT: &str = "library-sync-progress";
+const PLAYBACK_QUEUE_PAGE_MAX_LIMIT: u32 = 100;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +108,7 @@ struct WindowsPlaybackService {
     current_track: Mutex<Option<TrackSummary>>,
     command_gate: Mutex<()>,
     queue: Mutex<Option<PlaybackQueue>>,
+    queue_revision: AtomicU64,
     repeat_mode: Mutex<RepeatMode>,
     shuffle: Mutex<bool>,
     queue_advance_pending: Mutex<bool>,
@@ -149,6 +154,7 @@ impl WindowsPlaybackService {
             current_track: Mutex::new(None),
             command_gate: Mutex::new(()),
             queue: Mutex::new(None),
+            queue_revision: AtomicU64::new(0),
             repeat_mode: Mutex::new(repeat_mode),
             shuffle: Mutex::new(shuffle),
             queue_advance_pending: Mutex::new(false),
@@ -657,11 +663,34 @@ struct PlaybackSnapshot {
     can_previous: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaybackQueuePage {
+    revision: u64,
+    total: u64,
+    offset: u64,
+    cursor: Option<u64>,
+    current_entry_position: Option<u64>,
+    items: Vec<PlaybackQueuePageItem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaybackQueuePageItem {
+    traversal_position: u64,
+    entry_position: u64,
+    source_position: Option<u64>,
+    track_id: TrackId,
+    track: Option<TrackSummary>,
+    is_current: bool,
+}
+
 #[cfg(test)]
 mod playback_queue_ipc_tests {
     use super::{
-        feature, playback_duration_ms, FeatureState, LibrarySource, PlaybackQueueSource,
-        PlaybackSnapshot, RepeatMode, RuntimeCapabilities,
+        feature, playback_duration_ms, FeatureState, LibrarySource, PlaybackQueuePage,
+        PlaybackQueuePageItem, PlaybackQueueSource, PlaybackSnapshot, RepeatMode,
+        RuntimeCapabilities, TrackId,
     };
 
     #[test]
@@ -738,6 +767,10 @@ mod playback_queue_ipc_tests {
             assert!(value.get(key).is_some(), "missing camelCase field {key}");
         }
         assert_eq!(value["repeatMode"], "one");
+        assert!(
+            value.get("items").is_none(),
+            "queue items stay out of snapshots"
+        );
 
         let ready = || feature(FeatureState::Ready, None);
         let capabilities = RuntimeCapabilities {
@@ -782,6 +815,37 @@ mod playback_queue_ipc_tests {
             assert!(value.get(key).is_some(), "missing camelCase field {key}");
         }
         assert_eq!(value["location"], r"C:\音樂\清單.m3u8");
+    }
+
+    #[test]
+    fn playback_queue_page_serializes_traversal_and_stable_entry_positions() {
+        let page = PlaybackQueuePage {
+            revision: 12,
+            total: 3,
+            offset: 1,
+            cursor: Some(1),
+            current_entry_position: Some(2),
+            items: vec![PlaybackQueuePageItem {
+                traversal_position: 1,
+                entry_position: 2,
+                source_position: Some(7),
+                track_id: TrackId::new(),
+                track: None,
+                is_current: true,
+            }],
+        };
+
+        let value = serde_json::to_value(page).expect("serialize playback queue page");
+        assert_eq!(value["revision"], 12);
+        assert_eq!(value["total"], 3);
+        assert_eq!(value["offset"], 1);
+        assert_eq!(value["cursor"], 1);
+        assert_eq!(value["currentEntryPosition"], 2);
+        assert_eq!(value["items"][0]["traversalPosition"], 1);
+        assert_eq!(value["items"][0]["entryPosition"], 2);
+        assert_eq!(value["items"][0]["sourcePosition"], 7);
+        assert!(value["items"][0]["isCurrent"].as_bool().unwrap());
+        assert!(value["items"][0]["track"].is_null());
     }
 }
 
@@ -2167,6 +2231,25 @@ async fn playback_get_snapshot(state: State<'_, AppState>) -> Result<PlaybackSna
     }
 }
 
+#[tauri::command]
+fn playback_get_queue_page(
+    state: State<'_, AppState>,
+    offset: u64,
+    limit: u32,
+) -> Result<PlaybackQueuePage, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let service = windows_playback_service(&state)?;
+        let (revision, queue) = snapshot_playback_queue(service);
+        build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, offset, limit);
+        Err("此平台尚未提供本機播放佇列。".to_owned())
+    }
+}
+
 /// Read the active track's original encoded cover bytes on a blocking worker.
 /// An empty binary response means that no supported cover is available.
 #[tauri::command]
@@ -2424,7 +2507,12 @@ fn playback_set_shuffle(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_mut()
         {
+            let before = queue.snapshot();
             queue.set_shuffle(enabled);
+            let after = queue.snapshot();
+            if before.play_order != after.play_order || before.cursor != after.cursor {
+                bump_queue_revision(service);
+            }
         }
         if let Some(database) = state.database.as_ref() {
             save_playback_session(database, service)?;
@@ -2446,6 +2534,110 @@ fn windows_playback_service(state: &AppState) -> Result<&WindowsPlaybackService,
             .clone()
             .unwrap_or_else(|| "Windows 音訊服務尚未啟動。".to_owned())
     })
+}
+
+#[cfg(target_os = "windows")]
+fn snapshot_playback_queue(
+    service: &WindowsPlaybackService,
+) -> (u64, Option<PlaybackQueueSnapshot>) {
+    let queue = service
+        .queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let revision = service.queue_revision.load(Ordering::Relaxed);
+    (revision, queue.as_ref().map(PlaybackQueue::snapshot))
+}
+
+#[cfg(target_os = "windows")]
+fn build_playback_queue_page(
+    database: Option<&Database>,
+    revision: u64,
+    queue: Option<PlaybackQueueSnapshot>,
+    offset: u64,
+    requested_limit: u32,
+) -> Result<PlaybackQueuePage, String> {
+    let Some(queue) = queue else {
+        return Ok(PlaybackQueuePage {
+            revision,
+            total: 0,
+            offset,
+            cursor: None,
+            current_entry_position: None,
+            items: Vec::new(),
+        });
+    };
+
+    let total = u64::try_from(queue.play_order.len())
+        .map_err(|_| "播放佇列項目數量超出支援範圍。".to_owned())?;
+    let cursor =
+        u64::try_from(queue.cursor).map_err(|_| "播放佇列游標超出支援範圍。".to_owned())?;
+    let current_entry_position = queue
+        .play_order
+        .get(queue.cursor)
+        .copied()
+        .map(u64::try_from)
+        .transpose()
+        .map_err(|_| "播放佇列項目位置超出支援範圍。".to_owned())?;
+    let offset_index = usize::try_from(offset.min(total)).unwrap_or(usize::MAX);
+    let limit = requested_limit.clamp(1, PLAYBACK_QUEUE_PAGE_MAX_LIMIT) as usize;
+    let page_entries = queue
+        .play_order
+        .iter()
+        .skip(offset_index)
+        .take(limit)
+        .enumerate()
+        .map(|(page_index, entry_index)| {
+            let traversal_position = offset
+                .checked_add(page_index as u64)
+                .ok_or_else(|| "播放佇列分頁位置超出支援範圍。".to_owned())?;
+            let entry_position = u64::try_from(*entry_index)
+                .map_err(|_| "播放佇列項目位置超出支援範圍。".to_owned())?;
+            let entry = queue
+                .entries
+                .get(*entry_index)
+                .ok_or_else(|| "播放佇列 traversal 指向無效項目。".to_owned())?;
+            Ok((traversal_position, entry_position, entry))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let track_ids = page_entries
+        .iter()
+        .map(|(_, _, entry)| entry.track_id)
+        .collect::<Vec<_>>();
+    let tracks = match database {
+        Some(database) => database
+            .get_track_summaries(&track_ids)
+            .map_err(|error| error.to_string())?,
+        None => vec![None; page_entries.len()],
+    };
+
+    let items = page_entries
+        .into_iter()
+        .zip(tracks)
+        .map(
+            |((traversal_position, entry_position, entry), track)| PlaybackQueuePageItem {
+                traversal_position,
+                entry_position,
+                source_position: entry.source_position,
+                track_id: entry.track_id,
+                track,
+                is_current: traversal_position == cursor,
+            },
+        )
+        .collect();
+
+    Ok(PlaybackQueuePage {
+        revision,
+        total,
+        offset,
+        cursor: Some(cursor),
+        current_entry_position,
+        items,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn bump_queue_revision(service: &WindowsPlaybackService) {
+    service.queue_revision.fetch_add(1, Ordering::Relaxed);
 }
 
 #[cfg(target_os = "windows")]
@@ -2725,10 +2917,12 @@ fn commit_track_change(
 ) -> Result<(), String> {
     let queue_replaced = replacement_queue.is_some();
     if let Some(queue) = replacement_queue {
-        *service
+        let mut current_queue = service
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(queue);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *current_queue = Some(queue);
+        bump_queue_revision(service);
     } else if let Some(cursor) = target_cursor {
         let mut queue = service
             .queue
@@ -2739,6 +2933,7 @@ fn commit_track_change(
             .ok_or_else(|| "播放佇列在曲目切換期間消失。".to_owned())?
             .set_cursor(cursor)
             .map_err(|error| format!("播放佇列游標無效：{error}"))?;
+        bump_queue_revision(service);
     }
     *service
         .current_track
@@ -2836,10 +3031,12 @@ fn restore_playback_session(
     let track = database
         .get_track_summary(track_id)
         .map_err(|error| error.to_string())?;
-    *service
+    let mut current_queue = service
         .queue
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(queue.clone());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *current_queue = Some(queue.clone());
+    bump_queue_revision(service);
     *service
         .current_track
         .lock()
@@ -3036,6 +3233,7 @@ pub fn run() {
             android_saf_pick_source,
             library_sync,
             playback_get_snapshot,
+            playback_get_queue_page,
             library_get_track_artwork,
             playback_play,
             playback_pause,
@@ -3146,18 +3344,20 @@ mod windows_library_integration_tests {
         add_windows_folder_path_to_database, add_windows_folder_to_database, sync_windows_sources,
     };
     use super::{
-        apply_system_media_event, commit_track_change, navigate_queue, play_track_from_database,
-        playback_audio_error_message, queue_for_track, restore_playback_session,
-        set_playback_volume, PlaybackQueueSource, PreparedTrackChange, WindowsPlaybackService,
+        apply_system_media_event, build_playback_queue_page, commit_track_change, navigate_queue,
+        play_track_from_database, playback_audio_error_message, queue_for_track,
+        restore_playback_session, set_playback_volume, snapshot_playback_queue,
+        PlaybackQueueSource, PreparedTrackChange, TrackSummary, WindowsPlaybackService,
     };
     use player_audio_windows::{
         system_media::{SystemMediaController, SystemMediaEvent},
-        AudioBackend, AudioError, PlayerHandle,
+        AudioBackend, AudioError, PlaybackState as AudioPlaybackState, PlayerHandle,
     };
     use player_core::{
-        ListTracksQuery, MediaLocator, MediaSourceKind, Playlist, PlaylistEntry, SourceId,
+        ListTracksQuery, MediaLocator, MediaSourceKind, PlaybackQueue, PlaybackQueueContext,
+        PlaybackQueueEntry, Playlist, PlaylistEntry, SourceId, TrackId,
     };
-    use player_db::Database;
+    use player_db::{Database, PlaybackSessionCheckpoint};
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -3509,6 +3709,141 @@ mod windows_library_integration_tests {
         assert_eq!(
             reopened_page.items[0].album.as_deref(),
             Some("Acceptance Album")
+        );
+    }
+
+    #[test]
+    fn playback_queue_page_preserves_traversal_and_does_not_mutate_playback_or_session() {
+        let database = Database::open_in_memory().expect("open isolated database");
+        let first_track = TrackId::new();
+        let second_track = TrackId::new();
+        let queue = PlaybackQueue::with_entries(
+            vec![
+                PlaybackQueueEntry {
+                    track_id: first_track,
+                    source_position: Some(0),
+                },
+                PlaybackQueueEntry {
+                    track_id: second_track,
+                    source_position: Some(1),
+                },
+                PlaybackQueueEntry {
+                    track_id: first_track,
+                    source_position: Some(2),
+                },
+            ],
+            PlaybackQueueContext::Playlist {
+                playlist_id: "read-only-page-test".to_owned(),
+            },
+            1,
+        )
+        .expect("create duplicate queue");
+        let mut queue_snapshot = queue.snapshot();
+        queue_snapshot.play_order = vec![2, 0, 1];
+        queue_snapshot.cursor = 1;
+        let queue = PlaybackQueue::restore(queue_snapshot.clone()).expect("restore traversal");
+        let player = PlayerHandle::with_backend_factory(|| {
+            Ok(Box::new(CapturingAudioBackend {
+                loaded_path: Arc::new(Mutex::new(None)),
+                position: Duration::ZERO,
+            }) as Box<dyn AudioBackend>)
+        })
+        .expect("create silent test backend");
+        let initialization_deadline = Instant::now() + Duration::from_secs(2);
+        while player.snapshot().state == AudioPlaybackState::Initializing {
+            assert!(
+                Instant::now() < initialization_deadline,
+                "silent playback worker did not finish initialization"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(player.snapshot().state, AudioPlaybackState::Empty);
+        let service = WindowsPlaybackService::new(player);
+        *service.queue.lock().unwrap() = Some(queue);
+        service
+            .queue_revision
+            .store(7, std::sync::atomic::Ordering::Relaxed);
+        *service.current_track.lock().unwrap() = Some(TrackSummary {
+            id: first_track,
+            title: Some("Current Track".to_owned()),
+            artist: None,
+            album: None,
+            album_artist: None,
+            track_number: None,
+            disc_number: None,
+            duration_ms: Some(9_000),
+            codec: None,
+            bitrate_bps: None,
+            sample_rate_hz: None,
+            year: None,
+            bit_depth: None,
+        });
+        let before_playback = serde_json::to_value(service.snapshot())
+            .expect("serialize playback snapshot before query");
+        let before_audio = service.player.snapshot();
+        database
+            .save_playback_session(&PlaybackSessionCheckpoint {
+                queue: queue_snapshot.clone(),
+                position_ms: 4_321,
+            })
+            .expect("save baseline session");
+        let before_session = database
+            .load_playback_session()
+            .expect("read baseline session");
+
+        let (revision, queue) = snapshot_playback_queue(&service);
+        let first_page = build_playback_queue_page(Some(&database), revision, queue, 0, 2)
+            .expect("read first queue page");
+        assert_eq!(first_page.revision, 7);
+        assert_eq!(first_page.total, 3);
+        assert_eq!(first_page.offset, 0);
+        assert_eq!(first_page.cursor, Some(1));
+        assert_eq!(first_page.current_entry_position, Some(0));
+        assert_eq!(first_page.items.len(), 2);
+        assert_eq!(first_page.items[0].traversal_position, 0);
+        assert_eq!(first_page.items[0].entry_position, 2);
+        assert_eq!(first_page.items[0].source_position, Some(2));
+        assert_eq!(first_page.items[0].track_id, first_track);
+        assert!(!first_page.items[0].is_current);
+        assert!(first_page.items[0].track.is_none());
+        assert_eq!(first_page.items[1].traversal_position, 1);
+        assert_eq!(first_page.items[1].entry_position, 0);
+        assert_eq!(first_page.items[1].track_id, first_track);
+        assert!(first_page.items[1].is_current);
+
+        let (revision, queue) = snapshot_playback_queue(&service);
+        let second_page = build_playback_queue_page(Some(&database), revision, queue, 2, 2)
+            .expect("read final queue page");
+        assert_eq!(second_page.total, 3);
+        assert_eq!(second_page.offset, 2);
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(second_page.items[0].entry_position, 1);
+        assert_eq!(second_page.items[0].track_id, second_track);
+        assert!(second_page.items[0].track.is_none());
+
+        let (revision, queue) = snapshot_playback_queue(&service);
+        let past_end = build_playback_queue_page(Some(&database), revision, queue, 3, 2)
+            .expect("read page beyond queue end");
+        assert!(past_end.items.is_empty());
+        assert_eq!(past_end.total, 3);
+        let empty = build_playback_queue_page(None, 8, None, 0, 2)
+            .expect("empty queue remains readable without database");
+        assert_eq!(empty.total, 0);
+        assert_eq!(empty.cursor, None);
+        assert_eq!(empty.current_entry_position, None);
+        assert!(empty.items.is_empty());
+
+        let after_playback = serde_json::to_value(service.snapshot())
+            .expect("serialize playback snapshot after query");
+        assert_eq!(after_playback, before_playback);
+        assert_eq!(service.player.snapshot().state, before_audio.state);
+        assert_eq!(service.player.snapshot().position, before_audio.position);
+        assert_eq!(
+            database
+                .load_playback_session()
+                .expect("read session after query"),
+            before_session,
+            "a queue page query must not alter the persisted session"
         );
     }
 
