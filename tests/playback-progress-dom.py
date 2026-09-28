@@ -49,8 +49,9 @@ def check_live_snapshot_after_seek(page) -> None:
     slider = page.locator("input.progress-slider")
     page.wait_for_function("Number(document.querySelector('[data-testid=audio-snapshot-position]').textContent) > 5000")
     page.wait_for_function("() => document.querySelector('input.progress-slider').value === document.querySelector('[data-testid=audio-snapshot-position]').textContent")
-    before = int(position.inner_text())
-    assert int(slider.input_value()) == before, "initial UI position must match audio snapshot"
+    initial = read_progress_state(page)
+    before = initial["snapshot"]
+    assert initial["slider"] == before, "initial UI position must match audio snapshot"
     page.evaluate("""() => {
       const slider = document.querySelector('input.progress-slider');
       slider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
@@ -62,12 +63,12 @@ def check_live_snapshot_after_seek(page) -> None:
     assert page.locator("[data-testid='seek-request']").inner_text() == "23000", "seek must commit the final input value"
     assert page.locator("[data-testid='seek-request-count']").inner_text() == "1", "change plus pointerup must seek only once"
     page.wait_for_function("Number(document.querySelector('[data-testid=audio-snapshot-position]').textContent) > 6000")
-    after = int(position.inner_text())
-    rendered = int(slider.input_value())
+    after_state = read_progress_state(page)
+    after = after_state["snapshot"]
     assert after > before, "the synthetic audio snapshot must continue advancing"
-    assert rendered == after, f"playhead froze at {rendered}ms while the audio snapshot advanced to {after}ms"
+    assert after_state["slider"] == after, f"playhead froze at {after_state['slider']}ms while the audio snapshot advanced to {after}ms"
     elapsed_text = f"{after // 60_000}:{(after // 1_000) % 60:02d}"
-    assert page.locator(".progress-row span").first.inner_text() == elapsed_text, "elapsed display must follow worker time"
+    assert after_state["elapsed"] == elapsed_text, "elapsed display must follow worker time"
 
     page.evaluate("window.failNextSeek()")
     page.evaluate("""() => {
@@ -80,8 +81,8 @@ def check_live_snapshot_after_seek(page) -> None:
     }""")
     assert page.locator("[data-testid='seek-error']").inner_text() == "seek unsupported", "seek failure must be visible"
     page.wait_for_function("() => document.querySelector('input.progress-slider').value === document.querySelector('[data-testid=audio-snapshot-position]').textContent")
-    after_failure = int(position.inner_text())
-    assert int(slider.input_value()) == after_failure, "failed seek must discard its draft and keep the audio snapshot"
+    after_failure = read_progress_state(page)
+    assert after_failure["slider"] == after_failure["snapshot"], "failed seek must discard its draft and keep the audio snapshot"
     assert page.locator("[data-testid='seek-request-count']").inner_text() == "2"
 
     current_count = int(page.locator("[data-testid='seek-request-count']").inner_text())
@@ -101,6 +102,14 @@ def check_live_snapshot_after_seek(page) -> None:
     }""")
     page.wait_for_function("document.querySelector('input.progress-slider').value === '1000'")
     assert int(page.locator("[data-testid='seek-request-count']").inner_text()) == current_count, "old drag must not seek into the new track"
+
+
+def read_progress_state(page) -> dict[str, int | str]:
+    return page.evaluate("""() => ({
+      snapshot: Number(document.querySelector('[data-testid=audio-snapshot-position]').textContent),
+      slider: Number(document.querySelector('input.progress-slider').value),
+      elapsed: document.querySelector('.progress-row span').textContent.trim(),
+    })""")
 
 
 def main() -> None:
