@@ -1108,7 +1108,7 @@
 
 <svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} />
 
-<div class="app-shell">
+<div class="app-shell" class:now-playing-shell={activeView === 'now-playing'} data-active-view={activeView}>
   <aside class="sidebar" aria-label="主要導覽">
     <div class="brand-lockup">
       <div class="brand-mark" aria-hidden="true">
