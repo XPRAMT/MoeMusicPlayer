@@ -1,5 +1,4 @@
 ﻿<script lang="ts">
-  import { onMount } from 'svelte';
   import {
     getErrorText,
     invokeCommand,
@@ -9,11 +8,11 @@
   } from './ipc';
   import { formatDuration, formatTrackIndex } from './format';
   import {
-    buildVirtualRows,
-    getVirtualRange,
-    PagedTrackList,
+    PagedListController,
     TRACK_PAGE_SIZE,
   } from './track-list-data.js';
+  import PagedVirtualList from './PagedVirtualList.svelte';
+  import type { VirtualListRow } from './PagedVirtualList.svelte';
 
   interface Props {
     query: string;
@@ -37,10 +36,10 @@
     fetchPage,
   }: Props = $props();
 
-  type ListSnapshot = ReturnType<PagedTrackList['snapshot']>;
+  type ListSnapshot = ReturnType<PagedListController<TrackSummary, string>['snapshot']>;
 
   let snapshot = $state<ListSnapshot>({
-    query: '',
+    scope: null,
     totalCount: null,
     cachedPageCount: 0,
     cachedItemCount: 0,
@@ -49,46 +48,14 @@
     generation: 0,
     revision: 0,
   });
-  let scrollElement: HTMLDivElement | undefined = $state();
-  let scrollTop = $state(0);
-  let viewportHeight = $state(480);
-  let rowHeight = $state(57);
-  let headerHeight = $state(37);
-  let maxViewportHeight = $state(680);
-  let activeIndex = $state(0);
-
-  const listData = new PagedTrackList(
-    (request) => fetchPage
-      ? fetchPage(request)
-      : invokeCommand('library_get_page', request),
-    { onChange: () => { snapshot = listData.snapshot(); } },
+  const listData = new PagedListController<TrackSummary, string>(
+    ({ scope, offset, limit }) => fetchPage
+      ? fetchPage({ query: scope || null, offset, limit })
+      : invokeCommand('library_get_page', { query: scope || null, offset, limit }),
+    { listName: '曲庫', onChange: () => { snapshot = listData.snapshot(); } },
   );
 
-  let virtualTotalCount = $derived(snapshot.totalCount ?? TRACK_PAGE_SIZE);
-  let viewportPixelHeight = $derived(
-    Math.max(
-      headerHeight + rowHeight,
-      Math.min(maxViewportHeight, headerHeight + virtualTotalCount * rowHeight),
-    ),
-  );
-  let virtualRange = $derived(
-    getVirtualRange(
-      scrollTop,
-      viewportHeight,
-      virtualTotalCount,
-      rowHeight,
-      8,
-      headerHeight,
-    ),
-  );
-  let virtualRowWindow = $derived.by(() =>
-    buildVirtualRows(listData, virtualRange, snapshot.revision),
-  );
-  let virtualRows = $derived(virtualRowWindow.rows);
-  let activeDescendantId = $derived.by(() => {
-    const activeRow = virtualRows.find((row) => row.index === activeIndex && row.track !== null);
-    return activeRow ? `library-track-row-${activeRow.index}` : undefined;
-  });
+  let virtualRange = $state({ start: 0, end: TRACK_PAGE_SIZE });
   let rangeLabel = $derived.by(() => {
     if (snapshot.totalCount === null) return '正在載入曲庫…';
     if (snapshot.totalCount === 0) return '0 首';
@@ -101,9 +68,6 @@
     const normalizedQuery = query.trim();
     const currentResetKey = resetKey;
     listData.reset(normalizedQuery, currentResetKey);
-    activeIndex = 0;
-    scrollTop = 0;
-    scrollElement?.scrollTo({ top: 0 });
     void listData.ensureRange(0, TRACK_PAGE_SIZE);
   });
 
@@ -111,87 +75,22 @@
     onTotalCount?.(snapshot.totalCount);
   });
 
-  onMount(() => {
-    const updateMetrics = () => {
-      const narrow = window.matchMedia('(max-width: 620px)').matches;
-      const shortDesktop = window.matchMedia('(max-height: 680px) and (min-width: 621px)').matches;
-      rowHeight = narrow ? 53 : shortDesktop ? 49 : 57;
-      headerHeight = narrow ? 33 : 37;
-      maxViewportHeight = Math.max(160, Math.min(680, Math.floor(window.innerHeight * 0.65)));
-      viewportHeight = scrollElement?.clientHeight ?? viewportHeight;
-    };
-
-    updateMetrics();
-    window.addEventListener('resize', updateMetrics);
-    return () => window.removeEventListener('resize', updateMetrics);
-  });
-
-  function updateViewport(): void {
-    if (!scrollElement) return;
-    scrollTop = scrollElement.scrollTop;
-    viewportHeight = scrollElement.clientHeight;
-    const range = getVirtualRange(
-      scrollTop,
-      viewportHeight,
-      snapshot.totalCount ?? TRACK_PAGE_SIZE,
-      rowHeight,
-      8,
-      headerHeight,
-    );
-    void listData.ensureRange(range.start, range.end);
-  }
-
-  function setActiveIndex(index: number): void {
-    const maxIndex = Math.max(0, (snapshot.totalCount ?? TRACK_PAGE_SIZE) - 1);
-    activeIndex = Math.max(0, Math.min(maxIndex, index));
-    void listData.ensureRange(activeIndex, activeIndex + 1);
-
-    if (!scrollElement) return;
-    const rowTop = headerHeight + activeIndex * rowHeight;
-    const rowBottom = rowTop + rowHeight;
-    let nextScrollTop = scrollElement.scrollTop;
-    if (rowTop < nextScrollTop + headerHeight) nextScrollTop = Math.max(0, rowTop - headerHeight);
-    else if (rowBottom > nextScrollTop + scrollElement.clientHeight) {
-      nextScrollTop = rowBottom - scrollElement.clientHeight;
-    }
-    if (nextScrollTop !== scrollElement.scrollTop) scrollElement.scrollTo({ top: nextScrollTop });
-  }
-
-  function handleKeydown(event: KeyboardEvent): void {
-    let nextIndex: number | null = null;
-    switch (event.key) {
-      case 'ArrowDown': nextIndex = activeIndex + 1; break;
-      case 'ArrowUp': nextIndex = activeIndex - 1; break;
-      case 'Home': nextIndex = 0; break;
-      case 'End': nextIndex = (snapshot.totalCount ?? TRACK_PAGE_SIZE) - 1; break;
-      case 'PageDown': nextIndex = activeIndex + Math.max(1, Math.floor(viewportHeight / rowHeight)); break;
-      case 'PageUp': nextIndex = activeIndex - Math.max(1, Math.floor(viewportHeight / rowHeight)); break;
-      case 'Enter':
-      case ' ':
-        event.preventDefault();
-        playActiveTrack();
-        return;
-      default: return;
-    }
-
-    event.preventDefault();
-    if (nextIndex !== null) setActiveIndex(nextIndex);
-  }
-
-  function playActiveTrack(): void {
-    const track = listData.trackAt(activeIndex);
-    if (!track || !playbackReady || isSendingPlaybackCommand) return;
-    void onPlay(track);
-  }
-
   function retryFirstError(): void {
     const firstError = snapshot.errors[0];
     if (firstError) void listData.retry(firstError.offset);
   }
 
-  function playRow(track: TrackSummary, index: number): void {
-    activeIndex = index;
+  function playRow(track: TrackSummary): void {
     if (playbackReady && !isSendingPlaybackCommand) void onPlay(track);
+  }
+
+  function handleRange(range: { start: number; end: number }): void {
+    virtualRange = range;
+    void listData.ensureRange(range.start, range.end);
+  }
+
+  function itemAt(index: number): TrackSummary | null {
+    return listData.itemAt(index);
   }
 </script>
 
@@ -203,81 +102,75 @@
 {/if}
 
 {#if snapshot.totalCount === 0}
-  <div class="track-list-empty" role="status">{snapshot.query ? '找不到相符曲目。' : '曲庫目前是空的。'}</div>
+  <div class="track-list-empty" role="status">{query.trim() ? '找不到相符曲目。' : '曲庫目前是空的。'}</div>
 {:else}
-  <div
-    class="track-list-viewport"
-    bind:this={scrollElement}
-    role="grid"
-    aria-label="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目"
-    aria-rowcount={snapshot.totalCount === null ? -1 : snapshot.totalCount + 1}
-    aria-colcount="5"
-    aria-activedescendant={activeDescendantId}
-    aria-busy={snapshot.pendingPageCount > 0}
-    tabindex="0"
-    style={`height:${viewportPixelHeight}px`}
-    onscroll={updateViewport}
-    onkeydown={handleKeydown}
+  <PagedVirtualList
+    totalCount={snapshot.totalCount}
+    pending={snapshot.pendingPageCount > 0}
+    revision={snapshot.revision}
+    generation={snapshot.generation}
+    {itemAt}
+    getKey={(track) => track.id}
+    isSelected={(track) => selectedTrackId === track.id}
+    rowHeight={57}
+    compactRowHeight={53}
+    shortDesktopRowHeight={49}
+    headerHeight={37}
+    compactHeaderHeight={33}
+    maxViewportHeight={680}
+    listId="library-track"
+    ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目"
+    columnCount={5}
+    className="track-list-viewport"
+    rowClassName="track-row virtual-track-row"
+    listName="曲庫"
+    onRange={handleRange}
+    onPlay={(track) => playRow(track)}
   >
-    <div class="track-table-head track-list-header" role="row" aria-rowindex="1">
-      <span class="column-index" role="columnheader">#</span>
-      <span role="columnheader">曲目</span>
-      <span class="column-album" role="columnheader">專輯</span>
-      <span class="column-duration" role="columnheader">長度</span>
-      <span class="column-action" role="columnheader" aria-label="播放操作"></span>
-    </div>
-    <div
-      class="track-list-spacer"
-      role="presentation"
-      aria-hidden="true"
-      style={`height:${virtualTotalCount * rowHeight}px`}
-    ></div>
-    {#each virtualRows as row (row.index)}
-      <div
-        id={`library-track-row-${row.index}`}
-        class="track-row virtual-track-row"
-        class:selected={row.track !== null && selectedTrackId === row.track.id}
-        role="row"
-        aria-rowindex={row.index + 2}
-        aria-selected={row.track !== null && selectedTrackId === row.track.id}
-        aria-label={row.track ? `${row.track.title?.trim() || '未命名曲目'}，${row.track.artist?.trim() || '未知演出者'}` : `第 ${row.index + 1} 首，正在載入`}
-        style={`height:${rowHeight}px;transform:translateY(${headerHeight + row.index * rowHeight}px)`}
-      >
-        {#if row.track}
-          <span class="track-index column-index" role="gridcell">{formatTrackIndex(row.track.trackNumber, row.track.discNumber)}</span>
-          <div class="track-main" role="gridcell">
-            <span class="track-title">{row.track.title?.trim() || '未命名曲目'}</span>
-            <span class="track-artist">{row.track.artist?.trim() || '未知演出者'}</span>
-          </div>
-          <span class="track-album column-album" role="gridcell">{row.track.album?.trim() || '未知專輯'}</span>
-          <span class="track-duration column-duration" role="gridcell">{formatDuration(row.track.durationMs)}</span>
+    {#snippet header()}
+      <div class="track-table-head track-list-header" role="row" aria-rowindex="1">
+        <span class="column-index" role="columnheader">#</span>
+        <span role="columnheader">曲目</span>
+        <span class="column-album" role="columnheader">專輯</span>
+        <span class="column-duration" role="columnheader">長度</span>
+        <span class="column-action" role="columnheader" aria-label="播放操作"></span>
+      </div>
+    {/snippet}
+    {#snippet row(row: VirtualListRow<TrackSummary>)}
+      {#if row.item}
+        <span class="track-index column-index" role="gridcell">{formatTrackIndex(row.item.trackNumber, row.item.discNumber)}</span>
+        <div class="track-main" role="gridcell">
+          <span class="track-title">{row.item.title?.trim() || '未命名曲目'}</span>
+          <span class="track-artist">{row.item.artist?.trim() || '未知演出者'}</span>
+        </div>
+        <span class="track-album column-album" role="gridcell">{row.item.album?.trim() || '未知專輯'}</span>
+        <span class="track-duration column-duration" role="gridcell">{formatDuration(row.item.durationMs)}</span>
           <button
             class="row-play column-action"
             type="button"
             tabindex="-1"
-            aria-label={`播放 ${row.track.title?.trim() || '未命名曲目'}`}
+            aria-label={`播放 ${row.item.title?.trim() || '未命名曲目'}`}
             title={playbackReady ? '播放曲目' : '播放功能尚未就緒'}
             disabled={!playbackReady || isSendingPlaybackCommand}
-            onclick={() => playRow(row.track!, row.index)}
+            onclick={row.play}
           >
             <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7.3 5.8 7 4.2-7 4.2V5.8Z" fill="currentColor" /></svg>
           </button>
-        {:else}
+      {:else}
           <span class="track-index column-index" role="gridcell" aria-hidden="true">—</span>
           <div class="track-main" role="gridcell" aria-hidden="true"><span class="track-title track-loading-label">正在載入曲目…</span></div>
           <span class="track-album column-album" role="gridcell" aria-hidden="true">—</span>
           <span class="track-duration column-duration" role="gridcell" aria-hidden="true">—:—</span>
           <span class="column-action" role="gridcell" aria-hidden="true"></span>
-        {/if}
-      </div>
-    {/each}
-  </div>
+      {/if}
+    {/snippet}
+  </PagedVirtualList>
 {/if}
 
 <div class="track-list-count" role="status" aria-live="polite">{rangeLabel}</div>
 
 <style>
-  .track-list-viewport {
+  :global(.track-list-viewport) {
     position: relative;
     width: 100%;
     max-height: min(65vh, 680px);
@@ -290,7 +183,7 @@
     outline: none;
   }
 
-  .track-list-viewport:focus-visible {
+  :global(.track-list-viewport:focus-visible) {
     outline: 2px solid var(--accent-text);
     outline-offset: 2px;
   }
@@ -305,17 +198,7 @@
     background: var(--panel);
   }
 
-  .track-list-spacer {
-    width: 1px;
-    pointer-events: none;
-  }
-
-  .virtual-track-row {
-    position: absolute;
-    z-index: 1;
-    inset-inline: 0;
-    top: 0;
-    box-sizing: border-box;
+  :global(.virtual-track-row) {
     min-height: 0;
   }
 

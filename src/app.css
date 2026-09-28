@@ -2322,7 +2322,7 @@ input:focus-visible {
 }
 
 .playlist-entry-table {
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 9px;
 }

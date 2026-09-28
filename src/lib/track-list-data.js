@@ -1,7 +1,8 @@
 ﻿/** @typedef {import('./ipc').TrackPage} TrackPage */
 /** @typedef {import('./ipc').TrackSummary} TrackSummary */
-/** @typedef {import('./ipc').TrackPageRequest} TrackPageRequest */
-/** @typedef {(request: TrackPageRequest) => Promise<TrackPage>} FetchTrackPage */
+/** @template Item @typedef {{ items: Item[], offset: number, limit: number, totalCount: number }} PagedResponse */
+/** @template Scope @typedef {{ scope: Scope, offset: number, limit: number }} PagedRequest */
+/** @template Item, Scope @typedef {(request: PagedRequest<Scope>) => Promise<PagedResponse<Item>>} FetchPage */
 
 export const TRACK_PAGE_SIZE = 40;
 export const TRACK_LIST_MAX_CACHED_PAGES = 6;
@@ -54,20 +55,49 @@ export function getVirtualRange(
   };
 }
 
+/** Return the next active row for shared arrow/page navigation; null means the key is not handled. */
+export function getNextActiveIndex(
+  /** @type {string} */ key,
+  /** @type {number} */ activeIndex,
+  /** @type {number} */ totalCount,
+  /** @type {number} */ viewportHeight,
+  /** @type {number} */ rowHeight,
+) {
+  if (!Number.isFinite(totalCount) || totalCount <= 0) return null;
+  const count = Math.floor(totalCount);
+  const safeActive = Math.max(0, Math.min(count - 1, Math.floor(activeIndex)));
+  const pageStep = Math.max(1, Math.floor(
+    (Number.isFinite(viewportHeight) ? viewportHeight : 0)
+      / (Number.isFinite(rowHeight) && rowHeight > 0 ? rowHeight : 1),
+  ));
+  switch (key) {
+    case 'ArrowDown': return Math.min(count - 1, safeActive + 1);
+    case 'ArrowUp': return Math.max(0, safeActive - 1);
+    case 'Home': return 0;
+    case 'End': return count - 1;
+    case 'PageDown': return Math.min(count - 1, safeActive + pageStep);
+    case 'PageUp': return Math.max(0, safeActive - pageStep);
+    default: return null;
+  }
+}
+
 /**
  * Build the rendered window while carrying the source revision into Svelte's
  * dependency graph. The revision changes even when page lengths and totals do
  * not, so a visible range is rebuilt as its cached page is populated.
  *
- * @param {PagedTrackList} data
+ * @template Item
+ * @param {{ itemAt(index: number): Item | null }} data
  * @param {VirtualRange} range
  * @param {number} revision
- * @returns {{ revision: number, rows: Array<{ index: number, track: TrackSummary | null }> }}
+ * @param {(item: Item, index: number) => string | number} [keyOf]
+ * @returns {{ revision: number, rows: Array<{ index: number, item: Item | null, track: Item | null, key: string | number }> }}
  */
-export function buildVirtualRows(data, range, revision) {
+export function buildVirtualRows(data, range, revision, keyOf = (_item, index) => index) {
   const rows = [];
   for (let index = range.start; index < range.end; index += 1) {
-    rows.push({ index, track: data.trackAt(index) });
+    const item = data.itemAt(index);
+    rows.push({ index, item, track: item, key: item === null ? `loading:${index}` : keyOf(item, index) });
   }
   return { revision, rows };
 }
@@ -76,22 +106,24 @@ export function buildVirtualRows(data, range, revision) {
  * @typedef {Object} LoadState
  * @property {number} offset
  * @property {number} generation
- * @property {string} query
+ * @property {any} scope
  * @property {Promise<void>} promise
  * @property {() => void} resolve
  */
 
 /**
- * Holds only a bounded set of backend pages. In-flight responses from an older
- * query/reset generation are ignored; the caller supplies the backend fetcher.
+ * @template Item, Scope
+ * Holds a bounded set of pages for any renderer-facing paged endpoint. In-flight
+ * responses from an older scope/reset generation are ignored.
  */
-export class PagedTrackList {
+export class PagedListController {
   /**
-   * @param {FetchTrackPage} fetchPage
+   * @param {FetchPage<Item, Scope>} fetchPage
    * @param {{
    *   pageSize?: number,
    *   maxCachedPages?: number,
    *   maxConcurrentRequests?: number,
+   *   listName?: string,
    *   onChange?: () => void,
    * }} [options]
    */
@@ -103,19 +135,20 @@ export class PagedTrackList {
       1,
       Math.floor(options.maxConcurrentRequests ?? TRACK_LIST_MAX_CONCURRENT_REQUESTS),
     );
+    this.listName = options.listName ?? '列表';
     this.onChange = options.onChange ?? (() => {});
 
-    /** @type {string} */
-    this.query = '';
-    /** @type {string | number | null} */
-    this.resetKey = null;
+    /** @type {Scope | null} */
+    this.scope = null;
+    /** @type {unknown} */
+    this.resetKey = undefined;
     /** @type {number | null} */
     this.totalCount = null;
     /** @type {number} */
     this.generation = 0;
     /** @type {number} */
     this.revision = 0;
-    /** @type {Map<number, TrackPage>} */
+    /** @type {Map<number, PagedResponse<Item>>} */
     this.pages = new Map();
     /** @type {Map<number, string>} */
     this.errors = new Map();
@@ -130,15 +163,14 @@ export class PagedTrackList {
   }
 
   /**
-   * @param {string} query
-   * @param {string | number | null} resetKey
+   * @param {Scope | null} scope
+   * @param {unknown} [resetKey]
    * @returns {boolean} True when state was reset.
    */
-  reset(query, resetKey = null) {
-    const normalizedQuery = query.trim();
-    if (normalizedQuery === this.query && Object.is(resetKey, this.resetKey)) return false;
+  reset(scope, resetKey = scope) {
+    if (Object.is(scope, this.scope) && Object.is(resetKey, this.resetKey)) return false;
 
-    this.query = normalizedQuery;
+    this.scope = scope;
     this.resetKey = resetKey;
     this.generation += 1;
     this.totalCount = null;
@@ -152,13 +184,13 @@ export class PagedTrackList {
     return true;
   }
 
-  /** @returns {{ query: string, totalCount: number | null, cachedPageCount: number, cachedItemCount: number, pendingPageCount: number, errors: Array<{ offset: number, message: string }>, generation: number, revision: number }} */
+  /** @returns {{ scope: unknown, totalCount: number | null, cachedPageCount: number, cachedItemCount: number, pendingPageCount: number, errors: Array<{ offset: number, message: string }>, generation: number, revision: number }} */
   snapshot() {
     let cachedItemCount = 0;
     for (const page of this.pages.values()) cachedItemCount += page.items.length;
 
     return {
-      query: this.query,
+      scope: this.scope,
       totalCount: this.totalCount,
       cachedPageCount: this.pages.size,
       cachedItemCount,
@@ -173,9 +205,9 @@ export class PagedTrackList {
 
   /**
    * @param {number} index
-   * @returns {TrackSummary | null}
+   * @returns {Item | null}
    */
-  trackAt(index) {
+  itemAt(index) {
     if (!Number.isInteger(index) || index < 0 || (this.totalCount !== null && index >= this.totalCount)) {
       return null;
     }
@@ -185,7 +217,15 @@ export class PagedTrackList {
     if (!page) return null;
     this.pages.delete(offset);
     this.pages.set(offset, page);
-    return page.items[index - offset] ?? null;
+    /** @type {Item | undefined} */
+    const item = page.items[index - offset];
+    return item ?? null;
+  }
+
+  /** Backwards-compatible alias for the library list. */
+  /** @param {number} index */
+  trackAt(index) {
+    return this.itemAt(index);
   }
 
   /**
@@ -271,7 +311,7 @@ export class PagedTrackList {
     const state = {
       offset,
       generation: this.generation,
-      query: this.query,
+      scope: this.scope,
       promise,
       resolve,
     };
@@ -297,17 +337,17 @@ export class PagedTrackList {
   async fetchOne(state) {
     try {
       const page = await this.fetchPage({
-        query: state.query || null,
+        scope: state.scope,
         offset: state.offset,
         limit: this.pageSize,
       });
       if (!this.isCurrent(state)) return;
 
       if (!this.isValidPage(page, state.offset)) {
-        throw new Error('曲庫分頁資料格式不符，請重新載入。');
+        throw new Error(`${this.listName}分頁資料格式不符，請重新載入。`);
       }
       if (this.totalCount !== null && page.totalCount !== this.totalCount) {
-        throw new Error('曲庫在瀏覽期間有變更，請重新載入列表。');
+        throw new Error(`${this.listName}在瀏覽期間有變更，請重新載入列表。`);
       }
 
       this.totalCount = page.totalCount;
@@ -334,7 +374,7 @@ export class PagedTrackList {
     return state.generation === this.generation && this.loads.get(state.offset) === state;
   }
 
-  /** @param {TrackPage} page @param {number} offset */
+  /** @param {PagedResponse<Item>} page @param {number} offset */
   isValidPage(page, offset) {
     return page !== null
       && typeof page === 'object'
@@ -371,6 +411,30 @@ export class PagedTrackList {
   notify() {
     this.revision += 1;
     this.onChange();
+  }
+}
+
+/** @deprecated Use PagedListController with an explicit scope. @extends {PagedListController<TrackSummary, string>} */
+export class PagedTrackList extends PagedListController {
+  /**
+   * @param {(request: { query: string | null, offset: number, limit: number }) => Promise<PagedResponse<import('./ipc').TrackSummary>>} fetchPage
+   * @param {Object} [options]
+   */
+  constructor(fetchPage, options = {}) {
+    super(({ scope, offset, limit }) => fetchPage({
+      query: typeof scope === 'string' && scope ? scope : null,
+      offset,
+      limit,
+    }), options);
+  }
+
+  /** @param {string | null} query @param {string | number | null} [resetKey] */
+  reset(query, resetKey = query) {
+    return super.reset(query?.trim() ?? '', resetKey);
+  }
+
+  snapshot() {
+    return { ...super.snapshot(), query: typeof this.scope === 'string' ? this.scope : '' };
   }
 }
 
