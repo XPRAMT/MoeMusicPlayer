@@ -11,7 +11,7 @@ pub use library::{
     FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaScanProgress,
     MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, SourceId,
     SourceScan, SourceScanState, SyncCancellation, TrackId, TrackIdentity, TrackMetadata,
-    TrackMetadataError, TrackSummary, UserMetadataField,
+    TrackMetadataError, TrackSummary, UserMetadataField, TRACK_METADATA_VERSION,
 };
 pub use playback_queue::{PlaybackQueue, QueueRepeatMode};
 pub use playlist::{

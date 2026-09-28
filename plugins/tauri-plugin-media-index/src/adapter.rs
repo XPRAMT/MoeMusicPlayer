@@ -82,6 +82,8 @@ pub(crate) fn into_core_metadata(metadata: crate::models::TrackMetadata) -> Trac
         codec: metadata.codec,
         bitrate_bps: metadata.bitrate_bps,
         sample_rate_hz: metadata.sample_rate_hz,
+        year: metadata.year,
+        bit_depth: metadata.bit_depth,
     }
 }
 
@@ -135,6 +137,46 @@ mod tests {
             media_store_volume("content://media/VOLUME/audio/media/12"),
             Some("VOLUME")
         );
+    }
+
+    #[test]
+    fn android_metadata_wire_fields_are_optional_and_preserve_year_and_bit_depth() {
+        let legacy: crate::models::TrackMetadata = serde_json::from_value(serde_json::json!({
+            "title": "legacy",
+            "artist": "ARTIST",
+            "album": null,
+            "albumArtist": null,
+            "trackNumber": null,
+            "discNumber": null,
+            "durationMs": 1234,
+            "codec": "FLAC",
+            "bitrateBps": null,
+            "sampleRateHz": 96000
+        }))
+        .expect("older Android payload remains readable");
+        let converted = into_core_metadata(legacy);
+        assert_eq!(converted.artist.as_deref(), Some("ARTIST"));
+        assert_eq!(converted.year, None);
+        assert_eq!(converted.bit_depth, None);
+
+        let current: crate::models::TrackMetadata = serde_json::from_value(serde_json::json!({
+            "title": "hires",
+            "artist": "ARTIST",
+            "album": null,
+            "albumArtist": null,
+            "trackNumber": null,
+            "discNumber": null,
+            "durationMs": 1234,
+            "codec": "FLAC",
+            "bitrateBps": null,
+            "sampleRateHz": 96000,
+            "year": 2024,
+            "bitDepth": 24
+        }))
+        .expect("new Android metadata payload");
+        let converted = into_core_metadata(current);
+        assert_eq!(converted.year, Some(2024));
+        assert_eq!(converted.bit_depth, Some(24));
     }
 
     #[test]

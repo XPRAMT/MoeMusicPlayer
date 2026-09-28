@@ -7,6 +7,10 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+
+/// Increment when the metadata parser adds or changes persisted fields.
+/// Existing tracks below this version are eligible for bounded background backfill.
+pub const TRACK_METADATA_VERSION: u32 = 1;
 use uuid::Uuid;
 
 /// Stable identity owned by the application, independent of any OS media index.
@@ -129,6 +133,9 @@ pub struct TrackMetadata {
     pub codec: Option<String>,
     pub bitrate_bps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
+    pub year: Option<u16>,
+    /// Source bits per sample, populated only for codecs known to be lossless.
+    pub bit_depth: Option<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -286,6 +293,8 @@ pub struct TrackSummary {
     pub codec: Option<String>,
     pub bitrate_bps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
+    pub year: Option<u16>,
+    pub bit_depth: Option<u8>,
 }
 
 /// Fields which the user is allowed to override independently of source metadata.

@@ -97,6 +97,11 @@ pub struct PlaylistEntrySummary {
     /// True when the track currently has at least one enabled source mapping. This does not
     /// probe file existence or platform permission; playback remains the final availability test.
     pub has_enabled_mapping: bool,
+    pub codec: Option<String>,
+    pub bitrate_bps: Option<u32>,
+    pub sample_rate_hz: Option<u32>,
+    pub year: Option<u16>,
+    pub bit_depth: Option<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

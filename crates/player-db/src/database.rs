@@ -12,13 +12,13 @@ use player_core::{
     MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, Playlist, PlaylistEntry,
     PlaylistEntrySummary, PlaylistId, PlaylistPage, PlaylistSummary, SourceId, SourceScanState,
     SyncApplyOutcome, SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackId, TrackIdentity,
-    TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField,
+    TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField, TRACK_METADATA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const MAX_PAGE_SIZE: u32 = 500;
 const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT track_id) FROM source_mappings";
 const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
@@ -32,7 +32,8 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
-    t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz
+    t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
+    t.year, t.bit_depth
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=t.track_id)
    AND (?1 IS NULL
@@ -47,7 +48,8 @@ const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
-    t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz
+    t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
+    t.year, t.bit_depth
  FROM tracks t WHERE t.track_id=?1";
 const PLAYLIST_PAGE_SQL: &str = r#"
 WITH resolved_entries AS (
@@ -73,6 +75,7 @@ SELECT e.position, e.track_id,
        COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist),
        COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album),
        COALESCE(e.entry_duration_ms, t.duration_ms),
+       t.codec, t.bitrate_bps, t.sample_rate_hz, t.year, t.bit_depth,
        EXISTS (
            SELECT 1 FROM source_mappings m
            JOIN library_roots r ON r.source_id=m.source_id
@@ -201,6 +204,12 @@ CREATE TABLE playlist_file_sync_state (
     modified_at_utc_ms INTEGER,
     content_sha256 BLOB NOT NULL CHECK (length(content_sha256) = 32)
 );
+"#;
+
+const SCHEMA_V6: &str = r#"
+ALTER TABLE tracks ADD COLUMN year INTEGER CHECK (year IS NULL OR (year >= 1 AND year <= 9999));
+ALTER TABLE tracks ADD COLUMN bit_depth INTEGER CHECK (bit_depth IS NULL OR (bit_depth >= 1 AND bit_depth <= 64));
+ALTER TABLE tracks ADD COLUMN metadata_version INTEGER NOT NULL DEFAULT 0 CHECK (metadata_version >= 0);
 "#;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -400,6 +409,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V5)?;
             tx.pragma_update(None, "user_version", 5)?;
+            tx.commit()?;
+            version = 5;
+        }
+        if version == 5 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V6)?;
+            tx.pragma_update(None, "user_version", 6)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -911,14 +927,31 @@ impl Database {
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, Option<String>>(4)?,
                     row.get::<_, Option<i64>>(5)?,
-                    row.get::<_, bool>(6)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, Option<i64>>(9)?,
+                    row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, bool>(11)?,
                 ))
             },
         )?;
         let items = rows
             .map(|row| {
-                let (position, track_id, title, artist, album, duration_ms, has_enabled_mapping) =
-                    row?;
+                let (
+                    position,
+                    track_id,
+                    title,
+                    artist,
+                    album,
+                    duration_ms,
+                    codec,
+                    bitrate_bps,
+                    sample_rate_hz,
+                    year,
+                    bit_depth,
+                    has_enabled_mapping,
+                ) = row?;
                 let position = u64::try_from(position).map_err(|_| {
                     DatabaseError::CorruptData("negative playlist entry position".to_owned())
                 })?;
@@ -940,6 +973,15 @@ impl Database {
                     album,
                     duration_ms,
                     has_enabled_mapping,
+                    codec,
+                    bitrate_bps: bitrate_bps.map(|value| value.max(0) as u32),
+                    sample_rate_hz: sample_rate_hz.map(|value| value.max(0) as u32),
+                    year: year
+                        .and_then(|value| u16::try_from(value).ok())
+                        .filter(|value| *value > 0),
+                    bit_depth: bit_depth
+                        .and_then(|value| u8::try_from(value).ok())
+                        .filter(|value| *value > 0),
                 })
             })
             .collect::<Result<Vec<_>, DatabaseError>>()?;
@@ -1239,7 +1281,7 @@ impl LibraryRepository for Database {
         let source_id = identity.source_id.to_string();
         let exact = {
             let mut statement = connection.prepare_cached(
-                "SELECT m.size_bytes, m.modified_at_utc_ms, t.metadata_loaded
+                "SELECT m.size_bytes, m.modified_at_utc_ms, t.metadata_loaded, t.metadata_version
                  FROM source_mappings m JOIN tracks t ON t.track_id=m.track_id
                  WHERE m.source_id=?1 AND m.source_item_id=?2",
             )?;
@@ -1253,7 +1295,7 @@ impl LibraryRepository for Database {
             return Ok(exact);
         }
         let mut statement = connection.prepare_cached(
-            "SELECT m.size_bytes, m.modified_at_utc_ms, t.metadata_loaded
+            "SELECT m.size_bytes, m.modified_at_utc_ms, t.metadata_loaded, t.metadata_version
                  FROM source_mappings m JOIN tracks t ON t.track_id=m.track_id
                  WHERE m.locator_key=?1 LIMIT 1",
         )?;
@@ -1289,6 +1331,36 @@ impl LibraryRepository for Database {
             &SyncCancellation::default(),
         )
         .map(|outcome| outcome.stats)
+    }
+
+    fn apply_metadata_backfill_batch(
+        &mut self,
+        tracks: &[MediaTrackRecord],
+    ) -> Result<(), Self::Error> {
+        if tracks.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for record in tracks {
+            let Some(metadata) = record.metadata.as_ref() else {
+                continue;
+            };
+            let track_id = resolve_track_id(&tx, record)?;
+            let current_version: Option<i64> = tx
+                .query_row(
+                    "SELECT metadata_version FROM tracks WHERE track_id=?1",
+                    [track_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if current_version.is_some_and(|version| version >= i64::from(TRACK_METADATA_VERSION)) {
+                continue;
+            }
+            persist_metadata(&tx, track_id, Some(metadata))?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     fn apply_source_scan_with_progress(
@@ -1485,6 +1557,14 @@ fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummar
         sample_rate_hz: row
             .get::<_, Option<i64>>(10)?
             .map(|value| value.max(0) as u32),
+        year: row
+            .get::<_, Option<i64>>(11)?
+            .and_then(|value| u16::try_from(value).ok())
+            .filter(|value| *value > 0),
+        bit_depth: row
+            .get::<_, Option<i64>>(12)?
+            .and_then(|value| u8::try_from(value).ok())
+            .filter(|value| *value > 0),
     })
 }
 
@@ -1552,18 +1632,29 @@ fn persist_metadata(
         .or_else(|| metadata.title.clone())
         .unwrap_or_default()
         .to_lowercase();
+    if metadata.year.is_some_and(|year| year == 0 || year > 9999) {
+        return Err(DatabaseError::InvalidNumber("year"));
+    }
+    if metadata
+        .bit_depth
+        .is_some_and(|depth| depth == 0 || depth > 64)
+    {
+        return Err(DatabaseError::InvalidNumber("bit_depth"));
+    }
 
     tx.prepare_cached(
         "INSERT INTO tracks
             (track_id, metadata_loaded, sort_title, title, artist, album, album_artist, track_number,
-             disc_number, duration_ms, codec, bitrate_bps, sample_rate_hz)
-         VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             disc_number, duration_ms, codec, bitrate_bps, sample_rate_hz, year, bit_depth, metadata_version)
+         VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT(track_id) DO UPDATE SET
             metadata_loaded=1, sort_title=excluded.sort_title, title=excluded.title,
             artist=excluded.artist, album=excluded.album,
             album_artist=excluded.album_artist, track_number=excluded.track_number,
             disc_number=excluded.disc_number, duration_ms=excluded.duration_ms, codec=excluded.codec,
-            bitrate_bps=excluded.bitrate_bps, sample_rate_hz=excluded.sample_rate_hz",
+            bitrate_bps=excluded.bitrate_bps, sample_rate_hz=excluded.sample_rate_hz,
+            year=excluded.year, bit_depth=excluded.bit_depth,
+            metadata_version=excluded.metadata_version",
     )?
     .execute(params![
             track_id.to_string(),
@@ -1578,6 +1669,9 @@ fn persist_metadata(
             metadata.codec,
             metadata.bitrate_bps.map(i64::from),
             metadata.sample_rate_hz.map(i64::from),
+            metadata.year.map(i64::from),
+            metadata.bit_depth.map(i64::from),
+            i64::from(TRACK_METADATA_VERSION),
         ])?;
     Ok(())
 }
@@ -1628,6 +1722,7 @@ fn row_to_sync_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSyncState
             modified_at_utc_ms: row.get(1)?,
         },
         metadata_loaded: row.get(2)?,
+        metadata_version: row.get::<_, i64>(3)?.max(0) as u32,
     })
 }
 
@@ -1813,15 +1908,15 @@ mod tests {
 
     use player_core::{
         FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaSourceError,
-        MediaSourceKind, MediaTrackRecord, PlaylistEntry, PlaylistId, SourceId, SourceScan,
-        SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackId, TrackIdentity,
-        TrackMetadata, TrackMetadataError, UserMetadataField,
+        MediaSourceKind, MediaTrackRecord, Playlist, PlaylistEntry, PlaylistId, SourceId,
+        SourceScan, SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackId,
+        TrackIdentity, TrackMetadata, TrackMetadataError, UserMetadataField,
     };
     use rusqlite::{params, OptionalExtension};
 
     use super::{
         Database, DatabaseError, LibraryRepository, PlaylistFileSyncState, ThemePreferences,
-        COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, TRACKS_PAGE_SQL,
+        COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, TRACKS_PAGE_SQL,
     };
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -1865,6 +1960,8 @@ mod tests {
                 codec: Some("FLAC".to_owned()),
                 bitrate_bps: Some(900_000),
                 sample_rate_hz: Some(48_000),
+                year: Some(2001),
+                bit_depth: Some(24),
             }),
         }
     }
@@ -1969,7 +2066,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 5);
+            assert_eq!(version, 6);
         }
         {
             let db = Database::open(&path).expect("reopen migrated database");
@@ -2013,7 +2110,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 5);
+        assert_eq!(current_version, 6);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -2062,7 +2159,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -2102,7 +2199,7 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
     }
 
@@ -2142,8 +2239,263 @@ mod tests {
                     .expect("sync-state table lookup"),
             )
         };
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
+    }
+
+    #[test]
+    fn version_five_metadata_migration_backfills_once_and_projects_to_playlist_pages() {
+        let connection = rusqlite::Connection::open_in_memory().expect("legacy database");
+        connection
+            .execute_batch(SCHEMA_V1)
+            .expect("create schema v1");
+        connection
+            .execute_batch(SCHEMA_V2)
+            .expect("create schema v2");
+        connection
+            .execute_batch(SCHEMA_V3)
+            .expect("create schema v3");
+        connection
+            .execute_batch(SCHEMA_V4)
+            .expect("create schema v4");
+        connection
+            .execute_batch(SCHEMA_V5)
+            .expect("create schema v5");
+        let track_id = TrackId::new();
+        connection
+            .execute(
+                "INSERT INTO tracks (track_id, metadata_loaded, sort_title, title)
+                 VALUES (?1, 1, 'old title', 'old title')",
+                [track_id.to_string()],
+            )
+            .expect("insert legacy track");
+        connection
+            .pragma_update(None, "user_version", 5)
+            .expect("mark schema v5");
+
+        let mut db = Database::from_connection(connection).expect("migrate schema v5");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "metadata backfill");
+        let record = record(
+            &root,
+            "legacy-item",
+            "path-key:legacy",
+            "New title",
+            12,
+            345,
+        );
+        db.lock()
+            .expect("database lock")
+            .execute(
+                "INSERT INTO source_mappings
+                    (source_id, source_item_id, locator_key, locator_kind, locator_encoding,
+                     locator_data, size_bytes, modified_at_utc_ms, track_id)
+                 VALUES (?1, ?2, ?3, 'filesystem', 'utf8', X'6C6567616379', 12, 345, ?4)",
+                params![
+                    root.id.to_string(),
+                    record.identity.source_item_id,
+                    record.identity.locator_key,
+                    track_id.to_string(),
+                ],
+            )
+            .expect("map legacy track");
+
+        let legacy_state = db
+            .track_sync_state(&record.identity)
+            .expect("read old state")
+            .expect("legacy mapping exists");
+        assert_eq!(legacy_state.metadata_version, 0);
+        db.apply_metadata_backfill_batch(std::slice::from_ref(&record))
+            .expect("commit backfill batch");
+        let summary = db
+            .get_track_summary(track_id)
+            .expect("query summary")
+            .unwrap();
+        assert_eq!(summary.title.as_deref(), Some("New title"));
+        assert_eq!(summary.year, Some(2001));
+        assert_eq!(summary.bit_depth, Some(24));
+        assert_eq!(summary.artist.as_deref(), Some("artist"));
+
+        let mut playlist = Playlist::new("metadata projection");
+        playlist.entries = vec![
+            PlaylistEntry {
+                track_id: Some(track_id),
+                locator: record.locator.clone(),
+                title: Some("entry override".to_owned()),
+                duration_ms: Some(9_876),
+            },
+            PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::FileSystem(PathBuf::from(r"C:\missing\future.flac")),
+                title: Some("unmatched".to_owned()),
+                duration_ms: None,
+            },
+        ];
+        db.save_playlist(&playlist).expect("save playlist");
+        let playlist_page = db
+            .get_playlist_page(playlist.id, 0, 10)
+            .expect("project playlist page")
+            .expect("playlist exists");
+        assert_eq!(
+            playlist_page.items[0].title.as_deref(),
+            Some("entry override")
+        );
+        assert_eq!(playlist_page.items[0].duration_ms, Some(9_876));
+        assert_eq!(playlist_page.items[0].year, Some(2001));
+        assert_eq!(playlist_page.items[0].bit_depth, Some(24));
+        assert_eq!(playlist_page.items[1].track_id, None);
+        assert_eq!(playlist_page.items[1].year, None);
+        assert_eq!(playlist_page.items[1].bit_depth, None);
+
+        let mut repeat = record.clone();
+        repeat.metadata.as_mut().expect("metadata").year = Some(1999);
+        db.apply_metadata_backfill_batch(&[repeat])
+            .expect("idempotent repeat");
+        assert_eq!(
+            db.get_track_summary(track_id)
+                .expect("summary after repeated batch")
+                .unwrap()
+                .year,
+            Some(2001)
+        );
+    }
+
+    #[test]
+    fn metadata_backfill_keeps_committed_batches_across_database_reopen() {
+        struct InterruptingIndex {
+            source_id: SourceId,
+            records: Vec<MediaTrackRecord>,
+            reads: usize,
+            cancel: SyncCancellation,
+            cancel_at: Option<usize>,
+        }
+
+        impl MediaIndex for InterruptingIndex {
+            fn scan(&mut self, _root: &LibraryRoot) -> SourceScan {
+                SourceScan {
+                    source_id: self.source_id,
+                    state: SourceScanState::Complete,
+                    tracks: self.records.clone(),
+                    errors: Vec::new(),
+                }
+            }
+
+            fn read_metadata(
+                &mut self,
+                _track: &MediaTrackRecord,
+            ) -> Result<TrackMetadata, TrackMetadataError> {
+                self.reads += 1;
+                if self.cancel_at == Some(self.reads) {
+                    self.cancel.cancel();
+                }
+                Ok(TrackMetadata {
+                    title: Some(format!("backfilled {}", self.reads)),
+                    year: Some(2024),
+                    bit_depth: Some(24),
+                    ..TrackMetadata::default()
+                })
+            }
+        }
+
+        let path =
+            std::env::temp_dir().join(format!("moemusic-backfill-{}.sqlite", TrackId::new()));
+        let root;
+        let mut records;
+        {
+            let mut db = Database::open(&path).expect("open database");
+            root = add_root(&db, MediaSourceKind::WindowsFilesystem, "backfill restart");
+            records = (0..130)
+                .map(|index| {
+                    record(
+                        &root,
+                        &format!("legacy-{index:03}"),
+                        &format!("path-key:{index:03}"),
+                        "old metadata",
+                        100,
+                        1_800_000_000_000,
+                    )
+                })
+                .collect::<Vec<_>>();
+            apply(
+                &mut db,
+                &root,
+                SourceScanState::Complete,
+                &records,
+                &records,
+                1_800_000_000_001,
+            );
+            for record in &mut records {
+                record.metadata = None;
+            }
+            db.lock()
+                .expect("database lock")
+                .execute("UPDATE tracks SET metadata_version=0", [])
+                .expect("mark rows for migration backfill");
+
+            let cancel = SyncCancellation::default();
+            let mut index = InterruptingIndex {
+                source_id: root.id,
+                records: records.clone(),
+                reads: 0,
+                cancel: cancel.clone(),
+                cancel_at: Some(128),
+            };
+            let report = SyncEngine::sync_cancellable_with_progress(
+                &root,
+                &mut index,
+                &mut db,
+                1_800_000_000_002,
+                &cancel,
+                |_| {},
+            )
+            .expect("partial backfill cancellation");
+            assert!(report.cancelled);
+            assert_eq!(index.reads, 128);
+            assert_eq!(
+                db.lock()
+                    .expect("database lock")
+                    .query_row(
+                        "SELECT COUNT(*) FROM tracks WHERE metadata_version=1",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .expect("count committed versions"),
+                128
+            );
+        }
+
+        {
+            let mut db = Database::open(&path).expect("reopen after interruption");
+            let mut index = InterruptingIndex {
+                source_id: root.id,
+                records: records.clone(),
+                reads: 0,
+                cancel: SyncCancellation::default(),
+                cancel_at: None,
+            };
+            let report = SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_000_003)
+                .expect("resume remaining metadata");
+            assert!(!report.cancelled);
+            assert_eq!(index.reads, 2);
+            assert_eq!(
+                db.lock()
+                    .expect("database lock")
+                    .query_row(
+                        "SELECT COUNT(*) FROM tracks WHERE metadata_version=1",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .expect("count completed versions"),
+                130
+            );
+        }
+        for suffix in ["", "-wal", "-shm"] {
+            let mut file = path.as_os_str().to_os_string();
+            file.push(suffix);
+            let file = PathBuf::from(file);
+            if file.exists() {
+                std::fs::remove_file(file).expect("remove generated test database");
+            }
+        }
     }
 
     #[test]
@@ -2304,6 +2656,11 @@ mod tests {
         assert_eq!(page.items[0].artist.as_deref(), Some("artist"));
         assert_eq!(page.items[0].album.as_deref(), Some("album"));
         assert_eq!(page.items[0].duration_ms, Some(1_234));
+        assert_eq!(page.items[0].codec.as_deref(), Some("FLAC"));
+        assert_eq!(page.items[0].bitrate_bps, Some(900_000));
+        assert_eq!(page.items[0].sample_rate_hz, Some(48_000));
+        assert_eq!(page.items[0].year, Some(2001));
+        assert_eq!(page.items[0].bit_depth, Some(24));
         assert!(page.items[0].has_enabled_mapping);
 
         let second_page = db
@@ -2315,6 +2672,8 @@ mod tests {
         assert_eq!(second_page.items[0].position, 1);
         assert_eq!(second_page.items[0].track_id, None);
         assert_eq!(second_page.items[0].title.as_deref(), Some("曲庫標題"));
+        assert_eq!(second_page.items[0].year, None);
+        assert_eq!(second_page.items[0].bit_depth, None);
         assert!(!second_page.items[0].has_enabled_mapping);
 
         let stored = db

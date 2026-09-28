@@ -9,13 +9,16 @@ use serde::Serialize;
 use crate::library::{
     FileFingerprint, LibraryRoot, MediaIndex, MediaScanProgress, MediaScanProgressUnit,
     MediaSourceError, MediaTrackRecord, SourceId, SourceScanState, SyncCancellation, TrackIdentity,
-    TrackMetadataError,
+    TrackMetadataError, TRACK_METADATA_VERSION,
 };
+
+const METADATA_BACKFILL_BATCH_SIZE: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TrackSyncState {
     pub fingerprint: FileFingerprint,
     pub metadata_loaded: bool,
+    pub metadata_version: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -102,6 +105,13 @@ pub trait LibraryRepository {
         errors: &[MediaSourceError],
         synced_at_utc_ms: i64,
     ) -> Result<SyncApplyStats, Self::Error>;
+
+    /// Commit successfully parsed legacy metadata in small durable batches. This is separate
+    /// from complete-scan reconciliation so cancellation/restart keeps completed batches.
+    fn apply_metadata_backfill_batch(
+        &mut self,
+        tracks: &[MediaTrackRecord],
+    ) -> Result<(), Self::Error>;
 
     /// Apply one source result atomically where possible. A repository may report progress while
     /// it persists records. If it cannot cancel inside its transaction, it should finish that
@@ -319,6 +329,7 @@ impl SyncEngine {
         };
         let mut seen = Vec::with_capacity(scan.tracks.len());
         let mut changed = Vec::new();
+        let mut metadata_backfill_batch = Vec::with_capacity(METADATA_BACKFILL_BATCH_SIZE);
         let mut seen_item_ids = HashSet::new();
         let metadata_total = scan.tracks.len() as u64;
         progress.emit(
@@ -371,8 +382,45 @@ impl SyncEngine {
                 .track_sync_state(&track.identity)
                 .map_err(SyncError::Repository)?;
             let unchanged = existing.is_some_and(|state| state.fingerprint == track.fingerprint);
-            if unchanged && existing.is_some_and(|state| state.metadata_loaded) {
+            let legacy_metadata = unchanged
+                && existing.is_some_and(|state| {
+                    state.metadata_loaded && state.metadata_version < TRACK_METADATA_VERSION
+                });
+            if unchanged
+                && existing.is_some_and(|state| {
+                    state.metadata_loaded && state.metadata_version >= TRACK_METADATA_VERSION
+                })
+            {
                 report.unchanged += 1;
+                seen.push(track);
+                emit_metadata_progress(progress, metadata_processed, metadata_total, &report);
+                continue;
+            }
+
+            if legacy_metadata {
+                let metadata_result = match track.metadata.take() {
+                    Some(metadata) => Ok(metadata),
+                    None => {
+                        report.metadata_reads += 1;
+                        index.read_metadata(&track)
+                    }
+                };
+                match metadata_result {
+                    Ok(metadata) => {
+                        track.metadata = Some(metadata);
+                        metadata_backfill_batch.push(track.clone());
+                        if metadata_backfill_batch.len() == METADATA_BACKFILL_BATCH_SIZE {
+                            repository
+                                .apply_metadata_backfill_batch(&metadata_backfill_batch)
+                                .map_err(SyncError::Repository)?;
+                            metadata_backfill_batch.clear();
+                            std::thread::yield_now();
+                        }
+                    }
+                    Err(error) => report
+                        .metadata_errors
+                        .push((track.identity.source_item_id.clone(), error)),
+                }
                 seen.push(track);
                 emit_metadata_progress(progress, metadata_processed, metadata_total, &report);
                 continue;
@@ -390,6 +438,13 @@ impl SyncEngine {
             seen.push(track.clone());
             changed.push(track);
             emit_metadata_progress(progress, metadata_processed, metadata_total, &report);
+        }
+
+        if !metadata_backfill_batch.is_empty() {
+            repository
+                .apply_metadata_backfill_batch(&metadata_backfill_batch)
+                .map_err(SyncError::Repository)?;
+            std::thread::yield_now();
         }
 
         if cancellation.is_cancelled() {
@@ -622,7 +677,7 @@ mod tests {
         FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
         MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, SourceId,
         SourceScan, SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata,
-        TrackMetadataError,
+        TrackMetadataError, TRACK_METADATA_VERSION,
     };
 
     #[derive(Default)]
@@ -632,6 +687,7 @@ mod tests {
         observed: Vec<String>,
         changed: Vec<String>,
         errors: Vec<MediaSourceError>,
+        backfill_batches: Vec<usize>,
         fail_apply: bool,
     }
 
@@ -672,12 +728,32 @@ mod tests {
                 removed_source_mappings: 0,
             })
         }
+
+        fn apply_metadata_backfill_batch(
+            &mut self,
+            tracks: &[MediaTrackRecord],
+        ) -> Result<(), Self::Error> {
+            if self.fail_apply {
+                return Err(std::io::Error::other("test backfill failure"));
+            }
+            self.backfill_batches.push(tracks.len());
+            for track in tracks {
+                let state = self
+                    .entries
+                    .get_mut(&track.identity.source_item_id)
+                    .expect("legacy row exists");
+                state.metadata_loaded = true;
+                state.metadata_version = TRACK_METADATA_VERSION;
+            }
+            Ok(())
+        }
     }
 
     struct FakeIndex {
         scan: Option<SourceScan>,
         reads: Vec<String>,
         failures: Vec<String>,
+        cancel_after_reads: Option<(usize, SyncCancellation)>,
     }
 
     impl MediaIndex for FakeIndex {
@@ -690,6 +766,17 @@ mod tests {
             track: &MediaTrackRecord,
         ) -> Result<TrackMetadata, TrackMetadataError> {
             self.reads.push(track.identity.source_item_id.clone());
+            if self
+                .cancel_after_reads
+                .as_ref()
+                .is_some_and(|(count, _)| self.reads.len() == *count)
+            {
+                self.cancel_after_reads
+                    .as_ref()
+                    .expect("cancellation configured")
+                    .1
+                    .cancel();
+            }
             if self.failures.contains(&track.identity.source_item_id) {
                 return Err(TrackMetadataError {
                     message: "bad tag block".to_owned(),
@@ -783,6 +870,7 @@ mod tests {
             }),
             reads: Vec::new(),
             failures: Vec::new(),
+            cancel_after_reads: None,
         }
     }
 
@@ -797,6 +885,7 @@ mod tests {
             TrackSyncState {
                 fingerprint: record.fingerprint,
                 metadata_loaded: true,
+                metadata_version: TRACK_METADATA_VERSION,
             },
         );
 
@@ -808,6 +897,60 @@ mod tests {
         assert!(index.reads.is_empty());
         assert_eq!(repository.observed, ["same"]);
         assert!(repository.changed.is_empty());
+    }
+
+    #[test]
+    fn metadata_backfill_commits_bounded_batches_and_resumes_after_cancellation() {
+        let root = root();
+        let records = (0..300)
+            .map(|index| record(root.id, &format!("legacy-{index:03}"), 10, None))
+            .collect::<Vec<_>>();
+        let mut repository = FakeRepository::default();
+        for track in &records {
+            repository.entries.insert(
+                track.identity.source_item_id.clone(),
+                TrackSyncState {
+                    fingerprint: track.fingerprint,
+                    metadata_loaded: true,
+                    metadata_version: 0,
+                },
+            );
+        }
+
+        let cancellation = SyncCancellation::default();
+        let mut first_index = index(&root, records.clone(), SourceScanState::Complete);
+        first_index.cancel_after_reads = Some((128, cancellation.clone()));
+        let first = SyncEngine::sync_cancellable_with_progress(
+            &root,
+            &mut first_index,
+            &mut repository,
+            1_800_000_000_100,
+            &cancellation,
+            |_| {},
+        )
+        .expect("cancelled backfill is reported");
+        assert!(first.cancelled);
+        assert_eq!(first_index.reads.len(), 128);
+        assert_eq!(repository.backfill_batches, [128]);
+        assert_eq!(
+            repository
+                .entries
+                .values()
+                .filter(|state| state.metadata_version == TRACK_METADATA_VERSION)
+                .count(),
+            128
+        );
+
+        let mut second_index = index(&root, records, SourceScanState::Complete);
+        let second = SyncEngine::sync(&root, &mut second_index, &mut repository, 1_800_000_000_200)
+            .expect("resume stale metadata after restart");
+        assert!(!second.cancelled);
+        assert_eq!(second_index.reads.len(), 172);
+        assert_eq!(repository.backfill_batches, [128, 128, 44]);
+        assert!(repository
+            .entries
+            .values()
+            .all(|state| state.metadata_version == TRACK_METADATA_VERSION));
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::{
 };
 
 use lofty::{
-    file::EXTENSIONS,
+    file::{FileType, EXTENSIONS},
     prelude::{Accessor, AudioFile, TaggedFileExt},
     tag::ItemKey,
 };
@@ -381,6 +381,7 @@ impl MediaIndex for WindowsMediaIndex {
             .primary_tag()
             .or_else(|| tagged_file.first_tag());
         let properties = tagged_file.properties();
+        let file_type = tagged_file.file_type();
         let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
 
         Ok(TrackMetadata {
@@ -397,8 +398,58 @@ impl MediaIndex for WindowsMediaIndex {
                 .audio_bitrate()
                 .map(|kbps| kbps.saturating_mul(1000)),
             sample_rate_hz: properties.sample_rate(),
+            year: tag
+                .and_then(|tag| tag.get_string(ItemKey::Year))
+                .and_then(parse_year_tag),
+            bit_depth: reliable_source_bit_depth(file_type, properties.bit_depth()),
         })
     }
+}
+
+fn parse_year_tag(value: &str) -> Option<u16> {
+    let bytes = value.as_bytes();
+    let year = parse_four_digit_year(bytes.get(..4)?)?;
+    match bytes.len() {
+        4 => Some(year),
+        10 if bytes[4] == b'-' && bytes[7] == b'-' => {
+            let month = parse_two_digits(&bytes[5..7])?;
+            let day = parse_two_digits(&bytes[8..10])?;
+            let days_in_month = match month {
+                1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+                4 | 6 | 9 | 11 => 30,
+                2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
+                2 => 28,
+                _ => return None,
+            };
+            (1..=days_in_month).contains(&day).then_some(year)
+        }
+        _ => None,
+    }
+}
+
+fn parse_four_digit_year(bytes: &[u8]) -> Option<u16> {
+    if bytes.len() != 4 || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let year = std::str::from_utf8(bytes).ok()?.parse::<u16>().ok()?;
+    (year != 0).then_some(year)
+}
+
+fn parse_two_digits(bytes: &[u8]) -> Option<u8> {
+    if bytes.len() != 2 || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()?.parse().ok()
+}
+
+/// Lofty exposes the encoded source bit depth, but some containers can carry lossy codecs.
+/// Restrict reporting to formats which are intrinsically lossless; ambiguous containers remain
+/// unset even if they expose a bits-per-sample property.
+fn reliable_source_bit_depth(file_type: FileType, bit_depth: Option<u8>) -> Option<u8> {
+    if !matches!(file_type, FileType::Flac | FileType::Ape) {
+        return None;
+    }
+    bit_depth.filter(|depth| (8..=32).contains(depth))
 }
 
 fn empty_scan(source_id: player_core::SourceId) -> SourceScan {
@@ -464,7 +515,11 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{to_extended_path, windows_locator_key, WindowsMediaIndex};
+    use super::{
+        parse_year_tag, reliable_source_bit_depth, to_extended_path, windows_locator_key,
+        WindowsMediaIndex,
+    };
+    use lofty::file::FileType;
     use player_core::{
         LibraryRoot, MediaIndex, MediaLocator, MediaScanProgressUnit, MediaSourceKind, SourceId,
         SourceScanState, SyncCancellation, UserMetadataField,
@@ -517,6 +572,7 @@ mod tests {
         add_frame(&mut body, b"TPE1", "測試演出者");
         add_frame(&mut body, b"TPE2", "專輯演出者");
         add_frame(&mut body, b"TRCK", "4");
+        add_frame(&mut body, b"TDRC", "2024-02-29");
         let size = body.len() as u32;
         let header = [
             b'I',
@@ -837,7 +893,36 @@ mod tests {
         assert_eq!(metadata.artist.as_deref(), Some("測試演出者"));
         assert_eq!(metadata.track_number, Some(4));
         assert_eq!(metadata.album_artist.as_deref(), Some("專輯演出者"));
+        assert_eq!(metadata.year, None, "recording date is not a YEAR tag");
+        assert_eq!(metadata.bit_depth, None, "MP3 is lossy");
         fs::remove_dir_all(base).expect("cleanup");
+    }
+
+    #[test]
+    fn year_tag_accepts_only_year_or_valid_iso_calendar_date() {
+        assert_eq!(parse_year_tag("2024"), Some(2024));
+        assert_eq!(parse_year_tag("2024-02-29"), Some(2024));
+        assert_eq!(parse_year_tag("2023-02-29"), None);
+        assert_eq!(parse_year_tag("2024-13-01"), None);
+        assert_eq!(parse_year_tag("2024-04-31"), None);
+        assert_eq!(parse_year_tag("0000"), None);
+        assert_eq!(parse_year_tag(" 2024"), None);
+        assert_eq!(parse_year_tag("2024-02"), None);
+        assert_eq!(parse_year_tag("1999-01-01T00:00:00"), None);
+    }
+
+    #[test]
+    fn source_bit_depth_is_reported_only_for_unambiguous_lossless_formats() {
+        assert_eq!(
+            reliable_source_bit_depth(FileType::Flac, Some(24)),
+            Some(24)
+        );
+        assert_eq!(reliable_source_bit_depth(FileType::Ape, Some(16)), Some(16));
+        assert_eq!(reliable_source_bit_depth(FileType::Mpeg, Some(16)), None);
+        assert_eq!(reliable_source_bit_depth(FileType::Aac, Some(24)), None);
+        assert_eq!(reliable_source_bit_depth(FileType::WavPack, Some(24)), None);
+        assert_eq!(reliable_source_bit_depth(FileType::Mp4, Some(24)), None);
+        assert_eq!(reliable_source_bit_depth(FileType::Flac, Some(4)), None);
     }
 
     #[test]

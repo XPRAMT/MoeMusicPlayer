@@ -77,6 +77,10 @@ pub(crate) struct TrackMetadata {
     pub codec: Option<String>,
     pub bitrate_bps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
+    #[serde(default)]
+    pub year: Option<u16>,
+    #[serde(default)]
+    pub bit_depth: Option<u8>,
 }
 
 #[cfg(any(target_os = "android", test))]
