@@ -148,6 +148,7 @@ impl Default for ReqwestHttpTransport {
 }
 
 impl HttpTransport for ReqwestHttpTransport {
+    #[allow(clippy::manual_async_fn)]
     fn send<'a>(
         &'a self,
         request: HttpRequest,
@@ -578,7 +579,7 @@ fn parse_qq_lyrics(
         .as_deref()
         .filter(|text| !contains_lrc_timestamp(text))
         .map(str::to_owned);
-    let synced = normal.filter(|text| contains_lrc_timestamp(&text));
+    let synced = normal.filter(|text| contains_lrc_timestamp(text));
     let qrc = normalized_raw_payload(lyric.get("qrc").or_else(|| lyric.get("qrc_content")));
     let translation = normalized_raw_payload(lyric.get("trans").or_else(|| lyric.get("transl")));
     let romanization = normalized_raw_payload(lyric.get("roma"));
@@ -742,6 +743,7 @@ mod tests {
     }
 
     impl HttpTransport for MockTransport {
+        #[allow(clippy::manual_async_fn)]
         fn send<'a>(
             &'a self,
             request: HttpRequest,
@@ -765,6 +767,7 @@ mod tests {
     struct PendingTransport;
 
     impl HttpTransport for PendingTransport {
+        #[allow(clippy::manual_async_fn)]
         fn send<'a>(
             &'a self,
             request: HttpRequest,
