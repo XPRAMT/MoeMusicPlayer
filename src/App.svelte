@@ -575,7 +575,6 @@
       entryPosition: entry.position,
     };
     await sendPlaybackCommand(() => invokeCommand('playback_play', { trackId: entry.trackId!, queueSource }));
-    if (!playbackError) activeView = 'now-playing';
   }
 
   async function pickWindowsFolder(): Promise<void> {
@@ -736,7 +735,10 @@
       query: query.trim() || null,
     };
     await sendPlaybackCommand(() => invokeCommand('playback_play', { trackId: track.id, queueSource }));
-    if (!playbackError) activeView = 'now-playing';
+  }
+
+  function openNowPlaying(): void {
+    if (playback?.currentTrack) activeView = 'now-playing';
   }
 
   async function togglePlayback(): Promise<void> {
@@ -865,16 +867,6 @@
       >
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4.5 5.5h15v13h-15zM8 9h8M8 12.5h8M8 16h4" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" /></svg>
         <span class="nav-label">曲庫</span>
-        <span class="nav-arrow" aria-hidden="true">›</span>
-      </button>
-      <button
-        class="nav-link"
-        class:active={activeView === 'now-playing'}
-        aria-current={activeView === 'now-playing' ? 'page' : undefined}
-        onclick={() => (activeView = 'now-playing')}
-      >
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18V5l10-2v13M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3Zm10-2a3 3 0 1 1-3-3 3 3 0 0 1 3 3Z" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" /></svg>
-        <span class="nav-label">正在播放</span>
         <span class="nav-arrow" aria-hidden="true">›</span>
       </button>
       <button
@@ -1386,13 +1378,20 @@
 
   <footer class="player-dock" aria-label="播放控制">
     <div class="dock-track">
-      <div class="dock-art">
+      <button
+        class="dock-art"
+        type="button"
+        aria-label={playback?.currentTrack ? `開啟正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
+        title={playback?.currentTrack ? `查看正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
+        disabled={!playback?.currentTrack}
+        onclick={openNowPlaying}
+      >
         {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
           <img class="dock-art-image" src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
         {:else}
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 17V5l9-2v12M9 17a2.8 2.8 0 1 1-2.8-2.8A2.8 2.8 0 0 1 9 17Zm9-2a2.8 2.8 0 1 1-2.8-2.8A2.8 2.8 0 0 1 18 15Z" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" /></svg>
         {/if}
-      </div>
+      </button>
       <div class="dock-track-copy">
         <strong>{currentTrackTitle(playback?.currentTrack)}</strong>
         <span>{currentTrackArtist(playback?.currentTrack)}</span>
