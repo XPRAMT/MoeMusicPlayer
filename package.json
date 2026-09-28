@@ -11,6 +11,7 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "android:build:arm64": "tauri android build --debug --target aarch64 --apk --ci",
+    "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1",
     "tauri": "tauri"
   },
   "dependencies": {

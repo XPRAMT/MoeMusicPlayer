@@ -31,7 +31,7 @@ Android 播放目前尚未提供。實際 Tauri 視窗、系統媒體飛出面�
 4. 開啟「設定 → 音樂來源」，選擇「選擇資料夾並同步」，再選取現有音樂資料夾；取消不會變更來源清單。
 5. 開啟「設定 → 外觀」選擇背景色與主色；預設為純黑背景與水藍主色。在「設定 → 曲目欄位」可調整曲庫與播放清單共用欄位的順序及顯示狀態；也可在「正在播放」頁或「設定 → 正在播放」切換 A/B 排列。偏好與來源路徑保存在 App 資料目錄的 `settings.json`，SQLite 保存音樂曲庫。
 
-建置 Windows 執行檔請執行 `npm run tauri -- build --ci`，產物位於 `target/release/moemusicplayer.exe`。
+建置 Windows 執行檔請執行 `npm run release:windows`。命令一律使用 repo 的 `target` 目錄建置，不受呼叫端的 `CARGO_TARGET_DIR` 影響，產物固定在 `release/moemusicplayer.exe`。建置失敗會保留先前版本。
 
 ## 建置 Android 版
 

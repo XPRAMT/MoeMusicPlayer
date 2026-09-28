@@ -31,7 +31,7 @@ Android playback is not available yet. Real Tauri window, system media flyout, a
 4. Open **Settings → Music Sources**, choose **Select folder and sync**, and select an existing music folder. Canceling leaves the source list unchanged.
 5. Open **Settings → Appearance** to choose a background and accent color. The defaults are pure black and water blue. Open **Settings → Track Columns** to reorder or hide metadata columns for both lists. Choose layout A or B on the Now Playing page or in **Settings → Now Playing**. Preferences and registered source paths are saved in the app data directory as `settings.json`; SQLite stores the music library.
 
-To build the Windows executable, run `npm run tauri -- build --ci`. It is written to `target/release/moemusicplayer.exe`.
+To build the Windows executable, run `npm run release:windows`. The command always builds under the repository's `target` directory, regardless of the caller's `CARGO_TARGET_DIR`, and writes the result to `release/moemusicplayer.exe`. A failed build leaves the previous executable in place.
 
 ## Build for Android
 
