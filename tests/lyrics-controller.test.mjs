@@ -8,6 +8,13 @@ import {
   PLAIN_LYRIC_ROW_HEIGHT,
   TIMED_LYRIC_ROW_HEIGHT,
 } from '../src/lib/lyrics-window.js';
+import {
+  DEFAULT_LYRICS_PREFERENCES,
+  getDisplayActiveLyricIndex,
+  getLyricLineOpacity,
+  getLyricRowHeight,
+  normalizeLyricsPreferences,
+} from '../src/lib/lyrics-preferences.js';
 import { createLyricsController } from '../src/lib/lyrics-controller.js';
 import { getCandidatePresentation } from '../src/lib/lyrics-candidate-preview.js';
 
@@ -87,6 +94,86 @@ test('plain lyrics use a bounded scroll window without claiming synchronized tim
   assert.equal(first.beforeHeight, 94 * PLAIN_LYRIC_ROW_HEIGHT);
   assert.equal(top.start, 0);
   assert.equal(bottom.end, 10_000);
+});
+
+test('lyrics preferences use defaults and enforce the IPC-supported bounds', () => {
+  assert.deepEqual(normalizeLyricsPreferences(null), DEFAULT_LYRICS_PREFERENCES);
+  assert.deepEqual(normalizeLyricsPreferences({
+    showTranslation: true,
+    showRomanization: false,
+    inactiveOpacityPercent: 1,
+    primaryFontSizePx: 99,
+    auxiliaryFontSizePx: 4,
+  }), {
+    showTranslation: true,
+    showRomanization: false,
+    inactiveOpacityPercent: 10,
+    primaryFontSizePx: 36,
+    auxiliaryFontSizePx: 9,
+  });
+  assert.equal(normalizeLyricsPreferences({ inactiveOpacityPercent: 100.4 }).inactiveOpacityPercent, 100);
+});
+
+test('row geometry accounts for two primary lines, enabled auxiliary rows, gaps and box edges', () => {
+  const defaults = getLyricRowHeight(DEFAULT_LYRICS_PREFERENCES);
+  const bothAuxiliary = getLyricRowHeight({
+    ...DEFAULT_LYRICS_PREFERENCES,
+    showTranslation: true,
+    showRomanization: true,
+  });
+  const translationOnlyMaximum = getLyricRowHeight({
+    showTranslation: true,
+    showRomanization: false,
+    inactiveOpacityPercent: 70,
+    primaryFontSizePx: 36,
+    auxiliaryFontSizePx: 24,
+  });
+  const maximum = getLyricRowHeight({
+    showTranslation: true,
+    showRomanization: true,
+    inactiveOpacityPercent: 100,
+    primaryFontSizePx: 36,
+    auxiliaryFontSizePx: 24,
+  });
+
+  assert.equal(defaults, 76);
+  assert.equal(bothAuxiliary, 82);
+  assert.equal(translationOnlyMaximum, 145);
+  assert.equal(maximum, 177);
+  assert.ok(maximum >= 2 * 36 * 1.35 + 2 * 24 * 1.25 + 2 * 2 + 14 + 1);
+});
+
+test('timed and plain virtual spacers use the configured row height', () => {
+  const rowHeight = getLyricRowHeight({
+    ...DEFAULT_LYRICS_PREFERENCES,
+    showTranslation: true,
+    showRomanization: true,
+  });
+  const timeline = buildTimedLyricTimeline(Array.from({ length: 1_000 }, (_, index) => ({
+    startMs: index * 1_000,
+    text: `歌詞 ${index}`,
+    translation: null,
+    romanization: null,
+  })));
+  const timed = getTimedLyricWindow(timeline, 500, rowHeight);
+  const plain = getPlainLyricWindow(1_000, rowHeight * 40, rowHeight * 4, rowHeight);
+
+  assert.equal(timed.beforeHeight, timed.start * rowHeight);
+  assert.equal(timed.afterHeight, (timeline.length - timed.end) * rowHeight);
+  assert.equal(plain.beforeHeight, plain.start * rowHeight);
+  assert.equal(plain.afterHeight, (1_000 - plain.end) * rowHeight);
+  assert.ok(plain.end - plain.start <= 4 + 12);
+});
+
+test('plain, stopped, and cue-less lyrics stay fully opaque; playing and paused keep the cue', () => {
+  const dimOpacity = 0.35;
+  assert.equal(getDisplayActiveLyricIndex(2, 'playing'), 2);
+  assert.equal(getDisplayActiveLyricIndex(2, 'paused'), 2);
+  assert.equal(getDisplayActiveLyricIndex(2, 'stopped'), -1);
+  assert.equal(getDisplayActiveLyricIndex(-1, 'playing'), -1);
+  assert.equal(getLyricLineOpacity(1, 2, 35), dimOpacity);
+  assert.equal(getLyricLineOpacity(2, 2, 35), 1);
+  assert.equal(getLyricLineOpacity(1, -1, 35), 1);
 });
 
 test('local lyrics avoid remote search and repeated same-track updates do not reload them', async () => {

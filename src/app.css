@@ -1448,6 +1448,77 @@ input:focus-visible {
   line-height: 1.6;
 }
 
+.lyrics-preference-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.lyrics-preference-toggle,
+.lyrics-preference-range {
+  display: flex;
+  min-width: 0;
+  min-height: 58px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(var(--text-rgb), 0.02);
+}
+
+.lyrics-preference-toggle input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.lyrics-preference-toggle > span,
+.lyrics-preference-range > span {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.lyrics-preference-toggle > span {
+  flex-direction: column;
+}
+
+.lyrics-preference-toggle strong,
+.lyrics-preference-range strong {
+  font-weight: 600;
+}
+
+.lyrics-preference-toggle small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.lyrics-preference-range {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 8px;
+}
+
+.lyrics-preference-range output {
+  flex: 0 0 auto;
+  color: var(--accent-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.lyrics-preference-range input {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .track-column-settings {
   display: grid;
   gap: 8px;
@@ -2635,6 +2706,7 @@ input:focus-visible {
 @media (max-width: 620px) {
   .settings-page > .settings-heading h2 { font-size: 20px; }
   .settings-panel { padding: 14px; }
+  .lyrics-preference-grid { grid-template-columns: minmax(0, 1fr); }
   .appearance-color-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-tab { flex: 1 1 auto; }
 }

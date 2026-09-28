@@ -12,6 +12,7 @@
     type LibrarySource,
     type MediaStoreVolumeOption,
     type FeatureCapability,
+    type LyricsPreferences,
     type NowPlayingLayout,
     type PlaylistEntrySummary,
     type PlaylistSummary,
@@ -49,9 +50,13 @@
     type ActiveArtworkState,
   } from './lib/active-track-artwork';
   import { createVolumeCommandQueue } from './lib/volume-command-queue';
+  import {
+    DEFAULT_LYRICS_PREFERENCES,
+    normalizeLyricsPreferences,
+  } from './lib/lyrics-preferences.js';
 
   type View = 'library' | 'now-playing' | 'playlists' | 'settings';
-  type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'sources';
+  type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'sources';
   type SyncProgressViewState = {
     runId: string;
     sourceCount: number;
@@ -72,6 +77,9 @@
   let nowPlayingLayout = $state<NowPlayingLayout>('a');
   let nowPlayingLayoutState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let nowPlayingLayoutError = $state<string | null>(null);
+  let lyricsPreferences = $state<LyricsPreferences>(normalizeLyricsPreferences(DEFAULT_LYRICS_PREFERENCES));
+  let lyricsPreferencesState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
+  let lyricsPreferencesError = $state<string | null>(null);
   let themePreferences = $state<ThemePreferences>({ ...DEFAULT_THEME_PREFERENCES });
   let themeSaveState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let themeSaveError = $state<string | null>(null);
@@ -119,8 +127,11 @@
   let themeRevision = 0;
   let trackColumnSettingsRevision = 0;
   let nowPlayingLayoutRevision = 0;
+  let lyricsPreferencesRevision = 0;
   let trackColumnSettingsQueue: Promise<void> = Promise.resolve();
   let nowPlayingLayoutQueue: Promise<void> = Promise.resolve();
+  let lyricsPreferencesQueue: Promise<void> = Promise.resolve();
+  let lyricsPreferencesSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
   let playlistListRequestVersion = 0;
   let capabilityRefreshInFlight = false;
@@ -195,6 +206,7 @@
       themeSaveState = 'preview';
       trackColumnSettingsState = 'preview';
       nowPlayingLayoutState = 'preview';
+      lyricsPreferencesState = 'preview';
       void loadCapabilities();
     }
 
@@ -233,6 +245,7 @@
         loadSettingsRecoveryWarning(),
         loadTrackColumnSettings(),
         loadNowPlayingLayout(),
+        loadLyricsPreferences(),
       ]);
       if (!disposed && sourceSyncReady) void syncLibrary();
     }
@@ -248,6 +261,11 @@
     artworkController.dispose();
     volumeCommandQueue.dispose();
     if (themeSaveTimer !== undefined) clearTimeout(themeSaveTimer);
+    if (lyricsPreferencesSaveTimer !== undefined) {
+      clearTimeout(lyricsPreferencesSaveTimer);
+      lyricsPreferencesSaveTimer = undefined;
+      if (isTauri()) queueLyricsPreferencesSave(lyricsPreferencesRevision);
+    }
     themeRevision += 1;
     if (playbackPollTimer !== undefined) clearInterval(playbackPollTimer);
     unlistenSyncProgress?.();
@@ -361,6 +379,62 @@
         if (revision !== nowPlayingLayoutRevision) return;
         nowPlayingLayoutState = 'error';
         nowPlayingLayoutError = `無法保存正在播放版面設定：${getErrorText(error)}`;
+      }
+    });
+  }
+
+  async function loadLyricsPreferences(): Promise<void> {
+    const revision = lyricsPreferencesRevision;
+    try {
+      const stored = await invokeCommand('settings_get_lyrics_preferences', {});
+      if (revision !== lyricsPreferencesRevision) return;
+      lyricsPreferences = normalizeLyricsPreferences(stored);
+      lyricsPreferencesState = 'saved';
+      lyricsPreferencesError = null;
+    } catch (error) {
+      if (revision !== lyricsPreferencesRevision) return;
+      lyricsPreferencesState = 'error';
+      lyricsPreferencesError = `無法讀取歌詞設定：${getErrorText(error)}`;
+    }
+  }
+
+  function updateLyricsPreferences(patch: Partial<LyricsPreferences>, immediate = false): void {
+    lyricsPreferences = normalizeLyricsPreferences({ ...lyricsPreferences, ...patch });
+    lyricsPreferencesError = null;
+    const revision = ++lyricsPreferencesRevision;
+    if (!isTauri()) {
+      lyricsPreferencesState = 'preview';
+      lyricsPreferencesError = '瀏覽器預覽不會保存歌詞設定。';
+      return;
+    }
+
+    lyricsPreferencesState = 'saving';
+    if (lyricsPreferencesSaveTimer !== undefined) clearTimeout(lyricsPreferencesSaveTimer);
+    if (immediate) {
+      lyricsPreferencesSaveTimer = undefined;
+      queueLyricsPreferencesSave(revision);
+    } else {
+      lyricsPreferencesSaveTimer = setTimeout(() => {
+        lyricsPreferencesSaveTimer = undefined;
+        queueLyricsPreferencesSave(revision);
+      }, 220);
+    }
+  }
+
+  function queueLyricsPreferencesSave(revision: number): void {
+    const snapshot = { ...lyricsPreferences };
+    lyricsPreferencesQueue = lyricsPreferencesQueue.catch(() => undefined).then(async () => {
+      if (revision !== lyricsPreferencesRevision) return;
+      try {
+        const saved = await invokeCommand('settings_set_lyrics_preferences', { preferences: snapshot });
+        if (revision !== lyricsPreferencesRevision) return;
+        lyricsPreferences = normalizeLyricsPreferences(saved);
+        lyricsPreferencesState = 'saved';
+        lyricsPreferencesError = null;
+      } catch (error) {
+        if (revision !== lyricsPreferencesRevision) return;
+        lyricsPreferencesState = 'error';
+        lyricsPreferencesError = `無法保存歌詞設定：${getErrorText(error)}`;
       }
     });
   }
@@ -1370,6 +1444,9 @@
                   trackId={playback?.currentTrack?.id ?? null}
                   positionMs={playback?.positionMs ?? 0}
                   isPlaying={playback?.isPlaying ?? false}
+                  playbackState={playback?.state ?? 'empty'}
+                  {lyricsPreferences}
+                  onPreferencesChange={(patch) => updateLyricsPreferences(patch, true)}
                 />
               {/snippet}
             </NowPlayingArrangement>
@@ -1411,6 +1488,15 @@
                 aria-controls="now-playing-layout-panel"
                 onclick={() => (settingsSection = 'now-playing')}
               >正在播放</button>
+              <button
+                id="lyrics-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'lyrics'}
+                aria-controls="lyrics-panel"
+                onclick={() => (settingsSection = 'lyrics')}
+              >歌詞</button>
               <button
                 id="sources-tab"
                 class="settings-tab"
@@ -1522,6 +1608,76 @@
                 <NowPlayingLayoutSwitch layout={nowPlayingLayout} onChange={setNowPlayingLayout} />
                 <p class="settings-preference-status" class:error={nowPlayingLayoutState === 'error'} role="status">
                   {nowPlayingLayoutError ?? (nowPlayingLayoutState === 'loading' ? '正在讀取正在播放排列…' : nowPlayingLayoutState === 'saving' ? '正在保存排列…' : nowPlayingLayoutState === 'preview' ? '瀏覽器預覽不會保存排列。' : `排列 ${nowPlayingLayout.toUpperCase()} 已保存。`)}
+                </p>
+              </div>
+            {:else if settingsSection === 'lyrics'}
+              <div id="lyrics-panel" class="settings-panel" role="tabpanel" aria-labelledby="lyrics-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>歌詞顯示</h3>
+                    <p>設定會套用到所有歌曲；播放頁上方的「譯」「羅」按鈕也會更新同一組偏好。</p>
+                  </div>
+                  <button class="outline-button" type="button" onclick={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}>恢復預設</button>
+                </div>
+                <div class="lyrics-preference-grid">
+                  <label class="lyrics-preference-toggle">
+                    <input
+                      type="checkbox"
+                      checked={lyricsPreferences.showTranslation}
+                      onchange={(event) => updateLyricsPreferences({ showTranslation: event.currentTarget.checked }, true)}
+                    />
+                    <span><strong>顯示譯文</strong><small>在每行原文下方顯示翻譯</small></span>
+                  </label>
+                  <label class="lyrics-preference-toggle">
+                    <input
+                      type="checkbox"
+                      checked={lyricsPreferences.showRomanization}
+                      onchange={(event) => updateLyricsPreferences({ showRomanization: event.currentTarget.checked }, true)}
+                    />
+                    <span><strong>顯示羅馬拼音</strong><small>在每行原文下方顯示拼音</small></span>
+                  </label>
+                  <label class="lyrics-preference-range">
+                    <span><strong>非目前歌詞透明度</strong><output>{lyricsPreferences.inactiveOpacityPercent}%</output></span>
+                    <input
+                      type="range"
+                      min="10"
+                      max="100"
+                      step="1"
+                      value={lyricsPreferences.inactiveOpacityPercent}
+                      aria-label="非目前歌詞透明度"
+                      oninput={(event) => updateLyricsPreferences({ inactiveOpacityPercent: Number(event.currentTarget.value) })}
+                      onchange={(event) => updateLyricsPreferences({ inactiveOpacityPercent: Number(event.currentTarget.value) }, true)}
+                    />
+                  </label>
+                  <label class="lyrics-preference-range">
+                    <span><strong>原文大小</strong><output>{lyricsPreferences.primaryFontSizePx}px</output></span>
+                    <input
+                      type="range"
+                      min="12"
+                      max="36"
+                      step="1"
+                      value={lyricsPreferences.primaryFontSizePx}
+                      aria-label="原文字級"
+                      oninput={(event) => updateLyricsPreferences({ primaryFontSizePx: Number(event.currentTarget.value) })}
+                      onchange={(event) => updateLyricsPreferences({ primaryFontSizePx: Number(event.currentTarget.value) }, true)}
+                    />
+                  </label>
+                  <label class="lyrics-preference-range">
+                    <span><strong>譯文與羅馬拼音大小</strong><output>{lyricsPreferences.auxiliaryFontSizePx}px</output></span>
+                    <input
+                      type="range"
+                      min="9"
+                      max="24"
+                      step="1"
+                      value={lyricsPreferences.auxiliaryFontSizePx}
+                      aria-label="譯文與羅馬拼音字級"
+                      oninput={(event) => updateLyricsPreferences({ auxiliaryFontSizePx: Number(event.currentTarget.value) })}
+                      onchange={(event) => updateLyricsPreferences({ auxiliaryFontSizePx: Number(event.currentTarget.value) }, true)}
+                    />
+                  </label>
+                </div>
+                <p class="settings-preference-status" class:error={lyricsPreferencesState === 'error'} role="status">
+                  {lyricsPreferencesError ?? (lyricsPreferencesState === 'loading' ? '正在讀取歌詞設定…' : lyricsPreferencesState === 'saving' ? '正在保存歌詞設定…' : lyricsPreferencesState === 'preview' ? '瀏覽器預覽不會保存歌詞設定。' : '歌詞設定已保存。')}
                 </p>
               </div>
             {:else}

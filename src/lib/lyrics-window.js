@@ -1,8 +1,10 @@
 ﻿/** @typedef {import('./ipc').LyricLine} LyricLine */
 
+import { LYRIC_MIN_ROW_HEIGHT_PX } from './lyrics-preferences.js';
+
 export const TIMED_LYRIC_RADIUS = 6;
-export const TIMED_LYRIC_ROW_HEIGHT = 76;
-export const PLAIN_LYRIC_ROW_HEIGHT = 76;
+export const TIMED_LYRIC_ROW_HEIGHT = LYRIC_MIN_ROW_HEIGHT_PX;
+export const PLAIN_LYRIC_ROW_HEIGHT = LYRIC_MIN_ROW_HEIGHT_PX;
 
 /**
  * @typedef {{ index: number, startMs: number, line: LyricLine }} TimedLyric
@@ -46,9 +48,11 @@ export function findActiveLyricIndex(timeline, positionMs, offsetMs = 0) {
 /**
  * @param {TimedLyric[]} timeline
  * @param {number} activeIndex
+ * @param {number} [rowHeight]
  * @returns {{ start: number, end: number, beforeHeight: number, afterHeight: number, rows: TimedLyric[] }}
  */
-export function getTimedLyricWindow(timeline, activeIndex) {
+export function getTimedLyricWindow(timeline, activeIndex, rowHeight = TIMED_LYRIC_ROW_HEIGHT) {
+  const safeRowHeight = normalizeRowHeight(rowHeight, TIMED_LYRIC_ROW_HEIGHT);
   if (timeline.length === 0) {
     return { start: 0, end: 0, beforeHeight: 0, afterHeight: 0, rows: [] };
   }
@@ -60,8 +64,8 @@ export function getTimedLyricWindow(timeline, activeIndex) {
   return {
     start,
     end,
-    beforeHeight: start * TIMED_LYRIC_ROW_HEIGHT,
-    afterHeight: (timeline.length - end) * TIMED_LYRIC_ROW_HEIGHT,
+    beforeHeight: start * safeRowHeight,
+    afterHeight: (timeline.length - end) * safeRowHeight,
     rows: timeline.slice(start, end),
   };
 }
@@ -72,23 +76,30 @@ export function getTimedLyricWindow(timeline, activeIndex) {
  * @param {number} totalCount
  * @param {number} scrollTop
  * @param {number} viewportHeight
+ * @param {number} [rowHeight]
  * @returns {{ start: number, end: number, beforeHeight: number, afterHeight: number }}
  */
-export function getPlainLyricWindow(totalCount, scrollTop, viewportHeight) {
+export function getPlainLyricWindow(totalCount, scrollTop, viewportHeight, rowHeight = PLAIN_LYRIC_ROW_HEIGHT) {
   const count = Math.max(0, Math.floor(Number.isFinite(totalCount) ? totalCount : 0));
   if (count === 0) return { start: 0, end: 0, beforeHeight: 0, afterHeight: 0 };
 
+  const safeRowHeight = normalizeRowHeight(rowHeight, PLAIN_LYRIC_ROW_HEIGHT);
   const safeScrollTop = Math.max(0, Number.isFinite(scrollTop) ? scrollTop : 0);
-  const safeHeight = Math.max(PLAIN_LYRIC_ROW_HEIGHT, Number.isFinite(viewportHeight) ? viewportHeight : PLAIN_LYRIC_ROW_HEIGHT);
-  const firstVisible = Math.min(count - 1, Math.floor(safeScrollTop / PLAIN_LYRIC_ROW_HEIGHT));
-  const visibleRows = Math.ceil(safeHeight / PLAIN_LYRIC_ROW_HEIGHT);
+  const safeHeight = Math.max(safeRowHeight, Number.isFinite(viewportHeight) ? viewportHeight : safeRowHeight);
+  const firstVisible = Math.min(count - 1, Math.floor(safeScrollTop / safeRowHeight));
+  const visibleRows = Math.ceil(safeHeight / safeRowHeight);
   const start = Math.max(0, firstVisible - TIMED_LYRIC_RADIUS);
   const end = Math.min(count, firstVisible + visibleRows + TIMED_LYRIC_RADIUS);
 
   return {
     start,
     end,
-    beforeHeight: start * PLAIN_LYRIC_ROW_HEIGHT,
-    afterHeight: (count - end) * PLAIN_LYRIC_ROW_HEIGHT,
+    beforeHeight: start * safeRowHeight,
+    afterHeight: (count - end) * safeRowHeight,
   };
+}
+
+/** @param {number} candidate @param {number} fallback */
+function normalizeRowHeight(candidate, fallback) {
+  return Number.isFinite(candidate) && candidate >= 1 ? Math.ceil(candidate) : fallback;
 }

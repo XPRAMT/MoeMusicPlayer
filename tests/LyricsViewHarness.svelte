@@ -3,14 +3,18 @@
   import LyricsView from '../src/lib/LyricsView.svelte';
   import type {
     LyricsCandidate,
+    LyricsPreferences,
     LyricsTrackResult,
     TrackLyrics,
   } from '../src/lib/ipc';
+  import { DEFAULT_LYRICS_PREFERENCES, normalizeLyricsPreferences } from '../src/lib/lyrics-preferences.js';
 
   interface HarnessApi {
     setPosition: (positionMs: number) => Promise<void>;
     setPlaying: (isPlaying: boolean) => Promise<void>;
-    setTrack: (trackId: string) => Promise<void>;
+    setTrack: (trackId: string | null) => Promise<void>;
+    setPlaybackState: (state: 'playing' | 'paused' | 'stopped' | 'ready') => Promise<void>;
+    setPreferences: (patch: Partial<LyricsPreferences>) => Promise<void>;
     scrollPlainTo: (lineIndex: number) => Promise<void>;
     snapshot: () => {
       trackId: string;
@@ -28,6 +32,25 @@
       documentWidth: number;
       viewportWidth: number;
       isPlaying: string | null;
+      playbackState: string | null;
+      rowHeight: number;
+      timedWindowStart: number | null;
+      timedWindowEnd: number | null;
+      beforeSpacerHeight: number;
+      afterSpacerHeight: number;
+      actualRowHeights: number[];
+      firstRowTranslationCount: number;
+      firstRowRomanizationCount: number;
+      firstRowOpacity: number | null;
+      firstRowTextOpacity: number | null;
+      activeRowOpacity: number | null;
+      activeRowTextOpacity: number | null;
+      activeRowContentHeight: number | null;
+      bothAuxiliaryRowContentHeight: number | null;
+      timedScrollTop: number | null;
+      timedViewportHeight: number | null;
+      preferences: LyricsPreferences;
+      toolbarAvailable: boolean;
     };
   }
 
@@ -37,9 +60,11 @@
     }
   }
 
-  let trackId = $state('timed-track');
+  let trackId = $state<string | null>('timed-track');
   let positionMs = $state(0);
   let isPlaying = $state(true);
+  let playbackState = $state<'playing' | 'paused' | 'stopped' | 'ready'>('playing');
+  let lyricsPreferences = $state<LyricsPreferences>(normalizeLyricsPreferences(DEFAULT_LYRICS_PREFERENCES));
   let getCount = 0;
   let searchCount = 0;
   let cancelCount = 0;
@@ -57,7 +82,7 @@
       synced,
       lines: Array.from({ length: 120 }, (_, index) => ({
         startMs: synced ? index * 1_000 : null,
-        text: `${id} 歌詞 ${index}`,
+        text: synced && index === 90 ? '最大字級與副行不裁切幾何測試'.repeat(12) : `${id} 歌詞 ${index}`,
         translation: index % 3 === 0 ? `翻譯 ${index}` : null,
         romanization: index % 5 === 0 ? `拼音 ${index}` : null,
       })),
@@ -117,11 +142,32 @@
     await tick();
   }
 
+  function updatePreferences(patch: Partial<LyricsPreferences>): void {
+    lyricsPreferences = normalizeLyricsPreferences({ ...lyricsPreferences, ...patch });
+  }
+
   function snapshot() {
     const timed = document.querySelector<HTMLElement>('[data-testid="timed-lyrics"]');
     const plain = document.querySelector<HTMLElement>('[data-testid="plain-lyrics"]');
+    const viewport = timed ?? plain;
     const active = timed?.querySelector<HTMLElement>('[aria-current="true"]');
     const firstPlain = plain?.querySelector<HTMLElement>('[data-lyric-index]');
+    const rows = [...(viewport?.querySelectorAll<HTMLElement>('.lyric-line') ?? [])];
+    const spacers = [...(viewport?.querySelectorAll<HTMLElement>('.lyrics-spacer') ?? [])];
+    const rowContentHeight = (row: HTMLElement | null): number | null => {
+      if (!row) return null;
+      const paragraphs = [...row.querySelectorAll<HTMLElement>('p')];
+      const style = getComputedStyle(row);
+      return paragraphs.reduce((height, paragraph) => height + paragraph.getBoundingClientRect().height, 0)
+        + Math.max(0, paragraphs.length - 1) * Number.parseFloat(style.gap)
+        + Number.parseFloat(style.paddingTop)
+        + Number.parseFloat(style.paddingBottom)
+        + Number.parseFloat(style.borderBottomWidth);
+    };
+    const firstBothAuxiliary = rows.find((row) => row.querySelector('.lyric-translation') && row.querySelector('.lyric-romanization')) ?? null;
+    const activePrimary = active?.querySelector<HTMLElement>('.lyric-primary') ?? null;
+    const firstPrimary = rows[0]?.querySelector<HTMLElement>('.lyric-primary') ?? null;
+    const lyricsRoot = document.querySelector<HTMLElement>('[data-testid="lyrics-view"]');
 
     return {
       trackId,
@@ -138,7 +184,26 @@
       candidateActionEnabled: [...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === '使用這份' && !button.disabled),
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
-      isPlaying: document.querySelector<HTMLElement>('[data-testid="lyrics-view"]')?.dataset.playing ?? null,
+      isPlaying: lyricsRoot?.dataset.playing ?? null,
+      playbackState: lyricsRoot?.dataset.playbackState ?? null,
+      rowHeight: Number(lyricsRoot?.dataset.rowHeight ?? 0),
+      timedWindowStart: timed ? Number(timed.dataset.windowStart) : null,
+      timedWindowEnd: timed ? Number(timed.dataset.windowEnd) : null,
+      beforeSpacerHeight: spacers[0]?.getBoundingClientRect().height ?? 0,
+      afterSpacerHeight: spacers.at(-1)?.getBoundingClientRect().height ?? 0,
+      actualRowHeights: rows.map((row) => row.getBoundingClientRect().height),
+      firstRowTranslationCount: rows[0]?.querySelectorAll('.lyric-translation').length ?? 0,
+      firstRowRomanizationCount: rows[0]?.querySelectorAll('.lyric-romanization').length ?? 0,
+      firstRowOpacity: rows[0] ? Number(getComputedStyle(rows[0]).opacity) : null,
+      firstRowTextOpacity: firstPrimary ? Number(getComputedStyle(firstPrimary).opacity) : null,
+      activeRowOpacity: active ? Number(getComputedStyle(active).opacity) : null,
+      activeRowTextOpacity: activePrimary ? Number(getComputedStyle(activePrimary).opacity) : null,
+      activeRowContentHeight: rowContentHeight(active),
+      bothAuxiliaryRowContentHeight: rowContentHeight(firstBothAuxiliary),
+      timedScrollTop: timed?.scrollTop ?? null,
+      timedViewportHeight: timed?.clientHeight ?? null,
+      preferences: { ...lyricsPreferences },
+      toolbarAvailable: [...document.querySelectorAll<HTMLButtonElement>('.lyrics-toggle')].every((button) => !button.disabled),
     };
   }
 
@@ -149,6 +214,16 @@
     },
     async setPlaying(nextIsPlaying) {
       isPlaying = nextIsPlaying;
+      playbackState = nextIsPlaying ? 'playing' : 'paused';
+      await tick();
+    },
+    async setPlaybackState(nextState) {
+      playbackState = nextState;
+      isPlaying = nextState === 'playing';
+      await tick();
+    },
+    async setPreferences(patch) {
+      updatePreferences(patch);
       await tick();
     },
     async setTrack(nextTrackId) {
@@ -159,7 +234,7 @@
     async scrollPlainTo(lineIndex) {
       const plain = document.querySelector<HTMLElement>('[data-testid="plain-lyrics"]');
       if (plain) {
-        plain.scrollTop = lineIndex * 76;
+        plain.scrollTop = lineIndex * Number(plain.dataset.rowHeight ?? 76);
         plain.dispatchEvent(new Event('scroll'));
         await tick();
       }
@@ -171,7 +246,15 @@
 </script>
 
 <main>
-  <LyricsView {trackId} {positionMs} {isPlaying} {api} />
+  <LyricsView
+    {trackId}
+    {positionMs}
+    {isPlaying}
+    {playbackState}
+    {lyricsPreferences}
+    onPreferencesChange={updatePreferences}
+    {api}
+  />
 </main>
 
 <style>

@@ -248,6 +248,14 @@ export interface LyricsTrackResult {
   error: string | null;
 }
 
+export interface LyricsPreferences {
+  showTranslation: boolean;
+  showRomanization: boolean;
+  inactiveOpacityPercent: number;
+  primaryFontSizePx: number;
+  auxiliaryFontSizePx: number;
+}
+
 interface IpcContract {
   settings_get_recovery_warning: {
     args: Record<string, never>;
@@ -284,6 +292,14 @@ interface IpcContract {
   settings_set_now_playing_layout: {
     args: { layout: NowPlayingLayout };
     result: NowPlayingLayout;
+  };
+  settings_get_lyrics_preferences: {
+    args: Record<string, never>;
+    result: LyricsPreferences;
+  };
+  settings_set_lyrics_preferences: {
+    args: { preferences: LyricsPreferences };
+    result: LyricsPreferences;
   };
   get_runtime_capabilities: {
     args: Record<string, never>;
