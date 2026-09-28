@@ -399,14 +399,14 @@ impl MediaIndex for WindowsMediaIndex {
                 .map(|kbps| kbps.saturating_mul(1000)),
             sample_rate_hz: properties.sample_rate(),
             year: tag
-                .and_then(|tag| tag.get_string(ItemKey::Year))
-                .and_then(parse_year_tag),
+                .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
+                .and_then(parse_recording_date_year),
             bit_depth: reliable_source_bit_depth(file_type, properties.bit_depth()),
         })
     }
 }
 
-fn parse_year_tag(value: &str) -> Option<u16> {
+fn parse_recording_date_year(value: &str) -> Option<u16> {
     let bytes = value.as_bytes();
     let year = parse_four_digit_year(bytes.get(..4)?)?;
     match bytes.len() {
@@ -516,8 +516,8 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_year_tag, reliable_source_bit_depth, to_extended_path, windows_locator_key,
-        WindowsMediaIndex,
+        parse_recording_date_year, reliable_source_bit_depth, to_extended_path,
+        windows_locator_key, WindowsMediaIndex,
     };
     use lofty::file::FileType;
     use player_core::{
@@ -893,22 +893,22 @@ mod tests {
         assert_eq!(metadata.artist.as_deref(), Some("測試演出者"));
         assert_eq!(metadata.track_number, Some(4));
         assert_eq!(metadata.album_artist.as_deref(), Some("專輯演出者"));
-        assert_eq!(metadata.year, None, "recording date is not a YEAR tag");
+        assert_eq!(metadata.year, Some(2024));
         assert_eq!(metadata.bit_depth, None, "MP3 is lossy");
         fs::remove_dir_all(base).expect("cleanup");
     }
 
     #[test]
-    fn year_tag_accepts_only_year_or_valid_iso_calendar_date() {
-        assert_eq!(parse_year_tag("2024"), Some(2024));
-        assert_eq!(parse_year_tag("2024-02-29"), Some(2024));
-        assert_eq!(parse_year_tag("2023-02-29"), None);
-        assert_eq!(parse_year_tag("2024-13-01"), None);
-        assert_eq!(parse_year_tag("2024-04-31"), None);
-        assert_eq!(parse_year_tag("0000"), None);
-        assert_eq!(parse_year_tag(" 2024"), None);
-        assert_eq!(parse_year_tag("2024-02"), None);
-        assert_eq!(parse_year_tag("1999-01-01T00:00:00"), None);
+    fn recording_date_year_accepts_only_year_or_valid_iso_calendar_date() {
+        assert_eq!(parse_recording_date_year("2024"), Some(2024));
+        assert_eq!(parse_recording_date_year("2024-02-29"), Some(2024));
+        assert_eq!(parse_recording_date_year("2023-02-29"), None);
+        assert_eq!(parse_recording_date_year("2024-13-01"), None);
+        assert_eq!(parse_recording_date_year("2024-04-31"), None);
+        assert_eq!(parse_recording_date_year("0000"), None);
+        assert_eq!(parse_recording_date_year(" 2024"), None);
+        assert_eq!(parse_recording_date_year("2024-02"), None);
+        assert_eq!(parse_recording_date_year("1999-01-01T00:00:00"), None);
     }
 
     #[test]

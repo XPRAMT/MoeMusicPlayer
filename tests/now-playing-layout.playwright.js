@@ -49,11 +49,15 @@
     assert.ok(state.card.height > 0 && state.card.top >= state.topbar.bottom - 1, `${viewport.width}x${viewport.height}: arrangement overlaps the top bar`);
     assert.ok(state.card.bottom <= state.dock.top + 1, `${viewport.width}x${viewport.height}: arrangement overlaps the dock`);
     assert.ok(isInside(state.card, state.nowPlaying), `${viewport.width}x${viewport.height}: arrangement exceeds the Now Playing region`);
+    assert.ok(state.nowPlaying.bottom - state.card.bottom <= 1, `${viewport.width}x${viewport.height}: artwork and lyrics should fill the available area above the dock`);
     assert.ok(isInside(state.returnButton, artwork), `${viewport.width}x${viewport.height}: return-to-library control is missing or clipped in the artwork pane`);
     assert.ok(isInside(state.returnButton, artworkCopy), `${viewport.width}x${viewport.height}: long track title clipped the return-to-library control`);
     assert.ok(isInside(state.layoutSwitch, state.nowPlaying), `${viewport.width}x${viewport.height}: A/B layout switch is missing or outside Now Playing`);
     assert.ok(isInside(state.lyricsToolbar, lyrics), `${viewport.width}x${viewport.height}: lyric controls are missing or clipped in the lyrics pane`);
     assert.ok(isInside(state.dockControls, state.dock), `${viewport.width}x${viewport.height}: playback controls are missing or clipped in the dock: ${JSON.stringify({ controls: state.dockControls, dock: state.dock })}`);
+    assert.deepEqual(state.playerControlLabels, ['隨機播放', '上一首', '播放', '下一首', '循環播放'], `${viewport.width}x${viewport.height}: player controls must keep their Chinese accessible names`);
+    assert.equal(state.playerControlIcons.length, 5, `${viewport.width}x${viewport.height}: Tabler player icons did not render for every control`);
+    assert.ok(state.playerControlIcons.every(icon => icon.ariaHidden === 'true' && icon.width >= 18 && icon.height >= 18), `${viewport.width}x${viewport.height}: decorative control icons must be hidden from assistive technology and remain legible`);
     assert.ok(!['auto', 'scroll'].includes(state.artworkCopyOverflowY), `${viewport.width}x${viewport.height}: track information should not introduce a second scrollable window`);
     assert.equal(state.cover.objectFit, 'contain', `${viewport.width}x${viewport.height}: source image must keep its aspect ratio`);
     assert.deepEqual([state.cover.naturalWidth, state.cover.naturalHeight], [400, 300], `${viewport.width}x${viewport.height}: test artwork did not load at its source dimensions`);

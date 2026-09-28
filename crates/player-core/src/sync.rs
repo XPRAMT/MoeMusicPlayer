@@ -912,7 +912,7 @@ mod tests {
                 TrackSyncState {
                     fingerprint: track.fingerprint,
                     metadata_loaded: true,
-                    metadata_version: 0,
+                    metadata_version: TRACK_METADATA_VERSION - 1,
                 },
             );
         }

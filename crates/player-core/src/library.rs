@@ -8,9 +8,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-/// Increment when the metadata parser adds or changes persisted fields.
+/// Increment when the metadata parser adds or changes persisted fields or extraction rules.
 /// Existing tracks below this version are eligible for bounded background backfill.
-pub const TRACK_METADATA_VERSION: u32 = 1;
+pub const TRACK_METADATA_VERSION: u32 = 2;
 use uuid::Uuid;
 
 /// Stable identity owned by the application, independent of any OS media index.

@@ -2523,7 +2523,7 @@ mod tests {
         PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, Playlist, PlaylistEntry,
         PlaylistId, QueueRepeatMode, SourceId, SourceScan, SourceScanState, SyncApplyRequest,
         SyncCancellation, SyncEngine, TrackId, TrackIdentity, TrackLyrics, TrackMetadata,
-        TrackMetadataError, UserMetadataField,
+        TrackMetadataError, UserMetadataField, TRACK_METADATA_VERSION,
     };
     use rusqlite::{params, OptionalExtension};
 
@@ -3205,7 +3205,10 @@ mod tests {
             }
             db.lock()
                 .expect("database lock")
-                .execute("UPDATE tracks SET metadata_version=0", [])
+                .execute(
+                    "UPDATE tracks SET metadata_version=?1",
+                    [i64::from(TRACK_METADATA_VERSION - 1)],
+                )
                 .expect("mark rows for migration backfill");
 
             let cancel = SyncCancellation::default();
@@ -3231,11 +3234,22 @@ mod tests {
                 db.lock()
                     .expect("database lock")
                     .query_row(
-                        "SELECT COUNT(*) FROM tracks WHERE metadata_version=1",
-                        [],
+                        "SELECT COUNT(*) FROM tracks WHERE metadata_version=?1",
+                        [i64::from(TRACK_METADATA_VERSION)],
                         |row| row.get::<_, i64>(0),
                     )
                     .expect("count committed versions"),
+                128
+            );
+            assert_eq!(
+                db.lock()
+                    .expect("database lock")
+                    .query_row(
+                        "SELECT COUNT(*) FROM tracks WHERE metadata_version=?1 AND year=2024",
+                        [i64::from(TRACK_METADATA_VERSION)],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .expect("count updated recording dates"),
                 128
             );
         }
@@ -3257,11 +3271,22 @@ mod tests {
                 db.lock()
                     .expect("database lock")
                     .query_row(
-                        "SELECT COUNT(*) FROM tracks WHERE metadata_version=1",
-                        [],
+                        "SELECT COUNT(*) FROM tracks WHERE metadata_version=?1",
+                        [i64::from(TRACK_METADATA_VERSION)],
                         |row| row.get::<_, i64>(0),
                     )
                     .expect("count completed versions"),
+                130
+            );
+            assert_eq!(
+                db.lock()
+                    .expect("database lock")
+                    .query_row(
+                        "SELECT COUNT(*) FROM tracks WHERE metadata_version=?1 AND year=2024",
+                        [i64::from(TRACK_METADATA_VERSION)],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .expect("count updated recording dates"),
                 130
             );
         }

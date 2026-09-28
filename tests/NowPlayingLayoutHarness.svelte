@@ -1,5 +1,12 @@
 ﻿<script lang="ts">
   import { tick } from 'svelte';
+  import {
+    IconArrowsShuffle,
+    IconPlayerPlay,
+    IconPlayerTrackNext,
+    IconPlayerTrackPrev,
+    IconRepeat,
+  } from '@tabler/icons-svelte-runes';
   import LyricsView from '../src/lib/LyricsView.svelte';
   import NowPlayingArrangement from '../src/lib/NowPlayingArrangement.svelte';
   import NowPlayingLayoutSwitch from '../src/lib/NowPlayingLayoutSwitch.svelte';
@@ -29,6 +36,8 @@
     dockControls: { left: number; right: number; top: number; bottom: number; width: number; height: number };
     artworkCopyOverflowY: string;
     lyricsViewport: { clientHeight: number; scrollHeight: number; scrollTop: number; overflowY: string };
+    playerControlIcons: Array<{ ariaHidden: string | null; width: number; height: number }>;
+    playerControlLabels: Array<string | null>;
     layout: NowPlayingLayout;
   }
 
@@ -144,6 +153,13 @@
         scrollTop: lyrics?.scrollTop ?? 0,
         overflowY: lyrics ? getComputedStyle(lyrics).overflowY : 'missing',
       },
+      playerControlIcons: [...document.querySelectorAll<SVGElement>('.dock-controls button svg')].map((icon) => ({
+        ariaHidden: icon.getAttribute('aria-hidden'),
+        width: icon.getBoundingClientRect().width,
+        height: icon.getBoundingClientRect().height,
+      })),
+      playerControlLabels: [...document.querySelectorAll<HTMLButtonElement>('.dock-controls button')]
+        .map((button) => button.getAttribute('aria-label')),
       layout,
     };
   }
@@ -209,14 +225,13 @@
               />
             {/snippet}
           </NowPlayingArrangement>
-          <div class="playback-note"><span class="note-icon">i</span><p>播放狀態由原生音訊服務提供。</p></div>
         </section>
       </div>
     </div>
   </main>
   <footer class="player-dock" data-testid="layout-dock">
     <div class="dock-track"><button class="dock-art" type="button" aria-label="目前歌曲封面">M</button><div class="dock-track-copy"><strong>版面驗收曲目</strong><span>測試演出者</span></div></div>
-    <div class="dock-center"><div class="dock-controls"><button class="control-button" type="button" aria-label="上一首">‹</button><button class="play-button" type="button" aria-label="播放">▶</button><button class="control-button" type="button" aria-label="下一首">›</button></div><div class="progress-row"><span>0:50</span><input type="range" min="0" max="120" value="50" aria-label="播放進度"/><span>2:00</span></div></div>
+    <div class="dock-center"><div class="dock-controls"><button class="control-button secondary-control" type="button" aria-label="隨機播放"><IconArrowsShuffle size={20} stroke={1.7} aria-hidden="true" /></button><button class="control-button" type="button" aria-label="上一首"><IconPlayerTrackPrev size={20} stroke={1.7} aria-hidden="true" /></button><button class="play-button" type="button" aria-label="播放"><IconPlayerPlay size={21} stroke={1.9} aria-hidden="true" /></button><button class="control-button" type="button" aria-label="下一首"><IconPlayerTrackNext size={20} stroke={1.7} aria-hidden="true" /></button><button class="control-button secondary-control" type="button" aria-label="循環播放"><IconRepeat size={20} stroke={1.7} aria-hidden="true" /></button></div><div class="progress-row"><span>0:50</span><input type="range" min="0" max="120" value="50" aria-label="播放進度"/><span>2:00</span></div></div>
     <div class="dock-volume"><span>音量</span><input class="volume-slider" type="range" min="0" max="1" step="0.01" value="0.5" aria-label="音量"/></div>
   </footer>
 </div>

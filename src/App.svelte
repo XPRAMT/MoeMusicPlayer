@@ -1,5 +1,30 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import {
+    IconAlertCircle,
+    IconArrowDown,
+    IconArrowUp,
+    IconArrowsShuffle,
+    IconCheck,
+    IconChevronRight,
+    IconFilter,
+    IconFolder,
+    IconHeart,
+    IconLibrary,
+    IconMusic,
+    IconPlaylist,
+    IconPlayerPause,
+    IconPlayerPlay,
+    IconPlayerTrackNext,
+    IconPlayerTrackPrev,
+    IconRefresh,
+    IconRepeat,
+    IconRepeatOff,
+    IconRepeatOnce,
+    IconSearch,
+    IconSettings,
+    IconVolume2,
+  } from '@tabler/icons-svelte-runes';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { isTauri } from '@tauri-apps/api/core';
   import {
@@ -1131,9 +1156,9 @@
         aria-current={activeView === 'library' ? 'page' : undefined}
         onclick={() => (activeView = 'library')}
       >
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4.5 5.5h15v13h-15zM8 9h8M8 12.5h8M8 16h4" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        <IconLibrary size={20} stroke={1.6} aria-hidden="true" />
         <span class="nav-label">曲庫</span>
-        <span class="nav-arrow" aria-hidden="true">›</span>
+        <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
       <button
         class="nav-link"
@@ -1141,9 +1166,9 @@
         aria-current={activeView === 'playlists' ? 'page' : undefined}
         onclick={() => (activeView = 'playlists')}
       >
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 5.5h14M5 10h14M5 14.5h9M5 19h7" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" /></svg>
+        <IconPlaylist size={20} stroke={1.6} aria-hidden="true" />
         <span class="nav-label">播放清單</span>
-        <span class="nav-arrow" aria-hidden="true">›</span>
+        <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
       <button
         class="nav-link"
@@ -1151,16 +1176,16 @@
         aria-current={activeView === 'settings' ? 'page' : undefined}
         onclick={() => (activeView = 'settings')}
       >
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8.7a3.3 3.3 0 1 0 0 6.6 3.3 3.3 0 0 0 0-6.6Z" stroke="currentColor" stroke-width="1.55" /><path d="m19.4 13.6 1.2.9-1.5 2.6-1.4-.7a7.5 7.5 0 0 1-1.5.9l-.2 1.6h-3l-.2-1.6a7.5 7.5 0 0 1-1.5-.9l-1.4.7-1.5-2.6 1.2-.9a7 7 0 0 1 0-1.8l-1.2-.9 1.5-2.6 1.4.7a7.5 7.5 0 0 1 1.5-.9l.2-1.6h3l.2 1.6a7.5 7.5 0 0 1 1.5.9l1.4-.7 1.5 2.6-1.2.9a7 7 0 0 1 0 1.8Z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" /></svg>
+        <IconSettings size={20} stroke={1.6} aria-hidden="true" />
         <span class="nav-label">設定</span>
-        <span class="nav-arrow" aria-hidden="true">›</span>
+        <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
     </nav>
 
     <div class="sidebar-rule"></div>
     <div class="sidebar-source">
       <span class="source-mini-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M3.5 7.5h6l2 2h9v8.8a1.2 1.2 0 0 1-1.2 1.2H4.7a1.2 1.2 0 0 1-1.2-1.2V7.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /><path d="M3.5 9.5h17" stroke="currentColor" stroke-width="1.5" /></svg>
+        <IconFolder size={18} stroke={1.6} aria-hidden="true" />
       </span>
       <div class="source-copy">
         <span>本機曲庫</span>
@@ -1191,7 +1216,7 @@
 
     <div class="page-scroll">
       <div class="page-content">
-        {#if syncProgress}
+        {#if syncProgress && activeView !== 'now-playing'}
           <section
             class="sync-progress-banner"
             class:sync-progress-finished={!syncProgress.active}
@@ -1249,7 +1274,7 @@
                   disabled={!sourceSyncReady || isSyncing}
                   title={sourceSyncReady ? '重新同步本機來源' : showCapabilityDetail(capabilities?.sourceSync)}
                 >
-                  <svg class:spin={isSyncing} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /><path d="M6.2 9a6.5 6.5 0 0 1 11-2L20 12M4 12l2.2 5a6.5 6.5 0 0 0 11-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                  <IconRefresh size={15} stroke={1.6} class={isSyncing ? 'spin' : ''} aria-hidden="true" />
                   <span>{isSyncing ? '同步中' : '重新整理'}</span>
                 </button>
               </div>
@@ -1257,7 +1282,7 @@
 
             <div class="library-toolbar">
               <label class="search-field">
-                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3" stroke="currentColor" stroke-width="1.6" /><path d="m15.5 15.5 4.2 4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
+                <IconSearch size={17} stroke={1.6} aria-hidden="true" />
                 <input
                   type="search"
                   aria-label="搜尋曲庫"
@@ -1266,10 +1291,10 @@
                   oninput={handleSearchInput}
                   disabled={!libraryReady}
                 />
-                <kbd>⌕</kbd>
+                <kbd aria-hidden="true"><IconSearch size={11} stroke={1.8} aria-hidden="true" /></kbd>
               </label>
               <button class="filter-button" type="button" disabled title="篩選功能尚未接通">
-                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
+                <IconFilter size={15} stroke={1.6} aria-hidden="true" />
                 <span>篩選</span>
               </button>
             </div>
@@ -1277,7 +1302,7 @@
             {#if !libraryReady}
               <div class="not-ready-panel">
                 <div class="not-ready-icon" aria-hidden="true">
-                  <svg viewBox="0 0 28 28" fill="none"><path d="M5 8h7l2.2 2.3H23v10.2a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 5 20.5V8Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /><path d="M5 11h18" stroke="currentColor" stroke-width="1.5" /></svg>
+                  <IconFolder size={24} stroke={1.6} aria-hidden="true" />
                 </div>
                 <div class="not-ready-copy">
                   <span class="state-label">NATIVE SERVICE</span>
@@ -1322,7 +1347,7 @@
 
             {#if playlistError}
               <div class="inline-message" role="alert">
-                <span class="message-mark">!</span>
+                <span class="message-mark"><IconAlertCircle size={16} stroke={1.8} aria-hidden="true" /></span>
                 <div><strong>播放清單操作失敗</strong><p>{playlistError}</p></div>
                 <button class="text-button" type="button" onclick={() => { if (selectedPlaylistId) refreshPlaylistEntries(); else void loadPlaylists(); }}>再試一次</button>
               </div>
@@ -1333,7 +1358,7 @@
 
             {#if !libraryReady}
               <div class="not-ready-panel">
-                <div class="not-ready-icon" aria-hidden="true"><span>♪</span></div>
+                <div class="not-ready-icon" aria-hidden="true"><IconMusic size={24} stroke={1.6} aria-hidden="true" /></div>
                 <div class="not-ready-copy"><span class="state-label">NATIVE SERVICE</span><h3>播放清單服務尚未就緒</h3><p>{showCapabilityDetail(capabilities?.library)}</p></div>
               </div>
             {:else if isLoadingPlaylists && playlists.length === 0}
@@ -1355,7 +1380,7 @@
                         aria-pressed={selectedPlaylistId === playlist.id}
                         onclick={() => void selectPlaylist(playlist.id)}
                       >
-                        <span class="playlist-select-icon" aria-hidden="true">♫</span>
+                        <span class="playlist-select-icon" aria-hidden="true"><IconPlaylist size={19} stroke={1.6} aria-hidden="true" /></span>
                         <span class="playlist-select-copy"><strong>{playlist.name.trim() || '未命名播放清單'}</strong><small>{playlist.entryCount.toLocaleString()} 個項目</small></span>
                       </button>
                     </div>
@@ -1450,10 +1475,6 @@
                 />
               {/snippet}
             </NowPlayingArrangement>
-            <div class="playback-note">
-              <span class="note-icon" aria-hidden="true">i</span>
-              <p>{playbackReady ? '播放狀態由原生音訊服務提供。' : showCapabilityDetail(capabilities?.playback)}</p>
-            </div>
           </section>
         {:else}
           <section class="settings-page" aria-labelledby="settings-heading">
@@ -1587,8 +1608,8 @@
                       </label>
                       <div class="track-column-order-actions">
                         <span aria-label={`第 ${index + 1} 欄`}>{index + 1}</span>
-                        <button type="button" aria-label={`${definition.label}欄上移`} title="上移欄位" disabled={index === 0} onclick={() => moveConfiguredTrackColumn(preference.id, 'up')}>↑</button>
-                        <button type="button" aria-label={`${definition.label}欄下移`} title="下移欄位" disabled={index === trackColumnPreferences.length - 1} onclick={() => moveConfiguredTrackColumn(preference.id, 'down')}>↓</button>
+                        <button type="button" aria-label={`${definition.label}欄上移`} title="上移欄位" disabled={index === 0} onclick={() => moveConfiguredTrackColumn(preference.id, 'up')}><IconArrowUp size={16} stroke={1.7} aria-hidden="true" /></button>
+                        <button type="button" aria-label={`${definition.label}欄下移`} title="下移欄位" disabled={index === trackColumnPreferences.length - 1} onclick={() => moveConfiguredTrackColumn(preference.id, 'down')}><IconArrowDown size={16} stroke={1.7} aria-hidden="true" /></button>
                       </div>
                     </li>
                   {/each}
@@ -1691,7 +1712,7 @@
                   </div>
             <div class="source-status-card">
               <div class="source-status-icon" aria-hidden="true">
-                <svg viewBox="0 0 28 28" fill="none"><path d="M4.5 7.5h7l2.2 2.3h9.8v10.1a1.6 1.6 0 0 1-1.6 1.6H6.1a1.6 1.6 0 0 1-1.6-1.6V7.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /><path d="M4.5 11h19" stroke="currentColor" stroke-width="1.5" /></svg>
+                <IconFolder size={24} stroke={1.6} aria-hidden="true" />
               </div>
               <div class="source-status-copy"><h3>本機音樂來源</h3><p>啟動時先顯示已保存曲目，再於背景掃描來源；只有完整掃描才會確認移除項目。</p></div>
               <span class="status-pill" class:not-ready={!sourceSyncReady}>{capabilityLabel(capabilities?.sourceSync)}</span>
@@ -1768,7 +1789,7 @@
                 {/each}
               {/if}
             </div>
-                  <div class="settings-footnote"><span>保留既有曲庫與人工資料</span><span>來源暫時離線時不會當成刪除</span></div>
+                  <div class="settings-footnote"><span><IconCheck size={13} stroke={2} aria-hidden="true" />保留既有曲庫與人工資料</span><span><IconCheck size={13} stroke={2} aria-hidden="true" />來源暫時離線時不會當成刪除</span></div>
                 </section>
               </div>
             {/if}
@@ -1791,7 +1812,7 @@
         {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
           <img class="dock-art-image" src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
         {:else}
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 17V5l9-2v12M9 17a2.8 2.8 0 1 1-2.8-2.8A2.8 2.8 0 0 1 9 17Zm9-2a2.8 2.8 0 1 1-2.8-2.8A2.8 2.8 0 0 1 18 15Z" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          <IconMusic size={22} stroke={1.6} aria-hidden="true" />
         {/if}
       </button>
       <div class="dock-track-copy">
@@ -1799,30 +1820,36 @@
         <span>{currentTrackArtist(playback?.currentTrack)}</span>
       </div>
       <button class="dock-favorite" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 16.4s-6.4-3.8-6.4-8.1a3.4 3.4 0 0 1 6.4-1.5 3.4 3.4 0 0 1 6.4 1.5c0 4.3-6.4 8.1-6.4 8.1Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" /></svg>
+        <IconHeart size={18} stroke={1.6} aria-hidden="true" />
       </button>
     </div>
 
     <div class="dock-center">
       <div class="dock-controls">
         <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} onclick={toggleShuffle}>
-          <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M16 4h3v3M19 4l-6.5 7.2M5 6h2.2c1 0 1.9.5 2.5 1.2l5.6 7.6c.5.7 1.4 1.2 2.4 1.2H19m-3-3 3 3-3 3M5 16h2.2c.8 0 1.6-.4 2.1-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          <IconArrowsShuffle size={20} stroke={1.7} aria-hidden="true" />
         </button>
         <button class="control-button" type="button" aria-label="上一首" title={playback?.canPrevious ? '播放佇列上一首' : showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || !playback?.canPrevious || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
-          <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M6 5v12m11-11-8 5 8 5V6Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          <IconPlayerTrackPrev size={20} stroke={1.7} aria-hidden="true" />
         </button>
         <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} title={showCapabilityDetail(capabilities?.playback)} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
           {#if playback?.isPlaying}
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 6v12M16 6v12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" /></svg>
+            <IconPlayerPause size={21} stroke={1.9} aria-hidden="true" />
           {:else}
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m8.5 5.8 10 6.2-10 6.2V5.8Z" fill="currentColor" /></svg>
+            <IconPlayerPlay size={21} stroke={1.9} aria-hidden="true" />
           {/if}
         </button>
         <button class="control-button" type="button" aria-label="下一首" title={playback?.canNext ? '播放佇列下一首' : showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
-          <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M16 5v12M5 6l8 5-8 5V6Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          <IconPlayerTrackNext size={20} stroke={1.7} aria-hidden="true" />
         </button>
         <button class="control-button secondary-control" type="button" aria-label="循環播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
-          <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M17 8h2.5l-3-3-3 3H16v6a3 3 0 0 1-3 3h-1M5 14H2.5l3 3 3-3H6V8a3 3 0 0 1 3-3h1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /><circle cx="16" cy="15" r="3" fill="var(--dock-bg)" /><path d="M16 13.4v1.7l1.1.7" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          {#if playback?.repeatMode === 'one'}
+            <IconRepeatOnce size={20} stroke={1.7} aria-hidden="true" />
+          {:else if playback?.repeatMode === 'all'}
+            <IconRepeat size={20} stroke={1.7} aria-hidden="true" />
+          {:else}
+            <IconRepeatOff size={20} stroke={1.7} aria-hidden="true" />
+          {/if}
         </button>
       </div>
       <PlaybackProgress
@@ -1838,7 +1865,7 @@
 
     <div class="dock-volume">
       <span class="volume-state">{playbackReady ? '音量' : '播放未就緒'}</span>
-      <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M4 9v4h3.3l4.2 3.4V5.6L7.3 9H4Z" stroke="currentColor" stroke-width="1.45" stroke-linejoin="round" /><path d="M15 8a4.2 4.2 0 0 1 0 6m2.2-8a7.2 7.2 0 0 1 0 10" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" /></svg>
+      <IconVolume2 size={20} stroke={1.6} aria-hidden="true" />
       <input
         class="volume-slider"
         type="range"

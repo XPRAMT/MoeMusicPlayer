@@ -246,13 +246,21 @@ input:focus-visible {
 }
 
 .nav-arrow {
+  display: grid;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  place-items: center;
   margin-left: auto;
   color: var(--accent-text);
-  font-size: 19px;
-  line-height: 1;
   opacity: 0;
   transform: translateX(-2px);
   transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.nav-arrow svg {
+  width: 15px;
+  height: 15px;
 }
 
 .nav-link.active .nav-arrow,
@@ -1098,7 +1106,11 @@ input:focus-visible {
   border: 1px solid rgba(201, 125, 106, 0.35);
   border-radius: 50%;
   color: var(--status-danger);
-  font-size: 11px;
+}
+
+.message-mark svg {
+  width: 16px;
+  height: 16px;
 }
 
 .inline-message div {
@@ -1399,39 +1411,6 @@ input:focus-visible {
 .now-playing-return {
   display: flex;
   margin-top: 24px;
-}
-
-.playback-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  margin-top: 13px;
-  padding: 11px 13px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  color: var(--text-soft);
-  background: rgba(var(--text-rgb), 0.014);
-}
-
-.note-icon {
-  display: grid;
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid rgba(var(--accent-rgb), 0.25);
-  border-radius: 50%;
-  color: var(--accent-text);
-  font-family: Georgia, serif;
-  font-size: 9px;
-  font-style: italic;
-}
-
-.playback-note p {
-  overflow-wrap: anywhere;
-  margin: 0;
-  font-size: 9px;
-  line-height: 1.6;
 }
 
 .settings-view {
@@ -1850,10 +1829,17 @@ input:focus-visible {
   font-size: 9px;
 }
 
-.settings-footnote span::before {
-  margin-right: 7px;
+.settings-footnote span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.settings-footnote svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
   color: var(--status-success);
-  content: '✓';
 }
 
 .source-action-card,
@@ -2404,7 +2390,11 @@ input:focus-visible {
   border-radius: 9px;
   color: var(--accent-text);
   background: var(--panel);
-  font-size: 16px;
+}
+
+.playlist-select-icon svg {
+  width: 19px;
+  height: 19px;
 }
 
 .playlist-select-copy {
@@ -2836,11 +2826,6 @@ input:focus-visible {
 
   .now-playing-view .lyrics-view {
     gap: clamp(5px, 1.2cqi, 9px);
-  }
-
-  .now-playing-view .playback-note {
-    margin-top: 0;
-    padding: 7px 9px;
   }
 
   .now-playing-view .now-playing-return {

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { IconPlayerPlayFilled } from '@tabler/icons-svelte-runes';
 import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistPage, type TrackListColumnPreference } from './ipc';
 import { formatDuration } from './format';
 import {
@@ -157,7 +158,7 @@ import {
           disabled={!row.item.trackId || !row.item.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand}
           onclick={row.play}
         >
-          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7.3 5.8 7 4.2-7 4.2V5.8Z" fill="currentColor" /></svg>
+          <IconPlayerPlayFilled size={17} aria-hidden="true" />
         </button>
       {:else}
         <span class="playlist-entry-index" role="gridcell" aria-hidden="true">—</span>
