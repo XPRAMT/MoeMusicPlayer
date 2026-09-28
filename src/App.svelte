@@ -43,6 +43,7 @@
   import NowPlayingArrangement from './lib/NowPlayingArrangement.svelte';
   import NowPlayingLayoutSwitch from './lib/NowPlayingLayoutSwitch.svelte';
   import PlaybackProgress from './lib/PlaybackProgress.svelte';
+  import LyricsView from './lib/LyricsView.svelte';
   import {
     createActiveTrackArtworkController,
     type ActiveArtworkState,
@@ -1365,11 +1366,11 @@
                 </div>
               {/snippet}
               {#snippet lyrics()}
-                <div class="lyrics-panel-heading">
-                  <p class="section-kicker">LYRICS</p>
-                  <h3 id="lyrics-heading">歌詞</h3>
-                </div>
-                <p class="lyrics-placeholder" role="status">尚無可顯示歌詞；歌詞載入功能尚未接通。</p>
+                <LyricsView
+                  trackId={playback?.currentTrack?.id ?? null}
+                  positionMs={playback?.positionMs ?? 0}
+                  isPlaying={playback?.isPlaying ?? false}
+                />
               {/snippet}
             </NowPlayingArrangement>
             <div class="playback-note">

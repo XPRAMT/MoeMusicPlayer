@@ -201,6 +201,53 @@ export interface PlaybackSnapshot {
   canPrevious: boolean;
 }
 
+export interface LyricLine {
+  startMs: number | null;
+  text: string;
+  translation: string | null;
+  romanization: string | null;
+}
+
+export type LyricsSource = 'local' | 'embedded' | 'netease' | 'qqmusic' | 'manual';
+
+export interface TrackLyrics {
+  trackId: string;
+  source: LyricsSource;
+  title: string;
+  artist: string | null;
+  album: string | null;
+  durationMs: number | null;
+  offsetMs: number;
+  synced: boolean;
+  lines: LyricLine[];
+}
+
+export type LyricsProvider = 'netease' | 'qqmusic';
+export type LyricsConfidence = 'high' | 'medium' | 'low';
+
+export interface LyricsCandidate {
+  id: string;
+  provider: LyricsProvider;
+  title: string;
+  artist: string;
+  album: string | null;
+  durationMs: number | null;
+  score: number;
+  confidence: LyricsConfidence;
+  reasons: string[];
+  previewLines: string[];
+  hasSyncedLyrics: boolean;
+}
+
+export type LyricsResultStatus = 'ready' | 'empty' | 'candidates' | 'error';
+
+export interface LyricsTrackResult {
+  lyrics: TrackLyrics | null;
+  candidates: LyricsCandidate[];
+  status: LyricsResultStatus;
+  error: string | null;
+}
+
 interface IpcContract {
   settings_get_recovery_warning: {
     args: Record<string, never>;
@@ -337,6 +384,22 @@ interface IpcContract {
   playback_set_shuffle: {
     args: { enabled: boolean };
     result: PlaybackSnapshot;
+  };
+  lyrics_get_track: {
+    args: { trackId: string };
+    result: LyricsTrackResult;
+  };
+  lyrics_search: {
+    args: { trackId: string; requestId: string };
+    result: LyricsTrackResult;
+  };
+  lyrics_select_candidate: {
+    args: { trackId: string; candidateId: string };
+    result: TrackLyrics;
+  };
+  lyrics_cancel_search: {
+    args: { requestId: string };
+    result: void;
   };
 }
 
