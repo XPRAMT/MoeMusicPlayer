@@ -541,7 +541,9 @@ fn candidate_dto(metadata: &LyricsTrackMetadata, candidate: &LyricCandidate) -> 
         LyricsConfidenceDto::Low
     };
     let mut reasons = reasons;
-    if !candidate.lyrics.synced {
+    if candidate.lyrics.format == LyricFormat::Qrc && candidate.lyrics.lines.is_empty() {
+        reasons.push("僅保留未解碼的 QRC 原始資料，沒有可顯示的歌詞文字".to_owned());
+    } else if !candidate.lyrics.synced {
         reasons.push("此候選沒有逐行時間戳，僅作未同步歌詞顯示".to_owned());
     }
     LyricsCandidateDto {
@@ -1315,18 +1317,20 @@ mod tests {
         assert!(!qrc.lyrics.synced);
         assert!(qrc.lyrics.lines.is_empty());
         assert!(qrc.lyrics.raw_karaoke.is_some());
-        assert!(
-            !super::candidate_dto(
-                &LyricsTrackMetadata {
-                    title: Some("Song".to_owned()),
-                    artist: Some("Artist".to_owned()),
-                    album: None,
-                    duration_ms: None,
-                },
-                &qrc,
-            )
-            .has_synced_lyrics
+        let qrc_candidate = super::candidate_dto(
+            &LyricsTrackMetadata {
+                title: Some("Song".to_owned()),
+                artist: Some("Artist".to_owned()),
+                album: None,
+                duration_ms: None,
+            },
+            &qrc,
         );
+        assert!(!qrc_candidate.has_synced_lyrics);
+        assert!(qrc_candidate
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("沒有可顯示的歌詞文字")));
     }
 
     #[tokio::test]
