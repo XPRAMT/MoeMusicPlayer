@@ -1324,6 +1324,13 @@ mod tests {
             ..AppSettings::default()
         };
         let store = SettingsStore::open(&path, initial).expect("create degraded settings");
+        let lyrics_preferences = LyricsPreferences {
+            show_translation: true,
+            show_romanization: true,
+            inactive_opacity_percent: 43,
+            primary_font_size_px: 26,
+            auxiliary_font_size_px: 17,
+        };
         let mut columns = TrackListColumnSettings::default();
         columns.columns.swap(0, 2);
         columns.columns[1].visible = false;
@@ -1331,6 +1338,7 @@ mod tests {
             .update(|settings| {
                 settings.track_list_columns = columns.clone();
                 settings.now_playing_layout = NowPlayingLayout::B;
+                settings.lyrics_preferences = lyrics_preferences;
                 Ok(())
             })
             .expect("persist display preferences");
@@ -1339,6 +1347,7 @@ mod tests {
         let settings = reopened.snapshot().unwrap();
         assert_eq!(settings.track_list_columns, columns);
         assert_eq!(settings.now_playing_layout, NowPlayingLayout::B);
+        assert_eq!(settings.lyrics_preferences, lyrics_preferences);
         assert_eq!(settings.sources, vec![source]);
         assert!(!settings.source_registry_authoritative);
         assert!(!reopened.source_registry_authoritative().unwrap());
