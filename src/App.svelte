@@ -36,6 +36,7 @@
     createActiveTrackArtworkController,
     type ActiveArtworkState,
   } from './lib/active-track-artwork';
+  import { createVolumeCommandQueue } from './lib/volume-command-queue';
 
   type View = 'library' | 'now-playing' | 'playlists' | 'settings';
   type SettingsSection = 'appearance' | 'sources';
@@ -62,6 +63,7 @@
   let libraryListRevision = $state(0);
   let playbackError = $state<string | null>(null);
   let playback = $state<PlaybackSnapshot | null>(null);
+  let volumeDraft = $state<number | null>(null);
   let activeArtwork = $state<ActiveArtworkState>({ trackId: null, status: 'empty', objectUrl: null });
   let sources = $state<LibrarySource[]>([]);
   let sourceError = $state<string | null>(null);
@@ -88,6 +90,10 @@
   let isSendingPlaybackCommand = $state(false);
   let playbackSnapshotRequestVersion = 0;
   let playbackSnapshotFence = 0;
+  let isVolumePointerActive = false;
+  let volumeCommandGeneration = 0;
+  let volumeSettledGeneration = 0;
+  let confirmedVolume = $state<number | null>(null);
   let themeSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let themeSaveQueue: Promise<void> = Promise.resolve();
   let themeRevision = 0;
@@ -108,6 +114,16 @@
     },
     onChange(state) {
       activeArtwork = state;
+    },
+  });
+
+  const volumeCommandQueue = createVolumeCommandQueue({
+    send: sendPlaybackVolumeCommand,
+    onError(error) {
+      playbackError = getErrorText(error);
+    },
+    onIdle() {
+      if (!isVolumePointerActive) volumeDraft = null;
     },
   });
 
@@ -198,6 +214,7 @@
 
   onDestroy(() => {
     artworkController.dispose();
+    volumeCommandQueue.dispose();
     if (themeSaveTimer !== undefined) clearTimeout(themeSaveTimer);
     themeRevision += 1;
     if (playbackPollTimer !== undefined) clearInterval(playbackPollTimer);
@@ -712,12 +729,14 @@
   async function loadPlaybackSnapshot(clearError = true): Promise<void> {
     if (!playbackReady || isLoadingPlaybackSnapshot) return;
     const requestVersion = ++playbackSnapshotRequestVersion;
+    const volumeGenerationAtRequest = volumeSettledGeneration;
     isLoadingPlaybackSnapshot = true;
     if (clearError) playbackError = null;
     try {
       applyPlaybackSnapshot(
         await invokeCommand('playback_get_snapshot', {}),
         requestVersion,
+        volumeGenerationAtRequest,
       );
       void refreshCapabilitiesInBackground();
     } catch (error) {
@@ -765,15 +784,60 @@
     await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs }));
   }
 
-  function applyPlaybackSnapshot(next: PlaybackSnapshot, snapshotVersion?: number): void {
+  function applyPlaybackSnapshot(
+    next: PlaybackSnapshot,
+    snapshotVersion?: number,
+    volumeGenerationAtRequest?: number,
+  ): void {
     if (snapshotVersion !== undefined && snapshotVersion <= playbackSnapshotFence) return;
-    playback = next;
+    const volumeIsStale = volumeGenerationAtRequest !== undefined
+      && volumeGenerationAtRequest < volumeSettledGeneration;
+    const volumeToPreserve = playback?.volume ?? confirmedVolume;
+    const resolved = volumeIsStale && volumeToPreserve !== null
+      ? { ...next, volume: volumeToPreserve }
+      : next;
+    playback = resolved;
+    confirmedVolume = resolved.volume;
   }
 
-  async function setPlaybackVolume(event: Event): Promise<void> {
-    if (!playbackReady || isSendingPlaybackCommand) return;
+  function setPlaybackVolume(event: Event): void {
+    if (!playbackReady) return;
     const volume = Number((event.currentTarget as HTMLInputElement).value);
-    await sendPlaybackCommand(() => invokeCommand('playback_set_volume', { volume }));
+    if (!Number.isFinite(volume)) return;
+    volumeDraft = volume;
+    volumeCommandQueue.enqueue(volume);
+  }
+
+  function startVolumeInteraction(): void {
+    isVolumePointerActive = true;
+  }
+
+  function finishVolumeInteraction(): void {
+    if (!isVolumePointerActive) return;
+    isVolumePointerActive = false;
+    volumeCommandQueue.flush();
+  }
+
+  function finishVolumeChange(): void {
+    volumeCommandQueue.flush();
+  }
+
+  async function sendPlaybackVolumeCommand(volume: number): Promise<void> {
+    if (!playbackReady) return;
+    const generation = ++volumeCommandGeneration;
+    playbackError = null;
+    try {
+      const next = await invokeCommand('playback_set_volume', { volume });
+      if (generation === volumeCommandGeneration) {
+        if (playback) playback = { ...playback, volume: next.volume };
+        confirmedVolume = next.volume;
+      }
+    } catch (error) {
+      if (generation === volumeCommandGeneration) playbackError = getErrorText(error);
+      throw error;
+    } finally {
+      volumeSettledGeneration = Math.max(volumeSettledGeneration, generation);
+    }
   }
 
   async function setRepeatMode(): Promise<void> {
@@ -841,6 +905,8 @@
   }
 
 </script>
+
+<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} />
 
 <div class="app-shell">
   <aside class="sidebar" aria-label="主要導覽">
@@ -1437,8 +1503,20 @@
     <div class="dock-volume">
       <span class="volume-state">{playbackReady ? '音量' : '播放未就緒'}</span>
       <svg viewBox="0 0 22 22" fill="none" aria-hidden="true"><path d="M4 9v4h3.3l4.2 3.4V5.6L7.3 9H4Z" stroke="currentColor" stroke-width="1.45" stroke-linejoin="round" /><path d="M15 8a4.2 4.2 0 0 1 0 6m2.2-8a7.2 7.2 0 0 1 0 10" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" /></svg>
-      <input class="volume-slider" type="range" min="0" max="1" step="0.01" value={playback?.volume ?? 0} aria-label="音量" disabled={!playbackReady || isSendingPlaybackCommand} oninput={setPlaybackVolume} />
-      <span class="volume-value">{playback ? formatVolume(playback.volume) : '—'}</span>
+      <input
+        class="volume-slider"
+        type="range"
+        min="0"
+        max="1"
+        step="0.01"
+        value={volumeDraft ?? playback?.volume ?? confirmedVolume ?? 0}
+        aria-label="音量"
+        disabled={!playbackReady}
+        onpointerdown={startVolumeInteraction}
+        oninput={setPlaybackVolume}
+        onchange={finishVolumeChange}
+      />
+      <span class="volume-value">{playback ? formatVolume(volumeDraft ?? playback.volume) : confirmedVolume === null ? '—' : formatVolume(volumeDraft ?? confirmedVolume)}</span>
     </div>
   </footer>
 </div>
