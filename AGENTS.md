@@ -6,6 +6,7 @@
 
 目前已完成：
 
+- 首頁頂部宣傳 Banner 已移除，包含宣傳標題、說明、功能口號、唱片插圖與假輪播頁碼；主內容直接呈現各頁實際功能區，相關 CSS、響應式覆寫與裝飾動畫一併刪除。`npm run check`、`npm run build`、Node 42/42 與 Windows Tauri Release 建置通過；產物為 `target/release/moemusicplayer.exe`，正式 Tauri 視窗仍待人工確認頁面間距。
 - Windows 可新增來源資料夾，透過 Core 增量同步與 Lofty 讀取標籤；SQLite 保存曲目、來源映射與同步狀態，前端只取分頁結果。
 - Windows 來源設定使用原生資料夾選擇器；程式在取消時不新增來源。使用者已在隔離 app-data 實際選取資料夾並完成掃描；Cancel 不新增來源尚未單獨確認。Tauri picker 及 M3U/M3U8 檔案對話框都以呼叫端 WebviewWindow 設為 owner，主視窗 config 與啟動時也明確關閉 always-on-top。
 - 啟動同步由 renderer 在註冊 `library-sync-progress` 與 `library-sync-finished` 後觸發，避免空來源或快速掃描在 listener 建立前完成；不定總數的列舉只顯示已處理數。前端 call-site regression 與來源事件彙整測試通過。
@@ -24,6 +25,7 @@
 
 仍未完成或未驗證：
 
+- 頂部宣傳 Banner 已移除並通過 Svelte 型別檢查、正式前端建置與 Node 42/42；新版 Tauri 視窗尚未人工確認各頁內容起始位置與同步資訊布局。
 - Windows 原生資料夾選擇器已由使用者在隔離 app-data 選取 `D:\Music` 並完成唯讀同步；正式 AppData 未觸碰。Cancel 不新增來源的路徑尚未單獨確認；播放清單原生對話框仍待使用者驗收。系統媒體控制尚未由實際 Tauri 視窗、Windows 媒體 flyout 或硬體媒體按鍵端到端驗收。
 - Windows Tauri/音訊 IPC 的命令 ACK 與 queue/mode 已接線；`npm run check/build`、workspace Rust tests、嚴格 Tauri Clippy 及 Windows release build 通過。服務整合測試以臨時 Unicode 音樂資料夾與合成 MP3 驗證 TrackId 路徑、worker 播放、暫停與音量，並驗證重複 playlist TrackId 依 entry position 建 queue。Headless DOM harness 已覆蓋 seek failure、鍵盤操作、切歌及拖曳生命週期；worker snapshot 維持外部唯一權威，seek ACK 前的 poll 由 request fence 隔離，失敗會丟棄草稿並顯示錯誤。Rodio Symphonia paths 對 MP3/FLAC/Vorbis/WAV 的合成 duration/seek tests 通過，並不保證任意檔案格式均可 seek。使用者已在最新隔離 Tauri debug 視窗實際確認 slider 點擊／拖曳可正常 seek、啟動播放速度符合已知曲目時長、點歌維持目前頁面而底部封面可進正在播放頁；個別曲目格式、執行檔 hash 與 app-data identifier 未記錄。前次加速回報於最新驗收未再重現，但未找到可證明的程式碼根因；底部右側音量滑桿拖曳已通過 headless App DOM 回歸，但尚待 Windows Tauri 視窗人工複驗；SMTC flyout/硬體鍵仍待驗收。
 - 設定頁與真實 Tauri 視窗的自訂色對比、偏好重啟回讀及縮放版面尚未人工驗收。欄位偏好與 Now Playing A/B 已接版本化設定 JSON；Svelte 型別檢查、純函式測試與 headless DOM harness 通過。
@@ -33,7 +35,7 @@
 - Windows 封面目前只讀取已啟用本機檔案來源；Android MediaStore/SAF 封面、使用者實際 Tauri 視窗圖片解碼／縮放與封面載入失敗畫面仍待平台接線及驗收。封面上限內仍可能遇到瀏覽器無法解碼的容器資料，該路徑會回到占位圖。
 - 100,000 首真實曲庫端到端效能、真實 Tauri WebView 的捲動影格表現及完整 Windows SystemIndex 使用判準尚無實測結論；目前共用列表的 Node 與 headless Chrome harness 已驗證合成 100,000 項、虛擬 DOM 最多 25 列、LRU 最多 240 項，不能替代正式 Tauri 視窗效能量測。
 
-下一步：請使用者在隔離 Tauri 視窗複驗共享欄位設定保存／重啟回讀、Now Playing A/B 控制和窄視窗版面；本輪 headless Playwright harness 已驗證 component DOM 與 360px 響應式，但不代表真實 Tauri 視窗驗收。保持已確認正常的 seek、音量拖曳及點歌／封面導覽行為。其他待驗包括播放清單來源啟動同步與外部變更、原生匯入對話框、degraded registry 重新登記確認、舊 Hanser 清單播放與 queue 控制、SMTC flyout／硬體按鍵、真實封面畫面與應用音訊輸出；不得操作使用者正在使用的視窗或正式曲庫。`D:\Music` 已在隔離資料庫唯讀掃描完成，不重複掃描或寫入音樂檔。兩個列表 harness 已完成 100,000 項 DOM／鍵盤 smoke；正式 Tauri WebView 的捲動與縮放效能仍待量測。Android 驗收時需以 Tauri Android CLI/NDK 環境重建目前 shell，確認安全區與 MediaStore/SAF 真機掃描。每首實際播放累計時間與依較低 played/duration 優先的 shuffle 尚未實作；不得描述為目前播放模式功能。
+下一步：請使用者在隔離 Tauri 視窗先複驗新版頂部 Banner 移除後的頁面間距，再確認共享欄位設定保存／重啟回讀、Now Playing A/B 控制和窄視窗版面；本輪 headless Playwright harness 已驗證 component DOM 與 360px 響應式，但不代表真實 Tauri 視窗驗收。保持已確認正常的 seek、音量拖曳及點歌／封面導覽行為。其他待驗包括播放清單來源啟動同步與外部變更、原生匯入對話框、degraded registry 重新登記確認、舊 Hanser 清單播放與 queue 控制、SMTC flyout／硬體按鍵、真實封面畫面與應用音訊輸出；不得操作使用者正在使用的視窗或正式曲庫。`D:\Music` 已在隔離資料庫唯讀掃描完成，不重複掃描或寫入音樂檔。兩個列表 harness 已完成 100,000 項 DOM／鍵盤 smoke；正式 Tauri WebView 的捲動與縮放效能仍待量測。Android 驗收時需以 Tauri Android CLI/NDK 環境重建目前 shell，確認安全區與 MediaStore/SAF 真機掃描。每首實際播放累計時間與依較低 played/duration 優先的 shuffle 尚未實作；不得描述為目前播放模式功能。
 
 曲目欄位與 Now Playing 規則：
 
@@ -61,6 +63,7 @@
 - **播放：**播放/暫停、前後首、跳轉、音量、循環、隨機與佇列。架構需容納無縫播放。Windows 整合系統媒體控制；Android 使用 Media3/MediaSessionService，支援背景、通知列與藍牙控制，Activity 關閉後仍可依平台規範播放。點擊曲庫或播放清單歌曲只開始播放並留在原頁；只有手動點擊底部目前歌曲封面才進入「正在播放」頁，不提供側欄直達入口。進度滑桿拖曳時以本地草稿呈現，pointerup/cancel（包含滑出滑桿後）只提交一次或還原草稿；切歌時丟棄舊草稿，過期播放快照不得蓋掉 seek ACK 權威快照。音量拖曳以本地值即時跟隨，pointerup/change 提交最終音量；音量命令需合併為有界佇列，與播放、seek 的 busy 狀態隔離，舊 ACK 或輪詢不得倒退較新的拖曳草稿。
 - **歌詞：**支援本地 LRC、可取得的內嵌歌詞、網易雲與 QQ Provider、同步顯示、候選手動搜尋/指定及持久快取。Provider 與 UI、Library Core 分離，需有逾時、可取消與受控重試；網路失敗不得阻礙啟動、曲庫瀏覽、本地歌詞或播放。自動匹配須綜合標題、演出者、長度、專輯、版本與 feat. 資訊；低信心不自動套用。使用者指定與本地歌詞優先於網路自動結果。
 - 歌詞匹配要有可解釋分數與信心門檻。標題、演出者權重高；長度差異有實質影響；專輯為低權重。正規化大小寫、全半形、空白、常見括號及 feat./featuring/ft.，但須保留 Live、Cover、Acoustic、Instrumental、TV Size、Remaster 等版本差異；手動指定須持久保存並優先於後續自動搜尋。播放期間不得批量觸發網路補全。
+- **首頁文案：**不顯示無用途的宣傳式頂部標語、功能口號、裝飾唱片插圖或假輪播頁碼；主要頁面直接呈現實際曲庫、播放清單、播放或設定內容。
 - **歌詞渲染：**僅渲染可見行及少量緩衝；只有目前行及必要相鄰行可拆成逐字節點。高頻進度不觸發整棵 UI 重繪。實際 DOM、計時器與 GPU 資源用量不得隨歌曲長度或切歌次數無限增長。
 - 可從目前行前後各約 5～8 行作為窗口起點，再依實測調整；禁止整首逐字歌詞一次建立動畫 DOM。進度優先透過 requestAnimationFrame 更新少量 CSS/DOM 屬性；避免大範圍動態模糊、大量 filter、逐字 GPU layer 與無限制 will-change。
 - **響應式介面：**依可用寬高、比例及容器空間安排版面；播放控制始終可用，列表、歌詞、抽屜與對話框不得溢出。版面切換不得重設播放、佇列或歌詞狀態。優先使用 CSS Grid/Flex/容器查詢；若需 JavaScript 判定整體模式，由單一服務集中計算並節流。

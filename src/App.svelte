@@ -1116,28 +1116,6 @@
 
     <div class="page-scroll">
       <div class="page-content">
-        <section class="welcome-banner">
-          <div class="welcome-copy">
-            <p class="eyebrow"><span class="eyebrow-line"></span> PERSONAL AUDIO LIBRARY</p>
-            <h1>{activeView === 'library' ? '把喜歡的聲音，留在身邊。' : activeView === 'now-playing' ? '正在播放' : activeView === 'playlists' ? '整理想聽的曲目。' : '音樂來源'}</h1>
-            <p class="welcome-description">以本機音樂為核心，曲庫先分頁查詢；來源與播放服務就緒後才會開放操作。</p>
-            <div class="welcome-tags">
-              <span><i></i> 本機優先</span>
-              <span><i></i> 大型曲庫友善</span>
-              <span><i></i> 跨平台介面</span>
-            </div>
-          </div>
-          <div class="banner-art" aria-hidden="true">
-            <div class="art-ring ring-one"></div>
-            <div class="art-ring ring-two"></div>
-            <div class="art-disc"><div class="disc-center"><span></span></div></div>
-            <div class="art-spark spark-one"></div>
-            <div class="art-spark spark-two"></div>
-            <div class="art-caption">LOCAL<br />COLLECTION</div>
-          </div>
-          <div class="banner-index" aria-hidden="true">01 <span>/ 04</span></div>
-        </section>
-
         {#if syncProgress}
           <section
             class="sync-progress-banner"
