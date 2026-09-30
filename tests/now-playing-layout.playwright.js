@@ -78,15 +78,31 @@
     assert.ok(state.playerControlIcons.every(icon => icon.ariaHidden === 'true' && icon.width >= 18 && icon.height >= 18), `${viewport.width}x${viewport.height}: decorative control icons must be hidden from assistive technology and remain legible`);
     assert.ok(!['auto', 'scroll'].includes(state.artworkCopyOverflowY), `${viewport.width}x${viewport.height}: track information should not introduce a second scrollable window`);
     assert.equal(state.cover.objectFit, 'contain', `${viewport.width}x${viewport.height}: source image must keep its aspect ratio`);
-    assert.deepEqual([state.cover.naturalWidth, state.cover.naturalHeight], [400, 300], `${viewport.width}x${viewport.height}: test artwork did not load at its source dimensions`);
+    assert.ok(state.cover.naturalWidth > 0 && state.cover.naturalHeight > 0, `${viewport.width}x${viewport.height}: test artwork did not load at its source dimensions`);
     assert.ok(artwork && state.cover.width > 0 && state.cover.height > 0, `${viewport.width}x${viewport.height}: cover is missing`);
+    const stageAspect = state.cover.width / state.cover.height;
+    const sourceAspect = state.cover.naturalWidth / state.cover.naturalHeight;
+    assert.ok(Math.abs(stageAspect - sourceAspect) <= 0.02, `${viewport.width}x${viewport.height}: cover frame ${state.cover.width}x${state.cover.height} must match the ${state.cover.naturalWidth}x${state.cover.naturalHeight} artwork aspect ratio`);
+    assert.ok(Math.abs(state.cover.width - state.renderedImage.width - 2) <= 1.5 && Math.abs(state.cover.height - state.renderedImage.height - 2) <= 1.5,
+      `${viewport.width}x${viewport.height}: frame ${state.cover.width}x${state.cover.height} must hug the visible ${state.renderedImage.width}x${state.renderedImage.height} image with only a 1px border`);
+    assert.ok(Math.abs(state.renderedImage.width / state.renderedImage.height - sourceAspect) <= 0.01,
+      `${viewport.width}x${viewport.height}: visible pixels ${state.renderedImage.width}x${state.renderedImage.height} must preserve source ratio ${sourceAspect}`);
     assert.ok(state.cover.left >= artwork.left - 1 && state.cover.right <= artwork.right + 1, `${viewport.width}x${viewport.height}: cover spills out of artwork pane horizontally`);
     assert.ok(state.cover.top >= artwork.top - 1 && state.cover.bottom <= artwork.bottom + 1, `${viewport.width}x${viewport.height}: cover spills out of artwork pane vertically`);
     const copyGap = Math.max(4, artworkCopy.top - state.cover.bottom);
     const verticalBudget = artwork.height - artworkCopy.height - copyGap;
     const heightCap = viewport.width <= 720 ? viewport.height * 0.4 : viewport.height * 0.78;
-    const expectedMaximum = Math.max(1, Math.min(artwork.width, verticalBudget, heightCap));
-    assert.ok(state.cover.width >= expectedMaximum * 0.9, `${viewport.width}x${viewport.height}: cover does not use most of its available square area (${state.cover.width} of ${expectedMaximum})`);
+    const expectedScale = Math.min((artwork.width - 2) / state.cover.naturalWidth, (Math.min(verticalBudget, heightCap) - 2) / state.cover.naturalHeight);
+    assert.ok(Math.abs(state.renderedImage.width - state.cover.naturalWidth * expectedScale) <= 2
+      && Math.abs(state.renderedImage.height - state.cover.naturalHeight * expectedScale) <= 2,
+    `${viewport.width}x${viewport.height}: visible image ${state.renderedImage.width}x${state.renderedImage.height} does not maximize the available area without letterboxing`);
+    const helperMinimum = viewport.width >= 1280 ? 14 : 12;
+    assert.ok(state.typography.format >= helperMinimum
+      && state.typography.artist >= helperMinimum
+      && state.typography.album >= helperMinimum,
+    `${viewport.width}x${viewport.height}: metadata font sizes are too small: ${JSON.stringify(state.typography)}`);
+    assert.ok(state.typography.title >= 20 && state.typography.title <= 23,
+      `${viewport.width}x${viewport.height}: title font size should stay balanced near 22px: ${state.typography.title}`);
     assert.deepEqual(state.panes.map(pane => pane.name), expectedPaneOrder, `${viewport.width}x${viewport.height}: pane order differs for layout ${layout}`);
     if (viewport.wide) {
       assert.ok(Math.abs(state.panes[0].top - state.panes[1].top) <= 2, `${viewport.width}x${viewport.height}: wide layout should remain side by side`);
@@ -102,6 +118,7 @@
   const results = [];
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.evaluate(() => window.nowPlayingLayoutHarness.setArtworkVariant('square'));
     await page.waitForTimeout(35);
     await page.getByRole('button', { name: '排列 A：封面在前，歌詞在後' }).click();
     const wideState = await readLayout();
@@ -122,6 +139,7 @@
     results.push({
       viewport: `${viewport.width}x${viewport.height}`,
       cover: `${Math.round(wideState.cover.width)}x${Math.round(wideState.cover.height)}`,
+      typography: wideState.typography,
       artworkPane: `${Math.round(wideState.panes.find(pane => pane.name === 'artwork').width)}x${Math.round(wideState.panes.find(pane => pane.name === 'artwork').height)}`,
       artworkContent: wideState.artworkChildren.map(child => `${child.className || 'unnamed'}=${Math.round(child.width)}x${Math.round(child.height)}`),
       coverPaneRatio: [
@@ -136,5 +154,28 @@
     });
   }
 
-  return { result: 'PASS', viewports: results };
+  const focusedGeometry = [];
+  for (const [viewport, variant] of [
+    [{ width: 1920, height: 1080, wide: true }, 'square'],
+    [{ width: 1920, height: 1080, wide: true }, 'portrait'],
+    [{ width: 1920, height: 1080, wide: true }, 'landscape'],
+    [{ width: 1366, height: 768, wide: true }, 'square'],
+    [{ width: 1366, height: 768, wide: true }, 'portrait'],
+    [{ width: 1366, height: 768, wide: true }, 'landscape'],
+    [{ width: 412, height: 915, wide: false }, 'square'],
+    [{ width: 412, height: 915, wide: false }, 'portrait'],
+    [{ width: 412, height: 915, wide: false }, 'landscape'],
+  ]) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.evaluate((next) => window.nowPlayingLayoutHarness.setArtworkVariant(next), variant);
+    await page.evaluate(() => window.nowPlayingLayoutHarness.setLayout('a'));
+    const state = await readLayout();
+    verifyShell(state, viewport, 'a');
+    await page.evaluate(() => window.nowPlayingLayoutHarness.setLayout('b'));
+    const stateB = await readLayout();
+    verifyShell(stateB, viewport, 'b');
+    focusedGeometry.push({ viewport: `${viewport.width}x${viewport.height}`, variant, frame: `${state.cover.width.toFixed(1)}x${state.cover.height.toFixed(1)}`, image: `${state.renderedImage.width.toFixed(1)}x${state.renderedImage.height.toFixed(1)}` });
+  }
+
+  return { result: 'PASS', viewports: results, focusedGeometry };
 }

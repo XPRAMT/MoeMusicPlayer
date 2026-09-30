@@ -167,6 +167,9 @@ async page => {
     const state = await readOverlayLayout();
     assert.equal(state.layout, 'a', 'layout A selected in Settings should appear in Now Playing');
     assert.equal(state.coverFit, 'contain', 'cover art must preserve its original aspect ratio');
+    const stageAspect = state.cover.width / state.cover.height;
+    const sourceAspect = state.coverSource[0] / state.coverSource[1];
+    assert.ok(Math.abs(stageAspect - sourceAspect) <= 0.02, `1920x1080: cover frame ${state.cover.width}x${state.cover.height} must match ${state.coverSource[0]}x${state.coverSource[1]} artwork`);
     assert.deepEqual(state.copyChildren, ['now-playing-format', 'h2', 'now-playing-artist', 'now-playing-album'], 'track copy should show format, title, artist and album');
     assert.ok(state.formatText.includes('FLAC 48 kHz 24-bit'), 'format summary should use the shared audio format formatter');
     assert.equal(state.hiResBadge?.alt, 'Hi-Res', 'Hi-Res badge should have accessible alternative text');

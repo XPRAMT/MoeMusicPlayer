@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
   import {
     IconAlertCircle,
     IconArrowLeft,
@@ -60,6 +60,7 @@
   } from './lib/theme';
   import { formatVolume } from './lib/format';
   import hiResBadgeUrl from './assets/hi-res-badge.png';
+  import { calculateArtworkFrame } from './lib/artwork-frame.js';
   import {
     DEFAULT_TRACK_COLUMN_PREFERENCES,
     TRACK_COLUMN_DEFINITIONS,
@@ -143,6 +144,9 @@
   let playbackQueueCursorChangeKey = $state(0);
   let volumeDraft = $state<number | null>(null);
   let activeArtwork = $state<ActiveArtworkState>({ trackId: null, status: 'empty', objectUrl: null });
+  let coverStageElement = $state<HTMLDivElement | null>(null);
+  let nowPlayingCopyElement = $state<HTMLDivElement | null>(null);
+  let coverFrame = $state<{ width: number; height: number } | null>(null);
   let sources = $state<LibrarySource[]>([]);
   let sourceError = $state<string | null>(null);
   let sourceSyncSummary = $state<string | null>(null);
@@ -258,6 +262,62 @@
     } else {
       artworkController.setTrack(snapshot.currentTrack.id);
     }
+  });
+
+  function updateCoverFrame(): void {
+    const stage = coverStageElement;
+    const copy = nowPlayingCopyElement;
+    const artworkPane = stage?.parentElement;
+    const image = stage?.querySelector('img');
+    if (!stage || !copy || !artworkPane || !image?.naturalWidth || !image.naturalHeight) {
+      coverFrame = null;
+      return;
+    }
+
+    const artworkStyles = getComputedStyle(artworkPane);
+    const gap = Number.parseFloat(artworkStyles.rowGap) || 0;
+    const isNarrow = window.matchMedia('(max-width: 720px)').matches;
+    const maxDimension = window.innerHeight * (isNarrow ? 0.4 : 0.78);
+    const nextFrame = calculateArtworkFrame({
+      sourceWidth: image.naturalWidth,
+      sourceHeight: image.naturalHeight,
+      availableWidth: artworkPane.clientWidth,
+      availableHeight: Math.max(0, artworkPane.clientHeight - copy.offsetHeight - gap),
+      maxWidth: maxDimension,
+      maxHeight: maxDimension,
+      border: 1,
+    });
+    if (!nextFrame) {
+      coverFrame = null;
+      return;
+    }
+    if (!coverFrame || coverFrame.width !== nextFrame.width || coverFrame.height !== nextFrame.height) {
+      coverFrame = { width: nextFrame.width, height: nextFrame.height };
+    }
+  }
+
+  $effect(() => {
+    const stage = coverStageElement;
+    const copy = nowPlayingCopyElement;
+    const artworkUrl = activeArtwork.objectUrl;
+    const artworkStatus = activeArtwork.status;
+    if (!stage || !copy) {
+      coverFrame = null;
+      return;
+    }
+
+    void artworkUrl;
+    void artworkStatus;
+    const image = stage.querySelector('img');
+    const observer = new ResizeObserver(() => untrack(updateCoverFrame));
+    if (stage.parentElement) observer.observe(stage.parentElement);
+    observer.observe(copy);
+    image?.addEventListener('load', updateCoverFrame);
+    untrack(updateCoverFrame);
+    return () => {
+      observer.disconnect();
+      image?.removeEventListener('load', updateCoverFrame);
+    };
   });
 
   onMount(() => {
@@ -1978,7 +2038,13 @@
           <section class="now-playing-view" aria-labelledby="now-playing-heading">
             <NowPlayingArrangement layout={nowPlayingLayout}>
               {#snippet artwork()}
-                <div class="cover-stage" class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
+                <div
+                  bind:this={coverStageElement}
+                  class="cover-stage"
+                  class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
+                  style:width={coverFrame ? `${coverFrame.width}px` : undefined}
+                  style:height={coverFrame ? `${coverFrame.height}px` : undefined}
+                >
                   {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
                     <img class="cover-stage-image" src={activeArtwork.objectUrl} alt={`${currentTrackTitle(playback?.currentTrack)} 封面`} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
                   {:else}
@@ -1995,7 +2061,7 @@
                     {/if}
                   {/if}
                 </div>
-                <div class="now-playing-copy">
+                <div class="now-playing-copy" bind:this={nowPlayingCopyElement}>
                   <p class="now-playing-format">
                     <span>{formatTrackColumnValue('audioFormat', playback?.currentTrack ?? {}, () => '—')}</span>
                     {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}

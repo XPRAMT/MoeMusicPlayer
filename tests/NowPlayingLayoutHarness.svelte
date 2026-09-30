@@ -10,6 +10,7 @@
   import LyricsView from '../src/lib/LyricsView.svelte';
   import NowPlayingArrangement from '../src/lib/NowPlayingArrangement.svelte';
   import NowPlayingLayoutSwitch from '../src/lib/NowPlayingLayoutSwitch.svelte';
+  import { calculateArtworkFrame } from '../src/lib/artwork-frame.js';
   import hiResBadgeUrl from '../src/assets/hi-res-badge.png';
   import type { LyricsCandidate, LyricsTrackResult, NowPlayingLayout, TrackLyrics } from '../src/lib/ipc';
 
@@ -33,6 +34,8 @@
     panes: Array<{ name: string; left: number; right: number; top: number; bottom: number; width: number; height: number }>;
     artworkChildren: Array<{ className: string; left: number; right: number; top: number; bottom: number; width: number; height: number }>;
     cover: { left: number; right: number; top: number; bottom: number; width: number; height: number; objectFit: string; naturalWidth: number; naturalHeight: number };
+    renderedImage: { left: number; right: number; top: number; bottom: number; width: number; height: number };
+    typography: { format: number; title: number; artist: number; album: number };
     returnButton: { left: number; right: number; top: number; bottom: number; width: number; height: number };
     layoutSwitch: { left: number; right: number; top: number; bottom: number; width: number; height: number };
     lyricsToolbar: { left: number; right: number; top: number; bottom: number; width: number; height: number };
@@ -50,6 +53,7 @@
 
   interface LayoutHarnessApi {
     setLayout: (layout: NowPlayingLayout) => Promise<void>;
+    setArtworkVariant: (variant: 'square' | 'portrait' | 'landscape') => Promise<void>;
     snapshot: () => LayoutSnapshot;
     scrollLyrics: () => Promise<boolean>;
     attemptOuterScroll: () => Promise<number>;
@@ -60,6 +64,51 @@
   }
 
   let layout = $state<NowPlayingLayout>('a');
+  let artworkVariant = $state<'square' | 'portrait' | 'landscape'>('landscape');
+  let coverFrame = $state<{ width: number; height: number } | null>(null);
+  let coverStageElement: HTMLDivElement;
+  let artworkCopyElement: HTMLDivElement;
+
+  const artworkDimensions = {
+    square: [400, 400],
+    portrait: [300, 400],
+    landscape: [400, 300],
+  } as const;
+
+  function artworkDataUrl(variant: keyof typeof artworkDimensions): string {
+    const [width, height] = artworkDimensions[variant];
+    return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="#55d9ff"/></svg>`)}`;
+  }
+
+  function updateCoverFrame(): void {
+    const image = coverStageElement?.querySelector('img');
+    const pane = coverStageElement?.parentElement;
+    if (!image?.naturalWidth || !image.naturalHeight || !pane || !artworkCopyElement) {
+      coverFrame = null;
+      return;
+    }
+    const gap = Number.parseFloat(getComputedStyle(pane).rowGap) || 0;
+    const narrow = window.matchMedia('(max-width: 720px)').matches;
+    const maxDimension = window.innerHeight * (narrow ? 0.4 : 0.78);
+    const frame = calculateArtworkFrame({
+      sourceWidth: image.naturalWidth,
+      sourceHeight: image.naturalHeight,
+      availableWidth: pane.clientWidth,
+      availableHeight: Math.max(0, pane.clientHeight - artworkCopyElement.offsetHeight - gap),
+      maxWidth: maxDimension,
+      maxHeight: maxDimension,
+      border: 1,
+    });
+    coverFrame = frame ? { width: frame.width, height: frame.height } : null;
+  }
+
+  async function setArtworkVariant(variant: keyof typeof artworkDimensions): Promise<void> {
+    artworkVariant = variant;
+    await tick();
+    const image = coverStageElement.querySelector('img');
+    if (image && !image.complete) await new Promise<void>((resolve) => image.addEventListener('load', () => resolve(), { once: true }));
+    updateCoverFrame();
+  }
 
   function makeLyrics(trackId: string): TrackLyrics {
     return {
@@ -98,6 +147,24 @@
     await tick();
   }
 
+  $effect(() => {
+    const stage = coverStageElement;
+    const copy = artworkCopyElement;
+    const variant = artworkVariant;
+    if (!stage || !copy) return;
+    void variant;
+    const image = stage.querySelector('img');
+    const observer = new ResizeObserver(updateCoverFrame);
+    if (stage.parentElement) observer.observe(stage.parentElement);
+    observer.observe(copy);
+    image?.addEventListener('load', updateCoverFrame);
+    updateCoverFrame();
+    return () => {
+      observer.disconnect();
+      image?.removeEventListener('load', updateCoverFrame);
+    };
+  });
+
   function rect(element: Element | null): { top: number; bottom: number; left: number; right: number; width: number; height: number } {
     if (!element) return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 };
     const value = element.getBoundingClientRect();
@@ -111,6 +178,10 @@
     const overlay = document.querySelector<HTMLElement>('[data-testid="now-playing-overlay"]');
     const card = document.querySelector<HTMLElement>('.now-playing-card');
     const cover = document.querySelector<HTMLImageElement>('[data-testid="cover-image"]');
+    const formatRow = document.querySelector<HTMLElement>('.now-playing-format');
+    const title = document.querySelector<HTMLElement>('.now-playing-copy h2');
+    const artist = document.querySelector<HTMLElement>('.now-playing-artist');
+    const album = document.querySelector<HTMLElement>('.now-playing-album');
     const lyrics = document.querySelector<HTMLElement>('[data-testid="timed-lyrics"]');
     const paneElements = [...document.querySelectorAll<HTMLElement>('.now-playing-card > [data-layout-pane]')];
     const artworkChildren = [...document.querySelectorAll<HTMLElement>('.now-playing-artwork > *')];
@@ -124,7 +195,6 @@
     const lyricsToolbarRect = rect(document.querySelector('.lyrics-display-controls'));
     const dockControlsRect = rect(document.querySelector('.dock-controls'));
     const artworkCopy = document.querySelector<HTMLElement>('.now-playing-copy');
-    const formatRow = document.querySelector<HTMLElement>('.now-playing-format');
     const lyricPrimary = document.querySelector<HTMLElement>('.lyric-primary');
     const lyricTranslation = document.querySelector<HTMLElement>('.lyric-translation');
     const lyricRomanization = document.querySelector<HTMLElement>('.lyric-romanization');
@@ -156,6 +226,13 @@
         objectFit: cover ? getComputedStyle(cover).objectFit : 'missing',
         naturalWidth: cover?.naturalWidth ?? 0,
         naturalHeight: cover?.naturalHeight ?? 0,
+      },
+      renderedImage: rect(cover),
+      typography: {
+        format: formatRow ? Number.parseFloat(getComputedStyle(formatRow).fontSize) : 0,
+        title: title ? Number.parseFloat(getComputedStyle(title).fontSize) : 0,
+        artist: artist ? Number.parseFloat(getComputedStyle(artist).fontSize) : 0,
+        album: album ? Number.parseFloat(getComputedStyle(album).fontSize) : 0,
       },
       returnButton: returnRect,
       layoutSwitch: layoutSwitchRect,
@@ -208,7 +285,7 @@
   }
 
   $effect(() => {
-    window.nowPlayingLayoutHarness = { setLayout, snapshot, scrollLyrics, attemptOuterScroll };
+      window.nowPlayingLayoutHarness = { setLayout, setArtworkVariant, snapshot, scrollLyrics, attemptOuterScroll };
   });
 </script>
 
@@ -229,15 +306,21 @@
           <NowPlayingLayoutSwitch {layout} variant="compact" onChange={setLayout} />
           <NowPlayingArrangement {layout}>
             {#snippet artwork()}
-              <div class="cover-stage" data-testid="cover-stage">
+              <div
+                bind:this={coverStageElement}
+                class="cover-stage"
+                data-testid="cover-stage"
+                style:width={coverFrame ? `${coverFrame.width}px` : undefined}
+                style:height={coverFrame ? `${coverFrame.height}px` : undefined}
+              >
                 <img
                   class="cover-stage-image"
                   data-testid="cover-image"
-                  src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22 viewBox=%220 0 400 300%22%3E%3Crect width=%22400%22 height=%22300%22 fill=%22%2355d9ff%22/%3E%3C/svg%3E"
+                  src={artworkDataUrl(artworkVariant)}
                   alt="測試封面"
                 />
               </div>
-              <div class="now-playing-copy">
+              <div bind:this={artworkCopyElement} class="now-playing-copy">
                 <p class="now-playing-format"><span>FLAC 48 kHz 24-bit</span><img src={hiResBadgeUrl} alt="Hi-Res" /></p>
                 <h2>這是一段刻意加長的曲目標題，用來確認不同尺寸的正在播放頁會限制標題行數，並且不會把返回曲庫控制擠出畫面範圍或造成另一個可以捲動的資訊欄位。</h2>
                 <p class="now-playing-artist">測試演出者</p>
