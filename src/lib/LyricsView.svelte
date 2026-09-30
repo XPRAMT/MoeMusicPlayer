@@ -88,10 +88,15 @@
   let plainViewport = $state<HTMLDivElement | null>(null);
   let plainScrollTop = $state(0);
   let plainViewportHeight = $state(480);
+  let timedViewportHeight = $state(480);
   let layoutWidth = $state(0);
   let layoutRevision = $state(0);
   let previousTrackId: string | null | undefined;
   let previousPlainLayout: ReturnType<typeof buildLyricsLayout> | null = null;
+  let previousTimedNavigation: { trackId: string | null; generation: number; index: number; viewport: HTMLDivElement; height: number } | null = null;
+  let timedSmoothScrolling = false;
+  let timedUserScrolling = false;
+  let userScrollResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   const controller = createLyricsController({
     api: {
@@ -125,6 +130,8 @@
   );
   let plainLayout = $derived(buildLyricsLayout(lines, preferences, preferences.lineGapPx, layoutWidth));
   let timedTotalHeight = $derived.by(() => { layoutRevision; return timedLayout.totalHeight; });
+  let timedCanvasHeight = $derived(timedTotalHeight + timedViewportHeight);
+  let timedEdgePadding = $derived(timedViewportHeight / 2);
   let plainTotalHeight = $derived.by(() => { layoutRevision; return plainLayout.totalHeight; });
   let timedWindow = $derived.by(() => {
     layoutRevision;
@@ -137,6 +144,23 @@
   });
   let plainRenderedRows = $derived(plainWindow.rows.filter((index) => plainLayout.heights[index] > 0));
   let isTimed = $derived(timedLines.length > 0);
+
+  function timedCueScrollTop(layout: ReturnType<typeof buildLyricsLayout>, index: number, viewportHeight: number, scrollportHeight = viewportHeight): number {
+    if (index < 0) return 0;
+    const visibleIndex = layout.heights[index] <= 0
+      ? findLyricsRowAtOffset(layout, getLyricsOffset(layout, index))
+      : index;
+    if (visibleIndex < 0) return 0;
+    return Math.max(0, viewportHeight / 2 + getLyricsOffset(layout, visibleIndex) + layout.heights[visibleIndex] / 2 - scrollportHeight / 2);
+  }
+
+  function correctTimedCenter(): void {
+    const element = timedViewport;
+    const activeIndex = displayActiveTimedIndex;
+    if (!element || activeIndex < 0 || timedSmoothScrolling || timedUserScrolling) return;
+    const targetTop = timedCueScrollTop(timedLayout, activeIndex, timedViewportHeight, element.clientHeight);
+    if (Math.abs(element.scrollTop - targetTop) > 1) element.scrollTo({ top: targetTop, behavior: 'instant' });
+  }
 
   const rowObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver((entries) => {
     const layout = isTimed ? timedLayout : plainLayout;
@@ -153,6 +177,7 @@
     }
     if (!changed) return;
     layoutRevision += 1;
+    if (isTimed) correctTimedCenter();
     if (anchorIndex >= 0 && !isTimed) {
       viewport.scrollTop = getLyricsOffset(layout, anchorIndex) + anchorOffset;
       plainScrollTop = viewport.scrollTop;
@@ -185,6 +210,7 @@
       }
       if (!changed) return;
       layoutRevision += 1;
+      if (isTimed) correctTimedCenter();
       if (anchorIndex >= 0 && !isTimed) {
         viewport.scrollTop = getLyricsOffset(layout, anchorIndex) + anchorOffset;
         plainScrollTop = viewport.scrollTop;
@@ -203,7 +229,8 @@
     const observer = new ResizeObserver(() => {
       const nextWidth = Math.round(viewport.clientWidth);
       if (nextWidth !== layoutWidth) layoutWidth = nextWidth;
-      plainViewportHeight = viewport.clientHeight;
+      if (isTimed) timedViewportHeight = viewport.clientHeight;
+      else plainViewportHeight = viewport.clientHeight;
     });
     observer.observe(viewport);
     return () => observer.disconnect();
@@ -273,19 +300,61 @@
     const element = timedViewport;
     const activeIndex = activeTimedIndex;
     const layout = timedLayout;
-    layoutRevision;
+    const currentTrackId = trackId;
+    const currentlyPlaying = isPlaying && effectivePlaybackState === 'playing';
+    const viewportHeight = timedViewportHeight;
     if (!element) return;
 
+    const previous = previousTimedNavigation;
+    const sameTrackAndLayout = previous?.trackId === currentTrackId && previous.generation === layout.generation;
+    if (
+      sameTrackAndLayout
+      && previous?.index === activeIndex
+      && previous.viewport === element
+      && previous.height === viewportHeight
+    ) return;
+    const isNormalCueAdvance = Boolean(currentlyPlaying && sameTrackAndLayout && previous?.index >= 0 && activeIndex === previous.index + 1);
+    previousTimedNavigation = { trackId: currentTrackId, generation: layout.generation, index: activeIndex, viewport: element, height: viewportHeight };
+
     const frame = requestAnimationFrame(() => {
-      const visibleIndex = activeIndex >= 0 && layout.heights[activeIndex] <= 0
-        ? findLyricsRowAtOffset(layout, getLyricsOffset(layout, activeIndex))
-        : activeIndex;
-      const targetTop = visibleIndex < 0
-        ? 0
-        : Math.max(0, getLyricsOffset(layout, visibleIndex) + layout.heights[visibleIndex] / 2 - element.clientHeight / 2);
-      element.scrollTop = targetTop;
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+      const behavior: ScrollBehavior = isNormalCueAdvance && !reducedMotion ? 'smooth' : 'instant';
+      const targetTop = timedCueScrollTop(layout, activeIndex, viewportHeight, element.clientHeight);
+      timedSmoothScrolling = behavior === 'smooth' && Math.abs(element.scrollTop - targetTop) > 1;
+      element.scrollTo({ top: targetTop, behavior });
     });
     return () => cancelAnimationFrame(frame);
+  });
+
+  $effect(() => {
+    const element = timedViewport;
+    if (!element) return;
+    const onScrollEnd = () => {
+      const shouldCorrectCenter = timedSmoothScrolling && !timedUserScrolling;
+      timedSmoothScrolling = false;
+      timedUserScrolling = false;
+      if (userScrollResetTimer) clearTimeout(userScrollResetTimer);
+      userScrollResetTimer = null;
+      if (shouldCorrectCenter) correctTimedCenter();
+    };
+    const onUserScroll = () => {
+      timedSmoothScrolling = false;
+      timedUserScrolling = true;
+      if (userScrollResetTimer) clearTimeout(userScrollResetTimer);
+      userScrollResetTimer = setTimeout(() => { timedUserScrolling = false; userScrollResetTimer = null; }, 300);
+    };
+    element.addEventListener('scrollend', onScrollEnd);
+    element.addEventListener('wheel', onUserScroll, { passive: true });
+    element.addEventListener('pointerdown', onUserScroll, { passive: true });
+    element.addEventListener('touchstart', onUserScroll, { passive: true });
+    return () => {
+      element.removeEventListener('scrollend', onScrollEnd);
+      element.removeEventListener('wheel', onUserScroll);
+      element.removeEventListener('pointerdown', onUserScroll);
+      element.removeEventListener('touchstart', onUserScroll);
+      if (userScrollResetTimer) clearTimeout(userScrollResetTimer);
+      userScrollResetTimer = null;
+    };
   });
 
   onDestroy(() => { controller.dispose(); rowObserver?.disconnect(); });
@@ -363,9 +432,10 @@
         data-rendered-count={timedRenderedRows.length}
         data-window-start={timedWindow.start}
         data-window-end={timedWindow.end}
-        data-total-height={timedTotalHeight}
+        data-total-height={timedCanvasHeight}
       >
-        <div class="lyrics-spacer" style={`height:${timedWindow.beforeHeight}px`} aria-hidden="true"></div>
+        <div class="lyrics-spacer lyrics-edge-spacer" data-edge-spacer="head" style={`height:${timedEdgePadding}px`} aria-hidden="true"></div>
+        <div class="lyrics-spacer" data-virtual-spacer="before" style={`height:${timedWindow.beforeHeight}px`} aria-hidden="true"></div>
         {#each timedRenderedRows as timelineIndex (`${timelineIndex}:${timedLayout.generation}`)}
           {@const row = timedLines[timelineIndex]}
           <div
@@ -383,7 +453,8 @@
             {#if preferences.showRomanization && row.line.romanization?.trim()}<p class="lyric-romanization">{row.line.romanization}</p>{/if}
           </div>
         {/each}
-        <div class="lyrics-spacer" style={`height:${timedWindow.afterHeight}px`} aria-hidden="true"></div>
+        <div class="lyrics-spacer" data-virtual-spacer="after" style={`height:${timedWindow.afterHeight}px`} aria-hidden="true"></div>
+        <div class="lyrics-spacer lyrics-edge-spacer" data-edge-spacer="tail" style={`height:${timedEdgePadding}px`} aria-hidden="true"></div>
       </div>
     {:else if viewState.lyrics && lines.length > 0}
       <div
@@ -502,6 +573,8 @@
     flex: 1 1 auto;
     overflow: auto;
     overscroll-behavior: contain;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 24%, #000 76%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 24%, #000 76%, transparent 100%);
     scrollbar-color: color-mix(in srgb, var(--accent) 42%, transparent) transparent;
     scrollbar-width: thin;
   }
@@ -509,6 +582,10 @@
   .lyrics-spacer {
     width: 1px;
     pointer-events: none;
+  }
+
+  .lyrics-edge-spacer {
+    flex: 0 0 auto;
   }
 
   .lyric-line {
@@ -523,7 +600,7 @@
     overflow: hidden;
     padding: 7px 9px;
     margin-bottom: var(--lyric-gap-after, 0px);
-    border-bottom: 1px solid rgba(var(--text-rgb), 0.045);
+    border-bottom: 0;
     color: var(--muted);
     transition: color 140ms ease;
   }
@@ -617,7 +694,7 @@
 
   .lyrics-candidates {
     min-height: 0;
-    max-height: min(31vh, 260px);
+    max-height: min(50vh, 480px);
     overflow: auto;
     border-top: 1px solid var(--line);
   }

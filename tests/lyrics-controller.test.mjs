@@ -61,7 +61,7 @@ test('timed lyric timeline follows forward seek, backward seek, and per-track of
   assert.equal(findActiveLyricIndex(timeline, -1), -1);
 });
 
-test('timed lyric viewport keeps at most the active line and six neighbors on each side', () => {
+test('timed lyric viewport keeps at most the active line and twenty neighbors on each side', () => {
   const preferences = DEFAULT_LYRICS_PREFERENCES;
   const timeline = buildTimedLyricTimeline(Array.from({ length: 100_000 }, (_, index) => ({
     startMs: index * 1_000,
@@ -74,12 +74,12 @@ test('timed lyric viewport keeps at most the active line and six neighbors on ea
   const beginning = getTimedLyricWindow(layout, -1);
   const ending = getTimedLyricWindow(layout, timeline.length - 1);
 
-  assert.ok(middle.rows.length <= 13);
+  assert.ok(middle.rows.length <= 41);
   assert.ok(middle.rows.includes(50_000));
   assert.equal(middle.beforeHeight, layout.offsets[middle.start]);
   assert.equal(middle.afterHeight, layout.totalHeight - layout.offsets[middle.end]);
-  assert.ok(beginning.rows.length <= 13);
-  assert.ok(ending.rows.length <= 13);
+  assert.ok(beginning.rows.length <= 41);
+  assert.ok(ending.rows.length <= 41);
   assert.ok(middle.rows.length < timeline.length);
 });
 
@@ -141,7 +141,7 @@ test('variable row geometry adds only nonempty enabled auxiliary lines', () => {
     { text: '  ', translation: '', romanization: null },
   ];
   const layout = buildLyricsLayout(rows, base, 24);
-  const primary = base.primaryFontSizePx * 1.35 + 14 + 1;
+  const primary = base.primaryFontSizePx * 1.35 + 14;
   const oneAux = primary + 2 + base.auxiliaryFontSizePx * 1.25;
   const twoAux = primary + 4 + 2 * base.auxiliaryFontSizePx * 1.25;
 

@@ -4,10 +4,11 @@
 /** @typedef {{ index: number, startMs: number, line: LyricLine }} TimedLyric */
 /** @typedef {{ heights: Float64Array, gaps: Float64Array, visibleIndices: Uint32Array, tree: Float64Array, offsets: Float64Array, totalHeight: number, generation: number }} LyricsLayout */
 
-export const TIMED_LYRIC_RADIUS = 6;
+export const TIMED_LYRIC_RADIUS = 20;
+export const PLAIN_LYRIC_OVERSCAN = 6;
 export const LYRICS_ROW_GAP_PX = 2;
 export const LYRICS_ROW_VERTICAL_PADDING_PX = 14;
-export const LYRICS_ROW_BORDER_PX = 1;
+export const LYRICS_ROW_BORDER_PX = 0;
 export const LYRICS_PRIMARY_MAX_LINES = 2;
 export const LYRICS_PRIMARY_LINE_HEIGHT = 1.35;
 export const LYRICS_AUXILIARY_LINE_HEIGHT = 1.25;
@@ -156,7 +157,7 @@ export function getTimedLyricWindow(layout, activeIndex, radius = TIMED_LYRIC_RA
 }
 
 /** @param {LyricsLayout} layout @param {number} scrollTop @param {number} viewportHeight @param {number} [overscan] */
-export function getPlainLyricWindow(layout, scrollTop, viewportHeight, overscan = TIMED_LYRIC_RADIUS) {
+export function getPlainLyricWindow(layout, scrollTop, viewportHeight, overscan = PLAIN_LYRIC_OVERSCAN) {
   const count = layout.visibleIndices.length;
   if (!count) return { start: 0, end: 0, beforeHeight: 0, afterHeight: 0, rows: [] };
   const first = findVisiblePositionAtOffset(layout, Math.max(0, scrollTop));

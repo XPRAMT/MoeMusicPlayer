@@ -41,6 +41,8 @@
       timedWindowEnd: number | null;
       beforeSpacerHeight: number;
       afterSpacerHeight: number;
+      headPaddingHeight: number;
+      tailPaddingHeight: number;
       actualRowHeights: number[];
       firstRowTranslationCount: number;
       firstRowRomanizationCount: number;
@@ -202,8 +204,10 @@
       lineGapPx: Number(lyricsRoot?.dataset.lineGap ?? 24),
       timedWindowStart: timed ? Number(timed.dataset.windowStart) : null,
       timedWindowEnd: timed ? Number(timed.dataset.windowEnd) : null,
-      beforeSpacerHeight: spacers[0]?.getBoundingClientRect().height ?? 0,
-      afterSpacerHeight: spacers.at(-1)?.getBoundingClientRect().height ?? 0,
+      beforeSpacerHeight: (viewport?.querySelector<HTMLElement>('[data-virtual-spacer="before"]') ?? spacers[0])?.getBoundingClientRect().height ?? 0,
+      afterSpacerHeight: (viewport?.querySelector<HTMLElement>('[data-virtual-spacer="after"]') ?? spacers.at(-1))?.getBoundingClientRect().height ?? 0,
+      headPaddingHeight: viewport?.querySelector<HTMLElement>('[data-edge-spacer="head"]')?.getBoundingClientRect().height ?? 0,
+      tailPaddingHeight: viewport?.querySelector<HTMLElement>('[data-edge-spacer="tail"]')?.getBoundingClientRect().height ?? 0,
       actualRowHeights: rows.map((row) => row.getBoundingClientRect().height),
       expectedRowHeights: rows.map((row) => Number.parseFloat(getComputedStyle(row).height)),
       rowMargins: rows.map((row) => Number.parseFloat(getComputedStyle(row).marginBottom)),

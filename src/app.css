@@ -1396,7 +1396,7 @@ input:focus-visible {
 }
 
 .now-playing-lyrics .lyrics-candidates {
-  max-height: min(31vh, 260px);
+  max-height: min(50vh, 480px);
   flex: 0 1 auto;
 }
 
