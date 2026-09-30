@@ -132,6 +132,7 @@ struct WindowsSystemMediaService {
     pump_gate: Mutex<()>,
     last_update: Mutex<Option<Instant>>,
     artwork: Mutex<ArtworkPump>,
+    published_metadata: Mutex<Option<MediaControlMetadata>>,
 }
 
 #[cfg(target_os = "windows")]
@@ -144,6 +145,20 @@ struct ArtworkRequest {
 struct ArtworkResult {
     track_id: TrackId,
     bytes: Option<Arc<[u8]>>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ArtworkAvailability {
+    Pending,
+    Ready(Option<Arc<[u8]>>),
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MetadataPublication {
+    Hold,
+    Set(Option<MediaControlMetadata>),
 }
 
 #[cfg(target_os = "windows")]
@@ -161,6 +176,7 @@ struct ArtworkPump {
     active_track: Option<TrackId>,
     pending: Option<ArtworkRequest>,
     image: Option<Arc<[u8]>>,
+    lookup_complete: bool,
     stopped: bool,
 }
 
@@ -229,6 +245,55 @@ impl Drop for ArtworkReader {
 }
 
 #[cfg(target_os = "windows")]
+fn metadata_publication(
+    mut current: Option<MediaControlMetadata>,
+    artwork: ArtworkAvailability,
+) -> MetadataPublication {
+    let Some(metadata) = current.as_mut() else {
+        return MetadataPublication::Set(None);
+    };
+    match artwork {
+        ArtworkAvailability::Pending => MetadataPublication::Hold,
+        ArtworkAvailability::Ready(thumbnail) => {
+            metadata.thumbnail = thumbnail;
+            MetadataPublication::Set(current)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn metadata_for_update(
+    publication: &MetadataPublication,
+    published: &Option<MediaControlMetadata>,
+) -> Option<MediaControlMetadata> {
+    match publication {
+        MetadataPublication::Hold => published.clone(),
+        MetadataPublication::Set(metadata) => metadata.clone(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn commit_metadata_publication(
+    publication: MetadataPublication,
+    published: &mut Option<MediaControlMetadata>,
+) {
+    if let MetadataPublication::Set(metadata) = publication {
+        *published = metadata;
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn publish_metadata_update<E>(
+    publication: MetadataPublication,
+    published: &mut Option<MediaControlMetadata>,
+    update: impl FnOnce(Option<MediaControlMetadata>) -> Result<(), E>,
+) -> Result<(), E> {
+    update(metadata_for_update(&publication, published))?;
+    commit_metadata_publication(publication, published);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 impl ArtworkPump {
     fn new() -> Self {
         Self {
@@ -236,6 +301,7 @@ impl ArtworkPump {
             active_track: None,
             pending: None,
             image: None,
+            lookup_complete: false,
             stopped: false,
         }
     }
@@ -244,9 +310,9 @@ impl ArtworkPump {
         &mut self,
         track_id: Option<TrackId>,
         database: Option<&Database>,
-    ) -> Option<Arc<[u8]>> {
+    ) -> ArtworkAvailability {
         if self.stopped {
-            return None;
+            return ArtworkAvailability::Ready(None);
         }
         let result = self
             .reader
@@ -257,6 +323,7 @@ impl ArtworkPump {
         if let Some(result) = result {
             if Some(result.track_id) == self.active_track {
                 self.image = result.bytes;
+                self.lookup_complete = true;
             }
         }
 
@@ -264,11 +331,15 @@ impl ArtworkPump {
             self.active_track = track_id;
             self.pending = None;
             self.image = None;
+            self.lookup_complete = track_id.is_none() || database.is_none();
             if let (Some(track_id), Some(database)) = (track_id, database) {
-                self.pending = database
-                    .track_locators(track_id)
-                    .ok()
-                    .map(|locators| ArtworkRequest { track_id, locators });
+                match database.track_locators(track_id) {
+                    Ok(locators) => {
+                        self.pending = Some(ArtworkRequest { track_id, locators });
+                        self.lookup_complete = false;
+                    }
+                    Err(_) => self.lookup_complete = true,
+                }
             }
         }
 
@@ -277,30 +348,150 @@ impl ArtworkPump {
                 match sender.try_send(request) {
                     Ok(()) => {}
                     Err(TrySendError::Full(request)) => self.pending = Some(request),
-                    Err(TrySendError::Disconnected(_)) => {}
+                    Err(TrySendError::Disconnected(_)) => self.lookup_complete = true,
                 }
             }
         }
-        self.image.clone()
+        if self.lookup_complete {
+            ArtworkAvailability::Ready(self.image.clone())
+        } else {
+            ArtworkAvailability::Pending
+        }
     }
 
     fn shutdown(&mut self) {
         self.stopped = true;
         self.pending = None;
         self.image = None;
+        self.lookup_complete = true;
         self.reader.shutdown();
     }
 }
 
 #[cfg(all(test, target_os = "windows"))]
 mod system_media_artwork_tests {
-    use super::{ArtworkPump, ArtworkRequest, ArtworkResult};
-    use player_core::TrackId;
+    use super::{
+        metadata_publication, publish_metadata_update, ArtworkAvailability, ArtworkPump,
+        ArtworkRequest, ArtworkResult,
+    };
+    use player_audio_windows::system_media::MediaControlMetadata;
+    use player_core::{
+        FileFingerprint, LibraryRepository, ListTracksQuery, MediaLocator, MediaSourceKind,
+        MediaTrackRecord, SourceScanState, TrackId, TrackIdentity, TrackMetadata,
+    };
+    use player_db::Database;
     use std::{
+        fs,
+        path::{Path, PathBuf},
         sync::Arc,
         thread,
         time::{Duration, Instant},
     };
+
+    #[derive(Default)]
+    struct FakeMetadataSink {
+        fail_next: bool,
+        updates: Vec<(u64, Option<MediaControlMetadata>)>,
+    }
+
+    impl FakeMetadataSink {
+        fn update(
+            &mut self,
+            timeline_revision: u64,
+            metadata: Option<MediaControlMetadata>,
+        ) -> Result<(), ()> {
+            if std::mem::take(&mut self.fail_next) {
+                return Err(());
+            }
+            self.updates.push((timeline_revision, metadata));
+            Ok(())
+        }
+    }
+
+    fn metadata(title: &str, thumbnail: Option<&'static [u8]>) -> MediaControlMetadata {
+        MediaControlMetadata {
+            title: Some(title.to_owned()),
+            artist: Some(format!("{title} artist")),
+            album: Some(format!("{title} album")),
+            thumbnail: thumbnail.map(Arc::from),
+        }
+    }
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "moe-smtc-artwork-{}-{}",
+                std::process::id(),
+                TrackId::new()
+            ));
+            fs::create_dir_all(&path).expect("create isolated artwork directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_png(rgb: [u8; 3]) -> Vec<u8> {
+        fn chunk(output: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            output.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            output.extend_from_slice(kind);
+            output.extend_from_slice(data);
+            let crc = kind.iter().chain(data).fold(!0_u32, |crc, byte| {
+                let mut value = crc ^ u32::from(*byte);
+                for _ in 0..8 {
+                    value = if value & 1 == 1 {
+                        (value >> 1) ^ 0xedb8_8320
+                    } else {
+                        value >> 1
+                    };
+                }
+                value
+            });
+            output.extend_from_slice(&(!crc).to_be_bytes());
+        }
+
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        chunk(&mut png, b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
+        let scanline = [0, rgb[0], rgb[1], rgb[2]];
+        let mut zlib = vec![0x78, 0x01, 0x01, 4, 0, 0xfb, 0xff];
+        zlib.extend_from_slice(&scanline);
+        let (mut a, mut b) = (1_u32, 0_u32);
+        for byte in scanline {
+            a = (a + u32::from(byte)) % 65_521;
+            b = (b + a) % 65_521;
+        }
+        zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+        chunk(&mut png, b"IDAT", &zlib);
+        chunk(&mut png, b"IEND", &[]);
+        png
+    }
+
+    fn record(root: &player_core::LibraryRoot, path: &Path, title: &str) -> MediaTrackRecord {
+        MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: root.id,
+                source_item_id: title.to_owned(),
+                locator_key: None,
+            },
+            locator: MediaLocator::FileSystem(path.to_path_buf()),
+            fingerprint: FileFingerprint {
+                size_bytes: 1,
+                modified_at_utc_ms: Some(1),
+            },
+            metadata: Some(TrackMetadata {
+                title: Some(title.to_owned()),
+                artist: Some("test artist".to_owned()),
+                album: Some("test album".to_owned()),
+                ..TrackMetadata::default()
+            }),
+        }
+    }
 
     fn wait_for_result(pump: &ArtworkPump, track_id: TrackId) {
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -324,6 +515,121 @@ mod system_media_artwork_tests {
     }
 
     #[test]
+    fn metadata_publication_holds_pending_then_atomically_sets_or_clears_artwork() {
+        let previous = Some(metadata("Track A", Some(b"cover-a")));
+        let mut published = previous.clone();
+        let mut sink = FakeMetadataSink::default();
+
+        let pending_b = metadata_publication(
+            Some(metadata("Track B", None)),
+            ArtworkAvailability::Pending,
+        );
+        publish_metadata_update(pending_b, &mut published, |outgoing| {
+            sink.update(2, outgoing)
+        })
+        .expect("pending artwork still updates timeline");
+        assert_eq!(sink.updates[0].0, 2);
+        assert_eq!(sink.updates[0].1, published);
+        assert_eq!(
+            sink.updates[0].1.as_ref().unwrap().title.as_deref(),
+            Some("Track A")
+        );
+
+        let ready_b = metadata_publication(
+            Some(metadata("Track B", None)),
+            ArtworkAvailability::Ready(Some(Arc::from(&b"cover-b"[..]))),
+        );
+        publish_metadata_update(ready_b, &mut published, |outgoing| sink.update(3, outgoing))
+            .expect("ready metadata and artwork publish together");
+        assert_eq!(sink.updates[1].0, 3);
+        assert_eq!(sink.updates[1].1, published);
+        assert_eq!(
+            published.as_ref().unwrap().title.as_deref(),
+            Some("Track B")
+        );
+        assert_eq!(
+            published.as_ref().unwrap().thumbnail.as_deref(),
+            Some(&b"cover-b"[..])
+        );
+
+        let missing_c = metadata_publication(
+            Some(metadata("Track C", None)),
+            ArtworkAvailability::Ready(None),
+        );
+        publish_metadata_update(missing_c, &mut published, |outgoing| {
+            sink.update(4, outgoing)
+        })
+        .expect("missing artwork publishes new metadata and clears previous cover");
+        assert_eq!(sink.updates[2].0, 4);
+        assert_eq!(published, Some(metadata("Track C", None)));
+        assert_eq!(sink.updates[2].1, published);
+    }
+
+    #[test]
+    fn metadata_sink_error_does_not_commit_and_stale_artwork_keeps_previous_metadata() {
+        let track_a = TrackId::new();
+        let track_b = TrackId::new();
+        let mut pump = ArtworkPump::new();
+        pump.active_track = Some(track_b);
+        pump.lookup_complete = false;
+        pump.reader
+            .results
+            .lock()
+            .expect("result slot")
+            .replace(ArtworkResult {
+                track_id: track_a,
+                bytes: Some(Arc::from(&b"stale-cover"[..])),
+            });
+        assert_eq!(
+            pump.update(Some(track_b), None),
+            ArtworkAvailability::Pending,
+            "a late result from the previous track must not complete the current lookup"
+        );
+        assert!(pump.image.is_none());
+
+        let previous = Some(metadata("Track A", Some(b"cover-a")));
+        let mut published = previous.clone();
+        let mut sink = FakeMetadataSink {
+            fail_next: true,
+            ..FakeMetadataSink::default()
+        };
+        let ready_b = metadata_publication(
+            Some(metadata("Track B", None)),
+            ArtworkAvailability::Ready(Some(Arc::from(&b"cover-b"[..]))),
+        );
+        assert!(
+            publish_metadata_update(ready_b.clone(), &mut published, |outgoing| {
+                sink.update(2, outgoing)
+            })
+            .is_err()
+        );
+        assert_eq!(published, previous);
+
+        let stale_pending = metadata_publication(
+            Some(metadata("Track B", None)),
+            ArtworkAvailability::Pending,
+        );
+        publish_metadata_update(stale_pending, &mut published, |outgoing| {
+            sink.update(3, outgoing)
+        })
+        .expect("pending or stale artwork preserves the last complete metadata");
+        assert_eq!(sink.updates[0].0, 3);
+        assert_eq!(sink.updates[0].1, published);
+
+        publish_metadata_update(ready_b, &mut published, |outgoing| sink.update(4, outgoing))
+            .expect("retry can commit after a transient sink error");
+        assert_eq!(
+            published.as_ref().unwrap().title.as_deref(),
+            Some("Track B")
+        );
+        assert_eq!(
+            published.as_ref().unwrap().thumbnail.as_deref(),
+            Some(&b"cover-b"[..])
+        );
+        pump.shutdown();
+    }
+
+    #[test]
     fn stale_track_result_is_discarded_and_latest_track_request_is_serviced() {
         let mut pump = ArtworkPump::new();
         let track_a = TrackId::new();
@@ -334,15 +640,25 @@ mod system_media_artwork_tests {
             bytes: Some(Arc::from(&b"old"[..])),
         });
 
-        assert!(pump.update(Some(track_b), None).is_none());
+        assert_eq!(
+            pump.update(Some(track_b), None),
+            ArtworkAvailability::Ready(None)
+        );
         assert!(pump.image.is_none());
         pump.pending = Some(ArtworkRequest {
             track_id: track_b,
             locators: Vec::new(),
         });
-        pump.update(Some(track_b), None);
+        pump.lookup_complete = false;
+        assert_eq!(
+            pump.update(Some(track_b), None),
+            ArtworkAvailability::Pending
+        );
         wait_for_result(&pump, track_b);
-        assert!(pump.update(Some(track_b), None).is_none());
+        assert_eq!(
+            pump.update(Some(track_b), None),
+            ArtworkAvailability::Ready(None)
+        );
         assert!(pump.image.is_none());
         pump.shutdown();
     }
@@ -353,6 +669,7 @@ mod system_media_artwork_tests {
         let track = TrackId::new();
         pump.active_track = Some(track);
         pump.image = Some(Arc::from(&b"previous cover"[..]));
+        pump.lookup_complete = false;
         pump.reader
             .results
             .lock()
@@ -362,10 +679,16 @@ mod system_media_artwork_tests {
                 bytes: None,
             });
 
-        assert!(pump.update(Some(track), None).is_none());
+        assert_eq!(
+            pump.update(Some(track), None),
+            ArtworkAvailability::Ready(None)
+        );
         assert!(pump.image.is_none());
         for _ in 0..3 {
-            assert!(pump.update(Some(track), None).is_none());
+            assert_eq!(
+                pump.update(Some(track), None),
+                ArtworkAvailability::Ready(None)
+            );
         }
         assert!(pump.pending.is_none());
         pump.shutdown();
@@ -382,6 +705,97 @@ mod system_media_artwork_tests {
         pump.shutdown();
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(pump.reader.worker.is_none());
+    }
+
+    #[test]
+    fn current_track_reader_uses_enabled_database_locators_for_two_covers_then_missing() {
+        let directory = TestDirectory::new();
+        let mut database = Database::open_in_memory().expect("isolated in-memory library");
+        let root = database
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "isolated test source",
+                MediaLocator::FileSystem(directory.0.clone()),
+            )
+            .expect("register isolated source");
+        let path_a = directory.0.join("A").join("track-a.mp3");
+        let path_b = directory.0.join("B").join("track-b.mp3");
+        let path_c = directory.0.join("C").join("track-c.mp3");
+        for path in [&path_a, &path_b, &path_c] {
+            fs::create_dir_all(path.parent().expect("track parent"))
+                .expect("create isolated album directory");
+        }
+        let bytes_a = test_png([255, 0, 0]);
+        let bytes_b = test_png([0, 0, 255]);
+        fs::write(path_a.parent().unwrap().join("cover.jpg"), &bytes_a)
+            .expect("write A artwork sidecar");
+        fs::write(path_b.parent().unwrap().join("cover.jpg"), &bytes_b)
+            .expect("write B artwork sidecar");
+        let records = [
+            record(&root, &path_a, "Track A"),
+            record(&root, &path_b, "Track B"),
+            record(&root, &path_c, "Track C"),
+        ];
+        database
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Complete,
+                &records,
+                &records,
+                &[],
+                1_800_000_000_000,
+            )
+            .expect("persist fixture tracks and locators");
+        let tracks = database
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+            })
+            .expect("list fixture tracks")
+            .items;
+        let id_for = |title: &str| {
+            tracks
+                .iter()
+                .find(|track| track.title.as_deref() == Some(title))
+                .expect("find fixture track")
+                .id
+        };
+        let (track_a, track_b, track_c) = (id_for("Track A"), id_for("Track B"), id_for("Track C"));
+        let mut pump = ArtworkPump::new();
+        assert_eq!(
+            pump.update(Some(track_a), Some(&database)),
+            ArtworkAvailability::Pending
+        );
+        wait_for_result(&pump, track_a);
+        let ArtworkAvailability::Ready(Some(image_a)) = pump.update(Some(track_a), Some(&database))
+        else {
+            panic!("track A artwork should be ready");
+        };
+        assert_eq!(image_a.as_ref(), bytes_a.as_slice());
+
+        assert_eq!(
+            pump.update(Some(track_b), Some(&database)),
+            ArtworkAvailability::Pending
+        );
+        wait_for_result(&pump, track_b);
+        let ArtworkAvailability::Ready(Some(image_b)) = pump.update(Some(track_b), Some(&database))
+        else {
+            panic!("track B artwork should be ready");
+        };
+        assert_eq!(image_b.as_ref(), bytes_b.as_slice());
+
+        assert_eq!(
+            pump.update(Some(track_c), Some(&database)),
+            ArtworkAvailability::Pending
+        );
+        wait_for_result(&pump, track_c);
+        assert_eq!(
+            pump.update(Some(track_c), Some(&database)),
+            ArtworkAvailability::Ready(None)
+        );
+        assert!(pump.image.is_none(), "track C without artwork clears B");
+        pump.shutdown();
     }
 }
 
@@ -475,6 +889,7 @@ impl WindowsSystemMediaService {
             pump_gate: Mutex::new(()),
             last_update: Mutex::new(None),
             artwork: Mutex::new(ArtworkPump::new()),
+            published_metadata: Mutex::new(None),
         }
     }
 
@@ -581,17 +996,18 @@ impl WindowsSystemMediaService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         let track_id = current_track.as_ref().map(|track| track.id);
-        let thumbnail = self
+        let artwork = self
             .artwork
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .update(track_id, database);
-        let metadata = current_track.map(|track| MediaControlMetadata {
+        let current_metadata = current_track.map(|track| MediaControlMetadata {
             title: track.title,
             artist: track.artist,
             album: track.album,
-            thumbnail,
+            thumbnail: None,
         });
+        let publication = metadata_publication(current_metadata, artwork);
         let queue = playback
             .queue
             .lock()
@@ -600,12 +1016,17 @@ impl WindowsSystemMediaService {
             can_next: queue.as_ref().is_some_and(PlaybackQueue::can_next),
             can_previous: queue.as_ref().is_some_and(PlaybackQueue::can_previous),
         };
-        let update = MediaControlUpdate {
-            snapshot: playback.player.snapshot(),
-            metadata,
-            capabilities,
-        };
-        match controller.update(update) {
+        let mut published_metadata = self
+            .published_metadata
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match publish_metadata_update(publication, &mut published_metadata, |metadata| {
+            controller.update(MediaControlUpdate {
+                snapshot: playback.player.snapshot(),
+                metadata,
+                capabilities,
+            })
+        }) {
             Ok(()) => {
                 *self
                     .last_update
@@ -4514,6 +4935,7 @@ mod windows_library_integration_tests {
             pump_gate: Mutex::new(()),
             last_update: Mutex::new(None),
             artwork: Mutex::new(super::ArtworkPump::new()),
+            published_metadata: Mutex::new(None),
         };
         playback_error_service.handle_update_error(super::SystemMediaError::WorkerStopped);
         assert!(matches!(

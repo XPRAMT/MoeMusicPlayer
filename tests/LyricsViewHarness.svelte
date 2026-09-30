@@ -51,6 +51,11 @@
       activeRowContentHeight: number | null;
       activeRowBoxHeight: number | null;
       bothAuxiliaryRowContentHeight: number | null;
+      firstPrimaryTextHeight: number | null;
+      firstAuxiliaryTop: number | null;
+      firstPrimaryBottom: number | null;
+      longPrimaryHeight: number | null;
+      longPrimaryLineHeight: number | null;
       timedScrollTop: number | null;
       timedViewportHeight: number | null;
       preferences: LyricsPreferences;
@@ -86,7 +91,7 @@
       synced,
       lines: Array.from({ length: 120 }, (_, index) => ({
         startMs: synced ? index * 1_000 : null,
-        text: synced && index === 90 ? '最大字級與副行不裁切幾何測試'.repeat(12) : index === 1 ? '  ' : `${id} 歌詞 ${index}`,
+        text: synced && index === 90 ? '這段原文用來確認實際換行高度會隨可用歌詞寬度一起改變而更新' : index === 1 ? '  ' : `${id} 歌詞 ${index}`,
         translation: index % 3 === 0 ? `翻譯 ${index}` : index % 3 === 1 ? '  ' : null,
         romanization: index % 5 === 0 ? `拼音 ${index}` : index % 5 === 1 ? '' : null,
       })),
@@ -171,6 +176,8 @@
     const firstBothAuxiliary = rows.find((row) => row.querySelector('.lyric-translation') && row.querySelector('.lyric-romanization')) ?? null;
     const activePrimary = active?.querySelector<HTMLElement>('.lyric-primary') ?? null;
     const firstPrimary = rows[0]?.querySelector<HTMLElement>('.lyric-primary') ?? null;
+    const longPrimary = rows.find((row) => row.querySelector('.lyric-primary')?.textContent?.startsWith('這段原文'))?.querySelector<HTMLElement>('.lyric-primary') ?? null;
+    const firstAuxiliary = rows[0]?.querySelector<HTMLElement>('.lyric-translation, .lyric-romanization') ?? null;
     const lyricsRoot = document.querySelector<HTMLElement>('[data-testid="lyrics-view"]');
 
     return {
@@ -209,6 +216,11 @@
       activeRowContentHeight: rowContentHeight(active),
       activeRowBoxHeight: active?.getBoundingClientRect().height ?? null,
       bothAuxiliaryRowContentHeight: rowContentHeight(firstBothAuxiliary),
+      firstPrimaryTextHeight: firstPrimary?.getBoundingClientRect().height ?? null,
+      firstAuxiliaryTop: firstAuxiliary?.getBoundingClientRect().top ?? null,
+      firstPrimaryBottom: firstPrimary?.getBoundingClientRect().bottom ?? null,
+      longPrimaryHeight: longPrimary?.getBoundingClientRect().height ?? null,
+      longPrimaryLineHeight: longPrimary ? Number.parseFloat(getComputedStyle(longPrimary).lineHeight) : null,
       timedScrollTop: timed?.scrollTop ?? null,
       timedViewportHeight: timed?.clientHeight ?? null,
       preferences: { ...lyricsPreferences },
@@ -257,6 +269,10 @@
 </script>
 
 <main>
+  <div class="harness-lyrics-toolbar" role="group" aria-label="歌詞副行顯示">
+    <button type="button" class="lyrics-toggle" aria-label="切換譯文顯示" aria-pressed={lyricsPreferences.showTranslation} onclick={() => updatePreferences({ showTranslation: !lyricsPreferences.showTranslation })}>譯</button>
+    <button type="button" class="lyrics-toggle" aria-label="切換羅馬拼音顯示" aria-pressed={lyricsPreferences.showRomanization} onclick={() => updatePreferences({ showRomanization: !lyricsPreferences.showRomanization })}>羅</button>
+  </div>
   <LyricsView
     {trackId}
     {positionMs}
@@ -279,10 +295,13 @@
 
   main {
     box-sizing: border-box;
-    width: min(100%, 360px);
+    width: min(100%, 960px);
     min-height: 760px;
     padding: 20px;
     color: var(--text);
     background: var(--app-bg);
   }
+
+  .harness-lyrics-toolbar { display: flex; justify-content: flex-end; gap: 6px; padding: 8px; }
+  .lyrics-toggle { min-width: 34px; min-height: 32px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--panel); cursor: pointer; }
 </style>

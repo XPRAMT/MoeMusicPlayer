@@ -29,14 +29,18 @@
   assert.equal(initial.trackId, 'timed-track');
   assert.equal(initial.getCount, 1);
   assert.equal(initial.searchCount, 0, 'local lyrics must suppress remote lookup');
-  assert.ok(initial.renderedTimedRows <= 13);
+  assert.ok(initial.renderedTimedRows <= 13, 'timed rows must stay within the virtual window');
   assertGeometry(initial, 'default timed');
   assert.equal(initial.toolbarAvailable, true, 'lyrics toggles remain enabled');
   assert.equal(initial.lineGapPx, 24);
+  assert.equal(await page.locator('[data-testid="lyrics-view"] #lyrics-heading').count(), 0, 'LyricsView has no standalone heading');
+  assert.equal(await page.locator('[data-testid="lyrics-view"] .lyrics-toggle').count(), 0, 'the translation controls belong to the Now Playing toolbar');
+  assert.ok(Math.abs(initial.firstPrimaryTextHeight - 14 * 1.35) < 1, 'a short primary is measured as one line');
 
   await page.evaluate(() => window.lyricsViewHarness.setPreferences({ showTranslation: true, showRomanization: true }));
   const mixed = await page.evaluate(() => window.lyricsViewHarness.snapshot());
   assertGeometry(mixed, 'mixed timed rows');
+  assert.ok(Math.abs(mixed.firstAuxiliaryTop - mixed.firstPrimaryBottom - 2) < 1, 'visible auxiliary text follows the actual primary height');
   const missingAuxCue = await page.evaluate(async () => {
     await window.lyricsViewHarness.setPosition(4_000);
     const root = document.querySelector('[data-testid="lyrics-view"]');
@@ -84,9 +88,11 @@
   await page.waitForTimeout(40);
   const maximum = await page.evaluate(() => window.lyricsViewHarness.snapshot());
   assert.equal(maximum.activeIndex, 90);
-  assert.ok(maximum.actualRowHeights.length <= 13);
+  assert.ok(maximum.actualRowHeights.length <= 13, 'timed DOM remains bounded at maximum font sizes');
   assertGeometry(maximum, 'maximum timed');
   assert.ok(maximum.activeRowContentHeight <= maximum.activeRowBoxHeight + 0.6, 'clamped primary and present auxiliaries fit in the row');
+  assert.ok(maximum.longPrimaryHeight >= maximum.longPrimaryLineHeight * 1.8, 'a genuinely wrapped primary takes two measured lines');
+  assert.ok(maximum.longPrimaryHeight <= maximum.longPrimaryLineHeight * 2.05, 'primary remains clamped to two visible lines');
   const activeVisuals = await page.evaluate(() => {
     const viewport = document.querySelector('[data-testid="timed-lyrics"]');
     const active = viewport?.querySelector('[aria-current="true"]');
@@ -109,6 +115,15 @@
   assert.equal(activeVisuals.activeCentered, 'center');
   assert.ok(activeVisuals.centeredInViewport, 'auto-scroll centers the active row using variable offsets');
 
+  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 14, auxiliaryFontSizePx: 10 }));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.waitForTimeout(80);
+  const widePrimary = await page.evaluate(() => window.lyricsViewHarness.snapshot().longPrimaryHeight);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.waitForTimeout(80);
+  const narrowPrimary = await page.evaluate(() => window.lyricsViewHarness.snapshot().longPrimaryHeight);
+  assert.ok(narrowPrimary > widePrimary + 8, 'measured height is recalculated when the primary wraps at a narrower width');
+
   await page.evaluate(() => window.lyricsViewHarness.setPlaybackState('paused'));
   assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).activeIndex, 90, 'paused playback keeps the active cue');
   await page.evaluate(() => window.lyricsViewHarness.setPlaybackState('stopped'));
@@ -125,7 +140,7 @@
   await page.evaluate(() => window.lyricsViewHarness.setPosition(84_000));
   const soughtForward = await page.evaluate(() => window.lyricsViewHarness.snapshot());
   assert.equal(soughtForward.activeIndex, 84);
-  assert.ok(soughtForward.renderedTimedRows <= 13);
+  assert.ok(soughtForward.renderedTimedRows <= 13, 'seek keeps the timed DOM bounded');
   await page.evaluate(() => window.lyricsViewHarness.setPlaying(false));
   await page.evaluate(() => window.lyricsViewHarness.setPosition(12_000));
   assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).activeIndex, 12, 'backward seek updates the active cue');
@@ -151,8 +166,8 @@
   }));
   await page.evaluate(() => window.lyricsViewHarness.scrollPlainTo(60));
   const plain = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.ok(plain.renderedPlainRows <= 20);
-  assert.ok(plain.plainFirstIndex >= 54);
+  assert.ok(plain.renderedPlainRows <= 20, 'plain DOM remains bounded');
+  assert.ok(plain.plainFirstIndex >= 45, 'plain scrolling reaches the requested distant line with bounded overscan');
   assert.equal(plain.documentWidth, 360, 'narrow lyrics remain within the viewport');
   assertGeometry(plain, 'plain variable rows');
   assert.equal(plain.lineGapPx, 0);

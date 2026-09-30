@@ -25,6 +25,7 @@
     IconSearch,
     IconSettings,
     IconVolume2,
+    IconX,
   } from '@tabler/icons-svelte-runes';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { isTauri } from '@tauri-apps/api/core';
@@ -76,9 +77,9 @@
   import PlaylistTree from './lib/PlaylistTree.svelte';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import NowPlayingArrangement from './lib/NowPlayingArrangement.svelte';
-  import NowPlayingLayoutSwitch from './lib/NowPlayingLayoutSwitch.svelte';
   import PlaybackProgress from './lib/PlaybackProgress.svelte';
   import LyricsView from './lib/LyricsView.svelte';
+  import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
   import {
     createActiveTrackArtworkController,
     type ActiveArtworkState,
@@ -110,6 +111,11 @@
   let nowPlayingReturnView = $state<View>('library');
   let isNowPlayingMounted = $state(false);
   let isNowPlayingOpen = $state(false);
+  let isQuickSettingsOpen = $state(false);
+  let quickSettingsTrigger = $state<HTMLButtonElement | undefined>(undefined);
+  let quickSettingsCloseButton = $state<HTMLButtonElement | undefined>(undefined);
+  let quickSettingsDialog = $state<HTMLElement | undefined>(undefined);
+  let lyricsTopbarStatus = $state<{ source: string; sync: string } | null>(null);
   let nowPlayingBackButton = $state<HTMLButtonElement | undefined>(undefined);
   let dockArtworkButton = $state<HTMLButtonElement | undefined>(undefined);
   let settingsSection = $state<SettingsSection>('appearance');
@@ -1137,10 +1143,48 @@
 
   async function closeNowPlaying(): Promise<void> {
     if (!isNowPlayingOpen) return;
+    isQuickSettingsOpen = false;
     activeView = nowPlayingReturnView;
     isNowPlayingOpen = false;
     await tick();
     dockArtworkButton?.focus();
+  }
+
+  async function openQuickSettings(): Promise<void> {
+    if (isQuickSettingsOpen) return;
+    isQuickSettingsOpen = true;
+    await tick();
+    quickSettingsCloseButton?.focus();
+  }
+
+  async function closeQuickSettings(): Promise<void> {
+    if (!isQuickSettingsOpen) return;
+    isQuickSettingsOpen = false;
+    await tick();
+    quickSettingsTrigger?.focus();
+  }
+
+  function handleQuickSettingsKeydown(event: KeyboardEvent): void {
+    if (!isQuickSettingsOpen || !quickSettingsDialog) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      void closeQuickSettings();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(quickSettingsDialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    ));
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   async function togglePlayback(): Promise<void> {
@@ -1299,7 +1343,7 @@
 
 </script>
 
-<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} />
+<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onkeydown={handleQuickSettingsKeydown} />
 
 <div
   class="app-shell"
@@ -1789,58 +1833,22 @@
                     <p>只調整封面與歌詞區域的排列，不會重新載入播放或歌詞狀態。窄視窗會依選項順序堆疊。</p>
                   </div>
                 </div>
-                <NowPlayingLayoutSwitch layout={nowPlayingLayout} onChange={setNowPlayingLayout} />
-                <p class="settings-preference-status" class:error={nowPlayingLayoutState === 'error'} role="status">
-                  {nowPlayingLayoutError ?? (nowPlayingLayoutState === 'loading' ? '正在讀取正在播放排列…' : nowPlayingLayoutState === 'saving' ? '正在保存排列…' : nowPlayingLayoutState === 'preview' ? '瀏覽器預覽不會保存排列。' : `排列 ${nowPlayingLayout.toUpperCase()} 已保存。`)}
-                </p>
-                <div class="now-playing-appearance-settings">
-                  <div class="settings-panel-header">
-                    <div>
-                      <h3>封面背景</h3>
-                      <p>只影響「正在播放」頁。調整時即時預覽；快速拖動會合併保存。</p>
-                    </div>
-                  </div>
-                  <div
-                    class="now-playing-appearance-preview"
-                    style={`--preview-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --preview-surface-alpha: ${(100 - nowPlayingAppearancePreferences.surfaceTransparencyPercent) / 100};`}
-                    role="img"
-                    aria-label={`外觀預覽：模糊 ${nowPlayingAppearancePreferences.backgroundBlurPx} 像素，元件底色透明度 ${nowPlayingAppearancePreferences.surfaceTransparencyPercent}%`}
-                  >
-                    <span class="now-playing-appearance-preview-surface">歌詞面板</span>
-                    <span class="now-playing-appearance-preview-dock">底部播放控制</span>
-                  </div>
-                  <div class="lyrics-preference-grid">
-                    <label class="lyrics-preference-range">
-                      <span><strong>封面背景模糊</strong><output>{nowPlayingAppearancePreferences.backgroundBlurPx}px</output></span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="40"
-                        step="1"
-                        value={nowPlayingAppearancePreferences.backgroundBlurPx}
-                        aria-label="封面背景模糊程度"
-                        oninput={(event) => updateNowPlayingAppearancePreferences({ backgroundBlurPx: Number(event.currentTarget.value) })}
-                        onchange={(event) => updateNowPlayingAppearancePreferences({ backgroundBlurPx: Number(event.currentTarget.value) }, true)}
-                      />
-                    </label>
-                    <label class="lyrics-preference-range">
-                      <span><strong>元件底色透明度</strong><output>{nowPlayingAppearancePreferences.surfaceTransparencyPercent}%</output></span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="1"
-                        value={nowPlayingAppearancePreferences.surfaceTransparencyPercent}
-                        aria-label="元件底色透明度"
-                        oninput={(event) => updateNowPlayingAppearancePreferences({ surfaceTransparencyPercent: Number(event.currentTarget.value) })}
-                        onchange={(event) => updateNowPlayingAppearancePreferences({ surfaceTransparencyPercent: Number(event.currentTarget.value) }, true)}
-                      />
-                    </label>
-                  </div>
-                  <p class="settings-preference-status" class:error={nowPlayingAppearanceState === 'error'} role="status">
-                    {nowPlayingAppearanceError ?? (nowPlayingAppearanceState === 'loading' ? '正在讀取正在播放外觀…' : nowPlayingAppearanceState === 'saving' ? '正在保存正在播放外觀…' : nowPlayingAppearanceState === 'preview' ? '瀏覽器預覽不會保存正在播放外觀。' : '正在播放外觀已保存。')}
-                  </p>
-                </div>
+                <NowPlayingQuickSettingsControls
+                  groups="playback"
+                  layout={nowPlayingLayout}
+                  appearance={nowPlayingAppearancePreferences}
+                  lyrics={lyricsPreferences}
+                  appearanceState={nowPlayingAppearanceState}
+                  appearanceError={nowPlayingAppearanceError}
+                  lyricsState={lyricsPreferencesState}
+                  lyricsError={lyricsPreferencesError}
+                  layoutState={nowPlayingLayoutState}
+                  layoutError={nowPlayingLayoutError}
+                  onLayoutChange={setNowPlayingLayout}
+                  onAppearanceChange={updateNowPlayingAppearancePreferences}
+                  onLyricsChange={updateLyricsPreferences}
+                  onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
+                />
               </div>
             {:else if settingsSection === 'lyrics'}
               <div id="lyrics-panel" class="settings-panel" role="tabpanel" aria-labelledby="lyrics-tab" tabindex="0">
@@ -1849,81 +1857,23 @@
                     <h3>歌詞顯示</h3>
                     <p>設定會套用到所有歌曲；播放頁上方的「譯」「羅」按鈕也會更新同一組偏好。</p>
                   </div>
-                  <button class="outline-button" type="button" onclick={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}>恢復預設</button>
                 </div>
-                <div class="lyrics-preference-grid">
-                  <label class="lyrics-preference-toggle">
-                    <input
-                      type="checkbox"
-                      checked={lyricsPreferences.showTranslation}
-                      onchange={(event) => updateLyricsPreferences({ showTranslation: event.currentTarget.checked }, true)}
-                    />
-                    <span><strong>顯示譯文</strong><small>在每行原文下方顯示翻譯</small></span>
-                  </label>
-                  <label class="lyrics-preference-toggle">
-                    <input
-                      type="checkbox"
-                      checked={lyricsPreferences.showRomanization}
-                      onchange={(event) => updateLyricsPreferences({ showRomanization: event.currentTarget.checked }, true)}
-                    />
-                    <span><strong>顯示羅馬拼音</strong><small>在每行原文下方顯示拼音</small></span>
-                  </label>
-                  <label class="lyrics-preference-range">
-                    <span><strong>非目前歌詞透明度</strong><output>{lyricsPreferences.inactiveOpacityPercent}%</output></span>
-                    <input
-                      type="range"
-                      min="10"
-                      max="100"
-                      step="1"
-                      value={lyricsPreferences.inactiveOpacityPercent}
-                      aria-label="非目前歌詞透明度"
-                      oninput={(event) => updateLyricsPreferences({ inactiveOpacityPercent: Number(event.currentTarget.value) })}
-                      onchange={(event) => updateLyricsPreferences({ inactiveOpacityPercent: Number(event.currentTarget.value) }, true)}
-                    />
-                  </label>
-                  <label class="lyrics-preference-range">
-                    <span><strong>原文大小</strong><output>{lyricsPreferences.primaryFontSizePx}px</output></span>
-                    <input
-                      type="range"
-                      min="12"
-                      max="36"
-                      step="1"
-                      value={lyricsPreferences.primaryFontSizePx}
-                      aria-label="原文字級"
-                      oninput={(event) => updateLyricsPreferences({ primaryFontSizePx: Number(event.currentTarget.value) })}
-                      onchange={(event) => updateLyricsPreferences({ primaryFontSizePx: Number(event.currentTarget.value) }, true)}
-                    />
-                  </label>
-                  <label class="lyrics-preference-range">
-                    <span><strong>譯文與羅馬拼音大小</strong><output>{lyricsPreferences.auxiliaryFontSizePx}px</output></span>
-                    <input
-                      type="range"
-                      min="9"
-                      max="24"
-                      step="1"
-                      value={lyricsPreferences.auxiliaryFontSizePx}
-                      aria-label="譯文與羅馬拼音字級"
-                      oninput={(event) => updateLyricsPreferences({ auxiliaryFontSizePx: Number(event.currentTarget.value) })}
-                      onchange={(event) => updateLyricsPreferences({ auxiliaryFontSizePx: Number(event.currentTarget.value) }, true)}
-                    />
-                  </label>
-                  <label class="lyrics-preference-range">
-                    <span><strong>句間距</strong><output>{lyricsPreferences.lineGapPx}px</output></span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="64"
-                      step="1"
-                      value={lyricsPreferences.lineGapPx}
-                      aria-label="歌詞句間距"
-                      oninput={(event) => updateLyricsPreferences({ lineGapPx: Number(event.currentTarget.value) })}
-                      onchange={(event) => updateLyricsPreferences({ lineGapPx: Number(event.currentTarget.value) }, true)}
-                    />
-                  </label>
-                </div>
-                <p class="settings-preference-status" class:error={lyricsPreferencesState === 'error'} role="status">
-                  {lyricsPreferencesError ?? (lyricsPreferencesState === 'loading' ? '正在讀取歌詞設定…' : lyricsPreferencesState === 'saving' ? '正在保存歌詞設定…' : lyricsPreferencesState === 'preview' ? '瀏覽器預覽不會保存歌詞設定。' : '歌詞設定已保存。')}
-                </p>
+                <NowPlayingQuickSettingsControls
+                  groups="lyrics"
+                  layout={nowPlayingLayout}
+                  appearance={nowPlayingAppearancePreferences}
+                  lyrics={lyricsPreferences}
+                  appearanceState={nowPlayingAppearanceState}
+                  appearanceError={nowPlayingAppearanceError}
+                  lyricsState={lyricsPreferencesState}
+                  lyricsError={lyricsPreferencesError}
+                  layoutState={nowPlayingLayoutState}
+                  layoutError={nowPlayingLayoutError}
+                  onLayoutChange={setNowPlayingLayout}
+                  onAppearanceChange={updateNowPlayingAppearancePreferences}
+                  onLyricsChange={updateLyricsPreferences}
+                  onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
+                />
               </div>
             {:else}
               <div id="sources-panel" class="settings-source-panel" role="tabpanel" aria-labelledby="sources-tab" tabindex="0">
@@ -2032,7 +1982,7 @@
       aria-hidden={!isNowPlayingOpen}
       inert={!isNowPlayingOpen}
     >
-      <header class="topbar now-playing-overlay-topbar">
+      <header class="topbar now-playing-overlay-topbar" inert={isQuickSettingsOpen}>
         <button
           bind:this={nowPlayingBackButton}
           class="outline-button now-playing-overlay-return"
@@ -2045,8 +1995,22 @@
           <span>返回</span>
         </button>
         <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>NOW PLAYING</strong></div>
+        <div class="now-playing-topbar-tools">
+          {#if lyricsTopbarStatus}
+            <div class="lyrics-topbar-status" aria-label="歌詞來源與同步狀態">
+              <span>{lyricsTopbarStatus.source}</span><span>{lyricsTopbarStatus.sync}</span>
+            </div>
+          {/if}
+          <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
+            <button type="button" class="lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label="切換譯文顯示" onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>譯</button>
+            <button type="button" class="lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label="切換羅馬拼音顯示" onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>羅</button>
+          </div>
+          <button bind:this={quickSettingsTrigger} class="outline-button now-playing-quick-settings-trigger" type="button" aria-label="開啟快速設定" aria-haspopup="dialog" aria-expanded={isQuickSettingsOpen} onclick={() => void openQuickSettings()}>
+            <IconSettings size={18} stroke={1.7} aria-hidden="true" /><span>快速設定</span>
+          </button>
+        </div>
       </header>
-      <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body">
+      <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body" inert={isQuickSettingsOpen}>
         <div class="now-playing-overlay-content">
           <section class="now-playing-view" aria-labelledby="now-playing-heading">
             <NowPlayingArrangement layout={nowPlayingLayout}>
@@ -2093,16 +2057,53 @@
                   playbackState={playback?.state ?? 'empty'}
                   {lyricsPreferences}
                   onPreferencesChange={(patch) => updateLyricsPreferences(patch, true)}
+                  onStatusChange={(status) => { lyricsTopbarStatus = status; }}
                 />
               {/snippet}
             </NowPlayingArrangement>
           </section>
         </div>
       </div>
+      {#if isQuickSettingsOpen}
+        <button class="now-playing-quick-settings-scrim" type="button" tabindex="-1" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}></button>
+        <dialog open
+          bind:this={quickSettingsDialog}
+          class="now-playing-quick-settings-drawer"
+          aria-modal="true"
+          aria-labelledby="now-playing-quick-settings-title"
+          data-testid="now-playing-quick-settings"
+        >
+          <header class="quick-settings-drawer-header">
+            <h2 id="now-playing-quick-settings-title">快速設定</h2>
+            <button bind:this={quickSettingsCloseButton} class="outline-button icon-button" type="button" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}><IconX size={18} stroke={1.8} aria-hidden="true" /></button>
+          </header>
+          <nav class="quick-settings-nav" aria-label="快速設定區域">
+            <button type="button" onclick={() => quickSettingsDialog?.querySelector('#quick-settings-playback-heading')?.scrollIntoView({ block: 'start' })}>播放頁</button>
+            <button type="button" onclick={() => quickSettingsDialog?.querySelector('#quick-settings-lyrics-heading')?.scrollIntoView({ block: 'start' })}>歌詞外觀</button>
+          </nav>
+          <div class="quick-settings-drawer-scroll">
+            <NowPlayingQuickSettingsControls
+              layout={nowPlayingLayout}
+              appearance={nowPlayingAppearancePreferences}
+              lyrics={lyricsPreferences}
+              appearanceState={nowPlayingAppearanceState}
+              appearanceError={nowPlayingAppearanceError}
+              lyricsState={lyricsPreferencesState}
+              lyricsError={lyricsPreferencesError}
+              layoutState={nowPlayingLayoutState}
+              layoutError={nowPlayingLayoutError}
+              onLayoutChange={setNowPlayingLayout}
+              onAppearanceChange={updateNowPlayingAppearancePreferences}
+              onLyricsChange={updateLyricsPreferences}
+              onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
+            />
+          </div>
+        </dialog>
+      {/if}
     </section>
   {/if}
 
-  <footer class="player-dock" aria-label="播放控制">
+  <footer class="player-dock" aria-label="播放控制" inert={isQuickSettingsOpen}>
     <div class="dock-track">
       <button
         class="dock-art"

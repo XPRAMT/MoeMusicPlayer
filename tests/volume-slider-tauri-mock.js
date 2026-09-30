@@ -100,6 +100,7 @@
     },
     isVolumeCommandInFlight: () => activeVolumeCommands > 0,
     snapshot: () => ({ ...currentSnapshot }),
+    lyricsGetCount: 0,
   };
 
   const clone = (value) => structuredClone(value);
@@ -196,6 +197,7 @@
             items: [],
           };
         case 'lyrics_get_track':
+          volumeHarness.lyricsGetCount += 1;
           return {
             lyrics: {
               trackId: args.trackId,
@@ -207,9 +209,9 @@
               offsetMs: 0,
               synced: true,
               lines: [
-                { startMs: 0, text: '晨光落在窗沿', translation: null, romanization: null },
-                { startMs: 8_000, text: '微風輕輕唱著歌', translation: null, romanization: null },
-                { startMs: 16_000, text: '沿著旋律慢慢前行', translation: null, romanization: null },
+                { startMs: 0, text: '晨光落在窗沿', translation: 'Morning light rests on the window', romanization: 'chen guang luo zai chuang yan' },
+                { startMs: 8_000, text: '微風輕輕唱著歌，在漫長的午後沿著旋律慢慢走向遠方', translation: 'A long translated lyric line for the drawer layout check', romanization: 'wei feng qing qing chang zhe ge' },
+                { startMs: 16_000, text: '沿著旋律慢慢前行', translation: null, romanization: 'yan zhe xuan lv man man qian xing' },
                 { startMs: 24_000, text: '把今天交給遠方', translation: null, romanization: null },
               ],
             },

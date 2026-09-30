@@ -1,5 +1,5 @@
 ﻿<script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import { invokeCommand } from './ipc';
   import type {
     LyricsCandidate,
@@ -23,6 +23,8 @@
     findActiveLyricIndex,
     getPlainLyricWindow,
     getTimedLyricWindow,
+    getLyricsOffset,
+    updateLyricsRowHeight,
   } from './lyrics-window.js';
 
   type LyricsApi = {
@@ -50,6 +52,7 @@
     playbackState?: PlaybackState;
     lyricsPreferences?: LyricsPreferences;
     onPreferencesChange?: (patch: Partial<LyricsPreferences>) => void;
+    onStatusChange?: (status: { source: string; sync: string } | null) => void;
     api?: LyricsApi;
   }
 
@@ -67,6 +70,7 @@
     playbackState,
     lyricsPreferences = DEFAULT_LYRICS_PREFERENCES,
     onPreferencesChange = () => {},
+    onStatusChange,
     api = defaultLyricsApi,
   }: Props = $props();
 
@@ -84,6 +88,8 @@
   let plainViewport = $state<HTMLDivElement | null>(null);
   let plainScrollTop = $state(0);
   let plainViewportHeight = $state(480);
+  let layoutWidth = $state(0);
+  let layoutRevision = $state(0);
   let previousTrackId: string | null | undefined;
   let previousPlainLayout: ReturnType<typeof buildLyricsLayout> | null = null;
 
@@ -111,20 +117,107 @@
   let displayActiveTimedIndex = $derived(
     getDisplayActiveLyricIndex(activeTimedIndex, effectivePlaybackState),
   );
-  let timedLayout = $derived(buildLyricsLayout(timedLines, preferences, preferences.lineGapPx));
+  let timedLayout = $derived(buildLyricsLayout(timedLines, preferences, preferences.lineGapPx, layoutWidth));
   let visibleActiveTimedIndex = $derived(
     displayActiveTimedIndex >= 0 && timedLayout.heights[displayActiveTimedIndex] > 0
       ? displayActiveTimedIndex
       : -1,
   );
-  let plainLayout = $derived(buildLyricsLayout(lines, preferences, preferences.lineGapPx));
-  let timedWindow = $derived(getTimedLyricWindow(timedLayout, activeTimedIndex));
+  let plainLayout = $derived(buildLyricsLayout(lines, preferences, preferences.lineGapPx, layoutWidth));
+  let timedTotalHeight = $derived.by(() => { layoutRevision; return timedLayout.totalHeight; });
+  let plainTotalHeight = $derived.by(() => { layoutRevision; return plainLayout.totalHeight; });
+  let timedWindow = $derived.by(() => {
+    layoutRevision;
+    return getTimedLyricWindow(timedLayout, activeTimedIndex);
+  });
   let timedRenderedRows = $derived(timedWindow.rows.filter((index) => timedLayout.heights[index] > 0));
-  let plainWindow = $derived(
-    getPlainLyricWindow(plainLayout, plainScrollTop, plainViewportHeight),
-  );
+  let plainWindow = $derived.by(() => {
+    layoutRevision;
+    return getPlainLyricWindow(plainLayout, plainScrollTop, plainViewportHeight);
+  });
   let plainRenderedRows = $derived(plainWindow.rows.filter((index) => plainLayout.heights[index] > 0));
   let isTimed = $derived(timedLines.length > 0);
+
+  const rowObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver((entries) => {
+    const layout = isTimed ? timedLayout : plainLayout;
+    const viewport = isTimed ? timedViewport : plainViewport;
+    if (!viewport) return;
+    const anchorIndex = isTimed ? -1 : findLyricsRowAtOffset(layout, viewport.scrollTop);
+    const anchorOffset = anchorIndex < 0 ? 0 : viewport.scrollTop - getLyricsOffset(layout, anchorIndex);
+    let changed = false;
+    for (const entry of entries) {
+      const row = entry.target as HTMLElement;
+      if (Number(row.dataset.layoutGeneration) !== layout.generation) continue;
+      const index = Number(row.dataset.layoutIndex);
+      if (updateLyricsRowHeight(layout, index, row.getBoundingClientRect().height)) changed = true;
+    }
+    if (!changed) return;
+    layoutRevision += 1;
+    if (anchorIndex >= 0 && !isTimed) {
+      viewport.scrollTop = getLyricsOffset(layout, anchorIndex) + anchorOffset;
+      plainScrollTop = viewport.scrollTop;
+    }
+  });
+
+  function observeLyricRow(node: HTMLElement, index: number) {
+    const update = (nextIndex: number) => {
+      node.dataset.layoutIndex = String(nextIndex);
+      node.dataset.layoutGeneration = String((isTimed ? timedLayout : plainLayout).generation);
+      rowObserver?.observe(node, { box: 'border-box' });
+    };
+    update(index);
+    return {
+      update,
+      destroy() { rowObserver?.unobserve(node); },
+    };
+  }
+
+  function measureVisibleRows(generation: number) {
+    void tick().then(() => {
+      const layout = isTimed ? timedLayout : plainLayout;
+      const viewport = isTimed ? timedViewport : plainViewport;
+      if (!viewport || generation !== layout.generation) return;
+      const anchorIndex = isTimed ? -1 : findLyricsRowAtOffset(layout, viewport.scrollTop);
+      const anchorOffset = anchorIndex < 0 ? 0 : viewport.scrollTop - getLyricsOffset(layout, anchorIndex);
+      let changed = false;
+      for (const row of viewport.querySelectorAll<HTMLElement>(`.lyric-line[data-layout-generation="${generation}"]`)) {
+        changed = updateLyricsRowHeight(layout, Number(row.dataset.layoutIndex), row.getBoundingClientRect().height) || changed;
+      }
+      if (!changed) return;
+      layoutRevision += 1;
+      if (anchorIndex >= 0 && !isTimed) {
+        viewport.scrollTop = getLyricsOffset(layout, anchorIndex) + anchorOffset;
+        plainScrollTop = viewport.scrollTop;
+      }
+    });
+  }
+
+  $effect(() => {
+    const generation = isTimed ? timedLayout.generation : plainLayout.generation;
+    measureVisibleRows(generation);
+  });
+
+  $effect(() => {
+    const viewport = isTimed ? timedViewport : plainViewport;
+    if (!viewport) return;
+    const observer = new ResizeObserver(() => {
+      const nextWidth = Math.round(viewport.clientWidth);
+      if (nextWidth !== layoutWidth) layoutWidth = nextWidth;
+      plainViewportHeight = viewport.clientHeight;
+    });
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  });
+
+  $effect(() => {
+    layoutRevision;
+    timedLayout.generation;
+    plainLayout.generation;
+    const status = viewState.lyrics
+      ? { source: sourceLabel(viewState.lyrics.source), sync: isTimed ? '同步歌詞' : '純歌詞' }
+      : null;
+    onStatusChange?.(status);
+  });
 
   $effect(() => {
     const element = plainViewport;
@@ -137,8 +230,8 @@
     if (previousPlainLayout && previousPlainLayout !== nextLayout && previousPlainLayout.heights.length > 0) {
       const firstVisibleIndex = findLyricsRowAtOffset(previousPlainLayout, element.scrollTop);
       if (firstVisibleIndex >= 0) {
-        const intraRowOffset = element.scrollTop - previousPlainLayout.offsets[firstVisibleIndex];
-        element.scrollTop = nextLayout.offsets[Math.min(firstVisibleIndex, nextLayout.heights.length)] + intraRowOffset;
+        const intraRowOffset = element.scrollTop - getLyricsOffset(previousPlainLayout, firstVisibleIndex);
+        element.scrollTop = getLyricsOffset(nextLayout, Math.min(firstVisibleIndex, nextLayout.heights.length)) + intraRowOffset;
       }
       plainScrollTop = element.scrollTop;
     }
@@ -180,21 +273,22 @@
     const element = timedViewport;
     const activeIndex = activeTimedIndex;
     const layout = timedLayout;
+    layoutRevision;
     if (!element) return;
 
     const frame = requestAnimationFrame(() => {
       const visibleIndex = activeIndex >= 0 && layout.heights[activeIndex] <= 0
-        ? findLyricsRowAtOffset(layout, layout.offsets[activeIndex])
+        ? findLyricsRowAtOffset(layout, getLyricsOffset(layout, activeIndex))
         : activeIndex;
       const targetTop = visibleIndex < 0
         ? 0
-        : Math.max(0, layout.offsets[visibleIndex] + layout.heights[visibleIndex] / 2 - element.clientHeight / 2);
+        : Math.max(0, getLyricsOffset(layout, visibleIndex) + layout.heights[visibleIndex] / 2 - element.clientHeight / 2);
       element.scrollTop = targetTop;
     });
     return () => cancelAnimationFrame(frame);
   });
 
-  onDestroy(() => controller.dispose());
+  onDestroy(() => { controller.dispose(); rowObserver?.disconnect(); });
 
   function sourceLabel(source: TrackLyrics['source']): string {
     switch (source) {
@@ -250,38 +344,9 @@
   data-playback-state={effectivePlaybackState}
   data-line-gap={preferences.lineGapPx}
   data-active-cue-index={activeTimedIndex}
+  data-layout-revision={layoutRevision}
   style={`--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${preferences.auxiliaryFontSizePx}px`}
 >
-  <div class="lyrics-panel-heading">
-    <div>
-      <p class="section-kicker">LYRICS</p>
-      <h3 id="lyrics-heading">歌詞</h3>
-    </div>
-    {#if viewState.lyrics}
-      <div class="lyrics-source">
-        <span>{sourceLabel(viewState.lyrics.source)}</span>
-        <span>{isTimed ? '同步歌詞' : '純歌詞'}</span>
-      </div>
-    {/if}
-  </div>
-
-  <div class="lyrics-display-controls" role="group" aria-label="歌詞副行顯示">
-    <button
-      type="button"
-      class="lyrics-toggle"
-      aria-pressed={preferences.showTranslation}
-      aria-label="切換譯文顯示"
-      onclick={() => onPreferencesChange({ showTranslation: !preferences.showTranslation })}
-    >譯</button>
-    <button
-      type="button"
-      class="lyrics-toggle"
-      aria-pressed={preferences.showRomanization}
-      aria-label="切換羅馬拼音顯示"
-      onclick={() => onPreferencesChange({ showRomanization: !preferences.showRomanization })}
-    >羅</button>
-  </div>
-
   {#if !trackId}
     <p class="lyrics-placeholder" role="status">播放歌曲後會在此顯示歌詞。</p>
   {:else if viewState.phase === 'loading' && !viewState.lyrics}
@@ -298,10 +363,10 @@
         data-rendered-count={timedRenderedRows.length}
         data-window-start={timedWindow.start}
         data-window-end={timedWindow.end}
-        data-total-height={timedLayout.totalHeight}
+        data-total-height={timedTotalHeight}
       >
         <div class="lyrics-spacer" style={`height:${timedWindow.beforeHeight}px`} aria-hidden="true"></div>
-        {#each timedRenderedRows as timelineIndex (timelineIndex)}
+        {#each timedRenderedRows as timelineIndex (`${timelineIndex}:${timedLayout.generation}`)}
           {@const row = timedLines[timelineIndex]}
           <div
             class="lyric-line"
@@ -309,7 +374,8 @@
             class:active={timelineIndex === visibleActiveTimedIndex}
             data-lyric-index={row.index}
             data-timeline-index={timelineIndex}
-            style={`--lyric-text-opacity:${getLyricLineOpacity(timelineIndex, visibleActiveTimedIndex, preferences.inactiveOpacityPercent)};--lyric-row-height:${timedLayout.heights[timelineIndex]}px;--lyric-gap-after:${timedLayout.gaps[timelineIndex]}px`}
+            use:observeLyricRow={timelineIndex}
+            style={`--lyric-text-opacity:${getLyricLineOpacity(timelineIndex, visibleActiveTimedIndex, preferences.inactiveOpacityPercent)};--lyric-gap-after:${timedLayout.gaps[timelineIndex]}px`}
             aria-current={timelineIndex === visibleActiveTimedIndex ? 'true' : undefined}
           >
             {#if row.line.text?.trim()}<p class="lyric-primary">{row.line.text}</p>{/if}
@@ -330,12 +396,12 @@
         data-rendered-count={plainRenderedRows.length}
         data-window-start={plainWindow.start}
         data-window-end={plainWindow.end}
-        data-total-height={plainLayout.totalHeight}
+        data-total-height={plainTotalHeight}
       >
         <div class="lyrics-spacer" style={`height:${plainWindow.beforeHeight}px`} aria-hidden="true"></div>
-        {#each plainRenderedRows as rowIndex (rowIndex)}
+        {#each plainRenderedRows as rowIndex (`${rowIndex}:${plainLayout.generation}`)}
           {@const line = lines[rowIndex]}
-          <div class="lyric-line plain-lyric-line" class:empty={plainLayout.heights[rowIndex] === 0} data-lyric-index={rowIndex} style={`--lyric-row-height:${plainLayout.heights[rowIndex]}px;--lyric-gap-after:${plainLayout.gaps[rowIndex]}px`}>
+          <div class="lyric-line plain-lyric-line" class:empty={plainLayout.heights[rowIndex] === 0} data-lyric-index={rowIndex} use:observeLyricRow={rowIndex} style={`--lyric-gap-after:${plainLayout.gaps[rowIndex]}px`}>
             {#if line.text?.trim()}<p class="lyric-primary">{line.text}</p>{/if}
             {#if preferences.showTranslation && line.translation?.trim()}<p class="lyric-translation">{line.translation}</p>{/if}
             {#if preferences.showRomanization && line.romanization?.trim()}<p class="lyric-romanization">{line.romanization}</p>{/if}
@@ -417,67 +483,6 @@
     gap: 12px;
   }
 
-  .lyrics-panel-heading {
-    display: flex;
-    min-width: 0;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .lyrics-panel-heading h3 {
-    margin: 0;
-    color: var(--text);
-    font-size: 16px;
-    font-weight: 600;
-  }
-
-  .lyrics-source {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 5px;
-    color: var(--muted);
-    font-size: 10px;
-  }
-
-  .lyrics-source span {
-    padding: 4px 7px;
-    border: 1px solid var(--line);
-    border-radius: 99px;
-  }
-
-  .lyrics-display-controls {
-    display: flex;
-    flex: 0 0 auto;
-    gap: 6px;
-  }
-
-  .lyrics-toggle {
-    min-width: 36px;
-    min-height: 32px;
-    padding: 0 9px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    color: var(--muted);
-    background: var(--panel, #111);
-    font: inherit;
-    font-size: 11px;
-    font-weight: 650;
-    cursor: pointer;
-  }
-
-  .lyrics-toggle[aria-pressed='true'] {
-    border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
-    color: var(--accent-text);
-    background: color-mix(in srgb, var(--accent) 12%, var(--panel, #111));
-  }
-
-  .lyrics-toggle:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
   .lyrics-placeholder {
     display: grid;
     min-height: 150px;
@@ -510,7 +515,7 @@
     display: flex;
     box-sizing: border-box;
     width: 100%;
-    height: var(--lyric-row-height, auto);
+    height: auto;
     flex: 0 0 auto;
     flex-direction: column;
     justify-content: center;
@@ -552,8 +557,8 @@
 
   .lyric-primary {
     box-sizing: border-box;
-    height: calc(var(--lyric-primary-font-size, 14px) * 1.35 * 2);
-    flex: 0 0 auto;
+    max-height: calc(var(--lyric-primary-font-size, 14px) * 1.35 * 2);
+    flex: 0 1 auto;
     color: inherit;
     font-size: var(--lyric-primary-font-size, 14px);
     font-weight: 550;
@@ -565,8 +570,8 @@
   .lyric-translation,
   .lyric-romanization {
     box-sizing: border-box;
-    height: calc(var(--lyric-auxiliary-font-size, 10px) * 1.25);
-    flex: 0 0 auto;
+    max-height: calc(var(--lyric-auxiliary-font-size, 10px) * 1.25);
+    flex: 0 1 auto;
     color: var(--muted);
     font-size: var(--lyric-auxiliary-font-size, 10px);
     line-height: 1.25;
@@ -680,11 +685,6 @@
     color: var(--muted);
     font-size: 10px;
     line-height: 1.5;
-  }
-
-  @media (max-width: 420px) {
-    .lyrics-panel-heading { align-items: flex-start; }
-    .lyrics-display-controls { align-self: flex-start; }
   }
 
   @media (max-width: 560px) {

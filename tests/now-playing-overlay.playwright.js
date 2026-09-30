@@ -14,7 +14,8 @@ async page => {
   };
 
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('http://127.0.0.1:4173/tests/volume-slider-harness.html');
+  const harnessBaseUrl = page.url().split('/').slice(0, 3).join('/');
+  await page.goto(`${harnessBaseUrl}/tests/volume-slider-harness.html`);
   await page.waitForFunction(() => document.querySelector('.dock-art')?.disabled === false);
   await page.waitForFunction(() => document.querySelectorAll('.track-list-viewport .paged-virtual-row').length > 0);
 
@@ -49,7 +50,7 @@ async page => {
     await page.waitForFunction(() => document.querySelector('.app-shell')?.getAttribute('data-active-view') === 'settings');
     await page.getByRole('tab', { name: '正在播放' }).click();
     await page.getByRole('button', { name: layout === 'a' ? '排列 A：封面在前，歌詞在後' : '排列 B：歌詞在前，封面在後' }).click();
-    await page.waitForFunction((expected) => document.querySelector('#now-playing-layout-panel > [role="status"]')?.textContent?.includes(`排列 ${expected.toUpperCase()} 已保存`), layout);
+    await page.waitForFunction((expected) => document.querySelector('#now-playing-layout-panel .quick-settings-group [role="status"]')?.textContent?.includes(`排列 ${expected.toUpperCase()} 已保存`), layout);
   }
 
   async function readOverlayLayout() {
@@ -161,6 +162,83 @@ async page => {
   await page.waitForFunction(() => document.querySelector('.app-shell')?.getAttribute('data-active-view') === 'library');
   await rememberUnderlyingState(true);
   await openOverlay();
+  const trackIdBeforeQuickSettings = await page.evaluate(() => window.__volumeHarness.snapshot().currentTrack.id);
+  const lyricsFetchCountBeforeQuickSettings = await page.evaluate(() => window.__volumeHarness.lyricsGetCount);
+  await page.getByRole('button', { name: '開啟快速設定' }).click();
+  const quickSettings = page.getByRole('dialog', { name: '快速設定' });
+  await quickSettings.waitFor({ state: 'visible' });
+  for (const label of ['封面背景模糊程度', '元件底色透明度', '非目前歌詞透明度', '原文字級', '譯文與羅馬拼音字級', '歌詞句間距']) {
+    assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
+  }
+  assert.equal(await page.locator('.now-playing-topbar-tools .lyrics-topbar-status span').count(), 2, 'provider and sync labels are shown in the page toolbar');
+  assert.equal(await page.locator('.now-playing-overlay .lyrics-panel-heading').count(), 0, 'LyricsView has no heading');
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '歌詞句間距', 'Shift+Tab stays inside the settings dialog');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '關閉快速設定', 'Tab wraps focus to the close button');
+  assert.equal(await page.locator('.now-playing-overlay-body').evaluate((element) => element.inert), true, 'quick settings modal makes the covered playback view inert');
+  assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), true, 'modal drawer blocks dock controls while open');
+  await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-quick-settings-desktop.png' });
+  const drawerBounds = await quickSettings.boundingBox();
+  assert.ok(drawerBounds && drawerBounds.x >= 0 && drawerBounds.width <= 1280, 'desktop drawer stays within viewport bounds');
+  await quickSettings.getByRole('button', { name: '排列 B：歌詞在前，封面在後' }).click();
+  await page.waitForFunction(() => localStorage.getItem('__nowPlayingLayout') === 'b');
+  const blurSlider = quickSettings.locator('input[aria-label="封面背景模糊程度"]');
+  await blurSlider.evaluate((input) => {
+    input.value = '25';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('__appearancePreferences') || '{}').backgroundBlurPx === 25);
+  await blurSlider.evaluate((input) => {
+    input.value = '20';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('__appearancePreferences') || '{}').backgroundBlurPx === 20);
+  const drawerGap = quickSettings.locator('input[aria-label="歌詞句間距"]');
+  await drawerGap.evaluate((input) => {
+    input.value = '40';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('__lyricsPreferences') || '{}').lineGapPx === 40);
+  const drawerTranslation = quickSettings.getByRole('checkbox', { name: /顯示譯文/ });
+  await drawerTranslation.check();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('__lyricsPreferences') || '{}').showTranslation === true);
+  await drawerTranslation.uncheck();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('__lyricsPreferences') || '{}').showTranslation === false);
+  await quickSettings.getByRole('button', { name: '排列 A：封面在前，歌詞在後' }).click();
+  await page.waitForFunction(() => localStorage.getItem('__nowPlayingLayout') === 'a');
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-quick-settings-narrow.png' });
+  const narrowDrawerBounds = await quickSettings.boundingBox();
+  assert.ok(narrowDrawerBounds && narrowDrawerBounds.x >= 0 && narrowDrawerBounds.x + narrowDrawerBounds.width <= 360, 'narrow drawer stays within viewport bounds');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('[data-testid="now-playing-quick-settings"]'));
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '開啟快速設定', 'Escape returns focus to its trigger');
+  assert.equal(await page.locator('.now-playing-overlay-body').evaluate((element) => element.inert), false, 'closing drawer restores playback view interaction');
+  assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), false, 'closing drawer restores dock controls');
+  assert.equal(await page.evaluate(() => window.__volumeHarness.snapshot().currentTrack.id), trackIdBeforeQuickSettings, 'drawer preference changes retain the current track');
+  assert.equal(await page.evaluate(() => window.__volumeHarness.lyricsGetCount), lyricsFetchCountBeforeQuickSettings, 'drawer interactions do not reload or reset lyrics');
+  const translationToggle = page.locator('.now-playing-topbar-tools button[aria-label="切換譯文顯示"]');
+  await translationToggle.click();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('__lyricsPreferences') || '{}').showTranslation === true);
+  await translationToggle.click();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('__lyricsPreferences') || '{}').showTranslation === false);
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('__lyricsPreferences') || '{}').lineGapPx === 40);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.waitForTimeout(50);
+  await page.getByRole('button', { name: '開啟快速設定' }).click();
+  await page.locator('.now-playing-quick-settings-drawer input[aria-label="歌詞句間距"]').evaluate((input) => {
+    input.value = '24';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('__lyricsPreferences') || '{}').lineGapPx === 24);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('.now-playing-overlay .lyrics-panel-heading').count(), 0, 'lyrics title is removed from the page');
+  assert.equal(await page.locator('.now-playing-overlay .lyrics-toggle').count(), 2, 'translation controls moved to the top toolbar');
   const layoutA1920 = await (async () => {
     await page.setViewportSize({ width: 1920, height: 1080 });
     await page.waitForTimeout(35);
