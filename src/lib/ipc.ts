@@ -272,6 +272,7 @@ export interface LyricsPreferences {
   inactiveOpacityPercent: number;
   primaryFontSizePx: number;
   auxiliaryFontSizePx: number;
+  lineGapPx: number;
 }
 
 export interface NowPlayingAppearancePreferences {

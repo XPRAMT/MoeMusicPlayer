@@ -2,17 +2,16 @@
 import test from 'node:test';
 import {
   buildTimedLyricTimeline,
+  buildLyricsLayout,
+  findLyricsRowAtOffset,
   findActiveLyricIndex,
   getPlainLyricWindow,
   getTimedLyricWindow,
-  PLAIN_LYRIC_ROW_HEIGHT,
-  TIMED_LYRIC_ROW_HEIGHT,
 } from '../src/lib/lyrics-window.js';
 import {
   DEFAULT_LYRICS_PREFERENCES,
   getDisplayActiveLyricIndex,
   getLyricLineOpacity,
-  getLyricRowHeight,
   normalizeLyricsPreferences,
 } from '../src/lib/lyrics-preferences.js';
 import { createLyricsController } from '../src/lib/lyrics-controller.js';
@@ -63,35 +62,46 @@ test('timed lyric timeline follows forward seek, backward seek, and per-track of
 });
 
 test('timed lyric viewport keeps at most the active line and six neighbors on each side', () => {
+  const preferences = DEFAULT_LYRICS_PREFERENCES;
   const timeline = buildTimedLyricTimeline(Array.from({ length: 100_000 }, (_, index) => ({
     startMs: index * 1_000,
-    text: `歌詞 ${index}`,
+    text: index % 7 === 0 ? '  ' : `歌詞 ${index}`,
     translation: null,
     romanization: null,
   })));
-  const middle = getTimedLyricWindow(timeline, 50_000);
-  const beginning = getTimedLyricWindow(timeline, -1);
-  const ending = getTimedLyricWindow(timeline, timeline.length - 1);
+  const layout = buildLyricsLayout(timeline, preferences, preferences.lineGapPx);
+  const middle = getTimedLyricWindow(layout, 50_000);
+  const beginning = getTimedLyricWindow(layout, -1);
+  const ending = getTimedLyricWindow(layout, timeline.length - 1);
 
   assert.equal(middle.rows.length, 13);
-  assert.equal(middle.rows[0].index, 49_994);
-  assert.equal(middle.rows.at(-1).index, 50_006);
-  assert.equal(middle.beforeHeight, 49_994 * TIMED_LYRIC_ROW_HEIGHT);
-  assert.equal(middle.afterHeight, (100_000 - 50_007) * TIMED_LYRIC_ROW_HEIGHT);
-  assert.equal(beginning.rows.length, 7);
+  assert.equal(middle.rows[0], 49_994);
+  assert.equal(middle.rows.at(-1), 50_006);
+  assert.equal(middle.beforeHeight, layout.offsets[middle.start]);
+  assert.equal(middle.afterHeight, layout.totalHeight - layout.offsets[middle.end]);
+  assert.equal(beginning.rows.length, 8);
   assert.equal(ending.rows.length, 7);
   assert.ok(middle.rows.length < timeline.length);
 });
 
 test('plain lyrics use a bounded scroll window without claiming synchronized timing', () => {
-  const first = getPlainLyricWindow(10_000, PLAIN_LYRIC_ROW_HEIGHT * 100, PLAIN_LYRIC_ROW_HEIGHT * 5);
-  const top = getPlainLyricWindow(10_000, 0, PLAIN_LYRIC_ROW_HEIGHT * 5);
-  const bottom = getPlainLyricWindow(10_000, Number.MAX_SAFE_INTEGER, PLAIN_LYRIC_ROW_HEIGHT * 5);
+  const preferences = DEFAULT_LYRICS_PREFERENCES;
+  const lines = Array.from({ length: 10_000 }, (_, index) => ({
+    startMs: null,
+    text: `純歌詞 ${index}`,
+    translation: null,
+    romanization: null,
+  }));
+  const layout = buildLyricsLayout(lines, preferences, preferences.lineGapPx);
+  const rowHeight = layout.heights[0] + layout.gaps[0];
+  const first = getPlainLyricWindow(layout, layout.offsets[100], rowHeight * 5);
+  const top = getPlainLyricWindow(layout, 0, rowHeight * 5);
+  const bottom = getPlainLyricWindow(layout, Number.MAX_SAFE_INTEGER, rowHeight * 5);
 
   assert.equal(first.start, 94);
   assert.equal(first.end, 111);
   assert.ok(first.end - first.start <= 5 + 12);
-  assert.equal(first.beforeHeight, 94 * PLAIN_LYRIC_ROW_HEIGHT);
+  assert.equal(first.beforeHeight, layout.offsets[first.start]);
   assert.equal(top.start, 0);
   assert.equal(bottom.end, 10_000);
 });
@@ -104,65 +114,100 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
     inactiveOpacityPercent: 1,
     primaryFontSizePx: 99,
     auxiliaryFontSizePx: 4,
+    lineGapPx: 99,
   }), {
     showTranslation: true,
     showRomanization: false,
     inactiveOpacityPercent: 10,
     primaryFontSizePx: 36,
     auxiliaryFontSizePx: 9,
+    lineGapPx: 64,
   });
   assert.equal(normalizeLyricsPreferences({ inactiveOpacityPercent: 100.4 }).inactiveOpacityPercent, 100);
+  assert.equal(normalizeLyricsPreferences({ lineGapPx: -1 }).lineGapPx, 0);
 });
 
-test('row geometry accounts for two primary lines, enabled auxiliary rows, gaps and box edges', () => {
-  const defaults = getLyricRowHeight(DEFAULT_LYRICS_PREFERENCES);
-  const bothAuxiliary = getLyricRowHeight({
+test('variable row geometry adds only nonempty enabled auxiliary lines', () => {
+  const base = {
     ...DEFAULT_LYRICS_PREFERENCES,
     showTranslation: true,
     showRomanization: true,
-  });
-  const translationOnlyMaximum = getLyricRowHeight({
-    showTranslation: true,
-    showRomanization: false,
-    inactiveOpacityPercent: 70,
-    primaryFontSizePx: 36,
-    auxiliaryFontSizePx: 24,
-  });
-  const maximum = getLyricRowHeight({
-    showTranslation: true,
-    showRomanization: true,
-    inactiveOpacityPercent: 100,
-    primaryFontSizePx: 36,
-    auxiliaryFontSizePx: 24,
-  });
+  };
+  const rows = [
+    { text: '原文', translation: null, romanization: null },
+    { text: '原文', translation: ' ', romanization: '' },
+    { text: '原文', translation: '翻譯', romanization: null },
+    { text: '原文', translation: null, romanization: '拼音' },
+    { text: '原文', translation: '翻譯', romanization: '拼音' },
+    { text: '  ', translation: '', romanization: null },
+  ];
+  const layout = buildLyricsLayout(rows, base, 24);
+  const primary = 2 * base.primaryFontSizePx * 1.35 + 14 + 1;
+  const oneAux = primary + 2 + base.auxiliaryFontSizePx * 1.25;
+  const twoAux = primary + 4 + 2 * base.auxiliaryFontSizePx * 1.25;
 
-  assert.equal(defaults, 76);
-  assert.equal(bothAuxiliary, 82);
-  assert.equal(translationOnlyMaximum, 145);
-  assert.equal(maximum, 177);
-  assert.ok(maximum >= 2 * 36 * 1.35 + 2 * 24 * 1.25 + 2 * 2 + 14 + 1);
+  assert.equal(layout.heights[0], primary);
+  assert.equal(layout.heights[1], primary);
+  assert.equal(layout.heights[2], oneAux);
+  assert.equal(layout.heights[3], oneAux);
+  assert.equal(layout.heights[4], twoAux);
+  assert.equal(layout.heights[5], 0);
+  assert.deepEqual([...layout.visibleIndices], [0, 1, 2, 3, 4]);
+  assert.equal(layout.gaps[4], 0);
+  assert.equal(layout.totalHeight, [...layout.heights].reduce((sum, height) => sum + height, 0) + 4 * 24);
+
+  const translationHidden = buildLyricsLayout(rows, { ...base, showTranslation: false }, 24);
+  const romanizationHidden = buildLyricsLayout(rows, { ...base, showRomanization: false }, 24);
+  assert.equal(translationHidden.heights[2], primary);
+  assert.equal(romanizationHidden.heights[3], primary);
+  assert.equal(buildLyricsLayout(rows, { ...base, showTranslation: false, showRomanization: false }, 24).heights[5], 0);
 });
 
-test('timed and plain virtual spacers use the configured row height', () => {
-  const rowHeight = getLyricRowHeight({
-    ...DEFAULT_LYRICS_PREFERENCES,
-    showTranslation: true,
-    showRomanization: true,
-  });
-  const timeline = buildTimedLyricTimeline(Array.from({ length: 1_000 }, (_, index) => ({
-    startMs: index * 1_000,
-    text: `歌詞 ${index}`,
+test('layout binary search skips empty rows, honors gap extremes and keeps all-empty documents bounded', () => {
+  const lines = [
+    { text: '甲', translation: null, romanization: null },
+    { text: '', translation: null, romanization: null },
+    { text: '乙', translation: null, romanization: null },
+  ];
+  const noGap = buildLyricsLayout(lines, DEFAULT_LYRICS_PREFERENCES, 0);
+  const maxGap = buildLyricsLayout(lines, DEFAULT_LYRICS_PREFERENCES, 64);
+  assert.ok(Math.abs(maxGap.totalHeight - noGap.totalHeight - 64) < 0.001);
+  assert.equal(findLyricsRowAtOffset(maxGap, maxGap.offsets[1]), 2);
+  assert.equal(maxGap.gaps[0], 64);
+  assert.equal(maxGap.gaps[2], 0);
+
+  const empty = buildLyricsLayout(Array.from({ length: 100_000 }, () => ({ text: ' ', translation: null, romanization: null })), DEFAULT_LYRICS_PREFERENCES, 64);
+  assert.equal(empty.totalHeight, 0);
+  assert.equal(findLyricsRowAtOffset(empty, 0), -1);
+  assert.deepEqual(getPlainLyricWindow(empty, 0, 480).rows, []);
+
+  const sparseLines = Array.from({ length: 100_000 }, (_, index) => ({
+    text: [20_000, 50_000, 90_000].includes(index) ? `可見 ${index}` : '',
     translation: null,
     romanization: null,
-  })));
-  const timed = getTimedLyricWindow(timeline, 500, rowHeight);
-  const plain = getPlainLyricWindow(1_000, rowHeight * 40, rowHeight * 4, rowHeight);
+  }));
+  const sparseLayout = buildLyricsLayout(sparseLines, DEFAULT_LYRICS_PREFERENCES, 24);
+  const sparseWindow = getPlainLyricWindow(sparseLayout, sparseLayout.offsets[50_000], 480);
+  assert.deepEqual(sparseWindow.rows, [20_000, 50_000, 90_000]);
+  assert.ok(sparseWindow.rows.length <= 3, 'long empty stretches do not inflate the virtual window');
+});
 
-  assert.equal(timed.beforeHeight, timed.start * rowHeight);
-  assert.equal(timed.afterHeight, (timeline.length - timed.end) * rowHeight);
-  assert.equal(plain.beforeHeight, plain.start * rowHeight);
-  assert.equal(plain.afterHeight, (1_000 - plain.end) * rowHeight);
-  assert.ok(plain.end - plain.start <= 4 + 12);
+test('plain virtual window uses variable prefix offsets and bounds rows at distant scroll positions', () => {
+  const preferences = { ...DEFAULT_LYRICS_PREFERENCES, showTranslation: true, showRomanization: true };
+  const lines = Array.from({ length: 100_000 }, (_, index) => ({
+    text: index % 11 === 0 ? '' : `純歌詞 ${index}`,
+    translation: index % 3 === 0 ? `譯文 ${index}` : null,
+    romanization: index % 5 === 0 ? `拼音 ${index}` : null,
+  }));
+  const layout = buildLyricsLayout(lines, preferences, 24);
+  const targetOffset = layout.offsets[80_000];
+  const window = getPlainLyricWindow(layout, targetOffset, 400);
+
+  assert.ok(window.start < 80_000 && window.end > 80_000);
+  assert.ok(window.rows.length <= 13 + Math.ceil(400 / 52.8) + 2);
+  assert.equal(window.beforeHeight, layout.offsets[window.start]);
+  assert.equal(window.afterHeight, layout.totalHeight - layout.offsets[window.end]);
+  assert.equal(findLyricsRowAtOffset(layout, targetOffset), 80_000);
 });
 
 test('plain, stopped, and cue-less lyrics stay fully opaque; playing and paused keep the cue', () => {

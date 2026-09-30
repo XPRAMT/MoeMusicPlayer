@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
-        Mutex,
+        mpsc::{self, Receiver, SyncSender, TrySendError},
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -130,6 +131,258 @@ struct WindowsSystemMediaService {
     status: Mutex<WindowsSystemMediaStatus>,
     pump_gate: Mutex<()>,
     last_update: Mutex<Option<Instant>>,
+    artwork: Mutex<ArtworkPump>,
+}
+
+#[cfg(target_os = "windows")]
+struct ArtworkRequest {
+    track_id: TrackId,
+    locators: Vec<MediaLocator>,
+}
+
+#[cfg(target_os = "windows")]
+struct ArtworkResult {
+    track_id: TrackId,
+    bytes: Option<Arc<[u8]>>,
+}
+
+#[cfg(target_os = "windows")]
+struct ArtworkReader {
+    requests: Option<SyncSender<ArtworkRequest>>,
+    results: Arc<Mutex<Option<ArtworkResult>>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    stopped: Arc<std::sync::atomic::AtomicBool>,
+    worker_done: Receiver<()>,
+}
+
+#[cfg(target_os = "windows")]
+struct ArtworkPump {
+    reader: ArtworkReader,
+    active_track: Option<TrackId>,
+    pending: Option<ArtworkRequest>,
+    image: Option<Arc<[u8]>>,
+    stopped: bool,
+}
+
+#[cfg(target_os = "windows")]
+impl ArtworkReader {
+    fn new() -> Self {
+        let (request_tx, request_rx) = mpsc::sync_channel::<ArtworkRequest>(1);
+        let results = Arc::new(Mutex::new(None::<ArtworkResult>));
+        let worker_results = Arc::clone(&results);
+        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_stopped = Arc::clone(&stopped);
+        let (done_tx, worker_done) = mpsc::channel();
+        let worker = std::thread::Builder::new()
+            .name("moemusicplayer-smtc-artwork".to_owned())
+            .spawn(move || {
+                while let Ok(request) = request_rx.recv() {
+                    let bytes = match find_artwork(&request.locators) {
+                        ArtworkLookup::Found(image) => Some(Arc::<[u8]>::from(image.into_bytes())),
+                        ArtworkLookup::Missing | ArtworkLookup::Oversized => None,
+                    };
+                    if !worker_stopped.load(Ordering::Acquire) {
+                        *worker_results
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(ArtworkResult {
+                                track_id: request.track_id,
+                                bytes,
+                            })
+                    }
+                }
+                let _ = done_tx.send(());
+            })
+            .ok();
+        Self {
+            requests: worker.as_ref().map(|_| request_tx),
+            results,
+            worker,
+            stopped,
+            worker_done,
+        }
+    }
+
+    fn shutdown(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+        self.requests.take();
+        if let Some(worker) = self.worker.take() {
+            if self
+                .worker_done
+                .recv_timeout(Duration::from_millis(250))
+                .is_ok()
+            {
+                let _ = worker.join();
+            }
+            // A filesystem call can stall on an unavailable network volume.
+            // Keep shutdown bounded; the single worker exits and drops its
+            // handles once that OS call returns.
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ArtworkReader {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl ArtworkPump {
+    fn new() -> Self {
+        Self {
+            reader: ArtworkReader::new(),
+            active_track: None,
+            pending: None,
+            image: None,
+            stopped: false,
+        }
+    }
+
+    fn update(
+        &mut self,
+        track_id: Option<TrackId>,
+        database: Option<&Database>,
+    ) -> Option<Arc<[u8]>> {
+        if self.stopped {
+            return None;
+        }
+        let result = self
+            .reader
+            .results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(result) = result {
+            if Some(result.track_id) == self.active_track {
+                self.image = result.bytes;
+            }
+        }
+
+        if track_id != self.active_track {
+            self.active_track = track_id;
+            self.pending = None;
+            self.image = None;
+            if let (Some(track_id), Some(database)) = (track_id, database) {
+                self.pending = database
+                    .track_locators(track_id)
+                    .ok()
+                    .map(|locators| ArtworkRequest { track_id, locators });
+            }
+        }
+
+        if let Some(request) = self.pending.take() {
+            if let Some(sender) = self.reader.requests.as_ref() {
+                match sender.try_send(request) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(request)) => self.pending = Some(request),
+                    Err(TrySendError::Disconnected(_)) => {}
+                }
+            }
+        }
+        self.image.clone()
+    }
+
+    fn shutdown(&mut self) {
+        self.stopped = true;
+        self.pending = None;
+        self.image = None;
+        self.reader.shutdown();
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod system_media_artwork_tests {
+    use super::{ArtworkPump, ArtworkRequest, ArtworkResult};
+    use player_core::TrackId;
+    use std::{
+        sync::Arc,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    fn wait_for_result(pump: &ArtworkPump, track_id: TrackId) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let ready = pump
+                .reader
+                .results
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .is_some_and(|result| result.track_id == track_id);
+            if ready {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for artwork result"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn stale_track_result_is_discarded_and_latest_track_request_is_serviced() {
+        let mut pump = ArtworkPump::new();
+        let track_a = TrackId::new();
+        let track_b = TrackId::new();
+        pump.active_track = Some(track_a);
+        *pump.reader.results.lock().expect("result slot") = Some(ArtworkResult {
+            track_id: track_a,
+            bytes: Some(Arc::from(&b"old"[..])),
+        });
+
+        assert!(pump.update(Some(track_b), None).is_none());
+        assert!(pump.image.is_none());
+        pump.pending = Some(ArtworkRequest {
+            track_id: track_b,
+            locators: Vec::new(),
+        });
+        pump.update(Some(track_b), None);
+        wait_for_result(&pump, track_b);
+        assert!(pump.update(Some(track_b), None).is_none());
+        assert!(pump.image.is_none());
+        pump.shutdown();
+    }
+
+    #[test]
+    fn missing_art_clears_previous_image_and_same_track_does_not_requeue() {
+        let mut pump = ArtworkPump::new();
+        let track = TrackId::new();
+        pump.active_track = Some(track);
+        pump.image = Some(Arc::from(&b"previous cover"[..]));
+        pump.reader
+            .results
+            .lock()
+            .expect("result slot")
+            .replace(ArtworkResult {
+                track_id: track,
+                bytes: None,
+            });
+
+        assert!(pump.update(Some(track), None).is_none());
+        assert!(pump.image.is_none());
+        for _ in 0..3 {
+            assert!(pump.update(Some(track), None).is_none());
+        }
+        assert!(pump.pending.is_none());
+        pump.shutdown();
+    }
+
+    #[test]
+    fn shutdown_with_a_full_result_slot_joins_idle_reader() {
+        let mut pump = ArtworkPump::new();
+        *pump.reader.results.lock().expect("result slot") = Some(ArtworkResult {
+            track_id: TrackId::new(),
+            bytes: None,
+        });
+        let started = Instant::now();
+        pump.shutdown();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(pump.reader.worker.is_none());
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -221,6 +474,7 @@ impl WindowsSystemMediaService {
             status: Mutex::new(WindowsSystemMediaStatus::Starting),
             pump_gate: Mutex::new(()),
             last_update: Mutex::new(None),
+            artwork: Mutex::new(ArtworkPump::new()),
         }
     }
 
@@ -247,6 +501,10 @@ impl WindowsSystemMediaService {
     }
 
     fn shutdown(&self) {
+        self.artwork
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .shutdown();
         let controller = self
             .controller
             .lock()
@@ -322,10 +580,17 @@ impl WindowsSystemMediaService {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        let track_id = current_track.as_ref().map(|track| track.id);
+        let thumbnail = self
+            .artwork
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .update(track_id, database);
         let metadata = current_track.map(|track| MediaControlMetadata {
             title: track.title,
             artist: track.artist,
             album: track.album,
+            thumbnail,
         });
         let queue = playback
             .queue
@@ -4248,6 +4513,7 @@ mod windows_library_integration_tests {
             status: Mutex::new(super::WindowsSystemMediaStatus::Starting),
             pump_gate: Mutex::new(()),
             last_update: Mutex::new(None),
+            artwork: Mutex::new(super::ArtworkPump::new()),
         };
         playback_error_service.handle_update_error(super::SystemMediaError::WorkerStopped);
         assert!(matches!(

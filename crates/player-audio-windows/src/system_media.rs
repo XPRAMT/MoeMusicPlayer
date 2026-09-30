@@ -20,6 +20,9 @@ use windows::Media::{
     SystemMediaTransportControlsButtonPressedEventArgs,
     SystemMediaTransportControlsTimelineProperties,
 };
+use windows::Storage::Streams::{
+    DataWriter, InMemoryRandomAccessStream, RandomAccessStreamReference,
+};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::WinRT::{
     ISystemMediaTransportControlsInterop, RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED,
@@ -30,12 +33,26 @@ const EVENT_CAPACITY: usize = 32;
 
 /// Metadata shown by Windows for the current track. File paths and app track
 /// identifiers are intentionally not part of this projection.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct MediaControlMetadata {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    /// Original encoded artwork. Shared across periodic updates to avoid
+    /// copying or rebuilding the WinRT stream when only position changes.
+    pub thumbnail: Option<Arc<[u8]>>,
 }
+
+impl PartialEq for MediaControlMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.title == other.title
+            && self.artist == other.artist
+            && self.album == other.album
+            && same_artwork(self.thumbnail.as_ref(), other.thumbnail.as_ref())
+    }
+}
+
+impl Eq for MediaControlMetadata {}
 
 /// Queue capabilities advertised to Windows. They default to disabled until
 /// a real queue implementation can honor these requests.
@@ -263,6 +280,8 @@ struct NativeControls {
     button_token: i64,
     seek_token: i64,
     availability: Arc<RwLock<Availability>>,
+    thumbnail: Option<Arc<[u8]>>,
+    thumbnail_stream: Option<InMemoryRandomAccessStream>,
 }
 
 impl NativeControls {
@@ -333,6 +352,8 @@ impl NativeControls {
             button_token,
             seek_token,
             availability,
+            thumbnail: None,
+            thumbnail_stream: None,
         };
         native.initialize()?;
         Ok(native)
@@ -347,9 +368,14 @@ impl NativeControls {
         Ok(())
     }
 
-    fn update(&self, update: &MediaControlUpdate) -> Result<(), SystemMediaError> {
+    fn update(&mut self, update: &MediaControlUpdate) -> Result<(), SystemMediaError> {
         let availability = availability_for(update);
-        update_metadata(&self.controls, update.metadata.as_ref())?;
+        update_metadata(
+            &self.controls,
+            update.metadata.as_ref(),
+            &mut self.thumbnail,
+            &mut self.thumbnail_stream,
+        )?;
         update_timeline(&self.controls, &update.snapshot)?;
         self.controls
             .SetPlaybackStatus(playback_status(update.snapshot.state))
@@ -390,7 +416,7 @@ fn run_worker(
     }
     let _apartment = ApartmentGuard;
 
-    let native = match NativeControls::new(hwnd, &events) {
+    let mut native = match NativeControls::new(hwnd, &events) {
         Ok(native) => native,
         Err(error) => {
             let _ = events.try_send(SystemMediaEvent::Error(error));
@@ -446,6 +472,8 @@ fn set_button_availability(
 fn update_metadata(
     controls: &SystemMediaTransportControls,
     metadata: Option<&MediaControlMetadata>,
+    current_thumbnail: &mut Option<Arc<[u8]>>,
+    current_stream: &mut Option<InMemoryRandomAccessStream>,
 ) -> Result<(), SystemMediaError> {
     let updater = controls.DisplayUpdater().map_err(winrt_error)?;
     if let Some(metadata) = metadata {
@@ -468,10 +496,112 @@ fn update_metadata(
                 metadata.album.as_deref().unwrap_or_default(),
             ))
             .map_err(winrt_error)?;
+        if !same_artwork(current_thumbnail.as_ref(), metadata.thumbnail.as_ref()) {
+            match metadata.thumbnail.as_ref() {
+                Some(bytes) => {
+                    let result = (|| {
+                        let stream = InMemoryRandomAccessStream::new().map_err(winrt_error)?;
+                        let writer = DataWriter::CreateDataWriter(&stream).map_err(winrt_error)?;
+                        writer.WriteBytes(bytes).map_err(winrt_error)?;
+                        let stored = writer.StoreAsync().map_err(winrt_error)?;
+                        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                        loop {
+                            match stored.Status().map_err(winrt_error)?.0 {
+                                0 if std::time::Instant::now() < deadline => {
+                                    std::thread::sleep(Duration::from_millis(1));
+                                }
+                                0 => {
+                                    return Err(SystemMediaError::WindowsRuntime(
+                                        "artwork stream write timed out".to_owned(),
+                                    ));
+                                }
+                                1 => {
+                                    stored.GetResults().map_err(winrt_error)?;
+                                    break;
+                                }
+                                status => {
+                                    return Err(SystemMediaError::WindowsRuntime(format!(
+                                        "artwork stream write completed with {status:?}"
+                                    )))
+                                }
+                            }
+                        }
+                        // Detach before dropping DataWriter so it does not
+                        // close the retained random-access stream.
+                        let _ = writer.DetachStream().map_err(winrt_error)?;
+                        stream.Seek(0).map_err(winrt_error)?;
+                        let reference = RandomAccessStreamReference::CreateFromStream(&stream)
+                            .map_err(winrt_error)?;
+                        updater.SetThumbnail(&reference).map_err(winrt_error)?;
+                        Ok::<_, SystemMediaError>(stream)
+                    })();
+                    if let Ok(stream) = result {
+                        *current_thumbnail = metadata.thumbnail.clone();
+                        *current_stream = Some(stream);
+                    } else {
+                        // Artwork is optional. Keep metadata and transport
+                        // controls healthy if Windows rejects an image stream.
+                        updater.ClearAll().map_err(winrt_error)?;
+                        updater
+                            .SetType(MediaPlaybackType::Music)
+                            .map_err(winrt_error)?;
+                        let properties = updater.MusicProperties().map_err(winrt_error)?;
+                        set_music_metadata(properties, metadata)?;
+                        // Record the failed input as attempted so a periodic
+                        // position update does not retry the same bad image.
+                        *current_thumbnail = metadata.thumbnail.clone();
+                        *current_stream = None;
+                    }
+                }
+                None => {
+                    // ClearAll removes the previous image but also resets the
+                    // metadata; restore the current title/artist/album below.
+                    updater.ClearAll().map_err(winrt_error)?;
+                    updater
+                        .SetType(MediaPlaybackType::Music)
+                        .map_err(winrt_error)?;
+                    let properties = updater.MusicProperties().map_err(winrt_error)?;
+                    set_music_metadata(properties, metadata)?;
+                    *current_thumbnail = None;
+                    *current_stream = None;
+                }
+            }
+        }
     } else {
         updater.ClearAll().map_err(winrt_error)?;
+        *current_thumbnail = None;
+        *current_stream = None;
     }
     updater.Update().map_err(winrt_error)
+}
+
+fn set_music_metadata(
+    properties: windows::Media::MusicDisplayProperties,
+    metadata: &MediaControlMetadata,
+) -> Result<(), SystemMediaError> {
+    properties
+        .SetTitle(&HSTRING::from(
+            metadata.title.as_deref().unwrap_or_default(),
+        ))
+        .map_err(winrt_error)?;
+    properties
+        .SetArtist(&HSTRING::from(
+            metadata.artist.as_deref().unwrap_or_default(),
+        ))
+        .map_err(winrt_error)?;
+    properties
+        .SetAlbumTitle(&HSTRING::from(
+            metadata.album.as_deref().unwrap_or_default(),
+        ))
+        .map_err(winrt_error)
+}
+
+fn same_artwork(left: Option<&Arc<[u8]>>, right: Option<&Arc<[u8]>>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        _ => false,
+    }
 }
 
 fn update_timeline(
@@ -645,5 +775,17 @@ mod tests {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<SystemMediaError>();
         assert_send_sync::<SystemMediaEvent>();
+    }
+
+    #[test]
+    fn artwork_change_detection_uses_shared_identity_without_comparing_image_bytes() {
+        let first: Arc<[u8]> = Arc::from(&b"same"[..]);
+        let shared = Arc::clone(&first);
+        let equal_bytes_but_new_allocation: Arc<[u8]> = Arc::from(&b"same"[..]);
+        assert!(same_artwork(Some(&first), Some(&shared)));
+        assert!(!same_artwork(
+            Some(&first),
+            Some(&equal_bytes_but_new_allocation)
+        ));
     }
 }

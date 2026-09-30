@@ -6,21 +6,15 @@ export const DEFAULT_LYRICS_PREFERENCES = Object.freeze({
   inactiveOpacityPercent: 70,
   primaryFontSizePx: 14,
   auxiliaryFontSizePx: 10,
+  lineGapPx: 24,
 });
 
 export const LYRICS_PREFERENCE_LIMITS = Object.freeze({
   inactiveOpacityPercent: Object.freeze({ min: 10, max: 100 }),
   primaryFontSizePx: Object.freeze({ min: 12, max: 36 }),
   auxiliaryFontSizePx: Object.freeze({ min: 9, max: 24 }),
+  lineGapPx: Object.freeze({ min: 0, max: 64 }),
 });
-
-export const LYRIC_PRIMARY_MAX_LINES = 2;
-export const LYRIC_PRIMARY_LINE_HEIGHT = 1.35;
-export const LYRIC_AUXILIARY_LINE_HEIGHT = 1.25;
-export const LYRIC_ROW_GAP_PX = 2;
-export const LYRIC_ROW_VERTICAL_PADDING_PX = 14;
-export const LYRIC_ROW_BORDER_PX = 1;
-export const LYRIC_MIN_ROW_HEIGHT_PX = 76;
 
 /** @param {unknown} value @returns {LyricsPreferences} */
 export function normalizeLyricsPreferences(value) {
@@ -53,32 +47,13 @@ export function normalizeLyricsPreferences(value) {
       LYRICS_PREFERENCE_LIMITS.auxiliaryFontSizePx.max,
       DEFAULT_LYRICS_PREFERENCES.auxiliaryFontSizePx,
     ),
+    lineGapPx: normalizeInteger(
+      candidate.lineGapPx,
+      LYRICS_PREFERENCE_LIMITS.lineGapPx.min,
+      LYRICS_PREFERENCE_LIMITS.lineGapPx.max,
+      DEFAULT_LYRICS_PREFERENCES.lineGapPx,
+    ),
   };
-}
-
-/**
- * Fixed virtual rows must hold the largest possible primary text (two lines)
- * plus every enabled auxiliary line and the exact CSS spacing/box edges.
- * @param {LyricsPreferences | unknown} value
- */
-export function getLyricRowHeight(value) {
-  const preferences = normalizeLyricsPreferences(value);
-  const auxiliaryCount = Number(preferences.showTranslation) + Number(preferences.showRomanization);
-  const contentRows = 1 + auxiliaryCount;
-  const primaryHeight = preferences.primaryFontSizePx
-    * LYRIC_PRIMARY_LINE_HEIGHT
-    * LYRIC_PRIMARY_MAX_LINES;
-  const auxiliaryHeight = auxiliaryCount
-    * preferences.auxiliaryFontSizePx
-    * LYRIC_AUXILIARY_LINE_HEIGHT;
-  const gaps = Math.max(0, contentRows - 1) * LYRIC_ROW_GAP_PX;
-  const boxHeight = primaryHeight
-    + auxiliaryHeight
-    + gaps
-    + LYRIC_ROW_VERTICAL_PADDING_PX
-    + LYRIC_ROW_BORDER_PX;
-
-  return Math.max(LYRIC_MIN_ROW_HEIGHT_PX, Math.ceil(boxHeight));
 }
 
 /**

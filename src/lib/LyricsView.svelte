@@ -14,16 +14,15 @@
     DEFAULT_LYRICS_PREFERENCES,
     getDisplayActiveLyricIndex,
     getLyricLineOpacity,
-    getLyricRowHeight,
     normalizeLyricsPreferences,
   } from './lyrics-preferences.js';
   import {
+    buildLyricsLayout,
     buildTimedLyricTimeline,
+    findLyricsRowAtOffset,
     findActiveLyricIndex,
     getPlainLyricWindow,
     getTimedLyricWindow,
-    PLAIN_LYRIC_ROW_HEIGHT,
-    TIMED_LYRIC_ROW_HEIGHT,
   } from './lyrics-window.js';
 
   type LyricsApi = {
@@ -84,9 +83,9 @@
   let timedViewport = $state<HTMLDivElement | null>(null);
   let plainViewport = $state<HTMLDivElement | null>(null);
   let plainScrollTop = $state(0);
-  let plainViewportHeight = $state(PLAIN_LYRIC_ROW_HEIGHT * 6);
+  let plainViewportHeight = $state(480);
   let previousTrackId: string | null | undefined;
-  let previousPlainRowHeight = PLAIN_LYRIC_ROW_HEIGHT;
+  let previousPlainLayout: ReturnType<typeof buildLyricsLayout> | null = null;
 
   const controller = createLyricsController({
     api: {
@@ -102,7 +101,6 @@
 
   let lines = $derived(viewState.lyrics?.lines ?? []);
   let preferences = $derived(normalizeLyricsPreferences(lyricsPreferences));
-  let rowHeight = $derived(getLyricRowHeight(preferences));
   let effectivePlaybackState = $derived(playbackState ?? (isPlaying ? 'playing' : 'paused'));
   let timedLines = $derived(
     viewState.lyrics?.synced ? buildTimedLyricTimeline(lines) : [],
@@ -113,26 +111,38 @@
   let displayActiveTimedIndex = $derived(
     getDisplayActiveLyricIndex(activeTimedIndex, effectivePlaybackState),
   );
-  let timedWindow = $derived(getTimedLyricWindow(timedLines, activeTimedIndex, rowHeight));
-  let plainWindow = $derived(
-    getPlainLyricWindow(lines.length, plainScrollTop, plainViewportHeight, rowHeight),
+  let timedLayout = $derived(buildLyricsLayout(timedLines, preferences, preferences.lineGapPx));
+  let visibleActiveTimedIndex = $derived(
+    displayActiveTimedIndex >= 0 && timedLayout.heights[displayActiveTimedIndex] > 0
+      ? displayActiveTimedIndex
+      : -1,
   );
+  let plainLayout = $derived(buildLyricsLayout(lines, preferences, preferences.lineGapPx));
+  let timedWindow = $derived(getTimedLyricWindow(timedLayout, activeTimedIndex));
+  let timedRenderedRows = $derived(timedWindow.rows.filter((index) => timedLayout.heights[index] > 0));
+  let plainWindow = $derived(
+    getPlainLyricWindow(plainLayout, plainScrollTop, plainViewportHeight),
+  );
+  let plainRenderedRows = $derived(plainWindow.rows.filter((index) => plainLayout.heights[index] > 0));
   let isTimed = $derived(timedLines.length > 0);
 
   $effect(() => {
     const element = plainViewport;
-    const nextRowHeight = rowHeight;
+    const nextLayout = plainLayout;
     if (!element) {
-      previousPlainRowHeight = nextRowHeight;
+      previousPlainLayout = nextLayout;
       return;
     }
 
-    if (previousPlainRowHeight !== nextRowHeight) {
-      const firstVisibleIndex = Math.floor(element.scrollTop / previousPlainRowHeight);
-      element.scrollTop = firstVisibleIndex * nextRowHeight;
+    if (previousPlainLayout && previousPlainLayout !== nextLayout && previousPlainLayout.heights.length > 0) {
+      const firstVisibleIndex = findLyricsRowAtOffset(previousPlainLayout, element.scrollTop);
+      if (firstVisibleIndex >= 0) {
+        const intraRowOffset = element.scrollTop - previousPlainLayout.offsets[firstVisibleIndex];
+        element.scrollTop = nextLayout.offsets[Math.min(firstVisibleIndex, nextLayout.heights.length)] + intraRowOffset;
+      }
       plainScrollTop = element.scrollTop;
-      previousPlainRowHeight = nextRowHeight;
     }
+    previousPlainLayout = nextLayout;
   });
 
   $effect(() => {
@@ -169,16 +179,16 @@
   $effect(() => {
     const element = timedViewport;
     const activeIndex = activeTimedIndex;
-    const currentRowHeight = rowHeight;
+    const layout = timedLayout;
     if (!element) return;
 
     const frame = requestAnimationFrame(() => {
-      const targetTop = activeIndex < 0
+      const visibleIndex = activeIndex >= 0 && layout.heights[activeIndex] <= 0
+        ? findLyricsRowAtOffset(layout, layout.offsets[activeIndex])
+        : activeIndex;
+      const targetTop = visibleIndex < 0
         ? 0
-        : Math.max(
-          0,
-          activeIndex * currentRowHeight - (element.clientHeight - currentRowHeight) / 2,
-        );
+        : Math.max(0, layout.offsets[visibleIndex] + layout.heights[visibleIndex] / 2 - element.clientHeight / 2);
       element.scrollTop = targetTop;
     });
     return () => cancelAnimationFrame(frame);
@@ -238,8 +248,9 @@
   data-phase={viewState.phase}
   data-playing={isPlaying ? 'true' : 'false'}
   data-playback-state={effectivePlaybackState}
-  data-row-height={rowHeight}
-  style={`--lyric-row-height:${rowHeight}px;--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${preferences.auxiliaryFontSizePx}px`}
+  data-line-gap={preferences.lineGapPx}
+  data-active-cue-index={activeTimedIndex}
+  style={`--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${preferences.auxiliaryFontSizePx}px`}
 >
   <div class="lyrics-panel-heading">
     <div>
@@ -284,25 +295,26 @@
         aria-live="off"
         bind:this={timedViewport}
         data-testid="timed-lyrics"
-        data-rendered-count={timedWindow.rows.length}
+        data-rendered-count={timedRenderedRows.length}
         data-window-start={timedWindow.start}
         data-window-end={timedWindow.end}
-        data-row-height={rowHeight}
+        data-total-height={timedLayout.totalHeight}
       >
         <div class="lyrics-spacer" style={`height:${timedWindow.beforeHeight}px`} aria-hidden="true"></div>
-        {#each timedWindow.rows as row, visibleIndex (row.index)}
-          {@const timelineIndex = timedWindow.start + visibleIndex}
+        {#each timedRenderedRows as timelineIndex (timelineIndex)}
+          {@const row = timedLines[timelineIndex]}
           <div
             class="lyric-line"
-            class:active={timelineIndex === displayActiveTimedIndex}
+            class:empty={timedLayout.heights[timelineIndex] === 0}
+            class:active={timelineIndex === visibleActiveTimedIndex}
             data-lyric-index={row.index}
             data-timeline-index={timelineIndex}
-            style={`--lyric-text-opacity:${getLyricLineOpacity(timelineIndex, displayActiveTimedIndex, preferences.inactiveOpacityPercent)}`}
-            aria-current={timelineIndex === displayActiveTimedIndex ? 'true' : undefined}
+            style={`--lyric-text-opacity:${getLyricLineOpacity(timelineIndex, visibleActiveTimedIndex, preferences.inactiveOpacityPercent)};--lyric-row-height:${timedLayout.heights[timelineIndex]}px;--lyric-gap-after:${timedLayout.gaps[timelineIndex]}px`}
+            aria-current={timelineIndex === visibleActiveTimedIndex ? 'true' : undefined}
           >
-            <p class="lyric-primary">{row.line.text || ' '}</p>
-            {#if preferences.showTranslation && row.line.translation}<p class="lyric-translation">{row.line.translation}</p>{/if}
-            {#if preferences.showRomanization && row.line.romanization}<p class="lyric-romanization">{row.line.romanization}</p>{/if}
+            {#if row.line.text?.trim()}<p class="lyric-primary">{row.line.text}</p>{/if}
+            {#if preferences.showTranslation && row.line.translation?.trim()}<p class="lyric-translation">{row.line.translation}</p>{/if}
+            {#if preferences.showRomanization && row.line.romanization?.trim()}<p class="lyric-romanization">{row.line.romanization}</p>{/if}
           </div>
         {/each}
         <div class="lyrics-spacer" style={`height:${timedWindow.afterHeight}px`} aria-hidden="true"></div>
@@ -315,17 +327,18 @@
         aria-live="off"
         bind:this={plainViewport}
         data-testid="plain-lyrics"
-        data-rendered-count={plainWindow.end - plainWindow.start}
+        data-rendered-count={plainRenderedRows.length}
         data-window-start={plainWindow.start}
         data-window-end={plainWindow.end}
-        data-row-height={rowHeight}
+        data-total-height={plainLayout.totalHeight}
       >
         <div class="lyrics-spacer" style={`height:${plainWindow.beforeHeight}px`} aria-hidden="true"></div>
-        {#each lines.slice(plainWindow.start, plainWindow.end) as line, visibleIndex (plainWindow.start + visibleIndex)}
-          <div class="lyric-line plain-lyric-line" data-lyric-index={plainWindow.start + visibleIndex}>
-            <p class="lyric-primary">{line.text || ' '}</p>
-            {#if preferences.showTranslation && line.translation}<p class="lyric-translation">{line.translation}</p>{/if}
-            {#if preferences.showRomanization && line.romanization}<p class="lyric-romanization">{line.romanization}</p>{/if}
+        {#each plainRenderedRows as rowIndex (rowIndex)}
+          {@const line = lines[rowIndex]}
+          <div class="lyric-line plain-lyric-line" class:empty={plainLayout.heights[rowIndex] === 0} data-lyric-index={rowIndex} style={`--lyric-row-height:${plainLayout.heights[rowIndex]}px;--lyric-gap-after:${plainLayout.gaps[rowIndex]}px`}>
+            {#if line.text?.trim()}<p class="lyric-primary">{line.text}</p>{/if}
+            {#if preferences.showTranslation && line.translation?.trim()}<p class="lyric-translation">{line.translation}</p>{/if}
+            {#if preferences.showRomanization && line.romanization?.trim()}<p class="lyric-romanization">{line.romanization}</p>{/if}
           </div>
         {/each}
         <div class="lyrics-spacer" style={`height:${plainWindow.afterHeight}px`} aria-hidden="true"></div>
@@ -497,22 +510,30 @@
     display: flex;
     box-sizing: border-box;
     width: 100%;
-    height: var(--lyric-row-height);
-    flex: 0 0 var(--lyric-row-height);
+    height: var(--lyric-row-height, auto);
+    flex: 0 0 auto;
     flex-direction: column;
     justify-content: center;
     gap: 2px;
     overflow: hidden;
     padding: 7px 9px;
+    margin-bottom: var(--lyric-gap-after, 0px);
     border-bottom: 1px solid rgba(var(--text-rgb), 0.045);
     color: var(--muted);
-    transition: color 140ms ease, background-color 140ms ease;
+    transition: color 140ms ease;
   }
 
   .lyric-line.active {
-    border-radius: 7px;
     color: var(--text);
-    background: color-mix(in srgb, var(--accent) 11%, transparent);
+    background: transparent;
+  }
+
+  .lyric-line.empty {
+    height: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    border: 0;
   }
 
   .lyric-primary,
@@ -530,6 +551,9 @@
   }
 
   .lyric-primary {
+    box-sizing: border-box;
+    height: calc(var(--lyric-primary-font-size, 14px) * 1.35 * 2);
+    flex: 0 0 auto;
     color: inherit;
     font-size: var(--lyric-primary-font-size, 14px);
     font-weight: 550;
@@ -540,6 +564,9 @@
 
   .lyric-translation,
   .lyric-romanization {
+    box-sizing: border-box;
+    height: calc(var(--lyric-auxiliary-font-size, 10px) * 1.25);
+    flex: 0 0 auto;
     color: var(--muted);
     font-size: var(--lyric-auxiliary-font-size, 10px);
     line-height: 1.25;

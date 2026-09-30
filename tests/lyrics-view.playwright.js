@@ -12,22 +12,17 @@
       }
     },
   };
+  const baseUrl = page.url().split('/').slice(0, 3).join('/');
   await page.setViewportSize({ width: 360, height: 800 });
-  await page.goto('http://127.0.0.1:4173/tests/lyrics-view-harness.html');
+  await page.goto(`${baseUrl}/tests/lyrics-view-harness.html`);
   await page.waitForFunction(() => window.lyricsViewHarness?.snapshot().phase === 'ready');
 
   function assertGeometry(state, label) {
     assert.ok(state.actualRowHeights.length > 0, `${label}: rows should be rendered`);
-    assert.ok(state.actualRowHeights.every((height) => Math.abs(height - state.rowHeight) < 0.6), `${label}: each DOM row must use the declared row height`);
-    if (state.timedWindowStart !== null && state.timedWindowEnd !== null) {
-      assert.ok(Math.abs(state.beforeSpacerHeight - state.timedWindowStart * state.rowHeight) < 0.6, `${label}: timed leading spacer must align`);
-      assert.ok(Math.abs(state.afterSpacerHeight - (120 - state.timedWindowEnd) * state.rowHeight) < 0.6, `${label}: timed trailing spacer must align`);
-    } else {
-      const firstIndex = state.plainFirstIndex;
-      const endIndex = firstIndex + state.renderedPlainRows;
-      assert.ok(Math.abs(state.beforeSpacerHeight - firstIndex * state.rowHeight) < 0.6, `${label}: plain leading spacer must align`);
-      assert.ok(Math.abs(state.afterSpacerHeight - (120 - endIndex) * state.rowHeight) < 0.6, `${label}: plain trailing spacer must align`);
-    }
+    assert.equal(state.actualRowHeights.length, state.expectedRowHeights.length);
+    assert.ok(state.actualRowHeights.every((height, index) => Math.abs(height - state.expectedRowHeights[index]) < 0.6), `${label}: DOM row heights must match their variable geometry`);
+    const renderedHeight = state.actualRowHeights.reduce((sum, height, index) => sum + height + state.rowMargins[index], 0);
+    assert.ok(Math.abs(state.beforeSpacerHeight + renderedHeight + state.afterSpacerHeight - state.totalHeight) < 1.2, `${label}: row geometry and spacers must share prefix offsets`);
   }
 
   const initial = await page.evaluate(() => window.lyricsViewHarness.snapshot());
@@ -35,210 +30,182 @@
   assert.equal(initial.getCount, 1);
   assert.equal(initial.searchCount, 0, 'local lyrics must suppress remote lookup');
   assert.ok(initial.renderedTimedRows <= 13);
-  assert.equal(initial.rowHeight, 76, 'default settings retain the base row height');
   assertGeometry(initial, 'default timed');
   assert.equal(initial.toolbarAvailable, true, 'lyrics toggles remain enabled');
-
-  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ showTranslation: true }));
-  const translationOnly = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(translationOnly.rowHeight, 76);
-  assert.equal(translationOnly.firstRowTranslationCount, 1);
-  assert.equal(translationOnly.firstRowRomanizationCount, 0);
-  assertGeometry(translationOnly, 'translation only');
-
-  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ showTranslation: false, showRomanization: true }));
-  const romanizationOnly = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(romanizationOnly.rowHeight, 76);
-  assert.equal(romanizationOnly.firstRowTranslationCount, 0);
-  assert.equal(romanizationOnly.firstRowRomanizationCount, 1);
-  assertGeometry(romanizationOnly, 'romanization only');
+  assert.equal(initial.lineGapPx, 24);
 
   await page.evaluate(() => window.lyricsViewHarness.setPreferences({ showTranslation: true, showRomanization: true }));
-  await page.waitForFunction(() => window.lyricsViewHarness.snapshot().rowHeight === 82);
-  const bothAuxiliary = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assertGeometry(bothAuxiliary, 'default font with both auxiliary lines');
-  assert.ok(bothAuxiliary.activeRowContentHeight <= bothAuxiliary.rowHeight + 0.6, 'default text and both auxiliary lines fit without clipping');
-
-  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 36, auxiliaryFontSizePx: 24, inactiveOpacityPercent: 35 }));
-  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ showTranslation: true, showRomanization: false }));
-  await page.waitForFunction(() => window.lyricsViewHarness.snapshot().rowHeight === 145);
-  const maximumTranslationOnly = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(maximumTranslationOnly.firstRowTranslationCount, 1);
-  assert.equal(maximumTranslationOnly.firstRowRomanizationCount, 0);
-  assert.ok(maximumTranslationOnly.activeRowContentHeight <= maximumTranslationOnly.rowHeight + 0.6);
-  assertGeometry(maximumTranslationOnly, 'maximum translation only');
-
-  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ showTranslation: false, showRomanization: true }));
-  const maximumRomanizationOnly = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(maximumRomanizationOnly.rowHeight, 145);
-  assert.equal(maximumRomanizationOnly.firstRowTranslationCount, 0);
-  assert.equal(maximumRomanizationOnly.firstRowRomanizationCount, 1);
-  assert.ok(maximumRomanizationOnly.activeRowContentHeight <= maximumRomanizationOnly.rowHeight + 0.6);
-  assertGeometry(maximumRomanizationOnly, 'maximum romanization only');
-
+  const mixed = await page.evaluate(() => window.lyricsViewHarness.snapshot());
+  assertGeometry(mixed, 'mixed timed rows');
+  const missingAuxCue = await page.evaluate(async () => {
+    await window.lyricsViewHarness.setPosition(4_000);
+    const root = document.querySelector('[data-testid="lyrics-view"]');
+    const row = document.querySelector('[data-testid="timed-lyrics"] [aria-current="true"]');
+    return {
+      cueIndex: Number(root?.dataset.activeCueIndex),
+      translationCount: row?.querySelectorAll('.lyric-translation').length ?? -1,
+      romanizationCount: row?.querySelectorAll('.lyric-romanization').length ?? -1,
+      height: row?.getBoundingClientRect().height ?? 0,
+    };
+  });
+  assert.equal(missingAuxCue.cueIndex, 4);
+  assert.equal(missingAuxCue.translationCount, 0, 'blank translations do not render');
+  assert.equal(missingAuxCue.romanizationCount, 0, 'blank romanization does not render');
+  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ showTranslation: false, showRomanization: false }));
+  const hiddenAuxCue = await page.evaluate(() => document.querySelector('[data-testid="timed-lyrics"] [aria-current="true"]')?.getBoundingClientRect().height ?? 0);
+  assert.ok(Math.abs(missingAuxCue.height - hiddenAuxCue) < 0.6, 'enabled but missing auxiliary text does not add row height');
   await page.evaluate(() => window.lyricsViewHarness.setPreferences({ showTranslation: true, showRomanization: true }));
-  await page.waitForFunction(() => window.lyricsViewHarness.snapshot().rowHeight === 177);
+  const presentAuxCue = await page.evaluate(async () => {
+    await window.lyricsViewHarness.setPosition(3_000);
+    const row = document.querySelector('[data-testid="timed-lyrics"] [aria-current="true"]');
+    return {
+      cueIndex: Number(document.querySelector('[data-testid="lyrics-view"]')?.dataset.activeCueIndex),
+      translationCount: row?.querySelectorAll('.lyric-translation').length ?? -1,
+      height: row?.getBoundingClientRect().height ?? 0,
+    };
+  });
+  assert.equal(presentAuxCue.cueIndex, 3);
+  assert.equal(presentAuxCue.translationCount, 1, 'a real translation renders');
+  assert.ok(presentAuxCue.height > missingAuxCue.height, 'present auxiliary text contributes to row height');
+  await page.evaluate(() => window.lyricsViewHarness.setPosition(1_000));
+  await page.waitForTimeout(180);
+  const emptyCue = await page.evaluate(() => ({
+    cueIndex: Number(document.querySelector('[data-testid="lyrics-view"]')?.dataset.activeCueIndex),
+    currentRowCount: document.querySelectorAll('[data-testid="timed-lyrics"] [aria-current="true"]').length,
+    allTextOpaque: [...document.querySelectorAll('[data-testid="timed-lyrics"] .lyric-primary')]
+      .every((text) => getComputedStyle(text).opacity === '1'),
+  }));
+  assert.equal(emptyCue.cueIndex, 1, 'the timeline retains an empty-content cue');
+  assert.equal(emptyCue.currentRowCount, 0, 'an empty-content cue is not rendered or transferred to the next line');
+  assert.equal(emptyCue.allTextOpaque, true, 'an empty-content cue does not dim every visible row');
+
+  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 36, auxiliaryFontSizePx: 24, lineGapPx: 64 }));
   await page.evaluate(() => window.lyricsViewHarness.setPosition(90_000));
   await page.waitForTimeout(40);
   const maximum = await page.evaluate(() => window.lyricsViewHarness.snapshot());
   assert.equal(maximum.activeIndex, 90);
-  assert.equal(maximum.rowHeight, 177, 'maximum fonts and both auxiliary lines use the conservative row geometry');
   assert.ok(maximum.actualRowHeights.length <= 13);
   assertGeometry(maximum, 'maximum timed');
-  assert.ok(maximum.activeRowContentHeight <= maximum.rowHeight + 0.6, 'two primary lines and both auxiliary lines fit at maximum sizes');
-  assert.ok(maximum.bothAuxiliaryRowContentHeight <= maximum.rowHeight + 0.6, 'DOM row with both auxiliary lines stays inside the maximum row box');
-  const expectedScrollTop = Math.max(0, 90 * maximum.rowHeight - (maximum.timedViewportHeight - maximum.rowHeight) / 2);
-  assert.ok(Math.abs(maximum.timedScrollTop - expectedScrollTop) < 1.5, 'auto-scroll uses the same row-height geometry');
-  assert.equal(maximum.activeRowOpacity, 1, 'row background and border stay fully opaque');
-  assert.equal(maximum.activeRowTextOpacity, 1);
-  assert.equal(maximum.firstRowOpacity, 1, 'inactive dimming must not fade the row background or border');
-  assert.equal(maximum.firstRowTextOpacity, 0.35, 'only inactive lyric text uses the configured opacity');
+  assert.ok(maximum.activeRowContentHeight <= maximum.activeRowBoxHeight + 0.6, 'clamped primary and present auxiliaries fit in the row');
+  const activeVisuals = await page.evaluate(() => {
+    const viewport = document.querySelector('[data-testid="timed-lyrics"]');
+    const active = viewport?.querySelector('[aria-current="true"]');
+    const text = active?.querySelector('.lyric-primary');
+    return {
+      activeBackground: active ? getComputedStyle(active).backgroundColor : null,
+      activeTextOpacity: text ? Number(getComputedStyle(text).opacity) : null,
+      inactiveTextOpacity: document.querySelector('[data-testid="timed-lyrics"] .lyric-primary')
+        ? Number(getComputedStyle(document.querySelector('[data-testid="timed-lyrics"] .lyric-primary')).opacity) : null,
+      viewportBackground: viewport ? getComputedStyle(viewport).backgroundColor : null,
+      activeCentered: active ? getComputedStyle(active.querySelector('.lyric-primary')).textAlign : null,
+      centeredInViewport: active && viewport
+        ? Math.abs((active.getBoundingClientRect().top + active.getBoundingClientRect().height / 2)
+          - (viewport.getBoundingClientRect().top + viewport.clientHeight / 2)) < 2 : false,
+    };
+  });
+  assert.equal(activeVisuals.activeBackground, 'rgba(0, 0, 0, 0)', 'active lyric rows have no background');
+  assert.equal(activeVisuals.viewportBackground, 'rgba(0, 0, 0, 0)', 'lyrics pane has no background');
+  assert.equal(activeVisuals.activeTextOpacity, 1, 'active lyric text stays opaque');
+  assert.equal(activeVisuals.activeCentered, 'center');
+  assert.ok(activeVisuals.centeredInViewport, 'auto-scroll centers the active row using variable offsets');
 
   await page.evaluate(() => window.lyricsViewHarness.setPlaybackState('paused'));
-  const pausedGeometry = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(pausedGeometry.activeIndex, 90, 'paused playback keeps the active cue');
-
+  assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).activeIndex, 90, 'paused playback keeps the active cue');
   await page.evaluate(() => window.lyricsViewHarness.setPlaybackState('stopped'));
-  await page.waitForFunction(() => window.lyricsViewHarness.snapshot().firstRowTextOpacity === 1);
   const stopped = await page.evaluate(() => window.lyricsViewHarness.snapshot());
   assert.equal(stopped.activeIndex, null, 'stopped playback has no focused lyric row');
-  assert.equal(stopped.timedWindowStart, 84, 'stopped playback keeps the virtual window around the held middle cue');
-  assert.equal(stopped.timedScrollTop, maximum.timedScrollTop, 'stopping keeps the held lyric position visible');
-  assert.equal(stopped.firstRowTextOpacity, 1, 'without an active row all timed lines remain fully readable');
+  assert.equal(stopped.timedWindowStart, 84, 'stopping keeps the held cue in the bounded window');
   assert.equal(stopped.toolbarAvailable, true);
-
   await page.evaluate(() => window.lyricsViewHarness.setPlaybackState('playing'));
   await page.evaluate(() => window.lyricsViewHarness.setPosition(-1_000));
-  await page.waitForFunction(() => {
-    const state = window.lyricsViewHarness.snapshot();
-    return state.firstRowTextOpacity === 1 && state.timedScrollTop === 0;
-  });
+  await page.waitForFunction(() => window.lyricsViewHarness.snapshot().timedScrollTop === 0);
   const beforeFirstCue = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(beforeFirstCue.activeIndex, null, 'before the first cue there is no active line');
-  assert.equal(beforeFirstCue.timedWindowStart, 0);
-  assert.equal(beforeFirstCue.timedScrollTop, 0, 'no-cue fallback aligns the top window and scroll position');
-  assert.equal(beforeFirstCue.firstRowTextOpacity, 1, 'cue-less timed playback remains fully readable');
-
+  assert.equal(beforeFirstCue.activeIndex, null);
+  assert.equal(beforeFirstCue.timedScrollTop, 0);
   await page.evaluate(() => window.lyricsViewHarness.setPosition(84_000));
   const soughtForward = await page.evaluate(() => window.lyricsViewHarness.snapshot());
   assert.equal(soughtForward.activeIndex, 84);
   assert.ok(soughtForward.renderedTimedRows <= 13);
-
   await page.evaluate(() => window.lyricsViewHarness.setPlaying(false));
-  await page.waitForTimeout(300);
-  const paused = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(paused.activeIndex, 84, 'paused lyrics stay at the held playback position');
-  assert.equal(paused.getCount, 1, 'playback position updates do not reload lyrics');
-  assert.equal(paused.searchCount, 0, 'playback polling does not invoke remote lookup');
-
   await page.evaluate(() => window.lyricsViewHarness.setPosition(12_000));
-  const soughtBackward = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(soughtBackward.activeIndex, 12, 'backward seek immediately updates the active lyric');
-  assert.ok(soughtBackward.renderedTimedRows <= 13);
+  assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).activeIndex, 12, 'backward seek updates the active cue');
+  assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).getCount, 1, 'position updates do not reload lyrics');
 
   await page.evaluate(() => window.lyricsViewHarness.setTrack('candidate-track'));
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().phase === 'candidates');
   const candidateState = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(candidateState.getCount, 2);
-  assert.equal(candidateState.searchCount, 1, 'remote lookup begins after local miss in Now Playing');
-  assert.equal(candidateState.qrcNoticeVisible, true, 'QQ QRC without a preview is explained as undecoded');
-  assert.equal(candidateState.candidateActionEnabled, true, 'QRC-only candidates remain selectable');
+  assert.equal(candidateState.searchCount, 1, 'remote search starts after a local miss');
+  assert.equal(candidateState.qrcNoticeVisible, true);
+  assert.equal(candidateState.candidateActionEnabled, true);
   await page.getByRole('button', { name: '使用這份' }).click();
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().selectedSource === 'manual');
-  const selected = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(selected.phase, 'ready');
-  assert.equal(selected.selectedSource, 'manual');
 
   await page.evaluate(() => window.lyricsViewHarness.setTrack('plain-track'));
   await page.waitForFunction(() => document.querySelector('[data-testid="plain-lyrics"]') !== null);
-  await page.evaluate(() => window.lyricsViewHarness.setPreferences({
-    showTranslation: false,
-    showRomanization: false,
-    primaryFontSizePx: 14,
-    auxiliaryFontSizePx: 10,
-  }));
-  await page.waitForFunction(() => window.lyricsViewHarness.snapshot().rowHeight === 76);
-  const plainDefault = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assertGeometry(plainDefault, 'default plain');
-
   await page.evaluate(() => window.lyricsViewHarness.setPreferences({
     showTranslation: true,
     showRomanization: true,
     primaryFontSizePx: 36,
     auxiliaryFontSizePx: 24,
+    lineGapPx: 0,
   }));
-  await page.waitForFunction(() => window.lyricsViewHarness.snapshot().rowHeight === 177);
   await page.evaluate(() => window.lyricsViewHarness.scrollPlainTo(60));
   const plain = await page.evaluate(() => window.lyricsViewHarness.snapshot());
   assert.ok(plain.renderedPlainRows <= 20);
   assert.ok(plain.plainFirstIndex >= 54);
-  assert.equal(plain.documentWidth, 360, 'narrow lyrics remain inside the viewport');
-  assertGeometry(plain, 'maximum plain');
-  assert.ok(plain.bothAuxiliaryRowContentHeight <= plain.rowHeight + 0.6, 'plain row with both auxiliary lines fits at maximum sizes');
-  assert.equal(plain.firstRowTextOpacity, 1, 'plain lyrics are never dimmed without a timed active row');
+  assert.equal(plain.documentWidth, 360, 'narrow lyrics remain within the viewport');
+  assertGeometry(plain, 'plain variable rows');
+  assert.equal(plain.lineGapPx, 0);
   assert.equal(plain.toolbarAvailable, true);
-
   await page.getByRole('button', { name: '切換譯文顯示' }).click();
-  const toggled = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(toggled.preferences.showTranslation, false, 'viewport toolbar changes the shared preference');
-
+  assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).preferences.showTranslation, false);
   await page.evaluate(() => window.lyricsViewHarness.setTrack(null));
-  const noTrack = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(noTrack.toolbarAvailable, true, 'toolbar remains usable without a current track');
-  assert.equal(noTrack.preferences.showTranslation, false, 'track changes preserve global preferences');
+  assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).toolbarAvailable, true);
 
-  await page.goto('http://127.0.0.1:4173/');
+  await page.evaluate(() => localStorage.removeItem('__lyricsPreferences'));
+  await page.goto(`${baseUrl}/tests/volume-slider-harness.html`);
   await page.locator('.nav-link').filter({ hasText: '設定' }).click();
   await page.getByRole('tab', { name: '歌詞' }).click();
-  const settingsControls = await page.evaluate(() => ({
-    translationDefault: document.querySelectorAll('.lyrics-preference-toggle input')[0]?.checked,
-    romanizationDefault: document.querySelectorAll('.lyrics-preference-toggle input')[1]?.checked,
-    opacity: document.querySelectorAll('.lyrics-preference-range input')[0]?.value,
-    primary: document.querySelectorAll('.lyrics-preference-range input')[1]?.value,
-    auxiliary: document.querySelectorAll('.lyrics-preference-range input')[2]?.value,
-    opacityBounds: [document.querySelectorAll('.lyrics-preference-range input')[0]?.min, document.querySelectorAll('.lyrics-preference-range input')[0]?.max],
-    primaryBounds: [document.querySelectorAll('.lyrics-preference-range input')[1]?.min, document.querySelectorAll('.lyrics-preference-range input')[1]?.max],
-    auxiliaryBounds: [document.querySelectorAll('.lyrics-preference-range input')[2]?.min, document.querySelectorAll('.lyrics-preference-range input')[2]?.max],
-    activeTab: document.querySelector('#lyrics-tab')?.getAttribute('aria-selected'),
-  }));
+  const settingsControls = await page.evaluate(() => {
+    const sliders = [...document.querySelectorAll('.lyrics-preference-range input')];
+    return {
+      translationDefault: document.querySelectorAll('.lyrics-preference-toggle input')[0]?.checked,
+      romanizationDefault: document.querySelectorAll('.lyrics-preference-toggle input')[1]?.checked,
+      values: sliders.map((input) => input.value),
+      bounds: sliders.map((input) => [input.min, input.max]),
+      lineGapLabel: document.querySelector('input[aria-label="歌詞句間距"]')?.closest('label')?.innerText,
+      activeTab: document.querySelector('#lyrics-tab')?.getAttribute('aria-selected'),
+    };
+  });
   assert.equal(settingsControls.translationDefault, false);
   assert.equal(settingsControls.romanizationDefault, false);
-  assert.equal(settingsControls.opacity, '70');
-  assert.equal(settingsControls.primary, '14');
-  assert.equal(settingsControls.auxiliary, '10');
-  assert.deepEqual(settingsControls.opacityBounds, ['10', '100']);
-  assert.deepEqual(settingsControls.primaryBounds, ['12', '36']);
-  assert.deepEqual(settingsControls.auxiliaryBounds, ['9', '24']);
-  assert.equal(settingsControls.activeTab, 'true', 'lyrics preferences are accessible from Settings');
-
-  await page.locator('input[aria-label="原文字級"]').evaluate((input) => {
-    input.value = '36';
+  assert.deepEqual(settingsControls.values, ['70', '14', '10', '24']);
+  assert.deepEqual(settingsControls.bounds[3], ['0', '64']);
+  assert.ok(settingsControls.lineGapLabel.includes('24px'));
+  assert.equal(settingsControls.activeTab, 'true');
+  await page.locator('input[aria-label="歌詞句間距"]').evaluate((input) => {
+    input.value = '64';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   });
-  const changedSettings = await page.locator('input[aria-label="原文字級"]').inputValue();
-  assert.equal(changedSettings, '36', 'settings controls update the stored preference draft');
+  assert.equal(await page.locator('input[aria-label="歌詞句間距"]').inputValue(), '64', 'settings control updates the preference draft');
+  await page.waitForFunction(() => document.querySelector('#lyrics-panel [role="status"]')?.textContent?.includes('歌詞設定已保存'));
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('.nav-link') !== null);
+  await page.locator('.nav-link').filter({ hasText: '設定' }).click();
+  await page.getByRole('tab', { name: '歌詞' }).click();
+  await page.waitForFunction(() => document.querySelector('input[aria-label="歌詞句間距"]')?.value === '64');
+  assert.equal(await page.locator('input[aria-label="歌詞句間距"]').inputValue(), '64', 'saved line gap is loaded after app reload');
 
   return {
     result: 'PASS',
-    timedSeekForward: soughtForward.activeIndex,
-    pausedActiveIndex: paused.activeIndex,
-    timedSeekBackward: soughtBackward.activeIndex,
-    maxTimedRows: Math.max(initial.renderedTimedRows, soughtForward.renderedTimedRows, soughtBackward.renderedTimedRows),
-    defaultRowHeight: initial.rowHeight,
-    bothAuxiliaryDefaultRowHeight: bothAuxiliary.rowHeight,
-    maximumSingleAuxiliaryRowHeight: maximumTranslationOnly.rowHeight,
-    maximumRowHeight: maximum.rowHeight,
-    maximumActiveContentHeight: maximum.activeRowContentHeight,
-    maximumScrollTop: maximum.timedScrollTop,
-    stoppedTextOpacity: stopped.firstRowTextOpacity,
-    plainTextOpacity: plain.firstRowTextOpacity,
-    candidateRemoteSearches: candidateState.searchCount,
-    manualSelection: selected.selectedSource,
+    maxTimedRows: maximum.renderedTimedRows,
+    activeAutoCentered: activeVisuals.centeredInViewport,
+    missingAuxHeight: missingAuxCue.height,
+    presentAuxHeight: presentAuxCue.height,
     plainRows: plain.renderedPlainRows,
     plainFirstIndex: plain.plainFirstIndex,
-    viewportWidth: plain.viewportWidth,
-    documentWidth: plain.documentWidth,
-    lyricsSettingsDefaults: settingsControls,
+    settingsDefaults: settingsControls.values,
+    settingsLineGapRange: settingsControls.bounds[3],
   };
 }

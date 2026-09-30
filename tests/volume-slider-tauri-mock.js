@@ -42,6 +42,14 @@
     surfaceTransparencyPercent: 35,
   };
   let storedNowPlayingLayout = localStorage.getItem('__nowPlayingLayout') === 'b' ? 'b' : 'a';
+  let storedLyricsPreferences = JSON.parse(localStorage.getItem('__lyricsPreferences') || 'null') ?? {
+    showTranslation: false,
+    showRomanization: false,
+    inactiveOpacityPercent: 70,
+    primaryFontSizePx: 14,
+    auxiliaryFontSizePx: 10,
+    lineGapPx: 24,
+  };
   let artworkPromise;
   const appearanceHarness = {
     requests: [],
@@ -160,13 +168,11 @@
           return clone(storedAppearance);
         }
         case 'settings_get_lyrics_preferences':
-          return {
-            showTranslation: false,
-            showRomanization: false,
-            inactiveOpacityPercent: 70,
-            primaryFontSizePx: 14,
-            auxiliaryFontSizePx: 10,
-          };
+          return clone(storedLyricsPreferences);
+        case 'settings_set_lyrics_preferences':
+          storedLyricsPreferences = clone(args.preferences);
+          localStorage.setItem('__lyricsPreferences', JSON.stringify(storedLyricsPreferences));
+          return clone(storedLyricsPreferences);
         case 'library_list_sources':
           return [];
         case 'library_sync':

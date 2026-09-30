@@ -8,6 +8,7 @@
     TrackLyrics,
   } from '../src/lib/ipc';
   import { DEFAULT_LYRICS_PREFERENCES, normalizeLyricsPreferences } from '../src/lib/lyrics-preferences.js';
+  import { buildLyricsLayout } from '../src/lib/lyrics-window.js';
 
   interface HarnessApi {
     setPosition: (positionMs: number) => Promise<void>;
@@ -20,6 +21,7 @@
       trackId: string;
       phase: string;
       activeIndex: number | null;
+      activeCueIndex: number | null;
       renderedTimedRows: number;
       renderedPlainRows: number;
       plainFirstIndex: number | null;
@@ -33,7 +35,8 @@
       viewportWidth: number;
       isPlaying: string | null;
       playbackState: string | null;
-      rowHeight: number;
+      totalHeight: number;
+      lineGapPx: number;
       timedWindowStart: number | null;
       timedWindowEnd: number | null;
       beforeSpacerHeight: number;
@@ -46,6 +49,7 @@
       activeRowOpacity: number | null;
       activeRowTextOpacity: number | null;
       activeRowContentHeight: number | null;
+      activeRowBoxHeight: number | null;
       bothAuxiliaryRowContentHeight: number | null;
       timedScrollTop: number | null;
       timedViewportHeight: number | null;
@@ -82,9 +86,9 @@
       synced,
       lines: Array.from({ length: 120 }, (_, index) => ({
         startMs: synced ? index * 1_000 : null,
-        text: synced && index === 90 ? '最大字級與副行不裁切幾何測試'.repeat(12) : `${id} 歌詞 ${index}`,
-        translation: index % 3 === 0 ? `翻譯 ${index}` : null,
-        romanization: index % 5 === 0 ? `拼音 ${index}` : null,
+        text: synced && index === 90 ? '最大字級與副行不裁切幾何測試'.repeat(12) : index === 1 ? '  ' : `${id} 歌詞 ${index}`,
+        translation: index % 3 === 0 ? `翻譯 ${index}` : index % 3 === 1 ? '  ' : null,
+        romanization: index % 5 === 0 ? `拼音 ${index}` : index % 5 === 1 ? '' : null,
       })),
     };
   }
@@ -173,6 +177,7 @@
       trackId,
       phase: document.querySelector<HTMLElement>('[data-testid="lyrics-view"]')?.dataset.phase ?? '',
       activeIndex: active ? Number(active.dataset.lyricIndex) : null,
+      activeCueIndex: lyricsRoot?.dataset.activeCueIndex ? Number(lyricsRoot.dataset.activeCueIndex) : null,
       renderedTimedRows: timed?.querySelectorAll('.lyric-line').length ?? 0,
       renderedPlainRows: plain?.querySelectorAll('.lyric-line').length ?? 0,
       plainFirstIndex: firstPlain ? Number(firstPlain.dataset.lyricIndex) : null,
@@ -186,12 +191,15 @@
       viewportWidth: window.innerWidth,
       isPlaying: lyricsRoot?.dataset.playing ?? null,
       playbackState: lyricsRoot?.dataset.playbackState ?? null,
-      rowHeight: Number(lyricsRoot?.dataset.rowHeight ?? 0),
+      totalHeight: Number(viewport?.dataset.totalHeight ?? 0),
+      lineGapPx: Number(lyricsRoot?.dataset.lineGap ?? 24),
       timedWindowStart: timed ? Number(timed.dataset.windowStart) : null,
       timedWindowEnd: timed ? Number(timed.dataset.windowEnd) : null,
       beforeSpacerHeight: spacers[0]?.getBoundingClientRect().height ?? 0,
       afterSpacerHeight: spacers.at(-1)?.getBoundingClientRect().height ?? 0,
       actualRowHeights: rows.map((row) => row.getBoundingClientRect().height),
+      expectedRowHeights: rows.map((row) => Number.parseFloat(getComputedStyle(row).height)),
+      rowMargins: rows.map((row) => Number.parseFloat(getComputedStyle(row).marginBottom)),
       firstRowTranslationCount: rows[0]?.querySelectorAll('.lyric-translation').length ?? 0,
       firstRowRomanizationCount: rows[0]?.querySelectorAll('.lyric-romanization').length ?? 0,
       firstRowOpacity: rows[0] ? Number(getComputedStyle(rows[0]).opacity) : null,
@@ -199,6 +207,7 @@
       activeRowOpacity: active ? Number(getComputedStyle(active).opacity) : null,
       activeRowTextOpacity: activePrimary ? Number(getComputedStyle(activePrimary).opacity) : null,
       activeRowContentHeight: rowContentHeight(active),
+      activeRowBoxHeight: active?.getBoundingClientRect().height ?? null,
       bothAuxiliaryRowContentHeight: rowContentHeight(firstBothAuxiliary),
       timedScrollTop: timed?.scrollTop ?? null,
       timedViewportHeight: timed?.clientHeight ?? null,
@@ -234,7 +243,9 @@
     async scrollPlainTo(lineIndex) {
       const plain = document.querySelector<HTMLElement>('[data-testid="plain-lyrics"]');
       if (plain) {
-        plain.scrollTop = lineIndex * Number(plain.dataset.rowHeight ?? 76);
+        const lyrics = makeLyrics(trackId ?? 'plain-track', 'local', false);
+        const layout = buildLyricsLayout(lyrics.lines, lyricsPreferences, lyricsPreferences.lineGapPx);
+        plain.scrollTop = layout.offsets[Math.min(lineIndex, layout.heights.length)];
         plain.dispatchEvent(new Event('scroll'));
         await tick();
       }

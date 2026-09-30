@@ -1,6 +1,7 @@
 #![cfg(windows)]
 
 use std::path::Path;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,7 @@ use player_audio_windows::{
 };
 use windows::core::{factory, w};
 use windows::Media::{MediaPlaybackStatus, SystemMediaTransportControls};
+use windows::Storage::Streams::DataReader;
 use windows::Win32::Foundation::{HINSTANCE, HWND};
 use windows::Win32::System::WinRT::{
     ISystemMediaTransportControlsInterop, RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED,
@@ -72,6 +74,45 @@ fn controls_for_window(hwnd: HWND) -> Result<SystemMediaTransportControls, windo
     unsafe { interop.GetForWindow::<SystemMediaTransportControls>(hwnd) }
 }
 
+fn tiny_png() -> Vec<u8> {
+    vec![
+        0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0, 0,
+        0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0x90, 0x77, 0x53, 0xde, 0, 0, 0, 11, b'I', b'D', b'A',
+        b'T', 0x78, 0x9c, 0x63, 0x60, 0x00, 0x02, 0, 0, 0x05, 0, 1, 0xa5, 0xf6, 0x45, 0x40, 0, 0,
+        0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82,
+    ]
+}
+
+fn read_thumbnail(controls: &SystemMediaTransportControls) -> Vec<u8> {
+    let updater = controls.DisplayUpdater().expect("get display updater");
+    let reference = updater.Thumbnail().expect("read thumbnail reference");
+    let opening = reference.OpenReadAsync().expect("open thumbnail stream");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while opening.Status().expect("read thumbnail open status").0 == 0 {
+        assert!(Instant::now() < deadline, "thumbnail open timed out");
+        thread::sleep(Duration::from_millis(1));
+    }
+    let stream = opening.GetResults().expect("open thumbnail stream result");
+    let size = usize::try_from(stream.Size().expect("read thumbnail size"))
+        .expect("thumbnail fits address space");
+    let reader = DataReader::CreateDataReader(
+        &stream
+            .GetInputStreamAt(0)
+            .expect("get thumbnail input stream"),
+    )
+    .expect("create thumbnail reader");
+    let loading = reader.LoadAsync(size as u32).expect("load thumbnail bytes");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while loading.Status().expect("read thumbnail load status").0 == 0 {
+        assert!(Instant::now() < deadline, "thumbnail read timed out");
+        thread::sleep(Duration::from_millis(1));
+    }
+    loading.GetResults().expect("finish thumbnail read");
+    let mut bytes = vec![0; size];
+    reader.ReadBytes(&mut bytes).expect("copy thumbnail bytes");
+    bytes
+}
+
 fn wait_for_event(
     controller: &SystemMediaController,
     expected: fn(&SystemMediaEvent) -> bool,
@@ -116,6 +157,7 @@ fn hidden_window_receives_metadata_and_disables_unimplemented_queue_controls() {
                 title: Some("SMTC smoke track".to_owned()),
                 artist: Some("Local test artist".to_owned()),
                 album: Some("Local test album".to_owned()),
+                thumbnail: Some(Arc::from(tiny_png())),
             }),
             capabilities: MediaControlCapabilities::default(),
         })
@@ -136,6 +178,7 @@ fn hidden_window_receives_metadata_and_disables_unimplemented_queue_controls() {
                 .AlbumTitle()
                 .expect("read displayed album")
                 .to_string();
+            let has_thumbnail = updater.Thumbnail().is_ok();
             let status = controls.PlaybackStatus().expect("read playback status");
             let pause_enabled = controls.IsPauseEnabled().expect("read pause capability");
             let next_enabled = controls.IsNextEnabled().expect("read next capability");
@@ -145,6 +188,7 @@ fn hidden_window_receives_metadata_and_disables_unimplemented_queue_controls() {
             if title == "SMTC smoke track"
                 && artist == "Local test artist"
                 && album == "Local test album"
+                && has_thumbnail
                 && status == MediaPlaybackStatus::Playing
                 && pause_enabled
                 && !next_enabled
@@ -155,6 +199,7 @@ fn hidden_window_receives_metadata_and_disables_unimplemented_queue_controls() {
                     title,
                     artist,
                     album,
+                    has_thumbnail,
                     status,
                     pause_enabled,
                     next_enabled,
@@ -168,16 +213,64 @@ fn hidden_window_receives_metadata_and_disables_unimplemented_queue_controls() {
             thread::sleep(Duration::from_millis(10));
         }
     });
-    let (observed_controls, title, artist, album, status, pause, next, previous) = inspect
-        .join()
-        .expect("inspect SMTC from an independent MTA");
+    let (observed_controls, title, artist, album, has_thumbnail, status, pause, next, previous) =
+        inspect
+            .join()
+            .expect("inspect SMTC from an independent MTA");
     assert_eq!(title, "SMTC smoke track");
     assert_eq!(artist, "Local test artist");
     assert_eq!(album, "Local test album");
+    assert!(has_thumbnail);
+    assert_eq!(read_thumbnail(&observed_controls), tiny_png());
     assert_eq!(status, MediaPlaybackStatus::Playing);
     assert!(pause);
     assert!(!next);
     assert!(!previous);
+
+    controller
+        .update(MediaControlUpdate {
+            snapshot: PlaybackSnapshot {
+                state: PlaybackState::Playing,
+                position: Duration::from_secs(13),
+                duration: Some(Duration::from_secs(90)),
+                volume: 0.7,
+                last_error: None,
+            },
+            metadata: Some(MediaControlMetadata {
+                title: Some("SMTC next track without art".to_owned()),
+                artist: Some("Local test artist".to_owned()),
+                album: Some("Local test album".to_owned()),
+                thumbnail: None,
+            }),
+            capabilities: MediaControlCapabilities::default(),
+        })
+        .expect("queue metadata update that clears the previous thumbnail");
+    let hwnd = (window.0).0 as isize;
+    let cleared = thread::spawn(move || {
+        let _apartment = Apartment::mta();
+        let controls = controls_for_window(HWND(hwnd as *mut _))
+            .expect("get SMTC for hidden top-level window");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let updater = controls.DisplayUpdater().expect("get display updater");
+            let title = updater
+                .MusicProperties()
+                .expect("get music properties")
+                .Title()
+                .expect("read title")
+                .to_string();
+            if title == "SMTC next track without art" {
+                assert!(updater.Thumbnail().is_err(), "previous artwork must clear");
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for thumbnail clear"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    });
+    cleared.join().expect("verify thumbnail clearing");
 
     // Dropping the controller joins its worker after event-token revocation.
     drop(controller);

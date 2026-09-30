@@ -47,6 +47,12 @@ pub struct LyricsPreferences {
     pub inactive_opacity_percent: u8,
     pub primary_font_size_px: u8,
     pub auxiliary_font_size_px: u8,
+    #[serde(default = "default_line_gap_px")]
+    pub line_gap_px: u8,
+}
+
+fn default_line_gap_px() -> u8 {
+    24
 }
 
 impl Default for LyricsPreferences {
@@ -57,6 +63,7 @@ impl Default for LyricsPreferences {
             inactive_opacity_percent: 70,
             primary_font_size_px: 14,
             auxiliary_font_size_px: 10,
+            line_gap_px: default_line_gap_px(),
         }
     }
 }
@@ -76,6 +83,11 @@ impl LyricsPreferences {
         if !(9..=24).contains(&self.auxiliary_font_size_px) {
             return Err(SettingsError::InvalidData(
                 "auxiliaryFontSizePx must be between 9 and 24".into(),
+            ));
+        }
+        if self.line_gap_px > 64 {
+            return Err(SettingsError::InvalidData(
+                "lineGapPx must be between 0 and 64".into(),
             ));
         }
         Ok(())
@@ -1171,6 +1183,7 @@ mod tests {
                 inactive_opacity_percent: 70,
                 primary_font_size_px: 14,
                 auxiliary_font_size_px: 10,
+                line_gap_px: 24,
             }
         );
 
@@ -1180,6 +1193,7 @@ mod tests {
         assert_eq!(value["inactiveOpacityPercent"], 70);
         assert_eq!(value["primaryFontSizePx"], 14);
         assert_eq!(value["auxiliaryFontSizePx"], 10);
+        assert_eq!(value["lineGapPx"], 24);
         assert!(value.get("show_translation").is_none());
         assert_eq!(
             serde_json::from_value::<LyricsPreferences>(value).unwrap(),
@@ -1204,6 +1218,16 @@ mod tests {
             ..LyricsPreferences::default()
         };
         maximum.validate().expect("accept upper bounds");
+
+        let mut line_gap = LyricsPreferences {
+            line_gap_px: 0,
+            ..LyricsPreferences::default()
+        };
+        line_gap.validate().expect("accept zero line gap");
+        line_gap.line_gap_px = 64;
+        line_gap.validate().expect("accept maximum line gap");
+        line_gap.line_gap_px = 65;
+        assert!(line_gap.validate().is_err());
 
         minimum.inactive_opacity_percent = 9;
         assert!(minimum.validate().is_err());
@@ -1243,6 +1267,54 @@ mod tests {
             store.snapshot().unwrap().lyrics_preferences,
             LyricsPreferences::default()
         );
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn schema_four_without_line_gap_reads_default_and_persists_it_on_next_save() {
+        let directory = test_directory("lyrics-line-gap-migration");
+        let path = directory.join("settings.json");
+        let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        json["lyricsPreferences"]
+            .as_object_mut()
+            .unwrap()
+            .remove("lineGapPx");
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).expect("write old schema four JSON");
+
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("read old settings");
+        assert_eq!(store.snapshot().unwrap().lyrics_preferences.line_gap_px, 24);
+
+        store
+            .update(|settings| {
+                settings.lyrics_preferences.line_gap_px = 36;
+                Ok(())
+            })
+            .expect("persist line gap");
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["schemaVersion"], 4);
+        assert_eq!(persisted["lyricsPreferences"]["lineGapPx"], 36);
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert_eq!(
+            reopened.snapshot().unwrap().lyrics_preferences.line_gap_px,
+            36
+        );
+    }
+
+    #[test]
+    fn invalid_line_gap_does_not_change_memory_or_json() {
+        let directory = test_directory("invalid-lyrics-line-gap");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        let original = fs::read(&path).expect("read original settings");
+
+        let result = store.update(|settings| {
+            settings.lyrics_preferences.line_gap_px = 65;
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(store.snapshot().unwrap().lyrics_preferences.line_gap_px, 24);
         assert_eq!(fs::read(path).unwrap(), original);
     }
 
@@ -1369,6 +1441,7 @@ mod tests {
             inactive_opacity_percent: 43,
             primary_font_size_px: 26,
             auxiliary_font_size_px: 17,
+            line_gap_px: 42,
         };
         let mut columns = TrackListColumnSettings::default();
         columns.columns.swap(0, 2);

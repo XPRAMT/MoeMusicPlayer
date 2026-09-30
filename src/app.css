@@ -1268,14 +1268,14 @@ input:focus-visible {
   flex-direction: column;
   overflow: hidden;
   padding: clamp(9px, 1.4vw, 20px);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: rgba(var(--text-rgb), 0.018);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .now-playing-overlay.is-open .now-playing-lyrics {
-  border-color: rgba(var(--text-rgb), 0.18);
-  background: rgba(var(--page-rgb), var(--np-surface-alpha, 0.65));
+  border-color: transparent;
+  background: transparent;
 }
 
 .now-playing-lyrics .lyrics-lines-viewport {

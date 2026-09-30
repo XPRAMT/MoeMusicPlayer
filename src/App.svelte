@@ -1907,6 +1907,19 @@
                       onchange={(event) => updateLyricsPreferences({ auxiliaryFontSizePx: Number(event.currentTarget.value) }, true)}
                     />
                   </label>
+                  <label class="lyrics-preference-range">
+                    <span><strong>句間距</strong><output>{lyricsPreferences.lineGapPx}px</output></span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="64"
+                      step="1"
+                      value={lyricsPreferences.lineGapPx}
+                      aria-label="歌詞句間距"
+                      oninput={(event) => updateLyricsPreferences({ lineGapPx: Number(event.currentTarget.value) })}
+                      onchange={(event) => updateLyricsPreferences({ lineGapPx: Number(event.currentTarget.value) }, true)}
+                    />
+                  </label>
                 </div>
                 <p class="settings-preference-status" class:error={lyricsPreferencesState === 'error'} role="status">
                   {lyricsPreferencesError ?? (lyricsPreferencesState === 'loading' ? '正在讀取歌詞設定…' : lyricsPreferencesState === 'saving' ? '正在保存歌詞設定…' : lyricsPreferencesState === 'preview' ? '瀏覽器預覽不會保存歌詞設定。' : '歌詞設定已保存。')}
