@@ -5,6 +5,7 @@ import {
   formatAudioFormat,
   formatTrackColumnValue,
   formatYear,
+  isHiResTrack,
   moveTrackColumn,
   normalizeTrackColumnPreferences,
   nowPlayingLayoutOrder,
@@ -77,6 +78,16 @@ test('audio format uses only supplied source fields and formats nullable values'
   }), 'FLAC 48 kHz 16-bit 1024 kbps');
   assert.equal(formatAudioFormat({ codec: null, sampleRateHz: null, bitDepth: null, bitrateBps: null }), '—');
   assert.equal(formatAudioFormat({ codec: 'mp3', sampleRateHz: 44_100, bitDepth: null, bitrateBps: 192_000 }), 'MP3 44.1 kHz 192 kbps');
+});
+
+test('Hi-Res badge requires at least 48 kHz sample rate and 24-bit source depth', () => {
+  assert.equal(isHiResTrack({ sampleRateHz: 48_000, bitDepth: 24 }), true);
+  assert.equal(isHiResTrack({ sampleRateHz: 96_000, bitDepth: 24 }), true);
+  assert.equal(isHiResTrack({ sampleRateHz: 44_100, bitDepth: 24 }), false);
+  assert.equal(isHiResTrack({ sampleRateHz: 48_000, bitDepth: 16 }), false);
+  assert.equal(isHiResTrack({ sampleRateHz: 48_000, bitDepth: null }), false);
+  assert.equal(isHiResTrack({ sampleRateHz: null, bitDepth: 24 }), false);
+  assert.equal(isHiResTrack(null), false);
 });
 
 test('playlist entries show placeholders for missing metadata without an artist subtitle', () => {

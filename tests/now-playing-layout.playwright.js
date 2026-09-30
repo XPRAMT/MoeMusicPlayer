@@ -16,13 +16,20 @@
     },
   };
   const viewports = [
+    { width: 3840, height: 2160, wide: true },
+    { width: 2560, height: 1440, wide: true },
     { width: 1920, height: 1080, wide: true },
+    { width: 1600, height: 900, wide: true },
     { width: 1366, height: 768, wide: true },
+    { width: 1280, height: 1024, wide: true },
+    { width: 1024, height: 768, wide: true },
     { width: 900, height: 900, wide: true },
+    { width: 800, height: 1200, wide: true },
+    { width: 720, height: 1280, wide: false },
     { width: 412, height: 915, wide: false },
     { width: 360, height: 800, wide: false },
   ];
-  await page.goto('http://127.0.0.1:4173/tests/now-playing-layout-harness.html');
+  await page.goto('http://127.0.0.1:4174/tests/now-playing-layout-harness.html');
   await page.waitForFunction(() => window.nowPlayingLayoutHarness && document.querySelector('[data-testid="timed-lyrics"]'));
   await page.waitForFunction(() => document.querySelector('[data-testid="cover-image"]')?.naturalWidth === 400);
 
@@ -60,6 +67,11 @@
     assert.ok(state.returnButton.left <= state.topbar.left + Math.max(80, viewport.width * 0.05), `${viewport.width}x${viewport.height}: return control should remain at the top-left of the overlay`);
     assert.ok(isInside(state.layoutSwitch, state.nowPlaying), `${viewport.width}x${viewport.height}: A/B layout switch is missing or outside Now Playing`);
     assert.ok(isInside(state.lyricsToolbar, lyrics), `${viewport.width}x${viewport.height}: lyric controls are missing or clipped in the lyrics pane`);
+    assert.deepEqual(state.artworkCopyChildren, ['now-playing-format', 'h2', 'now-playing-artist', 'now-playing-album'], `${viewport.width}x${viewport.height}: artwork copy should show audio format, title, artist and album`);
+    assert.equal(state.artworkCopyTextAlign, 'center', `${viewport.width}x${viewport.height}: all four artwork copy rows should be centered`);
+    assert.equal(state.formatJustifyContent, 'center', `${viewport.width}x${viewport.height}: audio format and badge should be centered together`);
+    assert.deepEqual(state.lyricTextAlign, { primary: 'center', translation: 'center', romanization: 'center' }, `${viewport.width}x${viewport.height}: lyric text and auxiliary lines should be centered`);
+    assert.ok(artworkCopy && artworkCopy.top >= state.cover.bottom - 1, `${viewport.width}x${viewport.height}: title and artist must stay below the cover`);
     assert.ok(isInside(state.dockControls, state.dock), `${viewport.width}x${viewport.height}: playback controls are missing or clipped in the dock: ${JSON.stringify({ controls: state.dockControls, dock: state.dock })}`);
     assert.deepEqual(state.playerControlLabels, ['隨機播放', '上一首', '播放', '下一首', '循環播放'], `${viewport.width}x${viewport.height}: player controls must keep their Chinese accessible names`);
     assert.equal(state.playerControlIcons.length, 5, `${viewport.width}x${viewport.height}: Tabler player icons did not render for every control`);
@@ -70,13 +82,11 @@
     assert.ok(artwork && state.cover.width > 0 && state.cover.height > 0, `${viewport.width}x${viewport.height}: cover is missing`);
     assert.ok(state.cover.left >= artwork.left - 1 && state.cover.right <= artwork.right + 1, `${viewport.width}x${viewport.height}: cover spills out of artwork pane horizontally`);
     assert.ok(state.cover.top >= artwork.top - 1 && state.cover.bottom <= artwork.bottom + 1, `${viewport.width}x${viewport.height}: cover spills out of artwork pane vertically`);
-    assert.ok(state.cover.width >= artwork.width * 0.34, `${viewport.width}x${viewport.height}: cover is unexpectedly small for its available pane`);
-    if (viewport.width >= 1024 && viewport.height <= 820) {
-      assert.ok(state.cover.width >= artwork.width * 0.5, `${viewport.width}x${viewport.height}: short wide layout should allocate at least half the artwork pane width to cover`);
-    }
-    if (viewport.width <= 620) {
-      assert.ok(state.cover.width >= artwork.width * 0.45, `${viewport.width}x${viewport.height}: stacked layout should preserve enough pane width for artwork`);
-    }
+    const copyGap = Math.max(4, artworkCopy.top - state.cover.bottom);
+    const verticalBudget = artwork.height - artworkCopy.height - copyGap;
+    const heightCap = viewport.width <= 720 ? viewport.height * 0.4 : viewport.height * 0.78;
+    const expectedMaximum = Math.max(1, Math.min(artwork.width, verticalBudget, heightCap));
+    assert.ok(state.cover.width >= expectedMaximum * 0.9, `${viewport.width}x${viewport.height}: cover does not use most of its available square area (${state.cover.width} of ${expectedMaximum})`);
     assert.deepEqual(state.panes.map(pane => pane.name), expectedPaneOrder, `${viewport.width}x${viewport.height}: pane order differs for layout ${layout}`);
     if (viewport.wide) {
       assert.ok(Math.abs(state.panes[0].top - state.panes[1].top) <= 2, `${viewport.width}x${viewport.height}: wide layout should remain side by side`);

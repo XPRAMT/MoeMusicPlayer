@@ -133,6 +133,17 @@ export function formatAudioFormat(item) {
 }
 
 /**
+ * Hi-Res badges use source bit depth only. Lossy decoder PCM depth is not a source-depth claim.
+ * @param {{ sampleRateHz?: number | null, bitDepth?: number | null } | null | undefined} item
+ */
+export function isHiResTrack(item) {
+  return typeof item?.sampleRateHz === 'number'
+    && item.sampleRateHz >= 48_000
+    && typeof item.bitDepth === 'number'
+    && item.bitDepth >= 24;
+}
+
+/**
  * @param {TrackColumnId} id
  * @param {{ title?: string | null, artist?: string | null, album?: string | null, year?: number | string | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null }} item
  * @param {(durationMs: number | null | undefined) => string} formatDuration

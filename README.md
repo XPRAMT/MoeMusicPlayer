@@ -11,7 +11,7 @@ MoeMusicPlayer is a local-first music library for Windows and Android. User pref
 - Keep previously indexed tracks when a source is unavailable or a scan is incomplete.
 - Browse and search the saved library with paginated results; the interface never loads the whole collection.
 - Configure one shared metadata-column order and visibility for the library and playlists; row numbers and play actions stay fixed.
-- Now Playing shows the cover before the lyrics by default. Switch between layouts A and B on the page or in Settings; adjust cover background blur and panel translucency in **Settings → Now Playing**. These preferences are saved.
+- Now Playing shows the cover before the lyrics by default. Choose layout A or B in **Settings → Now Playing**. The page centers audio format, title, artist, and album below the cover and centers lyric text; the Hi-Res badge appears only for source audio at 48 kHz or higher and 24-bit or higher. Adjust cover background blur and panel translucency in the same settings page. These preferences are saved.
 - Customize the background and accent colors in Settings. Preferences are saved to `settings.json`, and text colors adjust for contrast.
 - If settings cannot be recovered from the JSON backup, source synchronization pauses until you re-register and confirm the intended sources; existing indexed music remains available.
 - On Windows, play local WAV, MP3, FLAC, and Ogg Vorbis files with play/pause, seek, and volume controls.
@@ -29,7 +29,7 @@ Android playback is not available yet. Real Tauri window, system media flyout, a
 2. Run `npm install`.
 3. Run `npm run tauri -- dev`.
 4. Open **Settings → Music Sources**, choose **Select folder and sync**, and select an existing music folder. Canceling leaves the source list unchanged.
-5. Open **Settings → Appearance** to choose a background and accent color. The defaults are pure black and water blue. Open **Settings → Track Columns** to reorder or hide metadata columns for both lists. Switch layout A or B on the Now Playing page or in **Settings → Now Playing**. Adjust cover background blur and surface transparency in **Settings → Now Playing**. Preferences and registered source paths are saved in the app data directory as `settings.json`; SQLite stores the music library.
+5. Open **Settings → Appearance** to choose a background and accent color. The defaults are pure black and water blue. Open **Settings → Track Columns** to reorder or hide metadata columns for both lists. Choose Now Playing layout A or B, or adjust cover background blur and surface transparency, in **Settings → Now Playing**. Preferences and registered source paths are saved in the app data directory as `settings.json`; SQLite stores the music library.
 
 To build the Windows executable, run `npm run release:windows`. The command always builds under the repository's `target` directory, regardless of the caller's `CARGO_TARGET_DIR`, and writes the result to `release/moemusicplayer.exe`. A failed build leaves the previous executable in place.
 

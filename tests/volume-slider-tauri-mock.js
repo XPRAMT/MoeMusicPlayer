@@ -10,9 +10,10 @@
     trackNumber: 1,
     discNumber: 1,
     durationMs: 60_000,
-    codec: 'wav',
+    codec: 'flac',
     bitrateBps: null,
     sampleRateHz: 48_000,
+    bitDepth: 24,
   };
   const libraryTracks = Array.from({ length: 120 }, (_, index) => ({
     ...track,
@@ -40,6 +41,7 @@
     backgroundBlurPx: 20,
     surfaceTransparencyPercent: 35,
   };
+  let storedNowPlayingLayout = localStorage.getItem('__nowPlayingLayout') === 'b' ? 'b' : 'a';
   let artworkPromise;
   const appearanceHarness = {
     requests: [],
@@ -134,7 +136,11 @@
             { id: 'duration', visible: true },
           ] };
         case 'settings_get_now_playing_layout':
-          return 'a';
+          return storedNowPlayingLayout;
+        case 'settings_set_now_playing_layout':
+          storedNowPlayingLayout = args.layout === 'b' ? 'b' : 'a';
+          localStorage.setItem('__nowPlayingLayout', storedNowPlayingLayout);
+          return storedNowPlayingLayout;
         case 'settings_get_now_playing_appearance_preferences':
           return clone(storedAppearance);
         case 'settings_set_now_playing_appearance_preferences': {

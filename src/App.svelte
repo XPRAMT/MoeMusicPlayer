@@ -47,7 +47,6 @@
     type PlaylistSummary,
     type PlaybackSnapshot,
     type PlaybackQueueSource,
-    type PlaybackState,
     type RuntimeCapabilities,
     type ThemePreferences,
     type TrackListColumnPreference,
@@ -60,9 +59,12 @@
     normalizeThemePreferences,
   } from './lib/theme';
   import { formatVolume } from './lib/format';
+  import hiResBadgeUrl from './assets/hi-res-badge.png';
   import {
     DEFAULT_TRACK_COLUMN_PREFERENCES,
     TRACK_COLUMN_DEFINITIONS,
+    formatTrackColumnValue,
+    isHiResTrack,
     moveTrackColumn,
     normalizeTrackColumnPreferences,
     setTrackColumnVisibility,
@@ -1231,19 +1233,8 @@
     return track?.artist?.trim() || '選取曲庫中的曲目開始播放';
   }
 
-  function playbackStateLabel(state: PlaybackState | undefined): string {
-    switch (state) {
-      case 'initializing': return '啟動播放引擎';
-      case 'empty': return '尚未選擇曲目';
-      case 'loading': return '載入中';
-      case 'ready': return '已就緒';
-      case 'playing': return '播放中';
-      case 'paused': return '已暫停';
-      case 'stopped': return '已停止';
-      case 'ended': return '播放完畢';
-      case 'error': return '播放發生錯誤';
-      default: return '等待播放狀態';
-    }
+  function currentTrackAlbum(track: TrackSummary | null | undefined): string {
+    return track?.album?.trim() || '—';
   }
 
 </script>
@@ -1981,17 +1972,10 @@
           <span>返回</span>
         </button>
         <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>NOW PLAYING</strong></div>
-        <div class="topbar-actions">
-          <div class="runtime-pill" class:ready={isReady(capabilities?.desktopRuntime)}>
-            <span class="status-dot" class:ready={isReady(capabilities?.desktopRuntime)} aria-hidden="true"></span>
-            <span>{isReady(capabilities?.desktopRuntime) ? '桌面服務已連線' : '桌面服務未連線'}</span>
-          </div>
-        </div>
       </header>
       <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body">
         <div class="now-playing-overlay-content">
           <section class="now-playing-view" aria-labelledby="now-playing-heading">
-            <NowPlayingLayoutSwitch layout={nowPlayingLayout} variant="compact" onChange={setNowPlayingLayout} />
             <NowPlayingArrangement layout={nowPlayingLayout}>
               {#snippet artwork()}
                 <div class="cover-stage" class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
@@ -2012,13 +1996,13 @@
                   {/if}
                 </div>
                 <div class="now-playing-copy">
-                  <p class="section-kicker">NOW PLAYING</p>
+                  <p class="now-playing-format">
+                    <span>{formatTrackColumnValue('audioFormat', playback?.currentTrack ?? {}, () => '—')}</span>
+                    {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}
+                  </p>
                   <h2 id="now-playing-heading">{currentTrackTitle(playback?.currentTrack)}</h2>
                   <p class="now-playing-artist">{currentTrackArtist(playback?.currentTrack)}</p>
-                  <div class="play-state-chip" class:ready={playbackReady}>
-                    <span class="status-dot" aria-hidden="true"></span>
-                    {playbackReady ? playbackStateLabel(playback?.state) : '播放引擎尚未就緒'}
-                  </div>
+                  <p class="now-playing-album">{currentTrackAlbum(playback?.currentTrack)}</p>
                   {#if playbackError || playback?.lastError}<p class="error-note" role="status">{playbackError ?? playback?.lastError}</p>{/if}
                 </div>
               {/snippet}

@@ -1342,8 +1342,8 @@ input:focus-visible {
 .cover-stage {
   position: relative;
   display: grid;
-  width: auto;
-  height: min(100%, 68vh);
+  width: min(100%, 78vh);
+  height: auto;
   max-width: 100%;
   max-height: 100%;
   aspect-ratio: 1;
@@ -1441,7 +1441,25 @@ input:focus-visible {
 }
 
 .now-playing-copy {
+  width: min(100%, 540px);
   min-width: 0;
+  text-align: center;
+}
+
+.now-playing-format {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.now-playing-format img {
+  width: 26px;
+  height: 14px;
+  object-fit: contain;
 }
 
 .now-playing-copy h2 {
@@ -1460,6 +1478,15 @@ input:focus-visible {
 .now-playing-artist {
   overflow: hidden;
   margin: 0;
+  color: var(--text-soft);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now-playing-album {
+  overflow: hidden;
+  margin: 4px 0 0;
   color: var(--text-soft);
   font-size: 11px;
   text-overflow: ellipsis;
@@ -2989,7 +3016,8 @@ input:focus-visible {
   }
 
   .now-playing-view .cover-stage {
-    height: min(100%, 34vh);
+    width: min(100%, 40vh);
+    height: auto;
     max-width: 100%;
   }
 
@@ -3008,39 +3036,18 @@ input:focus-visible {
     gap: clamp(5px, 1.2cqi, 9px);
   }
 
-  .now-playing-view .section-kicker {
-    display: none;
-  }
-
   .now-playing-view .now-playing-copy h2 {
     margin: 4px 0;
     font-size: clamp(16px, 4.4vw, 19px);
     line-height: 1.2;
   }
 
-  .now-playing-view .play-state-chip {
-    margin-top: 8px;
-  }
-}
-
-@media (min-width: 1024px) and (max-height: 820px) {
-  .now-playing-overlay .now-playing-artwork {
-    grid-template-columns: minmax(0, 1.2fr) minmax(180px, 0.8fr);
-    grid-template-rows: minmax(0, 1fr);
-    gap: clamp(12px, 1.4vw, 22px);
+  .now-playing-view .now-playing-format,
+  .now-playing-view .now-playing-artist,
+  .now-playing-view .now-playing-album {
+    font-size: 10px;
   }
 
-  .now-playing-overlay .cover-stage {
-    width: min(100%, 68vh);
-    height: auto;
-  }
-
-  .now-playing-overlay .now-playing-copy {
-    width: 100%;
-    max-height: 100%;
-    min-height: 0;
-    overflow: hidden;
-  }
 }
 
 @media (max-width: 620px) {

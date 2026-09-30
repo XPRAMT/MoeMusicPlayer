@@ -10,6 +10,7 @@
   import LyricsView from '../src/lib/LyricsView.svelte';
   import NowPlayingArrangement from '../src/lib/NowPlayingArrangement.svelte';
   import NowPlayingLayoutSwitch from '../src/lib/NowPlayingLayoutSwitch.svelte';
+  import hiResBadgeUrl from '../src/assets/hi-res-badge.png';
   import type { LyricsCandidate, LyricsTrackResult, NowPlayingLayout, TrackLyrics } from '../src/lib/ipc';
 
   interface LayoutSnapshot {
@@ -37,6 +38,10 @@
     lyricsToolbar: { left: number; right: number; top: number; bottom: number; width: number; height: number };
     dockControls: { left: number; right: number; top: number; bottom: number; width: number; height: number };
     artworkCopyOverflowY: string;
+    artworkCopyChildren: string[];
+    artworkCopyTextAlign: string;
+    formatJustifyContent: string;
+    lyricTextAlign: { primary: string; translation: string; romanization: string };
     lyricsViewport: { clientHeight: number; scrollHeight: number; scrollTop: number; overflowY: string };
     playerControlIcons: Array<{ ariaHidden: string | null; width: number; height: number }>;
     playerControlLabels: Array<string | null>;
@@ -69,8 +74,8 @@
       lines: Array.from({ length: 120 }, (_, index) => ({
         startMs: index * 1_000,
         text: `同步歌詞第 ${index + 1} 行`,
-        translation: null,
-        romanization: null,
+        translation: `測試譯文第 ${index + 1} 行`,
+        romanization: `ce shi yi wen ${index + 1}`,
       })),
     };
   }
@@ -119,6 +124,10 @@
     const lyricsToolbarRect = rect(document.querySelector('.lyrics-display-controls'));
     const dockControlsRect = rect(document.querySelector('.dock-controls'));
     const artworkCopy = document.querySelector<HTMLElement>('.now-playing-copy');
+    const formatRow = document.querySelector<HTMLElement>('.now-playing-format');
+    const lyricPrimary = document.querySelector<HTMLElement>('.lyric-primary');
+    const lyricTranslation = document.querySelector<HTMLElement>('.lyric-translation');
+    const lyricRomanization = document.querySelector<HTMLElement>('.lyric-romanization');
 
     return {
       documentWidth: root.scrollWidth,
@@ -153,6 +162,14 @@
       lyricsToolbar: lyricsToolbarRect,
       dockControls: dockControlsRect,
       artworkCopyOverflowY: artworkCopy ? getComputedStyle(artworkCopy).overflowY : 'missing',
+      artworkCopyChildren: artworkCopy ? [...artworkCopy.children].map((child) => child.className.toString() || child.tagName.toLowerCase()) : [],
+      artworkCopyTextAlign: artworkCopy ? getComputedStyle(artworkCopy).textAlign : 'missing',
+      formatJustifyContent: formatRow ? getComputedStyle(formatRow).justifyContent : 'missing',
+      lyricTextAlign: {
+        primary: lyricPrimary ? getComputedStyle(lyricPrimary).textAlign : 'missing',
+        translation: lyricTranslation ? getComputedStyle(lyricTranslation).textAlign : 'missing',
+        romanization: lyricRomanization ? getComputedStyle(lyricRomanization).textAlign : 'missing',
+      },
       lyricsViewport: {
         clientHeight: lyrics?.clientHeight ?? 0,
         scrollHeight: lyrics?.scrollHeight ?? 0,
@@ -221,10 +238,10 @@
                 />
               </div>
               <div class="now-playing-copy">
-                <p class="section-kicker">NOW PLAYING</p>
-        <h2>這是一段刻意加長的曲目標題，用來確認不同尺寸的正在播放頁會限制標題行數，並且不會把返回曲庫控制擠出畫面範圍或造成另一個可以捲動的資訊欄位。</h2>
+                <p class="now-playing-format"><span>FLAC 48 kHz 24-bit</span><img src={hiResBadgeUrl} alt="Hi-Res" /></p>
+                <h2>這是一段刻意加長的曲目標題，用來確認不同尺寸的正在播放頁會限制標題行數，並且不會把返回曲庫控制擠出畫面範圍或造成另一個可以捲動的資訊欄位。</h2>
                 <p class="now-playing-artist">測試演出者</p>
-                <div class="play-state-chip ready">播放中</div>
+                <p class="now-playing-album">測試專輯</p>
               </div>
             {/snippet}
             {#snippet lyrics()}
@@ -233,6 +250,7 @@
                 positionMs={50_000}
                 isPlaying={true}
                 playbackState="playing"
+                lyricsPreferences={{ showTranslation: true, showRomanization: true, inactiveOpacityPercent: 70, primaryFontSizePx: 14, auxiliaryFontSizePx: 10 }}
                 api={lyricsApi}
               />
             {/snippet}

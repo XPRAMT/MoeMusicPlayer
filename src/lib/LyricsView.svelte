@@ -524,6 +524,7 @@
     overflow: hidden;
     -webkit-box-orient: vertical;
     text-overflow: ellipsis;
+    text-align: center;
     opacity: var(--lyric-text-opacity, 1);
     transition: opacity 140ms ease;
   }
