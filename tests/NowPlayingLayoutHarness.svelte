@@ -18,12 +18,14 @@
     viewportWidth: number;
     viewportHeight: number;
     sidebarDisplay: string;
+    sidebar: { left: number; right: number; top: number; bottom: number; width: number; height: number };
+    overlay: { left: number; right: number; top: number; bottom: number; width: number; height: number };
     outerOverflow: string;
     outerScrollHeight: number;
     outerClientHeight: number;
     outerScrollTop: number;
     shellHeight: number;
-    topbar: { top: number; bottom: number; height: number };
+    topbar: { left: number; right: number; top: number; bottom: number; width: number; height: number };
     dock: { left: number; right: number; top: number; bottom: number; width: number; height: number };
     nowPlaying: { left: number; right: number; top: number; bottom: number; width: number; height: number };
     card: { left: number; right: number; top: number; bottom: number; width: number; height: number };
@@ -100,6 +102,8 @@
   function snapshot(): LayoutSnapshot {
     const root = document.documentElement;
     const outer = document.querySelector<HTMLElement>('[data-testid="outer-page-scroll"]');
+    const sidebar = document.querySelector<HTMLElement>('.sidebar');
+    const overlay = document.querySelector<HTMLElement>('[data-testid="now-playing-overlay"]');
     const card = document.querySelector<HTMLElement>('.now-playing-card');
     const cover = document.querySelector<HTMLImageElement>('[data-testid="cover-image"]');
     const lyrics = document.querySelector<HTMLElement>('[data-testid="timed-lyrics"]');
@@ -110,7 +114,7 @@
     const dockRect = rect(document.querySelector('[data-testid="layout-dock"]'));
     const nowPlayingRect = rect(document.querySelector('.now-playing-view'));
     const cardRect = rect(card);
-    const returnRect = rect(document.querySelector('.now-playing-return'));
+    const returnRect = rect(document.querySelector('.now-playing-overlay-return'));
     const layoutSwitchRect = rect(document.querySelector('.now-playing-layout-switch'));
     const lyricsToolbarRect = rect(document.querySelector('.lyrics-display-controls'));
     const dockControlsRect = rect(document.querySelector('.dock-controls'));
@@ -121,13 +125,15 @@
       documentHeight: root.scrollHeight,
       viewportWidth: root.clientWidth,
       viewportHeight: root.clientHeight,
-      sidebarDisplay: getComputedStyle(document.querySelector('.sidebar')!).display,
+      sidebarDisplay: sidebar ? getComputedStyle(sidebar).display : 'missing',
+      sidebar: rect(sidebar),
+      overlay: rect(overlay),
       outerOverflow: outer ? getComputedStyle(outer).overflowY : 'missing',
       outerScrollHeight: outer?.scrollHeight ?? 0,
       outerClientHeight: outer?.clientHeight ?? 0,
       outerScrollTop: outer?.scrollTop ?? -1,
       shellHeight: document.querySelector<HTMLElement>('.app-shell')?.getBoundingClientRect().height ?? 0,
-      topbar: { top: topbarRect.top, bottom: topbarRect.bottom, height: topbarRect.height },
+      topbar: topbarRect,
       dock: dockRect,
       nowPlaying: nowPlayingRect,
       card: cardRect,
@@ -189,12 +195,19 @@
   });
 </script>
 
-<div class="app-shell now-playing-shell" data-active-view="now-playing" data-testid="now-playing-shell">
-  <aside class="sidebar" aria-label="隱藏的側邊導覽"><span>側欄</span></aside>
+<div class="app-shell" data-active-view="library" data-testid="now-playing-shell">
+  <aside class="sidebar" aria-label="底層主要導覽"><span>側欄</span></aside>
   <main class="workspace">
-    <header class="topbar" data-testid="layout-topbar"><strong>MOEMUSIC / NOW PLAYING</strong></header>
-    <div class="page-scroll" data-testid="outer-page-scroll">
-      <div class="page-content">
+    <header class="topbar"><strong>MOEMUSIC / LIBRARY</strong></header>
+    <div class="page-scroll"><div class="page-content">底層曲庫狀態</div></div>
+  </main>
+  <section class="now-playing-overlay is-open" data-testid="now-playing-overlay" aria-label="正在播放">
+    <header class="topbar now-playing-overlay-topbar" data-testid="layout-topbar">
+      <button class="outline-button now-playing-overlay-return" type="button" aria-label="返回播放前頁面" title="返回播放前頁面">返回</button>
+      <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>NOW PLAYING</strong></div>
+    </header>
+    <div class="now-playing-overlay-body" data-testid="outer-page-scroll">
+      <div class="now-playing-overlay-content">
         <section class="now-playing-view" aria-label="正在播放版面">
           <NowPlayingLayoutSwitch {layout} variant="compact" onChange={setLayout} />
           <NowPlayingArrangement {layout}>
@@ -212,7 +225,6 @@
         <h2>這是一段刻意加長的曲目標題，用來確認不同尺寸的正在播放頁會限制標題行數，並且不會把返回曲庫控制擠出畫面範圍或造成另一個可以捲動的資訊欄位。</h2>
                 <p class="now-playing-artist">測試演出者</p>
                 <div class="play-state-chip ready">播放中</div>
-                <button class="outline-button now-playing-return" type="button">返回曲庫</button>
               </div>
             {/snippet}
             {#snippet lyrics()}
@@ -228,7 +240,7 @@
         </section>
       </div>
     </div>
-  </main>
+  </section>
   <footer class="player-dock" data-testid="layout-dock">
     <div class="dock-track"><button class="dock-art" type="button" aria-label="目前歌曲封面">M</button><div class="dock-track-copy"><strong>版面驗收曲目</strong><span>測試演出者</span></div></div>
     <div class="dock-center"><div class="dock-controls"><button class="control-button secondary-control" type="button" aria-label="隨機播放"><IconArrowsShuffle size={20} stroke={1.7} aria-hidden="true" /></button><button class="control-button" type="button" aria-label="上一首"><IconPlayerTrackPrev size={20} stroke={1.7} aria-hidden="true" /></button><button class="play-button" type="button" aria-label="播放"><IconPlayerPlay size={21} stroke={1.9} aria-hidden="true" /></button><button class="control-button" type="button" aria-label="下一首"><IconPlayerTrackNext size={20} stroke={1.7} aria-hidden="true" /></button><button class="control-button secondary-control" type="button" aria-label="循環播放"><IconRepeat size={20} stroke={1.7} aria-hidden="true" /></button></div><div class="progress-row"><span>0:50</span><input type="range" min="0" max="120" value="50" aria-label="播放進度"/><span>2:00</span></div></div>

@@ -29,14 +29,14 @@ test('playing a library or playlist item does not change the current page', () =
   assert.doesNotMatch(playlistPlay, /activeView\s*=/);
 });
 
-test('the footer artwork is the only Now Playing navigation control', () => {
+test('the footer artwork opens and closes a full-window Now Playing overlay', () => {
   const navStart = appSource.indexOf('<nav class="primary-nav"');
   assert.notEqual(navStart, -1, 'missing primary navigation');
   const navEnd = appSource.indexOf('</nav>', navStart);
   assert.notEqual(navEnd, -1, 'primary navigation must close');
   const primaryNav = appSource.slice(navStart, navEnd);
   assert.doesNotMatch(primaryNav, /now-playing|正在播放/);
-  assert.equal([...appSource.matchAll(/activeView\s*=\s*'now-playing'/g)].length, 1);
+  assert.doesNotMatch(appSource, /activeView\s*=\s*'now-playing'/);
 
   const artClass = appSource.indexOf('class="dock-art"');
   assert.notEqual(artClass, -1, 'missing footer artwork control');
@@ -44,12 +44,24 @@ test('the footer artwork is the only Now Playing navigation control', () => {
   const buttonEnd = appSource.indexOf('</button>', artClass);
   assert.ok(buttonStart >= 0 && buttonEnd > artClass, 'footer artwork must be a button');
   const artworkButton = appSource.slice(buttonStart, buttonEnd + '</button>'.length);
-  assert.match(artworkButton, /onclick=\{openNowPlaying\}/);
+  assert.match(artworkButton, /isNowPlayingOpen\s*\?\s*'返回播放前頁面'\s*:\s*`開啟正在播放/);
+  assert.match(artworkButton, /onclick=\{\(\)\s*=>\s*void\s*\(isNowPlayingOpen\s*\?\s*closeNowPlaying\(\)\s*:\s*openNowPlaying\(\)\)\}/);
   assert.match(artworkButton, /disabled=\{!playback\?\.currentTrack\}/);
   assert.match(artworkButton, /aria-label=/);
 
-  const navigationHandler = functionSource('function openNowPlaying(', 'async function togglePlayback(');
-  assert.match(navigationHandler, /activeView\s*=\s*'now-playing'/);
+  const openHandler = functionSource('async function openNowPlaying(', 'async function closeNowPlaying(');
+  const closeHandler = functionSource('async function closeNowPlaying(', 'async function togglePlayback(');
+  assert.match(openHandler, /nowPlayingReturnView\s*=\s*activeView/);
+  assert.match(openHandler, /isNowPlayingMounted\s*=\s*true/);
+  assert.match(openHandler, /isNowPlayingOpen\s*=\s*true/);
+  assert.doesNotMatch(openHandler, /activeView\s*=/, 'opening Now Playing should preserve the originating route');
+  assert.match(closeHandler, /activeView\s*=\s*nowPlayingReturnView/);
+  assert.match(closeHandler, /isNowPlayingOpen\s*=\s*false/);
+
+  assert.match(appSource, /class="sidebar"[^>]*inert=\{isNowPlayingOpen\}/);
+  assert.match(appSource, /class="workspace"[^>]*inert=\{isNowPlayingOpen\}/);
+  assert.match(appSource, /class="now-playing-overlay"[\s\S]*?aria-hidden=\{!isNowPlayingOpen\}[\s\S]*?inert=\{!isNowPlayingOpen\}/);
+  assert.match(appSource, /class="[^"]*\bnow-playing-overlay-return\b[^"]*"[\s\S]*?aria-label="返回播放前頁面"[\s\S]*?onclick=\{\(\)\s*=>\s*void closeNowPlaying\(\)\}/);
 });
 
 test('the sidebar playlist group is the single playlist navigation entry and works when empty', () => {
@@ -66,19 +78,22 @@ test('the sidebar playlist group is the single playlist navigation entry and wor
   assert.doesNotMatch(appSource, /\{#if playlists\.length > 0\}\s*<div class="sidebar-playlist-tree-host"/);
 });
 
-test('Now Playing hides library sync details and the native playback note', () => {
+test('Now Playing overlays the retained route without duplicating sync or native playback details', () => {
   const pageContentElement = /<div\b(?=[^>]*\bclass="[^"]*\bpage-content\b[^"]*")[^>]*>/.exec(appSource);
   const pageContentStart = pageContentElement?.index ?? -1;
   const syncBannerStart = appSource.indexOf('class="sync-progress-banner"', pageContentStart);
   assert.ok(pageContentStart >= 0 && syncBannerStart > pageContentStart, 'library sync banner should remain in the shared page content');
   const syncCondition = appSource.slice(pageContentStart, syncBannerStart);
-  assert.match(syncCondition, /\{#if syncProgress && activeView !== 'now-playing'\}/);
+  assert.match(syncCondition, /\{#if syncProgress\}/);
 
-  const nowPlayingStart = appSource.indexOf("{:else if activeView === 'now-playing'}");
-  const settingsStart = appSource.indexOf('<section class="settings-page"', nowPlayingStart);
-  assert.ok(nowPlayingStart >= 0 && settingsStart > nowPlayingStart, 'Now Playing markup should be bounded before the settings page');
-  const nowPlayingMarkup = appSource.slice(nowPlayingStart, settingsStart);
+  const overlayStart = appSource.indexOf('class="now-playing-overlay"');
+  const nowPlayingStart = appSource.indexOf('<section class="now-playing-view"', overlayStart);
+  const overlayEnd = appSource.indexOf('</section>\n  {/if}', nowPlayingStart);
+  assert.ok(overlayStart >= 0 && nowPlayingStart > overlayStart && overlayEnd > nowPlayingStart, 'Now Playing markup should live in its own overlay');
+  const nowPlayingMarkup = appSource.slice(nowPlayingStart, overlayEnd);
+  assert.doesNotMatch(nowPlayingMarkup, /sync-progress-banner/);
   assert.doesNotMatch(nowPlayingMarkup, /playback-note|播放狀態由原生音訊服務提供/);
+  assert.doesNotMatch(appSource, /返回曲庫/, 'Now Playing should not hardcode library as the return destination');
 });
 
 test('Tabler icons keep the Chinese playback labels and settings navigation accessible', () => {

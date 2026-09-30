@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import {
     IconAlertCircle,
+    IconArrowLeft,
     IconArrowDown,
     IconArrowUp,
     IconArrowsShuffle,
@@ -82,7 +83,7 @@
     normalizeLyricsPreferences,
   } from './lib/lyrics-preferences.js';
 
-  type View = 'library' | 'now-playing' | 'playlists' | 'queue' | 'settings';
+  type View = 'library' | 'playlists' | 'queue' | 'settings';
   type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'sources';
   type SyncProgressViewState = {
     runId: string;
@@ -95,6 +96,11 @@
 
 
   let activeView = $state<View>('library');
+  let nowPlayingReturnView = $state<View>('library');
+  let isNowPlayingMounted = $state(false);
+  let isNowPlayingOpen = $state(false);
+  let nowPlayingBackButton = $state<HTMLButtonElement | undefined>(undefined);
+  let dockArtworkButton = $state<HTMLButtonElement | undefined>(undefined);
   let settingsSection = $state<SettingsSection>('appearance');
   let trackColumnPreferences = $state<TrackListColumnPreference[]>(
     normalizeTrackColumnPreferences(DEFAULT_TRACK_COLUMN_PREFERENCES),
@@ -992,8 +998,21 @@
     );
   }
 
-  function openNowPlaying(): void {
-    if (playback?.currentTrack) activeView = 'now-playing';
+  async function openNowPlaying(): Promise<void> {
+    if (!playback?.currentTrack || isNowPlayingOpen) return;
+    nowPlayingReturnView = activeView;
+    isNowPlayingMounted = true;
+    isNowPlayingOpen = true;
+    await tick();
+    nowPlayingBackButton?.focus();
+  }
+
+  async function closeNowPlaying(): Promise<void> {
+    if (!isNowPlayingOpen) return;
+    activeView = nowPlayingReturnView;
+    isNowPlayingOpen = false;
+    await tick();
+    dockArtworkButton?.focus();
   }
 
   async function togglePlayback(): Promise<void> {
@@ -1165,8 +1184,8 @@
 
 <svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} />
 
-<div class="app-shell" class:now-playing-shell={activeView === 'now-playing'} data-active-view={activeView}>
-  <aside class="sidebar" aria-label="主要導覽">
+<div class="app-shell" data-active-view={activeView}>
+  <aside class="sidebar" aria-label="主要導覽" inert={isNowPlayingOpen}>
     <div class="brand-lockup">
       <div class="brand-mark" aria-hidden="true">
         <svg viewBox="0 0 40 40" fill="none">
@@ -1242,9 +1261,9 @@
     </div>
   </aside>
 
-  <main class="workspace">
+  <main class="workspace" inert={isNowPlayingOpen}>
     <header class="topbar">
-      <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>{activeView === 'library' ? 'LIBRARY' : activeView === 'now-playing' ? 'NOW PLAYING' : activeView === 'playlists' ? 'PLAYLISTS' : activeView === 'queue' ? 'QUEUE' : 'SOURCES'}</strong></div>
+      <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>{activeView === 'library' ? 'LIBRARY' : activeView === 'playlists' ? 'PLAYLISTS' : activeView === 'queue' ? 'QUEUE' : 'SOURCES'}</strong></div>
       <div class="topbar-actions">
         <div class="runtime-pill" class:ready={isReady(capabilities?.desktopRuntime)}>
           <span class="status-dot" class:ready={isReady(capabilities?.desktopRuntime)} aria-hidden="true"></span>
@@ -1258,7 +1277,7 @@
 
     <div class="page-scroll">
       <div class="page-content" class:wide-list-page={activeView === 'playlists' || activeView === 'queue'}>
-        {#if syncProgress && activeView !== 'now-playing'}
+        {#if syncProgress}
           <section
             class="sync-progress-banner"
             class:sync-progress-finished={!syncProgress.active}
@@ -1490,52 +1509,6 @@
                 columns={trackColumnPreferences}
               />
             {/if}
-          </section>
-        {:else if activeView === 'now-playing'}
-          <section class="now-playing-view" aria-labelledby="now-playing-heading">
-            <NowPlayingLayoutSwitch layout={nowPlayingLayout} variant="compact" onChange={setNowPlayingLayout} />
-            <NowPlayingArrangement layout={nowPlayingLayout}>
-              {#snippet artwork()}
-                <div class="cover-stage" class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
-                  {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
-                    <img class="cover-stage-image" src={activeArtwork.objectUrl} alt={`${currentTrackTitle(playback?.currentTrack)} 封面`} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
-                  {:else}
-                    <div class="cover-orbit cover-orbit-a"></div>
-                    <div class="cover-orbit cover-orbit-b"></div>
-                    <div class="cover-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-                    <span class="cover-stage-label">MOE / LOCAL</span>
-                    {#if activeArtwork.status === 'too-large'}
-                      <span class="cover-fallback-message">原圖超過 32 MiB 或 64 百萬像素上限</span>
-                    {:else if activeArtwork.status === 'error'}
-                      <span class="cover-fallback-message">封面格式不支援或無法讀取</span>
-                    {:else if activeArtwork.status === 'missing' && playback?.currentTrack}
-                      <span class="cover-fallback-message">沒有可用封面</span>
-                    {/if}
-                  {/if}
-                </div>
-                <div class="now-playing-copy">
-                  <p class="section-kicker">NOW PLAYING</p>
-                  <h2 id="now-playing-heading">{currentTrackTitle(playback?.currentTrack)}</h2>
-                  <p class="now-playing-artist">{currentTrackArtist(playback?.currentTrack)}</p>
-                  <div class="play-state-chip" class:ready={playbackReady}>
-                    <span class="status-dot" aria-hidden="true"></span>
-                    {playbackReady ? playbackStateLabel(playback?.state) : '播放引擎尚未就緒'}
-                  </div>
-                  {#if playbackError || playback?.lastError}<p class="error-note" role="status">{playbackError ?? playback?.lastError}</p>{/if}
-                  <button class="outline-button now-playing-return" type="button" onclick={() => (activeView = 'library')}>返回曲庫</button>
-                </div>
-              {/snippet}
-              {#snippet lyrics()}
-                <LyricsView
-                  trackId={playback?.currentTrack?.id ?? null}
-                  positionMs={playback?.positionMs ?? 0}
-                  isPlaying={playback?.isPlaying ?? false}
-                  playbackState={playback?.state ?? 'empty'}
-                  {lyricsPreferences}
-                  onPreferencesChange={(patch) => updateLyricsPreferences(patch, true)}
-                />
-              {/snippet}
-            </NowPlayingArrangement>
           </section>
         {:else}
           <section class="settings-page" aria-labelledby="settings-heading">
@@ -1860,15 +1833,96 @@
     </div>
   </main>
 
+  {#if isNowPlayingMounted}
+    <section
+      class="now-playing-overlay"
+      class:is-open={isNowPlayingOpen}
+      data-testid="now-playing-overlay"
+      aria-label="正在播放"
+      aria-hidden={!isNowPlayingOpen}
+      inert={!isNowPlayingOpen}
+    >
+      <header class="topbar now-playing-overlay-topbar">
+        <button
+          bind:this={nowPlayingBackButton}
+          class="outline-button now-playing-overlay-return"
+          type="button"
+          aria-label="返回播放前頁面"
+          title="返回播放前頁面"
+          onclick={() => void closeNowPlaying()}
+        >
+          <IconArrowLeft size={17} stroke={1.8} aria-hidden="true" />
+          <span>返回</span>
+        </button>
+        <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>NOW PLAYING</strong></div>
+        <div class="topbar-actions">
+          <div class="runtime-pill" class:ready={isReady(capabilities?.desktopRuntime)}>
+            <span class="status-dot" class:ready={isReady(capabilities?.desktopRuntime)} aria-hidden="true"></span>
+            <span>{isReady(capabilities?.desktopRuntime) ? '桌面服務已連線' : '桌面服務未連線'}</span>
+          </div>
+        </div>
+      </header>
+      <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body">
+        <div class="now-playing-overlay-content">
+          <section class="now-playing-view" aria-labelledby="now-playing-heading">
+            <NowPlayingLayoutSwitch layout={nowPlayingLayout} variant="compact" onChange={setNowPlayingLayout} />
+            <NowPlayingArrangement layout={nowPlayingLayout}>
+              {#snippet artwork()}
+                <div class="cover-stage" class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
+                  {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
+                    <img class="cover-stage-image" src={activeArtwork.objectUrl} alt={`${currentTrackTitle(playback?.currentTrack)} 封面`} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
+                  {:else}
+                    <div class="cover-orbit cover-orbit-a"></div>
+                    <div class="cover-orbit cover-orbit-b"></div>
+                    <div class="cover-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                    <span class="cover-stage-label">MOE / LOCAL</span>
+                    {#if activeArtwork.status === 'too-large'}
+                      <span class="cover-fallback-message">原圖超過 32 MiB 或 64 百萬像素上限</span>
+                    {:else if activeArtwork.status === 'error'}
+                      <span class="cover-fallback-message">封面格式不支援或無法讀取</span>
+                    {:else if activeArtwork.status === 'missing' && playback?.currentTrack}
+                      <span class="cover-fallback-message">沒有可用封面</span>
+                    {/if}
+                  {/if}
+                </div>
+                <div class="now-playing-copy">
+                  <p class="section-kicker">NOW PLAYING</p>
+                  <h2 id="now-playing-heading">{currentTrackTitle(playback?.currentTrack)}</h2>
+                  <p class="now-playing-artist">{currentTrackArtist(playback?.currentTrack)}</p>
+                  <div class="play-state-chip" class:ready={playbackReady}>
+                    <span class="status-dot" aria-hidden="true"></span>
+                    {playbackReady ? playbackStateLabel(playback?.state) : '播放引擎尚未就緒'}
+                  </div>
+                  {#if playbackError || playback?.lastError}<p class="error-note" role="status">{playbackError ?? playback?.lastError}</p>{/if}
+                </div>
+              {/snippet}
+              {#snippet lyrics()}
+                <LyricsView
+                  trackId={playback?.currentTrack?.id ?? null}
+                  positionMs={playback?.positionMs ?? 0}
+                  isPlaying={playback?.isPlaying ?? false}
+                  playbackState={playback?.state ?? 'empty'}
+                  {lyricsPreferences}
+                  onPreferencesChange={(patch) => updateLyricsPreferences(patch, true)}
+                />
+              {/snippet}
+            </NowPlayingArrangement>
+          </section>
+        </div>
+      </div>
+    </section>
+  {/if}
+
   <footer class="player-dock" aria-label="播放控制">
     <div class="dock-track">
       <button
         class="dock-art"
         type="button"
-        aria-label={playback?.currentTrack ? `開啟正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
-        title={playback?.currentTrack ? `查看正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
+        bind:this={dockArtworkButton}
+        aria-label={playback?.currentTrack ? isNowPlayingOpen ? '返回播放前頁面' : `開啟正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
+        title={playback?.currentTrack ? isNowPlayingOpen ? '返回播放前頁面' : `查看正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
         disabled={!playback?.currentTrack}
-        onclick={openNowPlaying}
+        onclick={() => void (isNowPlayingOpen ? closeNowPlaying() : openNowPlaying())}
       >
         {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
           <img class="dock-art-image" src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />

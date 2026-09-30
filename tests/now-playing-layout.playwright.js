@@ -3,6 +3,9 @@
     equal(actual, expected, message) {
       if (actual !== expected) throw new Error(`${message}: expected ${expected}, got ${actual}`);
     },
+    notEqual(actual, expected, message) {
+      if (actual === expected) throw new Error(`${message}: expected a value other than ${expected}`);
+    },
     ok(value, message) {
       if (!value) throw new Error(message);
     },
@@ -37,21 +40,24 @@
       && child.width > 0 && child.height > 0
       && child.left >= parent.left - 1 && child.right <= parent.right + 1
       && child.top >= parent.top - 1 && child.bottom <= parent.bottom + 1;
-    assert.equal(state.sidebarDisplay, 'none', `${viewport.width}x${viewport.height}: side navigation should be hidden`);
+    assert.notEqual(state.sidebarDisplay, 'none', `${viewport.width}x${viewport.height}: underlying side navigation should remain mounted and measurable`);
     assert.equal(state.outerOverflow, 'hidden', `${viewport.width}x${viewport.height}: Now Playing page scroll must be disabled`);
     assert.ok(state.documentWidth <= viewport.width + 1, `${viewport.width}x${viewport.height}: document width overflows`);
     assert.ok(state.documentHeight <= viewport.height + 1, `${viewport.width}x${viewport.height}: document height overflows`);
     assert.ok(state.outerScrollHeight <= state.outerClientHeight + 1, `${viewport.width}x${viewport.height}: page content exceeds its non-scroll region`);
     assert.equal(state.outerScrollTop, 0, `${viewport.width}x${viewport.height}: outer page accepted a scroll`);
     assert.ok(Math.abs(state.shellHeight - viewport.height) <= 1.1, `${viewport.width}x${viewport.height}: shell does not fill viewport height`);
+    assert.ok(state.overlay.left <= state.sidebar.left + 1, `${viewport.width}x${viewport.height}: overlay does not cover the left navigation`);
+    assert.ok(state.overlay.right >= state.dock.right - 1, `${viewport.width}x${viewport.height}: overlay does not span the full app width`);
+    assert.ok(state.overlay.top <= 1 && state.overlay.bottom <= state.dock.top + 1, `${viewport.width}x${viewport.height}: overlay must cover the app content above the dock`);
     assert.ok(state.topbar.height > 0 && state.topbar.top >= 0, `${viewport.width}x${viewport.height}: top bar is missing`);
     assert.ok(state.dock.height > 0 && state.dock.bottom <= viewport.height + 1, `${viewport.width}x${viewport.height}: player dock is clipped`);
     assert.ok(state.card.height > 0 && state.card.top >= state.topbar.bottom - 1, `${viewport.width}x${viewport.height}: arrangement overlaps the top bar`);
     assert.ok(state.card.bottom <= state.dock.top + 1, `${viewport.width}x${viewport.height}: arrangement overlaps the dock`);
     assert.ok(isInside(state.card, state.nowPlaying), `${viewport.width}x${viewport.height}: arrangement exceeds the Now Playing region`);
     assert.ok(state.nowPlaying.bottom - state.card.bottom <= 1, `${viewport.width}x${viewport.height}: artwork and lyrics should fill the available area above the dock`);
-    assert.ok(isInside(state.returnButton, artwork), `${viewport.width}x${viewport.height}: return-to-library control is missing or clipped in the artwork pane`);
-    assert.ok(isInside(state.returnButton, artworkCopy), `${viewport.width}x${viewport.height}: long track title clipped the return-to-library control`);
+    assert.ok(isInside(state.returnButton, state.topbar), `${viewport.width}x${viewport.height}: top-left return control is missing or clipped`);
+    assert.ok(state.returnButton.left <= state.topbar.left + Math.max(80, viewport.width * 0.05), `${viewport.width}x${viewport.height}: return control should remain at the top-left of the overlay`);
     assert.ok(isInside(state.layoutSwitch, state.nowPlaying), `${viewport.width}x${viewport.height}: A/B layout switch is missing or outside Now Playing`);
     assert.ok(isInside(state.lyricsToolbar, lyrics), `${viewport.width}x${viewport.height}: lyric controls are missing or clipped in the lyrics pane`);
     assert.ok(isInside(state.dockControls, state.dock), `${viewport.width}x${viewport.height}: playback controls are missing or clipped in the dock: ${JSON.stringify({ controls: state.dockControls, dock: state.dock })}`);

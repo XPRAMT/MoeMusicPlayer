@@ -85,25 +85,51 @@ input:focus-visible {
   isolation: isolate;
 }
 
-.app-shell.now-playing-shell {
-  grid-template-columns: minmax(0, 1fr);
+.now-playing-overlay {
+  z-index: 20;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--page);
 }
 
-.app-shell.now-playing-shell .sidebar {
+.now-playing-overlay:not(.is-open) {
   display: none;
 }
 
-.app-shell.now-playing-shell .workspace {
-  grid-column: 1;
-  grid-row: 1;
+.now-playing-overlay-topbar {
+  justify-content: flex-start;
+  padding-right: clamp(15px, 3vw, 40px);
+  padding-left: clamp(15px, 3vw, 40px);
 }
 
-.app-shell.now-playing-shell .page-scroll {
+.now-playing-overlay-return {
+  display: inline-flex;
+  min-height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+}
+
+.now-playing-overlay-topbar .breadcrumbs {
+  flex: 1 1 auto;
+}
+
+.now-playing-overlay-body {
   display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  justify-content: center;
   overflow: hidden;
 }
 
-.app-shell.now-playing-shell .page-content {
+.now-playing-overlay-content {
   display: flex;
   width: min(100%, 1510px);
   height: 100%;
@@ -1430,11 +1456,6 @@ input:focus-visible {
   line-height: 1.6;
 }
 
-.now-playing-return {
-  display: flex;
-  margin-top: 24px;
-}
-
 .settings-view {
   max-width: 860px;
 }
@@ -2658,11 +2679,6 @@ input:focus-visible {
     grid-template-rows: 58px minmax(0, 1fr) auto;
   }
 
-  .app-shell.now-playing-shell {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) auto;
-  }
-
   .sidebar {
     z-index: 10;
     grid-column: 1;
@@ -2684,9 +2700,9 @@ input:focus-visible {
   .sidebar-playlist-tree-host .playlist-tree { border-radius: 10px; }
   .sidebar-source { display: none; }
   .workspace { grid-column: 1; grid-row: 2; }
-  .app-shell.now-playing-shell .workspace { grid-row: 1; }
-  .app-shell.now-playing-shell .player-dock { grid-row: 2; }
+  .now-playing-overlay { grid-row: 1 / 3; }
   .topbar { min-height: 52px; padding: 0 15px; }
+  .now-playing-overlay-topbar .topbar-actions { display: none; }
   .topbar-actions { gap: 7px; }
   .runtime-pill { gap: 6px; padding: 6px 8px; font-size: 8px; }
   .runtime-pill .status-dot { width: 5px; height: 5px; }
@@ -2756,7 +2772,6 @@ input:focus-visible {
   .now-playing-copy h2 { font-size: 17px; }
   .now-playing-artist { font-size: 9px; }
   .play-state-chip { gap: 6px; margin-top: 12px; padding: 6px 7px; font-size: 8px; }
-  .now-playing-return { margin-top: 15px; }
   .source-status-card { gap: 10px; padding: 13px; }
   .source-status-icon { width: 38px; height: 38px; }
   .source-status-copy h3 { font-size: 10px; }
@@ -2879,11 +2894,6 @@ input:focus-visible {
     gap: clamp(5px, 1.2cqi, 9px);
   }
 
-  .now-playing-view .now-playing-return {
-    min-height: 30px;
-    margin-top: 3px;
-  }
-
   .now-playing-view .section-kicker {
     display: none;
   }
@@ -2900,18 +2910,18 @@ input:focus-visible {
 }
 
 @media (min-width: 1024px) and (max-height: 820px) {
-  .app-shell.now-playing-shell .now-playing-artwork {
+  .now-playing-overlay .now-playing-artwork {
     grid-template-columns: minmax(0, 1.2fr) minmax(180px, 0.8fr);
     grid-template-rows: minmax(0, 1fr);
     gap: clamp(12px, 1.4vw, 22px);
   }
 
-  .app-shell.now-playing-shell .cover-stage {
+  .now-playing-overlay .cover-stage {
     width: min(100%, 68vh);
     height: auto;
   }
 
-  .app-shell.now-playing-shell .now-playing-copy {
+  .now-playing-overlay .now-playing-copy {
     width: 100%;
     max-height: 100%;
     min-height: 0;

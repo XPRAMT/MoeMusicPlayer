@@ -14,6 +14,12 @@
     bitrateBps: null,
     sampleRateHz: 48_000,
   };
+  const libraryTracks = Array.from({ length: 120 }, (_, index) => ({
+    ...track,
+    id: `volume-slider-test-track-${index + 1}`,
+    title: `Volume Harness Track ${index + 1}`,
+    trackNumber: index + 1,
+  }));
   let currentSnapshot = {
     currentTrack: track,
     state: 'playing',
@@ -74,14 +80,49 @@
           return { backgroundHex: '#000000', accentHex: '#55D9FF' };
         case 'theme_set_preferences':
           return args;
+        case 'settings_get_track_list_columns':
+          return { columns: [
+            { id: 'title', visible: true },
+            { id: 'artist', visible: true },
+            { id: 'album', visible: true },
+            { id: 'year', visible: true },
+            { id: 'audioFormat', visible: true },
+            { id: 'duration', visible: true },
+          ] };
+        case 'settings_get_now_playing_layout':
+          return 'a';
+        case 'settings_get_lyrics_preferences':
+          return {
+            showTranslation: false,
+            showRomanization: false,
+            inactiveOpacityPercent: 70,
+            primaryFontSizePx: 14,
+            auxiliaryFontSizePx: 10,
+          };
         case 'library_list_sources':
           return [];
         case 'library_sync':
           return { sources: [] };
         case 'library_get_page':
-          return { items: [], offset: args.offset ?? 0, limit: args.limit ?? 40, totalCount: 0 };
+          return {
+            items: libraryTracks.slice(args.offset ?? 0, (args.offset ?? 0) + (args.limit ?? 40)),
+            offset: args.offset ?? 0,
+            limit: args.limit ?? 40,
+            totalCount: libraryTracks.length,
+          };
         case 'playlist_list':
           return [];
+        case 'playback_get_queue_page':
+          return {
+            revision: 0,
+            total: 0,
+            offset: args.offset ?? 0,
+            cursor: null,
+            currentEntryPosition: null,
+            items: [],
+          };
+        case 'lyrics_get_track':
+          return { lyrics: null, candidates: [], status: 'empty', error: null };
         case 'playback_get_snapshot':
           return clone(currentSnapshot);
         case 'library_get_track_artwork':
