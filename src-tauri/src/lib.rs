@@ -27,8 +27,8 @@ use playlist_exchange::{
 };
 mod settings;
 use settings::{
-    AppSettings, LyricsPreferences, NowPlayingLayout, RepeatMode, SettingsStore, SourceEntry,
-    SourceEntryKind, ThemeSettings, TrackListColumnSettings,
+    AppSettings, LyricsPreferences, NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode,
+    SettingsStore, SourceEntry, SourceEntryKind, ThemeSettings, TrackListColumnSettings,
 };
 mod lyrics_provider;
 mod lyrics_service;
@@ -1286,6 +1286,32 @@ fn settings_set_lyrics_preferences(
             Ok(())
         })
         .map(|settings| settings.lyrics_preferences)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_get_now_playing_appearance_preferences(
+    state: State<'_, AppState>,
+) -> Result<NowPlayingAppearancePreferences, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.now_playing_appearance_preferences)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_set_now_playing_appearance_preferences(
+    state: State<'_, AppState>,
+    preferences: NowPlayingAppearancePreferences,
+) -> Result<NowPlayingAppearancePreferences, String> {
+    state
+        .settings
+        .update(|settings| {
+            settings.now_playing_appearance_preferences = preferences;
+            Ok(())
+        })
+        .map(|settings| settings.now_playing_appearance_preferences)
         .map_err(|error| error.to_string())
 }
 
@@ -3212,6 +3238,8 @@ pub fn run() {
             theme_set_preferences,
             settings_get_lyrics_preferences,
             settings_set_lyrics_preferences,
+            settings_get_now_playing_appearance_preferences,
+            settings_set_now_playing_appearance_preferences,
             settings_get_track_list_columns,
             settings_set_track_list_columns,
             settings_get_now_playing_layout,

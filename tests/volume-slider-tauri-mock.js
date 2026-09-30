@@ -36,6 +36,49 @@
   let nextCallbackId = 0;
   const callbacks = new Map();
   let activeVolumeCommands = 0;
+  let storedAppearance = JSON.parse(localStorage.getItem('__appearancePreferences') || 'null') ?? {
+    backgroundBlurPx: 20,
+    surfaceTransparencyPercent: 35,
+  };
+  let artworkPromise;
+  const appearanceHarness = {
+    requests: [],
+    holdAcks: false,
+    pendingAcks: [],
+    failNext: false,
+    releaseAck() {
+      appearanceHarness.pendingAcks.shift()?.();
+    },
+  };
+  async function brightArtworkBytes() {
+    if (!artworkPromise) {
+      artworkPromise = new Promise((resolve, reject) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 800;
+        canvas.height = 800;
+        const context = canvas.getContext('2d');
+        if (!context) return reject(new Error('Canvas is unavailable'));
+        const gradient = context.createLinearGradient(0, 0, 800, 800);
+        gradient.addColorStop(0, '#fff18a');
+        gradient.addColorStop(0.38, '#ff9d67');
+        gradient.addColorStop(0.72, '#ff7bc1');
+        gradient.addColorStop(1, '#a9e9ff');
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, 800, 800);
+        context.fillStyle = 'rgba(255,255,255,.72)';
+        context.beginPath();
+        context.arc(250, 270, 170, 0, Math.PI * 2);
+        context.fill();
+        context.fillStyle = '#fffbdc';
+        context.fillRect(330, 450, 310, 48);
+        canvas.toBlob(async (blob) => {
+          if (!blob) return reject(new Error('Canvas image encoding failed'));
+          resolve(await blob.arrayBuffer());
+        }, 'image/png');
+      });
+    }
+    return artworkPromise;
+  }
   const volumeHarness = {
     volumeRequests: [],
     inputCount: 0,
@@ -53,6 +96,7 @@
   const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
   globalThis.isTauri = true;
   window.__volumeHarness = volumeHarness;
+  window.__appearanceHarness = appearanceHarness;
   window.__TAURI_INTERNALS__ = {
     async invoke(command, args = {}) {
       switch (command) {
@@ -91,6 +135,24 @@
           ] };
         case 'settings_get_now_playing_layout':
           return 'a';
+        case 'settings_get_now_playing_appearance_preferences':
+          return clone(storedAppearance);
+        case 'settings_set_now_playing_appearance_preferences': {
+          const preferences = clone(args.preferences);
+          appearanceHarness.requests.push(preferences);
+          if (appearanceHarness.holdAcks) {
+            await new Promise((resolve) => appearanceHarness.pendingAcks.push(resolve));
+          } else {
+            await delay(45);
+          }
+          if (appearanceHarness.failNext) {
+            appearanceHarness.failNext = false;
+            throw new Error('appearance settings unavailable');
+          }
+          storedAppearance = preferences;
+          localStorage.setItem('__appearancePreferences', JSON.stringify(storedAppearance));
+          return clone(storedAppearance);
+        }
         case 'settings_get_lyrics_preferences':
           return {
             showTranslation: false,
@@ -122,11 +184,31 @@
             items: [],
           };
         case 'lyrics_get_track':
-          return { lyrics: null, candidates: [], status: 'empty', error: null };
+          return {
+            lyrics: {
+              trackId: args.trackId,
+              source: 'local',
+              title: track.title,
+              artist: track.artist,
+              album: track.album,
+              durationMs: track.durationMs,
+              offsetMs: 0,
+              synced: true,
+              lines: [
+                { startMs: 0, text: '晨光落在窗沿', translation: null, romanization: null },
+                { startMs: 8_000, text: '微風輕輕唱著歌', translation: null, romanization: null },
+                { startMs: 16_000, text: '沿著旋律慢慢前行', translation: null, romanization: null },
+                { startMs: 24_000, text: '把今天交給遠方', translation: null, romanization: null },
+              ],
+            },
+            candidates: [],
+            status: 'ready',
+            error: null,
+          };
         case 'playback_get_snapshot':
           return clone(currentSnapshot);
         case 'library_get_track_artwork':
-          return new ArrayBuffer(0);
+          return brightArtworkBytes();
         case 'playback_set_volume': {
           const volume = Number(args.volume);
           volumeHarness.volumeRequests.push(volume);

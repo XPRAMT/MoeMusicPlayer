@@ -30,9 +30,11 @@
   import { isTauri } from '@tauri-apps/api/core';
   import {
     getErrorText,
+    getNowPlayingAppearancePreferences,
     getTrackArtworkBytes,
     invokeCommand,
     isReady,
+    setNowPlayingAppearancePreferences,
     type LibrarySyncFinishedEvent,
     type LibrarySyncProgressEvent,
     type LibrarySource,
@@ -40,6 +42,7 @@
     type FeatureCapability,
     type LyricsPreferences,
     type NowPlayingLayout,
+    type NowPlayingAppearancePreferences,
     type PlaylistEntrySummary,
     type PlaylistSummary,
     type PlaybackSnapshot,
@@ -79,6 +82,11 @@
   } from './lib/active-track-artwork';
   import { createVolumeCommandQueue } from './lib/volume-command-queue';
   import {
+    createNowPlayingAppearanceWriter,
+    DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES,
+    normalizeNowPlayingAppearancePreferences,
+  } from './lib/now-playing-appearance.js';
+  import {
     DEFAULT_LYRICS_PREFERENCES,
     normalizeLyricsPreferences,
   } from './lib/lyrics-preferences.js';
@@ -110,6 +118,11 @@
   let nowPlayingLayout = $state<NowPlayingLayout>('a');
   let nowPlayingLayoutState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let nowPlayingLayoutError = $state<string | null>(null);
+  let nowPlayingAppearancePreferences = $state<NowPlayingAppearancePreferences>(
+    normalizeNowPlayingAppearancePreferences(DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES),
+  );
+  let nowPlayingAppearanceState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
+  let nowPlayingAppearanceError = $state<string | null>(null);
   let lyricsPreferences = $state<LyricsPreferences>(normalizeLyricsPreferences(DEFAULT_LYRICS_PREFERENCES));
   let lyricsPreferencesState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let lyricsPreferencesError = $state<string | null>(null);
@@ -162,6 +175,7 @@
   let themeRevision = 0;
   let trackColumnSettingsRevision = 0;
   let nowPlayingLayoutRevision = 0;
+  let nowPlayingAppearanceRevision = 0;
   let lyricsPreferencesRevision = 0;
   let trackColumnSettingsQueue: Promise<void> = Promise.resolve();
   let nowPlayingLayoutQueue: Promise<void> = Promise.resolve();
@@ -194,6 +208,22 @@
     },
     onIdle() {
       if (!isVolumePointerActive) volumeDraft = null;
+    },
+  });
+
+  const nowPlayingAppearanceWriter = createNowPlayingAppearanceWriter({
+    write: setNowPlayingAppearancePreferences,
+    onState(state) {
+      nowPlayingAppearanceState = state;
+    },
+    onSaved(saved) {
+      nowPlayingAppearancePreferences = saved;
+      nowPlayingAppearanceState = 'saved';
+      nowPlayingAppearanceError = null;
+    },
+    onError(error) {
+      nowPlayingAppearanceState = 'error';
+      nowPlayingAppearanceError = `無法保存正在播放外觀：${getErrorText(error)}`;
     },
   });
 
@@ -241,6 +271,7 @@
       themeSaveState = 'preview';
       trackColumnSettingsState = 'preview';
       nowPlayingLayoutState = 'preview';
+      nowPlayingAppearanceState = 'preview';
       lyricsPreferencesState = 'preview';
       void loadCapabilities();
     }
@@ -280,6 +311,7 @@
         loadSettingsRecoveryWarning(),
         loadTrackColumnSettings(),
         loadNowPlayingLayout(),
+        loadNowPlayingAppearancePreferences(),
         loadLyricsPreferences(),
       ]);
       if (!disposed && sourceSyncReady) void syncLibrary();
@@ -295,6 +327,7 @@
   onDestroy(() => {
     artworkController.dispose();
     volumeCommandQueue.dispose();
+    nowPlayingAppearanceWriter.invalidate();
     if (themeSaveTimer !== undefined) clearTimeout(themeSaveTimer);
     if (lyricsPreferencesSaveTimer !== undefined) {
       clearTimeout(lyricsPreferencesSaveTimer);
@@ -416,6 +449,39 @@
         nowPlayingLayoutError = `無法保存正在播放版面設定：${getErrorText(error)}`;
       }
     });
+  }
+
+  async function loadNowPlayingAppearancePreferences(): Promise<void> {
+    const revision = nowPlayingAppearanceRevision;
+    try {
+      const stored = await getNowPlayingAppearancePreferences();
+      if (revision !== nowPlayingAppearanceRevision) return;
+      nowPlayingAppearancePreferences = normalizeNowPlayingAppearancePreferences(stored);
+      nowPlayingAppearanceState = 'saved';
+      nowPlayingAppearanceError = null;
+    } catch (error) {
+      if (revision !== nowPlayingAppearanceRevision) return;
+      nowPlayingAppearanceState = 'error';
+      nowPlayingAppearanceError = `無法讀取正在播放外觀：${getErrorText(error)}`;
+    }
+  }
+
+  function updateNowPlayingAppearancePreferences(
+    patch: Partial<NowPlayingAppearancePreferences>,
+    immediate = false,
+  ): void {
+    nowPlayingAppearancePreferences = normalizeNowPlayingAppearancePreferences({
+      ...nowPlayingAppearancePreferences,
+      ...patch,
+    });
+    nowPlayingAppearanceError = null;
+    nowPlayingAppearanceRevision += 1;
+    if (!isTauri()) {
+      nowPlayingAppearanceState = 'preview';
+      nowPlayingAppearanceError = '瀏覽器預覽不會保存正在播放外觀設定。';
+      return;
+    }
+    nowPlayingAppearanceWriter.schedule(nowPlayingAppearancePreferences, immediate);
   }
 
   async function loadLyricsPreferences(): Promise<void> {
@@ -1184,7 +1250,19 @@
 
 <svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} />
 
-<div class="app-shell" data-active-view={activeView}>
+<div
+  class="app-shell"
+  class:has-now-playing-backdrop={isNowPlayingOpen}
+  data-active-view={activeView}
+  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-surface-alpha: ${(100 - nowPlayingAppearancePreferences.surfaceTransparencyPercent) / 100};`}
+>
+  {#if isNowPlayingOpen}
+    <div class="now-playing-backdrop" data-testid="now-playing-backdrop" aria-hidden="true">
+      {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
+        <img src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
+      {/if}
+    </div>
+  {/if}
   <aside class="sidebar" aria-label="主要導覽" inert={isNowPlayingOpen}>
     <div class="brand-lockup">
       <div class="brand-mark" aria-hidden="true">
@@ -1664,6 +1742,54 @@
                 <p class="settings-preference-status" class:error={nowPlayingLayoutState === 'error'} role="status">
                   {nowPlayingLayoutError ?? (nowPlayingLayoutState === 'loading' ? '正在讀取正在播放排列…' : nowPlayingLayoutState === 'saving' ? '正在保存排列…' : nowPlayingLayoutState === 'preview' ? '瀏覽器預覽不會保存排列。' : `排列 ${nowPlayingLayout.toUpperCase()} 已保存。`)}
                 </p>
+                <div class="now-playing-appearance-settings">
+                  <div class="settings-panel-header">
+                    <div>
+                      <h3>封面背景</h3>
+                      <p>只影響「正在播放」頁。調整時即時預覽；快速拖動會合併保存。</p>
+                    </div>
+                  </div>
+                  <div
+                    class="now-playing-appearance-preview"
+                    style={`--preview-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --preview-surface-alpha: ${(100 - nowPlayingAppearancePreferences.surfaceTransparencyPercent) / 100};`}
+                    role="img"
+                    aria-label={`外觀預覽：模糊 ${nowPlayingAppearancePreferences.backgroundBlurPx} 像素，元件底色透明度 ${nowPlayingAppearancePreferences.surfaceTransparencyPercent}%`}
+                  >
+                    <span class="now-playing-appearance-preview-surface">歌詞面板</span>
+                    <span class="now-playing-appearance-preview-dock">底部播放控制</span>
+                  </div>
+                  <div class="lyrics-preference-grid">
+                    <label class="lyrics-preference-range">
+                      <span><strong>封面背景模糊</strong><output>{nowPlayingAppearancePreferences.backgroundBlurPx}px</output></span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="40"
+                        step="1"
+                        value={nowPlayingAppearancePreferences.backgroundBlurPx}
+                        aria-label="封面背景模糊程度"
+                        oninput={(event) => updateNowPlayingAppearancePreferences({ backgroundBlurPx: Number(event.currentTarget.value) })}
+                        onchange={(event) => updateNowPlayingAppearancePreferences({ backgroundBlurPx: Number(event.currentTarget.value) }, true)}
+                      />
+                    </label>
+                    <label class="lyrics-preference-range">
+                      <span><strong>元件底色透明度</strong><output>{nowPlayingAppearancePreferences.surfaceTransparencyPercent}%</output></span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={nowPlayingAppearancePreferences.surfaceTransparencyPercent}
+                        aria-label="元件底色透明度"
+                        oninput={(event) => updateNowPlayingAppearancePreferences({ surfaceTransparencyPercent: Number(event.currentTarget.value) })}
+                        onchange={(event) => updateNowPlayingAppearancePreferences({ surfaceTransparencyPercent: Number(event.currentTarget.value) }, true)}
+                      />
+                    </label>
+                  </div>
+                  <p class="settings-preference-status" class:error={nowPlayingAppearanceState === 'error'} role="status">
+                    {nowPlayingAppearanceError ?? (nowPlayingAppearanceState === 'loading' ? '正在讀取正在播放外觀…' : nowPlayingAppearanceState === 'saving' ? '正在保存正在播放外觀…' : nowPlayingAppearanceState === 'preview' ? '瀏覽器預覽不會保存正在播放外觀。' : '正在播放外觀已保存。')}
+                  </p>
+                </div>
               </div>
             {:else if settingsSection === 'lyrics'}
               <div id="lyrics-panel" class="settings-panel" role="tabpanel" aria-labelledby="lyrics-tab" tabindex="0">

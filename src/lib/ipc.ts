@@ -274,6 +274,11 @@ export interface LyricsPreferences {
   auxiliaryFontSizePx: number;
 }
 
+export interface NowPlayingAppearancePreferences {
+  backgroundBlurPx: number;
+  surfaceTransparencyPercent: number;
+}
+
 interface IpcContract {
   settings_get_recovery_warning: {
     args: Record<string, never>;
@@ -318,6 +323,14 @@ interface IpcContract {
   settings_set_lyrics_preferences: {
     args: { preferences: LyricsPreferences };
     result: LyricsPreferences;
+  };
+  settings_get_now_playing_appearance_preferences: {
+    args: Record<string, never>;
+    result: NowPlayingAppearancePreferences;
+  };
+  settings_set_now_playing_appearance_preferences: {
+    args: { preferences: NowPlayingAppearancePreferences };
+    result: NowPlayingAppearancePreferences;
   };
   get_runtime_capabilities: {
     args: Record<string, never>;
@@ -467,6 +480,16 @@ export function getTrackArtworkBytes(trackId: string): Promise<ArrayBuffer> {
     );
   }
   return invoke<ArrayBuffer>('library_get_track_artwork', { trackId });
+}
+
+export function getNowPlayingAppearancePreferences(): Promise<NowPlayingAppearancePreferences> {
+  return invokeCommand('settings_get_now_playing_appearance_preferences', {});
+}
+
+export function setNowPlayingAppearancePreferences(
+  preferences: NowPlayingAppearancePreferences,
+): Promise<NowPlayingAppearancePreferences> {
+  return invokeCommand('settings_set_now_playing_appearance_preferences', { preferences });
 }
 
 export function isReady(capability: FeatureCapability | undefined): boolean {

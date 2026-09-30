@@ -12,7 +12,7 @@ use std::{
 use player_core::{LibraryRoot, MediaLocator, MediaSourceKind, PlaylistId, SourceId};
 use serde::{Deserialize, Serialize};
 
-const SETTINGS_SCHEMA_VERSION: u32 = 3;
+const SETTINGS_SCHEMA_VERSION: u32 = 4;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -76,6 +76,38 @@ impl LyricsPreferences {
         if !(9..=24).contains(&self.auxiliary_font_size_px) {
             return Err(SettingsError::InvalidData(
                 "auxiliaryFontSizePx must be between 9 and 24".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NowPlayingAppearancePreferences {
+    pub background_blur_px: u8,
+    pub surface_transparency_percent: u8,
+}
+
+impl Default for NowPlayingAppearancePreferences {
+    fn default() -> Self {
+        Self {
+            background_blur_px: 20,
+            surface_transparency_percent: 35,
+        }
+    }
+}
+
+impl NowPlayingAppearancePreferences {
+    fn validate(&self) -> Result<(), SettingsError> {
+        if self.background_blur_px > 40 {
+            return Err(SettingsError::InvalidData(
+                "backgroundBlurPx must be between 0 and 40".into(),
+            ));
+        }
+        if self.surface_transparency_percent > 100 {
+            return Err(SettingsError::InvalidData(
+                "surfaceTransparencyPercent must be between 0 and 100".into(),
             ));
         }
         Ok(())
@@ -312,6 +344,7 @@ pub struct AppSettings {
     pub repeat_mode: RepeatMode,
     pub track_list_columns: TrackListColumnSettings,
     pub now_playing_layout: NowPlayingLayout,
+    pub now_playing_appearance_preferences: NowPlayingAppearancePreferences,
     /// False means the source registry came from defaults after both JSON copies failed.
     /// Sync must remain paused until the user rebuilds and confirms the registry.
     pub source_registry_authoritative: bool,
@@ -328,6 +361,7 @@ impl Default for AppSettings {
             repeat_mode: RepeatMode::Off,
             track_list_columns: TrackListColumnSettings::default(),
             now_playing_layout: NowPlayingLayout::A,
+            now_playing_appearance_preferences: NowPlayingAppearancePreferences::default(),
             source_registry_authoritative: true,
             sources: Vec::new(),
         }
@@ -361,6 +395,7 @@ impl AppSettings {
         validate_color(&self.theme.background_hex, "backgroundHex")?;
         validate_color(&self.theme.accent_hex, "accentHex")?;
         self.lyrics_preferences.validate()?;
+        self.now_playing_appearance_preferences.validate()?;
         self.track_list_columns.validate()?;
         let mut ids = std::collections::HashSet::new();
         for source in &self.sources {
@@ -633,6 +668,7 @@ struct RawSettings {
     repeat_mode: Option<RepeatMode>,
     track_list_columns: Option<TrackListColumnSettings>,
     now_playing_layout: Option<NowPlayingLayout>,
+    now_playing_appearance_preferences: Option<NowPlayingAppearancePreferences>,
     source_registry_authoritative: Option<bool>,
     sources: Option<Vec<SourceEntry>>,
 }
@@ -653,6 +689,9 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         repeat_mode: raw.repeat_mode.unwrap_or(RepeatMode::Off),
         track_list_columns: raw.track_list_columns.unwrap_or_default(),
         now_playing_layout: raw.now_playing_layout.unwrap_or(NowPlayingLayout::A),
+        now_playing_appearance_preferences: raw
+            .now_playing_appearance_preferences
+            .unwrap_or_default(),
         source_registry_authoritative: raw.source_registry_authoritative.unwrap_or(true),
         sources: raw.sources.unwrap_or_default(),
     };
@@ -1242,7 +1281,7 @@ mod tests {
 
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 3);
+        assert_eq!(persisted["schemaVersion"], SETTINGS_SCHEMA_VERSION);
         assert_eq!(persisted["lyricsPreferences"]["showTranslation"], false);
         assert_eq!(persisted["lyricsPreferences"]["showRomanization"], false);
         assert_eq!(persisted["lyricsPreferences"]["inactiveOpacityPercent"], 70);
@@ -1351,5 +1390,125 @@ mod tests {
         assert_eq!(settings.sources, vec![source]);
         assert!(!settings.source_registry_authoritative);
         assert!(!reopened.source_registry_authoritative().unwrap());
+    }
+
+    #[test]
+    fn schema_three_migrates_appearance_defaults_without_losing_other_settings() {
+        let directory = test_directory("appearance-migration");
+        let path = directory.join("settings.json");
+        let mut previous = AppSettings {
+            schema_version: 3,
+            sources: vec![source(StoredPath::Utf8("D:/Music".into()))],
+            shuffle: true,
+            repeat_mode: RepeatMode::All,
+            now_playing_layout: NowPlayingLayout::B,
+            ..AppSettings::default()
+        };
+        previous.theme.background_hex = "#123456".into();
+        previous.lyrics_preferences.show_translation = true;
+        let mut json = serde_json::to_value(previous.clone()).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .remove("nowPlayingAppearancePreferences");
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).expect("write schema three settings");
+
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("migrate settings");
+        let migrated = store.snapshot().unwrap();
+        assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(
+            migrated.now_playing_appearance_preferences,
+            NowPlayingAppearancePreferences::default()
+        );
+        assert_eq!(migrated.theme, previous.theme);
+        assert_eq!(migrated.lyrics_preferences, previous.lyrics_preferences);
+        assert_eq!(migrated.sources, previous.sources);
+        assert!(migrated.shuffle);
+        assert_eq!(migrated.repeat_mode, RepeatMode::All);
+        assert_eq!(migrated.now_playing_layout, NowPlayingLayout::B);
+
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            persisted["nowPlayingAppearancePreferences"]["backgroundBlurPx"],
+            20
+        );
+        assert_eq!(
+            persisted["nowPlayingAppearancePreferences"]["surfaceTransparencyPercent"],
+            35
+        );
+    }
+
+    #[test]
+    fn appearance_preferences_roundtrip_reopen_and_enforce_ranges() {
+        let directory = test_directory("appearance-restart");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        let preferences = NowPlayingAppearancePreferences {
+            background_blur_px: 0,
+            surface_transparency_percent: 100,
+        };
+        let saved = store
+            .update(|settings| {
+                settings.now_playing_appearance_preferences = preferences;
+                Ok(())
+            })
+            .expect("save boundary values");
+        assert_eq!(saved.now_playing_appearance_preferences, preferences);
+
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert_eq!(
+            reopened
+                .snapshot()
+                .unwrap()
+                .now_playing_appearance_preferences,
+            preferences
+        );
+
+        for invalid in [
+            NowPlayingAppearancePreferences {
+                background_blur_px: 41,
+                ..preferences
+            },
+            NowPlayingAppearancePreferences {
+                surface_transparency_percent: 101,
+                ..preferences
+            },
+        ] {
+            assert!(reopened
+                .update(|settings| {
+                    settings.now_playing_appearance_preferences = invalid;
+                    Ok(())
+                })
+                .is_err());
+            assert_eq!(
+                reopened
+                    .snapshot()
+                    .unwrap()
+                    .now_playing_appearance_preferences,
+                preferences
+            );
+        }
+    }
+
+    #[test]
+    fn appearance_preferences_dto_uses_camel_case_json_keys() {
+        let preferences = NowPlayingAppearancePreferences {
+            background_blur_px: 12,
+            surface_transparency_percent: 67,
+        };
+        let value = serde_json::to_value(preferences).unwrap();
+        assert_eq!(value["backgroundBlurPx"], 12);
+        assert_eq!(value["surfaceTransparencyPercent"], 67);
+        assert_eq!(
+            serde_json::from_value::<NowPlayingAppearancePreferences>(value).unwrap(),
+            preferences
+        );
+        assert!(
+            serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
+                "backgroundBlurPx": -1,
+                "surfaceTransparencyPercent": 50
+            }))
+            .is_err()
+        );
     }
 }
