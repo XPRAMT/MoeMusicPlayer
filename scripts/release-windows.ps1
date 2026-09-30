@@ -95,8 +95,25 @@ try {
         throw "Updated executable hash does not match the build output: '$outputExe'."
     }
     if ($null -ne $backupExe -and (Test-Path -LiteralPath $backupExe -PathType Leaf)) {
-        Remove-Item -LiteralPath $backupExe -Force
-        $backupExe = $null
+        try {
+            Remove-Item -LiteralPath $backupExe -Force -ErrorAction Stop
+            $backupExe = $null
+        }
+        catch {
+            $cleanupException = $_.Exception
+            $fileAccessException = $null
+            while ($null -ne $cleanupException) {
+                if ($cleanupException -is [System.IO.IOException] -or $cleanupException -is [System.UnauthorizedAccessException]) {
+                    $fileAccessException = $cleanupException
+                    break
+                }
+                $cleanupException = $cleanupException.InnerException
+            }
+            if ($null -eq $fileAccessException) {
+                throw
+            }
+            Write-Warning "Previous executable backup is still in use or cannot be removed; the verified release was updated. Keeping backup: '$backupExe'."
+        }
     }
     Write-Output "Updated: $outputExe"
     Write-Output "SHA256:  $outputHash"

@@ -1164,6 +1164,16 @@
     quickSettingsTrigger?.focus();
   }
 
+  function scrollQuickSettingsSection(sectionId: 'quick-settings-playback-heading' | 'quick-settings-lyrics-heading'): void {
+    const scroller = quickSettingsDialog?.querySelector<HTMLElement>('.quick-settings-drawer-scroll');
+    const target = quickSettingsDialog?.querySelector<HTMLElement>(`#${sectionId}`);
+    if (!scroller || !target) return;
+    const scrollerTop = scroller.getBoundingClientRect().top;
+    const targetTop = target.getBoundingClientRect().top;
+    const nextScrollTop = scroller.scrollTop + targetTop - scrollerTop - 16;
+    scroller.scrollTo({ top: Math.max(0, nextScrollTop), behavior: 'smooth' });
+  }
+
   function handleQuickSettingsKeydown(event: KeyboardEvent): void {
     if (!isQuickSettingsOpen || !quickSettingsDialog) return;
     if (event.key === 'Escape') {
@@ -2078,8 +2088,8 @@
             <button bind:this={quickSettingsCloseButton} class="outline-button icon-button" type="button" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}><IconX size={18} stroke={1.8} aria-hidden="true" /></button>
           </header>
           <nav class="quick-settings-nav" aria-label="快速設定區域">
-            <button type="button" onclick={() => quickSettingsDialog?.querySelector('#quick-settings-playback-heading')?.scrollIntoView({ block: 'start' })}>播放頁</button>
-            <button type="button" onclick={() => quickSettingsDialog?.querySelector('#quick-settings-lyrics-heading')?.scrollIntoView({ block: 'start' })}>歌詞外觀</button>
+            <button type="button" onclick={() => scrollQuickSettingsSection('quick-settings-playback-heading')}>播放頁</button>
+            <button type="button" onclick={() => scrollQuickSettingsSection('quick-settings-lyrics-heading')}>歌詞外觀</button>
           </nav>
           <div class="quick-settings-drawer-scroll">
             <NowPlayingQuickSettingsControls

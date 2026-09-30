@@ -164,6 +164,23 @@ async page => {
   await openOverlay();
   const trackIdBeforeQuickSettings = await page.evaluate(() => window.__volumeHarness.snapshot().currentTrack.id);
   const lyricsFetchCountBeforeQuickSettings = await page.evaluate(() => window.__volumeHarness.lyricsGetCount);
+  await page.locator('.timed-lyrics-viewport, .plain-lyrics-viewport').evaluate((element) => { element.scrollTop = 96; });
+  const quickSettingsBeforeOpen = await page.evaluate(() => {
+    const rect = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      const bounds = element.getBoundingClientRect();
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    };
+    return {
+      windowScroll: [window.scrollX, window.scrollY],
+      pageScroll: document.scrollingElement?.scrollTop ?? null,
+      lyricsScroll: document.querySelector('.timed-lyrics-viewport, .plain-lyrics-viewport')?.scrollTop ?? null,
+      topbar: rect('.now-playing-overlay-topbar'),
+      cover: rect('.cover-stage'),
+      dock: rect('.player-dock'),
+    };
+  });
   await page.getByRole('button', { name: '開啟快速設定' }).click();
   const quickSettings = page.getByRole('dialog', { name: '快速設定' });
   await quickSettings.waitFor({ state: 'visible' });
@@ -178,6 +195,135 @@ async page => {
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '關閉快速設定', 'Tab wraps focus to the close button');
   assert.equal(await page.locator('.now-playing-overlay-body').evaluate((element) => element.inert), true, 'quick settings modal makes the covered playback view inert');
   assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), true, 'modal drawer blocks dock controls while open');
+  const drawerGeometry = await page.evaluate(() => {
+    const rect = (element) => {
+      const bounds = element.getBoundingClientRect();
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    };
+    const drawer = document.querySelector('.now-playing-quick-settings-drawer');
+    const ancestors = [];
+    for (let element = drawer?.parentElement; element; element = element.parentElement) {
+      ancestors.push({
+        name: `${element.tagName.toLowerCase()}.${typeof element.className === 'string' ? element.className : ''}`,
+        scrollTop: element.scrollTop,
+        scrollLeft: element.scrollLeft,
+        rect: rect(element),
+      });
+    }
+    return {
+      windowScroll: [window.scrollX, window.scrollY],
+      pageScroll: document.scrollingElement?.scrollTop ?? null,
+      lyricsScroll: document.querySelector('.timed-lyrics-viewport, .plain-lyrics-viewport')?.scrollTop ?? null,
+      ancestors,
+      topbar: rect(document.querySelector('.now-playing-overlay-topbar')),
+      cover: rect(document.querySelector('.cover-stage')),
+      dock: rect(document.querySelector('.player-dock')),
+      header: rect(document.querySelector('.quick-settings-drawer-header')),
+      nav: rect(document.querySelector('.quick-settings-nav')),
+      close: rect(document.querySelector('.quick-settings-drawer-header button')),
+      drawer: rect(drawer),
+    };
+  });
+  assert.deepEqual(drawerGeometry.windowScroll, quickSettingsBeforeOpen.windowScroll, 'opening the drawer must not move the page');
+  assert.equal(drawerGeometry.pageScroll, quickSettingsBeforeOpen.pageScroll, 'opening the drawer must preserve document scroll');
+  assert.equal(drawerGeometry.lyricsScroll, quickSettingsBeforeOpen.lyricsScroll, 'opening the drawer must preserve the independent lyrics scroll position');
+  assert.deepEqual(drawerGeometry.topbar, quickSettingsBeforeOpen.topbar, 'opening the drawer must not move the Now Playing toolbar');
+  assert.deepEqual(drawerGeometry.cover, quickSettingsBeforeOpen.cover, 'opening the drawer must not move or crop the cover');
+  assert.deepEqual(drawerGeometry.dock, quickSettingsBeforeOpen.dock, 'opening the drawer must not move the dock');
+
+  const captureDrawerScrollState = () => page.evaluate(() => {
+    const rect = (element) => {
+      const bounds = element.getBoundingClientRect();
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    };
+    const drawer = document.querySelector('.now-playing-quick-settings-drawer');
+    const ancestors = [];
+    for (let element = drawer?.parentElement; element; element = element.parentElement) {
+      ancestors.push({
+        name: `${element.tagName.toLowerCase()}.${typeof element.className === 'string' ? element.className : ''}`,
+        scrollTop: element.scrollTop,
+        scrollLeft: element.scrollLeft,
+        rect: rect(element),
+      });
+    }
+    const scroller = drawer.querySelector('.quick-settings-drawer-scroll');
+    return {
+      windowScroll: [window.scrollX, window.scrollY],
+      pageScroll: document.scrollingElement?.scrollTop ?? null,
+      lyricsScroll: document.querySelector('.timed-lyrics-viewport, .plain-lyrics-viewport')?.scrollTop ?? null,
+      ancestors,
+      ownScroll: scroller.scrollTop,
+      ownMaxScroll: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+      topbar: rect(document.querySelector('.now-playing-overlay-topbar')),
+      cover: rect(document.querySelector('.cover-stage')),
+      dock: rect(document.querySelector('.player-dock')),
+      header: rect(document.querySelector('.quick-settings-drawer-header')),
+      nav: rect(document.querySelector('.quick-settings-nav')),
+      close: rect(document.querySelector('.quick-settings-drawer-header button')),
+      drawer: rect(drawer),
+      drawerScroll: rect(scroller),
+      lyricsHeading: rect(document.querySelector('#quick-settings-lyrics-heading')),
+    };
+  });
+  const assertOnlyDrawerMoved = (before, after, label) => {
+    for (const key of ['windowScroll', 'pageScroll', 'lyricsScroll', 'ancestors', 'topbar', 'cover', 'dock', 'header', 'nav', 'close', 'drawer', 'drawerScroll']) {
+      assert.deepEqual(after[key], before[key], `${label}: ${key} must stay fixed while drawer contents scroll`);
+    }
+  };
+  const quickSettingsScrollMeasurements = [];
+  for (const viewport of [
+    { width: 3840, height: 2160 },
+    { width: 1920, height: 1080 },
+    { width: 1366, height: 768 },
+    { width: 360, height: 800 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.waitForTimeout(60);
+    const beforeNavigation = await captureDrawerScrollState();
+    await quickSettings.getByRole('button', { name: '歌詞外觀', exact: true }).click();
+    await page.waitForTimeout(320);
+    const afterNavigation = await captureDrawerScrollState();
+    assertOnlyDrawerMoved(beforeNavigation, afterNavigation, `${viewport.width}x${viewport.height} navigation`);
+    if (viewport.height <= 800) {
+      assert.ok(afterNavigation.ownMaxScroll > 0, `${viewport.width}x${viewport.height}: drawer contents need an independent scroll range`);
+      assert.ok(afterNavigation.ownScroll > beforeNavigation.ownScroll, `${viewport.width}x${viewport.height}: section navigation scrolls only the drawer contents`);
+    }
+    assert.ok(afterNavigation.lyricsHeading.y >= afterNavigation.drawerScroll.y - 1, `${viewport.width}x${viewport.height}: lyrics settings remain in their own scroll viewport`);
+    assert.ok(afterNavigation.lyricsHeading.y < afterNavigation.drawerScroll.y + afterNavigation.drawerScroll.height, `${viewport.width}x${viewport.height}: lyrics section is reachable`);
+    assert.ok(afterNavigation.header.y >= 0 && afterNavigation.close.y >= afterNavigation.header.y, `${viewport.width}x${viewport.height}: drawer header and close button stay visible`);
+    assert.ok(afterNavigation.nav.y >= afterNavigation.header.y + afterNavigation.header.height - 1, `${viewport.width}x${viewport.height}: drawer navigation stays below its fixed header`);
+    assert.ok(afterNavigation.dock.y + afterNavigation.dock.height <= viewport.height + 1, `${viewport.width}x${viewport.height}: playback dock stays visible`);
+
+    const scrollerBounds = await quickSettings.locator('.quick-settings-drawer-scroll').boundingBox();
+    assert.ok(scrollerBounds, 'drawer has a bounded scroll viewport');
+    await page.mouse.move(scrollerBounds.x + scrollerBounds.width / 2, scrollerBounds.y + scrollerBounds.height / 2);
+    await page.mouse.wheel(0, 12000);
+    await page.waitForTimeout(120);
+    const afterWheel = await captureDrawerScrollState();
+    assertOnlyDrawerMoved(afterNavigation, afterWheel, `${viewport.width}x${viewport.height} wheel`);
+    assert.ok(afterWheel.ownMaxScroll === 0 || afterWheel.ownScroll >= afterWheel.ownMaxScroll - 1, `${viewport.width}x${viewport.height}: wheel reaches the drawer's own end`);
+    await page.mouse.wheel(0, 12000);
+    await page.waitForTimeout(100);
+    const afterOverscroll = await captureDrawerScrollState();
+    assertOnlyDrawerMoved(afterWheel, afterOverscroll, `${viewport.width}x${viewport.height} bottom overscroll`);
+    assert.ok(afterOverscroll.ownScroll === afterOverscroll.ownMaxScroll || afterOverscroll.ownMaxScroll === 0, `${viewport.width}x${viewport.height}: overscroll does not chain to the playback page`);
+
+    await quickSettings.getByRole('button', { name: '播放頁', exact: true }).click();
+    await page.waitForTimeout(320);
+    const afterReturnNavigation = await captureDrawerScrollState();
+    assertOnlyDrawerMoved(afterOverscroll, afterReturnNavigation, `${viewport.width}x${viewport.height} return navigation`);
+    assert.equal(await page.locator('.quick-settings-drawer-header').isVisible(), true, 'drawer close controls remain visible after internal navigation');
+    quickSettingsScrollMeasurements.push({
+      viewport: `${viewport.width}x${viewport.height}`,
+      drawer: [Math.round(afterNavigation.drawer.width), Math.round(afterNavigation.drawer.height)],
+      scrollerHeight: Math.round(afterNavigation.drawerScroll.height),
+      lyricsNavigationScrollTop: Math.round(afterNavigation.ownScroll),
+      maximumScrollTop: Math.round(afterNavigation.ownMaxScroll),
+      pageScrollTop: afterOverscroll.pageScroll,
+      dockBottom: Math.round(afterOverscroll.dock.y + afterOverscroll.dock.height),
+    });
+  }
+  await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-quick-settings-scroll-regression.png' });
   await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-quick-settings-desktop.png' });
   const drawerBounds = await quickSettings.boundingBox();
   assert.ok(drawerBounds && drawerBounds.x >= 0 && drawerBounds.width <= 1280, 'desktop drawer stays within viewport bounds');
@@ -309,6 +455,7 @@ async page => {
       '1366x768-B': { cover: [layoutB1366.cover.width, layoutB1366.cover.height], artwork: [layoutB1366.artwork.width, layoutB1366.artwork.height] },
     },
     screenshots: ['target/now-playing-layout-a-1920x1080.png', 'target/now-playing-layout-b-1366x768.png'],
+    quickSettingsScrollMeasurements,
     libraryScrollPreserved: true,
   };
 }
