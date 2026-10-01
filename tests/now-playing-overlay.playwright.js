@@ -49,7 +49,7 @@ async page => {
     await page.getByRole('button', { name: '設定', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.app-shell')?.getAttribute('data-active-view') === 'settings');
     await page.getByRole('tab', { name: '正在播放' }).click();
-    assert.equal(await page.locator('#now-playing-layout-panel input[aria-label="背景圖片亮度"]').count(), 1, 'main settings exposes background brightness');
+    assert.equal(await page.locator('#now-playing-layout-panel input[aria-label="封面背景亮度"]').count(), 1, 'main settings exposes cover background brightness');
     assert.equal(await page.locator('#now-playing-layout-panel input[aria-label="元件底色透明度"]').count(), 0, 'main settings removes surface transparency');
     await page.getByRole('button', { name: layout === 'a' ? '排列 A：封面在前，歌詞在後' : '排列 B：歌詞在前，封面在後' }).click();
     await page.waitForFunction((expected) => document.querySelector('#now-playing-layout-panel .quick-settings-group [role="status"]')?.textContent?.includes(`排列 ${expected.toUpperCase()} 已保存`), layout);
@@ -186,7 +186,7 @@ async page => {
   await page.getByRole('button', { name: '開啟快速設定' }).click();
   const quickSettings = page.getByRole('dialog', { name: '快速設定' });
   await quickSettings.waitFor({ state: 'visible' });
-  for (const label of ['封面背景模糊程度', '背景圖片亮度', '非目前歌詞透明度', '原文字級', '譯文與羅馬拼音字級', '歌詞句間距']) {
+  for (const label of ['封面背景模糊程度', '封面背景亮度', '非目前歌詞透明度', '原文字級', '譯文與羅馬拼音字級', '歌詞句間距']) {
     assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
   }
   assert.equal(await page.locator('.now-playing-topbar-tools .lyrics-topbar-status span').count(), 2, 'provider and sync labels are shown in the page toolbar');
@@ -339,7 +339,7 @@ async page => {
   await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-quick-settings-desktop.png' });
   const drawerBounds = await quickSettings.boundingBox();
   assert.ok(drawerBounds && drawerBounds.x >= 0 && drawerBounds.width <= 1280, 'desktop drawer stays within viewport bounds');
-  const brightnessSlider = quickSettings.locator('input[aria-label="背景圖片亮度"]');
+  const brightnessSlider = quickSettings.locator('input[aria-label="封面背景亮度"]');
   const expectedOverlayAlpha = new Map([[0, '1'], [40, '0.6'], [100, '0']]);
   for (const brightness of [0, 40, 100]) {
     await brightnessSlider.evaluate((input, value) => {
@@ -401,7 +401,7 @@ async page => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.getByRole('button', { name: '開啟快速設定' }).click();
   await page.waitForFunction(() => document.querySelector('[data-testid="now-playing-quick-settings"]'));
-  assert.equal(await page.locator('.now-playing-quick-settings-drawer input[aria-label="背景圖片亮度"]').inputValue(), '40', 'reopened drawer restores saved brightness');
+  assert.equal(await page.locator('.now-playing-quick-settings-drawer input[aria-label="封面背景亮度"]').inputValue(), '40', 'reopened drawer restores saved brightness');
   await page.locator('.now-playing-quick-settings-scrim').click({ position: { x: 12, y: 360 } });
   await page.waitForFunction(() => !document.querySelector('[data-testid="now-playing-quick-settings"]'));
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '開啟快速設定', 'click-outside close returns focus to its trigger');

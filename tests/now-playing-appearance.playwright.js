@@ -27,7 +27,7 @@ async page => {
   await page.getByRole('button', { name: '設定', exact: true }).click();
   await page.getByRole('tab', { name: '正在播放' }).click();
   const blur = page.getByRole('slider', { name: '封面背景模糊程度' });
-  const brightness = page.getByRole('slider', { name: '背景圖片亮度' });
+  const brightness = page.getByRole('slider', { name: '封面背景亮度' });
   await page.waitForFunction(() => document.querySelector('[aria-label="封面背景模糊程度"]')?.value === '20');
 
   await page.evaluate(() => { window.__appearanceHarness.holdAcks = true; });
@@ -42,7 +42,7 @@ async page => {
     blur: document.querySelector('.now-playing-appearance-preview').style.getPropertyValue('--preview-blur'),
     alpha: document.querySelector('.now-playing-appearance-preview').style.getPropertyValue('--preview-background-overlay-alpha'),
     blurValue: document.querySelector('[aria-label="封面背景模糊程度"]').value,
-    brightnessValue: document.querySelector('[aria-label="背景圖片亮度"]').value,
+    brightnessValue: document.querySelector('[aria-label="封面背景亮度"]').value,
   }));
   assert.equal(preview.blur, '25px', 'blur preview should update immediately');
   assert.equal(preview.alpha, '0.48', 'background overlay preview should update immediately');
@@ -69,7 +69,7 @@ async page => {
   await page.getByRole('button', { name: '設定', exact: true }).click();
   await page.getByRole('tab', { name: '正在播放' }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="封面背景模糊程度"]')?.value === '25');
-  await page.waitForFunction(() => document.querySelector('[aria-label="背景圖片亮度"]')?.value === '52');
+  await page.waitForFunction(() => document.querySelector('[aria-label="封面背景亮度"]')?.value === '52');
   await page.evaluate(() => { window.__appearanceStep = 'preferences restored'; });
   await page.locator('.dock-art').click();
   await page.evaluate(() => { window.__appearanceStep = 'dock clicked'; });
