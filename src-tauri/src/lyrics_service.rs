@@ -17,7 +17,7 @@ use player_core::{
 };
 use player_db::Database;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 use tokio::{sync::Semaphore, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 
@@ -632,6 +632,7 @@ impl LyricsTrackResultDto {
 #[tauri::command]
 pub async fn lyrics_get_track(
     state: State<'_, super::AppState>,
+    app: AppHandle,
     track_id: String,
 ) -> Result<LyricsTrackResultDto, String> {
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
@@ -641,12 +642,17 @@ pub async fn lyrics_get_track(
             .clone()
             .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
     })?;
-    load_track_result(database, track_id).await
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    load_track_result_with_context(database, track_id, Some(&app), &settings.sources).await
 }
 
 #[tauri::command]
 pub async fn lyrics_search(
     state: State<'_, super::AppState>,
+    app: AppHandle,
     track_id: String,
     request_id: String,
 ) -> Result<LyricsTrackResultDto, String> {
@@ -660,7 +666,12 @@ pub async fn lyrics_search(
     })?;
 
     let (cancellation, _guard) = state.lyrics_service.begin_search(&request_id)?;
-    let initial = load_track_result(database, track_id).await?;
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    let initial =
+        load_track_result_with_context(database, track_id, Some(&app), &settings.sources).await?;
     if initial.lyrics.is_some() {
         return Ok(initial);
     }
@@ -722,9 +733,19 @@ fn select_candidate_from_database(
     Ok(persisted_lyrics_dto(&track, selected))
 }
 
+#[cfg(test)]
 async fn load_track_result(
     database: &Database,
     track_id: TrackId,
+) -> Result<LyricsTrackResultDto, String> {
+    load_track_result_with_context(database, track_id, None, &[]).await
+}
+
+async fn load_track_result_with_context(
+    database: &Database,
+    track_id: TrackId,
+    app: Option<&AppHandle>,
+    sources: &[super::settings::SourceEntry],
 ) -> Result<LyricsTrackResultDto, String> {
     let track = database
         .get_track_summary(track_id)
@@ -734,7 +755,7 @@ async fn load_track_result(
         .get_track_lyrics(track_id)
         .map_err(|error| error.to_string())?;
 
-    match local_lyrics_for_track(database, track_id, &track).await? {
+    match local_lyrics_for_track(app, sources, database, track_id, &track).await? {
         LocalLyricsLookup::Found(lyrics) => Ok(LyricsTrackResultDto::ready(lyrics)),
         LocalLyricsLookup::Oversized => match cached {
             Some(cached) => Ok(LyricsTrackResultDto::ready(persisted_lyrics_dto(
@@ -761,6 +782,8 @@ enum LocalLyricsLookup {
 
 #[cfg(target_os = "windows")]
 async fn local_lyrics_for_track(
+    _app: Option<&AppHandle>,
+    _sources: &[super::settings::SourceEntry],
     database: &Database,
     track_id: TrackId,
     track: &TrackSummary,
@@ -787,13 +810,136 @@ async fn local_lyrics_for_track(
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
 async fn local_lyrics_for_track(
+    _app: Option<&AppHandle>,
+    _sources: &[super::settings::SourceEntry],
     _database: &Database,
     _track_id: TrackId,
     _track: &TrackSummary,
 ) -> Result<LocalLyricsLookup, String> {
     Ok(LocalLyricsLookup::Missing)
+}
+
+#[cfg(target_os = "android")]
+async fn local_lyrics_for_track(
+    app: Option<&AppHandle>,
+    sources: &[super::settings::SourceEntry],
+    database: &Database,
+    track_id: TrackId,
+    track: &TrackSummary,
+) -> Result<LocalLyricsLookup, String> {
+    use lofty::{config::ParseOptions, prelude::TaggedFileExt, probe::Probe, tag::ItemKey};
+    use player_core::{parse_lrc, parse_yrc, ParsedLyrics, MAX_LYRIC_PAYLOAD_BYTES};
+    use tauri_plugin_media_index::MediaIndexExt;
+
+    let Some(app) = app else {
+        return Ok(LocalLyricsLookup::Missing);
+    };
+    let locators = database
+        .track_locators(track_id)
+        .map_err(|error| error.to_string())?;
+    let Some(audio_uri) = locators.iter().find_map(|locator| match locator {
+        player_core::MediaLocator::ContentUri(uri) => Some(uri.clone()),
+        player_core::MediaLocator::FileSystem(_) => None,
+    }) else {
+        return Ok(LocalLyricsLookup::Missing);
+    };
+
+    let tree_uris = sources
+        .iter()
+        .filter(|source| source.enabled)
+        .filter_map(|source| match &source.kind {
+            super::settings::SourceEntryKind::Folder {
+                media_kind: player_core::MediaSourceKind::AndroidSaf,
+                path: super::settings::StoredPath::Uri(uri),
+            } => Some(uri.clone()),
+            super::settings::SourceEntryKind::PlaylistFile {
+                tree_uri: Some(uri),
+                ..
+            } => Some(uri.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for tree_uri in tree_uris {
+        let app = app.clone();
+        let audio_uri = audio_uri.clone();
+        let tree_uri = tree_uri.clone();
+        let sidecar = tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .read_saf_lyric_sibling(&tree_uri, &audio_uri, MAX_LYRIC_PAYLOAD_BYTES as u64)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| format!("讀取 Android 歌詞 sidecar 工作失敗：{error}"))??;
+        if let Some(text) = sidecar {
+            if text.len() > MAX_LYRIC_PAYLOAD_BYTES {
+                return Ok(LocalLyricsLookup::Oversized);
+            }
+            if let Ok(lyrics) = parse_lrc(&text) {
+                if !lyrics.lines.is_empty() {
+                    return Ok(LocalLyricsLookup::Found(track_lyrics_dto(
+                        track.id,
+                        track,
+                        LyricProvider::Sidecar,
+                        false,
+                        &lyrics,
+                    )));
+                }
+            }
+        }
+    }
+
+    let app = app.clone();
+    let lookup = tauri::async_runtime::spawn_blocking(
+        move || -> Result<(Option<ParsedLyrics>, bool), String> {
+            let lease = app
+                .media_index()
+                .cache_content_uri(&audio_uri, 512 * 1024 * 1024)
+                .map_err(|error| error.to_string())?;
+            let tagged = Probe::open(lease.path())
+                .map_err(|error| format!("無法開啟 Android 曲目標籤：{error}"))?
+                .options(ParseOptions::new().read_properties(false))
+                .guess_file_type()
+                .map_err(|error| format!("無法辨識 Android 曲目格式：{error}"))?
+                .read()
+                .map_err(|error| format!("無法讀取 Android 曲目標籤：{error}"))?;
+            let tags = tagged.tags();
+            let mut oversized = false;
+            for key in [ItemKey::Lyrics, ItemKey::UnsyncLyrics] {
+                for raw in tags.iter().filter_map(|tag| tag.get_string(key)) {
+                    if raw.len() > MAX_LYRIC_PAYLOAD_BYTES {
+                        oversized = true;
+                        continue;
+                    }
+                    let parsed = if looks_like_yrc(raw) {
+                        parse_yrc(raw)
+                    } else {
+                        parse_lrc(raw)
+                    };
+                    if let Ok(lyrics) = parsed {
+                        if !lyrics.lines.is_empty() {
+                            return Ok((Some(lyrics), false));
+                        }
+                    }
+                }
+            }
+            Ok((None, oversized))
+        },
+    )
+    .await
+    .map_err(|error| format!("讀取 Android 內嵌歌詞工作失敗：{error}"))??;
+    match lookup {
+        (Some(lyrics), _) => Ok(LocalLyricsLookup::Found(track_lyrics_dto(
+            track.id,
+            track,
+            LyricProvider::Embedded,
+            false,
+            &lyrics,
+        ))),
+        (None, true) => Ok(LocalLyricsLookup::Oversized),
+        (None, false) => Ok(LocalLyricsLookup::Missing),
+    }
 }
 
 fn persisted_lyrics_dto(track: &TrackSummary, lyrics: TrackLyrics) -> TrackLyricsDto {

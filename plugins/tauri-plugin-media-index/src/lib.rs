@@ -2,6 +2,7 @@ use player_core::{
     LibraryRoot, MediaIndex as CoreMediaIndex, MediaTrackRecord, SourceScan, TrackMetadata,
     TrackMetadataError,
 };
+use std::path::{Path, PathBuf};
 use tauri::{Manager, Runtime, plugin::Builder, plugin::TauriPlugin};
 
 #[cfg(any(target_os = "android", test))]
@@ -15,6 +16,79 @@ mod models;
 
 pub use error::{Error, Result};
 pub use models::{MediaStoreVolume, MediaStoreVolumes};
+
+/// A playlist document selected from a persisted SAF tree, allowing relative M3U entries to be resolved safely.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SafPlaylistImport {
+    pub playlist_uri: String,
+    pub tree_uri: String,
+    pub display_name: String,
+}
+
+/// Fingerprint metadata from an authorized Android content URI without copying its media bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContentUriMetadata {
+    pub content_uri: String,
+    pub size_bytes: Option<u64>,
+    pub modified_at_utc_ms: Option<i64>,
+}
+
+/// A playlist-relative document resolved within its persisted SAF tree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedSafPlaylistEntry {
+    pub content_uri: String,
+    pub size_bytes: Option<u64>,
+    pub modified_at_utc_ms: Option<u64>,
+}
+
+/// An app-private temporary copy of an authorized Android content URI.
+/// The path is available only to Rust callers; dropping the lease releases the cache token.
+pub struct ContentCacheLease {
+    token: String,
+    path: PathBuf,
+    release: Option<Box<dyn FnOnce(String)>>,
+    mime_type: Option<String>,
+}
+
+impl ContentCacheLease {
+    #[cfg(target_os = "android")]
+    pub(crate) fn new(
+        token: String,
+        path: PathBuf,
+        mime_type: Option<String>,
+        release: Box<dyn FnOnce(String)>,
+    ) -> Self {
+        Self {
+            token,
+            path,
+            mime_type,
+            release: Some(release),
+        }
+    }
+
+    /// The lease file is private to the Android app cache and is deleted when this value drops.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// MIME type reported by ContentResolver for the leased original bytes, if available.
+    pub fn mime_type(&self) -> Option<&str> {
+        self.mime_type.as_deref()
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn token(&self) -> &str {
+        &self.token
+    }
+}
+
+impl Drop for ContentCacheLease {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release(self.token.clone());
+        }
+    }
+}
 
 #[cfg(not(target_os = "android"))]
 use desktop::PlatformMediaIndex;
@@ -76,9 +150,81 @@ impl<R: Runtime> MediaIndex<R> {
         self.platform.has_saf_permission(uri)
     }
 
+    /// Probe an Android content URI and return available size/mtime without copying its contents.
+    pub fn probe_content_uri(&self, uri: &str) -> Result<Option<ContentUriMetadata>> {
+        self.platform.probe_content_uri(uri)
+    }
+
     /// Release a persisted grant when the user removes a SAF source.
     pub fn release_saf_tree(&self, uri: &str) -> Result<()> {
         self.platform.release_saf_tree(uri)
+    }
+
+    /// Start the single Android MediaSessionService without coupling its lifecycle to the activity.
+    pub fn ensure_playback_service_started(&self) -> Result<()> {
+        self.platform.ensure_playback_service_started()
+    }
+
+    /// Copy a content URI to a bounded private cache lease for a Rust parser.
+    pub fn cache_content_uri(&self, uri: &str, max_bytes: u64) -> Result<ContentCacheLease> {
+        self.platform.cache_content_uri(uri, max_bytes)
+    }
+
+    /// Extract embedded compressed artwork bytes into a bounded cache lease without decoding or re-encoding.
+    pub fn cache_artwork_bytes(
+        &self,
+        uri: &str,
+        tree_uri: Option<&str>,
+        max_bytes: u64,
+    ) -> Result<ContentCacheLease> {
+        self.platform.cache_artwork_bytes(uri, tree_uri, max_bytes)
+    }
+
+    /// Create an empty cache lease for Rust to populate before a SAF export.
+    pub fn create_cache_lease(&self) -> Result<ContentCacheLease> {
+        self.platform.create_cache_lease()
+    }
+
+    /// Stream a Rust-generated cache lease into a user-selected SAF document.
+    pub fn write_content_cache_lease(
+        &self,
+        lease: &ContentCacheLease,
+        destination_uri: &str,
+    ) -> Result<()> {
+        self.platform
+            .write_content_cache_lease(lease, destination_uri)
+    }
+
+    /// Let the user choose an M3U/M3U8 document inside a persisted SAF tree.
+    pub fn pick_playlist_import(&self) -> Result<Option<SafPlaylistImport>> {
+        self.platform.pick_playlist_import()
+    }
+
+    /// Resolve one relative playlist entry only within the selected, persisted SAF tree.
+    pub fn resolve_saf_playlist_entry(
+        &self,
+        tree_uri: &str,
+        playlist_uri: &str,
+        locator: &str,
+    ) -> Result<Option<ResolvedSafPlaylistEntry>> {
+        self.platform
+            .resolve_saf_playlist_entry(tree_uri, playlist_uri, locator)
+    }
+
+    /// Let the user choose an M3U/M3U8 document destination for export.
+    pub fn pick_playlist_export(&self, suggested_name: &str) -> Result<Option<String>> {
+        self.platform.pick_playlist_export(suggested_name)
+    }
+
+    /// Read an adjacent LRC only when both URIs are inside the same persisted SAF tree.
+    pub fn read_saf_lyric_sibling(
+        &self,
+        tree_uri: &str,
+        audio_uri: &str,
+        max_bytes: u64,
+    ) -> Result<Option<String>> {
+        self.platform
+            .read_saf_lyric_sibling(tree_uri, audio_uri, max_bytes)
     }
 }
 

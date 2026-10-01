@@ -366,6 +366,7 @@ pub enum DatabaseError {
     TrackNotFound(TrackId),
     NoEnabledTrackMapping(TrackId),
     NonFilesystemTrackLocator(TrackId),
+    NonContentUriTrackLocator(TrackId),
     TrackFileUnavailable(TrackId),
     InvalidThemeColor(&'static str),
     UnknownPlaybackStatisticsRuntime(Uuid),
@@ -398,6 +399,10 @@ impl fmt::Display for DatabaseError {
             Self::NonFilesystemTrackLocator(track_id) => write!(
                 f,
                 "track {track_id} has no enabled filesystem locator; its available locator is not a local path"
+            ),
+            Self::NonContentUriTrackLocator(track_id) => write!(
+                f,
+                "track {track_id} has no enabled content URI locator; its available locator is not an Android content URI"
             ),
             Self::TrackFileUnavailable(track_id) => write!(
                 f,
@@ -1613,6 +1618,23 @@ impl Database {
         } else {
             Err(DatabaseError::NonFilesystemTrackLocator(track_id))
         }
+    }
+
+    /// Resolve an enabled Android content URI for this stable TrackId. The URI is
+    /// returned for the current command only and must never be persisted as the
+    /// playback-session identity.
+    pub fn resolve_playable_content_uri(&self, track_id: TrackId) -> Result<String, DatabaseError> {
+        let locators = self.track_locators(track_id)?;
+        if locators.is_empty() {
+            return Err(DatabaseError::NoEnabledTrackMapping(track_id));
+        }
+        locators
+            .into_iter()
+            .find_map(|locator| match locator {
+                MediaLocator::ContentUri(uri) => Some(uri),
+                MediaLocator::FileSystem(_) => None,
+            })
+            .ok_or(DatabaseError::NonContentUriTrackLocator(track_id))
     }
 
     pub fn set_user_override(

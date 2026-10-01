@@ -54,7 +54,10 @@ pub fn sync_playlist_file_source(
     source: &SourceEntry,
     synced_at_utc_ms: i64,
 ) -> Result<Option<SyncReport>, String> {
-    let SourceEntryKind::PlaylistFile { playlist_id, path } = &source.kind else {
+    let SourceEntryKind::PlaylistFile {
+        playlist_id, path, ..
+    } = &source.kind
+    else {
         return Ok(None);
     };
     let playlist_path = path.to_path_buf().map_err(|error| error.to_string())?;
@@ -304,6 +307,7 @@ mod tests {
             kind: SourceEntryKind::PlaylistFile {
                 playlist_id,
                 path: StoredPath::from_path(path).expect("store Unicode playlist path"),
+                tree_uri: None,
             },
         }
     }

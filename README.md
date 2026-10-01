@@ -7,7 +7,7 @@ MoeMusicPlayer is a local-first music library for Windows and Android. User pref
 ## Features
 
 - Choose Windows music folders with the native folder picker and incrementally scan them in the background. Canceling the picker does not add a source.
-- On Android, select shared-audio storage through MediaStore or choose a folder with the system document picker (SAF).
+- On Android, select shared-audio storage through MediaStore or choose a folder with the system document picker (SAF); playback uses Media3 and continues through the foreground media service when the app is backgrounded.
 - Keep previously indexed tracks when a source is unavailable or a scan is incomplete.
 - Browse and search the saved library with paginated results; the interface never loads the whole collection.
 - Configure one shared metadata-column order and visibility for the library and playlists; row numbers and play actions stay fixed.
@@ -15,13 +15,13 @@ MoeMusicPlayer is a local-first music library for Windows and Android. User pref
 - Customize the background and accent colors in Settings. Preferences are saved to `settings.json`, and text colors adjust for contrast.
 - If settings cannot be recovered from the JSON backup, source synchronization pauses until you re-register and confirm the intended sources; existing indexed music remains available.
 - On Windows, play local WAV, MP3, FLAC, and Ogg Vorbis files with play/pause, seek, and volume controls.
-- Show the current track's embedded artwork, then same-folder `cover.jpg` or `folder.jpg`, using the original image bytes in Now Playing and the player bar.
-- In Windows Now Playing, read local LRC sidecars and embedded lyrics first. When none are available, you can search NetEase and QQ candidates; show synchronized line highlighting when timing is available, apply only high-confidence matches automatically, and select and save a candidate manually. Lyrics fade toward the top and bottom of their scroll viewport while the active line remains centered; synchronized playback follows adjacent cues smoothly. Quick Settings and **Settings → Lyrics** share saved preferences for translation and romanization visibility, inactive lyric text opacity, primary and auxiliary font sizes, and spacing between lyric lines.
-- Import and export M3U and UTF-8 M3U8 playlists on Windows. A newly imported playlist file is registered as a source; older static playlists are not linked to a guessed file path. Unmatched entries are retained, and relative exports are limited to the selected shared root.
-- Use queue navigation, shuffle, and repeat off/all/one modes on Windows. Playlist queue order retains repeated entries. Listening time counts only while audio is Playing and its position advances. Weighted shuffle gives tracks with lower `played_ms / duration_ms` ratios a higher chance when a new shuffle traversal is generated; unknown or zero duration uses neutral weight, and an active traversal stays unchanged.
-- Windows system media controls broadcast the current title, artist, album, cover artwork, playback state, and timeline; Play/Pause/Stop/Seek and available queue navigation are routed back to the audio service.
+- On Windows, show the current track's embedded artwork, then same-folder `cover.jpg` or `folder.jpg`. Android artwork uses original embedded image bytes through a binary IPC path.
+- In Now Playing, read authorized local LRC sidecars and embedded lyrics first. When none are available, you can search NetEase and QQ candidates; show synchronized line highlighting when timing is available, apply only high-confidence matches automatically, and select and save a candidate manually. Lyrics fade toward the top and bottom of their scroll viewport while the active line remains centered; synchronized playback follows adjacent cues smoothly. Quick Settings and **Settings → Lyrics** share saved preferences for translation and romanization visibility, inactive lyric text opacity, primary and auxiliary font sizes, and spacing between lyric lines.
+- Import and export M3U and UTF-8 M3U8 playlists on Windows and Android. Android uses a persistent SAF tree grant and resolves relative entries only within that tree. A newly imported playlist file is registered as a source; older static playlists are not linked to a guessed file path. Unmatched entries are retained, and relative exports are limited to the selected shared root.
+- Use queue navigation, shuffle, and repeat off/all/one modes on Windows and Android. Playlist queue order retains repeated entries. Listening time counts only while audio is Playing and its position advances. Weighted shuffle gives tracks with lower `played_ms / duration_ms` ratios a higher chance when a new shuffle traversal is generated; unknown or zero duration uses neutral weight, and an active traversal stays unchanged.
+- Windows system media controls broadcast the current title, artist, album, cover artwork, playback state, and timeline; Play/Pause/Stop/Seek and available queue navigation are routed back to the audio service. Android uses a MediaSession notification/service for background transport controls and queue navigation.
 
-Android playback is not available yet. Real Tauri window, system media flyout, and hardware media-key behavior still need platform acceptance.
+Android Media3 playback integration is implemented. The ARM64 APK builds successfully, but has not yet been installed or verified on NX809J; real-device behavior remains unverified.
 
 ## Run on Windows
 
@@ -42,4 +42,4 @@ npm install
 npm run android:build:arm64
 ```
 
-The debug APK is written to `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`. On the device, open **Settings → Music Sources** to grant MediaStore access or select a SAF folder. Preferences are saved in `settings.json` in the app data directory.
+The debug APK is written to `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`. After verification, the fixed copy is `release/moemusicplayer-android-arm64-debug.apk`. On the device, open **Settings → Music Sources** to grant MediaStore access or select a SAF folder. To import a playlist, grant access to its containing SAF tree. Playback uses a foreground MediaSession service and restores the saved queue paused on the next launch. Preferences and source registrations are saved in `settings.json`; library and playback-session data are stored in SQLite.

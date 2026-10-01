@@ -5,6 +5,42 @@ use player_core::{
 
 use crate::models::{ScanResponse, ScanState};
 
+pub(crate) fn parse_recording_date_year(value: &str) -> Option<u16> {
+    let bytes = value.as_bytes();
+    let year = parse_four_digit_year(bytes.get(..4)?)?;
+    match bytes.len() {
+        4 => Some(year),
+        10 if bytes[4] == b'-' && bytes[7] == b'-' => {
+            let month = parse_two_digits(&bytes[5..7])?;
+            let day = parse_two_digits(&bytes[8..10])?;
+            let days_in_month = match month {
+                1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+                4 | 6 | 9 | 11 => 30,
+                2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
+                2 => 28,
+                _ => return None,
+            };
+            (1..=days_in_month).contains(&day).then_some(year)
+        }
+        _ => None,
+    }
+}
+
+fn parse_four_digit_year(bytes: &[u8]) -> Option<u16> {
+    if bytes.len() != 4 || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let year = std::str::from_utf8(bytes).ok()?.parse::<u16>().ok()?;
+    (year != 0).then_some(year)
+}
+
+fn parse_two_digits(bytes: &[u8]) -> Option<u8> {
+    if bytes.len() != 2 || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()?.parse().ok()
+}
+
 pub(crate) fn scan_from_response(root: &LibraryRoot, response: ScanResponse) -> SourceScan {
     let mut state = match response.state {
         ScanState::Complete => SourceScanState::Complete,
@@ -113,6 +149,18 @@ mod tests {
             locator: MediaLocator::ContentUri(locator.into()),
             enabled: true,
         }
+    }
+
+    #[test]
+    fn recording_date_year_accepts_valid_year_or_calendar_date_only() {
+        assert_eq!(parse_recording_date_year("2024"), Some(2024));
+        assert_eq!(parse_recording_date_year("2000-02-29"), Some(2000));
+        assert_eq!(parse_recording_date_year("1900-02-29"), None);
+        assert_eq!(parse_recording_date_year("2024-02-30"), None);
+        assert_eq!(parse_recording_date_year("2024-13-01"), None);
+        assert_eq!(parse_recording_date_year("0000"), None);
+        assert_eq!(parse_recording_date_year("2024-01"), None);
+        assert_eq!(parse_recording_date_year("not-a-date"), None);
     }
 
     #[test]

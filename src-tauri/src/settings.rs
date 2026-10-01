@@ -289,6 +289,10 @@ pub enum SourceEntryKind {
     PlaylistFile {
         playlist_id: PlaylistId,
         path: StoredPath,
+        /// Android SAF tree grant used to authorize playlist and relative media URIs.
+        /// `None` preserves compatibility with Windows filesystem playlist sources.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tree_uri: Option<String>,
     },
 }
 
@@ -823,6 +827,7 @@ mod tests {
             kind: SourceEntryKind::PlaylistFile {
                 playlist_id: PlaylistId::new(),
                 path,
+                tree_uri: None,
             },
         }
     }
@@ -1130,6 +1135,7 @@ mod tests {
             kind: SourceEntryKind::PlaylistFile {
                 playlist_id,
                 path: StoredPath::Utf8("C:/music.m3u8".into()),
+                tree_uri: None,
             },
         });
         let json = serde_json::to_value(&settings).expect("serialize settings");

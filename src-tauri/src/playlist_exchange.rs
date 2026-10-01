@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use player_core::{
     parse_m3u, parse_m3u8, write_m3u, write_m3u8, M3uExportOptions, PlaylistId, PlaylistSummary,
@@ -29,8 +29,9 @@ pub fn import_playlist_file(
     save_imported_playlist(database, playlist)
 }
 
+#[cfg(any(target_os = "windows", test))]
 pub fn read_playlist_file(path: &Path) -> Result<player_core::Playlist, String> {
-    let bytes = fs::read(path).map_err(|error| format!("無法讀取選擇的播放清單：{error}"))?;
+    let bytes = std::fs::read(path).map_err(|error| format!("無法讀取選擇的播放清單：{error}"))?;
     read_playlist_bytes(&bytes, path)
 }
 
@@ -60,6 +61,7 @@ pub fn read_playlist_bytes(bytes: &[u8], path: &Path) -> Result<player_core::Pla
     Ok(playlist)
 }
 
+#[cfg(any(target_os = "windows", test))]
 pub fn import_playlist_file_with_id(
     database: &Database,
     path: &Path,
@@ -70,6 +72,7 @@ pub fn import_playlist_file_with_id(
     save_imported_playlist(database, playlist)
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn save_imported_playlist(
     database: &Database,
     playlist: player_core::Playlist,
@@ -137,7 +140,7 @@ pub fn export_playlist_file(
         _ => unreachable!("validated above"),
     }
     .map_err(|error| format!("無法產生 UTF-8 {format}: {error}"))?;
-    fs::write(&output_path, bytes).map_err(|error| format!("無法寫入 M3U8 檔案：{error}"))?;
+    std::fs::write(&output_path, bytes).map_err(|error| format!("無法寫入 M3U8 檔案：{error}"))?;
 
     Ok(PlaylistExportResult {
         playlist_name: playlist.name,

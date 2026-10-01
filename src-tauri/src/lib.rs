@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "windows", test))]
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "windows")]
@@ -8,32 +10,43 @@ use std::{
         mpsc::{self, Receiver, SyncSender, TrySendError},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
+#[cfg(target_os = "windows")]
+use player_core::PlaybackCheckpoint;
 use player_core::{
-    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaybackCheckpoint,
-    PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId,
-    PlaylistPage, PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId,
-    SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId, TrackSummary,
+    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaybackQueue,
+    PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId, PlaylistPage,
+    PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId, SourceScanState,
+    SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId, TrackSummary,
 };
-use player_db::{Database, PlaybackSessionCheckpoint, ThemePreferences};
+#[cfg(target_os = "windows")]
+use player_db::PlaybackSessionCheckpoint;
+use player_db::{Database, ThemePreferences};
 use serde::{Deserialize, Serialize};
 use tauri::{ipc::Response, AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_media_index::MediaIndexExt;
 
 mod playlist_exchange;
-use playlist_exchange::{
-    export_playlist_file, import_playlist_file_with_id, read_playlist_file, PlaylistExportResult,
-    PlaylistImportResult,
-};
+use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImportResult};
+#[cfg(target_os = "windows")]
+use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 use settings::{
     AppSettings, LyricsPreferences, NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode,
     SettingsStore, SourceEntry, SourceEntryKind, ThemeSettings, TrackListColumnSettings,
 };
+#[cfg(any(target_os = "android", test))]
+mod android_artwork;
+#[cfg(any(target_os = "android", test))]
+#[cfg_attr(test, allow(dead_code))]
+mod android_playback;
+#[cfg(any(target_os = "android", test))]
+mod android_playlist_source_sync;
 mod lyrics_provider;
 mod lyrics_service;
+#[cfg(any(target_os = "windows", test))]
 mod playlist_source_sync;
 
 #[cfg(target_os = "windows")]
@@ -103,6 +116,22 @@ struct AppState {
     system_media: Option<WindowsSystemMediaService>,
     #[cfg(target_os = "windows")]
     system_media_error: Option<String>,
+    #[cfg(target_os = "android")]
+    android_playback: Option<android_playback::AndroidPlaybackService>,
+    #[cfg(target_os = "android")]
+    android_playback_error: Option<String>,
+}
+
+#[cfg(target_os = "android")]
+fn android_playback_service(
+    state: &AppState,
+) -> Result<&android_playback::AndroidPlaybackService, String> {
+    state.android_playback.as_ref().ok_or_else(|| {
+        state
+            .android_playback_error
+            .clone()
+            .unwrap_or_else(|| "Android MediaSession 播放服務尚未啟動。".to_owned())
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -1478,10 +1507,12 @@ fn audio_state_name(state: AudioPlaybackState) -> &'static str {
     }
 }
 
-fn duration_millis(duration: Duration) -> u64 {
+#[cfg(any(target_os = "windows", test))]
+fn duration_millis(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn playback_duration_ms(
     audio_duration: Option<Duration>,
     track_duration_ms: Option<u64>,
@@ -1896,7 +1927,21 @@ fn get_runtime_capabilities(state: State<'_, AppState>) -> RuntimeCapabilities {
                 )
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "android")]
+        {
+            if state.database.is_some() && state.android_playback.is_some() {
+                feature(FeatureState::Ready, None)
+            } else {
+                feature(
+                    FeatureState::NotReady,
+                    state
+                        .database_error
+                        .clone()
+                        .or_else(|| state.android_playback_error.clone()),
+                )
+            }
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "android")))]
         {
             feature(
                 FeatureState::NotReady,
@@ -1905,7 +1950,7 @@ fn get_runtime_capabilities(state: State<'_, AppState>) -> RuntimeCapabilities {
         }
     };
 
-    let playlist_exchange = if cfg!(target_os = "windows") {
+    let playlist_exchange = if cfg!(any(target_os = "windows", target_os = "android")) {
         if state.database.is_some() {
             feature(FeatureState::Ready, None)
         } else {
@@ -1920,7 +1965,7 @@ fn get_runtime_capabilities(state: State<'_, AppState>) -> RuntimeCapabilities {
     } else {
         feature(
             FeatureState::NotReady,
-            Some("M3U/M3U8 原生檔案匯入與匯出目前只支援 Windows。".to_owned()),
+            Some("M3U/M3U8 原生檔案匯入與匯出目前不可用。".to_owned()),
         )
     };
 
@@ -1956,7 +2001,22 @@ fn unavailable_system_media_capability(detail: Option<String>) -> FeatureCapabil
     )
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "android")]
+fn system_media_controls_capability(state: &AppState) -> FeatureCapability {
+    if state.android_playback.is_some() {
+        feature(FeatureState::Ready, None)
+    } else {
+        feature(
+            FeatureState::NotReady,
+            state
+                .android_playback_error
+                .clone()
+                .or_else(|| Some("Android MediaSession 尚未啟動。".to_owned())),
+        )
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
 fn system_media_controls_capability(_state: &AppState) -> FeatureCapability {
     feature(
         FeatureState::NotReady,
@@ -2082,6 +2142,7 @@ async fn playlist_import_m3u(
                     playlist_id,
                     path: settings::StoredPath::from_path(&path)
                         .map_err(|error| error.to_string())?,
+                    tree_uri: None,
                 },
             })
             .map_err(|error| error.to_string())?;
@@ -2113,8 +2174,147 @@ async fn playlist_import_m3u(
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, window, state);
-        Err("M3U/M3U8 原生檔案匯入目前只支援 Windows。".to_owned())
+        #[cfg(target_os = "android")]
+        {
+            let _ = window;
+            let Some(selected) = app
+                .media_index()
+                .pick_playlist_import()
+                .map_err(|error| error.to_string())?
+            else {
+                return Ok(None);
+            };
+            if !app
+                .media_index()
+                .has_saf_permission(&selected.tree_uri)
+                .map_err(|error| error.to_string())?
+            {
+                return Err("Android 未保留此播放清單文件樹的讀取授權。".to_owned());
+            }
+            let playlist_uri = selected.playlist_uri.clone();
+            let app_for_read = app.clone();
+            let playlist_bytes = tauri::async_runtime::spawn_blocking(move || {
+                let lease = app_for_read
+                    .media_index()
+                    .cache_content_uri(
+                        &playlist_uri,
+                        android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64,
+                    )
+                    .map_err(|error| error.to_string())?;
+                let metadata = std::fs::metadata(lease.path())
+                    .map_err(|error| format!("無法讀取播放清單快取：{error}"))?;
+                if metadata.len() > android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64
+                {
+                    return Err("Android 播放清單超過 32 MiB 限制。".to_owned());
+                }
+                let mut bytes = Vec::with_capacity(metadata.len() as usize);
+                {
+                    use std::io::Read;
+                    std::fs::File::open(lease.path())
+                        .and_then(|file| {
+                            file.take(
+                                android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64 + 1,
+                            )
+                            .read_to_end(&mut bytes)
+                        })
+                        .map_err(|error| format!("讀取播放清單快取失敗：{error}"))?;
+                }
+                if bytes.len() > android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES {
+                    return Err("Android 播放清單超過 32 MiB 限制。".to_owned());
+                }
+                Ok(bytes)
+            })
+            .await
+            .map_err(|error| format!("讀取 Android 播放清單工作失敗：{error}"))??;
+
+            let file_name = std::path::Path::new(&selected.display_name)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| {
+                    name.rsplit_once('.').is_some_and(|(_, ext)| {
+                        matches!(ext.to_ascii_lowercase().as_str(), "m3u" | "m3u8")
+                    })
+                })
+                .ok_or_else(|| "選取的文件不是 .m3u 或 .m3u8 播放清單。".to_owned())?;
+            let parse_path = std::path::PathBuf::from(file_name);
+            let parsed = playlist_exchange::read_playlist_bytes(&playlist_bytes, &parse_path)?;
+            let database = state.database.as_ref().ok_or_else(|| {
+                state
+                    .database_error
+                    .clone()
+                    .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+            })?;
+            let settings = state
+                .settings
+                .snapshot()
+                .map_err(|error| error.to_string())?;
+            let existing = settings.sources.iter().find(|source| {
+                matches!(
+                    &source.kind,
+                    SourceEntryKind::PlaylistFile {
+                        path: settings::StoredPath::Uri(path),
+                        tree_uri: Some(tree),
+                        ..
+                    } if path == &selected.playlist_uri && tree == &selected.tree_uri
+                )
+            });
+            let (source_id, playlist_id) = if let Some(source) = existing {
+                let SourceEntryKind::PlaylistFile { playlist_id, .. } = source.kind else {
+                    unreachable!();
+                };
+                (source.id, playlist_id)
+            } else {
+                let playlist_id = database
+                    .unique_playlist_id_matching_locators(
+                        &parsed.name,
+                        &parsed
+                            .entries
+                            .iter()
+                            .map(|entry| entry.locator.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(|error| error.to_string())?
+                    .unwrap_or(parsed.id);
+                (SourceId::new(), playlist_id)
+            };
+            state
+                .settings
+                .upsert_source(SourceEntry {
+                    id: source_id,
+                    display_name: file_name.to_owned(),
+                    enabled: true,
+                    kind: SourceEntryKind::PlaylistFile {
+                        playlist_id,
+                        path: settings::StoredPath::Uri(selected.playlist_uri),
+                        tree_uri: Some(selected.tree_uri),
+                    },
+                })
+                .map_err(|error| error.to_string())?;
+            let sync = library_sync(app.clone()).await?;
+            let saved = database
+                .get_playlist(playlist_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "播放清單同步後無法重新讀取。".to_owned())?;
+            let result = PlaylistImportResult {
+                playlist: PlaylistSummary {
+                    id: saved.id,
+                    name: saved.name,
+                    entry_count: saved.entries.len() as u64,
+                },
+                matched_entries: saved
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.track_id.is_some())
+                    .count() as u64,
+            };
+            let _ = sync;
+            Ok(Some(result))
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (app, window, state);
+            Err("M3U/M3U8 原生檔案匯入目前只支援 Windows 與 Android。".to_owned())
+        }
     }
 }
 
@@ -2190,8 +2390,74 @@ async fn playlist_export_m3u(
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, window, state, playlist_id, format, relative_paths);
-        Err("M3U/M3U8 原生檔案匯出目前只支援 Windows。".to_owned())
+        #[cfg(target_os = "android")]
+        {
+            let _ = window;
+            if relative_paths {
+                return Err(
+                    "Android 匯出使用已授權的 content URI；目前不支援相對路徑匯出。".to_owned(),
+                );
+            }
+            let database_path = state.database_path.clone().ok_or_else(|| {
+                state
+                    .database_error
+                    .clone()
+                    .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+            })?;
+            let playlist_id = PlaylistId::parse(&playlist_id)
+                .map_err(|_| "播放清單識別碼無效，請重新載入清單。".to_owned())?;
+            let database = state.database.as_ref().ok_or_else(|| {
+                state
+                    .database_error
+                    .clone()
+                    .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+            })?;
+            let playlist = database
+                .get_playlist(playlist_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "找不到這份播放清單，請重新載入清單。".to_owned())?;
+            let extension = match format.as_str() {
+                "m3u" | "m3u8" => format,
+                _ => return Err("匯出格式必須是 M3U 或 M3U8。".to_owned()),
+            };
+            let suggested_name = format!("{}.{}", playlist.name, extension);
+            let app_for_export = app.clone();
+            let exported = tauri::async_runtime::spawn_blocking(
+                move || -> Result<Option<PlaylistExportResult>, String> {
+                    let media_index = app_for_export.media_index();
+                    let Some(destination_uri) = media_index
+                        .pick_playlist_export(&suggested_name)
+                        .map_err(|error| error.to_string())?
+                    else {
+                        return Ok(None);
+                    };
+                    let lease = media_index
+                        .create_cache_lease()
+                        .map_err(|error| error.to_string())?;
+                    let database =
+                        Database::open(database_path).map_err(|error| error.to_string())?;
+                    let result = export_playlist_file(
+                        &database,
+                        &playlist_id.to_string(),
+                        lease.path(),
+                        &extension,
+                        None,
+                    )?;
+                    media_index
+                        .write_content_cache_lease(&lease, &destination_uri)
+                        .map_err(|error| error.to_string())?;
+                    Ok(Some(result))
+                },
+            )
+            .await
+            .map_err(|error| format!("匯出 Android 播放清單工作失敗：{error}"))??;
+            Ok(exported)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (app, window, state, playlist_id, format, relative_paths);
+            Err("M3U/M3U8 原生檔案匯出目前只支援 Windows 與 Android。".to_owned())
+        }
     }
 }
 
@@ -2619,6 +2885,7 @@ fn source_entry_summary(
 #[tauri::command]
 fn library_remove_source(
     state: State<'_, AppState>,
+    app: AppHandle,
     source_id: String,
 ) -> Result<Vec<LibrarySource>, String> {
     let id = SourceId::parse(&source_id).map_err(|error| format!("來源 ID 無效：{error}"))?;
@@ -2640,11 +2907,40 @@ fn library_remove_source(
             .save_library_root(&root)
             .map_err(|error| error.to_string())?;
     }
+    #[cfg(target_os = "android")]
+    if let Some(tree_uri) = source_tree_uri(&removed) {
+        let tree_still_used = settings
+            .sources
+            .iter()
+            .any(|source| source_tree_uri(source) == Some(tree_uri));
+        if !tree_still_used {
+            if let Err(error) = app.media_index().release_saf_tree(tree_uri) {
+                eprintln!("無法釋放已移除來源的 SAF 授權：{error}");
+            }
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
     settings
         .sources
         .iter()
         .map(|source| source_entry_summary(state.database.as_ref(), source))
         .collect()
+}
+
+#[cfg(target_os = "android")]
+fn source_tree_uri(source: &SourceEntry) -> Option<&str> {
+    match &source.kind {
+        SourceEntryKind::Folder {
+            media_kind: MediaSourceKind::AndroidSaf,
+            path: settings::StoredPath::Uri(uri),
+        } => Some(uri),
+        SourceEntryKind::PlaylistFile {
+            tree_uri: Some(uri),
+            ..
+        } => Some(uri),
+        _ => None,
+    }
 }
 
 #[tauri::command]
@@ -2916,7 +3212,13 @@ where
                     )
             })
             .collect();
-        let source_count = roots.len();
+        let playlist_sources = configured_sources
+            .iter()
+            .filter(|source| source.enabled)
+            .filter(|source| matches!(source.kind, SourceEntryKind::PlaylistFile { .. }))
+            .cloned()
+            .collect::<Vec<_>>();
+        let source_count = roots.len() + playlist_sources.len();
         let mut sources = Vec::new();
         app.media_index()
             .with_adapter(|index| -> Result<(), String> {
@@ -2935,7 +3237,94 @@ where
                 }
                 Ok(())
             })?;
-        return Ok(LibrarySyncResult { sources });
+        for source in playlist_sources {
+            let root = source
+                .database_projection()
+                .map_err(|error| error.to_string())?;
+            let SourceEntryKind::PlaylistFile {
+                path: settings::StoredPath::Uri(playlist_uri),
+                tree_uri: Some(tree_uri),
+                ..
+            } = &source.kind
+            else {
+                sources.push(unavailable_source_summary(&root));
+                continue;
+            };
+            let media_index = app.media_index();
+            if !media_index.has_saf_permission(tree_uri).unwrap_or(false) {
+                sources.push(unavailable_source_summary(&root));
+                continue;
+            }
+            let lease = match media_index.cache_content_uri(
+                playlist_uri,
+                android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64,
+            ) {
+                Ok(lease) => lease,
+                Err(_) => {
+                    sources.push(unavailable_source_summary(&root));
+                    continue;
+                }
+            };
+            let file_metadata = match std::fs::metadata(lease.path()) {
+                Ok(metadata)
+                    if metadata.len()
+                        <= android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64 =>
+                {
+                    metadata
+                }
+                _ => {
+                    sources.push(unavailable_source_summary(&root));
+                    continue;
+                }
+            };
+            let mut playlist_bytes = Vec::with_capacity(file_metadata.len() as usize);
+            let read_result = {
+                use std::io::Read;
+                std::fs::File::open(lease.path()).and_then(|file| {
+                    file.take(android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64 + 1)
+                        .read_to_end(&mut playlist_bytes)
+                })
+            };
+            if read_result.is_err()
+                || playlist_bytes.len() > android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES
+            {
+                sources.push(unavailable_source_summary(&root));
+                continue;
+            }
+            let authorized_content_uris =
+                authorized_android_playlist_content_uris(database, app, &source, &playlist_bytes)?;
+            let report = android_playlist_source_sync::sync_android_playlist_source(
+                database,
+                &source,
+                &playlist_bytes,
+                None,
+                synced_at_utc_ms,
+                |locator| {
+                    media_index
+                        .resolve_saf_playlist_entry(tree_uri, playlist_uri, locator)
+                        .map(|entry| {
+                            entry.map(|entry| {
+                                android_playlist_source_sync::ResolvedSafPlaylistEntry {
+                                    content_uri: entry.content_uri,
+                                    size_bytes: entry.size_bytes,
+                                    modified_at_utc_ms: entry
+                                        .modified_at_utc_ms
+                                        .and_then(|value| i64::try_from(value).ok()),
+                                }
+                            })
+                        })
+                        .map_err(|error| error.to_string())
+                },
+                |uri| Ok(authorized_content_uris.get(uri).cloned().flatten()),
+                |record| media_index.read_metadata(record),
+            );
+            drop(lease);
+            match report {
+                Ok(Some(report)) => sources.push(sync_summary(&root, report)),
+                Ok(None) | Err(_) => sources.push(unavailable_source_summary(&root)),
+            }
+        }
+        Ok(LibrarySyncResult { sources })
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
@@ -2943,6 +3332,76 @@ where
         let _ = (app, database);
         return Err("目前平台尚未提供媒體來源同步。".to_owned());
     }
+}
+
+#[cfg(target_os = "android")]
+fn authorized_android_playlist_content_uris(
+    database: &Database,
+    app: &AppHandle,
+    source: &SourceEntry,
+    bytes: &[u8],
+) -> Result<
+    std::collections::HashMap<
+        String,
+        Option<android_playlist_source_sync::ResolvedSafPlaylistEntry>,
+    >,
+    String,
+> {
+    use std::path::PathBuf;
+
+    let extension = source.display_name.rsplit('.').next().unwrap_or_default();
+    let synthetic_file =
+        PathBuf::from("__android_saf_playlist_parent__").join(format!("playlist.{extension}"));
+    let parsed = if extension.eq_ignore_ascii_case("m3u8") {
+        player_core::parse_m3u8(bytes, &synthetic_file)
+    } else if extension.eq_ignore_ascii_case("m3u") {
+        player_core::parse_m3u(bytes, &synthetic_file)
+    } else {
+        return Ok(std::collections::HashMap::new());
+    };
+    let Ok(parsed) = parsed else {
+        // The sync module will report the parse error and leave the old projection untouched.
+        return Ok(std::collections::HashMap::new());
+    };
+
+    let mut authorized = std::collections::HashMap::new();
+    for entry in parsed.entries {
+        let MediaLocator::ContentUri(uri) = entry.locator else {
+            continue;
+        };
+        if authorized.contains_key(&uri) {
+            continue;
+        }
+        let locator = MediaLocator::ContentUri(uri.clone());
+        let track_id = database
+            .resolve_track_id_for_locator(&locator)
+            .map_err(|error| error.to_string())?;
+        let value = if let Some(track_id) = track_id {
+            let locators = database
+                .track_locators(track_id)
+                .map_err(|error| error.to_string())?;
+            if locators.contains(&locator) {
+                app.media_index()
+                    .probe_content_uri(&uri)
+                    .ok()
+                    .flatten()
+                    .filter(|metadata| metadata.content_uri == uri)
+                    .map(
+                        |metadata| android_playlist_source_sync::ResolvedSafPlaylistEntry {
+                            content_uri: metadata.content_uri,
+                            size_bytes: metadata.size_bytes,
+                            modified_at_utc_ms: metadata.modified_at_utc_ms,
+                        },
+                    )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        authorized.insert(uri, value);
+    }
+    Ok(authorized)
 }
 
 #[cfg(target_os = "windows")]
@@ -3199,6 +3658,21 @@ fn sync_summary(root: &LibraryRoot, report: SyncReport) -> SourceSyncResult {
     }
 }
 
+#[cfg(target_os = "android")]
+fn unavailable_source_summary(root: &LibraryRoot) -> SourceSyncResult {
+    SourceSyncResult {
+        source_id: root.id.to_string(),
+        display_name: root.display_name.clone(),
+        state: "unavailable".to_owned(),
+        observed: 0,
+        metadata_reads: 0,
+        unchanged: 0,
+        added_or_updated: 0,
+        removed_mappings: 0,
+        error_count: 1,
+    }
+}
+
 fn scan_state_name(state: &SourceScanState) -> &'static str {
     match state {
         SourceScanState::Complete => "complete",
@@ -3245,7 +3719,11 @@ async fn playback_get_snapshot(state: State<'_, AppState>) -> Result<PlaybackSna
         }
         Ok(playback.snapshot())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        Ok(android_playback_service(&state)?.snapshot())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = state;
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
@@ -3264,7 +3742,15 @@ fn playback_get_queue_page(
         let (revision, queue) = snapshot_playback_queue(service);
         build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        let service = android_playback_service(&state)?;
+        let (revision, queue) = service
+            .queue_snapshot()?
+            .map_or((0, None), |(revision, queue)| (revision, Some(queue)));
+        build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (state, offset, limit);
         Err("此平台尚未提供本機播放佇列。".to_owned())
@@ -3275,11 +3761,13 @@ fn playback_get_queue_page(
 /// An empty binary response means that no supported cover is available.
 #[tauri::command]
 async fn library_get_track_artwork(
+    app: AppHandle,
     state: State<'_, AppState>,
     track_id: String,
 ) -> Result<Response, String> {
     #[cfg(target_os = "windows")]
     {
+        let _ = &app;
         let database = state.database.as_ref().ok_or_else(|| {
             state
                 .database_error
@@ -3299,10 +3787,130 @@ async fn library_get_track_artwork(
             ArtworkLookup::Oversized => Err("ARTWORK_TOO_LARGE".to_owned()),
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
     {
-        let _ = (state, track_id);
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let id = TrackId::parse(&track_id).map_err(|error| format!("曲目 ID 無效：{error}"))?;
+        let locators = database
+            .track_locators(id)
+            .map_err(|error| error.to_string())?;
+        let settings = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        let mut tree_uris = settings
+            .sources
+            .iter()
+            .filter(|source| source.enabled)
+            .filter_map(|source| match &source.kind {
+                SourceEntryKind::Folder {
+                    media_kind: MediaSourceKind::AndroidSaf,
+                    path: settings::StoredPath::Uri(tree_uri),
+                } => Some(tree_uri.clone()),
+                SourceEntryKind::PlaylistFile {
+                    tree_uri: Some(tree_uri),
+                    ..
+                } => Some(tree_uri.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        tree_uris.sort();
+        tree_uris.dedup();
+        let artwork = tauri::async_runtime::spawn_blocking(move || {
+            find_android_artwork(&app, &locators, &tree_uris)
+        })
+        .await
+        .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
+        match artwork {
+            Ok(image) => Ok(Response::new(image.into_bytes())),
+            Err(android_artwork::ArtworkError::Missing) => Ok(Response::new(Vec::new())),
+            Err(android_artwork::ArtworkError::Oversized) => Err("ARTWORK_TOO_LARGE".to_owned()),
+            Err(android_artwork::ArtworkError::Invalid) => Ok(Response::new(Vec::new())),
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = (app, state, track_id);
         Err("此平台尚未提供本機封面讀取服務。".to_owned())
+    }
+}
+
+#[cfg(target_os = "android")]
+fn find_android_artwork(
+    app: &AppHandle,
+    locators: &[MediaLocator],
+    tree_uris: &[String],
+) -> Result<player_core::ArtworkImage, android_artwork::ArtworkError> {
+    use std::io::Read;
+    use tauri_plugin_media_index::MediaIndexExt as _;
+
+    let media_index = app.media_index();
+    let content_uris = locators
+        .iter()
+        .filter_map(|locator| match locator {
+            MediaLocator::ContentUri(uri) if uri.starts_with("content://") => Some(uri.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut oversized = false;
+    for uri in content_uris {
+        let trees = if tree_uris.is_empty() {
+            std::iter::once(None).collect::<Vec<_>>()
+        } else {
+            tree_uris
+                .iter()
+                .map(|tree| Some(tree.as_str()))
+                .collect::<Vec<_>>()
+        };
+        for tree_uri in trees {
+            let lease = match media_index.cache_artwork_bytes(
+                uri,
+                tree_uri,
+                player_core::MAX_ARTWORK_BYTES as u64,
+            ) {
+                Ok(lease) => lease,
+                Err(error) => {
+                    let message = error.to_string();
+                    oversized |= message.contains("ARTWORK_TOO_LARGE");
+                    continue;
+                }
+            };
+            let metadata = match std::fs::metadata(lease.path()) {
+                Ok(metadata) if metadata.len() <= player_core::MAX_ARTWORK_BYTES as u64 => metadata,
+                Ok(_) => {
+                    oversized = true;
+                    continue;
+                }
+                Err(_) => continue,
+            };
+            let mut bytes = Vec::with_capacity(metadata.len() as usize);
+            if std::fs::File::open(lease.path())
+                .and_then(|file| {
+                    file.take(player_core::MAX_ARTWORK_BYTES as u64 + 1)
+                        .read_to_end(&mut bytes)
+                })
+                .is_err()
+            {
+                continue;
+            }
+            match android_artwork::image_from_bytes(&bytes, lease.mime_type()) {
+                Ok(image) => return Ok(image),
+                Err(android_artwork::ArtworkError::Oversized) => oversized = true,
+                Err(
+                    android_artwork::ArtworkError::Missing | android_artwork::ArtworkError::Invalid,
+                ) => {}
+            }
+        }
+    }
+    if oversized {
+        Err(android_artwork::ArtworkError::Oversized)
+    } else {
+        Err(android_artwork::ArtworkError::Missing)
     }
 }
 
@@ -3332,7 +3940,16 @@ async fn playback_play(
         commit_track_change(database, service, track, replacement_queue, target_cursor)?;
         Ok(service.snapshot())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        android_playback_service(&state)?
+            .execute(android_playback::PlaybackAction::select_track(
+                track_id,
+                queue_source,
+            ))
+            .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (state, track_id, queue_source);
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
@@ -3350,7 +3967,13 @@ async fn playback_pause(state: State<'_, AppState>) -> Result<PlaybackSnapshot, 
         }
         Ok(service.snapshot())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        android_playback_service(&state)?
+            .execute(android_playback::PlaybackAction::Pause)
+            .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = state;
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
@@ -3380,7 +4003,13 @@ async fn playback_next(state: State<'_, AppState>) -> Result<PlaybackSnapshot, S
         }
         Ok(service.snapshot())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        android_playback_service(&state)?
+            .execute(android_playback::PlaybackAction::Next { natural: false })
+            .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = state;
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
@@ -3410,7 +4039,13 @@ async fn playback_previous(state: State<'_, AppState>) -> Result<PlaybackSnapsho
         }
         Ok(service.snapshot())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        android_playback_service(&state)?
+            .execute(android_playback::PlaybackAction::Previous)
+            .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = state;
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
@@ -3431,7 +4066,13 @@ async fn playback_seek(
         }
         Ok(service.snapshot())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        android_playback_service(&state)?
+            .execute(android_playback::PlaybackAction::Seek(position_ms))
+            .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (state, position_ms);
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
@@ -3449,7 +4090,13 @@ async fn playback_set_volume(
         await_playback_ack(set_playback_volume(service, volume)?).await?;
         Ok(service.snapshot())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        android_playback_service(&state)?
+            .execute(android_playback::PlaybackAction::SetVolume(volume))
+            .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (state, volume);
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
@@ -3457,7 +4104,7 @@ async fn playback_set_volume(
 }
 
 #[tauri::command]
-fn playback_set_repeat(
+async fn playback_set_repeat(
     state: State<'_, AppState>,
     mode: RepeatMode,
 ) -> Result<PlaybackSnapshot, String> {
@@ -3492,7 +4139,13 @@ fn playback_set_repeat(
         }
         Ok(service.snapshot())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        android_playback_service(&state)?
+            .execute(android_playback::PlaybackAction::SetRepeat(mode))
+            .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (state, mode);
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
@@ -3500,7 +4153,7 @@ fn playback_set_repeat(
 }
 
 #[tauri::command]
-fn playback_set_shuffle(
+async fn playback_set_shuffle(
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<PlaybackSnapshot, String> {
@@ -3550,7 +4203,13 @@ fn playback_set_shuffle(
         }
         Ok(service.snapshot())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        android_playback_service(&state)?
+            .execute(android_playback::PlaybackAction::SetShuffle(enabled))
+            .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (state, enabled);
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
@@ -3579,7 +4238,6 @@ fn snapshot_playback_queue(
     (revision, queue.as_ref().map(PlaybackQueue::snapshot))
 }
 
-#[cfg(target_os = "windows")]
 fn build_playback_queue_page(
     database: Option<&Database>,
     revision: u64,
@@ -3671,7 +4329,7 @@ fn bump_queue_revision(service: &WindowsPlaybackService) {
     service.queue_revision.fetch_add(1, Ordering::Relaxed);
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 fn queue_repeat_mode(mode: RepeatMode) -> QueueRepeatMode {
     match mode {
         RepeatMode::Off => QueueRepeatMode::Off,
@@ -3680,7 +4338,6 @@ fn queue_repeat_mode(mode: RepeatMode) -> QueueRepeatMode {
     }
 }
 
-#[cfg(target_os = "windows")]
 fn set_queue_shuffle_with_latest_stats(
     database: &Database,
     queue: &mut PlaybackQueue,
@@ -3715,7 +4372,6 @@ fn set_queue_shuffle_with_latest_stats(
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
 fn queue_for_track(
     database: &Database,
     track_id: TrackId,
@@ -4281,12 +4937,12 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_dialog::init());
 
     builder
-        .on_window_event(|window, event| {
+        .on_window_event(|_window, _event| {
             #[cfg(target_os = "windows")]
-            if window.label() == "main"
-                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            if _window.label() == "main"
+                && matches!(_event, tauri::WindowEvent::CloseRequested { .. })
             {
-                let state = window.app_handle().state::<AppState>();
+                let state = _window.app_handle().state::<AppState>();
                 #[cfg(target_os = "windows")]
                 if let (Some(database), Some(playback)) =
                     (state.database.as_ref(), state.playback.as_ref())
@@ -4399,6 +5055,10 @@ pub fn run() {
             let initial_settings = settings
                 .snapshot()
                 .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
+            #[cfg(target_os = "android")]
+            let initial_settings = settings
+                .snapshot()
+                .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::new() {
                 Ok(player) => {
@@ -4432,6 +5092,30 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             let (system_media, system_media_error) =
                 create_windows_system_media_service(app.handle());
+            #[cfg(target_os = "android")]
+            let (android_playback, android_playback_error) = match stored_path.as_deref() {
+                Some(path) => match android_playback::AndroidPlaybackService::start(
+                    path,
+                    initial_settings.shuffle,
+                    initial_settings.repeat_mode,
+                ) {
+                    Ok(service) => {
+                        match app.handle().media_index().ensure_playback_service_started() {
+                            Ok(()) => (Some(service), None),
+                            Err(error) => (Some(service), Some(error.to_string())),
+                        }
+                    }
+                    Err(error) => (None, Some(error)),
+                },
+                None => (
+                    None,
+                    Some(
+                        database_error
+                            .clone()
+                            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned()),
+                    ),
+                ),
+            };
             app.manage(AppState {
                 database,
                 database_path: stored_path.clone(),
@@ -4446,10 +5130,15 @@ pub fn run() {
                 system_media,
                 #[cfg(target_os = "windows")]
                 system_media_error,
+                #[cfg(target_os = "android")]
+                android_playback,
+                #[cfg(target_os = "android")]
+                android_playback_error,
             });
 
             if let Some(window) = app.get_webview_window("main") {
                 window.set_title("MoeMusicPlayer")?;
+                #[cfg(target_os = "windows")]
                 window.set_always_on_top(false)?;
             }
             Ok(())
@@ -4567,6 +5256,7 @@ mod windows_library_integration_tests {
                 playlist_id: super::PlaylistId::new(),
                 path: super::settings::StoredPath::from_path(&playlist_path)
                     .expect("store native playlist path"),
+                tree_uri: None,
             },
         };
         let mut database = Database::open_in_memory().expect("database");

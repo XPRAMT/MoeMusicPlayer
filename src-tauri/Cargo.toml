@@ -18,6 +18,7 @@ player-core = { path = "../crates/player-core" }
 player-db = { path = "../crates/player-db" }
 tauri-plugin-media-index = { path = "../plugins/tauri-plugin-media-index" }
 base64 = "0.22"
+imagesize = "0.14"
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -25,8 +26,15 @@ sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tauri = { version = "2.12.0", features = [] }
+uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 player-audio-windows = { path = "../crates/player-audio-windows" }
 player-platform-windows = { path = "../crates/player-platform-windows" }
 tauri-plugin-dialog = "=2.8.0"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"
+
+[target.'cfg(target_os = "android")'.dependencies.lofty]
+version = "0.25.4"

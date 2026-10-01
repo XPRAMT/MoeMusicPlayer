@@ -5,7 +5,10 @@ use player_core::{
 use serde::de::DeserializeOwned;
 use tauri::{AppHandle, Runtime, plugin::PluginApi};
 
-use crate::{Error, MediaStoreVolumes, Result};
+use crate::{
+    ContentCacheLease, Error, MediaStoreVolumes, ResolvedSafPlaylistEntry, Result,
+    SafPlaylistImport,
+};
 
 pub(crate) struct PlatformMediaIndex<R: Runtime>(std::marker::PhantomData<fn() -> R>);
 
@@ -59,7 +62,73 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Err(Error::Unsupported("Android document-tree permissions"))
     }
 
+    pub(crate) fn probe_content_uri(
+        &self,
+        _uri: &str,
+    ) -> Result<Option<crate::ContentUriMetadata>> {
+        Err(Error::Unsupported("Android content URI metadata probe"))
+    }
+
     pub(crate) fn release_saf_tree(&self, _uri: &str) -> Result<()> {
         Err(Error::Unsupported("Android document-tree permissions"))
+    }
+
+    pub(crate) fn ensure_playback_service_started(&self) -> Result<()> {
+        Err(Error::Unsupported("Android MediaSession playback service"))
+    }
+
+    pub(crate) fn cache_content_uri(
+        &self,
+        _uri: &str,
+        _max_bytes: u64,
+    ) -> Result<ContentCacheLease> {
+        Err(Error::Unsupported("Android content URI cache lease"))
+    }
+
+    pub(crate) fn cache_artwork_bytes(
+        &self,
+        _uri: &str,
+        _tree_uri: Option<&str>,
+        _max_bytes: u64,
+    ) -> Result<ContentCacheLease> {
+        Err(Error::Unsupported("Android content URI artwork"))
+    }
+
+    pub(crate) fn create_cache_lease(&self) -> Result<ContentCacheLease> {
+        Err(Error::Unsupported("Android SAF playlist export cache"))
+    }
+
+    pub(crate) fn write_content_cache_lease(
+        &self,
+        _lease: &ContentCacheLease,
+        _destination_uri: &str,
+    ) -> Result<()> {
+        Err(Error::Unsupported("Android SAF playlist export"))
+    }
+
+    pub(crate) fn pick_playlist_import(&self) -> Result<Option<SafPlaylistImport>> {
+        Err(Error::Unsupported("Android M3U import picker"))
+    }
+
+    pub(crate) fn resolve_saf_playlist_entry(
+        &self,
+        _tree_uri: &str,
+        _playlist_uri: &str,
+        _locator: &str,
+    ) -> Result<Option<ResolvedSafPlaylistEntry>> {
+        Err(Error::Unsupported("Android SAF playlist entry resolution"))
+    }
+
+    pub(crate) fn pick_playlist_export(&self, _suggested_name: &str) -> Result<Option<String>> {
+        Err(Error::Unsupported("Android M3U export picker"))
+    }
+
+    pub(crate) fn read_saf_lyric_sibling(
+        &self,
+        _tree_uri: &str,
+        _audio_uri: &str,
+        _max_bytes: u64,
+    ) -> Result<Option<String>> {
+        Err(Error::Unsupported("Android SAF lyric sidecar"))
     }
 }

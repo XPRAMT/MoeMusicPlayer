@@ -244,6 +244,14 @@
   const libraryReady = $derived(isReady(capabilities?.library));
   const sourceSyncReady = $derived(isReady(capabilities?.sourceSync));
   const playbackReady = $derived(isReady(capabilities?.playback));
+  const runtimeServiceReady = $derived(
+    capabilities?.platform === 'android' ? playbackReady : isReady(capabilities?.desktopRuntime),
+  );
+  const runtimeServiceLabel = $derived(
+    capabilities?.platform === 'android'
+      ? playbackReady ? 'Android 音訊服務已連線' : 'Android 音訊服務未連線'
+      : isReady(capabilities?.desktopRuntime) ? '桌面服務已連線' : '桌面服務未連線',
+  );
   const playbackNavigationReady = $derived(isReady(capabilities?.playbackNavigation));
   const playbackModesReady = $derived(isReady(capabilities?.playbackModes));
   const playbackDurationMs = $derived(effectivePlaybackDurationMs(
@@ -1349,14 +1357,18 @@
   }
 
   function capabilityLabel(capability: FeatureCapability | undefined): string {
-    if (!capability) return '等待桌面服務';
+    if (!capability) return capabilities?.platform === 'android' ? '等待 Android 服務' : '等待桌面服務';
     if (capability.state === 'ready') return '已就緒';
     if (capability.state === 'unavailable') return '目前無法使用';
     return '尚未就緒';
   }
 
   function showCapabilityDetail(capability: FeatureCapability | undefined): string {
-    return capability?.detail ?? runtimeError ?? '請由 MoeMusicPlayer 桌面程式開啟。';
+    return capability?.detail ?? runtimeError ?? (
+      capabilities?.platform === 'android'
+        ? '請確認 Android 媒體來源授權及音訊服務狀態。'
+        : '請由 MoeMusicPlayer 桌面程式開啟。'
+    );
   }
 
   function currentTrackTitle(track: TrackSummary | null | undefined): string {
@@ -1464,9 +1476,9 @@
     <header class="topbar">
       <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>{activeView === 'library' ? 'LIBRARY' : activeView === 'playlists' ? 'PLAYLISTS' : activeView === 'queue' ? 'QUEUE' : 'SOURCES'}</strong></div>
       <div class="topbar-actions">
-        <div class="runtime-pill" class:ready={isReady(capabilities?.desktopRuntime)}>
-          <span class="status-dot" class:ready={isReady(capabilities?.desktopRuntime)} aria-hidden="true"></span>
-          <span>{isReady(capabilities?.desktopRuntime) ? '桌面服務已連線' : '桌面服務未連線'}</span>
+        <div class="runtime-pill" class:ready={runtimeServiceReady}>
+          <span class="status-dot" class:ready={runtimeServiceReady} aria-hidden="true"></span>
+          <span>{runtimeServiceLabel}</span>
         </div>
         <button class="avatar-button" type="button" aria-label="使用者設定" title="使用者設定" disabled>
           <span>M</span>

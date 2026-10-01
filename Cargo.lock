@@ -1609,6 +1609,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "imagesize"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2021,6 +2027,9 @@ name = "moemusicplayer"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "imagesize",
+ "jni",
+ "lofty",
  "player-audio-windows",
  "player-core",
  "player-db",
@@ -2035,6 +2044,7 @@ dependencies = [
  "tauri-plugin-media-index",
  "tokio",
  "tokio-util",
+ "uuid",
 ]
 
 [[package]]
@@ -4023,6 +4033,7 @@ dependencies = [
 name = "tauri-plugin-media-index"
 version = "0.1.0"
 dependencies = [
+ "lofty",
  "player-core",
  "serde",
  "serde_json",
