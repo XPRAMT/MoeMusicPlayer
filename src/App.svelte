@@ -1359,7 +1359,7 @@
   class="app-shell"
   class:has-now-playing-backdrop={isNowPlayingOpen}
   data-active-view={activeView}
-  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-surface-alpha: ${(100 - nowPlayingAppearancePreferences.surfaceTransparencyPercent) / 100};`}
+  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-overlay-alpha: ${(100 - nowPlayingAppearancePreferences.backgroundBrightnessPercent) / 100};`}
 >
   {#if isNowPlayingOpen}
     <div class="now-playing-backdrop" data-testid="now-playing-backdrop" aria-hidden="true">

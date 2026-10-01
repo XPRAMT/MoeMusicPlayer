@@ -2,6 +2,7 @@ pub mod artwork;
 pub mod library;
 pub mod lyrics;
 pub mod playback_queue;
+pub mod playback_statistics;
 pub mod playlist;
 pub mod sync;
 #[cfg(windows)]
@@ -21,8 +22,10 @@ pub use lyrics::{
     TrackLyrics, MAX_LYRIC_PAYLOAD_BYTES,
 };
 pub use playback_queue::{
-    PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, QueueRepeatMode,
+    PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot,
+    QueueRepeatMode, QueueTrackListeningStats,
 };
+pub use playback_statistics::{PlaybackCheckpoint, PlaybackStatistics};
 pub use playlist::{
     parse_m3u, parse_m3u8, write_m3u, write_m3u8, M3uExportOptions, Playlist, PlaylistEntry,
     PlaylistEntrySummary, PlaylistError, PlaylistId, PlaylistPage, PlaylistSummary,

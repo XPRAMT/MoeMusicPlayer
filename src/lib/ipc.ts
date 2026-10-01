@@ -277,7 +277,7 @@ export interface LyricsPreferences {
 
 export interface NowPlayingAppearancePreferences {
   backgroundBlurPx: number;
-  surfaceTransparencyPercent: number;
+  backgroundBrightnessPercent: number;
 }
 
 interface IpcContract {

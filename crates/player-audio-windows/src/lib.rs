@@ -8,15 +8,47 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 mod rodio_backend;
 
 #[cfg(windows)]
 pub mod system_media;
+
+/// Query a Windows process creation time as UTC milliseconds since the Unix
+/// epoch. This identity is used with a PID to distinguish a reused PID from
+/// the process that registered a playback-statistics runtime.
+#[cfg(windows)]
+pub fn process_started_utc_ms(pid: u32) -> Result<Option<i64>, String> {
+    use windows::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let process = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
+        Ok(process) => process,
+        Err(error) if error.code().0 as u32 == 0x8007_0057 => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    let result =
+        unsafe { GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) };
+    let _ = unsafe { CloseHandle(process) };
+    result.map_err(|error| error.to_string())?;
+
+    const WINDOWS_TO_UNIX_EPOCH_100NS: u64 = 116_444_736_000_000_000;
+    let filetime = (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
+    let Some(unix_100ns) = filetime.checked_sub(WINDOWS_TO_UNIX_EPOCH_100NS) else {
+        return Ok(None);
+    };
+    Ok(i64::try_from(unix_100ns / 10_000).ok())
+}
 
 const COMMAND_CAPACITY: usize = 64;
 const EVENT_CAPACITY: usize = 128;
@@ -146,18 +178,64 @@ struct PlayerInner {
     commands: SyncSender<QueuedCommand>,
     snapshot: Arc<RwLock<PlaybackSnapshot>>,
     events: Mutex<Receiver<AudioEvent>>,
+    accounting: Arc<PlaybackAccountingShared>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
+/// Opaque identity assigned by the application to one TrackId for this
+/// process. The audio worker never interprets it as a path or database key.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct PlaybackAccountingId(u128);
+
+impl PlaybackAccountingId {
+    pub const fn new(value: u128) -> Self {
+        Self(value)
+    }
+
+    pub const fn value(self) -> u128 {
+        self.0
+    }
+}
+
+/// Cumulative, retry-safe audio-thread listening checkpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlaybackAccountingCheckpoint {
+    pub id: PlaybackAccountingId,
+    pub played_ms: u64,
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Default)]
+struct PlaybackAccountingState {
+    counters: std::collections::HashMap<PlaybackAccountingId, PlaybackCounter>,
+    dirty: std::collections::HashSet<PlaybackAccountingId>,
+    flush_requested: bool,
+}
+
+#[derive(Default)]
+struct PlaybackCounter {
+    played_nanos: u128,
+    acknowledged_ms: u64,
+    duration_ms: Option<u64>,
+    acknowledged_duration_ms: Option<u64>,
+}
+
+#[derive(Default)]
+struct PlaybackAccountingShared {
+    state: Mutex<PlaybackAccountingState>,
+    changed: Condvar,
+}
+
 enum Command {
-    Load(PathBuf),
-    LoadAndPlay(PathBuf),
-    LoadPreservingPlayback(PathBuf),
+    Load(PathBuf, Option<PlaybackAccountingId>),
+    LoadAndPlay(PathBuf, Option<PlaybackAccountingId>),
+    LoadPreservingPlayback(PathBuf, Option<PlaybackAccountingId>),
     Play,
     Pause,
     Stop,
     Seek(Duration),
     SetVolume(f32),
+    CheckpointAccounting,
     Shutdown,
 }
 
@@ -204,9 +282,19 @@ impl PlayerHandle {
         let worker_snapshot = Arc::clone(&snapshot);
         let (command_tx, command_rx) = mpsc::sync_channel(COMMAND_CAPACITY);
         let (event_tx, event_rx) = mpsc::sync_channel(EVENT_CAPACITY);
+        let accounting = Arc::new(PlaybackAccountingShared::default());
+        let worker_accounting = Arc::clone(&accounting);
         let worker = thread::Builder::new()
             .name("moe-audio-player".to_owned())
-            .spawn(move || worker_loop(factory, command_rx, worker_snapshot, event_tx))
+            .spawn(move || {
+                worker_loop(
+                    factory,
+                    command_rx,
+                    worker_snapshot,
+                    event_tx,
+                    worker_accounting,
+                )
+            })
             .map_err(|error| AudioError::WorkerStart(error.to_string()))?;
 
         Ok(Self {
@@ -214,6 +302,7 @@ impl PlayerHandle {
                 commands: command_tx,
                 snapshot,
                 events: Mutex::new(event_rx),
+                accounting,
                 worker: Mutex::new(Some(worker)),
             }),
         })
@@ -222,7 +311,7 @@ impl PlayerHandle {
     /// Queue a local file for playback. The path is preserved as an OS path;
     /// it is not converted to a lossy UTF-8 string.
     pub fn load(&self, path: impl Into<PathBuf>) -> Result<(), AudioError> {
-        self.enqueue(Command::Load(path.into()))
+        self.enqueue(Command::Load(path.into(), None))
     }
 
     pub fn play(&self) -> Result<(), AudioError> {
@@ -259,7 +348,25 @@ impl PlayerHandle {
         &self,
         path: impl Into<PathBuf>,
     ) -> Result<CommandTicket, AudioError> {
-        self.enqueue_with_ack(Command::LoadAndPlay(path.into()))
+        self.enqueue_with_ack(Command::LoadAndPlay(path.into(), None))
+    }
+
+    /// Load a track paused while associating all subsequent audio accounting
+    /// with the caller's opaque per-track identity.
+    pub fn request_load_accounted(
+        &self,
+        path: impl Into<PathBuf>,
+        accounting_id: PlaybackAccountingId,
+    ) -> Result<CommandTicket, AudioError> {
+        self.enqueue_with_ack(Command::Load(path.into(), Some(accounting_id)))
+    }
+
+    pub fn request_load_and_play_accounted(
+        &self,
+        path: impl Into<PathBuf>,
+        accounting_id: PlaybackAccountingId,
+    ) -> Result<CommandTicket, AudioError> {
+        self.enqueue_with_ack(Command::LoadAndPlay(path.into(), Some(accounting_id)))
     }
 
     /// Load a selected track while preserving the playback intent observed by
@@ -269,7 +376,18 @@ impl PlayerHandle {
         &self,
         path: impl Into<PathBuf>,
     ) -> Result<CommandTicket, AudioError> {
-        self.enqueue_with_ack(Command::LoadPreservingPlayback(path.into()))
+        self.enqueue_with_ack(Command::LoadPreservingPlayback(path.into(), None))
+    }
+
+    pub fn request_load_preserving_playback_accounted(
+        &self,
+        path: impl Into<PathBuf>,
+        accounting_id: PlaybackAccountingId,
+    ) -> Result<CommandTicket, AudioError> {
+        self.enqueue_with_ack(Command::LoadPreservingPlayback(
+            path.into(),
+            Some(accounting_id),
+        ))
     }
 
     pub fn request_pause(&self) -> Result<CommandTicket, AudioError> {
@@ -287,10 +405,67 @@ impl PlayerHandle {
         self.enqueue_with_ack(Command::SetVolume(volume))
     }
 
+    /// Sample and request persistence of the final active playback interval
+    /// without changing its state.
+    pub fn request_playback_accounting_checkpoint(&self) -> Result<CommandTicket, AudioError> {
+        self.enqueue_with_ack(Command::CheckpointAccounting)
+    }
+
     /// Return the most recent playback snapshot. Audio operations never hold
     /// this lock while opening files, decoding, or talking to the device.
     pub fn snapshot(&self) -> PlaybackSnapshot {
         read_snapshot(&self.inner.snapshot)
+    }
+
+    /// Read all counters whose cumulative value or duration has not yet been
+    /// acknowledged by the persistence worker. Reading never clears data.
+    pub fn playback_accounting_checkpoints(&self) -> Vec<PlaybackAccountingCheckpoint> {
+        accounting_checkpoints(&self.inner.accounting)
+    }
+
+    /// Acknowledge only the exact checkpoint accepted by the database. Newer
+    /// audio-thread progress remains pending for the next batch.
+    pub fn acknowledge_playback_accounting(
+        &self,
+        id: PlaybackAccountingId,
+        played_ms: u64,
+        duration_ms: Option<u64>,
+    ) {
+        acknowledge_accounting(&self.inner.accounting, id, played_ms, duration_ms);
+    }
+
+    /// Wait until an audio boundary requests an immediate persistence pass or
+    /// until the caller's bounded periodic interval expires.
+    pub fn wait_for_playback_accounting_flush(&self, timeout: Duration) -> bool {
+        let mut state = self
+            .inner
+            .accounting
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.flush_requested {
+            let (next, _) = self
+                .inner
+                .accounting
+                .changed
+                .wait_timeout(state, timeout)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = next;
+        }
+        let requested = state.flush_requested;
+        state.flush_requested = false;
+        requested
+    }
+
+    pub fn request_playback_accounting_flush(&self) {
+        let mut state = self
+            .inner
+            .accounting
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.flush_requested = true;
+        self.inner.accounting.changed.notify_one();
     }
 
     /// Drain one pending state/error notification without waiting.
@@ -360,6 +535,7 @@ fn worker_loop<F>(
     commands: Receiver<QueuedCommand>,
     snapshot: Arc<RwLock<PlaybackSnapshot>>,
     events: SyncSender<AudioEvent>,
+    accounting: Arc<PlaybackAccountingShared>,
 ) where
     F: FnOnce() -> Result<Box<dyn AudioBackend>, AudioError>,
 {
@@ -379,19 +555,29 @@ fn worker_loop<F>(
         }
     };
     let mut current_path: Option<PathBuf> = None;
+    let mut meter = PlaybackMeter::new(Arc::clone(&accounting));
 
     loop {
         match commands.recv_timeout(POSITION_POLL_INTERVAL) {
-            Ok(queued) if matches!(queued.command, Command::Shutdown) => break,
+            Ok(queued) if matches!(queued.command, Command::Shutdown) => {
+                sample_before_command(&mut meter, &mut backend, &snapshot);
+                meter.request_flush();
+                break;
+            }
             Ok(queued) => {
+                // Sample the old identity before a command can pause, seek,
+                // stop, or replace it. AudioEvent delivery is intentionally
+                // not involved in the accounting path.
+                sample_before_command(&mut meter, &mut backend, &snapshot);
                 let result = handle_command(
                     queued.command,
                     &mut backend,
                     &mut current_path,
+                    &mut meter,
                     &snapshot,
                     &events,
                 );
-                update_position(&mut backend, &snapshot, &events);
+                update_position(&mut backend, &snapshot, &events, &mut meter);
                 if let Some(acknowledgement) = queued.acknowledgement {
                     let response = result.map(|()| read_snapshot(&snapshot));
                     let _ = acknowledgement.try_send(response);
@@ -400,7 +586,7 @@ fn worker_loop<F>(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-        update_position(&mut backend, &snapshot, &events);
+        update_position(&mut backend, &snapshot, &events, &mut meter);
     }
 }
 
@@ -408,9 +594,23 @@ fn handle_command(
     command: Command,
     backend: &mut Option<Box<dyn AudioBackend>>,
     current_path: &mut Option<PathBuf>,
+    meter: &mut PlaybackMeter,
     snapshot: &Arc<RwLock<PlaybackSnapshot>>,
     events: &SyncSender<AudioEvent>,
 ) -> Result<(), AudioError> {
+    if matches!(
+        &command,
+        Command::Load(_, _)
+            | Command::LoadAndPlay(_, _)
+            | Command::LoadPreservingPlayback(_, _)
+            | Command::Pause
+            | Command::Stop
+            | Command::Seek(_)
+            | Command::CheckpointAccounting
+            | Command::Shutdown
+    ) {
+        meter.request_flush();
+    }
     let Some(backend) = backend.as_mut() else {
         let error = AudioError::BackendUnavailable;
         set_error(snapshot, events, error.clone());
@@ -418,7 +618,7 @@ fn handle_command(
     };
 
     match command {
-        Command::Load(path) => {
+        Command::Load(path, accounting_id) => {
             update_snapshot(snapshot, events, |state| {
                 state.state = PlaybackState::Loading;
                 state.position = Duration::ZERO;
@@ -428,6 +628,7 @@ fn handle_command(
             match backend.load(&path) {
                 Ok(duration) => {
                     *current_path = Some(path);
+                    meter.activate(accounting_id, duration);
                     update_snapshot(snapshot, events, |state| {
                         state.state = PlaybackState::Ready;
                         state.position = Duration::ZERO;
@@ -438,12 +639,13 @@ fn handle_command(
                 Err(error) => {
                     let _ = backend.stop();
                     *current_path = None;
+                    meter.activate(None, None);
                     set_error(snapshot, events, error.clone());
                     return Err(error);
                 }
             }
         }
-        Command::LoadAndPlay(path) => {
+        Command::LoadAndPlay(path, accounting_id) => {
             update_snapshot(snapshot, events, |state| {
                 state.state = PlaybackState::Loading;
                 state.position = Duration::ZERO;
@@ -453,6 +655,7 @@ fn handle_command(
             match backend.load(&path) {
                 Ok(duration) => {
                     *current_path = Some(path);
+                    meter.activate(accounting_id, duration);
                     update_snapshot(snapshot, events, |state| {
                         state.state = PlaybackState::Ready;
                         state.position = Duration::ZERO;
@@ -463,6 +666,7 @@ fn handle_command(
                 Err(error) => {
                     let _ = backend.stop();
                     *current_path = None;
+                    meter.activate(None, None);
                     set_error(snapshot, events, error.clone());
                     return Err(error);
                 }
@@ -473,7 +677,7 @@ fn handle_command(
             }
             set_state(snapshot, events, PlaybackState::Playing);
         }
-        Command::LoadPreservingPlayback(path) => {
+        Command::LoadPreservingPlayback(path, accounting_id) => {
             // Sample intent on the audio worker, after earlier queued commands
             // (such as Pause) have completed. A Tauri-side snapshot would race
             // with the bounded actor queue.
@@ -487,6 +691,7 @@ fn handle_command(
             match backend.load(&path) {
                 Ok(duration) => {
                     *current_path = Some(path);
+                    meter.activate(accounting_id, duration);
                     update_snapshot(snapshot, events, |state| {
                         state.state = PlaybackState::Ready;
                         state.position = Duration::ZERO;
@@ -497,6 +702,7 @@ fn handle_command(
                 Err(error) => {
                     let _ = backend.stop();
                     *current_path = None;
+                    meter.activate(None, None);
                     set_error(snapshot, events, error.clone());
                     return Err(error);
                 }
@@ -545,8 +751,12 @@ fn handle_command(
             let state = read_snapshot(snapshot).state;
             if state == PlaybackState::Playing {
                 match backend.pause() {
-                    Ok(()) => set_state(snapshot, events, PlaybackState::Paused),
+                    Ok(()) => {
+                        set_state(snapshot, events, PlaybackState::Paused);
+                        meter.reset_anchor(PlaybackState::Paused, backend.position());
+                    }
                     Err(error) => {
+                        meter.reset_anchor(state, backend.position());
                         set_error(snapshot, events, error.clone());
                         return Err(error);
                     }
@@ -565,6 +775,7 @@ fn handle_command(
                     snapshot.position = Duration::ZERO;
                     snapshot.last_error = None;
                 });
+                meter.reset_anchor(state, Duration::ZERO);
             }
             Err(error) => {
                 set_error(snapshot, events, error.clone());
@@ -595,11 +806,15 @@ fn handle_command(
             let duration = read_snapshot(snapshot).duration;
             let requested = duration.map_or(position, |duration| position.min(duration));
             match backend.seek(requested) {
-                Ok(actual_position) => update_snapshot(snapshot, events, |snapshot| {
-                    snapshot.position = actual_position;
-                    snapshot.last_error = None;
-                }),
+                Ok(actual_position) => {
+                    update_snapshot(snapshot, events, |snapshot| {
+                        snapshot.position = actual_position;
+                        snapshot.last_error = None;
+                    });
+                    meter.reset_anchor(state, actual_position);
+                }
                 Err(error) => {
+                    meter.reset_anchor(state, backend.position());
                     set_error(snapshot, events, error.clone());
                     return Err(error);
                 }
@@ -612,6 +827,7 @@ fn handle_command(
                 return Err(error);
             }
         },
+        Command::CheckpointAccounting => meter.request_flush(),
         Command::Shutdown => {}
     }
     Ok(())
@@ -621,6 +837,7 @@ fn update_position(
     backend: &mut Option<Box<dyn AudioBackend>>,
     snapshot: &Arc<RwLock<PlaybackSnapshot>>,
     events: &SyncSender<AudioEvent>,
+    meter: &mut PlaybackMeter,
 ) {
     let Some(backend) = backend.as_mut() else {
         return;
@@ -631,21 +848,205 @@ fn update_position(
     }
     let current = read_snapshot(snapshot);
     if current.state != PlaybackState::Playing {
+        meter.reset_anchor(current.state, backend.position());
         return;
     }
     if backend.is_empty() {
+        let position = current.duration.unwrap_or_else(|| backend.position());
+        meter.observe(current.state, position, current.duration, Instant::now());
         update_snapshot(snapshot, events, |state| {
-            state.position = state.duration.unwrap_or_else(|| backend.position());
+            state.position = position;
             state.state = PlaybackState::Ended;
         });
+        meter.request_flush();
+        meter.reset_anchor(PlaybackState::Ended, position);
     } else {
         let position = backend.position();
+        meter.observe(current.state, position, current.duration, Instant::now());
         update_snapshot(snapshot, events, |state| {
             state.position = state
                 .duration
                 .map_or(position, |duration| position.min(duration));
         });
     }
+}
+
+fn sample_before_command(
+    meter: &mut PlaybackMeter,
+    backend: &mut Option<Box<dyn AudioBackend>>,
+    snapshot: &Arc<RwLock<PlaybackSnapshot>>,
+) {
+    let Some(backend) = backend.as_mut() else {
+        return;
+    };
+    let current = read_snapshot(snapshot);
+    let position = if backend.is_empty() {
+        current.duration.unwrap_or_else(|| backend.position())
+    } else {
+        backend.position()
+    };
+    meter.observe(current.state, position, current.duration, Instant::now());
+}
+
+struct PlaybackMeter {
+    shared: Arc<PlaybackAccountingShared>,
+    active_id: Option<PlaybackAccountingId>,
+    segment: Option<(Instant, Duration, u128)>,
+}
+
+impl PlaybackMeter {
+    fn new(shared: Arc<PlaybackAccountingShared>) -> Self {
+        Self {
+            shared,
+            active_id: None,
+            segment: None,
+        }
+    }
+
+    fn activate(&mut self, id: Option<PlaybackAccountingId>, duration: Option<Duration>) {
+        self.active_id = id;
+        self.segment = None;
+        if let Some(id) = id {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let counter = state.counters.entry(id).or_default();
+            if let Some(duration) = duration {
+                let duration_ms = Some(duration.as_millis().min(u128::from(u64::MAX)) as u64);
+                if counter.duration_ms != duration_ms {
+                    counter.duration_ms = duration_ms;
+                    state.dirty.insert(id);
+                }
+            }
+        }
+    }
+
+    fn observe(
+        &mut self,
+        state: PlaybackState,
+        position: Duration,
+        duration: Option<Duration>,
+        now: Instant,
+    ) {
+        if state != PlaybackState::Playing {
+            self.segment = None;
+            return;
+        }
+        let Some(id) = self.active_id else {
+            self.segment = None;
+            return;
+        };
+        let Some((started_at, started_position, mut credited_nanos)) = self.segment else {
+            self.segment = Some((now, position, 0));
+            return;
+        };
+        if position < started_position {
+            // A backend position discontinuity is treated like a seek, never
+            // as negative or fabricated listening time.
+            self.segment = Some((now, position, 0));
+            return;
+        }
+        let elapsed = now.saturating_duration_since(started_at);
+        let natural_advance = position.saturating_sub(started_position);
+        let allowed_total = elapsed.min(natural_advance).as_nanos();
+        let newly_credited = allowed_total.saturating_sub(credited_nanos);
+        if newly_credited > 0 {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let duration_changed = {
+                let counter = state.counters.entry(id).or_default();
+                counter.played_nanos = counter.played_nanos.saturating_add(newly_credited);
+                duration
+                    .map(|duration| {
+                        let duration_ms =
+                            Some(duration.as_millis().min(u128::from(u64::MAX)) as u64);
+                        if counter.duration_ms != duration_ms {
+                            counter.duration_ms = duration_ms;
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or(false)
+            };
+            state.dirty.insert(id);
+            if duration_changed {
+                state.dirty.insert(id);
+            }
+        }
+        credited_nanos = credited_nanos.max(allowed_total);
+        self.segment = Some((started_at, started_position, credited_nanos));
+    }
+
+    fn reset_anchor(&mut self, state: PlaybackState, position: Duration) {
+        self.reset_anchor_at(state, position, Instant::now());
+    }
+
+    fn reset_anchor_at(&mut self, state: PlaybackState, position: Duration, now: Instant) {
+        self.segment = (state == PlaybackState::Playing).then_some((now, position, 0));
+    }
+
+    fn request_flush(&self) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.flush_requested = true;
+        self.shared.changed.notify_one();
+    }
+}
+
+fn acknowledge_accounting(
+    shared: &PlaybackAccountingShared,
+    id: PlaybackAccountingId,
+    played_ms: u64,
+    duration_ms: Option<u64>,
+) {
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fully_acknowledged = if let Some(counter) = state.counters.get_mut(&id) {
+        counter.acknowledged_ms = counter.acknowledged_ms.max(played_ms);
+        if counter.duration_ms == duration_ms {
+            counter.acknowledged_duration_ms = duration_ms;
+        }
+        let current_ms = (counter.played_nanos / 1_000_000).min(u128::from(u64::MAX)) as u64;
+        current_ms <= counter.acknowledged_ms
+            && counter.duration_ms == counter.acknowledged_duration_ms
+    } else {
+        false
+    };
+    if fully_acknowledged {
+        state.dirty.remove(&id);
+    }
+}
+
+fn accounting_checkpoints(shared: &PlaybackAccountingShared) -> Vec<PlaybackAccountingCheckpoint> {
+    let state = shared
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    state
+        .dirty
+        .iter()
+        .filter_map(|id| {
+            state
+                .counters
+                .get(id)
+                .map(|counter| PlaybackAccountingCheckpoint {
+                    id: *id,
+                    played_ms: (counter.played_nanos / 1_000_000).min(u128::from(u64::MAX)) as u64,
+                    duration_ms: counter.duration_ms,
+                })
+        })
+        .collect()
 }
 
 fn read_snapshot(snapshot: &RwLock<PlaybackSnapshot>) -> PlaybackSnapshot {
@@ -754,6 +1155,18 @@ mod tests {
             .expect("worker should start")
     }
 
+    #[test]
+    fn process_start_probe_distinguishes_current_and_nonexistent_process() {
+        let current = process_started_utc_ms(std::process::id())
+            .expect("query current process identity")
+            .expect("current process should exist");
+        assert!(current > 0);
+        assert_eq!(
+            process_started_utc_ms(u32::MAX).expect("query nonexistent PID"),
+            None
+        );
+    }
+
     fn wait_for(player: &PlayerHandle, expected: PlaybackState) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
@@ -766,6 +1179,133 @@ mod tests {
             "timed out waiting for {expected:?}; snapshot: {:?}",
             player.snapshot()
         );
+    }
+
+    #[test]
+    fn listening_meter_requires_playing_state_and_natural_position_advance() {
+        let shared = Arc::new(PlaybackAccountingShared::default());
+        let mut meter = PlaybackMeter::new(Arc::clone(&shared));
+        let id = PlaybackAccountingId::new(7);
+        let start = Instant::now();
+        meter.activate(Some(id), Some(Duration::from_secs(30)));
+        meter.observe(
+            PlaybackState::Ready,
+            Duration::ZERO,
+            Some(Duration::from_secs(30)),
+            start,
+        );
+        meter.observe(
+            PlaybackState::Playing,
+            Duration::ZERO,
+            Some(Duration::from_secs(30)),
+            start + Duration::from_secs(1),
+        );
+        meter.observe(
+            PlaybackState::Playing,
+            Duration::from_millis(750),
+            Some(Duration::from_secs(30)),
+            start + Duration::from_secs(2),
+        );
+        meter.observe(
+            PlaybackState::Playing,
+            Duration::from_millis(750),
+            Some(Duration::from_secs(30)),
+            start + Duration::from_secs(3),
+        );
+        meter.observe(
+            PlaybackState::Paused,
+            Duration::from_millis(750),
+            Some(Duration::from_secs(30)),
+            start + Duration::from_secs(4),
+        );
+
+        let state = shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(state.counters[&id].played_nanos, 750_000_000);
+        assert_eq!(state.counters[&id].duration_ms, Some(30_000));
+    }
+
+    #[test]
+    fn listening_meter_resets_on_seek_and_keeps_new_progress_dirty_during_ack() {
+        let shared = Arc::new(PlaybackAccountingShared::default());
+        let mut meter = PlaybackMeter::new(Arc::clone(&shared));
+        let id = PlaybackAccountingId::new(9);
+        let start = Instant::now();
+        meter.activate(Some(id), Some(Duration::from_secs(60)));
+        meter.observe(
+            PlaybackState::Playing,
+            Duration::ZERO,
+            Some(Duration::from_secs(60)),
+            start,
+        );
+        meter.observe(
+            PlaybackState::Playing,
+            Duration::from_millis(100),
+            Some(Duration::from_secs(60)),
+            start + Duration::from_millis(100),
+        );
+
+        let checkpoint = PlaybackAccountingCheckpoint {
+            id,
+            played_ms: 100,
+            duration_ms: Some(60_000),
+        };
+        meter.reset_anchor_at(
+            PlaybackState::Playing,
+            Duration::from_secs(20),
+            start + Duration::from_millis(100),
+        );
+        meter.observe(
+            PlaybackState::Playing,
+            Duration::from_millis(20_050),
+            Some(Duration::from_secs(60)),
+            start + Duration::from_millis(150),
+        );
+
+        let current = shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .counters[&id]
+            .played_nanos;
+        assert_eq!(current, 150_000_000, "seek jump itself adds no time");
+
+        acknowledge_accounting(&shared, id, checkpoint.played_ms, checkpoint.duration_ms);
+        let pending = accounting_checkpoints(&shared);
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].played_ms > checkpoint.played_ms);
+    }
+
+    #[test]
+    fn listening_meter_handles_quantized_positions_and_dense_non_state_commands() {
+        let shared = Arc::new(PlaybackAccountingShared::default());
+        let mut meter = PlaybackMeter::new(Arc::clone(&shared));
+        let id = PlaybackAccountingId::new(11);
+        let start = Instant::now();
+        meter.activate(Some(id), Some(Duration::from_secs(10)));
+        meter.observe(
+            PlaybackState::Playing,
+            Duration::ZERO,
+            Some(Duration::from_secs(10)),
+            start,
+        );
+        // These represent frequent volume/poll samples around a decoder whose
+        // reported position advances in coarse 40 ms steps.
+        for (elapsed_ms, position_ms) in [(30, 0), (40, 40), (45, 40), (80, 80)] {
+            meter.observe(
+                PlaybackState::Playing,
+                Duration::from_millis(position_ms),
+                Some(Duration::from_secs(10)),
+                start + Duration::from_millis(elapsed_ms),
+            );
+        }
+        let state = shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(state.counters[&id].played_nanos, 80_000_000);
     }
 
     #[test]

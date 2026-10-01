@@ -109,7 +109,7 @@ input:focus-visible {
   inset: 0;
   background: var(--page);
   content: '';
-  opacity: 0.6;
+  opacity: var(--np-background-overlay-alpha, 0.6);
 }
 
 .now-playing-overlay {
@@ -141,7 +141,7 @@ input:focus-visible {
 
 .now-playing-overlay.is-open .now-playing-overlay-topbar {
   border-bottom-color: rgba(var(--text-rgb), 0.16);
-  background: rgba(var(--page-rgb), var(--np-surface-alpha, 0.65));
+  background: transparent;
 }
 
 .now-playing-overlay-return {
@@ -204,7 +204,7 @@ input:focus-visible {
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--muted);
-  background: rgba(var(--page-rgb), var(--np-surface-alpha, 0.65));
+  background: transparent;
   font-size: 11px;
   font-weight: 650;
   cursor: pointer;
@@ -228,7 +228,7 @@ input:focus-visible {
   height: 100%;
   padding: 0;
   border: 0;
-  background: rgba(0, 0, 0, 0.42);
+  background: transparent;
   cursor: default;
 }
 
@@ -249,7 +249,6 @@ input:focus-visible {
   border: 0;
   border-left: 1px solid var(--line-strong);
   background: color-mix(in srgb, var(--page) 94%, transparent);
-  box-shadow: -24px 0 64px rgba(0, 0, 0, 0.38);
   box-sizing: border-box;
 }
 
@@ -2290,7 +2289,7 @@ input:focus-visible {
 .app-shell.has-now-playing-backdrop .player-dock {
   z-index: 21;
   border-top-color: rgba(var(--text-rgb), 0.18);
-  background: rgba(var(--page-rgb), var(--np-surface-alpha, 0.65));
+  background: transparent;
   box-shadow: 0 -15px 35px rgba(0, 0, 0, 0.18);
 }
 
@@ -2340,7 +2339,7 @@ input:focus-visible {
   inset: 0;
   background: var(--page);
   content: '';
-  opacity: 0.46;
+  opacity: var(--preview-background-overlay-alpha, 0.6);
 }
 
 .now-playing-appearance-preview-surface,
@@ -2351,7 +2350,7 @@ input:focus-visible {
   padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: rgba(var(--page-rgb), var(--preview-surface-alpha, 0.65));
+  background: transparent;
   font-size: 10px;
 }
 

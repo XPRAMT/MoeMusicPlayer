@@ -3,20 +3,20 @@
 
 export const DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES = Object.freeze({
   backgroundBlurPx: 20,
-  surfaceTransparencyPercent: 35,
+  backgroundBrightnessPercent: 40,
 });
 
 /** @param {Partial<NowPlayingAppearancePreferences> | null | undefined} [value] */
 export function normalizeNowPlayingAppearancePreferences(value = {}) {
   const blur = Number(value?.backgroundBlurPx);
-  const transparency = Number(value?.surfaceTransparencyPercent);
+  const brightness = Number(value?.backgroundBrightnessPercent);
   return {
     backgroundBlurPx: Number.isFinite(blur)
       ? Math.round(Math.max(0, Math.min(40, blur)))
       : DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES.backgroundBlurPx,
-    surfaceTransparencyPercent: Number.isFinite(transparency)
-      ? Math.round(Math.max(0, Math.min(100, transparency)))
-      : DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES.surfaceTransparencyPercent,
+    backgroundBrightnessPercent: Number.isFinite(brightness)
+      ? Math.round(Math.max(0, Math.min(100, brightness)))
+      : DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES.backgroundBrightnessPercent,
   };
 }
 

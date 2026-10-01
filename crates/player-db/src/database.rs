@@ -1,26 +1,27 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     error::Error,
     fmt,
     path::Path,
     sync::{Mutex, MutexGuard},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use player_core::{
     FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, LyricCandidate,
     LyricProvider, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page,
-    PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, Playlist, PlaylistEntry,
-    PlaylistEntrySummary, PlaylistId, PlaylistPage, PlaylistSummary, QueueRepeatMode, SourceId,
-    SourceScanState, SyncApplyOutcome, SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackId,
-    TrackIdentity, TrackLyrics, TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField,
-    TRACK_METADATA_VERSION,
+    PlaybackCheckpoint, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot,
+    PlaybackStatistics, Playlist, PlaylistEntry, PlaylistEntrySummary, PlaylistId, PlaylistPage,
+    PlaylistSummary, QueueRepeatMode, SourceId, SourceScanState, SyncApplyOutcome,
+    SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackId, TrackIdentity, TrackLyrics,
+    TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField, TRACK_METADATA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const MAX_PAGE_SIZE: u32 = 500;
 const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
@@ -263,6 +264,30 @@ CREATE TABLE playback_session_entries (
 );
 "#;
 
+const SCHEMA_V9: &str = r#"
+CREATE TABLE track_playback_statistics (
+    track_id TEXT PRIMARY KEY NOT NULL,
+    played_ms INTEGER NOT NULL DEFAULT 0 CHECK (played_ms >= 0),
+    observed_duration_ms INTEGER CHECK (observed_duration_ms IS NULL OR observed_duration_ms > 0)
+);
+
+CREATE TABLE playback_statistics_runtimes (
+    runtime_id TEXT PRIMARY KEY NOT NULL,
+    owner_pid INTEGER CHECK (owner_pid IS NULL OR owner_pid > 0),
+    owner_process_started_utc_ms INTEGER CHECK (
+        owner_process_started_utc_ms IS NULL OR owner_process_started_utc_ms >= 0
+    ),
+    registered_at_utc_ms INTEGER NOT NULL CHECK (registered_at_utc_ms >= 0)
+);
+
+CREATE TABLE playback_statistics_checkpoints (
+    runtime_id TEXT NOT NULL REFERENCES playback_statistics_runtimes(runtime_id) ON DELETE CASCADE,
+    track_id TEXT NOT NULL,
+    played_ms INTEGER NOT NULL CHECK (played_ms >= 0),
+    PRIMARY KEY (runtime_id, track_id)
+);
+"#;
+
 fn repeat_mode_name(mode: QueueRepeatMode) -> &'static str {
     match mode {
         QueueRepeatMode::Off => "off",
@@ -294,6 +319,14 @@ pub struct PlaybackSessionCheckpoint {
     pub position_ms: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlaybackStatisticsRuntime {
+    pub runtime_id: Uuid,
+    pub owner_pid: Option<u32>,
+    pub owner_process_started_utc_ms: Option<i64>,
+    pub registered_at_utc_ms: i64,
+}
+
 pub struct Database {
     connection: Mutex<Connection>,
 }
@@ -319,6 +352,7 @@ pub enum DatabaseError {
     NonFilesystemTrackLocator(TrackId),
     TrackFileUnavailable(TrackId),
     InvalidThemeColor(&'static str),
+    UnknownPlaybackStatisticsRuntime(Uuid),
 }
 
 impl fmt::Display for DatabaseError {
@@ -356,6 +390,10 @@ impl fmt::Display for DatabaseError {
             Self::InvalidThemeColor(field) => write!(
                 f,
                 "theme preference {field} must be a six-digit hexadecimal color such as #55D9FF"
+            ),
+            Self::UnknownPlaybackStatisticsRuntime(runtime_id) => write!(
+                f,
+                "playback statistics runtime {runtime_id} is not registered or has already finished"
             ),
         }
     }
@@ -504,6 +542,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V8)?;
             tx.pragma_update(None, "user_version", 8)?;
+            tx.commit()?;
+            version = 8;
+        }
+        if version == 8 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V9)?;
+            tx.pragma_update(None, "user_version", 9)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -1848,6 +1893,199 @@ impl Database {
         Ok(())
     }
 
+    /// Register one process runtime before it records any listening checkpoint.
+    /// Runtime IDs must be fresh UUIDs and must not be reused after finish.
+    pub fn register_playback_statistics_runtime(
+        &self,
+        runtime_id: Uuid,
+        owner_pid: Option<u32>,
+        owner_process_started_utc_ms: Option<i64>,
+    ) -> Result<(), DatabaseError> {
+        let registered_at_utc_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| DatabaseError::CorruptData("system clock predates Unix epoch".into()))?
+            .as_millis();
+        let registered_at_utc_ms = i64::try_from(registered_at_utc_ms)
+            .map_err(|_| DatabaseError::InvalidNumber("runtime registration time"))?;
+        if owner_pid == Some(0) {
+            return Err(DatabaseError::InvalidNumber("runtime owner PID"));
+        }
+        let owner_pid = owner_pid.map(i64::from);
+        if owner_process_started_utc_ms.is_some_and(|started| started < 0) {
+            return Err(DatabaseError::InvalidNumber("process start time"));
+        }
+
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO playback_statistics_runtimes
+                (runtime_id, owner_pid, owner_process_started_utc_ms, registered_at_utc_ms)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                runtime_id.to_string(),
+                owner_pid,
+                owner_process_started_utc_ms,
+                registered_at_utc_ms
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Apply a batch of monotonic per-track counters atomically. The runtime
+    /// must already be registered; retries at or below the stored watermark
+    /// do not add listening time again.
+    pub fn record_playback_checkpoints(
+        &self,
+        runtime_id: Uuid,
+        checkpoints: &[PlaybackCheckpoint],
+    ) -> Result<(), DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        apply_playback_checkpoints(&tx, runtime_id, checkpoints)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Commit the final batch and remove the runtime and its watermarks in one
+    /// transaction. Checkpoints arriving after this returns are rejected.
+    pub fn finish_playback_statistics_runtime(
+        &self,
+        runtime_id: Uuid,
+        final_checkpoints: &[PlaybackCheckpoint],
+    ) -> Result<(), DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        apply_playback_checkpoints(&tx, runtime_id, final_checkpoints)?;
+        let deleted = tx.execute(
+            "DELETE FROM playback_statistics_runtimes WHERE runtime_id=?1",
+            [runtime_id.to_string()],
+        )?;
+        if deleted != 1 {
+            return Err(DatabaseError::UnknownPlaybackStatisticsRuntime(runtime_id));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// List active runtime registrations so the integration layer can inspect
+    /// and clean up sessions whose owning process is known to have exited.
+    pub fn list_playback_statistics_runtimes(
+        &self,
+    ) -> Result<Vec<PlaybackStatisticsRuntime>, DatabaseError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT runtime_id, owner_pid, owner_process_started_utc_ms, registered_at_utc_ms
+             FROM playback_statistics_runtimes ORDER BY registered_at_utc_ms, runtime_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (runtime_id, owner_pid, owner_process_started_utc_ms, registered_at_utc_ms) = row?;
+            let runtime_id = Uuid::parse_str(&runtime_id)
+                .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+            let owner_pid = owner_pid
+                .map(|pid| {
+                    u32::try_from(pid).map_err(|_| {
+                        DatabaseError::CorruptData("runtime owner PID is out of range".into())
+                    })
+                })
+                .transpose()?;
+            if registered_at_utc_ms < 0 {
+                return Err(DatabaseError::CorruptData(
+                    "runtime registration time is negative".into(),
+                ));
+            }
+            if owner_process_started_utc_ms.is_some_and(|started| started < 0) {
+                return Err(DatabaseError::CorruptData(
+                    "runtime owner process start time is negative".into(),
+                ));
+            }
+            Ok(PlaybackStatisticsRuntime {
+                runtime_id,
+                owner_pid,
+                owner_process_started_utc_ms,
+                registered_at_utc_ms,
+            })
+        })
+        .collect()
+    }
+
+    /// Return statistics for a queue's Track IDs with a bounded number of
+    /// parameters per query. Duplicate queue entries share one TrackId row.
+    pub fn playback_statistics_for(
+        &self,
+        track_ids: &[TrackId],
+    ) -> Result<HashMap<TrackId, PlaybackStatistics>, DatabaseError> {
+        const IDS_PER_QUERY: usize = 500;
+        let mut statistics = HashMap::with_capacity(track_ids.len());
+        for track_id in track_ids {
+            statistics
+                .entry(*track_id)
+                .or_insert(PlaybackStatistics::default());
+        }
+        if statistics.is_empty() {
+            return Ok(statistics);
+        }
+
+        let connection = self.lock()?;
+        let unique_ids: Vec<TrackId> = statistics.keys().copied().collect();
+        for chunk in unique_ids.chunks(IDS_PER_QUERY) {
+            let ids: Vec<String> = chunk.iter().map(ToString::to_string).collect();
+            let sql = format!(
+                "WITH requested(track_id) AS (VALUES {})
+                 SELECT requested.track_id, COALESCE(s.played_ms, 0),
+                        CASE WHEN t.duration_ms > 0 THEN t.duration_ms
+                             WHEN s.observed_duration_ms > 0 THEN s.observed_duration_ms
+                             ELSE NULL END
+                 FROM requested
+                 LEFT JOIN tracks t ON t.track_id=requested.track_id
+                 LEFT JOIN track_playback_statistics s ON s.track_id=requested.track_id",
+                ids.iter()
+                    .enumerate()
+                    .map(|(index, _)| format!("(?{})", index + 1))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (track_id, played_ms, duration_ms) = row?;
+                let track_id = parse_track_id(&track_id)?;
+                let played_ms = u64::try_from(played_ms)
+                    .map_err(|_| DatabaseError::CorruptData("negative played duration".into()))?;
+                let duration_ms = duration_ms
+                    .filter(|duration| *duration > 0)
+                    .map(|duration| {
+                        u64::try_from(duration).map_err(|_| {
+                            DatabaseError::CorruptData("negative track duration".into())
+                        })
+                    })
+                    .transpose()?;
+                statistics.insert(
+                    track_id,
+                    PlaybackStatistics {
+                        played_ms,
+                        duration_ms,
+                    },
+                );
+            }
+        }
+        Ok(statistics)
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, DatabaseError> {
         self.connection.lock().map_err(|_| DatabaseError::Poisoned)
     }
@@ -2309,6 +2547,89 @@ fn row_to_sync_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSyncState
     })
 }
 
+fn apply_playback_checkpoints(
+    tx: &Transaction<'_>,
+    runtime_id: Uuid,
+    checkpoints: &[PlaybackCheckpoint],
+) -> Result<(), DatabaseError> {
+    let runtime_key = runtime_id.to_string();
+    let registered: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM playback_statistics_runtimes WHERE runtime_id=?1)",
+        [&runtime_key],
+        |row| row.get(0),
+    )?;
+    if !registered {
+        return Err(DatabaseError::UnknownPlaybackStatisticsRuntime(runtime_id));
+    }
+
+    let mut seen = HashSet::with_capacity(checkpoints.len());
+    for checkpoint in checkpoints {
+        if !seen.insert(checkpoint.track_id) {
+            return Err(DatabaseError::CorruptData(
+                "a playback checkpoint batch contains a duplicate TrackId".into(),
+            ));
+        }
+        let counter_ms = i64::try_from(checkpoint.played_ms)
+            .map_err(|_| DatabaseError::InvalidNumber("played duration checkpoint"))?;
+        let duration_ms = checkpoint
+            .duration_ms
+            .filter(|duration| *duration > 0)
+            .map(|duration| {
+                i64::try_from(duration)
+                    .map_err(|_| DatabaseError::InvalidNumber("observed track duration"))
+            })
+            .transpose()?;
+        let track_key = checkpoint.track_id.to_string();
+        let previous_counter_ms: Option<i64> = tx
+            .query_row(
+                "SELECT played_ms FROM playback_statistics_checkpoints
+                 WHERE runtime_id=?1 AND track_id=?2",
+                params![runtime_key, track_key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let previous_counter_ms = previous_counter_ms.unwrap_or(0);
+        if counter_ms < previous_counter_ms {
+            return Err(DatabaseError::CorruptData(format!(
+                "playback checkpoint for TrackId {} moved backwards",
+                checkpoint.track_id
+            )));
+        }
+        let delta_ms = counter_ms - previous_counter_ms;
+        let previous_total_ms: Option<i64> = tx
+            .query_row(
+                "SELECT played_ms FROM track_playback_statistics WHERE track_id=?1",
+                [&track_key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let total_ms = previous_total_ms
+            .unwrap_or(0)
+            .checked_add(delta_ms)
+            .ok_or(DatabaseError::InvalidNumber("total played duration"))?;
+
+        tx.execute(
+            "INSERT INTO track_playback_statistics
+                (track_id, played_ms, observed_duration_ms)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(track_id) DO UPDATE SET
+                played_ms=excluded.played_ms,
+                observed_duration_ms=COALESCE(
+                    excluded.observed_duration_ms,
+                    track_playback_statistics.observed_duration_ms
+                )",
+            params![track_key, total_ms, duration_ms],
+        )?;
+        tx.execute(
+            "INSERT INTO playback_statistics_checkpoints (runtime_id, track_id, played_ms)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(runtime_id, track_id) DO UPDATE SET played_ms=excluded.played_ms",
+            params![runtime_key, track_key, counter_ms],
+        )?;
+    }
+    Ok(())
+}
+
 fn parse_track_id(value: &str) -> Result<TrackId, DatabaseError> {
     TrackId::parse(value).map_err(|error| DatabaseError::CorruptData(error.to_string()))
 }
@@ -2539,17 +2860,18 @@ mod tests {
     use player_core::{
         parse_lrc, FileFingerprint, LibraryRoot, ListTracksQuery, LyricCandidate, LyricProvider,
         MediaIndex, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord,
-        PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, Playlist, PlaylistEntry,
-        PlaylistId, QueueRepeatMode, SourceId, SourceScan, SourceScanState, SyncApplyRequest,
-        SyncCancellation, SyncEngine, TrackId, TrackIdentity, TrackLyrics, TrackMetadata,
-        TrackMetadataError, UserMetadataField, TRACK_METADATA_VERSION,
+        PlaybackCheckpoint, PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry,
+        PlaybackStatistics, Playlist, PlaylistEntry, PlaylistId, QueueRepeatMode, SourceId,
+        SourceScan, SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackId,
+        TrackIdentity, TrackLyrics, TrackMetadata, TrackMetadataError, UserMetadataField,
+        TRACK_METADATA_VERSION,
     };
     use rusqlite::{params, OptionalExtension};
 
     use super::{
         Database, DatabaseError, LibraryRepository, PlaybackSessionCheckpoint,
         PlaylistFileSyncState, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2,
-        SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, TRACKS_PAGE_SQL,
+        SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, TRACKS_PAGE_SQL,
     };
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -2699,7 +3021,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 8);
+            assert_eq!(version, 9);
         }
         {
             let db = Database::open(&path).expect("reopen migrated database");
@@ -2743,7 +3065,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 8);
+        assert_eq!(current_version, 9);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -2792,7 +3114,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -2832,7 +3154,7 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
     }
 
@@ -2872,7 +3194,7 @@ mod tests {
                     .expect("sync-state table lookup"),
             )
         };
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
     }
 
@@ -3048,7 +3370,7 @@ mod tests {
                     .expect("lyric candidates table"),
             )
         };
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         assert_eq!(lyric_table, "track_lyrics");
         assert_eq!(candidate_table, "lyric_candidates");
         assert_eq!(
@@ -3085,7 +3407,7 @@ mod tests {
             [],
             |row| row.get(0),
         ).expect("playback session tables");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         assert_eq!(tables, 2);
     }
 
@@ -4819,5 +5141,389 @@ mod tests {
         assert!(!columns
             .iter()
             .any(|column| column.contains("path") || column.contains("locator")));
+    }
+
+    #[test]
+    fn schema_v8_migrates_to_v9_without_requiring_track_rows_for_statistics() {
+        let connection = rusqlite::Connection::open_in_memory().expect("legacy v8 database");
+        connection.execute_batch(SCHEMA_V1).expect("schema v1");
+        connection.execute_batch(SCHEMA_V2).expect("schema v2");
+        connection.execute_batch(SCHEMA_V3).expect("schema v3");
+        connection.execute_batch(SCHEMA_V4).expect("schema v4");
+        connection.execute_batch(SCHEMA_V5).expect("schema v5");
+        connection.execute_batch(SCHEMA_V6).expect("schema v6");
+        connection.execute_batch(SCHEMA_V7).expect("schema v7");
+        connection.execute_batch(SCHEMA_V8).expect("schema v8");
+        connection
+            .pragma_update(None, "user_version", 8)
+            .expect("mark v8");
+
+        let db = Database::from_connection(connection).expect("migrate to v9");
+        let version: i64 = db
+            .lock()
+            .expect("connection")
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("schema version");
+        assert_eq!(version, 9);
+        let table_count: i64 = db
+            .lock()
+            .expect("connection")
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'
+                 AND name IN ('track_playback_statistics',
+                              'playback_statistics_runtimes',
+                              'playback_statistics_checkpoints')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("statistics tables");
+        assert_eq!(table_count, 3);
+    }
+
+    #[test]
+    fn playback_statistics_checkpoints_are_idempotent_atomic_and_finishable() {
+        let unique = TrackId::new().to_string();
+        let path = std::env::temp_dir().join(format!("moemusic-statistics-{unique}.sqlite"));
+        let first_track = TrackId::new();
+        let second_track = TrackId::new();
+        let first_runtime = uuid::Uuid::new_v4();
+        let second_runtime = uuid::Uuid::new_v4();
+        {
+            let db = Database::open(&path).expect("open statistics database");
+            db.register_playback_statistics_runtime(
+                first_runtime,
+                Some(101),
+                Some(1_700_000_000_000),
+            )
+            .expect("register first runtime");
+            db.register_playback_statistics_runtime(
+                second_runtime,
+                Some(202),
+                Some(1_700_000_000_001),
+            )
+            .expect("register second runtime");
+            let runtimes = db
+                .list_playback_statistics_runtimes()
+                .expect("list runtimes");
+            let registered = runtimes
+                .iter()
+                .find(|runtime| runtime.runtime_id == first_runtime)
+                .expect("first runtime registration");
+            assert_eq!(registered.owner_pid, Some(101));
+            assert_eq!(
+                registered.owner_process_started_utc_ms,
+                Some(1_700_000_000_000)
+            );
+            let first_batch = [
+                PlaybackCheckpoint {
+                    track_id: first_track,
+                    played_ms: 500,
+                    duration_ms: Some(1_000),
+                },
+                PlaybackCheckpoint {
+                    track_id: second_track,
+                    played_ms: 100,
+                    duration_ms: None,
+                },
+            ];
+            db.record_playback_checkpoints(first_runtime, &first_batch)
+                .expect("record initial batch");
+            db.record_playback_checkpoints(first_runtime, &first_batch)
+                .expect("retry initial batch");
+            db.record_playback_checkpoints(
+                second_runtime,
+                &[PlaybackCheckpoint {
+                    track_id: first_track,
+                    played_ms: 200,
+                    duration_ms: Some(2_000),
+                }],
+            )
+            .expect("record parallel runtime");
+
+            let atomic_failure = [
+                PlaybackCheckpoint {
+                    track_id: first_track,
+                    played_ms: 700,
+                    duration_ms: Some(1_000),
+                },
+                PlaybackCheckpoint {
+                    track_id: second_track,
+                    played_ms: 99,
+                    duration_ms: None,
+                },
+            ];
+            assert!(matches!(
+                db.record_playback_checkpoints(first_runtime, &atomic_failure),
+                Err(DatabaseError::CorruptData(_))
+            ));
+            assert_eq!(
+                db.playback_statistics_for(&[first_track, second_track])
+                    .expect("read after rollback"),
+                [
+                    (
+                        first_track,
+                        PlaybackStatistics {
+                            played_ms: 700,
+                            duration_ms: Some(2_000)
+                        }
+                    ),
+                    (
+                        second_track,
+                        PlaybackStatistics {
+                            played_ms: 100,
+                            duration_ms: None
+                        }
+                    ),
+                ]
+                .into_iter()
+                .collect()
+            );
+            assert_eq!(
+                db.list_playback_statistics_runtimes()
+                    .expect("list runtimes")
+                    .len(),
+                2
+            );
+        }
+
+        {
+            let db = Database::open(&path).expect("reopen statistics database");
+            db.record_playback_checkpoints(
+                first_runtime,
+                &[PlaybackCheckpoint {
+                    track_id: first_track,
+                    played_ms: 500,
+                    duration_ms: Some(2_100),
+                }],
+            )
+            .expect("retry an acknowledged checkpoint after reopen");
+            db.record_playback_checkpoints(
+                first_runtime,
+                &[PlaybackCheckpoint {
+                    track_id: first_track,
+                    played_ms: 700,
+                    duration_ms: Some(2_100),
+                }],
+            )
+            .expect("advance checkpoint after reopen");
+            assert!(matches!(
+                db.finish_playback_statistics_runtime(
+                    first_runtime,
+                    &[PlaybackCheckpoint {
+                        track_id: first_track,
+                        played_ms: 600,
+                        duration_ms: Some(2_200),
+                    }]
+                ),
+                Err(DatabaseError::CorruptData(_))
+            ));
+            assert!(db
+                .list_playback_statistics_runtimes()
+                .expect("runtime remains active after failed finish")
+                .iter()
+                .any(|runtime| runtime.runtime_id == first_runtime));
+            db.finish_playback_statistics_runtime(
+                first_runtime,
+                &[
+                    PlaybackCheckpoint {
+                        track_id: first_track,
+                        played_ms: 1_000,
+                        duration_ms: Some(2_200),
+                    },
+                    PlaybackCheckpoint {
+                        track_id: second_track,
+                        played_ms: 150,
+                        duration_ms: None,
+                    },
+                ],
+            )
+            .expect("finish with last batch");
+            assert!(matches!(
+                db.record_playback_checkpoints(
+                    first_runtime,
+                    &[PlaybackCheckpoint {
+                        track_id: first_track,
+                        played_ms: 1_500,
+                        duration_ms: Some(2_200),
+                    }]
+                ),
+                Err(DatabaseError::UnknownPlaybackStatisticsRuntime(id)) if id == first_runtime
+            ));
+            assert_eq!(
+                db.playback_statistics_for(&[first_track, second_track])
+                    .expect("read final totals"),
+                [
+                    (
+                        first_track,
+                        PlaybackStatistics {
+                            played_ms: 1_200,
+                            duration_ms: Some(2_200)
+                        }
+                    ),
+                    (
+                        second_track,
+                        PlaybackStatistics {
+                            played_ms: 150,
+                            duration_ms: None
+                        }
+                    ),
+                ]
+                .into_iter()
+                .collect()
+            );
+            db.finish_playback_statistics_runtime(second_runtime, &[])
+                .expect("finish parallel runtime");
+            assert!(db
+                .list_playback_statistics_runtimes()
+                .expect("runtimes cleaned")
+                .is_empty());
+        }
+
+        for suffix in ["", "-wal", "-shm"] {
+            let mut file = path.as_os_str().to_os_string();
+            file.push(suffix);
+            let file = PathBuf::from(file);
+            if file.exists() {
+                std::fs::remove_file(file).expect("remove test database");
+            }
+        }
+    }
+
+    #[test]
+    fn playback_statistics_survive_metadata_changes_and_track_removal() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "statistics metadata",
+        );
+        let original = record(&root, "song", "song-key", "Before", 10, 1_800_000_000_001);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&original),
+            std::slice::from_ref(&original),
+            1,
+        );
+        let track_id = track_id_for_query(&db, "Before");
+        let runtime_id = uuid::Uuid::new_v4();
+        db.register_playback_statistics_runtime(runtime_id, None, None)
+            .expect("register runtime");
+        db.record_playback_checkpoints(
+            runtime_id,
+            &[PlaybackCheckpoint {
+                track_id,
+                played_ms: 400,
+                duration_ms: Some(230_000),
+            }],
+        )
+        .expect("record listening");
+
+        let mut changed = record(&root, "song", "song-key", "After", 11, 1_800_000_000_002);
+        changed.metadata.as_mut().expect("metadata").duration_ms = Some(100_000);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&changed),
+            std::slice::from_ref(&changed),
+            2,
+        );
+        assert_eq!(
+            db.playback_statistics_for(&[track_id])
+                .expect("metadata duration wins")[&track_id],
+            PlaybackStatistics {
+                played_ms: 400,
+                duration_ms: Some(100_000)
+            }
+        );
+
+        {
+            let connection = db.lock().expect("connection");
+            connection
+                .execute(
+                    "DELETE FROM source_mappings WHERE track_id=?1",
+                    [track_id.to_string()],
+                )
+                .expect("remove mapping fixture");
+            connection
+                .execute(
+                    "DELETE FROM tracks WHERE track_id=?1",
+                    [track_id.to_string()],
+                )
+                .expect("remove offline track fixture");
+        }
+        assert_eq!(
+            db.playback_statistics_for(&[track_id])
+                .expect("statistics without track row")[&track_id],
+            PlaybackStatistics {
+                played_ms: 400,
+                duration_ms: Some(230_000)
+            }
+        );
+    }
+
+    #[test]
+    fn playback_statistics_batch_query_handles_one_hundred_thousand_ids() {
+        let db = Database::open_in_memory().expect("database");
+        let track_ids: Vec<TrackId> = (0..100_000).map(|_| TrackId::new()).collect();
+        let mut query_ids = track_ids.clone();
+        query_ids.push(track_ids[0]);
+        let statistics = db
+            .playback_statistics_for(&query_ids)
+            .expect("read large batch");
+        assert_eq!(statistics.len(), 100_000);
+        assert_eq!(
+            statistics[&track_ids[0]],
+            PlaybackStatistics {
+                played_ms: 0,
+                duration_ms: None
+            }
+        );
+    }
+
+    #[test]
+    fn playback_statistics_overflow_rejects_batch_without_changing_watermarks() {
+        let db = Database::open_in_memory().expect("database");
+        let track_id = TrackId::new();
+        let runtime_id = uuid::Uuid::new_v4();
+        db.register_playback_statistics_runtime(runtime_id, None, None)
+            .expect("register runtime");
+        db.lock()
+            .expect("connection")
+            .execute(
+                "INSERT INTO track_playback_statistics(track_id, played_ms)
+                 VALUES (?1, ?2)",
+                params![track_id.to_string(), i64::MAX],
+            )
+            .expect("set total at representable limit");
+        let result = db.record_playback_checkpoints(
+            runtime_id,
+            &[PlaybackCheckpoint {
+                track_id,
+                played_ms: 1,
+                duration_ms: Some(0),
+            }],
+        );
+        assert!(matches!(result, Err(DatabaseError::InvalidNumber(_))));
+        assert_eq!(
+            db.playback_statistics_for(&[track_id]).expect("read total")[&track_id],
+            PlaybackStatistics {
+                played_ms: i64::MAX as u64,
+                duration_ms: None,
+            }
+        );
+        let watermark_count: i64 = db
+            .lock()
+            .expect("connection")
+            .query_row(
+                "SELECT COUNT(*) FROM playback_statistics_checkpoints
+                 WHERE runtime_id=?1 AND track_id=?2",
+                params![runtime_id.to_string(), track_id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("checkpoint count");
+        assert_eq!(watermark_count, 0);
     }
 }

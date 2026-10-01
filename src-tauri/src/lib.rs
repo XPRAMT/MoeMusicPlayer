@@ -2,8 +2,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "windows")]
 use std::{
+    collections::HashMap,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
         Arc, Mutex,
     },
@@ -11,10 +12,10 @@ use std::{
 };
 
 use player_core::{
-    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaybackQueue,
-    PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId, PlaylistPage,
-    PlaylistSummary, QueueRepeatMode, SourceId, SourceScanState, SyncEngine, SyncProgress,
-    SyncReport, TrackId, TrackSummary,
+    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaybackCheckpoint,
+    PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId,
+    PlaylistPage, PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId,
+    SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackId, TrackSummary,
 };
 use player_db::{Database, PlaybackSessionCheckpoint, ThemePreferences};
 use serde::{Deserialize, Serialize};
@@ -46,7 +47,8 @@ use player_audio_windows::{
         MediaControlMetadata, MediaControlUpdate, SystemMediaController, SystemMediaError,
         SystemMediaEvent,
     },
-    AudioError, CommandTicket, PlaybackState as AudioPlaybackState, PlayerHandle,
+    AudioError, CommandTicket, PlaybackAccountingCheckpoint, PlaybackAccountingId,
+    PlaybackState as AudioPlaybackState, PlayerHandle,
 };
 
 const LIBRARY_SYNC_FINISHED_EVENT: &str = "library-sync-finished";
@@ -106,6 +108,9 @@ struct AppState {
 #[cfg(target_os = "windows")]
 struct WindowsPlaybackService {
     player: PlayerHandle,
+    accounting_track_ids: Arc<Mutex<HashMap<PlaybackAccountingId, TrackId>>>,
+    statistics_status: Arc<Mutex<Option<String>>>,
+    statistics_collector: Mutex<Option<PlaybackStatisticsCollector>>,
     current_track: Mutex<Option<TrackSummary>>,
     command_gate: Mutex<()>,
     queue: Mutex<Option<PlaybackQueue>>,
@@ -115,6 +120,12 @@ struct WindowsPlaybackService {
     queue_advance_pending: Mutex<bool>,
     last_position_checkpoint: Mutex<Instant>,
     restore_warning: Mutex<Option<String>>,
+}
+
+#[cfg(target_os = "windows")]
+struct PlaybackStatisticsCollector {
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 #[cfg(target_os = "windows")]
@@ -818,6 +829,9 @@ impl WindowsPlaybackService {
     fn with_modes(player: PlayerHandle, shuffle: bool, repeat_mode: RepeatMode) -> Self {
         Self {
             player,
+            accounting_track_ids: Arc::new(Mutex::new(HashMap::new())),
+            statistics_status: Arc::new(Mutex::new(None)),
+            statistics_collector: Mutex::new(None),
             current_track: Mutex::new(None),
             command_gate: Mutex::new(()),
             queue: Mutex::new(None),
@@ -827,6 +841,85 @@ impl WindowsPlaybackService {
             queue_advance_pending: Mutex::new(false),
             last_position_checkpoint: Mutex::new(Instant::now()),
             restore_warning: Mutex::new(None),
+        }
+    }
+
+    fn accounting_id_for(&self, track_id: TrackId) -> PlaybackAccountingId {
+        let id = PlaybackAccountingId::new(track_id.as_uuid().as_u128());
+        self.accounting_track_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id, track_id);
+        id
+    }
+
+    fn start_statistics_collector(&self, database_path: &std::path::Path) -> Result<(), String> {
+        let database = Database::open(database_path)
+            .map_err(|error| format!("開啟播放時長統計連線失敗：{error}"))?;
+        cleanup_stale_statistics_runtimes(&database);
+
+        let runtime_marker = TrackId::new();
+        let runtime_id = runtime_marker.as_uuid();
+        let owner_pid = std::process::id();
+        let owner_process_started_utc_ms = player_audio_windows::process_started_utc_ms(owner_pid)
+            .ok()
+            .flatten();
+        database
+            .register_playback_statistics_runtime(
+                runtime_id,
+                Some(owner_pid),
+                owner_process_started_utc_ms,
+            )
+            .map_err(|error| format!("登記播放時長統計工作階段失敗：{error}"))?;
+
+        let player = self.player.clone();
+        let track_ids = Arc::clone(&self.accounting_track_ids);
+        let status = Arc::clone(&self.statistics_status);
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = std::thread::Builder::new()
+            .name("moe-playback-statistics".to_owned())
+            .spawn(move || {
+                playback_statistics_worker(
+                    database,
+                    player,
+                    track_ids,
+                    status,
+                    worker_stop,
+                    runtime_marker,
+                );
+            })
+            .map_err(|error| format!("啟動播放時長統計工作失敗：{error}"))?;
+        *self
+            .statistics_collector
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(PlaybackStatisticsCollector {
+                stop,
+                worker: Some(worker),
+            });
+        Ok(())
+    }
+
+    fn shutdown_statistics_collector(&self) {
+        let collector = self
+            .statistics_collector
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(mut collector) = collector {
+            collector.stop.store(true, Ordering::Release);
+            self.player.request_playback_accounting_flush();
+            if let Some(worker) = collector.worker.take() {
+                if worker.join().is_err() {
+                    *self
+                        .statistics_status
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(
+                        "播放時長統計工作意外停止；已提交統計保留，未保存增量可能遺失。".to_owned(),
+                    );
+                }
+            }
         }
     }
 
@@ -871,6 +964,12 @@ impl WindowsPlaybackService {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .clone()
+                })
+                .or_else(|| {
+                    self.statistics_status
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone()
                 }),
             repeat_mode,
             shuffle,
@@ -878,6 +977,188 @@ impl WindowsPlaybackService {
             can_previous,
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn cleanup_stale_statistics_runtimes(database: &Database) {
+    let runtimes = match database.list_playback_statistics_runtimes() {
+        Ok(runtimes) => runtimes,
+        Err(error) => {
+            eprintln!("無法檢查過期播放統計工作階段：{error}");
+            return;
+        }
+    };
+    for runtime in runtimes {
+        let Some(pid) = runtime.owner_pid else {
+            continue;
+        };
+        let stale = match player_audio_windows::process_started_utc_ms(pid) {
+            Ok(None) => true,
+            Ok(Some(actual_started)) => runtime
+                .owner_process_started_utc_ms
+                .is_some_and(|saved_started| saved_started != actual_started),
+            Err(error) => {
+                eprintln!("無法確認播放統計工作階段 PID {pid}：{error}");
+                false
+            }
+        };
+        if stale {
+            if let Err(error) = database.finish_playback_statistics_runtime(runtime.runtime_id, &[])
+            {
+                eprintln!("無法清理已結束的播放統計工作階段：{error}");
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn playback_statistics_worker(
+    database: Database,
+    player: PlayerHandle,
+    accounting_track_ids: Arc<Mutex<HashMap<PlaybackAccountingId, TrackId>>>,
+    status: Arc<Mutex<Option<String>>>,
+    stop: Arc<AtomicBool>,
+    runtime_marker: TrackId,
+) {
+    let runtime_id = runtime_marker.as_uuid();
+    let mut shutdown_failures = 0u8;
+    loop {
+        let shutting_down = stop.load(Ordering::Acquire);
+        if !shutting_down {
+            player.wait_for_playback_accounting_flush(Duration::from_secs(5));
+        }
+        let shutting_down = stop.load(Ordering::Acquire);
+        if shutting_down {
+            match player
+                .request_pause()
+                .and_then(|ticket| ticket.wait(Duration::from_secs(2)))
+            {
+                Ok(_) => {}
+                Err(error) => {
+                    set_statistics_status(
+                        &status,
+                        Some(format!(
+                            "關閉時無法確認音訊已暫停；記憶體中的未保存時長可能遺失：{error}"
+                        )),
+                    );
+                    return;
+                }
+            }
+        }
+        let audio_checkpoints = player.playback_accounting_checkpoints();
+        let track_map = accounting_track_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut database_checkpoints = Vec::with_capacity(audio_checkpoints.len());
+        let mut mapped_audio_checkpoints = Vec::with_capacity(audio_checkpoints.len());
+        let mut unmapped = false;
+        for checkpoint in &audio_checkpoints {
+            if let Some(track_id) = track_map.get(&checkpoint.id) {
+                mapped_audio_checkpoints.push(*checkpoint);
+                database_checkpoints.push(PlaybackCheckpoint {
+                    track_id: *track_id,
+                    played_ms: checkpoint.played_ms,
+                    duration_ms: checkpoint.duration_ms,
+                });
+            } else {
+                unmapped = true;
+            }
+        }
+        drop(track_map);
+
+        if shutting_down {
+            if unmapped {
+                set_statistics_status(
+                    &status,
+                    Some(
+                        "部分播放時長無法對應曲目；未保存增量可能遺失，已提交統計仍保留。"
+                            .to_owned(),
+                    ),
+                );
+                return;
+            }
+            match database.finish_playback_statistics_runtime(runtime_id, &database_checkpoints) {
+                Ok(()) => {
+                    acknowledge_statistics_batch(&player, &mapped_audio_checkpoints);
+                    set_statistics_status(&status, None);
+                    return;
+                }
+                Err(error) => {
+                    shutdown_failures = shutdown_failures.saturating_add(1);
+                    set_statistics_status(
+                        &status,
+                        Some(format!("播放時長仍待保存，關閉時將重試：{error}")),
+                    );
+                    if shutdown_failures >= 10 {
+                        eprintln!(
+                            "播放時長檢查點仍待保存；已提交統計保留，未保存增量可能遺失：{error}"
+                        );
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+            }
+        }
+
+        if audio_checkpoints.is_empty() && !unmapped {
+            continue;
+        }
+        if unmapped {
+            set_statistics_status(
+                &status,
+                Some("部分播放時長仍待保存：找不到對應的曲目識別。".to_owned()),
+            );
+        }
+        if database_checkpoints.is_empty() {
+            if unmapped {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            continue;
+        }
+        match database.record_playback_checkpoints(runtime_id, &database_checkpoints) {
+            Ok(()) => {
+                acknowledge_statistics_batch(&player, &mapped_audio_checkpoints);
+                if unmapped {
+                    set_statistics_status(
+                        &status,
+                        Some("部分播放時長仍待保存：找不到對應的曲目識別。".to_owned()),
+                    );
+                } else {
+                    set_statistics_status(&status, None);
+                }
+            }
+            Err(error) => {
+                set_statistics_status(
+                    &status,
+                    Some(format!("播放時長檢查點仍待保存，背景工作會重試：{error}")),
+                );
+                eprintln!("播放時長檢查點仍待保存，背景工作會重試：{error}");
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn acknowledge_statistics_batch(
+    player: &PlayerHandle,
+    checkpoints: &[PlaybackAccountingCheckpoint],
+) {
+    for checkpoint in checkpoints {
+        player.acknowledge_playback_accounting(
+            checkpoint.id,
+            checkpoint.played_ms,
+            checkpoint.duration_ms,
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_statistics_status(status: &Mutex<Option<String>>, message: Option<String>) {
+    *status
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = message;
 }
 
 #[cfg(target_os = "windows")]
@@ -3220,7 +3501,17 @@ fn playback_set_shuffle(
             .as_mut()
         {
             let before = queue.snapshot();
-            queue.set_shuffle(enabled);
+            if enabled && !queue.shuffle() {
+                let database = state.database.as_ref().ok_or_else(|| {
+                    state
+                        .database_error
+                        .clone()
+                        .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+                })?;
+                set_queue_shuffle_with_latest_stats(database, queue, true)?;
+            } else {
+                queue.set_shuffle(enabled);
+            }
             let after = queue.snapshot();
             if before.play_order != after.play_order || before.cursor != after.cursor {
                 bump_queue_revision(service);
@@ -3362,6 +3653,41 @@ fn queue_repeat_mode(mode: RepeatMode) -> QueueRepeatMode {
 }
 
 #[cfg(target_os = "windows")]
+fn set_queue_shuffle_with_latest_stats(
+    database: &Database,
+    queue: &mut PlaybackQueue,
+    enabled: bool,
+) -> Result<(), String> {
+    if !enabled || queue.shuffle() {
+        queue.set_shuffle(enabled);
+        return Ok(());
+    }
+    let snapshot = queue.snapshot();
+    let track_ids = snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.track_id)
+        .collect::<Vec<_>>();
+    let stored = database
+        .playback_statistics_for(&track_ids)
+        .map_err(|error| format!("讀取曲目播放時長失敗：{error}"))?;
+    let stats_by_track = stored
+        .into_iter()
+        .map(|(track_id, stats)| {
+            (
+                track_id,
+                QueueTrackListeningStats {
+                    played_ms: stats.played_ms,
+                    duration_ms: stats.duration_ms,
+                },
+            )
+        })
+        .collect();
+    queue.set_shuffle_with_stats(true, &stats_by_track);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 fn queue_for_track(
     database: &Database,
     track_id: TrackId,
@@ -3456,10 +3782,15 @@ fn prepare_track_load(
     let path = database
         .resolve_playable_filesystem_locator(track_id)
         .map_err(|error| error.to_string())?;
+    let accounting_id = service.accounting_id_for(track_id);
     let ticket = if force_play {
-        service.player.request_load_and_play(path)
+        service
+            .player
+            .request_load_and_play_accounted(path, accounting_id)
     } else {
-        service.player.request_load_preserving_playback(path)
+        service
+            .player
+            .request_load_preserving_playback_accounted(path, accounting_id)
     }
     .map_err(|error| playback_audio_error_message(&error))?;
     Ok((ticket, track))
@@ -3787,9 +4118,11 @@ fn restore_playback_session(
             return Ok(());
         }
     };
+    let accounting_id = service.accounting_id_for(track_id);
     service
         .player
-        .load(path)
+        .request_load_accounted(path, accounting_id)
+        .and_then(|ticket| ticket.wait(Duration::from_secs(2)))
         .map_err(|error| playback_audio_error_message(&error))?;
     // The audio backend duration is authoritative for seek clamping. Track tag
     // duration is only display fallback and may be stale or approximate.
@@ -3866,7 +4199,7 @@ fn play_track_from_database(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         queue.set_repeat_mode(queue_repeat_mode(repeat_mode));
-        queue.set_shuffle(shuffle);
+        set_queue_shuffle_with_latest_stats(database, &mut queue, shuffle)?;
         Some(queue)
     };
     drop(existing_queue);
@@ -3884,12 +4217,12 @@ fn play_track_from_database(
     } else if selection_intent {
         service
             .player
-            .request_load_preserving_playback(path)
+            .request_load_preserving_playback_accounted(path, service.accounting_id_for(track_id))
             .map_err(|error| playback_audio_error_message(&error))?
     } else {
         service
             .player
-            .request_load_and_play(path)
+            .request_load_and_play_accounted(path, service.accounting_id_for(track_id))
             .map_err(|error| playback_audio_error_message(&error))?
     };
     Ok(PreparedTrackChange {
@@ -3919,6 +4252,20 @@ pub fn run() {
                 {
                     if let Err(error) = checkpoint_playback_position(database, playback, true) {
                         eprintln!("無法在關閉時保存播放狀態：{error}");
+                    }
+                    if let Ok(ticket) = playback.player.request_playback_accounting_checkpoint() {
+                        if let Err(error) = ticket.wait(Duration::from_secs(2)) {
+                            eprintln!("無法在關閉時取得播放時長尾段：{error}");
+                        }
+                    }
+                    playback.shutdown_statistics_collector();
+                    if let Some(status) = playback
+                        .statistics_status
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .as_ref()
+                    {
+                        eprintln!("播放時長統計狀態：{status}");
                     }
                 }
                 if let Some(system_media) = state.system_media.as_ref() {
@@ -3981,7 +4328,7 @@ pub fn run() {
             let settings_path = database_path.with_file_name("settings.json");
             let database_result = Database::open(&database_path).map_err(|error| error.to_string());
             let (database, stored_path, database_error) = match database_result {
-                Ok(database) => (Some(database), Some(database_path), None),
+                Ok(database) => (Some(database), Some(database_path.clone()), None),
                 Err(error) => (None, None, Some(error)),
             };
             let legacy_settings = if SettingsStore::needs_legacy_import(&settings_path) {
@@ -4029,6 +4376,14 @@ pub fn run() {
                             eprintln!("無法完整還原播放狀態，已保留檢查點：{error}");
                         }
                     }
+                    if let Err(error) = service.start_statistics_collector(&database_path) {
+                        *service
+                            .statistics_status
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(error.clone());
+                        eprintln!("播放時長統計未啟動：{error}");
+                    }
                     (Some(service), None)
                 }
                 Err(error) => (None, Some(playback_audio_error_message(&error))),
@@ -4070,8 +4425,9 @@ mod windows_library_integration_tests {
     use super::{
         apply_system_media_event, build_playback_queue_page, commit_track_change, navigate_queue,
         pause_playback, play_track_from_database, playback_audio_error_message, queue_for_track,
-        restore_playback_session, set_playback_volume, snapshot_playback_queue,
-        PlaybackQueueSource, PreparedTrackChange, TrackSummary, WindowsPlaybackService,
+        restore_playback_session, set_playback_volume, set_queue_shuffle_with_latest_stats,
+        snapshot_playback_queue, PlaybackQueueSource, PreparedTrackChange, TrackSummary,
+        WindowsPlaybackService,
     };
     use player_audio_windows::{
         system_media::{SystemMediaController, SystemMediaEvent},
@@ -4247,6 +4603,80 @@ mod windows_library_integration_tests {
     struct CapturingAudioBackend {
         loaded_path: Arc<Mutex<Option<PathBuf>>>,
         position: Duration,
+    }
+
+    struct ClockedAudioBackend {
+        loaded: bool,
+        playing: bool,
+        position: Duration,
+        started_at: Option<Instant>,
+    }
+
+    impl ClockedAudioBackend {
+        fn current_position(&self) -> Duration {
+            if self.playing {
+                self.position.saturating_add(
+                    self.started_at
+                        .map(|started| started.elapsed())
+                        .unwrap_or_default(),
+                )
+            } else {
+                self.position
+            }
+        }
+    }
+
+    impl AudioBackend for ClockedAudioBackend {
+        fn load(&mut self, _path: &Path) -> Result<Option<Duration>, AudioError> {
+            self.loaded = true;
+            self.playing = false;
+            self.position = Duration::ZERO;
+            self.started_at = None;
+            Ok(Some(Duration::from_secs(60)))
+        }
+
+        fn play(&mut self) -> Result<(), AudioError> {
+            if !self.loaded {
+                return Err(AudioError::NoTrackLoaded);
+            }
+            if !self.playing {
+                self.playing = true;
+                self.started_at = Some(Instant::now());
+            }
+            Ok(())
+        }
+
+        fn pause(&mut self) -> Result<(), AudioError> {
+            self.position = self.current_position();
+            self.playing = false;
+            self.started_at = None;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), AudioError> {
+            self.playing = false;
+            self.position = Duration::ZERO;
+            self.started_at = None;
+            Ok(())
+        }
+
+        fn seek(&mut self, position: Duration) -> Result<Duration, AudioError> {
+            self.position = position.min(Duration::from_secs(60));
+            self.started_at = self.playing.then(Instant::now);
+            Ok(self.position)
+        }
+
+        fn set_volume(&mut self, _volume: f32) -> Result<(), AudioError> {
+            Ok(())
+        }
+
+        fn position(&self) -> Duration {
+            self.current_position()
+        }
+
+        fn is_empty(&self) -> bool {
+            !self.loaded
+        }
     }
 
     impl AudioBackend for CapturingAudioBackend {
@@ -4569,6 +4999,94 @@ mod windows_library_integration_tests {
             before_session,
             "a queue page query must not alter the persisted session"
         );
+    }
+
+    #[test]
+    fn playback_statistics_flush_on_pause_reopen_and_feed_new_shuffle_generation() {
+        let temporary = TestDirectory::new();
+        fs::create_dir_all(&temporary.0).expect("create isolated test directory");
+        let database_path = temporary.0.join("statistics.sqlite3");
+        let database = Database::open(&database_path).expect("open isolated statistics database");
+        let track_id = TrackId::new();
+        let player = PlayerHandle::with_backend_factory(|| {
+            Ok(Box::new(ClockedAudioBackend {
+                loaded: false,
+                playing: false,
+                position: Duration::ZERO,
+                started_at: None,
+            }) as Box<dyn AudioBackend>)
+        })
+        .expect("create clocked audio backend");
+        let ready_deadline = Instant::now() + Duration::from_secs(2);
+        while player.snapshot().state == AudioPlaybackState::Initializing {
+            assert!(
+                Instant::now() < ready_deadline,
+                "audio actor did not initialize"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
+        let service = WindowsPlaybackService::with_modes(player, false, super::RepeatMode::Off);
+        service
+            .start_statistics_collector(&database_path)
+            .expect("start isolated statistics collector");
+
+        let accounting_id = service.accounting_id_for(track_id);
+        service
+            .player
+            .request_load_and_play_accounted("synthetic-track.wav", accounting_id)
+            .expect("enqueue tracked synthetic playback")
+            .wait(Duration::from_secs(2))
+            .expect("tracked playback starts");
+        thread::sleep(Duration::from_millis(180));
+        service
+            .player
+            .request_pause()
+            .expect("enqueue pause")
+            .wait(Duration::from_secs(2))
+            .expect("pause and sample actor tail");
+
+        let flush_deadline = Instant::now() + Duration::from_secs(3);
+        let stats = loop {
+            let stats = database
+                .playback_statistics_for(&[track_id])
+                .expect("query isolated stats");
+            if stats[&track_id].played_ms > 0 {
+                break stats[&track_id];
+            }
+            assert!(
+                Instant::now() < flush_deadline,
+                "pause boundary did not flush stats"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(stats.played_ms >= 80, "unexpected credited time: {stats:?}");
+        assert_eq!(stats.duration_ms, Some(60_000));
+
+        let second_track = TrackId::new();
+        let mut queue = PlaybackQueue::with_seed(vec![track_id, second_track, track_id], 0, 17)
+            .expect("make a queue with a duplicate playlist slot");
+        set_queue_shuffle_with_latest_stats(&database, &mut queue, true)
+            .expect("build weighted shuffle from persisted stats");
+        let shuffled = queue.snapshot();
+        assert!(shuffled.shuffle);
+        assert_eq!(shuffled.play_order.first().copied(), Some(0));
+        let mut permutation = shuffled.play_order.clone();
+        permutation.sort_unstable();
+        assert_eq!(permutation, vec![0, 1, 2]);
+        assert_eq!(shuffled.entries[0].track_id, shuffled.entries[2].track_id);
+
+        service.shutdown_statistics_collector();
+        drop(database);
+        let reopened = Database::open(&database_path).expect("reopen isolated statistics DB");
+        assert_eq!(
+            reopened.playback_statistics_for(&[track_id]).unwrap()[&track_id],
+            stats,
+            "runtime retries/close must not double-count flushed milliseconds"
+        );
+        assert!(reopened
+            .list_playback_statistics_runtimes()
+            .expect("inspect statistics runtimes")
+            .is_empty());
     }
 
     #[test]

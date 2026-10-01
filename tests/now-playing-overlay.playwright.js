@@ -49,6 +49,8 @@ async page => {
     await page.getByRole('button', { name: '設定', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.app-shell')?.getAttribute('data-active-view') === 'settings');
     await page.getByRole('tab', { name: '正在播放' }).click();
+    assert.equal(await page.locator('#now-playing-layout-panel input[aria-label="背景圖片亮度"]').count(), 1, 'main settings exposes background brightness');
+    assert.equal(await page.locator('#now-playing-layout-panel input[aria-label="元件底色透明度"]').count(), 0, 'main settings removes surface transparency');
     await page.getByRole('button', { name: layout === 'a' ? '排列 A：封面在前，歌詞在後' : '排列 B：歌詞在前，封面在後' }).click();
     await page.waitForFunction((expected) => document.querySelector('#now-playing-layout-panel .quick-settings-group [role="status"]')?.textContent?.includes(`排列 ${expected.toUpperCase()} 已保存`), layout);
   }
@@ -184,7 +186,7 @@ async page => {
   await page.getByRole('button', { name: '開啟快速設定' }).click();
   const quickSettings = page.getByRole('dialog', { name: '快速設定' });
   await quickSettings.waitFor({ state: 'visible' });
-  for (const label of ['封面背景模糊程度', '元件底色透明度', '非目前歌詞透明度', '原文字級', '譯文與羅馬拼音字級', '歌詞句間距']) {
+  for (const label of ['封面背景模糊程度', '背景圖片亮度', '非目前歌詞透明度', '原文字級', '譯文與羅馬拼音字級', '歌詞句間距']) {
     assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
   }
   assert.equal(await page.locator('.now-playing-topbar-tools .lyrics-topbar-status span').count(), 2, 'provider and sync labels are shown in the page toolbar');
@@ -195,12 +197,14 @@ async page => {
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '關閉快速設定', 'Tab wraps focus to the close button');
   assert.equal(await page.locator('.now-playing-overlay-body').evaluate((element) => element.inert), true, 'quick settings modal makes the covered playback view inert');
   assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), true, 'modal drawer blocks dock controls while open');
+  assert.equal(await quickSettings.locator('input[aria-label="元件底色透明度"]').count(), 0, 'surface transparency is not configurable');
   const drawerGeometry = await page.evaluate(() => {
     const rect = (element) => {
       const bounds = element.getBoundingClientRect();
       return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
     };
     const drawer = document.querySelector('.now-playing-quick-settings-drawer');
+    const scrim = document.querySelector('.now-playing-quick-settings-scrim');
     const ancestors = [];
     for (let element = drawer?.parentElement; element; element = element.parentElement) {
       ancestors.push({
@@ -222,6 +226,8 @@ async page => {
       nav: rect(document.querySelector('.quick-settings-nav')),
       close: rect(document.querySelector('.quick-settings-drawer-header button')),
       drawer: rect(drawer),
+      scrim: rect(scrim),
+      scrimBackground: getComputedStyle(scrim).backgroundColor,
     };
   });
   assert.deepEqual(drawerGeometry.windowScroll, quickSettingsBeforeOpen.windowScroll, 'opening the drawer must not move the page');
@@ -230,6 +236,12 @@ async page => {
   assert.deepEqual(drawerGeometry.topbar, quickSettingsBeforeOpen.topbar, 'opening the drawer must not move the Now Playing toolbar');
   assert.deepEqual(drawerGeometry.cover, quickSettingsBeforeOpen.cover, 'opening the drawer must not move or crop the cover');
   assert.deepEqual(drawerGeometry.dock, quickSettingsBeforeOpen.dock, 'opening the drawer must not move the dock');
+  assert.equal(drawerGeometry.scrimBackground, 'rgba(0, 0, 0, 0)', 'click-outside layer has no darkening overlay');
+  assert.equal(drawerGeometry.scrim.x, 0, 'click-outside layer still covers the playback area from the left edge');
+  assert.equal(drawerGeometry.scrim.width, 1280, 'click-outside layer still spans the playback area');
+  assert.ok(drawerGeometry.drawer.x >= 0 && drawerGeometry.drawer.x + drawerGeometry.drawer.width <= 1280, 'drawer stays within the right edge');
+  assert.ok(drawerGeometry.drawer.x >= drawerGeometry.scrim.x && drawerGeometry.drawer.x + drawerGeometry.drawer.width <= drawerGeometry.scrim.x + drawerGeometry.scrim.width, 'drawer remains inside the click-outside layer geometry');
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.now-playing-quick-settings-drawer')).boxShadow), 'none', 'drawer has no left-side black shadow');
 
   const captureDrawerScrollState = () => page.evaluate(() => {
     const rect = (element) => {
@@ -327,6 +339,27 @@ async page => {
   await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-quick-settings-desktop.png' });
   const drawerBounds = await quickSettings.boundingBox();
   assert.ok(drawerBounds && drawerBounds.x >= 0 && drawerBounds.width <= 1280, 'desktop drawer stays within viewport bounds');
+  const brightnessSlider = quickSettings.locator('input[aria-label="背景圖片亮度"]');
+  const expectedOverlayAlpha = new Map([[0, '1'], [40, '0.6'], [100, '0']]);
+  for (const brightness of [0, 40, 100]) {
+    await brightnessSlider.evaluate((input, value) => {
+      input.value = String(value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }, brightness);
+    const overlayAlpha = await page.evaluate(() => getComputedStyle(document.querySelector('.now-playing-backdrop'), '::after').opacity);
+    assert.equal(overlayAlpha, expectedOverlayAlpha.get(brightness), `brightness ${brightness}% maps to the expected theme overlay alpha`);
+    await page.waitForFunction((expected) => JSON.parse(localStorage.getItem('__appearancePreferences') || '{}').backgroundBrightnessPercent === expected, brightness);
+  }
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.now-playing-overlay.is-open .now-playing-overlay-topbar')).backgroundColor), 'rgba(0, 0, 0, 0)', 'Now Playing topbar surface remains transparent');
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.app-shell.has-now-playing-backdrop .player-dock')).backgroundColor), 'rgba(0, 0, 0, 0)', 'Now Playing dock surface remains transparent');
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.now-playing-overlay .lyrics-toggle')).backgroundColor), 'rgba(0, 0, 0, 0)', 'Now Playing inactive lyric toggle surface remains transparent');
+  await brightnessSlider.evaluate((input) => {
+    input.value = '40';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('__appearancePreferences') || '{}').backgroundBrightnessPercent === 40);
   await quickSettings.getByRole('button', { name: '排列 B：歌詞在前，封面在後' }).click();
   await page.waitForFunction(() => localStorage.getItem('__nowPlayingLayout') === 'b');
   const blurSlider = quickSettings.locator('input[aria-label="封面背景模糊程度"]');
@@ -365,6 +398,13 @@ async page => {
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '開啟快速設定', 'Escape returns focus to its trigger');
   assert.equal(await page.locator('.now-playing-overlay-body').evaluate((element) => element.inert), false, 'closing drawer restores playback view interaction');
   assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), false, 'closing drawer restores dock controls');
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.getByRole('button', { name: '開啟快速設定' }).click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="now-playing-quick-settings"]'));
+  assert.equal(await page.locator('.now-playing-quick-settings-drawer input[aria-label="背景圖片亮度"]').inputValue(), '40', 'reopened drawer restores saved brightness');
+  await page.locator('.now-playing-quick-settings-scrim').click({ position: { x: 12, y: 360 } });
+  await page.waitForFunction(() => !document.querySelector('[data-testid="now-playing-quick-settings"]'));
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '開啟快速設定', 'click-outside close returns focus to its trigger');
   assert.equal(await page.evaluate(() => window.__volumeHarness.snapshot().currentTrack.id), trackIdBeforeQuickSettings, 'drawer preference changes retain the current track');
   assert.equal(await page.evaluate(() => window.__volumeHarness.lyricsGetCount), lyricsFetchCountBeforeQuickSettings, 'drawer interactions do not reload or reset lyrics');
   const translationToggle = page.locator('.now-playing-topbar-tools button[aria-label="切換譯文顯示"]');

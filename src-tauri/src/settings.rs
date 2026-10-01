@@ -12,7 +12,7 @@ use std::{
 use player_core::{LibraryRoot, MediaLocator, MediaSourceKind, PlaylistId, SourceId};
 use serde::{Deserialize, Serialize};
 
-const SETTINGS_SCHEMA_VERSION: u32 = 4;
+const SETTINGS_SCHEMA_VERSION: u32 = 5;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -98,14 +98,19 @@ impl LyricsPreferences {
 #[serde(rename_all = "camelCase")]
 pub struct NowPlayingAppearancePreferences {
     pub background_blur_px: u8,
-    pub surface_transparency_percent: u8,
+    #[serde(default = "default_background_brightness_percent")]
+    pub background_brightness_percent: u8,
+}
+
+fn default_background_brightness_percent() -> u8 {
+    40
 }
 
 impl Default for NowPlayingAppearancePreferences {
     fn default() -> Self {
         Self {
             background_blur_px: 20,
-            surface_transparency_percent: 35,
+            background_brightness_percent: 40,
         }
     }
 }
@@ -117,9 +122,9 @@ impl NowPlayingAppearancePreferences {
                 "backgroundBlurPx must be between 0 and 40".into(),
             ));
         }
-        if self.surface_transparency_percent > 100 {
+        if self.background_brightness_percent > 100 {
             return Err(SettingsError::InvalidData(
-                "surfaceTransparencyPercent must be between 0 and 100".into(),
+                "backgroundBrightnessPercent must be between 0 and 100".into(),
             ));
         }
         Ok(())
@@ -1275,6 +1280,7 @@ mod tests {
         let directory = test_directory("lyrics-line-gap-migration");
         let path = directory.join("settings.json");
         let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        json["schemaVersion"] = serde_json::json!(4);
         json["lyricsPreferences"]
             .as_object_mut()
             .unwrap()
@@ -1292,7 +1298,7 @@ mod tests {
             .expect("persist line gap");
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 4);
+        assert_eq!(persisted["schemaVersion"], SETTINGS_SCHEMA_VERSION);
         assert_eq!(persisted["lyricsPreferences"]["lineGapPx"], 36);
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
         assert_eq!(
@@ -1506,8 +1512,11 @@ mod tests {
             20
         );
         assert_eq!(
-            persisted["nowPlayingAppearancePreferences"]["surfaceTransparencyPercent"],
-            35
+            persisted["nowPlayingAppearancePreferences"]["backgroundBrightnessPercent"],
+            40
+        );
+        assert!(
+            persisted["nowPlayingAppearancePreferences"]["surfaceTransparencyPercent"].is_null()
         );
     }
 
@@ -1518,7 +1527,7 @@ mod tests {
         let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
         let preferences = NowPlayingAppearancePreferences {
             background_blur_px: 0,
-            surface_transparency_percent: 100,
+            background_brightness_percent: 100,
         };
         let saved = store
             .update(|settings| {
@@ -1543,7 +1552,7 @@ mod tests {
                 ..preferences
             },
             NowPlayingAppearancePreferences {
-                surface_transparency_percent: 101,
+                background_brightness_percent: 101,
                 ..preferences
             },
         ] {
@@ -1567,11 +1576,11 @@ mod tests {
     fn appearance_preferences_dto_uses_camel_case_json_keys() {
         let preferences = NowPlayingAppearancePreferences {
             background_blur_px: 12,
-            surface_transparency_percent: 67,
+            background_brightness_percent: 67,
         };
         let value = serde_json::to_value(preferences).unwrap();
         assert_eq!(value["backgroundBlurPx"], 12);
-        assert_eq!(value["surfaceTransparencyPercent"], 67);
+        assert_eq!(value["backgroundBrightnessPercent"], 67);
         assert_eq!(
             serde_json::from_value::<NowPlayingAppearancePreferences>(value).unwrap(),
             preferences
@@ -1579,9 +1588,71 @@ mod tests {
         assert!(
             serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
                 "backgroundBlurPx": -1,
-                "surfaceTransparencyPercent": 50
+                "backgroundBrightnessPercent": 50
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn schema_four_legacy_surface_values_migrate_to_transparent_surfaces_and_default_brightness() {
+        for legacy_surface in [0, 100] {
+            let directory = test_directory(&format!("appearance-v4-surface-{legacy_surface}"));
+            let path = directory.join("settings.json");
+            let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+            json["schemaVersion"] = serde_json::json!(4);
+            json["nowPlayingAppearancePreferences"] = serde_json::json!({
+                "backgroundBlurPx": 27,
+                "surfaceTransparencyPercent": legacy_surface
+            });
+            json["sources"] = serde_json::json!([source(StoredPath::Utf8("D:/Music".into()))]);
+            json["shuffle"] = serde_json::json!(true);
+            json["theme"]["backgroundHex"] = serde_json::json!("#123456");
+            json["lyricsPreferences"]["showTranslation"] = serde_json::json!(true);
+            json["repeatMode"] = serde_json::json!("all");
+            json["nowPlayingLayout"] = serde_json::json!("b");
+            assert_eq!(
+                serde_json::from_value::<NowPlayingAppearancePreferences>(
+                    json["nowPlayingAppearancePreferences"].clone()
+                )
+                .unwrap()
+                .background_blur_px,
+                27
+            );
+            fs::write(&path, serde_json::to_vec(&json).unwrap()).expect("write legacy settings");
+
+            let store = SettingsStore::open(&path, AppSettings::default())
+                .expect("migrate legacy settings");
+            let migrated = store.snapshot().unwrap();
+            assert_eq!(
+                migrated
+                    .now_playing_appearance_preferences
+                    .background_blur_px,
+                27
+            );
+            assert_eq!(
+                migrated
+                    .now_playing_appearance_preferences
+                    .background_brightness_percent,
+                40
+            );
+            assert!(migrated.shuffle);
+            assert_eq!(migrated.sources.len(), 1);
+            assert_eq!(migrated.theme.background_hex, "#123456");
+            assert!(migrated.lyrics_preferences.show_translation);
+            assert_eq!(migrated.repeat_mode, RepeatMode::All);
+            assert_eq!(migrated.now_playing_layout, NowPlayingLayout::B);
+
+            let persisted: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(
+                persisted["nowPlayingAppearancePreferences"]["backgroundBrightnessPercent"],
+                40
+            );
+            assert!(
+                persisted["nowPlayingAppearancePreferences"]["surfaceTransparencyPercent"]
+                    .is_null()
+            );
+        }
     }
 }

@@ -39,7 +39,7 @@
   let activeVolumeCommands = 0;
   let storedAppearance = JSON.parse(localStorage.getItem('__appearancePreferences') || 'null') ?? {
     backgroundBlurPx: 20,
-    surfaceTransparencyPercent: 35,
+    backgroundBrightnessPercent: 40,
   };
   let storedNowPlayingLayout = localStorage.getItem('__nowPlayingLayout') === 'b' ? 'b' : 'a';
   let storedLyricsPreferences = JSON.parse(localStorage.getItem('__lyricsPreferences') || 'null') ?? {

@@ -9,26 +9,32 @@ import {
 test('appearance preferences default and clamp to supported ranges', () => {
   assert.deepEqual(normalizeNowPlayingAppearancePreferences(), {
     backgroundBlurPx: 20,
-    surfaceTransparencyPercent: 35,
+    backgroundBrightnessPercent: 40,
   });
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: -4,
-    surfaceTransparencyPercent: 140,
+    backgroundBrightnessPercent: 140,
   }), {
     backgroundBlurPx: 0,
-    surfaceTransparencyPercent: 100,
+    backgroundBrightnessPercent: 100,
   });
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: 80.4,
-    surfaceTransparencyPercent: 21.6,
+    backgroundBrightnessPercent: 21.6,
   }), {
     backgroundBlurPx: 40,
-    surfaceTransparencyPercent: 22,
+    backgroundBrightnessPercent: 22,
   });
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: Number.NaN,
-    surfaceTransparencyPercent: Infinity,
+    backgroundBrightnessPercent: Infinity,
   }), DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES);
+  for (const legacySurface of [0, 100]) {
+    assert.deepEqual(normalizeNowPlayingAppearancePreferences({
+      backgroundBlurPx: 27,
+      surfaceTransparencyPercent: legacySurface,
+    }), { backgroundBlurPx: 27, backgroundBrightnessPercent: 40 });
+  }
 });
 
 test('slow saves coalesce drag updates and ignore stale acknowledgements', async () => {
@@ -57,25 +63,25 @@ test('slow saves coalesce drag updates and ignore stale acknowledgements', async
     request.resolve(request.preferences);
   };
 
-  writer.schedule({ backgroundBlurPx: 20, surfaceTransparencyPercent: 35 });
+  writer.schedule({ backgroundBlurPx: 20, backgroundBrightnessPercent: 40 });
   await wait(35);
   assert.equal(requests.length, 1, 'debounced change should start one write');
-  writer.schedule({ backgroundBlurPx: 21, surfaceTransparencyPercent: 35 });
+  writer.schedule({ backgroundBlurPx: 21, backgroundBrightnessPercent: 40 });
   await wait(8);
-  writer.schedule({ backgroundBlurPx: 22, surfaceTransparencyPercent: 48 });
+  writer.schedule({ backgroundBlurPx: 22, backgroundBrightnessPercent: 48 });
   await wait(35);
   assert.equal(requests.length, 1, 'new values must wait behind the slow acknowledgement');
   resolveNext();
   await wait(0);
   assert.equal(requests.length, 2, 'one latest value should follow the active write');
-  assert.deepEqual(requests[1], { backgroundBlurPx: 22, surfaceTransparencyPercent: 48 });
+  assert.deepEqual(requests[1], { backgroundBlurPx: 22, backgroundBrightnessPercent: 48 });
   resolveNext();
   await wait(0);
-  assert.deepEqual(saved, [{ backgroundBlurPx: 22, surfaceTransparencyPercent: 48 }]);
+  assert.deepEqual(saved, [{ backgroundBlurPx: 22, backgroundBrightnessPercent: 48 }]);
   assert.equal(maxActive, 1, 'settings writes must not overlap');
   assert.deepEqual(errors, []);
 
-  writer.schedule({ backgroundBlurPx: 24, surfaceTransparencyPercent: 50 }, true);
+  writer.schedule({ backgroundBlurPx: 24, backgroundBrightnessPercent: 50 }, true);
   await wait(0);
   const failed = held.shift();
   assert.ok(failed);

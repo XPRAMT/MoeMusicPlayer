@@ -16,19 +16,23 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **Year**: The displayed year is derived only from the embedded `YEAR` value. Accepted forms are a four-digit year (`YYYY`) or a valid full date (`YYYY-MM-DD`); other forms do not define a display year.
 
-**App settings**: User-owned preferences stored in a versioned JSON document, including theme colors, shuffle, repeat mode, and the source registry. JSON is the authority for these values; SQLite rows are rebuildable music-data projections.
+**App settings**: User-owned preferences stored in a versioned JSON document, including theme colors, shuffle, repeat mode, Now Playing layout/appearance, and the source registry. JSON is the authority for these values; SQLite rows are rebuildable music-data projections.
 
 **Source registry**: The stable list of enabled or disabled folders and explicitly registered playlist files. A playlist-file entry associates its source ID and native path with the internal Playlist ID; static playlists do not imply a source-file path.
 
 ## Playback
 
-**Playback session**: The restorable state of a listening session: its ordered queue traversal, selected queue entry and track, and saved playback position. It is separate from the full library; playable file paths are resolved from current source mappings rather than treated as session identity.
+**Playback session**: The restorable state of a listening session: its ordered queue traversal, selected queue entry and track, and saved playback position. Stable Track IDs identify queued tracks; a native file path is not session identity.
+
+**Accumulated listening time**: The credited duration during which audio is in the Playing state and its natural playback position advances. Paused, loading, ready, stopped, and seek jumps do not add listening time.
+
+**Shuffle ratio**: The accumulated listening time divided by a track’s known duration. A lower ratio increases the track’s chance in a newly generated shuffle traversal; an unknown or zero duration has neutral weight.
 
 **Playback snapshot**: A point-in-time view of the current playback session, including state, position, duration, volume, and any current error. The audio backend is authoritative for these values.
 
 **Playback queue**: A session-local ordered sequence of stable Track IDs drawn from the active library query or a user playlist. Library order follows the visible library sort; playlist order follows entry order and keeps repeated playable entries. Queue IDs stay in Rust and are not copied into the Renderer.
 
-**Shuffle**: A queue traversal order that keeps the current entry in place, visits each remaining entry once per cycle, and supports previous/next traversal through the same order. Turning shuffle off resumes source order at the current entry.
+**Shuffle**: A queue traversal order that keeps the current entry in place, visits each remaining entry once per cycle, and supports previous/next traversal through the same order. Weighted shuffle uses `1 / (1 + played_ms / duration_ms)` to raise the relative chance of less-played tracks when a traversal is generated; unknown or zero duration uses neutral weight `1`. Turning shuffle off resumes source order at the current entry.
 
 **Repeat mode**: `off` stops after the final queue entry, `all` wraps the queue at its ends, and `one` repeats the current track only when it reaches its natural end. Manual next still advances in every mode.
 
