@@ -1,4 +1,4 @@
-﻿//! Background-thread Windows audio playback for local files.
+//! Background-thread Windows audio playback for local files.
 //!
 //! The handle exposes a small, backend-independent command surface. Native
 //! device access, file opening, decoding, and seeking run on a dedicated worker
@@ -152,6 +152,7 @@ struct PlayerInner {
 enum Command {
     Load(PathBuf),
     LoadAndPlay(PathBuf),
+    LoadPreservingPlayback(PathBuf),
     Play,
     Pause,
     Stop,
@@ -259,6 +260,16 @@ impl PlayerHandle {
         path: impl Into<PathBuf>,
     ) -> Result<CommandTicket, AudioError> {
         self.enqueue_with_ack(Command::LoadAndPlay(path.into()))
+    }
+
+    /// Load a selected track while preserving the playback intent observed by
+    /// the worker when this command executes. An empty player starts the first
+    /// selected track; a paused/ready/restored player stays nonplaying.
+    pub fn request_load_preserving_playback(
+        &self,
+        path: impl Into<PathBuf>,
+    ) -> Result<CommandTicket, AudioError> {
+        self.enqueue_with_ack(Command::LoadPreservingPlayback(path.into()))
     }
 
     pub fn request_pause(&self) -> Result<CommandTicket, AudioError> {
@@ -461,6 +472,44 @@ fn handle_command(
                 return Err(error);
             }
             set_state(snapshot, events, PlaybackState::Playing);
+        }
+        Command::LoadPreservingPlayback(path) => {
+            // Sample intent on the audio worker, after earlier queued commands
+            // (such as Pause) have completed. A Tauri-side snapshot would race
+            // with the bounded actor queue.
+            let prior_state = read_snapshot(snapshot).state;
+            update_snapshot(snapshot, events, |state| {
+                state.state = PlaybackState::Loading;
+                state.position = Duration::ZERO;
+                state.duration = None;
+                state.last_error = None;
+            });
+            match backend.load(&path) {
+                Ok(duration) => {
+                    *current_path = Some(path);
+                    update_snapshot(snapshot, events, |state| {
+                        state.state = PlaybackState::Ready;
+                        state.position = Duration::ZERO;
+                        state.duration = duration;
+                        state.last_error = None;
+                    });
+                }
+                Err(error) => {
+                    let _ = backend.stop();
+                    *current_path = None;
+                    set_error(snapshot, events, error.clone());
+                    return Err(error);
+                }
+            }
+            if matches!(prior_state, PlaybackState::Playing | PlaybackState::Empty) {
+                if let Err(error) = backend.play() {
+                    set_error(snapshot, events, error.clone());
+                    return Err(error);
+                }
+                set_state(snapshot, events, PlaybackState::Playing);
+            } else if prior_state == PlaybackState::Paused {
+                set_state(snapshot, events, PlaybackState::Paused);
+            }
         }
         Command::Play => {
             let Some(path) = current_path.as_deref() else {
@@ -823,6 +872,69 @@ mod tests {
             .unwrap();
         assert_eq!(volume.volume, 0.4);
         assert_eq!(volume.state, PlaybackState::Paused);
+    }
+
+    #[test]
+    fn selected_track_load_uses_worker_time_playback_intent() {
+        let handle = player();
+        wait_for(&handle, PlaybackState::Empty);
+
+        let first = handle
+            .request_load_preserving_playback("first.wav")
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            first.state,
+            PlaybackState::Playing,
+            "first selection starts playback"
+        );
+
+        // Queue Pause and then selection without reading a Tauri-side snapshot.
+        // The second command must observe the completed Pause on the worker.
+        let paused = handle.request_pause().unwrap();
+        let selected = handle
+            .request_load_preserving_playback("second.wav")
+            .unwrap();
+        assert_eq!(
+            paused.wait(Duration::from_secs(1)).unwrap().state,
+            PlaybackState::Paused
+        );
+        assert_eq!(
+            selected.wait(Duration::from_secs(1)).unwrap().state,
+            PlaybackState::Paused
+        );
+
+        handle
+            .request_play()
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            handle
+                .request_load_preserving_playback("third.wav")
+                .unwrap()
+                .wait(Duration::from_secs(1))
+                .unwrap()
+                .state,
+            PlaybackState::Playing,
+            "selection while playing keeps playback active"
+        );
+
+        let restored = player();
+        wait_for(&restored, PlaybackState::Empty);
+        restored.load(PathBuf::from("restored.wav")).unwrap();
+        wait_for(&restored, PlaybackState::Ready);
+        assert_eq!(
+            restored
+                .request_load_preserving_playback("replacement.wav")
+                .unwrap()
+                .wait(Duration::from_secs(1))
+                .unwrap()
+                .state,
+            PlaybackState::Ready,
+            "restored Ready state remains nonplaying"
+        );
     }
 
     #[test]

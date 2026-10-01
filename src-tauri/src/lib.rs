@@ -3447,6 +3447,7 @@ fn prepare_track_load(
     database: &Database,
     service: &WindowsPlaybackService,
     track_id: TrackId,
+    force_play: bool,
 ) -> Result<(CommandTicket, TrackSummary), String> {
     let track = database
         .get_track_summary(track_id)
@@ -3455,10 +3456,12 @@ fn prepare_track_load(
     let path = database
         .resolve_playable_filesystem_locator(track_id)
         .map_err(|error| error.to_string())?;
-    let ticket = service
-        .player
-        .request_load_and_play(path)
-        .map_err(|error| playback_audio_error_message(&error))?;
+    let ticket = if force_play {
+        service.player.request_load_and_play(path)
+    } else {
+        service.player.request_load_preserving_playback(path)
+    }
+    .map_err(|error| playback_audio_error_message(&error))?;
     Ok((ticket, track))
 }
 
@@ -3488,7 +3491,7 @@ fn navigate_queue(
     };
     target
         .map(|(track_id, cursor)| {
-            let (ticket, track) = prepare_track_load(database, service, track_id)?;
+            let (ticket, track) = prepare_track_load(database, service, track_id, false)?;
             Ok(PreparedTrackChange {
                 ticket,
                 track,
@@ -3538,7 +3541,7 @@ fn advance_ended_playback(
             .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
         return Ok(None);
     };
-    match prepare_track_load(database, service, track_id) {
+    match prepare_track_load(database, service, track_id, true) {
         Ok((ticket, track)) => Ok(Some(PreparedTrackChange {
             ticket,
             track,
@@ -3830,6 +3833,7 @@ fn play_track_from_database(
     let path = database
         .resolve_playable_filesystem_locator(track_id)
         .map_err(|error| error.to_string())?;
+    let selection_intent = source.is_some();
 
     let _gate = service
         .command_gate
@@ -3867,7 +3871,8 @@ fn play_track_from_database(
     };
     drop(existing_queue);
     let audio_snapshot = service.player.snapshot();
-    let ticket = if current_track_id == Some(track_id)
+    let ticket = if !selection_intent
+        && current_track_id == Some(track_id)
         && matches!(
             audio_snapshot.state,
             AudioPlaybackState::Ready | AudioPlaybackState::Paused
@@ -3875,6 +3880,11 @@ fn play_track_from_database(
         service
             .player
             .request_play()
+            .map_err(|error| playback_audio_error_message(&error))?
+    } else if selection_intent {
+        service
+            .player
+            .request_load_preserving_playback(path)
             .map_err(|error| playback_audio_error_message(&error))?
     } else {
         service
@@ -4059,7 +4069,7 @@ mod windows_library_integration_tests {
     };
     use super::{
         apply_system_media_event, build_playback_queue_page, commit_track_change, navigate_queue,
-        play_track_from_database, playback_audio_error_message, queue_for_track,
+        pause_playback, play_track_from_database, playback_audio_error_message, queue_for_track,
         restore_playback_session, set_playback_volume, snapshot_playback_queue,
         PlaybackQueueSource, PreparedTrackChange, TrackSummary, WindowsPlaybackService,
     };
@@ -4069,7 +4079,7 @@ mod windows_library_integration_tests {
     };
     use player_core::{
         ListTracksQuery, MediaLocator, MediaSourceKind, PlaybackQueue, PlaybackQueueContext,
-        PlaybackQueueEntry, Playlist, PlaylistEntry, SourceId, TrackId,
+        PlaybackQueueEntry, Playlist, PlaylistEntry, QueueRepeatMode, SourceId, TrackId,
     };
     use player_db::{Database, PlaybackSessionCheckpoint};
     use std::{
@@ -4559,6 +4569,247 @@ mod windows_library_integration_tests {
             before_session,
             "a queue page query must not alter the persisted session"
         );
+    }
+
+    #[test]
+    fn paused_next_keeps_audio_nonplaying() {
+        let temporary = TestDirectory::new();
+        let source_path = temporary.0.join("paused-navigation-source");
+        fs::create_dir_all(&source_path).expect("create isolated source folder");
+        write_tagged_mp3(&source_path.join("track-one.mp3"));
+        write_tagged_mp3(&source_path.join("track-two.mp3"));
+        let mut database =
+            Database::open(temporary.0.join("library.sqlite3")).expect("open isolated database");
+        add_windows_folder_to_database(
+            &database,
+            source_path.to_str().expect("source folder path"),
+        )
+        .expect("register isolated folder");
+        sync_windows_sources(&mut database).expect("index isolated tracks");
+        let tracks = database
+            .list_tracks_page(ListTracksQuery {
+                query: None,
+                offset: 0,
+                limit: 10,
+            })
+            .expect("read isolated tracks");
+        assert_eq!(tracks.total_count, 2);
+
+        let player = PlayerHandle::with_backend_factory(|| {
+            Ok(Box::new(CapturingAudioBackend {
+                loaded_path: Arc::new(Mutex::new(None)),
+                position: Duration::ZERO,
+            }) as Box<dyn AudioBackend>)
+        })
+        .expect("create isolated audio worker");
+        let service = WindowsPlaybackService::new(player);
+        let first_id = tracks.items[0].id;
+        let change = play_track_from_database(
+            &database,
+            &service,
+            &first_id.to_string(),
+            Some(PlaybackQueueSource::Library { query: None }),
+        )
+        .expect("play selected initial track");
+        change
+            .ticket
+            .wait(Duration::from_secs(2))
+            .expect("initial track starts");
+        commit_track_change(
+            &database,
+            &service,
+            change.track,
+            change.replacement_queue,
+            change.target_cursor,
+        )
+        .expect("commit initial track");
+        assert!(service.snapshot().is_playing);
+
+        pause_playback(&service)
+            .expect("queue pause")
+            .wait(Duration::from_secs(2))
+            .expect("pause initial track");
+        assert!(!service.snapshot().is_playing);
+        service
+            .queue
+            .lock()
+            .unwrap()
+            .as_mut()
+            .expect("active queue")
+            .set_repeat_mode(QueueRepeatMode::All);
+
+        let change = navigate_queue(&database, &service, true)
+            .expect("prepare next track")
+            .expect("repeat-all queue has a next track");
+        change
+            .ticket
+            .wait(Duration::from_secs(2))
+            .expect("next track ACK");
+        commit_track_change(
+            &database,
+            &service,
+            change.track,
+            change.replacement_queue,
+            change.target_cursor,
+        )
+        .expect("commit next track");
+
+        assert_eq!(service.snapshot().state, "paused");
+        assert!(!service.snapshot().is_playing);
+
+        let change = navigate_queue(&database, &service, false)
+            .expect("prepare previous track")
+            .expect("previous track exists after next");
+        change
+            .ticket
+            .wait(Duration::from_secs(2))
+            .expect("previous track ACK");
+        commit_track_change(
+            &database,
+            &service,
+            change.track,
+            change.replacement_queue,
+            change.target_cursor,
+        )
+        .expect("commit previous track");
+        assert_eq!(service.snapshot().state, "paused");
+
+        // Selecting another library row while paused must keep the intent,
+        // while selecting during playback must leave playback active.
+        let selected_id = tracks.items[1].id;
+        let selected = play_track_from_database(
+            &database,
+            &service,
+            &selected_id.to_string(),
+            Some(PlaybackQueueSource::Library { query: None }),
+        )
+        .expect("select library row while paused");
+        selected
+            .ticket
+            .wait(Duration::from_secs(2))
+            .expect("selection ACK");
+        commit_track_change(
+            &database,
+            &service,
+            selected.track,
+            selected.replacement_queue,
+            selected.target_cursor,
+        )
+        .expect("commit paused selection");
+        assert_eq!(service.snapshot().state, "paused");
+
+        let mut playlist = Playlist::new("paused playlist selection");
+        for (position, id) in [first_id, first_id, selected_id].into_iter().enumerate() {
+            playlist.entries.push(PlaylistEntry {
+                track_id: Some(id),
+                locator: MediaLocator::FileSystem(
+                    database
+                        .resolve_playable_filesystem_locator(id)
+                        .expect("resolve playlist fixture path"),
+                ),
+                title: None,
+                duration_ms: None,
+            });
+            assert_eq!(playlist.entries.len() - 1, position);
+        }
+        database
+            .save_playlist(&playlist)
+            .expect("save test playlist");
+        let playlist_selection = play_track_from_database(
+            &database,
+            &service,
+            &first_id.to_string(),
+            Some(PlaybackQueueSource::Playlist {
+                playlist_id: playlist.id.to_string(),
+                entry_position: 1,
+            }),
+        )
+        .expect("select repeated playlist entry while paused");
+        playlist_selection
+            .ticket
+            .wait(Duration::from_secs(2))
+            .expect("playlist selection ACK");
+        commit_track_change(
+            &database,
+            &service,
+            playlist_selection.track,
+            playlist_selection.replacement_queue,
+            playlist_selection.target_cursor,
+        )
+        .expect("commit duplicate playlist selection");
+        assert_eq!(service.snapshot().state, "paused");
+        assert_eq!(
+            service
+                .queue
+                .lock()
+                .unwrap()
+                .as_ref()
+                .expect("playlist queue")
+                .snapshot()
+                .cursor,
+            1,
+            "selecting the repeated playlist row keeps its exact entry position"
+        );
+
+        let explicit_play =
+            play_track_from_database(&database, &service, &selected_id.to_string(), None)
+                .expect("explicit Play of current track");
+        explicit_play
+            .ticket
+            .wait(Duration::from_secs(2))
+            .expect("explicit Play ACK");
+        assert_eq!(service.snapshot().state, "playing");
+
+        let selected_while_playing = play_track_from_database(
+            &database,
+            &service,
+            &first_id.to_string(),
+            Some(PlaybackQueueSource::Library { query: None }),
+        )
+        .expect("select library row while playing");
+        selected_while_playing
+            .ticket
+            .wait(Duration::from_secs(2))
+            .expect("playing selection ACK");
+        commit_track_change(
+            &database,
+            &service,
+            selected_while_playing.track,
+            selected_while_playing.replacement_queue,
+            selected_while_playing.target_cursor,
+        )
+        .expect("commit playing selection");
+        assert_eq!(service.snapshot().state, "playing");
+
+        // Restored sessions load to Ready; replacing their selected track must
+        // not turn startup restoration into autoplay.
+        let restored_path = database
+            .resolve_playable_filesystem_locator(first_id)
+            .expect("resolve restored fixture path");
+        service
+            .player
+            .load(restored_path)
+            .expect("load restored track");
+        let ready_deadline = Instant::now() + Duration::from_secs(2);
+        while service.player.snapshot().state != AudioPlaybackState::Ready {
+            assert!(
+                Instant::now() < ready_deadline,
+                "restored player did not reach Ready"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let change = play_track_from_database(
+            &database,
+            &service,
+            &selected_id.to_string(),
+            Some(PlaybackQueueSource::Library { query: None }),
+        )
+        .expect("select track from restored Ready state");
+        change
+            .ticket
+            .wait(Duration::from_secs(2))
+            .expect("Ready selection ACK");
+        assert_eq!(service.snapshot().state, "ready");
     }
 
     #[test]
