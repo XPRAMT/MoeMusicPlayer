@@ -187,7 +187,7 @@
     const cardRect = rect(card);
     const returnRect = rect(document.querySelector('.now-playing-overlay-return'));
     const layoutSwitchRect = rect(document.querySelector('.now-playing-layout-switch'));
-    const lyricsToolbarRect = rect(document.querySelector('.lyrics-display-controls'));
+    const lyricsToolbarRect = rect(document.querySelector('.lyrics-topbar-toggles'));
     const dockControlsRect = rect(document.querySelector('.dock-controls'));
     const artworkCopy = document.querySelector<HTMLElement>('.now-playing-copy');
     const lyricPrimary = document.querySelector<HTMLElement>('.lyric-primary');
@@ -285,6 +285,7 @@
 </script>
 
 <div class="app-shell" data-active-view="library" data-testid="now-playing-shell">
+  <div class="now-playing-backdrop" data-testid="now-playing-backdrop" aria-hidden="true"></div>
   <aside class="sidebar" aria-label="底層主要導覽"><span>側欄</span></aside>
   <main class="workspace">
     <header class="topbar"><strong>MOEMUSIC / LIBRARY</strong></header>
@@ -300,6 +301,12 @@
           <button data-track-field="album" type="button">測試專輯</button>
         </nav>
         <p class="now-playing-format"><span>FLAC．48 kHz．24 bit</span><img src={hiResBadgeUrl} alt="Hi-Res" /></p>
+      </div>
+      <div class="now-playing-topbar-tools">
+        <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
+          <button type="button" class="lyrics-toggle" aria-pressed="true" aria-label="切換譯文顯示">譯</button>
+          <button type="button" class="lyrics-toggle" aria-pressed="false" aria-label="切換羅馬拼音顯示">羅</button>
+        </div>
       </div>
     </header>
     <div class="now-playing-overlay-body" data-testid="outer-page-scroll">

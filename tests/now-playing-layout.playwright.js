@@ -65,7 +65,7 @@
     assert.ok(isInside(state.returnButton, state.topbar), `${viewport.width}x${viewport.height}: top-left return control is missing or clipped`);
     assert.ok(state.returnButton.left <= state.topbar.left + Math.max(80, viewport.width * 0.05), `${viewport.width}x${viewport.height}: return control should remain at the top-left of the overlay`);
     assert.ok(isInside(state.layoutSwitch, state.nowPlaying), `${viewport.width}x${viewport.height}: A/B layout switch is missing or outside Now Playing`);
-    assert.ok(isInside(state.lyricsToolbar, lyrics), `${viewport.width}x${viewport.height}: lyric controls are missing or clipped in the lyrics pane`);
+    assert.ok(isInside(state.lyricsToolbar, state.topbar), `${viewport.width}x${viewport.height}: lyric controls are missing or clipped in the top bar`);
     assert.deepEqual(state.artworkCopyChildren, [], `${viewport.width}x${viewport.height}: no text should be rendered below the cover`);
     assert.equal(state.formatJustifyContent, 'flex-start', `${viewport.width}x${viewport.height}: audio format follows the top track information`);
     assert.deepEqual(state.lyricTextAlign, { primary: 'center', translation: 'center', romanization: 'center' }, `${viewport.width}x${viewport.height}: lyric text and auxiliary lines should be centered`);
@@ -169,5 +169,54 @@
     focusedGeometry.push({ viewport: `${viewport.width}x${viewport.height}`, variant, frame: `${state.cover.width.toFixed(1)}x${state.cover.height.toFixed(1)}`, image: `${state.renderedImage.width.toFixed(1)}x${state.renderedImage.height.toFixed(1)}` });
   }
 
-  return { result: 'PASS', viewports: results, focusedGeometry };
+  const androidInsetsGeometry = [];
+  for (const testCase of [
+    { name: 'gesture-nav-hidden', safeLeft: 0, safeTop: 42, safeRight: 0, safeBottom: 0 },
+    { name: 'three-button-nav-visible', safeLeft: 0, safeTop: 42, safeRight: 0, safeBottom: 24 },
+    { name: 'cutout-and-bars', safeLeft: 14, safeTop: 36, safeRight: 10, safeBottom: 0 },
+  ]) {
+    await page.setViewportSize({ width: 412, height: 915 });
+    await page.evaluate((insets) => {
+      const root = document.documentElement;
+      root.style.setProperty('--android-safe-left', `${insets.safeLeft}px`);
+      root.style.setProperty('--android-safe-top', `${insets.safeTop}px`);
+      root.style.setProperty('--android-safe-right', `${insets.safeRight}px`);
+      root.style.setProperty('--android-safe-bottom', `${insets.safeBottom}px`);
+    }, testCase);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const geometry = await page.evaluate(() => {
+      const bounds = (selector) => {
+        const rect = document.querySelector(selector).getBoundingClientRect();
+        return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+      };
+      return {
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        shell: bounds('[data-testid="now-playing-shell"]'),
+        backdrop: bounds('[data-testid="now-playing-backdrop"]'),
+        topbar: bounds('[data-testid="layout-topbar"]'),
+        dock: bounds('[data-testid="layout-dock"]'),
+      };
+    });
+    assert.ok(Math.abs(geometry.shell.left) <= 1 && Math.abs(geometry.shell.top) <= 1
+      && Math.abs(geometry.shell.right - geometry.viewport.width) <= 1
+      && Math.abs(geometry.shell.bottom - geometry.viewport.height) <= 1,
+    `${testCase.name}: app shell must fill the full viewport while its children use safe padding`);
+    assert.ok(geometry.backdrop.left <= 0 && geometry.backdrop.top <= 0
+      && geometry.backdrop.right >= geometry.viewport.width
+      && geometry.backdrop.bottom >= geometry.viewport.height,
+    `${testCase.name}: Now Playing backdrop must reach behind every system bar`);
+    assert.ok(geometry.topbar.top >= testCase.safeTop - 1
+      && geometry.topbar.left >= testCase.safeLeft - 1
+      && geometry.topbar.right <= geometry.viewport.width - testCase.safeRight + 1,
+    `${testCase.name}: top controls must stay within status/cutout safe bounds`);
+    assert.ok(geometry.dock.bottom <= geometry.viewport.height - testCase.safeBottom + 1,
+      `${testCase.name}: dock must avoid visible tappable navigation UI`);
+    if (testCase.safeBottom === 0) {
+      assert.ok(Math.abs(geometry.dock.bottom - geometry.viewport.height) <= 1,
+        `${testCase.name}: hidden gesture navigation must not leave a reserved bottom gap`);
+    }
+    androidInsetsGeometry.push({ name: testCase.name, backdrop: geometry.backdrop, topbar: geometry.topbar, dock: geometry.dock });
+  }
+
+  return { result: 'PASS', viewports: results, focusedGeometry, androidInsetsGeometry };
 }

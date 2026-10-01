@@ -96,6 +96,14 @@
     normalizeLyricsPreferences,
   } from './lib/lyrics-preferences.js';
 
+  type AndroidWindowInsets = {
+    safeLeftPx: number;
+    safeTopPx: number;
+    safeRightPx: number;
+    safeBottomPx: number;
+    imeBottomPx: number;
+  };
+
   type View = 'library' | 'playlists' | 'queue' | 'settings';
   type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'sources';
   type SyncProgressViewState = {
@@ -332,6 +340,35 @@
 
   onMount(() => {
     let disposed = false;
+    const applyAndroidInsets = (value?: AndroidWindowInsets): void => {
+      let insets = value;
+      if (!insets) {
+        const current = (window as Window & { MoeAndroidInsets?: { currentInsetsJson(): string } }).MoeAndroidInsets?.currentInsetsJson();
+        if (!current) return;
+        try {
+          insets = JSON.parse(current) as AndroidWindowInsets;
+        } catch {
+          return;
+        }
+      }
+      const root = document.documentElement;
+      const devicePixelRatio = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+      for (const [property, pixels] of [
+        ['--android-safe-left', insets.safeLeftPx],
+        ['--android-safe-top', insets.safeTopPx],
+        ['--android-safe-right', insets.safeRightPx],
+        ['--android-safe-bottom', insets.safeBottomPx],
+      ] as const) {
+        if (Number.isFinite(pixels) && pixels >= 0) {
+          root.style.setProperty(property, `${pixels / devicePixelRatio}px`);
+        }
+      }
+    };
+    const handleAndroidInsets = (event: Event): void => {
+      applyAndroidInsets((event as CustomEvent<AndroidWindowInsets>).detail);
+    };
+    window.addEventListener('moe:android-insets', handleAndroidInsets);
+    applyAndroidInsets();
     if (isTauri()) {
       playbackPollTimer = setInterval(() => {
         if (playbackReady && !isSendingPlaybackCommand) {
@@ -391,6 +428,7 @@
 
     return () => {
       disposed = true;
+      window.removeEventListener('moe:android-insets', handleAndroidInsets);
       unlistenSyncProgress?.();
       unlistenSyncFinished?.();
     };

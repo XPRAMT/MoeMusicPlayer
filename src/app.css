@@ -33,6 +33,10 @@
   --mint: var(--status-success);
   --warn: var(--status-warning);
   --dock-bg: #141414;
+  --android-safe-left: env(safe-area-inset-left, 0px);
+  --android-safe-top: env(safe-area-inset-top, 0px);
+  --android-safe-right: env(safe-area-inset-right, 0px);
+  --android-safe-bottom: env(safe-area-inset-bottom, 0px);
   font-optical-sizing: auto;
 }
 
@@ -83,6 +87,7 @@ input:focus-visible {
   overflow: hidden;
   background: var(--page);
   isolation: isolate;
+  padding: var(--android-safe-top) var(--android-safe-right) var(--android-safe-bottom) var(--android-safe-left);
 }
 
 .now-playing-backdrop {
