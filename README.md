@@ -21,7 +21,7 @@ MoeMusicPlayer is a local-first music library for Windows and Android. User pref
 - Use queue navigation, shuffle, and repeat off/all/one modes on Windows and Android. Playlist queue order retains repeated entries. Listening time counts only while audio is Playing and its position advances. Weighted shuffle gives tracks with lower `played_ms / duration_ms` ratios a higher chance when a new shuffle traversal is generated; unknown or zero duration uses neutral weight, and an active traversal stays unchanged.
 - Windows system media controls broadcast the current title, artist, album, cover artwork, playback state, and timeline; Play/Pause/Stop/Seek and available queue navigation are routed back to the audio service. Android uses a MediaSession notification/service for background transport controls and queue navigation.
 
-Android Media3 playback integration is implemented. The ARM64 APK builds successfully, but has not yet been installed or verified on NX809J; real-device behavior remains unverified.
+Android Media3 playback integration is implemented. The ARM64 APK is installed on NX809J and the app starts successfully; the library shows 207 tracks, and artwork and lyrics views are visible. Actual audio output, playback controls, background behavior, SAF access, and lyric retrieval still need manual verification. One document-folder source currently reports unavailable and is under investigation.
 
 ## Run on Windows
 

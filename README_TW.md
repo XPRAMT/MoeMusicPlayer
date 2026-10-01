@@ -21,7 +21,7 @@ MoeMusicPlayer 是以本機優先為設計方向的 Windows 與 Android 音樂�
 - Windows 與 Android 提供佇列前後首、隨機與循環關閉／全部／單曲模式；播放清單佇列會保留重複項目。只有音訊處於 Playing 且播放位置自然前進時才累計聆聽時間。新生成的隨機 traversal 會提高 `played_ms / duration_ms` 比值較低曲目的抽中機率；未知或 0 時長採中性權重；現有 traversal 不會在播放中重新排列。
 - Windows 系統媒體控制會廣播目前曲名、演出者、專輯、封面、播放狀態與時間軸；播放／暫停／停止／跳轉及可用時的佇列前後首會送回音訊服務處理。Android 透過 MediaSession 通知與背景服務提供媒體控制及佇列導覽。
 
-Android Media3 播放整合已完成，ARM64 APK 建置成功；尚未安裝至 NX809J，真機行為仍待驗收。
+Android Media3 播放整合已完成，ARM64 APK 已安裝至 NX809J 並成功啟動；曲庫顯示 207 首，封面與歌詞畫面可呈現。實際聲音輸出、播放控制、背景行為、SAF 存取及歌詞讀取仍待人工驗收；目前一個文件資料夾來源回報暫不可用，原因待確認。
 
 ## 在 Windows 執行
 
