@@ -153,6 +153,69 @@ input:focus-visible {
   margin: 0;
 }
 
+.now-playing-header-track {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 3px;
+}
+
+.now-playing-track-info {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: clamp(12px, 1.3vw, 18px);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.now-playing-track-info button {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.now-playing-track-info button:not(:disabled):hover,
+.dock-track-link:not(:disabled):hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.now-playing-track-info button:disabled,
+.dock-track-link:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.now-playing-track-info > span {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.now-playing-header-track .now-playing-format {
+  justify-content: flex-start;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.now-playing-header-track .now-playing-format img {
+  width: 22px;
+  height: 12px;
+}
+
 .now-playing-overlay-topbar .breadcrumbs {
   flex: 1 1 auto;
 }
@@ -283,9 +346,9 @@ input:focus-visible {
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: clamp(8px, 1.2vh, 14px);
+  gap: clamp(4px, 0.7vh, 8px);
   overflow: hidden;
-  padding: clamp(8px, 1.6vh, 18px) clamp(12px, 3vw, 42px);
+  padding: clamp(4px, 0.8vh, 9px) clamp(12px, 3vw, 42px) 2px;
 }
 
 .sidebar {
@@ -1366,10 +1429,10 @@ input:focus-visible {
   min-width: 0;
   min-height: 0;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   align-items: center;
   justify-items: center;
-  gap: clamp(8px, 1.2vh, 14px);
+  gap: 0;
 }
 
 .now-playing-lyrics {
@@ -2420,6 +2483,31 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.dock-track-link {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.dock-track-title-link {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.dock-track-artist-link {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
 .dock-track-copy strong {
   color: var(--text);
   font-size: 10px;
@@ -2453,6 +2541,48 @@ input:focus-visible {
   min-width: 0;
   justify-items: center;
   gap: 6px;
+}
+
+.app-shell.has-now-playing-backdrop .dock-center {
+  display: contents;
+}
+
+.app-shell.has-now-playing-backdrop .player-dock {
+  grid-template-rows: 22px minmax(42px, 1fr);
+  row-gap: 0;
+}
+
+.app-shell.has-now-playing-backdrop .progress-row {
+  width: 100%;
+  grid-column: 1 / 4;
+  grid-row: 1;
+  justify-self: center;
+}
+
+.app-shell.has-now-playing-backdrop .dock-track {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.app-shell.has-now-playing-backdrop .dock-controls {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: center;
+}
+
+.app-shell.has-now-playing-backdrop .dock-volume {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.app-shell.has-now-playing-backdrop .dock-error {
+  top: auto;
+  right: 10px;
+  bottom: calc(100% - 22px);
+  left: 10px;
+  z-index: 1;
+  max-width: none;
+  text-align: center;
 }
 
 .dock-controls {
@@ -2547,6 +2677,10 @@ input:focus-visible {
   font-family: 'DM Mono', monospace;
   font-size: 8px;
   text-align: center;
+}
+
+.app-shell.has-now-playing-backdrop .dock-track-copy {
+  gap: 5px;
 }
 
 .progress-slider,
@@ -3125,20 +3259,14 @@ input:focus-visible {
 
   .now-playing-view .now-playing-artwork {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) auto;
-    gap: clamp(4px, 0.9cqi, 8px);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
   }
 
   .now-playing-view .cover-stage {
     width: min(100%, 40vh);
     height: auto;
     max-width: 100%;
-  }
-
-  .now-playing-view .now-playing-copy {
-    width: 100%;
-    max-width: 540px;
-    justify-self: center;
   }
 
   .now-playing-view .now-playing-lyrics {
@@ -3150,18 +3278,6 @@ input:focus-visible {
     gap: clamp(5px, 1.2cqi, 9px);
   }
 
-  .now-playing-view .now-playing-copy h2 {
-    margin: 4px 0;
-    font-size: clamp(20px, 1.5vw, 22px);
-    line-height: 1.2;
-  }
-
-  .now-playing-view .now-playing-format,
-  .now-playing-view .now-playing-artist,
-  .now-playing-view .now-playing-album {
-    font-size: 13px;
-  }
-
 }
 
 @media (max-width: 620px) {
@@ -3171,9 +3287,20 @@ input:focus-visible {
 }
 
 @media (max-width: 560px) {
-  .now-playing-overlay-topbar { gap: 8px; padding-right: 10px; padding-left: 10px; }
-  .now-playing-overlay-topbar .breadcrumbs { display: none; }
-  .now-playing-topbar-tools { margin-left: auto; gap: 5px; }
+  .now-playing-overlay-topbar {
+    display: grid;
+    min-height: 88px;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-content: center;
+    gap: 4px 8px;
+    padding: 6px 10px;
+  }
+  .now-playing-overlay-return { grid-column: 1; grid-row: 1; min-height: 32px; }
+  .now-playing-header-track { grid-column: 1 / -1; grid-row: 2; }
+  .now-playing-track-info { gap: 3px; font-size: 13px; }
+  .now-playing-track-info button { flex: 1 1 0; }
+  .now-playing-topbar-tools { grid-column: 2; grid-row: 1; justify-content: flex-end; gap: 5px; }
   .lyrics-topbar-status { display: none; }
   .now-playing-quick-settings-trigger { width: 36px; min-width: 36px; justify-content: center; padding: 0; }
   .now-playing-quick-settings-trigger span { display: none; }
@@ -3181,5 +3308,17 @@ input:focus-visible {
   .quick-settings-drawer-header { padding: 14px 14px 10px; }
   .quick-settings-nav { padding-right: 14px; padding-left: 14px; }
   .quick-settings-drawer-scroll { padding-right: 14px; padding-left: 14px; }
+}
+
+@media (max-width: 390px) {
+  .now-playing-overlay-topbar { min-height: 82px; }
+  .now-playing-track-info { font-size: 11px; }
+  .now-playing-header-track .now-playing-format { font-size: 9px; }
+  .app-shell.has-now-playing-backdrop .player-dock { padding-right: 8px; padding-left: 8px; }
+  .app-shell.has-now-playing-backdrop .dock-track { gap: 4px; }
+  .dock-track-title-link { font-size: 12px; }
+  .dock-track-artist-link { font-size: 10px; }
+  .app-shell.has-now-playing-backdrop .dock-volume { gap: 4px; }
+  .app-shell.has-now-playing-backdrop .volume-slider { width: 42px; flex-basis: 42px; }
 }
 

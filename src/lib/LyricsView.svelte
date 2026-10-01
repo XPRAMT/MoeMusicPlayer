@@ -628,6 +628,7 @@
     -webkit-box-orient: vertical;
     text-overflow: ellipsis;
     text-align: center;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.82), 0 0 8px rgba(0, 0, 0, 0.38);
     opacity: var(--lyric-text-opacity, 1);
     transition: opacity 140ms ease;
   }

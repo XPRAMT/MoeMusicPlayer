@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::TrackId;
+use crate::{TrackFieldFilter, TrackId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -15,8 +15,14 @@ pub enum QueueRepeatMode {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PlaybackQueueContext {
-    Library { query: Option<String> },
-    Playlist { playlist_id: String },
+    Library {
+        query: Option<String>,
+        #[serde(default)]
+        field_filter: Option<TrackFieldFilter>,
+    },
+    Playlist {
+        playlist_id: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -77,7 +83,10 @@ impl PlaybackQueue {
             .collect();
         Self::with_entries_and_seed(
             entries,
-            PlaybackQueueContext::Library { query: None },
+            PlaybackQueueContext::Library {
+                query: None,
+                field_filter: None,
+            },
             selected_index,
             random_state,
         )

@@ -51,6 +51,7 @@
     type RuntimeCapabilities,
     type ThemePreferences,
     type TrackListColumnPreference,
+    type TrackFieldFilter,
     type TrackSummary,
   } from './lib/ipc';
   import {
@@ -118,6 +119,7 @@
   let lyricsTopbarStatus = $state<{ source: string; sync: string } | null>(null);
   let nowPlayingBackButton = $state<HTMLButtonElement | undefined>(undefined);
   let dockArtworkButton = $state<HTMLButtonElement | undefined>(undefined);
+  let librarySearchInput = $state<HTMLInputElement | undefined>(undefined);
   let settingsSection = $state<SettingsSection>('appearance');
   let trackColumnPreferences = $state<TrackListColumnPreference[]>(
     normalizeTrackColumnPreferences(DEFAULT_TRACK_COLUMN_PREFERENCES),
@@ -151,7 +153,6 @@
   let volumeDraft = $state<number | null>(null);
   let activeArtwork = $state<ActiveArtworkState>({ trackId: null, status: 'empty', objectUrl: null });
   let coverStageElement = $state<HTMLDivElement | null>(null);
-  let nowPlayingCopyElement = $state<HTMLDivElement | null>(null);
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   let sources = $state<LibrarySource[]>([]);
   let sourceError = $state<string | null>(null);
@@ -167,6 +168,7 @@
   let playlistExportFormat = $state<'m3u' | 'm3u8'>('m3u8');
   let playlistExportRelativePaths = $state(false);
   let query = $state('');
+  let libraryFieldFilter = $state<TrackFieldFilter | null>(null);
   let selectedTrackId = $state<string | null>(null);
   let isSyncing = $state(false);
   let isLoadingSources = $state(false);
@@ -272,23 +274,19 @@
 
   function updateCoverFrame(): void {
     const stage = coverStageElement;
-    const copy = nowPlayingCopyElement;
     const artworkPane = stage?.parentElement;
     const image = stage?.querySelector('img');
-    if (!stage || !copy || !artworkPane || !image?.naturalWidth || !image.naturalHeight) {
+    if (!stage || !artworkPane || !image?.naturalWidth || !image.naturalHeight) {
       coverFrame = null;
       return;
     }
 
-    const artworkStyles = getComputedStyle(artworkPane);
-    const gap = Number.parseFloat(artworkStyles.rowGap) || 0;
-    const isNarrow = window.matchMedia('(max-width: 720px)').matches;
-    const maxDimension = window.innerHeight * (isNarrow ? 0.4 : 0.78);
+    const maxDimension = window.innerHeight * 0.92;
     const nextFrame = calculateArtworkFrame({
       sourceWidth: image.naturalWidth,
       sourceHeight: image.naturalHeight,
       availableWidth: artworkPane.clientWidth,
-      availableHeight: Math.max(0, artworkPane.clientHeight - copy.offsetHeight - gap),
+      availableHeight: artworkPane.clientHeight,
       maxWidth: maxDimension,
       maxHeight: maxDimension,
       border: 1,
@@ -304,10 +302,9 @@
 
   $effect(() => {
     const stage = coverStageElement;
-    const copy = nowPlayingCopyElement;
     const artworkUrl = activeArtwork.objectUrl;
     const artworkStatus = activeArtwork.status;
-    if (!stage || !copy) {
+    if (!stage) {
       coverFrame = null;
       return;
     }
@@ -317,7 +314,6 @@
     const image = stage.querySelector('img');
     const observer = new ResizeObserver(() => untrack(updateCoverFrame));
     if (stage.parentElement) observer.observe(stage.parentElement);
-    observer.observe(copy);
     image?.addEventListener('load', updateCoverFrame);
     untrack(updateCoverFrame);
     return () => {
@@ -847,6 +843,7 @@
 
   function handleSearchInput(event: Event): void {
     query = (event.currentTarget as HTMLInputElement).value;
+    libraryFieldFilter = null;
   }
 
   async function syncLibrary(): Promise<void> {
@@ -1125,6 +1122,7 @@
     const queueSource: PlaybackQueueSource = {
       kind: 'library',
       query: query.trim() || null,
+      fieldFilter: libraryFieldFilter ?? undefined,
     };
     await sendPlaybackCommand(
       () => invokeCommand('playback_play', { trackId: track.id, queueSource }),
@@ -1148,6 +1146,28 @@
     isNowPlayingOpen = false;
     await tick();
     dockArtworkButton?.focus();
+  }
+
+  function trackFieldValue(track: TrackSummary | null | undefined, field: TrackFieldFilter['field']): string | null {
+    const value = track?.[field];
+    return typeof value === 'string' && value.trim().length > 0 ? value : null;
+  }
+
+  function trackFieldLabel(track: TrackSummary | null | undefined, field: TrackFieldFilter['field']): string {
+    return trackFieldValue(track, field)?.trim() ?? '—';
+  }
+
+  async function openTrackField(field: TrackFieldFilter['field']): Promise<void> {
+    const value = trackFieldValue(playback?.currentTrack, field);
+    if (!value) return;
+    await closeNowPlaying();
+    nowPlayingReturnView = 'library';
+    activeView = 'library';
+    query = '';
+    libraryFieldFilter = { field, value };
+    libraryListRevision += 1;
+    await tick();
+    librarySearchInput?.focus();
   }
 
   async function openQuickSettings(): Promise<void> {
@@ -1347,10 +1367,6 @@
     return track?.artist?.trim() || '選取曲庫中的曲目開始播放';
   }
 
-  function currentTrackAlbum(track: TrackSummary | null | undefined): string {
-    return track?.album?.trim() || '—';
-  }
-
 </script>
 
 <svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onkeydown={handleQuickSettingsKeydown} />
@@ -1528,6 +1544,7 @@
               <label class="search-field">
                 <IconSearch size={17} stroke={1.6} aria-hidden="true" />
                 <input
+                  bind:this={librarySearchInput}
                   type="search"
                   aria-label="搜尋曲庫"
                   placeholder="搜尋歌名、演出者或專輯"
@@ -1558,6 +1575,7 @@
             {:else}
               <TrackList
                 query={query}
+                fieldFilter={libraryFieldFilter}
                 resetKey={libraryListRevision}
                 selectedTrackId={selectedTrackId}
                 playbackReady={playbackReady}
@@ -2004,7 +2022,19 @@
           <IconArrowLeft size={17} stroke={1.8} aria-hidden="true" />
           <span>返回</span>
         </button>
-        <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>NOW PLAYING</strong></div>
+        <div class="now-playing-header-track">
+          <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類">
+            <button type="button" data-track-field="title" disabled={!trackFieldValue(playback?.currentTrack, 'title')} title={trackFieldValue(playback?.currentTrack, 'title') ?? '沒有曲名分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'title') ? `依曲名「${trackFieldValue(playback?.currentTrack, 'title')}」篩選曲庫` : '沒有曲名分類資料'} onclick={() => void openTrackField('title')}>{trackFieldLabel(playback?.currentTrack, 'title')}</button>
+            <span aria-hidden="true">．</span>
+            <button type="button" data-track-field="artist" disabled={!trackFieldValue(playback?.currentTrack, 'artist')} title={trackFieldValue(playback?.currentTrack, 'artist') ?? '沒有演出者分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'artist') ? `依演出者「${trackFieldValue(playback?.currentTrack, 'artist')}」篩選曲庫` : '沒有演出者分類資料'} onclick={() => void openTrackField('artist')}>{trackFieldLabel(playback?.currentTrack, 'artist')}</button>
+            <span aria-hidden="true">．</span>
+            <button type="button" data-track-field="album" disabled={!trackFieldValue(playback?.currentTrack, 'album')} title={trackFieldValue(playback?.currentTrack, 'album') ?? '沒有專輯分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'album') ? `依專輯「${trackFieldValue(playback?.currentTrack, 'album')}」篩選曲庫` : '沒有專輯分類資料'} onclick={() => void openTrackField('album')}>{trackFieldLabel(playback?.currentTrack, 'album')}</button>
+          </nav>
+          <p class="now-playing-format" aria-label="音質格式">
+            <span>{formatTrackColumnValue('audioFormat', playback?.currentTrack ?? {}, () => '—')}</span>
+            {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}
+          </p>
+        </div>
         <div class="now-playing-topbar-tools">
           {#if lyricsTopbarStatus}
             <div class="lyrics-topbar-status" aria-label="歌詞來源與同步狀態">
@@ -2022,7 +2052,7 @@
       </header>
       <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body" inert={isQuickSettingsOpen}>
         <div class="now-playing-overlay-content">
-          <section class="now-playing-view" aria-labelledby="now-playing-heading">
+          <section class="now-playing-view" aria-label="正在播放">
             <NowPlayingArrangement layout={nowPlayingLayout}>
               {#snippet artwork()}
                 <div
@@ -2047,16 +2077,6 @@
                       <span class="cover-fallback-message">沒有可用封面</span>
                     {/if}
                   {/if}
-                </div>
-                <div class="now-playing-copy" bind:this={nowPlayingCopyElement}>
-                  <p class="now-playing-format">
-                    <span>{formatTrackColumnValue('audioFormat', playback?.currentTrack ?? {}, () => '—')}</span>
-                    {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}
-                  </p>
-                  <h2 id="now-playing-heading">{currentTrackTitle(playback?.currentTrack)}</h2>
-                  <p class="now-playing-artist">{currentTrackArtist(playback?.currentTrack)}</p>
-                  <p class="now-playing-album">{currentTrackAlbum(playback?.currentTrack)}</p>
-                  {#if playbackError || playback?.lastError}<p class="error-note" role="status">{playbackError ?? playback?.lastError}</p>{/if}
                 </div>
               {/snippet}
               {#snippet lyrics()}
@@ -2115,6 +2135,7 @@
 
   <footer class="player-dock" aria-label="播放控制" inert={isQuickSettingsOpen}>
     <div class="dock-track">
+      {#if !isNowPlayingOpen}
       <button
         class="dock-art"
         type="button"
@@ -2130,13 +2151,21 @@
           <IconMusic size={22} stroke={1.6} aria-hidden="true" />
         {/if}
       </button>
+      {/if}
       <div class="dock-track-copy">
-        <strong>{currentTrackTitle(playback?.currentTrack)}</strong>
-        <span>{currentTrackArtist(playback?.currentTrack)}</span>
+        {#if isNowPlayingOpen}
+          <button class="dock-track-link dock-track-title-link" type="button" aria-label="返回播放前頁面" title="返回播放前頁面" onclick={() => void closeNowPlaying()}>{currentTrackTitle(playback?.currentTrack)}</button>
+          <button class="dock-track-link dock-track-artist-link" type="button" aria-label="返回播放前頁面" title="返回播放前頁面" onclick={() => void closeNowPlaying()}>{currentTrackArtist(playback?.currentTrack)}</button>
+        {:else}
+          <strong>{currentTrackTitle(playback?.currentTrack)}</strong>
+          <span>{currentTrackArtist(playback?.currentTrack)}</span>
+        {/if}
       </div>
-      <button class="dock-favorite" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
-        <IconHeart size={18} stroke={1.6} aria-hidden="true" />
-      </button>
+      {#if !isNowPlayingOpen}
+        <button class="dock-favorite" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
+          <IconHeart size={18} stroke={1.6} aria-hidden="true" />
+        </button>
+      {/if}
     </div>
 
     <div class="dock-center">

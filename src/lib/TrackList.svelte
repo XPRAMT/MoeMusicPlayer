@@ -35,6 +35,7 @@
     onTotalCount?: (count: number | null) => void;
     fetchPage?: (request: TrackPageRequest) => Promise<TrackPage>;
     columns?: TrackListColumnPreference[];
+    fieldFilter?: TrackPageRequest['fieldFilter'];
   }
 
   let {
@@ -47,6 +48,7 @@
     onTotalCount,
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
+    fieldFilter = null,
   }: Props = $props();
 
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
@@ -69,9 +71,16 @@
     revision: 0,
   });
   const listData = new PagedListController<TrackSummary, string>(
-    ({ scope, offset, limit }) => fetchPage
-      ? fetchPage({ query: scope || null, offset, limit })
-      : invokeCommand('library_get_page', { query: scope || null, offset, limit }),
+    ({ scope, offset, limit }) => {
+      const requestScope = JSON.parse(scope || '{"query":null,"fieldFilter":null}') as {
+        query: string | null;
+        fieldFilter: TrackPageRequest['fieldFilter'];
+      };
+      const request = { ...requestScope, offset, limit };
+      return fetchPage
+        ? fetchPage(request)
+        : invokeCommand('library_get_page', request);
+    },
     { listName: '曲庫', onChange: () => { snapshot = listData.snapshot(); } },
   );
 
@@ -87,7 +96,12 @@
   $effect(() => {
     const normalizedQuery = query.trim();
     const currentResetKey = resetKey;
-    listData.reset(normalizedQuery, currentResetKey);
+    const currentFieldFilter = fieldFilter;
+    const scope = JSON.stringify({
+      query: normalizedQuery || null,
+      fieldFilter: currentFieldFilter ?? null,
+    });
+    listData.reset(scope, currentResetKey);
     void listData.ensureRange(0, TRACK_PAGE_SIZE);
   });
 

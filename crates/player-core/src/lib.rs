@@ -12,8 +12,9 @@ pub use artwork::{ArtworkImage, MAX_ARTWORK_BYTES, MAX_ARTWORK_DIMENSION, MAX_AR
 pub use library::{
     FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaScanProgress,
     MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, SourceId,
-    SourceScan, SourceScanState, SyncCancellation, TrackId, TrackIdentity, TrackMetadata,
-    TrackMetadataError, TrackSummary, UserMetadataField, TRACK_METADATA_VERSION,
+    SourceScan, SourceScanState, SyncCancellation, TrackField, TrackFieldFilter, TrackId,
+    TrackIdentity, TrackMetadata, TrackMetadataError, TrackSummary, UserMetadataField,
+    TRACK_METADATA_VERSION,
 };
 pub use lyrics::{
     auto_lyric_candidate, explain_lyric_candidate_match, merge_lrc_auxiliary, parse_lrc, parse_yrc,

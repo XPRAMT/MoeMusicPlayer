@@ -18,7 +18,6 @@ async page => {
   await page.goto(`${harnessBaseUrl}/tests/volume-slider-harness.html`);
   await page.waitForFunction(() => document.querySelector('.dock-art')?.disabled === false);
   await page.waitForFunction(() => document.querySelectorAll('.track-list-viewport .paged-virtual-row').length > 0);
-
   async function rememberUnderlyingState(includeListScroll = false) {
     await page.evaluate((saveScroll) => {
       const list = document.querySelector('.track-list-viewport');
@@ -63,28 +62,42 @@ async page => {
       };
       const artwork = document.querySelector('.now-playing-card [data-layout-pane="artwork"]');
       const lyrics = document.querySelector('.now-playing-card [data-layout-pane="lyrics"]');
-      const stage = document.querySelector('.now-playing-copy')?.previousElementSibling;
-      const copy = document.querySelector('.now-playing-copy');
+      const stage = document.querySelector('.cover-stage');
+      const headerTrack = document.querySelector('.now-playing-header-track');
+      const format = headerTrack.querySelector('.now-playing-format');
+      const dock = document.querySelector('.player-dock');
       return {
         layout: document.querySelector('.now-playing-card')?.dataset.layout,
         panes: [...document.querySelectorAll('.now-playing-card > [data-layout-pane]')].map((pane) => pane.dataset.layoutPane),
         artwork: rect(artwork),
         lyrics: rect(lyrics),
         cover: rect(stage),
-        copy: rect(copy),
+        copy: rect(headerTrack),
         coverFit: getComputedStyle(document.querySelector('.cover-stage-image')).objectFit,
         coverSource: [document.querySelector('.cover-stage-image').naturalWidth, document.querySelector('.cover-stage-image').naturalHeight],
-        copyChildren: [...copy.children].map((child) => child.className.toString() || child.tagName.toLowerCase()),
-        formatText: copy.querySelector('.now-playing-format')?.textContent?.trim() ?? '',
+        copyChildren: [...document.querySelectorAll('.now-playing-card .now-playing-copy')].map((child) => child.className.toString()),
+        formatText: format?.textContent?.trim() ?? '',
+        trackFields: [...headerTrack.querySelectorAll('[data-track-field]')].map((button) => ({ field: button.dataset.trackField, text: button.textContent.trim(), disabled: button.disabled, ariaLabel: button.getAttribute('aria-label') })),
         hiResBadge: (() => {
-          const image = copy.querySelector('.now-playing-format img');
+          const image = format.querySelector('img');
           return image ? { alt: image.alt, complete: image.complete, naturalWidth: image.naturalWidth } : null;
         })(),
-        errorText: copy.querySelector('.error-note')?.textContent ?? null,
+        dockArtworkCount: dock.querySelectorAll('.dock-art').length,
+        dockTrackLinks: [...dock.querySelectorAll('.dock-track-link')].map((button) => button.textContent.trim()),
+        progress: rect(dock.querySelector('.progress-row')),
+        dockTrack: rect(dock.querySelector('.dock-track')),
+        controls: rect(dock.querySelector('.dock-controls')),
+        volume: rect(dock.querySelector('.dock-volume')),
+        dockPadding: (() => {
+          const styles = getComputedStyle(dock);
+          return { left: Number.parseFloat(styles.paddingLeft), right: Number.parseFloat(styles.paddingRight) };
+        })(),
         lyricsViewport: rect(lyrics.querySelector('.timed-lyrics-viewport, .plain-lyrics-viewport')),
         lyricsOverflow: getComputedStyle(lyrics.querySelector('.timed-lyrics-viewport, .plain-lyrics-viewport')).overflowY,
         pageOverflow: getComputedStyle(document.querySelector('.now-playing-overlay-body')).overflowY,
         return: rect(document.querySelector('.now-playing-overlay-return')),
+        lyricsToggles: rect(document.querySelector('.lyrics-topbar-toggles')),
+        quickSettingsTrigger: rect(document.querySelector('.now-playing-quick-settings-trigger')),
         topbar: rect(document.querySelector('.now-playing-overlay-topbar')),
         dock: rect(document.querySelector('.player-dock')),
       };
@@ -133,10 +146,10 @@ async page => {
       assert.equal(overlayState.listScrollTop, await page.evaluate(() => window.__nowPlayingOrigin.listScrollTop), 'library list scroll position should remain unchanged');
     }
 
-    if (returnMethod === 'topbar') {
-      await page.locator('.now-playing-overlay-return').click();
+    if (returnMethod === 'dock') {
+      await page.locator('.dock-track-title-link').click();
     } else {
-      await page.locator('.dock-art').click();
+      await page.locator('.now-playing-overlay-return').click();
     }
     await page.waitForFunction(() => !document.querySelector('.now-playing-overlay')?.classList.contains('is-open'));
     const returned = await page.evaluate(() => ({
@@ -148,10 +161,14 @@ async page => {
       listScrollTop: document.querySelector('.track-list-viewport')?.scrollTop ?? null,
       lyricsTab: document.querySelector('#lyrics-tab')?.getAttribute('aria-selected') ?? null,
       workspaceInert: document.querySelector('.workspace')?.inert,
+      focusReturnedToDockArtwork: document.activeElement === document.querySelector('.dock-art'),
     }));
     assert.equal(returned.view, await page.evaluate(() => window.__nowPlayingOrigin.view), 'return should restore the originating route');
     assert.equal(returned.pageRetained, true, 'return should preserve the originating page DOM');
     assert.equal(returned.workspaceInert, false, 'return should re-enable the underlying workspace');
+    if (returnMethod === 'dock') {
+      assert.equal(returned.focusReturnedToDockArtwork, true, 'dock return restores focus to the artwork entrance after it reappears');
+    }
     if (returned.listRetained !== null) {
       assert.equal(returned.listRetained, true, 'return should preserve the library virtual list DOM');
       assert.equal(returned.listScrollTop, await page.evaluate(() => window.__nowPlayingOrigin.listScrollTop), 'return should preserve the library list scroll position');
@@ -434,12 +451,19 @@ async page => {
     const stageAspect = state.cover.width / state.cover.height;
     const sourceAspect = state.coverSource[0] / state.coverSource[1];
     assert.ok(Math.abs(stageAspect - sourceAspect) <= 0.02, `1920x1080: cover frame ${state.cover.width}x${state.cover.height} must match ${state.coverSource[0]}x${state.coverSource[1]} artwork`);
-    assert.deepEqual(state.copyChildren, ['now-playing-format', 'h2', 'now-playing-artist', 'now-playing-album'], 'track copy should show format, title, artist and album');
-    assert.ok(state.formatText.includes('FLAC 48 kHz 24-bit'), 'format summary should use the shared audio format formatter');
+    assert.deepEqual(state.copyChildren, [], 'no title, artist, album, or format copy should sit below the cover');
+    assert.deepEqual(state.trackFields.map((field) => field.field), ['title', 'artist', 'album'], 'topbar exposes title, artist, and album category links');
+    assert.ok(state.formatText.includes('FLAC．48 kHz．24 bit'), 'format summary should use the shared full-width separator formatter');
     assert.equal(state.hiResBadge?.alt, 'Hi-Res', 'Hi-Res badge should have accessible alternative text');
     assert.ok(state.hiResBadge?.complete && state.hiResBadge.naturalWidth > 0, 'Hi-Res badge image should load for qualifying source depth');
-    assert.ok(state.copy.top >= state.cover.bottom, 'title and artist must be below the cover');
+    assert.ok(state.copy.bottom <= state.cover.top, 'title, artist, album, and format belong above the cover');
     assert.ok(state.cover.width > 628, `1920x1080: cover should use more space than the previous 628px layout (${state.cover.width}px)`);
+    assert.equal(state.dockArtworkCount, 0, 'overlay dock hides the artwork button');
+    assert.deepEqual(state.dockTrackLinks, ['Volume Slider Test', 'hanser feat. 合作演出者'], 'overlay dock shows clickable title and complete artist value');
+    assert.ok(state.progress.bottom <= state.controls.top && state.progress.bottom <= state.dockTrack.top && state.progress.bottom <= state.volume.top, 'progress and time row sits above the entire bottom control row');
+    assert.ok(Math.abs(state.progress.left - state.dock.left - state.dockPadding.left) <= 2
+      && Math.abs(state.dock.right - state.dockPadding.right - state.progress.right) <= 2,
+    'progress and time row spans the full usable dock width');
     assert.ok(state.lyricsViewport.height >= 64 && ['auto', 'scroll'].includes(state.lyricsOverflow), 'lyrics must keep an independently scrollable viewport');
     assert.equal(state.pageOverflow, 'hidden', 'the Now Playing page itself must not scroll');
     assert.ok(state.return.left >= 0 && state.return.right <= 1920 && state.topbar.bottom <= state.dock.top, 'return control must fit above the dock');
@@ -447,7 +471,7 @@ async page => {
     return state;
   })();
   await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-layout-a-1920x1080.png' });
-  await verifyAndRestore('topbar');
+  await verifyAndRestore('dock');
 
   await selectLayoutInSettings('b');
   await rememberUnderlyingState();
@@ -458,19 +482,86 @@ async page => {
   assert.equal(layoutB1366.layout, 'b', 'layout B selected in Settings should appear in Now Playing');
   assert.deepEqual(layoutB1366.panes, ['lyrics', 'artwork'], 'layout B should place lyrics before cover');
   assert.ok(layoutB1366.cover.width > 367, `1366x768: cover should use more space than the previous 367px layout (${layoutB1366.cover.width}px)`);
-  assert.ok(layoutB1366.copy.top >= layoutB1366.cover.bottom, 'layout B title and artist must stay below the cover');
+  assert.ok(layoutB1366.copy.bottom <= layoutB1366.cover.top, 'layout B title, artist, album, and format remain above the cover');
+  assert.equal(layoutB1366.dockArtworkCount, 0, 'layout B overlay dock also hides artwork button');
   assert.ok(layoutB1366.lyricsViewport.height >= 64 && ['auto', 'scroll'].includes(layoutB1366.lyricsOverflow), 'layout B lyrics must keep an independently scrollable viewport');
   assert.equal(layoutB1366.pageOverflow, 'hidden', 'layout B Now Playing page itself must not scroll');
   assert.ok(layoutB1366.return.left >= 0 && layoutB1366.return.right <= 1366 && layoutB1366.topbar.bottom <= layoutB1366.dock.top, 'layout B return control must fit above the dock');
   assert.ok(layoutB1366.dock.bottom <= 768, 'layout B bottom playback controls must fit in the viewport');
   await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-layout-b-1366x768.png' });
-  await verifyAndRestore('dock');
+  await verifyAndRestore('topbar');
+
+  await openOverlay();
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.waitForTimeout(35);
+  const narrowOverlay = await readOverlayLayout();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 360, '360px overlay has no horizontal document overflow');
+  assert.ok(narrowOverlay.return.right <= narrowOverlay.lyricsToggles.left
+    && narrowOverlay.lyricsToggles.right <= narrowOverlay.quickSettingsTrigger.left
+    && narrowOverlay.quickSettingsTrigger.right <= 360,
+  'narrow topbar keeps return, lyric toggles and quick settings visible without overlap');
+  assert.ok(Math.abs(narrowOverlay.progress.left - narrowOverlay.dock.left - narrowOverlay.dockPadding.left) <= 2
+    && Math.abs(narrowOverlay.dock.right - narrowOverlay.dockPadding.right - narrowOverlay.progress.right) <= 2,
+  'narrow progress row spans all three dock columns through volume');
+  assert.ok(narrowOverlay.progress.bottom <= narrowOverlay.dockTrack.top
+    && narrowOverlay.progress.bottom <= narrowOverlay.controls.top
+    && narrowOverlay.progress.bottom <= narrowOverlay.volume.top,
+  'narrow progress row remains above track, transport and volume controls');
+  await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-layout-narrow-360x800.png' });
+  await verifyAndRestore('topbar');
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  for (const [field, value] of [
+    ['title', 'Volume Slider Test'],
+    ['artist', 'hanser feat. 合作演出者'],
+    ['album', 'hanser Cover'],
+  ]) {
+    await openOverlay();
+    const before = await page.evaluate(() => {
+      window.__fieldNavigationNodes = {
+        progress: document.querySelector('.progress-slider'),
+        lyricsView: document.querySelector('.now-playing-overlay .lyrics-view'),
+        lyricsGetCount: window.__volumeHarness.lyricsGetCount,
+        snapshot: window.__volumeHarness.snapshot(),
+      };
+      return { requests: window.__volumeHarness.libraryRequests.length };
+    });
+    const metadataButton = page.locator(`.now-playing-track-info [data-track-field="${field}"]`);
+    assert.equal(await metadataButton.isDisabled(), false, `${field} metadata link should be enabled for a nonempty field`);
+    await metadataButton.click();
+    await page.waitForFunction(() => !document.querySelector('.now-playing-overlay')?.classList.contains('is-open'));
+    await page.waitForFunction(({ start, fieldName, expectedValue }) => window.__volumeHarness.libraryRequests.slice(start).some((request) => request.fieldFilter?.field === fieldName && request.fieldFilter?.value === expectedValue), { start: before.requests, fieldName: field, expectedValue: value });
+    const navigation = await page.evaluate(() => {
+      const request = [...window.__volumeHarness.libraryRequests].reverse().find((item) => item.fieldFilter);
+      return {
+        view: document.querySelector('.app-shell')?.dataset.activeView,
+        query: document.querySelector('[aria-label="搜尋曲庫"]')?.value,
+        request,
+        firstRow: document.querySelector('.track-list-viewport .track-row .list-column-title')?.textContent?.trim() ?? null,
+        playState: window.__volumeHarness.snapshot().isPlaying,
+        trackId: window.__volumeHarness.snapshot().currentTrack.id,
+        lyricsGetCount: window.__volumeHarness.lyricsGetCount,
+        progressPreserved: window.__fieldNavigationNodes.progress === document.querySelector('.progress-slider'),
+        lyricsNodePreserved: window.__fieldNavigationNodes.lyricsView === document.querySelector('.now-playing-overlay .lyrics-view'),
+      };
+    });
+    assert.equal(navigation.view, 'library', `${field}: metadata link closes Now Playing into the library`);
+    assert.equal(navigation.query, '', `${field}: exact field category does not become an ambiguous fuzzy query`);
+    assert.deepEqual(navigation.request.fieldFilter, { field, value }, `${field}: exact full value is sent as a separate field filter`);
+    assert.equal(navigation.firstRow, value === 'Volume Slider Test' ? value : 'Volume Slider Test', `${field}: harness returns the exact matched row`);
+    assert.equal(navigation.playState, true, `${field}: closing and filtering preserves playback`);
+    assert.equal(navigation.trackId, await page.evaluate(() => window.__fieldNavigationNodes.snapshot.currentTrack.id), `${field}: filtering preserves the current track`);
+    assert.equal(navigation.lyricsGetCount, await page.evaluate(() => window.__fieldNavigationNodes.lyricsGetCount), `${field}: filtering does not reload lyrics`);
+    assert.equal(navigation.progressPreserved, true, `${field}: footer seek component remains the same instance`);
+    assert.equal(navigation.lyricsNodePreserved, true, `${field}: LyricsView remains mounted while returning to the library`);
+
+  }
 
   await page.locator('.playlist-tree-open').click();
   await page.waitForFunction(() => document.querySelector('.app-shell')?.getAttribute('data-active-view') === 'playlists');
   await rememberUnderlyingState();
   await openOverlay();
-  await verifyAndRestore('dock');
+  await verifyAndRestore('topbar');
 
   await page.getByRole('button', { name: /播放佇列/ }).click();
   await page.waitForFunction(() => document.querySelector('.app-shell')?.getAttribute('data-active-view') === 'queue');
@@ -483,12 +574,12 @@ async page => {
   await page.getByRole('tab', { name: '歌詞' }).click();
   await rememberUnderlyingState();
   await openOverlay();
-  await verifyAndRestore('dock');
+  await verifyAndRestore('topbar');
 
   return {
     result: 'PASS',
     routes: ['library', 'playlists', 'queue', 'settings'],
-    returnControls: ['top-left', 'dock-artwork'],
+    returnControls: ['top-left', 'dock-title-artist'],
     layoutSelectedInSettings: ['a', 'b'],
     measurements: {
       '1920x1080-A': { cover: [layoutA1920.cover.width, layoutA1920.cover.height], artwork: [layoutA1920.artwork.width, layoutA1920.artwork.height] },

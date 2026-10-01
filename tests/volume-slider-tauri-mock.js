@@ -4,8 +4,8 @@
   const track = {
     id: 'volume-slider-test-track',
     title: 'Volume Slider Test',
-    artist: 'Harness',
-    album: 'Harness',
+    artist: 'hanser feat. 合作演出者',
+    album: 'hanser Cover',
     albumArtist: 'Harness',
     trackNumber: 1,
     discNumber: 1,
@@ -18,7 +18,9 @@
   const libraryTracks = Array.from({ length: 120 }, (_, index) => ({
     ...track,
     id: `volume-slider-test-track-${index + 1}`,
-    title: `Volume Harness Track ${index + 1}`,
+    title: index === 0 ? track.title : `Volume Harness Track ${index + 1}`,
+    artist: index === 0 ? track.artist : `Other artist ${index + 1}`,
+    album: index === 0 ? track.album : `Other album ${index + 1}`,
     trackNumber: index + 1,
   }));
   let currentSnapshot = {
@@ -101,6 +103,8 @@
     isVolumeCommandInFlight: () => activeVolumeCommands > 0,
     snapshot: () => ({ ...currentSnapshot }),
     lyricsGetCount: 0,
+    libraryRequests: [],
+    playRequests: [],
   };
 
   const clone = (value) => structuredClone(value);
@@ -178,13 +182,18 @@
           return [];
         case 'library_sync':
           return { sources: [] };
-        case 'library_get_page':
+        case 'library_get_page': {
+          volumeHarness.libraryRequests.push(clone(args));
+          let matches = libraryTracks;
+          if (args.fieldFilter) matches = matches.filter((item) => item[args.fieldFilter.field] === args.fieldFilter.value);
+          if (args.query) matches = matches.filter((item) => [item.title, item.artist, item.album].some((value) => value?.toLocaleLowerCase().includes(args.query.toLocaleLowerCase())));
           return {
-            items: libraryTracks.slice(args.offset ?? 0, (args.offset ?? 0) + (args.limit ?? 40)),
+            items: matches.slice(args.offset ?? 0, (args.offset ?? 0) + (args.limit ?? 40)),
             offset: args.offset ?? 0,
             limit: args.limit ?? 40,
-            totalCount: libraryTracks.length,
+            totalCount: matches.length,
           };
+        }
         case 'playlist_list':
           return [];
         case 'playback_get_queue_page':
@@ -221,6 +230,12 @@
           };
         case 'playback_get_snapshot':
           return clone(currentSnapshot);
+        case 'playback_play': {
+          volumeHarness.playRequests.push(clone(args));
+          const selected = libraryTracks.find((item) => item.id === args.trackId);
+          if (selected) currentSnapshot = { ...currentSnapshot, currentTrack: selected };
+          return clone(currentSnapshot);
+        }
         case 'library_get_track_artwork':
           return brightArtworkBytes();
         case 'playback_set_volume': {

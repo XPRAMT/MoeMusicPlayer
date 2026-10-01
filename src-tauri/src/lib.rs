@@ -15,7 +15,7 @@ use player_core::{
     LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaybackCheckpoint,
     PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId,
     PlaylistPage, PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId,
-    SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackId, TrackSummary,
+    SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId, TrackSummary,
 };
 use player_db::{Database, PlaybackSessionCheckpoint, ThemePreferences};
 use serde::{Deserialize, Serialize};
@@ -762,6 +762,7 @@ mod system_media_artwork_tests {
                 offset: 0,
                 limit: 10,
                 query: None,
+                field_filter: None,
             })
             .expect("list fixture tracks")
             .items;
@@ -1600,11 +1601,13 @@ struct LibrarySyncFinishedEvent {
     error: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum PlaybackQueueSource {
     Library {
         query: Option<String>,
+        #[serde(default, rename = "fieldFilter")]
+        field_filter: Option<TrackFieldFilter>,
     },
     Playlist {
         #[serde(rename = "playlistId")]
@@ -1701,8 +1704,31 @@ mod playback_queue_ipc_tests {
         .expect("deserialize library query source");
         assert!(matches!(
             source,
-            PlaybackQueueSource::Library { query: Some(query) } if query == "ambient"
+            PlaybackQueueSource::Library {
+                query: Some(query),
+                field_filter: None,
+            } if query == "ambient"
         ));
+    }
+
+    #[test]
+    fn library_field_filter_json_matches_renderer_contract() {
+        let source: PlaybackQueueSource = serde_json::from_value(serde_json::json!({
+            "kind": "library",
+            "query": "ambient",
+            "fieldFilter": { "field": "artist", "value": "演出者 🎧" }
+        }))
+        .expect("deserialize exact field filter");
+        assert_eq!(
+            source,
+            PlaybackQueueSource::Library {
+                query: Some("ambient".to_owned()),
+                field_filter: Some(player_core::TrackFieldFilter {
+                    field: player_core::TrackField::Artist,
+                    value: "演出者 🎧".to_owned(),
+                }),
+            }
+        );
     }
 
     #[test]
@@ -1942,6 +1968,7 @@ fn system_media_controls_capability(_state: &AppState) -> FeatureCapability {
 fn library_get_page(
     state: State<'_, AppState>,
     query: Option<String>,
+    field_filter: Option<TrackFieldFilter>,
     offset: u64,
     limit: u32,
 ) -> Result<Page<TrackSummary>, String> {
@@ -1955,6 +1982,7 @@ fn library_get_page(
     database
         .list_tracks_page(ListTracksQuery {
             query,
+            field_filter,
             offset,
             limit,
         })
@@ -3694,9 +3722,12 @@ fn queue_for_track(
     source: Option<PlaybackQueueSource>,
 ) -> Result<PlaybackQueue, String> {
     let (entries, context, selected_index) = match source {
-        Some(PlaybackQueueSource::Library { query }) => {
+        Some(PlaybackQueueSource::Library {
+            query,
+            field_filter,
+        }) => {
             let track_ids = database
-                .list_track_ids(query.as_deref())
+                .list_track_ids_filtered(query.as_deref(), field_filter.as_ref())
                 .map_err(|error| error.to_string())?;
             let selected = track_ids
                 .iter()
@@ -3709,7 +3740,14 @@ fn queue_for_track(
                     source_position: None,
                 })
                 .collect();
-            (entries, PlaybackQueueContext::Library { query }, selected)
+            (
+                entries,
+                PlaybackQueueContext::Library {
+                    query,
+                    field_filter,
+                },
+                selected,
+            )
         }
         Some(PlaybackQueueSource::Playlist {
             playlist_id,
@@ -3759,7 +3797,10 @@ fn queue_for_track(
                 .collect();
             (
                 entries,
-                PlaybackQueueContext::Library { query: None },
+                PlaybackQueueContext::Library {
+                    query: None,
+                    field_filter: None,
+                },
                 selected,
             )
         }
@@ -4434,8 +4475,10 @@ mod windows_library_integration_tests {
         AudioBackend, AudioError, PlaybackState as AudioPlaybackState, PlayerHandle,
     };
     use player_core::{
-        ListTracksQuery, MediaLocator, MediaSourceKind, PlaybackQueue, PlaybackQueueContext,
-        PlaybackQueueEntry, Playlist, PlaylistEntry, QueueRepeatMode, SourceId, TrackId,
+        FileFingerprint, LibraryRepository, ListTracksQuery, MediaLocator, MediaSourceKind,
+        MediaTrackRecord, PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, Playlist,
+        PlaylistEntry, QueueRepeatMode, SourceId, SourceScanState, TrackField, TrackFieldFilter,
+        TrackId, TrackIdentity, TrackMetadata,
     };
     use player_db::{Database, PlaybackSessionCheckpoint};
     use std::{
@@ -4803,6 +4846,7 @@ mod windows_library_integration_tests {
             let page = database
                 .list_tracks_page(ListTracksQuery {
                     query: None,
+                    field_filter: None,
                     offset: 0,
                     limit: 25,
                 })
@@ -4817,6 +4861,7 @@ mod windows_library_integration_tests {
             let filtered = database
                 .list_tracks_page(ListTracksQuery {
                     query: Some("夜色".to_owned()),
+                    field_filter: None,
                     offset: 0,
                     limit: 25,
                 })
@@ -4846,6 +4891,7 @@ mod windows_library_integration_tests {
         let reopened_page = reopened
             .list_tracks_page(ListTracksQuery {
                 query: None,
+                field_filter: None,
                 offset: 0,
                 limit: 25,
             })
@@ -4863,6 +4909,83 @@ mod windows_library_integration_tests {
         assert_eq!(
             reopened_page.items[0].album.as_deref(),
             Some("Acceptance Album")
+        );
+    }
+
+    #[test]
+    fn library_queue_uses_the_exact_field_filtered_page_set_and_persists_its_context() {
+        let mut database = Database::open_in_memory().expect("isolated database");
+        let root = database
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "library filter fixture",
+                MediaLocator::FileSystem(PathBuf::from(r"C:\Music\filter-fixture")),
+            )
+            .expect("add fixture root");
+        let fixture = |item: &str, title: &str, artist: &str| MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: root.id,
+                source_item_id: item.to_owned(),
+                locator_key: Some(format!("fixture:{item}")),
+            },
+            locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\{item}.flac"))),
+            fingerprint: FileFingerprint {
+                size_bytes: 1,
+                modified_at_utc_ms: Some(1),
+            },
+            metadata: Some(TrackMetadata {
+                title: Some(title.to_owned()),
+                artist: Some(artist.to_owned()),
+                album: Some("Album".to_owned()),
+                ..TrackMetadata::default()
+            }),
+        };
+        let records = vec![
+            fixture("first", "Needle One", "hanser"),
+            fixture("second", "Needle Two", "hanser"),
+            fixture("excluded", "Needle Three", "other artist"),
+        ];
+        database
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Complete,
+                &records,
+                &records,
+                &[],
+                1,
+            )
+            .expect("persist fixture tracks");
+        let filter = TrackFieldFilter {
+            field: TrackField::Artist,
+            value: "hanser".to_owned(),
+        };
+        let page = database
+            .list_tracks_page(ListTracksQuery {
+                query: Some("needle".to_owned()),
+                field_filter: Some(filter.clone()),
+                offset: 0,
+                limit: 10,
+            })
+            .expect("read exact-filtered page");
+        assert_eq!(page.total_count, 2);
+        let selected_track = page.items[0].id;
+        let queue = queue_for_track(
+            &database,
+            selected_track,
+            Some(PlaybackQueueSource::Library {
+                query: Some("needle".to_owned()),
+                field_filter: Some(filter.clone()),
+            }),
+        )
+        .expect("construct library queue from same filter");
+        assert_eq!(queue.current(), selected_track);
+        assert_eq!(queue.snapshot().entries.len(), page.total_count as usize);
+        assert_eq!(
+            queue.snapshot().context,
+            PlaybackQueueContext::Library {
+                query: Some("needle".to_owned()),
+                field_filter: Some(filter),
+            }
         );
     }
 
@@ -5107,6 +5230,7 @@ mod windows_library_integration_tests {
         let tracks = database
             .list_tracks_page(ListTracksQuery {
                 query: None,
+                field_filter: None,
                 offset: 0,
                 limit: 10,
             })
@@ -5126,7 +5250,10 @@ mod windows_library_integration_tests {
             &database,
             &service,
             &first_id.to_string(),
-            Some(PlaybackQueueSource::Library { query: None }),
+            Some(PlaybackQueueSource::Library {
+                query: None,
+                field_filter: None,
+            }),
         )
         .expect("play selected initial track");
         change
@@ -5199,7 +5326,10 @@ mod windows_library_integration_tests {
             &database,
             &service,
             &selected_id.to_string(),
-            Some(PlaybackQueueSource::Library { query: None }),
+            Some(PlaybackQueueSource::Library {
+                query: None,
+                field_filter: None,
+            }),
         )
         .expect("select library row while paused");
         selected
@@ -5282,7 +5412,10 @@ mod windows_library_integration_tests {
             &database,
             &service,
             &first_id.to_string(),
-            Some(PlaybackQueueSource::Library { query: None }),
+            Some(PlaybackQueueSource::Library {
+                query: None,
+                field_filter: None,
+            }),
         )
         .expect("select library row while playing");
         selected_while_playing
@@ -5320,7 +5453,10 @@ mod windows_library_integration_tests {
             &database,
             &service,
             &selected_id.to_string(),
-            Some(PlaybackQueueSource::Library { query: None }),
+            Some(PlaybackQueueSource::Library {
+                query: None,
+                field_filter: None,
+            }),
         )
         .expect("select track from restored Ready state");
         change
@@ -5351,6 +5487,7 @@ mod windows_library_integration_tests {
         let page = database
             .list_tracks_page(ListTracksQuery {
                 query: None,
+                field_filter: None,
                 offset: 0,
                 limit: 10,
             })

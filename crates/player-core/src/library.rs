@@ -268,6 +268,24 @@ pub struct ListTracksQuery {
     pub offset: u64,
     pub limit: u32,
     pub query: Option<String>,
+    #[serde(default)]
+    pub field_filter: Option<TrackFieldFilter>,
+}
+
+/// An exact binary value filter on one user-facing metadata field.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackFieldFilter {
+    pub field: TrackField,
+    pub value: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrackField {
+    Title,
+    Artist,
+    Album,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

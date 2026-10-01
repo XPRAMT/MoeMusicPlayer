@@ -42,7 +42,6 @@
     const expectedPaneOrder = layout === 'a' ? ['artwork', 'lyrics'] : ['lyrics', 'artwork'];
     const artwork = state.panes.find(pane => pane.name === 'artwork');
     const lyrics = state.panes.find(pane => pane.name === 'lyrics');
-    const artworkCopy = state.artworkChildren.find(child => child.className === 'now-playing-copy');
     const isInside = (child, parent) => child && parent
       && child.width > 0 && child.height > 0
       && child.left >= parent.left - 1 && child.right <= parent.right + 1
@@ -67,16 +66,14 @@
     assert.ok(state.returnButton.left <= state.topbar.left + Math.max(80, viewport.width * 0.05), `${viewport.width}x${viewport.height}: return control should remain at the top-left of the overlay`);
     assert.ok(isInside(state.layoutSwitch, state.nowPlaying), `${viewport.width}x${viewport.height}: A/B layout switch is missing or outside Now Playing`);
     assert.ok(isInside(state.lyricsToolbar, lyrics), `${viewport.width}x${viewport.height}: lyric controls are missing or clipped in the lyrics pane`);
-    assert.deepEqual(state.artworkCopyChildren, ['now-playing-format', 'h2', 'now-playing-artist', 'now-playing-album'], `${viewport.width}x${viewport.height}: artwork copy should show audio format, title, artist and album`);
-    assert.equal(state.artworkCopyTextAlign, 'center', `${viewport.width}x${viewport.height}: all four artwork copy rows should be centered`);
-    assert.equal(state.formatJustifyContent, 'center', `${viewport.width}x${viewport.height}: audio format and badge should be centered together`);
+    assert.deepEqual(state.artworkCopyChildren, [], `${viewport.width}x${viewport.height}: no text should be rendered below the cover`);
+    assert.equal(state.formatJustifyContent, 'flex-start', `${viewport.width}x${viewport.height}: audio format follows the top track information`);
     assert.deepEqual(state.lyricTextAlign, { primary: 'center', translation: 'center', romanization: 'center' }, `${viewport.width}x${viewport.height}: lyric text and auxiliary lines should be centered`);
-    assert.ok(artworkCopy && artworkCopy.top >= state.cover.bottom - 1, `${viewport.width}x${viewport.height}: title and artist must stay below the cover`);
     assert.ok(isInside(state.dockControls, state.dock), `${viewport.width}x${viewport.height}: playback controls are missing or clipped in the dock: ${JSON.stringify({ controls: state.dockControls, dock: state.dock })}`);
     assert.deepEqual(state.playerControlLabels, ['隨機播放', '上一首', '播放', '下一首', '循環播放'], `${viewport.width}x${viewport.height}: player controls must keep their Chinese accessible names`);
     assert.equal(state.playerControlIcons.length, 5, `${viewport.width}x${viewport.height}: Tabler player icons did not render for every control`);
     assert.ok(state.playerControlIcons.every(icon => icon.ariaHidden === 'true' && icon.width >= 18 && icon.height >= 18), `${viewport.width}x${viewport.height}: decorative control icons must be hidden from assistive technology and remain legible`);
-    assert.ok(!['auto', 'scroll'].includes(state.artworkCopyOverflowY), `${viewport.width}x${viewport.height}: track information should not introduce a second scrollable window`);
+    assert.equal(state.artworkCopyOverflowY, 'missing', `${viewport.width}x${viewport.height}: cover area must not contain track copy`);
     assert.equal(state.cover.objectFit, 'contain', `${viewport.width}x${viewport.height}: source image must keep its aspect ratio`);
     assert.ok(state.cover.naturalWidth > 0 && state.cover.naturalHeight > 0, `${viewport.width}x${viewport.height}: test artwork did not load at its source dimensions`);
     assert.ok(artwork && state.cover.width > 0 && state.cover.height > 0, `${viewport.width}x${viewport.height}: cover is missing`);
@@ -89,20 +86,15 @@
       `${viewport.width}x${viewport.height}: visible pixels ${state.renderedImage.width}x${state.renderedImage.height} must preserve source ratio ${sourceAspect}`);
     assert.ok(state.cover.left >= artwork.left - 1 && state.cover.right <= artwork.right + 1, `${viewport.width}x${viewport.height}: cover spills out of artwork pane horizontally`);
     assert.ok(state.cover.top >= artwork.top - 1 && state.cover.bottom <= artwork.bottom + 1, `${viewport.width}x${viewport.height}: cover spills out of artwork pane vertically`);
-    const copyGap = Math.max(4, artworkCopy.top - state.cover.bottom);
-    const verticalBudget = artwork.height - artworkCopy.height - copyGap;
-    const heightCap = viewport.width <= 720 ? viewport.height * 0.4 : viewport.height * 0.78;
-    const expectedScale = Math.min((artwork.width - 2) / state.cover.naturalWidth, (Math.min(verticalBudget, heightCap) - 2) / state.cover.naturalHeight);
+    assert.ok(Math.abs((state.cover.top + state.cover.bottom) / 2 - (artwork.top + artwork.bottom) / 2) <= 2, `${viewport.width}x${viewport.height}: cover should be vertically centered in the artwork pane`);
+    const heightCap = viewport.height * 0.92;
+    const expectedScale = Math.min((artwork.width - 2) / state.cover.naturalWidth, (Math.min(artwork.height, heightCap) - 2) / state.cover.naturalHeight);
     assert.ok(Math.abs(state.renderedImage.width - state.cover.naturalWidth * expectedScale) <= 2
       && Math.abs(state.renderedImage.height - state.cover.naturalHeight * expectedScale) <= 2,
     `${viewport.width}x${viewport.height}: visible image ${state.renderedImage.width}x${state.renderedImage.height} does not maximize the available area without letterboxing`);
-    const helperMinimum = viewport.width >= 1280 ? 14 : 12;
-    assert.ok(state.typography.format >= helperMinimum
-      && state.typography.artist >= helperMinimum
-      && state.typography.album >= helperMinimum,
-    `${viewport.width}x${viewport.height}: metadata font sizes are too small: ${JSON.stringify(state.typography)}`);
-    assert.ok(state.typography.title >= 20 && state.typography.title <= 23,
-      `${viewport.width}x${viewport.height}: title font size should stay balanced near 22px: ${state.typography.title}`);
+    assert.ok(state.typography.format >= 9 && state.typography.title >= 11
+      && state.typography.artist >= 11 && state.typography.album >= 11,
+    `${viewport.width}x${viewport.height}: topbar track information must remain readable: ${JSON.stringify(state.typography)}`);
     assert.deepEqual(state.panes.map(pane => pane.name), expectedPaneOrder, `${viewport.width}x${viewport.height}: pane order differs for layout ${layout}`);
     if (viewport.wide) {
       assert.ok(Math.abs(state.panes[0].top - state.panes[1].top) <= 2, `${viewport.width}x${viewport.height}: wide layout should remain side by side`);

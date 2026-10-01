@@ -80,6 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         offset: 0,
         limit: 1,
         query: None,
+        field_filter: None,
     })?;
 
     println!(
@@ -135,6 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         offset: 0,
         limit: 1,
         query: None,
+        field_filter: None,
     })?;
     println!(
         "finished pass=unchanged elapsed_seconds={:.3} state={:?} observed={} metadata_reads={} unchanged={} updated={} removed_mappings={} errors={} database_tracks={}",

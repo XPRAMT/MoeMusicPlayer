@@ -720,6 +720,7 @@ mod tests {
                 offset: 0,
                 limit: 10,
                 query: None,
+                field_filter: None,
             })
             .expect("page");
         assert_eq!(page.items.len(), 1);
@@ -780,6 +781,7 @@ mod tests {
                 offset: 0,
                 limit: 10,
                 query: None,
+                field_filter: None,
             })
             .expect("initial page");
         assert_eq!(original_page.items.len(), 2);
@@ -811,6 +813,7 @@ mod tests {
                 offset: 0,
                 limit: 10,
                 query: None,
+                field_filter: None,
             })
             .expect("remaining page");
         assert_eq!(remaining.items.len(), 1);
@@ -830,6 +833,7 @@ mod tests {
                 offset: 0,
                 limit: 10,
                 query: None,
+                field_filter: None,
             })
             .expect("retained offline track")
             .items[0]
@@ -876,6 +880,7 @@ mod tests {
                 offset: 0,
                 limit: 10,
                 query: None,
+                field_filter: None,
             })
             .expect("first page");
         assert_eq!(first.items.len(), 1);
@@ -903,6 +908,7 @@ mod tests {
                 offset: 0,
                 limit: 10,
                 query: None,
+                field_filter: None,
             })
             .expect("fallback page");
         assert_eq!(after_fallback.items.len(), 1);

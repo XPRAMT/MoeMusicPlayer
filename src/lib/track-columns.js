@@ -124,12 +124,12 @@ export function formatAudioFormat(item) {
     parts.push(`${Number.isInteger(kiloHertz) ? kiloHertz : kiloHertz.toFixed(1)} kHz`);
   }
   if (typeof item.bitDepth === 'number' && Number.isInteger(item.bitDepth) && item.bitDepth > 0) {
-    parts.push(`${item.bitDepth}-bit`);
+    parts.push(`${item.bitDepth} bit`);
   }
   if (typeof item.bitrateBps === 'number' && Number.isFinite(item.bitrateBps) && item.bitrateBps > 0) {
     parts.push(`${Math.round(item.bitrateBps / 1000)} kbps`);
   }
-  return parts.length > 0 ? parts.join(' ') : '—';
+  return parts.length > 0 ? parts.join('．') : '—';
 }
 
 /**

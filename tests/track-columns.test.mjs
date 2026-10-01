@@ -75,9 +75,12 @@ test('YEAR displays only YYYY or valid YYYY-MM-DD and never accepts other date s
 test('audio format uses only supplied source fields and formats nullable values', () => {
   assert.equal(formatAudioFormat({
     codec: 'flac', sampleRateHz: 48_000, bitDepth: 16, bitrateBps: 1_024_000,
-  }), 'FLAC 48 kHz 16-bit 1024 kbps');
+  }), 'FLAC．48 kHz．16 bit．1024 kbps');
+  assert.equal(formatAudioFormat({
+    codec: 'flac', sampleRateHz: 48_000, bitDepth: 24, bitrateBps: 1_989_000,
+  }), 'FLAC．48 kHz．24 bit．1989 kbps');
   assert.equal(formatAudioFormat({ codec: null, sampleRateHz: null, bitDepth: null, bitrateBps: null }), '—');
-  assert.equal(formatAudioFormat({ codec: 'mp3', sampleRateHz: 44_100, bitDepth: null, bitrateBps: 192_000 }), 'MP3 44.1 kHz 192 kbps');
+  assert.equal(formatAudioFormat({ codec: 'mp3', sampleRateHz: 44_100, bitDepth: null, bitrateBps: 192_000 }), 'MP3．44.1 kHz．192 kbps');
 });
 
 test('Hi-Res badge requires at least 48 kHz sample rate and 24-bit source depth', () => {

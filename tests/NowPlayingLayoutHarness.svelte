@@ -67,7 +67,6 @@
   let artworkVariant = $state<'square' | 'portrait' | 'landscape'>('landscape');
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   let coverStageElement: HTMLDivElement;
-  let artworkCopyElement: HTMLDivElement;
 
   const artworkDimensions = {
     square: [400, 400],
@@ -83,18 +82,16 @@
   function updateCoverFrame(): void {
     const image = coverStageElement?.querySelector('img');
     const pane = coverStageElement?.parentElement;
-    if (!image?.naturalWidth || !image.naturalHeight || !pane || !artworkCopyElement) {
+    if (!image?.naturalWidth || !image.naturalHeight || !pane) {
       coverFrame = null;
       return;
     }
-    const gap = Number.parseFloat(getComputedStyle(pane).rowGap) || 0;
-    const narrow = window.matchMedia('(max-width: 720px)').matches;
-    const maxDimension = window.innerHeight * (narrow ? 0.4 : 0.78);
+    const maxDimension = window.innerHeight * 0.92;
     const frame = calculateArtworkFrame({
       sourceWidth: image.naturalWidth,
       sourceHeight: image.naturalHeight,
       availableWidth: pane.clientWidth,
-      availableHeight: Math.max(0, pane.clientHeight - artworkCopyElement.offsetHeight - gap),
+      availableHeight: pane.clientHeight,
       maxWidth: maxDimension,
       maxHeight: maxDimension,
       border: 1,
@@ -149,14 +146,12 @@
 
   $effect(() => {
     const stage = coverStageElement;
-    const copy = artworkCopyElement;
     const variant = artworkVariant;
-    if (!stage || !copy) return;
+    if (!stage) return;
     void variant;
     const image = stage.querySelector('img');
     const observer = new ResizeObserver(updateCoverFrame);
     if (stage.parentElement) observer.observe(stage.parentElement);
-    observer.observe(copy);
     image?.addEventListener('load', updateCoverFrame);
     updateCoverFrame();
     return () => {
@@ -179,9 +174,9 @@
     const card = document.querySelector<HTMLElement>('.now-playing-card');
     const cover = document.querySelector<HTMLImageElement>('[data-testid="cover-image"]');
     const formatRow = document.querySelector<HTMLElement>('.now-playing-format');
-    const title = document.querySelector<HTMLElement>('.now-playing-copy h2');
-    const artist = document.querySelector<HTMLElement>('.now-playing-artist');
-    const album = document.querySelector<HTMLElement>('.now-playing-album');
+    const title = document.querySelector<HTMLElement>('.now-playing-track-info [data-track-field="title"]');
+    const artist = document.querySelector<HTMLElement>('.now-playing-track-info [data-track-field="artist"]');
+    const album = document.querySelector<HTMLElement>('.now-playing-track-info [data-track-field="album"]');
     const lyrics = document.querySelector<HTMLElement>('[data-testid="timed-lyrics"]');
     const paneElements = [...document.querySelectorAll<HTMLElement>('.now-playing-card > [data-layout-pane]')];
     const artworkChildren = [...document.querySelectorAll<HTMLElement>('.now-playing-artwork > *')];
@@ -298,7 +293,14 @@
   <section class="now-playing-overlay is-open" data-testid="now-playing-overlay" aria-label="正在播放">
     <header class="topbar now-playing-overlay-topbar" data-testid="layout-topbar">
       <button class="outline-button now-playing-overlay-return" type="button" aria-label="返回播放前頁面" title="返回播放前頁面">返回</button>
-      <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>NOW PLAYING</strong></div>
+      <div class="now-playing-header-track">
+        <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類">
+          <button data-track-field="title" type="button">測試曲名</button><span aria-hidden="true">．</span>
+          <button data-track-field="artist" type="button">測試演出者</button><span aria-hidden="true">．</span>
+          <button data-track-field="album" type="button">測試專輯</button>
+        </nav>
+        <p class="now-playing-format"><span>FLAC．48 kHz．24 bit</span><img src={hiResBadgeUrl} alt="Hi-Res" /></p>
+      </div>
     </header>
     <div class="now-playing-overlay-body" data-testid="outer-page-scroll">
       <div class="now-playing-overlay-content">
@@ -319,12 +321,6 @@
                   src={artworkDataUrl(artworkVariant)}
                   alt="測試封面"
                 />
-              </div>
-              <div bind:this={artworkCopyElement} class="now-playing-copy">
-                <p class="now-playing-format"><span>FLAC 48 kHz 24-bit</span><img src={hiResBadgeUrl} alt="Hi-Res" /></p>
-                <h2>這是一段刻意加長的曲目標題，用來確認不同尺寸的正在播放頁會限制標題行數，並且不會把返回曲庫控制擠出畫面範圍或造成另一個可以捲動的資訊欄位。</h2>
-                <p class="now-playing-artist">測試演出者</p>
-                <p class="now-playing-album">測試專輯</p>
               </div>
             {/snippet}
             {#snippet lyrics()}

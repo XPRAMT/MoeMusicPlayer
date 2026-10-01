@@ -75,12 +75,13 @@ async page => {
   await page.evaluate(() => { window.__appearanceStep = 'dock clicked'; });
   await page.waitForFunction(() => document.querySelector('.now-playing-overlay')?.classList.contains('is-open'));
   await page.evaluate(() => { window.__appearanceStep = 'overlay open'; });
-  await page.waitForFunction(() => document.querySelector('.now-playing-backdrop img')?.complete && document.querySelector('.now-playing-backdrop img')?.naturalWidth === 800);
+  await page.waitForFunction(() => document.querySelector('.now-playing-backdrop img')?.complete && document.querySelector('.now-playing-backdrop img')?.naturalWidth === 800, { timeout: 15000 });
 
   const sharedArtwork = await page.evaluate(() => ({
     backgroundUrl: document.querySelector('.now-playing-backdrop img')?.src,
     coverUrl: document.querySelector('.cover-stage-image')?.src,
-    dockUrl: document.querySelector('.dock-art-image')?.src,
+     dockArtworkButtonCount: document.querySelectorAll('.player-dock .dock-art').length,
+     dockLinks: [...document.querySelectorAll('.player-dock .dock-track-link')].map((button) => button.textContent.trim()),
     layerCount: document.querySelectorAll('.now-playing-backdrop').length,
     filter: getComputedStyle(document.querySelector('.now-playing-backdrop img')).filter,
     z: {
@@ -91,7 +92,8 @@ async page => {
     },
   }));
   assert.equal(sharedArtwork.backgroundUrl, sharedArtwork.coverUrl, 'full-screen background should reuse the Now Playing artwork URL');
-  assert.equal(sharedArtwork.backgroundUrl, sharedArtwork.dockUrl, 'dock should reuse the same active artwork URL');
+  assert.equal(sharedArtwork.dockArtworkButtonCount, 0, 'overlay dock removes the mini artwork entrance');
+  assert.deepEqual(sharedArtwork.dockLinks, ['Volume Slider Test', 'hanser feat. 合作演出者'], 'overlay dock shows clickable title and full artist values as return controls');
   assert.equal(sharedArtwork.layerCount, 1, 'render exactly one full-screen background layer');
   assert.equal(sharedArtwork.filter, 'blur(25px)', 'loaded preferences should set the backdrop blur');
   assert.ok(sharedArtwork.z.backdrop > sharedArtwork.z.sidebar, 'backdrop must cover the mobile sidebar');
@@ -142,6 +144,25 @@ async page => {
 
   await page.setViewportSize({ width: 1600, height: 900 });
   await wait(100);
+  await page.locator('.now-playing-topbar-tools button[aria-label="切換譯文顯示"]').click();
+  await page.locator('.now-playing-topbar-tools button[aria-label="切換羅馬拼音顯示"]').click();
+  await page.waitForFunction(() => document.querySelector('.lyric-translation') && document.querySelector('.lyric-romanization'));
+  const lyricContrast = await page.evaluate(() => {
+    const primary = document.querySelector('.lyric-line.active .lyric-primary');
+    const translation = document.querySelector('.lyric-translation');
+    const romanization = document.querySelector('.lyric-romanization');
+    const viewport = document.querySelector('.lyrics-lines-viewport');
+    return {
+      shadows: [primary, translation, romanization].map((element) => getComputedStyle(element).textShadow),
+      opacity: getComputedStyle(primary).opacity,
+      lineBackground: getComputedStyle(primary.closest('.lyric-line')).backgroundColor,
+      mask: getComputedStyle(viewport).maskImage,
+    };
+  });
+  assert.ok(lyricContrast.shadows.every((shadow) => shadow.includes('rgba(0, 0, 0')), 'original, translation, and romanization lyrics use dark text shadows over bright covers');
+  assert.equal(lyricContrast.lineBackground, 'rgba(0, 0, 0, 0)', 'lyric text shadow does not add a row background');
+  assert.equal(lyricContrast.mask.includes('linear-gradient'), true, 'lyric viewport gradient mask remains enabled');
+  assert.equal(lyricContrast.opacity, '1', 'current lyric opacity remains unchanged');
   await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-appearance-light-cover.png' });
 
   await page.locator('.now-playing-backdrop img').dispatchEvent('error');
@@ -157,7 +178,7 @@ async page => {
   }));
   assert.ok(fallback.background !== 'rgba(0, 0, 0, 0)', 'cover failure should keep a theme-colored fallback layer');
   assert.ok(fallback.buttonHit, 'fallback layer must not block playback controls');
-  await page.locator('.dock-art').click();
+  await page.locator('.now-playing-overlay-return').click();
   await page.waitForFunction(() => !document.querySelector('.now-playing-backdrop'));
   const closed = await page.evaluate(() => ({
     activeClass: document.querySelector('.app-shell').classList.contains('has-now-playing-backdrop'),

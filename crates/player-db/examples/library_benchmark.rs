@@ -116,6 +116,7 @@ fn run_size(size: usize) -> Result<(), Box<dyn std::error::Error>> {
         offset: 0,
         limit: 100,
         query: None,
+        field_filter: None,
     })?;
     let combined_page = started.elapsed();
 

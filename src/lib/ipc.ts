@@ -129,8 +129,14 @@ export interface TrackPage {
 
 export interface TrackPageRequest {
   query: string | null;
+  fieldFilter?: TrackFieldFilter | null;
   offset: number;
   limit: number;
+}
+
+export interface TrackFieldFilter {
+  field: 'title' | 'artist' | 'album';
+  value: string;
 }
 
 export interface PlaylistSummary {
@@ -192,7 +198,7 @@ export interface PlaylistExportResult {
 export type RepeatMode = 'off' | 'one' | 'all';
 
 export type PlaybackQueueSource =
-  | { kind: 'library'; query: string | null }
+  | { kind: 'library'; query: string | null; fieldFilter?: TrackFieldFilter | null }
   | { kind: 'playlist'; playlistId: string; entryPosition: number };
 export type PlaybackState =
   | 'initializing'
