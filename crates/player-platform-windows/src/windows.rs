@@ -1,14 +1,18 @@
 use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
-    fs, io,
+    fs,
+    io::{self, Seek},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use lofty::{
-    file::{FileType, EXTENSIONS},
+    config::ParseOptions,
+    file::{FileType, TaggedFile, EXTENSIONS},
+    mpeg::{Layer, MpegFile},
     prelude::{Accessor, AudioFile, TaggedFileExt},
+    probe::Probe,
     tag::ItemKey,
 };
 use player_core::{
@@ -374,14 +378,42 @@ impl MediaIndex for WindowsMediaIndex {
             }
         };
 
-        let tagged_file = lofty::read_from_path(path).map_err(|error| TrackMetadataError {
-            message: format!("could not parse audio metadata: {error}"),
+        let probe = Probe::open(path).map_err(|error| TrackMetadataError {
+            message: format!("could not open audio metadata: {error}"),
         })?;
+        let probe = probe
+            .guess_file_type()
+            .map_err(|error| TrackMetadataError {
+                message: format!("could not identify audio file type: {error}"),
+            })?;
+        let file_type = probe.file_type().ok_or_else(|| TrackMetadataError {
+            message: "could not identify audio file type".to_owned(),
+        })?;
+        let (tagged_file, codec) = if file_type == FileType::Mpeg {
+            let mut reader = probe.into_inner();
+            reader
+                .seek(std::io::SeekFrom::Start(0))
+                .map_err(|error| TrackMetadataError {
+                    message: format!("could not rewind MPEG audio file: {error}"),
+                })?;
+            let mpeg_file =
+                MpegFile::read_from(&mut reader, ParseOptions::new()).map_err(|error| {
+                    TrackMetadataError {
+                        message: format!("could not parse MPEG audio properties: {error}"),
+                    }
+                })?;
+            let codec = mpeg_codec_name(*mpeg_file.properties().layer()).to_owned();
+            (TaggedFile::from(mpeg_file), codec)
+        } else {
+            let tagged_file = probe.read().map_err(|error| TrackMetadataError {
+                message: format!("could not parse audio metadata: {error}"),
+            })?;
+            (tagged_file, format!("{file_type:?}"))
+        };
         let tag = tagged_file
             .primary_tag()
             .or_else(|| tagged_file.first_tag());
         let properties = tagged_file.properties();
-        let file_type = tagged_file.file_type();
         let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
 
         Ok(TrackMetadata {
@@ -393,7 +425,7 @@ impl MediaIndex for WindowsMediaIndex {
             track_number: tag.and_then(|tag| tag.track()),
             disc_number: tag.and_then(|tag| tag.disk()),
             duration_ms: Some(properties.duration().as_millis().min(u64::MAX as u128) as u64),
-            codec: Some(format!("{:?}", tagged_file.file_type())),
+            codec: Some(codec),
             bitrate_bps: properties
                 .audio_bitrate()
                 .map(|kbps| kbps.saturating_mul(1000)),
@@ -403,6 +435,14 @@ impl MediaIndex for WindowsMediaIndex {
                 .and_then(parse_recording_date_year),
             bit_depth: reliable_source_bit_depth(file_type, properties.bit_depth()),
         })
+    }
+}
+
+fn mpeg_codec_name(layer: Layer) -> &'static str {
+    match layer {
+        Layer::Layer1 => "MP1",
+        Layer::Layer2 => "MP2",
+        Layer::Layer3 => "MP3",
     }
 }
 
@@ -516,10 +556,11 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_recording_date_year, reliable_source_bit_depth, to_extended_path,
+        mpeg_codec_name, parse_recording_date_year, reliable_source_bit_depth, to_extended_path,
         windows_locator_key, WindowsMediaIndex,
     };
     use lofty::file::FileType;
+    use lofty::mpeg::Layer;
     use player_core::{
         LibraryRoot, MediaIndex, MediaLocator, MediaScanProgressUnit, MediaSourceKind, SourceId,
         SourceScanState, SyncCancellation, UserMetadataField,
@@ -894,8 +935,16 @@ mod tests {
         assert_eq!(metadata.track_number, Some(4));
         assert_eq!(metadata.album_artist.as_deref(), Some("專輯演出者"));
         assert_eq!(metadata.year, Some(2024));
+        assert_eq!(metadata.codec.as_deref(), Some("MP3"));
         assert_eq!(metadata.bit_depth, None, "MP3 is lossy");
         fs::remove_dir_all(base).expect("cleanup");
+    }
+
+    #[test]
+    fn mpeg_layer_names_remain_distinct() {
+        assert_eq!(mpeg_codec_name(Layer::Layer1), "MP1");
+        assert_eq!(mpeg_codec_name(Layer::Layer2), "MP2");
+        assert_eq!(mpeg_codec_name(Layer::Layer3), "MP3");
     }
 
     #[test]
