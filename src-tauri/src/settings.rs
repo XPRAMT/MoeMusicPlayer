@@ -833,15 +833,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "read-only replay against an explicitly supplied preserved settings copy"]
-    fn preserved_corrupt_settings_copy_is_valid_schema_five() {
-        let path = std::env::var_os("MOE_SETTINGS_CORRUPT_FIXTURE")
-            .expect("set MOE_SETTINGS_CORRUPT_FIXTURE to an isolated preserved copy");
+    #[ignore = "isolated replay against an explicitly supplied settings copy"]
+    fn preserved_settings_copy_loads_through_store_open() {
+        let path = std::env::var_os("MOE_SETTINGS_STORE_FIXTURE")
+            .expect("set MOE_SETTINGS_STORE_FIXTURE to an isolated settings copy");
         let path = PathBuf::from(path);
+        let original_bytes = fs::read(&path).expect("read isolated settings copy");
         let (settings, migrated) = read_settings(&path).expect("parse preserved settings copy");
         assert!(
             !migrated,
-            "the preserved copy already uses the current schema"
+            "the settings copy already uses the current schema"
         );
         assert!(settings.source_registry_authoritative);
         assert_eq!(settings.sources.len(), 2);
@@ -853,6 +854,107 @@ mod tests {
             &settings.sources[1].kind,
             SourceEntryKind::PlaylistFile { .. }
         ));
+
+        let store = SettingsStore::open(&path, AppSettings::default())
+            .expect("open isolated settings copy through the production store");
+        assert_eq!(store.path(), path);
+        assert_eq!(
+            store.snapshot().expect("snapshot settings").sources.len(),
+            2
+        );
+        assert!(store.source_registry_authoritative().unwrap());
+        assert!(store.recovery_warning().is_none());
+        assert_eq!(
+            fs::read(&path).expect("settings remain unchanged"),
+            original_bytes
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "read-only probe of logical and package-cache settings paths"]
+    fn probe_live_settings_paths_without_opening_the_store() {
+        fn final_handle_path(handle: std::os::windows::io::RawHandle) -> Option<String> {
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn GetFinalPathNameByHandleW(
+                    file: *mut std::ffi::c_void,
+                    file_path: *mut u16,
+                    file_path_size: u32,
+                    flags: u32,
+                ) -> u32;
+            }
+
+            let mut buffer = vec![0_u16; 32_768];
+            let written = unsafe {
+                GetFinalPathNameByHandleW(
+                    handle,
+                    buffer.as_mut_ptr(),
+                    u32::try_from(buffer.len()).ok()?,
+                    0,
+                )
+            } as usize;
+            if written == 0 || written >= buffer.len() {
+                return None;
+            }
+            Some(String::from_utf16_lossy(&buffer[..written]))
+        }
+
+        fn probe(label: &str, path: &Path) {
+            let path_metadata = match fs::metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    eprintln!("settings_probe label={label} path={path:?} metadata_error={error}");
+                    return;
+                }
+            };
+            let canonical = fs::canonicalize(path).ok();
+            let mut file = match File::open(path) {
+                Ok(file) => file,
+                Err(error) => {
+                    eprintln!("settings_probe label={label} path={path:?} open_error={error}");
+                    return;
+                }
+            };
+            let handle_path = final_handle_path(file.as_raw_handle());
+            let handle_metadata = file.metadata().ok();
+            let mut bytes = Vec::new();
+            if let Err(error) = file.read_to_end(&mut bytes) {
+                eprintln!("settings_probe label={label} path={path:?} read_error={error}");
+                return;
+            }
+            let settings_result = read_settings(path).map(|(settings, migrated)| {
+                (
+                    settings.sources.len(),
+                    settings.source_registry_authoritative,
+                    migrated,
+                )
+            });
+            eprintln!(
+                "settings_probe label={label} requested={path:?} canonical={canonical:?} handle_final={handle_path:?} path_len={} handle_len={:?} read_len={} loader={settings_result:?}",
+                path_metadata.len(),
+                handle_metadata.map(|metadata| metadata.len()),
+                bytes.len(),
+            );
+        }
+
+        use std::os::windows::io::AsRawHandle;
+
+        let logical = PathBuf::from(
+            std::env::var_os("MOE_SETTINGS_LOGICAL_PATH")
+                .expect("set MOE_SETTINGS_LOGICAL_PATH to the Roaming settings path"),
+        );
+        let extended = PathBuf::from(
+            std::env::var_os("MOE_SETTINGS_EXTENDED_PATH")
+                .expect("set MOE_SETTINGS_EXTENDED_PATH to the extended Roaming path"),
+        );
+        let local_cache = PathBuf::from(
+            std::env::var_os("MOE_SETTINGS_LOCALCACHE_PATH")
+                .expect("set MOE_SETTINGS_LOCALCACHE_PATH to the LocalCache settings path"),
+        );
+        probe("logical-roaming", &logical);
+        probe("extended-roaming", &extended);
+        probe("direct-local-cache", &local_cache);
     }
 
     #[test]
