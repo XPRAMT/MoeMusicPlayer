@@ -656,6 +656,7 @@ pub async fn lyrics_search(
     track_id: String,
     request_id: String,
 ) -> Result<LyricsTrackResultDto, String> {
+    let _database_work = super::enter_database_work(&state)?;
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
     validate_request_id(&request_id)?;
     let database = state.database.as_ref().ok_or_else(|| {
@@ -699,6 +700,7 @@ pub fn lyrics_select_candidate(
     track_id: String,
     candidate_id: String,
 ) -> Result<TrackLyricsDto, String> {
+    let _database_work = super::enter_database_work(&state)?;
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
     if candidate_id.is_empty() || candidate_id.len() > 256 {
         return Err("歌詞候選識別碼無效，請重新搜尋。".to_owned());

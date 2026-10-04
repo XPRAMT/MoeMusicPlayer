@@ -833,6 +833,29 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "read-only replay against an explicitly supplied preserved settings copy"]
+    fn preserved_corrupt_settings_copy_is_valid_schema_five() {
+        let path = std::env::var_os("MOE_SETTINGS_CORRUPT_FIXTURE")
+            .expect("set MOE_SETTINGS_CORRUPT_FIXTURE to an isolated preserved copy");
+        let path = PathBuf::from(path);
+        let (settings, migrated) = read_settings(&path).expect("parse preserved settings copy");
+        assert!(
+            !migrated,
+            "the preserved copy already uses the current schema"
+        );
+        assert!(settings.source_registry_authoritative);
+        assert_eq!(settings.sources.len(), 2);
+        assert!(matches!(
+            &settings.sources[0].kind,
+            SourceEntryKind::Folder { .. }
+        ));
+        assert!(matches!(
+            &settings.sources[1].kind,
+            SourceEntryKind::PlaylistFile { .. }
+        ));
+    }
+
+    #[test]
     fn migration_from_legacy_sqlite_values_writes_a_versioned_json_file() {
         let directory = test_directory("legacy");
         let path = directory.join("settings.json");

@@ -17,7 +17,9 @@ use player_core::{
     TrackIdentity, TrackLyrics, TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField,
     TRACK_METADATA_VERSION,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{
+    params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
+};
 use uuid::Uuid;
 
 use crate::locator;
@@ -361,6 +363,10 @@ pub enum DatabaseError {
     UnsupportedSchemaVersion(i64),
     UnsupportedLocatorEncoding(String),
     CorruptData(String),
+    CheckpointBusy {
+        log_frames: i64,
+        checkpointed_frames: i64,
+    },
     InvalidNumber(&'static str),
     SourceMismatch,
     TrackNotFound(TrackId),
@@ -388,6 +394,13 @@ impl fmt::Display for DatabaseError {
                 write!(f, "cannot open a filesystem locator encoded as {encoding}")
             }
             Self::CorruptData(reason) => write!(f, "invalid database data: {reason}"),
+            Self::CheckpointBusy {
+                log_frames,
+                checkpointed_frames,
+            } => write!(
+                f,
+                "SQLite WAL checkpoint remained busy ({checkpointed_frames}/{log_frames} frames checkpointed)"
+            ),
             Self::InvalidNumber(field) => write!(f, "{field} does not fit SQLite INTEGER"),
             Self::SourceMismatch => {
                 f.write_str("a source scan contains an identity from a different library root")
@@ -474,6 +487,46 @@ impl ThemePreferences {
 }
 
 impl Database {
+    /// Open an existing database only after a structural check on a genuinely read-only handle.
+    /// This method never rebuilds or replaces the database and checks before writable migrations.
+    pub fn open_checked(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
+        let path = path.as_ref();
+        if path == Path::new(":memory:") || !path.exists() {
+            return Self::open(path);
+        }
+        let metadata = std::fs::metadata(path)?;
+        if metadata.len() == 0 {
+            return Err(DatabaseError::CorruptData(
+                "existing SQLite database file is empty; automatic initialization was refused"
+                    .to_owned(),
+            ));
+        }
+
+        // Validate an existing DB through a genuinely read-only handle. Setting
+        // query_only on a read-write handle is not sufficient: SQLite may still
+        // recover/checkpoint a WAL while opening or closing that handle.
+        let validation_connection =
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        validation_connection.busy_timeout(Duration::from_secs(5))?;
+        let check: String = validation_connection
+            .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
+            .map_err(|error| {
+                DatabaseError::CorruptData(format!("startup quick_check failed: {error}"))
+            })?;
+        if check != "ok" {
+            return Err(DatabaseError::CorruptData(format!(
+                "startup quick_check failed: {check}"
+            )));
+        }
+
+        // Keep the read-only handle open while acquiring the writer handle so
+        // the path cannot be replaced between validation and normal open on
+        // platforms that enforce SQLite's file-sharing locks.
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        drop(validation_connection);
+        Self::from_connection(connection)
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
         let path = path.as_ref();
         if path != Path::new(":memory:") {
@@ -490,6 +543,22 @@ impl Database {
 
     pub fn open_in_memory() -> Result<Self, DatabaseError> {
         Self::from_connection(Connection::open_in_memory()?)
+    }
+
+    /// Checkpoint pending WAL pages after callers have stopped and joined their writers.
+    pub fn checkpoint_wal(&self) -> Result<(), DatabaseError> {
+        let connection = self.lock()?;
+        let (busy, log_frames, checkpointed_frames): (i64, i64, i64) =
+            connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+        if busy != 0 {
+            return Err(DatabaseError::CheckpointBusy {
+                log_frames,
+                checkpointed_frames,
+            });
+        }
+        Ok(())
     }
 
     fn from_connection(connection: Connection) -> Result<Self, DatabaseError> {
@@ -3019,7 +3088,10 @@ fn to_sql_i64(value: u64, field: &'static str) -> Result<i64, DatabaseError> {
 #[cfg(test)]
 mod tests {
     use std::{
-        path::PathBuf,
+        fs,
+        io::{Seek, SeekFrom, Write},
+        path::{Path, PathBuf},
+        process::{Command, Stdio},
         sync::mpsc,
         thread,
         time::{Duration, SystemTime},
@@ -3034,7 +3106,7 @@ mod tests {
         TrackFieldFilter, TrackId, TrackIdentity, TrackLyrics, TrackMetadata, TrackMetadataError,
         UserMetadataField, TRACK_METADATA_VERSION,
     };
-    use rusqlite::{params, OptionalExtension};
+    use rusqlite::{params, Connection, OptionalExtension};
 
     use super::{
         Database, DatabaseError, LibraryRepository, PlaybackSessionCheckpoint,
@@ -3042,6 +3114,12 @@ mod tests {
         SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9,
         TRACKS_PAGE_SQL,
     };
+
+    fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+        let mut value = path.as_os_str().to_os_string();
+        value.push(suffix);
+        value.into()
+    }
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
         db.add_library_root(
@@ -4272,6 +4350,259 @@ mod tests {
                 std::fs::remove_file(file).expect("remove temporary playlist database");
             }
         }
+    }
+
+    #[test]
+    fn checked_open_rejects_corrupt_main_with_a_pending_wal_without_writing_files() {
+        assert_eq!(rusqlite::version(), "3.53.2");
+
+        let directory = std::env::temp_dir().join(format!(
+            "moemusic-wal-mismatch-{}-{}",
+            std::process::id(),
+            PlaylistId::new()
+        ));
+        fs::create_dir_all(&directory).expect("create isolated fixture directory");
+        let source_path = directory.join("source.sqlite3");
+        let checked_path = directory.join("checked.sqlite3");
+        {
+            let source = Connection::open(&source_path).expect("create WAL source database");
+            source
+                .pragma_update(None, "journal_mode", "WAL")
+                .expect("enable WAL for source");
+            source
+                .pragma_update(None, "wal_autocheckpoint", 0)
+                .expect("disable automatic checkpoint for fixture");
+            source
+                .execute_batch(
+                    "CREATE TABLE entries(id INTEGER PRIMARY KEY, body TEXT NOT NULL);
+                     WITH RECURSIVE n(value) AS (
+                         SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 4000
+                     ) INSERT INTO entries(id, body) SELECT value, printf('entry-%d', value) FROM n;",
+                )
+                .expect("seed source pages");
+            let checkpoint: (i64, i64, i64) = source
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .expect("checkpoint the source baseline");
+            assert_eq!(checkpoint.0, 0, "source baseline checkpoint was busy");
+
+            source
+                .pragma_update(None, "user_version", 99)
+                .expect("write page-one frame into source WAL");
+            let source_wal = sidecar_path(&source_path, "-wal");
+            let source_shm = sidecar_path(&source_path, "-shm");
+            assert!(fs::metadata(&source_wal).expect("source WAL exists").len() > 0);
+            fs::copy(&source_path, &checked_path).expect("copy SQLite main file");
+            fs::copy(&source_wal, sidecar_path(&checked_path, "-wal"))
+                .expect("copy committed WAL frame");
+            if source_shm.exists() {
+                fs::copy(&source_shm, sidecar_path(&checked_path, "-shm"))
+                    .expect("copy WAL index sidecar");
+            }
+        }
+
+        // Page 2 is not represented by the copied page-one WAL frame. Make the
+        // main/WAL pair inconsistent while keeping a syntactically valid WAL.
+        let mut checked_main = fs::OpenOptions::new()
+            .write(true)
+            .open(&checked_path)
+            .expect("open isolated main file for fixture corruption");
+        checked_main
+            .seek(SeekFrom::Start(4096))
+            .expect("seek to page two");
+        checked_main
+            .write_all(&[0xff])
+            .expect("damage a b-tree page not present in WAL");
+        checked_main.flush().expect("flush fixture corruption");
+        drop(checked_main);
+
+        let main_before = fs::read(&checked_path).expect("capture isolated main file");
+        let wal_path = sidecar_path(&checked_path, "-wal");
+        let wal_before = fs::read(&wal_path).expect("capture isolated WAL");
+        let result = Database::open_checked(&checked_path);
+        let error = result.expect_err("checked open must reject the damaged pair");
+        assert!(
+            error.to_string().contains("startup quick_check failed"),
+            "startup must reject the pair at the pre-migration guard: {error}"
+        );
+        assert_eq!(
+            fs::read(&checked_path).expect("read main after rejected open"),
+            main_before,
+            "failed checked open must not rewrite the main database"
+        );
+        assert_eq!(
+            fs::read(&wal_path).expect("read WAL after rejected open"),
+            wal_before,
+            "failed checked open must not checkpoint, truncate, or replace the WAL"
+        );
+        fs::remove_dir_all(&directory).expect("remove isolated fixture directory");
+    }
+
+    #[test]
+    fn forced_process_exit_recovers_committed_wal_and_rolls_back_open_transaction() {
+        assert_eq!(rusqlite::version(), "3.53.2");
+        let directory = std::env::temp_dir().join(format!(
+            "moemusic-wal-kill-{}-{}",
+            std::process::id(),
+            PlaylistId::new()
+        ));
+        fs::create_dir_all(&directory).expect("create isolated crash-test directory");
+        let path = directory.join("crash.sqlite3");
+        let status = Command::new(std::env::current_exe().expect("test executable path"))
+            .arg("--exact")
+            .arg("database::tests::sqlite_crash_child_writer")
+            .arg("--nocapture")
+            .env("MOE_DB_CRASH_TEST_PATH", &path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("start isolated SQLite child process");
+        assert_eq!(
+            status.code(),
+            Some(73),
+            "child exited inside an open transaction"
+        );
+        assert!(
+            fs::metadata(sidecar_path(&path, "-wal"))
+                .expect("committed WAL survives process exit")
+                .len()
+                > 0
+        );
+
+        let database = Database::open_checked(&path).expect("recover committed WAL on reopen");
+        let connection = database.lock().expect("database mutex");
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM crash_rows", [], |row| row.get(0))
+            .expect("read recovered rows");
+        let committed: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM crash_rows WHERE value='committed'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read committed row");
+        assert_eq!(rows, 1, "the uncommitted transaction must be rolled back");
+        assert_eq!(
+            committed, 1,
+            "the committed row must survive the process exit"
+        );
+        drop(connection);
+        database
+            .checkpoint_wal()
+            .expect("checkpoint after recovery");
+        drop(database);
+        fs::remove_dir_all(&directory).expect("remove isolated crash-test directory");
+    }
+
+    #[test]
+    fn sqlite_crash_child_writer() {
+        let Some(path) = std::env::var_os("MOE_DB_CRASH_TEST_PATH") else {
+            return;
+        };
+        assert_eq!(rusqlite::version(), "3.53.2");
+        let mut connection = Connection::open(path).expect("open isolated child database");
+        connection
+            .pragma_update(None, "journal_mode", "WAL")
+            .expect("enable WAL");
+        connection
+            .pragma_update(None, "wal_autocheckpoint", 0)
+            .expect("leave committed transaction in WAL");
+        connection
+            .pragma_update(None, "cache_size", 1)
+            .expect("force small page cache");
+        connection
+            .execute_batch(
+                "CREATE TABLE crash_rows(value TEXT NOT NULL);
+                 INSERT INTO crash_rows(value) VALUES('committed');",
+            )
+            .expect("commit durable baseline");
+        let transaction = connection.transaction().expect("begin open transaction");
+        for index in 0..2_000 {
+            transaction
+                .execute(
+                    "INSERT INTO crash_rows(value) VALUES(?1)",
+                    [format!("uncommitted-{index}")],
+                )
+                .expect("write uncommitted rows");
+        }
+        std::process::exit(73);
+    }
+
+    #[test]
+    #[ignore = "manual startup-check timing with 100,000 synthetic tracks"]
+    fn measure_checked_open_100k_tracks_with_pending_wal() {
+        assert_eq!(rusqlite::version(), "3.53.2");
+        let directory = std::env::temp_dir().join(format!(
+            "moemusic-open-check-100k-{}-{}",
+            std::process::id(),
+            PlaylistId::new()
+        ));
+        fs::create_dir_all(&directory).expect("create isolated benchmark directory");
+        let path = directory.join("library.sqlite3");
+        let mut database = Database::open(&path).expect("open isolated benchmark database");
+        let root = add_root(&database, MediaSourceKind::WindowsFilesystem, "check-100k");
+        let records = (0..100_000)
+            .map(|index| {
+                let item = format!("check-100k-{index}");
+                record(
+                    &root,
+                    &item,
+                    &format!("locator-check-100k-{index}"),
+                    &format!("Track {index}"),
+                    3_000_000 + index as u64,
+                    1_800_000_000_000,
+                )
+            })
+            .collect::<Vec<_>>();
+        database
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Complete,
+                &records,
+                &records,
+                &[],
+                1_800_000_000_000,
+            )
+            .expect("insert synthetic track rows");
+        drop(database);
+
+        let writer = Connection::open(&path).expect("open isolated WAL writer");
+        writer
+            .pragma_update(None, "journal_mode", "WAL")
+            .expect("enable WAL for timing fixture");
+        writer
+            .pragma_update(None, "wal_autocheckpoint", 0)
+            .expect("disable timing-fixture auto checkpoint");
+        writer
+            .pragma_update(None, "application_id", 5_063_493_i64)
+            .expect("leave one valid page in WAL");
+        let started = std::time::Instant::now();
+        let checked = Database::open_checked(&path).expect("checked open 100k fixture");
+        let elapsed = started.elapsed();
+        assert_eq!(checked.count_tracks(None).expect("count tracks"), 100_000);
+        let database_bytes = fs::metadata(&path).expect("database file metadata").len();
+        eprintln!(
+            "sqlite_version={} tracks=100000 main_database_bytes={} checked_open_with_pending_wal_ms={}",
+            rusqlite::version(),
+            database_bytes,
+            elapsed.as_millis()
+        );
+        drop(checked);
+        drop(writer);
+
+        let started = std::time::Instant::now();
+        let reopened = Database::open_checked(&path).expect("checked open without pending WAL");
+        let clean_open_elapsed = started.elapsed();
+        assert_eq!(reopened.count_tracks(None).expect("count tracks"), 100_000);
+        eprintln!(
+            "sqlite_version={} tracks=100000 main_database_bytes={} checked_open_without_wal_ms={}",
+            rusqlite::version(),
+            fs::metadata(&path).expect("clean database metadata").len(),
+            clean_open_elapsed.as_millis()
+        );
+        drop(reopened);
+        fs::remove_dir_all(&directory).expect("remove isolated benchmark directory");
     }
 
     #[test]

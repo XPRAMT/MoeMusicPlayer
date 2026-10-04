@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{ipc::Response, AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_media_index::MediaIndexExt;
 
+mod database_lifecycle;
 mod playlist_exchange;
 use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImportResult};
 #[cfg(target_os = "windows")]
@@ -106,6 +107,9 @@ struct AppState {
     database: Option<Database>,
     database_path: Option<std::path::PathBuf>,
     database_error: Option<String>,
+    database_work: database_lifecycle::DatabaseWorkGate,
+    #[cfg(target_os = "windows")]
+    shutdown: database_lifecycle::ShutdownCoordinator,
     settings: SettingsStore,
     lyrics_service: lyrics_service::LyricsService,
     #[cfg(target_os = "windows")]
@@ -120,6 +124,13 @@ struct AppState {
     android_playback: Option<android_playback::AndroidPlaybackService>,
     #[cfg(target_os = "android")]
     android_playback_error: Option<String>,
+}
+
+fn enter_database_work(state: &AppState) -> Result<database_lifecycle::DatabaseWorkGuard, String> {
+    state
+        .database_work
+        .try_enter()
+        .ok_or_else(|| "應用程式正在關閉，暫時無法開始新的資料庫工作。".to_owned())
 }
 
 #[cfg(target_os = "android")]
@@ -2067,6 +2078,7 @@ fn playlist_get_page(
     offset: u64,
     limit: u32,
 ) -> Result<PlaylistPage, String> {
+    let _database_work = enter_database_work(&state)?;
     let playlist_id = PlaylistId::parse(&playlist_id)
         .map_err(|_| "播放清單識別碼無效，請重新載入清單。".to_owned())?;
     let database = state.database.as_ref().ok_or_else(|| {
@@ -2104,6 +2116,7 @@ async fn playlist_import_m3u(
         let path = selected
             .into_path()
             .map_err(|error| format!("無法取得選取的本機播放清單路徑：{error}"))?;
+        let _database_work = enter_database_work(&state)?;
         let database = state.database.as_ref().ok_or_else(|| {
             state
                 .database_error
@@ -2156,8 +2169,11 @@ async fn playlist_import_m3u(
         database
             .save_library_root(&root)
             .map_err(|error| error.to_string())?;
+        drop(_database_work);
         let _ = library_sync(app.clone()).await;
-        if let Some(database) = app.state::<AppState>().database.as_ref() {
+        let post_sync_state = app.state::<AppState>();
+        let _post_sync_database_work = enter_database_work(&post_sync_state)?;
+        if let Some(database) = post_sync_state.database.as_ref() {
             if let Some(saved) = database
                 .get_playlist(playlist_id)
                 .map_err(|error| error.to_string())?
@@ -2238,6 +2254,7 @@ async fn playlist_import_m3u(
                 .ok_or_else(|| "選取的文件不是 .m3u 或 .m3u8 播放清單。".to_owned())?;
             let parse_path = std::path::PathBuf::from(file_name);
             let parsed = playlist_exchange::read_playlist_bytes(&playlist_bytes, &parse_path)?;
+            let _database_work = enter_database_work(&state)?;
             let database = state.database.as_ref().ok_or_else(|| {
                 state
                     .database_error
@@ -2290,7 +2307,9 @@ async fn playlist_import_m3u(
                     },
                 })
                 .map_err(|error| error.to_string())?;
+            drop(_database_work);
             let sync = library_sync(app.clone()).await?;
+            let _post_sync_database_work = enter_database_work(&state)?;
             let saved = database
                 .get_playlist(playlist_id)
                 .map_err(|error| error.to_string())?
@@ -2373,6 +2392,7 @@ async fn playlist_export_m3u(
         let path = selected
             .into_path()
             .map_err(|error| format!("無法取得匯出檔案路徑：{error}"))?;
+        let _database_work = enter_database_work(&state)?;
         let database = state.database.as_ref().ok_or_else(|| {
             state
                 .database_error
@@ -2406,16 +2426,19 @@ async fn playlist_export_m3u(
             })?;
             let playlist_id = PlaylistId::parse(&playlist_id)
                 .map_err(|_| "播放清單識別碼無效，請重新載入清單。".to_owned())?;
-            let database = state.database.as_ref().ok_or_else(|| {
-                state
-                    .database_error
-                    .clone()
-                    .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-            })?;
-            let playlist = database
-                .get_playlist(playlist_id)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| "找不到這份播放清單，請重新載入清單。".to_owned())?;
+            let playlist = {
+                let _database_work = enter_database_work(&state)?;
+                let database = state.database.as_ref().ok_or_else(|| {
+                    state
+                        .database_error
+                        .clone()
+                        .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+                })?;
+                database
+                    .get_playlist(playlist_id)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "找不到這份播放清單，請重新載入清單。".to_owned())?
+            };
             let extension = match format.as_str() {
                 "m3u" | "m3u8" => format,
                 _ => return Err("匯出格式必須是 M3U 或 M3U8。".to_owned()),
@@ -2633,6 +2656,7 @@ fn library_add_windows_folder(
 ) -> Result<LibrarySource, String> {
     #[cfg(target_os = "windows")]
     {
+        let _database_work = enter_database_work(&state)?;
         let database = state.database.as_ref().ok_or_else(|| {
             state
                 .database_error
@@ -2677,6 +2701,7 @@ async fn library_pick_windows_folder(
         let path = selected
             .into_path()
             .map_err(|error| format!("無法取得選取的資料夾路徑：{error}"))?;
+        let _database_work = enter_database_work(&state)?;
         add_windows_folder_path_to_settings(database, &state.settings, &path).map(Some)
     }
 
@@ -2825,6 +2850,7 @@ fn library_set_source_enabled(
     source_id: String,
     enabled: bool,
 ) -> Result<Vec<LibrarySource>, String> {
+    let _database_work = enter_database_work(&state)?;
     let id = SourceId::parse(&source_id).map_err(|error| format!("來源 ID 無效：{error}"))?;
     state
         .settings
@@ -2888,6 +2914,7 @@ fn library_remove_source(
     app: AppHandle,
     source_id: String,
 ) -> Result<Vec<LibrarySource>, String> {
+    let _database_work = enter_database_work(&state)?;
     let id = SourceId::parse(&source_id).map_err(|error| format!("來源 ID 無效：{error}"))?;
     let (settings, removed) = state
         .settings
@@ -2973,6 +3000,7 @@ fn android_media_add_volume(
     app: AppHandle,
     volume_name: String,
 ) -> Result<LibrarySource, String> {
+    let _database_work = enter_database_work(&state)?;
     let database = state.database.as_ref().ok_or_else(|| {
         state
             .database_error
@@ -3033,6 +3061,7 @@ fn android_saf_pick_source(
         return Err("Android 未保留這個資料夾的讀取授權。".to_owned());
     }
 
+    let _database_work = enter_database_work(&state)?;
     let mut root = add_or_get_root(
         database,
         MediaSourceKind::AndroidSaf,
@@ -3130,6 +3159,7 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
                 .to_owned(),
         );
     }
+    let database_work = enter_database_work(&state)?;
     let database_path = state.database_path.clone().ok_or_else(|| {
         state
             .database_error
@@ -3141,6 +3171,7 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
     let sync_app = app.clone();
     let event_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _database_work = database_work;
         let mut database = Database::open(database_path).map_err(|error| error.to_string())?;
         let mut on_progress = |root: &LibraryRoot,
                                source_index: usize,
@@ -3691,6 +3722,7 @@ fn now_utc_epoch_ms() -> Result<i64, String> {
 
 #[tauri::command]
 async fn playback_get_snapshot(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
     #[cfg(target_os = "windows")]
     {
         let playback = windows_playback_service(&state)?;
@@ -3736,6 +3768,7 @@ fn playback_get_queue_page(
     offset: u64,
     limit: u32,
 ) -> Result<PlaybackQueuePage, String> {
+    let _database_work = enter_database_work(&state)?;
     #[cfg(target_os = "windows")]
     {
         let service = windows_playback_service(&state)?;
@@ -3920,6 +3953,7 @@ async fn playback_play(
     track_id: String,
     queue_source: Option<PlaybackQueueSource>,
 ) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
     #[cfg(target_os = "windows")]
     {
         let database = state.database.as_ref().ok_or_else(|| {
@@ -3958,6 +3992,7 @@ async fn playback_play(
 
 #[tauri::command]
 async fn playback_pause(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
     #[cfg(target_os = "windows")]
     {
         let service = windows_playback_service(&state)?;
@@ -3982,6 +4017,7 @@ async fn playback_pause(state: State<'_, AppState>) -> Result<PlaybackSnapshot, 
 
 #[tauri::command]
 async fn playback_next(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
     #[cfg(target_os = "windows")]
     {
         let database = state.database.as_ref().ok_or_else(|| {
@@ -4018,6 +4054,7 @@ async fn playback_next(state: State<'_, AppState>) -> Result<PlaybackSnapshot, S
 
 #[tauri::command]
 async fn playback_previous(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
     #[cfg(target_os = "windows")]
     {
         let database = state.database.as_ref().ok_or_else(|| {
@@ -4057,6 +4094,7 @@ async fn playback_seek(
     state: State<'_, AppState>,
     position_ms: u64,
 ) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
     #[cfg(target_os = "windows")]
     {
         let service = windows_playback_service(&state)?;
@@ -4108,6 +4146,7 @@ async fn playback_set_repeat(
     state: State<'_, AppState>,
     mode: RepeatMode,
 ) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
     state
         .settings
         .update(|settings| {
@@ -4157,6 +4196,7 @@ async fn playback_set_shuffle(
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
     state
         .settings
         .update(|settings| {
@@ -4733,6 +4773,77 @@ fn checkpoint_playback_position(
 }
 
 #[cfg(target_os = "windows")]
+fn schedule_database_shutdown(app: AppHandle, request: database_lifecycle::ShutdownRequest) {
+    if request != database_lifecycle::ShutdownRequest::Start {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        const DATABASE_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+        let state = app.state::<AppState>();
+        let result = database_lifecycle::finish_shutdown(
+            &state.shutdown,
+            &state.database_work,
+            DATABASE_DRAIN_TIMEOUT,
+            || {
+                if let Some(system_media) = state.system_media.as_ref() {
+                    system_media.shutdown();
+                }
+                if let (Some(database), Some(playback)) =
+                    (state.database.as_ref(), state.playback.as_ref())
+                {
+                    if let Err(error) = checkpoint_playback_position(database, playback, true) {
+                        eprintln!("無法在關閉時保存播放狀態：{error}");
+                    }
+                    if let Ok(ticket) = playback.player.request_playback_accounting_checkpoint() {
+                        if let Err(error) = ticket.wait(Duration::from_secs(2)) {
+                            eprintln!("無法在關閉時取得播放時長尾段：{error}");
+                        }
+                    }
+                    playback.shutdown_statistics_collector();
+                    if let Some(status) = playback
+                        .statistics_status
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .as_ref()
+                    {
+                        eprintln!("播放時長統計狀態：{status}");
+                    }
+                    if let Err(error) = database.checkpoint_wal() {
+                        eprintln!("無法在關閉時完成 SQLite WAL checkpoint：{error}");
+                    }
+                } else if let Some(database) = state.database.as_ref() {
+                    if let Err(error) = database.checkpoint_wal() {
+                        eprintln!("無法在關閉時完成 SQLite WAL checkpoint：{error}");
+                    }
+                }
+            },
+        );
+
+        if result.is_err() {
+            eprintln!(
+                "關閉已取消：資料庫工作未能在 {} 秒內完成；應用程式仍保持開啟。",
+                DATABASE_DRAIN_TIMEOUT.as_secs()
+            );
+            let _ = app.emit(
+                "database-shutdown-blocked",
+                "曲庫工作仍在執行，關閉已取消；請稍後再試。",
+            );
+            return;
+        }
+
+        if let Some(window) = app.get_webview_window("main") {
+            if let Err(error) = window.close() {
+                eprintln!("關閉主視窗失敗：{error}");
+                app.exit(0);
+            }
+        } else {
+            app.exit(0);
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
 fn save_playback_session(
     database: &Database,
     service: &WindowsPlaybackService,
@@ -4939,34 +5050,15 @@ pub fn run() {
     builder
         .on_window_event(|_window, _event| {
             #[cfg(target_os = "windows")]
-            if _window.label() == "main"
-                && matches!(_event, tauri::WindowEvent::CloseRequested { .. })
-            {
-                let state = _window.app_handle().state::<AppState>();
-                #[cfg(target_os = "windows")]
-                if let (Some(database), Some(playback)) =
-                    (state.database.as_ref(), state.playback.as_ref())
-                {
-                    if let Err(error) = checkpoint_playback_position(database, playback, true) {
-                        eprintln!("無法在關閉時保存播放狀態：{error}");
+            if _window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
+                    let app = _window.app_handle().clone();
+                    let state = app.state::<AppState>();
+                    let request = state.shutdown.request();
+                    if request != database_lifecycle::ShutdownRequest::Ready {
+                        api.prevent_close();
+                        schedule_database_shutdown(app, request);
                     }
-                    if let Ok(ticket) = playback.player.request_playback_accounting_checkpoint() {
-                        if let Err(error) = ticket.wait(Duration::from_secs(2)) {
-                            eprintln!("無法在關閉時取得播放時長尾段：{error}");
-                        }
-                    }
-                    playback.shutdown_statistics_collector();
-                    if let Some(status) = playback
-                        .statistics_status
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .as_ref()
-                    {
-                        eprintln!("播放時長統計狀態：{status}");
-                    }
-                }
-                if let Some(system_media) = state.system_media.as_ref() {
-                    system_media.shutdown();
                 }
             }
         })
@@ -5023,7 +5115,8 @@ pub fn run() {
                 .map_err(|error| error.to_string())?
                 .join("moemusicplayer.sqlite3");
             let settings_path = database_path.with_file_name("settings.json");
-            let database_result = Database::open(&database_path).map_err(|error| error.to_string());
+            let database_result =
+                Database::open_checked(&database_path).map_err(|error| error.to_string());
             let (database, stored_path, database_error) = match database_result {
                 Ok(database) => (Some(database), Some(database_path.clone()), None),
                 Err(error) => (None, None, Some(error)),
@@ -5076,14 +5169,24 @@ pub fn run() {
                                 Some(error.clone());
                             eprintln!("無法完整還原播放狀態，已保留檢查點：{error}");
                         }
-                    }
-                    if let Err(error) = service.start_statistics_collector(&database_path) {
+                        if let Err(error) = service.start_statistics_collector(&database_path) {
+                            *service
+                                .statistics_status
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                Some(error.clone());
+                            eprintln!("播放時長統計未啟動：{error}");
+                        }
+                    } else {
+                        let reason = database_error
+                            .clone()
+                            .unwrap_or_else(|| "曲庫資料庫未通過啟動安全檢查。".to_owned());
                         *service
                             .statistics_status
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                            Some(error.clone());
-                        eprintln!("播放時長統計未啟動：{error}");
+                            Some(format!("曲庫資料庫未安全開啟，播放統計暫停：{reason}"));
+                        eprintln!("播放時長統計未啟動：曲庫資料庫未安全開啟：{reason}");
                     }
                     (Some(service), None)
                 }
@@ -5120,6 +5223,9 @@ pub fn run() {
                 database,
                 database_path: stored_path.clone(),
                 database_error,
+                database_work: database_lifecycle::DatabaseWorkGate::default(),
+                #[cfg(target_os = "windows")]
+                shutdown: database_lifecycle::ShutdownCoordinator::default(),
                 settings,
                 lyrics_service: lyrics_service::LyricsService::default(),
                 #[cfg(target_os = "windows")]
@@ -5143,8 +5249,21 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("MoeMusicPlayer could not start");
+        .build(tauri::generate_context!())
+        .expect("MoeMusicPlayer could not start")
+        .run(|app_handle, event| {
+            #[cfg(target_os = "windows")]
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                let state = app_handle.state::<AppState>();
+                let request = state.shutdown.request();
+                if request != database_lifecycle::ShutdownRequest::Ready {
+                    api.prevent_exit();
+                    schedule_database_shutdown(app_handle.clone(), request);
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            let _ = (app_handle, event);
+        });
 }
 
 #[cfg(all(test, target_os = "windows"))]
