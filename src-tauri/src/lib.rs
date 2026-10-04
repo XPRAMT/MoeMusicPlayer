@@ -16,10 +16,11 @@ use std::{
 #[cfg(target_os = "windows")]
 use player_core::PlaybackCheckpoint;
 use player_core::{
-    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, Page, PlaybackQueue,
-    PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId, PlaylistPage,
-    PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId, SourceScanState,
-    SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId, TrackSummary,
+    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceError, MediaSourceKind, Page,
+    PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId,
+    PlaylistPage, PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId,
+    SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId,
+    TrackMetadataError, TrackSummary,
 };
 #[cfg(target_os = "windows")]
 use player_db::PlaybackSessionCheckpoint;
@@ -70,6 +71,7 @@ use player_audio_windows::{
 const LIBRARY_SYNC_FINISHED_EVENT: &str = "library-sync-finished";
 const LIBRARY_SYNC_PROGRESS_EVENT: &str = "library-sync-progress";
 const PLAYBACK_QUEUE_PAGE_MAX_LIMIT: u32 = 100;
+const SOURCE_SYNC_ERROR_DETAILS_LIMIT: usize = 100;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1596,6 +1598,7 @@ struct LibrarySource {
     last_attempt_utc_ms: Option<i64>,
     last_success_utc_ms: Option<i64>,
     error_count: u64,
+    last_error: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1603,6 +1606,13 @@ struct LibrarySource {
 struct MediaStoreVolumeOption {
     volume_name: String,
     display_name: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceSyncError {
+    item: Option<String>,
+    message: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -1617,6 +1627,8 @@ struct SourceSyncResult {
     added_or_updated: u64,
     removed_mappings: u64,
     error_count: u64,
+    errors: Vec<SourceSyncError>,
+    errors_truncated: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -1702,9 +1714,10 @@ struct PlaybackQueuePageItem {
 #[cfg(test)]
 mod playback_queue_ipc_tests {
     use super::{
-        feature, playback_duration_ms, FeatureState, LibrarySource, PlaybackQueuePage,
-        PlaybackQueuePageItem, PlaybackQueueSource, PlaybackSnapshot, RepeatMode,
-        RuntimeCapabilities, TrackId,
+        feature, playback_duration_ms, sync_summary, FeatureState, LibraryRoot, LibrarySource,
+        MediaLocator, MediaSourceError, MediaSourceKind, PlaybackQueuePage, PlaybackQueuePageItem,
+        PlaybackQueueSource, PlaybackSnapshot, RepeatMode, RuntimeCapabilities, SourceId,
+        SourceScanState, SyncReport, TrackId, TrackMetadataError,
     };
 
     #[test]
@@ -1838,7 +1851,8 @@ mod playback_queue_ipc_tests {
             sync_state: Some("complete".to_owned()),
             last_attempt_utc_ms: Some(1_800_000_000_001),
             last_success_utc_ms: Some(1_800_000_000_002),
-            error_count: 0,
+            error_count: 1,
+            last_error: Some("playlist permission revoked".to_owned()),
         };
         let value = serde_json::to_value(source).expect("serialize library source summary");
         for key in [
@@ -1848,10 +1862,126 @@ mod playback_queue_ipc_tests {
             "lastAttemptUtcMs",
             "lastSuccessUtcMs",
             "errorCount",
+            "lastError",
         ] {
             assert!(value.get(key).is_some(), "missing camelCase field {key}");
         }
         assert_eq!(value["location"], r"C:\音樂\清單.m3u8");
+        assert_eq!(value["lastError"], "playlist permission revoked");
+    }
+
+    #[test]
+    fn sync_summary_serializes_nullable_source_item_and_metadata_error_details() {
+        let root = LibraryRoot {
+            id: SourceId::new(),
+            kind: MediaSourceKind::WindowsFilesystem,
+            display_name: "音樂資料夾".to_owned(),
+            locator: MediaLocator::FileSystem(std::path::PathBuf::from(r"C:\Music")),
+            enabled: true,
+        };
+        let mut report = SyncReport {
+            state: Some(SourceScanState::Complete),
+            ..SyncReport::default()
+        };
+        report.source_errors.push(MediaSourceError {
+            source_item_id: None,
+            message: "無法列舉來源資料夾".to_owned(),
+        });
+        report.metadata_errors.push((
+            r"C:\Music\歌手\歌曲.flac".to_owned(),
+            TrackMetadataError {
+                message: "音訊標籤無法解析".to_owned(),
+            },
+        ));
+
+        let value = serde_json::to_value(sync_summary(&root, report))
+            .expect("serialize source sync summary");
+
+        assert_eq!(value["state"], "complete");
+        assert_eq!(value["errorCount"], 2);
+        assert_eq!(value["errorsTruncated"], false);
+        assert_eq!(value["errors"].as_array().unwrap().len(), 2);
+        assert!(value["errors"][0]["item"].is_null());
+        assert_eq!(value["errors"][0]["message"], "無法列舉來源資料夾");
+        assert_eq!(value["errors"][1]["item"], r"C:\Music\歌手\歌曲.flac");
+        assert_eq!(value["errors"][1]["message"], "音訊標籤無法解析");
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn sync_summary_decodes_only_valid_windows_locator_keys_for_display() {
+        let path = r"D:\Music\Loss\[hanser]\泠鳶yousa,hanser - 1 2 FanClub.m4a";
+        let key = super::windows_locator_key(std::path::Path::new(path));
+        let root = LibraryRoot {
+            id: SourceId::new(),
+            kind: MediaSourceKind::WindowsFilesystem,
+            display_name: "Music".to_owned(),
+            locator: MediaLocator::FileSystem(std::path::PathBuf::from(r"D:\Music")),
+            enabled: true,
+        };
+        let mut report = SyncReport {
+            state: Some(SourceScanState::Complete),
+            ..SyncReport::default()
+        };
+        report.source_errors.push(MediaSourceError {
+            source_item_id: Some("content://provider/document/track".to_owned()),
+            message: "URI source error".to_owned(),
+        });
+        report.source_errors.push(MediaSourceError {
+            source_item_id: Some("windows-u16-v1:d800".to_owned()),
+            message: "invalid UTF-16 key".to_owned(),
+        });
+        report.metadata_errors.push((
+            key,
+            TrackMetadataError {
+                message: "MP4 metadata parse failed".to_owned(),
+            },
+        ));
+
+        let value = serde_json::to_value(sync_summary(&root, report))
+            .expect("serialize source sync summary");
+
+        assert_eq!(
+            value["errors"][0]["item"],
+            "content://provider/document/track"
+        );
+        assert_eq!(value["errors"][1]["item"], "windows-u16-v1:d800");
+        assert_eq!(value["errors"][2]["item"], path);
+    }
+
+    #[test]
+    fn sync_summary_caps_error_details_without_changing_total_count() {
+        let root = LibraryRoot {
+            id: SourceId::new(),
+            kind: MediaSourceKind::WindowsFilesystem,
+            display_name: "Music".to_owned(),
+            locator: MediaLocator::FileSystem(std::path::PathBuf::from(r"C:\Music")),
+            enabled: true,
+        };
+        let mut report = SyncReport {
+            state: Some(SourceScanState::Complete),
+            ..SyncReport::default()
+        };
+        for index in 0..101 {
+            report.source_errors.push(MediaSourceError {
+                source_item_id: Some(format!("item-{index}")),
+                message: "source item error".to_owned(),
+            });
+        }
+        report.metadata_errors.push((
+            "metadata-item".to_owned(),
+            TrackMetadataError {
+                message: "metadata error".to_owned(),
+            },
+        ));
+
+        let value = serde_json::to_value(sync_summary(&root, report))
+            .expect("serialize capped source sync summary");
+
+        assert_eq!(value["errorCount"], 102);
+        assert_eq!(value["errors"].as_array().unwrap().len(), 100);
+        assert_eq!(value["errorsTruncated"], true);
+        assert_eq!(value["errors"][99]["item"], "item-99");
     }
 
     #[test]
@@ -2906,7 +3036,8 @@ fn source_entry_summary(
         sync_state: sync.as_ref().map(|state| state.state.clone()),
         last_attempt_utc_ms: sync.as_ref().and_then(|state| state.last_attempt_utc_ms),
         last_success_utc_ms: sync.as_ref().and_then(|state| state.last_success_utc_ms),
-        error_count: sync.map_or(0, |state| state.error_count),
+        error_count: sync.as_ref().map_or(0, |state| state.error_count),
+        last_error: sync.and_then(|state| state.last_error),
     })
 }
 
@@ -3124,7 +3255,8 @@ fn source_summary(database: &Database, root: &LibraryRoot) -> Result<LibrarySour
         sync_state: sync.as_ref().map(|state| state.state.clone()),
         last_attempt_utc_ms: sync.as_ref().and_then(|state| state.last_attempt_utc_ms),
         last_success_utc_ms: sync.as_ref().and_then(|state| state.last_success_utc_ms),
-        error_count: sync.map_or(0, |state| state.error_count),
+        error_count: sync.as_ref().map_or(0, |state| state.error_count),
+        last_error: sync.and_then(|state| state.last_error),
     })
 }
 
@@ -3280,21 +3412,40 @@ where
                 ..
             } = &source.kind
             else {
-                sources.push(unavailable_source_summary(&root));
+                sources.push(unavailable_source_summary(
+                    &root,
+                    "播放清單來源缺少有效的 SAF URI 或文件樹授權。",
+                ));
                 continue;
             };
             let media_index = app.media_index();
-            if !media_index.has_saf_permission(tree_uri).unwrap_or(false) {
-                sources.push(unavailable_source_summary(&root));
-                continue;
+            match media_index.has_saf_permission(tree_uri) {
+                Ok(true) => {}
+                Ok(false) => {
+                    sources.push(unavailable_source_summary(
+                        &root,
+                        "已撤銷此播放清單的 SAF 文件樹權限。",
+                    ));
+                    continue;
+                }
+                Err(error) => {
+                    sources.push(unavailable_source_summary(
+                        &root,
+                        format!("無法確認 SAF 文件樹權限：{error}"),
+                    ));
+                    continue;
+                }
             }
             let lease = match media_index.cache_content_uri(
                 playlist_uri,
                 android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64,
             ) {
                 Ok(lease) => lease,
-                Err(_) => {
-                    sources.push(unavailable_source_summary(&root));
+                Err(error) => {
+                    sources.push(unavailable_source_summary(
+                        &root,
+                        format!("無法讀取 SAF 播放清單：{error}"),
+                    ));
                     continue;
                 }
             };
@@ -3305,8 +3456,22 @@ where
                 {
                     metadata
                 }
-                _ => {
-                    sources.push(unavailable_source_summary(&root));
+                Ok(metadata) => {
+                    sources.push(unavailable_source_summary(
+                        &root,
+                        format!(
+                            "播放清單大小 {} bytes 超過 {} bytes 上限。",
+                            metadata.len(),
+                            android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES
+                        ),
+                    ));
+                    continue;
+                }
+                Err(error) => {
+                    sources.push(unavailable_source_summary(
+                        &root,
+                        format!("無法讀取 SAF 播放清單檔案資訊：{error}"),
+                    ));
                     continue;
                 }
             };
@@ -3318,10 +3483,22 @@ where
                         .read_to_end(&mut playlist_bytes)
                 })
             };
-            if read_result.is_err()
-                || playlist_bytes.len() > android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES
-            {
-                sources.push(unavailable_source_summary(&root));
+            if let Err(error) = read_result {
+                sources.push(unavailable_source_summary(
+                    &root,
+                    format!("無法讀取暫存的 SAF 播放清單：{error}"),
+                ));
+                continue;
+            }
+            if playlist_bytes.len() > android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES {
+                sources.push(unavailable_source_summary(
+                    &root,
+                    format!(
+                        "讀取的播放清單大小 {} bytes 超過 {} bytes 上限。",
+                        playlist_bytes.len(),
+                        android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES
+                    ),
+                ));
                 continue;
             }
             let authorized_content_uris =
@@ -3354,7 +3531,14 @@ where
             drop(lease);
             match report {
                 Ok(Some(report)) => sources.push(sync_summary(&root, report)),
-                Ok(None) | Err(_) => sources.push(unavailable_source_summary(&root)),
+                Ok(None) => sources.push(unavailable_source_summary(
+                    &root,
+                    "播放清單同步沒有產生來源結果。",
+                )),
+                Err(error) => sources.push(unavailable_source_summary(
+                    &root,
+                    format!("播放清單同步失敗：{error}"),
+                )),
             }
         }
         Ok(LibrarySyncResult { sources })
@@ -3678,6 +3862,11 @@ fn sync_summary(root: &LibraryRoot, report: SyncReport) -> SourceSyncResult {
         .map(scan_state_name)
         .unwrap_or("unknown")
         .to_owned();
+    let error_count = report
+        .metadata_errors
+        .len()
+        .saturating_add(report.source_errors.len());
+    let errors = source_sync_error_details(&report.source_errors, &report.metadata_errors);
     SourceSyncResult {
         source_id: root.id.to_string(),
         display_name: root.display_name.clone(),
@@ -3687,12 +3876,79 @@ fn sync_summary(root: &LibraryRoot, report: SyncReport) -> SourceSyncResult {
         unchanged: report.unchanged,
         added_or_updated: report.applied.inserted_or_updated,
         removed_mappings: report.applied.removed_source_mappings,
-        error_count: (report.metadata_errors.len() + report.source_errors.len()) as u64,
+        error_count: error_count as u64,
+        errors_truncated: error_count > errors.len(),
+        errors,
     }
 }
 
+fn source_sync_error_details(
+    source_errors: &[MediaSourceError],
+    metadata_errors: &[(String, TrackMetadataError)],
+) -> Vec<SourceSyncError> {
+    let mut details = Vec::with_capacity(
+        source_errors
+            .len()
+            .saturating_add(metadata_errors.len())
+            .min(SOURCE_SYNC_ERROR_DETAILS_LIMIT),
+    );
+    for error in source_errors {
+        if details.len() == SOURCE_SYNC_ERROR_DETAILS_LIMIT {
+            return details;
+        }
+        details.push(SourceSyncError {
+            item: error
+                .source_item_id
+                .as_deref()
+                .map(display_source_sync_item),
+            message: error.message.clone(),
+        });
+    }
+    for (item, error) in metadata_errors {
+        if details.len() == SOURCE_SYNC_ERROR_DETAILS_LIMIT {
+            return details;
+        }
+        details.push(SourceSyncError {
+            item: Some(display_source_sync_item(item)),
+            message: error.message.clone(),
+        });
+    }
+    details
+}
+
+fn display_source_sync_item(item: &str) -> String {
+    #[cfg(target_os = "windows")]
+    if let Some(path) = decode_windows_locator_key(item) {
+        return path;
+    }
+
+    item.to_owned()
+}
+
+#[cfg(target_os = "windows")]
+fn decode_windows_locator_key(key: &str) -> Option<String> {
+    const PREFIX: &str = "windows-u16-v1:";
+    let encoded = key.strip_prefix(PREFIX)?;
+    if encoded.is_empty() || !encoded.len().is_multiple_of(4) {
+        return None;
+    }
+
+    let mut code_units = Vec::with_capacity(encoded.len() / 4);
+    for chunk in encoded.as_bytes().chunks_exact(4) {
+        let hex = std::str::from_utf8(chunk).ok()?;
+        code_units.push(u16::from_str_radix(hex, 16).ok()?);
+    }
+    let path = String::from_utf16(&code_units).ok()?;
+    if path.contains('\0') {
+        return None;
+    }
+
+    // Only render tokens that round-trip through the canonical Windows identity encoder.
+    (windows_locator_key(std::path::Path::new(&path)) == key).then_some(path)
+}
+
 #[cfg(target_os = "android")]
-fn unavailable_source_summary(root: &LibraryRoot) -> SourceSyncResult {
+fn unavailable_source_summary(root: &LibraryRoot, reason: impl Into<String>) -> SourceSyncResult {
     SourceSyncResult {
         source_id: root.id.to_string(),
         display_name: root.display_name.clone(),
@@ -3703,6 +3959,11 @@ fn unavailable_source_summary(root: &LibraryRoot) -> SourceSyncResult {
         added_or_updated: 0,
         removed_mappings: 0,
         error_count: 1,
+        errors: vec![SourceSyncError {
+            item: None,
+            message: reason.into(),
+        }],
+        errors_truncated: false,
     }
 }
 

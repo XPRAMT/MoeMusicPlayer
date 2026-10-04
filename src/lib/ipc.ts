@@ -47,6 +47,7 @@ export interface LibrarySource {
   lastAttemptUtcMs: number | null;
   lastSuccessUtcMs: number | null;
   errorCount: number;
+  lastError: string | null;
 }
 
 export interface MediaStoreVolumeOption {
@@ -64,6 +65,13 @@ export interface SourceSyncResult {
   addedOrUpdated: number;
   removedMappings: number;
   errorCount: number;
+  errors: SourceSyncError[];
+  errorsTruncated: boolean;
+}
+
+export interface SourceSyncError {
+  item: string | null;
+  message: string;
 }
 
 export interface LibrarySyncResult {

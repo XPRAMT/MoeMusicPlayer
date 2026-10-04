@@ -39,6 +39,7 @@
     type LibrarySyncFinishedEvent,
     type LibrarySyncProgressEvent,
     type LibrarySource,
+    type SourceSyncResult,
     type MediaStoreVolumeOption,
     type FeatureCapability,
     type LyricsPreferences,
@@ -77,6 +78,7 @@
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
+  import SyncErrorDetails from './lib/SyncErrorDetails.svelte';
   import NowPlayingArrangement from './lib/NowPlayingArrangement.svelte';
   import PlaybackProgress from './lib/PlaybackProgress.svelte';
   import LyricsView from './lib/LyricsView.svelte';
@@ -165,6 +167,7 @@
   let sources = $state<LibrarySource[]>([]);
   let sourceError = $state<string | null>(null);
   let sourceSyncSummary = $state<string | null>(null);
+  let sourceSyncResults = $state<SourceSyncResult[]>([]);
   let syncProgress = $state<SyncProgressViewState | null>(null);
   let mediaStoreVolumes = $state<MediaStoreVolumeOption[]>([]);
   let mediaPermissionGranted = $state<boolean | null>(null);
@@ -771,6 +774,7 @@
   }
 
   function handleLibrarySyncFinished(event: LibrarySyncFinishedEvent): void {
+    sourceSyncResults = event.sources;
     const current = syncProgress?.runId === event.runId
       ? syncProgress
       : {
@@ -830,8 +834,11 @@
 
   function formatProgressSummary(sources: LibrarySyncProgressEvent[]): string {
     const complete = sources.filter((source) => source.outcome === 'complete').length;
+    const attention = sources.filter(
+      (source) => source.outcome !== 'complete' || source.errorCount > 0,
+    ).length;
     const errorCount = sources.reduce((sum, source) => sum + source.errorCount, 0);
-    return `${sources.length} 個來源已檢查；${complete} 個完整，${sources.length - complete} 個需要留意；${errorCount} 個項目錯誤。`;
+    return `${sources.length} 個來源已檢查；${complete} 個掃描完整，${attention} 個需要留意；${errorCount} 個項目錯誤。`;
   }
 
   function syncProgressLine(progress: LibrarySyncProgressEvent): string {
@@ -896,13 +903,18 @@
     if (!sourceSyncReady) return;
     isSyncing = true;
     sourceError = null;
+    sourceSyncResults = [];
     try {
       const result = await invokeCommand('library_sync', {});
+      sourceSyncResults = result.sources;
       const completed = result.sources.filter((source) => source.state === 'complete').length;
-      const partial = result.sources.length - completed;
+      const attention = result.sources.filter(
+        (source) => source.state !== 'complete' || source.errorCount > 0,
+      ).length;
+      const errorCount = result.sources.reduce((sum, source) => sum + source.errorCount, 0);
       sourceSyncSummary = result.sources.length === 0
         ? '尚未加入可同步的音樂來源。'
-        : `${result.sources.length} 個來源已檢查；${completed} 個完整，${partial} 個需要留意。`;
+        : `${result.sources.length} 個來源已檢查；${completed} 個掃描完整，${attention} 個需要留意；${errorCount} 個項目錯誤。`;
       await loadSources();
     } catch (error) {
       sourceError = getErrorText(error);
@@ -1033,6 +1045,7 @@
     sourceError = null;
     try {
       sources = await invokeCommand('library_set_source_enabled', { sourceId: source.id, enabled });
+      sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
       if (enabled) await syncLibrary();
     } catch (error) {
       sourceError = getErrorText(error);
@@ -1048,6 +1061,7 @@
     sourceError = null;
     try {
       sources = await invokeCommand('library_remove_source', { sourceId: source.id });
+      sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
       sourceSyncSummary = source.kind === 'playlist_file'
         ? '已移除播放清單檔案同步來源；原有播放清單內容仍會保留。'
         : '已移除音樂來源；曲庫資料仍會保留，之後不再同步此位置。';
@@ -1565,6 +1579,9 @@
                 {/each}
               </ul>
             {/if}
+            {#if !syncProgress.active}
+              <SyncErrorDetails results={sourceSyncResults} sources={sources} />
+            {/if}
           </section>
         {/if}
 
@@ -2021,6 +2038,7 @@
             {#if sourceSyncSummary}
               <div class="source-result-message" role="status">{sourceSyncSummary}</div>
             {/if}
+            <SyncErrorDetails results={sourceSyncResults} sources={sources} />
 
             <div class="configured-sources" aria-live="polite">
               <div class="configured-sources-heading"><strong>已加入的來源</strong><span>{sources.length}</span></div>
