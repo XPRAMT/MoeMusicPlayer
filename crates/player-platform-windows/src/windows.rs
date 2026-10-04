@@ -49,6 +49,9 @@ impl WindowsMediaIndex {
         };
         let mut seen = HashSet::with_capacity(paths.len());
         for path in paths {
+            if !is_supported_audio_file(path) {
+                continue;
+            }
             let item_id = windows_locator_key(path);
             if !seen.insert(item_id.clone()) {
                 continue;
@@ -503,7 +506,13 @@ fn empty_scan(source_id: player_core::SourceId) -> SourceScan {
     }
 }
 
-fn is_supported_audio_file(path: &Path) -> bool {
+/// Whether the path has an audio extension understood by Lofty, excluding MP4 video files.
+/// M4A remains accepted as an audio container; this filter does not infer or constrain its codec.
+pub fn is_supported_audio_file(path: &Path) -> bool {
+    if is_video_mp4(path) {
+        return false;
+    }
+
     path.extension()
         .and_then(OsStr::to_str)
         .is_some_and(|extension| {
@@ -511,6 +520,13 @@ fn is_supported_audio_file(path: &Path) -> bool {
                 .iter()
                 .any(|known| known.eq_ignore_ascii_case(extension))
         })
+}
+
+/// MP4 files are treated as video candidates and excluded from Windows library projection.
+pub fn is_video_mp4(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
 }
 
 fn system_time_to_utc_ms(time: SystemTime) -> Option<i64> {
@@ -861,6 +877,165 @@ mod tests {
         let fingerprint = scan.tracks[0].fingerprint;
         assert!(fingerprint.modified_at_utc_ms.is_some());
         assert!(fingerprint.size_bytes > 0);
+        fs::remove_dir_all(base).expect("cleanup");
+    }
+
+    #[test]
+    fn complete_folder_sync_removes_old_mp4_mapping_but_incomplete_sync_retains_it() {
+        use player_core::{
+            FileFingerprint, LibraryRepository, MediaTrackRecord, TrackIdentity, TrackMetadata,
+        };
+
+        let base = temp_path("mp4-mapping-reconcile");
+        fs::create_dir_all(&base).expect("create scan root");
+        let video = base.join("舊影片.mp4");
+        fs::write(&video, b"video candidate").expect("write MP4 candidate");
+        let mut database = Database::open_in_memory().expect("database");
+        let root = add_root(&database, base.clone());
+        let source_item_id = windows_locator_key(&video);
+        let file_metadata = fs::metadata(&video).expect("MP4 metadata");
+        let record = MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: root.id,
+                source_item_id: source_item_id.clone(),
+                locator_key: Some(source_item_id),
+            },
+            locator: MediaLocator::FileSystem(video),
+            fingerprint: FileFingerprint {
+                size_bytes: file_metadata.len(),
+                modified_at_utc_ms: Some(1_800_000_000_000),
+            },
+            metadata: Some(TrackMetadata {
+                title: Some("legacy video mapping".to_owned()),
+                ..TrackMetadata::default()
+            }),
+        };
+        database
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Complete,
+                std::slice::from_ref(&record),
+                std::slice::from_ref(&record),
+                &[],
+                1_800_000_000_000,
+            )
+            .expect("seed pre-filter MP4 mapping");
+        assert_eq!(
+            database.count_tracks(None).expect("legacy visible track"),
+            1
+        );
+
+        database
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Incomplete {
+                    reason: "partial enumeration".to_owned(),
+                },
+                &[],
+                &[],
+                &[],
+                1_800_000_000_001,
+            )
+            .expect("incomplete sync");
+        assert_eq!(
+            database
+                .count_tracks(None)
+                .expect("incomplete retains track"),
+            1
+        );
+
+        let scan = WindowsMediaIndex::new().scan(&root);
+        assert_eq!(scan.state, SourceScanState::Complete);
+        assert!(scan.errors.is_empty());
+        assert!(scan.tracks.is_empty());
+        database
+            .apply_source_scan(
+                &root,
+                &scan.state,
+                &scan.tracks,
+                &scan.tracks,
+                &scan.errors,
+                1_800_000_000_002,
+            )
+            .expect("complete folder reconciliation");
+        assert_eq!(database.count_tracks(None).expect("video is hidden"), 0);
+        let page = database
+            .list_tracks_page(player_core::ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+            })
+            .expect("read library");
+        assert_eq!(page.total_count, 0);
+
+        fs::remove_dir_all(base).expect("cleanup");
+    }
+
+    #[test]
+    fn folder_and_playlist_scans_skip_mp4_without_errors_and_keep_m4a_aac() {
+        let base = temp_path("mp4-filter");
+        fs::create_dir_all(&base).expect("create scan root");
+        let video = base.join("演唱會片段.mp4");
+        let m4a = base.join("歌曲.M4A");
+        let aac = base.join("語音.AAC");
+        let missing_video = base.join("不存在.mp4");
+        fs::write(&video, b"video candidate").expect("write MP4 candidate");
+        fs::write(&m4a, b"M4A audio candidate").expect("write M4A candidate");
+        fs::write(&aac, b"AAC audio candidate").expect("write AAC candidate");
+
+        let source_id = player_core::SourceId::new();
+        let root = LibraryRoot {
+            id: source_id,
+            kind: MediaSourceKind::WindowsFilesystem,
+            display_name: "mp4-filter".to_owned(),
+            locator: MediaLocator::FileSystem(base.clone()),
+            enabled: true,
+        };
+        let folder_scan = WindowsMediaIndex::new().scan(&root);
+        assert_eq!(folder_scan.state, SourceScanState::Complete);
+        assert!(
+            folder_scan.errors.is_empty(),
+            "excluded video is not a metadata error"
+        );
+        assert_eq!(folder_scan.tracks.len(), 2);
+        assert!(folder_scan.tracks.iter().any(|track| matches!(
+            &track.locator,
+            MediaLocator::FileSystem(path)
+                if path.file_name().is_some_and(|name| name == "歌曲.M4A")
+        )));
+        assert!(folder_scan.tracks.iter().any(|track| matches!(
+            &track.locator,
+            MediaLocator::FileSystem(path)
+                if path.file_name().is_some_and(|name| name == "語音.AAC")
+        )));
+
+        let playlist_scan = WindowsMediaIndex::new().scan_playlist_paths(
+            source_id,
+            &[video.clone(), missing_video, m4a.clone(), aac.clone()],
+        );
+        assert_eq!(playlist_scan.state, SourceScanState::Complete);
+        assert!(
+            playlist_scan.errors.is_empty(),
+            "excluded video must not preserve an old mapping as an item error"
+        );
+        assert_eq!(playlist_scan.tracks.len(), 2);
+        assert!(!playlist_scan.tracks.iter().any(|track| matches!(
+            &track.locator,
+            MediaLocator::FileSystem(path)
+                if path.file_name().is_some_and(|name| name == "演唱會片段.mp4")
+        )));
+        assert!(playlist_scan.tracks.iter().any(|track| matches!(
+            &track.locator,
+            MediaLocator::FileSystem(path)
+                if path.file_name().is_some_and(|name| name == "歌曲.M4A")
+        )));
+        assert!(playlist_scan.tracks.iter().any(|track| matches!(
+            &track.locator,
+            MediaLocator::FileSystem(path)
+                if path.file_name().is_some_and(|name| name == "語音.AAC")
+        )));
+
         fs::remove_dir_all(base).expect("cleanup");
     }
 

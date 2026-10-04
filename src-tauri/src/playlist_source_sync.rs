@@ -17,7 +17,7 @@ use crate::{
 #[cfg(target_os = "windows")]
 use player_core::{SourceScan, TrackMetadata, TrackMetadataError};
 #[cfg(target_os = "windows")]
-use player_platform_windows::WindowsMediaIndex;
+use player_platform_windows::{is_supported_audio_file, is_video_mp4, WindowsMediaIndex};
 
 #[cfg(target_os = "windows")]
 pub fn source_ids_for_path(
@@ -143,12 +143,21 @@ pub fn sync_playlist_file_source(
     let mut playlist_needs_save = changed;
     let mut resolved = std::collections::HashMap::new();
     for entry in &mut playlist.entries {
-        if entry.track_id.is_some() {
-            continue;
-        }
         let MediaLocator::FileSystem(path) = &entry.locator else {
             continue;
         };
+        if is_video_mp4(path) {
+            if entry.track_id.take().is_some() {
+                playlist_needs_save = true;
+            }
+            continue;
+        }
+        if entry.track_id.is_some() {
+            continue;
+        }
+        if !is_supported_audio_file(path) {
+            continue;
+        }
         let Ok(canonical) = fs::canonicalize(path) else {
             continue;
         };
@@ -229,7 +238,11 @@ pub fn sync_playlist_file_source(
 mod tests {
     use std::{fs, path::PathBuf, time::SystemTime};
 
-    use player_core::{ListTracksQuery, MediaSourceKind, Playlist, PlaylistId, SourceId};
+    use player_core::{
+        FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, MediaLocator,
+        MediaSourceKind, MediaTrackRecord, Playlist, PlaylistId, SourceId, SourceScanState,
+        TrackIdentity, TrackMetadata,
+    };
     use player_db::Database;
 
     use crate::settings::{SourceEntry, SourceEntryKind, StoredPath};
@@ -349,6 +362,70 @@ mod tests {
         assert_eq!(saved.entries[2].track_id, None);
         let stable_track_id = saved.entries[0].track_id.expect("matched song");
 
+        // Simulate a previously persisted TrackId link from before MP4 filtering was introduced.
+        // Seed an old source mapping as well, so the next complete sync must remove the mapping
+        // before a playlist page reconciliation can try to attach it again.
+        let video_path = music.join("舞台影像.mp4");
+        fs::write(&video_path, b"video candidate").expect("write MP4 candidate");
+        let video_locator = MediaLocator::FileSystem(video_path.clone());
+        let video_file_metadata = fs::metadata(&video_path).expect("MP4 metadata");
+        let video_source_item_id = player_core::windows_locator_key(&video_path);
+        let video_record = MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id,
+                source_item_id: video_source_item_id.clone(),
+                locator_key: Some(video_source_item_id),
+            },
+            locator: video_locator.clone(),
+            fingerprint: FileFingerprint {
+                size_bytes: video_file_metadata.len(),
+                modified_at_utc_ms: Some(1_800_000_000_000),
+            },
+            metadata: Some(TrackMetadata {
+                title: Some("legacy video mapping".to_owned()),
+                ..TrackMetadata::default()
+            }),
+        };
+        let playlist_root = LibraryRoot {
+            id: source_id,
+            kind: MediaSourceKind::PlaylistFile,
+            display_name: source.display_name.clone(),
+            locator: MediaLocator::FileSystem(playlist_path.clone()),
+            enabled: true,
+        };
+        database
+            .apply_source_scan(
+                &playlist_root,
+                &SourceScanState::Incomplete {
+                    reason: "legacy mapping fixture".to_owned(),
+                },
+                std::slice::from_ref(&video_record),
+                std::slice::from_ref(&video_record),
+                &[],
+                1_800_000_000_001,
+            )
+            .expect("seed old MP4 source mapping without reconciling audio");
+        assert_eq!(
+            database.count_tracks(None).expect("legacy mapping visible"),
+            2
+        );
+        let video_track_id = database
+            .resolve_track_id_for_locator(&video_locator)
+            .expect("resolve old MP4 mapping")
+            .expect("old MP4 TrackId");
+        let mut with_stale_video_link = saved;
+        with_stale_video_link
+            .entries
+            .push(player_core::PlaylistEntry {
+                track_id: Some(video_track_id),
+                locator: video_locator.clone(),
+                title: None,
+                duration_ms: None,
+            });
+        database
+            .save_playlist(&with_stale_video_link)
+            .expect("seed stale MP4 playlist link");
+
         write_tagged_mp3(&song, "第二版・中繼資料已更新");
         let second = sync_playlist_file_source(&mut database, &source, 1_800_000_000_001)
             .expect("unchanged playlist media check")
@@ -368,6 +445,27 @@ mod tests {
             page.items[0].title.as_deref(),
             Some("第二版・中繼資料已更新")
         );
+        let after_mp4_cleanup = database
+            .get_playlist(playlist_id)
+            .expect("read playlist after successful sync")
+            .expect("playlist projection remains");
+        assert_eq!(after_mp4_cleanup.entries[3].track_id, None);
+        assert_eq!(after_mp4_cleanup.entries[3].locator, video_locator);
+        assert_eq!(
+            database.count_tracks(None).expect("only audio is visible"),
+            1
+        );
+        let playlist_page = database
+            .get_playlist_page(playlist_id, 0, 10)
+            .expect("read playlist page after reconciliation")
+            .expect("playlist page");
+        assert_eq!(playlist_page.items[3].track_id, None);
+        let after_page_reconciliation = database
+            .get_playlist(playlist_id)
+            .expect("read playlist after page reconciliation")
+            .expect("playlist projection remains");
+        assert_eq!(after_page_reconciliation.entries[3].track_id, None);
+        assert_eq!(after_page_reconciliation.entries[3].locator, video_locator);
 
         fs::remove_file(&playlist_path).expect("take playlist source offline");
         assert!(

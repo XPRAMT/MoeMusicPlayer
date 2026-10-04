@@ -20,7 +20,7 @@ mod system_index;
 pub use player_core::windows_locator_key;
 
 #[cfg(windows)]
-pub use windows::WindowsMediaIndex;
+pub use windows::{is_supported_audio_file, is_video_mp4, WindowsMediaIndex};
 
 #[cfg(windows)]
 pub use artwork::{find_artwork, ArtworkLookup};
