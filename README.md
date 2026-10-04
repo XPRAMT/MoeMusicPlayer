@@ -31,6 +31,8 @@ Android Media3 playback integration is implemented. The ARM64 APK is installed o
 4. Open **Settings → Music Sources**, choose **Select folder and sync**, and select an existing music folder. Canceling leaves the source list unchanged.
 5. Open **Settings → Appearance** to choose a background and accent color. The defaults are pure black and water blue. Open **Settings → Track Columns** to reorder or hide metadata columns for both lists. Choose Now Playing layout A or B, or adjust cover background blur and **Cover background brightness** (`封面背景亮度`), in **Settings → Now Playing**. Now Playing surfaces are fully transparent. Preferences and registered source paths are saved in the app data directory as `settings.json`; SQLite stores music data, playback-session checkpoints, and listening-time totals.
 
+On Windows, the running executable stores all settings and SQLite data in a `UserData` folder beside that executable. For the fixed release build, keep `release/UserData/` beside `release/moemusicplayer.exe`; moving only the executable starts with a separate empty library. Windows does not fall back to Roaming or LocalCache and does not automatically move data between locations. Android continues to use its platform-managed app data directory.
+
 To build the Windows executable, run `npm run release:windows`. The command always builds under the repository's `target` directory, regardless of the caller's `CARGO_TARGET_DIR`, and writes the result to `release/moemusicplayer.exe`. A failed build leaves the previous executable in place.
 
 ## Build for Android

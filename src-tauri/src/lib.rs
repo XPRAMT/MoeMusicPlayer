@@ -49,6 +49,8 @@ mod lyrics_provider;
 mod lyrics_service;
 #[cfg(any(target_os = "windows", test))]
 mod playlist_source_sync;
+#[cfg(target_os = "windows")]
+mod windows_data_directory;
 
 #[cfg(target_os = "windows")]
 use player_platform_windows::{
@@ -5109,11 +5111,17 @@ pub fn run() {
             lyrics_service::lyrics_cancel_search,
         ])
         .setup(|app| {
-            let database_path = app
+            #[cfg(target_os = "windows")]
+            let app_data_dir = windows_data_directory::user_data_dir_for_executable(
+                &std::env::current_exe().map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| format!("無法使用執行檔旁的 UserData 資料夾：{error}"))?;
+            #[cfg(not(target_os = "windows"))]
+            let app_data_dir = app
                 .path()
                 .app_data_dir()
-                .map_err(|error| error.to_string())?
-                .join("moemusicplayer.sqlite3");
+                .map_err(|error| error.to_string())?;
+            let database_path = app_data_dir.join("moemusicplayer.sqlite3");
             let settings_path = database_path.with_file_name("settings.json");
             let database_result =
                 Database::open_checked(&database_path).map_err(|error| error.to_string());
