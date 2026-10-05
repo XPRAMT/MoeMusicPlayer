@@ -2332,14 +2332,14 @@
           <strong class="dock-marquee"><span class="dock-marquee-text" use:dockMarquee>{currentTrackTitle(playback?.currentTrack)}</span></strong>
           <span class="dock-marquee"><span class="dock-marquee-text" use:dockMarquee>{currentTrackArtist(playback?.currentTrack)}</span></span>
         </div>
-        <button class="dock-favorite" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
-          <IconHeart size={18} stroke={1.6} aria-hidden="true" />
-        </button>
       {/if}
     </div>
 
     <div class="dock-center">
       <div class="dock-controls">
+        <button class="dock-favorite control-button" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
+          <IconHeart size={18} stroke={1.6} aria-hidden="true" />
+        </button>
         <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} onclick={toggleShuffle}>
           <IconArrowsShuffle size={20} stroke={1.7} aria-hidden="true" />
         </button>
@@ -2365,6 +2365,46 @@
             <IconRepeatOff size={20} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
+        <div
+          class="dock-volume"
+          class:expanded={volumeExpanded}
+          bind:this={volumePanelElement}
+        >
+          <button
+            class="volume-toggle"
+            type="button"
+            aria-label="音量"
+            aria-expanded={volumeExpanded}
+            aria-haspopup="dialog"
+            title={volumeExpanded ? '收合音量' : '展開音量'}
+            disabled={!playbackReady}
+            onclick={toggleVolumeExpanded}
+          >
+            <IconVolume2 size={20} stroke={1.6} aria-hidden="true" />
+          </button>
+          <div
+            class="volume-popover"
+            role="dialog"
+            aria-label="音量控制"
+            hidden={!volumeExpanded}
+          >
+            <input
+              class="volume-slider"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={volumeDraft ?? playback?.volume ?? confirmedVolume ?? 0}
+              aria-label="音量滑桿"
+              tabindex={volumeExpanded ? 0 : -1}
+              disabled={!playbackReady || !volumeExpanded}
+              onpointerdown={startVolumeInteraction}
+              oninput={setPlaybackVolume}
+              onchange={finishVolumeChange}
+            />
+            <span class="volume-value">{playback ? formatVolume(volumeDraft ?? playback.volume) : confirmedVolume === null ? '—' : formatVolume(volumeDraft ?? confirmedVolume)}</span>
+          </div>
+        </div>
       </div>
       <PlaybackProgress
         positionMs={playback?.positionMs ?? 0}
@@ -2378,45 +2418,6 @@
       {#if playbackError || playback?.lastError}<span class="dock-error" role="status">{playbackError ?? playback?.lastError}</span>{/if}
     </div>
 
-    <div
-      class="dock-volume"
-      class:expanded={volumeExpanded}
-      bind:this={volumePanelElement}
-    >
-      <button
-        class="volume-toggle"
-        type="button"
-        aria-label="音量"
-        aria-expanded={volumeExpanded}
-        aria-haspopup="dialog"
-        title={volumeExpanded ? '收合音量' : '展開音量'}
-        disabled={!playbackReady}
-        onclick={toggleVolumeExpanded}
-      >
-        <IconVolume2 size={20} stroke={1.6} aria-hidden="true" />
-      </button>
-      <div
-        class="volume-popover"
-        role="dialog"
-        aria-label="音量控制"
-        hidden={!volumeExpanded}
-      >
-        <input
-          class="volume-slider"
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={volumeDraft ?? playback?.volume ?? confirmedVolume ?? 0}
-          aria-label="音量滑桿"
-          tabindex={volumeExpanded ? 0 : -1}
-          disabled={!playbackReady || !volumeExpanded}
-          onpointerdown={startVolumeInteraction}
-          oninput={setPlaybackVolume}
-          onchange={finishVolumeChange}
-        />
-        <span class="volume-value">{playback ? formatVolume(volumeDraft ?? playback.volume) : confirmedVolume === null ? '—' : formatVolume(volumeDraft ?? confirmedVolume)}</span>
-      </div>
-    </div>
+    <div class="dock-spacer" aria-hidden="true"></div>
   </footer>
 </div>

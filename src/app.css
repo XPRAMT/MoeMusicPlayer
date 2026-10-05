@@ -2586,17 +2586,23 @@ input:focus-visible {
   min-width: 0;
   overflow: visible;
   /* Compact: one control row (~art 44px) + line progress (~18px) + tight padding. */
+  --dock-pad-x: clamp(18px, 3vw, 38px);
   min-height: 72px;
   grid-column: 1 / -1;
   grid-row: 2;
-  /* Equal side columns + auto center: transport stays window-centered regardless of track/volume width. */
+  /* Equal side columns + auto center: favorite…volume stay window-centered as one group. */
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 14px;
-  padding: 5px clamp(18px, 3vw, 38px);
+  padding: 5px var(--dock-pad-x);
   border-top: 1px solid rgba(var(--text-rgb), 0.11);
   background: linear-gradient(100deg, var(--dock-bg), var(--panel-soft) 50%, var(--dock-bg));
   box-shadow: 0 -15px 35px rgba(0, 0, 0, 0.15);
+}
+
+.dock-spacer {
+  min-width: 0;
+  pointer-events: none;
 }
 
 .app-shell.has-now-playing-backdrop .player-dock {
@@ -2821,13 +2827,20 @@ input:focus-visible {
 
 .dock-favorite {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 31px;
+  height: 31px;
   flex: 0 0 auto;
   place-items: center;
   border: 0;
+  border-radius: 8px;
   color: var(--text-soft);
   background: transparent;
+  cursor: pointer;
+}
+
+.dock-favorite:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .dock-favorite svg {
@@ -2882,12 +2895,13 @@ input:focus-visible {
 .player-dock[data-timeline-style="edge"] .progress-row {
   position: absolute;
   top: 0;
-  left: 0;
-  right: 0;
+  /* Full dock border-box width (bleed through horizontal padding). */
+  left: calc(-1 * var(--dock-pad-x));
+  right: calc(-1 * var(--dock-pad-x));
   z-index: 7;
   box-sizing: border-box;
   display: grid;
-  width: 100%;
+  width: auto;
   max-width: none;
   height: auto;
   margin-top: -8px;
@@ -2919,7 +2933,7 @@ input:focus-visible {
   grid-column: 1;
   grid-row: 2;
   justify-self: start;
-  padding-left: clamp(18px, 3vw, 38px);
+  padding-left: max(var(--dock-pad-x), 12px);
   text-align: left;
 }
 
@@ -2927,7 +2941,7 @@ input:focus-visible {
   grid-column: 2;
   grid-row: 2;
   justify-self: end;
-  padding-right: clamp(18px, 3vw, 38px);
+  padding-right: max(var(--dock-pad-x), 12px);
   text-align: right;
 }
 
@@ -2944,14 +2958,9 @@ input:focus-visible {
   justify-self: center;
 }
 
-.player-dock[data-timeline-style="edge"] .dock-volume {
+.player-dock[data-timeline-style="edge"] .dock-spacer {
   grid-column: 3;
   grid-row: 1;
-  align-self: center;
-  /* Nudge left so the volume row clears the duration label under the full-width edge track. */
-  justify-self: end;
-  margin-right: 44px;
-  padding-right: 0;
 }
 
 .app-shell.has-now-playing-backdrop .player-dock[data-timeline-style="edge"] {
@@ -2961,7 +2970,7 @@ input:focus-visible {
 
 .app-shell.has-now-playing-backdrop .player-dock[data-timeline-style="edge"] .dock-track,
 .app-shell.has-now-playing-backdrop .player-dock[data-timeline-style="edge"] .dock-controls,
-.app-shell.has-now-playing-backdrop .player-dock[data-timeline-style="edge"] .dock-volume {
+.app-shell.has-now-playing-backdrop .player-dock[data-timeline-style="edge"] .dock-spacer {
   grid-row: 1;
 }
 
@@ -3009,7 +3018,7 @@ input:focus-visible {
   justify-self: center;
 }
 
-.app-shell.has-now-playing-backdrop .dock-volume {
+.app-shell.has-now-playing-backdrop .dock-spacer {
   grid-column: 3;
   grid-row: 2;
 }
@@ -3189,8 +3198,12 @@ input:focus-visible {
 
 .dock-track,
 .dock-controls,
-.dock-volume {
+.dock-spacer {
   align-self: center;
+}
+
+.dock-controls .dock-volume {
+  margin-right: 0;
 }
 
 .volume-toggle {
@@ -3574,8 +3587,7 @@ input:focus-visible {
   .topbar { min-height: 63px; }
   .page-content { padding-top: 26px; }
   /* Dock height stays width-invariant; only tighten horizontal padding / art size. */
-  .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; padding-right: 16px; padding-left: 16px; }
-  .dock-favorite { display: none; }
+  .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; --dock-pad-x: 16px; padding-right: var(--dock-pad-x); padding-left: var(--dock-pad-x); }
   .dock-volume { gap: 7px; }
   .volume-popover .volume-slider { width: 110px; }
   .dock-art { width: 46px; height: 46px; }
@@ -3692,20 +3704,20 @@ input:focus-visible {
     grid-column: 1;
     grid-row: 3;
   }
-  .dock-favorite { display: none; }
   .control-button { width: 27px; height: 27px; }
   .control-button svg { width: 18px; height: 18px; }
   .play-button { width: 31px; height: 31px; }
   .play-button svg { width: 18px; height: 18px; }
   .dock-error { top: calc(100% + 2px); }
 
-  /* At 620px layout collapses (sidebar etc.) but dock height / hide chrome stay unchanged.
-     Non-NP hide mode is delayed to max-width 480px so times/volume remain longer. */
-  .app-shell.has-now-playing-backdrop .dock-volume {
-    display: flex !important;
-  }
+  /* Now Playing: never apply non-NP hide stages. */
+  .app-shell.has-now-playing-backdrop .dock-favorite,
+  .app-shell.has-now-playing-backdrop .dock-volume,
   .app-shell.has-now-playing-backdrop .dock-controls .secondary-control {
     display: grid !important;
+  }
+  .app-shell.has-now-playing-backdrop .dock-volume {
+    display: flex !important;
   }
   .app-shell.has-now-playing-backdrop .progress-time,
   .app-shell.has-now-playing-backdrop .progress-time-elapsed,
@@ -3714,15 +3726,23 @@ input:focus-visible {
   }
 }
 
-/* Non-NP hide mode: only enter when narrower than before (was 620 → now 480).
-   Times hidden → drop edge cover nudge. Dock min-height / padding stay width-invariant. */
-@media (max-width: 480px) {
+/* Non-NP Stage 1: hide favorite + volume; keep shuffle, prev, play, next, repeat centered. */
+@media (max-width: 720px) {
+  .app-shell:not(.has-now-playing-backdrop) .dock-favorite,
+  .app-shell:not(.has-now-playing-backdrop) .dock-volume {
+    display: none !important;
+  }
+}
+
+/* Non-NP Stage 2: also hide shuffle + repeat (+ times); keep prev, play, next centered.
+   Cover becomes dock-tall, proportional, square corners. Edge timeline stays full-bleed. */
+@media (max-width: 520px) {
   .app-shell:not(.has-now-playing-backdrop) .player-dock {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: 16px minmax(36px, auto);
-    column-gap: 8px;
-    row-gap: 0;
-    align-items: center;
+    --dock-pad-x: 0px;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: stretch;
+    padding-top: 0;
+    padding-bottom: 0;
   }
   .app-shell:not(.has-now-playing-backdrop) .dock-center {
     display: contents;
@@ -3743,47 +3763,64 @@ input:focus-visible {
   .app-shell:not(.has-now-playing-backdrop) .dock-track {
     grid-column: 1;
     grid-row: 2;
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
-    align-self: center;
+    align-self: stretch;
+    padding-right: 8px;
   }
   .app-shell:not(.has-now-playing-backdrop) .dock-art {
-    width: 40px;
-    height: 40px;
+    width: auto;
+    height: 100%;
+    max-height: none;
+    aspect-ratio: 1 / 1;
     margin-left: 0;
-    border-radius: 8px;
+    border-radius: 0;
+    border-width: 0;
+    align-self: stretch;
   }
   .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] .dock-art {
     margin-left: 0;
   }
-  .app-shell:not(.has-now-playing-backdrop) .dock-art svg { width: 20px; height: 20px; }
-  .app-shell:not(.has-now-playing-backdrop) .dock-track-copy { gap: 2px; min-width: 0; }
+  .app-shell:not(.has-now-playing-backdrop) .dock-art svg {
+    width: 22px;
+    height: 22px;
+  }
+  .app-shell:not(.has-now-playing-backdrop) .dock-track-copy { gap: 2px; min-width: 0; align-self: center; }
   .app-shell:not(.has-now-playing-backdrop) .dock-track-copy strong { font-size: 9px; }
   .app-shell:not(.has-now-playing-backdrop) .dock-track-copy span { max-width: none; font-size: 8px; }
   .app-shell:not(.has-now-playing-backdrop) .dock-controls {
     grid-column: 2;
     grid-row: 2;
-    height: 32px;
+    height: auto;
     gap: 6px;
     align-self: center;
-    justify-self: end;
+    justify-self: center;
   }
-  .app-shell:not(.has-now-playing-backdrop) .dock-controls .secondary-control,
-  .app-shell:not(.has-now-playing-backdrop) .dock-volume {
+  .app-shell:not(.has-now-playing-backdrop) .dock-spacer {
+    grid-column: 3;
+    grid-row: 2;
+  }
+  .app-shell:not(.has-now-playing-backdrop) .dock-controls .secondary-control {
     display: none !important;
   }
   .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] {
-    grid-template-rows: minmax(36px, auto);
-    align-items: center;
+    grid-template-rows: minmax(0, auto);
+    align-items: stretch;
   }
   .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] .progress-row {
     position: absolute;
+    left: 0;
+    right: 0;
     grid-row: auto;
     grid-template-rows: 14px;
   }
   .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] .dock-track,
-  .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] .dock-controls {
+  .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] .dock-controls,
+  .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] .dock-spacer {
     grid-row: 1;
+  }
+  .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="line"] {
+    grid-template-rows: 14px minmax(40px, auto);
   }
 }
 
