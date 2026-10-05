@@ -17,10 +17,10 @@ pub use library::{
     TRACK_METADATA_VERSION,
 };
 pub use lyrics::{
-    auto_lyric_candidate, explain_lyric_candidate_match, merge_lrc_auxiliary, parse_lrc, parse_yrc,
-    preserve_qrc, rank_lyric_candidates, with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate,
-    LyricFormat, LyricLine, LyricMatchScore, LyricProvider, LyricsTrackMetadata, ParsedLyrics,
-    TrackLyrics, MAX_LYRIC_PAYLOAD_BYTES,
+    auto_lyric_candidate, explain_lyric_candidate_match, merge_lrc_auxiliary,
+    merge_same_timestamp_lines, parse_lrc, parse_yrc, preserve_qrc, rank_lyric_candidates,
+    with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine, LyricMatchScore,
+    LyricProvider, LyricsTrackMetadata, ParsedLyrics, TrackLyrics, MAX_LYRIC_PAYLOAD_BYTES,
 };
 pub use playback_queue::{
     PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot,

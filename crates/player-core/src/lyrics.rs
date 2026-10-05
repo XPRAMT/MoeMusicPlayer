@@ -113,6 +113,10 @@ impl std::error::Error for LyricsParseError {}
 
 /// Parse ordinary LRC timestamps. Repeated timestamps on one physical line become separate
 /// line rows. An offset header applies to all timestamped rows in the document.
+///
+/// Rows from different physical lines that share one start timestamp are folded into a single
+/// `LyricLine` by [`merge_same_timestamp_lines`]: the first row in file order is the primary text,
+/// the second is the translation and the third is the romanization; further rows are ignored.
 pub fn parse_lrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
     check_payload_size(input)?;
 
@@ -148,6 +152,10 @@ pub fn parse_lrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
         }
 
         let text = remainder.trim().to_owned();
+        // `[00:01.00][00:01.00]text` names one cue twice; it must not turn into its own
+        // translation when same-timestamp rows are folded below.
+        timestamps.sort_unstable();
+        timestamps.dedup();
         if !timestamps.is_empty() {
             if !text.is_empty() {
                 lines.extend(timestamps.into_iter().map(|start_ms| LyricLine {
@@ -167,7 +175,9 @@ pub fn parse_lrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
         }
     }
 
+    // Stable sort keeps file order inside one timestamp, which defines the role of each row.
     lines.sort_by_key(|line| line.start_ms.unwrap_or_default());
+    let mut lines = merge_same_timestamp_lines(lines);
     let synced = !lines.is_empty();
     if !synced {
         lines = plain_lines;
@@ -239,8 +249,38 @@ pub fn with_raw_karaoke(mut lyrics: ParsedLyrics, raw_karaoke: Option<String>) -
     lyrics
 }
 
+/// Fold adjacent timed rows that share one start timestamp into one line. Within a group the
+/// first row keeps its text, the second row's text becomes the translation and the third row's
+/// text becomes the romanization; a role that is already populated is kept. Rows beyond the third
+/// are ignored. Untimed rows are never merged. Callers must pass rows already ordered by start
+/// time with file order preserved inside each timestamp (as `parse_lrc` does).
+pub fn merge_same_timestamp_lines(lines: Vec<LyricLine>) -> Vec<LyricLine> {
+    let mut merged: Vec<LyricLine> = Vec::with_capacity(lines.len());
+    let mut role = 0_usize;
+    for line in lines {
+        if let (Some(start_ms), Some(previous)) = (line.start_ms, merged.last_mut()) {
+            if previous.start_ms == Some(start_ms) {
+                role += 1;
+                match role {
+                    1 if previous.translation.is_none() => previous.translation = Some(line.text),
+                    2 if previous.romanization.is_none() => {
+                        previous.romanization = Some(line.text);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+        }
+        role = 0;
+        merged.push(line);
+    }
+    merged
+}
+
 /// Attach translation or romanization only when its parsed LRC start timestamp matches a primary
 /// line. Mismatched or untimed auxiliary text is left unattached instead of shifting line pairs.
+/// A role already supplied by same-timestamp rows inside the primary LRC wins; a separate
+/// translation/romanization document only fills lines that are still missing that role.
 pub fn merge_lrc_auxiliary(
     primary: &mut ParsedLyrics,
     auxiliary_text: &str,
@@ -273,9 +313,12 @@ pub fn merge_lrc_auxiliary(
         else {
             continue;
         };
-        match kind {
-            LyricAuxiliaryKind::Translation => line.translation = Some(auxiliary_text),
-            LyricAuxiliaryKind::Romanization => line.romanization = Some(auxiliary_text),
+        let slot = match kind {
+            LyricAuxiliaryKind::Translation => &mut line.translation,
+            LyricAuxiliaryKind::Romanization => &mut line.romanization,
+        };
+        if slot.is_none() {
+            *slot = Some(auxiliary_text);
         }
     }
     Ok(())
@@ -640,6 +683,127 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn same_timestamp_rows_become_primary_and_translation() {
+        let parsed = parse_lrc("[00:13.64]二番なんて望んでない\n[00:13.64]才不稀罕當第二呢")
+            .expect("valid LRC");
+
+        assert!(parsed.synced);
+        assert_eq!(
+            parsed.lines,
+            vec![LyricLine {
+                start_ms: Some(13_640),
+                text: "二番なんて望んでない".into(),
+                translation: Some("才不稀罕當第二呢".into()),
+                romanization: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn same_timestamp_third_row_is_romanization_and_extras_are_ignored() {
+        let parsed = parse_lrc(
+            "[00:01.00]原文\n[00:01.00]譯文\n[00:01.00]genbun\n[00:01.00]extra\n[00:02.00]next",
+        )
+        .expect("valid LRC");
+
+        assert_eq!(
+            parsed.lines,
+            vec![
+                LyricLine {
+                    start_ms: Some(1_000),
+                    text: "原文".into(),
+                    translation: Some("譯文".into()),
+                    romanization: Some("genbun".into()),
+                },
+                LyricLine {
+                    start_ms: Some(2_000),
+                    text: "next".into(),
+                    translation: None,
+                    romanization: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn same_timestamp_rows_keep_file_order_even_when_not_adjacent() {
+        let parsed = parse_lrc(
+            "[offset:100]\n[00:02.00]second\n[00:01.00]first\n[00:02.00]第二\n[00:01.00]第一",
+        )
+        .expect("valid LRC");
+
+        assert_eq!(parsed.lines.len(), 2);
+        assert_eq!(parsed.lines[0].start_ms, Some(1_100));
+        assert_eq!(parsed.lines[0].text, "first");
+        assert_eq!(parsed.lines[0].translation.as_deref(), Some("第一"));
+        assert_eq!(parsed.lines[1].start_ms, Some(2_100));
+        assert_eq!(parsed.lines[1].text, "second");
+        assert_eq!(parsed.lines[1].translation.as_deref(), Some("第二"));
+    }
+
+    #[test]
+    fn repeated_timestamp_tags_on_one_row_do_not_translate_themselves() {
+        let parsed = parse_lrc("[00:01.00][00:01.00]once\n[00:01.00]一次").expect("valid LRC");
+
+        assert_eq!(
+            parsed.lines,
+            vec![LyricLine {
+                start_ms: Some(1_000),
+                text: "once".into(),
+                translation: Some("一次".into()),
+                romanization: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn empty_same_timestamp_rows_do_not_take_a_role() {
+        let parsed = parse_lrc("[00:01.00]原文\n[00:01.00]\n[00:01.00]譯文").expect("valid LRC");
+
+        assert_eq!(parsed.lines.len(), 1);
+        assert_eq!(parsed.lines[0].translation.as_deref(), Some("譯文"));
+        assert_eq!(parsed.lines[0].romanization, None);
+    }
+
+    #[test]
+    fn separate_auxiliary_lrc_only_fills_roles_missing_from_same_timestamp_rows() {
+        let mut primary =
+            parse_lrc("[00:01.00]one\n[00:01.00]內嵌譯\n[00:02.00]two").expect("primary LRC");
+        merge_lrc_auxiliary(
+            &mut primary,
+            "[00:01.00]外部譯一\n[00:02.00]外部譯二",
+            LyricAuxiliaryKind::Translation,
+        )
+        .expect("translation LRC");
+
+        assert_eq!(primary.lines[0].translation.as_deref(), Some("內嵌譯"));
+        assert_eq!(primary.lines[1].translation.as_deref(), Some("外部譯二"));
+    }
+
+    #[test]
+    fn legacy_rows_with_duplicate_timestamps_are_folded_and_untimed_rows_are_kept() {
+        let row = |start_ms: Option<u64>, text: &str| LyricLine {
+            start_ms,
+            text: text.into(),
+            translation: None,
+            romanization: None,
+        };
+        let merged = merge_same_timestamp_lines(vec![
+            row(Some(500), "a"),
+            row(Some(500), "a-tr"),
+            row(None, "plain"),
+            row(None, "plain"),
+            row(Some(900), "b"),
+        ]);
+
+        assert_eq!(merged.len(), 4);
+        assert_eq!(merged[0].translation.as_deref(), Some("a-tr"));
+        assert_eq!(merged[1].text, "plain");
+        assert_eq!(merged[2].text, "plain");
+        assert_eq!(merged[3].text, "b");
     }
 
     #[test]

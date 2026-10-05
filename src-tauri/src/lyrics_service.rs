@@ -10,10 +10,10 @@ use std::{
 };
 
 use player_core::{
-    auto_lyric_candidate, explain_lyric_candidate_match, merge_lrc_auxiliary, parse_lrc, parse_yrc,
-    preserve_qrc, rank_lyric_candidates, with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate,
-    LyricFormat, LyricLine, LyricProvider, LyricsTrackMetadata, ParsedLyrics, TrackId, TrackLyrics,
-    TrackSummary,
+    auto_lyric_candidate, explain_lyric_candidate_match, merge_lrc_auxiliary,
+    merge_same_timestamp_lines, parse_lrc, parse_yrc, preserve_qrc, rank_lyric_candidates,
+    with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine, LyricProvider,
+    LyricsTrackMetadata, ParsedLyrics, TrackId, TrackLyrics, TrackSummary,
 };
 use player_db::Database;
 use serde::Serialize;
@@ -750,7 +750,6 @@ pub async fn lyrics_clear_track(
     load_track_result_with_context(database, track_id, Some(&app), &settings.sources).await
 }
 
-
 #[tauri::command]
 pub fn lyrics_select_candidate(
     state: State<'_, super::AppState>,
@@ -813,6 +812,16 @@ async fn load_track_result_with_context(
     let cached = database
         .get_track_lyrics(track_id)
         .map_err(|error| error.to_string())?;
+
+    // Resolution order: a lyric candidate the user explicitly picked is linked to this TrackId in
+    // the library database and wins over local sidecar/embedded lyrics until it is cleared or
+    // re-picked. Without a manual link, local lyrics beat the automatic provider cache.
+    if let Some(selected) = cached.as_ref().filter(|cached| cached.manually_selected) {
+        return Ok(LyricsTrackResultDto::ready(persisted_lyrics_dto(
+            &track,
+            selected.clone(),
+        )));
+    }
 
     match local_lyrics_for_track(app, sources, database, track_id, &track).await? {
         LocalLyricsLookup::Found(lyrics) => Ok(LyricsTrackResultDto::ready(lyrics)),
@@ -1001,7 +1010,13 @@ async fn local_lyrics_for_track(
     }
 }
 
-fn persisted_lyrics_dto(track: &TrackSummary, lyrics: TrackLyrics) -> TrackLyricsDto {
+fn persisted_lyrics_dto(track: &TrackSummary, mut lyrics: TrackLyrics) -> TrackLyricsDto {
+    // Provider LRC cached before same-timestamp folding may still hold one row per duplicate
+    // timestamp; fold it on read so old cache entries follow the primary/translation/romanization
+    // rule without rewriting SQLite.
+    if lyrics.lyrics.format == LyricFormat::Lrc {
+        lyrics.lyrics.lines = merge_same_timestamp_lines(std::mem::take(&mut lyrics.lyrics.lines));
+    }
     track_lyrics_dto(
         track.id,
         track,
@@ -1591,7 +1606,14 @@ mod tests {
             seeded_test_database("完全不同的本機曲名", "本機演出者", "本機專輯");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new(), true, None)
+            .search_track(
+                &database,
+                track.id,
+                &track,
+                CancellationToken::new(),
+                true,
+                None,
+            )
             .await
             .expect("complete fixture search");
 
@@ -1616,7 +1638,14 @@ mod tests {
         let (database, _directory, track) = seeded_test_database("Song", "Artist", "Album");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new(), true, None)
+            .search_track(
+                &database,
+                track.id,
+                &track,
+                CancellationToken::new(),
+                true,
+                None,
+            )
             .await
             .expect("complete fixture search");
 
@@ -1658,7 +1687,14 @@ mod tests {
         let (database, _directory, track) = seeded_test_database("Song", "Artist", "Album");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new(), false, None)
+            .search_track(
+                &database,
+                track.id,
+                &track,
+                CancellationToken::new(),
+                false,
+                None,
+            )
             .await
             .expect("manual search without auto-apply");
 
@@ -1680,7 +1716,14 @@ mod tests {
             seeded_test_database("完全不同的本機曲名", "本機演出者", "本機專輯");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new(), true, None)
+            .search_track(
+                &database,
+                track.id,
+                &track,
+                CancellationToken::new(),
+                true,
+                None,
+            )
             .await
             .expect("complete fixture search");
         let selected_candidate = result
@@ -1838,7 +1881,7 @@ mod tests {
             .expect("write local media placeholder");
         fs::write(
             directory.0.join("local.lrc"),
-            "[offset:250]\n[00:01.00]本機逐行歌詞",
+            "[offset:250]\n[00:01.00]本機逐行歌詞\n[00:01.00]本機譯文",
         )
         .expect("write local LRC sidecar");
 
@@ -1893,7 +1936,91 @@ mod tests {
         assert!(matches!(result.status, super::LyricsResultStatusDto::Ready));
         let lyrics = result.lyrics.expect("sidecar lyrics returned");
         assert_eq!(lyrics.source, LyricsSourceDto::Local);
+        assert_eq!(lyrics.lines.len(), 1);
         assert_eq!(lyrics.lines[0].text, "本機逐行歌詞");
+        assert_eq!(lyrics.lines[0].translation.as_deref(), Some("本機譯文"));
         assert_eq!(lyrics.lines[0].start_ms, Some(1_250));
+
+        // An automatic provider cache entry must not hide local lyrics.
+        let automatic = player_core::TrackLyrics {
+            track_id,
+            provider: LyricProvider::NetEase,
+            candidate_id: Some("netease:auto".to_owned()),
+            lyrics: parse_lrc("[00:02.00]自動快取").expect("automatic LRC"),
+            manually_selected: false,
+            updated_at_utc_ms: 1_800_000_000_000,
+        };
+        assert!(database
+            .save_automatic_track_lyrics(&automatic)
+            .expect("save automatic cache"));
+        let result = super::load_track_result(&database, track_id)
+            .await
+            .expect("load with automatic cache");
+        assert_eq!(
+            result.lyrics.expect("local lyrics").source,
+            LyricsSourceDto::Local
+        );
+
+        // A manual pick is linked to the TrackId and wins over the sidecar on the next load.
+        let manual = player_core::TrackLyrics {
+            track_id,
+            provider: LyricProvider::Qq,
+            candidate_id: Some("qqmusic:manual".to_owned()),
+            lyrics: parse_lrc("[00:03.00]人工指定\n[00:03.00]人工譯文").expect("manual LRC"),
+            manually_selected: true,
+            updated_at_utc_ms: 1_800_000_000_001,
+        };
+        database
+            .save_manual_track_lyrics(&manual)
+            .expect("save manual selection");
+        let result = super::load_track_result(&database, track_id)
+            .await
+            .expect("load with manual selection");
+        let lyrics = result.lyrics.expect("manual lyrics returned");
+        assert_eq!(lyrics.source, LyricsSourceDto::Manual);
+        assert_eq!(lyrics.lines[0].text, "人工指定");
+        assert_eq!(lyrics.lines[0].translation.as_deref(), Some("人工譯文"));
+
+        // Clearing the link falls back to local lyrics again.
+        assert!(database
+            .clear_track_lyrics(track_id)
+            .expect("clear manual selection"));
+        let result = super::load_track_result(&database, track_id)
+            .await
+            .expect("load after clear");
+        assert_eq!(
+            result.lyrics.expect("local lyrics after clear").source,
+            LyricsSourceDto::Local
+        );
+    }
+
+    #[test]
+    fn legacy_cached_lrc_rows_with_shared_timestamps_are_folded_on_read() {
+        use player_core::{LyricLine, TrackLyrics};
+
+        let track = track();
+        let mut lyrics = parse_lrc("[00:13.64]placeholder").expect("parse LRC");
+        let row = |text: &str| LyricLine {
+            start_ms: Some(13_640),
+            text: text.to_owned(),
+            translation: None,
+            romanization: None,
+        };
+        lyrics.lines = vec![row("二番なんて望んでない"), row("才不稀罕當第二呢")];
+        let persisted = TrackLyrics {
+            track_id: track.id,
+            provider: LyricProvider::NetEase,
+            candidate_id: Some("netease:legacy".to_owned()),
+            lyrics,
+            manually_selected: false,
+            updated_at_utc_ms: 1_800_000_000_000,
+        };
+        let dto = super::persisted_lyrics_dto(&track, persisted);
+        assert_eq!(dto.lines.len(), 1);
+        assert_eq!(dto.lines[0].text, "二番なんて望んでない");
+        assert_eq!(
+            dto.lines[0].translation.as_deref(),
+            Some("才不稀罕當第二呢")
+        );
     }
 }

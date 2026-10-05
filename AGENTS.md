@@ -88,7 +88,8 @@
 - **播放：**播放/暫停、前後首、跳轉、音量、循環、隨機與佇列。架構需容納無縫播放。Windows 整合系統媒體控制；Android 使用 Media3/MediaSessionService，支援背景、通知列與藍牙控制，Activity 關閉後仍可依平台規範播放。點擊曲庫或播放清單歌曲只開始播放並留在原頁；只有手動點擊底部目前歌曲封面才進入「正在播放」頁，不提供側欄直達入口。進度滑桿拖曳時以本地草稿呈現，pointerup/cancel（包含滑出滑桿後）只提交一次或還原草稿；切歌時丟棄舊草稿，過期播放快照不得蓋掉 seek ACK 權威快照。音量拖曳以本地值即時跟隨，pointerup/change 提交最終音量；音量命令需合併為有界佇列，與播放、seek 的 busy 狀態隔離，舊 ACK 或輪詢不得倒退較新的拖曳草稿。
 - **播放 session：**App SQLite 持久保存目前播放佇列的精確來源順序、shuffle traversal、目前 entry 游標與播放位置；播放清單重複曲目以各自 entry position 保留。下次啟動還原相同佇列、目前曲目與位置，但不自動播放，必須由使用者按 Play 開始。來源暫時離線或曲目目前無法解析時，保留 session，恢復可用後再以穩定 TrackId 解析；native path 不得作為 session identity 或持久化權威。
 - **聆聽統計與加權隨機：**只累計音訊處於 Playing 且自然播放位置前進的時間；暫停、載入、Ready、停止及 seek 跳躍不計入。App SQLite 持久保存每個 TrackId 的累計 `played_ms`；新隨機 traversal 以 `1/(1 + played_ms/duration_ms)` 作權重，未知或 0 時長採中性權重 1。只在建立新 traversal 或關閉隨機後重新開啟時取最新統計，不重排既有 traversal；播放清單重複 entry 保留各自位置。背景來源暫時不可用時不得清除累計值，native path 不得作為統計身份。
-- **歌詞：**支援本地 LRC、可取得的內嵌歌詞、網易雲與 QQ Provider、同步顯示、候選手動搜尋/指定及持久快取。Provider 與 UI、Library Core 分離，需有逾時、可取消與受控重試；網路失敗不得阻礙啟動、曲庫瀏覽、本地歌詞或播放。自動匹配須綜合標題、演出者、長度、專輯、版本與 feat. 資訊；低信心不自動套用。使用者指定與本地歌詞優先於網路自動結果。
+- **歌詞：**支援本地 LRC、可取得的內嵌歌詞、網易雲與 QQ Provider、同步顯示、候選手動搜尋/指定及持久快取。Provider 與 UI、Library Core 分離，需有逾時、可取消與受控重試；網路失敗不得阻礙啟動、曲庫瀏覽、本地歌詞或播放。自動匹配須綜合標題、演出者、長度、專輯、版本與 feat. 資訊；低信心不自動套用。歌詞解析優先序：使用者手動指定（`lyrics_select_candidate` 寫入 App SQLite `track_lyrics`、以 TrackId 關聯曲庫、`manually_selected=1`）> 本機 sidecar／內嵌歌詞 > 網路自動快取；手動關聯在使用者「移除歌詞」（`lyrics_clear_track`）或重新指定前一律優先，之後才回落到本機歌詞。
+- **同時間戳多行 LRC（通用做法）：**`parse_lrc`（涵蓋本機 sidecar、內嵌歌詞、Android SAF sidecar、Provider LRC 與手動候選）把不同實體行但時間戳相同（套用 offset 後）的列合併為單一 `LyricLine`：依檔案順序第 1 行為主文 `text`、第 2 行為 `translation`、第 3 行為 `romanization`；第 4 行起忽略（不附加到羅馬拼音，避免把重複或演職員行混入）。空白文字行不佔角色；同一實體行重複寫同一時間戳（`[00:01.00][00:01.00]x`）只算一次，不會自成譯文；同一實體行多個不同時間戳仍各自成列。`merge_same_timestamp_lines` 為共用實作，讀取舊版 SQLite 快取的 LRC 歌詞時也會折疊，不必重寫資料庫。獨立 tlyric／romalrc 文件仍以 `merge_lrc_auxiliary` 依精確時間戳附加，但只填補缺少的角色，不覆蓋同時間戳行已提供的譯文／羅馬拼音。「譯」「羅」關閉時前端只顯示第一行主文。已知取捨：同時間戳的兩行演職員資訊（如 `[00:00.00]作詞`／`[00:00.00]作曲`）也會被視為主文＋譯文。
 - 歌詞匹配要有可解釋分數與信心門檻。標題、演出者權重高；長度差異有實質影響；專輯為低權重。正規化大小寫、全半形、空白、常見括號及 feat./featuring/ft.，但須保留 Live、Cover、Acoustic、Instrumental、TV Size、Remaster 等版本差異；手動指定須持久保存並優先於後續自動搜尋。播放期間不得批量觸發網路補全。
 - **首頁文案：**不顯示無用途的宣傳式頂部標語、功能口號、裝飾唱片插圖或假輪播頁碼；主要頁面直接呈現實際曲庫、播放清單、播放或設定內容。
 - **介面圖示：**Svelte 5 UI 的功能性圖示使用官方 `@tabler/icons-svelte-runes`；涵蓋播放、導覽、搜尋、排序、收藏、音量、來源與設定等語意圖示，保留既有操作、中文 `aria-label`／`title`、可讀尺寸與狀態差異。品牌標誌、歌曲封面、純裝飾波形及非圖示文字不替換。
@@ -170,6 +171,7 @@
 - Windows Release 已更新：`release/moemusicplayer.exe` 由 commit `f866011` 建置（修復 NP 時間軸消失／時間標籤錯位與封面垂直置中；歌詞選擇器「移除歌詞」+ `lyrics_clear_track`；歌詞文字效果陰影／描邊／關閉），SHA-256 `47F8FBCD143CD37F65997C833133B2AD9E4F28D256759E10C9E3550A155C0D26`；`npm run check` 0 errors/warnings、Node 89/89。前一版 EXE 備份後已刪除，不保留於 `release/` 下 `.bak`。
 - 封面與歌詞外層 `.now-playing-card` 半透明白框／淡底已移除（border/background 透明），A/B 僅保留分欄與間距。
 - 正在播放曲目的「播放次數」每秒依 in-memory 聆聽進度更新一次（base `playedMs` + 播放中自然 position 前進），不重查整庫；僅目前曲目受影響。Now Playing 頂列與曲庫／播放清單／佇列中可見的目前列同步覆寫顯示。
+- 同時間戳多行 LRC 已改為主文／譯文／羅馬拼音合併（見產品需求「同時間戳多行 LRC」）；手動指定歌詞改為優先於本機 sidecar／內嵌歌詞，`lyrics_get_track`／`lyrics_search` 初始載入與 `lyrics_clear_track` 後重載共用 `load_track_result_with_context` 的此優先序。Rust 測試：player-core lyrics 17/17（含 `[00:13.64]二番なんて望んでない`／`[00:13.64]才不稀罕當第二呢` 範例、三行角色、第四行忽略、非相鄰同時間戳、空白行、外部 tlyric 只補缺）、Windows platform lyrics 4/4、Tauri lyrics 27/27（含 Windows sidecar 同時間戳譯文、自動快取不遮蔽本機、手動指定優先於 sidecar、清除後回落本機、舊快取讀取折疊）。正式 Tauri 視窗中手動指定後切歌再回來的實際行為仍待人工驗收。
 
 ## 工作方式與下一步
 
