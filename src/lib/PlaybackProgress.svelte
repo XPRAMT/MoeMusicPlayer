@@ -5,6 +5,7 @@
     isPlaybackSeekableDuration,
     playbackSeekDisplayPosition,
   } from './playback-scrubber';
+  import type { TimelineStyle } from './ipc';
 
   let {
     positionMs = 0,
@@ -12,6 +13,7 @@
     trackId = null,
     canControl = false,
     isSending = false,
+    timelineStyle = 'line',
     onSeek,
   }: {
     positionMs: number;
@@ -19,6 +21,7 @@
     trackId: string | null;
     canControl: boolean;
     isSending: boolean;
+    timelineStyle?: TimelineStyle;
     onSeek: (positionMs: number) => void | Promise<void>;
   } = $props();
 
@@ -85,7 +88,7 @@
 
 <svelte:window onpointerup={finishPointerSeek} onpointercancel={cancelDraft} />
 
-<div class="progress-row">
+<div class="progress-row" data-timeline-style={timelineStyle}>
   <span>{formatDuration(displayedPositionMs)}</span>
   <input
     class="progress-slider"

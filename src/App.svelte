@@ -2267,7 +2267,7 @@
     </section>
   {/if}
 
-  <footer class="player-dock" aria-label="播放控制" inert={isQuickSettingsOpen}>
+  <footer class="player-dock" data-timeline-style={nowPlayingAppearancePreferences.timelineStyle} aria-label="播放控制" inert={isQuickSettingsOpen}>
     <div class="dock-track" class:dock-track-dismiss={isNowPlayingOpen}>
       {#if isNowPlayingOpen}
         <button
@@ -2337,6 +2337,7 @@
         trackId={playback?.currentTrack?.id ?? null}
         canControl={playbackReady}
         isSending={isSendingPlaybackCommand}
+        timelineStyle={nowPlayingAppearancePreferences.timelineStyle}
         onSeek={commitPlaybackSeek}
       />
       {#if playbackError || playback?.lastError}<span class="dock-error" role="status">{playbackError ?? playback?.lastError}</span>{/if}

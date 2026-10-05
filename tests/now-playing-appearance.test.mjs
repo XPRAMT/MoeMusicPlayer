@@ -11,24 +11,29 @@ test('appearance preferences default and clamp to supported ranges', () => {
     backgroundBlurPx: 20,
     backgroundBrightnessPercent: 40,
     coverCornerStyle: 'rounded',
+    timelineStyle: 'line',
   });
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: -4,
     backgroundBrightnessPercent: 140,
     coverCornerStyle: 'square',
+    timelineStyle: 'bar',
   }), {
     backgroundBlurPx: 0,
     backgroundBrightnessPercent: 100,
     coverCornerStyle: 'square',
+    timelineStyle: 'bar',
   });
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: 80.4,
     backgroundBrightnessPercent: 21.6,
     coverCornerStyle: 'nope',
+    timelineStyle: 'nope',
   }), {
     backgroundBlurPx: 40,
     backgroundBrightnessPercent: 22,
     coverCornerStyle: 'rounded',
+    timelineStyle: 'line',
   });
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: Number.NaN,
@@ -38,7 +43,7 @@ test('appearance preferences default and clamp to supported ranges', () => {
     assert.deepEqual(normalizeNowPlayingAppearancePreferences({
       backgroundBlurPx: 27,
       surfaceTransparencyPercent: legacySurface,
-    }), { backgroundBlurPx: 27, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded' });
+    }), { backgroundBlurPx: 27, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'line' });
   }
 });
 
@@ -68,25 +73,25 @@ test('slow saves coalesce drag updates and ignore stale acknowledgements', async
     request.resolve(request.preferences);
   };
 
-  writer.schedule({ backgroundBlurPx: 20, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded' });
+  writer.schedule({ backgroundBlurPx: 20, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'line' });
   await wait(35);
   assert.equal(requests.length, 1, 'debounced change should start one write');
-  writer.schedule({ backgroundBlurPx: 21, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded' });
+  writer.schedule({ backgroundBlurPx: 21, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'line' });
   await wait(8);
-  writer.schedule({ backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square' });
+  writer.schedule({ backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'minimal' });
   await wait(35);
   assert.equal(requests.length, 1, 'new values must wait behind the slow acknowledgement');
   resolveNext();
   await wait(0);
   assert.equal(requests.length, 2, 'one latest value should follow the active write');
-  assert.deepEqual(requests[1], { backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square' });
+  assert.deepEqual(requests[1], { backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'minimal' });
   resolveNext();
   await wait(0);
-  assert.deepEqual(saved, [{ backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square' }]);
+  assert.deepEqual(saved, [{ backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'minimal' }]);
   assert.equal(maxActive, 1, 'settings writes must not overlap');
   assert.deepEqual(errors, []);
 
-  writer.schedule({ backgroundBlurPx: 24, backgroundBrightnessPercent: 50, coverCornerStyle: 'rounded' }, true);
+  writer.schedule({ backgroundBlurPx: 24, backgroundBrightnessPercent: 50, coverCornerStyle: 'rounded', timelineStyle: 'line' }, true);
   await wait(0);
   const failed = held.shift();
   assert.ok(failed);

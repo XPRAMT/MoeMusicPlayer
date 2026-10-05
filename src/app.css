@@ -2584,14 +2584,17 @@ input:focus-visible {
   z-index: 5;
   display: grid;
   min-width: 0;
-  min-height: 94px;
+  min-height: 82px;
   grid-column: 1 / -1;
   grid-row: 2;
   /* Equal side columns + auto center: transport stays window-centered regardless of track/volume width. */
+  /* Row 1 = timeline strip flush to dock top edge; row 2 = track / transport / volume vertically centered. */
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 18px;
-  padding: 14px clamp(18px, 3vw, 38px);
+  column-gap: 18px;
+  row-gap: 0;
+  padding: 0 clamp(18px, 3vw, 38px) 8px;
   border-top: 1px solid rgba(var(--text-rgb), 0.11);
   background: linear-gradient(100deg, var(--dock-bg), var(--panel-soft) 50%, var(--dock-bg));
   box-shadow: 0 -15px 35px rgba(0, 0, 0, 0.15);
@@ -2619,7 +2622,7 @@ input:focus-visible {
 .now-playing-appearance-preview {
   position: relative;
   display: flex;
-  min-height: 94px;
+  min-height: 82px;
   align-items: flex-start;
   justify-content: flex-end;
   gap: 8px;
@@ -2784,28 +2787,40 @@ input:focus-visible {
 }
 
 .dock-center {
-  position: relative;
-  display: grid;
-  min-width: min(100%, 270px);
-  justify-items: center;
-  justify-self: center;
-  gap: 6px;
-}
-
-.app-shell.has-now-playing-backdrop .dock-center {
+  /* Promote controls + progress into the dock grid so the timeline can sit on the top edge. */
   display: contents;
 }
 
-.app-shell.has-now-playing-backdrop .player-dock {
-  grid-template-rows: 22px minmax(42px, 1fr);
-  row-gap: 0;
-}
-
-.app-shell.has-now-playing-backdrop .progress-row {
+.progress-row {
   width: 100%;
   grid-column: 1 / 4;
   grid-row: 1;
+  align-self: stretch;
+  justify-self: stretch;
+}
+
+.dock-track {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: center;
+}
+
+.dock-controls {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: center;
   justify-self: center;
+}
+
+.dock-volume {
+  grid-column: 3;
+  grid-row: 2;
+  align-self: center;
+}
+
+.app-shell.has-now-playing-backdrop .player-dock {
+  grid-template-rows: 18px minmax(36px, 1fr);
+  row-gap: 0;
 }
 
 .dock-track-dismiss {
@@ -2856,7 +2871,7 @@ input:focus-visible {
 .app-shell.has-now-playing-backdrop .dock-error {
   top: auto;
   right: 10px;
-  bottom: calc(100% - 22px);
+  bottom: calc(100% - 18px);
   left: 10px;
   z-index: 1;
   max-width: none;
@@ -2945,11 +2960,13 @@ input:focus-visible {
 
 .progress-row {
   display: grid;
-  width: min(100%, 480px);
+  width: 100%;
   min-width: 0;
+  max-width: none;
   grid-template-columns: 37px minmax(0, 1fr) 37px;
   align-items: center;
   gap: 8px;
+  padding: 0 2px;
   color: var(--text-soft);
   font-family: inherit;
   font-size: 9px;
@@ -2973,7 +2990,7 @@ input:focus-visible {
 .progress-slider,
 .volume-slider {
   width: 100%;
-  height: 24px;
+  height: 20px;
   margin: 0;
   border-radius: 99px;
   background: linear-gradient(90deg, var(--accent), rgba(var(--text-rgb), 0.2));
@@ -2992,6 +3009,8 @@ input:focus-visible {
   border-radius: 50%;
   background: var(--accent);
   appearance: none;
+  box-shadow: none;
+  transition: opacity 120ms ease, transform 120ms ease;
 }
 
 .progress-slider:disabled,
@@ -3003,6 +3022,56 @@ input:focus-visible {
 .progress-slider:not(:disabled),
 .volume-slider:not(:disabled) {
   cursor: pointer;
+}
+
+/* Timeline styles: theme progress only; volume keeps the shared line look above. */
+.progress-row[data-timeline-style="line"] .progress-slider,
+.player-dock[data-timeline-style="line"] .progress-slider {
+  background-size: 100% 3px;
+}
+
+.progress-row[data-timeline-style="bar"] .progress-slider,
+.player-dock[data-timeline-style="bar"] .progress-slider {
+  height: 20px;
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 88%, white),
+    color-mix(in srgb, var(--accent) 55%, transparent) 42%,
+    rgba(var(--text-rgb), 0.18)
+  );
+  background-size: 100% 7px;
+  background-position: center;
+}
+
+.progress-row[data-timeline-style="bar"] .progress-slider::-webkit-slider-thumb,
+.player-dock[data-timeline-style="bar"] .progress-slider::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+}
+
+.progress-row[data-timeline-style="minimal"] .progress-slider,
+.player-dock[data-timeline-style="minimal"] .progress-slider {
+  background-image: linear-gradient(90deg, rgba(var(--accent-rgb), 0.85), rgba(var(--text-rgb), 0.16));
+  background-size: 100% 1.5px;
+}
+
+.progress-row[data-timeline-style="minimal"] .progress-slider::-webkit-slider-thumb,
+.player-dock[data-timeline-style="minimal"] .progress-slider::-webkit-slider-thumb {
+  width: 10px;
+  height: 10px;
+  opacity: 0;
+  transform: scale(0.85);
+}
+
+.progress-row[data-timeline-style="minimal"]:hover .progress-slider::-webkit-slider-thumb,
+.progress-row[data-timeline-style="minimal"]:focus-within .progress-slider::-webkit-slider-thumb,
+.progress-row[data-timeline-style="minimal"] .progress-slider:active::-webkit-slider-thumb,
+.player-dock[data-timeline-style="minimal"] .progress-row:hover .progress-slider::-webkit-slider-thumb,
+.player-dock[data-timeline-style="minimal"] .progress-row:focus-within .progress-slider::-webkit-slider-thumb,
+.player-dock[data-timeline-style="minimal"] .progress-slider:active::-webkit-slider-thumb {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .dock-error {
@@ -3275,7 +3344,7 @@ input:focus-visible {
 @media (max-width: 1120px) {
   .app-shell { --sidebar-width: 222px; }
   .sidebar { padding-right: 14px; padding-left: 14px; }
-  .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; }
+  .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); column-gap: 12px; row-gap: 0; }
   .dock-controls { gap: 6px; }
   }
 
@@ -3331,7 +3400,7 @@ input:focus-visible {
   }
   .topbar { min-height: 63px; }
   .page-content { padding-top: 26px; }
-  .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); min-height: 84px; gap: 8px; padding-right: 16px; padding-left: 16px; }
+  .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); min-height: 74px; column-gap: 8px; row-gap: 0; padding-right: 16px; padding-left: 16px; }
   .dock-art { width: 40px; height: 40px; }
   .dock-favorite { display: none; }
   .dock-volume { gap: 7px; }
@@ -3447,30 +3516,30 @@ input:focus-visible {
   .source-status-copy p { font-size: 8px; }
   .status-pill { padding: 5px 6px; font-size: 8px; }
   .player-dock {
-    min-height: 127px;
+    min-height: 112px;
     grid-column: 1;
     grid-row: 3;
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: 43px 48px;
-    gap: 1px 8px;
-    padding: 8px 13px 6px;
+    grid-template-rows: 16px 38px 42px;
+    column-gap: 8px;
+    row-gap: 0;
+    padding: 0 13px 6px;
   }
-  .dock-track { grid-column: 1; grid-row: 1; gap: 8px; }
+  .progress-row { grid-column: 1 / -1; grid-row: 1; width: 100%; grid-template-columns: 31px minmax(0, 1fr) 31px; gap: 7px; font-size: 8px; }
+  .dock-track { grid-column: 1; grid-row: 2; gap: 8px; align-self: center; }
   .dock-art { width: 34px; height: 34px; border-radius: 8px; }
   .dock-art svg { width: 18px; height: 18px; }
   .dock-track-copy { gap: 3px; }
   .dock-track-copy strong { font-size: 9px; }
   .dock-track-copy span { max-width: 200px; font-size: 8px; }
-  .dock-volume { grid-column: 2; grid-row: 1; gap: 6px; }
+  .dock-volume { grid-column: 2; grid-row: 2; gap: 6px; align-self: center; }
   .dock-volume > svg { width: 17px; height: 17px; }
   .volume-slider { width: 53px; flex-basis: 53px; }
-  .dock-center { grid-column: 1 / -1; grid-row: 2; grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .dock-controls { height: 29px; gap: clamp(9px, 5vw, 18px); }
+  .dock-controls { grid-column: 1 / -1; grid-row: 3; height: 29px; gap: clamp(9px, 5vw, 18px); align-self: center; justify-self: center; }
   .control-button { width: 27px; height: 27px; }
   .control-button svg { width: 18px; height: 18px; }
   .play-button { width: 31px; height: 31px; }
   .play-button svg { width: 18px; height: 18px; }
-  .progress-row { width: 100%; grid-template-columns: 31px minmax(0, 1fr) 31px; gap: 7px; font-size: 8px; }
   .dock-error { top: calc(100% + 2px); }
 }
 
@@ -3498,7 +3567,7 @@ input:focus-visible {
   .topbar { min-height: 58px; }
   .page-content { padding-top: 18px; }
   .track-row { min-height: 49px; }
-  .player-dock { min-height: 81px; padding-top: 10px; padding-bottom: 10px; }
+  .player-dock { min-height: 72px; padding-top: 0; padding-bottom: 6px; }
 }
 
 @media (max-width: 620px) {

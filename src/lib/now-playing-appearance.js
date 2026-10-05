@@ -5,6 +5,7 @@ export const DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES = Object.freeze({
   backgroundBlurPx: 20,
   backgroundBrightnessPercent: 40,
   coverCornerStyle: /** @type {const} */ ('rounded'),
+  timelineStyle: /** @type {const} */ ('line'),
 });
 
 /**
@@ -16,6 +17,11 @@ export function normalizeNowPlayingAppearancePreferences(value = {}) {
   const brightness = Number(value?.backgroundBrightnessPercent);
   /** @type {import('./ipc').CoverCornerStyle} */
   const coverCornerStyle = value?.coverCornerStyle === 'square' ? 'square' : 'rounded';
+  /** @type {import('./ipc').TimelineStyle} */
+  const timelineStyle =
+    value?.timelineStyle === 'bar' || value?.timelineStyle === 'minimal'
+      ? value.timelineStyle
+      : 'line';
   return {
     backgroundBlurPx: Number.isFinite(blur)
       ? Math.round(Math.max(0, Math.min(40, blur)))
@@ -24,6 +30,7 @@ export function normalizeNowPlayingAppearancePreferences(value = {}) {
       ? Math.round(Math.max(0, Math.min(100, brightness)))
       : DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES.backgroundBrightnessPercent,
     coverCornerStyle,
+    timelineStyle,
   };
 }
 

@@ -53,7 +53,7 @@ async page => {
   await page.evaluate(() => window.__appearanceHarness.releaseAck());
   await page.waitForFunction(() => window.__appearanceHarness.requests.length === 2);
   const latest = await page.evaluate(() => window.__appearanceHarness.requests[1]);
-  assert.deepEqual(latest, { backgroundBlurPx: 25, backgroundBrightnessPercent: 52, coverCornerStyle: 'rounded' }, 'the active request should flush only the latest preferences');
+  assert.deepEqual(latest, { backgroundBlurPx: 25, backgroundBrightnessPercent: 52, coverCornerStyle: 'rounded', timelineStyle: 'line' }, 'the active request should flush only the latest preferences');
   await page.evaluate(() => window.__appearanceHarness.releaseAck());
   await page.waitForFunction(() => document.querySelector('#now-playing-layout-panel .quick-settings-group[aria-labelledby="quick-settings-playback-heading"] .settings-preference-status:last-of-type')?.textContent.includes('正在播放外觀已保存'));
 

@@ -106,6 +106,14 @@ pub enum CoverCornerStyle {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
+pub enum TimelineStyle {
+    Line,
+    Bar,
+    Minimal,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum LyricsTextEffect {
     Shadow,
     Stroke,
@@ -132,6 +140,16 @@ fn default_cover_corner_style() -> CoverCornerStyle {
     CoverCornerStyle::Rounded
 }
 
+impl Default for TimelineStyle {
+    fn default() -> Self {
+        Self::Line
+    }
+}
+
+fn default_timeline_style() -> TimelineStyle {
+    TimelineStyle::Line
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NowPlayingAppearancePreferences {
@@ -140,6 +158,8 @@ pub struct NowPlayingAppearancePreferences {
     pub background_brightness_percent: u8,
     #[serde(default = "default_cover_corner_style")]
     pub cover_corner_style: CoverCornerStyle,
+    #[serde(default = "default_timeline_style")]
+    pub timeline_style: TimelineStyle,
 }
 
 fn default_background_brightness_percent() -> u8 {
@@ -152,6 +172,7 @@ impl Default for NowPlayingAppearancePreferences {
             background_blur_px: 20,
             background_brightness_percent: 40,
             cover_corner_style: CoverCornerStyle::Rounded,
+            timeline_style: TimelineStyle::Line,
         }
     }
 }
@@ -250,8 +271,7 @@ fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColu
         return settings;
     }
 
-    const LEGACY: [TrackListColumnId; 6] =
-        [Title, Artist, Album, Year, AudioFormat, Duration];
+    const LEGACY: [TrackListColumnId; 6] = [Title, Artist, Album, Year, AudioFormat, Duration];
     let ids: Vec<_> = settings.columns.iter().map(|column| column.id).collect();
     let unique: std::collections::HashSet<_> = ids.iter().copied().collect();
     if ids.len() == LEGACY.len()
@@ -779,9 +799,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         lyrics_preferences: raw.lyrics_preferences.unwrap_or_default(),
         shuffle: raw.shuffle.unwrap_or(false),
         repeat_mode: raw.repeat_mode.unwrap_or(RepeatMode::Off),
-        track_list_columns: repair_track_list_columns(
-            raw.track_list_columns.unwrap_or_default(),
-        ),
+        track_list_columns: repair_track_list_columns(raw.track_list_columns.unwrap_or_default()),
         now_playing_layout: raw.now_playing_layout.unwrap_or(NowPlayingLayout::A),
         now_playing_appearance_preferences: raw
             .now_playing_appearance_preferences
@@ -1781,6 +1799,10 @@ mod tests {
             persisted["nowPlayingAppearancePreferences"]["coverCornerStyle"],
             "rounded"
         );
+        assert_eq!(
+            persisted["nowPlayingAppearancePreferences"]["timelineStyle"],
+            "line"
+        );
         assert!(
             persisted["nowPlayingAppearancePreferences"]["surfaceTransparencyPercent"].is_null()
         );
@@ -1795,6 +1817,7 @@ mod tests {
             background_blur_px: 0,
             background_brightness_percent: 100,
             cover_corner_style: CoverCornerStyle::Square,
+            timeline_style: TimelineStyle::Line,
         };
         let saved = store
             .update(|settings| {
@@ -1845,11 +1868,13 @@ mod tests {
             background_blur_px: 12,
             background_brightness_percent: 67,
             cover_corner_style: CoverCornerStyle::Square,
+            timeline_style: TimelineStyle::Line,
         };
         let value = serde_json::to_value(preferences).unwrap();
         assert_eq!(value["backgroundBlurPx"], 12);
         assert_eq!(value["backgroundBrightnessPercent"], 67);
         assert_eq!(value["coverCornerStyle"], "square");
+        assert_eq!(value["timelineStyle"], "line");
         assert_eq!(
             serde_json::from_value::<NowPlayingAppearancePreferences>(value).unwrap(),
             preferences
@@ -1873,19 +1898,23 @@ mod tests {
             "backgroundBlurPx": 15,
             "backgroundBrightnessPercent": 55
         });
-        fs::write(&path, serde_json::to_vec(&json).unwrap()).expect("write settings without cover corner");
+        fs::write(&path, serde_json::to_vec(&json).unwrap())
+            .expect("write settings without cover corner");
 
         let store = SettingsStore::open(&path, AppSettings::default()).expect("open settings");
         let snapshot = store.snapshot().unwrap();
         assert_eq!(
-            snapshot.now_playing_appearance_preferences.cover_corner_style,
+            snapshot
+                .now_playing_appearance_preferences
+                .cover_corner_style,
             CoverCornerStyle::Rounded
         );
 
         let saved = store
             .update(|settings| {
-                settings.now_playing_appearance_preferences.cover_corner_style =
-                    CoverCornerStyle::Square;
+                settings
+                    .now_playing_appearance_preferences
+                    .cover_corner_style = CoverCornerStyle::Square;
                 Ok(())
             })
             .expect("save square corners");
@@ -1906,6 +1935,55 @@ mod tests {
                 "backgroundBlurPx": 12,
                 "backgroundBrightnessPercent": 50,
                 "coverCornerStyle": "circle"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_timeline_style_defaults_to_line_and_rejects_unknown_values() {
+        let directory = test_directory("appearance-timeline-style");
+        let path = directory.join("settings.json");
+        let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        json["schemaVersion"] = serde_json::json!(5);
+        json["nowPlayingAppearancePreferences"] = serde_json::json!({
+            "backgroundBlurPx": 15,
+            "backgroundBrightnessPercent": 55,
+            "coverCornerStyle": "square"
+        });
+        fs::write(&path, serde_json::to_vec(&json).unwrap())
+            .expect("write settings without timeline");
+
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("open settings");
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(
+            snapshot.now_playing_appearance_preferences.timeline_style,
+            TimelineStyle::Line
+        );
+
+        let saved = store
+            .update(|settings| {
+                settings.now_playing_appearance_preferences.timeline_style = TimelineStyle::Bar;
+                Ok(())
+            })
+            .expect("save bar timeline");
+        assert_eq!(
+            saved.now_playing_appearance_preferences.timeline_style,
+            TimelineStyle::Bar
+        );
+
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            persisted["nowPlayingAppearancePreferences"]["timelineStyle"],
+            "bar"
+        );
+
+        assert!(
+            serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
+                "backgroundBlurPx": 12,
+                "backgroundBrightnessPercent": 50,
+                "timelineStyle": "chunky"
             }))
             .is_err()
         );
