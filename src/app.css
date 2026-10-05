@@ -3584,23 +3584,24 @@ input:focus-visible {
   .control-button svg { width: 18px; height: 18px; }
   .play-button { width: 31px; height: 31px; }
   .play-button svg { width: 18px; height: 18px; }
-  .progress-row { width: 100%; grid-template-columns: 31px minmax(0, 1fr) 31px; gap: 7px; font-size: 8px; }
+  .progress-row { width: 100%; grid-template-columns: minmax(0, 1fr); gap: 0; font-size: 8px; }
+  /* Narrow/vertical: hide elapsed/duration to shrink dock; keep seek track. */
+  .progress-time,
+  .progress-time-elapsed,
+  .progress-time-duration { display: none; }
   .dock-error { top: calc(100% + 2px); }
   .player-dock[data-timeline-style="edge"] {
-    min-height: 108px;
-    grid-template-rows: 38px 42px;
+    min-height: 100px;
+    grid-template-rows: 36px 40px;
     padding-top: 5px;
     padding-bottom: 5px;
     align-items: center;
   }
+  .player-dock[data-timeline-style="edge"] .progress-row {
+    grid-template-rows: 16px;
+  }
   .player-dock[data-timeline-style="edge"] .dock-volume {
-    margin-right: 28px;
-  }
-  .player-dock[data-timeline-style="edge"] .progress-time-elapsed {
-    padding-left: 13px;
-  }
-  .player-dock[data-timeline-style="edge"] .progress-time-duration {
-    padding-right: 13px;
+    margin-right: 12px;
   }
   .player-dock[data-timeline-style="edge"] .dock-track,
   .player-dock[data-timeline-style="edge"] .dock-volume {
@@ -3637,6 +3638,11 @@ input:focus-visible {
   .page-content { padding-top: 18px; }
   .track-row { min-height: 49px; }
   .player-dock { min-height: 64px; padding-top: 4px; padding-bottom: 4px; }
+  .progress-time,
+  .progress-time-elapsed,
+  .progress-time-duration { display: none; }
+  .progress-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .player-dock[data-timeline-style="edge"] .progress-row { grid-template-rows: 16px; }
 }
 
 @media (max-width: 620px) {
