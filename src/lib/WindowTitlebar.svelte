@@ -14,8 +14,11 @@
   const LABEL_MAXIMIZE = '\u6700\u5927\u5316';
   const LABEL_RESTORE = '\u9084\u539F';
   const LABEL_CLOSE = '\u95DC\u9589';
+  const LABEL_ENTER_FULLSCREEN = '\u5168\u87a2\u5e55';
+  const LABEL_EXIT_FULLSCREEN = '\u7d50\u675f\u5168\u87a2\u5e55';
 
   let maximized = $state(false);
+  let fullscreen = $state(false);
   let unlistenResize: UnlistenFn | undefined;
 
   const appWindow = (() => {
@@ -26,21 +29,26 @@
     }
   })();
 
-  async function refreshMaximized(): Promise<void> {
+  async function refreshWindowChromeState(): Promise<void> {
     if (!appWindow) return;
     try {
       maximized = await appWindow.isMaximized();
     } catch {
       maximized = false;
     }
+    try {
+      fullscreen = await appWindow.isFullscreen();
+    } catch {
+      fullscreen = false;
+    }
   }
 
   onMount(() => {
-    void refreshMaximized();
+    void refreshWindowChromeState();
     if (!appWindow) return;
     void appWindow
       .onResized(() => {
-        void refreshMaximized();
+        void refreshWindowChromeState();
       })
       .then((unlisten) => {
         unlistenResize = unlisten;
@@ -65,7 +73,18 @@
   async function toggleMaximize(): Promise<void> {
     try {
       await appWindow?.toggleMaximize();
-      await refreshMaximized();
+      await refreshWindowChromeState();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function toggleFullscreen(): Promise<void> {
+    if (!appWindow) return;
+    try {
+      const next = !(await appWindow.isFullscreen());
+      await appWindow.setFullscreen(next);
+      await refreshWindowChromeState();
     } catch {
       /* ignore */
     }
@@ -95,6 +114,40 @@
     <span class="window-titlebar-label" data-tauri-drag-region>MoeMusicPlayer</span>
   </div>
   <div class="window-titlebar-controls" role="group" aria-label={LABEL_CONTROLS}>
+    <button
+      type="button"
+      class="window-titlebar-button"
+      class:is-active={fullscreen}
+      aria-label={fullscreen ? LABEL_EXIT_FULLSCREEN : LABEL_ENTER_FULLSCREEN}
+      title={fullscreen ? LABEL_EXIT_FULLSCREEN : LABEL_ENTER_FULLSCREEN}
+      aria-pressed={fullscreen}
+      onclick={() => void toggleFullscreen()}
+      data-testid="window-titlebar-fullscreen"
+    >
+      {#if fullscreen}
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path
+            d="M1.2 3.2H3.2V1.2M6.8 1.2V3.2H8.8M8.8 6.8H6.8V8.8M3.2 8.8V6.8H1.2"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      {:else}
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path
+            d="M1.2 3.2V1.2H3.2M6.8 1.2H8.8V3.2M8.8 6.8V8.8H6.8M3.2 8.8H1.2V6.8"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      {/if}
+    </button>
     <button
       type="button"
       class="window-titlebar-button"
