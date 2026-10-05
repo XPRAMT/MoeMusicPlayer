@@ -4,6 +4,11 @@
 
 專案已有可建置的 Tauri 2、Svelte 5、TypeScript 與 Vite 骨架，並包含 Rust Core、SQLite 曲庫、Windows 與 Android 媒體來源 adapter，以及雙語 README。
 
+## GitHub 與版控
+
+- 私人 GitHub 儲存庫為 [XPRAMT/MoeMusicPlayer](https://github.com/XPRAMT/MoeMusicPlayer)；`origin` 使用 `master` 作為發布分支。
+- `release/` 是本機建置輸出，`UserData/` 含本機使用者資料；兩者不得提交或上傳。`.gitignore` 已排除這些路徑。
+
 目前已完成：
 
 - Now Playing 使用延遲掛載且保持已掛載狀態的全內容區覆蓋層，跨過側欄與主工作區但避開固定播放列；底層路由、頁面 DOM、曲庫列表捲動位置、播放核心、佇列與歌詞不因開關頁面而重設。左上返回鈕與覆蓋期間底部曲名／演出者都返回進入前的曲庫／播放清單／佇列／設定頁；覆蓋期間底層側欄和主工作區 inert，快速設定 modal 關閉時固定播放列仍可操作。覆蓋頁本身不捲動，歌詞區可獨立捲動；播放頂列顯示歌詞來源／同步狀態與譯／羅控制。A/B 只在「設定 → 正在播放」及播放頁右上快速設定抽屜可調；右抽屜也共用「設定 → 正在播放」與「設定 → 歌詞」的偏好控件和同一套 JSON save merge，不離開 Now Playing、不重掛載歌詞／播放元件。抽屜內容區限高並獨立捲動，標頭／導覽列固定，內部導覽與底部 overscroll 不會移動播放頁或底層捲動位置。對話框有焦點圈限、Escape／外側／關閉鈕及還焦；開啟時播放區與 dock inert，播放狀態不變。播放頁頂列以「曲名．演出者．專輯」提供可點擊的曲庫精確欄位篩選，缺少欄位時顯示停用的「—」；下方小字顯示共用格式摘要及 Hi-Res 標誌。封面不再附加文字，依來源比例完整顯示並在內容區置中；亮色背景下原文、譯文與羅馬拼音使用深色文字陰影，維持透明列與原有 mask。Tabler Svelte 5 圖示與中文無障礙名稱保持一致。`npm run check` 無錯誤／警告、Node 69/69 與 headless Microsoft Edge Playwright 通過；真實 Tauri WebView 尚待人工確認。
