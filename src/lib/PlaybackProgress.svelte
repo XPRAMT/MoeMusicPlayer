@@ -89,7 +89,7 @@
 <svelte:window onpointerup={finishPointerSeek} onpointercancel={cancelDraft} />
 
 <div class="progress-row" data-timeline-style={timelineStyle}>
-  <span>{formatDuration(displayedPositionMs)}</span>
+  <span class="progress-time progress-time-elapsed">{formatDuration(displayedPositionMs)}</span>
   <input
     class="progress-slider"
     type="range"
@@ -103,5 +103,5 @@
     onchange={commitDraft}
     onblur={commitDraft}
   />
-  <span>{formatDuration(durationMs)}</span>
+  <span class="progress-time progress-time-duration">{formatDuration(durationMs)}</span>
 </div>
