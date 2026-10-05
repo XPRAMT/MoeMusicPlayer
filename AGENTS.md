@@ -162,6 +162,7 @@
 - 底欄進度時間標籤、音量區文字與音量%字體與演出者一致：移除 `DM Mono`，改繼承字型；一般 9px、Now Playing 開啟時 12px（對齊 `.dock-track-artist-link`／`.dock-track-copy span`）。
 - Now Playing 頂欄曲目資訊順序改為「演出者．專輯．曲名」；曲名改純文字顯示，取消點擊曲名跳轉／曲庫篩選；演出者與專輯仍可精確篩選曲庫。
 - 歌詞譯文／羅馬拼音改自動換行，長句不可再用 ellipsis／overflow hidden 隱藏；主歌詞行仍維持至多兩行 clamp。
+- Windows Release 已更新：`release/moemusicplayer.exe` 由 commit `ab1cbd0` 建置，SHA-256 `A12EDC106EF51CA2E6766ED4CF37FE672B9883B05C0030CBEEAC1CD5BD31370A`；`npm run check` 0 errors/warnings、Node 83/83、lyrics Rust tests 26/26 通過。先前 EXE 備份因占用未能刪除，另存於 `release/.moemusicplayer.previous.*.bak`。
 - 封面與歌詞外層 `.now-playing-card` 半透明白框／淡底已移除（border/background 透明），A/B 僅保留分欄與間距。
 - 正在播放曲目的「播放次數」每秒依 in-memory 聆聽進度更新一次（base `playedMs` + 播放中自然 position 前進），不重查整庫；僅目前曲目受影響。Now Playing 頂列與曲庫／播放清單／佇列中可見的目前列同步覆寫顯示。
 
