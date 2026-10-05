@@ -167,7 +167,7 @@
 - Now Playing dock 時間軸回歸已修正：`dd0453e` 誤把 `.progress-slider` 與 `.volume-state { display: none }` 併在同一選擇器，導致進度條消失、時間標籤落到錯誤欄位；已恢復 `.progress-slider, .volume-slider` 共用樣式，並另以 `.volume-state { display: none }` 隱藏音量文字。封面／歌詞垂直置中強化（artwork `place-content/place-items` + 對稱 overlay padding；lyrics-view 高度僅在 `--np-cover-height` 有值時鎖定）。
 - 歌詞候選右下角「關閉」改為「移除歌詞」：會關閉選擇器並透過新 IPC `lyrics_clear_track` 清除該曲已套用／快取歌詞（本機 sidecar／內嵌檔不刪）；標題列「關閉」仍只取消選擇、不移除歌詞。
 - 歌詞外觀新增文字效果三選一（陰影／描邊／關閉），欄位 `textEffect`（`shadow`｜`stroke`｜`none`，預設陰影），設定頁與快速設定歌詞區可切換，並與其他歌詞偏好一併持久化；套用至原文與譯文／羅馬拼音。
-- Windows Release 已更新：`release/moemusicplayer.exe` 由 commit `dd0453e` 建置（NP 封面/歌詞共用垂直置中、底欄傳輸鍵視窗水平置中、NP 左側透明關閉熱區、音量列無「音量」文字、非 seek 忙碌不 disable 進度條以避免時間軸閃爍），SHA-256 `5D9336A8CD5275E3EEAF9BACBB1102F9A8A4FA39FC8794F6368CFA0390064A56`；`npm run check` 0 errors/warnings、Node 84/84。先前 EXE 備份因占用未能刪除，仍保留於 `release/` 下 `.bak`。
+- Windows Release 已更新：`release/moemusicplayer.exe` 由 commit `f866011` 建置（修復 NP 時間軸消失／時間標籤錯位與封面垂直置中；歌詞選擇器「移除歌詞」+ `lyrics_clear_track`；歌詞文字效果陰影／描邊／關閉），SHA-256 `47F8FBCD143CD37F65997C833133B2AD9E4F28D256759E10C9E3550A155C0D26`；`npm run check` 0 errors/warnings、Node 89/89。前一版 EXE 備份後已刪除，不保留於 `release/` 下 `.bak`。
 - 封面與歌詞外層 `.now-playing-card` 半透明白框／淡底已移除（border/background 透明），A/B 僅保留分欄與間距。
 - 正在播放曲目的「播放次數」每秒依 in-memory 聆聽進度更新一次（base `playedMs` + 播放中自然 position 前進），不重查整庫；僅目前曲目受影響。Now Playing 頂列與曲庫／播放清單／佇列中可見的目前列同步覆寫顯示。
 
