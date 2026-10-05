@@ -9,7 +9,7 @@
     TrackLyrics,
   } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
-  import { getCandidatePresentation } from './lyrics-candidate-preview.js';
+  import { filterLyricsCandidates, getCandidatePresentation } from './lyrics-candidate-preview.js';
   import {
     DEFAULT_LYRICS_PREFERENCES,
     getDisplayActiveLyricIndex,
@@ -120,6 +120,7 @@
   let userScrollResetTimer: ReturnType<typeof setTimeout> | null = null;
   let timingOffsetSec = $state(0);
   let timingPanelOpen = $state(false);
+  let candidateQuery = $state('');
 
   const controller = createLyricsController({
     api: {
@@ -177,6 +178,7 @@
       || viewState.phase === 'candidates'
       || viewState.phase === 'searching',
   );
+  let filteredCandidates = $derived(filterLyricsCandidates(viewState.candidates, candidateQuery));
 
   function timedCueScrollTop(layout: ReturnType<typeof buildLyricsLayout>, index: number, viewportHeight: number, scrollportHeight = viewportHeight): number {
     if (index < 0) return 0;
@@ -320,6 +322,7 @@
     if (plainViewport) plainViewport.scrollTop = 0;
     if (timedViewport) timedViewport.scrollTop = 0;
     timingPanelOpen = false;
+    candidateQuery = '';
     timingOffsetSec = loadLyricsTimingOffsetSec(nextTrackId);
     void controller.setTrack(nextTrackId);
   });
@@ -444,11 +447,23 @@
     void controller.searchAgain();
   }
 
+  function submitCandidateSearch(event?: Event): void {
+    event?.preventDefault?.();
+    // Re-query providers with the current track metadata; typed text still filters results.
+    void controller.searchAgain();
+  }
+
+  function onCandidateQueryInput(event: Event): void {
+    const target = event.currentTarget as HTMLInputElement;
+    candidateQuery = target.value;
+  }
+
   function cancelSearch(): void {
     controller.cancelSearch();
   }
 
   function dismissSelection(): void {
+    candidateQuery = '';
     controller.dismissSelection();
   }
 
@@ -602,13 +617,29 @@
         <button type="button" class="lyrics-action secondary" onclick={cancelSearch}>取消搜尋</button>
       </div>
     {:else if viewState.candidates.length > 0}
-      <section class="lyrics-candidates" aria-label="歌詞候選">
+      <section class="lyrics-candidates" aria-label="歌詞候選" data-testid="lyrics-candidates">
         <div class="lyrics-candidates-header">
-          <h4>選擇歌詞</h4>
-          <button type="button" class="lyrics-action secondary" onclick={dismissSelection}>關閉</button>
+          <div class="lyrics-candidates-title-row">
+            <h4>選擇歌詞</h4>
+            <button type="button" class="lyrics-action secondary" onclick={dismissSelection}>關閉</button>
+          </div>
+          <form class="lyrics-candidates-search" onsubmit={submitCandidateSearch}>
+            <input
+              class="lyrics-candidates-search-input"
+              type="search"
+              value={candidateQuery}
+              oninput={onCandidateQueryInput}
+              placeholder="搜尋候選歌詞…"
+              aria-label="搜尋候選歌詞"
+              autocomplete="off"
+              spellcheck="false"
+              data-testid="lyrics-candidates-search"
+            />
+            <button type="submit" class="lyrics-action secondary">搜尋</button>
+          </form>
         </div>
         <ul>
-          {#each viewState.candidates as candidate (candidate.id)}
+          {#each filteredCandidates as candidate (candidate.id)}
             {@const presentation = getCandidatePresentation(candidate)}
             <li class="lyrics-candidate">
               <div class="candidate-copy">
@@ -633,8 +664,16 @@
                 {viewState.selectingCandidateId === candidate.id ? '套用中…' : '使用這份'}
               </button>
             </li>
+          {:else}
+            <li class="lyrics-candidate-empty" role="status">沒有符合「{candidateQuery.trim()}」的候選。</li>
           {/each}
         </ul>
+        <div class="lyrics-candidates-footer lyrics-message">
+          <button type="button" class="lyrics-action secondary" onclick={searchAgain}>再次搜尋</button>
+          {#if viewState.lyrics}
+            <button type="button" class="lyrics-action secondary" onclick={dismissSelection}>關閉</button>
+          {/if}
+        </div>
       </section>
     {:else if viewState.phase === 'empty' && !viewState.error && (selectionUiOpen || !viewState.lyrics)}
       <div class="lyrics-message lyrics-empty" role="status">
@@ -798,48 +837,105 @@
   }
 
   .lyrics-candidates {
+    display: flex;
     min-height: 0;
-    max-height: min(50vh, 480px);
-    overflow: auto;
-    border-top: 1px solid var(--line);
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 8px;
+    overflow: hidden;
+    border-top: 1px solid rgba(var(--text-rgb), 0.12);
   }
 
   .lyrics-candidates-header {
     position: sticky;
     top: 0;
     z-index: 1;
+    display: grid;
+    gap: 8px;
+    padding: 8px 0 10px;
+    border-bottom: 1px solid rgba(var(--text-rgb), 0.1);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, rgba(var(--text-rgb), 0.08) 100%, transparent),
+      color-mix(in srgb, rgba(var(--text-rgb), 0.02) 100%, transparent)
+    );
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .lyrics-candidates-title-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 8px 0;
-    background: var(--panel, #111);
   }
 
-  .lyrics-candidates-header h4 {
-    margin: 0;
-    color: var(--text-soft);
-    font-size: 11px;
-    font-weight: 600;
-  }
-
+  .lyrics-candidates-header h4,
   .lyrics-candidates h4 {
-    position: sticky;
-    top: 0;
     margin: 0;
-    padding: 8px 0;
+    padding: 0;
     color: var(--text-soft);
-    background: var(--panel, #111);
+    background: transparent;
     font-size: 11px;
     font-weight: 600;
+  }
+
+  .lyrics-candidates-search {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .lyrics-candidates-search-input {
+    box-sizing: border-box;
+    min-width: 0;
+    flex: 1 1 auto;
+    min-height: 34px;
+    padding: 0 11px;
+    border: 1px solid rgba(var(--text-rgb), 0.18);
+    border-radius: 10px;
+    color: var(--text);
+    background: color-mix(in srgb, rgba(var(--text-rgb), 0.05) 100%, transparent);
+    font: inherit;
+    font-size: 11px;
+  }
+
+  .lyrics-candidates-search-input::placeholder {
+    color: var(--muted);
+  }
+
+  .lyrics-candidates-search-input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .lyrics-candidates ul {
     display: grid;
+    min-height: 0;
+    flex: 1 1 auto;
     gap: 7px;
     margin: 0;
     padding: 0 0 4px;
+    overflow: auto;
+    overscroll-behavior: contain;
     list-style: none;
+    scrollbar-color: color-mix(in srgb, var(--accent) 42%, transparent) transparent;
+    scrollbar-width: thin;
+  }
+
+  .lyrics-candidate-empty {
+    padding: 18px 10px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.6;
+    text-align: center;
+    list-style: none;
+  }
+
+  .lyrics-candidates-footer {
+    flex: 0 0 auto;
+    padding-top: 2px;
   }
 
   .lyrics-candidate {

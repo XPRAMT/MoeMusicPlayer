@@ -2152,7 +2152,7 @@
       </header>
       <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body" inert={isQuickSettingsOpen}>
         <div class="now-playing-overlay-content">
-          <section class="now-playing-view" aria-label="正在播放">
+          <section class="now-playing-view" aria-label="正在播放" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}>
             <NowPlayingArrangement layout={nowPlayingLayout}>
               {#snippet artwork()}
                 <div
