@@ -73,6 +73,12 @@
     normalizeTrackColumnPreferences,
     setTrackColumnVisibility,
   } from './lib/track-columns.js';
+  import {
+    applyLivePlayCountSample,
+    createLivePlayCountState,
+    toLivePlayCountView,
+    withLivePlayedMs,
+  } from './lib/live-play-count.js';
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
   import TrackList from './lib/TrackList.svelte';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
@@ -216,6 +222,9 @@
   let lyricsPreferencesQueue: Promise<void> = Promise.resolve();
   let lyricsPreferencesSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
+  let livePlayCountTimer: ReturnType<typeof setInterval> | undefined;
+  let livePlayCountTracker = createLivePlayCountState();
+  let livePlayCount = $state<{ trackId: string; playedMs: number } | null>(null);
   let playlistListRequestVersion = 0;
   let capabilityRefreshInFlight = false;
   let nextCapabilityRefreshAt = 0;
@@ -387,6 +396,9 @@
           void loadPlaybackSnapshot(false);
         }
       }, 250);
+      livePlayCountTimer = setInterval(() => {
+        publishLivePlayCount();
+      }, 1000);
       void initializeTauri();
     } else {
       themeSaveState = 'preview';
@@ -458,6 +470,7 @@
     }
     themeRevision += 1;
     if (playbackPollTimer !== undefined) clearInterval(playbackPollTimer);
+    if (livePlayCountTimer !== undefined) clearInterval(livePlayCountTimer);
     unlistenSyncProgress?.();
     unlistenSyncFinished?.();
     playlistListRequestVersion += 1;
@@ -1312,6 +1325,10 @@
     await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs }));
   }
 
+  function publishLivePlayCount(): void {
+    livePlayCount = toLivePlayCountView(livePlayCountTracker);
+  }
+
   function applyPlaybackSnapshot(
     next: PlaybackSnapshot,
     snapshotVersion?: number,
@@ -1337,6 +1354,15 @@
     playback = resolved;
     confirmedVolume = resolved.volume;
     if (trackChanged || positionReset || forceQueueCursorProbe) playbackQueueCursorChangeKey += 1;
+    livePlayCountTracker = applyLivePlayCountSample(livePlayCountTracker, {
+      trackId: resolved.currentTrack?.id ?? null,
+      playedMs: resolved.currentTrack?.playedMs,
+      positionMs: resolved.positionMs,
+      isPlaying: resolved.isPlaying && resolved.state === 'playing',
+    });
+    if (trackChanged || previousTrackId !== nextTrackId || !resolved.currentTrack) {
+      publishLivePlayCount();
+    }
   }
 
   function setPlaybackVolume(event: Event): void {
@@ -1661,6 +1687,7 @@
                 playbackReady={playbackReady}
                 isSendingPlaybackCommand={isSendingPlaybackCommand}
                 columns={trackColumnPreferences}
+                livePlayCount={livePlayCount}
                 onPlay={playTrack}
                 onTotalCount={(count) => (libraryTrackCount = count)}
               />
@@ -1755,6 +1782,7 @@
                         {playbackReady}
                         {isSendingPlaybackCommand}
                         columns={trackColumnPreferences}
+                  livePlayCount={livePlayCount}
                         onPlay={playPlaylistEntry}
                       />
                     {/key}
@@ -1788,6 +1816,7 @@
                 resetKey={playbackQueueResetKey}
                 cursorChangeKey={playbackQueueCursorChangeKey}
                 columns={trackColumnPreferences}
+                  livePlayCount={livePlayCount}
               />
             {/if}
           </section>
@@ -2114,7 +2143,7 @@
             <span>{formatTrackColumnValue('audioFormat', playback?.currentTrack ?? {}, () => '—')}</span>
             {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}
             <span class="now-playing-play-count" aria-label="播放次數">
-              播放次數 {formatTrackColumnValue('playCount', playback?.currentTrack ?? {}, () => '—')}
+              播放次數 {formatTrackColumnValue('playCount', withLivePlayedMs(playback?.currentTrack ?? {}, livePlayCount), () => '—')}
             </span>
           </p>
         </div>

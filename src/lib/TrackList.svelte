@@ -18,6 +18,7 @@
     trackListGridTemplate,
     visibleTrackColumns,
   } from './track-columns.js';
+  import { withLivePlayedMs } from './live-play-count.js';
   import {
     PagedListController,
     TRACK_PAGE_SIZE,
@@ -36,6 +37,7 @@
     fetchPage?: (request: TrackPageRequest) => Promise<TrackPage>;
     columns?: TrackListColumnPreference[];
     fieldFilter?: TrackPageRequest['fieldFilter'];
+    livePlayCount?: { trackId: string; playedMs: number } | null;
   }
 
   let {
@@ -48,6 +50,7 @@
     onTotalCount,
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
+    livePlayCount = null,
     fieldFilter = null,
   }: Props = $props();
 
@@ -176,7 +179,7 @@
         <span class="track-index column-index" role="gridcell">{formatTrackIndex(row.item.trackNumber, row.item.discNumber)}</span>
         {#each visibleColumns as column (column.id)}
           <span class={`list-column list-column-${column.id}`} role="gridcell" title={column.id === 'title' && !row.item.title?.trim() ? '未命名曲目' : undefined}>
-            {formatTrackColumnValue(column.id, row.item, formatDuration)}
+            {formatTrackColumnValue(column.id, withLivePlayedMs(row.item, livePlayCount), formatDuration)}
           </span>
         {/each}
           <button

@@ -11,6 +11,7 @@ import {
   trackListGridTemplate,
   visibleTrackColumns,
 } from './track-columns.js';
+import { withLivePlayedMs } from './live-play-count.js';
   import { PagedListController, TRACK_PAGE_SIZE } from './track-list-data.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
@@ -23,6 +24,7 @@ import {
     onPlay: (entry: PlaylistEntrySummary, playlistId: string) => void;
     fetchPage?: (request: { playlistId: string; offset: number; limit: number }) => Promise<PlaylistPage>;
     columns?: TrackListColumnPreference[];
+    livePlayCount?: { trackId: string; playedMs: number } | null;
   }
 
   let {
@@ -33,6 +35,7 @@ import {
     onPlay,
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
+    livePlayCount = null,
   }: Props = $props();
 
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
@@ -147,7 +150,7 @@ import {
             class={`list-column list-column-${column.id}`}
             role="gridcell"
             title={column.id === 'title' && !row.item.hasEnabledMapping ? '目前未對應到可播放的曲庫曲目' : undefined}
-          >{formatTrackColumnValue(column.id, row.item, formatDuration, '未命名項目')}</span>
+          >{formatTrackColumnValue(column.id, withLivePlayedMs(row.item, livePlayCount), formatDuration, '未命名項目')}</span>
         {/each}
         <button
           class="row-play"

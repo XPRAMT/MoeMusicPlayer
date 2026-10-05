@@ -10,6 +10,7 @@
     trackListGridTemplate,
     visibleTrackColumns,
   } from './track-columns.js';
+  import { withLivePlayedMs } from './live-play-count.js';
   import { PagedListController, TRACK_PAGE_SIZE } from './track-list-data.js';
   import {
     adaptPlaybackQueuePage,
@@ -24,6 +25,7 @@
     cursorChangeKey: number;
     columns?: TrackListColumnPreference[];
     fetchPage?: (request: { offset: number; limit: number }) => Promise<PlaybackQueuePage>;
+    livePlayCount?: { trackId: string; playedMs: number } | null;
   }
 
   let {
@@ -31,6 +33,7 @@
     cursorChangeKey,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     fetchPage,
+    livePlayCount = null,
   }: Props = $props();
 
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
@@ -140,7 +143,7 @@
 
   function displayValue(id: (typeof TRACK_COLUMN_DEFINITIONS)[number]['id'], item: PlaybackQueuePageItem): string {
     if (!item.track) return id === 'title' ? '曲目資訊暫不可用' : '—';
-    return formatTrackColumnValue(id, item.track, formatDuration);
+    return formatTrackColumnValue(id, withLivePlayedMs(item.track, livePlayCount), formatDuration);
   }
 </script>
 
