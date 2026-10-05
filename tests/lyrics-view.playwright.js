@@ -6,6 +6,9 @@
     ok(value, message = 'expected a truthy value') {
       if (!value) throw new Error(message);
     },
+    match(actual, pattern, message = 'value does not match') {
+      if (!pattern.test(actual)) throw new Error(`${message}: ${pattern} vs ${JSON.stringify(actual)}`);
+    },
     deepEqual(actual, expected, message = 'values differ') {
       if (JSON.stringify(actual) !== JSON.stringify(expected)) {
         throw new Error(`${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
@@ -222,15 +225,42 @@
   assert.equal(await page.locator('[data-testid="lyrics-candidates-search"]').count(), 1, 'empty search still shows the text search field');
   assert.match(await page.locator('.lyrics-candidate-empty').innerText(), /找不到符合的歌詞/);
 
+  const searchCountBeforeCandidates = (await page.evaluate(() => window.lyricsViewHarness.snapshot())).searchCount;
   await page.evaluate(() => window.lyricsViewHarness.setTrack('candidate-track'));
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().phase === 'candidates');
   const candidateState = await page.evaluate(() => window.lyricsViewHarness.snapshot());
-  assert.equal(candidateState.searchCount, 1, 'remote search starts after a local miss');
+  assert.equal(candidateState.searchCount - searchCountBeforeCandidates, 1, 'remote search starts after a local miss');
   assert.equal(candidateState.qrcNoticeVisible, true);
   assert.equal(candidateState.candidateActionEnabled, true);
   assert.equal(await page.locator('.lyrics-candidates').evaluate((element) => Number.parseFloat(getComputedStyle(element).maxHeight)), 400, 'candidate selector grows to the bounded 50vh cap at 800px height');
   assert.ok(await page.locator('.lyrics-candidates').evaluate((element) => Number.parseFloat(getComputedStyle(element).maxHeight)) > 260, 'candidate selector is taller than its previous 260px cap');
   assert.equal(await page.locator('[data-testid="lyrics-candidates-search"]').count(), 1, 'candidate picker keeps the text search field');
+  async function focusRingInsideClip(locator, label) {
+    await locator.focus();
+    const ring = await locator.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const outset = Math.max(0, Number.parseFloat(style.outlineOffset) + Number.parseFloat(style.outlineWidth));
+      const rect = element.getBoundingClientRect();
+      const ringRect = { left: rect.left - outset, right: rect.right + outset, top: rect.top - outset, bottom: rect.bottom + outset };
+      const clipped = [];
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const nodeStyle = getComputedStyle(node);
+        if (nodeStyle.overflowX === 'visible' && nodeStyle.overflowY === 'visible') continue;
+        const clip = node.getBoundingClientRect();
+        if (ringRect.left < clip.left - 0.5 || ringRect.right > clip.right + 0.5 || ringRect.top < clip.top - 0.5 || ringRect.bottom > clip.bottom + 0.5) {
+          clipped.push(`${node.className}: ring ${JSON.stringify(ringRect)} clip ${JSON.stringify({ left: clip.left, right: clip.right, top: clip.top, bottom: clip.bottom })}`);
+        }
+      }
+      return { focusVisible: element.matches(':focus-visible'), outlineStyle: style.outlineStyle, clipped };
+    });
+    assert.ok(ring.focusVisible, `${label}: focus-visible should apply`);
+    assert.ok(ring.outlineStyle !== 'none', `${label}: focus ring should be visible`);
+    assert.deepEqual(ring.clipped, [], `${label}: focus ring must not be clipped by overflow ancestors`);
+  }
+  await focusRingInsideClip(page.locator('[data-testid="lyrics-candidates-search"]'), 'candidate search input');
+  await focusRingInsideClip(page.locator('.lyrics-candidates-search button[type="submit"]'), 'candidate search button');
+  await focusRingInsideClip(page.locator('.lyrics-candidates-title-row button'), 'candidate close button');
+  await focusRingInsideClip(page.getByRole('button', { name: '選擇' }), 'candidate select button');
   await page.getByRole('button', { name: '選擇' }).click();
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().selectedSource === 'manual');
 

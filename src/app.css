@@ -2857,12 +2857,10 @@ input:focus-visible {
 }
 
 .play-button {
+  /* Hollow outline glyph like the other dock controls; only the hit target stays slightly larger. */
   width: 36px;
   height: 36px;
-  border-radius: 50%;
-  color: var(--accent-foreground);
-  background: var(--accent);
-  box-shadow: 0 3px 12px rgba(var(--accent-rgb), 0.15);
+  border-radius: 8px;
 }
 
 .play-button svg {
@@ -2881,7 +2879,8 @@ input:focus-visible {
 }
 
 .play-button:not(:disabled):hover {
-  transform: scale(1.045);
+  color: var(--accent-text);
+  background: rgba(var(--text-rgb), 0.04);
 }
 
 .control-button:disabled,

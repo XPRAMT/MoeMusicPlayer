@@ -162,6 +162,8 @@
 - 底欄進度時間標籤、音量區文字與音量%字體與演出者一致：移除 `DM Mono`，改繼承字型；一般 9px、Now Playing 開啟時 12px（對齊 `.dock-track-artist-link`／`.dock-track-copy span`）。
 - Now Playing 頂欄曲目資訊順序改為「演出者．專輯．曲名」；曲名改純文字顯示，取消點擊曲名跳轉／曲庫篩選；演出者與專輯仍可精確篩選曲庫。
 - 歌詞譯文／羅馬拼音改自動換行，長句不可再用 ellipsis／overflow hidden 隱藏；主歌詞行仍維持至多兩行 clamp。
+- 歌詞候選搜尋框聚焦時左緣被裁切：根因是 `.lyrics-candidates`（及外層 `.now-playing-lyrics`）為了讓候選清單在封面等高面板內捲動而 `overflow: hidden`，搜尋框貼齊面板左緣，`:focus-visible` 外框為 2px + `outline-offset: 2px` 向外突出 4px 而被裁掉。修正為面板內焦點外框改畫在元件內側（`outline-offset: -2px`，搜尋框另以 `border-color: var(--accent)` 強調），搜尋框、搜尋／關閉與「選擇」按鈕皆適用；不移除 overflow 以免破壞清單捲動。`tests/lyrics-view.playwright.js` 新增焦點外框不得超出任何 overflow 祖先的斷言（修正前失敗：外框 left 16 < 裁切 left 20），並修正 `ab1cbd0` 遺留的 `assert.match` 缺失與累計 `searchCount` 斷言。
+- 底欄播放／暫停鍵改為空心樣式：移除實心 accent 圓底、陰影與 hover 放大，改與其他底欄控制相同的透明底、`--text` 線條圖示、8px 圓角與 hover 淡底／`--accent-text`；Tabler `IconPlayerPlay`／`IconPlayerPause` stroke 由 1.9 改為與其他控制一致的 1.7，36px 點擊區與 21px 圖示保留作為主要控制的尺寸差異。
 - Windows Release 已更新：`release/moemusicplayer.exe` 由 commit `ab1cbd0` 建置，SHA-256 `A12EDC106EF51CA2E6766ED4CF37FE672B9883B05C0030CBEEAC1CD5BD31370A`；`npm run check` 0 errors/warnings、Node 83/83、lyrics Rust tests 26/26 通過。先前 EXE 備份因占用未能刪除，另存於 `release/.moemusicplayer.previous.*.bak`。
 - 封面與歌詞外層 `.now-playing-card` 半透明白框／淡底已移除（border/background 透明），A/B 僅保留分欄與間距。
 - 正在播放曲目的「播放次數」每秒依 in-memory 聆聽進度更新一次（base `playedMs` + 播放中自然 position 前進），不重查整庫；僅目前曲目受影響。Now Playing 頂列與曲庫／播放清單／佇列中可見的目前列同步覆寫顯示。

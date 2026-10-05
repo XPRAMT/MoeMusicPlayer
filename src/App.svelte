@@ -2312,9 +2312,9 @@
         </button>
         <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} title={showCapabilityDetail(capabilities?.playback)} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
           {#if playback?.isPlaying}
-            <IconPlayerPause size={21} stroke={1.9} aria-hidden="true" />
+            <IconPlayerPause size={21} stroke={1.7} aria-hidden="true" />
           {:else}
-            <IconPlayerPlay size={21} stroke={1.9} aria-hidden="true" />
+            <IconPlayerPlay size={21} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
         <button class="control-button" type="button" aria-label="下一首" title={playback?.canNext ? '播放佇列下一首' : showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>

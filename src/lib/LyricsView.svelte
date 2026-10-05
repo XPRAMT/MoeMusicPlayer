@@ -912,9 +912,18 @@
     color: var(--muted);
   }
 
+  /*
+   * .lyrics-candidates (and .now-playing-lyrics) clip overflow so the list can scroll inside a
+   * cover-height panel. An outset focus ring would be cut off at the panel edge, so draw it inset.
+   */
   .lyrics-candidates-search-input:focus-visible {
+    border-color: var(--accent);
     outline: 2px solid var(--accent);
-    outline-offset: 2px;
+    outline-offset: -2px;
+  }
+
+  .lyrics-candidates .lyrics-action:focus-visible {
+    outline-offset: -2px;
   }
 
   .lyrics-candidates ul {
