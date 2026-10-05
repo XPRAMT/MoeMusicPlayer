@@ -2811,8 +2811,10 @@ input:focus-visible {
 /* timelineStyle=edge only: pin the painted track onto the content↔dock border-top.
    Default line keeps pre-feature placement (under transport / NP row 1 inside the dock). */
 .player-dock[data-timeline-style="edge"] {
-  /* Extra top padding clears labels that hang under the edge-pinned track. */
-  padding-top: 28px;
+  /* Top clears labels under the edge track; bottom matches so track/controls/volume center in the dock body. */
+  padding-top: 26px;
+  padding-bottom: 14px;
+  align-items: center;
 }
 
 .player-dock[data-timeline-style="edge"] .dock-center {
@@ -2888,6 +2890,10 @@ input:focus-visible {
   grid-column: 3;
   grid-row: 1;
   align-self: center;
+  /* Nudge left so the volume row clears the duration label under the full-width edge track. */
+  justify-self: end;
+  margin-right: 44px;
+  padding-right: 0;
 }
 
 .app-shell.has-now-playing-backdrop .player-dock[data-timeline-style="edge"] {
@@ -3119,7 +3125,14 @@ input:focus-visible {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  margin-right: 10px;
   color: var(--text-soft);
+}
+
+.dock-track,
+.dock-controls,
+.dock-volume {
+  align-self: center;
 }
 
 .dock-volume > svg {
@@ -3573,6 +3586,11 @@ input:focus-visible {
     min-height: 126px;
     grid-template-rows: 40px 44px;
     padding-top: 26px;
+    padding-bottom: 12px;
+    align-items: center;
+  }
+  .player-dock[data-timeline-style="edge"] .dock-volume {
+    margin-right: 28px;
   }
   .player-dock[data-timeline-style="edge"] .progress-time-elapsed {
     padding-left: 13px;

@@ -156,7 +156,7 @@
 ## 本輪 Now Playing UI
 
 - 時間軸樣式（兩種）：`timelineStyle` = `line`（線條，預設；外觀與位置維持本功能前的細線時間軸，時間左右並排）／`edge`（貼邊緣；軌道全寬貼齊底欄 `border-top`，已播／總長時間移到軌道下方兩側）。設定 → 正在播放與快速設定可切換；schema 仍 v5。舊 WIP 值 `bar`／`minimal` 讀入對應為 `line`。
-- 底欄布局：預設略縮（桌面 min-height ~86px、padding ~10px），曲目／傳輸／音量垂直置中。`line` 維持原 dock-center／NP 第一列配置；僅 `edge` 用絕對定位把全寬軌道中心對齊 `border-top`（`margin-top:-9px`），時間標籤在軌道下方，`display:contents` 提升進度列。
+- 底欄布局：預設略縮（桌面 min-height ~86px、padding ~10px），曲目／傳輸／音量以 `align-self: center` 垂直置中；`edge` 上下內距平衡並把 `.dock-volume` 右移距（margin-right）加大，避免與軌道下方右側總長時間重疊。`line` 維持原 dock-center／NP 第一列配置；僅 `edge` 全寬軌道貼頂緣、時間在軌道下方。
 
 - 播放次數字體與音質文字同字級／字重／顏色（外層 .now-playing-format）。
 - 頂列「手動指定」「同步歌詞」已接線：前者以 manual=true 呼叫 lyrics_search，即使已有本機／快取歌詞也會繼續抓 Provider 候選且不自動套用；候選／搜尋 UI 會蓋住播放歌詞直到使用者選取或按關閉／取消。後者對同步歌詞顯示延遲滑桿（±5 秒、0.1 秒），偏移依曲目持久化。播放列隨機／循環與頂列譯／羅開關啟用時只套用主題強調色於圖示／文字，不加暗色圓角底；正在播放頂列「返回」「快速設定」僅顯示圖示（保留 aria-label／title）。
