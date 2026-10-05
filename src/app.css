@@ -2584,14 +2584,15 @@ input:focus-visible {
   z-index: 5;
   display: grid;
   min-width: 0;
-  min-height: 86px;
+  /* Compact: one control row (~art 44px) + line progress (~18px) + tight padding. */
+  min-height: 72px;
   grid-column: 1 / -1;
   grid-row: 2;
   /* Equal side columns + auto center: transport stays window-centered regardless of track/volume width. */
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 18px;
-  padding: 10px clamp(18px, 3vw, 38px);
+  gap: 14px;
+  padding: 5px clamp(18px, 3vw, 38px);
   border-top: 1px solid rgba(var(--text-rgb), 0.11);
   background: linear-gradient(100deg, var(--dock-bg), var(--panel-soft) 50%, var(--dock-bg));
   box-shadow: 0 -15px 35px rgba(0, 0, 0, 0.15);
@@ -2679,8 +2680,8 @@ input:focus-visible {
 
 .dock-art {
   display: grid;
-  width: 47px;
-  height: 47px;
+  width: 42px;
+  height: 42px;
   flex: 0 0 auto;
   place-items: center;
   padding: 0;
@@ -2789,7 +2790,8 @@ input:focus-visible {
   min-width: min(100%, 270px);
   justify-items: center;
   justify-self: center;
-  gap: 6px;
+  align-content: center;
+  gap: 3px;
 }
 
 .app-shell.has-now-playing-backdrop .dock-center {
@@ -2797,8 +2799,9 @@ input:focus-visible {
 }
 
 .app-shell.has-now-playing-backdrop .player-dock {
-  grid-template-rows: 22px minmax(42px, 1fr);
+  grid-template-rows: 18px minmax(36px, 1fr);
   row-gap: 0;
+  align-items: center;
 }
 
 .app-shell.has-now-playing-backdrop .progress-row {
@@ -2811,9 +2814,10 @@ input:focus-visible {
 /* timelineStyle=edge only: pin the painted track onto the content↔dock border-top.
    Default line keeps pre-feature placement (under transport / NP row 1 inside the dock). */
 .player-dock[data-timeline-style="edge"] {
-  /* Top clears labels under the edge track; bottom matches so track/controls/volume center in the dock body. */
-  padding-top: 26px;
-  padding-bottom: 14px;
+  /* Only clear the time row under the edge track (~12–14px); keep bottom tight so the control row centers below. */
+  min-height: 64px;
+  padding-top: 14px;
+  padding-bottom: 6px;
   align-items: center;
 }
 
@@ -2832,13 +2836,13 @@ input:focus-visible {
   width: 100%;
   max-width: none;
   height: auto;
-  margin-top: -9px;
+  margin-top: -8px;
   padding: 0;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: 18px auto;
+  grid-template-rows: 16px auto;
   align-items: center;
   column-gap: 0;
-  row-gap: 2px;
+  row-gap: 1px;
   pointer-events: none;
   grid-column: auto;
   grid-row: auto;
@@ -2853,7 +2857,7 @@ input:focus-visible {
   grid-column: 1 / -1;
   grid-row: 1;
   width: 100%;
-  height: 18px;
+  height: 16px;
   border-radius: 0;
 }
 
@@ -2897,7 +2901,7 @@ input:focus-visible {
 }
 
 .app-shell.has-now-playing-backdrop .player-dock[data-timeline-style="edge"] {
-  grid-template-rows: minmax(42px, 1fr);
+  grid-template-rows: minmax(36px, 1fr);
   row-gap: 0;
 }
 
@@ -2913,7 +2917,7 @@ input:focus-visible {
 
 .dock-track-dismiss {
   position: relative;
-  min-height: 42px;
+  min-height: 36px;
 }
 
 .dock-now-playing-dismiss {
@@ -2921,7 +2925,7 @@ input:focus-visible {
   box-sizing: border-box;
   width: 100%;
   height: 100%;
-  min-height: 42px;
+  min-height: 36px;
   margin: 0;
   padding: 0;
   border: 0;
@@ -2959,7 +2963,7 @@ input:focus-visible {
 .app-shell.has-now-playing-backdrop .dock-error {
   top: auto;
   right: 10px;
-  bottom: calc(100% - 22px);
+  bottom: calc(100% - 18px);
   left: 10px;
   z-index: 1;
   max-width: none;
@@ -2968,10 +2972,10 @@ input:focus-visible {
 
 .dock-controls {
   display: flex;
-  height: 36px;
+  height: 34px;
   align-items: center;
   justify-content: center;
-  gap: 11px;
+  gap: 10px;
 }
 
 .control-button,
@@ -3441,7 +3445,7 @@ input:focus-visible {
   }
   .topbar { min-height: 63px; }
   .page-content { padding-top: 26px; }
-  .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); min-height: 78px; gap: 8px; padding-right: 16px; padding-left: 16px; }
+  .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); min-height: 66px; gap: 8px; padding-top: 4px; padding-bottom: 4px; padding-right: 16px; padding-left: 16px; }
   .dock-art { width: 40px; height: 40px; }
   .dock-favorite { display: none; }
   .dock-volume { gap: 7px; }
@@ -3557,13 +3561,13 @@ input:focus-visible {
   .source-status-copy p { font-size: 8px; }
   .status-pill { padding: 5px 6px; font-size: 8px; }
   .player-dock {
-    min-height: 120px;
+    min-height: 108px;
     grid-column: 1;
     grid-row: 3;
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: 43px 48px;
+    grid-template-rows: 38px 44px;
     gap: 1px 8px;
-    padding: 8px 13px 6px;
+    padding: 5px 13px 5px;
   }
   .dock-track { grid-column: 1; grid-row: 1; gap: 8px; }
   .dock-art { width: 34px; height: 34px; border-radius: 8px; }
@@ -3583,10 +3587,10 @@ input:focus-visible {
   .progress-row { width: 100%; grid-template-columns: 31px minmax(0, 1fr) 31px; gap: 7px; font-size: 8px; }
   .dock-error { top: calc(100% + 2px); }
   .player-dock[data-timeline-style="edge"] {
-    min-height: 126px;
-    grid-template-rows: 40px 44px;
-    padding-top: 26px;
-    padding-bottom: 12px;
+    min-height: 108px;
+    grid-template-rows: 38px 42px;
+    padding-top: 14px;
+    padding-bottom: 6px;
     align-items: center;
   }
   .player-dock[data-timeline-style="edge"] .dock-volume {
@@ -3632,7 +3636,7 @@ input:focus-visible {
   .topbar { min-height: 58px; }
   .page-content { padding-top: 18px; }
   .track-row { min-height: 49px; }
-  .player-dock { min-height: 76px; padding-top: 8px; padding-bottom: 8px; }
+  .player-dock { min-height: 64px; padding-top: 4px; padding-bottom: 4px; }
 }
 
 @media (max-width: 620px) {
