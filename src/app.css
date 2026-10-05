@@ -279,6 +279,7 @@ input:focus-visible {
   display: flex;
   min-width: 0;
   align-items: center;
+  justify-content: flex-start;
   gap: 5px;
   overflow: hidden;
   color: var(--text-soft);
@@ -3142,8 +3143,15 @@ input:focus-visible {
   gap: 8px;
   color: var(--text-soft);
   font-family: inherit;
-  font-size: 9px;
+  /* Same size in NP and non-NP — leaving Now Playing must not shrink times. */
+  font-size: 12px;
   text-align: center;
+}
+
+.progress-time,
+.progress-time-elapsed,
+.progress-time-duration {
+  font-size: inherit;
 }
 
 .player-dock[data-timeline-style="line"] .progress-time-elapsed {
@@ -3997,15 +4005,33 @@ input:focus-visible {
     grid-template-columns: auto minmax(0, 1fr);
     grid-template-rows: auto auto;
     align-content: center;
+    justify-content: flex-start;
     gap: 4px 8px;
     padding: 6px 10px;
   }
   .now-playing-overlay-return { grid-column: 1; grid-row: 1; width: 34px; min-width: 34px; min-height: 34px; height: 34px; }
-  .now-playing-header-track { grid-column: 1 / -1; grid-row: 2; }
-  .now-playing-track-info { gap: 3px; font-size: 13px; }
-  .now-playing-track-info button { flex: 1 1 0; }
-  .now-playing-topbar-tools { grid-column: 2; grid-row: 1; justify-content: flex-end; gap: 5px; }
-  .lyrics-topbar-status { display: none; }
+  .now-playing-header-track { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; }
+  .now-playing-track-info {
+    gap: 3px;
+    font-size: 13px;
+    justify-content: flex-start;
+  }
+  /* Keep meta left-packed — do not stretch buttons into space-between/center. */
+  .now-playing-track-info button {
+    flex: 0 1 auto;
+    max-width: 100%;
+  }
+  .now-playing-topbar-tools { grid-column: 2; grid-row: 1; justify-content: flex-end; gap: 5px; min-width: 0; }
+  /* 手動指定 / 同步歌詞 must remain visible at every width. */
+  .lyrics-topbar-status {
+    display: flex !important;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .lyrics-topbar-action {
+    max-width: none;
+    flex: 0 0 auto;
+  }
   .now-playing-quick-settings-trigger { width: 34px; min-width: 34px; height: 34px; min-height: 34px; justify-content: center; padding: 0; }
   .now-playing-quick-settings-trigger span { display: none; }
   .now-playing-quick-settings-drawer { width: 100%; }
