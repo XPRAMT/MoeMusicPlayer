@@ -2680,10 +2680,12 @@ input:focus-visible {
 
 .dock-art {
   display: grid;
-  width: 42px;
-  height: 42px;
+  width: 50px;
+  height: 50px;
   flex: 0 0 auto;
   place-items: center;
+  /* Nudge right so the thumb clears edge-style elapsed time under the track. */
+  margin-left: 12px;
   padding: 0;
   border: 1px solid rgba(var(--accent-rgb), 0.13);
   border-radius: 10px;
@@ -2706,8 +2708,8 @@ input:focus-visible {
 }
 
 .dock-art svg {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
 }
 
 .dock-art-image {
@@ -3552,7 +3554,8 @@ input:focus-visible {
   .dock-favorite { display: none; }
   .dock-volume { gap: 7px; }
   .volume-slider { width: 54px; flex-basis: 54px; }
-  .volume-value { display: none; }
+  .app-shell:not(.has-now-playing-backdrop) .volume-value { display: none; }
+  .dock-art { width: 46px; height: 46px; margin-left: 10px; }
 }
 
 @media (max-width: 620px) {
@@ -3663,10 +3666,19 @@ input:focus-visible {
   .source-status-copy p { font-size: 8px; }
   .status-pill { padding: 5px 6px; font-size: 8px; }
   .player-dock {
-    /* Seek strip + one control band: cover/title with prev/play/next — never two stacked control rows. */
-    min-height: 58px;
     grid-column: 1;
     grid-row: 3;
+  }
+  .dock-favorite { display: none; }
+  .control-button { width: 27px; height: 27px; }
+  .control-button svg { width: 18px; height: 18px; }
+  .play-button { width: 31px; height: 31px; }
+  .play-button svg { width: 18px; height: 18px; }
+  .dock-error { top: calc(100% + 2px); }
+
+  /* Non-NP + narrow width only: compact single control band; hide secondary chrome gradually by width. */
+  .app-shell:not(.has-now-playing-backdrop) .player-dock {
+    min-height: 58px;
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-rows: 14px minmax(36px, auto);
     column-gap: 8px;
@@ -3674,10 +3686,10 @@ input:focus-visible {
     padding: 4px 10px;
     align-items: center;
   }
-  .dock-center {
+  .app-shell:not(.has-now-playing-backdrop) .dock-center {
     display: contents;
   }
-  .progress-row {
+  .app-shell:not(.has-now-playing-backdrop) .progress-row {
     width: 100%;
     grid-column: 1 / -1;
     grid-row: 1;
@@ -3685,24 +3697,29 @@ input:focus-visible {
     gap: 0;
     font-size: 8px;
   }
-  /* Narrow/vertical: hide elapsed/duration; keep seek track. */
-  .progress-time,
-  .progress-time-elapsed,
-  .progress-time-duration { display: none; }
-  .dock-track {
+  .app-shell:not(.has-now-playing-backdrop) .progress-time,
+  .app-shell:not(.has-now-playing-backdrop) .progress-time-elapsed,
+  .app-shell:not(.has-now-playing-backdrop) .progress-time-duration {
+    display: none;
+  }
+  .app-shell:not(.has-now-playing-backdrop) .dock-track {
     grid-column: 1;
     grid-row: 2;
     gap: 6px;
     min-width: 0;
     align-self: center;
   }
-  .dock-art { width: 34px; height: 34px; border-radius: 8px; }
-  .dock-art svg { width: 18px; height: 18px; }
-  .dock-track-copy { gap: 2px; min-width: 0; }
-  .dock-track-copy strong { font-size: 9px; }
-  .dock-track-copy span { max-width: none; font-size: 8px; }
-  .dock-favorite { display: none; }
-  .dock-controls {
+  .app-shell:not(.has-now-playing-backdrop) .dock-art {
+    width: 40px;
+    height: 40px;
+    margin-left: 10px;
+    border-radius: 8px;
+  }
+  .app-shell:not(.has-now-playing-backdrop) .dock-art svg { width: 20px; height: 20px; }
+  .app-shell:not(.has-now-playing-backdrop) .dock-track-copy { gap: 2px; min-width: 0; }
+  .app-shell:not(.has-now-playing-backdrop) .dock-track-copy strong { font-size: 9px; }
+  .app-shell:not(.has-now-playing-backdrop) .dock-track-copy span { max-width: none; font-size: 8px; }
+  .app-shell:not(.has-now-playing-backdrop) .dock-controls {
     grid-column: 2;
     grid-row: 2;
     height: 32px;
@@ -3710,29 +3727,47 @@ input:focus-visible {
     align-self: center;
     justify-self: end;
   }
-  .control-button { width: 27px; height: 27px; }
-  .control-button svg { width: 18px; height: 18px; }
-  .play-button { width: 31px; height: 31px; }
-  .play-button svg { width: 18px; height: 18px; }
-  /* Hide shuffle / repeat / volume on narrow — keep prev / play / next. */
-  .dock-controls .secondary-control,
-  .dock-volume { display: none !important; }
-  .dock-error { top: calc(100% + 2px); }
-  .player-dock[data-timeline-style="edge"] {
+  .app-shell:not(.has-now-playing-backdrop) .dock-controls .secondary-control,
+  .app-shell:not(.has-now-playing-backdrop) .dock-volume {
+    display: none !important;
+  }
+  .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] {
     min-height: 52px;
     grid-template-rows: minmax(36px, auto);
     padding-top: 4px;
     padding-bottom: 4px;
     align-items: center;
   }
-  .player-dock[data-timeline-style="edge"] .progress-row {
+  .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] .progress-row {
     position: absolute;
     grid-row: auto;
     grid-template-rows: 14px;
   }
-  .player-dock[data-timeline-style="edge"] .dock-track,
-  .player-dock[data-timeline-style="edge"] .dock-controls {
+  .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] .dock-track,
+  .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] .dock-controls {
     grid-row: 1;
+  }
+
+  /* Now Playing: enough room — keep shuffle/repeat/volume/times visible even on narrow width. */
+  .app-shell.has-now-playing-backdrop .player-dock {
+    min-height: 72px;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    padding: 5px 10px;
+    align-items: center;
+  }
+  .app-shell.has-now-playing-backdrop .dock-volume {
+    display: flex !important;
+  }
+  .app-shell.has-now-playing-backdrop .dock-controls .secondary-control {
+    display: grid !important;
+  }
+  .app-shell.has-now-playing-backdrop .progress-time,
+  .app-shell.has-now-playing-backdrop .progress-time-elapsed,
+  .app-shell.has-now-playing-backdrop .progress-time-duration {
+    display: initial;
+  }
+  .app-shell.has-now-playing-backdrop .player-dock[data-timeline-style="line"] .progress-row {
+    grid-template-columns: 37px minmax(0, 1fr) 37px;
   }
 }
 
@@ -3759,12 +3794,8 @@ input:focus-visible {
   .topbar { min-height: 58px; }
   .page-content { padding-top: 18px; }
   .track-row { min-height: 49px; }
+  /* Height may shrink the dock, but must not hide times or transport controls. */
   .player-dock { min-height: 64px; padding-top: 4px; padding-bottom: 4px; }
-  .progress-time,
-  .progress-time-elapsed,
-  .progress-time-duration { display: none; }
-  .progress-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
-  .player-dock[data-timeline-style="edge"] .progress-row { grid-template-rows: 16px; }
 }
 
 @media (max-width: 620px) {
