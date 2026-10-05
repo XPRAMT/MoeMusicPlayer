@@ -12,7 +12,7 @@ use std::{
 use player_core::{LibraryRoot, MediaLocator, MediaSourceKind, PlaylistId, SourceId};
 use serde::{Deserialize, Serialize};
 
-const SETTINGS_SCHEMA_VERSION: u32 = 5;
+const SETTINGS_SCHEMA_VERSION: u32 = 6;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -459,6 +459,68 @@ impl SourceEntry {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WindowGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub maximized: bool,
+}
+
+impl WindowGeometry {
+    pub const MIN_WIDTH: u32 = 360;
+    pub const MIN_HEIGHT: u32 = 540;
+
+    pub fn clamped_size(self) -> Self {
+        Self {
+            width: self.width.max(Self::MIN_WIDTH),
+            height: self.height.max(Self::MIN_HEIGHT),
+            ..self
+        }
+    }
+}
+
+/// Keep the window at least partially visible on one of the given monitor work areas.
+/// `monitors` entries are `(x, y, width, height)` in physical pixels.
+pub fn clamp_window_geometry_to_monitors(
+    geometry: WindowGeometry,
+    monitors: &[(i32, i32, u32, u32)],
+) -> WindowGeometry {
+    let geometry = geometry.clamped_size();
+    const MIN_VISIBLE: i32 = 48;
+    let width = i32::try_from(geometry.width).unwrap_or(i32::MAX);
+    let height = i32::try_from(geometry.height).unwrap_or(i32::MAX);
+
+    let visible = monitors.iter().any(|(mx, my, mw, mh)| {
+        let mw = i32::try_from(*mw).unwrap_or(i32::MAX);
+        let mh = i32::try_from(*mh).unwrap_or(i32::MAX);
+        let left = geometry.x.max(*mx);
+        let top = geometry.y.max(*my);
+        let right = (geometry.x.saturating_add(width)).min(mx.saturating_add(mw));
+        let bottom = (geometry.y.saturating_add(height)).min(my.saturating_add(mh));
+        (right - left) >= MIN_VISIBLE && (bottom - top) >= MIN_VISIBLE
+    });
+    if visible || monitors.is_empty() {
+        return geometry;
+    }
+
+    let (mx, my, mw, mh) = monitors[0];
+    let mw = i32::try_from(mw).unwrap_or(width);
+    let mh = i32::try_from(mh).unwrap_or(height);
+    let x = mx + ((mw - width) / 2).max(0);
+    let y = my + ((mh - height) / 2).max(0);
+    WindowGeometry {
+        x,
+        y,
+        width: geometry.width.min(u32::try_from(mw.max(1)).unwrap_or(geometry.width)),
+        height: geometry.height.min(u32::try_from(mh.max(1)).unwrap_or(geometry.height)),
+        maximized: geometry.maximized,
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub schema_version: u32,
     pub theme: ThemeSettings,
@@ -472,6 +534,9 @@ pub struct AppSettings {
     /// Sync must remain paused until the user rebuilds and confirms the registry.
     pub source_registry_authoritative: bool,
     pub sources: Vec<SourceEntry>,
+    /// Last main-window outer position / inner size / maximized flag (desktop).
+    #[serde(default)]
+    pub window_geometry: Option<WindowGeometry>,
 }
 
 impl Default for AppSettings {
@@ -487,6 +552,7 @@ impl Default for AppSettings {
             now_playing_appearance_preferences: NowPlayingAppearancePreferences::default(),
             source_registry_authoritative: true,
             sources: Vec::new(),
+            window_geometry: None,
         }
     }
 }
@@ -794,6 +860,7 @@ struct RawSettings {
     now_playing_appearance_preferences: Option<NowPlayingAppearancePreferences>,
     source_registry_authoritative: Option<bool>,
     sources: Option<Vec<SourceEntry>>,
+    window_geometry: Option<WindowGeometry>,
 }
 
 fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
@@ -817,6 +884,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
             .unwrap_or_default(),
         source_registry_authoritative: raw.source_registry_authoritative.unwrap_or(true),
         sources: raw.sources.unwrap_or_default(),
+        window_geometry: raw.window_geometry,
     };
     settings.validate()?;
     Ok((settings, version != SETTINGS_SCHEMA_VERSION))
@@ -2071,5 +2139,54 @@ mod tests {
                     .is_null()
             );
         }
+    }
+
+    #[test]
+    fn window_geometry_migrates_from_v5_and_clamps_offscreen() {
+        let directory = test_directory("window-geometry");
+        let path = directory.join("settings.json");
+        fs::write(
+            &path,
+            r##"{"schemaVersion":5,"theme":{"backgroundHex":"#000000","accentHex":"#55D9FF"},"shuffle":false,"repeatMode":"off","sourceRegistryAuthoritative":true,"sources":[]}"##,
+        )
+        .expect("write v5 settings");
+        let (settings, migrated) = read_settings(&path).expect("read v5");
+        assert!(migrated);
+        assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert!(settings.window_geometry.is_none());
+
+        let offscreen = WindowGeometry {
+            x: -8000,
+            y: -8000,
+            width: 200,
+            height: 200,
+            maximized: false,
+        };
+        let clamped = clamp_window_geometry_to_monitors(offscreen, &[(0, 0, 1920, 1080)]);
+        assert_eq!(clamped.width, WindowGeometry::MIN_WIDTH);
+        assert_eq!(clamped.height, WindowGeometry::MIN_HEIGHT);
+        assert!(clamped.x >= 0 && clamped.y >= 0);
+
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("open");
+        store
+            .update(|settings| {
+                settings.window_geometry = Some(WindowGeometry {
+                    x: 120,
+                    y: 80,
+                    width: 1100,
+                    height: 700,
+                    maximized: true,
+                });
+                Ok(())
+            })
+            .expect("persist geometry");
+        let reopened = SettingsStore::open(&path, AppSettings::default())
+            .expect("reopen")
+            .snapshot()
+            .expect("snapshot");
+        let geo = reopened.window_geometry.expect("geometry saved");
+        assert_eq!(geo.x, 120);
+        assert_eq!(geo.width, 1100);
+        assert!(geo.maximized);
     }
 }

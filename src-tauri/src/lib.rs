@@ -26,7 +26,7 @@ use player_core::{
 use player_db::PlaybackSessionCheckpoint;
 use player_db::{Database, ThemePreferences};
 use serde::{Deserialize, Serialize};
-use tauri::{ipc::Response, AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{ipc::Response, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size, State, WebviewWindow};
 use tauri_plugin_media_index::MediaIndexExt;
 
 mod database_lifecycle;
@@ -36,8 +36,9 @@ use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImpo
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 use settings::{
-    AppSettings, LyricsPreferences, NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode,
-    SettingsStore, SourceEntry, SourceEntryKind, ThemeSettings, TrackListColumnSettings,
+    clamp_window_geometry_to_monitors, AppSettings, LyricsPreferences,
+    NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode, SettingsStore, SourceEntry,
+    SourceEntryKind, ThemeSettings, TrackListColumnSettings, WindowGeometry,
 };
 #[cfg(any(target_os = "android", test))]
 mod android_artwork;
@@ -107,7 +108,15 @@ impl From<ThemeSettings> for ThemePreferencesDto {
     }
 }
 
+#[cfg(target_os = "windows")]
+#[derive(Debug, Default)]
+struct WindowFrameMemory {
+    /// Last non-maximized outer position + inner size.
+    normal: Option<WindowGeometry>,
+}
+
 struct AppState {
+
     database: Option<Database>,
     database_path: Option<std::path::PathBuf>,
     database_error: Option<String>,
@@ -115,6 +124,8 @@ struct AppState {
     #[cfg(target_os = "windows")]
     shutdown: database_lifecycle::ShutdownCoordinator,
     settings: SettingsStore,
+    #[cfg(target_os = "windows")]
+    window_frame: std::sync::Mutex<WindowFrameMemory>,
     lyrics_service: lyrics_service::LyricsService,
     #[cfg(target_os = "windows")]
     playback: Option<WindowsPlaybackService>,
@@ -5035,6 +5046,99 @@ fn checkpoint_playback_position(
     Ok(())
 }
 
+
+#[cfg(target_os = "windows")]
+fn capture_window_geometry(window: &tauri::Window) -> Option<WindowGeometry> {
+    let position = window.outer_position().ok()?;
+    let size = window.inner_size().ok()?;
+    let maximized = window.is_maximized().unwrap_or(false);
+    Some(WindowGeometry {
+        x: position.x,
+        y: position.y,
+        width: size.width.max(1),
+        height: size.height.max(1),
+        maximized,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn remember_main_window_normal_frame(window: &tauri::Window) {
+    if window.is_maximized().unwrap_or(false) {
+        return;
+    }
+    let Some(geometry) = capture_window_geometry(window) else {
+        return;
+    };
+    let state = window.app_handle().state::<AppState>();
+    let Ok(mut frame) = state.window_frame.lock() else {
+        return;
+    };
+    frame.normal = Some(WindowGeometry {
+        maximized: false,
+        ..geometry
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn persist_main_window_geometry(window: &tauri::Window) {
+    let maximized = window.is_maximized().unwrap_or(false);
+    let state = window.app_handle().state::<AppState>();
+    let geometry = if maximized {
+        state
+            .window_frame
+            .lock()
+            .ok()
+            .and_then(|frame| frame.normal.clone())
+            .or_else(|| capture_window_geometry(window))
+    } else {
+        capture_window_geometry(window)
+    };
+    let Some(mut geometry) = geometry else {
+        return;
+    };
+    geometry.maximized = maximized;
+    if let Err(error) = state.settings.update(|settings| {
+        settings.window_geometry = Some(geometry.clone());
+        Ok(())
+    }) {
+        eprintln!("無法保存視窗位置與大小：{error}");
+        return;
+    }
+    let Ok(mut frame) = state.window_frame.lock() else {
+        return;
+    };
+    frame.normal = Some(WindowGeometry {
+        maximized: false,
+        ..geometry
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn apply_saved_window_geometry(window: &WebviewWindow, geometry: WindowGeometry) {
+    let monitors: Vec<(i32, i32, u32, u32)> = window
+        .available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            (position.x, position.y, size.width, size.height)
+        })
+        .collect();
+    let geometry = clamp_window_geometry_to_monitors(geometry, &monitors);
+    if let Err(error) = window.set_size(Size::Physical(PhysicalSize::new(geometry.width, geometry.height))) {
+        eprintln!("無法還原視窗大小：{error}");
+    }
+    if let Err(error) = window.set_position(Position::Physical(PhysicalPosition::new(geometry.x, geometry.y))) {
+        eprintln!("無法還原視窗位置：{error}");
+    }
+    if geometry.maximized {
+        if let Err(error) = window.maximize() {
+            eprintln!("無法還原最大化狀態：{error}");
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn schedule_database_shutdown(app: AppHandle, request: database_lifecycle::ShutdownRequest) {
     if request != database_lifecycle::ShutdownRequest::Start {
@@ -5311,17 +5415,24 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_dialog::init());
 
     builder
-        .on_window_event(|_window, _event| {
+        .on_window_event(|window, event| {
             #[cfg(target_os = "windows")]
-            if _window.label() == "main" {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
-                    let app = _window.app_handle().clone();
-                    let state = app.state::<AppState>();
-                    let request = state.shutdown.request();
-                    if request != database_lifecycle::ShutdownRequest::Ready {
-                        api.prevent_close();
-                        schedule_database_shutdown(app, request);
+            if window.label() == "main" {
+                match event {
+                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                        remember_main_window_normal_frame(window);
                     }
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        persist_main_window_geometry(window);
+                        let app = window.app_handle().clone();
+                        let state = app.state::<AppState>();
+                        let request = state.shutdown.request();
+                        if request != database_lifecycle::ShutdownRequest::Ready {
+                            api.prevent_close();
+                            schedule_database_shutdown(app, request);
+                        }
+                    }
+                    _ => {}
                 }
             }
         })
@@ -5497,6 +5608,13 @@ pub fn run() {
                 #[cfg(target_os = "windows")]
                 shutdown: database_lifecycle::ShutdownCoordinator::default(),
                 settings,
+                #[cfg(target_os = "windows")]
+                window_frame: std::sync::Mutex::new(WindowFrameMemory {
+                    normal: initial_settings.window_geometry.as_ref().map(|geometry| WindowGeometry {
+                        maximized: false,
+                        ..geometry.clone()
+                    }),
+                }),
                 lyrics_service: lyrics_service::LyricsService::default(),
                 #[cfg(target_os = "windows")]
                 playback,
@@ -5516,6 +5634,10 @@ pub fn run() {
                 window.set_title("MoeMusicPlayer")?;
                 #[cfg(target_os = "windows")]
                 window.set_always_on_top(false)?;
+                #[cfg(target_os = "windows")]
+                if let Some(geometry) = initial_settings.window_geometry.clone() {
+                    apply_saved_window_geometry(&window, geometry);
+                }
             }
             Ok(())
         })
