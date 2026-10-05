@@ -45,8 +45,11 @@ test('the footer artwork opens and closes a full-window Now Playing overlay', ()
   const buttonEnd = appSource.indexOf('</button>', artClass);
   assert.ok(buttonStart >= 0 && buttonEnd > artClass, 'footer artwork must be a button');
   const artworkButton = appSource.slice(buttonStart, buttonEnd + '</button>'.length);
-  assert.match(artworkButton, /isNowPlayingOpen\s*\?\s*'返回播放前頁面'\s*:\s*`開啟正在播放/);
-  assert.match(artworkButton, /onclick=\{\(\)\s*=>\s*void\s*\(isNowPlayingOpen\s*\?\s*closeNowPlaying\(\)\s*:\s*openNowPlaying\(\)\)\}/);
+  assert.match(artworkButton, /`開啟正在播放/);
+  assert.doesNotMatch(artworkButton, /isNowPlayingOpen\s*\?\s*'返回播放前頁面'/);
+  assert.match(artworkButton, /onclick=\{\(\)\s*=>\s*void\s*openNowPlaying\(\)\}/);
+  assert.match(appSource, /class="dock-now-playing-dismiss"/);
+  assert.match(appSource, /class:dock-track-dismiss=\{isNowPlayingOpen\}/);
   assert.match(artworkButton, /disabled=\{!playback\?\.currentTrack\}/);
   assert.match(artworkButton, /aria-label=/);
 

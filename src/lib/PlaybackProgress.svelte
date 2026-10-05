@@ -34,6 +34,7 @@
     ),
   );
   const seekEnabled = $derived(canControl && trackId !== null && isPlaybackSeekableDuration(durationMs));
+  // Keep the range input enabled while non-seek commands are busy so :disabled opacity does not flash the timeline.
 
   $effect(() => {
     if (draftTrackId !== null && draftTrackId !== trackId) cancelDraft();
@@ -93,7 +94,7 @@
     max={Math.max(1, durationMs ?? 0)}
     value={displayedPositionMs}
     aria-label="播放進度"
-    disabled={!seekEnabled || isSending}
+    disabled={!seekEnabled}
     onpointerdown={beginPointerSeek}
     oninput={updateDraft}
     onchange={commitDraft}

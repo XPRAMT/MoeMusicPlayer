@@ -50,6 +50,13 @@ test('playlist track metadata supplies display duration when the decoder does no
   assert.equal(effectivePlaybackDurationMs(183_500, 184_000), 183_500);
   assert.equal(effectivePlaybackDurationMs(null, 0), null);
   assert.match(appSource, /effectivePlaybackDurationMs\(\s*playback\?\.durationMs,\s*playback\?\.currentTrack\?\.durationMs,/);
-  assert.match(progressSource, /disabled=\{!seekEnabled \|\| isSending\}/);
+  assert.match(progressSource, /disabled=\{!seekEnabled\}/);
   assert.match(appSource, /playbackError = getErrorText\(error\)/);
+});
+
+test('progress slider stays enabled during non-seek playback busy to avoid timeline flash', () => {
+  assert.match(progressSource, /disabled=\{\!seekEnabled\}/);
+  assert.doesNotMatch(progressSource, /disabled=\{\!seekEnabled \|\| isSending\}/);
+  assert.match(progressSource, /if \(\!seekEnabled \|\| isSending\) return;/);
+  assert.match(appSource, /isSending=\{isSendingPlaybackCommand\}/);
 });

@@ -44,6 +44,8 @@
     artworkCopyChildren: string[];
     artworkCopyTextAlign: string;
     formatJustifyContent: string;
+    lyricsPaneJustifyContent: string;
+    lyricsView: { height: number };
     lyricTextAlign: { primary: string; translation: string; romanization: string };
     lyricsViewport: { clientHeight: number; scrollHeight: number; scrollTop: number; overflowY: string };
     playerControlIcons: Array<{ ariaHidden: string | null; width: number; height: number }>;
@@ -237,6 +239,15 @@
       artworkCopyChildren: artworkCopy ? [...artworkCopy.children].map((child) => child.className.toString() || child.tagName.toLowerCase()) : [],
       artworkCopyTextAlign: artworkCopy ? getComputedStyle(artworkCopy).textAlign : 'missing',
       formatJustifyContent: formatRow ? getComputedStyle(formatRow).justifyContent : 'missing',
+      lyricsPaneJustifyContent: (() => {
+        const pane = document.querySelector<HTMLElement>('.now-playing-lyrics');
+        return pane ? getComputedStyle(pane).justifyContent : 'missing';
+      })(),
+      lyricsView: (() => {
+        const view = document.querySelector<HTMLElement>('.now-playing-lyrics .lyrics-view');
+        const box = view?.getBoundingClientRect();
+        return { height: box?.height ?? 0 };
+      })(),
       lyricTextAlign: {
         primary: lyricPrimary ? getComputedStyle(lyricPrimary).textAlign : 'missing',
         translation: lyricTranslation ? getComputedStyle(lyricTranslation).textAlign : 'missing',
@@ -311,7 +322,7 @@
     </header>
     <div class="now-playing-overlay-body" data-testid="outer-page-scroll">
       <div class="now-playing-overlay-content">
-        <section class="now-playing-view" aria-label="正在播放版面">
+        <section class="now-playing-view" aria-label="正在播放版面" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}>
           <NowPlayingLayoutSwitch {layout} variant="compact" onChange={setLayout} />
           <NowPlayingArrangement {layout}>
             {#snippet artwork()}

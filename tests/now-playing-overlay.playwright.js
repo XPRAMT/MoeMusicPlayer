@@ -84,6 +84,12 @@ async page => {
         })(),
         dockArtworkCount: dock.querySelectorAll('.dock-art').length,
         dockTrackLinks: [...dock.querySelectorAll('.dock-track-link')].map((button) => button.textContent.trim()),
+        dockDismiss: (() => {
+          const button = dock.querySelector('.dock-now-playing-dismiss');
+          if (!button) return null;
+          const box = button.getBoundingClientRect();
+          return { label: button.getAttribute('aria-label'), width: box.width, height: box.height };
+        })(),
         progress: rect(dock.querySelector('.progress-row')),
         dockTrack: rect(dock.querySelector('.dock-track')),
         controls: rect(dock.querySelector('.dock-controls')),
@@ -147,7 +153,7 @@ async page => {
     }
 
     if (returnMethod === 'dock') {
-      await page.locator('.dock-track-title-link').click();
+      await page.locator('.dock-now-playing-dismiss').click();
     } else {
       await page.locator('.now-playing-overlay-return').click();
     }
@@ -461,7 +467,14 @@ async page => {
     assert.ok(state.copy.bottom <= state.cover.top, 'title, artist, album, and format belong above the cover');
     assert.ok(state.cover.width > 628, `1920x1080: cover should use more space than the previous 628px layout (${state.cover.width}px)`);
     assert.equal(state.dockArtworkCount, 0, 'overlay dock hides the artwork button');
-    assert.deepEqual(state.dockTrackLinks, ['Volume Slider Test', 'hanser feat. 合作演出者'], 'overlay dock shows clickable title and complete artist value');
+    assert.deepEqual(state.dockTrackLinks, [], 'overlay dock hides title/artist text while Now Playing is open');
+    assert.ok(state.dockDismiss && state.dockDismiss.width >= 40 && state.dockDismiss.height >= 32, 'overlay left dock is a transparent dismiss hit target');
+    assert.equal(state.dockDismiss.label, '返回播放前頁面', 'dismiss hit target keeps return accessible name');
+    {
+      const controlsMid = (state.controls.left + state.controls.right) / 2;
+      const dockMid = (state.dock.left + state.dock.right) / 2;
+      assert.ok(Math.abs(controlsMid - dockMid) <= 8, 'transport controls must stay horizontally centered in the dock');
+    }
     assert.ok(state.progress.bottom <= state.controls.top && state.progress.bottom <= state.dockTrack.top && state.progress.bottom <= state.volume.top, 'progress and time row sits above the entire bottom control row');
     assert.ok(Math.abs(state.progress.left - state.dock.left - state.dockPadding.left) <= 2
       && Math.abs(state.dock.right - state.dockPadding.right - state.progress.right) <= 2,

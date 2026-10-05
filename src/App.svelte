@@ -2268,34 +2268,35 @@
   {/if}
 
   <footer class="player-dock" aria-label="播放控制" inert={isQuickSettingsOpen}>
-    <div class="dock-track">
-      {#if !isNowPlayingOpen}
-      <button
-        class="dock-art"
-        type="button"
-        bind:this={dockArtworkButton}
-        aria-label={playback?.currentTrack ? isNowPlayingOpen ? '返回播放前頁面' : `開啟正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
-        title={playback?.currentTrack ? isNowPlayingOpen ? '返回播放前頁面' : `查看正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
-        disabled={!playback?.currentTrack}
-        onclick={() => void (isNowPlayingOpen ? closeNowPlaying() : openNowPlaying())}
-      >
-        {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
-          <img class="dock-art-image" src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
-        {:else}
-          <IconMusic size={22} stroke={1.6} aria-hidden="true" />
-        {/if}
-      </button>
-      {/if}
-      <div class="dock-track-copy">
-        {#if isNowPlayingOpen}
-          <button class="dock-track-link dock-track-title-link" type="button" aria-label="返回播放前頁面" title="返回播放前頁面" onclick={() => void closeNowPlaying()}>{currentTrackTitle(playback?.currentTrack)}</button>
-          <button class="dock-track-link dock-track-artist-link" type="button" aria-label="返回播放前頁面" title="返回播放前頁面" onclick={() => void closeNowPlaying()}>{currentTrackArtist(playback?.currentTrack)}</button>
-        {:else}
+    <div class="dock-track" class:dock-track-dismiss={isNowPlayingOpen}>
+      {#if isNowPlayingOpen}
+        <button
+          class="dock-now-playing-dismiss"
+          type="button"
+          aria-label="返回播放前頁面"
+          title="返回播放前頁面"
+          onclick={() => void closeNowPlaying()}
+        ></button>
+      {:else}
+        <button
+          class="dock-art"
+          type="button"
+          bind:this={dockArtworkButton}
+          aria-label={playback?.currentTrack ? `開啟正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
+          title={playback?.currentTrack ? `查看正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
+          disabled={!playback?.currentTrack}
+          onclick={() => void openNowPlaying()}
+        >
+          {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
+            <img class="dock-art-image" src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
+          {:else}
+            <IconMusic size={22} stroke={1.6} aria-hidden="true" />
+          {/if}
+        </button>
+        <div class="dock-track-copy">
           <strong>{currentTrackTitle(playback?.currentTrack)}</strong>
           <span>{currentTrackArtist(playback?.currentTrack)}</span>
-        {/if}
-      </div>
-      {#if !isNowPlayingOpen}
+        </div>
         <button class="dock-favorite" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
           <IconHeart size={18} stroke={1.6} aria-hidden="true" />
         </button>
@@ -2342,7 +2343,6 @@
     </div>
 
     <div class="dock-volume">
-      <span class="volume-state">{playbackReady ? '音量' : '播放未就緒'}</span>
       <IconVolume2 size={20} stroke={1.6} aria-hidden="true" />
       <input
         class="volume-slider"

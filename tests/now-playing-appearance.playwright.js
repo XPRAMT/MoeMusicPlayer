@@ -93,7 +93,8 @@ async page => {
   }));
   assert.equal(sharedArtwork.backgroundUrl, sharedArtwork.coverUrl, 'full-screen background should reuse the Now Playing artwork URL');
   assert.equal(sharedArtwork.dockArtworkButtonCount, 0, 'overlay dock removes the mini artwork entrance');
-  assert.deepEqual(sharedArtwork.dockLinks, ['Volume Slider Test', 'hanser feat. 合作演出者'], 'overlay dock shows clickable title and full artist values as return controls');
+  assert.deepEqual(sharedArtwork.dockLinks, [], 'overlay dock hides title/artist while Now Playing is open');
+  assert.equal(await page.locator('.player-dock .dock-now-playing-dismiss').count(), 1, 'overlay left dock exposes dismiss hit target');
   assert.equal(sharedArtwork.layerCount, 1, 'render exactly one full-screen background layer');
   assert.equal(sharedArtwork.filter, 'blur(25px)', 'loaded preferences should set the backdrop blur');
   assert.ok(sharedArtwork.z.backdrop > sharedArtwork.z.sidebar, 'backdrop must cover the mobile sidebar');

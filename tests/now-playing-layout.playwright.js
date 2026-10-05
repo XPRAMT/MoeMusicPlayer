@@ -87,6 +87,15 @@
     assert.ok(state.cover.left >= artwork.left - 1 && state.cover.right <= artwork.right + 1, `${viewport.width}x${viewport.height}: cover spills out of artwork pane horizontally`);
     assert.ok(state.cover.top >= artwork.top - 1 && state.cover.bottom <= artwork.bottom + 1, `${viewport.width}x${viewport.height}: cover spills out of artwork pane vertically`);
     assert.ok(Math.abs((state.cover.top + state.cover.bottom) / 2 - (artwork.top + artwork.bottom) / 2) <= 2, `${viewport.width}x${viewport.height}: cover should be vertically centered in the artwork pane`);
+    assert.equal(state.lyricsPaneJustifyContent, 'center', `${viewport.width}x${viewport.height}: lyrics pane should use the same vertical centering strategy as cover`);
+    if (state.cover.height > 0 && state.lyricsView.height > 0 && viewport.wide) {
+      assert.ok(Math.abs(state.lyricsView.height - state.cover.height) <= 24, `${viewport.width}x${viewport.height}: lyrics block height should track cover height (${state.lyricsView.height} vs ${state.cover.height})`);
+    }
+    {
+      const controlsMid = (state.dockControls.left + state.dockControls.right) / 2;
+      const dockMid = (state.dock.left + state.dock.right) / 2;
+      assert.ok(Math.abs(controlsMid - dockMid) <= 8, `${viewport.width}x${viewport.height}: dock transport controls must stay horizontally centered`);
+    }
     const heightCap = viewport.height * 0.92;
     const expectedScale = Math.min((artwork.width - 2) / state.cover.naturalWidth, (Math.min(artwork.height, heightCap) - 2) / state.cover.naturalHeight);
     assert.ok(Math.abs(state.renderedImage.width - state.cover.naturalWidth * expectedScale) <= 2
