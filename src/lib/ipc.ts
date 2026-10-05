@@ -37,7 +37,7 @@ export interface TrackListColumnSettings {
 
 export type NowPlayingLayout = 'a' | 'b';
 export type CoverCornerStyle = 'rounded' | 'square';
-export type TimelineStyle = 'line' | 'bar' | 'minimal';
+export type TimelineStyle = 'line' | 'edge';
 export type LyricsTextEffect = 'shadow' | 'stroke' | 'none';
 
 export interface LibrarySource {

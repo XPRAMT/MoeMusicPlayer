@@ -104,12 +104,33 @@ pub enum CoverCornerStyle {
     Square,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TimelineStyle {
     Line,
-    Bar,
-    Minimal,
+    Edge,
+}
+
+impl<'de> Deserialize<'de> for TimelineStyle {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        match raw.as_str() {
+            "edge" => Ok(Self::Edge),
+            // Default line look; also accept legacy bar/minimal from earlier WIP builds.
+            "line" | "bar" | "minimal" => Ok(Self::Line),
+            other => Err(serde::de::Error::unknown_variant(other, &["line", "edge"])),
+        }
+    }
+}
+
+impl Default for TimelineStyle {
+    fn default() -> Self {
+        Self::Line
+    }
+}
+
+fn default_timeline_style() -> TimelineStyle {
+    TimelineStyle::Line
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -138,16 +159,6 @@ impl Default for CoverCornerStyle {
 
 fn default_cover_corner_style() -> CoverCornerStyle {
     CoverCornerStyle::Rounded
-}
-
-impl Default for TimelineStyle {
-    fn default() -> Self {
-        Self::Line
-    }
-}
-
-fn default_timeline_style() -> TimelineStyle {
-    TimelineStyle::Line
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1963,20 +1974,31 @@ mod tests {
 
         let saved = store
             .update(|settings| {
-                settings.now_playing_appearance_preferences.timeline_style = TimelineStyle::Bar;
+                settings.now_playing_appearance_preferences.timeline_style = TimelineStyle::Edge;
                 Ok(())
             })
-            .expect("save bar timeline");
+            .expect("save edge timeline");
         assert_eq!(
             saved.now_playing_appearance_preferences.timeline_style,
-            TimelineStyle::Bar
+            TimelineStyle::Edge
         );
 
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(
             persisted["nowPlayingAppearancePreferences"]["timelineStyle"],
-            "bar"
+            "edge"
+        );
+
+        assert_eq!(
+            serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
+                "backgroundBlurPx": 12,
+                "backgroundBrightnessPercent": 50,
+                "timelineStyle": "minimal"
+            }))
+            .unwrap()
+            .timeline_style,
+            TimelineStyle::Line
         );
 
         assert!(

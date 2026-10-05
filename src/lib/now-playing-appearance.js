@@ -18,10 +18,7 @@ export function normalizeNowPlayingAppearancePreferences(value = {}) {
   /** @type {import('./ipc').CoverCornerStyle} */
   const coverCornerStyle = value?.coverCornerStyle === 'square' ? 'square' : 'rounded';
   /** @type {import('./ipc').TimelineStyle} */
-  const timelineStyle =
-    value?.timelineStyle === 'bar' || value?.timelineStyle === 'minimal'
-      ? value.timelineStyle
-      : 'line';
+  const timelineStyle = value?.timelineStyle === 'edge' ? 'edge' : 'line';
   return {
     backgroundBlurPx: Number.isFinite(blur)
       ? Math.round(Math.max(0, Math.min(40, blur)))

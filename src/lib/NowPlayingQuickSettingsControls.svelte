@@ -66,25 +66,16 @@
           class:chosen={appearance.timelineStyle === 'line'}
           onclick={() => onAppearanceChange({ timelineStyle: 'line' }, true)}
         >
-          <strong>線條</strong><span>細線軌道與圓形滑鈕</span>
+          <strong>線條</strong><span>原本位置的細線時間軸</span>
         </button>
         <button
           type="button"
-          aria-label="時間軸長條"
-          aria-pressed={appearance.timelineStyle === 'bar'}
-          class:chosen={appearance.timelineStyle === 'bar'}
-          onclick={() => onAppearanceChange({ timelineStyle: 'bar' }, true)}
+          aria-label="時間軸貼邊緣"
+          aria-pressed={appearance.timelineStyle === 'edge'}
+          class:chosen={appearance.timelineStyle === 'edge'}
+          onclick={() => onAppearanceChange({ timelineStyle: 'edge' }, true)}
         >
-          <strong>長條</strong><span>較粗的膠囊軌道</span>
-        </button>
-        <button
-          type="button"
-          aria-label="時間軸極簡"
-          aria-pressed={appearance.timelineStyle === 'minimal'}
-          class:chosen={appearance.timelineStyle === 'minimal'}
-          onclick={() => onAppearanceChange({ timelineStyle: 'minimal' }, true)}
-        >
-          <strong>極簡</strong><span>細線；滑鈕僅在互動時顯示</span>
+          <strong>貼邊緣</strong><span>時間軸貼齊底欄頂緣交界</span>
         </button>
       </div>
     </div>

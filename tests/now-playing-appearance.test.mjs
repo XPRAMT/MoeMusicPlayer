@@ -17,12 +17,12 @@ test('appearance preferences default and clamp to supported ranges', () => {
     backgroundBlurPx: -4,
     backgroundBrightnessPercent: 140,
     coverCornerStyle: 'square',
-    timelineStyle: 'bar',
+    timelineStyle: 'edge',
   }), {
     backgroundBlurPx: 0,
     backgroundBrightnessPercent: 100,
     coverCornerStyle: 'square',
-    timelineStyle: 'bar',
+    timelineStyle: 'edge',
   });
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: 80.4,
@@ -35,6 +35,20 @@ test('appearance preferences default and clamp to supported ranges', () => {
     coverCornerStyle: 'rounded',
     timelineStyle: 'line',
   });
+  // Legacy WIP values fall back to the default line placement.
+  for (const legacy of ['bar', 'minimal']) {
+    assert.deepEqual(normalizeNowPlayingAppearancePreferences({
+      backgroundBlurPx: 10,
+      backgroundBrightnessPercent: 40,
+      coverCornerStyle: 'rounded',
+      timelineStyle: legacy,
+    }), {
+      backgroundBlurPx: 10,
+      backgroundBrightnessPercent: 40,
+      coverCornerStyle: 'rounded',
+      timelineStyle: 'line',
+    });
+  }
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: Number.NaN,
     backgroundBrightnessPercent: Infinity,
@@ -78,16 +92,16 @@ test('slow saves coalesce drag updates and ignore stale acknowledgements', async
   assert.equal(requests.length, 1, 'debounced change should start one write');
   writer.schedule({ backgroundBlurPx: 21, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'line' });
   await wait(8);
-  writer.schedule({ backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'minimal' });
+  writer.schedule({ backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'edge' });
   await wait(35);
   assert.equal(requests.length, 1, 'new values must wait behind the slow acknowledgement');
   resolveNext();
   await wait(0);
   assert.equal(requests.length, 2, 'one latest value should follow the active write');
-  assert.deepEqual(requests[1], { backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'minimal' });
+  assert.deepEqual(requests[1], { backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'edge' });
   resolveNext();
   await wait(0);
-  assert.deepEqual(saved, [{ backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'minimal' }]);
+  assert.deepEqual(saved, [{ backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'edge' }]);
   assert.equal(maxActive, 1, 'settings writes must not overlap');
   assert.deepEqual(errors, []);
 
