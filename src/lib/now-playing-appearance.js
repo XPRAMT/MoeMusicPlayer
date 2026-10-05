@@ -4,12 +4,18 @@
 export const DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES = Object.freeze({
   backgroundBlurPx: 20,
   backgroundBrightnessPercent: 40,
+  coverCornerStyle: /** @type {const} */ ('rounded'),
 });
 
-/** @param {Partial<NowPlayingAppearancePreferences> | null | undefined} [value] */
+/**
+ * @param {Partial<NowPlayingAppearancePreferences> | null | undefined} [value]
+ * @returns {NowPlayingAppearancePreferences}
+ */
 export function normalizeNowPlayingAppearancePreferences(value = {}) {
   const blur = Number(value?.backgroundBlurPx);
   const brightness = Number(value?.backgroundBrightnessPercent);
+  /** @type {import('./ipc').CoverCornerStyle} */
+  const coverCornerStyle = value?.coverCornerStyle === 'square' ? 'square' : 'rounded';
   return {
     backgroundBlurPx: Number.isFinite(blur)
       ? Math.round(Math.max(0, Math.min(40, blur)))
@@ -17,6 +23,7 @@ export function normalizeNowPlayingAppearancePreferences(value = {}) {
     backgroundBrightnessPercent: Number.isFinite(brightness)
       ? Math.round(Math.max(0, Math.min(100, brightness)))
       : DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES.backgroundBrightnessPercent,
+    coverCornerStyle,
   };
 }
 

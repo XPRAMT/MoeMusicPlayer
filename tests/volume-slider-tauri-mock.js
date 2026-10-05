@@ -40,9 +40,10 @@
   const callbacks = new Map();
   let activeVolumeCommands = 0;
   let storedAppearance = JSON.parse(localStorage.getItem('__appearancePreferences') || 'null') ?? {
-    backgroundBlurPx: 20,
-    backgroundBrightnessPercent: 40,
-  };
+  backgroundBlurPx: 20,
+  backgroundBrightnessPercent: 40,
+  coverCornerStyle: 'rounded',
+};
   let storedNowPlayingLayout = localStorage.getItem('__nowPlayingLayout') === 'b' ? 'b' : 'a';
   let storedLyricsPreferences = JSON.parse(localStorage.getItem('__lyricsPreferences') || 'null') ?? {
     showTranslation: false,
@@ -119,6 +120,16 @@
           return 1;
         case 'plugin:event|unlisten':
           return null;
+        case 'plugin:window|minimize':
+        case 'plugin:window|close':
+        case 'plugin:window|start_dragging':
+        case 'plugin:window|set_focus':
+          return null;
+        case 'plugin:window|toggle_maximize':
+        case 'plugin:window|internal_toggle_maximize':
+          return null;
+        case 'plugin:window|is_maximized':
+          return false;
         case 'get_runtime_capabilities':
           return {
             platform: 'windows',

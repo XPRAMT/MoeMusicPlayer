@@ -1,0 +1,143 @@
+<script lang="ts">
+  import { onDestroy, onMount } from 'svelte';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import type { UnlistenFn } from '@tauri-apps/api/event';
+
+  type Props = {
+    transparent?: boolean;
+  };
+
+  let { transparent = false }: Props = $props();
+
+  const LABEL_CONTROLS = '\u8996\u7A97\u63A7\u5236';
+  const LABEL_MINIMIZE = '\u6700\u5C0F\u5316';
+  const LABEL_MAXIMIZE = '\u6700\u5927\u5316';
+  const LABEL_RESTORE = '\u9084\u539F';
+  const LABEL_CLOSE = '\u95DC\u9589';
+
+  let maximized = $state(false);
+  let unlistenResize: UnlistenFn | undefined;
+
+  const appWindow = (() => {
+    try {
+      return getCurrentWindow();
+    } catch {
+      return null;
+    }
+  })();
+
+  async function refreshMaximized(): Promise<void> {
+    if (!appWindow) return;
+    try {
+      maximized = await appWindow.isMaximized();
+    } catch {
+      maximized = false;
+    }
+  }
+
+  onMount(() => {
+    void refreshMaximized();
+    if (!appWindow) return;
+    void appWindow
+      .onResized(() => {
+        void refreshMaximized();
+      })
+      .then((unlisten) => {
+        unlistenResize = unlisten;
+      })
+      .catch(() => {
+        /* harness / non-desktop */
+      });
+  });
+
+  onDestroy(() => {
+    if (typeof unlistenResize === 'function') unlistenResize();
+  });
+
+  async function minimize(): Promise<void> {
+    try {
+      await appWindow?.minimize();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function toggleMaximize(): Promise<void> {
+    try {
+      await appWindow?.toggleMaximize();
+      await refreshMaximized();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function close(): Promise<void> {
+    try {
+      await appWindow?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+</script>
+
+<div
+  class="window-titlebar"
+  class:is-transparent={transparent}
+  data-testid="window-titlebar"
+>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="window-titlebar-drag"
+    data-tauri-drag-region
+    title="MoeMusicPlayer"
+    ondblclick={() => void toggleMaximize()}
+  >
+    <span class="window-titlebar-label" data-tauri-drag-region>MoeMusicPlayer</span>
+  </div>
+  <div class="window-titlebar-controls" role="group" aria-label={LABEL_CONTROLS}>
+    <button
+      type="button"
+      class="window-titlebar-button"
+      aria-label={LABEL_MINIMIZE}
+      title={LABEL_MINIMIZE}
+      onclick={() => void minimize()}
+    >
+      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+        <path d="M1 5h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+      </svg>
+    </button>
+    <button
+      type="button"
+      class="window-titlebar-button"
+      aria-label={maximized ? LABEL_RESTORE : LABEL_MAXIMIZE}
+      title={maximized ? LABEL_RESTORE : LABEL_MAXIMIZE}
+      onclick={() => void toggleMaximize()}
+    >
+      {#if maximized}
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path
+            d="M3 2.2h4.8V7H3zM2.2 3.2H1.5V8.5H6.8V7.8"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.1"
+          />
+        </svg>
+      {:else}
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <rect x="1.5" y="1.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.2" />
+        </svg>
+      {/if}
+    </button>
+    <button
+      type="button"
+      class="window-titlebar-button is-close"
+      aria-label={LABEL_CLOSE}
+      title={LABEL_CLOSE}
+      onclick={() => void close()}
+    >
+      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+        <path d="M2 2l6 6M8 2L2 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+      </svg>
+    </button>
+  </div>
+</div>

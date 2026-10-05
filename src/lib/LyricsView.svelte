@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onDestroy, tick } from 'svelte';
   import { invokeCommand } from './ipc';
   import type {
@@ -26,6 +26,16 @@
     getLyricsOffset,
     updateLyricsRowHeight,
   } from './lyrics-window.js';
+  import {
+    LYRICS_TIMING_OFFSET_MAX_SEC,
+    LYRICS_TIMING_OFFSET_MIN_SEC,
+    LYRICS_TIMING_OFFSET_STEP_SEC,
+    clampLyricsTimingOffsetSec,
+    formatLyricsTimingOffsetSec,
+    loadLyricsTimingOffsetSec,
+    lyricsTimingDelaySecToOffsetMs,
+    saveLyricsTimingOffsetSec,
+  } from './lyrics-timing-offset.js';
 
   type LyricsApi = {
     getTrack: (args: { trackId: string }) => Promise<LyricsTrackResult>;
@@ -45,6 +55,15 @@
     failedStage: 'load' | 'search' | 'selection' | null;
   };
 
+  export type LyricsTopbarStatus = {
+    source: string;
+    sync: string;
+    canAdjustTiming: boolean;
+    timingPanelOpen: boolean;
+    openManualSelection: () => void;
+    toggleTimingOffset: () => void;
+  };
+
   interface Props {
     trackId: string | null;
     positionMs: number;
@@ -52,7 +71,7 @@
     playbackState?: PlaybackState;
     lyricsPreferences?: LyricsPreferences;
     onPreferencesChange?: (patch: Partial<LyricsPreferences>) => void;
-    onStatusChange?: (status: { source: string; sync: string } | null) => void;
+    onStatusChange?: (status: LyricsTopbarStatus | null) => void;
     api?: LyricsApi;
   }
 
@@ -97,6 +116,8 @@
   let timedSmoothScrolling = false;
   let timedUserScrolling = false;
   let userScrollResetTimer: ReturnType<typeof setTimeout> | null = null;
+  let timingOffsetSec = $state(0);
+  let timingPanelOpen = $state(false);
 
   const controller = createLyricsController({
     api: {
@@ -117,7 +138,11 @@
     viewState.lyrics?.synced ? buildTimedLyricTimeline(lines) : [],
   );
   let activeTimedIndex = $derived(
-    findActiveLyricIndex(timedLines, positionMs, viewState.lyrics?.offsetMs ?? 0),
+    findActiveLyricIndex(
+      timedLines,
+      positionMs,
+      (viewState.lyrics?.offsetMs ?? 0) + lyricsTimingDelaySecToOffsetMs(timingOffsetSec),
+    ),
   );
   let displayActiveTimedIndex = $derived(
     getDisplayActiveLyricIndex(activeTimedIndex, effectivePlaybackState),
@@ -240,10 +265,24 @@
     layoutRevision;
     timedLayout.generation;
     plainLayout.generation;
-    const status = viewState.lyrics
-      ? { source: sourceLabel(viewState.lyrics.source), sync: isTimed ? '同步歌詞' : '純歌詞' }
-      : null;
-    onStatusChange?.(status);
+    timingPanelOpen;
+    timingOffsetSec;
+    const source = viewState.lyrics ? sourceLabel(viewState.lyrics.source) : '尚未載入';
+    const sync = viewState.lyrics ? (isTimed ? '同步歌詞' : '純歌詞') : '沒有歌詞';
+    onStatusChange?.({
+      source,
+      sync,
+      canAdjustTiming: isTimed,
+      timingPanelOpen,
+      openManualSelection: () => {
+        if (!trackId) return;
+        void controller.searchAgain();
+      },
+      toggleTimingOffset: () => {
+        if (!isTimed) return;
+        timingPanelOpen = !timingPanelOpen;
+      },
+    });
   });
 
   $effect(() => {
@@ -272,6 +311,8 @@
     plainScrollTop = 0;
     if (plainViewport) plainViewport.scrollTop = 0;
     if (timedViewport) timedViewport.scrollTop = 0;
+    timingPanelOpen = false;
+    timingOffsetSec = loadLyricsTimingOffsetSec(nextTrackId);
     void controller.setTrack(nextTrackId);
   });
 
@@ -357,7 +398,7 @@
     };
   });
 
-  onDestroy(() => { controller.dispose(); rowObserver?.disconnect(); });
+  onDestroy(() => { onStatusChange?.(null); controller.dispose(); rowObserver?.disconnect(); });
 
   function sourceLabel(source: TrackLyrics['source']): string {
     switch (source) {
@@ -402,6 +443,23 @@
   function selectCandidate(candidateId: string): void {
     void controller.selectCandidate(candidateId);
   }
+
+  function setTimingOffsetSec(next: number): void {
+    timingOffsetSec = saveLyricsTimingOffsetSec(trackId, next);
+  }
+
+  function onTimingOffsetInput(event: Event): void {
+    const target = event.currentTarget as HTMLInputElement;
+    setTimingOffsetSec(Number(target.value));
+  }
+
+  function nudgeTimingOffset(deltaSec: number): void {
+    setTimingOffsetSec(timingOffsetSec + deltaSec);
+  }
+
+  function resetTimingOffset(): void {
+    setTimingOffsetSec(0);
+  }
 </script>
 
 <div
@@ -421,6 +479,34 @@
   {:else if viewState.phase === 'loading' && !viewState.lyrics}
     <p class="lyrics-placeholder" role="status">正在讀取本機與已保存的歌詞…</p>
   {:else}
+    {#if timingPanelOpen && isTimed}
+      <div class="lyrics-timing-panel" role="group" aria-label="歌詞同步延遲" data-testid="lyrics-timing-panel">
+        <div class="lyrics-timing-panel-header">
+          <strong>同步歌詞延遲</strong>
+          <span data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingOffsetSec)}</span>
+          <button type="button" class="lyrics-action secondary" onclick={() => { timingPanelOpen = false; }}>關閉</button>
+        </div>
+        <div class="lyrics-timing-controls">
+          <button type="button" class="lyrics-action secondary" aria-label="延遲減少 0.1 秒" onclick={() => nudgeTimingOffset(-LYRICS_TIMING_OFFSET_STEP_SEC)}>−0.1</button>
+          <input
+            class="lyrics-timing-slider"
+            type="range"
+            min={LYRICS_TIMING_OFFSET_MIN_SEC}
+            max={LYRICS_TIMING_OFFSET_MAX_SEC}
+            step={LYRICS_TIMING_OFFSET_STEP_SEC}
+            value={timingOffsetSec}
+            aria-label="歌詞延遲秒數"
+            aria-valuemin={LYRICS_TIMING_OFFSET_MIN_SEC}
+            aria-valuemax={LYRICS_TIMING_OFFSET_MAX_SEC}
+            aria-valuenow={timingOffsetSec}
+            oninput={onTimingOffsetInput}
+          />
+          <button type="button" class="lyrics-action secondary" aria-label="延遲增加 0.1 秒" onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
+          <button type="button" class="lyrics-action secondary" onclick={resetTimingOffset}>重設</button>
+        </div>
+        <p class="lyrics-timing-hint">正值延後歌詞，負值提前歌詞；範圍 ±5 秒，步進 0.1 秒。</p>
+      </div>
+    {/if}
     {#if viewState.lyrics && isTimed}
       <div
         class="lyrics-lines-viewport timed-lyrics-viewport"
@@ -765,6 +851,55 @@
     line-height: 1.5;
   }
 
+  .lyrics-timing-panel {
+    display: grid;
+    gap: 8px;
+    padding: 10px 10px 8px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--panel, #111) 88%, transparent);
+  }
+
+  .lyrics-timing-panel-header {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .lyrics-timing-panel-header strong {
+    color: var(--text-soft);
+    font-size: 11px;
+    font-weight: 650;
+  }
+
+  .lyrics-timing-panel-header span {
+    margin-right: auto;
+    color: var(--text);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .lyrics-timing-controls {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .lyrics-timing-slider {
+    min-width: 0;
+    flex: 1 1 auto;
+    accent-color: var(--accent);
+  }
+
+  .lyrics-timing-hint {
+    margin: 0;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.5;
+  }
+
   @media (max-width: 560px) {
     .lyrics-candidate {
       align-items: flex-start;
@@ -772,6 +907,10 @@
 
     .lyrics-action {
       padding: 6px 8px;
+    }
+
+    .lyrics-timing-controls {
+      flex-wrap: wrap;
     }
   }
 </style>

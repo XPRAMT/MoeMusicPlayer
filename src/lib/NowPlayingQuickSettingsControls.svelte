@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import type { LyricsPreferences, NowPlayingAppearancePreferences, NowPlayingLayout } from './ipc';
   import NowPlayingLayoutSwitch from './NowPlayingLayoutSwitch.svelte';
 
@@ -33,6 +33,29 @@
     <p class="settings-preference-status" class:error={layoutState === 'error'} role="status">
       {layoutError ?? (layoutState === 'loading' ? '正在讀取正在播放排列…' : layoutState === 'saving' ? '正在保存排列…' : layoutState === 'preview' ? '瀏覽器預覽不會保存排列。' : `排列 ${layout.toUpperCase()} 已保存。`)}
     </p>
+    <div class="cover-corner-setting" role="group" aria-labelledby="cover-corner-style-label">
+      <span id="cover-corner-style-label" class="cover-corner-setting-label"><strong>專輯封面造型</strong></span>
+      <div class="layout-choice-row cover-corner-choice-row">
+        <button
+          type="button"
+          aria-label="專輯封面圓角"
+          aria-pressed={appearance.coverCornerStyle === 'rounded'}
+          class:chosen={appearance.coverCornerStyle === 'rounded'}
+          onclick={() => onAppearanceChange({ coverCornerStyle: 'rounded' }, true)}
+        >
+          <strong>圓角</strong><span>專輯封面使用圓角</span>
+        </button>
+        <button
+          type="button"
+          aria-label="專輯封面方形"
+          aria-pressed={appearance.coverCornerStyle === 'square'}
+          class:chosen={appearance.coverCornerStyle === 'square'}
+          onclick={() => onAppearanceChange({ coverCornerStyle: 'square' }, true)}
+        >
+          <strong>方形</strong><span>專輯封面不圓角</span>
+        </button>
+      </div>
+    </div>
     <div
       class="now-playing-appearance-preview"
       style={`--preview-blur: ${appearance.backgroundBlurPx}px; --preview-background-overlay-alpha: ${(100 - appearance.backgroundBrightnessPercent) / 100};`}

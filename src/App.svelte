@@ -83,6 +83,7 @@
   import PlaybackProgress from './lib/PlaybackProgress.svelte';
   import LyricsView from './lib/LyricsView.svelte';
   import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
+  import WindowTitlebar from './lib/WindowTitlebar.svelte';
   import {
     createActiveTrackArtworkController,
     type ActiveArtworkState,
@@ -126,7 +127,14 @@
   let quickSettingsTrigger = $state<HTMLButtonElement | undefined>(undefined);
   let quickSettingsCloseButton = $state<HTMLButtonElement | undefined>(undefined);
   let quickSettingsDialog = $state<HTMLElement | undefined>(undefined);
-  let lyricsTopbarStatus = $state<{ source: string; sync: string } | null>(null);
+  let lyricsTopbarStatus = $state<{
+    source: string;
+    sync: string;
+    canAdjustTiming: boolean;
+    timingPanelOpen: boolean;
+    openManualSelection: () => void;
+    toggleTimingOffset: () => void;
+  } | null>(null);
   let nowPlayingBackButton = $state<HTMLButtonElement | undefined>(undefined);
   let dockArtworkButton = $state<HTMLButtonElement | undefined>(undefined);
   let librarySearchInput = $state<HTMLInputElement | undefined>(undefined);
@@ -153,6 +161,7 @@
   let settingsRecoveryWarning = $state<string | null>(null);
   let settingsSourceRegistryAuthoritative = $state(true);
   let capabilities = $state<RuntimeCapabilities | null>(null);
+  const showCustomTitlebar = $derived(capabilities?.platform === 'windows');
   let runtimeError = $state<string | null>(null);
   let libraryTrackCount = $state<number | null>(null);
   let libraryListRevision = $state(0);
@@ -1438,9 +1447,13 @@
 <div
   class="app-shell"
   class:has-now-playing-backdrop={isNowPlayingOpen}
+  class:has-custom-titlebar={showCustomTitlebar}
   data-active-view={activeView}
   style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-overlay-alpha: ${(100 - nowPlayingAppearancePreferences.backgroundBrightnessPercent) / 100};`}
 >
+  {#if showCustomTitlebar}
+    <WindowTitlebar transparent={isNowPlayingOpen} />
+  {/if}
   {#if isNowPlayingOpen}
     <div class="now-playing-backdrop" data-testid="now-playing-backdrop" aria-hidden="true">
       {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
@@ -2101,15 +2114,32 @@
           <p class="now-playing-format" aria-label="音質格式">
             <span>{formatTrackColumnValue('audioFormat', playback?.currentTrack ?? {}, () => '—')}</span>
             {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}
-          </p>
-          <p class="now-playing-play-count" aria-label="播放次數">
-            播放次數 {formatTrackColumnValue('playCount', playback?.currentTrack ?? {}, () => '—')}
+            <span class="now-playing-play-count" aria-label="播放次數">
+              播放次數 {formatTrackColumnValue('playCount', playback?.currentTrack ?? {}, () => '—')}
+            </span>
           </p>
         </div>
         <div class="now-playing-topbar-tools">
           {#if lyricsTopbarStatus}
-            <div class="lyrics-topbar-status" aria-label="歌詞來源與同步狀態">
-              <span>{lyricsTopbarStatus.source}</span><span>{lyricsTopbarStatus.sync}</span>
+            <div class="lyrics-topbar-status" role="group" aria-label="歌詞來源與同步操作">
+              <button
+                type="button"
+                class="lyrics-topbar-action"
+                title={`目前來源：${lyricsTopbarStatus.source}（開啟候選以手動指定）`}
+                aria-label="手動指定歌詞"
+                disabled={!playback?.currentTrack}
+                onclick={() => lyricsTopbarStatus?.openManualSelection()}
+              >手動指定</button>
+              <button
+                type="button"
+                class="lyrics-topbar-action"
+                class:is-active={lyricsTopbarStatus.timingPanelOpen}
+                title={lyricsTopbarStatus.canAdjustTiming ? `目前：${lyricsTopbarStatus.sync}（調整延遲 ±5 秒）` : '目前不是同步歌詞，無法調整延遲'}
+                aria-label="同步歌詞延遲調整"
+                aria-pressed={lyricsTopbarStatus.timingPanelOpen}
+                disabled={!lyricsTopbarStatus.canAdjustTiming}
+                onclick={() => lyricsTopbarStatus?.toggleTimingOffset()}
+              >同步歌詞</button>
             </div>
           {/if}
           <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
@@ -2130,6 +2160,7 @@
                   bind:this={coverStageElement}
                   class="cover-stage"
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
+                  class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
                   style:width={coverFrame ? `${coverFrame.width}px` : undefined}
                   style:height={coverFrame ? `${coverFrame.height}px` : undefined}
                 >

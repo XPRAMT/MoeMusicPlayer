@@ -36,6 +36,7 @@ export interface TrackListColumnSettings {
 }
 
 export type NowPlayingLayout = 'a' | 'b';
+export type CoverCornerStyle = 'rounded' | 'square';
 
 export interface LibrarySource {
   id: string;
@@ -295,6 +296,7 @@ export interface LyricsPreferences {
 export interface NowPlayingAppearancePreferences {
   backgroundBlurPx: number;
   backgroundBrightnessPercent: number;
+  coverCornerStyle: CoverCornerStyle;
 }
 
 interface IpcContract {

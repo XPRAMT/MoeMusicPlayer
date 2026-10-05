@@ -95,11 +95,30 @@ impl LyricsPreferences {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverCornerStyle {
+    Rounded,
+    Square,
+}
+
+impl Default for CoverCornerStyle {
+    fn default() -> Self {
+        Self::Rounded
+    }
+}
+
+fn default_cover_corner_style() -> CoverCornerStyle {
+    CoverCornerStyle::Rounded
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NowPlayingAppearancePreferences {
     pub background_blur_px: u8,
     #[serde(default = "default_background_brightness_percent")]
     pub background_brightness_percent: u8,
+    #[serde(default = "default_cover_corner_style")]
+    pub cover_corner_style: CoverCornerStyle,
 }
 
 fn default_background_brightness_percent() -> u8 {
@@ -111,6 +130,7 @@ impl Default for NowPlayingAppearancePreferences {
         Self {
             background_blur_px: 20,
             background_brightness_percent: 40,
+            cover_corner_style: CoverCornerStyle::Rounded,
         }
     }
 }
@@ -1603,7 +1623,8 @@ mod tests {
             "nowPlayingLayout": "a",
             "nowPlayingAppearancePreferences": {
                 "backgroundBlurPx": 20,
-                "backgroundBrightnessPercent": 40
+                "backgroundBrightnessPercent": 40,
+                "coverCornerStyle": "rounded"
             },
             "sourceRegistryAuthoritative": true,
             "sources": []
@@ -1732,6 +1753,10 @@ mod tests {
             persisted["nowPlayingAppearancePreferences"]["backgroundBrightnessPercent"],
             40
         );
+        assert_eq!(
+            persisted["nowPlayingAppearancePreferences"]["coverCornerStyle"],
+            "rounded"
+        );
         assert!(
             persisted["nowPlayingAppearancePreferences"]["surfaceTransparencyPercent"].is_null()
         );
@@ -1745,6 +1770,7 @@ mod tests {
         let preferences = NowPlayingAppearancePreferences {
             background_blur_px: 0,
             background_brightness_percent: 100,
+            cover_corner_style: CoverCornerStyle::Square,
         };
         let saved = store
             .update(|settings| {
@@ -1794,10 +1820,12 @@ mod tests {
         let preferences = NowPlayingAppearancePreferences {
             background_blur_px: 12,
             background_brightness_percent: 67,
+            cover_corner_style: CoverCornerStyle::Square,
         };
         let value = serde_json::to_value(preferences).unwrap();
         assert_eq!(value["backgroundBlurPx"], 12);
         assert_eq!(value["backgroundBrightnessPercent"], 67);
+        assert_eq!(value["coverCornerStyle"], "square");
         assert_eq!(
             serde_json::from_value::<NowPlayingAppearancePreferences>(value).unwrap(),
             preferences
@@ -1806,6 +1834,54 @@ mod tests {
             serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
                 "backgroundBlurPx": -1,
                 "backgroundBrightnessPercent": 50
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_cover_corner_style_defaults_to_rounded_and_rejects_unknown_values() {
+        let directory = test_directory("appearance-cover-corner");
+        let path = directory.join("settings.json");
+        let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        json["schemaVersion"] = serde_json::json!(5);
+        json["nowPlayingAppearancePreferences"] = serde_json::json!({
+            "backgroundBlurPx": 15,
+            "backgroundBrightnessPercent": 55
+        });
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).expect("write settings without cover corner");
+
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("open settings");
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(
+            snapshot.now_playing_appearance_preferences.cover_corner_style,
+            CoverCornerStyle::Rounded
+        );
+
+        let saved = store
+            .update(|settings| {
+                settings.now_playing_appearance_preferences.cover_corner_style =
+                    CoverCornerStyle::Square;
+                Ok(())
+            })
+            .expect("save square corners");
+        assert_eq!(
+            saved.now_playing_appearance_preferences.cover_corner_style,
+            CoverCornerStyle::Square
+        );
+
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            persisted["nowPlayingAppearancePreferences"]["coverCornerStyle"],
+            "square"
+        );
+
+        assert!(
+            serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
+                "backgroundBlurPx": 12,
+                "backgroundBrightnessPercent": 50,
+                "coverCornerStyle": "circle"
             }))
             .is_err()
         );

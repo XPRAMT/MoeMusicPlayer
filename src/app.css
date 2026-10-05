@@ -37,6 +37,7 @@
   --android-safe-top: env(safe-area-inset-top, 0px);
   --android-safe-right: env(safe-area-inset-right, 0px);
   --android-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --window-titlebar-height: 0px;
   font-optical-sizing: auto;
 }
 
@@ -88,6 +89,111 @@ input:focus-visible {
   background: var(--page);
   isolation: isolate;
   padding: var(--android-safe-top) var(--android-safe-right) var(--android-safe-bottom) var(--android-safe-left);
+}
+
+
+.app-shell.has-custom-titlebar {
+  --window-titlebar-height: 32px;
+  padding-top: calc(var(--window-titlebar-height) + var(--android-safe-top));
+}
+
+.window-titlebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  height: var(--window-titlebar-height, 32px);
+  align-items: stretch;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-soft);
+  background: color-mix(in srgb, var(--page) 92%, transparent);
+  backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.window-titlebar.is-transparent {
+  border-bottom-color: color-mix(in srgb, var(--text) 10%, transparent);
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.window-titlebar-drag {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  padding: 0 12px;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.window-titlebar-drag *[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.window-titlebar-label {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.window-titlebar.is-transparent .window-titlebar-label {
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.window-titlebar-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.window-titlebar-button {
+  display: grid;
+  width: 46px;
+  height: 100%;
+  place-items: center;
+  border: 0;
+  color: var(--text-soft);
+  background: transparent;
+  cursor: default;
+}
+
+.window-titlebar-button:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.window-titlebar-button:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
+}
+
+.window-titlebar-button.is-close:hover {
+  color: #fff;
+  background: #e81123;
+}
+
+.app-shell.has-custom-titlebar .now-playing-backdrop {
+  /* Base inset:-48px already covers the 32px titlebar; keep the blur bleed and make the
+     under-chrome intent explicit. Transparent titlebar (z=50) reveals this layer (z=15). */
+  top: -48px;
+  right: -48px;
+  bottom: -48px;
+  left: -48px;
 }
 
 .now-playing-backdrop {
@@ -217,10 +323,12 @@ input:focus-visible {
 }
 
 .now-playing-header-track .now-playing-play-count {
-  margin: 2px 0 0;
-  color: color-mix(in srgb, var(--text) 72%, transparent);
-  font-size: 11px;
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .now-playing-header-track .now-playing-format img {
@@ -262,14 +370,40 @@ input:focus-visible {
   font-size: 10px;
 }
 
-.lyrics-topbar-status span {
+.lyrics-topbar-action {
   max-width: 110px;
   overflow: hidden;
   padding: 4px 7px;
   border: 1px solid var(--line);
   border-radius: 99px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.lyrics-topbar-action:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent-text);
+}
+
+.lyrics-topbar-action.is-active,
+.lyrics-topbar-action[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 12%, var(--page));
+}
+
+.lyrics-topbar-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.lyrics-topbar-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .lyrics-toggle {
@@ -1544,7 +1678,7 @@ input:focus-visible {
   align-self: center;
   place-items: center;
   overflow: hidden;
-  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  border: 0;
   border-radius: 18px;
   background:
     radial-gradient(circle at 50% 50%, rgba(var(--accent-rgb), 0.11) 0 18%, transparent 19%),
@@ -1553,8 +1687,30 @@ input:focus-visible {
 }
 
 .cover-stage.has-artwork {
-  border-color: rgba(var(--accent-rgb), 0.28);
   background: #101216;
+}
+
+.cover-stage.cover-corner-square {
+  border-radius: 0;
+}
+
+.cover-corner-setting {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+
+.cover-corner-setting-label {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.cover-corner-choice-row {
+  margin-bottom: 0;
+}
+
+.cover-corner-choice-row button {
+  min-height: 64px;
 }
 
 .cover-stage-image {
@@ -3171,6 +3327,7 @@ input:focus-visible {
   .pagination-bar { min-height: 43px; font-size: 8px; }
   .now-playing-card { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 16px; padding: 16px; }
   .cover-stage { border-radius: 12px; }
+  .cover-stage.cover-corner-square { border-radius: 0; }
   .cover-wave { gap: 3px; }
   .cover-wave i { width: 2px; }
   .cover-stage-label { bottom: 8px; font-size: 6px; }
