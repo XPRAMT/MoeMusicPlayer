@@ -2728,8 +2728,51 @@ input:focus-visible {
 .dock-track-copy strong,
 .dock-track-copy span {
   overflow: hidden;
+  white-space: nowrap;
+}
+
+.dock-marquee {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.dock-marquee-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  vertical-align: bottom;
+  will-change: transform;
+}
+
+.dock-marquee-text.is-overflowing {
+  max-width: none;
+  text-overflow: clip;
+  padding-right: 1.25em;
+  animation: dock-marquee-scroll 9s linear infinite;
+}
+
+@keyframes dock-marquee-scroll {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(var(--dock-marquee-distance, 0px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-marquee-text.is-overflowing {
+    animation: none;
+    max-width: 100%;
+    padding-right: 0;
+    text-overflow: ellipsis;
+  }
 }
 
 .dock-track-link {
@@ -3128,7 +3171,7 @@ input:focus-visible {
   min-width: 0;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
   margin-right: 10px;
   color: var(--text-soft);
 }
@@ -3139,12 +3182,71 @@ input:focus-visible {
   align-self: center;
 }
 
+.volume-toggle {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.volume-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.volume-toggle:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), 0.72);
+  outline-offset: 2px;
+}
+
+.volume-toggle svg,
 .dock-volume > svg {
   width: 20px;
   height: 20px;
   flex: 0 0 auto;
 }
 
+/* Wide/normal: icon only until expanded. */
+.dock-volume .volume-slider,
+.dock-volume .volume-value {
+  overflow: hidden;
+  width: 0;
+  min-width: 0;
+  flex: 0 0 0;
+  opacity: 0;
+  pointer-events: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.dock-volume.expanded .volume-slider {
+  width: min(120px, 36vw);
+  min-width: 72px;
+  flex: 0 1 120px;
+  height: 24px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dock-volume.expanded .volume-value {
+  width: 31px;
+  flex: 0 0 auto;
+  opacity: 1;
+  pointer-events: auto;
+  color: var(--text-soft);
+  font-family: inherit;
+  font-size: 9px;
+  text-align: right;
+}
 
 .volume-slider {
   width: min(120px, 36%);
@@ -3561,55 +3663,76 @@ input:focus-visible {
   .source-status-copy p { font-size: 8px; }
   .status-pill { padding: 5px 6px; font-size: 8px; }
   .player-dock {
-    min-height: 108px;
+    /* Seek strip + one control band: cover/title with prev/play/next — never two stacked control rows. */
+    min-height: 58px;
     grid-column: 1;
     grid-row: 3;
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: 38px 44px;
-    gap: 1px 8px;
-    padding: 5px 13px 5px;
+    grid-template-rows: 14px minmax(36px, auto);
+    column-gap: 8px;
+    row-gap: 0;
+    padding: 4px 10px;
+    align-items: center;
   }
-  .dock-track { grid-column: 1; grid-row: 1; gap: 8px; }
+  .dock-center {
+    display: contents;
+  }
+  .progress-row {
+    width: 100%;
+    grid-column: 1 / -1;
+    grid-row: 1;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    font-size: 8px;
+  }
+  /* Narrow/vertical: hide elapsed/duration; keep seek track. */
+  .progress-time,
+  .progress-time-elapsed,
+  .progress-time-duration { display: none; }
+  .dock-track {
+    grid-column: 1;
+    grid-row: 2;
+    gap: 6px;
+    min-width: 0;
+    align-self: center;
+  }
   .dock-art { width: 34px; height: 34px; border-radius: 8px; }
   .dock-art svg { width: 18px; height: 18px; }
-  .dock-track-copy { gap: 3px; }
+  .dock-track-copy { gap: 2px; min-width: 0; }
   .dock-track-copy strong { font-size: 9px; }
-  .dock-track-copy span { max-width: 200px; font-size: 8px; }
-  .dock-volume { grid-column: 2; grid-row: 1; gap: 6px; }
-  .dock-volume > svg { width: 17px; height: 17px; }
-  .volume-slider { width: 53px; flex-basis: 53px; }
-  .dock-center { grid-column: 1 / -1; grid-row: 2; grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .dock-controls { height: 29px; gap: clamp(9px, 5vw, 18px); }
+  .dock-track-copy span { max-width: none; font-size: 8px; }
+  .dock-favorite { display: none; }
+  .dock-controls {
+    grid-column: 2;
+    grid-row: 2;
+    height: 32px;
+    gap: 6px;
+    align-self: center;
+    justify-self: end;
+  }
   .control-button { width: 27px; height: 27px; }
   .control-button svg { width: 18px; height: 18px; }
   .play-button { width: 31px; height: 31px; }
   .play-button svg { width: 18px; height: 18px; }
-  .progress-row { width: 100%; grid-template-columns: minmax(0, 1fr); gap: 0; font-size: 8px; }
-  /* Narrow/vertical: hide elapsed/duration to shrink dock; keep seek track. */
-  .progress-time,
-  .progress-time-elapsed,
-  .progress-time-duration { display: none; }
+  /* Hide shuffle / repeat / volume on narrow — keep prev / play / next. */
+  .dock-controls .secondary-control,
+  .dock-volume { display: none !important; }
   .dock-error { top: calc(100% + 2px); }
   .player-dock[data-timeline-style="edge"] {
-    min-height: 100px;
-    grid-template-rows: 36px 40px;
-    padding-top: 5px;
-    padding-bottom: 5px;
+    min-height: 52px;
+    grid-template-rows: minmax(36px, auto);
+    padding-top: 4px;
+    padding-bottom: 4px;
     align-items: center;
   }
   .player-dock[data-timeline-style="edge"] .progress-row {
-    grid-template-rows: 16px;
-  }
-  .player-dock[data-timeline-style="edge"] .dock-volume {
-    margin-right: 12px;
+    position: absolute;
+    grid-row: auto;
+    grid-template-rows: 14px;
   }
   .player-dock[data-timeline-style="edge"] .dock-track,
-  .player-dock[data-timeline-style="edge"] .dock-volume {
-    grid-row: 1;
-  }
   .player-dock[data-timeline-style="edge"] .dock-controls {
-    grid-column: 1 / -1;
-    grid-row: 2;
+    grid-row: 1;
   }
 }
 
@@ -3625,8 +3748,7 @@ input:focus-visible {
   .not-ready-panel { gap: 8px; padding-right: 9px; padding-left: 9px; }
   .track-table-head,
   .track-row { gap: 6px; padding: 0 7px; }
-  .dock-track-copy span { max-width: 160px; }
-  .volume-slider { width: 43px; flex-basis: 43px; }
+  .dock-track-copy { max-width: 42vw; }
 }
 
 @media (max-height: 680px) and (min-width: 621px) {

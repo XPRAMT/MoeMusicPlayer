@@ -210,6 +210,8 @@
   let volumeCommandGeneration = 0;
   let volumeSettledGeneration = 0;
   let confirmedVolume = $state<number | null>(null);
+  let volumeExpanded = $state(false);
+  let volumePanelElement = $state<HTMLElement | null>(null);
   let themeSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let themeSaveQueue: Promise<void> = Promise.resolve();
   let themeRevision = 0;
@@ -1387,6 +1389,39 @@
     volumeCommandQueue.flush();
   }
 
+  function toggleVolumeExpanded(event: MouseEvent): void {
+    event.stopPropagation();
+    volumeExpanded = !volumeExpanded;
+  }
+
+  function handleDockPointerDown(event: PointerEvent): void {
+    if (!volumeExpanded || !volumePanelElement) return;
+    const target = event.target;
+    if (target instanceof Node && volumePanelElement.contains(target)) return;
+    volumeExpanded = false;
+  }
+
+  /** Mark title/artist for CSS marquee only when the text overflows its slot. */
+  function dockMarquee(node: HTMLElement): { destroy: () => void } {
+    const update = (): void => {
+      const parent = node.parentElement;
+      const visible = parent?.clientWidth ?? node.clientWidth;
+      const distance = Math.min(0, visible - node.scrollWidth - 8);
+      const overflowing = distance < -1;
+      node.classList.toggle('is-overflowing', overflowing);
+      node.style.setProperty('--dock-marquee-distance', `${distance}px`);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    if (node.parentElement) observer.observe(node.parentElement);
+    return {
+      destroy() {
+        observer.disconnect();
+      },
+    };
+  }
+
   async function sendPlaybackVolumeCommand(volume: number): Promise<void> {
     if (!playbackReady) return;
     const generation = ++volumeCommandGeneration;
@@ -1468,7 +1503,7 @@
 
 </script>
 
-<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onkeydown={handleQuickSettingsKeydown} />
+<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleDockPointerDown} onkeydown={handleQuickSettingsKeydown} />
 
 <div
   class="app-shell"
@@ -2294,8 +2329,8 @@
           {/if}
         </button>
         <div class="dock-track-copy">
-          <strong>{currentTrackTitle(playback?.currentTrack)}</strong>
-          <span>{currentTrackArtist(playback?.currentTrack)}</span>
+          <strong class="dock-marquee"><span class="dock-marquee-text" use:dockMarquee>{currentTrackTitle(playback?.currentTrack)}</span></strong>
+          <span class="dock-marquee"><span class="dock-marquee-text" use:dockMarquee>{currentTrackArtist(playback?.currentTrack)}</span></span>
         </div>
         <button class="dock-favorite" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
           <IconHeart size={18} stroke={1.6} aria-hidden="true" />
@@ -2343,8 +2378,22 @@
       {#if playbackError || playback?.lastError}<span class="dock-error" role="status">{playbackError ?? playback?.lastError}</span>{/if}
     </div>
 
-    <div class="dock-volume">
-      <IconVolume2 size={20} stroke={1.6} aria-hidden="true" />
+    <div
+      class="dock-volume"
+      class:expanded={volumeExpanded}
+      bind:this={volumePanelElement}
+    >
+      <button
+        class="volume-toggle"
+        type="button"
+        aria-label="音量"
+        aria-expanded={volumeExpanded}
+        title={volumeExpanded ? '收合音量' : '展開音量'}
+        disabled={!playbackReady}
+        onclick={toggleVolumeExpanded}
+      >
+        <IconVolume2 size={20} stroke={1.6} aria-hidden="true" />
+      </button>
       <input
         class="volume-slider"
         type="range"
@@ -2352,13 +2401,14 @@
         max="1"
         step="0.01"
         value={volumeDraft ?? playback?.volume ?? confirmedVolume ?? 0}
-        aria-label="音量"
-        disabled={!playbackReady}
+        aria-label="音量滑桿"
+        tabindex={volumeExpanded ? 0 : -1}
+        disabled={!playbackReady || !volumeExpanded}
         onpointerdown={startVolumeInteraction}
         oninput={setPlaybackVolume}
         onchange={finishVolumeChange}
       />
-      <span class="volume-value">{playback ? formatVolume(volumeDraft ?? playback.volume) : confirmedVolume === null ? '—' : formatVolume(volumeDraft ?? confirmedVolume)}</span>
+      <span class="volume-value" aria-hidden={!volumeExpanded}>{playback ? formatVolume(volumeDraft ?? playback.volume) : confirmedVolume === null ? '—' : formatVolume(volumeDraft ?? confirmedVolume)}</span>
     </div>
   </footer>
 </div>
