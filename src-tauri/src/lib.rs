@@ -6132,6 +6132,7 @@ mod windows_library_integration_tests {
             sample_rate_hz: None,
             year: None,
             bit_depth: None,
+            played_ms: 0,
         });
         let before_playback = serde_json::to_value(service.snapshot())
             .expect("serialize playback snapshot before query");

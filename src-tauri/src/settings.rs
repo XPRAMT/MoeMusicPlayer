@@ -141,6 +141,7 @@ pub enum TrackListColumnId {
     Year,
     AudioFormat,
     Duration,
+    PlayCount,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -168,6 +169,7 @@ impl Default for TrackListColumnSettings {
                 TrackListColumnId::Year,
                 TrackListColumnId::AudioFormat,
                 TrackListColumnId::Duration,
+                TrackListColumnId::PlayCount,
             ]
             .into_iter()
             .map(|id| TrackListColumnPreference { id, visible: true })
@@ -178,10 +180,10 @@ impl Default for TrackListColumnSettings {
 
 impl TrackListColumnSettings {
     fn validate(&self) -> Result<(), SettingsError> {
-        use TrackListColumnId::{Album, Artist, AudioFormat, Duration, Title, Year};
+        use TrackListColumnId::{Album, Artist, AudioFormat, Duration, PlayCount, Title, Year};
 
-        const REQUIRED: [TrackListColumnId; 6] =
-            [Title, Artist, Album, Year, AudioFormat, Duration];
+        const REQUIRED: [TrackListColumnId; 7] =
+            [Title, Artist, Album, Year, AudioFormat, Duration, PlayCount];
         let actual = self
             .columns
             .iter()
@@ -192,11 +194,39 @@ impl TrackListColumnSettings {
             || REQUIRED.iter().any(|id| !actual.contains(id))
         {
             return Err(SettingsError::InvalidData(
-                "track list columns must contain title, artist, album, year, audioFormat, and duration exactly once".into(),
+                "track list columns must contain title, artist, album, year, audioFormat, duration, and playCount exactly once".into(),
             ));
         }
         Ok(())
     }
+}
+
+/// Accept persisted preferences that predate the playCount column.
+fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColumnSettings {
+    use TrackListColumnId::{Album, Artist, AudioFormat, Duration, PlayCount, Title, Year};
+
+    if settings.validate().is_ok() {
+        return settings;
+    }
+
+    const LEGACY: [TrackListColumnId; 6] =
+        [Title, Artist, Album, Year, AudioFormat, Duration];
+    let ids: Vec<_> = settings.columns.iter().map(|column| column.id).collect();
+    let unique: std::collections::HashSet<_> = ids.iter().copied().collect();
+    if ids.len() == LEGACY.len()
+        && unique.len() == LEGACY.len()
+        && LEGACY.iter().all(|id| unique.contains(id))
+        && !unique.contains(&PlayCount)
+    {
+        let mut columns = settings.columns;
+        columns.push(TrackListColumnPreference {
+            id: PlayCount,
+            visible: true,
+        });
+        return TrackListColumnSettings { columns };
+    }
+
+    TrackListColumnSettings::default()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -708,7 +738,9 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         lyrics_preferences: raw.lyrics_preferences.unwrap_or_default(),
         shuffle: raw.shuffle.unwrap_or(false),
         repeat_mode: raw.repeat_mode.unwrap_or(RepeatMode::Off),
-        track_list_columns: raw.track_list_columns.unwrap_or_default(),
+        track_list_columns: repair_track_list_columns(
+            raw.track_list_columns.unwrap_or_default(),
+        ),
         now_playing_layout: raw.now_playing_layout.unwrap_or(NowPlayingLayout::A),
         now_playing_appearance_preferences: raw
             .now_playing_appearance_preferences
@@ -1295,6 +1327,7 @@ mod tests {
                 TrackListColumnId::Year,
                 TrackListColumnId::AudioFormat,
                 TrackListColumnId::Duration,
+                TrackListColumnId::PlayCount,
             ]
             .map(|id| (id, true))
         );
@@ -1535,6 +1568,59 @@ mod tests {
             serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(persisted["schemaVersion"], SETTINGS_SCHEMA_VERSION);
         assert_eq!(persisted["sourceRegistryAuthoritative"], false);
+    }
+
+    #[test]
+    fn legacy_six_column_preferences_gain_play_count_on_load() {
+        let directory = test_directory("legacy-play-count-columns");
+        let path = directory.join("settings.json");
+        let legacy = serde_json::json!({
+            "schemaVersion": SETTINGS_SCHEMA_VERSION,
+            "theme": {
+                "backgroundHex": "#000000",
+                "accentHex": "#55D9FF"
+            },
+            "lyricsPreferences": {
+                "showTranslation": false,
+                "showRomanization": false,
+                "inactiveOpacityPercent": 70,
+                "primaryFontSizePx": 14,
+                "auxiliaryFontSizePx": 10,
+                "lineGapPx": 24
+            },
+            "shuffle": false,
+            "repeatMode": "off",
+            "trackListColumns": {
+                "columns": [
+                    { "id": "title", "visible": true },
+                    { "id": "artist", "visible": false },
+                    { "id": "album", "visible": true },
+                    { "id": "year", "visible": true },
+                    { "id": "audioFormat", "visible": true },
+                    { "id": "duration", "visible": true }
+                ]
+            },
+            "nowPlayingLayout": "a",
+            "nowPlayingAppearancePreferences": {
+                "backgroundBlurPx": 20,
+                "backgroundBrightnessPercent": 40
+            },
+            "sourceRegistryAuthoritative": true,
+            "sources": []
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).expect("write legacy");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("open repaired");
+        let columns = store.snapshot().unwrap().track_list_columns.columns;
+        assert_eq!(columns.len(), 7);
+        assert_eq!(columns[1].id, TrackListColumnId::Artist);
+        assert!(!columns[1].visible);
+        assert_eq!(columns[6].id, TrackListColumnId::PlayCount);
+        assert!(columns[6].visible);
+        TrackListColumnSettings {
+            columns: columns.clone(),
+        }
+        .validate()
+        .expect("repaired columns validate");
     }
 
     #[test]

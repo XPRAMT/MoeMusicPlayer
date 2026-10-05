@@ -147,6 +147,7 @@
             { id: 'year', visible: true },
             { id: 'audioFormat', visible: true },
             { id: 'duration', visible: true },
+            { id: 'playCount', visible: true },
           ] };
         case 'settings_get_now_playing_layout':
           return storedNowPlayingLayout;

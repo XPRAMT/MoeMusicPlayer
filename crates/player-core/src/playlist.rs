@@ -102,6 +102,8 @@ pub struct PlaylistEntrySummary {
     pub sample_rate_hz: Option<u32>,
     pub year: Option<u16>,
     pub bit_depth: Option<u8>,
+    /// Cumulative credited listening time; 0 when unmatched or never played.
+    pub played_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
