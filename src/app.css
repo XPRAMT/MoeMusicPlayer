@@ -2814,10 +2814,10 @@ input:focus-visible {
 /* timelineStyle=edge only: pin the painted track onto the content↔dock border-top.
    Default line keeps pre-feature placement (under transport / NP row 1 inside the dock). */
 .player-dock[data-timeline-style="edge"] {
-  /* Only clear the time row under the edge track (~12–14px); keep bottom tight so the control row centers below. */
+  /* No extra top pad for time labels — labels may overlap the control band. Symmetric pad so controls center under the edge track. */
   min-height: 64px;
-  padding-top: 14px;
-  padding-bottom: 6px;
+  padding-top: 5px;
+  padding-bottom: 5px;
   align-items: center;
 }
 
@@ -2830,7 +2830,7 @@ input:focus-visible {
   top: 0;
   left: 0;
   right: 0;
-  z-index: 6;
+  z-index: 7;
   box-sizing: border-box;
   display: grid;
   width: 100%;
@@ -3589,8 +3589,8 @@ input:focus-visible {
   .player-dock[data-timeline-style="edge"] {
     min-height: 108px;
     grid-template-rows: 38px 42px;
-    padding-top: 14px;
-    padding-bottom: 6px;
+    padding-top: 5px;
+    padding-bottom: 5px;
     align-items: center;
   }
   .player-dock[data-timeline-style="edge"] .dock-volume {
