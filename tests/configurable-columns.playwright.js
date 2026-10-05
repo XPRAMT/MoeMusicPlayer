@@ -1,6 +1,6 @@
-﻿async page => {
+async page => {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
-  const defaultOrder = ['title', 'artist', 'album', 'year', 'audioFormat', 'duration'];
+  const defaultOrder = ['title', 'artist', 'album', 'year', 'audioFormat', 'duration', 'playCount'];
   const groupName = '正在播放頁排列';
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto('http://127.0.0.1:4173/tests/configurable-columns-harness.html');
@@ -13,8 +13,8 @@
   assert(JSON.stringify(state.playlist.header) === JSON.stringify(defaultOrder), 'playlist default header order differs');
   for (const [name, list] of [['library', state.library], ['playlist', state.playlist]]) {
     assert(JSON.stringify(list.skeleton) === JSON.stringify(defaultOrder), name + ' skeleton columns differ');
-    assert(list.headerCellCount === 8 && list.rowCellCount === 8, name + ' fixed/skeleton cells not synchronized');
-    assert(list.ariaColumnCount === '8', name + ' aria-colcount does not match default grid');
+    assert(list.headerCellCount === 9 && list.rowCellCount === 9, name + ' fixed/skeleton cells not synchronized');
+    assert(list.ariaColumnCount === '9', name + ' aria-colcount does not match default grid');
     assert(list.scrollWidth > list.clientWidth, name + ' list does not contain its own horizontal scrolling');
   }
   assert(mobileMetrics.documentWidth <= mobileMetrics.viewportWidth, 'outer page horizontally overflows at 360px');
@@ -24,6 +24,7 @@
   const moved = [
     { id: 'artist', visible: true }, { id: 'title', visible: true }, { id: 'album', visible: true },
     { id: 'year', visible: true }, { id: 'duration', visible: true }, { id: 'audioFormat', visible: true },
+    { id: 'playCount', visible: true },
   ];
   await page.evaluate(columns => window.configurableColumnsHarness.setColumns(columns), moved);
   state = await page.evaluate(() => window.configurableColumnsHarness.snapshot());
@@ -40,8 +41,8 @@
   for (const [name, list] of [['library', state.library], ['playlist', state.playlist]]) {
     assert(JSON.stringify(list.header) === JSON.stringify(movedOrder), name + ' loaded header order not applied');
     assert(JSON.stringify(list.row) === JSON.stringify(movedOrder), name + ' loaded row order differs from header');
-    assert(list.headerCellCount === 8 && list.rowCellCount === 8, name + ' loaded cell count mismatch');
-    assert(list.ariaColumnCount === '8', name + ' loaded aria-colcount mismatch');
+    assert(list.headerCellCount === 9 && list.rowCellCount === 9, name + ' loaded cell count mismatch');
+    assert(list.ariaColumnCount === '9', name + ' loaded aria-colcount mismatch');
   }
 
   const missing = await page.locator('.playlist-entry-row').filter({ hasText: 'M3U 項目' }).evaluate(row => ({
@@ -49,7 +50,7 @@
     artistSubtitles: row.querySelectorAll('.playlist-entry-title small').length,
   }));
   assert(missing.artistSubtitles === 0, 'playlist title duplicates artist as a subtitle');
-  for (const id of ['artist', 'album', 'year', 'audioFormat', 'duration']) {
+  for (const id of ['artist', 'album', 'year', 'audioFormat', 'duration', 'playCount']) {
     assert(missing.cells.find(cell => cell.className.includes('list-column-' + id))?.text === '—', 'unmatched playlist ' + id + ' lacks placeholder');
   }
 

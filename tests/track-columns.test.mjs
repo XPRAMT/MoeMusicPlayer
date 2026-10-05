@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   DEFAULT_TRACK_COLUMN_PREFERENCES,
   formatAudioFormat,
+  formatPlayCount,
   formatTrackColumnValue,
   formatYear,
   isHiResTrack,
@@ -19,30 +20,30 @@ const formatDuration = (value) => `${Math.floor(value / 60_000)}:${String(Math.f
 
 test('default list columns are shared and keep index/play as fixed extra columns', () => {
   assert.deepEqual(DEFAULT_TRACK_COLUMN_PREFERENCES.map(({ id }) => id), [
-    'title', 'artist', 'album', 'year', 'audioFormat', 'duration',
+    'title', 'artist', 'album', 'year', 'audioFormat', 'duration', 'playCount',
   ]);
-  assert.equal(trackListColumnCount(DEFAULT_TRACK_COLUMN_PREFERENCES), 8);
-  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ').length, 8);
+  assert.equal(trackListColumnCount(DEFAULT_TRACK_COLUMN_PREFERENCES), 9);
+  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ').length, 9);
 });
 
 test('column order can move the first and last information columns without moving fixed actions', () => {
   const movedFirst = moveTrackColumn(DEFAULT_TRACK_COLUMN_PREFERENCES, 'title', 'down');
   assert.deepEqual(movedFirst.map(({ id }) => id), [
-    'artist', 'title', 'album', 'year', 'audioFormat', 'duration',
+    'artist', 'title', 'album', 'year', 'audioFormat', 'duration', 'playCount',
   ]);
-  const movedLast = moveTrackColumn(movedFirst, 'duration', 'up');
+  const movedLast = moveTrackColumn(movedFirst, 'playCount', 'up');
   assert.deepEqual(movedLast.map(({ id }) => id), [
-    'artist', 'title', 'album', 'year', 'duration', 'audioFormat',
+    'artist', 'title', 'album', 'year', 'audioFormat', 'playCount', 'duration',
   ]);
   assert.deepEqual(moveTrackColumn(movedLast, 'artist', 'up'), movedLast);
-  assert.deepEqual(moveTrackColumn(movedLast, 'audioFormat', 'down'), movedLast);
+  assert.deepEqual(moveTrackColumn(movedLast, 'duration', 'down'), movedLast);
   assert.equal(trackListGridTemplate(movedLast).split(' ').at(0), '42px');
   assert.equal(trackListGridTemplate(movedLast).split(' ').at(-1), '42px');
 });
 
 test('visibility omits any information column from rows, skeletons, header count and grid template', () => {
   let preferences = DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column }));
-  for (const id of ['title', 'artist', 'album', 'year', 'audioFormat', 'duration']) {
+  for (const id of ['title', 'artist', 'album', 'year', 'audioFormat', 'duration', 'playCount']) {
     preferences = setTrackColumnVisibility(preferences, id, false);
     const visible = visibleTrackColumns(preferences);
     assert.equal(visible.some((column) => column.id === id), false);
@@ -105,11 +106,23 @@ test('playlist entries show placeholders for missing metadata without an artist 
     bitrateBps: null,
     durationMs: null,
   };
-  for (const id of ['artist', 'album', 'year', 'audioFormat', 'duration']) {
+  for (const id of ['artist', 'album', 'year', 'audioFormat', 'duration', 'playCount']) {
     assert.equal(formatTrackColumnValue(id, missing, formatDuration, '未命名項目'), '—');
   }
   assert.equal(formatTrackColumnValue('title', missing, formatDuration, '未命名項目'), '未命名項目');
   assert.equal(formatTrackColumnValue('artist', { ...missing, artist: 'hanser' }, formatDuration), 'hanser');
+});
+
+test('play count is played_ms / duration_ms with tidy precision', () => {
+  assert.equal(formatPlayCount(130_000, 100_000), '1.3');
+  assert.equal(formatPlayCount(200_000, 100_000), '2');
+  assert.equal(formatPlayCount(0, 100_000), '0');
+  assert.equal(formatPlayCount(50_000, 0), '—');
+  assert.equal(formatPlayCount(50_000, null), '—');
+  assert.equal(formatPlayCount(50_000, undefined), '—');
+  assert.equal(formatPlayCount(undefined, 100_000), '0');
+  assert.equal(formatTrackColumnValue('playCount', { playedMs: 130_000, durationMs: 100_000 }, formatDuration), '1.3');
+  assert.equal(formatTrackColumnValue('playCount', { playedMs: 10, durationMs: null }, formatDuration), '—');
 });
 
 test('Now Playing A and B keep artwork/lyrics order when stacked', () => {

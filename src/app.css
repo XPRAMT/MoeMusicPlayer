@@ -216,6 +216,13 @@ input:focus-visible {
   font-size: 10px;
 }
 
+.now-playing-header-track .now-playing-play-count {
+  margin: 2px 0 0;
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .now-playing-header-track .now-playing-format img {
   width: 22px;
   height: 12px;
@@ -1198,6 +1205,12 @@ input:focus-visible {
 }
 
 .list-column-duration {
+  font-family: 'DM Mono', monospace;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.list-column-playCount {
   font-family: 'DM Mono', monospace;
   text-align: right;
   font-variant-numeric: tabular-nums;

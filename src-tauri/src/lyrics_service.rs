@@ -1142,6 +1142,7 @@ mod tests {
             sample_rate_hz: None,
             year: None,
             bit_depth: None,
+            played_ms: 0,
         }
     }
 

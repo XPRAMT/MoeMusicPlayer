@@ -2102,6 +2102,9 @@
             <span>{formatTrackColumnValue('audioFormat', playback?.currentTrack ?? {}, () => '—')}</span>
             {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}
           </p>
+          <p class="now-playing-play-count" aria-label="播放次數">
+            播放次數 {formatTrackColumnValue('playCount', playback?.currentTrack ?? {}, () => '—')}
+          </p>
         </div>
         <div class="now-playing-topbar-tools">
           {#if lyricsTopbarStatus}

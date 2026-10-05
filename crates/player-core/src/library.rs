@@ -313,6 +313,8 @@ pub struct TrackSummary {
     pub sample_rate_hz: Option<u32>,
     pub year: Option<u16>,
     pub bit_depth: Option<u8>,
+    /// Cumulative credited listening time from `track_playback_statistics`.
+    pub played_ms: u64,
 }
 
 /// Fields which the user is allowed to override independently of source metadata.

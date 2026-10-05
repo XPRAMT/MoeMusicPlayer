@@ -1,4 +1,4 @@
-﻿/** @typedef {'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration'} TrackColumnId */
+/** @typedef {'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
 
 /** @type {ReadonlyArray<{ id: TrackColumnId, label: string, min: string }>} */
@@ -9,6 +9,7 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'year', label: '年份', min: '62px' },
   { id: 'audioFormat', label: '音訊格式', min: 'minmax(175px,1.35fr)' },
   { id: 'duration', label: '長度', min: '70px' },
+  { id: 'playCount', label: '播放次數', min: '78px' },
 ]);
 
 /** @type {TrackColumnPreference[]} */
@@ -90,6 +91,24 @@ export function setTrackColumnVisibility(preferences, id, visible) {
   );
 }
 
+/**
+ * play_count = played_ms / duration_ms. Unknown or zero duration shows an em dash.
+ * @param {unknown} playedMs
+ * @param {unknown} durationMs
+ */
+export function formatPlayCount(playedMs, durationMs) {
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return '—';
+  }
+  const played = typeof playedMs === 'number' && Number.isFinite(playedMs) && playedMs > 0
+    ? playedMs
+    : 0;
+  const ratio = played / durationMs;
+  if (!Number.isFinite(ratio) || ratio < 0) return '—';
+  const rounded = Math.round(ratio * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
 /** @param {unknown} value */
 export function formatYear(value) {
   if (typeof value === 'number') {
@@ -145,7 +164,7 @@ export function isHiResTrack(item) {
 
 /**
  * @param {TrackColumnId} id
- * @param {{ title?: string | null, artist?: string | null, album?: string | null, year?: number | string | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null }} item
+ * @param {{ title?: string | null, artist?: string | null, album?: string | null, year?: number | string | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null }} item
  * @param {(durationMs: number | null | undefined) => string} formatDuration
  * @param {string} titleFallback
  */
@@ -165,6 +184,8 @@ export function formatTrackColumnValue(id, item, formatDuration, titleFallback =
       return item.durationMs === null || item.durationMs === undefined
         ? '—'
         : formatDuration(item.durationMs);
+    case 'playCount':
+      return formatPlayCount(item.playedMs, item.durationMs);
   }
 }
 

@@ -24,7 +24,7 @@ export interface ThemePreferences {
   accentHex: string;
 }
 
-export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration';
+export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount';
 
 export interface TrackListColumnPreference {
   id: TrackListColumnId;
@@ -126,6 +126,8 @@ export interface TrackSummary {
   sampleRateHz: number | null;
   year?: number | null;
   bitDepth?: number | null;
+  /** Cumulative credited listening time in milliseconds. */
+  playedMs?: number | null;
 }
 
 export interface TrackPage {
@@ -166,6 +168,7 @@ export interface PlaylistEntrySummary {
   sampleRateHz?: number | null;
   bitDepth?: number | null;
   bitrateBps?: number | null;
+  playedMs?: number | null;
 }
 
 export interface PlaylistPage {

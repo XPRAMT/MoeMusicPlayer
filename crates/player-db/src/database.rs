@@ -54,7 +54,8 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
-    t.year, t.bit_depth
+    t.year, t.bit_depth,
+    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=t.track_id)
    AND (?1 IS NULL
@@ -73,7 +74,8 @@ const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
-    t.year, t.bit_depth
+    t.year, t.bit_depth,
+    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
  FROM tracks t WHERE t.track_id=?1";
 const PLAYLIST_PAGE_SQL: &str = r#"
 WITH resolved_entries AS (
@@ -104,7 +106,8 @@ SELECT e.position, e.track_id,
            SELECT 1 FROM source_mappings m
            JOIN library_roots r ON r.source_id=m.source_id
            WHERE m.track_id=e.track_id AND r.enabled=1
-       )
+       ),
+       COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0)
 FROM resolved_entries e
 LEFT JOIN tracks t ON t.track_id=e.track_id
 ORDER BY e.position
@@ -1163,6 +1166,7 @@ impl Database {
                     row.get::<_, Option<i64>>(9)?,
                     row.get::<_, Option<i64>>(10)?,
                     row.get::<_, bool>(11)?,
+                    row.get::<_, i64>(12)?,
                 ))
             },
         )?;
@@ -1181,6 +1185,7 @@ impl Database {
                     year,
                     bit_depth,
                     has_enabled_mapping,
+                    played_ms,
                 ) = row?;
                 let position = u64::try_from(position).map_err(|_| {
                     DatabaseError::CorruptData("negative playlist entry position".to_owned())
@@ -1195,6 +1200,9 @@ impl Database {
                         })
                     })
                     .transpose()?;
+                let played_ms = u64::try_from(played_ms.max(0)).map_err(|_| {
+                    DatabaseError::CorruptData("playlist played_ms is negative".to_owned())
+                })?;
                 Ok(PlaylistEntrySummary {
                     position,
                     track_id,
@@ -1212,6 +1220,7 @@ impl Database {
                     bit_depth: bit_depth
                         .and_then(|value| u8::try_from(value).ok())
                         .filter(|value| *value > 0),
+                    played_ms,
                 })
             })
             .collect::<Result<Vec<_>, DatabaseError>>()?;
@@ -2618,6 +2627,7 @@ fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummar
             .get::<_, Option<i64>>(12)?
             .and_then(|value| u8::try_from(value).ok())
             .filter(|value| *value > 0),
+        played_ms: row.get::<_, i64>(13)?.max(0) as u64,
     })
 }
 
