@@ -5634,10 +5634,13 @@ pub fn run() {
                 window.set_title("MoeMusicPlayer")?;
                 #[cfg(target_os = "windows")]
                 window.set_always_on_top(false)?;
+                // Window starts with visible:false so we can apply saved geometry before first paint.
                 #[cfg(target_os = "windows")]
                 if let Some(geometry) = initial_settings.window_geometry.clone() {
                     apply_saved_window_geometry(&window, geometry);
                 }
+                window.show()?;
+                let _ = window.set_focus();
             }
             Ok(())
         })
