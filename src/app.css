@@ -2895,19 +2895,24 @@ input:focus-visible {
 .player-dock[data-timeline-style="edge"] .progress-row {
   position: absolute;
   top: 0;
-  /* Full dock border-box width (bleed through horizontal padding). */
+  /* Track bleeds full dock width; time labels keep dock-pad inset (not window-flush). */
   left: calc(-1 * var(--dock-pad-x));
   right: calc(-1 * var(--dock-pad-x));
   z-index: 7;
   box-sizing: border-box;
-  display: block;
+  display: grid;
   width: auto;
   max-width: none;
-  height: 16px;
-  margin: -8px 0 0;
+  height: auto;
+  margin-top: -8px;
   padding: 0;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 16px auto;
+  align-items: center;
+  column-gap: 0;
+  row-gap: 1px;
   pointer-events: none;
-  grid-column: auto;
+  grid-column: 1 / -1;
   grid-row: auto;
   justify-self: stretch;
   overflow: visible;
@@ -2918,39 +2923,41 @@ input:focus-visible {
 }
 
 .player-dock[data-timeline-style="edge"] .progress-slider {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  position: static;
+  grid-column: 1 / -1;
+  grid-row: 1;
   width: 100%;
   height: 16px;
   margin: 0;
   border-radius: 0;
 }
 
-/* Times sit directly under the edge track (not in a growing grid row). */
+/* Under full-width track; horizontal inset matches dock padding (pre-full-bleed labels). */
 .player-dock[data-timeline-style="edge"] .progress-time-elapsed,
 .player-dock[data-timeline-style="edge"] .progress-time-duration {
-  position: absolute;
-  top: calc(100% + 1px);
+  position: static;
   z-index: 1;
   width: auto;
   margin: 0;
-  padding: 0;
   line-height: 1;
   white-space: nowrap;
-  pointer-events: none;
 }
 
 .player-dock[data-timeline-style="edge"] .progress-time-elapsed {
-  left: max(var(--dock-pad-x), 12px);
-  right: auto;
+  grid-column: 1;
+  grid-row: 2;
+  justify-self: start;
+  padding-left: var(--dock-pad-x);
+  padding-right: 0;
   text-align: left;
 }
 
 .player-dock[data-timeline-style="edge"] .progress-time-duration {
-  right: max(var(--dock-pad-x), 12px);
-  left: auto;
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: end;
+  padding-right: var(--dock-pad-x);
+  padding-left: 0;
   text-align: right;
 }
 
@@ -3136,6 +3143,7 @@ input:focus-visible {
 }
 
 .player-dock[data-timeline-style="line"] .progress-time-elapsed {
+  position: static;
   grid-column: 1;
   grid-row: 1;
   justify-self: end;
@@ -3150,6 +3158,7 @@ input:focus-visible {
 }
 
 .player-dock[data-timeline-style="line"] .progress-time-duration {
+  position: static;
   grid-column: 3;
   grid-row: 1;
   justify-self: start;
@@ -3777,19 +3786,21 @@ input:focus-visible {
    Cover = fixed player-dock content height (never viewport/% chain), square, no radius. */
 @media (max-width: 520px) {
   .app-shell:not(.has-now-playing-backdrop) .player-dock {
+    /* Keep label inset token even when side pad is 0 (times hidden in stage2). */
     --dock-pad-x: 0px;
+    --dock-label-inset: 12px;
     /* Explicit dock content-box height — art sizes to this, not 100%/100vh ancestors. */
     --dock-hide-height: 56px;
     box-sizing: border-box;
     height: var(--dock-hide-height);
     min-height: var(--dock-hide-height);
     max-height: var(--dock-hide-height);
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    /* Track left, transport right (靠右) — no centering spacer. */
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-rows: minmax(0, 1fr);
     align-items: center;
     padding-top: 0;
     padding-bottom: 0;
-    /* Keep visible so edge progress can bleed onto the border; art is size-capped instead. */
     overflow: visible;
   }
   .app-shell:not(.has-now-playing-backdrop) .dock-center {
@@ -3843,21 +3854,21 @@ input:focus-visible {
     height: auto;
     gap: 6px;
     align-self: center;
-    justify-self: center;
+    justify-self: end;
+    margin-right: 8px;
   }
   .app-shell:not(.has-now-playing-backdrop) .dock-spacer {
-    grid-column: 3;
-    grid-row: 1;
+    display: none;
   }
   .app-shell:not(.has-now-playing-backdrop) .dock-controls .secondary-control {
     display: none !important;
   }
-  /* Edge: progress stays absolute on border; times already hidden; no extra flow row. */
+  /* Edge: progress stays absolute on border; times already hidden. */
   .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="edge"] .progress-row {
     position: absolute;
     left: 0;
     right: 0;
-    height: 14px;
+    grid-column: 1 / -1;
   }
   /* Line: progress overlays top of the fixed dock (does not grow dock / art). */
   .app-shell:not(.has-now-playing-backdrop) .player-dock[data-timeline-style="line"] .progress-row {
