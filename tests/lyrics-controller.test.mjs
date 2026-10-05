@@ -361,7 +361,7 @@ test('QQ QRC-only candidates explain unavailable preview and remain manually sel
   };
   assert.deepEqual(getCandidatePresentation(candidate), {
     formatLabel: 'QRC 尚未解碼',
-    previewNotice: '原始 QRC 尚未解碼，目前無法預覽；仍可使用「使用這份」保存。',
+    previewNotice: '原始 QRC 尚未解碼，目前無法預覽；仍可使用「選擇」保存。',
   });
 
   const calls = [];
@@ -470,3 +470,25 @@ test('manual searchAgain keeps selection open when lyrics already exist', async 
   controller.dispose();
 });
 
+
+
+test('searchAgain forwards optional query to lyrics_search', async () => {
+  const calls = [];
+  const controller = createLyricsController({
+    api: {
+      getTrack: async () => emptyResult(),
+      search: async (args) => { calls.push(['search', args]); return emptyResult(); },
+      selectCandidate: async () => { throw new Error('unused'); },
+      cancelSearch: async () => {},
+    },
+    onChange() {},
+    createRequestId: () => 'request-q',
+  });
+  void controller.setTrack('track-q');
+  await Promise.resolve();
+  await Promise.resolve();
+  calls.length = 0;
+  await controller.searchAgain({ query: '  春日影  ' });
+  assert.deepEqual(calls, [['search', { trackId: 'track-q', requestId: 'request-q', manual: true, query: '春日影' }]]);
+  controller.dispose();
+});

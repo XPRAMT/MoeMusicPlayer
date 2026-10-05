@@ -452,7 +452,9 @@ async page => {
     const sourceAspect = state.coverSource[0] / state.coverSource[1];
     assert.ok(Math.abs(stageAspect - sourceAspect) <= 0.02, `1920x1080: cover frame ${state.cover.width}x${state.cover.height} must match ${state.coverSource[0]}x${state.coverSource[1]} artwork`);
     assert.deepEqual(state.copyChildren, [], 'no title, artist, album, or format copy should sit below the cover');
-    assert.deepEqual(state.trackFields.map((field) => field.field), ['title', 'artist', 'album'], 'topbar exposes title, artist, and album category links');
+    assert.deepEqual(state.trackFields.map((field) => field.field), ['artist', 'album', 'title'], 'topbar order is artist, album, then title');
+  assert.equal(await page.locator('.now-playing-track-info [data-track-field="title"]').evaluate((el) => el.tagName), 'SPAN', 'title is display-only and not a navigation button');
+  assert.equal(await page.locator('.now-playing-track-info button[data-track-field="title"]').count(), 0, 'title has no clickable filter button');
     assert.ok(state.formatText.includes('FLAC．48 kHz．24 bit'), 'format summary should use the shared full-width separator formatter');
     assert.equal(state.hiResBadge?.alt, 'Hi-Res', 'Hi-Res badge should have accessible alternative text');
     assert.ok(state.hiResBadge?.complete && state.hiResBadge.naturalWidth > 0, 'Hi-Res badge image should load for qualifying source depth');
@@ -512,7 +514,6 @@ async page => {
   await page.setViewportSize({ width: 1280, height: 800 });
 
   for (const [field, value] of [
-    ['title', 'Volume Slider Test'],
     ['artist', 'hanser feat. 合作演出者'],
     ['album', 'hanser Cover'],
   ]) {
@@ -548,7 +549,7 @@ async page => {
     assert.equal(navigation.view, 'library', `${field}: metadata link closes Now Playing into the library`);
     assert.equal(navigation.query, '', `${field}: exact field category does not become an ambiguous fuzzy query`);
     assert.deepEqual(navigation.request.fieldFilter, { field, value }, `${field}: exact full value is sent as a separate field filter`);
-    assert.equal(navigation.firstRow, value === 'Volume Slider Test' ? value : 'Volume Slider Test', `${field}: harness returns the exact matched row`);
+    assert.equal(navigation.firstRow, 'Volume Slider Test', `${field}: harness returns the exact matched row`);
     assert.equal(navigation.playState, true, `${field}: closing and filtering preserves playback`);
     assert.equal(navigation.trackId, await page.evaluate(() => window.__fieldNavigationNodes.snapshot.currentTrack.id), `${field}: filtering preserves the current track`);
     assert.equal(navigation.lyricsGetCount, await page.evaluate(() => window.__fieldNavigationNodes.lyricsGetCount), `${field}: filtering does not reload lyrics`);

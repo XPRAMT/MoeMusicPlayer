@@ -461,7 +461,7 @@ interface IpcContract {
     result: LyricsTrackResult;
   };
   lyrics_search: {
-    args: { trackId: string; requestId: string; manual?: boolean };
+    args: { trackId: string; requestId: string; manual?: boolean; query?: string };
     result: LyricsTrackResult;
   };
   lyrics_select_candidate: {

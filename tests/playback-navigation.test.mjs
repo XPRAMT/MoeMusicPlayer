@@ -5,11 +5,12 @@ import path from 'node:path';
 import test from 'node:test';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const appSource = readFileSync(path.join(root, 'src/App.svelte'), 'utf8');
-const appStyles = readFileSync(path.join(root, 'src/app.css'), 'utf8');
-const trackListSource = readFileSync(path.join(root, 'src/lib/TrackList.svelte'), 'utf8');
-const playlistEntrySource = readFileSync(path.join(root, 'src/lib/PlaylistEntryList.svelte'), 'utf8');
-const playlistTreeSource = readFileSync(path.join(root, 'src/lib/PlaylistTree.svelte'), 'utf8');
+const readSource = (relativePath) => readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
+const appSource = readSource('src/App.svelte');
+const appStyles = readSource('src/app.css');
+const trackListSource = readSource('src/lib/TrackList.svelte');
+const playlistEntrySource = readSource('src/lib/PlaylistEntryList.svelte');
+const playlistTreeSource = readSource('src/lib/PlaylistTree.svelte');
 
 function functionSource(startText, endText) {
   const start = appSource.indexOf(startText);

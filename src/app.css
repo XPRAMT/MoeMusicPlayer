@@ -310,9 +310,20 @@ input:focus-visible {
   cursor: default;
 }
 
-.now-playing-track-info > span {
+.now-playing-track-info > .now-playing-track-sep {
   flex: 0 0 auto;
   color: var(--muted);
+}
+
+.now-playing-track-info > .now-playing-track-title {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
 }
 
 .now-playing-header-track .now-playing-format {
@@ -1644,11 +1655,21 @@ input:focus-visible {
   max-height: none;
 }
 
+/* Match cover height exactly; avoid min(100%) which shrinks under lyrics-pane padding. */
+.now-playing-lyrics:has(.lyrics-candidates) {
+  justify-content: center;
+  padding-block: 0;
+}
+
 .now-playing-lyrics .lyrics-candidates {
-  flex: 1 1 auto;
-  min-height: 0;
-  height: var(--np-cover-height, 100%);
-  max-height: min(100%, var(--np-cover-height, 100%));
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--np-cover-height, min(50vh, 480px));
+  min-height: var(--np-cover-height, 0);
+  max-height: var(--np-cover-height, min(50vh, 480px));
+  border: 0;
+  background: transparent;
 }
 
 .lyrics-panel-heading h3 {
@@ -2885,13 +2906,20 @@ input:focus-visible {
   align-items: center;
   gap: 8px;
   color: var(--text-soft);
-  font-family: 'DM Mono', monospace;
-  font-size: 8px;
+  font-family: inherit;
+  font-size: 9px;
   text-align: center;
 }
 
 .app-shell.has-now-playing-backdrop .dock-track-copy {
   gap: 5px;
+}
+
+.app-shell.has-now-playing-backdrop .progress-row,
+.app-shell.has-now-playing-backdrop .volume-state,
+.app-shell.has-now-playing-backdrop .volume-value {
+  font-family: inherit;
+  font-size: 12px;
 }
 
 .progress-slider,
@@ -2972,8 +3000,8 @@ input:focus-visible {
   width: 31px;
   flex: 0 0 auto;
   color: var(--text-soft);
-  font-family: 'DM Mono', monospace;
-  font-size: 8px;
+  font-family: inherit;
+  font-size: 9px;
   text-align: right;
 }
 
@@ -3402,7 +3430,7 @@ input:focus-visible {
   .control-button svg { width: 18px; height: 18px; }
   .play-button { width: 31px; height: 31px; }
   .play-button svg { width: 18px; height: 18px; }
-  .progress-row { width: 100%; grid-template-columns: 31px minmax(0, 1fr) 31px; gap: 7px; font-size: 7px; }
+  .progress-row { width: 100%; grid-template-columns: 31px minmax(0, 1fr) 31px; gap: 7px; font-size: 8px; }
   .dock-error { top: calc(100% + 2px); }
 }
 

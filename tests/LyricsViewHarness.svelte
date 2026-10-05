@@ -117,7 +117,7 @@
   const api = {
     async getTrack({ trackId: requestedTrackId }: { trackId: string }): Promise<LyricsTrackResult> {
       getCount += 1;
-      if (requestedTrackId === 'candidate-track') {
+      if (requestedTrackId === 'candidate-track' || requestedTrackId === 'empty-results-track') {
         return { lyrics: null, candidates: [], status: 'empty', error: null };
       }
       const synced = requestedTrackId !== 'plain-track';
@@ -128,11 +128,12 @@
         error: null,
       };
     },
-    async search({ trackId: requestedTrackId }: { trackId: string; requestId: string }): Promise<LyricsTrackResult> {
+    async search({ trackId: requestedTrackId }: { trackId: string; requestId: string; manual?: boolean; query?: string }): Promise<LyricsTrackResult> {
       searchCount += 1;
-      return requestedTrackId === 'candidate-track'
-        ? { lyrics: null, candidates: [candidate], status: 'candidates', error: null }
-        : { lyrics: null, candidates: [], status: 'empty', error: null };
+      if (requestedTrackId === 'candidate-track') {
+        return { lyrics: null, candidates: [candidate], status: 'candidates', error: null };
+      }
+      return { lyrics: null, candidates: [], status: 'empty', error: null };
     },
     async selectCandidate({ trackId: requestedTrackId }: { trackId: string; candidateId: string }): Promise<TrackLyrics> {
       selectedSource = 'manual';
@@ -195,7 +196,7 @@
       cancelCount,
       selectedSource,
       qrcNoticeVisible: document.querySelector('.candidate-preview-note') !== null,
-      candidateActionEnabled: [...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === '使用這份' && !button.disabled),
+      candidateActionEnabled: [...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === '選擇' && !button.disabled),
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
       isPlaying: lyricsRoot?.dataset.playing ?? null,

@@ -2133,11 +2133,15 @@
         </button>
         <div class="now-playing-header-track">
           <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類">
-            <button type="button" data-track-field="title" disabled={!trackFieldValue(playback?.currentTrack, 'title')} title={trackFieldValue(playback?.currentTrack, 'title') ?? '沒有曲名分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'title') ? `依曲名「${trackFieldValue(playback?.currentTrack, 'title')}」篩選曲庫` : '沒有曲名分類資料'} onclick={() => void openTrackField('title')}>{trackFieldLabel(playback?.currentTrack, 'title')}</button>
-            <span aria-hidden="true">．</span>
             <button type="button" data-track-field="artist" disabled={!trackFieldValue(playback?.currentTrack, 'artist')} title={trackFieldValue(playback?.currentTrack, 'artist') ?? '沒有演出者分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'artist') ? `依演出者「${trackFieldValue(playback?.currentTrack, 'artist')}」篩選曲庫` : '沒有演出者分類資料'} onclick={() => void openTrackField('artist')}>{trackFieldLabel(playback?.currentTrack, 'artist')}</button>
-            <span aria-hidden="true">．</span>
+            <span class="now-playing-track-sep" aria-hidden="true">．</span>
             <button type="button" data-track-field="album" disabled={!trackFieldValue(playback?.currentTrack, 'album')} title={trackFieldValue(playback?.currentTrack, 'album') ?? '沒有專輯分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'album') ? `依專輯「${trackFieldValue(playback?.currentTrack, 'album')}」篩選曲庫` : '沒有專輯分類資料'} onclick={() => void openTrackField('album')}>{trackFieldLabel(playback?.currentTrack, 'album')}</button>
+            <span class="now-playing-track-sep" aria-hidden="true">．</span>
+            <span
+              class="now-playing-track-title"
+              data-track-field="title"
+              title={trackFieldValue(playback?.currentTrack, 'title') ?? '沒有曲名'}
+            >{trackFieldLabel(playback?.currentTrack, 'title')}</span>
           </nav>
           <p class="now-playing-format" aria-label="音質格式">
             <span>{formatTrackColumnValue('audioFormat', playback?.currentTrack ?? {}, () => '—')}</span>

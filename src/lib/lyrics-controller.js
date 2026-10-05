@@ -60,7 +60,7 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
  * @param {{
  *   api: {
  *     getTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
- *     search: (args: {trackId:string, requestId:string, manual?:boolean}) => Promise<LyricsTrackResult>,
+ *     search: (args: {trackId:string, requestId:string, manual?:boolean, query?:string}) => Promise<LyricsTrackResult>,
  *     selectCandidate: (args: {trackId:string, candidateId:string}) => Promise<TrackLyrics>,
  *     cancelSearch: (args: {requestId:string}) => Promise<void> | void
  *   },
@@ -110,11 +110,12 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       && generation === requestGeneration;
   }
 
-  /** @param {string} trackId @param {number} requestGeneration @param {{manual?: boolean}} [options] */
+  /** @param {string} trackId @param {number} requestGeneration @param {{manual?: boolean, query?: string}} [options] */
   async function startSearch(trackId, requestGeneration, options = {}) {
     if (!isCurrent(trackId, requestGeneration)) return;
 
     const manual = Boolean(options.manual);
+    const query = typeof options.query === 'string' ? options.query.trim() : '';
     const requestId = makeRequestId();
     activeRequestId = requestId;
     update({
@@ -127,7 +128,11 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
     });
 
     try {
-      const result = await api.search(manual ? { trackId, requestId, manual: true } : { trackId, requestId });
+      /** @type {{trackId:string, requestId:string, manual?:boolean, query?:string}} */
+      const args = { trackId, requestId };
+      if (manual) args.manual = true;
+      if (query) args.query = query;
+      const result = await api.search(args);
       if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
       activeRequestId = null;
       update(stateFromResult(trackId, result, 'search', { selectionMode: manual || state.selectionMode }));
@@ -210,11 +215,15 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       await loadTrack(trackId, generation);
     },
 
-    async searchAgain() {
+    /**
+     * @param {{ query?: string }} [options]
+     */
+    async searchAgain(options = {}) {
       if (disposed || !activeTrackId) return;
       generation += 1;
       cancelActiveRequest();
       const trackId = activeTrackId;
+      const query = typeof options.query === 'string' ? options.query.trim() : '';
       update({
         ...state,
         phase: 'searching',
@@ -223,7 +232,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
         selectionMode: true,
         failedStage: null,
       });
-      await startSearch(trackId, generation, { manual: true });
+      await startSearch(trackId, generation, { manual: true, query: query || undefined });
     },
 
     cancelSearch() {

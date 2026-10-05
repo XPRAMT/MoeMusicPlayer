@@ -16,7 +16,7 @@ export function getCandidatePresentation(candidate) {
         ? '同步歌詞'
         : '純歌詞',
     previewNotice: qrcUnavailable
-      ? '原始 QRC 尚未解碼，目前無法預覽；仍可使用「使用這份」保存。'
+      ? '原始 QRC 尚未解碼，目前無法預覽；仍可使用「選擇」保存。'
       : null,
   };
 }

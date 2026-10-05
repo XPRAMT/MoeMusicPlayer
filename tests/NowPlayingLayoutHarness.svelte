@@ -296,9 +296,9 @@
       <button class="outline-button now-playing-overlay-return" type="button" aria-label="返回播放前頁面" title="返回播放前頁面">返回</button>
       <div class="now-playing-header-track">
         <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類">
-          <button data-track-field="title" type="button">測試曲名</button><span aria-hidden="true">．</span>
-          <button data-track-field="artist" type="button">測試演出者</button><span aria-hidden="true">．</span>
-          <button data-track-field="album" type="button">測試專輯</button>
+          <button data-track-field="artist" type="button">測試演出者</button><span class="now-playing-track-sep" aria-hidden="true">．</span>
+          <button data-track-field="album" type="button">測試專輯</button><span class="now-playing-track-sep" aria-hidden="true">．</span>
+          <span class="now-playing-track-title" data-track-field="title">測試曲名</span>
         </nav>
         <p class="now-playing-format"><span>FLAC．48 kHz．24 bit</span><img src={hiResBadgeUrl} alt="Hi-Res" /></p>
       </div>

@@ -39,7 +39,7 @@
 
   type LyricsApi = {
     getTrack: (args: { trackId: string }) => Promise<LyricsTrackResult>;
-    search: (args: { trackId: string; requestId: string }) => Promise<LyricsTrackResult>;
+    search: (args: { trackId: string; requestId: string; manual?: boolean; query?: string }) => Promise<LyricsTrackResult>;
     selectCandidate: (args: { trackId: string; candidateId: string }) => Promise<TrackLyrics>;
     cancelSearch: (args: { requestId: string }) => Promise<void>;
   };
@@ -179,6 +179,13 @@
       || viewState.phase === 'searching',
   );
   let filteredCandidates = $derived(filterLyricsCandidates(viewState.candidates, candidateQuery));
+  let showCandidatePicker = $derived(
+    !viewState.isSearching
+      && (
+        viewState.candidates.length > 0
+        || (viewState.phase === 'empty' && !viewState.error && (selectionUiOpen || !viewState.lyrics))
+      ),
+  );
 
   function timedCueScrollTop(layout: ReturnType<typeof buildLyricsLayout>, index: number, viewportHeight: number, scrollportHeight = viewportHeight): number {
     if (index < 0) return 0;
@@ -449,8 +456,8 @@
 
   function submitCandidateSearch(event?: Event): void {
     event?.preventDefault?.();
-    // Re-query providers with the current track metadata; typed text still filters results.
-    void controller.searchAgain();
+    // Typed text filters current results; submitting re-queries providers (optional query override).
+    void controller.searchAgain({ query: candidateQuery.trim() || undefined });
   }
 
   function onCandidateQueryInput(event: Event): void {
@@ -616,7 +623,7 @@
         <span>正在搜尋網易雲與 QQ 音樂歌詞…</span>
         <button type="button" class="lyrics-action secondary" onclick={cancelSearch}>取消搜尋</button>
       </div>
-    {:else if viewState.candidates.length > 0}
+    {:else if showCandidatePicker}
       <section class="lyrics-candidates" aria-label="歌詞候選" data-testid="lyrics-candidates">
         <div class="lyrics-candidates-header">
           <div class="lyrics-candidates-title-row">
@@ -629,8 +636,8 @@
               type="search"
               value={candidateQuery}
               oninput={onCandidateQueryInput}
-              placeholder="搜尋候選歌詞…"
-              aria-label="搜尋候選歌詞"
+              placeholder="搜尋歌詞關鍵字…"
+              aria-label="搜尋歌詞關鍵字"
               autocomplete="off"
               spellcheck="false"
               data-testid="lyrics-candidates-search"
@@ -661,11 +668,17 @@
                 disabled={viewState.selectingCandidateId !== null}
                 onclick={() => selectCandidate(candidate.id)}
               >
-                {viewState.selectingCandidateId === candidate.id ? '套用中…' : '使用這份'}
+                {viewState.selectingCandidateId === candidate.id ? '套用中…' : '選擇'}
               </button>
             </li>
           {:else}
-            <li class="lyrics-candidate-empty" role="status">沒有符合「{candidateQuery.trim()}」的候選。</li>
+            <li class="lyrics-candidate-empty" role="status">
+              {#if viewState.candidates.length === 0}
+                找不到符合的歌詞。可輸入關鍵字後再搜尋。
+              {:else}
+                沒有符合「{candidateQuery.trim()}」的候選。
+              {/if}
+            </li>
           {/each}
         </ul>
         <div class="lyrics-candidates-footer lyrics-message">
@@ -675,14 +688,6 @@
           {/if}
         </div>
       </section>
-    {:else if viewState.phase === 'empty' && !viewState.error && (selectionUiOpen || !viewState.lyrics)}
-      <div class="lyrics-message lyrics-empty" role="status">
-        <span>找不到符合的歌詞。</span>
-        <button type="button" class="lyrics-action secondary" onclick={searchAgain}>再次搜尋</button>
-        {#if viewState.lyrics}
-          <button type="button" class="lyrics-action secondary" onclick={dismissSelection}>關閉</button>
-        {/if}
-      </div>
     {/if}
   {/if}
 </div>
@@ -761,13 +766,20 @@
     border: 0;
   }
 
-  .lyric-primary,
-  .lyric-translation,
-  .lyric-romanization {
+  .lyric-primary {
     display: -webkit-box;
+    box-sizing: border-box;
     min-width: 0;
+    max-height: calc(var(--lyric-primary-font-size, 14px) * 1.35 * 2);
+    flex: 0 1 auto;
     margin: 0;
     overflow: hidden;
+    color: inherit;
+    font-size: var(--lyric-primary-font-size, 14px);
+    font-weight: 550;
+    line-height: 1.35;
+    line-clamp: 2;
+    -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     text-overflow: ellipsis;
     text-align: center;
@@ -776,28 +788,26 @@
     transition: opacity 140ms ease;
   }
 
-  .lyric-primary {
-    box-sizing: border-box;
-    max-height: calc(var(--lyric-primary-font-size, 14px) * 1.35 * 2);
-    flex: 0 1 auto;
-    color: inherit;
-    font-size: var(--lyric-primary-font-size, 14px);
-    font-weight: 550;
-    line-height: 1.35;
-    line-clamp: 2;
-    -webkit-line-clamp: 2;
-  }
-
   .lyric-translation,
   .lyric-romanization {
+    display: block;
     box-sizing: border-box;
-    max-height: calc(var(--lyric-auxiliary-font-size, 10px) * 1.25);
+    min-width: 0;
+    max-height: none;
     flex: 0 1 auto;
+    margin: 0;
+    overflow: visible;
     color: var(--muted);
     font-size: var(--lyric-auxiliary-font-size, 10px);
     line-height: 1.25;
-    line-clamp: 1;
-    -webkit-line-clamp: 1;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    text-overflow: clip;
+    text-align: center;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.82), 0 0 8px rgba(0, 0, 0, 0.38);
+    opacity: var(--lyric-text-opacity, 1);
+    transition: opacity 140ms ease;
   }
 
   .lyrics-message {
@@ -838,12 +848,15 @@
 
   .lyrics-candidates {
     display: flex;
+    box-sizing: border-box;
     min-height: 0;
     flex: 1 1 auto;
     flex-direction: column;
     gap: 8px;
     overflow: hidden;
-    border-top: 1px solid rgba(var(--text-rgb), 0.12);
+    max-height: min(50vh, 480px);
+    border: 0;
+    background: transparent;
   }
 
   .lyrics-candidates-header {
@@ -852,15 +865,9 @@
     z-index: 1;
     display: grid;
     gap: 8px;
-    padding: 8px 0 10px;
-    border-bottom: 1px solid rgba(var(--text-rgb), 0.1);
-    background: linear-gradient(
-      180deg,
-      color-mix(in srgb, rgba(var(--text-rgb), 0.08) 100%, transparent),
-      color-mix(in srgb, rgba(var(--text-rgb), 0.02) 100%, transparent)
-    );
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
+    padding: 0 0 8px;
+    border: 0;
+    background: transparent;
   }
 
   .lyrics-candidates-title-row {
@@ -896,7 +903,7 @@
     border: 1px solid rgba(var(--text-rgb), 0.18);
     border-radius: 10px;
     color: var(--text);
-    background: color-mix(in srgb, rgba(var(--text-rgb), 0.05) 100%, transparent);
+    background: transparent;
     font: inherit;
     font-size: 11px;
   }
@@ -945,9 +952,9 @@
     justify-content: space-between;
     gap: 10px;
     padding: 9px;
-    border: 1px solid var(--line);
+    border: 1px solid rgba(var(--text-rgb), 0.14);
     border-radius: 8px;
-    background: color-mix(in srgb, var(--text) 2%, transparent);
+    background: transparent;
   }
 
   .candidate-copy {

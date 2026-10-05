@@ -203,6 +203,7 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
         track: &TrackSummary,
         cancellation: CancellationToken,
         allow_auto_apply: bool,
+        query_override: Option<String>,
     ) -> Result<LyricsTrackResultDto, String> {
         let metadata = LyricsTrackMetadata {
             title: track.title.clone(),
@@ -210,9 +211,22 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
             album: track.album.clone(),
             duration_ms: track.duration_ms,
         };
+        let search_metadata = match query_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(query) => LyricsTrackMetadata {
+                title: Some(query.to_owned()),
+                artist: None,
+                album: None,
+                duration_ms: metadata.duration_ms,
+            },
+            None => metadata.clone(),
+        };
         let candidates = match tokio::time::timeout(
             MAX_PROVIDER_SEARCH_DURATION,
-            fetch_provider_candidates(self.client.clone(), metadata.clone(), cancellation.clone()),
+            fetch_provider_candidates(self.client.clone(), search_metadata, cancellation.clone()),
         )
         .await
         {
@@ -659,6 +673,7 @@ pub async fn lyrics_search(
     track_id: String,
     request_id: String,
     manual: Option<bool>,
+    query: Option<String>,
 ) -> Result<LyricsTrackResultDto, String> {
     let _database_work = super::enter_database_work(&state)?;
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
@@ -690,9 +705,14 @@ pub async fn lyrics_search(
         .get_track_summary(track_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "找不到這首曲目。".to_owned())?;
+    let query = query
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
     let mut result = state
         .lyrics_service
-        .search_track(database, track_id, &track, cancellation, !manual)
+        .search_track(database, track_id, &track, cancellation, !manual, query)
         .await?;
     if manual && result.lyrics.is_none() {
         // Keep already-playing lyrics so dismiss can restore playback UI without reload.
@@ -1546,7 +1566,7 @@ mod tests {
             seeded_test_database("完全不同的本機曲名", "本機演出者", "本機專輯");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new(), true)
+            .search_track(&database, track.id, &track, CancellationToken::new(), true, None)
             .await
             .expect("complete fixture search");
 
@@ -1571,7 +1591,7 @@ mod tests {
         let (database, _directory, track) = seeded_test_database("Song", "Artist", "Album");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new(), true)
+            .search_track(&database, track.id, &track, CancellationToken::new(), true, None)
             .await
             .expect("complete fixture search");
 
@@ -1613,7 +1633,7 @@ mod tests {
         let (database, _directory, track) = seeded_test_database("Song", "Artist", "Album");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new(), false)
+            .search_track(&database, track.id, &track, CancellationToken::new(), false, None)
             .await
             .expect("manual search without auto-apply");
 
@@ -1635,7 +1655,7 @@ mod tests {
             seeded_test_database("完全不同的本機曲名", "本機演出者", "本機專輯");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new(), true)
+            .search_track(&database, track.id, &track, CancellationToken::new(), true, None)
             .await
             .expect("complete fixture search");
         let selected_candidate = result
@@ -1716,7 +1736,7 @@ mod tests {
             let cancellation = cancellation.clone();
             async move {
                 service
-                    .search_track(&database, track.id, &track, cancellation, true)
+                    .search_track(&database, track.id, &track, cancellation, true, None)
                     .await
             }
         });

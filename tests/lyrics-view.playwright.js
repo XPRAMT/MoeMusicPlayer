@@ -216,6 +216,12 @@
   assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).activeIndex, 12, 'backward seek updates the active cue');
   assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).getCount, 1, 'position updates do not reload lyrics');
 
+  await page.evaluate(() => window.lyricsViewHarness.setTrack('empty-results-track'));
+  await page.waitForFunction(() => window.lyricsViewHarness.snapshot().phase === 'empty');
+  assert.equal(await page.locator('[data-testid="lyrics-candidates"]').count(), 1, 'empty search still shows the candidate picker panel');
+  assert.equal(await page.locator('[data-testid="lyrics-candidates-search"]').count(), 1, 'empty search still shows the text search field');
+  assert.match(await page.locator('.lyrics-candidate-empty').innerText(), /找不到符合的歌詞/);
+
   await page.evaluate(() => window.lyricsViewHarness.setTrack('candidate-track'));
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().phase === 'candidates');
   const candidateState = await page.evaluate(() => window.lyricsViewHarness.snapshot());
@@ -224,7 +230,8 @@
   assert.equal(candidateState.candidateActionEnabled, true);
   assert.equal(await page.locator('.lyrics-candidates').evaluate((element) => Number.parseFloat(getComputedStyle(element).maxHeight)), 400, 'candidate selector grows to the bounded 50vh cap at 800px height');
   assert.ok(await page.locator('.lyrics-candidates').evaluate((element) => Number.parseFloat(getComputedStyle(element).maxHeight)) > 260, 'candidate selector is taller than its previous 260px cap');
-  await page.getByRole('button', { name: '使用這份' }).click();
+  assert.equal(await page.locator('[data-testid="lyrics-candidates-search"]').count(), 1, 'candidate picker keeps the text search field');
+  await page.getByRole('button', { name: '選擇' }).click();
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().selectedSource === 'manual');
 
   await page.evaluate(() => window.lyricsViewHarness.setTrack('plain-track'));
