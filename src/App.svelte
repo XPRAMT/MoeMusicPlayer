@@ -2388,27 +2388,35 @@
         type="button"
         aria-label="音量"
         aria-expanded={volumeExpanded}
+        aria-haspopup="dialog"
         title={volumeExpanded ? '收合音量' : '展開音量'}
         disabled={!playbackReady}
         onclick={toggleVolumeExpanded}
       >
         <IconVolume2 size={20} stroke={1.6} aria-hidden="true" />
       </button>
-      <input
-        class="volume-slider"
-        type="range"
-        min="0"
-        max="1"
-        step="0.01"
-        value={volumeDraft ?? playback?.volume ?? confirmedVolume ?? 0}
-        aria-label="音量滑桿"
-        tabindex={volumeExpanded ? 0 : -1}
-        disabled={!playbackReady || !volumeExpanded}
-        onpointerdown={startVolumeInteraction}
-        oninput={setPlaybackVolume}
-        onchange={finishVolumeChange}
-      />
-      <span class="volume-value" aria-hidden={!volumeExpanded}>{playback ? formatVolume(volumeDraft ?? playback.volume) : confirmedVolume === null ? '—' : formatVolume(volumeDraft ?? confirmedVolume)}</span>
+      <div
+        class="volume-popover"
+        role="dialog"
+        aria-label="音量控制"
+        hidden={!volumeExpanded}
+      >
+        <input
+          class="volume-slider"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={volumeDraft ?? playback?.volume ?? confirmedVolume ?? 0}
+          aria-label="音量滑桿"
+          tabindex={volumeExpanded ? 0 : -1}
+          disabled={!playbackReady || !volumeExpanded}
+          onpointerdown={startVolumeInteraction}
+          oninput={setPlaybackVolume}
+          onchange={finishVolumeChange}
+        />
+        <span class="volume-value">{playback ? formatVolume(volumeDraft ?? playback.volume) : confirmedVolume === null ? '—' : formatVolume(volumeDraft ?? confirmedVolume)}</span>
+      </div>
     </div>
   </footer>
 </div>
