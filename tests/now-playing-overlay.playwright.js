@@ -91,6 +91,17 @@ async page => {
           return { label: button.getAttribute('aria-label'), width: box.width, height: box.height };
         })(),
         progress: rect(dock.querySelector('.progress-row')),
+        progressSlider: (() => {
+          const slider = dock.querySelector('.progress-slider');
+          if (!slider) return null;
+          const box = slider.getBoundingClientRect();
+          const style = getComputedStyle(slider);
+          return { width: box.width, height: box.height, display: style.display, opacity: style.opacity };
+        })(),
+        progressTimes: [...dock.querySelectorAll('.progress-row > span')].map((node) => {
+          const box = node.getBoundingClientRect();
+          return { text: node.textContent.trim(), left: box.left, right: box.right, width: box.width };
+        }),
         dockTrack: rect(dock.querySelector('.dock-track')),
         controls: rect(dock.querySelector('.dock-controls')),
         volume: rect(dock.querySelector('.dock-volume')),
@@ -474,6 +485,15 @@ async page => {
       const controlsMid = (state.controls.left + state.controls.right) / 2;
       const dockMid = (state.dock.left + state.dock.right) / 2;
       assert.ok(Math.abs(controlsMid - dockMid) <= 8, 'transport controls must stay horizontally centered in the dock');
+    }
+    assert.ok(state.progressSlider && state.progressSlider.display !== 'none' && state.progressSlider.width >= 80 && state.progressSlider.height >= 8, 'progress/timeline slider must remain visible in the dock');
+    assert.equal(state.progressTimes.length, 2, 'progress row keeps current and duration labels');
+    assert.ok(state.progressTimes[0].right <= state.progressTimes[1].left, 'current time stays left of duration time');
+    assert.ok(state.progressTimes[1].left >= state.progress.left + state.progress.width * 0.55, 'duration time stays on the right of the progress row');
+    {
+      const coverMid = (state.cover.top + state.cover.bottom) / 2;
+      const bandMid = (state.topbar.bottom + state.dock.top) / 2;
+      assert.ok(Math.abs(coverMid - bandMid) <= 48, `cover should sit near the vertical center between topbar and dock (coverMid=${coverMid}, bandMid=${bandMid})`);
     }
     assert.ok(state.progress.bottom <= state.controls.top && state.progress.bottom <= state.dockTrack.top && state.progress.bottom <= state.volume.top, 'progress and time row sits above the entire bottom control row');
     assert.ok(Math.abs(state.progress.left - state.dock.left - state.dockPadding.left) <= 2

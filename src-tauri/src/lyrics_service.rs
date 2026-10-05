@@ -727,6 +727,31 @@ pub fn lyrics_cancel_search(state: State<'_, super::AppState>, request_id: Strin
 }
 
 #[tauri::command]
+pub async fn lyrics_clear_track(
+    state: State<'_, super::AppState>,
+    app: AppHandle,
+    track_id: String,
+) -> Result<LyricsTrackResultDto, String> {
+    let _database_work = super::enter_database_work(&state)?;
+    let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database
+        .clear_track_lyrics(track_id)
+        .map_err(|error| error.to_string())?;
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    load_track_result_with_context(database, track_id, Some(&app), &settings.sources).await
+}
+
+
+#[tauri::command]
 pub fn lyrics_select_candidate(
     state: State<'_, super::AppState>,
     track_id: String,

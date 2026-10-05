@@ -42,6 +42,7 @@
     search: (args: { trackId: string; requestId: string; manual?: boolean; query?: string }) => Promise<LyricsTrackResult>;
     selectCandidate: (args: { trackId: string; candidateId: string }) => Promise<TrackLyrics>;
     cancelSearch: (args: { requestId: string }) => Promise<void>;
+    clearTrack: (args: { trackId: string }) => Promise<LyricsTrackResult>;
   };
 
   type LyricsViewState = {
@@ -81,6 +82,7 @@
     search: (args) => invokeCommand('lyrics_search', args),
     selectCandidate: (args) => invokeCommand('lyrics_select_candidate', args),
     cancelSearch: (args) => invokeCommand('lyrics_cancel_search', args),
+    clearTrack: (args) => invokeCommand('lyrics_clear_track', args),
   };
 
   let {
@@ -128,6 +130,7 @@
       search: (args) => api.search(args),
       selectCandidate: (args) => api.selectCandidate(args),
       cancelSearch: (args) => api.cancelSearch(args),
+      clearTrack: (args) => api.clearTrack(args),
     },
     onChange(nextState: LyricsViewState) {
       viewState = nextState;
@@ -474,6 +477,11 @@
     controller.dismissSelection();
   }
 
+  function removeLyrics(): void {
+    candidateQuery = '';
+    void controller.removeLyrics();
+  }
+
   function selectCandidate(candidateId: string): void {
     void controller.selectCandidate(candidateId);
   }
@@ -504,6 +512,7 @@
   data-playing={isPlaying ? 'true' : 'false'}
   data-playback-state={effectivePlaybackState}
   data-line-gap={preferences.lineGapPx}
+  data-text-effect={preferences.textEffect}
   data-active-cue-index={activeTimedIndex}
   data-layout-revision={layoutRevision}
   style={`--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${preferences.auxiliaryFontSizePx}px`}
@@ -628,7 +637,7 @@
         <div class="lyrics-candidates-header">
           <div class="lyrics-candidates-title-row">
             <h4>選擇歌詞</h4>
-            <button type="button" class="lyrics-action secondary" onclick={dismissSelection}>關閉</button>
+            <button type="button" class="lyrics-action secondary" data-testid="lyrics-dismiss" onclick={dismissSelection}>關閉</button>
           </div>
           <form class="lyrics-candidates-search" onsubmit={submitCandidateSearch}>
             <input
@@ -684,7 +693,7 @@
         <div class="lyrics-candidates-footer lyrics-message">
           <button type="button" class="lyrics-action secondary" onclick={searchAgain}>再次搜尋</button>
           {#if viewState.lyrics}
-            <button type="button" class="lyrics-action secondary" onclick={dismissSelection}>關閉</button>
+            <button type="button" class="lyrics-action secondary" data-testid="lyrics-remove" onclick={removeLyrics}>移除歌詞</button>
           {/if}
         </div>
       </section>
@@ -766,6 +775,28 @@
     border: 0;
   }
 
+
+  .lyrics-view[data-text-effect='shadow'] .lyric-primary,
+  .lyrics-view[data-text-effect='shadow'] .lyric-translation,
+  .lyrics-view[data-text-effect='shadow'] .lyric-romanization {
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.82), 0 0 8px rgba(0, 0, 0, 0.38);
+  }
+
+  .lyrics-view[data-text-effect='stroke'] .lyric-primary,
+  .lyrics-view[data-text-effect='stroke'] .lyric-translation,
+  .lyrics-view[data-text-effect='stroke'] .lyric-romanization {
+    text-shadow: none;
+    -webkit-text-stroke: 0.85px rgba(0, 0, 0, 0.88);
+    paint-order: stroke fill;
+  }
+
+  .lyrics-view[data-text-effect='none'] .lyric-primary,
+  .lyrics-view[data-text-effect='none'] .lyric-translation,
+  .lyrics-view[data-text-effect='none'] .lyric-romanization {
+    text-shadow: none;
+    -webkit-text-stroke: 0;
+  }
+
   .lyric-primary {
     display: -webkit-box;
     box-sizing: border-box;
@@ -783,7 +814,6 @@
     -webkit-box-orient: vertical;
     text-overflow: ellipsis;
     text-align: center;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.82), 0 0 8px rgba(0, 0, 0, 0.38);
     opacity: var(--lyric-text-opacity, 1);
     transition: opacity 140ms ease;
   }
@@ -805,7 +835,6 @@
     word-break: break-word;
     text-overflow: clip;
     text-align: center;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.82), 0 0 8px rgba(0, 0, 0, 0.38);
     opacity: var(--lyric-text-opacity, 1);
     transition: opacity 140ms ease;
   }

@@ -121,6 +121,7 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
     primaryFontSizePx: 36,
     auxiliaryFontSizePx: 9,
     lineGapPx: 64,
+    textEffect: 'shadow',
   });
   assert.equal(normalizeLyricsPreferences({ inactiveOpacityPercent: 100.4 }).inactiveOpacityPercent, 100);
   assert.equal(normalizeLyricsPreferences({ lineGapPx: -1 }).lineGapPx, 0);
@@ -492,3 +493,67 @@ test('searchAgain forwards optional query to lyrics_search', async () => {
   assert.deepEqual(calls, [['search', { trackId: 'track-q', requestId: 'request-q', manual: true, query: '春日影' }]]);
   controller.dispose();
 });
+
+test('removeLyrics clears persisted lyrics, dismisses picker, and skips auto-search', async () => {
+  let clearCalls = 0;
+  let searchCalls = 0;
+  const existing = lyric('t-remove', 'manual');
+  const candidate = {
+    id: 'candidate-remove',
+    provider: 'netease',
+    title: '移除測試',
+    artist: '歌手',
+    album: null,
+    durationMs: 120000,
+    score: 0.9,
+    confidence: 'high',
+    reasons: [],
+    previewLines: ['line'],
+    synced: true,
+    hasTranslation: false,
+    hasRomanization: false,
+  };
+  let pending;
+  const searching = new Promise((resolve) => {
+    pending = { resolve };
+  });
+  const controller = createLyricsController({
+    api: {
+      getTrack: async () => ({ lyrics: existing, candidates: [], status: 'ready', error: null }),
+      search: async () => {
+        searchCalls += 1;
+        return searching;
+      },
+      selectCandidate: async () => existing,
+      cancelSearch: async () => {},
+      clearTrack: async ({ trackId }) => {
+        clearCalls += 1;
+        assert.equal(trackId, 't-remove');
+        return { lyrics: null, candidates: [], status: 'empty', error: null };
+      },
+    },
+    onChange: () => {},
+  });
+
+  await controller.setTrack('t-remove');
+  const searchPromise = controller.searchAgain();
+  pending.resolve({
+    lyrics: existing,
+    candidates: [candidate],
+    status: 'candidates',
+    error: null,
+  });
+  await searchPromise;
+  assert.equal(controller.getState().selectionMode, true);
+  assert.ok(controller.getState().lyrics);
+
+  const searchesBefore = searchCalls;
+  await controller.removeLyrics();
+  assert.equal(clearCalls, 1);
+  assert.equal(controller.getState().selectionMode, false);
+  assert.equal(controller.getState().lyrics, null);
+  assert.equal(controller.getState().phase, 'empty');
+  assert.equal(searchCalls, searchesBefore, 'explicit remove must not auto-search');
+  controller.dispose();
+});
+

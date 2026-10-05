@@ -5370,6 +5370,7 @@ pub fn run() {
             lyrics_service::lyrics_search,
             lyrics_service::lyrics_select_candidate,
             lyrics_service::lyrics_cancel_search,
+            lyrics_service::lyrics_clear_track,
         ])
         .setup(|app| {
             #[cfg(target_os = "windows")]

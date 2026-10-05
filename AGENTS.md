@@ -164,6 +164,9 @@
 - 歌詞譯文／羅馬拼音改自動換行，長句不可再用 ellipsis／overflow hidden 隱藏；主歌詞行仍維持至多兩行 clamp。
 - 歌詞候選搜尋框聚焦時左緣被裁切：根因是 `.lyrics-candidates`（及外層 `.now-playing-lyrics`）為了讓候選清單在封面等高面板內捲動而 `overflow: hidden`，搜尋框貼齊面板左緣，`:focus-visible` 外框為 2px + `outline-offset: 2px` 向外突出 4px 而被裁掉。修正為面板內焦點外框改畫在元件內側（`outline-offset: -2px`，搜尋框另以 `border-color: var(--accent)` 強調），搜尋框、搜尋／關閉與「選擇」按鈕皆適用；不移除 overflow 以免破壞清單捲動。`tests/lyrics-view.playwright.js` 新增焦點外框不得超出任何 overflow 祖先的斷言（修正前失敗：外框 left 16 < 裁切 left 20），並修正 `ab1cbd0` 遺留的 `assert.match` 缺失與累計 `searchCount` 斷言。
 - 底欄播放／暫停鍵改為空心樣式：移除實心 accent 圓底、陰影與 hover 放大，改與其他底欄控制相同的透明底、`--text` 線條圖示、8px 圓角與 hover 淡底／`--accent-text`；Tabler `IconPlayerPlay`／`IconPlayerPause` stroke 由 1.9 改為與其他控制一致的 1.7，36px 點擊區與 21px 圖示保留作為主要控制的尺寸差異。
+- Now Playing dock 時間軸回歸已修正：`dd0453e` 誤把 `.progress-slider` 與 `.volume-state { display: none }` 併在同一選擇器，導致進度條消失、時間標籤落到錯誤欄位；已恢復 `.progress-slider, .volume-slider` 共用樣式，並另以 `.volume-state { display: none }` 隱藏音量文字。封面／歌詞垂直置中強化（artwork `place-content/place-items` + 對稱 overlay padding；lyrics-view 高度僅在 `--np-cover-height` 有值時鎖定）。
+- 歌詞候選右下角「關閉」改為「移除歌詞」：會關閉選擇器並透過新 IPC `lyrics_clear_track` 清除該曲已套用／快取歌詞（本機 sidecar／內嵌檔不刪）；標題列「關閉」仍只取消選擇、不移除歌詞。
+- 歌詞外觀新增文字效果三選一（陰影／描邊／關閉），欄位 `textEffect`（`shadow`｜`stroke`｜`none`，預設陰影），設定頁與快速設定歌詞區可切換，並與其他歌詞偏好一併持久化；套用至原文與譯文／羅馬拼音。
 - Windows Release 已更新：`release/moemusicplayer.exe` 由 commit `dd0453e` 建置（NP 封面/歌詞共用垂直置中、底欄傳輸鍵視窗水平置中、NP 左側透明關閉熱區、音量列無「音量」文字、非 seek 忙碌不 disable 進度條以避免時間軸閃爍），SHA-256 `5D9336A8CD5275E3EEAF9BACBB1102F9A8A4FA39FC8794F6368CFA0390064A56`；`npm run check` 0 errors/warnings、Node 84/84。先前 EXE 備份因占用未能刪除，仍保留於 `release/` 下 `.bak`。
 - 封面與歌詞外層 `.now-playing-card` 半透明白框／淡底已移除（border/background 透明），A/B 僅保留分欄與間距。
 - 正在播放曲目的「播放次數」每秒依 in-memory 聆聽進度更新一次（base `playedMs` + 播放中自然 position 前進），不重查整庫；僅目前曲目受影響。Now Playing 頂列與曲庫／播放清單／佇列中可見的目前列同步覆寫顯示。

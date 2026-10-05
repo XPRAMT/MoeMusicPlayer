@@ -260,6 +260,8 @@
   await focusRingInsideClip(page.locator('[data-testid="lyrics-candidates-search"]'), 'candidate search input');
   await focusRingInsideClip(page.locator('.lyrics-candidates-search button[type="submit"]'), 'candidate search button');
   await focusRingInsideClip(page.locator('.lyrics-candidates-title-row button'), 'candidate close button');
+  assert.equal(await page.locator('[data-testid="lyrics-dismiss"]').count(), 1, 'header close remains cancel-only dismiss');
+  assert.equal(await page.locator('[data-testid="lyrics-remove"]').count(), 1, 'footer exposes remove-lyrics when lyrics exist');
   await focusRingInsideClip(page.getByRole('button', { name: '選擇' }), 'candidate select button');
   await page.getByRole('button', { name: '選擇' }).click();
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().selectedSource === 'manual');

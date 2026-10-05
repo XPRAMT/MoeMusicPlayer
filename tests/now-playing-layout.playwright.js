@@ -87,6 +87,11 @@
     assert.ok(state.cover.left >= artwork.left - 1 && state.cover.right <= artwork.right + 1, `${viewport.width}x${viewport.height}: cover spills out of artwork pane horizontally`);
     assert.ok(state.cover.top >= artwork.top - 1 && state.cover.bottom <= artwork.bottom + 1, `${viewport.width}x${viewport.height}: cover spills out of artwork pane vertically`);
     assert.ok(Math.abs((state.cover.top + state.cover.bottom) / 2 - (artwork.top + artwork.bottom) / 2) <= 2, `${viewport.width}x${viewport.height}: cover should be vertically centered in the artwork pane`);
+    {
+      const coverMid = (state.cover.top + state.cover.bottom) / 2;
+      const bandMid = (state.topbar.bottom + state.dock.top) / 2;
+      assert.ok(Math.abs(coverMid - bandMid) <= 56, `${viewport.width}x${viewport.height}: cover should sit near the vertical center between topbar and dock`);
+    }
     assert.equal(state.lyricsPaneJustifyContent, 'center', `${viewport.width}x${viewport.height}: lyrics pane should use the same vertical centering strategy as cover`);
     if (state.cover.height > 0 && state.lyricsView.height > 0 && viewport.wide) {
       assert.ok(Math.abs(state.lyricsView.height - state.cover.height) <= 24, `${viewport.width}x${viewport.height}: lyrics block height should track cover height (${state.lyricsView.height} vs ${state.cover.height})`);

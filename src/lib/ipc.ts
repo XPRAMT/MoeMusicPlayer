@@ -37,6 +37,7 @@ export interface TrackListColumnSettings {
 
 export type NowPlayingLayout = 'a' | 'b';
 export type CoverCornerStyle = 'rounded' | 'square';
+export type LyricsTextEffect = 'shadow' | 'stroke' | 'none';
 
 export interface LibrarySource {
   id: string;
@@ -291,6 +292,7 @@ export interface LyricsPreferences {
   primaryFontSizePx: number;
   auxiliaryFontSizePx: number;
   lineGapPx: number;
+  textEffect: LyricsTextEffect;
 }
 
 export interface NowPlayingAppearancePreferences {
@@ -471,6 +473,10 @@ interface IpcContract {
   lyrics_cancel_search: {
     args: { requestId: string };
     result: void;
+  };
+  lyrics_clear_track: {
+    args: { trackId: string };
+    result: LyricsTrackResult;
   };
 }
 

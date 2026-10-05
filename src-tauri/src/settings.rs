@@ -49,6 +49,8 @@ pub struct LyricsPreferences {
     pub auxiliary_font_size_px: u8,
     #[serde(default = "default_line_gap_px")]
     pub line_gap_px: u8,
+    #[serde(default = "default_lyrics_text_effect")]
+    pub text_effect: LyricsTextEffect,
 }
 
 fn default_line_gap_px() -> u8 {
@@ -64,6 +66,7 @@ impl Default for LyricsPreferences {
             primary_font_size_px: 14,
             auxiliary_font_size_px: 10,
             line_gap_px: default_line_gap_px(),
+            text_effect: default_lyrics_text_effect(),
         }
     }
 }
@@ -99,6 +102,24 @@ impl LyricsPreferences {
 pub enum CoverCornerStyle {
     Rounded,
     Square,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LyricsTextEffect {
+    Shadow,
+    Stroke,
+    None,
+}
+
+impl Default for LyricsTextEffect {
+    fn default() -> Self {
+        Self::Shadow
+    }
+}
+
+fn default_lyrics_text_effect() -> LyricsTextEffect {
+    LyricsTextEffect::Shadow
 }
 
 impl Default for CoverCornerStyle {
@@ -1373,6 +1394,7 @@ mod tests {
                 primary_font_size_px: 14,
                 auxiliary_font_size_px: 10,
                 line_gap_px: 24,
+                text_effect: LyricsTextEffect::Shadow,
             }
         );
 
@@ -1383,6 +1405,7 @@ mod tests {
         assert_eq!(value["primaryFontSizePx"], 14);
         assert_eq!(value["auxiliaryFontSizePx"], 10);
         assert_eq!(value["lineGapPx"], 24);
+        assert_eq!(value["textEffect"], "shadow");
         assert!(value.get("show_translation").is_none());
         assert_eq!(
             serde_json::from_value::<LyricsPreferences>(value).unwrap(),
@@ -1686,6 +1709,7 @@ mod tests {
             primary_font_size_px: 26,
             auxiliary_font_size_px: 17,
             line_gap_px: 42,
+            text_effect: LyricsTextEffect::Shadow,
         };
         let mut columns = TrackListColumnSettings::default();
         columns.columns.swap(0, 2);

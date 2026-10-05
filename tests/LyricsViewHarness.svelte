@@ -144,6 +144,10 @@
     async cancelSearch(): Promise<void> {
       cancelCount += 1;
     },
+    async clearTrack({ trackId: requestedTrackId }: { trackId: string }): Promise<LyricsTrackResult> {
+      selectedSource = 'local';
+      return { lyrics: null, candidates: [], status: 'empty', error: null };
+    },
   };
 
   async function settle(): Promise<void> {

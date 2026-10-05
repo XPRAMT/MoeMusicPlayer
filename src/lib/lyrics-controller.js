@@ -62,6 +62,7 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
  *     getTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
  *     search: (args: {trackId:string, requestId:string, manual?:boolean, query?:string}) => Promise<LyricsTrackResult>,
  *     selectCandidate: (args: {trackId:string, candidateId:string}) => Promise<TrackLyrics>,
+ *     clearTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
  *     cancelSearch: (args: {requestId:string}) => Promise<void> | void
  *   },
  *   onChange: (state: LyricsControllerState) => void,
@@ -262,6 +263,55 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
         selectionMode: state.candidates.length > 0,
         failedStage: null,
       });
+    },
+
+
+    async removeLyrics() {
+      if (disposed || !activeTrackId || !state.selectionMode) return;
+      if (typeof api.clearTrack !== 'function') {
+        update({
+          ...state,
+          error: '目前環境不支援移除歌詞。',
+          failedStage: 'selection',
+        });
+        return;
+      }
+      generation += 1;
+      cancelActiveRequest();
+      const trackId = activeTrackId;
+      const requestGeneration = generation;
+      update({
+        ...state,
+        phase: 'loading',
+        error: null,
+        isSearching: false,
+        selectingCandidateId: null,
+        failedStage: null,
+      });
+      try {
+        const result = await api.clearTrack({ trackId });
+        if (!isCurrent(trackId, requestGeneration)) return;
+        // Do not auto-search after an explicit remove; leave empty or rediscovered local/sidecar lyrics.
+        update({
+          ...stateFromResult(trackId, result, null, { selectionMode: false }),
+          selectionMode: false,
+          selectingCandidateId: null,
+          isSearching: false,
+          candidates: [],
+          failedStage: null,
+        });
+      } catch (error) {
+        if (!isCurrent(trackId, requestGeneration)) return;
+        update({
+          ...state,
+          phase: 'candidates',
+          error: errorMessage(error),
+          isSearching: false,
+          selectionMode: true,
+          selectingCandidateId: null,
+          failedStage: 'selection',
+        });
+      }
     },
 
     dismissSelection() {

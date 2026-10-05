@@ -60,3 +60,13 @@ test('progress slider stays enabled during non-seek playback busy to avoid timel
   assert.match(progressSource, /if \(\!seekEnabled \|\| isSending\) return;/);
   assert.match(appSource, /isSending=\{isSendingPlaybackCommand\}/);
 });
+
+test('progress slider remains visible and is not collapsed with volume-state hide', () => {
+  const css = readFileSync(path.join(root, 'src/app.css'), 'utf8');
+  assert.match(css, /\.volume-state\s*\{\s*display:\s*none;/);
+  assert.match(css, /\.progress-slider,\s*\.volume-slider\s*\{/);
+  assert.doesNotMatch(css, /\.progress-slider,\s*\.volume-state\s*\{\s*display:\s*none;/);
+  assert.match(progressSource, /class="progress-slider"/);
+  assert.match(progressSource, /<div class="progress-row">/);
+});
+

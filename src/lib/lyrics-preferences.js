@@ -7,7 +7,10 @@ export const DEFAULT_LYRICS_PREFERENCES = Object.freeze({
   primaryFontSizePx: 14,
   auxiliaryFontSizePx: 10,
   lineGapPx: 24,
+  textEffect: 'shadow',
 });
+
+export const LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);
 
 export const LYRICS_PREFERENCE_LIMITS = Object.freeze({
   inactiveOpacityPercent: Object.freeze({ min: 10, max: 100 }),
@@ -53,6 +56,9 @@ export function normalizeLyricsPreferences(value) {
       LYRICS_PREFERENCE_LIMITS.lineGapPx.max,
       DEFAULT_LYRICS_PREFERENCES.lineGapPx,
     ),
+    textEffect: LYRICS_TEXT_EFFECTS.includes(/** @type {string} */ (candidate.textEffect))
+      ? /** @type {import('./ipc').LyricsTextEffect} */ (candidate.textEffect)
+      : DEFAULT_LYRICS_PREFERENCES.textEffect,
   };
 }
 

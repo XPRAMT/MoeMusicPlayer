@@ -139,6 +139,7 @@
       return makeLyrics(trackId);
     },
     async cancelSearch(): Promise<void> {},
+    async clearTrack(): Promise<LyricsTrackResult> { return { lyrics: null, candidates: [], status: 'empty', error: null }; },
   };
 
   async function setLayout(nextLayout: NowPlayingLayout): Promise<void> {
@@ -347,7 +348,7 @@
                 positionMs={50_000}
                 isPlaying={true}
                 playbackState="playing"
-                lyricsPreferences={{ showTranslation: true, showRomanization: true, inactiveOpacityPercent: 70, primaryFontSizePx: 14, auxiliaryFontSizePx: 10 }}
+                lyricsPreferences={{ showTranslation: true, showRomanization: true, inactiveOpacityPercent: 70, primaryFontSizePx: 14, auxiliaryFontSizePx: 10, textEffect: 'shadow' }}
                 api={lyricsApi}
               />
             {/snippet}

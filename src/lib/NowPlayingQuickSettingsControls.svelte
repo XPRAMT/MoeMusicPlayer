@@ -93,6 +93,38 @@
       <input type="checkbox" checked={lyrics.showRomanization} onchange={(event) => onLyricsChange({ showRomanization: event.currentTarget.checked }, true)} />
       <span><strong>顯示羅馬拼音</strong><small>在每行原文下方顯示拼音</small></span>
     </label>
+    <div class="cover-corner-setting" role="group" aria-labelledby="lyrics-text-effect-label">
+      <span id="lyrics-text-effect-label" class="cover-corner-setting-label"><strong>歌詞文字效果</strong></span>
+      <div class="layout-choice-row cover-corner-choice-row">
+        <button
+          type="button"
+          aria-label="歌詞陰影"
+          aria-pressed={lyrics.textEffect === 'shadow'}
+          class:chosen={lyrics.textEffect === 'shadow'}
+          onclick={() => onLyricsChange({ textEffect: 'shadow' }, true)}
+        >
+          <strong>陰影</strong><span>文字加上柔和陰影</span>
+        </button>
+        <button
+          type="button"
+          aria-label="歌詞描邊"
+          aria-pressed={lyrics.textEffect === 'stroke'}
+          class:chosen={lyrics.textEffect === 'stroke'}
+          onclick={() => onLyricsChange({ textEffect: 'stroke' }, true)}
+        >
+          <strong>描邊</strong><span>文字加上外框描邊</span>
+        </button>
+        <button
+          type="button"
+          aria-label="關閉歌詞文字效果"
+          aria-pressed={lyrics.textEffect === 'none'}
+          class:chosen={lyrics.textEffect === 'none'}
+          onclick={() => onLyricsChange({ textEffect: 'none' }, true)}
+        >
+          <strong>關閉</strong><span>不描邊也不加陰影</span>
+        </button>
+      </div>
+    </div>
     <label class="lyrics-preference-range">
       <span><strong>非目前歌詞透明度</strong><output>{lyrics.inactiveOpacityPercent}%</output></span>
       <input type="range" min="10" max="100" step="1" value={lyrics.inactiveOpacityPercent} aria-label="非目前歌詞透明度" oninput={(event) => onLyricsChange({ inactiveOpacityPercent: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ inactiveOpacityPercent: Number(event.currentTarget.value) }, true)} />

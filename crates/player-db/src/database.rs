@@ -1494,6 +1494,21 @@ impl Database {
 
     /// Persist an explicit candidate selection. This row is protected from automatic updates
     /// and automatic-cache eviction.
+    /// Remove persisted lyrics and cached candidates for one track.
+    /// Sidecar/embedded files are left untouched; the next load may rediscover them.
+    pub fn clear_track_lyrics(&self, track_id: TrackId) -> Result<bool, DatabaseError> {
+        let connection = self.lock()?;
+        let deleted = connection.execute(
+            "DELETE FROM track_lyrics WHERE track_id=?1",
+            [track_id.to_string()],
+        )?;
+        connection.execute(
+            "DELETE FROM lyric_candidates WHERE track_id=?1",
+            [track_id.to_string()],
+        )?;
+        Ok(deleted > 0)
+    }
+
     pub fn save_manual_track_lyrics(&self, lyrics: &TrackLyrics) -> Result<(), DatabaseError> {
         let mut selected = lyrics.clone();
         selected.manually_selected = true;
