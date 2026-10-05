@@ -1,4 +1,4 @@
-﻿/** @typedef {import('./ipc').LyricsTrackResult} LyricsTrackResult */
+/** @typedef {import('./ipc').LyricsTrackResult} LyricsTrackResult */
 /** @typedef {import('./ipc').TrackLyrics} TrackLyrics */
 
 let requestSequence = 0;
@@ -20,21 +20,26 @@ function errorMessage(error) {
  * @param {string | null} trackId
  * @param {LyricsTrackResult} result
  * @param {'load'|'search'|null} failedStage
+ * @param {{ selectionMode?: boolean }} [options]
  * @returns {LyricsControllerState}
  */
-function stateFromResult(trackId, result, failedStage) {
+function stateFromResult(trackId, result, failedStage, options = {}) {
   if (result.lyrics && result.lyrics.trackId !== trackId) {
     throw new Error('歌詞資料與目前播放曲目不一致。');
   }
 
   const candidates = Array.isArray(result.candidates) ? result.candidates : [];
-  const phase = result.lyrics
-    ? 'ready'
-    : result.status === 'error'
-      ? 'error'
-      : candidates.length > 0 || result.status === 'candidates'
-        ? 'candidates'
-        : 'empty';
+  const selectionMode = Boolean(options.selectionMode);
+  // Manual selection must stay on the candidate UI even when prior lyrics are preserved.
+  const phase = candidates.length > 0 || result.status === 'candidates'
+    ? (candidates.length > 0 ? 'candidates' : 'empty')
+    : selectionMode && result.lyrics
+      ? 'empty'
+      : result.lyrics
+        ? 'ready'
+        : result.status === 'error'
+          ? 'error'
+          : 'empty';
 
   return {
     trackId,
@@ -44,6 +49,7 @@ function stateFromResult(trackId, result, failedStage) {
     error: result.error,
     isSearching: false,
     selectingCandidateId: null,
+    selectionMode: selectionMode || phase === 'candidates' || (selectionMode && phase === 'empty'),
     failedStage: phase === 'error' ? failedStage : null,
   };
 }
@@ -54,7 +60,7 @@ function stateFromResult(trackId, result, failedStage) {
  * @param {{
  *   api: {
  *     getTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
- *     search: (args: {trackId:string, requestId:string}) => Promise<LyricsTrackResult>,
+ *     search: (args: {trackId:string, requestId:string, manual?:boolean}) => Promise<LyricsTrackResult>,
  *     selectCandidate: (args: {trackId:string, candidateId:string}) => Promise<TrackLyrics>,
  *     cancelSearch: (args: {requestId:string}) => Promise<void> | void
  *   },
@@ -104,10 +110,11 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       && generation === requestGeneration;
   }
 
-  /** @param {string} trackId @param {number} requestGeneration */
-  async function startSearch(trackId, requestGeneration) {
+  /** @param {string} trackId @param {number} requestGeneration @param {{manual?: boolean}} [options] */
+  async function startSearch(trackId, requestGeneration, options = {}) {
     if (!isCurrent(trackId, requestGeneration)) return;
 
+    const manual = Boolean(options.manual);
     const requestId = makeRequestId();
     activeRequestId = requestId;
     update({
@@ -115,14 +122,15 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       phase: 'searching',
       error: null,
       isSearching: true,
+      selectionMode: manual || state.selectionMode,
       failedStage: null,
     });
 
     try {
-      const result = await api.search({ trackId, requestId });
+      const result = await api.search(manual ? { trackId, requestId, manual: true } : { trackId, requestId });
       if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
       activeRequestId = null;
-      update(stateFromResult(trackId, result, 'search'));
+      update(stateFromResult(trackId, result, 'search', { selectionMode: manual || state.selectionMode }));
     } catch (error) {
       if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
       activeRequestId = null;
@@ -131,6 +139,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
         phase: 'error',
         error: errorMessage(error),
         isSearching: false,
+        selectionMode: manual || state.selectionMode,
         failedStage: 'search',
       });
     }
@@ -167,6 +176,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       error: null,
       isSearching: false,
       selectingCandidateId: null,
+      selectionMode: false,
       failedStage: null,
     };
   }
@@ -210,20 +220,53 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
         phase: 'searching',
         error: null,
         isSearching: true,
+        selectionMode: true,
         failedStage: null,
       });
-      await startSearch(trackId, generation);
+      await startSearch(trackId, generation, { manual: true });
     },
 
     cancelSearch() {
-      if (disposed || !activeRequestId) return;
-      generation += 1;
-      cancelActiveRequest();
+      if (disposed) return;
+      if (activeRequestId) {
+        generation += 1;
+        cancelActiveRequest();
+      }
+      // Dismiss selection UI and restore playback lyrics when the user cancels.
+      if (state.lyrics) {
+        update({
+          ...state,
+          phase: 'ready',
+          candidates: [],
+          error: null,
+          isSearching: false,
+          selectionMode: false,
+          failedStage: null,
+        });
+        return;
+      }
       update({
         ...state,
         phase: state.candidates.length > 0 ? 'candidates' : 'empty',
         error: null,
         isSearching: false,
+        selectionMode: state.candidates.length > 0,
+        failedStage: null,
+      });
+    },
+
+    dismissSelection() {
+      if (disposed || !state.selectionMode) return;
+      generation += 1;
+      cancelActiveRequest();
+      update({
+        ...state,
+        phase: state.lyrics ? 'ready' : 'empty',
+        candidates: [],
+        error: null,
+        isSearching: false,
+        selectionMode: false,
+        selectingCandidateId: null,
         failedStage: null,
       });
     },
@@ -256,6 +299,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
           error: null,
           isSearching: false,
           selectingCandidateId: null,
+          selectionMode: false,
           failedStage: null,
         });
       } catch (error) {
@@ -288,6 +332,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
  * error: string | null,
  * isSearching: boolean,
  * selectingCandidateId: string | null,
+ * selectionMode: boolean,
  * failedStage: 'load'|'search'|'selection'|null
  * }} LyricsControllerState
  */

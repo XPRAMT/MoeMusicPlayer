@@ -411,3 +411,62 @@ test('dispose cancels an active provider request and fences its result', async (
   assert.deepEqual(calls, [{ requestId: 'dispose-request' }]);
   assert.equal(states.some((state) => state.lyrics?.source === 'netease'), false);
 });
+test('manual searchAgain keeps selection open when lyrics already exist', async () => {
+  const pending = deferred();
+  const existing = lyric('track-ready', 'local');
+  const candidate = {
+    id: 'candidate-manual',
+    provider: 'netease',
+    title: '候選曲',
+    artist: '歌手',
+    album: null,
+    durationMs: 10000,
+    score: 0.91,
+    confidence: 'high',
+    reasons: ['標題相符'],
+    previewLines: ['預覽'],
+    hasSyncedLyrics: true,
+  };
+  const controller = createLyricsController({
+    api: {
+      getTrack: async () => readyResult('track-ready', 'local'),
+      search: async (args) => {
+        assert.equal(args.manual, true);
+        return pending.promise;
+      },
+      selectCandidate: async () => existing,
+      cancelSearch: () => {},
+    },
+    onChange: () => {},
+  });
+
+  await controller.setTrack('track-ready');
+  assert.equal(controller.getState().phase, 'ready');
+  assert.equal(controller.getState().lyrics?.source, 'local');
+
+  const searching = controller.searchAgain();
+  assert.equal(controller.getState().phase, 'searching');
+  assert.equal(controller.getState().selectionMode, true);
+  assert.equal(controller.getState().isSearching, true);
+
+  pending.resolve({
+    lyrics: existing,
+    candidates: [candidate],
+    status: 'candidates',
+    error: null,
+  });
+  await searching;
+
+  assert.equal(controller.getState().phase, 'candidates');
+  assert.equal(controller.getState().selectionMode, true);
+  assert.equal(controller.getState().candidates.length, 1);
+  assert.equal(controller.getState().lyrics?.source, 'local');
+
+  controller.dismissSelection();
+  assert.equal(controller.getState().phase, 'ready');
+  assert.equal(controller.getState().selectionMode, false);
+  assert.equal(controller.getState().candidates.length, 0);
+  assert.equal(controller.getState().lyrics?.source, 'local');
+  controller.dispose();
+});
+

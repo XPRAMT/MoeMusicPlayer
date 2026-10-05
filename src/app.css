@@ -420,9 +420,9 @@ input:focus-visible {
 }
 
 .lyrics-toggle[aria-pressed='true'] {
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  border-color: transparent;
   color: var(--accent-text);
-  background: color-mix(in srgb, var(--accent) 12%, var(--page));
+  background: transparent;
 }
 
 .lyrics-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -2795,7 +2795,7 @@ input:focus-visible {
 
 .control-active {
   color: var(--accent-text);
-  background: var(--panel);
+  background: transparent;
 }
 
 .play-button {

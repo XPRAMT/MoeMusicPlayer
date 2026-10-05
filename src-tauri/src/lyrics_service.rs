@@ -202,6 +202,7 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
         track_id: TrackId,
         track: &TrackSummary,
         cancellation: CancellationToken,
+        allow_auto_apply: bool,
     ) -> Result<LyricsTrackResultDto, String> {
         let metadata = LyricsTrackMetadata {
             title: track.title.clone(),
@@ -242,37 +243,39 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
             .cache_lyric_candidates(track_id, &ranked, now)
             .map_err(|error| error.to_string())?;
 
-        if let Some(best) = auto_lyric_candidate(&ranked)
-            .filter(|candidate| candidate.score >= HIGH_CONFIDENCE_SCORE)
-        {
-            let automatic = TrackLyrics {
-                track_id,
-                provider: best.provider,
-                candidate_id: Some(best.candidate_id.clone()),
-                lyrics: best.lyrics.clone(),
-                manually_selected: false,
-                updated_at_utc_ms: now,
-            };
-            if database
-                .save_automatic_track_lyrics(&automatic)
-                .map_err(|error| error.to_string())?
+        if allow_auto_apply {
+            if let Some(best) = auto_lyric_candidate(&ranked)
+                .filter(|candidate| candidate.score >= HIGH_CONFIDENCE_SCORE)
             {
-                return Ok(LyricsTrackResultDto::ready(track_lyrics_dto(
+                let automatic = TrackLyrics {
                     track_id,
-                    track,
-                    automatic.provider,
-                    false,
-                    &automatic.lyrics,
-                )));
-            }
-            // A manual selection may have landed while the provider request was in flight.
-            if let Some(selected) = database
-                .get_track_lyrics(track_id)
-                .map_err(|error| error.to_string())?
-            {
-                return Ok(LyricsTrackResultDto::ready(persisted_lyrics_dto(
-                    track, selected,
-                )));
+                    provider: best.provider,
+                    candidate_id: Some(best.candidate_id.clone()),
+                    lyrics: best.lyrics.clone(),
+                    manually_selected: false,
+                    updated_at_utc_ms: now,
+                };
+                if database
+                    .save_automatic_track_lyrics(&automatic)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Ok(LyricsTrackResultDto::ready(track_lyrics_dto(
+                        track_id,
+                        track,
+                        automatic.provider,
+                        false,
+                        &automatic.lyrics,
+                    )));
+                }
+                // A manual selection may have landed while the provider request was in flight.
+                if let Some(selected) = database
+                    .get_track_lyrics(track_id)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Ok(LyricsTrackResultDto::ready(persisted_lyrics_dto(
+                        track, selected,
+                    )));
+                }
             }
         }
 
@@ -655,10 +658,12 @@ pub async fn lyrics_search(
     app: AppHandle,
     track_id: String,
     request_id: String,
+    manual: Option<bool>,
 ) -> Result<LyricsTrackResultDto, String> {
     let _database_work = super::enter_database_work(&state)?;
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
     validate_request_id(&request_id)?;
+    let manual = manual.unwrap_or(false);
     let database = state.database.as_ref().ok_or_else(|| {
         state
             .database_error
@@ -673,7 +678,9 @@ pub async fn lyrics_search(
         .map_err(|error| error.to_string())?;
     let initial =
         load_track_result_with_context(database, track_id, Some(&app), &settings.sources).await?;
-    if initial.lyrics.is_some() {
+    // Automatic follow-up after an empty get may rediscover local/embedded lyrics.
+    // Explicit manual selection must continue to provider candidates even when lyrics exist.
+    if !manual && initial.lyrics.is_some() {
         return Ok(initial);
     }
     if cancellation.is_cancelled() {
@@ -683,10 +690,15 @@ pub async fn lyrics_search(
         .get_track_summary(track_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "找不到這首曲目。".to_owned())?;
-    state
+    let mut result = state
         .lyrics_service
-        .search_track(database, track_id, &track, cancellation)
-        .await
+        .search_track(database, track_id, &track, cancellation, !manual)
+        .await?;
+    if manual && result.lyrics.is_none() {
+        // Keep already-playing lyrics so dismiss can restore playback UI without reload.
+        result.lyrics = initial.lyrics;
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1534,7 +1546,7 @@ mod tests {
             seeded_test_database("完全不同的本機曲名", "本機演出者", "本機專輯");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new())
+            .search_track(&database, track.id, &track, CancellationToken::new(), true)
             .await
             .expect("complete fixture search");
 
@@ -1559,7 +1571,7 @@ mod tests {
         let (database, _directory, track) = seeded_test_database("Song", "Artist", "Album");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new())
+            .search_track(&database, track.id, &track, CancellationToken::new(), true)
             .await
             .expect("complete fixture search");
 
@@ -1597,12 +1609,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_search_skips_auto_apply_and_returns_candidates() {
+        let (database, _directory, track) = seeded_test_database("Song", "Artist", "Album");
+        let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
+        let result = service
+            .search_track(&database, track.id, &track, CancellationToken::new(), false)
+            .await
+            .expect("manual search without auto-apply");
+
+        assert!(matches!(
+            result.status,
+            super::LyricsResultStatusDto::Candidates
+        ));
+        assert!(result.lyrics.is_none());
+        assert!(!result.candidates.is_empty());
+        assert!(database
+            .get_track_lyrics(track.id)
+            .expect("read lyric cache")
+            .is_none());
+    }
+
+    #[tokio::test]
     async fn searched_candidate_is_cached_and_manual_selection_persists_auxiliary_and_raw_yrc() {
         let (database, _directory, track) =
             seeded_test_database("完全不同的本機曲名", "本機演出者", "本機專輯");
         let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
         let result = service
-            .search_track(&database, track.id, &track, CancellationToken::new())
+            .search_track(&database, track.id, &track, CancellationToken::new(), true)
             .await
             .expect("complete fixture search");
         let selected_candidate = result
@@ -1683,7 +1716,7 @@ mod tests {
             let cancellation = cancellation.clone();
             async move {
                 service
-                    .search_track(&database, track.id, &track, cancellation)
+                    .search_track(&database, track.id, &track, cancellation, true)
                     .await
             }
         });

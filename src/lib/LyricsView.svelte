@@ -52,6 +52,7 @@
     error: string | null;
     isSearching: boolean;
     selectingCandidateId: string | null;
+    selectionMode: boolean;
     failedStage: 'load' | 'search' | 'selection' | null;
   };
 
@@ -101,6 +102,7 @@
     error: null,
     isSearching: false,
     selectingCandidateId: null,
+    selectionMode: false,
     failedStage: null,
   });
   let timedViewport = $state<HTMLDivElement | null>(null);
@@ -169,6 +171,12 @@
   });
   let plainRenderedRows = $derived(plainWindow.rows.filter((index) => plainLayout.heights[index] > 0));
   let isTimed = $derived(timedLines.length > 0);
+  let selectionUiOpen = $derived(
+    viewState.selectionMode
+      || viewState.isSearching
+      || viewState.phase === 'candidates'
+      || viewState.phase === 'searching',
+  );
 
   function timedCueScrollTop(layout: ReturnType<typeof buildLyricsLayout>, index: number, viewportHeight: number, scrollportHeight = viewportHeight): number {
     if (index < 0) return 0;
@@ -440,6 +448,10 @@
     controller.cancelSearch();
   }
 
+  function dismissSelection(): void {
+    controller.dismissSelection();
+  }
+
   function selectCandidate(candidateId: string): void {
     void controller.selectCandidate(candidateId);
   }
@@ -507,7 +519,7 @@
         <p class="lyrics-timing-hint">正值延後歌詞，負值提前歌詞；範圍 ±5 秒，步進 0.1 秒。</p>
       </div>
     {/if}
-    {#if viewState.lyrics && isTimed}
+    {#if viewState.lyrics && isTimed && !selectionUiOpen}
       <div
         class="lyrics-lines-viewport timed-lyrics-viewport"
         role="region"
@@ -542,7 +554,7 @@
         <div class="lyrics-spacer" data-virtual-spacer="after" style={`height:${timedWindow.afterHeight}px`} aria-hidden="true"></div>
         <div class="lyrics-spacer lyrics-edge-spacer" data-edge-spacer="tail" style={`height:${timedEdgePadding}px`} aria-hidden="true"></div>
       </div>
-    {:else if viewState.lyrics && lines.length > 0}
+    {:else if viewState.lyrics && lines.length > 0 && !selectionUiOpen}
       <div
         class="lyrics-lines-viewport plain-lyrics-viewport"
         role="region"
@@ -566,7 +578,7 @@
         {/each}
         <div class="lyrics-spacer" style={`height:${plainWindow.afterHeight}px`} aria-hidden="true"></div>
       </div>
-    {:else if viewState.lyrics}
+    {:else if viewState.lyrics && !selectionUiOpen}
       <p class="lyrics-placeholder" role="status">這份歌詞沒有可顯示的文字。</p>
     {/if}
 
@@ -591,7 +603,10 @@
       </div>
     {:else if viewState.candidates.length > 0}
       <section class="lyrics-candidates" aria-label="歌詞候選">
-        <h4>選擇歌詞</h4>
+        <div class="lyrics-candidates-header">
+          <h4>選擇歌詞</h4>
+          <button type="button" class="lyrics-action secondary" onclick={dismissSelection}>關閉</button>
+        </div>
         <ul>
           {#each viewState.candidates as candidate (candidate.id)}
             {@const presentation = getCandidatePresentation(candidate)}
@@ -621,10 +636,13 @@
           {/each}
         </ul>
       </section>
-    {:else if !viewState.lyrics && !viewState.error && viewState.phase === 'empty'}
+    {:else if viewState.phase === 'empty' && !viewState.error && (selectionUiOpen || !viewState.lyrics)}
       <div class="lyrics-message lyrics-empty" role="status">
         <span>找不到符合的歌詞。</span>
         <button type="button" class="lyrics-action secondary" onclick={searchAgain}>再次搜尋</button>
+        {#if viewState.lyrics}
+          <button type="button" class="lyrics-action secondary" onclick={dismissSelection}>關閉</button>
+        {/if}
       </div>
     {/if}
   {/if}
@@ -784,6 +802,25 @@
     max-height: min(50vh, 480px);
     overflow: auto;
     border-top: 1px solid var(--line);
+  }
+
+  .lyrics-candidates-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 0;
+    background: var(--panel, #111);
+  }
+
+  .lyrics-candidates-header h4 {
+    margin: 0;
+    color: var(--text-soft);
+    font-size: 11px;
+    font-weight: 600;
   }
 
   .lyrics-candidates h4 {

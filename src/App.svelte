@@ -2101,7 +2101,6 @@
           onclick={() => void closeNowPlaying()}
         >
           <IconArrowLeft size={17} stroke={1.8} aria-hidden="true" />
-          <span>返回</span>
         </button>
         <div class="now-playing-header-track">
           <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類">
@@ -2146,8 +2145,8 @@
             <button type="button" class="lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label="切換譯文顯示" onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>譯</button>
             <button type="button" class="lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label="切換羅馬拼音顯示" onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>羅</button>
           </div>
-          <button bind:this={quickSettingsTrigger} class="outline-button now-playing-quick-settings-trigger" type="button" aria-label="開啟快速設定" aria-haspopup="dialog" aria-expanded={isQuickSettingsOpen} onclick={() => void openQuickSettings()}>
-            <IconSettings size={18} stroke={1.7} aria-hidden="true" /><span>快速設定</span>
+          <button bind:this={quickSettingsTrigger} class="outline-button now-playing-quick-settings-trigger" type="button" aria-label="開啟快速設定" title="快速設定" aria-haspopup="dialog" aria-expanded={isQuickSettingsOpen} onclick={() => void openQuickSettings()}>
+            <IconSettings size={18} stroke={1.7} aria-hidden="true" />
           </button>
         </div>
       </header>
