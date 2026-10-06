@@ -13,7 +13,7 @@
     trackId = null,
     canControl = false,
     isSending = false,
-    timelineStyle = 'line',
+    timelineStyle = 'edge',
     onSeek,
   }: {
     positionMs: number;

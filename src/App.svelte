@@ -2520,31 +2520,31 @@
     <div class="dock-center">
       <div class="dock-controls">
         <button class="dock-favorite control-button" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
-          <IconHeart size={18} stroke={1.6} aria-hidden="true" />
+          <IconHeart size={21} stroke={1.6} aria-hidden="true" />
         </button>
         <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} onclick={toggleShuffle}>
-          <IconArrowsShuffle size={20} stroke={1.7} aria-hidden="true" />
+          <IconArrowsShuffle size={23} stroke={1.7} aria-hidden="true" />
         </button>
         <button class="control-button" type="button" aria-label="上一首" title={playback?.canPrevious ? '播放佇列上一首' : showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || !playback?.canPrevious || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
-          <IconPlayerTrackPrev size={20} stroke={1.7} aria-hidden="true" />
+          <IconPlayerTrackPrev size={23} stroke={1.7} aria-hidden="true" />
         </button>
         <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} title={showCapabilityDetail(capabilities?.playback)} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
           {#if playback?.isPlaying}
-            <IconPlayerPause size={21} stroke={1.7} aria-hidden="true" />
+            <IconPlayerPause size={26} stroke={1.7} aria-hidden="true" />
           {:else}
-            <IconPlayerPlay size={21} stroke={1.7} aria-hidden="true" />
+            <IconPlayerPlay size={26} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
         <button class="control-button" type="button" aria-label="下一首" title={playback?.canNext ? '播放佇列下一首' : showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
-          <IconPlayerTrackNext size={20} stroke={1.7} aria-hidden="true" />
+          <IconPlayerTrackNext size={23} stroke={1.7} aria-hidden="true" />
         </button>
         <button class="control-button secondary-control" type="button" aria-label="循環播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
           {#if playback?.repeatMode === 'one'}
-            <IconRepeatOnce size={20} stroke={1.7} aria-hidden="true" />
+            <IconRepeatOnce size={23} stroke={1.7} aria-hidden="true" />
           {:else if playback?.repeatMode === 'all'}
-            <IconRepeat size={20} stroke={1.7} aria-hidden="true" />
+            <IconRepeat size={23} stroke={1.7} aria-hidden="true" />
           {:else}
-            <IconRepeatOff size={20} stroke={1.7} aria-hidden="true" />
+            <IconRepeatOff size={23} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
         <div
@@ -2562,7 +2562,7 @@
             disabled={!playbackReady}
             onclick={toggleVolumeExpanded}
           >
-            <IconVolume2 size={20} stroke={1.6} aria-hidden="true" />
+            <IconVolume2 size={23} stroke={1.6} aria-hidden="true" />
           </button>
           <div
             class="volume-popover"

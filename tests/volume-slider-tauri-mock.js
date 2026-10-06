@@ -43,7 +43,7 @@
   backgroundBlurPx: 20,
   backgroundBrightnessPercent: 40,
   coverCornerStyle: 'rounded',
-  timelineStyle: 'line',
+  timelineStyle: 'edge',
 };
   let storedNowPlayingLayout = localStorage.getItem('__nowPlayingLayout') === 'b' ? 'b' : 'a';
   let storedLyricsPreferences = JSON.parse(localStorage.getItem('__lyricsPreferences') || 'null') ?? {

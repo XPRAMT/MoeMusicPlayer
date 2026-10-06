@@ -5,7 +5,7 @@ export const DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES = Object.freeze({
   backgroundBlurPx: 20,
   backgroundBrightnessPercent: 40,
   coverCornerStyle: /** @type {const} */ ('rounded'),
-  timelineStyle: /** @type {const} */ ('line'),
+  timelineStyle: /** @type {const} */ ('edge'),
 });
 
 /**
@@ -18,7 +18,7 @@ export function normalizeNowPlayingAppearancePreferences(value = {}) {
   /** @type {import('./ipc').CoverCornerStyle} */
   const coverCornerStyle = value?.coverCornerStyle === 'square' ? 'square' : 'rounded';
   /** @type {import('./ipc').TimelineStyle} */
-  const timelineStyle = value?.timelineStyle === 'edge' ? 'edge' : 'line';
+  const timelineStyle = 'edge';
   return {
     backgroundBlurPx: Number.isFinite(blur)
       ? Math.round(Math.max(0, Math.min(40, blur)))

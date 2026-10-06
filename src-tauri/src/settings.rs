@@ -109,7 +109,6 @@ pub enum CoverCornerStyle {
 #[serde(rename_all = "lowercase")]
 pub enum TimelineStyle {
     #[default]
-    Line,
     Edge,
 }
 
@@ -117,16 +116,18 @@ impl<'de> Deserialize<'de> for TimelineStyle {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;
         match raw.as_str() {
-            "edge" => Ok(Self::Edge),
-            // Default line look; also accept legacy bar/minimal from earlier WIP builds.
-            "line" | "bar" | "minimal" => Ok(Self::Line),
-            other => Err(serde::de::Error::unknown_variant(other, &["line", "edge"])),
+            // The line look is gone. Older line/bar/minimal values stay valid and become edge.
+            "edge" | "line" | "bar" | "minimal" => Ok(Self::Edge),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["edge", "line"],
+            )),
         }
     }
 }
 
 fn default_timeline_style() -> TimelineStyle {
-    TimelineStyle::Line
+    TimelineStyle::Edge
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -168,7 +169,7 @@ impl Default for NowPlayingAppearancePreferences {
             background_blur_px: 20,
             background_brightness_percent: 40,
             cover_corner_style: CoverCornerStyle::Rounded,
-            timeline_style: TimelineStyle::Line,
+            timeline_style: TimelineStyle::Edge,
         }
     }
 }
@@ -1999,7 +2000,7 @@ mod tests {
         );
         assert_eq!(
             persisted["nowPlayingAppearancePreferences"]["timelineStyle"],
-            "line"
+            "edge"
         );
         assert!(
             persisted["nowPlayingAppearancePreferences"]["surfaceTransparencyPercent"].is_null()
@@ -2015,7 +2016,7 @@ mod tests {
             background_blur_px: 0,
             background_brightness_percent: 100,
             cover_corner_style: CoverCornerStyle::Square,
-            timeline_style: TimelineStyle::Line,
+            timeline_style: TimelineStyle::Edge,
         };
         let saved = store
             .update(|settings| {
@@ -2066,13 +2067,13 @@ mod tests {
             background_blur_px: 12,
             background_brightness_percent: 67,
             cover_corner_style: CoverCornerStyle::Square,
-            timeline_style: TimelineStyle::Line,
+            timeline_style: TimelineStyle::Edge,
         };
         let value = serde_json::to_value(preferences).unwrap();
         assert_eq!(value["backgroundBlurPx"], 12);
         assert_eq!(value["backgroundBrightnessPercent"], 67);
         assert_eq!(value["coverCornerStyle"], "square");
-        assert_eq!(value["timelineStyle"], "line");
+        assert_eq!(value["timelineStyle"], "edge");
         assert_eq!(
             serde_json::from_value::<NowPlayingAppearancePreferences>(value).unwrap(),
             preferences
@@ -2139,7 +2140,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_timeline_style_defaults_to_line_and_rejects_unknown_values() {
+    fn missing_timeline_style_defaults_to_edge_and_rejects_unknown_values() {
         let directory = test_directory("appearance-timeline-style");
         let path = directory.join("settings.json");
         let mut json = serde_json::to_value(AppSettings::default()).unwrap();
@@ -2156,7 +2157,7 @@ mod tests {
         let snapshot = store.snapshot().unwrap();
         assert_eq!(
             snapshot.now_playing_appearance_preferences.timeline_style,
-            TimelineStyle::Line
+            TimelineStyle::Edge
         );
 
         let saved = store
@@ -2185,7 +2186,17 @@ mod tests {
             }))
             .unwrap()
             .timeline_style,
-            TimelineStyle::Line
+            TimelineStyle::Edge
+        );
+        assert_eq!(
+            serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
+                "backgroundBlurPx": 12,
+                "backgroundBrightnessPercent": 50,
+                "timelineStyle": "line"
+            }))
+            .unwrap()
+            .timeline_style,
+            TimelineStyle::Edge
         );
 
         assert!(

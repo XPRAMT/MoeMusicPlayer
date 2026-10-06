@@ -56,29 +56,6 @@
         </button>
       </div>
     </div>
-    <div class="cover-corner-setting" role="group" aria-labelledby="timeline-style-label">
-      <span id="timeline-style-label" class="cover-corner-setting-label"><strong>時間軸樣式</strong></span>
-      <div class="layout-choice-row cover-corner-choice-row">
-        <button
-          type="button"
-          aria-label="時間軸線條"
-          aria-pressed={appearance.timelineStyle === 'line'}
-          class:chosen={appearance.timelineStyle === 'line'}
-          onclick={() => onAppearanceChange({ timelineStyle: 'line' }, true)}
-        >
-          <strong>線條</strong><span>原本位置的細線時間軸</span>
-        </button>
-        <button
-          type="button"
-          aria-label="時間軸貼邊緣"
-          aria-pressed={appearance.timelineStyle === 'edge'}
-          class:chosen={appearance.timelineStyle === 'edge'}
-          onclick={() => onAppearanceChange({ timelineStyle: 'edge' }, true)}
-        >
-          <strong>貼邊緣</strong><span>時間軸貼齊底欄頂緣交界</span>
-        </button>
-      </div>
-    </div>
     <div
       class="now-playing-appearance-preview"
       style={`--preview-blur: ${appearance.backgroundBlurPx}px; --preview-background-overlay-alpha: ${(100 - appearance.backgroundBrightnessPercent) / 100};`}

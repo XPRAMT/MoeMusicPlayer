@@ -11,7 +11,7 @@ test('appearance preferences default and clamp to supported ranges', () => {
     backgroundBlurPx: 20,
     backgroundBrightnessPercent: 40,
     coverCornerStyle: 'rounded',
-    timelineStyle: 'line',
+    timelineStyle: 'edge',
   });
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: -4,
@@ -33,10 +33,10 @@ test('appearance preferences default and clamp to supported ranges', () => {
     backgroundBlurPx: 40,
     backgroundBrightnessPercent: 22,
     coverCornerStyle: 'rounded',
-    timelineStyle: 'line',
+    timelineStyle: 'edge',
   });
-  // Legacy WIP values fall back to the default line placement.
-  for (const legacy of ['bar', 'minimal']) {
+  // Legacy line/bar/minimal values all resolve to the only remaining edge timeline.
+  for (const legacy of ['line', 'bar', 'minimal']) {
     assert.deepEqual(normalizeNowPlayingAppearancePreferences({
       backgroundBlurPx: 10,
       backgroundBrightnessPercent: 40,
@@ -46,7 +46,7 @@ test('appearance preferences default and clamp to supported ranges', () => {
       backgroundBlurPx: 10,
       backgroundBrightnessPercent: 40,
       coverCornerStyle: 'rounded',
-      timelineStyle: 'line',
+      timelineStyle: 'edge',
     });
   }
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
@@ -57,7 +57,7 @@ test('appearance preferences default and clamp to supported ranges', () => {
     assert.deepEqual(normalizeNowPlayingAppearancePreferences({
       backgroundBlurPx: 27,
       surfaceTransparencyPercent: legacySurface,
-    }), { backgroundBlurPx: 27, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'line' });
+    }), { backgroundBlurPx: 27, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'edge' });
   }
 });
 
