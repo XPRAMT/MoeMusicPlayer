@@ -589,15 +589,19 @@ static int run_graph(uint32_t channels, uint32_t codec, uint32_t inHz, uint32_t 
         hr = grabber->GetConnectedMediaType(&actual);
         auto* outWf = reinterpret_cast<WAVEFORMATEX*>(actual.pbFormat);
         if (FAILED(hr) || !outWf) {
+            if (actual.pbFormat) CoTaskMemFree(actual.pbFormat);
             write_err(4, "output format missing");
             goto done;
         }
-        if (outWf->wBitsPerSample != 24 || outWf->nChannels != 2 || outWf->nSamplesPerSec == 0) {
-            if (actual.pbFormat) CoTaskMemFree(actual.pbFormat);
+        const DWORD rate = outWf->nSamplesPerSec;
+        const WORD bits = outWf->wBitsPerSample;
+        const WORD channels = outWf->nChannels;
+        CoTaskMemFree(actual.pbFormat);
+        actual.pbFormat = nullptr;
+        if (bits != 24 || channels != 2 || rate < 8000 || rate > 384000) {
             write_err(4, "unexpected output format");
             goto done;
         }
-        if (actual.pbFormat) CoTaskMemFree(actual.pbFormat);
         Capture callback;
         grabber->SetCallback(&callback, 0);
         IMediaFilter* media = nullptr;
@@ -608,7 +612,7 @@ static int run_graph(uint32_t channels, uint32_t codec, uint32_t inHz, uint32_t 
         graph->QueryInterface(IID_IMediaControl, reinterpret_cast<void**>(&control));
         hr = control->Run();
         if (FAILED(hr)) { control->Release(); write_err(4, "graph run failed"); goto done; }
-        uint32_t ready[3] = {outWf->nSamplesPerSec, outWf->wBitsPerSample, static_cast<uint32_t>(outWf->nChannels)};
+        uint32_t ready[3] = {rate, bits, static_cast<uint32_t>(channels)};
         write_message(kReady, ready, sizeof(ready));
         std::fflush(stdout);
         bool sawEos = false;

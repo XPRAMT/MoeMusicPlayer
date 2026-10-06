@@ -30,6 +30,10 @@ use crate::DseeHxState;
 pub(crate) const FILTER_PATH: &str =
     r"C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax";
 pub(crate) const INSTALL_NOTICE: &str = "請先安裝 Sony Music Center。DSEE HX 只會載入 C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax，播放器不會內含或散佈這個檔案。";
+pub(crate) fn plausible_hx_rate(rate: u32) -> bool {
+    matches!(rate, 44_100 | 48_000 | 88_200 | 96_000 | 176_400 | 192_000)
+}
+
 pub(crate) fn expected_hx_rate(sample_rate: u32) -> u32 {
     // The installed filter keeps the 44.1 kHz family on a 176.4 kHz output
     // even when 96 kHz is requested. 48 kHz and other rates come back at 96 kHz.
@@ -373,7 +377,7 @@ where
             ));
         }
         let output_rate = match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(rate)) if rate > 0 => rate,
+            Ok(Ok(rate)) if plausible_hx_rate(rate) => rate,
             Ok(Err(message)) => {
                 let _ = child.kill();
                 return Err(OpenError::Rejected(decoder, message));
@@ -763,6 +767,8 @@ mod tests {
         assert_eq!(expected_hx_rate(22_050), 176_400);
         assert_eq!(expected_hx_rate(48_000), 96_000);
         assert_eq!(expected_hx_rate(32_000), 96_000);
+        assert!(plausible_hx_rate(176_400));
+        assert!(!plausible_hx_rate(9_365_152));
     }
 
     #[test]
@@ -798,6 +804,7 @@ mod tests {
                 panic!("dsee stream failed: {message}")
             }
         };
+        assert_eq!(source.sample_rate().get(), 176_400);
         let output: Vec<f32> = source.take(rate as usize).collect();
         assert!(
             output.iter().any(|sample| sample.abs() > 0.001),
