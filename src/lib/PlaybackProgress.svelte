@@ -4,6 +4,7 @@
     clampPlaybackPosition,
     isPlaybackSeekableDuration,
     playbackSeekDisplayPosition,
+    shouldReleasePlaybackSeekDraft,
   } from './playback-scrubber';
   import type { TimelineStyle } from './ipc';
 
@@ -22,12 +23,15 @@
     canControl: boolean;
     isSending: boolean;
     timelineStyle?: TimelineStyle;
-    onSeek: (positionMs: number) => void | Promise<void>;
+    onSeek: (positionMs: number) => boolean | void | Promise<boolean | void>;
   } = $props();
 
   let draftPositionMs = $state<number | null>(null);
   let draftTrackId = $state<string | null>(null);
+  let seekBaselineMs = $state<number | null>(null);
+  let seekSettled = $state(false);
   let pointerActive = false;
+  let seekInFlight = false;
 
   const displayedPositionMs = $derived(
     playbackSeekDisplayPosition(
@@ -39,15 +43,31 @@
   const seekEnabled = $derived(canControl && trackId !== null && isPlaybackSeekableDuration(durationMs));
   // Keep the range input enabled while non-seek commands are busy so :disabled opacity does not flash the timeline.
 
+  function discardSeekDraft(): void {
+    pointerActive = false;
+    draftPositionMs = null;
+    draftTrackId = null;
+    seekBaselineMs = null;
+    seekSettled = false;
+  }
+
   $effect(() => {
-    if (draftTrackId !== null && draftTrackId !== trackId) cancelDraft();
+    if (draftTrackId !== null && draftTrackId !== trackId) {
+      discardSeekDraft();
+      return;
+    }
+    if (shouldReleasePlaybackSeekDraft(positionMs, draftPositionMs, pointerActive, seekSettled, seekBaselineMs)) {
+      draftPositionMs = null;
+      draftTrackId = null;
+      seekBaselineMs = null;
+      seekSettled = false;
+    }
   });
 
   function beginPointerSeek(): void {
     if (!seekEnabled || isSending) return;
     pointerActive = true;
     draftTrackId = trackId;
-    draftPositionMs = displayedPositionMs;
   }
 
   function updateDraft(event: Event): void {
@@ -63,15 +83,28 @@
   function commitDraft(): void {
     if (draftPositionMs === null) return;
     if (draftTrackId !== trackId) {
-      cancelDraft();
+      discardSeekDraft();
       return;
     }
     const requestedPositionMs = draftPositionMs;
-    draftPositionMs = null;
-    draftTrackId = null;
     pointerActive = false;
-    if (!seekEnabled || isSending || requestedPositionMs === positionMs) return;
-    void onSeek(requestedPositionMs);
+    if (!seekEnabled || requestedPositionMs === positionMs) {
+      discardSeekDraft();
+      return;
+    }
+    if (isSending || seekInFlight) return;
+    seekBaselineMs = positionMs;
+    seekSettled = false;
+    seekInFlight = true;
+    void Promise.resolve(onSeek(requestedPositionMs)).then((accepted) => {
+      seekInFlight = false;
+      if (pointerActive || draftPositionMs !== requestedPositionMs) return;
+      if (accepted === false) {
+        discardSeekDraft();
+        return;
+      }
+      seekSettled = true;
+    });
   }
 
   function cancelDraft(): void {

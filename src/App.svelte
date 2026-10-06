@@ -1422,9 +1422,10 @@
     });
   }
 
-  async function commitPlaybackSeek(positionMs: number): Promise<void> {
-    if (!playbackReady || isSendingPlaybackCommand) return;
+  async function commitPlaybackSeek(positionMs: number): Promise<boolean> {
+    if (!playbackReady || isSendingPlaybackCommand) return false;
     await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs }));
+    return playbackError === null;
   }
 
   function publishLivePlayCount(): void {

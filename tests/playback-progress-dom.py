@@ -62,7 +62,10 @@ def check_live_snapshot_after_seek(page) -> None:
     }""")
     assert page.locator("[data-testid='seek-request']").inner_text() == "23000", "seek must commit the final input value"
     assert page.locator("[data-testid='seek-request-count']").inner_text() == "1", "change plus pointerup must seek only once"
-    page.wait_for_function("Number(document.querySelector('[data-testid=audio-snapshot-position]').textContent) > 6000")
+    held = read_progress_state(page)
+    assert held["slider"] == 23000, f"clicked position snapped back to {held['slider']}ms before the seek ACK"
+    assert held["snapshot"] < 23000, "the fixture must still be on the old clock while the slider holds the click"
+    page.wait_for_function("Number(document.querySelector('[data-testid=audio-snapshot-position]').textContent) >= 23000")
     after_state = read_progress_state(page)
     after = after_state["snapshot"]
     assert after > before, "the synthetic audio snapshot must continue advancing"

@@ -10,6 +10,20 @@ export function clampPlaybackPosition(positionMs: number, durationMs: number | n
     : nonNegative;
 }
 
+export const PLAYBACK_SEEK_SETTLE_TOLERANCE_MS = 400;
+
+/** Keep a committed click on screen until the worker snapshot lands near it. */
+export function shouldReleasePlaybackSeekDraft(
+  snapshotPositionMs: number,
+  draftPositionMs: number | null,
+  pointerActive: boolean,
+  seekSettled: boolean,
+  baselinePositionMs: number | null,
+): boolean {
+  if (!seekSettled || pointerActive || draftPositionMs === null || baselinePositionMs === null) return false;
+  return Math.abs(snapshotPositionMs - draftPositionMs) <= PLAYBACK_SEEK_SETTLE_TOLERANCE_MS;
+}
+
 export function playbackSeekDisplayPosition(
   snapshotPositionMs: number,
   durationMs: number | null,

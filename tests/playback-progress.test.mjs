@@ -7,6 +7,7 @@ import {
   clampPlaybackPosition,
   isPlaybackSeekableDuration,
   playbackSeekDisplayPosition,
+  shouldReleasePlaybackSeekDraft,
 } from '../src/lib/playback-scrubber.ts';
 import { effectivePlaybackDurationMs } from '../src/lib/playback-duration.ts';
 
@@ -24,13 +25,17 @@ test('the progress component displays the latest audio snapshot outside an activ
   assert.doesNotMatch(progressSource, /pendingPlaybackSeek|requestedAtMs|snapshotVersionAtRequest/);
 });
 
-test('seek draft is local, commits once on change or pointerup, and cancel restores snapshot', () => {
+test('seek draft stays on the clicked position until the worker snapshot catches up', () => {
   assert.match(progressSource, /oninput=\{updateDraft\}/);
   assert.match(progressSource, /onchange=\{commitDraft\}/);
   assert.match(progressSource, /<svelte:window onpointerup=\{finishPointerSeek\} onpointercancel=\{cancelDraft\}/);
-  assert.match(progressSource, /function commitDraft\(\): void \{/);
-  assert.match(progressSource, /draftPositionMs = null;\s*draftTrackId = null;\s*pointerActive = false;\s*if \(!seekEnabled \|\| isSending \|\| requestedPositionMs === positionMs\) return;\s*void onSeek\(requestedPositionMs\);/);
-  assert.match(progressSource, /function cancelDraft\(\): void \{/);
+  assert.match(progressSource, /seekSettled = true/);
+  assert.match(progressSource, /accepted === false/);
+  assert.equal(playbackSeekDisplayPosition(12_000, 60_000, 30_000), 30_000);
+  assert.equal(shouldReleasePlaybackSeekDraft(12_000, 30_000, false, false, 12_000), false);
+  assert.equal(shouldReleasePlaybackSeekDraft(12_250, 30_000, false, true, 12_000), false);
+  assert.equal(shouldReleasePlaybackSeekDraft(30_040, 30_000, false, true, 12_000), true);
+  assert.equal(shouldReleasePlaybackSeekDraft(30_040, 30_000, true, true, 12_000), false);
   assert.equal(clampPlaybackPosition(70_000, 60_000), 60_000);
   assert.equal(isPlaybackSeekableDuration(null), false);
   assert.equal(isPlaybackSeekableDuration(60_000), true);

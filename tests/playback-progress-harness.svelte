@@ -21,17 +21,19 @@
 
   onDestroy(() => clearInterval(timer));
 
-  function requestSeek(positionMs: number): void {
+  function requestSeek(positionMs: number): boolean {
     seekRequestCount += 1;
     if (failNextSeek) {
       failNextSeek = false;
       seekError = 'seek unsupported';
-      return;
+      return false;
     }
-    // The fixture keeps advancing like a playing worker whose first seek ACK
-    // reports its current authoritative clock rather than an optimistic target.
     lastSeekRequestMs = positionMs;
     seekError = null;
+    window.setTimeout(() => {
+      audioPositionMs = positionMs;
+    }, 150);
+    return true;
   }
 
   (window as unknown as { setTrack: (nextTrackId: string, nextPositionMs: number) => void }).setTrack =
