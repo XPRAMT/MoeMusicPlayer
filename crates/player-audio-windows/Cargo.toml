@@ -13,6 +13,8 @@ rodio = { version = "=0.22.2", default-features = false, features = [
     "vorbis",
     "wav",
 ] }
+# High-quality sample-rate conversion (MIT OR Apache-2.0).
+rubato = { version = "=5.0.1", default-features = false, features = ["fft_resampler"] }
 windows = { version = "=0.62.2", features = [
     "Media",
     "Media_Control",

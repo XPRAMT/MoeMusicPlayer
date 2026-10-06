@@ -49,6 +49,7 @@
     type PlaylistSummary,
     type PlaybackSnapshot,
     type PlaybackQueueSource,
+    type ResamplingMode,
     type RuntimeCapabilities,
     type ThemePreferences,
     type TrackListColumnPreference,
@@ -62,6 +63,7 @@
     normalizeThemePreferences,
   } from './lib/theme';
   import { formatVolume } from './lib/format';
+  import { describeOutputFormat } from './lib/output-format.js';
   import hiResBadgeUrl from './assets/hi-res-badge.png';
   import { calculateArtworkFrame } from './lib/artwork-frame.js';
   import {
@@ -114,7 +116,7 @@
   };
 
   type View = 'library' | 'playlists' | 'queue' | 'settings';
-  type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'sources';
+  type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'playback' | 'sources';
   type SyncProgressViewState = {
     runId: string;
     sourceCount: number;
@@ -153,6 +155,9 @@
   let nowPlayingLayout = $state<NowPlayingLayout>('a');
   let nowPlayingLayoutState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let nowPlayingLayoutError = $state<string | null>(null);
+  let resamplingMode = $state<ResamplingMode>('highQuality');
+  let resamplingModeState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
+  let resamplingModeError = $state<string | null>(null);
   let nowPlayingAppearancePreferences = $state<NowPlayingAppearancePreferences>(
     normalizeNowPlayingAppearancePreferences(DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES),
   );
@@ -217,6 +222,8 @@
   let themeRevision = 0;
   let trackColumnSettingsRevision = 0;
   let nowPlayingLayoutRevision = 0;
+  let resamplingModeRevision = 0;
+  let resamplingModeQueue: Promise<void> = Promise.resolve();
   let nowPlayingAppearanceRevision = 0;
   let lyricsPreferencesRevision = 0;
   let trackColumnSettingsQueue: Promise<void> = Promise.resolve();
@@ -406,6 +413,7 @@
       themeSaveState = 'preview';
       trackColumnSettingsState = 'preview';
       nowPlayingLayoutState = 'preview';
+      resamplingModeState = 'preview';
       nowPlayingAppearanceState = 'preview';
       lyricsPreferencesState = 'preview';
       void loadCapabilities();
@@ -446,6 +454,7 @@
         loadSettingsRecoveryWarning(),
         loadTrackColumnSettings(),
         loadNowPlayingLayout(),
+        loadResamplingMode(),
         loadNowPlayingAppearancePreferences(),
         loadLyricsPreferences(),
       ]);
@@ -585,6 +594,49 @@
         nowPlayingLayoutState = 'error';
         nowPlayingLayoutError = `無法保存正在播放版面設定：${getErrorText(error)}`;
       }
+    });
+  }
+
+  async function loadResamplingMode(): Promise<void> {
+    const revision = resamplingModeRevision;
+    try {
+      const stored = await invokeCommand('settings_get_resampling_mode', {});
+      if (revision !== resamplingModeRevision) return;
+      resamplingMode = stored === 'windowsBuiltin' ? 'windowsBuiltin' : 'highQuality';
+      resamplingModeState = 'saved';
+      resamplingModeError = null;
+    } catch (error) {
+      if (revision !== resamplingModeRevision) return;
+      resamplingModeState = 'error';
+      resamplingModeError = `無法讀取取樣率轉換設定：${getErrorText(error)}`;
+    }
+  }
+
+  function setResamplingMode(mode: ResamplingMode): void {
+    resamplingMode = mode;
+    resamplingModeError = null;
+    const revision = ++resamplingModeRevision;
+    if (!isTauri()) {
+      resamplingModeState = 'preview';
+      resamplingModeError = '瀏覽器預覽不會保存取樣率轉換設定。';
+      return;
+    }
+
+    resamplingModeState = 'saving';
+    resamplingModeQueue = resamplingModeQueue.catch(() => undefined).then(async () => {
+      if (revision !== resamplingModeRevision) return;
+      try {
+        const saved = await invokeCommand('settings_set_resampling_mode', { mode });
+        if (revision !== resamplingModeRevision) return;
+        resamplingMode = saved;
+        resamplingModeState = 'saved';
+        resamplingModeError = null;
+      } catch (error) {
+        if (revision !== resamplingModeRevision) return;
+        resamplingModeState = 'error';
+        resamplingModeError = getErrorText(error);
+      }
+      void loadPlaybackSnapshot(false);
     });
   }
 
@@ -1897,6 +1949,17 @@
                 aria-controls="lyrics-panel"
                 onclick={() => (settingsSection = 'lyrics')}
               >歌詞</button>
+              {#if capabilities?.platform === 'windows'}
+                <button
+                  id="playback-tab"
+                  class="settings-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsSection === 'playback'}
+                  aria-controls="playback-panel"
+                  onclick={() => (settingsSection = 'playback')}
+                >播放</button>
+              {/if}
               <button
                 id="sources-tab"
                 class="settings-tab"
@@ -1995,6 +2058,56 @@
                 </ol>
                 <p class="settings-preference-status" class:error={trackColumnSettingsState === 'error'} role="status">
                   {trackColumnSettingsError ?? (trackColumnSettingsState === 'loading' ? '正在讀取欄位設定…' : trackColumnSettingsState === 'saving' ? '正在保存欄位設定…' : trackColumnSettingsState === 'preview' ? '瀏覽器預覽不會保存欄位設定。' : '欄位設定已保存。')}
+                </p>
+              </div>
+            {:else if settingsSection === 'playback'}
+              {@const outputStatus = describeOutputFormat(playback?.outputFormat)}
+              <div id="playback-panel" class="settings-panel" role="tabpanel" aria-labelledby="playback-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>取樣率轉換</h3>
+                    <p>曲目的取樣率與輸出裝置不同時的轉換方式。兩種方式都使用 Windows 共享模式輸出，並非 bit-perfect；取樣率相同時不做任何轉換。</p>
+                  </div>
+                </div>
+                <div class="resampling-options" role="radiogroup" aria-label="取樣率轉換方式">
+                  <label class="resampling-option">
+                    <input
+                      type="radio"
+                      name="resampling-mode"
+                      value="highQuality"
+                      checked={resamplingMode === 'highQuality'}
+                      disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
+                      onchange={() => setResamplingMode('highQuality')}
+                    />
+                    <span class="resampling-option-copy">
+                      <strong>高品質（預設）</strong>
+                      <small>輸出維持在裝置的混音取樣率，由播放器以高品質重取樣器轉換（通帶平坦至約 21 kHz）。切換不同取樣率的曲目時不必重新開啟輸出。</small>
+                    </span>
+                  </label>
+                  <label class="resampling-option">
+                    <input
+                      type="radio"
+                      name="resampling-mode"
+                      value="windowsBuiltin"
+                      checked={resamplingMode === 'windowsBuiltin'}
+                      disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
+                      onchange={() => setResamplingMode('windowsBuiltin')}
+                    />
+                    <span class="resampling-option-copy">
+                      <strong>Windows 內建</strong>
+                      <small>以曲目的取樣率開啟輸出，交由 Windows 音訊引擎轉換為裝置格式。前後曲目取樣率不同時需重新開啟輸出，換曲時可能短暫停頓；裝置無法以該取樣率開啟時會自動改用高品質轉換。</small>
+                    </span>
+                  </label>
+                </div>
+                <div class="resampling-status" role="status">
+                  <span>目前輸出</span>
+                  <strong>{outputStatus.text}</strong>
+                  {#if outputStatus.notice}
+                    <p title={playback?.outputFormat?.fallbackReason ?? undefined}>{outputStatus.notice}</p>
+                  {/if}
+                </div>
+                <p class="settings-preference-status" class:error={resamplingModeState === 'error'} role="status">
+                  {resamplingModeError ?? (resamplingModeState === 'loading' ? '正在讀取取樣率轉換設定…' : resamplingModeState === 'saving' ? '正在切換取樣率轉換方式…' : resamplingModeState === 'preview' ? '瀏覽器預覽不會保存取樣率轉換設定。' : '取樣率轉換設定已保存。')}
                 </p>
               </div>
             {:else if settingsSection === 'now-playing'}

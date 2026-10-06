@@ -281,6 +281,7 @@ fn hidden_window_updates_artwork_across_tracks_and_clears_missing_art() {
                 duration: Some(Duration::from_secs(90)),
                 volume: 0.7,
                 last_error: None,
+                resampling: None,
             },
             metadata: Some(MediaControlMetadata {
                 title: Some("SMTC smoke track".to_owned()),
@@ -370,6 +371,7 @@ fn hidden_window_updates_artwork_across_tracks_and_clears_missing_art() {
                     duration: Some(Duration::from_secs(90)),
                     volume: 0.7,
                     last_error: None,
+                    resampling: None,
                 },
                 metadata: Some(MediaControlMetadata {
                     title: Some("SMTC smoke track".to_owned()),
@@ -403,6 +405,7 @@ fn hidden_window_updates_artwork_across_tracks_and_clears_missing_art() {
                 duration: Some(Duration::from_secs(75)),
                 volume: 0.7,
                 last_error: None,
+                resampling: None,
             },
             metadata: Some(MediaControlMetadata {
                 title: Some("SMTC second track".to_owned()),
@@ -459,6 +462,7 @@ fn hidden_window_updates_artwork_across_tracks_and_clears_missing_art() {
                 duration: Some(Duration::from_secs(90)),
                 volume: 0.7,
                 last_error: None,
+                resampling: None,
             },
             metadata: Some(MediaControlMetadata {
                 title: Some("SMTC third track without art".to_owned()),
@@ -533,6 +537,7 @@ fn gsmtc_media_properties_events_observe_two_phase_track_cover_publication() {
                     duration: Some(Duration::from_secs(80)),
                     volume: 0.7,
                     last_error: None,
+                    resampling: None,
                 },
                 metadata: Some(MediaControlMetadata {
                     title: Some(title.to_owned()),

@@ -321,6 +321,7 @@ fn empty_snapshot(shuffle: bool, repeat_mode: RepeatMode) -> PlaybackSnapshot {
         shuffle,
         can_next: false,
         can_previous: false,
+        output_format: None,
     }
 }
 
@@ -1192,6 +1193,7 @@ impl AndroidActor {
             shuffle: self.shuffle,
             can_next: queue.is_some_and(PlaybackQueue::can_next),
             can_previous: queue.is_some_and(PlaybackQueue::can_previous),
+            output_format: None,
         };
         *self
             .shared

@@ -12,7 +12,7 @@ use std::{
 use player_core::{LibraryRoot, MediaLocator, MediaSourceKind, PlaylistId, SourceId};
 use serde::{Deserialize, Serialize};
 
-const SETTINGS_SCHEMA_VERSION: u32 = 6;
+const SETTINGS_SCHEMA_VERSION: u32 = 7;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -293,6 +293,26 @@ pub enum NowPlayingLayout {
     B,
 }
 
+/// How Windows playback converts tracks whose sample rate differs from the
+/// output. Both modes use WASAPI shared mode; neither is bit-perfect.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResamplingMode {
+    /// Open the stream at the track's rate; the Windows audio engine converts.
+    WindowsBuiltin,
+    /// Keep the mix rate and convert in-app with the FFT resampler.
+    #[default]
+    HighQuality,
+}
+
+/// An unknown or malformed stored value falls back to the default instead of
+/// rejecting the whole settings file.
+fn lenient_resampling_mode(value: Option<serde_json::Value>) -> ResamplingMode {
+    value
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "encoding", content = "value", rename_all = "camelCase")]
 pub enum StoredPath {
@@ -519,6 +539,9 @@ pub struct AppSettings {
     pub track_list_columns: TrackListColumnSettings,
     pub now_playing_layout: NowPlayingLayout,
     pub now_playing_appearance_preferences: NowPlayingAppearancePreferences,
+    /// Windows playback sample-rate conversion (schema 7).
+    #[serde(default)]
+    pub resampling_mode: ResamplingMode,
     /// False means the source registry came from defaults after both JSON copies failed.
     /// Sync must remain paused until the user rebuilds and confirms the registry.
     pub source_registry_authoritative: bool,
@@ -539,6 +562,7 @@ impl Default for AppSettings {
             track_list_columns: TrackListColumnSettings::default(),
             now_playing_layout: NowPlayingLayout::A,
             now_playing_appearance_preferences: NowPlayingAppearancePreferences::default(),
+            resampling_mode: ResamplingMode::default(),
             source_registry_authoritative: true,
             sources: Vec::new(),
             window_geometry: None,
@@ -847,6 +871,7 @@ struct RawSettings {
     track_list_columns: Option<TrackListColumnSettings>,
     now_playing_layout: Option<NowPlayingLayout>,
     now_playing_appearance_preferences: Option<NowPlayingAppearancePreferences>,
+    resampling_mode: Option<serde_json::Value>,
     source_registry_authoritative: Option<bool>,
     sources: Option<Vec<SourceEntry>>,
     window_geometry: Option<WindowGeometry>,
@@ -871,6 +896,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         now_playing_appearance_preferences: raw
             .now_playing_appearance_preferences
             .unwrap_or_default(),
+        resampling_mode: lenient_resampling_mode(raw.resampling_mode),
         source_registry_authoritative: raw.source_registry_authoritative.unwrap_or(true),
         sources: raw.sources.unwrap_or_default(),
         window_geometry: raw.window_geometry,
@@ -1817,6 +1843,103 @@ mod tests {
         assert_eq!(settings.sources, vec![source]);
         assert!(!settings.source_registry_authoritative);
         assert!(!reopened.source_registry_authoritative().unwrap());
+    }
+
+    #[test]
+    fn schema_six_migrates_to_high_quality_resampling_without_losing_other_settings() {
+        let directory = test_directory("resampling-migration");
+        let path = directory.join("settings.json");
+        let mut previous = AppSettings {
+            schema_version: 6,
+            sources: vec![source(StoredPath::Utf8("D:/Music".into()))],
+            shuffle: true,
+            repeat_mode: RepeatMode::One,
+            now_playing_layout: NowPlayingLayout::B,
+            ..AppSettings::default()
+        };
+        previous.theme.accent_hex = "#ABCDEF".into();
+        previous
+            .now_playing_appearance_preferences
+            .background_blur_px = 8;
+        let mut json = serde_json::to_value(previous.clone()).unwrap();
+        json.as_object_mut().unwrap().remove("resamplingMode");
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).expect("write schema six settings");
+
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("migrate settings");
+        let migrated = store.snapshot().unwrap();
+        assert_eq!(migrated.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(migrated.resampling_mode, ResamplingMode::HighQuality);
+        assert_eq!(migrated.theme, previous.theme);
+        assert_eq!(
+            migrated.now_playing_appearance_preferences,
+            previous.now_playing_appearance_preferences
+        );
+        assert_eq!(migrated.sources, previous.sources);
+        assert!(migrated.shuffle);
+        assert_eq!(migrated.repeat_mode, RepeatMode::One);
+        assert_eq!(migrated.now_playing_layout, NowPlayingLayout::B);
+
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["schemaVersion"], 7);
+        assert_eq!(persisted["resamplingMode"], "highQuality");
+    }
+
+    #[test]
+    fn unknown_resampling_mode_falls_back_to_high_quality() {
+        for stored in [
+            serde_json::json!("highestQuality"),
+            serde_json::json!(3),
+            serde_json::json!(null),
+            serde_json::json!({ "mode": "sinc" }),
+        ] {
+            let directory = test_directory("resampling-unknown");
+            let path = directory.join("settings.json");
+            let mut json = serde_json::to_value(AppSettings {
+                shuffle: true,
+                ..AppSettings::default()
+            })
+            .unwrap();
+            json["resamplingMode"] = stored.clone();
+            fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+            let store = SettingsStore::open(&path, AppSettings::default())
+                .unwrap_or_else(|error| panic!("{stored}: {error:?}"));
+            let settings = store.snapshot().unwrap();
+            assert_eq!(
+                settings.resampling_mode,
+                ResamplingMode::HighQuality,
+                "{stored}"
+            );
+            assert!(settings.shuffle, "other settings survive {stored}");
+        }
+    }
+
+    #[test]
+    fn resampling_mode_roundtrips_through_the_store() {
+        let directory = test_directory("resampling-roundtrip");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).unwrap();
+        assert_eq!(
+            store.snapshot().unwrap().resampling_mode,
+            ResamplingMode::HighQuality
+        );
+        store
+            .update(|settings| {
+                settings.resampling_mode = ResamplingMode::WindowsBuiltin;
+                Ok(())
+            })
+            .unwrap();
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["resamplingMode"], "windowsBuiltin");
+        drop(store);
+
+        let reopened = SettingsStore::open(&path, AppSettings::default()).unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().resampling_mode,
+            ResamplingMode::WindowsBuiltin
+        );
     }
 
     #[test]

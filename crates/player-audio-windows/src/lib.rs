@@ -7,11 +7,14 @@
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+mod resample;
 #[cfg(windows)]
 mod rodio_backend;
 
@@ -93,6 +96,8 @@ pub struct PlaybackSnapshot {
     /// Linear gain in the range `0.0..=1.0`.
     pub volume: f32,
     pub last_error: Option<AudioError>,
+    /// Sample-rate path of the current output; `None` without a backend.
+    pub resampling: Option<ResamplingInfo>,
 }
 
 impl Default for PlaybackSnapshot {
@@ -103,7 +108,101 @@ impl Default for PlaybackSnapshot {
             duration: None,
             volume: 1.0,
             last_error: None,
+            resampling: None,
         }
+    }
+}
+
+/// How tracks whose sample rate differs from the output are converted. Both
+/// modes use WASAPI shared mode; neither is bit-perfect.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum ResamplingMode {
+    /// Open the stream at the track's rate and let the Windows audio engine
+    /// convert to the mix format. The stream reopens when the rate changes.
+    WindowsBuiltin,
+    /// Keep the stream at the mix rate and convert in-app with a 2048-frame
+    /// FFT resampler.
+    #[default]
+    HighQuality,
+}
+
+/// Who converts the current track's sample rate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResamplingConversion {
+    /// The track already runs at the endpoint's mix rate, or nothing is loaded.
+    None,
+    /// The in-app high-quality resampler.
+    HighQuality,
+    /// The Windows audio engine (stream opened at the track's rate).
+    Windows,
+    /// Rodio's basic converter; only if the high-quality resampler could not
+    /// be built for this format.
+    Basic,
+}
+
+/// Snapshot of the output's sample-rate path for status display.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResamplingInfo {
+    pub mode: ResamplingMode,
+    /// Rate of the loaded track, if any.
+    pub source_rate: Option<u32>,
+    /// Rate of the opened shared-mode stream.
+    pub output_rate: u32,
+    /// The endpoint's shared-mode mix rate.
+    pub device_rate: u32,
+    pub conversion: ResamplingConversion,
+    /// Windows-builtin only: why the stream could not run at the track's rate
+    /// and the track is converted in-app instead.
+    pub fallback_reason: Option<String>,
+}
+
+/// Resampling preferences shared with the backend factory, so an output that
+/// is rebuilt after a device change opens in the current mode and, in
+/// Windows-builtin mode, directly at the current track's rate.
+#[derive(Debug)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct ResamplingConfig {
+    mode: AtomicU8,
+    /// Rate of the most recently loaded track; 0 when unknown.
+    track_rate_hint: AtomicU32,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl ResamplingConfig {
+    pub(crate) fn new(mode: ResamplingMode) -> Self {
+        Self {
+            mode: AtomicU8::new(Self::encode(mode)),
+            track_rate_hint: AtomicU32::new(0),
+        }
+    }
+
+    fn encode(mode: ResamplingMode) -> u8 {
+        match mode {
+            ResamplingMode::WindowsBuiltin => 0,
+            ResamplingMode::HighQuality => 1,
+        }
+    }
+
+    pub(crate) fn mode(&self) -> ResamplingMode {
+        match self.mode.load(AtomicOrdering::Relaxed) {
+            0 => ResamplingMode::WindowsBuiltin,
+            _ => ResamplingMode::HighQuality,
+        }
+    }
+
+    pub(crate) fn set_mode(&self, mode: ResamplingMode) {
+        self.mode.store(Self::encode(mode), AtomicOrdering::Relaxed);
+    }
+
+    pub(crate) fn track_rate_hint(&self) -> Option<u32> {
+        match self.track_rate_hint.load(AtomicOrdering::Relaxed) {
+            0 => None,
+            rate => Some(rate),
+        }
+    }
+
+    pub(crate) fn set_track_rate_hint(&self, rate: u32) {
+        self.track_rate_hint.store(rate, AtomicOrdering::Relaxed);
     }
 }
 
@@ -210,6 +309,15 @@ pub trait AudioBackend: 'static {
         let actual = self.seek(target).unwrap_or(Duration::ZERO);
         Ok((duration, actual))
     }
+    /// Switch the resampling mode. A live track continues from its current
+    /// position with its play/pause state and volume.
+    fn set_resampling_mode(&mut self, _mode: ResamplingMode) -> Result<(), AudioError> {
+        Ok(())
+    }
+    /// Current sample-rate path, for status display.
+    fn resampling_info(&self) -> Option<ResamplingInfo> {
+        None
+    }
     /// Report whether the output stream must be rebuilt. Must not block.
     fn output_status(&mut self) -> OutputStatus {
         match self.take_error() {
@@ -234,6 +342,8 @@ struct PlayerInner {
     /// Disconnects when the worker thread finishes, so shutdown can wait
     /// with a deadline instead of joining a stuck thread forever.
     worker_exited: Mutex<Receiver<()>>,
+    /// Shared with the native backend factory; `None` for injected backends.
+    resampling: Option<Arc<ResamplingConfig>>,
 }
 
 /// Opaque identity assigned by the application to one TrackId for this
@@ -289,6 +399,7 @@ enum Command {
     Stop,
     Seek(Duration),
     SetVolume(f32),
+    SetResampling(ResamplingMode),
     CheckpointAccounting,
     Shutdown,
 }
@@ -313,15 +424,28 @@ impl CommandTicket {
 impl PlayerHandle {
     /// Create the Windows Rodio/CPAL backend on a worker thread.
     pub fn new() -> Result<Self, AudioError> {
+        Self::with_resampling(ResamplingMode::default())
+    }
+
+    /// Create the Windows Rodio/CPAL backend with an initial resampling mode.
+    pub fn with_resampling(mode: ResamplingMode) -> Result<Self, AudioError> {
         #[cfg(windows)]
         {
-            Self::with_recoverable_backend_factory(|| {
-                Ok(Box::new(rodio_backend::RodioBackend::new()?) as Box<dyn AudioBackend>)
-            })
+            let config = Arc::new(ResamplingConfig::new(mode));
+            let factory_config = Arc::clone(&config);
+            Self::spawn(
+                BackendSource::recoverable(move || {
+                    Ok(Box::new(rodio_backend::RodioBackend::new(Arc::clone(
+                        &factory_config,
+                    ))?) as Box<dyn AudioBackend>)
+                }),
+                Some(config),
+            )
         }
 
         #[cfg(not(windows))]
         {
+            let _ = mode;
             Err(AudioError::UnsupportedPlatform)
         }
     }
@@ -332,7 +456,7 @@ impl PlayerHandle {
     where
         F: FnOnce() -> Result<Box<dyn AudioBackend>, AudioError> + Send + 'static,
     {
-        Self::spawn(BackendSource::once(factory))
+        Self::spawn(BackendSource::once(factory), None)
     }
 
     /// Spawn a worker whose factory can be called again. When the backend
@@ -345,10 +469,13 @@ impl PlayerHandle {
     where
         F: FnMut() -> Result<Box<dyn AudioBackend>, AudioError> + Send + 'static,
     {
-        Self::spawn(BackendSource::recoverable(factory))
+        Self::spawn(BackendSource::recoverable(factory), None)
     }
 
-    fn spawn(source: BackendSource) -> Result<Self, AudioError> {
+    fn spawn(
+        source: BackendSource,
+        resampling: Option<Arc<ResamplingConfig>>,
+    ) -> Result<Self, AudioError> {
         let snapshot = Arc::new(RwLock::new(PlaybackSnapshot::default()));
         let worker_snapshot = Arc::clone(&snapshot);
         let (command_tx, command_rx) = mpsc::sync_channel(COMMAND_CAPACITY);
@@ -379,6 +506,7 @@ impl PlayerHandle {
                 accounting,
                 worker: Mutex::new(Some(worker)),
                 worker_exited: Mutex::new(exit_rx),
+                resampling,
             }),
         })
     }
@@ -478,6 +606,20 @@ impl PlayerHandle {
             return Err(AudioError::InvalidVolume);
         }
         self.enqueue_with_ack(Command::SetVolume(volume))
+    }
+
+    /// Switch the resampling mode. A loaded track continues from its current
+    /// position with its play/pause state; an output rebuilt later (device
+    /// change) keeps the new mode.
+    pub fn request_set_resampling(
+        &self,
+        mode: ResamplingMode,
+    ) -> Result<CommandTicket, AudioError> {
+        let ticket = self.enqueue_with_ack(Command::SetResampling(mode))?;
+        if let Some(config) = self.inner.resampling.as_ref() {
+            config.set_mode(mode);
+        }
+        Ok(ticket)
     }
 
     /// Sample and request persistence of the final active playback interval
@@ -712,6 +854,9 @@ struct OutputSupervisor {
     source: BackendSource,
     recovery: Option<OutputRecovery>,
     unrecoverable_failure_reported: bool,
+    /// Last mode requested through `SetResampling`; applied to every rebuilt
+    /// backend before its track is restored.
+    resampling_mode: Option<ResamplingMode>,
 }
 
 fn worker_loop(
@@ -748,6 +893,7 @@ fn worker_loop(
         source,
         recovery: initial_recovery,
         unrecoverable_failure_reported: false,
+        resampling_mode: None,
     };
 
     loop {
@@ -762,6 +908,9 @@ fn worker_loop(
                 // stop, or replace it. AudioEvent delivery is intentionally
                 // not involved in the accounting path.
                 sample_before_command(&mut meter, &mut backend, &snapshot);
+                if let Command::SetResampling(mode) = &queued.command {
+                    supervisor.resampling_mode = Some(*mode);
+                }
                 let result = if backend.is_none() && supervisor.recovery.is_some() {
                     handle_command_during_recovery(
                         queued.command,
@@ -920,6 +1069,11 @@ fn attempt_output_recovery(
     let resume_playing = recovery.prior_state == PlaybackState::Playing
         && (trigger == RecoveryTrigger::Command
             || recovery.lost_at.elapsed() <= OUTPUT_RESUME_PLAYBACK_GRACE);
+    if let Some(mode) = supervisor.resampling_mode {
+        if let Err(error) = restored.set_resampling_mode(mode) {
+            eprintln!("[audio] could not apply the resampling mode to the rebuilt output: {error}");
+        }
+    }
     let _ = restored.set_volume(recovery.volume);
     let outcome = restore_track(
         restored.as_mut(),
@@ -1057,6 +1211,8 @@ fn handle_command_during_recovery(
             update_snapshot(snapshot, events, |snapshot| snapshot.volume = volume);
             Ok(())
         }
+        // The worker already recorded the mode; the rebuilt backend gets it.
+        Command::SetResampling(_) => Ok(()),
         Command::CheckpointAccounting => {
             meter.request_flush();
             Ok(())
@@ -1302,10 +1458,52 @@ fn handle_command(
                 return Err(error);
             }
         },
+        Command::SetResampling(mode) => {
+            let state = read_snapshot(snapshot).state;
+            if let Err(error) = backend.set_resampling_mode(mode) {
+                set_error(snapshot, events, error.clone());
+                return Err(error);
+            }
+            if current_path.is_some()
+                && matches!(
+                    state,
+                    PlaybackState::Ready | PlaybackState::Playing | PlaybackState::Paused
+                )
+            {
+                // The track restarted from the captured position; report it
+                // even while paused, when position polling is idle.
+                let position = backend.position();
+                update_snapshot(snapshot, events, |snapshot| {
+                    snapshot.position = snapshot
+                        .duration
+                        .map_or(position, |duration| position.min(duration));
+                });
+                meter.reset_anchor(state, position);
+            }
+        }
         Command::CheckpointAccounting => meter.request_flush(),
         Command::Shutdown => {}
     }
     Ok(())
+}
+
+/// Mirror the backend's sample-rate path into the snapshot.
+fn sync_resampling_info(
+    backend: Option<&dyn AudioBackend>,
+    snapshot: &Arc<RwLock<PlaybackSnapshot>>,
+) {
+    let info = backend.and_then(|backend| backend.resampling_info());
+    let changed = snapshot
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .resampling
+        != info;
+    if changed {
+        snapshot
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .resampling = info;
+    }
 }
 
 fn update_position(
@@ -1314,6 +1512,7 @@ fn update_position(
     events: &SyncSender<AudioEvent>,
     meter: &mut PlaybackMeter,
 ) {
+    sync_resampling_info(backend.as_deref(), snapshot);
     let Some(backend) = backend.as_mut() else {
         return;
     };
@@ -2040,6 +2239,7 @@ mod tests {
         script: Arc<OutputScript>,
         loaded: bool,
         position: Duration,
+        resampling: ResamplingMode,
     }
 
     impl ScriptedBackend {
@@ -2094,6 +2294,32 @@ mod tests {
         fn is_empty(&self) -> bool {
             !self.loaded
         }
+        fn set_resampling_mode(&mut self, mode: ResamplingMode) -> Result<(), AudioError> {
+            // Like RodioBackend, the live track restarts from its position.
+            self.log(format!("resampling:{mode:?}"));
+            self.resampling = mode;
+            Ok(())
+        }
+        fn resampling_info(&self) -> Option<ResamplingInfo> {
+            let source_rate = self.loaded.then_some(44_100);
+            let (output_rate, conversion) = match (self.resampling, source_rate) {
+                (_, None) => (96_000, ResamplingConversion::None),
+                (ResamplingMode::HighQuality, Some(_)) => {
+                    (96_000, ResamplingConversion::HighQuality)
+                }
+                (ResamplingMode::WindowsBuiltin, Some(rate)) => {
+                    (rate, ResamplingConversion::Windows)
+                }
+            };
+            Some(ResamplingInfo {
+                mode: self.resampling,
+                source_rate,
+                output_rate,
+                device_rate: 96_000,
+                conversion,
+                fallback_reason: None,
+            })
+        }
         fn output_status(&mut self) -> OutputStatus {
             self.script
                 .inject
@@ -2118,6 +2344,7 @@ mod tests {
                 script: Arc::clone(&script),
                 loaded: false,
                 position: Duration::ZERO,
+                resampling: ResamplingMode::default(),
             }) as Box<dyn AudioBackend>)
         })
         .expect("worker should start")
@@ -2161,8 +2388,11 @@ mod tests {
 
         script.inject(OutputStatus::Lost("device invalidated".to_owned()));
         wait_until("rebuilt playing backend", || {
+            // `2:play` is the last call of the restore; the state alone is
+            // already Playing while the rebuild is still in progress.
             script.created.load(Ordering::SeqCst) == 2
                 && player.snapshot().state == PlaybackState::Playing
+                && script.calls().contains(&"2:play".to_owned())
         });
         let calls = script.calls();
         for expected in ["2:volume:0.4", "2:load:song.flac", "2:seek:2500", "2:play"] {
@@ -2182,6 +2412,163 @@ mod tests {
         assert_eq!(paused.state, PlaybackState::Paused);
         assert!(started.elapsed() < Duration::from_millis(500));
         assert!(script.calls().contains(&"2:pause".to_owned()));
+    }
+
+    #[test]
+    fn resampling_switch_is_acknowledged_and_keeps_position_and_state() {
+        let script = available_script();
+        let player = scripted_player(&script);
+        wait_for(&player, PlaybackState::Empty);
+        wait_until("output status", || player.snapshot().resampling.is_some());
+        let idle = player.snapshot().resampling.unwrap();
+        assert_eq!(idle.mode, ResamplingMode::HighQuality);
+        assert_eq!(idle.conversion, ResamplingConversion::None);
+
+        player
+            .request_load_and_play(PathBuf::from("song.flac"))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        player
+            .request_seek(Duration::from_millis(3_000))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        let playing = player
+            .request_set_resampling(ResamplingMode::WindowsBuiltin)
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        assert_eq!(playing.state, PlaybackState::Playing);
+        assert_eq!(playing.position, Duration::from_millis(3_000));
+        let info = playing.resampling.expect("status after the switch");
+        assert_eq!(info.mode, ResamplingMode::WindowsBuiltin);
+        assert_eq!(info.conversion, ResamplingConversion::Windows);
+        assert_eq!(info.output_rate, 44_100);
+
+        player.request_pause().unwrap().wait(ACK).unwrap();
+        player
+            .request_seek(Duration::from_millis(4_200))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        let paused = player
+            .request_set_resampling(ResamplingMode::HighQuality)
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        assert_eq!(paused.state, PlaybackState::Paused);
+        assert_eq!(paused.position, Duration::from_millis(4_200));
+        assert_eq!(
+            paused.resampling.map(|info| info.conversion),
+            Some(ResamplingConversion::HighQuality)
+        );
+        let calls = script.calls();
+        assert!(
+            calls.contains(&"1:resampling:WindowsBuiltin".to_owned()),
+            "{calls:?}"
+        );
+        assert!(
+            calls.contains(&"1:resampling:HighQuality".to_owned()),
+            "{calls:?}"
+        );
+        // Switching modes never reloads, replays, or pauses the track itself.
+        assert_eq!(
+            calls.iter().filter(|call| call.contains("load:")).count(),
+            1
+        );
+        assert_eq!(
+            calls.iter().filter(|call| call.ends_with(":play")).count(),
+            1
+        );
+        assert_eq!(script.created.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn rebuilt_output_keeps_the_resampling_mode() {
+        let script = available_script();
+        let player = scripted_player(&script);
+        wait_for(&player, PlaybackState::Empty);
+        player
+            .request_set_resampling(ResamplingMode::WindowsBuiltin)
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        player
+            .request_load_and_play(PathBuf::from("song.flac"))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        player
+            .request_seek(Duration::from_millis(2_000))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+
+        script.inject(OutputStatus::DefaultDeviceChanged);
+        wait_until("rebuilt playing backend", || {
+            // `2:play` is the last call of the restore; the state alone is
+            // already Playing while the rebuild is still in progress.
+            script.created.load(Ordering::SeqCst) == 2
+                && player.snapshot().state == PlaybackState::Playing
+                && script.calls().contains(&"2:play".to_owned())
+        });
+        let calls = script.calls();
+        let mode = calls
+            .iter()
+            .position(|call| call == "2:resampling:WindowsBuiltin")
+            .unwrap_or_else(|| panic!("mode not reapplied: {calls:?}"));
+        let load = calls
+            .iter()
+            .position(|call| call == "2:load:song.flac")
+            .unwrap();
+        assert!(
+            mode < load,
+            "the mode must be set before the track is restored: {calls:?}"
+        );
+        wait_until("status from the rebuilt output", || {
+            player
+                .snapshot()
+                .resampling
+                .is_some_and(|info| info.mode == ResamplingMode::WindowsBuiltin)
+        });
+        assert_eq!(player.snapshot().position, Duration::from_millis(2_000));
+    }
+
+    #[test]
+    fn resampling_change_during_an_outage_applies_to_the_rebuilt_output() {
+        let script = available_script();
+        let player = scripted_player(&script);
+        wait_for(&player, PlaybackState::Empty);
+        player
+            .request_load_and_play(PathBuf::from("song.flac"))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        script.available.store(false, Ordering::SeqCst);
+        script.inject(OutputStatus::Lost("device removed".to_owned()));
+        wait_for(&player, PlaybackState::Error);
+        assert_eq!(player.snapshot().resampling, None);
+
+        let started = Instant::now();
+        player
+            .request_set_resampling(ResamplingMode::WindowsBuiltin)
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500));
+
+        script.available.store(true, Ordering::SeqCst);
+        wait_until("background recovery", || {
+            // `2:play` is the last call of the restore; the state alone is
+            // already Playing while the rebuild is still in progress.
+            script.created.load(Ordering::SeqCst) == 2
+                && player.snapshot().state == PlaybackState::Playing
+                && script.calls().contains(&"2:play".to_owned())
+        });
+        assert!(script
+            .calls()
+            .contains(&"2:resampling:WindowsBuiltin".to_owned()));
     }
 
     #[test]
@@ -2232,8 +2619,11 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(500));
         assert_eq!(seeked.position, Duration::from_millis(4_000));
         wait_until("rebuild after seek timeout", || {
+            // `2:play` is the last call of the restore; the state alone is
+            // already Playing while the rebuild is still in progress.
             script.created.load(Ordering::SeqCst) == 2
                 && player.snapshot().state == PlaybackState::Playing
+                && script.calls().contains(&"2:play".to_owned())
         });
         let calls = script.calls();
         assert!(calls.contains(&"2:seek:4000".to_owned()), "{calls:?}");
@@ -2273,8 +2663,11 @@ mod tests {
 
         script.available.store(true, Ordering::SeqCst);
         wait_until("background recovery", || {
+            // `2:play` is the last call of the restore; the state alone is
+            // already Playing while the rebuild is still in progress.
             script.created.load(Ordering::SeqCst) == 2
                 && player.snapshot().state == PlaybackState::Playing
+                && script.calls().contains(&"2:play".to_owned())
         });
         let calls = script.calls();
         for expected in ["2:volume:0.3", "2:seek:3000", "2:play"] {

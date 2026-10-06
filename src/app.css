@@ -2138,6 +2138,69 @@ input:focus-visible {
   accent-color: var(--accent);
 }
 
+.resampling-options {
+  display: grid;
+  gap: 8px;
+}
+
+.resampling-option {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(var(--text-rgb), 0.02);
+  cursor: pointer;
+}
+
+.resampling-option:has(input:checked) {
+  border-color: var(--accent);
+}
+
+.resampling-option input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.resampling-option-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.resampling-option-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.resampling-status {
+  display: grid;
+  gap: 4px;
+  margin-top: 14px;
+  padding: 11px 12px;
+  border-radius: 9px;
+  background: rgba(var(--text-rgb), 0.04);
+}
+
+.resampling-status > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.resampling-status > strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.resampling-status > p {
+  margin: 0;
+  color: var(--status-warning);
+  font-size: 11px;
+}
+
 .track-column-order-actions {
   display: flex;
   align-items: center;

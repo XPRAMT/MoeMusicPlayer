@@ -40,8 +40,8 @@ use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 use settings::{
     clamp_window_geometry_to_monitors, AppSettings, LyricsPreferences,
-    NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode, SettingsStore, SourceEntry,
-    SourceEntryKind, ThemeSettings, TrackListColumnSettings, WindowGeometry,
+    NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode, ResamplingMode, SettingsStore,
+    SourceEntry, SourceEntryKind, ThemeSettings, TrackListColumnSettings, WindowGeometry,
 };
 #[cfg(any(target_os = "android", test))]
 mod android_artwork;
@@ -69,7 +69,8 @@ use player_audio_windows::{
         SystemMediaEvent,
     },
     AudioError, CommandTicket, PlaybackAccountingCheckpoint, PlaybackAccountingId,
-    PlaybackState as AudioPlaybackState, PlayerHandle,
+    PlaybackState as AudioPlaybackState, PlayerHandle, ResamplingConversion, ResamplingInfo,
+    ResamplingMode as AudioResamplingMode,
 };
 
 const LIBRARY_SYNC_FINISHED_EVENT: &str = "library-sync-finished";
@@ -1033,7 +1034,36 @@ impl WindowsPlaybackService {
             shuffle,
             can_next,
             can_previous,
+            output_format: audio.resampling.as_ref().map(playback_output_format),
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn audio_resampling_mode(mode: ResamplingMode) -> AudioResamplingMode {
+    match mode {
+        ResamplingMode::WindowsBuiltin => AudioResamplingMode::WindowsBuiltin,
+        ResamplingMode::HighQuality => AudioResamplingMode::HighQuality,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn playback_output_format(info: &ResamplingInfo) -> PlaybackOutputFormat {
+    PlaybackOutputFormat {
+        mode: match info.mode {
+            AudioResamplingMode::WindowsBuiltin => ResamplingMode::WindowsBuiltin,
+            AudioResamplingMode::HighQuality => ResamplingMode::HighQuality,
+        },
+        source_rate_hz: info.source_rate,
+        output_rate_hz: info.output_rate,
+        device_rate_hz: info.device_rate,
+        conversion: match info.conversion {
+            ResamplingConversion::None => OutputConversion::None,
+            ResamplingConversion::HighQuality => OutputConversion::HighQuality,
+            ResamplingConversion::Windows => OutputConversion::Windows,
+            ResamplingConversion::Basic => OutputConversion::Basic,
+        },
+        fallback_reason: info.fallback_reason.clone(),
     }
 }
 
@@ -1705,6 +1735,35 @@ struct PlaybackSnapshot {
     shuffle: bool,
     can_next: bool,
     can_previous: bool,
+    /// Windows only: the output's sample-rate path for the playback settings.
+    output_format: Option<PlaybackOutputFormat>,
+}
+
+/// Who converts the current track's sample rate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+enum OutputConversion {
+    /// Native rate, or nothing loaded.
+    None,
+    HighQuality,
+    Windows,
+    /// Basic converter; only if the high-quality resampler is unavailable.
+    Basic,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+struct PlaybackOutputFormat {
+    mode: ResamplingMode,
+    source_rate_hz: Option<u32>,
+    output_rate_hz: u32,
+    device_rate_hz: u32,
+    conversion: OutputConversion,
+    /// Windows built-in mode could not open the track's rate; the track is
+    /// converted in-app at the mix rate instead.
+    fallback_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1733,9 +1792,10 @@ struct PlaybackQueuePageItem {
 mod playback_queue_ipc_tests {
     use super::{
         feature, playback_duration_ms, sync_summary, FeatureState, LibraryRoot, LibrarySource,
-        MediaLocator, MediaSourceError, MediaSourceKind, PlaybackQueuePage, PlaybackQueuePageItem,
-        PlaybackQueueSource, PlaybackSnapshot, RepeatMode, RuntimeCapabilities, SourceId,
-        SourceScanState, SyncReport, TrackId, TrackMetadataError,
+        MediaLocator, MediaSourceError, MediaSourceKind, OutputConversion, PlaybackOutputFormat,
+        PlaybackQueuePage, PlaybackQueuePageItem, PlaybackQueueSource, PlaybackSnapshot,
+        RepeatMode, ResamplingMode, RuntimeCapabilities, SourceId, SourceScanState, SyncReport,
+        TrackId, TrackMetadataError,
     };
 
     #[test]
@@ -1820,8 +1880,27 @@ mod playback_queue_ipc_tests {
             shuffle: true,
             can_next: true,
             can_previous: false,
+            output_format: Some(PlaybackOutputFormat {
+                mode: ResamplingMode::WindowsBuiltin,
+                source_rate_hz: Some(44_100),
+                output_rate_hz: 96_000,
+                device_rate_hz: 96_000,
+                conversion: OutputConversion::HighQuality,
+                fallback_reason: Some("unsupported".to_owned()),
+            }),
         };
         let value = serde_json::to_value(snapshot).expect("serialize playback snapshot");
+        assert_eq!(
+            value["outputFormat"],
+            serde_json::json!({
+                "mode": "windowsBuiltin",
+                "sourceRateHz": 44_100,
+                "outputRateHz": 96_000,
+                "deviceRateHz": 96_000,
+                "conversion": "highQuality",
+                "fallbackReason": "unsupported",
+            })
+        );
         for key in [
             "currentTrack",
             "isPlaying",
@@ -2797,6 +2876,44 @@ fn settings_set_now_playing_layout(
         })
         .map(|settings| settings.now_playing_layout)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_get_resampling_mode(state: State<'_, AppState>) -> Result<ResamplingMode, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.resampling_mode)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the mode, then switch the running player. The track continues from
+/// its position; a failure after saving is reported but the choice is kept.
+#[tauri::command]
+async fn settings_set_resampling_mode(
+    state: State<'_, AppState>,
+    mode: ResamplingMode,
+) -> Result<ResamplingMode, String> {
+    let saved = state
+        .settings
+        .update(|settings| {
+            settings.resampling_mode = mode;
+            Ok(())
+        })
+        .map(|settings| settings.resampling_mode)
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(service) = state.playback.as_ref() {
+            let applied = match set_playback_resampling(service, saved) {
+                // Reopening the output can take up to two bounded device opens.
+                Ok(ticket) => await_playback_ack_within(ticket, Duration::from_secs(10)).await,
+                Err(error) => Err(error),
+            };
+            applied.map_err(|error| format!("設定已保存，但套用到播放器失敗：{error}"))?;
+        }
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -4963,8 +5080,28 @@ fn set_playback_volume(
 }
 
 #[cfg(target_os = "windows")]
+fn set_playback_resampling(
+    service: &WindowsPlaybackService,
+    mode: ResamplingMode,
+) -> Result<CommandTicket, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    service
+        .player
+        .request_set_resampling(audio_resampling_mode(mode))
+        .map_err(|error| playback_audio_error_message(&error))
+}
+
+#[cfg(target_os = "windows")]
 async fn await_playback_ack(ticket: CommandTicket) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || ticket.wait(Duration::from_secs(2)))
+    await_playback_ack_within(ticket, Duration::from_secs(2)).await
+}
+
+#[cfg(target_os = "windows")]
+async fn await_playback_ack_within(ticket: CommandTicket, timeout: Duration) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || ticket.wait(timeout))
         .await
         .map_err(|error| format!("等待播放命令工作失敗：{error}"))?
         .map(|_| ())
@@ -5461,6 +5598,8 @@ pub fn run() {
             settings_set_track_list_columns,
             settings_get_now_playing_layout,
             settings_set_now_playing_layout,
+            settings_get_resampling_mode,
+            settings_set_resampling_mode,
             get_runtime_capabilities,
             library_get_page,
             playlist_list,
@@ -5545,7 +5684,9 @@ pub fn run() {
                 .snapshot()
                 .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
             #[cfg(target_os = "windows")]
-            let (playback, playback_error) = match PlayerHandle::new() {
+            let (playback, playback_error) = match PlayerHandle::with_resampling(
+                audio_resampling_mode(initial_settings.resampling_mode),
+            ) {
                 Ok(player) => {
                     let service = WindowsPlaybackService::with_modes(
                         player,

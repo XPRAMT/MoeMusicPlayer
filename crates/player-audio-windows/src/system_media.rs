@@ -130,7 +130,8 @@ struct ControllerInner {
 }
 
 enum WorkerCommand {
-    Update(MediaControlUpdate),
+    // Boxed: the snapshot makes this variant much larger than `Shutdown`.
+    Update(Box<MediaControlUpdate>),
     Shutdown,
 }
 
@@ -166,7 +167,11 @@ impl SystemMediaController {
     /// This method is non-blocking. If the bounded queue is full, callers can
     /// retry with the next authoritative snapshot.
     pub fn update(&self, update: MediaControlUpdate) -> Result<(), SystemMediaError> {
-        match self.inner.commands.try_send(WorkerCommand::Update(update)) {
+        match self
+            .inner
+            .commands
+            .try_send(WorkerCommand::Update(Box::new(update)))
+        {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(SystemMediaError::CommandQueueFull),
             Err(TrySendError::Disconnected(_)) => Err(SystemMediaError::WorkerStopped),
@@ -673,6 +678,7 @@ mod tests {
                 duration: Some(Duration::from_secs(90)),
                 volume: 0.8,
                 last_error: None,
+                resampling: None,
             },
             metadata: None,
             capabilities: MediaControlCapabilities::default(),

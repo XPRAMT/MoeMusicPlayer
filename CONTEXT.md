@@ -28,7 +28,9 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **Shuffle ratio**: The accumulated listening time divided by a track’s known duration. A lower ratio increases the track’s chance in a newly generated shuffle traversal; an unknown or zero duration has neutral weight.
 
-**Playback snapshot**: A point-in-time view of the current playback session, including state, position, duration, volume, and any current error. The audio backend is authoritative for these values.
+**Playback snapshot**: A point-in-time view of the current playback session, including state, position, duration, volume, any current error, and on Windows the output's sample-rate path. The audio backend is authoritative for these values.
+
+**Resampling mode**: The Windows playback setting that decides who converts a track whose sample rate differs from the output: the app's high-quality resampler (default, stream stays at the device mix rate) or the Windows audio engine (stream opened at the track's rate). Both use shared mode and are not bit-perfect.
 
 **Playback queue**: A session-local ordered sequence of stable Track IDs drawn from the active library query or a user playlist. Library order follows the visible library sort; playlist order follows entry order and keeps repeated playable entries. Queue IDs stay in Rust and are not copied into the Renderer.
 

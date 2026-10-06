@@ -19,6 +19,14 @@ track identity, metadata, or renderer state.
   or queue can honor a command; unsupported commands stay disabled.
 - **Now-playing metadata:** The track title, artist, and album shown in system
   media surfaces, separate from the track's stable app identity.
+- **Resampling mode:** How a track whose sample rate differs from the output is
+  converted. *High quality* (default) keeps the stream at the endpoint's
+  shared-mode mix rate and converts in-app; *Windows built-in* opens the stream
+  at the track's rate and lets the Windows audio engine convert. Both are
+  shared mode and not bit-perfect.
+- **Resampling info:** The snapshot's view of the current sample-rate path:
+  mode, track rate, stream rate, endpoint mix rate, who converts, and why a
+  Windows built-in open fell back to in-app conversion.
 
 ## Constraints
 
@@ -37,3 +45,15 @@ track identity, metadata, or renderer state.
   snapshot carries a recoverable `OutputDevice` error and the worker retries.
 - Dropping the final handle waits at most a few seconds for the worker and
   detaches it if a backend call is stuck.
+- In-app resampling (`resample.rs`, rubato FFT, 2048-frame chunks, one
+  sub-chunk) is built on the worker when a track is attached; it trims the
+  filter delay, flushes the tail, resets on seek, and only allocates in the
+  render callback when a stream changes rate mid-way. Equal rates bypass it.
+- Windows built-in mode reopens the stream only when the track rate changes.
+  A refused or mismatched open falls back to the mix rate with in-app
+  conversion and a logged warning; failing every open is an output error
+  handled by recovery. A rebuilt output reopens in the current mode, directly
+  at the last track's rate, before the track is restored.
+- Switching modes is an acknowledged worker command; when the output must be
+  replaced the track restarts at its current position with its play/pause
+  state and volume.

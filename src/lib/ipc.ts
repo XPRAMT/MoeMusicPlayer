@@ -36,6 +36,7 @@ export interface TrackListColumnSettings {
 }
 
 export type NowPlayingLayout = 'a' | 'b';
+export type ResamplingMode = 'windowsBuiltin' | 'highQuality';
 export type CoverCornerStyle = 'rounded' | 'square';
 export type TimelineStyle = 'line' | 'edge';
 export type LyricsTextEffect = 'shadow' | 'stroke' | 'none';
@@ -237,6 +238,17 @@ export interface PlaybackSnapshot {
   shuffle: boolean;
   canNext: boolean;
   canPrevious: boolean;
+  /** Windows only: the output's sample-rate path. */
+  outputFormat?: PlaybackOutputFormat | null;
+}
+
+export interface PlaybackOutputFormat {
+  mode: ResamplingMode;
+  sourceRateHz: number | null;
+  outputRateHz: number;
+  deviceRateHz: number;
+  conversion: 'none' | 'highQuality' | 'windows' | 'basic';
+  fallbackReason: string | null;
 }
 
 export interface LyricLine {
@@ -339,6 +351,14 @@ interface IpcContract {
   settings_set_now_playing_layout: {
     args: { layout: NowPlayingLayout };
     result: NowPlayingLayout;
+  };
+  settings_get_resampling_mode: {
+    args: Record<string, never>;
+    result: ResamplingMode;
+  };
+  settings_set_resampling_mode: {
+    args: { mode: ResamplingMode };
+    result: ResamplingMode;
   };
   settings_get_lyrics_preferences: {
     args: Record<string, never>;

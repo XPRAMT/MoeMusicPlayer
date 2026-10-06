@@ -1,4 +1,4 @@
-﻿//! Rodio/CPAL (WASAPI shared mode) backend.
+//! Rodio/CPAL (WASAPI shared mode) backend.
 //!
 //! Every method here runs on the audio worker thread and must return without
 //! waiting for CPAL's render callback. When a WASAPI endpoint is invalidated
@@ -16,6 +16,17 @@
 //!   `Player`, and the output is reported lost so the worker rebuilds it.
 //! - Abandoned helper threads own only an `Arc<Player>`; no lock is held
 //!   while they wait and nothing ever joins them.
+//!
+//! Sample-rate handling follows [`ResamplingMode`]:
+//!
+//! - High quality: the stream runs at the endpoint's shared-mode mix rate and
+//!   every track whose rate differs is wrapped in [`Resampled`], so Rodio's
+//!   mixer never converts.
+//! - Windows built-in: before a track is attached the stream is reopened
+//!   strictly at the track's rate (only when it differs), and the Windows
+//!   audio engine converts to the mix rate. If that open fails, the stream
+//!   stays on or returns to the mix rate, the track is converted in-app, and
+//!   the fallback is reported in [`ResamplingInfo`].
 
 use std::fs::File;
 use std::io::BufReader;
@@ -32,7 +43,11 @@ use rodio::{
     ChannelCount, Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Sample, SampleRate, Source,
 };
 
-use crate::{AudioBackend, AudioError, OutputStatus};
+use crate::resample::{needs_resampling, Resampled};
+use crate::{
+    AudioBackend, AudioError, OutputStatus, ResamplingConfig, ResamplingConversion, ResamplingInfo,
+    ResamplingMode,
+};
 
 /// Upper bound for opening a WASAPI endpoint. A driver that hangs inside
 /// Activate/Initialize must not take the worker with it.
@@ -53,6 +68,12 @@ pub(super) struct RodioBackend {
     track: TrackPlayer,
     last_device_check: Instant,
     last_heartbeat: (u64, Instant),
+    /// Shared with the backend factory so a rebuilt output starts in the
+    /// current mode and, in Windows-builtin mode, at the current track's rate.
+    config: Arc<ResamplingConfig>,
+    mode: ResamplingMode,
+    /// Windows-builtin only: the track rate the endpoint refused, and why.
+    fallback: Option<OutputFallback>,
 }
 
 struct OpenOutput {
@@ -60,6 +81,69 @@ struct OpenOutput {
     sink: MixerDeviceSink,
     device_id: Option<String>,
     signals: Arc<OutputSignals>,
+    /// The rate the stream actually runs at (the mixer's rate).
+    sample_rate: SampleRate,
+    /// The endpoint's shared-mode mix rate reported when the stream opened.
+    device_rate: SampleRate,
+    /// Opened with the device's default format rather than a requested rate.
+    mix: bool,
+}
+
+#[derive(Clone, Debug)]
+struct OutputFallback {
+    rate: SampleRate,
+    reason: String,
+}
+
+/// Output change needed before a track at some rate is attached.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputPlan {
+    Keep,
+    /// Reopen strictly at this rate (Windows-builtin).
+    OpenAt(SampleRate),
+    /// Reopen with the device's default (mix) format.
+    OpenMix,
+}
+
+/// Decide whether the stream must be reopened for a track at `source_rate`.
+/// `refused_rate` is a rate the current endpoint already failed to open at,
+/// which is not retried for every track.
+fn plan_output(
+    mode: ResamplingMode,
+    source_rate: SampleRate,
+    output_rate: SampleRate,
+    output_is_mix: bool,
+    refused_rate: Option<SampleRate>,
+) -> OutputPlan {
+    match mode {
+        ResamplingMode::HighQuality if output_is_mix => OutputPlan::Keep,
+        ResamplingMode::HighQuality => OutputPlan::OpenMix,
+        ResamplingMode::WindowsBuiltin if output_rate == source_rate => OutputPlan::Keep,
+        ResamplingMode::WindowsBuiltin if refused_rate == Some(source_rate) => {
+            if output_is_mix {
+                OutputPlan::Keep
+            } else {
+                OutputPlan::OpenMix
+            }
+        }
+        ResamplingMode::WindowsBuiltin => OutputPlan::OpenAt(source_rate),
+    }
+}
+
+/// What the current track goes through on its way to the endpoint.
+fn conversion_for(
+    source_rate: Option<SampleRate>,
+    output_rate: SampleRate,
+    device_rate: SampleRate,
+    in_app: bool,
+) -> ResamplingConversion {
+    match source_rate {
+        None => ResamplingConversion::None,
+        Some(rate) if rate != output_rate && in_app => ResamplingConversion::HighQuality,
+        Some(rate) if rate != output_rate => ResamplingConversion::Basic,
+        Some(_) if output_rate != device_rate => ResamplingConversion::Windows,
+        Some(_) => ResamplingConversion::None,
+    }
 }
 
 #[derive(Default)]
@@ -101,39 +185,146 @@ impl RodioBackend {
     }
 
     /// Open the current default output endpoint. The open runs on a helper
-    /// thread and is abandoned after `OUTPUT_OPEN_TIMEOUT`.
-    pub(super) fn new() -> Result<Self, AudioError> {
-        let output = open_default_output_with_timeout(OUTPUT_OPEN_TIMEOUT)?;
-        let track = TrackPlayer::new(output.sink.mixer().clone());
+    /// thread and is abandoned after `OUTPUT_OPEN_TIMEOUT`. In Windows-builtin
+    /// mode the stream opens directly at the last track's rate when known; if
+    /// the endpoint refuses it, the mix rate is used and the fallback noted.
+    /// Failing both is an error so the worker's recovery retries.
+    pub(super) fn new(config: Arc<ResamplingConfig>) -> Result<Self, AudioError> {
+        let mode = config.mode();
+        let requested = match mode {
+            ResamplingMode::WindowsBuiltin => config.track_rate_hint().and_then(SampleRate::new),
+            ResamplingMode::HighQuality => None,
+        };
+        let mut fallback = None;
+        let output = match requested {
+            Some(rate) => match open_output_with_timeout(Some(rate), OUTPUT_OPEN_TIMEOUT) {
+                Ok(output) => output,
+                Err(error) => {
+                    let reason = error.to_string();
+                    log_refused_rate(rate, &reason);
+                    let output = open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT)?;
+                    fallback = Some(OutputFallback { rate, reason });
+                    output
+                }
+            },
+            None => open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT)?,
+        };
+        let track = TrackPlayer::new(output.sink.mixer().clone(), output.sample_rate);
         let now = Instant::now();
         Ok(Self {
             output: Some(output),
             track,
             last_device_check: now,
             last_heartbeat: (0, now),
+            config,
+            mode,
+            fallback,
         })
     }
+
+    /// Bring the stream to the rate the current mode wants for a track at
+    /// `source_rate`. Returns true when the output (and its mixer) was
+    /// replaced; the track's previous player is gone in that case.
+    fn prepare_output_for(&mut self, source_rate: SampleRate) -> bool {
+        self.config.set_track_rate_hint(source_rate.get());
+        let Some(output) = self.output.as_ref() else {
+            return false;
+        };
+        let refused_rate = self.fallback.as_ref().map(|fallback| fallback.rate);
+        let plan = plan_output(
+            self.mode,
+            source_rate,
+            output.sample_rate,
+            output.mix,
+            refused_rate,
+        );
+        let output_is_mix = output.mix;
+        if self.mode == ResamplingMode::WindowsBuiltin && refused_rate != Some(source_rate) {
+            // Either the stream already runs at this rate or a fresh attempt
+            // follows; an older refusal no longer describes this track.
+            self.fallback = None;
+        }
+        match plan {
+            OutputPlan::Keep => false,
+            OutputPlan::OpenAt(rate) => {
+                match open_output_with_timeout(Some(rate), OUTPUT_OPEN_TIMEOUT) {
+                    Ok(output) => {
+                        self.replace_output(output);
+                        true
+                    }
+                    Err(error) => {
+                        let reason = error.to_string();
+                        log_refused_rate(rate, &reason);
+                        self.fallback = Some(OutputFallback { rate, reason });
+                        !output_is_mix && self.reopen_mix()
+                    }
+                }
+            }
+            OutputPlan::OpenMix => self.reopen_mix(),
+        }
+    }
+
+    /// Reopen with the device's mix format. On failure the current stream is
+    /// kept; it still works, just at a different rate than preferred.
+    fn reopen_mix(&mut self) -> bool {
+        match open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT) {
+            Ok(output) => {
+                self.replace_output(output);
+                true
+            }
+            Err(error) => {
+                eprintln!("[audio] reopening the output at the mix rate failed: {error}");
+                false
+            }
+        }
+    }
+
+    fn replace_output(&mut self, output: OpenOutput) {
+        let old_player = self
+            .track
+            .attach(output.sink.mixer().clone(), output.sample_rate);
+        let old_output = self.output.replace(output);
+        dispose_off_worker(old_output, old_player);
+        let now = Instant::now();
+        self.last_heartbeat = (0, now);
+        self.last_device_check = now;
+    }
+}
+
+fn log_refused_rate(rate: SampleRate, reason: &str) {
+    eprintln!(
+        "[audio] warning: the output device could not open a shared-mode stream at {} Hz \
+         ({reason}); using the mix rate with high-quality in-app conversion",
+        rate.get()
+    );
+}
+
+/// Dropping a CPAL stream joins its render thread. If a driver call is stuck
+/// there, the join would block; hand teardown to a disposable thread so the
+/// audio worker always stays responsive.
+fn dispose_off_worker(output: Option<OpenOutput>, player: Option<Arc<Player>>) {
+    if output.is_none() && player.is_none() {
+        return;
+    }
+    let _ = thread::Builder::new()
+        .name("moe-audio-output-dispose".to_owned())
+        .spawn(move || {
+            drop(player);
+            drop(output);
+        });
 }
 
 impl Drop for RodioBackend {
     fn drop(&mut self) {
-        // Dropping a CPAL stream joins its render thread. If a driver call is
-        // stuck there, the join would block; hand teardown to a disposable
-        // thread so the audio worker always stays responsive.
-        let output = self.output.take();
-        let player = self.track.player.take();
-        let _ = thread::Builder::new()
-            .name("moe-audio-output-dispose".to_owned())
-            .spawn(move || {
-                drop(player);
-                drop(output);
-            });
+        dispose_off_worker(self.output.take(), self.track.player.take());
     }
 }
 
 impl AudioBackend for RodioBackend {
     fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
-        self.track.load(path)
+        let decoder = open_decoder(path)?;
+        self.prepare_output_for(decoder.sample_rate());
+        Ok(self.track.load_decoder(path, decoder))
     }
 
     fn play(&mut self) -> Result<(), AudioError> {
@@ -164,7 +355,61 @@ impl AudioBackend for RodioBackend {
         path: &Path,
         position: Duration,
     ) -> Result<(Option<Duration>, Duration), AudioError> {
-        self.track.load_at(path, position)
+        let decoder = open_decoder(path)?;
+        self.prepare_output_for(decoder.sample_rate());
+        self.track.load_decoder_at(path, decoder, position)
+    }
+
+    fn set_resampling_mode(&mut self, mode: ResamplingMode) -> Result<(), AudioError> {
+        self.config.set_mode(mode);
+        if mode == self.mode {
+            return Ok(());
+        }
+        self.mode = mode;
+        self.fallback = None;
+        // Capture the live position before the output (and player) changes.
+        let resume = self.track.resume_point();
+        let replaced = match self.track.source_rate {
+            Some(rate) if resume.is_some() => self.prepare_output_for(rate),
+            // Nothing is playing; HQ only needs the stream back at the mix
+            // rate, and Windows-builtin reopens when the next track loads.
+            _ => match (mode, self.output.as_ref()) {
+                (ResamplingMode::HighQuality, Some(output)) if !output.mix => self.reopen_mix(),
+                _ => false,
+            },
+        };
+        if replaced {
+            if let Some((path, position)) = resume {
+                self.track.seek_by_reopening(&path, position)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn resampling_info(&self) -> Option<ResamplingInfo> {
+        let output = self.output.as_ref()?;
+        let source_rate = self.track.loaded_source_rate();
+        let fallback = match (self.mode, self.fallback.as_ref(), source_rate) {
+            (ResamplingMode::WindowsBuiltin, Some(fallback), Some(rate))
+                if fallback.rate == rate =>
+            {
+                Some(fallback.reason.clone())
+            }
+            _ => None,
+        };
+        Some(ResamplingInfo {
+            mode: self.mode,
+            source_rate: source_rate.map(SampleRate::get),
+            output_rate: output.sample_rate.get(),
+            device_rate: output.device_rate.get(),
+            conversion: conversion_for(
+                source_rate,
+                output.sample_rate,
+                output.device_rate,
+                self.track.in_app,
+            ),
+            fallback_reason: fallback,
+        })
     }
 
     fn set_volume(&mut self, volume: f32) -> Result<(), AudioError> {
@@ -224,14 +469,19 @@ fn default_output_device_id() -> Option<String> {
         .map(|id| id.to_string())
 }
 
-fn open_default_output_with_timeout(timeout: Duration) -> Result<OpenOutput, AudioError> {
+/// Open the default endpoint on a helper thread, giving up after `timeout`.
+/// `rate` requests a strict shared-mode rate; `None` uses the mix format.
+fn open_output_with_timeout(
+    rate: Option<SampleRate>,
+    timeout: Duration,
+) -> Result<OpenOutput, AudioError> {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     thread::Builder::new()
         .name("moe-audio-output-open".to_owned())
         .spawn(move || {
             // If the worker gave up, the send fails and the late stream is
             // dropped here instead of on the worker.
-            let _ = result_tx.send(open_default_output());
+            let _ = result_tx.send(open_output(rate));
         })
         .map_err(|error| AudioError::OutputDevice(error.to_string()))?;
     match result_rx.recv_timeout(timeout) {
@@ -246,21 +496,56 @@ fn open_default_output_with_timeout(timeout: Duration) -> Result<OpenOutput, Aud
     }
 }
 
-fn open_default_output() -> Result<OpenOutput, AudioError> {
+/// About 50 ms of audio rounded to a power of two, like Rodio's own default
+/// for the device's mix rate.
+fn stream_buffer_frames(rate: SampleRate) -> u32 {
+    let frames = (rate.get() / 20).max(1);
+    let next = frames.next_power_of_two();
+    let previous = next >> 1;
+    if previous > 0 && frames - previous <= next - frames {
+        previous
+    } else {
+        next
+    }
+}
+
+fn open_output(rate: Option<SampleRate>) -> Result<OpenOutput, AudioError> {
     let device = rodio::cpal::default_host()
         .default_output_device()
         .ok_or_else(|| AudioError::OutputDevice("no default output device".to_owned()))?;
     let device_id = device.id().ok().map(|id| id.to_string());
+    let device_rate = device
+        .default_output_config()
+        .ok()
+        .and_then(|config| SampleRate::new(config.sample_rate()));
     let signals = Arc::new(OutputSignals::default());
-    let mut sink = DeviceSinkBuilder::from_device(device)
+    let builder = DeviceSinkBuilder::from_device(device)
         .map_err(|error| AudioError::OutputDevice(error.to_string()))?
-        .with_error_callback(stream_error_callback(Arc::clone(&signals)))
-        .open_sink_or_fallback()
-        .map_err(|error| AudioError::OutputDevice(error.to_string()))?;
+        .with_error_callback(stream_error_callback(Arc::clone(&signals)));
+    let mut sink = match rate {
+        // CPAL's shared mode enables AUTOCONVERTPCM, so the Windows audio
+        // engine converts this rate to the mix format.
+        Some(rate) => builder
+            .with_sample_rate(rate)
+            .with_buffer_size(rodio::cpal::BufferSize::Fixed(stream_buffer_frames(rate)))
+            .open_stream(),
+        None => builder.open_sink_or_fallback(),
+    }
+    .map_err(|error| AudioError::OutputDevice(error.to_string()))?;
+    let sample_rate = sink.config().sample_rate();
+    if let Some(requested) = rate {
+        if sample_rate != requested {
+            return Err(AudioError::OutputDevice(format!(
+                "the stream opened at {} Hz instead of {} Hz",
+                sample_rate.get(),
+                requested.get()
+            )));
+        }
+    }
     sink.log_on_drop(false);
     sink.mixer().add(Heartbeat {
         channels: sink.config().channel_count(),
-        sample_rate: sink.config().sample_rate(),
+        sample_rate,
         signals: Arc::clone(&signals),
         pending: 0,
     });
@@ -268,6 +553,9 @@ fn open_default_output() -> Result<OpenOutput, AudioError> {
         sink,
         device_id,
         signals,
+        sample_rate,
+        device_rate: device_rate.unwrap_or(sample_rate),
+        mix: rate.is_none(),
     })
 }
 
@@ -342,6 +630,8 @@ struct SeekOutcome {
 /// One local track on a mixer, driven only through non-waiting Rodio calls.
 struct TrackPlayer {
     mixer: Mixer,
+    /// The mixer's rate; tracks at other rates are wrapped in [`Resampled`].
+    output_rate: SampleRate,
     // Shared only with abandoned seek helpers, which never lock anything.
     player: Option<Arc<Player>>,
     path: Option<PathBuf>,
@@ -349,37 +639,59 @@ struct TrackPlayer {
     base: Duration,
     paused: bool,
     volume: f32,
+    /// Rate of the decoder attached to the current player.
+    source_rate: Option<SampleRate>,
+    /// The current source goes through the in-app high-quality resampler.
+    in_app: bool,
 }
 
 impl TrackPlayer {
-    fn new(mixer: Mixer) -> Self {
+    fn new(mixer: Mixer, output_rate: SampleRate) -> Self {
         Self {
             mixer,
+            output_rate,
             player: None,
             path: None,
             base: Duration::ZERO,
             paused: true,
             volume: 1.0,
+            source_rate: None,
+            in_app: false,
         }
     }
 
+    #[cfg(test)]
     fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
         let decoder = open_decoder(path)?;
+        Ok(self.load_decoder(path, decoder))
+    }
+
+    fn load_decoder(&mut self, path: &Path, decoder: Decoder<BufReader<File>>) -> Option<Duration> {
         let duration = decoder.total_duration();
         self.paused = true;
         self.start(decoder, Duration::ZERO);
         self.path = Some(path.to_path_buf());
-        Ok(duration)
+        duration
     }
 
-    /// Load paused at `position` by seeking the decoder before it is attached,
-    /// so no render callback is involved. Used when rebuilding the output.
+    #[cfg(test)]
     fn load_at(
         &mut self,
         path: &Path,
         position: Duration,
     ) -> Result<(Option<Duration>, Duration), AudioError> {
-        let mut decoder = open_decoder(path)?;
+        let decoder = open_decoder(path)?;
+        self.load_decoder_at(path, decoder, position)
+    }
+
+    /// Load paused at `position` by seeking the decoder before it is attached,
+    /// so no render callback is involved. Used when rebuilding the output.
+    fn load_decoder_at(
+        &mut self,
+        path: &Path,
+        mut decoder: Decoder<BufReader<File>>,
+        position: Duration,
+    ) -> Result<(Option<Duration>, Duration), AudioError> {
         let duration = decoder.total_duration();
         let target = duration.map_or(position, |duration| position.min(duration));
         let actual = if target.is_zero() {
@@ -420,6 +732,34 @@ impl TrackPlayer {
         self.path = None;
         self.base = Duration::ZERO;
         self.paused = true;
+        self.source_rate = None;
+        self.in_app = false;
+    }
+
+    /// Move to a new output mixer. The old player is returned for disposal;
+    /// the caller attaches a fresh source afterwards.
+    fn attach(&mut self, mixer: Mixer, output_rate: SampleRate) -> Option<Arc<Player>> {
+        self.mixer = mixer;
+        self.output_rate = output_rate;
+        let previous = self.player.take();
+        if let Some(previous) = previous.as_ref() {
+            previous.stop();
+        }
+        previous
+    }
+
+    /// Track and position to resume from when the output must be swapped
+    /// under a live player (a mode switch). `None` once the track finished.
+    fn resume_point(&self) -> Option<(PathBuf, Duration)> {
+        let path = self.path.clone()?;
+        if self.is_empty() {
+            return None;
+        }
+        Some((path, self.position()))
+    }
+
+    fn loaded_source_rate(&self) -> Option<SampleRate> {
+        self.path.as_ref().and(self.source_rate)
     }
 
     fn seek(
@@ -503,7 +843,30 @@ impl TrackPlayer {
         if self.paused {
             player.pause();
         }
-        player.append(decoder);
+        let source_rate = decoder.sample_rate();
+        self.source_rate = Some(source_rate);
+        self.in_app = false;
+        if needs_resampling(source_rate, self.output_rate) {
+            // Builds FFT plans and buffers here, never in the render callback.
+            match Resampled::new(decoder, self.output_rate) {
+                Ok(resampled) => {
+                    player.append(resampled);
+                    self.in_app = true;
+                }
+                Err(rejected) => {
+                    eprintln!(
+                        "[audio] high-quality resampler unavailable for {} -> {} Hz ({}); \
+                         using Rodio's converter",
+                        source_rate.get(),
+                        self.output_rate.get(),
+                        rejected.error
+                    );
+                    player.append(rejected.source);
+                }
+            }
+        } else {
+            player.append(decoder);
+        }
         if let Some(previous) = self.player.replace(Arc::new(player)) {
             // Only flags the old source; the mixer drops it on its next pull.
             // A seek helper may still hold it; it is never joined.
@@ -552,7 +915,7 @@ fn open_decoder(path: &Path) -> Result<Decoder<BufReader<File>>, AudioError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::num::{NonZeroU16, NonZeroU32};
+    use std::num::NonZeroU16;
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -563,11 +926,14 @@ mod tests {
 
     /// A mixer whose output is never pulled behaves exactly like a WASAPI
     /// stream whose render thread exited after AUDCLNT_E_DEVICE_INVALIDATED.
+    const MIXER_RATE: SampleRate = SampleRate::new(48_000).unwrap();
+
+    fn rate(value: u32) -> SampleRate {
+        SampleRate::new(value).unwrap()
+    }
+
     fn dead_stream_mixer() -> (Mixer, rodio::mixer::MixerSource) {
-        rodio::mixer::mixer(
-            NonZeroU16::new(2).unwrap(),
-            NonZeroU32::new(48_000).unwrap(),
-        )
+        rodio::mixer::mixer(NonZeroU16::new(2).unwrap(), MIXER_RATE)
     }
 
     fn finishes_within<T: Send + 'static>(
@@ -581,10 +947,41 @@ mod tests {
         rx.recv_timeout(timeout).ok()
     }
 
+    fn backend(mode: ResamplingMode) -> RodioBackend {
+        RodioBackend::new(Arc::new(ResamplingConfig::new(mode))).expect("default output device")
+    }
+
+    /// Write a 16-bit stereo sine WAV for real-device tests.
+    fn write_tone(path: &Path, sample_rate: u32, seconds: u32) {
+        let frames = sample_rate * seconds;
+        let data_len = frames * 4;
+        let mut bytes = Vec::with_capacity(44 + data_len as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * 4).to_le_bytes());
+        bytes.extend_from_slice(&4u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        for frame in 0..frames {
+            let phase =
+                2.0 * std::f64::consts::PI * 440.0 * f64::from(frame) / f64::from(sample_rate);
+            let sample = ((phase.sin() * 8_000.0) as i16).to_le_bytes();
+            bytes.extend_from_slice(&sample);
+            bytes.extend_from_slice(&sample);
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
     #[test]
     #[ignore = "opens the real default output device (muted); run manually"]
     fn real_default_device_stays_healthy_and_seeks_in_place() {
-        let mut backend = RodioBackend::new().expect("default output device");
+        let mut backend = backend(ResamplingMode::HighQuality);
         backend.set_volume(0.0).unwrap();
         backend.load(&fixture("seek-tone.wav")).unwrap();
         backend.play().unwrap();
@@ -603,6 +1000,218 @@ mod tests {
         let dropping = Instant::now();
         drop(backend);
         assert!(dropping.elapsed() < Duration::from_millis(200));
+    }
+
+    /// Plays silent 44.1 kHz and 96 kHz tones in both modes on the real
+    /// default device and checks the stream rate and conversion path.
+    #[test]
+    #[ignore = "opens the real default output device (muted); run manually"]
+    fn real_default_device_plays_44k_and_96k_in_both_modes() {
+        let directory = std::env::temp_dir().join(format!("moe-resampling-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let tracks: Vec<(u32, PathBuf)> = [44_100, 96_000]
+            .into_iter()
+            .map(|rate| {
+                let path = directory.join(format!("tone-{rate}.wav"));
+                write_tone(&path, rate, 3);
+                (rate, path)
+            })
+            .collect();
+
+        for mode in [ResamplingMode::HighQuality, ResamplingMode::WindowsBuiltin] {
+            let mut backend = backend(mode);
+            backend.set_volume(0.0).unwrap();
+            for (track_rate, path) in &tracks {
+                backend.load(path).unwrap();
+                backend.play().unwrap();
+                thread::sleep(Duration::from_millis(500));
+                assert_eq!(
+                    backend.output_status(),
+                    OutputStatus::Healthy,
+                    "{mode:?} {track_rate}"
+                );
+                let info = backend.resampling_info().unwrap();
+                eprintln!("{mode:?} {track_rate} Hz: {info:?}");
+                assert_eq!(info.source_rate, Some(*track_rate));
+                match mode {
+                    ResamplingMode::HighQuality => {
+                        assert_eq!(info.output_rate, info.device_rate);
+                        let expected = if *track_rate == info.device_rate {
+                            ResamplingConversion::None
+                        } else {
+                            ResamplingConversion::HighQuality
+                        };
+                        assert_eq!(info.conversion, expected);
+                    }
+                    ResamplingMode::WindowsBuiltin if info.fallback_reason.is_none() => {
+                        assert_eq!(info.output_rate, *track_rate);
+                        let expected = if *track_rate == info.device_rate {
+                            ResamplingConversion::None
+                        } else {
+                            ResamplingConversion::Windows
+                        };
+                        assert_eq!(info.conversion, expected);
+                    }
+                    ResamplingMode::WindowsBuiltin => {
+                        assert_eq!(info.conversion, ResamplingConversion::HighQuality);
+                    }
+                }
+                let position = backend.seek(Duration::from_millis(1_500)).unwrap();
+                assert!(
+                    (Duration::from_millis(1_450)..=Duration::from_millis(1_600))
+                        .contains(&position),
+                    "{position:?}"
+                );
+                thread::sleep(Duration::from_millis(300));
+                assert!(backend.position() > Duration::from_millis(1_550));
+                assert_eq!(backend.output_status(), OutputStatus::Healthy);
+            }
+            // Live switch to the other mode keeps the position.
+            let before = backend.position();
+            let other = match mode {
+                ResamplingMode::HighQuality => ResamplingMode::WindowsBuiltin,
+                ResamplingMode::WindowsBuiltin => ResamplingMode::HighQuality,
+            };
+            backend.set_resampling_mode(other).unwrap();
+            let after = backend.position();
+            assert!(
+                after >= before && after < before + Duration::from_millis(200),
+                "{before:?} -> {after:?}"
+            );
+            thread::sleep(Duration::from_millis(300));
+            assert_eq!(backend.output_status(), OutputStatus::Healthy);
+            assert_eq!(backend.resampling_info().unwrap().mode, other);
+            drop(backend);
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn stream_buffer_is_about_50_ms_rounded_to_a_power_of_two() {
+        assert_eq!(stream_buffer_frames(rate(44_100)), 2_048);
+        assert_eq!(stream_buffer_frames(rate(48_000)), 2_048);
+        assert_eq!(stream_buffer_frames(rate(96_000)), 4_096);
+        assert_eq!(stream_buffer_frames(rate(192_000)), 8_192);
+        assert_eq!(stream_buffer_frames(rate(8)), 1);
+    }
+
+    #[test]
+    fn output_plan_follows_the_resampling_mode() {
+        use OutputPlan::{Keep, OpenAt, OpenMix};
+        use ResamplingMode::{HighQuality, WindowsBuiltin};
+        let (k44, k48, k96) = (rate(44_100), rate(48_000), rate(96_000));
+        // High quality always runs at the mix format, whatever the track.
+        assert_eq!(plan_output(HighQuality, k44, k96, true, None), Keep);
+        assert_eq!(plan_output(HighQuality, k96, k96, true, None), Keep);
+        // ...and leaves a stream that Windows-builtin opened at a track rate.
+        assert_eq!(plan_output(HighQuality, k44, k44, false, None), OpenMix);
+        // Windows-builtin reopens only when the rate changes.
+        assert_eq!(
+            plan_output(WindowsBuiltin, k44, k96, true, None),
+            OpenAt(k44)
+        );
+        assert_eq!(plan_output(WindowsBuiltin, k44, k44, false, None), Keep);
+        assert_eq!(plan_output(WindowsBuiltin, k96, k96, true, None), Keep);
+        assert_eq!(
+            plan_output(WindowsBuiltin, k48, k44, false, None),
+            OpenAt(k48)
+        );
+        // A rate the endpoint refused is not retried for every track.
+        assert_eq!(plan_output(WindowsBuiltin, k44, k96, true, Some(k44)), Keep);
+        assert_eq!(
+            plan_output(WindowsBuiltin, k44, k48, false, Some(k44)),
+            OpenMix
+        );
+        assert_eq!(
+            plan_output(WindowsBuiltin, k48, k96, true, Some(k44)),
+            OpenAt(k48)
+        );
+    }
+
+    #[test]
+    fn conversion_status_names_who_converts() {
+        let (k44, k96) = (rate(44_100), rate(96_000));
+        assert_eq!(
+            conversion_for(None, k96, k96, false),
+            ResamplingConversion::None
+        );
+        assert_eq!(
+            conversion_for(Some(k96), k96, k96, false),
+            ResamplingConversion::None
+        );
+        assert_eq!(
+            conversion_for(Some(k44), k96, k96, true),
+            ResamplingConversion::HighQuality
+        );
+        assert_eq!(
+            conversion_for(Some(k44), k96, k96, false),
+            ResamplingConversion::Basic
+        );
+        assert_eq!(
+            conversion_for(Some(k44), k44, k96, false),
+            ResamplingConversion::Windows
+        );
+    }
+
+    #[test]
+    fn tracks_at_other_rates_are_resampled_to_the_mixer_rate() {
+        let (mixer, mut output) = dead_stream_mixer();
+        let mut track = TrackPlayer::new(mixer, MIXER_RATE);
+        track.load(&fixture("seek-tone.wav")).unwrap();
+        assert_eq!(track.loaded_source_rate(), Some(rate(44_100)));
+        assert!(track.in_app);
+        track.play().unwrap();
+        // 250 ms of 48 kHz stereo mixer output.
+        let mut peak = 0.0f32;
+        for _ in 0..(48_000 / 4 * 2) {
+            peak = peak.max(output.next().unwrap().abs());
+        }
+        assert!(peak > 0.01, "the resampled tone should be audible");
+        let position = track.position();
+        assert!(
+            (Duration::from_millis(230)..=Duration::from_millis(270)).contains(&position),
+            "{position:?}"
+        );
+
+        // A track at the mixer's rate is attached untouched.
+        let (mixer, _output) = rodio::mixer::mixer(NonZeroU16::new(2).unwrap(), rate(44_100));
+        let mut native = TrackPlayer::new(mixer, rate(44_100));
+        native.load(&fixture("seek-tone.wav")).unwrap();
+        assert!(!native.in_app);
+        native.stop();
+        assert_eq!(native.loaded_source_rate(), None);
+    }
+
+    #[test]
+    fn attaching_a_new_mixer_resumes_at_the_captured_position() {
+        let (mixer, mut output) = dead_stream_mixer();
+        let mut track = TrackPlayer::new(mixer, MIXER_RATE);
+        track.load(&fixture("seek-tone.wav")).unwrap();
+        track.set_volume(0.4);
+        track.play().unwrap();
+        for _ in 0..(48_000 / 2 * 2) {
+            output.next();
+        }
+        let (path, position) = track.resume_point().unwrap();
+        let (mixer, mut native_output) =
+            rodio::mixer::mixer(NonZeroU16::new(2).unwrap(), rate(44_100));
+        let old = track.attach(mixer, rate(44_100)).unwrap();
+        assert!(track.player.is_none());
+        track.seek_by_reopening(&path, position).unwrap();
+        drop(old);
+        assert!(!track.in_app, "the new mixer runs at the track's rate");
+        let player = track.player.as_ref().unwrap();
+        assert!(!player.is_paused());
+        assert_eq!(player.volume(), 0.4);
+        assert_eq!(track.position(), position);
+        for _ in 0..(44_100 / 10 * 2) {
+            native_output.next();
+        }
+        let advanced = track.position() - position;
+        assert!(
+            (Duration::from_millis(85)..=Duration::from_millis(115)).contains(&advanced),
+            "{advanced:?}"
+        );
     }
 
     #[test]
@@ -627,7 +1236,7 @@ mod tests {
     fn track_player_never_waits_on_a_dead_output_stream() {
         let finished = finishes_within(Duration::from_secs(2), || {
             let (mixer, dead_output) = dead_stream_mixer();
-            let mut track = TrackPlayer::new(mixer);
+            let mut track = TrackPlayer::new(mixer, MIXER_RATE);
             let duration = track.load(&fixture("seek-tone.wav")).unwrap();
             assert!(duration.is_some());
             track.set_volume(0.5);
@@ -676,7 +1285,7 @@ mod tests {
     #[test]
     fn seek_timeout_falls_back_to_reopened_decoder_on_a_fresh_player() {
         let (mixer, _dead_output) = dead_stream_mixer();
-        let mut track = TrackPlayer::new(mixer);
+        let mut track = TrackPlayer::new(mixer, MIXER_RATE);
         track.load(&fixture("seek-tone.wav")).unwrap();
         track.set_volume(0.3);
         track.play().unwrap();
@@ -706,7 +1315,7 @@ mod tests {
     #[test]
     fn healthy_stream_seeks_in_place_with_try_seek() {
         let (mixer, mut output) = dead_stream_mixer();
-        let mut track = TrackPlayer::new(mixer);
+        let mut track = TrackPlayer::new(mixer, MIXER_RATE);
         track.load(&fixture("seek-tone.wav")).unwrap();
         track.play().unwrap();
         let original = Arc::clone(track.player.as_ref().unwrap());
@@ -737,7 +1346,7 @@ mod tests {
     #[test]
     fn track_player_restarts_playback_state_and_volume_after_seek() {
         let (mixer, mut output) = dead_stream_mixer();
-        let mut track = TrackPlayer::new(mixer);
+        let mut track = TrackPlayer::new(mixer, MIXER_RATE);
         track.load(&fixture("seek-tone.wav")).unwrap();
         track.set_volume(0.25);
         track.play().unwrap();
