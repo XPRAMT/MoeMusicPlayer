@@ -288,7 +288,7 @@ where
     S: Source<Item = Sample> + Send + 'static,
 {
     pub(crate) fn open(
-        decoder: S,
+        mut decoder: S,
         input_rate: u32,
         bitrate_kbps: u32,
     ) -> Result<Self, OpenError<S>> {
@@ -393,6 +393,14 @@ where
                 ));
             }
         };
+        // Send the first samples on this thread. The helper is already waiting
+        // for PCM, and playback can keep the audio callback busy enough that a
+        // newly spawned feeder does not deliver them before the prefill deadline.
+        let prime = pull_pcm(&mut decoder, 2048);
+        if !prime.is_empty() && write_message(&mut stdin, 2, &prime).is_err() {
+            let _ = child.kill();
+            return Err(OpenError::Lost("DSEE HX 輔助程式已中斷。".to_owned()));
+        }
         let feeder_stop = Arc::clone(&stop);
         let feeder_ring = Arc::clone(&ring);
         let feeder = match thread::Builder::new()
@@ -425,8 +433,10 @@ where
 }
 
 fn wait_prefill(ring: &Ring, stop: &AtomicBool, output_rate: u32) -> Result<(), String> {
-    let target = usize::try_from(output_rate).unwrap_or(96_000) * 2 / 10;
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let target = (usize::try_from(output_rate / 100).unwrap_or(960))
+        .saturating_mul(2)
+        .max(64);
+    let deadline = Instant::now() + Duration::from_secs(5);
     let mut guard = ring.inner.lock().unwrap_or_else(|error| error.into_inner());
     loop {
         if let Some(message) = guard.failed.clone() {
@@ -448,6 +458,24 @@ fn wait_prefill(ring: &Ring, stop: &AtomicBool, output_rate: u32) -> Result<(), 
             .unwrap_or_else(|error| error.into_inner());
         guard = next;
     }
+}
+
+fn pull_pcm<S>(decoder: &mut S, frames: usize) -> Vec<u8>
+where
+    S: Source<Item = Sample>,
+{
+    let mut payload = Vec::with_capacity(frames * 4);
+    for _ in 0..frames {
+        let Some(left) = decoder.next() else {
+            break;
+        };
+        let Some(right) = decoder.next() else {
+            break;
+        };
+        payload.extend_from_slice(&quantize(left).to_le_bytes());
+        payload.extend_from_slice(&quantize(right).to_le_bytes());
+    }
+    payload
 }
 
 fn feed<S>(mut decoder: S, mut stdin: impl Write, stop: Arc<AtomicBool>, ring: Arc<Ring>)
@@ -521,14 +549,18 @@ fn read_output(
             }
             2 => {
                 pending.extend_from_slice(&message.payload);
-                while pending.len() >= 6 {
-                    let left = i24_to_f32(&pending[0..3]);
-                    let right = i24_to_f32(&pending[3..6]);
-                    pending.drain(0..6);
+                let mut offset = 0;
+                while pending.len() - offset >= 6 {
+                    let left = i24_to_f32(&pending[offset..offset + 3]);
+                    let right = i24_to_f32(&pending[offset + 3..offset + 6]);
+                    offset += 6;
                     if !ring.push(left, &stop) || !ring.push(right, &stop) {
                         ring.finish(None);
                         return;
                     }
+                }
+                if offset > 0 {
+                    pending.drain(0..offset);
                 }
             }
             3 => {
@@ -739,6 +771,92 @@ mod tests {
         assert_eq!(bitrate_kbps(None, true), 320);
         assert_eq!(bitrate_kbps(Some(5_000), false), 1021);
         assert_eq!(bitrate_kbps(Some(1411), false), 1021);
+    }
+
+    #[test]
+    fn installed_filter_streams_a_short_tone() {
+        if !filter_installed() {
+            return;
+        }
+        let rate = 44_100u32;
+        let frames = rate / 5;
+        let samples: Vec<f32> = (0..frames)
+            .flat_map(|frame| {
+                let sample =
+                    (2.0 * std::f32::consts::PI * 440.0 * frame as f32 / rate as f32).sin() * 0.2;
+                [sample, sample]
+            })
+            .collect();
+        let decoder = rodio::buffer::SamplesBuffer::new(
+            ChannelCount::new(2).unwrap(),
+            SampleRate::new(rate).unwrap(),
+            samples,
+        );
+        let source = match DseeSource::open(decoder, rate, 320) {
+            Ok(source) => source,
+            Err(OpenError::Rejected(_, message) | OpenError::Lost(message)) => {
+                panic!("dsee stream failed: {message}")
+            }
+        };
+        let output: Vec<f32> = source.take(rate as usize).collect();
+        assert!(
+            output.iter().any(|sample| sample.abs() > 0.001),
+            "expected audible samples from DSEE HX, got silence"
+        );
+    }
+
+    #[test]
+    #[ignore = "opens the default output device and plays a short tone"]
+    fn installed_filter_streams_while_wasapi_is_playing() {
+        if !filter_installed() {
+            return;
+        }
+        use rodio::cpal::traits::HostTrait;
+        let device = rodio::cpal::default_host()
+            .default_output_device()
+            .expect("default output");
+        let sink = rodio::DeviceSinkBuilder::from_device(device)
+            .expect("sink builder")
+            .open_sink_or_fallback()
+            .expect("output stream");
+        let player = rodio::Player::connect_new(sink.mixer());
+        let playing: Vec<f32> = (0..48_000 * 2)
+            .flat_map(|frame| {
+                let sample =
+                    (2.0 * std::f32::consts::PI * 220.0 * frame as f32 / 48_000.0).sin() * 0.05;
+                [sample, sample]
+            })
+            .collect();
+        player.append(rodio::buffer::SamplesBuffer::new(
+            ChannelCount::new(2).unwrap(),
+            SampleRate::new(48_000).unwrap(),
+            playing,
+        ));
+        player.play();
+        std::thread::sleep(Duration::from_millis(200));
+        let rate = 48_000u32;
+        let frames = rate / 5;
+        let samples: Vec<f32> = (0..frames)
+            .flat_map(|frame| {
+                let sample =
+                    (2.0 * std::f32::consts::PI * 440.0 * frame as f32 / rate as f32).sin() * 0.2;
+                [sample, sample]
+            })
+            .collect();
+        let decoder = rodio::buffer::SamplesBuffer::new(
+            ChannelCount::new(2).unwrap(),
+            SampleRate::new(rate).unwrap(),
+            samples,
+        );
+        let source = match DseeSource::open(decoder, rate, 320) {
+            Ok(source) => source,
+            Err(OpenError::Rejected(_, message) | OpenError::Lost(message)) => {
+                panic!("dsee stream during playback failed: {message}")
+            }
+        };
+        let output: Vec<f32> = source.take(2_000).collect();
+        assert!(output.iter().any(|sample| sample.abs() > 0.001));
+        player.stop();
     }
 
     #[test]

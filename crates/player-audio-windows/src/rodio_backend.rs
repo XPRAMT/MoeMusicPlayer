@@ -904,18 +904,25 @@ impl TrackPlayer {
         base: Duration,
         engagement: crate::dsee::Engagement,
     ) -> Result<(), AudioError> {
-        // A brand-new Player is never in the stopped state, so `append` does
-        // not wait for the render callback to drain an older source.
+        // The filter has to deliver its first samples before this player is
+        // attached. Connecting an empty player first lets the live callback
+        // sit in the mixer while DSEE HX is still starting, and the prefill
+        // then times out.
+        let file_rate = decoder.sample_rate();
+        self.source_rate = Some(file_rate);
+        if matches!(engagement, crate::dsee::Engagement::Run { .. }) {
+            if let Some(previous) = self.player.take() {
+                previous.stop();
+            }
+        }
+        let playback = self.attach_dsee(path, decoder, base, engagement)?;
+        let playback_rate = playback.sample_rate();
+        self.playback_rate = Some(playback_rate);
         let player = Player::connect_new(&self.mixer);
         player.set_volume(self.volume);
         if self.paused {
             player.pause();
         }
-        let file_rate = decoder.sample_rate();
-        self.source_rate = Some(file_rate);
-        let playback = self.attach_dsee(path, decoder, base, engagement)?;
-        let playback_rate = playback.sample_rate();
-        self.playback_rate = Some(playback_rate);
         self.in_app = false;
         if needs_resampling(playback_rate, self.output_rate) {
             match Resampled::new(playback, self.output_rate) {
