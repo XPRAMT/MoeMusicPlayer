@@ -1681,13 +1681,17 @@ input:focus-visible {
   padding-block: 0;
 }
 
-.now-playing-lyrics .lyrics-candidates {
-  flex: 0 0 auto;
+.now-playing-lyrics .lyrics-view:has(.lyrics-candidates) {
+  overflow: hidden;
+}
+
+.now-playing-lyrics .lyrics-view .lyrics-candidates {
+  flex: 1 1 auto;
   box-sizing: border-box;
   width: 100%;
-  height: var(--np-cover-height, min(50vh, 480px));
-  min-height: var(--np-cover-height, 0);
-  max-height: var(--np-cover-height, min(50vh, 480px));
+  height: auto;
+  min-height: 0;
+  max-height: none;
   border: 0;
   background: transparent;
 }

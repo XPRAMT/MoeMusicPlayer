@@ -692,9 +692,7 @@
         </ul>
         <div class="lyrics-candidates-footer lyrics-message">
           <button type="button" class="lyrics-action secondary" onclick={searchAgain}>再次搜尋</button>
-          {#if viewState.lyrics}
-            <button type="button" class="lyrics-action secondary" data-testid="lyrics-remove" onclick={removeLyrics}>移除歌詞</button>
-          {/if}
+          <button type="button" class="lyrics-action secondary" data-testid="lyrics-remove" onclick={removeLyrics}>移除歌詞</button>
         </div>
       </section>
     {/if}
@@ -893,6 +891,7 @@
     top: 0;
     z-index: 1;
     display: grid;
+    flex: 0 0 auto;
     gap: 8px;
     padding: 0 0 8px;
     border: 0;

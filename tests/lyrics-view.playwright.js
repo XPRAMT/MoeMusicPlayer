@@ -222,6 +222,7 @@
   await page.evaluate(() => window.lyricsViewHarness.setTrack('empty-results-track'));
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().phase === 'empty');
   assert.equal(await page.locator('[data-testid="lyrics-candidates"]').count(), 1, 'empty search still shows the candidate picker panel');
+  assert.equal(await page.locator('[data-testid="lyrics-remove"]').count(), 1, 'empty search still shows remove lyrics');
   assert.equal(await page.locator('[data-testid="lyrics-candidates-search"]').count(), 1, 'empty search still shows the text search field');
   assert.match(await page.locator('.lyrics-candidate-empty').innerText(), /找不到符合的歌詞/);
 
@@ -261,7 +262,35 @@
   await focusRingInsideClip(page.locator('.lyrics-candidates-search button[type="submit"]'), 'candidate search button');
   await focusRingInsideClip(page.locator('.lyrics-candidates-title-row button'), 'candidate close button');
   assert.equal(await page.locator('[data-testid="lyrics-dismiss"]').count(), 1, 'header close remains cancel-only dismiss');
-  assert.equal(await page.locator('[data-testid="lyrics-remove"]').count(), 1, 'footer exposes remove-lyrics when lyrics exist');
+  assert.equal(await page.locator('[data-testid="lyrics-remove"]').count(), 1, 'footer always exposes remove-lyrics');
+  const removeInsidePanel = await page.locator('[data-testid="lyrics-remove"]').evaluate((button) => {
+    const panel = button.closest('.lyrics-candidates');
+    const buttonRect = button.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    return buttonRect.top >= panelRect.top - 0.5
+      && buttonRect.bottom <= panelRect.bottom + 0.5
+      && buttonRect.height > 0;
+  });
+  assert.equal(removeInsidePanel, true, 'remove-lyrics stays inside the candidate panel');
+  const removeInsideShortPane = await page.evaluate(() => {
+    const view = document.querySelector('.lyrics-view');
+    const parent = view.parentElement;
+    const pane = document.createElement('section');
+    pane.className = 'now-playing-lyrics';
+    pane.style.height = '240px';
+    pane.style.overflow = 'hidden';
+    pane.style.setProperty('--np-cover-height', '640px');
+    parent.insertBefore(pane, view);
+    pane.appendChild(view);
+    const button = document.querySelector('[data-testid="lyrics-remove"]');
+    const buttonRect = button.getBoundingClientRect();
+    const clip = pane.getBoundingClientRect();
+    const visible = buttonRect.height > 0 && buttonRect.top >= clip.top - 1 && buttonRect.bottom <= clip.bottom + 1;
+    parent.insertBefore(view, pane);
+    pane.remove();
+    return visible;
+  });
+  assert.equal(removeInsideShortPane, true, 'remove-lyrics stays visible when the cover is taller than the lyrics pane');
   await focusRingInsideClip(page.getByRole('button', { name: '選擇' }), 'candidate select button');
   await page.getByRole('button', { name: '選擇' }).click();
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().selectedSource === 'manual');

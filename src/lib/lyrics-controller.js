@@ -136,7 +136,11 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       const result = await api.search(args);
       if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
       activeRequestId = null;
-      update(stateFromResult(trackId, result, 'search', { selectionMode: manual || state.selectionMode }));
+      const next = stateFromResult(trackId, result, 'search', { selectionMode: manual || state.selectionMode });
+      if (!next.lyrics && state.lyrics && (manual || state.selectionMode)) {
+        next.lyrics = state.lyrics;
+      }
+      update(next);
     } catch (error) {
       if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
       activeRequestId = null;

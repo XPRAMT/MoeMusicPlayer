@@ -471,6 +471,24 @@ test('manual searchAgain keeps selection open when lyrics already exist', async 
   controller.dispose();
 });
 
+test('manual search keeps the lyrics already on screen when the result omits them', async () => {
+  const existing = lyric('track-ready', 'local');
+  const controller = createLyricsController({
+    api: {
+      getTrack: async () => readyResult('track-ready', 'local'),
+      search: async () => ({ lyrics: null, candidates: [], status: 'empty', error: null }),
+      selectCandidate: async () => existing,
+      cancelSearch: () => {},
+    },
+    onChange: () => {},
+  });
+  await controller.setTrack('track-ready');
+  await controller.searchAgain();
+  assert.equal(controller.getState().selectionMode, true);
+  assert.equal(controller.getState().lyrics?.source, 'local');
+  controller.dispose();
+});
+
 
 
 test('searchAgain forwards optional query to lyrics_search', async () => {
