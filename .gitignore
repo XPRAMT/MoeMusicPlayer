@@ -4,6 +4,7 @@
 /.vite/
 /.svelte-check/
 /.playwright-cli/
+/.agent-scratch/
 
 # Generated native build output
 /target/

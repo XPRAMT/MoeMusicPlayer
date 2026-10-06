@@ -7152,6 +7152,14 @@ mod windows_library_integration_tests {
             }) as Box<dyn AudioBackend>)
         })
         .expect("create offline restore worker");
+        let initialization_deadline = Instant::now() + Duration::from_secs(2);
+        while offline_player.snapshot().state == AudioPlaybackState::Initializing {
+            assert!(
+                Instant::now() < initialization_deadline,
+                "offline restore worker did not initialize"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
         let offline_service = WindowsPlaybackService::new(offline_player);
         restore_playback_session(&database, &offline_service)
             .expect("offline restore is fail-soft");
