@@ -19,6 +19,7 @@
 
   let maximized = $state(false);
   let fullscreen = $state(false);
+  let restoreMaximizedAfterFullscreen = false;
   let unlistenResize: UnlistenFn | undefined;
 
   const appWindow = (() => {
@@ -82,8 +83,23 @@
   async function toggleFullscreen(): Promise<void> {
     if (!appWindow) return;
     try {
-      const next = !(await appWindow.isFullscreen());
-      await appWindow.setFullscreen(next);
+      const entering = !(await appWindow.isFullscreen());
+      if (entering) {
+        // A maximized borderless window keeps the maximized client clipped to
+        // the work area, so fullscreen cannot cover the taskbar until that
+        // state is cleared.
+        restoreMaximizedAfterFullscreen = await appWindow.isMaximized();
+        if (restoreMaximizedAfterFullscreen) {
+          await appWindow.unmaximize();
+        }
+        await appWindow.setFullscreen(true);
+      } else {
+        await appWindow.setFullscreen(false);
+        if (restoreMaximizedAfterFullscreen) {
+          restoreMaximizedAfterFullscreen = false;
+          await appWindow.maximize();
+        }
+      }
       await refreshWindowChromeState();
     } catch {
       /* ignore */

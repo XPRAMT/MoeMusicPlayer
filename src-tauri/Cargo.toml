@@ -32,6 +32,11 @@ uuid = { version = "1", features = ["v4"] }
 player-audio-windows = { path = "../crates/player-audio-windows" }
 player-platform-windows = { path = "../crates/player-platform-windows" }
 tauri-plugin-dialog = "=2.8.0"
+windows = { version = "=0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21.1"

@@ -33,6 +33,8 @@ use tauri::{
 use tauri_plugin_media_index::MediaIndexExt;
 
 mod database_lifecycle;
+#[cfg(target_os = "windows")]
+mod maximized_work_area;
 mod playlist_exchange;
 use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImportResult};
 #[cfg(target_os = "windows")]
@@ -1544,6 +1546,7 @@ fn create_windows_system_media_service(
                 .map_err(|error| format!("無法取得 Tauri 主視窗 HWND：{error}"))
         })
         .and_then(|hwnd| {
+            maximized_work_area::install(hwnd);
             SystemMediaController::attach(hwnd.0 as isize)
                 .map_err(|error| format!("無法啟動 Windows 系統媒體控制：{error}"))
         });

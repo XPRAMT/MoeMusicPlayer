@@ -160,7 +160,7 @@
 
 - 時間軸樣式（兩種）：`timelineStyle` = `line`（線條，預設；外觀與位置維持本功能前的細線時間軸，時間左右並排）／`edge`（貼邊緣；軌道全寬貼齊底欄 `border-top`，已播／總長時間移到軌道下方兩側）。設定 → 正在播放與快速設定可切換；schema 現為 v7（含 windowGeometry 與 resamplingMode；舊 v5／v6 自動遷移）。舊 WIP 值 `bar`／`minimal` 讀入對應為 `line`。
 - Now Playing 頂欄：窄寬仍顯示「手動指定」「同步歌詞」；曲目 meta 永遠左對齊（不用 space-between／均分）。底欄進度時間字級固定 12px，離開 NP 不縮小。
-- 自訂標題列在最小化左側提供全螢幕切換（進入／結束）；圖示與 aria-pressed 隨 `isFullscreen` 更新，視窗 resized 時同步狀態。
+- 自訂標題列在最小化左側提供全螢幕切換（進入／結束）；圖示與 aria-pressed 隨 `isFullscreen` 更新，視窗 resized 時同步狀態。無邊框視窗最大化時，`WM_GETMINMAXINFO` 把最大尺寸限制在目前螢幕工作區（不含工作列），避免工作列位置被畫成黑條。從最大化進入全螢幕會先 `unmaximize` 再 `setFullscreen`，結束後若原本是最大化則還原；否則 Windows 會維持工作區裁切，全螢幕蓋不住工作列。
 - 啟動時主視窗 `visible: false`，套用已存 `windowGeometry`（夾住螢幕）後再 `show`，避免還原前空白／過大閃爍。
 - 主視窗幾何：關閉時將 outer 位置、inner 大小與 maximized 寫入 settings.json（schema v6 windowGeometry）；下次啟動還原，並以可用螢幕矩形夾住避免跑出顯示器。移動/縮放時記住非最大化外框以便還原。
 - 底欄布局：控制列置中群組（收藏→隨機→prev→play→next→循環→音量）；非 NP ≤720 藏收藏+音量，≤520（stage2）再藏隨機+循環且三鍵**靠右**。edge 進度條滿寬；時間標籤在條下方並以 `--dock-pad-x`（等同 dock 水平 padding / 舊 clamp 18–38）內縮，不貼視窗左右緣。隱藏模式封面固定 `--dock-hide-height`。音量 popover。NP 不套用非 NP 隱藏。
@@ -178,7 +178,7 @@
 - Now Playing dock 時間軸回歸已修正：`dd0453e` 誤把 `.progress-slider` 與 `.volume-state { display: none }` 併在同一選擇器，導致進度條消失、時間標籤落到錯誤欄位；已恢復 `.progress-slider, .volume-slider` 共用樣式，並另以 `.volume-state { display: none }` 隱藏音量文字。封面／歌詞垂直置中強化（artwork `place-content/place-items` + 對稱 overlay padding；lyrics-view 高度僅在 `--np-cover-height` 有值時鎖定）。
 - 歌詞候選右下角「關閉」改為「移除歌詞」：會關閉選擇器並透過新 IPC `lyrics_clear_track` 清除該曲已套用／快取歌詞（本機 sidecar／內嵌檔不刪）；標題列「關閉」仍只取消選擇、不移除歌詞。
 - 歌詞外觀新增文字效果三選一（陰影／描邊／關閉），欄位 `textEffect`（`shadow`｜`stroke`｜`none`，預設陰影），設定頁與快速設定歌詞區可切換，並與其他歌詞偏好一併持久化；套用至原文與譯文／羅馬拼音。
-- Windows Release：`npm run release:windows` 已完成 DSEE 輸出取樣率修正的建置、原子替換與固定輸出核對；`release/moemusicplayer.exe` 大小為 20,792,320 bytes，SHA-256 `E18F5F6206C5E5285140F1C9B349CB4CF6FB62DE3F0C06D661B1AC689E06B417`。使用者已確認 44.1 kHz 經濾鏡後輸出列為 176.4 kHz，不再讀到已釋放格式塊的亂數。此確認只涵蓋取樣率顯示，不代表聽感或歌詞對位已驗收。
+- Windows Release：`npm run release:windows` 已完成最大化工作區與全螢幕切換修正的建置、原子替換與固定輸出核對；`release/moemusicplayer.exe` 大小為 20,801,536 bytes，SHA-256 `43297E2A7BAC126E00FA4123FD7E4092279C7544555526C4019D618E95F8838F`。最大化應停在工作列上方，工作列不再被黑條蓋住；最大化時可進入全螢幕並蓋住工作列，結束後回到最大化。此行為仍待使用者重開此 EXE 後確認。先前 DSEE 44.1 kHz 顯示 176.4 kHz 已由使用者在上一版確認。
 - 封面與歌詞外層 `.now-playing-card` 半透明白框／淡底已移除（border/background 透明），A/B 僅保留分欄與間距。
 - 正在播放曲目的「播放次數」每秒依 in-memory 聆聽進度更新一次（base `playedMs` + 播放中自然 position 前進），不重查整庫；僅目前曲目受影響。Now Playing 頂列與曲庫／播放清單／佇列中可見的目前列同步覆寫顯示。
 - 同時間戳多行 LRC 已改為主文／譯文／羅馬拼音合併（見產品需求「同時間戳多行 LRC」）；手動指定歌詞改為優先於本機 sidecar／內嵌歌詞，`lyrics_get_track`／`lyrics_search` 初始載入與 `lyrics_clear_track` 後重載共用 `load_track_result_with_context` 的此優先序。Rust 測試：player-core lyrics 17/17（含 `[00:13.64]二番なんて望んでない`／`[00:13.64]才不稀罕當第二呢` 範例、三行角色、第四行忽略、非相鄰同時間戳、空白行、外部 tlyric 只補缺）、Windows platform lyrics 4/4、Tauri lyrics 27/27（含 Windows sidecar 同時間戳譯文、自動快取不遮蔽本機、手動指定優先於 sidecar、清除後回落本機、舊快取讀取折疊）。正式 Tauri 視窗中手動指定後切歌再回來的實際行為仍待人工驗收。
