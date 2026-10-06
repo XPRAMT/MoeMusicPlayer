@@ -39,6 +39,7 @@
   --android-safe-bottom: env(safe-area-inset-bottom, 0px);
   --window-titlebar-height: 0px;
   --chrome-bar-height: 74px;
+  --dock-height: 74px;
   font-optical-sizing: auto;
 }
 
@@ -2658,9 +2659,9 @@ input:focus-visible {
   display: grid;
   min-width: 0;
   overflow: visible;
-  /* Same outer height as the page top bar. Edge progress sits on the top border. */
+  /* Fixed outer height. Narrow widths may shorten the top bar, but not this dock. */
   --dock-pad-x: clamp(18px, 3vw, 38px);
-  min-height: var(--chrome-bar-height);
+  min-height: var(--dock-height);
   grid-column: 1 / -1;
   grid-row: 2;
   /* Equal side columns + auto center: favorite…volume stay window-centered as one group. */
@@ -2940,7 +2941,7 @@ input:focus-visible {
   grid-template-rows: 16px minmax(44px, auto);
   row-gap: 0;
   align-items: center;
-  min-height: var(--chrome-bar-height);
+  min-height: var(--dock-height);
   overflow: visible;
 }
 
@@ -2954,7 +2955,7 @@ input:focus-visible {
 /* Pin the painted track onto the content↔dock border-top. */
 .player-dock[data-timeline-style="edge"] {
   /* No extra top pad for time labels — labels may overlap the control band. Symmetric pad so controls center under the edge track. */
-  min-height: var(--chrome-bar-height);
+  min-height: var(--dock-height);
   padding-top: 5px;
   padding-bottom: 5px;
   align-items: center;
@@ -3846,7 +3847,7 @@ input:focus-visible {
     --dock-pad-x: 0px;
     --dock-label-inset: 12px;
     /* Explicit dock content-box height — art sizes to this, not 100%/100vh ancestors. */
-    --dock-hide-height: 58px;
+    --dock-hide-height: var(--dock-height);
     box-sizing: border-box;
     height: var(--dock-hide-height);
     min-height: var(--dock-hide-height);
