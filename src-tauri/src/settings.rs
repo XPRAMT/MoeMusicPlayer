@@ -97,16 +97,18 @@ impl LyricsPreferences {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CoverCornerStyle {
+    #[default]
     Rounded,
     Square,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TimelineStyle {
+    #[default]
     Line,
     Edge,
 }
@@ -123,38 +125,21 @@ impl<'de> Deserialize<'de> for TimelineStyle {
     }
 }
 
-impl Default for TimelineStyle {
-    fn default() -> Self {
-        Self::Line
-    }
-}
-
 fn default_timeline_style() -> TimelineStyle {
     TimelineStyle::Line
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LyricsTextEffect {
+    #[default]
     Shadow,
     Stroke,
     None,
 }
 
-impl Default for LyricsTextEffect {
-    fn default() -> Self {
-        Self::Shadow
-    }
-}
-
 fn default_lyrics_text_effect() -> LyricsTextEffect {
     LyricsTextEffect::Shadow
-}
-
-impl Default for CoverCornerStyle {
-    fn default() -> Self {
-        Self::Rounded
-    }
 }
 
 fn default_cover_corner_style() -> CoverCornerStyle {
@@ -513,8 +498,12 @@ pub fn clamp_window_geometry_to_monitors(
     WindowGeometry {
         x,
         y,
-        width: geometry.width.min(u32::try_from(mw.max(1)).unwrap_or(geometry.width)),
-        height: geometry.height.min(u32::try_from(mh.max(1)).unwrap_or(geometry.height)),
+        width: geometry
+            .width
+            .min(u32::try_from(mw.max(1)).unwrap_or(geometry.width)),
+        height: geometry
+            .height
+            .min(u32::try_from(mh.max(1)).unwrap_or(geometry.height)),
         maximized: geometry.maximized,
     }
 }

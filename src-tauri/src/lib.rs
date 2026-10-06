@@ -26,7 +26,10 @@ use player_core::{
 use player_db::PlaybackSessionCheckpoint;
 use player_db::{Database, ThemePreferences};
 use serde::{Deserialize, Serialize};
-use tauri::{ipc::Response, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size, State, WebviewWindow};
+use tauri::{
+    ipc::Response, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size,
+    State, WebviewWindow,
+};
 use tauri_plugin_media_index::MediaIndexExt;
 
 mod database_lifecycle;
@@ -116,7 +119,6 @@ struct WindowFrameMemory {
 }
 
 struct AppState {
-
     database: Option<Database>,
     database_path: Option<std::path::PathBuf>,
     database_error: Option<String>,
@@ -1270,10 +1272,13 @@ impl WindowsSystemMediaService {
     }
 
     fn pump(&self, playback: &WindowsPlaybackService, database: Option<&Database>) {
-        let _pump = self
-            .pump_gate
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A pump already in progress may be waiting (bounded) on audio
+        // acknowledgements; skip instead of parking more IPC threads behind it.
+        let _pump = match self.pump_gate.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return,
+        };
         let controller_guard = self
             .controller
             .lock()
@@ -1551,7 +1556,9 @@ fn playback_duration_ms(
 #[cfg(target_os = "windows")]
 fn playback_audio_error_message(error: &AudioError) -> String {
     match error {
-        AudioError::OutputDevice(_) => "無法連線到預設音訊輸出裝置。".to_owned(),
+        AudioError::OutputDevice(_) => {
+            "找不到可用的音訊輸出裝置；裝置恢復後會自動重新連線。".to_owned()
+        }
         AudioError::WorkerStart(_) => "無法啟動音訊背景工作。".to_owned(),
         AudioError::WorkerStopped => "音訊工作階段已結束。".to_owned(),
         AudioError::CommandQueueFull => "音訊服務忙碌，請稍後再試。".to_owned(),
@@ -5046,7 +5053,6 @@ fn checkpoint_playback_position(
     Ok(())
 }
 
-
 #[cfg(target_os = "windows")]
 fn capture_window_geometry(window: &tauri::Window) -> Option<WindowGeometry> {
     let position = window.outer_position().ok()?;
@@ -5126,10 +5132,15 @@ fn apply_saved_window_geometry(window: &WebviewWindow, geometry: WindowGeometry)
         })
         .collect();
     let geometry = clamp_window_geometry_to_monitors(geometry, &monitors);
-    if let Err(error) = window.set_size(Size::Physical(PhysicalSize::new(geometry.width, geometry.height))) {
+    if let Err(error) = window.set_size(Size::Physical(PhysicalSize::new(
+        geometry.width,
+        geometry.height,
+    ))) {
         eprintln!("無法還原視窗大小：{error}");
     }
-    if let Err(error) = window.set_position(Position::Physical(PhysicalPosition::new(geometry.x, geometry.y))) {
+    if let Err(error) = window.set_position(Position::Physical(PhysicalPosition::new(
+        geometry.x, geometry.y,
+    ))) {
         eprintln!("無法還原視窗位置：{error}");
     }
     if geometry.maximized {
@@ -5610,9 +5621,11 @@ pub fn run() {
                 settings,
                 #[cfg(target_os = "windows")]
                 window_frame: std::sync::Mutex::new(WindowFrameMemory {
-                    normal: initial_settings.window_geometry.as_ref().map(|geometry| WindowGeometry {
-                        maximized: false,
-                        ..geometry.clone()
+                    normal: initial_settings.window_geometry.as_ref().map(|geometry| {
+                        WindowGeometry {
+                            maximized: false,
+                            ..geometry.clone()
+                        }
                     }),
                 }),
                 lyrics_service: lyrics_service::LyricsService::default(),

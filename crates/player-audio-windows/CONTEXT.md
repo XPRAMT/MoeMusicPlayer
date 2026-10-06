@@ -26,8 +26,14 @@ track identity, metadata, or renderer state.
   thread.
 - Public control methods enqueue into a bounded queue without waiting; a full or
   stopped worker is reported to the caller.
-- Dropping the final player handle sends shutdown and joins the worker.
 - The current source is an OS `PathBuf`; converting it to a display string is
   not part of source identity.
 - The initial Windows backend uses rodio and CPAL/WASAPI. `AudioBackend` keeps
   the worker boundary replaceable.
+- Backend methods never wait on CPAL's render callback. Output loss (stream
+  error, stalled heartbeat) or a default-device change is reported through
+  `OutputStatus`; the worker rebuilds the backend via a recoverable factory and
+  restores track, position, volume, and play/pause intent. Without a device the
+  snapshot carries a recoverable `OutputDevice` error and the worker retries.
+- Dropping the final handle waits at most a few seconds for the worker and
+  detaches it if a backend call is stuck.

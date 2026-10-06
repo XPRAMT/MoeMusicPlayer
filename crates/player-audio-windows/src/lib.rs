@@ -53,6 +53,22 @@ pub fn process_started_utc_ms(pid: u32) -> Result<Option<i64>, String> {
 const COMMAND_CAPACITY: usize = 64;
 const EVENT_CAPACITY: usize = 128;
 const POSITION_POLL_INTERVAL: Duration = Duration::from_millis(40);
+/// Delays between output rebuild attempts after a stream is lost. The last
+/// delay repeats while no output device is available.
+const OUTPUT_RECOVERY_RETRY_DELAYS: [Duration; 4] = [
+    Duration::from_millis(200),
+    Duration::from_millis(500),
+    Duration::from_millis(1_000),
+    Duration::from_millis(2_000),
+];
+/// A lost stream that was playing resumes playing only if the outage was
+/// shorter than this; longer outages come back paused.
+const OUTPUT_RESUME_PLAYBACK_GRACE: Duration = Duration::from_secs(10);
+/// Dropping the last handle waits at most this long for the worker to exit.
+#[cfg(not(test))]
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(test)]
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// The coarse playback lifecycle exposed to application code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,6 +164,19 @@ impl fmt::Display for AudioError {
 
 impl Error for AudioError {}
 
+/// Health of the native output stream owned by a backend. The worker polls it
+/// on every tick and rebuilds the backend when the stream is gone or the
+/// system default output endpoint has moved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OutputStatus {
+    Healthy,
+    /// The stream failed (device invalidated or removed, or it stopped
+    /// requesting audio) and must be rebuilt.
+    Lost(String),
+    /// The stream still works but the system default output device changed.
+    DefaultDeviceChanged,
+}
+
 /// Synchronous backend operations. Implementations are created and called only
 /// by the worker thread, so an application can replace Rodio without changing
 /// the IPC-facing handle.
@@ -166,6 +195,28 @@ pub trait AudioBackend: 'static {
     fn take_error(&mut self) -> Option<AudioError> {
         None
     }
+    /// Load a file paused at `position`; used when rebuilding the output.
+    /// Returns the duration and the position actually reached.
+    fn load_at(
+        &mut self,
+        path: &Path,
+        position: Duration,
+    ) -> Result<(Option<Duration>, Duration), AudioError> {
+        let duration = self.load(path)?;
+        let target = duration.map_or(position, |duration| position.min(duration));
+        if target.is_zero() {
+            return Ok((duration, Duration::ZERO));
+        }
+        let actual = self.seek(target).unwrap_or(Duration::ZERO);
+        Ok((duration, actual))
+    }
+    /// Report whether the output stream must be rebuilt. Must not block.
+    fn output_status(&mut self) -> OutputStatus {
+        match self.take_error() {
+            Some(error) => OutputStatus::Lost(error.to_string()),
+            None => OutputStatus::Healthy,
+        }
+    }
 }
 
 /// Cloneable, non-blocking control surface for one playback worker.
@@ -180,6 +231,9 @@ struct PlayerInner {
     events: Mutex<Receiver<AudioEvent>>,
     accounting: Arc<PlaybackAccountingShared>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    /// Disconnects when the worker thread finishes, so shutdown can wait
+    /// with a deadline instead of joining a stuck thread forever.
+    worker_exited: Mutex<Receiver<()>>,
 }
 
 /// Opaque identity assigned by the application to one TrackId for this
@@ -261,7 +315,7 @@ impl PlayerHandle {
     pub fn new() -> Result<Self, AudioError> {
         #[cfg(windows)]
         {
-            Self::with_backend_factory(|| {
+            Self::with_recoverable_backend_factory(|| {
                 Ok(Box::new(rodio_backend::RodioBackend::new()?) as Box<dyn AudioBackend>)
             })
         }
@@ -278,17 +332,37 @@ impl PlayerHandle {
     where
         F: FnOnce() -> Result<Box<dyn AudioBackend>, AudioError> + Send + 'static,
     {
+        Self::spawn(BackendSource::once(factory))
+    }
+
+    /// Spawn a worker whose factory can be called again. When the backend
+    /// reports a lost output stream or a default-device change, the worker
+    /// drops it, creates a new one, and restores the current track, position,
+    /// volume, and play/pause intent. While creation fails (no output device)
+    /// the snapshot shows a recoverable `OutputDevice` error and the worker
+    /// retries in the background and on the next play/load command.
+    pub fn with_recoverable_backend_factory<F>(factory: F) -> Result<Self, AudioError>
+    where
+        F: FnMut() -> Result<Box<dyn AudioBackend>, AudioError> + Send + 'static,
+    {
+        Self::spawn(BackendSource::recoverable(factory))
+    }
+
+    fn spawn(source: BackendSource) -> Result<Self, AudioError> {
         let snapshot = Arc::new(RwLock::new(PlaybackSnapshot::default()));
         let worker_snapshot = Arc::clone(&snapshot);
         let (command_tx, command_rx) = mpsc::sync_channel(COMMAND_CAPACITY);
         let (event_tx, event_rx) = mpsc::sync_channel(EVENT_CAPACITY);
         let accounting = Arc::new(PlaybackAccountingShared::default());
         let worker_accounting = Arc::clone(&accounting);
+        let (exit_tx, exit_rx) = mpsc::sync_channel::<()>(0);
         let worker = thread::Builder::new()
             .name("moe-audio-player".to_owned())
             .spawn(move || {
+                // Dropped when the thread ends, including on panic.
+                let _exit_signal = exit_tx;
                 worker_loop(
-                    factory,
+                    source,
                     command_rx,
                     worker_snapshot,
                     event_tx,
@@ -304,6 +378,7 @@ impl PlayerHandle {
                 events: Mutex::new(event_rx),
                 accounting,
                 worker: Mutex::new(Some(worker)),
+                worker_exited: Mutex::new(exit_rx),
             }),
         })
     }
@@ -513,33 +588,140 @@ struct QueuedCommand {
 
 impl Drop for PlayerInner {
     fn drop(&mut self) {
-        // Sending shutdown through the bounded queue may wait for the worker to
-        // drain earlier commands, but public playback methods remain non-blocking.
-        let _ = self.commands.send(QueuedCommand {
+        // Shutdown is bounded: a worker stuck inside a backend call must not
+        // keep the application from closing.
+        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+        let mut shutdown = QueuedCommand {
             command: Command::Shutdown,
             acknowledgement: None,
-        });
-        if let Some(worker) = self
+        };
+        loop {
+            match self.commands.try_send(shutdown) {
+                Ok(()) | Err(TrySendError::Disconnected(_)) => break,
+                Err(TrySendError::Full(message)) => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    shutdown = message;
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+        let Some(worker) = self
             .worker
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
-        {
-            let _ = worker.join();
+        else {
+            return;
+        };
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let exited = self
+            .worker_exited
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .recv_timeout(remaining);
+        match exited {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = worker.join();
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Detach; the worker exits on its own once the backend call
+                // returns and it observes the closed command channel.
+                eprintln!("audio worker did not stop within {SHUTDOWN_TIMEOUT:?}; detaching it");
+            }
         }
     }
 }
 
-fn worker_loop<F>(
-    factory: F,
+type BackendFactory = Box<dyn FnMut() -> Result<Box<dyn AudioBackend>, AudioError> + Send>;
+
+struct BackendSource {
+    factory: BackendFactory,
+    /// Only factories that can be called again support output recovery.
+    recoverable: bool,
+}
+
+impl BackendSource {
+    fn once<F>(factory: F) -> Self
+    where
+        F: FnOnce() -> Result<Box<dyn AudioBackend>, AudioError> + Send + 'static,
+    {
+        let mut factory = Some(factory);
+        Self {
+            factory: Box::new(move || match factory.take() {
+                Some(factory) => factory(),
+                None => Err(AudioError::BackendUnavailable),
+            }),
+            recoverable: false,
+        }
+    }
+
+    fn recoverable<F>(factory: F) -> Self
+    where
+        F: FnMut() -> Result<Box<dyn AudioBackend>, AudioError> + Send + 'static,
+    {
+        Self {
+            factory: Box::new(factory),
+            recoverable: true,
+        }
+    }
+
+    fn create(&mut self) -> Result<Box<dyn AudioBackend>, AudioError> {
+        (self.factory)()
+    }
+}
+
+/// Resume point captured when the output stream was lost.
+struct OutputRecovery {
+    prior_state: PlaybackState,
+    position: Duration,
+    volume: f32,
+    lost_at: Instant,
+    attempts: usize,
+    next_attempt_at: Instant,
+}
+
+impl OutputRecovery {
+    fn new(prior_state: PlaybackState, position: Duration, volume: f32, now: Instant) -> Self {
+        Self {
+            prior_state,
+            position,
+            volume,
+            lost_at: now,
+            attempts: 0,
+            next_attempt_at: now,
+        }
+    }
+
+    fn schedule_retry(&mut self, now: Instant) {
+        let delay =
+            OUTPUT_RECOVERY_RETRY_DELAYS[self.attempts.min(OUTPUT_RECOVERY_RETRY_DELAYS.len() - 1)];
+        self.attempts = self.attempts.saturating_add(1);
+        self.next_attempt_at = now + delay;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryTrigger {
+    Background,
+    Command,
+}
+
+struct OutputSupervisor {
+    source: BackendSource,
+    recovery: Option<OutputRecovery>,
+    unrecoverable_failure_reported: bool,
+}
+
+fn worker_loop(
+    mut source: BackendSource,
     commands: Receiver<QueuedCommand>,
     snapshot: Arc<RwLock<PlaybackSnapshot>>,
     events: SyncSender<AudioEvent>,
     accounting: Arc<PlaybackAccountingShared>,
-) where
-    F: FnOnce() -> Result<Box<dyn AudioBackend>, AudioError>,
-{
-    let mut backend = match factory() {
+) {
+    let mut backend = match source.create() {
         Ok(mut backend) => {
             if let Err(error) = backend.set_volume(1.0) {
                 set_error(&snapshot, &events, error);
@@ -556,6 +738,17 @@ fn worker_loop<F>(
     };
     let mut current_path: Option<PathBuf> = None;
     let mut meter = PlaybackMeter::new(Arc::clone(&accounting));
+    let initial_recovery = (backend.is_none() && source.recoverable).then(|| {
+        let now = Instant::now();
+        let mut recovery = OutputRecovery::new(PlaybackState::Empty, Duration::ZERO, 1.0, now);
+        recovery.schedule_retry(now);
+        recovery
+    });
+    let mut supervisor = OutputSupervisor {
+        source,
+        recovery: initial_recovery,
+        unrecoverable_failure_reported: false,
+    };
 
     loop {
         match commands.recv_timeout(POSITION_POLL_INTERVAL) {
@@ -569,14 +762,26 @@ fn worker_loop<F>(
                 // stop, or replace it. AudioEvent delivery is intentionally
                 // not involved in the accounting path.
                 sample_before_command(&mut meter, &mut backend, &snapshot);
-                let result = handle_command(
-                    queued.command,
-                    &mut backend,
-                    &mut current_path,
-                    &mut meter,
-                    &snapshot,
-                    &events,
-                );
+                let result = if backend.is_none() && supervisor.recovery.is_some() {
+                    handle_command_during_recovery(
+                        queued.command,
+                        &mut supervisor,
+                        &mut backend,
+                        &mut current_path,
+                        &mut meter,
+                        &snapshot,
+                        &events,
+                    )
+                } else {
+                    handle_command(
+                        queued.command,
+                        &mut backend,
+                        &mut current_path,
+                        &mut meter,
+                        &snapshot,
+                        &events,
+                    )
+                };
                 update_position(&mut backend, &snapshot, &events, &mut meter);
                 if let Some(acknowledgement) = queued.acknowledgement {
                     let response = result.map(|()| read_snapshot(&snapshot));
@@ -586,7 +791,277 @@ fn worker_loop<F>(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
+        supervise_output(
+            &mut supervisor,
+            &mut backend,
+            &mut current_path,
+            &mut meter,
+            &snapshot,
+            &events,
+        );
         update_position(&mut backend, &snapshot, &events, &mut meter);
+    }
+}
+
+/// Detect a lost stream or a default-device change and drive the rebuild.
+/// Runs on the worker between commands; no lock is held across backend calls.
+fn supervise_output(
+    supervisor: &mut OutputSupervisor,
+    backend: &mut Option<Box<dyn AudioBackend>>,
+    current_path: &mut Option<PathBuf>,
+    meter: &mut PlaybackMeter,
+    snapshot: &Arc<RwLock<PlaybackSnapshot>>,
+    events: &SyncSender<AudioEvent>,
+) {
+    if supervisor.recovery.is_none() {
+        if supervisor.unrecoverable_failure_reported {
+            return;
+        }
+        let Some(active) = backend.as_mut() else {
+            return;
+        };
+        let reason = match active.output_status() {
+            OutputStatus::Healthy => return,
+            OutputStatus::Lost(reason) => reason,
+            OutputStatus::DefaultDeviceChanged => "the default output device changed".to_owned(),
+        };
+        if !supervisor.source.recoverable {
+            supervisor.unrecoverable_failure_reported = true;
+            set_error(
+                snapshot,
+                events,
+                AudioError::Backend(format!("output stream failed: {reason}")),
+            );
+            return;
+        }
+
+        let current = read_snapshot(snapshot);
+        let resumable = current_path.is_some()
+            && matches!(
+                current.state,
+                PlaybackState::Playing
+                    | PlaybackState::Paused
+                    | PlaybackState::Ready
+                    | PlaybackState::Error
+            );
+        let position = if resumable {
+            let position = active.position();
+            current
+                .duration
+                .map_or(position, |duration| position.min(duration))
+        } else {
+            current.position
+        };
+        let now = Instant::now();
+        meter.observe(current.state, position, current.duration, now);
+        meter.reset_anchor(PlaybackState::Paused, position);
+        // The Rodio backend hands stream teardown to a disposal thread.
+        drop(backend.take());
+        update_snapshot(snapshot, events, |state| state.position = position);
+        eprintln!("audio output lost ({reason}); rebuilding on the default device");
+        supervisor.recovery = Some(OutputRecovery::new(
+            current.state,
+            position,
+            current.volume,
+            now,
+        ));
+    }
+
+    if supervisor
+        .recovery
+        .as_ref()
+        .is_some_and(|recovery| Instant::now() >= recovery.next_attempt_at)
+    {
+        let _ = attempt_output_recovery(
+            RecoveryTrigger::Background,
+            supervisor,
+            backend,
+            current_path,
+            meter,
+            snapshot,
+            events,
+        );
+    }
+}
+
+/// Create a new backend on the current default device and restore the
+/// captured track state. `Err` means no backend could be created; a restore
+/// failure (for example a vanished file) still installs the new backend and
+/// is reported through the snapshot.
+fn attempt_output_recovery(
+    trigger: RecoveryTrigger,
+    supervisor: &mut OutputSupervisor,
+    backend: &mut Option<Box<dyn AudioBackend>>,
+    current_path: &mut Option<PathBuf>,
+    meter: &mut PlaybackMeter,
+    snapshot: &Arc<RwLock<PlaybackSnapshot>>,
+    events: &SyncSender<AudioEvent>,
+) -> Result<(), AudioError> {
+    if supervisor.recovery.is_none() {
+        return Ok(());
+    }
+    let mut restored = match supervisor.source.create() {
+        Ok(restored) => restored,
+        Err(error) => {
+            if let Some(recovery) = supervisor.recovery.as_mut() {
+                recovery.schedule_retry(Instant::now());
+            }
+            let current = read_snapshot(snapshot);
+            if current.last_error.as_ref() != Some(&error) {
+                set_error(snapshot, events, error.clone());
+            }
+            return Err(error);
+        }
+    };
+    let recovery = supervisor
+        .recovery
+        .take()
+        .expect("recovery presence was checked above");
+    let resume_playing = recovery.prior_state == PlaybackState::Playing
+        && (trigger == RecoveryTrigger::Command
+            || recovery.lost_at.elapsed() <= OUTPUT_RESUME_PLAYBACK_GRACE);
+    let _ = restored.set_volume(recovery.volume);
+    let outcome = restore_track(
+        restored.as_mut(),
+        current_path.as_deref(),
+        &recovery,
+        resume_playing,
+    );
+    *backend = Some(restored);
+    match outcome {
+        Ok((state, position, duration)) => {
+            update_snapshot(snapshot, events, |snapshot| {
+                snapshot.state = state;
+                snapshot.position = position;
+                if duration.is_some() {
+                    snapshot.duration = duration;
+                }
+                snapshot.volume = recovery.volume;
+                snapshot.last_error = None;
+            });
+            meter.reset_anchor(state, position);
+        }
+        Err(error) => {
+            *current_path = None;
+            meter.activate(None, None);
+            set_error(snapshot, events, error);
+        }
+    }
+    Ok(())
+}
+
+fn restore_track(
+    backend: &mut dyn AudioBackend,
+    path: Option<&Path>,
+    recovery: &OutputRecovery,
+    resume_playing: bool,
+) -> Result<(PlaybackState, Duration, Option<Duration>), AudioError> {
+    let Some(path) = path else {
+        return Ok((PlaybackState::Empty, Duration::ZERO, None));
+    };
+    if matches!(
+        recovery.prior_state,
+        PlaybackState::Stopped | PlaybackState::Ended
+    ) {
+        // Play/seek from these states reload the file themselves.
+        return Ok((recovery.prior_state, recovery.position, None));
+    }
+    let (duration, position) = backend.load_at(path, recovery.position)?;
+    if resume_playing {
+        backend.play()?;
+        return Ok((PlaybackState::Playing, position, duration));
+    }
+    let state = if recovery.prior_state == PlaybackState::Ready && position.is_zero() {
+        PlaybackState::Ready
+    } else {
+        PlaybackState::Paused
+    };
+    Ok((state, position, duration))
+}
+
+/// Commands that arrive while no output device is available. Play and load
+/// retry the rebuild immediately and fail fast; the rest update the resume
+/// point so the eventual rebuild honors them.
+fn handle_command_during_recovery(
+    command: Command,
+    supervisor: &mut OutputSupervisor,
+    backend: &mut Option<Box<dyn AudioBackend>>,
+    current_path: &mut Option<PathBuf>,
+    meter: &mut PlaybackMeter,
+    snapshot: &Arc<RwLock<PlaybackSnapshot>>,
+    events: &SyncSender<AudioEvent>,
+) -> Result<(), AudioError> {
+    match command {
+        Command::Play
+        | Command::Load(_, _)
+        | Command::LoadAndPlay(_, _)
+        | Command::LoadPreservingPlayback(_, _) => {
+            attempt_output_recovery(
+                RecoveryTrigger::Command,
+                supervisor,
+                backend,
+                current_path,
+                meter,
+                snapshot,
+                events,
+            )?;
+            handle_command(command, backend, current_path, meter, snapshot, events)
+        }
+        Command::Pause => {
+            if let Some(recovery) = supervisor.recovery.as_mut() {
+                if recovery.prior_state == PlaybackState::Playing {
+                    recovery.prior_state = PlaybackState::Paused;
+                }
+            }
+            if current_path.is_some() {
+                set_state(snapshot, events, PlaybackState::Paused);
+            }
+            Ok(())
+        }
+        Command::Stop => {
+            if let Some(recovery) = supervisor.recovery.as_mut() {
+                recovery.prior_state = if current_path.is_some() {
+                    PlaybackState::Stopped
+                } else {
+                    PlaybackState::Empty
+                };
+                recovery.position = Duration::ZERO;
+            }
+            update_snapshot(snapshot, events, |snapshot| {
+                snapshot.position = Duration::ZERO
+            });
+            Ok(())
+        }
+        Command::Seek(position) => {
+            if current_path.is_none() {
+                return Err(AudioError::NoTrackLoaded);
+            }
+            let duration = read_snapshot(snapshot).duration;
+            let position = duration.map_or(position, |duration| position.min(duration));
+            if let Some(recovery) = supervisor.recovery.as_mut() {
+                recovery.position = position;
+                if matches!(
+                    recovery.prior_state,
+                    PlaybackState::Stopped | PlaybackState::Ended
+                ) {
+                    recovery.prior_state = PlaybackState::Paused;
+                }
+            }
+            update_snapshot(snapshot, events, |snapshot| snapshot.position = position);
+            Ok(())
+        }
+        Command::SetVolume(volume) => {
+            if let Some(recovery) = supervisor.recovery.as_mut() {
+                recovery.volume = volume;
+            }
+            update_snapshot(snapshot, events, |snapshot| snapshot.volume = volume);
+            Ok(())
+        }
+        Command::CheckpointAccounting => {
+            meter.request_flush();
+            Ok(())
+        }
+        Command::Shutdown => Ok(()),
     }
 }
 
@@ -842,10 +1317,6 @@ fn update_position(
     let Some(backend) = backend.as_mut() else {
         return;
     };
-    if let Some(error) = backend.take_error() {
-        set_error(snapshot, events, error);
-        return;
-    }
     let current = read_snapshot(snapshot);
     if current.state != PlaybackState::Playing {
         meter.reset_anchor(current.state, backend.position());
@@ -1543,6 +2014,356 @@ mod tests {
         fn is_empty(&self) -> bool {
             !self.loaded
         }
+    }
+
+    #[derive(Default)]
+    struct OutputScript {
+        created: std::sync::atomic::AtomicUsize,
+        available: AtomicBool,
+        seek_times_out: AtomicBool,
+        inject: Mutex<Option<OutputStatus>>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl OutputScript {
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+
+        fn inject(&self, status: OutputStatus) {
+            *self.inject.lock().unwrap() = Some(status);
+        }
+    }
+
+    struct ScriptedBackend {
+        id: usize,
+        script: Arc<OutputScript>,
+        loaded: bool,
+        position: Duration,
+    }
+
+    impl ScriptedBackend {
+        fn log(&self, call: String) {
+            self.script
+                .calls
+                .lock()
+                .unwrap()
+                .push(format!("{}:{call}", self.id));
+        }
+    }
+
+    impl AudioBackend for ScriptedBackend {
+        fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
+            self.log(format!("load:{}", path.display()));
+            self.loaded = true;
+            self.position = Duration::ZERO;
+            Ok(Some(Duration::from_secs(10)))
+        }
+        fn play(&mut self) -> Result<(), AudioError> {
+            self.log("play".to_owned());
+            Ok(())
+        }
+        fn pause(&mut self) -> Result<(), AudioError> {
+            self.log("pause".to_owned());
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<(), AudioError> {
+            self.log("stop".to_owned());
+            self.position = Duration::ZERO;
+            Ok(())
+        }
+        fn seek(&mut self, position: Duration) -> Result<Duration, AudioError> {
+            self.log(format!("seek:{}", position.as_millis()));
+            self.position = position;
+            if self.script.seek_times_out.swap(false, Ordering::SeqCst) {
+                // Mirrors RodioBackend: a try_seek deadline miss lands the
+                // track at the target via a reopened decoder and reports the
+                // output as lost.
+                self.script
+                    .inject(OutputStatus::Lost("seek timed out".to_owned()));
+            }
+            Ok(position)
+        }
+        fn set_volume(&mut self, volume: f32) -> Result<(), AudioError> {
+            self.log(format!("volume:{volume}"));
+            Ok(())
+        }
+        fn position(&self) -> Duration {
+            self.position
+        }
+        fn is_empty(&self) -> bool {
+            !self.loaded
+        }
+        fn output_status(&mut self) -> OutputStatus {
+            self.script
+                .inject
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or(OutputStatus::Healthy)
+        }
+    }
+
+    fn scripted_player(script: &Arc<OutputScript>) -> PlayerHandle {
+        let script = Arc::clone(script);
+        PlayerHandle::with_recoverable_backend_factory(move || {
+            if !script.available.load(Ordering::SeqCst) {
+                return Err(AudioError::OutputDevice(
+                    "no default output device".to_owned(),
+                ));
+            }
+            let id = script.created.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(Box::new(ScriptedBackend {
+                id,
+                script: Arc::clone(&script),
+                loaded: false,
+                position: Duration::ZERO,
+            }) as Box<dyn AudioBackend>)
+        })
+        .expect("worker should start")
+    }
+
+    fn available_script() -> Arc<OutputScript> {
+        let script = Arc::new(OutputScript::default());
+        script.available.store(true, Ordering::SeqCst);
+        script
+    }
+
+    fn wait_until(what: &str, condition: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if condition() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    const ACK: Duration = Duration::from_secs(1);
+
+    #[test]
+    fn injected_stream_error_rebuilds_output_and_restores_playing_track() {
+        let script = available_script();
+        let player = scripted_player(&script);
+        wait_for(&player, PlaybackState::Empty);
+        player
+            .request_load_and_play(PathBuf::from("song.flac"))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        player
+            .request_seek(Duration::from_millis(2_500))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        player.request_set_volume(0.4).unwrap().wait(ACK).unwrap();
+
+        script.inject(OutputStatus::Lost("device invalidated".to_owned()));
+        wait_until("rebuilt playing backend", || {
+            script.created.load(Ordering::SeqCst) == 2
+                && player.snapshot().state == PlaybackState::Playing
+        });
+        let calls = script.calls();
+        for expected in ["2:volume:0.4", "2:load:song.flac", "2:seek:2500", "2:play"] {
+            assert!(
+                calls.contains(&expected.to_owned()),
+                "missing {expected}: {calls:?}"
+            );
+        }
+        let snapshot = player.snapshot();
+        assert_eq!(snapshot.position, Duration::from_millis(2_500));
+        assert_eq!(snapshot.volume, 0.4);
+        assert_eq!(snapshot.last_error, None);
+
+        // The worker stays responsive after the rebuild.
+        let started = Instant::now();
+        let paused = player.request_pause().unwrap().wait(ACK).unwrap();
+        assert_eq!(paused.state, PlaybackState::Paused);
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(script.calls().contains(&"2:pause".to_owned()));
+    }
+
+    #[test]
+    fn default_device_change_while_paused_rebuilds_and_stays_paused() {
+        let script = available_script();
+        let player = scripted_player(&script);
+        wait_for(&player, PlaybackState::Empty);
+        player
+            .request_load_and_play(PathBuf::from("song.flac"))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        player.request_pause().unwrap().wait(ACK).unwrap();
+        player
+            .request_seek(Duration::from_millis(1_200))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+
+        script.inject(OutputStatus::DefaultDeviceChanged);
+        wait_until("rebuilt backend", || {
+            script.created.load(Ordering::SeqCst) == 2
+        });
+        wait_for(&player, PlaybackState::Paused);
+        let calls = script.calls();
+        assert!(calls.contains(&"2:seek:1200".to_owned()), "{calls:?}");
+        assert!(!calls.contains(&"2:play".to_owned()), "{calls:?}");
+        assert_eq!(player.snapshot().position, Duration::from_millis(1_200));
+    }
+
+    #[test]
+    fn seek_timeout_fallback_rebuilds_output_at_the_requested_position() {
+        let script = available_script();
+        let player = scripted_player(&script);
+        wait_for(&player, PlaybackState::Empty);
+        player
+            .request_load_and_play(PathBuf::from("song.flac"))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        script.seek_times_out.store(true, Ordering::SeqCst);
+        let started = Instant::now();
+        let seeked = player
+            .request_seek(Duration::from_millis(4_000))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(seeked.position, Duration::from_millis(4_000));
+        wait_until("rebuild after seek timeout", || {
+            script.created.load(Ordering::SeqCst) == 2
+                && player.snapshot().state == PlaybackState::Playing
+        });
+        let calls = script.calls();
+        assert!(calls.contains(&"2:seek:4000".to_owned()), "{calls:?}");
+        assert!(calls.contains(&"2:play".to_owned()), "{calls:?}");
+    }
+
+    #[test]
+    fn missing_device_is_a_recoverable_error_with_fast_failures() {
+        let script = available_script();
+        let player = scripted_player(&script);
+        wait_for(&player, PlaybackState::Empty);
+        player
+            .request_load_and_play(PathBuf::from("song.flac"))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        player
+            .request_seek(Duration::from_millis(3_000))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+
+        script.available.store(false, Ordering::SeqCst);
+        script.inject(OutputStatus::Lost("device removed".to_owned()));
+        wait_for(&player, PlaybackState::Error);
+        assert!(matches!(
+            player.snapshot().last_error,
+            Some(AudioError::OutputDevice(_))
+        ));
+
+        let started = Instant::now();
+        let play = player.request_play().unwrap().wait(ACK);
+        assert!(matches!(play, Err(AudioError::OutputDevice(_))), "{play:?}");
+        assert!(started.elapsed() < Duration::from_millis(500));
+        player.request_set_volume(0.3).unwrap().wait(ACK).unwrap();
+        assert_eq!(player.snapshot().volume, 0.3);
+
+        script.available.store(true, Ordering::SeqCst);
+        wait_until("background recovery", || {
+            script.created.load(Ordering::SeqCst) == 2
+                && player.snapshot().state == PlaybackState::Playing
+        });
+        let calls = script.calls();
+        for expected in ["2:volume:0.3", "2:seek:3000", "2:play"] {
+            assert!(
+                calls.contains(&expected.to_owned()),
+                "missing {expected}: {calls:?}"
+            );
+        }
+        assert_eq!(player.snapshot().last_error, None);
+    }
+
+    #[test]
+    fn pause_during_outage_and_play_command_retry_immediately() {
+        let script = available_script();
+        let player = scripted_player(&script);
+        wait_for(&player, PlaybackState::Empty);
+        player
+            .request_load_and_play(PathBuf::from("song.flac"))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        script.available.store(false, Ordering::SeqCst);
+        script.inject(OutputStatus::Lost("device removed".to_owned()));
+        wait_for(&player, PlaybackState::Error);
+        let paused = player.request_pause().unwrap().wait(ACK).unwrap();
+        assert_eq!(paused.state, PlaybackState::Paused);
+
+        script.available.store(true, Ordering::SeqCst);
+        let playing = player.request_play().unwrap().wait(ACK).unwrap();
+        assert_eq!(playing.state, PlaybackState::Playing);
+        assert_eq!(script.created.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn startup_without_output_device_recovers_when_one_appears() {
+        let script = Arc::new(OutputScript::default());
+        let player = scripted_player(&script);
+        wait_for(&player, PlaybackState::Error);
+        script.available.store(true, Ordering::SeqCst);
+        wait_for(&player, PlaybackState::Empty);
+        player
+            .request_load_and_play(PathBuf::from("song.flac"))
+            .unwrap()
+            .wait(ACK)
+            .unwrap();
+        assert_eq!(player.snapshot().state, PlaybackState::Playing);
+    }
+
+    #[test]
+    fn stuck_backend_times_out_commands_and_shutdown_is_bounded() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let player = PlayerHandle::with_backend_factory(move || {
+            Ok(Box::new(BlockingPlayBackend {
+                started: started_tx,
+                release: release_rx,
+                loaded: false,
+            }) as Box<dyn AudioBackend>)
+        })
+        .unwrap();
+        wait_for(&player, PlaybackState::Empty);
+        player.load(PathBuf::from("fixture.wav")).unwrap();
+        wait_for(&player, PlaybackState::Ready);
+
+        let started = Instant::now();
+        let ticket = player.request_play().unwrap();
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker should enter the stuck backend call");
+        assert_eq!(
+            ticket.wait(Duration::from_millis(50)),
+            Err(AudioError::CommandTimeout)
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+
+        for _ in 0..COMMAND_CAPACITY {
+            let submitted = Instant::now();
+            player.pause().unwrap();
+            assert!(submitted.elapsed() < Duration::from_millis(50));
+        }
+        assert_eq!(player.pause(), Err(AudioError::CommandQueueFull));
+
+        let dropping = Instant::now();
+        drop(player);
+        assert!(
+            dropping.elapsed() < SHUTDOWN_TIMEOUT + Duration::from_millis(500),
+            "dropping the handle must not join a stuck worker"
+        );
+        release_tx.send(()).unwrap();
     }
 
     #[test]
