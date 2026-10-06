@@ -249,6 +249,9 @@ export interface PlaybackOutputFormat {
   deviceRateHz: number;
   conversion: 'none' | 'highQuality' | 'windows' | 'basic';
   fallbackReason: string | null;
+  dseeHx: 'off' | 'active' | 'bypassed' | 'unavailable';
+  dseeNotice: string | null;
+  dseeOutputRateHz: number | null;
 }
 
 export interface LyricLine {
@@ -359,6 +362,14 @@ interface IpcContract {
   settings_set_resampling_mode: {
     args: { mode: ResamplingMode };
     result: ResamplingMode;
+  };
+  settings_get_dsee_hx: {
+    args: Record<string, never>;
+    result: boolean;
+  };
+  settings_set_dsee_hx: {
+    args: { enabled: boolean };
+    result: boolean;
   };
   settings_get_lyrics_preferences: {
     args: Record<string, never>;

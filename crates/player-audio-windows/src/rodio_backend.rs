@@ -45,8 +45,8 @@ use rodio::{
 
 use crate::resample::{needs_resampling, Resampled};
 use crate::{
-    AudioBackend, AudioError, OutputStatus, ResamplingConfig, ResamplingConversion, ResamplingInfo,
-    ResamplingMode,
+    AudioBackend, AudioError, DseeHxState, OutputStatus, ResamplingConfig, ResamplingConversion,
+    ResamplingInfo, ResamplingMode,
 };
 
 /// Upper bound for opening a WASAPI endpoint. A driver that hangs inside
@@ -72,6 +72,7 @@ pub(super) struct RodioBackend {
     /// current mode and, in Windows-builtin mode, at the current track's rate.
     config: Arc<ResamplingConfig>,
     mode: ResamplingMode,
+    dsee_enabled: bool,
     /// Windows-builtin only: the track rate the endpoint refused, and why.
     fallback: Option<OutputFallback>,
 }
@@ -209,15 +210,17 @@ impl RodioBackend {
             },
             None => open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT)?,
         };
-        let track = TrackPlayer::new(output.sink.mixer().clone(), output.sample_rate);
+        let mut track = TrackPlayer::new(output.sink.mixer().clone(), output.sample_rate);
+        track.dsee_enabled = config.dsee_hx();
         let now = Instant::now();
         Ok(Self {
             output: Some(output),
             track,
             last_device_check: now,
             last_heartbeat: (0, now),
-            config,
+            config: Arc::clone(&config),
             mode,
+            dsee_enabled: config.dsee_hx(),
             fallback,
         })
     }
@@ -289,6 +292,10 @@ impl RodioBackend {
         self.last_heartbeat = (0, now);
         self.last_device_check = now;
     }
+
+    fn plan_for(&self, path: &Path, decoder: &Decoder<BufReader<File>>) -> crate::dsee::DseePlan {
+        crate::dsee::plan(self.dsee_enabled, path, &track_signal(decoder))
+    }
 }
 
 fn log_refused_rate(rate: SampleRate, reason: &str) {
@@ -323,8 +330,9 @@ impl Drop for RodioBackend {
 impl AudioBackend for RodioBackend {
     fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
         let decoder = open_decoder(path)?;
-        self.prepare_output_for(decoder.sample_rate());
-        Ok(self.track.load_decoder(path, decoder))
+        let plan = self.plan_for(path, &decoder);
+        self.prepare_output_for(plan_rate(&decoder, plan.output_rate));
+        self.track.load_decoder(path, decoder, plan.engagement)
     }
 
     fn play(&mut self) -> Result<(), AudioError> {
@@ -356,8 +364,10 @@ impl AudioBackend for RodioBackend {
         position: Duration,
     ) -> Result<(Option<Duration>, Duration), AudioError> {
         let decoder = open_decoder(path)?;
-        self.prepare_output_for(decoder.sample_rate());
-        self.track.load_decoder_at(path, decoder, position)
+        let plan = self.plan_for(path, &decoder);
+        self.prepare_output_for(plan_rate(&decoder, plan.output_rate));
+        self.track
+            .load_decoder_at(path, decoder, position, plan.engagement)
     }
 
     fn set_resampling_mode(&mut self, mode: ResamplingMode) -> Result<(), AudioError> {
@@ -369,7 +379,8 @@ impl AudioBackend for RodioBackend {
         self.fallback = None;
         // Capture the live position before the output (and player) changes.
         let resume = self.track.resume_point();
-        let replaced = match self.track.source_rate {
+        let rate = self.track.playback_rate.or(self.track.source_rate);
+        let replaced = match rate {
             Some(rate) if resume.is_some() => self.prepare_output_for(rate),
             // Nothing is playing; HQ only needs the stream back at the mix
             // rate, and Windows-builtin reopens when the next track loads.
@@ -386,10 +397,30 @@ impl AudioBackend for RodioBackend {
         Ok(())
     }
 
+    fn set_dsee_hx(&mut self, enabled: bool) -> Result<(), AudioError> {
+        self.config.set_dsee_hx(enabled);
+        self.dsee_enabled = enabled;
+        self.track.dsee_enabled = enabled;
+        let Some((path, position)) = self.track.resume_point() else {
+            return Ok(());
+        };
+        let was_playing = !self.track.paused;
+        let decoder = open_decoder(&path)?;
+        let plan = self.plan_for(&path, &decoder);
+        self.prepare_output_for(plan_rate(&decoder, plan.output_rate));
+        self.track
+            .load_decoder_at(&path, decoder, position, plan.engagement)?;
+        if was_playing {
+            self.track.play()?;
+        }
+        Ok(())
+    }
+
     fn resampling_info(&self) -> Option<ResamplingInfo> {
         let output = self.output.as_ref()?;
-        let source_rate = self.track.loaded_source_rate();
-        let fallback = match (self.mode, self.fallback.as_ref(), source_rate) {
+        let file_rate = self.track.loaded_source_rate();
+        let playback_rate = self.track.playback_rate.or(file_rate);
+        let fallback = match (self.mode, self.fallback.as_ref(), playback_rate) {
             (ResamplingMode::WindowsBuiltin, Some(fallback), Some(rate))
                 if fallback.rate == rate =>
             {
@@ -399,16 +430,21 @@ impl AudioBackend for RodioBackend {
         };
         Some(ResamplingInfo {
             mode: self.mode,
-            source_rate: source_rate.map(SampleRate::get),
+            source_rate: file_rate.map(SampleRate::get),
             output_rate: output.sample_rate.get(),
             device_rate: output.device_rate.get(),
             conversion: conversion_for(
-                source_rate,
+                playback_rate,
                 output.sample_rate,
                 output.device_rate,
                 self.track.in_app,
             ),
             fallback_reason: fallback,
+            dsee_hx: self.track.dsee_state,
+            dsee_notice: self.track.dsee_notice.clone(),
+            dsee_output_rate: (self.track.dsee_state == DseeHxState::Active)
+                .then(|| self.track.playback_rate.map(SampleRate::get))
+                .flatten(),
         })
     }
 
@@ -639,8 +675,13 @@ struct TrackPlayer {
     base: Duration,
     paused: bool,
     volume: f32,
-    /// Rate of the decoder attached to the current player.
+    /// Decoder rate of the loaded file. Status display uses this.
     source_rate: Option<SampleRate>,
+    /// Rate of the samples appended to the mixer, after DSEE HX when it is active.
+    playback_rate: Option<SampleRate>,
+    dsee_enabled: bool,
+    dsee_state: DseeHxState,
+    dsee_notice: Option<String>,
     /// The current source goes through the in-app high-quality resampler.
     in_app: bool,
 }
@@ -656,6 +697,10 @@ impl TrackPlayer {
             paused: true,
             volume: 1.0,
             source_rate: None,
+            playback_rate: None,
+            dsee_enabled: false,
+            dsee_state: DseeHxState::Off,
+            dsee_notice: None,
             in_app: false,
         }
     }
@@ -663,15 +708,20 @@ impl TrackPlayer {
     #[cfg(test)]
     fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
         let decoder = open_decoder(path)?;
-        Ok(self.load_decoder(path, decoder))
+        self.load_decoder(path, decoder, crate::dsee::Engagement::Off)
     }
 
-    fn load_decoder(&mut self, path: &Path, decoder: Decoder<BufReader<File>>) -> Option<Duration> {
+    fn load_decoder(
+        &mut self,
+        path: &Path,
+        decoder: Decoder<BufReader<File>>,
+        engagement: crate::dsee::Engagement,
+    ) -> Result<Option<Duration>, AudioError> {
         let duration = decoder.total_duration();
         self.paused = true;
-        self.start(decoder, Duration::ZERO);
+        self.start(path, decoder, Duration::ZERO, engagement)?;
         self.path = Some(path.to_path_buf());
-        duration
+        Ok(duration)
     }
 
     #[cfg(test)]
@@ -681,7 +731,7 @@ impl TrackPlayer {
         position: Duration,
     ) -> Result<(Option<Duration>, Duration), AudioError> {
         let decoder = open_decoder(path)?;
-        self.load_decoder_at(path, decoder, position)
+        self.load_decoder_at(path, decoder, position, crate::dsee::Engagement::Off)
     }
 
     /// Load paused at `position` by seeking the decoder before it is attached,
@@ -691,6 +741,7 @@ impl TrackPlayer {
         path: &Path,
         mut decoder: Decoder<BufReader<File>>,
         position: Duration,
+        engagement: crate::dsee::Engagement,
     ) -> Result<(Option<Duration>, Duration), AudioError> {
         let duration = decoder.total_duration();
         let target = duration.map_or(position, |duration| position.min(duration));
@@ -704,7 +755,7 @@ impl TrackPlayer {
             Duration::ZERO
         };
         self.paused = true;
-        self.start(decoder, actual);
+        self.start(path, decoder, actual, engagement)?;
         self.path = Some(path.to_path_buf());
         Ok((duration, actual))
     }
@@ -733,6 +784,9 @@ impl TrackPlayer {
         self.base = Duration::ZERO;
         self.paused = true;
         self.source_rate = None;
+        self.playback_rate = None;
+        self.dsee_state = DseeHxState::Off;
+        self.dsee_notice = None;
         self.in_app = false;
     }
 
@@ -771,6 +825,13 @@ impl TrackPlayer {
         let Some(path) = self.path.clone() else {
             return Err(AudioError::NoTrackLoaded);
         };
+        if self.dsee_state == DseeHxState::Active {
+            let position = self.seek_by_reopening(&path, position)?;
+            return Ok(SeekOutcome {
+                position,
+                timed_out: false,
+            });
+        }
         if output_alive {
             if let Some(player) = self.player.as_ref() {
                 match try_seek_with_deadline(Arc::clone(player), position, timeout) {
@@ -810,10 +871,11 @@ impl TrackPlayer {
         position: Duration,
     ) -> Result<Duration, AudioError> {
         let mut decoder = open_decoder(path)?;
+        let plan = crate::dsee::plan(self.dsee_enabled, path, &track_signal(&decoder));
         decoder
             .try_seek(position)
             .map_err(|error| AudioError::Seek(error.to_string()))?;
-        self.start(decoder, position);
+        self.start(path, decoder, position, plan.engagement)?;
         Ok(position)
     }
 
@@ -835,7 +897,13 @@ impl TrackPlayer {
         self.player.as_ref().is_none_or(|player| player.empty())
     }
 
-    fn start(&mut self, decoder: Decoder<BufReader<File>>, base: Duration) {
+    fn start(
+        &mut self,
+        path: &Path,
+        decoder: Decoder<BufReader<File>>,
+        base: Duration,
+        engagement: crate::dsee::Engagement,
+    ) -> Result<(), AudioError> {
         // A brand-new Player is never in the stopped state, so `append` does
         // not wait for the render callback to drain an older source.
         let player = Player::connect_new(&self.mixer);
@@ -843,12 +911,14 @@ impl TrackPlayer {
         if self.paused {
             player.pause();
         }
-        let source_rate = decoder.sample_rate();
-        self.source_rate = Some(source_rate);
+        let file_rate = decoder.sample_rate();
+        self.source_rate = Some(file_rate);
+        let playback = self.attach_dsee(path, decoder, base, engagement)?;
+        let playback_rate = playback.sample_rate();
+        self.playback_rate = Some(playback_rate);
         self.in_app = false;
-        if needs_resampling(source_rate, self.output_rate) {
-            // Builds FFT plans and buffers here, never in the render callback.
-            match Resampled::new(decoder, self.output_rate) {
+        if needs_resampling(playback_rate, self.output_rate) {
+            match Resampled::new(playback, self.output_rate) {
                 Ok(resampled) => {
                     player.append(resampled);
                     self.in_app = true;
@@ -857,7 +927,7 @@ impl TrackPlayer {
                     eprintln!(
                         "[audio] high-quality resampler unavailable for {} -> {} Hz ({}); \
                          using Rodio's converter",
-                        source_rate.get(),
+                        playback_rate.get(),
                         self.output_rate.get(),
                         rejected.error
                     );
@@ -865,15 +935,122 @@ impl TrackPlayer {
                 }
             }
         } else {
-            player.append(decoder);
+            player.append(playback);
         }
         if let Some(previous) = self.player.replace(Arc::new(player)) {
-            // Only flags the old source; the mixer drops it on its next pull.
-            // A seek helper may still hold it; it is never joined.
             previous.stop();
         }
         self.base = base;
+        Ok(())
     }
+
+    fn attach_dsee(
+        &mut self,
+        path: &Path,
+        decoder: Decoder<BufReader<File>>,
+        base: Duration,
+        engagement: crate::dsee::Engagement,
+    ) -> Result<PlaybackSource, AudioError> {
+        match engagement {
+            crate::dsee::Engagement::Run {
+                bitrate_kbps,
+                input_rate,
+            } => match crate::dsee::DseeSource::open(decoder, input_rate, bitrate_kbps) {
+                Ok(source) => {
+                    self.dsee_state = DseeHxState::Active;
+                    self.dsee_notice = None;
+                    Ok(PlaybackSource::Dsee(source))
+                }
+                Err(crate::dsee::OpenError::Rejected(decoder, notice)) => {
+                    self.dsee_state = DseeHxState::Unavailable;
+                    self.dsee_notice = Some(notice);
+                    Ok(PlaybackSource::Direct(decoder))
+                }
+                Err(crate::dsee::OpenError::Lost(notice)) => {
+                    self.dsee_state = DseeHxState::Unavailable;
+                    self.dsee_notice = Some(notice);
+                    let mut decoder = open_decoder(path)?;
+                    if !base.is_zero() {
+                        let _ = decoder.try_seek(base);
+                    }
+                    Ok(PlaybackSource::Direct(decoder))
+                }
+            },
+            other => {
+                let (state, notice) = crate::dsee::state_of(&other);
+                self.dsee_state = state;
+                self.dsee_notice = notice;
+                Ok(PlaybackSource::Direct(decoder))
+            }
+        }
+    }
+}
+
+type FileDecoder = Decoder<BufReader<File>>;
+
+enum PlaybackSource {
+    Direct(FileDecoder),
+    Dsee(crate::dsee::DseeSource<FileDecoder>),
+}
+
+impl Iterator for PlaybackSource {
+    type Item = Sample;
+
+    fn next(&mut self) -> Option<Sample> {
+        match self {
+            Self::Direct(source) => source.next(),
+            Self::Dsee(source) => source.next(),
+        }
+    }
+}
+
+impl Source for PlaybackSource {
+    fn current_span_len(&self) -> Option<usize> {
+        match self {
+            Self::Direct(source) => source.current_span_len(),
+            Self::Dsee(source) => source.current_span_len(),
+        }
+    }
+
+    fn channels(&self) -> ChannelCount {
+        match self {
+            Self::Direct(source) => source.channels(),
+            Self::Dsee(source) => source.channels(),
+        }
+    }
+
+    fn sample_rate(&self) -> SampleRate {
+        match self {
+            Self::Direct(source) => source.sample_rate(),
+            Self::Dsee(source) => source.sample_rate(),
+        }
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        match self {
+            Self::Direct(source) => source.total_duration(),
+            Self::Dsee(source) => source.total_duration(),
+        }
+    }
+
+    fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
+        match self {
+            Self::Direct(source) => source.try_seek(position),
+            Self::Dsee(source) => source.try_seek(position),
+        }
+    }
+}
+
+fn track_signal(decoder: &FileDecoder) -> crate::dsee::TrackSignal {
+    crate::dsee::TrackSignal {
+        sample_rate: decoder.sample_rate().get(),
+        channels: decoder.channels().get(),
+        duration: decoder.total_duration(),
+    }
+}
+
+fn plan_rate(decoder: &FileDecoder, output_rate: u32) -> SampleRate {
+    SampleRate::new(output_rate).unwrap_or(decoder.sample_rate())
 }
 
 /// Run `Player::try_seek` on a helper thread. `None` means the deadline
@@ -948,7 +1125,8 @@ mod tests {
     }
 
     fn backend(mode: ResamplingMode) -> RodioBackend {
-        RodioBackend::new(Arc::new(ResamplingConfig::new(mode))).expect("default output device")
+        RodioBackend::new(Arc::new(ResamplingConfig::new(mode, false)))
+            .expect("default output device")
     }
 
     /// Write a 16-bit stereo sine WAV for real-device tests.

@@ -6,6 +6,9 @@
  *   deviceRateHz: number,
  *   conversion: 'none' | 'highQuality' | 'windows' | 'basic',
  *   fallbackReason: string | null,
+ *   dseeHx: 'off' | 'active' | 'bypassed' | 'unavailable',
+ *   dseeNotice: string | null,
+ *   dseeOutputRateHz: number | null,
  * }} OutputFormat
  */
 /** @typedef {{ text: string, notice: string | null }} OutputFormatStatus */
@@ -32,6 +35,32 @@ export function describeOutputFormat(format) {
     return { text: `尚未載入曲目（輸出 ${output}）`, notice: null };
   }
   const source = formatSampleRate(format.sourceRateHz);
+  if (format.dseeHx === 'active') {
+    const enhancedRate = format.dseeOutputRateHz ?? 96_000;
+    const enhanced = `${source} → ${formatSampleRate(enhancedRate)}（DSEE HX）`;
+    if (format.conversion === 'windows') {
+      return { text: `${enhanced}，再交由 Windows 轉換為 ${device}`, notice: format.dseeNotice };
+    }
+    if ((format.conversion === 'highQuality' || format.conversion === 'basic') && format.outputRateHz !== enhancedRate) {
+      return { text: `${enhanced} → ${output}（高品質）`, notice: format.dseeNotice };
+    }
+    return { text: enhanced, notice: format.dseeNotice };
+  }
+  const status = describeSampleRatePath(format, source, output, device);
+  if (format.dseeHx === 'bypassed' || format.dseeHx === 'unavailable') {
+    return { text: status.text, notice: format.dseeNotice ?? status.notice };
+  }
+  return status;
+}
+
+/**
+ * @param {OutputFormat} format
+ * @param {string} source
+ * @param {string} output
+ * @param {string} device
+ * @returns {OutputFormatStatus}
+ */
+function describeSampleRatePath(format, source, output, device) {
   switch (format.conversion) {
     case 'highQuality': {
       const notice = format.mode === 'windowsBuiltin'

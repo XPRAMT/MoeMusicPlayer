@@ -12,7 +12,7 @@ use std::{
 use player_core::{LibraryRoot, MediaLocator, MediaSourceKind, PlaylistId, SourceId};
 use serde::{Deserialize, Serialize};
 
-const SETTINGS_SCHEMA_VERSION: u32 = 7;
+const SETTINGS_SCHEMA_VERSION: u32 = 8;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -542,6 +542,9 @@ pub struct AppSettings {
     /// Windows playback sample-rate conversion (schema 7).
     #[serde(default)]
     pub resampling_mode: ResamplingMode,
+    /// Windows-only Sony DSEE HX streaming switch (schema 8). Default off.
+    #[serde(default)]
+    pub dsee_hx: bool,
     /// False means the source registry came from defaults after both JSON copies failed.
     /// Sync must remain paused until the user rebuilds and confirms the registry.
     pub source_registry_authoritative: bool,
@@ -563,6 +566,7 @@ impl Default for AppSettings {
             now_playing_layout: NowPlayingLayout::A,
             now_playing_appearance_preferences: NowPlayingAppearancePreferences::default(),
             resampling_mode: ResamplingMode::default(),
+            dsee_hx: false,
             source_registry_authoritative: true,
             sources: Vec::new(),
             window_geometry: None,
@@ -872,6 +876,7 @@ struct RawSettings {
     now_playing_layout: Option<NowPlayingLayout>,
     now_playing_appearance_preferences: Option<NowPlayingAppearancePreferences>,
     resampling_mode: Option<serde_json::Value>,
+    dsee_hx: Option<serde_json::Value>,
     source_registry_authoritative: Option<bool>,
     sources: Option<Vec<SourceEntry>>,
     window_geometry: Option<WindowGeometry>,
@@ -897,6 +902,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
             .now_playing_appearance_preferences
             .unwrap_or_default(),
         resampling_mode: lenient_resampling_mode(raw.resampling_mode),
+        dsee_hx: matches!(raw.dsee_hx, Some(serde_json::Value::Bool(true))),
         source_registry_authoritative: raw.source_registry_authoritative.unwrap_or(true),
         sources: raw.sources.unwrap_or_default(),
         window_geometry: raw.window_geometry,
@@ -1881,8 +1887,9 @@ mod tests {
 
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 7);
+        assert_eq!(persisted["schemaVersion"], SETTINGS_SCHEMA_VERSION);
         assert_eq!(persisted["resamplingMode"], "highQuality");
+        assert_eq!(persisted["dseeHx"], false);
     }
 
     #[test]

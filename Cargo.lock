@@ -2623,6 +2623,7 @@ version = "0.1.0"
 dependencies = [
  "rodio",
  "rubato",
+ "symphonia",
  "windows",
 ]
 

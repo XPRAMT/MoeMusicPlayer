@@ -158,6 +158,9 @@
   let resamplingMode = $state<ResamplingMode>('highQuality');
   let resamplingModeState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let resamplingModeError = $state<string | null>(null);
+  let dseeHx = $state(false);
+  let dseeHxState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
+  let dseeHxError = $state<string | null>(null);
   let nowPlayingAppearancePreferences = $state<NowPlayingAppearancePreferences>(
     normalizeNowPlayingAppearancePreferences(DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES),
   );
@@ -224,6 +227,8 @@
   let nowPlayingLayoutRevision = 0;
   let resamplingModeRevision = 0;
   let resamplingModeQueue: Promise<void> = Promise.resolve();
+  let dseeHxRevision = 0;
+  let dseeHxQueue: Promise<void> = Promise.resolve();
   let nowPlayingAppearanceRevision = 0;
   let lyricsPreferencesRevision = 0;
   let trackColumnSettingsQueue: Promise<void> = Promise.resolve();
@@ -455,6 +460,7 @@
         loadTrackColumnSettings(),
         loadNowPlayingLayout(),
         loadResamplingMode(),
+        loadDseeHx(),
         loadNowPlayingAppearancePreferences(),
         loadLyricsPreferences(),
       ]);
@@ -635,6 +641,48 @@
         if (revision !== resamplingModeRevision) return;
         resamplingModeState = 'error';
         resamplingModeError = getErrorText(error);
+      }
+      void loadPlaybackSnapshot(false);
+    });
+  }
+
+  async function loadDseeHx(): Promise<void> {
+    const revision = dseeHxRevision;
+    try {
+      const stored = await invokeCommand('settings_get_dsee_hx', {});
+      if (revision !== dseeHxRevision) return;
+      dseeHx = stored === true;
+      dseeHxState = 'saved';
+      dseeHxError = null;
+    } catch (error) {
+      if (revision !== dseeHxRevision) return;
+      dseeHxState = 'error';
+      dseeHxError = `無法讀取 DSEE HX 設定：${getErrorText(error)}`;
+    }
+  }
+
+  function setDseeHx(enabled: boolean): void {
+    dseeHx = enabled;
+    dseeHxError = null;
+    const revision = ++dseeHxRevision;
+    if (!isTauri()) {
+      dseeHxState = 'preview';
+      dseeHxError = '瀏覽器預覽不會保存 DSEE HX 設定。';
+      return;
+    }
+    dseeHxState = 'saving';
+    dseeHxQueue = dseeHxQueue.catch(() => undefined).then(async () => {
+      if (revision !== dseeHxRevision) return;
+      try {
+        const saved = await invokeCommand('settings_set_dsee_hx', { enabled });
+        if (revision !== dseeHxRevision) return;
+        dseeHx = saved;
+        dseeHxState = 'saved';
+        dseeHxError = null;
+      } catch (error) {
+        if (revision !== dseeHxRevision) return;
+        dseeHxState = 'error';
+        dseeHxError = getErrorText(error);
       }
       void loadPlaybackSnapshot(false);
     });
@@ -2108,6 +2156,27 @@
                 </div>
                 <p class="settings-preference-status" class:error={resamplingModeState === 'error'} role="status">
                   {resamplingModeError ?? (resamplingModeState === 'loading' ? '正在讀取取樣率轉換設定…' : resamplingModeState === 'saving' ? '正在切換取樣率轉換方式…' : resamplingModeState === 'preview' ? '瀏覽器預覽不會保存取樣率轉換設定。' : '取樣率轉換設定已保存。')}
+                </p>
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>DSEE HX</h3>
+                    <p>串流透過本機已安裝的 Sony Music Center 濾鏡處理。只在 48 kHz／16-bit 以下的雙聲道啟動。48 kHz 系列輸出 96 kHz／24-bit，44.1 kHz 系列輸出 176.4 kHz／24-bit，之後仍依目前的取樣率轉換接到輸出裝置。有損格式沒有來源位深，會以 16-bit PCM 送入。24-bit、更高取樣率或非雙聲道不處理。需要先安裝 Sony Music Center。播放器只載入 C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax，不會內含或散佈這個檔案。</p>
+                  </div>
+                </div>
+                <label class="resampling-option">
+                  <input
+                    type="checkbox"
+                    checked={dseeHx}
+                    disabled={dseeHxState === 'loading' || dseeHxState === 'saving'}
+                    onchange={(event) => setDseeHx(event.currentTarget.checked)}
+                  />
+                  <span class="resampling-option-copy">
+                    <strong>啟用 DSEE HX</strong>
+                    <small>關閉時維持原本的解碼與取樣率轉換。開啟後，符合格式的曲目才會進入濾鏡；濾鏡不存在或處理失敗時仍播放原解碼。</small>
+                  </span>
+                </label>
+                <p class="settings-preference-status" class:error={dseeHxState === 'error'} role="status">
+                  {dseeHxError ?? (dseeHxState === 'loading' ? '正在讀取 DSEE HX 設定…' : dseeHxState === 'saving' ? '正在套用 DSEE HX…' : dseeHxState === 'preview' ? '瀏覽器預覽不會保存 DSEE HX 設定。' : dseeHx ? 'DSEE HX 已開啟。' : 'DSEE HX 已關閉。')}
                 </p>
               </div>
             {:else if settingsSection === 'now-playing'}

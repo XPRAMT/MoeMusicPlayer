@@ -7,12 +7,14 @@
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+mod dsee;
 #[cfg(windows)]
 mod resample;
 #[cfg(windows)]
@@ -126,6 +128,19 @@ pub enum ResamplingMode {
     HighQuality,
 }
 
+/// Whether Sony DSEE HX is processing the loaded track.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DseeHxState {
+    #[default]
+    Off,
+    /// The 32-bit helper is streaming this track through the installed filter.
+    Active,
+    /// The switch is on, but this track is above 48 kHz / 16-bit or is not stereo.
+    Bypassed,
+    /// The switch is on, but Music Center or the helper is unavailable.
+    Unavailable,
+}
+
 /// Who converts the current track's sample rate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResamplingConversion {
@@ -154,6 +169,10 @@ pub struct ResamplingInfo {
     /// Windows-builtin only: why the stream could not run at the track's rate
     /// and the track is converted in-app instead.
     pub fallback_reason: Option<String>,
+    pub dsee_hx: DseeHxState,
+    pub dsee_notice: Option<String>,
+    /// Sample rate leaving the DSEE HX filter when it is active.
+    pub dsee_output_rate: Option<u32>,
 }
 
 /// Resampling preferences shared with the backend factory, so an output that
@@ -165,14 +184,16 @@ pub(crate) struct ResamplingConfig {
     mode: AtomicU8,
     /// Rate of the most recently loaded track; 0 when unknown.
     track_rate_hint: AtomicU32,
+    dsee_hx: AtomicBool,
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
 impl ResamplingConfig {
-    pub(crate) fn new(mode: ResamplingMode) -> Self {
+    pub(crate) fn new(mode: ResamplingMode, dsee_hx: bool) -> Self {
         Self {
             mode: AtomicU8::new(Self::encode(mode)),
             track_rate_hint: AtomicU32::new(0),
+            dsee_hx: AtomicBool::new(dsee_hx),
         }
     }
 
@@ -203,6 +224,14 @@ impl ResamplingConfig {
 
     pub(crate) fn set_track_rate_hint(&self, rate: u32) {
         self.track_rate_hint.store(rate, AtomicOrdering::Relaxed);
+    }
+
+    pub(crate) fn dsee_hx(&self) -> bool {
+        self.dsee_hx.load(AtomicOrdering::Relaxed)
+    }
+
+    pub(crate) fn set_dsee_hx(&self, enabled: bool) {
+        self.dsee_hx.store(enabled, AtomicOrdering::Relaxed);
     }
 }
 
@@ -314,6 +343,12 @@ pub trait AudioBackend: 'static {
     fn set_resampling_mode(&mut self, _mode: ResamplingMode) -> Result<(), AudioError> {
         Ok(())
     }
+    /// Turn Sony DSEE HX streaming on or off. A loaded track restarts at its
+    /// current position. The filter is used only for stereo at or below
+    /// 48 kHz / 16-bit.
+    fn set_dsee_hx(&mut self, _enabled: bool) -> Result<(), AudioError> {
+        Ok(())
+    }
     /// Current sample-rate path, for status display.
     fn resampling_info(&self) -> Option<ResamplingInfo> {
         None
@@ -400,6 +435,7 @@ enum Command {
     Seek(Duration),
     SetVolume(f32),
     SetResampling(ResamplingMode),
+    SetDseeHx(bool),
     CheckpointAccounting,
     Shutdown,
 }
@@ -429,9 +465,14 @@ impl PlayerHandle {
 
     /// Create the Windows Rodio/CPAL backend with an initial resampling mode.
     pub fn with_resampling(mode: ResamplingMode) -> Result<Self, AudioError> {
+        Self::with_output(mode, false)
+    }
+
+    /// Create the backend with the saved resampling mode and DSEE HX switch.
+    pub fn with_output(mode: ResamplingMode, dsee_hx: bool) -> Result<Self, AudioError> {
         #[cfg(windows)]
         {
-            let config = Arc::new(ResamplingConfig::new(mode));
+            let config = Arc::new(ResamplingConfig::new(mode, dsee_hx));
             let factory_config = Arc::clone(&config);
             Self::spawn(
                 BackendSource::recoverable(move || {
@@ -445,7 +486,7 @@ impl PlayerHandle {
 
         #[cfg(not(windows))]
         {
-            let _ = mode;
+            let _ = (mode, dsee_hx);
             Err(AudioError::UnsupportedPlatform)
         }
     }
@@ -620,6 +661,15 @@ impl PlayerHandle {
             config.set_mode(mode);
         }
         Ok(ticket)
+    }
+
+    /// Enable or disable DSEE HX. A loaded track continues from its position.
+    /// Only stereo at or below 48 kHz / 16-bit is sent to the filter.
+    pub fn request_set_dsee_hx(&self, enabled: bool) -> Result<CommandTicket, AudioError> {
+        if let Some(config) = self.inner.resampling.as_ref() {
+            config.set_dsee_hx(enabled);
+        }
+        self.enqueue_with_ack(Command::SetDseeHx(enabled))
     }
 
     /// Sample and request persistence of the final active playback interval
@@ -1211,8 +1261,8 @@ fn handle_command_during_recovery(
             update_snapshot(snapshot, events, |snapshot| snapshot.volume = volume);
             Ok(())
         }
-        // The worker already recorded the mode; the rebuilt backend gets it.
-        Command::SetResampling(_) => Ok(()),
+        // The worker already recorded the preference; the rebuilt backend gets it.
+        Command::SetResampling(_) | Command::SetDseeHx(_) => Ok(()),
         Command::CheckpointAccounting => {
             meter.request_flush();
             Ok(())
@@ -1472,6 +1522,27 @@ fn handle_command(
             {
                 // The track restarted from the captured position; report it
                 // even while paused, when position polling is idle.
+                let position = backend.position();
+                update_snapshot(snapshot, events, |snapshot| {
+                    snapshot.position = snapshot
+                        .duration
+                        .map_or(position, |duration| position.min(duration));
+                });
+                meter.reset_anchor(state, position);
+            }
+        }
+        Command::SetDseeHx(enabled) => {
+            let state = read_snapshot(snapshot).state;
+            if let Err(error) = backend.set_dsee_hx(enabled) {
+                set_error(snapshot, events, error.clone());
+                return Err(error);
+            }
+            if current_path.is_some()
+                && matches!(
+                    state,
+                    PlaybackState::Ready | PlaybackState::Playing | PlaybackState::Paused
+                )
+            {
                 let position = backend.position();
                 update_snapshot(snapshot, events, |snapshot| {
                     snapshot.position = snapshot
@@ -2318,6 +2389,9 @@ mod tests {
                 device_rate: 96_000,
                 conversion,
                 fallback_reason: None,
+                dsee_hx: DseeHxState::Off,
+                dsee_notice: None,
+                dsee_output_rate: None,
             })
         }
         fn output_status(&mut self) -> OutputStatus {

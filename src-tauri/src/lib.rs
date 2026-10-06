@@ -1064,6 +1064,14 @@ fn playback_output_format(info: &ResamplingInfo) -> PlaybackOutputFormat {
             ResamplingConversion::Basic => OutputConversion::Basic,
         },
         fallback_reason: info.fallback_reason.clone(),
+        dsee_hx: match info.dsee_hx {
+            player_audio_windows::DseeHxState::Off => DseeHxActivity::Off,
+            player_audio_windows::DseeHxState::Active => DseeHxActivity::Active,
+            player_audio_windows::DseeHxState::Bypassed => DseeHxActivity::Bypassed,
+            player_audio_windows::DseeHxState::Unavailable => DseeHxActivity::Unavailable,
+        },
+        dsee_notice: info.dsee_notice.clone(),
+        dsee_output_rate_hz: info.dsee_output_rate,
     }
 }
 
@@ -1752,6 +1760,16 @@ enum OutputConversion {
     Basic,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+enum DseeHxActivity {
+    Off,
+    Active,
+    Bypassed,
+    Unavailable,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -1764,6 +1782,9 @@ struct PlaybackOutputFormat {
     /// Windows built-in mode could not open the track's rate; the track is
     /// converted in-app at the mix rate instead.
     fallback_reason: Option<String>,
+    dsee_hx: DseeHxActivity,
+    dsee_notice: Option<String>,
+    dsee_output_rate_hz: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1791,11 +1812,11 @@ struct PlaybackQueuePageItem {
 #[cfg(test)]
 mod playback_queue_ipc_tests {
     use super::{
-        feature, playback_duration_ms, sync_summary, FeatureState, LibraryRoot, LibrarySource,
-        MediaLocator, MediaSourceError, MediaSourceKind, OutputConversion, PlaybackOutputFormat,
-        PlaybackQueuePage, PlaybackQueuePageItem, PlaybackQueueSource, PlaybackSnapshot,
-        RepeatMode, ResamplingMode, RuntimeCapabilities, SourceId, SourceScanState, SyncReport,
-        TrackId, TrackMetadataError,
+        feature, playback_duration_ms, sync_summary, DseeHxActivity, FeatureState, LibraryRoot,
+        LibrarySource, MediaLocator, MediaSourceError, MediaSourceKind, OutputConversion,
+        PlaybackOutputFormat, PlaybackQueuePage, PlaybackQueuePageItem, PlaybackQueueSource,
+        PlaybackSnapshot, RepeatMode, ResamplingMode, RuntimeCapabilities, SourceId,
+        SourceScanState, SyncReport, TrackId, TrackMetadataError,
     };
 
     #[test]
@@ -1887,6 +1908,9 @@ mod playback_queue_ipc_tests {
                 device_rate_hz: 96_000,
                 conversion: OutputConversion::HighQuality,
                 fallback_reason: Some("unsupported".to_owned()),
+                dsee_hx: DseeHxActivity::Off,
+                dsee_notice: None,
+                dsee_output_rate_hz: None,
             }),
         };
         let value = serde_json::to_value(snapshot).expect("serialize playback snapshot");
@@ -1899,6 +1923,9 @@ mod playback_queue_ipc_tests {
                 "deviceRateHz": 96_000,
                 "conversion": "highQuality",
                 "fallbackReason": "unsupported",
+                "dseeHx": "off",
+                "dseeNotice": null,
+                "dseeOutputRateHz": null,
             })
         );
         for key in [
@@ -2907,6 +2934,39 @@ async fn settings_set_resampling_mode(
         if let Some(service) = state.playback.as_ref() {
             let applied = match set_playback_resampling(service, saved) {
                 // Reopening the output can take up to two bounded device opens.
+                Ok(ticket) => await_playback_ack_within(ticket, Duration::from_secs(10)).await,
+                Err(error) => Err(error),
+            };
+            applied.map_err(|error| format!("設定已保存，但套用到播放器失敗：{error}"))?;
+        }
+    }
+    Ok(saved)
+}
+
+#[tauri::command]
+fn settings_get_dsee_hx(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.dsee_hx)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the DSEE HX switch, then apply it to the running player.
+#[tauri::command]
+async fn settings_set_dsee_hx(state: State<'_, AppState>, enabled: bool) -> Result<bool, String> {
+    let saved = state
+        .settings
+        .update(|settings| {
+            settings.dsee_hx = enabled;
+            Ok(())
+        })
+        .map(|settings| settings.dsee_hx)
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(service) = state.playback.as_ref() {
+            let applied = match set_playback_dsee_hx(service, saved) {
                 Ok(ticket) => await_playback_ack_within(ticket, Duration::from_secs(10)).await,
                 Err(error) => Err(error),
             };
@@ -5095,6 +5155,21 @@ fn set_playback_resampling(
 }
 
 #[cfg(target_os = "windows")]
+fn set_playback_dsee_hx(
+    service: &WindowsPlaybackService,
+    enabled: bool,
+) -> Result<CommandTicket, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    service
+        .player
+        .request_set_dsee_hx(enabled)
+        .map_err(|error| playback_audio_error_message(&error))
+}
+
+#[cfg(target_os = "windows")]
 async fn await_playback_ack(ticket: CommandTicket) -> Result<(), String> {
     await_playback_ack_within(ticket, Duration::from_secs(2)).await
 }
@@ -5600,6 +5675,8 @@ pub fn run() {
             settings_set_now_playing_layout,
             settings_get_resampling_mode,
             settings_set_resampling_mode,
+            settings_get_dsee_hx,
+            settings_set_dsee_hx,
             get_runtime_capabilities,
             library_get_page,
             playlist_list,
@@ -5684,8 +5761,9 @@ pub fn run() {
                 .snapshot()
                 .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
             #[cfg(target_os = "windows")]
-            let (playback, playback_error) = match PlayerHandle::with_resampling(
+            let (playback, playback_error) = match PlayerHandle::with_output(
                 audio_resampling_mode(initial_settings.resampling_mode),
+                initial_settings.dsee_hx,
             ) {
                 Ok(player) => {
                     let service = WindowsPlaybackService::with_modes(

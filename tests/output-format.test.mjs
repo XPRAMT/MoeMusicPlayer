@@ -10,6 +10,9 @@ const format = (overrides) => ({
   deviceRateHz: 96_000,
   conversion: 'highQuality',
   fallbackReason: null,
+  dseeHx: 'off',
+  dseeNotice: null,
+  dseeOutputRateHz: null,
   ...overrides,
 });
 
@@ -42,6 +45,35 @@ test('windows built-in fallback is called out', () => {
   );
   assert.equal(status.text, '44.1 kHz → 96 kHz（高品質）');
   assert.equal(status.notice, 'Windows 無法以 44.1 kHz 開啟共享模式輸出，已改用 96 kHz 並以高品質轉換。');
+});
+
+test('DSEE HX names the enhancement and keeps a later device conversion', () => {
+  assert.equal(
+    describeOutputFormat(format({ dseeHx: 'active' })).text,
+    '44.1 kHz → 96 kHz（DSEE HX）',
+  );
+  assert.equal(
+    describeOutputFormat(format({
+      dseeHx: 'active',
+      outputRateHz: 48_000,
+      deviceRateHz: 48_000,
+    })).text,
+    '44.1 kHz → 96 kHz（DSEE HX） → 48 kHz（高品質）',
+  );
+  assert.equal(
+    describeOutputFormat(format({
+      dseeHx: 'active',
+      dseeOutputRateHz: 176_400,
+    })).text,
+    '44.1 kHz → 176.4 kHz（DSEE HX） → 96 kHz（高品質）',
+  );
+  assert.equal(
+    describeOutputFormat(format({
+      dseeHx: 'unavailable',
+      dseeNotice: '請先安裝 Sony Music Center。',
+    })).notice,
+    '請先安裝 Sony Music Center。',
+  );
 });
 
 test('missing output or track has a neutral status', () => {
