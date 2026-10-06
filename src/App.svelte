@@ -2081,7 +2081,7 @@
                     />
                     <span class="resampling-option-copy">
                       <strong>高品質（預設）</strong>
-                      <small>輸出維持在裝置的混音取樣率，由播放器以高品質重取樣器轉換（通帶平坦至約 21 kHz）。切換不同取樣率的曲目時不必重新開啟輸出。</small>
+                      <small>輸出維持在裝置的混音取樣率，由 rubato 的 FFT 進行取樣率轉換（區塊大小 2048），通帶平坦至約 21 kHz。切換不同取樣率的曲目時不必重新開啟輸出。</small>
                     </span>
                   </label>
                   <label class="resampling-option">
