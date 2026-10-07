@@ -33,6 +33,10 @@ test('gamepad buttons can be bound and are absent from the defaults', () => {
   assert.equal(shortcutActionFor(bound, 'gamepad', 'button0'), 'playPause');
   assert.equal(shortcutActionFor(bound, 'keyboard', 'Space'), 'playPause');
   assert.equal(shortcutBindingLabel(bound.playPause.find((binding) => binding.device === 'gamepad')), '手柄 A');
+  const stick = addShortcutBinding(defaults, 'seekForward', { device: 'gamepad', code: 'stickLeftXPlus' });
+  assert.equal(shortcutActionFor(stick, 'gamepad', 'stickLeftXPlus'), 'seekForward');
+  assert.equal(shortcutBindingLabel({ device: 'gamepad', code: 'stickLeftYMinus' }), '左搖桿上');
+  assert.equal(Object.values(defaults).flat().some((binding) => binding.code.startsWith('stick')), false);
   const rejected = normalizeShortcutSettings({ playPause: [{ device: 'gamepad', code: 'button99' }] });
   assert.equal(shortcutActionFor(rejected, 'gamepad', 'button99'), null);
 });

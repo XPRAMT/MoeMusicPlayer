@@ -39,6 +39,14 @@ const GAMEPAD_LABELS = {
   button13: '手柄方向下',
   button14: '手柄方向左',
   button15: '手柄方向右',
+  stickLeftXMinus: '左搖桿左',
+  stickLeftXPlus: '左搖桿右',
+  stickLeftYMinus: '左搖桿上',
+  stickLeftYPlus: '左搖桿下',
+  stickRightXMinus: '右搖桿左',
+  stickRightXPlus: '右搖桿右',
+  stickRightYMinus: '右搖桿上',
+  stickRightYPlus: '右搖桿下',
 };
 const KEY_LABELS = {
   F11: 'F11',
@@ -99,7 +107,7 @@ function normalizeBinding(binding) {
   if (device === 'mouse' && typeof code === 'string' && MOUSE_CODES.has(code)) {
     return { device, code };
   }
-  if (device === 'gamepad' && typeof code === 'string' && /^button(?:[0-9]|1[0-5])$/.test(code)) {
+  if (device === 'gamepad' && typeof code === 'string' && /^(?:button(?:[0-9]|1[0-5])|stick(?:Left|Right)[XY](?:Minus|Plus))$/.test(code)) {
     return { device, code };
   }
   return null;

@@ -618,11 +618,24 @@ impl ShortcutSettings {
                             "wheelUp" | "wheelDown" | "back" | "forward"
                         )
                     }
-                    ShortcutDevice::Gamepad => binding
-                        .code
-                        .strip_prefix("button")
-                        .and_then(|index| index.parse::<u8>().ok())
-                        .is_some_and(|index| index <= 15),
+                    ShortcutDevice::Gamepad => {
+                        binding
+                            .code
+                            .strip_prefix("button")
+                            .and_then(|index| index.parse::<u8>().ok())
+                            .is_some_and(|index| index <= 15)
+                            || matches!(
+                                binding.code.as_str(),
+                                "stickLeftXMinus"
+                                    | "stickLeftXPlus"
+                                    | "stickLeftYMinus"
+                                    | "stickLeftYPlus"
+                                    | "stickRightXMinus"
+                                    | "stickRightXPlus"
+                                    | "stickRightYMinus"
+                                    | "stickRightYPlus"
+                            )
+                    }
                 };
                 if !ok {
                     return Err(SettingsError::InvalidData(

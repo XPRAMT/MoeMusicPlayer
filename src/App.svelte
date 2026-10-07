@@ -805,6 +805,30 @@
         const action = shortcutActionFor(shortcutSettings, 'gamepad', code);
         if (action) runShortcut(action);
       }
+      if (captured) continue;
+      const stickCodes = [
+        ['stickLeftXMinus', 'stickLeftXPlus'],
+        ['stickLeftYMinus', 'stickLeftYPlus'],
+        ['stickRightXMinus', 'stickRightXPlus'],
+        ['stickRightYMinus', 'stickRightYPlus'],
+      ] as const;
+      for (let axis = 0; axis < stickCodes.length && axis < pad.axes.length; axis += 1) {
+        const value = pad.axes[axis] ?? 0;
+        for (const [sign, code] of [[-1, stickCodes[axis][0]], [1, stickCodes[axis][1]]] as const) {
+          const key = `${pad.index}:${code}`;
+          const pressed = sign < 0 ? value < -0.65 : value > 0.65;
+          const wasPressed = gamepadPressed.get(key) === true;
+          gamepadPressed.set(key, pressed);
+          if (!pressed || wasPressed || captured) continue;
+          if (capturingShortcut) {
+            recordShortcutBinding({ device: 'gamepad', code });
+            captured = true;
+            break;
+          }
+          const action = shortcutActionFor(shortcutSettings, 'gamepad', code);
+          if (action) runShortcut(action);
+        }
+      }
     }
     gamepadFrame = requestAnimationFrame(pollGamepads);
   }
@@ -2068,11 +2092,11 @@
                 <div class="settings-panel-header">
                   <div>
                     <h3>快捷鍵</h3>
-                    <p>可綁定鍵盤、滑鼠滾輪、滑鼠側鍵與手柄按鈕。預設不含手柄按鍵。點「新增」後按下要使用的操作，Esc 取消。輸入文字時不會觸發。</p>
+                    <p>可綁定鍵盤、滑鼠滾輪、滑鼠側鍵、手柄按鈕與搖桿方向。預設不含手柄。點「新增」後按下要使用的操作，Esc 取消。輸入文字時不會觸發。</p>
                   </div>
                 </div>
                 {#if capturingShortcut}
-                  <p class="settings-preference-status" role="status">正在設定「{SHORTCUT_ACTIONS.find((action) => action.id === capturingShortcut)?.label}」。請按下按鍵、滾動滾輪、按滑鼠側鍵或手柄按鈕。</p>
+                  <p class="settings-preference-status" role="status">正在設定「{SHORTCUT_ACTIONS.find((action) => action.id === capturingShortcut)?.label}」。請按下按鍵、滾動滾輪、按滑鼠側鍵、手柄按鈕，或把搖桿推到要綁定的方向。</p>
                 {/if}
                 <div class="shortcut-list">
                   {#each SHORTCUT_ACTIONS as action (action.id)}
