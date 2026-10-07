@@ -289,7 +289,7 @@ input:focus-visible {
   gap: 5px;
   overflow: hidden;
   color: var(--text-soft);
-  font-size: clamp(12px, 1.3vw, 18px);
+  font-size: var(--font-title);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -4026,7 +4026,6 @@ input:focus-visible {
   .now-playing-header-track { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; }
   .now-playing-track-info {
     gap: 3px;
-    font-size: var(--font-body);
     justify-content: flex-start;
   }
   /* Keep meta left-packed — do not stretch buttons into space-between/center. */
@@ -4055,7 +4054,6 @@ input:focus-visible {
 
 @media (max-width: 390px) {
   .now-playing-overlay-topbar { min-height: 82px; }
-  .now-playing-track-info { font-size: var(--font-caption); }
   .now-playing-header-track .now-playing-format { font-size: var(--font-caption); }
   .app-shell.has-now-playing-backdrop .player-dock { padding-right: 8px; padding-left: 8px; }
   .app-shell.has-now-playing-backdrop .dock-track { gap: 4px; }
