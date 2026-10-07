@@ -4,7 +4,7 @@
   const track = {
     id: 'volume-slider-test-track',
     title: 'Volume Slider Test',
-    artist: 'hanser feat. 合作演出者',
+    artist: 'hanser/yousa',
     album: 'hanser Cover',
     albumArtist: 'Harness',
     trackNumber: 1,

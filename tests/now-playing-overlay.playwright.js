@@ -480,7 +480,8 @@ async page => {
     const sourceAspect = state.coverSource[0] / state.coverSource[1];
     assert.ok(Math.abs(stageAspect - sourceAspect) <= 0.02, `1920x1080: cover frame ${state.cover.width}x${state.cover.height} must match ${state.coverSource[0]}x${state.coverSource[1]} artwork`);
     assert.deepEqual(state.copyChildren, [], 'no title, artist, album, or format copy should sit below the cover');
-    assert.deepEqual(state.trackFields.map((field) => field.field), ['artist', 'album', 'title'], 'topbar order is artist, album, then title');
+    assert.deepEqual(state.trackFields.map((field) => field.field), ['artist', 'artist', 'album', 'title'], 'topbar order is each artist, then album, then title');
+    assert.deepEqual(state.trackFields.filter((field) => field.field === 'artist').map((field) => field.text), ['hanser', 'yousa'], 'a slash-separated artist tag is two topbar links');
   assert.equal(await page.locator('.now-playing-track-info [data-track-field="title"]').evaluate((el) => el.tagName), 'SPAN', 'title is display-only and not a navigation button');
   assert.equal(await page.locator('.now-playing-track-info button[data-track-field="title"]').count(), 0, 'title has no clickable filter button');
     assert.ok(state.formatText.includes('FLAC．48 kHz．24 bit'), 'format summary should use the shared full-width separator formatter');
@@ -558,7 +559,8 @@ async page => {
   await page.setViewportSize({ width: 1280, height: 800 });
 
   for (const [field, value] of [
-    ['artist', 'hanser feat. 合作演出者'],
+    ['artist', 'hanser'],
+    ['artist', 'yousa'],
     ['album', 'hanser Cover'],
   ]) {
     await openOverlay();
@@ -571,7 +573,7 @@ async page => {
       };
       return { requests: window.__volumeHarness.libraryRequests.length };
     });
-    const metadataButton = page.locator(`.now-playing-track-info [data-track-field="${field}"]`);
+    const metadataButton = page.getByRole('button', { name: field === 'artist' ? `依演出者「${value}」篩選曲庫` : `依專輯「${value}」篩選曲庫` });
     assert.equal(await metadataButton.isDisabled(), false, `${field} metadata link should be enabled for a nonempty field`);
     await metadataButton.click();
     await page.waitForFunction(() => !document.querySelector('.now-playing-overlay')?.classList.contains('is-open'));

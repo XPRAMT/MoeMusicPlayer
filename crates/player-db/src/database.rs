@@ -45,7 +45,7 @@ const COUNT_FIELD_FILTER_SQL: &str = "SELECT COUNT(DISTINCT t.track_id) FROM tra
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
       AND (?2 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?2 COLLATE BINARY)
-      AND (?3 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) = ?3 COLLATE BINARY)
+      AND (CASE WHEN ?3 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?3 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' ', '|') || '|', '|' || ?3 || '|') > 0 THEN 1 ELSE 0 END) = 1
       AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?4 COLLATE BINARY)";
 const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
@@ -63,7 +63,7 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
    AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?4 COLLATE BINARY)
-   AND (?5 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) = ?5 COLLATE BINARY)
+   AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' ', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
    AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)
  ORDER BY t.sort_title, t.track_id
  LIMIT ?2 OFFSET ?3";
@@ -1286,7 +1286,7 @@ impl Database {
                     OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
                     OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
                AND (?2 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?2 COLLATE BINARY)
-               AND (?3 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) = ?3 COLLATE BINARY)
+               AND (CASE WHEN ?3 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?3 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' ', '|') || '|', '|' || ?3 || '|') > 0 THEN 1 ELSE 0 END) = 1
                AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?4 COLLATE BINARY)
              ORDER BY t.sort_title, t.track_id",
         )?;
@@ -5299,6 +5299,117 @@ mod tests {
                 .expect("filter current user-facing title"),
             vec![third_id]
         );
+    }
+
+    #[test]
+    fn artist_filter_matches_each_name_separated_by_the_supported_delimiters() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "artist-split");
+        let tags = [
+            ("solo", "hanser"),
+            ("slash", "hanser/yousa"),
+            ("pipe", "hanser | yousa"),
+            ("backslash", "hanser\\yousa"),
+            ("semicolon", "hanser; yousa"),
+            ("comma", "hanser,yousa"),
+            ("space", "hanser yousa"),
+            ("other", "yousa"),
+            ("prefix", "hanser2"),
+            ("suffix", "xyousa"),
+        ];
+        let mut records = Vec::new();
+        for (index, (title, artist)) in tags.iter().enumerate() {
+            let mut track = record(
+                &root,
+                title,
+                &format!("path:{title}"),
+                title,
+                (index as u64 + 1) * 10,
+                100,
+            );
+            track.metadata.as_mut().expect("metadata").artist = Some((*artist).to_owned());
+            records.push(track);
+        }
+        let saved = records.clone();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &saved,
+            1_000,
+        );
+        let all = list(&db, 0, 20).items;
+        let id_for = |title: &str| {
+            all.iter()
+                .find(|track| track.title.as_deref() == Some(title))
+                .expect("fixture track")
+                .id
+        };
+        let hanser_ids = db
+            .list_track_ids_filtered(
+                None,
+                Some(&TrackFieldFilter {
+                    field: TrackField::Artist,
+                    value: "hanser".to_owned(),
+                }),
+            )
+            .expect("hanser membership");
+        assert_eq!(
+            hanser_ids,
+            vec![
+                id_for("backslash"),
+                id_for("comma"),
+                id_for("pipe"),
+                id_for("semicolon"),
+                id_for("slash"),
+                id_for("solo"),
+                id_for("space"),
+            ]
+        );
+        let yousa_page = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 20,
+                query: None,
+                field_filter: Some(TrackFieldFilter {
+                    field: TrackField::Artist,
+                    value: "yousa".to_owned(),
+                }),
+            })
+            .expect("yousa page");
+        let yousa_ids = db
+            .list_track_ids_filtered(
+                None,
+                Some(&TrackFieldFilter {
+                    field: TrackField::Artist,
+                    value: "yousa".to_owned(),
+                }),
+            )
+            .expect("yousa membership");
+        assert_eq!(yousa_page.total_count, yousa_ids.len() as u64);
+        assert_eq!(
+            yousa_ids,
+            vec![
+                id_for("backslash"),
+                id_for("comma"),
+                id_for("other"),
+                id_for("pipe"),
+                id_for("semicolon"),
+                id_for("slash"),
+                id_for("space"),
+            ]
+        );
+        assert!(db
+            .list_track_ids_filtered(
+                None,
+                Some(&TrackFieldFilter {
+                    field: TrackField::Artist,
+                    value: "Hanser".to_owned(),
+                }),
+            )
+            .expect("case sensitive artist token")
+            .is_empty());
     }
 
     #[test]

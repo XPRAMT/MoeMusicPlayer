@@ -317,6 +317,7 @@ input:focus-visible {
   cursor: default;
 }
 
+.now-playing-artist-sep,
 .now-playing-track-info > .now-playing-track-sep {
   flex: 0 0 auto;
   color: var(--muted);

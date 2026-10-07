@@ -62,6 +62,7 @@
     isHexColor,
     normalizeThemePreferences,
   } from './lib/theme';
+  import { splitArtists } from './lib/artist-names.js';
   import { formatVolume } from './lib/format';
   import { describeOutputFormat } from './lib/output-format.js';
   import hiResBadgeUrl from './assets/hi-res-badge.png';
@@ -1549,14 +1550,16 @@
     return trackFieldValue(track, field)?.trim() ?? '—';
   }
 
-  async function openTrackField(field: TrackFieldFilter['field']): Promise<void> {
-    const value = trackFieldValue(playback?.currentTrack, field);
-    if (!value) return;
+  const nowPlayingArtists = $derived(splitArtists(trackFieldValue(playback?.currentTrack, 'artist')));
+
+  async function openTrackField(field: TrackFieldFilter['field'], value?: string): Promise<void> {
+    const resolved = (value ?? trackFieldValue(playback?.currentTrack, field))?.trim();
+    if (!resolved) return;
     await closeNowPlaying();
     nowPlayingReturnView = 'library';
     activeView = 'library';
     query = '';
-    libraryFieldFilter = { field, value };
+    libraryFieldFilter = { field, value: resolved };
     libraryListRevision += 1;
     await tick();
     librarySearchInput?.focus();
@@ -2597,7 +2600,14 @@
         </button>
         <div class="now-playing-header-track">
           <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類">
-            <button type="button" data-track-field="artist" disabled={!trackFieldValue(playback?.currentTrack, 'artist')} title={trackFieldValue(playback?.currentTrack, 'artist') ?? '沒有演出者分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'artist') ? `依演出者「${trackFieldValue(playback?.currentTrack, 'artist')}」篩選曲庫` : '沒有演出者分類資料'} onclick={() => void openTrackField('artist')}>{trackFieldLabel(playback?.currentTrack, 'artist')}</button>
+            {#if nowPlayingArtists.length === 0}
+              <button type="button" data-track-field="artist" disabled title="沒有演出者分類資料" aria-label="沒有演出者分類資料">—</button>
+            {:else}
+              {#each nowPlayingArtists as artist, index (artist)}
+                {#if index > 0}<span class="now-playing-artist-sep" aria-hidden="true">/</span>{/if}
+                <button type="button" data-track-field="artist" title={artist} aria-label={`依演出者「${artist}」篩選曲庫`} onclick={() => void openTrackField('artist', artist)}>{artist}</button>
+              {/each}
+            {/if}
             <span class="now-playing-track-sep" aria-hidden="true">．</span>
             <button type="button" data-track-field="album" disabled={!trackFieldValue(playback?.currentTrack, 'album')} title={trackFieldValue(playback?.currentTrack, 'album') ?? '沒有專輯分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'album') ? `依專輯「${trackFieldValue(playback?.currentTrack, 'album')}」篩選曲庫` : '沒有專輯分類資料'} onclick={() => void openTrackField('album')}>{trackFieldLabel(playback?.currentTrack, 'album')}</button>
             <span class="now-playing-track-sep" aria-hidden="true">．</span>

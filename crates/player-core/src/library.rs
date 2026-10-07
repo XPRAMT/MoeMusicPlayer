@@ -272,7 +272,9 @@ pub struct ListTracksQuery {
     pub field_filter: Option<TrackFieldFilter>,
 }
 
-/// An exact binary value filter on one user-facing metadata field.
+/// A binary filter on one user-facing metadata field.
+/// Title and album match the whole value. Artist matches that whole value or one
+/// name inside it. Multiple names are separated by `|`, `\`, `/`, `;`, `,`, or a space.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackFieldFilter {
