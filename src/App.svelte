@@ -2367,9 +2367,6 @@
           <span class="status-dot" class:ready={runtimeServiceReady} aria-hidden="true"></span>
           <span>{runtimeServiceLabel}</span>
         </div>
-        <button class="avatar-button" type="button" aria-label="使用者設定" title="使用者設定" disabled>
-          <span>M</span>
-        </button>
       </div>
     </header>
 

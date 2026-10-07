@@ -14,6 +14,7 @@ async page => {
     assert(!sidebar.includes(removed), 'sidebar still shows ' + removed);
   }
   assert(await page.locator('[data-testid="sync-progress-banner"]').count() === 0, 'sync banner is on the library page');
+  assert(await page.locator('.avatar-button').count() === 0, 'placeholder avatar remains');
 
   await page.getByRole('button', { name: '播放佇列' }).click();
   assert(await page.locator('#page-heading').innerText() === '播放佇列', 'queue title missing');
