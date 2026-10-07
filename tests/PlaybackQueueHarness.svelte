@@ -210,7 +210,7 @@
     return {
       activeView,
       selectedPlaylistId,
-      queueCurrentRows: [...document.querySelectorAll<HTMLElement>('.playback-queue-row.selected .queue-entry-index')]
+      queueCurrentRows: [...document.querySelectorAll<HTMLElement>('.playback-queue-row.selected .column-index')]
         .map((element) => element.textContent?.trim() ?? ''),
       queueRequestLog: queueRequestLog.slice(),
       treeHostParent: document.querySelector('.sidebar-playlist-tree-host')?.parentElement?.className ?? null,

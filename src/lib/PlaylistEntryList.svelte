@@ -15,6 +15,7 @@ import { withLivePlayedMs } from './live-play-count.js';
   import { PagedListController, TRACK_PAGE_SIZE } from './track-list-data.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
+  import TrackColumnCells from './TrackColumnCells.svelte';
 
   interface Props {
     playlistId: string;
@@ -117,60 +118,55 @@ import { withLivePlayedMs } from './live-play-count.js';
     generation={snapshot.generation}
     {itemAt}
     getKey={(entry) => entry.position}
-    rowHeight={56}
-    compactRowHeight={47}
+    rowHeight={57}
+    compactRowHeight={53}
     shortDesktopRowHeight={49}
-    headerHeight={35}
-    compactHeaderHeight={30}
+    headerHeight={37}
+    compactHeaderHeight={33}
     maxViewportHeight={680}
     listId={`playlist-${playlistId}`}
     ariaLabel="播放清單項目；使用方向鍵瀏覽，按 Enter 播放目前項目"
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
-    className="playlist-entry-table"
-    rowClassName="playlist-entry-row configurable-track-grid"
+    className="track-list-viewport playlist-entry-table"
+    rowClassName="track-row virtual-track-row configurable-track-grid playlist-entry-row"
     listName="播放清單"
     onRange={handleRange}
     onPlay={(entry) => playEntry(entry)}
   >
     {#snippet header()}
-      <div class="playlist-entry-head configurable-track-grid" role="row" aria-rowindex="1">
-        <span role="columnheader">#</span>
-        {#each visibleColumns as column (column.id)}
-          <span class={`list-column list-column-${column.id}`} role="columnheader">{column.label}</span>
-        {/each}
-        <span role="columnheader" aria-label="播放操作"></span>
+      <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
+        <TrackColumnCells variant="header" columns={visibleColumns} trailingLabel="播放操作" />
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<PlaylistEntrySummary>)}
       {#if row.item}
-        <span class="playlist-entry-index" role="gridcell">{row.item.position + 1}</span>
-        {#each visibleColumns as column (column.id)}
-          <span
-            class={`list-column list-column-${column.id}`}
-            role="gridcell"
-            title={column.id === 'title' && !row.item.hasEnabledMapping ? '目前未對應到可播放的曲庫曲目' : undefined}
-          >{formatTrackColumnValue(column.id, withLivePlayedMs(row.item, livePlayCount), formatDuration, '未命名項目')}</span>
-        {/each}
-        <button
-          class="row-play"
-          type="button"
-          tabindex="-1"
-          aria-label={`播放 ${row.item.title?.trim() || '播放清單項目'}`}
-          title={row.item.trackId && row.item.hasEnabledMapping ? '播放曲目' : '這個項目尚未對應到可播放的曲庫曲目'}
-          disabled={!row.item.trackId || !row.item.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand}
-          onclick={row.play}
+        <TrackColumnCells
+          variant="item"
+          columns={visibleColumns}
+          indexLabel={String(row.item.position + 1)}
+          cells={visibleColumns.map((column) => ({
+            id: column.id,
+            text: formatTrackColumnValue(column.id, withLivePlayedMs(row.item!, livePlayCount), formatDuration, '未命名項目'),
+            title: column.id === 'title' && !row.item?.hasEnabledMapping ? '目前未對應到可播放的曲庫曲目' : undefined,
+          }))}
         >
-          <IconPlayerPlayFilled size={17} aria-hidden="true" />
-        </button>
+          {#snippet trailing()}
+            <button
+              class="row-play column-action"
+              type="button"
+              tabindex="-1"
+              aria-label={`播放 ${row.item?.title?.trim() || '播放清單項目'}`}
+              title={row.item?.trackId && row.item?.hasEnabledMapping ? '播放曲目' : '這個項目尚未對應到可播放的曲庫曲目'}
+              disabled={!row.item?.trackId || !row.item?.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand}
+              onclick={row.play}
+            >
+              <IconPlayerPlayFilled size={17} aria-hidden="true" />
+            </button>
+          {/snippet}
+        </TrackColumnCells>
       {:else}
-        <span class="playlist-entry-index" role="gridcell" aria-hidden="true">—</span>
-        {#each visibleColumns as column (column.id)}
-          <span class={`list-column list-column-${column.id}`} role="gridcell" aria-hidden="true">
-            {column.id === 'title' ? '正在載入項目…' : '—'}
-          </span>
-        {/each}
-        <span role="gridcell" aria-hidden="true"></span>
+        <TrackColumnCells variant="placeholder" columns={visibleColumns} placeholderTitle="正在載入項目…" />
       {/if}
     {/snippet}
   </PagedVirtualList>

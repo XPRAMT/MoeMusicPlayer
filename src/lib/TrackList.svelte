@@ -25,6 +25,7 @@
   } from './track-list-data.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
+  import TrackColumnCells from './TrackColumnCells.svelte';
 
   interface Props {
     query: string;
@@ -167,40 +168,37 @@
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
-        <span class="column-index" role="columnheader">#</span>
-        {#each visibleColumns as column (column.id)}
-          <span class={`list-column list-column-${column.id}`} role="columnheader">{column.label}</span>
-        {/each}
-        <span class="column-action" role="columnheader" aria-label="播放操作"></span>
+        <TrackColumnCells variant="header" columns={visibleColumns} trailingLabel="播放操作" />
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<TrackSummary>)}
       {#if row.item}
-        <span class="track-index column-index" role="gridcell">{formatTrackIndex(row.item.trackNumber, row.item.discNumber)}</span>
-        {#each visibleColumns as column (column.id)}
-          <span class={`list-column list-column-${column.id}`} role="gridcell" title={column.id === 'title' && !row.item.title?.trim() ? '未命名曲目' : undefined}>
-            {formatTrackColumnValue(column.id, withLivePlayedMs(row.item, livePlayCount), formatDuration)}
-          </span>
-        {/each}
-          <button
-            class="row-play column-action"
-            type="button"
-            tabindex="-1"
-            aria-label={`播放 ${row.item.title?.trim() || '未命名曲目'}`}
-            title={playbackReady ? '播放曲目' : '播放功能尚未就緒'}
-            disabled={!playbackReady || isSendingPlaybackCommand}
-            onclick={row.play}
-          >
-            <IconPlayerPlayFilled size={17} aria-hidden="true" />
-          </button>
+        <TrackColumnCells
+          variant="item"
+          columns={visibleColumns}
+          indexLabel={formatTrackIndex(row.item.trackNumber, row.item.discNumber)}
+          cells={visibleColumns.map((column) => ({
+            id: column.id,
+            text: formatTrackColumnValue(column.id, withLivePlayedMs(row.item!, livePlayCount), formatDuration),
+            title: column.id === 'title' && !row.item?.title?.trim() ? '未命名曲目' : undefined,
+          }))}
+        >
+          {#snippet trailing()}
+            <button
+              class="row-play column-action"
+              type="button"
+              tabindex="-1"
+              aria-label={`播放 ${row.item?.title?.trim() || '未命名曲目'}`}
+              title={playbackReady ? '播放曲目' : '播放功能尚未就緒'}
+              disabled={!playbackReady || isSendingPlaybackCommand}
+              onclick={row.play}
+            >
+              <IconPlayerPlayFilled size={17} aria-hidden="true" />
+            </button>
+          {/snippet}
+        </TrackColumnCells>
       {:else}
-          <span class="track-index column-index" role="gridcell" aria-hidden="true">—</span>
-          {#each visibleColumns as column (column.id)}
-            <span class={`list-column list-column-${column.id}`} role="gridcell" aria-hidden="true">
-              {column.id === 'title' ? '正在載入曲目…' : '—'}
-            </span>
-          {/each}
-          <span class="column-action" role="gridcell" aria-hidden="true"></span>
+        <TrackColumnCells variant="placeholder" columns={visibleColumns} placeholderTitle="正在載入曲目…" />
       {/if}
     {/snippet}
   </PagedVirtualList>
@@ -227,13 +225,10 @@
     outline-offset: 2px;
   }
 
-  .track-list-header {
-    position: sticky;
-    z-index: 2;
-    top: 0;
+  :global(.track-list-header) {
     box-sizing: border-box;
-    height: 37px;
-    min-height: 37px;
+    height: var(--paged-header-height, 37px);
+    min-height: var(--paged-header-height, 37px);
     background: var(--panel);
   }
 
@@ -277,33 +272,11 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .track-loading-label {
-    color: var(--muted);
-    animation: track-loading-pulse 1.4s ease-in-out infinite alternate;
-  }
-
-  @keyframes track-loading-pulse {
-    from { opacity: 0.4; }
-    to { opacity: 0.85; }
-  }
-
   @media (max-width: 620px) {
-    .track-list-header {
-      height: 33px;
-      min-height: 33px;
-    }
-
     .track-list-count,
     .track-list-error,
     .track-list-empty {
       font-size: 10px;
-    }
-  }
-
-  @media (max-height: 680px) and (min-width: 621px) {
-    .track-list-header {
-      height: 37px;
-      min-height: 37px;
     }
   }
 </style>

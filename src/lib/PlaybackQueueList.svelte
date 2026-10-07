@@ -19,6 +19,7 @@
   } from './playback-queue-data.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
+  import TrackColumnCells from './TrackColumnCells.svelte';
 
   interface Props {
     resetKey: number;
@@ -181,38 +182,35 @@
     ariaLabel="目前播放佇列；使用方向鍵瀏覽"
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
-    className="playback-queue-viewport"
-    rowClassName="playback-queue-row configurable-track-grid"
+    className="track-list-viewport playback-queue-viewport"
+    rowClassName="track-row virtual-track-row configurable-track-grid playback-queue-row"
     listName="播放佇列"
     onRange={handleRange}
     onPlay={() => {}}
   >
     {#snippet header()}
-      <div class="playback-queue-head configurable-track-grid" role="row" aria-rowindex="1">
-        <span class="queue-entry-index" role="columnheader">#</span>
-        {#each visibleColumns as column (column.id)}
-          <span class={`list-column list-column-${column.id}`} role="columnheader">{column.label}</span>
-        {/each}
-        <span role="columnheader" aria-label="佇列狀態"></span>
+      <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
+        <TrackColumnCells variant="header" columns={visibleColumns} trailingLabel="佇列狀態" />
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<PlaybackQueuePageItem>)}
       {#if row.item}
-        <span class="queue-entry-index" role="gridcell">{row.item.traversalPosition + 1}</span>
-        {#each visibleColumns as column (column.id)}
-          <span class={`list-column list-column-${column.id}`} role="gridcell" title={column.id === 'title' && row.item.track === null ? '曲目目前無法取得中繼資料' : undefined}>
-            {displayValue(column.id, row.item)}
-          </span>
-        {/each}
-        <span class="queue-entry-state" role="gridcell">{isCurrent(row.item) ? '正在播放' : ''}</span>
+        <TrackColumnCells
+          variant="item"
+          columns={visibleColumns}
+          indexLabel={String(row.item.traversalPosition + 1)}
+          cells={visibleColumns.map((column) => ({
+            id: column.id,
+            text: displayValue(column.id, row.item!),
+            title: column.id === 'title' && row.item?.track === null ? '曲目目前無法取得中繼資料' : undefined,
+          }))}
+        >
+          {#snippet trailing()}
+            <span class="queue-entry-state column-action" role="gridcell">{isCurrent(row.item!) ? '正在播放' : ''}</span>
+          {/snippet}
+        </TrackColumnCells>
       {:else}
-        <span class="queue-entry-index" role="gridcell" aria-hidden="true">—</span>
-        {#each visibleColumns as column (column.id)}
-          <span class={`list-column list-column-${column.id}`} role="gridcell" aria-hidden="true">
-            {column.id === 'title' ? '正在載入項目…' : '—'}
-          </span>
-        {/each}
-        <span role="gridcell" aria-hidden="true"></span>
+        <TrackColumnCells variant="placeholder" columns={visibleColumns} placeholderTitle="正在載入項目…" />
       {/if}
     {/snippet}
   </PagedVirtualList>
@@ -221,56 +219,6 @@
 <div class="track-list-count" role="status" aria-live="polite">{rangeLabel}</div>
 
 <style>
-  .playback-queue-viewport {
-    width: 100%;
-    border: 1px solid var(--line);
-    border-radius: 11px;
-    background: rgba(var(--text-rgb), 0.012);
-  }
-
-  .playback-queue-head,
-  .playback-queue-row {
-    display: grid;
-    width: max-content;
-    min-width: 100%;
-    grid-template-columns: var(--paged-grid-template);
-    align-items: center;
-    gap: 10px;
-    padding: 0 14px;
-  }
-
-  .playback-queue-head {
-    border-bottom: 1px solid var(--line);
-    color: var(--text-soft);
-    background: rgba(var(--text-rgb), 0.017);
-    font-family: Consolas, monospace;
-    font-size: 8px;
-    letter-spacing: 0.07em;
-  }
-
-  .playback-queue-row {
-    border-bottom: 1px solid rgba(var(--text-rgb), 0.055);
-    color: var(--text);
-  }
-
-  .playback-queue-row.selected {
-    background: color-mix(in srgb, var(--accent) 11%, transparent);
-  }
-
-  :global(.playback-queue-row .list-column),
-  :global(.playback-queue-head .list-column) {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .queue-entry-index {
-    color: var(--text-soft);
-    font-family: 'DM Mono', monospace;
-    font-size: 9px;
-  }
-
   .queue-entry-state {
     overflow: hidden;
     color: var(--accent-text);
@@ -287,13 +235,5 @@
     margin: 0 0 8px;
     color: var(--text-soft);
     font-size: 10px;
-  }
-
-  @media (max-width: 620px) {
-    .playback-queue-head,
-    .playback-queue-row {
-      gap: 6px;
-      padding: 0 7px;
-    }
   }
 </style>
