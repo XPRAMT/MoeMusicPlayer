@@ -1357,7 +1357,7 @@ input:focus-visible {
   min-height: 38px;
   border-bottom: 1px solid var(--line);
   color: var(--text-soft);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--page) 35%, transparent);
   font-family: Consolas, monospace;
   font-size: var(--font-body);
   letter-spacing: 0.07em;
@@ -1384,7 +1384,7 @@ input:focus-visible {
 
 .track-row.selected,
 .track-row.selected:hover {
-  background: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .column-index,

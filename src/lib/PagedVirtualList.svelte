@@ -283,7 +283,7 @@
     flex: 0 0 auto;
     overflow: hidden;
     box-sizing: border-box;
-    background: color-mix(in srgb, var(--page) 72%, transparent);
+    background: transparent;
   }
 
   .paged-virtual-header-shift {

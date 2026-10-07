@@ -97,10 +97,12 @@
     border-radius: 8px;
   }
 
-  .playlist-tree-heading.active,
   .playlist-tree-heading.active .playlist-tree-open,
-  .playlist-tree-heading.active .playlist-tree-open:hover {
-    background: rgba(255, 255, 255, 0.45);
+  .playlist-tree-heading.active .playlist-tree-open:hover,
+  .playlist-tree-heading.active .playlist-tree-open:focus-visible,
+  .playlist-tree-heading.active .playlist-tree-toggle:hover,
+  .playlist-tree-heading.active .playlist-tree-toggle:focus-visible {
+    background: transparent;
   }
 
   .playlist-tree-open,
@@ -224,7 +226,7 @@
   .playlist-tree-item.selected:focus-visible {
     border-color: transparent;
     color: var(--text);
-    background: rgba(255, 255, 255, 0.45);
+    background: rgba(255, 255, 255, 0.2);
   }
 
   .playlist-tree-item > :global(svg) {

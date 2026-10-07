@@ -20,6 +20,6 @@ async page => {
   });
   assert(found['.nav-link.active, .nav-link.active:hover:not(:disabled)'] === 'rgba(255, 255, 255, 0.2)', JSON.stringify(found));
   assert(found['.track-row:hover'] === 'rgba(255, 255, 255, 0.1)', JSON.stringify(found));
-  assert(found['.track-row.selected, .track-row.selected:hover'] === 'rgba(255, 255, 255, 0.45)', JSON.stringify(found));
+  assert(found['.track-row.selected, .track-row.selected:hover'] === 'rgba(255, 255, 255, 0.3)', JSON.stringify(found));
   return { result: 'PASS', found };
 }
