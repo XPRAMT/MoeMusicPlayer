@@ -1393,12 +1393,14 @@ input:focus-visible {
   z-index: 1;
 }
 
-.track-row:hover::before {
+.track-row:hover::before,
+.track-row.active:not(.selected)::before {
   opacity: 0.1;
 }
 
 .track-row.selected::before,
-.track-row.selected:hover::before {
+.track-row.selected:hover::before,
+.track-row.selected.active::before {
   opacity: 0.2;
 }
 

@@ -314,8 +314,4 @@
     right: auto;
     width: max(100%, var(--track-list-min-width, 0px));
   }
-
-  .paged-virtual-row.active {
-    background: color-mix(in srgb, var(--accent) 11%, transparent);
-  }
 </style>
