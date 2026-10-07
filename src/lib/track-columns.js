@@ -1,15 +1,15 @@
 /** @typedef {'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
 
-/** @type {ReadonlyArray<{ id: TrackColumnId, label: string, min: string }>} */
+/** @type {ReadonlyArray<{ id: TrackColumnId, label: string, min: string, minPx: number }>} */
 export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
-  { id: 'title', label: '曲目', min: 'minmax(150px,1.5fr)' },
-  { id: 'artist', label: '演出者', min: 'minmax(110px,1fr)' },
-  { id: 'album', label: '專輯', min: 'minmax(120px,1fr)' },
-  { id: 'year', label: '年份', min: '62px' },
-  { id: 'audioFormat', label: '音訊格式', min: 'minmax(175px,1.35fr)' },
-  { id: 'duration', label: '長度', min: '70px' },
-  { id: 'playCount', label: '播放次數', min: '78px' },
+  { id: 'title', label: '曲目', min: 'minmax(150px,1.5fr)', minPx: 150 },
+  { id: 'artist', label: '演出者', min: 'minmax(110px,1fr)', minPx: 110 },
+  { id: 'album', label: '專輯', min: 'minmax(120px,1fr)', minPx: 120 },
+  { id: 'year', label: '年份', min: '62px', minPx: 62 },
+  { id: 'audioFormat', label: '音訊格式', min: 'minmax(175px,1.35fr)', minPx: 175 },
+  { id: 'duration', label: '長度', min: '70px', minPx: 70 },
+  { id: 'playCount', label: '播放次數', min: '78px', minPx: 78 },
 ]);
 
 /** @type {TrackColumnPreference[]} */
@@ -62,6 +62,22 @@ export function trackListGridTemplate(preferences) {
   const informationColumns = visibleTrackColumns(preferences)
     .map(({ id }) => COLUMN_DEFINITION_BY_ID.get(id)?.min ?? 'minmax(100px,1fr)');
   return ['42px', ...informationColumns, '42px'].join(' ');
+}
+
+/**
+ * Width the shared grid needs before a long cell is allowed to grow the row.
+ * Includes the index column, the action column, horizontal padding, and gaps.
+ * @param {TrackColumnPreference[]} preferences
+ */
+export function trackListMinWidthPx(preferences) {
+  const visible = visibleTrackColumns(preferences);
+  const information = visible.reduce(
+    (sum, column) => sum + (COLUMN_DEFINITION_BY_ID.get(column.id)?.minPx ?? 100),
+    0,
+  );
+  const gaps = (visible.length + 1) * 10;
+  const padding = 28;
+  return 42 + information + 42 + gaps + padding;
 }
 
 /**

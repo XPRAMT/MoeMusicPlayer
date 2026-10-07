@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import MiddleEllipsis from './MiddleEllipsis.svelte';
 
   interface Column {
     id: string;
@@ -42,7 +43,13 @@
 {:else if variant === 'item'}
   <span class="track-index column-index" role="gridcell">{indexLabel}</span>
   {#each cells as cell (cell.id)}
-    <span class={`list-column list-column-${cell.id}`} role="gridcell" title={cell.title}>{cell.text}</span>
+    <span class={`list-column list-column-${cell.id}`} role="gridcell" title={cell.title || cell.text || undefined}>
+      {#if cell.id === 'title' || cell.id === 'artist' || cell.id === 'album' || cell.id === 'audioFormat'}
+        <MiddleEllipsis text={cell.text} />
+      {:else}
+        {cell.text}
+      {/if}
+    </span>
   {/each}
   {#if trailing}
     {@render trailing()}

@@ -8,6 +8,7 @@
     normalizeTrackColumnPreferences,
     trackListColumnCount,
     trackListGridTemplate,
+    trackListMinWidthPx,
     visibleTrackColumns,
   } from './track-columns.js';
   import { withLivePlayedMs } from './live-play-count.js';
@@ -42,6 +43,7 @@
     TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
   ));
   let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns));
+  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
   let visibleRange = $state({ start: 0, end: TRACK_PAGE_SIZE });
   let currentEntryPosition = $state<number | null>(null);
@@ -182,6 +184,7 @@
     ariaLabel="目前播放佇列；使用方向鍵瀏覽"
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
+    minContentWidth={listMinWidth}
     className="track-list-viewport playback-queue-viewport"
     rowClassName="track-row virtual-track-row configurable-track-grid playback-queue-row"
     listName="播放佇列"

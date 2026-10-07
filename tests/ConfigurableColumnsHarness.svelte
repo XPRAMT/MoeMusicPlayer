@@ -69,7 +69,9 @@
       id: `column-track-${index}`,
       title: `曲目 ${index + 1}`,
       artist: 'ARTIST 演出者',
-      album: '專輯',
+      album: index === 0
+        ? '崩壞星穹鐵道-行於命途6 Experience the Paths Vol.6'
+        : '專輯',
       albumArtist: null,
       trackNumber: index + 1,
       discNumber: 1,
@@ -79,6 +81,7 @@
       sampleRateHz: 48_000,
       year: 2024,
       bitDepth: 24,
+      playedMs: 0,
     };
   }
 

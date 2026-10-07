@@ -1285,8 +1285,8 @@ input:focus-visible {
 }
 
 .configurable-track-grid {
-  width: max-content;
-  min-width: 100%;
+  width: max(100%, var(--track-list-min-width, 0px));
+  min-width: max(100%, var(--track-list-min-width, 0px));
 }
 
 .track-table-head.configurable-track-grid,

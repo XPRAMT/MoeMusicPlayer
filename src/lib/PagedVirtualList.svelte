@@ -37,6 +37,7 @@
     ariaLabel: string;
     columnCount: number;
     gridTemplate?: string;
+    minContentWidth?: number;
     className?: string;
     rowClassName?: string;
     listName: string;
@@ -65,6 +66,7 @@
     ariaLabel,
     columnCount,
     gridTemplate = '42px minmax(0,1fr) 42px',
+    minContentWidth = 0,
     className = '',
     rowClassName = '',
     listName,
@@ -185,7 +187,7 @@
   aria-activedescendant={activeDescendantId}
   aria-busy={pending || totalCount === null}
   tabindex="0"
-  style={`height:${viewportPixelHeight}px;--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate}`}
+  style={`height:${viewportPixelHeight}px;--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
   onscroll={updateViewport}
   onkeydown={handleKeydown}
 >
@@ -261,6 +263,12 @@
     right: 0;
     left: 0;
     box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .paged-virtual-row.configurable-track-grid {
+    right: auto;
+    width: max(100%, var(--track-list-min-width, 0px));
   }
 
   .paged-virtual-row.active {

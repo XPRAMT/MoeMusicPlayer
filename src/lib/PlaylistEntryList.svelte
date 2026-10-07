@@ -9,6 +9,7 @@ import {
   normalizeTrackColumnPreferences,
   trackListColumnCount,
   trackListGridTemplate,
+  trackListMinWidthPx,
   visibleTrackColumns,
 } from './track-columns.js';
 import { withLivePlayedMs } from './live-play-count.js';
@@ -44,6 +45,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
   ));
   let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns));
+  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
 
   type ListSnapshot = ReturnType<PagedListController<PlaylistEntrySummary, string>['snapshot']>;
@@ -128,6 +130,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     ariaLabel="播放清單項目；使用方向鍵瀏覽，按 Enter 播放目前項目"
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
+    minContentWidth={listMinWidth}
     className="track-list-viewport playlist-entry-table"
     rowClassName="track-row virtual-track-row configurable-track-grid playlist-entry-row"
     listName="播放清單"
