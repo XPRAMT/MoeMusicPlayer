@@ -185,7 +185,7 @@ async page => {
     dockBackground: getComputedStyle(document.querySelector('.player-dock')).backgroundImage,
   }));
   assert.equal(closed.activeClass, false, 'closing the page should remove the background layer');
-  assert.ok(closed.dockBackground.startsWith('linear-gradient'), 'closing the page should restore the ordinary dock background');
+  assert.equal(closed.dockBackground, 'none', 'closing the page keeps the dock without a fill');
 
   return { result: 'PASS', savedAppearance: latest, checkedViewports: geometries, screenshot: 'target/now-playing-appearance-light-cover.png', fallback: fallback.background };
 }

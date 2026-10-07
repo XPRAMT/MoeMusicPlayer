@@ -275,10 +275,6 @@ input:focus-visible {
   background: transparent;
 }
 
-.app-shell.has-main-backdrop .player-dock {
-  background: rgba(var(--text-rgb), 0.1);
-}
-
 .app-shell.has-main-backdrop .settings-tab {
   background: rgba(var(--text-rgb), 0.1);
 }
@@ -2760,10 +2756,10 @@ input:focus-visible {
   align-items: center;
   gap: 14px;
   padding: 5px var(--dock-pad-x);
-  border-top: 1px solid rgba(var(--text-rgb), 0.11);
-  background: linear-gradient(100deg, var(--dock-bg), var(--panel-soft) 50%, var(--dock-bg));
+  border-top: 0;
+  background: transparent;
   backdrop-filter: none;
-  box-shadow: 0 -15px 35px rgba(0, 0, 0, 0.15);
+  box-shadow: none;
   cursor: pointer;
 }
 
@@ -2774,9 +2770,7 @@ input:focus-visible {
 
 .app-shell.has-now-playing-backdrop .player-dock {
   z-index: 21;
-  border-top-color: rgba(var(--text-rgb), 0.18);
   background: transparent;
-  box-shadow: 0 -15px 35px rgba(0, 0, 0, 0.18);
 }
 
 .now-playing-appearance-settings {
