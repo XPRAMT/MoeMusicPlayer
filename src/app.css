@@ -1399,7 +1399,7 @@ input:focus-visible {
 
 .track-row.selected::before,
 .track-row.selected:hover::before {
-  opacity: 0.22;
+  opacity: 0.2;
 }
 
 .column-index,
