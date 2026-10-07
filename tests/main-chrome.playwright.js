@@ -41,7 +41,7 @@ async page => {
     for (let index = 1; index < boxes.length; index += 1) spaces.push(Math.round(boxes[index].top - boxes[index - 1].bottom));
     return spaces;
   });
-  assert(gaps.length >= 4 && gaps.every((gap) => gap >= 18), 'main interface settings are cramped: ' + JSON.stringify(gaps));
+  assert(gaps.length >= 4 && gaps.every((gap) => gap === 8), 'main interface settings spacing: ' + JSON.stringify(gaps));
   assert(await page.getByRole('button', { name: '選擇背景圖片' }).count() === 1, 'background picker missing');
   assert(await page.getByRole('slider', { name: '主介面背景模糊程度' }).count() === 1, 'background blur missing');
   assert(await page.getByRole('slider', { name: '主介面背景亮度' }).count() === 1, 'background brightness missing');

@@ -2374,7 +2374,7 @@ input:focus-visible {
 .main-interface-panel {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 8px;
 }
 
 .main-interface-panel > .settings-panel-header,
@@ -2387,7 +2387,7 @@ input:focus-visible {
 .appearance-color-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 8px;
 }
 
 .theme-color-control {
