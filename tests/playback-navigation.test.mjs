@@ -72,7 +72,7 @@ test('the sidebar playlist group is the single playlist navigation entry and wor
   const navStart = appSource.indexOf('<nav class="primary-nav"');
   const navEnd = appSource.indexOf('</nav>', navStart);
   assert.ok(navStart >= 0 && navEnd > navStart, 'primary navigation must remain available');
-  assert.doesNotMatch(appSource.slice(navStart, navEnd), /播放清單/);
+  assert.doesNotMatch(appSource.slice(navStart, navEnd), /播放清單|設定/);
 
   const treeHost = /<div class="sidebar-playlist-tree-host">\s*<PlaylistTree([\s\S]*?)\/>\s*<\/div>/.exec(appSource);
   assert.ok(treeHost, 'playlist tree must always render in the sidebar');
@@ -106,7 +106,8 @@ test('Now Playing overlays the retained route without duplicating sync or native
 test('Tabler icons keep the Chinese playback labels and settings navigation accessible', () => {
   assert.match(appSource, /from '@tabler\/icons-svelte-runes'/);
 
-  const settingsStart = appSource.indexOf("class:active={activeView === 'settings'}");
+  const settingsStart = appSource.indexOf('class="sidebar-settings"');
+  assert.ok(settingsStart > appSource.indexOf('class="sidebar-playlist-tree-host"'), 'settings stays at the bottom of the sidebar');
   const settingsEnd = appSource.indexOf('<span class="nav-label">設定</span>', settingsStart);
   assert.ok(settingsStart >= 0 && settingsEnd > settingsStart, 'settings navigation entry should remain available');
   assert.match(appSource.slice(settingsStart, settingsEnd), /<IconSettings[^>]+aria-hidden="true"/);

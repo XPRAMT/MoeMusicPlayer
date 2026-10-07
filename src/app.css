@@ -686,9 +686,16 @@ input:focus-visible {
   display: flex;
   min-width: 0;
   min-height: 0;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   overflow: hidden;
-  margin: 13px 0 10px;
+  margin: 13px 0 0;
+}
+
+.sidebar-settings {
+  display: grid;
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding-top: 8px;
 }
 
 .sidebar-playlist-tree-host .playlist-tree {
@@ -3763,6 +3770,7 @@ input:focus-visible {
   .nav-link { width: 38px; min-height: 38px; border-radius: 10px; }
   .nav-link.active::before { top: auto; right: 11px; bottom: -6px; left: 11px; width: auto; height: 2px; border-radius: 3px 3px 0 0; }
   .sidebar-playlist-tree-host { width: 60px; margin: 0; }
+  .sidebar-settings { margin: 0; padding-top: 0; }
   .sidebar-playlist-tree-host .playlist-tree { border-radius: 10px; }
   .sidebar-source { display: none; }
   .workspace { grid-column: 1; grid-row: 2; }

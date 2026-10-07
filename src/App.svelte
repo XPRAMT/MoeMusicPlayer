@@ -2438,16 +2438,6 @@
         <span class="nav-label">播放佇列</span>
         <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
-      <button
-        class="nav-link"
-        class:active={activeView === 'settings'}
-        aria-current={activeView === 'settings' ? 'page' : undefined}
-        onclick={() => (activeView = 'settings')}
-      >
-        <IconSettings size={20} stroke={1.6} aria-hidden="true" />
-        <span class="nav-label">設定</span>
-        <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
-      </button>
     </nav>
 
     <div class="sidebar-playlist-tree-host">
@@ -2459,6 +2449,18 @@
         onSelect={selectPlaylist}
       />
     </div>
+    <nav class="sidebar-settings" aria-label="設定">
+      <button
+        class="nav-link"
+        class:active={activeView === 'settings'}
+        aria-current={activeView === 'settings' ? 'page' : undefined}
+        onclick={() => (activeView = 'settings')}
+      >
+        <IconSettings size={20} stroke={1.6} aria-hidden="true" />
+        <span class="nav-label">設定</span>
+        <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
+      </button>
+    </nav>
   </aside>
 
   <main class="workspace" inert={isNowPlayingOpen}>
