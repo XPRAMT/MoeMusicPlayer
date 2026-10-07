@@ -56,8 +56,9 @@ pub(crate) fn filter_installed() -> bool {
 /// Stereo 44.1 kHz always enters, including 24-bit lossless. Stereo 48 kHz
 /// enters unless the file is lossless and explicitly 24-bit. Anything above
 /// 48 kHz stays out. Other rates at or below 48 kHz still need a stored depth
-/// of 1–16 bits, or a lossy file with no stored depth. Samples are quantized
-/// to 16-bit PCM before the Sony filter.
+/// of 1–16 bits, or a lossy file with no stored depth. Lossy audio is sent
+/// to the filter as 32-bit integer PCM. Lossless audio keeps its stored
+/// depth, using 16, 24, or 32-bit integer PCM.
 pub(crate) fn eligible(
     sample_rate: u32,
     channels: u16,
@@ -83,6 +84,24 @@ fn explicit_24bit_lossless(bits_per_sample: Option<u16>, lossy: bool) -> bool {
     bits_per_sample == Some(24) && !lossy
 }
 
+/// Integer PCM width sent to the Sony filter.
+///
+/// Lossy decoders have no stored sample width here, so their float samples are
+/// packed as 32-bit integers. A lossless file keeps 16, 24, or 32-bit depth.
+/// Narrower stored depths are carried in 16-bit signed PCM.
+pub(crate) fn pcm_bits(bits_per_sample: Option<u16>, lossy: bool) -> u16 {
+    if lossy {
+        return 32;
+    }
+    match bits_per_sample {
+        Some(24) => 24,
+        Some(32) => 32,
+        Some(bits) if (25..32).contains(&bits) => 32,
+        Some(bits) if (17..24).contains(&bits) => 24,
+        _ => 16,
+    }
+}
+
 pub(crate) fn bitrate_kbps(measured_kbps: Option<u32>, lossy: bool) -> u32 {
     match measured_kbps {
         Some(kbps) if (8..=1020).contains(&kbps) => kbps,
@@ -101,7 +120,11 @@ pub(crate) enum Engagement {
     Off,
     Bypass(String),
     Unavailable(String),
-    Run { bitrate_kbps: u32, input_rate: u32 },
+    Run {
+        bitrate_kbps: u32,
+        input_rate: u32,
+        input_bits: u16,
+    },
 }
 
 pub(crate) struct DseePlan {
@@ -149,6 +172,7 @@ pub(crate) fn plan(enabled: bool, path: &Path, signal: &TrackSignal) -> DseePlan
         engagement: Engagement::Run {
             bitrate_kbps: bitrate_kbps(average_kbps(path, signal.duration), lossy),
             input_rate: signal.sample_rate,
+            input_bits: pcm_bits(bits_per_sample, lossy),
         },
     }
 }
@@ -307,6 +331,7 @@ where
         mut decoder: S,
         input_rate: u32,
         bitrate_kbps: u32,
+        input_bits: u16,
     ) -> Result<Self, OpenError<S>> {
         let duration = decoder.total_duration();
         let helper = match helper_exe() {
@@ -380,8 +405,11 @@ where
                 let _ = stderr.take(4096).read_to_end(&mut sink);
             })
         });
-        if let Err(error) = write_message(&mut stdin, 1, &config_payload(input_rate, bitrate_kbps))
-        {
+        if let Err(error) = write_message(
+            &mut stdin,
+            1,
+            &config_payload(input_rate, bitrate_kbps, input_bits),
+        ) {
             let _ = child.kill();
             return Err(OpenError::Rejected(
                 decoder,
@@ -412,7 +440,7 @@ where
         // Send the first samples on this thread. The helper is already waiting
         // for PCM, and playback can keep the audio callback busy enough that a
         // newly spawned feeder does not deliver them before the prefill deadline.
-        let prime = pull_pcm(&mut decoder, 2048);
+        let prime = pull_pcm(&mut decoder, 2048, input_bits);
         if !prime.is_empty() && write_message(&mut stdin, 2, &prime).is_err() {
             let _ = child.kill();
             return Err(OpenError::Lost("DSEE HX 輔助程式已中斷。".to_owned()));
@@ -421,7 +449,7 @@ where
         let feeder_ring = Arc::clone(&ring);
         let feeder = match thread::Builder::new()
             .name("dsee-hx-feed".to_owned())
-            .spawn(move || feed(decoder, stdin, feeder_stop, feeder_ring))
+            .spawn(move || feed(decoder, stdin, feeder_stop, feeder_ring, input_bits))
         {
             Ok(feeder) => feeder,
             Err(error) => {
@@ -476,11 +504,11 @@ fn wait_prefill(ring: &Ring, stop: &AtomicBool, output_rate: u32) -> Result<(), 
     }
 }
 
-fn pull_pcm<S>(decoder: &mut S, frames: usize) -> Vec<u8>
+fn pull_pcm<S>(decoder: &mut S, frames: usize, input_bits: u16) -> Vec<u8>
 where
     S: Source<Item = Sample>,
 {
-    let mut payload = Vec::with_capacity(frames * 4);
+    let mut payload = Vec::with_capacity(frames * pcm_stride(input_bits));
     for _ in 0..frames {
         let Some(left) = decoder.next() else {
             break;
@@ -488,17 +516,21 @@ where
         let Some(right) = decoder.next() else {
             break;
         };
-        payload.extend_from_slice(&quantize(left).to_le_bytes());
-        payload.extend_from_slice(&quantize(right).to_le_bytes());
+        push_pcm_frame(&mut payload, left, right, input_bits);
     }
     payload
 }
 
-fn feed<S>(mut decoder: S, mut stdin: impl Write, stop: Arc<AtomicBool>, ring: Arc<Ring>)
-where
+fn feed<S>(
+    mut decoder: S,
+    mut stdin: impl Write,
+    stop: Arc<AtomicBool>,
+    ring: Arc<Ring>,
+    input_bits: u16,
+) where
     S: Source<Item = Sample>,
 {
-    let mut payload = Vec::with_capacity(4096);
+    let mut payload = Vec::with_capacity(1024 * pcm_stride(input_bits));
     while !stop.load(Ordering::Relaxed) {
         payload.clear();
         for _ in 0..1024 {
@@ -511,8 +543,7 @@ where
             if stop.load(Ordering::Relaxed) {
                 return;
             }
-            payload.extend_from_slice(&quantize(left).to_le_bytes());
-            payload.extend_from_slice(&quantize(right).to_le_bytes());
+            push_pcm_frame(&mut payload, left, right, input_bits);
         }
         if payload.is_empty() {
             break;
@@ -619,13 +650,13 @@ fn read_message(reader: &mut impl Read) -> std::io::Result<PipeMessage> {
     Ok(PipeMessage { kind, payload })
 }
 
-fn config_payload(input_rate: u32, bitrate_kbps: u32) -> [u8; 32] {
+fn config_payload(input_rate: u32, bitrate_kbps: u32, input_bits: u16) -> [u8; 32] {
     let fields = [
         2u32,
         CODEC_MP3,
         input_rate,
         OUTPUT_REQUEST_HZ,
-        16,
+        u32::from(input_bits),
         24,
         0,
         bitrate_kbps,
@@ -652,12 +683,35 @@ fn decode_error(payload: &[u8]) -> String {
     "DSEE HX 無法處理這首曲目。".to_owned()
 }
 
-fn quantize(sample: f32) -> i16 {
-    if !sample.is_finite() {
-        return 0;
+fn pcm_stride(input_bits: u16) -> usize {
+    usize::from(input_bits / 8) * 2
+}
+
+fn push_pcm_frame(payload: &mut Vec<u8>, left: f32, right: f32, input_bits: u16) {
+    push_pcm_sample(payload, left, input_bits);
+    push_pcm_sample(payload, right, input_bits);
+}
+
+fn push_pcm_sample(payload: &mut Vec<u8>, sample: f32, input_bits: u16) {
+    let sample = if sample.is_finite() {
+        sample.clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
+    match input_bits {
+        24 => {
+            let value = (sample * 8_388_607.0).round() as i32;
+            payload.extend_from_slice(&value.to_le_bytes()[..3]);
+        }
+        32 => {
+            let value = (sample * 2_147_483_647.0).round() as i32;
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+        _ => {
+            let value = (sample * 32_767.0).round() as i16;
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
     }
-    let scaled = (sample.clamp(-1.0, 1.0) * 32767.0).round();
-    scaled as i16
 }
 
 fn i24_to_f32(bytes: &[u8]) -> f32 {
@@ -793,11 +847,74 @@ mod tests {
     }
 
     #[test]
+    fn lossy_audio_is_packed_as_32_bit_and_lossless_keeps_its_depth() {
+        assert_eq!(pcm_bits(None, true), 32);
+        assert_eq!(pcm_bits(Some(16), true), 32);
+        assert_eq!(pcm_bits(Some(16), false), 16);
+        assert_eq!(pcm_bits(Some(24), false), 24);
+        assert_eq!(pcm_bits(Some(32), false), 32);
+        assert_eq!(pcm_bits(Some(8), false), 16);
+        assert_eq!(pcm_bits(None, false), 16);
+
+        let mut sixteen = Vec::new();
+        push_pcm_sample(&mut sixteen, 0.5, 16);
+        assert_eq!(sixteen, 16_384i16.to_le_bytes());
+
+        let mut twenty_four = Vec::new();
+        push_pcm_sample(&mut twenty_four, -1.0, 24);
+        assert_eq!(twenty_four, (-8_388_607i32).to_le_bytes()[..3]);
+
+        let mut thirty_two = Vec::new();
+        push_pcm_sample(&mut thirty_two, 0.5, 32);
+        assert_eq!(thirty_two, 1_073_741_824i32.to_le_bytes());
+    }
+
+    #[test]
     fn bitrate_uses_a_measured_value_inside_the_filter_range() {
         assert_eq!(bitrate_kbps(Some(320), true), 320);
         assert_eq!(bitrate_kbps(None, true), 320);
         assert_eq!(bitrate_kbps(Some(5_000), false), 1021);
         assert_eq!(bitrate_kbps(Some(1411), false), 1021);
+    }
+
+    #[test]
+    fn installed_filter_streams_24_and_32_bit_pcm() {
+        if !filter_installed() {
+            return;
+        }
+        for bits in [24_u16, 32] {
+            let rate = 44_100_u32;
+            let frames = rate / 10;
+            let samples: Vec<f32> = (0..frames)
+                .flat_map(|frame| {
+                    let sample = (2.0 * std::f32::consts::PI * 440.0 * frame as f32 / rate as f32)
+                        .sin()
+                        * 0.2;
+                    [sample, sample]
+                })
+                .collect();
+            let decoder = rodio::buffer::SamplesBuffer::new(
+                ChannelCount::new(2).unwrap(),
+                SampleRate::new(rate).unwrap(),
+                samples,
+            );
+            let source = match DseeSource::open(decoder, rate, 1_411, bits) {
+                Ok(source) => source,
+                Err(OpenError::Rejected(_, message) | OpenError::Lost(message)) => {
+                    panic!("{bits}-bit dsee stream failed: {message}")
+                }
+            };
+            assert_eq!(
+                source.sample_rate().get(),
+                176_400,
+                "{bits}-bit output rate"
+            );
+            let output: Vec<f32> = source.take(4_000).collect();
+            assert!(
+                output.iter().any(|sample| sample.abs() > 0.001),
+                "{bits}-bit DSEE HX output was silent"
+            );
+        }
     }
 
     #[test]
@@ -819,7 +936,7 @@ mod tests {
             SampleRate::new(rate).unwrap(),
             samples,
         );
-        let source = match DseeSource::open(decoder, rate, 320) {
+        let source = match DseeSource::open(decoder, rate, 320, 16) {
             Ok(source) => source,
             Err(OpenError::Rejected(_, message) | OpenError::Lost(message)) => {
                 panic!("dsee stream failed: {message}")
@@ -876,7 +993,7 @@ mod tests {
             SampleRate::new(rate).unwrap(),
             samples,
         );
-        let source = match DseeSource::open(decoder, rate, 320) {
+        let source = match DseeSource::open(decoder, rate, 320, 16) {
             Ok(source) => source,
             Err(OpenError::Rejected(_, message) | OpenError::Lost(message)) => {
                 panic!("dsee stream during playback failed: {message}")

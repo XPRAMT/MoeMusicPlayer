@@ -962,7 +962,9 @@ impl TrackPlayer {
             crate::dsee::Engagement::Run {
                 bitrate_kbps,
                 input_rate,
-            } => match crate::dsee::DseeSource::open(decoder, input_rate, bitrate_kbps) {
+                input_bits,
+            } => match crate::dsee::DseeSource::open(decoder, input_rate, bitrate_kbps, input_bits)
+            {
                 Ok(source) => {
                     self.dsee_state = DseeHxState::Active;
                     self.dsee_notice = None;
