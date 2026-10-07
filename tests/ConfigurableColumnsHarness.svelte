@@ -159,7 +159,8 @@
   function listSnapshot(selector: string): ColumnSnapshot {
     const root = document.querySelector<HTMLElement>(selector);
     if (!root) throw new Error(`Missing virtual list: ${selector}`);
-    const header = root.querySelector<HTMLElement>('[role="row"][aria-rowindex="1"]');
+    const header = root.parentElement?.querySelector<HTMLElement>('[role="row"][aria-rowindex="1"]')
+      ?? root.querySelector<HTMLElement>('[role="row"][aria-rowindex="1"]');
     const row = root.querySelector<HTMLElement>('.paged-virtual-row[role="row"]');
     const rowIsSkeleton = row?.getAttribute('aria-label')?.includes('正在載入') ?? false;
     const columnsIn = (element: HTMLElement | null) => element

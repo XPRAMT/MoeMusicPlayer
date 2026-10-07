@@ -201,9 +201,6 @@
     overflow: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
-    border: 1px solid var(--line);
-    border-radius: 11px;
-    background: rgba(var(--text-rgb), 0.012);
     outline: none;
   }
 

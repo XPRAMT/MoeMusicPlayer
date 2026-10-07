@@ -2,7 +2,11 @@ async page => {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   await page.goto('http://127.0.0.1:4173/', { waitUntil: 'domcontentloaded' });
   const found = await page.evaluate(() => {
-    const wanted = ['.track-row:hover', '.track-row.selected, .track-row.selected:hover'];
+    const wanted = [
+      '.nav-link.active, .nav-link.active:hover:not(:disabled)',
+      '.track-row:hover',
+      '.track-row.selected, .track-row.selected:hover',
+    ];
     const hits = {};
     for (const sheet of document.styleSheets) {
       let rules;
@@ -14,7 +18,8 @@ async page => {
     }
     return hits;
   });
-  assert(found['.track-row:hover'] === 'rgba(255, 255, 255, 0.1)', 'hover: ' + JSON.stringify(found));
-  assert(found['.track-row.selected, .track-row.selected:hover'] === 'rgba(255, 255, 255, 0.2)', 'selected: ' + JSON.stringify(found));
+  assert(found['.nav-link.active, .nav-link.active:hover:not(:disabled)'] === 'rgba(255, 255, 255, 0.2)', JSON.stringify(found));
+  assert(found['.track-row:hover'] === 'rgba(255, 255, 255, 0.1)', JSON.stringify(found));
+  assert(found['.track-row.selected, .track-row.selected:hover'] === 'rgba(255, 255, 255, 0.45)', JSON.stringify(found));
   return { result: 'PASS', found };
 }

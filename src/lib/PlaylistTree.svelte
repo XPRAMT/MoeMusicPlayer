@@ -100,7 +100,7 @@
   .playlist-tree-heading.active,
   .playlist-tree-heading.active .playlist-tree-open,
   .playlist-tree-heading.active .playlist-tree-open:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.45);
   }
 
   .playlist-tree-open,
@@ -224,7 +224,7 @@
   .playlist-tree-item.selected:focus-visible {
     border-color: transparent;
     color: var(--text);
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.45);
   }
 
   .playlist-tree-item > :global(svg) {

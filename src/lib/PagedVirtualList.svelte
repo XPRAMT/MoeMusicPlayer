@@ -88,9 +88,9 @@
   let seenGeneration = $state(0);
 
   const virtualTotalCount = $derived(totalCount ?? 40);
-  const viewportPixelHeight = $derived(Math.max(
-    headerHeight + rowHeight,
-    Math.min(maxViewportHeight, headerHeight + virtualTotalCount * rowHeight),
+  const rowViewportHeight = $derived(Math.max(
+    rowHeight,
+    Math.min(Math.max(rowHeight, maxViewportHeight - headerHeight), virtualTotalCount * rowHeight),
   ));
   const range = $derived(getVirtualRange(
     scrollTop,
@@ -98,7 +98,7 @@
     virtualTotalCount,
     rowHeight,
     overscan,
-    headerHeight,
+    0,
   ));
   const virtualRows = $derived.by(() => buildVirtualRows(
     { itemAt },
@@ -144,10 +144,10 @@
     const maxIndex = Math.max(0, virtualTotalCount - 1);
     activeIndex = Math.max(0, Math.min(maxIndex, index));
     if (!viewport) return;
-    const rowTop = headerHeight + activeIndex * rowHeight;
+    const rowTop = activeIndex * rowHeight;
     const rowBottom = rowTop + rowHeight;
     let nextScrollTop = viewport.scrollTop;
-    if (rowTop < nextScrollTop + headerHeight) nextScrollTop = Math.max(0, rowTop - headerHeight);
+    if (rowTop < nextScrollTop) nextScrollTop = rowTop;
     else if (rowBottom > nextScrollTop + viewport.clientHeight) {
       nextScrollTop = rowBottom - viewport.clientHeight;
     }
@@ -179,67 +179,79 @@
   }
 </script>
 
-<div
-  class={`paged-virtual-viewport ${className}`}
-  bind:this={viewport}
-  role="grid"
-  aria-label={ariaLabel}
-  aria-rowcount={totalCount === null ? -1 : totalCount + 1}
-  aria-colcount={columnCount}
-  aria-activedescendant={activeDescendantId}
-  aria-busy={pending || totalCount === null}
-  tabindex="0"
-  style={`height:${viewportPixelHeight}px;--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
-  onscroll={updateViewport}
-  onkeydown={handleKeydown}
->
+<div class="paged-virtual-frame">
   <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px`}>
     {#if header}{@render header()}{/if}
   </div>
   <div
-    class="paged-virtual-spacer"
-    role="presentation"
-    aria-hidden="true"
-    style={`height:${virtualTotalCount * rowHeight}px`}
-  ></div>
-  {#each virtualRows as virtualRow (virtualRow.key)}
-    {@const id = `${listId}-row-${virtualRow.index}`}
-    {@const selected = virtualRow.item !== null && isSelected(virtualRow.item, virtualRow.index)}
+    class={`paged-virtual-viewport ${className}`}
+    bind:this={viewport}
+    role="grid"
+    aria-label={ariaLabel}
+    aria-rowcount={totalCount === null ? -1 : totalCount + 1}
+    aria-colcount={columnCount}
+    aria-activedescendant={activeDescendantId}
+    aria-busy={pending || totalCount === null}
+    tabindex="0"
+    style={`height:${rowViewportHeight}px;--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
+    onscroll={updateViewport}
+    onkeydown={handleKeydown}
+  >
     <div
-      id={id}
-      class={`paged-virtual-row ${rowClassName}`}
-      class:selected
-      class:active={activeIndex === virtualRow.index}
-      role="row"
-      aria-rowindex={virtualRow.index + 2}
-      aria-selected={selected}
-      tabindex={rowActivates && virtualRow.item !== null ? -1 : undefined}
-      aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
-      style={`height:${rowHeight}px;transform:translateY(${headerHeight + virtualRow.index * rowHeight}px)`}
-      class:activates={rowActivates && virtualRow.item !== null}
-      onclick={() => {
-        if (rowActivates) playRow(virtualRow.item, virtualRow.index);
-      }}
-      onkeydown={(event) => {
-        if (!rowActivates || (event.key !== 'Enter' && event.key !== ' ')) return;
-        event.preventDefault();
-        playRow(virtualRow.item, virtualRow.index);
-      }}
-    >
-      {@render row({
-        item: virtualRow.item,
-        index: virtualRow.index,
-        key: virtualRow.key,
-        id,
-        active: activeIndex === virtualRow.index,
-        selected,
-        play: () => playRow(virtualRow.item, virtualRow.index),
-      })}
-    </div>
-  {/each}
+      class="paged-virtual-spacer"
+      role="presentation"
+      aria-hidden="true"
+      style={`height:${virtualTotalCount * rowHeight}px`}
+    ></div>
+    {#each virtualRows as virtualRow (virtualRow.key)}
+      {@const id = `${listId}-row-${virtualRow.index}`}
+      {@const selected = virtualRow.item !== null && isSelected(virtualRow.item, virtualRow.index)}
+      <div
+        id={id}
+        class={`paged-virtual-row ${rowClassName}`}
+        class:selected
+        class:active={activeIndex === virtualRow.index}
+        role="row"
+        aria-rowindex={virtualRow.index + 2}
+        aria-selected={selected}
+        tabindex={rowActivates && virtualRow.item !== null ? -1 : undefined}
+        aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
+        style={`height:${rowHeight}px;transform:translateY(${virtualRow.index * rowHeight}px)`}
+        class:activates={rowActivates && virtualRow.item !== null}
+        onclick={() => {
+          if (rowActivates) playRow(virtualRow.item, virtualRow.index);
+        }}
+        onkeydown={(event) => {
+          if (!rowActivates || (event.key !== 'Enter' && event.key !== ' ')) return;
+          event.preventDefault();
+          playRow(virtualRow.item, virtualRow.index);
+        }}
+      >
+        {@render row({
+          item: virtualRow.item,
+          index: virtualRow.index,
+          key: virtualRow.key,
+          id,
+          active: activeIndex === virtualRow.index,
+          selected,
+          play: () => playRow(virtualRow.item, virtualRow.index),
+        })}
+      </div>
+    {/each}
+  </div>
 </div>
 
 <style>
+  .paged-virtual-frame {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: rgba(var(--text-rgb), 0.012);
+  }
+
   .paged-virtual-viewport {
     position: relative;
     width: 100%;
@@ -256,11 +268,11 @@
   }
 
   .paged-virtual-header {
-    position: sticky;
+    position: relative;
     z-index: 2;
-    top: 0;
+    flex: 0 0 auto;
     box-sizing: border-box;
-    background: var(--panel);
+    background: color-mix(in srgb, var(--page) 55%, transparent);
   }
 
   .paged-virtual-spacer {

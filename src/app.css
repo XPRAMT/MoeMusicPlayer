@@ -280,10 +280,7 @@ input:focus-visible {
   backdrop-filter: blur(18px);
 }
 
-.app-shell.has-main-backdrop .settings-tab,
-.app-shell.has-main-backdrop .track-table-head,
-.app-shell.has-main-backdrop .track-list-header,
-.app-shell.has-main-backdrop .paged-virtual-header {
+.app-shell.has-main-backdrop .settings-tab {
   background: color-mix(in srgb, var(--page) 28%, transparent);
 }
 
@@ -733,15 +730,16 @@ input:focus-visible {
   white-space: nowrap;
 }
 
-.nav-link:hover:not(:disabled) {
+.nav-link:hover:not(:disabled):not(.active) {
   color: var(--text);
-  background: rgba(var(--text-rgb), 0.035);
+  background: rgba(255, 255, 255, 0.1);
 }
 
-.nav-link.active {
-  border-color: rgba(var(--accent-rgb), 0.12);
+.nav-link.active,
+.nav-link.active:hover:not(:disabled) {
+  border-color: transparent;
   color: var(--accent-text);
-  background: linear-gradient(100deg, var(--panel-soft), var(--panel));
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .nav-link.active::before {
@@ -1386,7 +1384,7 @@ input:focus-visible {
 
 .track-row.selected,
 .track-row.selected:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.45);
 }
 
 .column-index,
