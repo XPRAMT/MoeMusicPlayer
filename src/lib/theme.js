@@ -4,6 +4,7 @@
 export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   backgroundHex: '#000000',
   accentHex: '#55D9FF',
+  quickSettingsOpacityPercent: 70,
 });
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
@@ -26,7 +27,16 @@ export function normalizeThemePreferences(value) {
     accentHex: isHexColor(candidate.accentHex)
       ? candidate.accentHex.toUpperCase()
       : DEFAULT_THEME_PREFERENCES.accentHex,
+    quickSettingsOpacityPercent: normalizeOpacityPercent(candidate.quickSettingsOpacityPercent),
   };
+}
+
+/** @param {unknown} value */
+function normalizeOpacityPercent(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_THEME_PREFERENCES.quickSettingsOpacityPercent;
+  }
+  return Math.max(0, Math.min(100, Math.round(value)));
 }
 
 /** @param {string} hex */

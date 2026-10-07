@@ -805,6 +805,19 @@
     }
   }
 
+  function updateQuickSettingsOpacity(value: number): void {
+    const next = normalizeThemePreferences({ ...themePreferences, quickSettingsOpacityPercent: value });
+    themePreferences = next;
+    themeSaveError = null;
+    themeSaveState = isTauri() ? 'saving' : 'preview';
+    const revision = ++themeRevision;
+    if (themeSaveTimer !== undefined) clearTimeout(themeSaveTimer);
+    themeSaveTimer = setTimeout(() => {
+      themeSaveTimer = undefined;
+      queueThemeSave(next, revision);
+    }, 300);
+  }
+
   function updateThemeColor(key: keyof ThemePreferences, value: string): void {
     if (!isHexColor(value)) return;
     const next = normalizeThemePreferences({ ...themePreferences, [key]: value });
@@ -1368,16 +1381,6 @@
     quickSettingsTrigger?.focus();
   }
 
-  function scrollQuickSettingsSection(sectionId: 'quick-settings-playback-heading' | 'quick-settings-lyrics-heading'): void {
-    const scroller = quickSettingsDialog?.querySelector<HTMLElement>('.quick-settings-drawer-scroll');
-    const target = quickSettingsDialog?.querySelector<HTMLElement>(`#${sectionId}`);
-    if (!scroller || !target) return;
-    const scrollerTop = scroller.getBoundingClientRect().top;
-    const targetTop = target.getBoundingClientRect().top;
-    const nextScrollTop = scroller.scrollTop + targetTop - scrollerTop - 16;
-    scroller.scrollTo({ top: Math.max(0, nextScrollTop), behavior: 'smooth' });
-  }
-
   function handleQuickSettingsKeydown(event: KeyboardEvent): void {
     if (!isQuickSettingsOpen || !quickSettingsDialog) return;
     if (event.key === 'Escape') {
@@ -1605,6 +1608,375 @@
 </script>
 
 <svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleDockPointerDown} onkeydown={handleQuickSettingsKeydown} />
+
+{#snippet settingsPanels(scope: string)}
+            <div class="settings-tabs" role="tablist" aria-label="設定分類">
+              <button
+                id="{scope}appearance-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'appearance'}
+                aria-controls="{scope}appearance-panel"
+                onclick={() => (settingsSection = 'appearance')}
+              >外觀</button>
+              <button
+                id="{scope}track-columns-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'track-columns'}
+                aria-controls="{scope}track-columns-panel"
+                onclick={() => (settingsSection = 'track-columns')}
+              >曲目欄位</button>
+              <button
+                id="{scope}now-playing-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'now-playing'}
+                aria-controls="{scope}now-playing-layout-panel"
+                onclick={() => (settingsSection = 'now-playing')}
+              >正在播放</button>
+              <button
+                id="{scope}lyrics-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'lyrics'}
+                aria-controls="{scope}lyrics-panel"
+                onclick={() => (settingsSection = 'lyrics')}
+              >歌詞</button>
+              {#if capabilities?.platform === 'windows'}
+                <button
+                  id="{scope}playback-tab"
+                  class="settings-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsSection === 'playback'}
+                  aria-controls="{scope}playback-panel"
+                  onclick={() => (settingsSection = 'playback')}
+                >輸出</button>
+              {/if}
+              <button
+                id="{scope}sources-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'sources'}
+                aria-controls="{scope}sources-panel"
+                onclick={() => (settingsSection = 'sources')}
+              >音樂來源</button>
+            </div>
+
+            {#if settingsRecoveryWarning}
+              <div class="source-error-message" role="status">
+                設定檔修復通知：{settingsRecoveryWarning}
+                {#if !settingsSourceRegistryAuthoritative}
+                  <p>為保留原有曲庫，來源同步已暫停。請重新登記全部音樂資料夾與播放清單檔案，再確認恢復同步。</p>
+                  <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void confirmSourceRegistry()}>我已確認來源清單，恢復同步</button>
+                {/if}
+              </div>
+            {/if}
+
+            {#if settingsSection === 'appearance'}
+              <div id="{scope}appearance-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}appearance-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>顏色</h3>
+                    <p>自訂背景與主色。文字會依背景自動選擇黑色或白色，保持清楚對比。</p>
+                  </div>
+                  <button class="outline-button" type="button" onclick={resetThemePreferences}>恢復預設</button>
+                </div>
+                <div class="appearance-color-grid">
+                  <label class="theme-color-control">
+                    <input
+                      type="color"
+                      aria-label="背景色"
+                      value={themePreferences.backgroundHex}
+                      oninput={(event) => updateThemeColor('backgroundHex', event.currentTarget.value)}
+                      onchange={saveThemePreferencesNow}
+                    />
+                    <span class="theme-color-copy">
+                      <strong>背景色</strong>
+                      <code>{themePreferences.backgroundHex}</code>
+                    </span>
+                  </label>
+                  <label class="theme-color-control">
+                    <input
+                      type="color"
+                      aria-label="主色"
+                      value={themePreferences.accentHex}
+                      oninput={(event) => updateThemeColor('accentHex', event.currentTarget.value)}
+                      onchange={saveThemePreferencesNow}
+                    />
+                    <span class="theme-color-copy">
+                      <strong>主色</strong>
+                      <code>{themePreferences.accentHex}</code>
+                    </span>
+                  </label>
+                </div>
+                <div class="theme-preview" role="img" aria-label="顏色即時預覽">
+                  <div class="theme-preview-copy">
+                    <strong>外觀預覽</strong>
+                    <small>文字會自動調整對比</small>
+                  </div>
+                  <span class="theme-preview-chip">主色按鈕</span>
+                </div>
+                <label class="lyrics-preference-range">
+                  <span><strong>快速設定面板透明度</strong><output>{themePreferences.quickSettingsOpacityPercent}%</output></span>
+                  <input type="range" min="0" max="100" step="1" value={themePreferences.quickSettingsOpacityPercent} aria-label="快速設定面板透明度" oninput={(event) => updateQuickSettingsOpacity(Number(event.currentTarget.value))} onchange={saveThemePreferencesNow} />
+                </label>
+                <p class="theme-save-status" class:error={themeSaveState === 'error'} role="status">{themeSaveMessage}</p>
+              </div>
+            {:else if settingsSection === 'track-columns'}
+              <div id="{scope}track-columns-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}track-columns-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>曲庫與播放清單欄位</h3>
+                    <p>兩種列表共用欄位順序與顯示設定；序號與播放操作固定在兩側。</p>
+                  </div>
+                </div>
+                <ol class="track-column-settings" aria-label="曲目資訊欄位設定">
+                  {#each trackColumnPreferences as preference, index (preference.id)}
+                    {@const definition = TRACK_COLUMN_DEFINITIONS.find((column) => column.id === preference.id)!}
+                    <li class="track-column-setting-row">
+                      <label class="track-column-setting-label">
+                        <input
+                          type="checkbox"
+                          checked={preference.visible}
+                          aria-label={`顯示${definition.label}欄`}
+                          onchange={(event) => setTrackColumnVisible(preference.id, event.currentTarget.checked)}
+                        />
+                        <span>{definition.label}</span>
+                      </label>
+                      <div class="track-column-order-actions">
+                        <span aria-label={`第 ${index + 1} 欄`}>{index + 1}</span>
+                        <button type="button" aria-label={`${definition.label}欄上移`} title="上移欄位" disabled={index === 0} onclick={() => moveConfiguredTrackColumn(preference.id, 'up')}><IconArrowUp size={16} stroke={1.7} aria-hidden="true" /></button>
+                        <button type="button" aria-label={`${definition.label}欄下移`} title="下移欄位" disabled={index === trackColumnPreferences.length - 1} onclick={() => moveConfiguredTrackColumn(preference.id, 'down')}><IconArrowDown size={16} stroke={1.7} aria-hidden="true" /></button>
+                      </div>
+                    </li>
+                  {/each}
+                </ol>
+                <p class="settings-preference-status" class:error={trackColumnSettingsState === 'error'} role="status">
+                  {trackColumnSettingsError ?? (trackColumnSettingsState === 'loading' ? '正在讀取欄位設定…' : trackColumnSettingsState === 'saving' ? '正在保存欄位設定…' : trackColumnSettingsState === 'preview' ? '瀏覽器預覽不會保存欄位設定。' : '欄位設定已保存。')}
+                </p>
+              </div>
+            {:else if settingsSection === 'playback'}
+              {@const outputStatus = describeOutputFormat(playback?.outputFormat)}
+              <div id="{scope}playback-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}playback-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>取樣率轉換</h3>
+                    <p>曲目的取樣率與輸出裝置不同時的轉換方式。兩種方式都使用 Windows 共享模式輸出，並非 bit-perfect；取樣率相同時不做任何轉換。</p>
+                  </div>
+                </div>
+                <div class="resampling-options" role="radiogroup" aria-label="取樣率轉換方式">
+                  <label class="resampling-option">
+                    <input
+                      type="radio"
+                      name="{scope}resampling-mode"
+                      value="highQuality"
+                      checked={resamplingMode === 'highQuality'}
+                      disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
+                      onchange={() => setResamplingMode('highQuality')}
+                    />
+                    <span class="resampling-option-copy">
+                      <strong>高品質（預設）</strong>
+                      <small>輸出維持在裝置的混音取樣率，由 rubato 的 FFT 進行取樣率轉換（區塊大小 2048）。濾波範圍依來源與輸出取樣率自動調整；取樣率相同時直接輸出。切換不同取樣率的曲目時不必重新開啟輸出。</small>
+                    </span>
+                  </label>
+                  <label class="resampling-option">
+                    <input
+                      type="radio"
+                      name="{scope}resampling-mode"
+                      value="windowsBuiltin"
+                      checked={resamplingMode === 'windowsBuiltin'}
+                      disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
+                      onchange={() => setResamplingMode('windowsBuiltin')}
+                    />
+                    <span class="resampling-option-copy">
+                      <strong>Windows 內建</strong>
+                      <small>以曲目的取樣率開啟輸出，交由 Windows 音訊引擎轉換為裝置格式。前後曲目取樣率不同時需重新開啟輸出，換曲時可能短暫停頓；裝置無法以該取樣率開啟時會自動改用高品質轉換。</small>
+                    </span>
+                  </label>
+                </div>
+                <div class="resampling-status" role="status">
+                  <span>目前輸出</span>
+                  <strong>{outputStatus.text}</strong>
+                  {#if outputStatus.notice}
+                    <p title={playback?.outputFormat?.fallbackReason ?? undefined}>{outputStatus.notice}</p>
+                  {/if}
+                </div>
+                <p class="settings-preference-status" class:error={resamplingModeState === 'error'} role="status">
+                  {resamplingModeError ?? (resamplingModeState === 'loading' ? '正在讀取取樣率轉換設定…' : resamplingModeState === 'saving' ? '正在切換取樣率轉換方式…' : resamplingModeState === 'preview' ? '瀏覽器預覽不會保存取樣率轉換設定。' : '取樣率轉換設定已保存。')}
+                </p>
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>DSEE HX</h3>
+                    <p>串流透過本機已安裝的 Sony Music Center 濾鏡處理。只在 48 kHz／16-bit 以下的雙聲道啟動。48 kHz 系列輸出 96 kHz／24-bit，44.1 kHz 系列輸出 176.4 kHz／24-bit，之後仍依目前的取樣率轉換接到輸出裝置。有損格式沒有來源位深，會以 16-bit PCM 送入。24-bit、更高取樣率或非雙聲道不處理。需要先安裝 Sony Music Center。播放器只載入 C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax，不會內含或散佈這個檔案。</p>
+                  </div>
+                </div>
+                <label class="resampling-option">
+                  <input
+                    type="checkbox"
+                    checked={dseeHx}
+                    disabled={dseeHxState === 'loading' || dseeHxState === 'saving'}
+                    onchange={(event) => setDseeHx(event.currentTarget.checked)}
+                  />
+                  <span class="resampling-option-copy">
+                    <strong>啟用 DSEE HX</strong>
+                    <small>關閉時維持原本的解碼與取樣率轉換。開啟後，符合格式的曲目才會進入濾鏡；濾鏡不存在或處理失敗時仍播放原解碼。</small>
+                  </span>
+                </label>
+                <p class="settings-preference-status" class:error={dseeHxState === 'error'} role="status">
+                  {dseeHxError ?? (dseeHxState === 'loading' ? '正在讀取 DSEE HX 設定…' : dseeHxState === 'saving' ? '正在套用 DSEE HX…' : dseeHxState === 'preview' ? '瀏覽器預覽不會保存 DSEE HX 設定。' : dseeHx ? 'DSEE HX 已開啟。' : 'DSEE HX 已關閉。')}
+                </p>
+              </div>
+            {:else if settingsSection === 'now-playing'}
+              <div id="{scope}now-playing-layout-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}now-playing-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>正在播放排列</h3>
+                    <p>只調整封面與歌詞區域的排列，不會重新載入播放或歌詞狀態。窄視窗會依選項順序堆疊。</p>
+                  </div>
+                </div>
+                <NowPlayingQuickSettingsControls
+                  groups="playback"
+                  layout={nowPlayingLayout}
+                  appearance={nowPlayingAppearancePreferences}
+                  lyrics={lyricsPreferences}
+                  appearanceState={nowPlayingAppearanceState}
+                  appearanceError={nowPlayingAppearanceError}
+                  lyricsState={lyricsPreferencesState}
+                  lyricsError={lyricsPreferencesError}
+                  layoutState={nowPlayingLayoutState}
+                  layoutError={nowPlayingLayoutError}
+                  onLayoutChange={setNowPlayingLayout}
+                  onAppearanceChange={updateNowPlayingAppearancePreferences}
+                  onLyricsChange={updateLyricsPreferences}
+                  onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
+                />
+              </div>
+            {:else if settingsSection === 'lyrics'}
+              <div id="{scope}lyrics-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}lyrics-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>歌詞顯示</h3>
+                    <p>設定會套用到所有歌曲；播放頁上方的「譯」「羅」按鈕也會更新同一組偏好。</p>
+                  </div>
+                </div>
+                <NowPlayingQuickSettingsControls
+                  groups="lyrics"
+                  layout={nowPlayingLayout}
+                  appearance={nowPlayingAppearancePreferences}
+                  lyrics={lyricsPreferences}
+                  appearanceState={nowPlayingAppearanceState}
+                  appearanceError={nowPlayingAppearanceError}
+                  lyricsState={lyricsPreferencesState}
+                  lyricsError={lyricsPreferencesError}
+                  layoutState={nowPlayingLayoutState}
+                  layoutError={nowPlayingLayoutError}
+                  onLayoutChange={setNowPlayingLayout}
+                  onAppearanceChange={updateNowPlayingAppearancePreferences}
+                  onLyricsChange={updateLyricsPreferences}
+                  onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
+                />
+              </div>
+            {:else}
+              <div id="{scope}sources-panel" class="settings-source-panel" role="tabpanel" aria-labelledby="{scope}sources-tab" tabindex="0">
+                <section class="settings-view" aria-labelledby="{scope}source-settings-heading">
+                  <div class="section-heading settings-heading">
+                    <div><p class="section-kicker">SOURCES</p><h2 id="{scope}source-settings-heading">管理音樂來源</h2></div>
+                    <button class="outline-button" type="button" onclick={() => void loadSources()} disabled={!sourceSyncReady || isLoadingSources}>
+                      {isLoadingSources ? '載入中' : '重新載入'}
+                    </button>
+                  </div>
+            <div class="source-status-card">
+              <div class="source-status-icon" aria-hidden="true">
+                <IconFolder size={24} stroke={1.6} aria-hidden="true" />
+              </div>
+              <div class="source-status-copy"><h3>本機音樂來源</h3><p>啟動時先顯示已保存曲目，再於背景掃描來源；只有完整掃描才會確認移除項目。</p></div>
+              <span class="status-pill" class:not-ready={!sourceSyncReady}>{capabilityLabel(capabilities?.sourceSync)}</span>
+            </div>
+
+            {#if capabilities?.platform === 'windows'}
+              <div class="source-action-card source-folder-picker">
+                <div class="source-action-heading"><strong>Windows 音樂資料夾</strong><span>本機</span></div>
+                <p>使用 Windows 原生資料夾選擇器；取消時不會加入來源或開始同步。</p>
+                <button class="primary-button" type="button" onclick={() => void pickWindowsFolder()} disabled={!sourceSyncReady || isUpdatingSource}>
+                  {isUpdatingSource ? '處理中' : '選擇資料夾並同步'}
+                </button>
+              </div>
+            {:else if capabilities?.platform === 'android'}
+              <div class="source-action-card android-source-actions">
+                <div class="source-action-heading"><strong>共享音樂</strong><span>MediaStore</span></div>
+                <p>先授權讀取音樂，再選擇裝置提供的媒體儲存空間。</p>
+                <div class="source-action-row source-action-buttons">
+                  <button class="primary-button" type="button" onclick={() => void requestMediaStorePermission()} disabled={!sourceSyncReady || isUpdatingSource}>
+                    {mediaPermissionGranted ? '重新檢查授權' : '授權並讀取共享音樂'}
+                  </button>
+                  {#if mediaPermissionGranted}
+                    <button class="outline-button" type="button" onclick={() => void loadMediaStoreVolumes()} disabled={isLoadingVolumes || isUpdatingSource}>
+                      {isLoadingVolumes ? '載入中' : '重新載入儲存空間'}
+                    </button>
+                  {/if}
+                </div>
+                {#if mediaStoreVolumes.length > 0}
+                  <div class="media-volume-list" aria-label="MediaStore 儲存空間">
+                    {#each mediaStoreVolumes as volume (volume.volumeName)}
+                      <button class="volume-choice" type="button" onclick={() => void addMediaStoreVolume(volume)} disabled={isUpdatingSource}>
+                        <span>{volume.displayName}</span><small>加入並同步</small>
+                      </button>
+                    {/each}
+                  </div>
+                {:else if mediaPermissionGranted && !isLoadingVolumes}
+                  <p class="source-muted-note">目前沒有可用的共享媒體儲存空間。</p>
+                {/if}
+              </div>
+              <div class="source-action-card android-source-actions">
+                <div class="source-action-heading"><strong>選擇文件資料夾</strong><span>SAF</span></div>
+                <p>使用 Android 系統文件選擇器授權資料夾；URI 與授權留在原生端管理。</p>
+                <button class="outline-button" type="button" onclick={() => void pickSafSource()} disabled={!sourceSyncReady || isUpdatingSource}>
+                  {isUpdatingSource ? '處理中' : '選擇資料夾並同步'}
+                </button>
+              </div>
+            {:else}
+              <div class="source-action-card"><p>{showCapabilityDetail(capabilities?.sourceSync)}</p></div>
+            {/if}
+
+            {#if sourceError}
+              <div class="source-error-message" role="status">{sourceError}</div>
+            {/if}
+            {#if sourceSyncSummary}
+              <div class="source-result-message" role="status">{sourceSyncSummary}</div>
+            {/if}
+            <SyncErrorDetails results={sourceSyncResults} sources={sources} />
+
+            <div class="configured-sources" aria-live="polite">
+              <div class="configured-sources-heading"><strong>已加入的來源</strong><span>{sources.length}</span></div>
+              {#if isLoadingSources && sources.length === 0}
+                <p class="source-muted-note">正在讀取來源…</p>
+              {:else if sources.length === 0}
+                <p class="source-muted-note">尚未加入來源。加入後會自動開始同步。</p>
+              {:else}
+                {#each sources as source (source.id)}
+                  <div class="configured-source">
+                    <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{sourceKindLabel(source.kind)}</small><small class="configured-source-location" title={source.location}>{source.location}</small></div>
+                    <div class="configured-source-state"><span>{source.enabled ? sourceStateLabel(source.syncState) : '已停用'}</span>{#if source.enabled && source.errorCount > 0}<small>{source.errorCount} 個項目需要留意</small>{/if}</div>
+                    <div class="configured-source-actions">
+                      <label><input type="checkbox" checked={source.enabled} disabled={isUpdatingSource} onchange={(event) => void setSourceEnabled(source, event.currentTarget.checked)} />啟用</label>
+                      <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeSource(source)}>移除</button>
+                    </div>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+                  <div class="settings-footnote"><span><IconCheck size={13} stroke={2} aria-hidden="true" />保留既有曲庫與人工資料</span><span><IconCheck size={13} stroke={2} aria-hidden="true" />來源暫時離線時不會當成刪除</span></div>
+                </section>
+              </div>
+            {/if}
+{/snippet}
 
 <div
   class="app-shell"
@@ -1961,368 +2333,8 @@
             <div class="section-heading settings-heading">
               <div><p class="section-kicker">SETTINGS</p><h2 id="settings-heading">設定</h2></div>
             </div>
-            <div class="settings-tabs" role="tablist" aria-label="設定分類">
-              <button
-                id="appearance-tab"
-                class="settings-tab"
-                type="button"
-                role="tab"
-                aria-selected={settingsSection === 'appearance'}
-                aria-controls="appearance-panel"
-                onclick={() => (settingsSection = 'appearance')}
-              >外觀</button>
-              <button
-                id="track-columns-tab"
-                class="settings-tab"
-                type="button"
-                role="tab"
-                aria-selected={settingsSection === 'track-columns'}
-                aria-controls="track-columns-panel"
-                onclick={() => (settingsSection = 'track-columns')}
-              >曲目欄位</button>
-              <button
-                id="now-playing-tab"
-                class="settings-tab"
-                type="button"
-                role="tab"
-                aria-selected={settingsSection === 'now-playing'}
-                aria-controls="now-playing-layout-panel"
-                onclick={() => (settingsSection = 'now-playing')}
-              >正在播放</button>
-              <button
-                id="lyrics-tab"
-                class="settings-tab"
-                type="button"
-                role="tab"
-                aria-selected={settingsSection === 'lyrics'}
-                aria-controls="lyrics-panel"
-                onclick={() => (settingsSection = 'lyrics')}
-              >歌詞</button>
-              {#if capabilities?.platform === 'windows'}
-                <button
-                  id="playback-tab"
-                  class="settings-tab"
-                  type="button"
-                  role="tab"
-                  aria-selected={settingsSection === 'playback'}
-                  aria-controls="playback-panel"
-                  onclick={() => (settingsSection = 'playback')}
-                >輸出</button>
-              {/if}
-              <button
-                id="sources-tab"
-                class="settings-tab"
-                type="button"
-                role="tab"
-                aria-selected={settingsSection === 'sources'}
-                aria-controls="sources-panel"
-                onclick={() => (settingsSection = 'sources')}
-              >音樂來源</button>
-            </div>
 
-            {#if settingsRecoveryWarning}
-              <div class="source-error-message" role="status">
-                設定檔修復通知：{settingsRecoveryWarning}
-                {#if !settingsSourceRegistryAuthoritative}
-                  <p>為保留原有曲庫，來源同步已暫停。請重新登記全部音樂資料夾與播放清單檔案，再確認恢復同步。</p>
-                  <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void confirmSourceRegistry()}>我已確認來源清單，恢復同步</button>
-                {/if}
-              </div>
-            {/if}
-
-            {#if settingsSection === 'appearance'}
-              <div id="appearance-panel" class="settings-panel" role="tabpanel" aria-labelledby="appearance-tab" tabindex="0">
-                <div class="settings-panel-header">
-                  <div>
-                    <h3>顏色</h3>
-                    <p>自訂背景與主色。文字會依背景自動選擇黑色或白色，保持清楚對比。</p>
-                  </div>
-                  <button class="outline-button" type="button" onclick={resetThemePreferences}>恢復預設</button>
-                </div>
-                <div class="appearance-color-grid">
-                  <label class="theme-color-control">
-                    <input
-                      type="color"
-                      aria-label="背景色"
-                      value={themePreferences.backgroundHex}
-                      oninput={(event) => updateThemeColor('backgroundHex', event.currentTarget.value)}
-                      onchange={saveThemePreferencesNow}
-                    />
-                    <span class="theme-color-copy">
-                      <strong>背景色</strong>
-                      <code>{themePreferences.backgroundHex}</code>
-                    </span>
-                  </label>
-                  <label class="theme-color-control">
-                    <input
-                      type="color"
-                      aria-label="主色"
-                      value={themePreferences.accentHex}
-                      oninput={(event) => updateThemeColor('accentHex', event.currentTarget.value)}
-                      onchange={saveThemePreferencesNow}
-                    />
-                    <span class="theme-color-copy">
-                      <strong>主色</strong>
-                      <code>{themePreferences.accentHex}</code>
-                    </span>
-                  </label>
-                </div>
-                <div class="theme-preview" role="img" aria-label="顏色即時預覽">
-                  <div class="theme-preview-copy">
-                    <strong>外觀預覽</strong>
-                    <small>文字會自動調整對比</small>
-                  </div>
-                  <span class="theme-preview-chip">主色按鈕</span>
-                </div>
-                <p class="theme-save-status" class:error={themeSaveState === 'error'} role="status">{themeSaveMessage}</p>
-              </div>
-            {:else if settingsSection === 'track-columns'}
-              <div id="track-columns-panel" class="settings-panel" role="tabpanel" aria-labelledby="track-columns-tab" tabindex="0">
-                <div class="settings-panel-header">
-                  <div>
-                    <h3>曲庫與播放清單欄位</h3>
-                    <p>兩種列表共用欄位順序與顯示設定；序號與播放操作固定在兩側。</p>
-                  </div>
-                </div>
-                <ol class="track-column-settings" aria-label="曲目資訊欄位設定">
-                  {#each trackColumnPreferences as preference, index (preference.id)}
-                    {@const definition = TRACK_COLUMN_DEFINITIONS.find((column) => column.id === preference.id)!}
-                    <li class="track-column-setting-row">
-                      <label class="track-column-setting-label">
-                        <input
-                          type="checkbox"
-                          checked={preference.visible}
-                          aria-label={`顯示${definition.label}欄`}
-                          onchange={(event) => setTrackColumnVisible(preference.id, event.currentTarget.checked)}
-                        />
-                        <span>{definition.label}</span>
-                      </label>
-                      <div class="track-column-order-actions">
-                        <span aria-label={`第 ${index + 1} 欄`}>{index + 1}</span>
-                        <button type="button" aria-label={`${definition.label}欄上移`} title="上移欄位" disabled={index === 0} onclick={() => moveConfiguredTrackColumn(preference.id, 'up')}><IconArrowUp size={16} stroke={1.7} aria-hidden="true" /></button>
-                        <button type="button" aria-label={`${definition.label}欄下移`} title="下移欄位" disabled={index === trackColumnPreferences.length - 1} onclick={() => moveConfiguredTrackColumn(preference.id, 'down')}><IconArrowDown size={16} stroke={1.7} aria-hidden="true" /></button>
-                      </div>
-                    </li>
-                  {/each}
-                </ol>
-                <p class="settings-preference-status" class:error={trackColumnSettingsState === 'error'} role="status">
-                  {trackColumnSettingsError ?? (trackColumnSettingsState === 'loading' ? '正在讀取欄位設定…' : trackColumnSettingsState === 'saving' ? '正在保存欄位設定…' : trackColumnSettingsState === 'preview' ? '瀏覽器預覽不會保存欄位設定。' : '欄位設定已保存。')}
-                </p>
-              </div>
-            {:else if settingsSection === 'playback'}
-              {@const outputStatus = describeOutputFormat(playback?.outputFormat)}
-              <div id="playback-panel" class="settings-panel" role="tabpanel" aria-labelledby="playback-tab" tabindex="0">
-                <div class="settings-panel-header">
-                  <div>
-                    <h3>取樣率轉換</h3>
-                    <p>曲目的取樣率與輸出裝置不同時的轉換方式。兩種方式都使用 Windows 共享模式輸出，並非 bit-perfect；取樣率相同時不做任何轉換。</p>
-                  </div>
-                </div>
-                <div class="resampling-options" role="radiogroup" aria-label="取樣率轉換方式">
-                  <label class="resampling-option">
-                    <input
-                      type="radio"
-                      name="resampling-mode"
-                      value="highQuality"
-                      checked={resamplingMode === 'highQuality'}
-                      disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
-                      onchange={() => setResamplingMode('highQuality')}
-                    />
-                    <span class="resampling-option-copy">
-                      <strong>高品質（預設）</strong>
-                      <small>輸出維持在裝置的混音取樣率，由 rubato 的 FFT 進行取樣率轉換（區塊大小 2048）。濾波範圍依來源與輸出取樣率自動調整；取樣率相同時直接輸出。切換不同取樣率的曲目時不必重新開啟輸出。</small>
-                    </span>
-                  </label>
-                  <label class="resampling-option">
-                    <input
-                      type="radio"
-                      name="resampling-mode"
-                      value="windowsBuiltin"
-                      checked={resamplingMode === 'windowsBuiltin'}
-                      disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
-                      onchange={() => setResamplingMode('windowsBuiltin')}
-                    />
-                    <span class="resampling-option-copy">
-                      <strong>Windows 內建</strong>
-                      <small>以曲目的取樣率開啟輸出，交由 Windows 音訊引擎轉換為裝置格式。前後曲目取樣率不同時需重新開啟輸出，換曲時可能短暫停頓；裝置無法以該取樣率開啟時會自動改用高品質轉換。</small>
-                    </span>
-                  </label>
-                </div>
-                <div class="resampling-status" role="status">
-                  <span>目前輸出</span>
-                  <strong>{outputStatus.text}</strong>
-                  {#if outputStatus.notice}
-                    <p title={playback?.outputFormat?.fallbackReason ?? undefined}>{outputStatus.notice}</p>
-                  {/if}
-                </div>
-                <p class="settings-preference-status" class:error={resamplingModeState === 'error'} role="status">
-                  {resamplingModeError ?? (resamplingModeState === 'loading' ? '正在讀取取樣率轉換設定…' : resamplingModeState === 'saving' ? '正在切換取樣率轉換方式…' : resamplingModeState === 'preview' ? '瀏覽器預覽不會保存取樣率轉換設定。' : '取樣率轉換設定已保存。')}
-                </p>
-                <div class="settings-panel-header">
-                  <div>
-                    <h3>DSEE HX</h3>
-                    <p>串流透過本機已安裝的 Sony Music Center 濾鏡處理。只在 48 kHz／16-bit 以下的雙聲道啟動。48 kHz 系列輸出 96 kHz／24-bit，44.1 kHz 系列輸出 176.4 kHz／24-bit，之後仍依目前的取樣率轉換接到輸出裝置。有損格式沒有來源位深，會以 16-bit PCM 送入。24-bit、更高取樣率或非雙聲道不處理。需要先安裝 Sony Music Center。播放器只載入 C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax，不會內含或散佈這個檔案。</p>
-                  </div>
-                </div>
-                <label class="resampling-option">
-                  <input
-                    type="checkbox"
-                    checked={dseeHx}
-                    disabled={dseeHxState === 'loading' || dseeHxState === 'saving'}
-                    onchange={(event) => setDseeHx(event.currentTarget.checked)}
-                  />
-                  <span class="resampling-option-copy">
-                    <strong>啟用 DSEE HX</strong>
-                    <small>關閉時維持原本的解碼與取樣率轉換。開啟後，符合格式的曲目才會進入濾鏡；濾鏡不存在或處理失敗時仍播放原解碼。</small>
-                  </span>
-                </label>
-                <p class="settings-preference-status" class:error={dseeHxState === 'error'} role="status">
-                  {dseeHxError ?? (dseeHxState === 'loading' ? '正在讀取 DSEE HX 設定…' : dseeHxState === 'saving' ? '正在套用 DSEE HX…' : dseeHxState === 'preview' ? '瀏覽器預覽不會保存 DSEE HX 設定。' : dseeHx ? 'DSEE HX 已開啟。' : 'DSEE HX 已關閉。')}
-                </p>
-              </div>
-            {:else if settingsSection === 'now-playing'}
-              <div id="now-playing-layout-panel" class="settings-panel" role="tabpanel" aria-labelledby="now-playing-tab" tabindex="0">
-                <div class="settings-panel-header">
-                  <div>
-                    <h3>正在播放排列</h3>
-                    <p>只調整封面與歌詞區域的排列，不會重新載入播放或歌詞狀態。窄視窗會依選項順序堆疊。</p>
-                  </div>
-                </div>
-                <NowPlayingQuickSettingsControls
-                  groups="playback"
-                  layout={nowPlayingLayout}
-                  appearance={nowPlayingAppearancePreferences}
-                  lyrics={lyricsPreferences}
-                  appearanceState={nowPlayingAppearanceState}
-                  appearanceError={nowPlayingAppearanceError}
-                  lyricsState={lyricsPreferencesState}
-                  lyricsError={lyricsPreferencesError}
-                  layoutState={nowPlayingLayoutState}
-                  layoutError={nowPlayingLayoutError}
-                  onLayoutChange={setNowPlayingLayout}
-                  onAppearanceChange={updateNowPlayingAppearancePreferences}
-                  onLyricsChange={updateLyricsPreferences}
-                  onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
-                />
-              </div>
-            {:else if settingsSection === 'lyrics'}
-              <div id="lyrics-panel" class="settings-panel" role="tabpanel" aria-labelledby="lyrics-tab" tabindex="0">
-                <div class="settings-panel-header">
-                  <div>
-                    <h3>歌詞顯示</h3>
-                    <p>設定會套用到所有歌曲；播放頁上方的「譯」「羅」按鈕也會更新同一組偏好。</p>
-                  </div>
-                </div>
-                <NowPlayingQuickSettingsControls
-                  groups="lyrics"
-                  layout={nowPlayingLayout}
-                  appearance={nowPlayingAppearancePreferences}
-                  lyrics={lyricsPreferences}
-                  appearanceState={nowPlayingAppearanceState}
-                  appearanceError={nowPlayingAppearanceError}
-                  lyricsState={lyricsPreferencesState}
-                  lyricsError={lyricsPreferencesError}
-                  layoutState={nowPlayingLayoutState}
-                  layoutError={nowPlayingLayoutError}
-                  onLayoutChange={setNowPlayingLayout}
-                  onAppearanceChange={updateNowPlayingAppearancePreferences}
-                  onLyricsChange={updateLyricsPreferences}
-                  onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
-                />
-              </div>
-            {:else}
-              <div id="sources-panel" class="settings-source-panel" role="tabpanel" aria-labelledby="sources-tab" tabindex="0">
-                <section class="settings-view" aria-labelledby="source-settings-heading">
-                  <div class="section-heading settings-heading">
-                    <div><p class="section-kicker">SOURCES</p><h2 id="source-settings-heading">管理音樂來源</h2></div>
-                    <button class="outline-button" type="button" onclick={() => void loadSources()} disabled={!sourceSyncReady || isLoadingSources}>
-                      {isLoadingSources ? '載入中' : '重新載入'}
-                    </button>
-                  </div>
-            <div class="source-status-card">
-              <div class="source-status-icon" aria-hidden="true">
-                <IconFolder size={24} stroke={1.6} aria-hidden="true" />
-              </div>
-              <div class="source-status-copy"><h3>本機音樂來源</h3><p>啟動時先顯示已保存曲目，再於背景掃描來源；只有完整掃描才會確認移除項目。</p></div>
-              <span class="status-pill" class:not-ready={!sourceSyncReady}>{capabilityLabel(capabilities?.sourceSync)}</span>
-            </div>
-
-            {#if capabilities?.platform === 'windows'}
-              <div class="source-action-card source-folder-picker">
-                <div class="source-action-heading"><strong>Windows 音樂資料夾</strong><span>本機</span></div>
-                <p>使用 Windows 原生資料夾選擇器；取消時不會加入來源或開始同步。</p>
-                <button class="primary-button" type="button" onclick={() => void pickWindowsFolder()} disabled={!sourceSyncReady || isUpdatingSource}>
-                  {isUpdatingSource ? '處理中' : '選擇資料夾並同步'}
-                </button>
-              </div>
-            {:else if capabilities?.platform === 'android'}
-              <div class="source-action-card android-source-actions">
-                <div class="source-action-heading"><strong>共享音樂</strong><span>MediaStore</span></div>
-                <p>先授權讀取音樂，再選擇裝置提供的媒體儲存空間。</p>
-                <div class="source-action-row source-action-buttons">
-                  <button class="primary-button" type="button" onclick={() => void requestMediaStorePermission()} disabled={!sourceSyncReady || isUpdatingSource}>
-                    {mediaPermissionGranted ? '重新檢查授權' : '授權並讀取共享音樂'}
-                  </button>
-                  {#if mediaPermissionGranted}
-                    <button class="outline-button" type="button" onclick={() => void loadMediaStoreVolumes()} disabled={isLoadingVolumes || isUpdatingSource}>
-                      {isLoadingVolumes ? '載入中' : '重新載入儲存空間'}
-                    </button>
-                  {/if}
-                </div>
-                {#if mediaStoreVolumes.length > 0}
-                  <div class="media-volume-list" aria-label="MediaStore 儲存空間">
-                    {#each mediaStoreVolumes as volume (volume.volumeName)}
-                      <button class="volume-choice" type="button" onclick={() => void addMediaStoreVolume(volume)} disabled={isUpdatingSource}>
-                        <span>{volume.displayName}</span><small>加入並同步</small>
-                      </button>
-                    {/each}
-                  </div>
-                {:else if mediaPermissionGranted && !isLoadingVolumes}
-                  <p class="source-muted-note">目前沒有可用的共享媒體儲存空間。</p>
-                {/if}
-              </div>
-              <div class="source-action-card android-source-actions">
-                <div class="source-action-heading"><strong>選擇文件資料夾</strong><span>SAF</span></div>
-                <p>使用 Android 系統文件選擇器授權資料夾；URI 與授權留在原生端管理。</p>
-                <button class="outline-button" type="button" onclick={() => void pickSafSource()} disabled={!sourceSyncReady || isUpdatingSource}>
-                  {isUpdatingSource ? '處理中' : '選擇資料夾並同步'}
-                </button>
-              </div>
-            {:else}
-              <div class="source-action-card"><p>{showCapabilityDetail(capabilities?.sourceSync)}</p></div>
-            {/if}
-
-            {#if sourceError}
-              <div class="source-error-message" role="status">{sourceError}</div>
-            {/if}
-            {#if sourceSyncSummary}
-              <div class="source-result-message" role="status">{sourceSyncSummary}</div>
-            {/if}
-            <SyncErrorDetails results={sourceSyncResults} sources={sources} />
-
-            <div class="configured-sources" aria-live="polite">
-              <div class="configured-sources-heading"><strong>已加入的來源</strong><span>{sources.length}</span></div>
-              {#if isLoadingSources && sources.length === 0}
-                <p class="source-muted-note">正在讀取來源…</p>
-              {:else if sources.length === 0}
-                <p class="source-muted-note">尚未加入來源。加入後會自動開始同步。</p>
-              {:else}
-                {#each sources as source (source.id)}
-                  <div class="configured-source">
-                    <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{sourceKindLabel(source.kind)}</small><small class="configured-source-location" title={source.location}>{source.location}</small></div>
-                    <div class="configured-source-state"><span>{source.enabled ? sourceStateLabel(source.syncState) : '已停用'}</span>{#if source.enabled && source.errorCount > 0}<small>{source.errorCount} 個項目需要留意</small>{/if}</div>
-                    <div class="configured-source-actions">
-                      <label><input type="checkbox" checked={source.enabled} disabled={isUpdatingSource} onchange={(event) => void setSourceEnabled(source, event.currentTarget.checked)} />啟用</label>
-                      <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeSource(source)}>移除</button>
-                    </div>
-                  </div>
-                {/each}
-              {/if}
-            </div>
-                  <div class="settings-footnote"><span><IconCheck size={13} stroke={2} aria-hidden="true" />保留既有曲庫與人工資料</span><span><IconCheck size={13} stroke={2} aria-hidden="true" />來源暫時離線時不會當成刪除</span></div>
-                </section>
-              </div>
-            {/if}
+          {@render settingsPanels('')}
           </section>
         {/if}
       </div>
@@ -2454,31 +2466,14 @@
           aria-modal="true"
           aria-labelledby="now-playing-quick-settings-title"
           data-testid="now-playing-quick-settings"
+          style:--quick-settings-opacity={`${themePreferences.quickSettingsOpacityPercent}%`}
         >
           <header class="quick-settings-drawer-header">
             <h2 id="now-playing-quick-settings-title">快速設定</h2>
             <button bind:this={quickSettingsCloseButton} class="outline-button icon-button" type="button" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}><IconX size={18} stroke={1.8} aria-hidden="true" /></button>
           </header>
-          <nav class="quick-settings-nav" aria-label="快速設定區域">
-            <button type="button" onclick={() => scrollQuickSettingsSection('quick-settings-playback-heading')}>播放頁</button>
-            <button type="button" onclick={() => scrollQuickSettingsSection('quick-settings-lyrics-heading')}>歌詞外觀</button>
-          </nav>
           <div class="quick-settings-drawer-scroll">
-            <NowPlayingQuickSettingsControls
-              layout={nowPlayingLayout}
-              appearance={nowPlayingAppearancePreferences}
-              lyrics={lyricsPreferences}
-              appearanceState={nowPlayingAppearanceState}
-              appearanceError={nowPlayingAppearanceError}
-              lyricsState={lyricsPreferencesState}
-              lyricsError={lyricsPreferencesError}
-              layoutState={nowPlayingLayoutState}
-              layoutError={nowPlayingLayoutError}
-              onLayoutChange={setNowPlayingLayout}
-              onAppearanceChange={updateNowPlayingAppearancePreferences}
-              onLyricsChange={updateLyricsPreferences}
-              onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
-            />
+            {@render settingsPanels('quick-')}
           </div>
         </dialog>
       {/if}

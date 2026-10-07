@@ -22,6 +22,7 @@ export interface RuntimeCapabilities {
 export interface ThemePreferences {
   backgroundHex: string;
   accentHex: string;
+  quickSettingsOpacityPercent: number;
 }
 
 export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount';

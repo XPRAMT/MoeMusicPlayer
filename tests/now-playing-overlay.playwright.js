@@ -220,15 +220,24 @@ async page => {
   await page.getByRole('button', { name: '開啟快速設定' }).click();
   const quickSettings = page.getByRole('dialog', { name: '快速設定' });
   await quickSettings.waitFor({ state: 'visible' });
-  for (const label of ['封面背景模糊程度', '封面背景亮度', '非目前歌詞透明度', '原文字級', '譯文與羅馬拼音字級', '歌詞句間距']) {
-    assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
-  }
   assert.equal(await page.locator('.now-playing-topbar-tools .lyrics-topbar-status span').count(), 2, 'provider and sync labels are shown in the page toolbar');
   assert.equal(await page.locator('.now-playing-overlay .lyrics-panel-heading').count(), 0, 'LyricsView has no heading');
   await page.keyboard.press('Shift+Tab');
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '歌詞句間距', 'Shift+Tab stays inside the settings dialog');
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '封面背景亮度', 'Shift+Tab stays inside the settings dialog');
   await page.keyboard.press('Tab');
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '關閉快速設定', 'Tab wraps focus to the close button');
+  await quickSettings.getByRole('tab', { name: '正在播放' }).click();
+  for (const label of ['封面背景模糊程度', '封面背景亮度']) {
+    assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
+  }
+  await quickSettings.getByRole('tab', { name: '歌詞' }).click();
+  for (const label of ['非目前歌詞透明度', '原文字級', '譯文與羅馬拼音字級', '歌詞句間距']) {
+    assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
+  }
+  assert.equal(await quickSettings.getByRole('checkbox', { name: '簡體轉繁體' }).count(), 1, 'drawer exposes simplified-to-traditional');
+  await quickSettings.getByRole('tab', { name: '外觀' }).click();
+  assert.equal(await quickSettings.locator('input[aria-label="快速設定面板透明度"]').inputValue(), '70', 'drawer shares the appearance opacity control at 70%');
+  await quickSettings.getByRole('tab', { name: '正在播放' }).click();
   assert.equal(await page.locator('.now-playing-overlay-body').evaluate((element) => element.inert), true, 'quick settings modal makes the covered playback view inert');
   assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), true, 'modal drawer blocks dock controls while open');
   assert.equal(await quickSettings.locator('input[aria-label="元件底色透明度"]').count(), 0, 'surface transparency is not configurable');
@@ -257,7 +266,7 @@ async page => {
       cover: rect(document.querySelector('.cover-stage')),
       dock: rect(document.querySelector('.player-dock')),
       header: rect(document.querySelector('.quick-settings-drawer-header')),
-      nav: rect(document.querySelector('.quick-settings-nav')),
+      nav: rect(document.querySelector('.now-playing-quick-settings-drawer .settings-tabs')),
       close: rect(document.querySelector('.quick-settings-drawer-header button')),
       drawer: rect(drawer),
       scrim: rect(scrim),
@@ -304,11 +313,14 @@ async page => {
       cover: rect(document.querySelector('.cover-stage')),
       dock: rect(document.querySelector('.player-dock')),
       header: rect(document.querySelector('.quick-settings-drawer-header')),
-      nav: rect(document.querySelector('.quick-settings-nav')),
+      nav: rect(document.querySelector('.now-playing-quick-settings-drawer .settings-tabs')),
       close: rect(document.querySelector('.quick-settings-drawer-header button')),
       drawer: rect(drawer),
       drawerScroll: rect(scroller),
-      lyricsHeading: rect(document.querySelector('#quick-settings-lyrics-heading')),
+      lyricsHeading: (() => {
+        const heading = document.querySelector('#quick-settings-lyrics-heading');
+        return heading ? rect(heading) : null;
+      })(),
     };
   });
   const assertOnlyDrawerMoved = (before, after, label) => {
@@ -326,13 +338,12 @@ async page => {
     await page.setViewportSize(viewport);
     await page.waitForTimeout(60);
     const beforeNavigation = await captureDrawerScrollState();
-    await quickSettings.getByRole('button', { name: '歌詞外觀', exact: true }).click();
+    await quickSettings.getByRole('tab', { name: '歌詞', exact: true }).click();
     await page.waitForTimeout(320);
     const afterNavigation = await captureDrawerScrollState();
     assertOnlyDrawerMoved(beforeNavigation, afterNavigation, `${viewport.width}x${viewport.height} navigation`);
     if (viewport.height <= 800) {
       assert.ok(afterNavigation.ownMaxScroll > 0, `${viewport.width}x${viewport.height}: drawer contents need an independent scroll range`);
-      assert.ok(afterNavigation.ownScroll > beforeNavigation.ownScroll, `${viewport.width}x${viewport.height}: section navigation scrolls only the drawer contents`);
     }
     assert.ok(afterNavigation.lyricsHeading.y >= afterNavigation.drawerScroll.y - 1, `${viewport.width}x${viewport.height}: lyrics settings remain in their own scroll viewport`);
     assert.ok(afterNavigation.lyricsHeading.y < afterNavigation.drawerScroll.y + afterNavigation.drawerScroll.height, `${viewport.width}x${viewport.height}: lyrics section is reachable`);
@@ -354,7 +365,7 @@ async page => {
     assertOnlyDrawerMoved(afterWheel, afterOverscroll, `${viewport.width}x${viewport.height} bottom overscroll`);
     assert.ok(afterOverscroll.ownScroll === afterOverscroll.ownMaxScroll || afterOverscroll.ownMaxScroll === 0, `${viewport.width}x${viewport.height}: overscroll does not chain to the playback page`);
 
-    await quickSettings.getByRole('button', { name: '播放頁', exact: true }).click();
+    await quickSettings.getByRole('tab', { name: '正在播放', exact: true }).click();
     await page.waitForTimeout(320);
     const afterReturnNavigation = await captureDrawerScrollState();
     assertOnlyDrawerMoved(afterOverscroll, afterReturnNavigation, `${viewport.width}x${viewport.height} return navigation`);

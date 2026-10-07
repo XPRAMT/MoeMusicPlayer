@@ -85,6 +85,12 @@ const SOURCE_SYNC_ERROR_DETAILS_LIMIT: usize = 100;
 struct ThemePreferencesDto {
     background_hex: String,
     accent_hex: String,
+    #[serde(default = "default_quick_settings_opacity_percent")]
+    quick_settings_opacity_percent: u8,
+}
+
+fn default_quick_settings_opacity_percent() -> u8 {
+    70
 }
 
 impl From<ThemePreferences> for ThemePreferencesDto {
@@ -92,6 +98,7 @@ impl From<ThemePreferences> for ThemePreferencesDto {
         Self {
             background_hex: preferences.background_hex,
             accent_hex: preferences.accent_hex,
+            quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
         }
     }
 }
@@ -110,6 +117,7 @@ impl From<ThemeSettings> for ThemePreferencesDto {
         Self {
             background_hex: preferences.background_hex,
             accent_hex: preferences.accent_hex,
+            quick_settings_opacity_percent: preferences.quick_settings_opacity_percent,
         }
     }
 }
@@ -2795,6 +2803,7 @@ fn theme_set_preferences(
     let preferences = ThemeSettings {
         background_hex: preferences.background_hex,
         accent_hex: preferences.accent_hex,
+        quick_settings_opacity_percent: preferences.quick_settings_opacity_percent,
     };
     state
         .settings

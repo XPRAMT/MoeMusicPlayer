@@ -510,7 +510,7 @@ input:focus-visible {
   overflow: hidden;
   border: 0;
   border-left: 1px solid var(--line-strong);
-  background: color-mix(in srgb, var(--page) 94%, transparent);
+  background: color-mix(in srgb, var(--page) var(--quick-settings-opacity, 70%), transparent);
   box-sizing: border-box;
 }
 
@@ -532,6 +532,10 @@ input:focus-visible {
 .quick-settings-nav button:hover { border-color: var(--accent); color: var(--accent-text); }
 
 .quick-settings-drawer-scroll { min-height: 0; flex: 1 1 0; overflow: auto; overscroll-behavior: contain; padding: 16px 20px 26px; }
+.now-playing-quick-settings-drawer .settings-panel,
+.now-playing-quick-settings-drawer .settings-tab {
+  background: color-mix(in srgb, var(--panel) var(--quick-settings-opacity, 70%), transparent);
+}
 .quick-settings-controls { display: grid; gap: 24px; }
 .quick-settings-group { display: grid; min-width: 0; gap: 12px; scroll-margin-top: 12px; }
 .quick-settings-group h3 { margin: 0; color: var(--text); font-size: 14px; }

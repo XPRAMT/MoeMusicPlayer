@@ -13,6 +13,7 @@ test('default appearance uses pure black and a water-blue accent', () => {
   assert.deepEqual(DEFAULT_THEME_PREFERENCES, {
     backgroundHex: '#000000',
     accentHex: '#55D9FF',
+    quickSettingsOpacityPercent: 70,
   });
 });
 
@@ -85,5 +86,8 @@ test('invalid persisted values fall back to safe defaults', () => {
   assert.deepEqual(normalizeThemePreferences({ backgroundHex: 'red', accentHex: '#fff' }), {
     backgroundHex: '#000000',
     accentHex: '#55D9FF',
+    quickSettingsOpacityPercent: 70,
   });
+  assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: 140 }).quickSettingsOpacityPercent, 100);
+  assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: -4 }).quickSettingsOpacityPercent, 0);
 });

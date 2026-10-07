@@ -28,6 +28,12 @@ pub enum RepeatMode {
 pub struct ThemeSettings {
     pub background_hex: String,
     pub accent_hex: String,
+    #[serde(default = "default_quick_settings_opacity_percent")]
+    pub quick_settings_opacity_percent: u8,
+}
+
+fn default_quick_settings_opacity_percent() -> u8 {
+    70
 }
 
 impl Default for ThemeSettings {
@@ -35,6 +41,7 @@ impl Default for ThemeSettings {
         Self {
             background_hex: "#000000".to_owned(),
             accent_hex: "#55D9FF".to_owned(),
+            quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
         }
     }
 }
@@ -588,6 +595,7 @@ impl AppSettings {
             theme: ThemeSettings {
                 background_hex: theme.background_hex,
                 accent_hex: theme.accent_hex,
+                quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
             },
             ..Self::default()
         };
@@ -605,6 +613,11 @@ impl AppSettings {
         }
         validate_color(&self.theme.background_hex, "backgroundHex")?;
         validate_color(&self.theme.accent_hex, "accentHex")?;
+        if self.theme.quick_settings_opacity_percent > 100 {
+            return Err(SettingsError::InvalidData(
+                "quickSettingsOpacityPercent must be between 0 and 100".into(),
+            ));
+        }
         self.lyrics_preferences.validate()?;
         self.now_playing_appearance_preferences.validate()?;
         self.track_list_columns.validate()?;
@@ -1675,6 +1688,7 @@ mod tests {
             theme: ThemeSettings {
                 background_hex: "#123456".into(),
                 accent_hex: "#ABCDEF".into(),
+                quick_settings_opacity_percent: 70,
             },
             sources: vec![source.clone()],
             shuffle: true,
