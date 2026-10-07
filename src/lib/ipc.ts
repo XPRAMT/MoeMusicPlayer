@@ -295,6 +295,14 @@ export interface LyricsCandidate {
 
 export type LyricsResultStatus = 'ready' | 'empty' | 'candidates' | 'error';
 
+export type ShortcutAction = 'fullscreen' | 'playPause' | 'seekBack' | 'seekForward' | 'previous' | 'next';
+export type ShortcutDevice = 'keyboard' | 'mouse';
+export interface ShortcutBinding {
+  device: ShortcutDevice;
+  code: string;
+}
+export type ShortcutSettings = Record<ShortcutAction, ShortcutBinding[]>;
+
 export interface LyricsTrackResult {
   lyrics: TrackLyrics | null;
   candidates: LyricsCandidate[];
@@ -373,6 +381,14 @@ interface IpcContract {
   settings_set_dsee_hx: {
     args: { enabled: boolean };
     result: boolean;
+  };
+  settings_get_shortcuts: {
+    args: Record<string, never>;
+    result: ShortcutSettings;
+  };
+  settings_set_shortcuts: {
+    args: { shortcuts: ShortcutSettings };
+    result: ShortcutSettings;
   };
   settings_get_lyrics_preferences: {
     args: Record<string, never>;
@@ -500,6 +516,10 @@ interface IpcContract {
   };
   lyrics_search: {
     args: { trackId: string; requestId: string; manual?: boolean; query?: string };
+    result: LyricsTrackResult;
+  };
+  lyrics_load_more: {
+    args: { trackId: string };
     result: LyricsTrackResult;
   };
   lyrics_select_candidate: {

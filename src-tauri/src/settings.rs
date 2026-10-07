@@ -537,6 +537,105 @@ pub fn clamp_window_geometry_to_monitors(
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShortcutDevice {
+    Keyboard,
+    Mouse,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutBinding {
+    pub device: ShortcutDevice,
+    pub code: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutSettings {
+    pub fullscreen: Vec<ShortcutBinding>,
+    pub play_pause: Vec<ShortcutBinding>,
+    pub seek_back: Vec<ShortcutBinding>,
+    pub seek_forward: Vec<ShortcutBinding>,
+    pub previous: Vec<ShortcutBinding>,
+    pub next: Vec<ShortcutBinding>,
+}
+
+fn keyboard_binding(code: &str) -> ShortcutBinding {
+    ShortcutBinding {
+        device: ShortcutDevice::Keyboard,
+        code: code.to_owned(),
+    }
+}
+
+fn mouse_binding(code: &str) -> ShortcutBinding {
+    ShortcutBinding {
+        device: ShortcutDevice::Mouse,
+        code: code.to_owned(),
+    }
+}
+
+impl Default for ShortcutSettings {
+    fn default() -> Self {
+        Self {
+            fullscreen: vec![keyboard_binding("F11")],
+            play_pause: vec![keyboard_binding("Space")],
+            seek_back: vec![keyboard_binding("ArrowLeft"), mouse_binding("wheelUp")],
+            seek_forward: vec![keyboard_binding("ArrowRight"), mouse_binding("wheelDown")],
+            previous: vec![keyboard_binding("PageUp"), mouse_binding("back")],
+            next: vec![keyboard_binding("PageDown"), mouse_binding("forward")],
+        }
+    }
+}
+
+impl ShortcutSettings {
+    fn validate(&self) -> Result<(), SettingsError> {
+        for bindings in [
+            &self.fullscreen,
+            &self.play_pause,
+            &self.seek_back,
+            &self.seek_forward,
+            &self.previous,
+            &self.next,
+        ] {
+            if bindings.len() > 4 {
+                return Err(SettingsError::InvalidData(
+                    "each shortcut action accepts at most 4 bindings".into(),
+                ));
+            }
+            for binding in bindings {
+                let ok = match binding.device {
+                    ShortcutDevice::Keyboard => {
+                        !binding.code.is_empty()
+                            && binding.code.len() <= 32
+                            && binding.code.chars().all(|ch| ch.is_ascii_alphanumeric())
+                    }
+                    ShortcutDevice::Mouse => {
+                        matches!(
+                            binding.code.as_str(),
+                            "wheelUp" | "wheelDown" | "back" | "forward"
+                        )
+                    }
+                };
+                if !ok {
+                    return Err(SettingsError::InvalidData(
+                        "shortcut binding is not a supported key or mouse control".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn lenient_shortcuts(value: Option<serde_json::Value>) -> ShortcutSettings {
+    value
+        .and_then(|value| serde_json::from_value::<ShortcutSettings>(value).ok())
+        .filter(|shortcuts| shortcuts.validate().is_ok())
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -561,6 +660,9 @@ pub struct AppSettings {
     /// Last main-window outer position / inner size / maximized flag (desktop).
     #[serde(default)]
     pub window_geometry: Option<WindowGeometry>,
+    /// Keyboard and mouse bindings. Missing values keep the player defaults.
+    #[serde(default)]
+    pub shortcuts: ShortcutSettings,
 }
 
 impl Default for AppSettings {
@@ -579,6 +681,7 @@ impl Default for AppSettings {
             source_registry_authoritative: true,
             sources: Vec::new(),
             window_geometry: None,
+            shortcuts: ShortcutSettings::default(),
         }
     }
 }
@@ -618,6 +721,7 @@ impl AppSettings {
         self.lyrics_preferences.validate()?;
         self.now_playing_appearance_preferences.validate()?;
         self.track_list_columns.validate()?;
+        self.shortcuts.validate()?;
         let mut ids = std::collections::HashSet::new();
         for source in &self.sources {
             if !ids.insert(source.id) {
@@ -895,6 +999,7 @@ struct RawSettings {
     source_registry_authoritative: Option<bool>,
     sources: Option<Vec<SourceEntry>>,
     window_geometry: Option<WindowGeometry>,
+    shortcuts: Option<serde_json::Value>,
 }
 
 fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
@@ -921,6 +1026,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         source_registry_authoritative: raw.source_registry_authoritative.unwrap_or(true),
         sources: raw.sources.unwrap_or_default(),
         window_geometry: raw.window_geometry,
+        shortcuts: lenient_shortcuts(raw.shortcuts),
     };
     settings.validate()?;
     Ok((settings, version != SETTINGS_SCHEMA_VERSION))

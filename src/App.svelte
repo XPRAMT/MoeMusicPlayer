@@ -82,6 +82,18 @@
     withLivePlayedMs,
   } from './lib/live-play-count.js';
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
+  import {
+    SHORTCUT_ACTIONS,
+    addShortcutBinding,
+    defaultShortcutSettings,
+    normalizeShortcutSettings,
+    removeShortcutBinding,
+    shortcutActionFor,
+    shortcutBindingLabel,
+    shortcutTargetIsEditable,
+    shortcutTargetIsScrollable,
+  } from './lib/shortcuts.js';
+  import type { ShortcutAction, ShortcutBinding, ShortcutSettings } from './lib/ipc';
   import TrackList from './lib/TrackList.svelte';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
@@ -116,7 +128,7 @@
   };
 
   type View = 'library' | 'playlists' | 'queue' | 'settings';
-  type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'playback' | 'sources';
+  type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'playback' | 'shortcuts' | 'sources';
   type SyncProgressViewState = {
     runId: string;
     sourceCount: number;
@@ -147,6 +159,8 @@
   let dockArtworkButton = $state<HTMLButtonElement | undefined>(undefined);
   let librarySearchInput = $state<HTMLInputElement | undefined>(undefined);
   let settingsSection = $state<SettingsSection>('appearance');
+  let shortcutSettings = $state<ShortcutSettings>(defaultShortcutSettings());
+  let capturingShortcut = $state<ShortcutAction | null>(null);
   let trackColumnPreferences = $state<TrackListColumnPreference[]>(
     normalizeTrackColumnPreferences(DEFAULT_TRACK_COLUMN_PREFERENCES),
   );
@@ -403,6 +417,9 @@
       applyAndroidInsets((event as CustomEvent<AndroidWindowInsets>).detail);
     };
     window.addEventListener('moe:android-insets', handleAndroidInsets);
+    window.addEventListener('keydown', handleShortcutKeydown, true);
+    window.addEventListener('mousedown', handleShortcutMouseDown, true);
+    window.addEventListener('wheel', handleShortcutWheel, { capture: true, passive: false });
     applyAndroidInsets();
     if (isTauri()) {
       playbackPollTimer = setInterval(() => {
@@ -461,6 +478,7 @@
         loadNowPlayingLayout(),
         loadResamplingMode(),
         loadDseeHx(),
+        loadShortcutSettings(),
         loadNowPlayingAppearancePreferences(),
         loadLyricsPreferences(),
       ]);
@@ -491,6 +509,9 @@
     unlistenSyncProgress?.();
     unlistenSyncFinished?.();
     playlistListRequestVersion += 1;
+    window.removeEventListener('keydown', handleShortcutKeydown, true);
+    window.removeEventListener('mousedown', handleShortcutMouseDown, true);
+    window.removeEventListener('wheel', handleShortcutWheel, true);
   });
 
   async function loadThemePreferences(): Promise<void> {
@@ -659,6 +680,118 @@
       dseeHxState = 'error';
       dseeHxError = `無法讀取 DSEE HX 設定：${getErrorText(error)}`;
     }
+  }
+
+  async function loadShortcutSettings(): Promise<void> {
+    if (!isTauri()) {
+      shortcutSettings = defaultShortcutSettings();
+      return;
+    }
+    try {
+      shortcutSettings = normalizeShortcutSettings(await invokeCommand('settings_get_shortcuts', {}));
+    } catch {
+      shortcutSettings = defaultShortcutSettings();
+    }
+  }
+
+  async function saveShortcutSettings(next: ShortcutSettings): Promise<void> {
+    shortcutSettings = next;
+    if (!isTauri()) return;
+    try {
+      shortcutSettings = normalizeShortcutSettings(await invokeCommand('settings_set_shortcuts', { shortcuts: next }));
+    } catch {
+      /* keep the local bindings if the save fails */
+    }
+  }
+
+  function beginShortcutCapture(action: ShortcutAction): void {
+    capturingShortcut = action;
+  }
+
+  function recordShortcutBinding(binding: ShortcutBinding): void {
+    if (!capturingShortcut) return;
+    const action = capturingShortcut;
+    capturingShortcut = null;
+    void saveShortcutSettings(addShortcutBinding(shortcutSettings, action, binding));
+  }
+
+  function deleteShortcutBinding(action: ShortcutAction, binding: ShortcutBinding): void {
+    void saveShortcutSettings(removeShortcutBinding(shortcutSettings, action, binding));
+  }
+
+  function runShortcut(action: ShortcutAction): void {
+    if (action === 'fullscreen') {
+      window.dispatchEvent(new Event('moemusicplayer-toggle-fullscreen'));
+      return;
+    }
+    if (action === 'playPause') {
+      void togglePlayback();
+      return;
+    }
+    if (action === 'previous') {
+      void controlPlayback('playback_previous');
+      return;
+    }
+    if (action === 'next') {
+      void controlPlayback('playback_next');
+      return;
+    }
+    const delta = action === 'seekBack' ? -5_000 : 5_000;
+    const duration = playback?.durationMs;
+    const next = Math.max(0, (playback?.positionMs ?? 0) + delta);
+    void commitPlaybackSeek(duration == null ? next : Math.min(next, duration));
+  }
+
+  function shortcutEventShouldRun(target: EventTarget | null): boolean {
+    return !shortcutTargetIsEditable(target) && !(target instanceof Element && target.closest('button, a, [role="slider"]'));
+  }
+
+  function handleShortcutKeydown(event: KeyboardEvent): void {
+    if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
+    if (capturingShortcut) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.code === 'Escape') {
+        capturingShortcut = null;
+        return;
+      }
+      recordShortcutBinding({ device: 'keyboard', code: event.code });
+      return;
+    }
+    if (!shortcutEventShouldRun(event.target)) return;
+    const action = shortcutActionFor(shortcutSettings, 'keyboard', event.code);
+    if (!action) return;
+    event.preventDefault();
+    runShortcut(action);
+  }
+
+  function handleShortcutMouseDown(event: MouseEvent): void {
+    const code = event.button === 3 ? 'back' : event.button === 4 ? 'forward' : null;
+    if (!code) return;
+    if (capturingShortcut) {
+      event.preventDefault();
+      recordShortcutBinding({ device: 'mouse', code });
+      return;
+    }
+    const action = shortcutActionFor(shortcutSettings, 'mouse', code);
+    if (!action) return;
+    event.preventDefault();
+    runShortcut(action);
+  }
+
+  function handleShortcutWheel(event: WheelEvent): void {
+    if (event.deltaY === 0) return;
+    const code = event.deltaY < 0 ? 'wheelUp' : 'wheelDown';
+    if (capturingShortcut) {
+      event.preventDefault();
+      recordShortcutBinding({ device: 'mouse', code });
+      return;
+    }
+    if (shortcutTargetIsEditable(event.target) || shortcutTargetIsScrollable(event.target)) return;
+    const action = shortcutActionFor(shortcutSettings, 'mouse', code);
+    if (!action) return;
+    event.preventDefault();
+    runShortcut(action);
   }
 
   function setDseeHx(enabled: boolean): void {
@@ -1659,6 +1792,15 @@
                 >輸出</button>
               {/if}
               <button
+                id="{scope}shortcuts-tab"
+                class="settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'shortcuts'}
+                aria-controls="{scope}shortcuts-panel"
+                onclick={() => (settingsSection = 'shortcuts')}
+              >快捷鍵</button>
+              <button
                 id="{scope}sources-tab"
                 class="settings-tab"
                 type="button"
@@ -1882,6 +2024,36 @@
                   onLyricsChange={updateLyricsPreferences}
                   onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
                 />
+              </div>
+            {:else if settingsSection === 'shortcuts'}
+              <div id="{scope}shortcuts-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}shortcuts-tab" tabindex="0">
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>快捷鍵</h3>
+                    <p>可綁定鍵盤、滑鼠滾輪與滑鼠側鍵。點「新增」後按下要使用的操作，Esc 取消。輸入文字時不會觸發。</p>
+                  </div>
+                </div>
+                {#if capturingShortcut}
+                  <p class="settings-preference-status" role="status">正在設定「{SHORTCUT_ACTIONS.find((action) => action.id === capturingShortcut)?.label}」。請按下按鍵、滾動滾輪或按滑鼠側鍵。</p>
+                {/if}
+                <div class="shortcut-list">
+                  {#each SHORTCUT_ACTIONS as action (action.id)}
+                    <div class="shortcut-row">
+                      <strong>{action.label}</strong>
+                      <div class="shortcut-bindings">
+                        {#each shortcutSettings[action.id] as binding (`${binding.device}:${binding.code}`)}
+                          <button class="shortcut-chip" type="button" aria-label={`移除${action.label}的${shortcutBindingLabel(binding)}`} onclick={() => deleteShortcutBinding(action.id, binding)}>
+                            {shortcutBindingLabel(binding)}
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        {:else}
+                          <span class="shortcut-empty">未綁定</span>
+                        {/each}
+                      </div>
+                      <button class="outline-button" type="button" onclick={() => beginShortcutCapture(action.id)}>新增</button>
+                    </div>
+                  {/each}
+                </div>
               </div>
             {:else}
               <div id="{scope}sources-panel" class="settings-source-panel" role="tabpanel" aria-labelledby="{scope}sources-tab" tabindex="0">

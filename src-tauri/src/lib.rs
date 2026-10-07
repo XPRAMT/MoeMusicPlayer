@@ -2958,6 +2958,32 @@ async fn settings_set_resampling_mode(
 }
 
 #[tauri::command]
+fn settings_get_shortcuts(
+    state: State<'_, AppState>,
+) -> Result<crate::settings::ShortcutSettings, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.shortcuts)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_set_shortcuts(
+    state: State<'_, AppState>,
+    shortcuts: crate::settings::ShortcutSettings,
+) -> Result<crate::settings::ShortcutSettings, String> {
+    state
+        .settings
+        .update(|settings| {
+            settings.shortcuts = shortcuts;
+            Ok(())
+        })
+        .map(|settings| settings.shortcuts)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn settings_get_dsee_hx(state: State<'_, AppState>) -> Result<bool, String> {
     state
         .settings
@@ -5691,6 +5717,8 @@ pub fn run() {
             settings_set_resampling_mode,
             settings_get_dsee_hx,
             settings_set_dsee_hx,
+            settings_get_shortcuts,
+            settings_set_shortcuts,
             get_runtime_capabilities,
             library_get_page,
             playlist_list,

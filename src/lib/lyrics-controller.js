@@ -227,9 +227,6 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       await loadTrack(trackId, generation);
     },
 
-    /**
-     * @param {{ query?: string }} [options]
-     */
     async loadMore() {
       if (disposed || !activeTrackId || !state.hasMore || state.isLoadingMore) return;
       if (typeof api.loadMore !== 'function') return;
@@ -262,6 +259,9 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       }
     },
 
+    /**
+     * @param {{ query?: string }} [options]
+     */
     async searchAgain(options = {}) {
       if (disposed || !activeTrackId) return;
       generation += 1;
@@ -407,6 +407,8 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
           selectionMode: false,
           failedStage: null,
           pickerClosed: true,
+          hasMore: false,
+          isLoadingMore: false,
         });
       } catch (error) {
         if (!isCurrent(trackId, requestGeneration)) return;
@@ -440,6 +442,8 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
  * selectingCandidateId: string | null,
  * selectionMode: boolean,
  * failedStage: 'load'|'search'|'selection'|null,
- * pickerClosed: boolean
+ * pickerClosed: boolean,
+ * hasMore: boolean,
+ * isLoadingMore: boolean
  * }} LyricsControllerState
  */

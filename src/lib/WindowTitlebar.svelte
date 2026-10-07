@@ -44,7 +44,12 @@
     }
   }
 
+  function onToggleFullscreenRequest(): void {
+    void toggleFullscreen();
+  }
+
   onMount(() => {
+    window.addEventListener('moemusicplayer-toggle-fullscreen', onToggleFullscreenRequest);
     void refreshWindowChromeState();
     if (!appWindow) return;
     void appWindow
@@ -60,6 +65,7 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener('moemusicplayer-toggle-fullscreen', onToggleFullscreenRequest);
     if (typeof unlistenResize === 'function') unlistenResize();
   });
 
