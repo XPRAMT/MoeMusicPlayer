@@ -89,15 +89,6 @@
     { listName: '曲庫', onChange: () => { snapshot = listData.snapshot(); } },
   );
 
-  let virtualRange = $state({ start: 0, end: TRACK_PAGE_SIZE });
-  let rangeLabel = $derived.by(() => {
-    if (snapshot.totalCount === null) return '正在載入曲庫…';
-    if (snapshot.totalCount === 0) return '0 首';
-    const first = virtualRange.start + 1;
-    const last = Math.min(virtualRange.end, snapshot.totalCount);
-    return `${first.toLocaleString()}–${last.toLocaleString()} 首，共 ${snapshot.totalCount.toLocaleString()} 首`;
-  });
-
   $effect(() => {
     const normalizedQuery = query.trim();
     const currentResetKey = resetKey;
@@ -124,7 +115,6 @@
   }
 
   function handleRange(range: { start: number; end: number }): void {
-    virtualRange = range;
     void listData.ensureRange(range.start, range.end);
   }
 
@@ -133,6 +123,7 @@
   }
 </script>
 
+<div class="track-list-shell">
 {#if snapshot.errors.length > 0}
   <div class="track-list-error" role="alert">
     <span>{getErrorText(snapshot.errors[0]?.message)}</span>
@@ -156,7 +147,7 @@
     shortDesktopRowHeight={49}
     headerHeight={37}
     compactHeaderHeight={33}
-    maxViewportHeight={680}
+    fillAvailable={true}
     listId="library-track"
     ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目"
     columnCount={listColumnCount}
@@ -190,14 +181,20 @@
     {/snippet}
   </PagedVirtualList>
 {/if}
-
-<div class="track-list-count" role="status" aria-live="polite">{rangeLabel}</div>
+</div>
 
 <style>
+  .track-list-shell {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+
   :global(.track-list-viewport) {
     position: relative;
     width: 100%;
-    max-height: min(65vh, 680px);
     overflow: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
@@ -221,8 +218,7 @@
   }
 
   .track-list-error,
-  .track-list-empty,
-  .track-list-count {
+  .track-list-empty {
     color: var(--muted);
     font-size: var(--font-body);
   }
@@ -247,12 +243,5 @@
   .track-list-empty {
     padding: 28px 16px;
     text-align: center;
-  }
-
-  .track-list-count {
-    min-height: 22px;
-    padding-top: 8px;
-    text-align: right;
-    font-variant-numeric: tabular-nums;
   }
 </style>

@@ -29,6 +29,7 @@
     fetchPage?: (request: { offset: number; limit: number }) => Promise<PlaybackQueuePage>;
     livePlayCount?: { trackId: string; playedMs: number } | null;
     onPlay?: (entry: PlaybackQueuePageItem) => void;
+    onTotalCount?: (count: number | null) => void;
   }
 
   let {
@@ -38,6 +39,7 @@
     fetchPage,
     livePlayCount = null,
     onPlay = () => {},
+    onTotalCount,
   }: Props = $props();
 
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
@@ -47,7 +49,6 @@
   let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns));
   let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
-  let visibleRange = $state({ start: 0, end: TRACK_PAGE_SIZE });
   let currentEntryPosition = $state<number | null>(null);
   let cursorError = $state<string | null>(null);
   let cursorProbeGeneration = 0;
@@ -75,12 +76,9 @@
     { listName: '播放佇列', onChange: () => { queueSnapshot = queue.snapshot(); } },
   );
   let snapshot = $derived(queueSnapshot);
-  let rangeLabel = $derived.by(() => {
-    if (snapshot.totalCount === null) return '正在載入播放佇列…';
-    if (snapshot.totalCount === 0) return '0 個項目';
-    const first = visibleRange.start + 1;
-    const last = Math.min(visibleRange.end, snapshot.totalCount);
-    return `${first.toLocaleString()}–${last.toLocaleString()} 項，共 ${snapshot.totalCount.toLocaleString()} 項`;
+
+  $effect(() => {
+    onTotalCount?.(snapshot.totalCount);
   });
 
   $effect(() => {
@@ -133,7 +131,6 @@
   }
 
   function handleRange(range: { start: number; end: number }): void {
-    visibleRange = range;
     void queue.ensureRange(range.start, range.end);
   }
 
@@ -152,6 +149,7 @@
   }
 </script>
 
+<div class="track-list-shell">
 {#if snapshot.errors.length > 0}
   <div class="track-list-error" role="alert">
     <span>{getErrorText(snapshot.errors[0]?.message)}</span>
@@ -181,7 +179,7 @@
     shortDesktopRowHeight={49}
     headerHeight={37}
     compactHeaderHeight={33}
-    maxViewportHeight={680}
+    fillAvailable={true}
     listId="playback-queue"
     ariaLabel="目前播放佇列；使用方向鍵瀏覽，按 Enter 播放目前項目"
     columnCount={listColumnCount}
@@ -218,10 +216,17 @@
     {/snippet}
   </PagedVirtualList>
 {/if}
-
-<div class="track-list-count" role="status" aria-live="polite">{rangeLabel}</div>
+</div>
 
 <style>
+  .track-list-shell {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+
   .queue-empty {
     margin: 12px 0;
   }

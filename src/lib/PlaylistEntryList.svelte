@@ -23,6 +23,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     playbackReady: boolean;
     isSendingPlaybackCommand: boolean;
     onPlay: (entry: PlaylistEntrySummary, playlistId: string) => void;
+    onTotalCount?: (count: number | null) => void;
     fetchPage?: (request: { playlistId: string; offset: number; limit: number }) => Promise<PlaylistPage>;
     columns?: TrackListColumnPreference[];
     livePlayCount?: { trackId: string; playedMs: number } | null;
@@ -35,6 +36,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     playbackReady,
     isSendingPlaybackCommand,
     onPlay,
+    onTotalCount,
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     livePlayCount = null,
@@ -60,22 +62,12 @@ import { withLivePlayedMs } from './live-play-count.js';
     generation: 0,
     revision: 0,
   });
-  let visibleRange = $state({ start: 0, end: TRACK_PAGE_SIZE });
-
   const entries = new PagedListController<PlaylistEntrySummary, string>(
     ({ scope, offset, limit }) => fetchPage
       ? fetchPage({ playlistId: scope, offset, limit })
       : invokeCommand('playlist_get_page', { playlistId: scope, offset, limit }),
     { listName: '播放清單', onChange: () => { snapshot = entries.snapshot(); } },
   );
-
-  let rangeLabel = $derived.by(() => {
-    if (snapshot.totalCount === null) return '正在載入項目…';
-    if (snapshot.totalCount === 0) return '0 個項目';
-    const first = visibleRange.start + 1;
-    const last = Math.min(visibleRange.end, snapshot.totalCount);
-    return `${first.toLocaleString()}–${last.toLocaleString()} 項，共 ${snapshot.totalCount.toLocaleString()} 項`;
-  });
 
   $effect(() => {
     const currentId = playlistId;
@@ -84,12 +76,15 @@ import { withLivePlayedMs } from './live-play-count.js';
     void entries.ensureRange(0, TRACK_PAGE_SIZE);
   });
 
+  $effect(() => {
+    onTotalCount?.(snapshot.totalCount);
+  });
+
   function itemAt(index: number): PlaylistEntrySummary | null {
     return entries.itemAt(index);
   }
 
   function handleRange(range: { start: number; end: number }): void {
-    visibleRange = range;
     void entries.ensureRange(range.start, range.end);
   }
 
@@ -104,6 +99,7 @@ import { withLivePlayedMs } from './live-play-count.js';
   }
 </script>
 
+<div class="track-list-shell">
 {#if snapshot.errors.length > 0}
   <div class="track-list-error" role="alert">
     <span>{getErrorText(snapshot.errors[0]?.message)}</span>
@@ -127,7 +123,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     shortDesktopRowHeight={49}
     headerHeight={37}
     compactHeaderHeight={33}
-    maxViewportHeight={680}
+    fillAvailable={true}
     listId={`playlist-${playlistId}`}
     ariaLabel="播放清單項目；使用方向鍵瀏覽，按 Enter 播放目前項目"
     columnCount={listColumnCount}
@@ -162,5 +158,14 @@ import { withLivePlayedMs } from './live-play-count.js';
     {/snippet}
   </PagedVirtualList>
 {/if}
+</div>
 
-<div class="track-list-count" role="status" aria-live="polite">{rangeLabel}</div>
+<style>
+  .track-list-shell {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+</style>

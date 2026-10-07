@@ -212,6 +212,8 @@
   );
   let runtimeError = $state<string | null>(null);
   let libraryTrackCount = $state<number | null>(null);
+  let playlistTrackCount = $state<number | null>(null);
+  let queueTrackCount = $state<number | null>(null);
   let libraryListRevision = $state(0);
   let playbackError = $state<string | null>(null);
   let playback = $state<PlaybackSnapshot | null>(null);
@@ -339,6 +341,25 @@
   const selectedPlaylist = $derived(
     playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null,
   );
+  const isListPage = $derived(
+    activeView === 'library' || activeView === 'playlists' || activeView === 'queue',
+  );
+  const pageTrackCountLabel = $derived.by(() => {
+    if (activeView === 'library') {
+      if (libraryTrackCount === null) return null;
+      return `${libraryTrackCount.toLocaleString()} 首曲目`;
+    }
+    if (activeView === 'playlists') {
+      const count = playlistTrackCount ?? selectedPlaylist?.entryCount ?? null;
+      if (count === null) return null;
+      return `${count.toLocaleString()} 首曲目`;
+    }
+    if (activeView === 'queue') {
+      if (queueTrackCount === null) return null;
+      return `${queueTrackCount.toLocaleString()} 首曲目`;
+    }
+    return null;
+  });
   const syncProgressSources = $derived.by(() =>
     syncProgress
       ? Object.values(syncProgress.sources).sort((left, right) => left.sourceIndex - right.sourceIndex)
@@ -1372,6 +1393,7 @@
 
   async function selectPlaylist(playlistId: string): Promise<void> {
     selectedPlaylistId = playlistId;
+    playlistTrackCount = null;
     activeView = 'playlists';
     playlistListRevision += 1;
     playlistMessage = null;
@@ -2465,7 +2487,12 @@
 
   <main class="workspace" inert={isNowPlayingOpen}>
     <header class="topbar">
-      <h1 id="page-heading" class="page-title">{pageTitle}</h1>
+      <div class="topbar-title-block">
+        <h1 id="page-heading" class="page-title">{pageTitle}</h1>
+        {#if pageTrackCountLabel}
+          <p class="page-title-count">{pageTrackCountLabel}</p>
+        {/if}
+      </div>
       <div class="topbar-actions">
         <div class="runtime-pill" class:ready={runtimeServiceReady}>
           <span class="status-dot" class:ready={runtimeServiceReady} aria-hidden="true"></span>
@@ -2474,13 +2501,12 @@
       </div>
     </header>
 
-    <div class="page-scroll">
-      <div class="page-content" class:wide-list-page={activeView === 'playlists' || activeView === 'queue'}>
+    <div class="page-scroll" class:is-list-page={isListPage}>
+      <div class="page-content" class:wide-list-page={isListPage} class:is-list-page={isListPage}>
         {#if activeView === 'library'}
           <section class="library-section" aria-labelledby="page-heading">
             <div class="section-heading section-heading-toolbar">
               <div class="section-heading-actions">
-                <span class="page-count">{libraryTrackCount?.toLocaleString() ?? '—'} <small>首曲目</small></span>
                 <button
                   class="outline-button"
                   type="button"
@@ -2545,7 +2571,6 @@
           <section class="playlist-section" aria-labelledby="page-heading">
             <div class="section-heading section-heading-toolbar">
               <div class="section-heading-actions">
-                <span class="page-count">{playlists.length.toLocaleString()} <small>份清單</small></span>
                 <button
                   class="primary-button playlist-import-button"
                   type="button"
@@ -2591,7 +2616,6 @@
                         <span class="playlist-detail-artwork" aria-hidden="true"><IconMusic size={27} stroke={1.5} aria-hidden="true" /></span>
                         <div>
                           <h3 id="selected-playlist-heading">{selectedPlaylist.name.trim() || '未命名播放清單'}</h3>
-                          <p class="playlist-detail-count">{selectedPlaylist.entryCount.toLocaleString()} 個項目</p>
                         </div>
                       </div>
                       <div class="playlist-export-actions">
@@ -2628,6 +2652,7 @@
                         livePlayCount={livePlayCount}
                         currentTrackId={playback?.currentTrack?.id ?? null}
                         onPlay={playPlaylistEntry}
+                        onTotalCount={(count) => (playlistTrackCount = count)}
                       />
                     {/key}
                   </section>
@@ -2660,6 +2685,7 @@
                 columns={trackColumnPreferences}
                 livePlayCount={livePlayCount}
                 onPlay={playQueueEntry}
+                onTotalCount={(count) => (queueTrackCount = count)}
               />
             {/if}
           </section>

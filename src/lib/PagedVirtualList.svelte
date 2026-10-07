@@ -31,7 +31,8 @@
     shortDesktopRowHeight?: number;
     headerHeight: number;
     compactHeaderHeight?: number;
-    maxViewportHeight: number;
+    maxViewportHeight?: number;
+    fillAvailable?: boolean;
     overscan?: number;
     listId: string;
     ariaLabel: string;
@@ -61,7 +62,8 @@
     shortDesktopRowHeight = baseRowHeight,
     headerHeight: baseHeaderHeight,
     compactHeaderHeight = baseHeaderHeight,
-    maxViewportHeight: maxHeight,
+    maxViewportHeight: maxHeight = 680,
+    fillAvailable = false,
     overscan = 8,
     listId,
     ariaLabel,
@@ -78,6 +80,7 @@
     row,
   }: Props<Item> = $props();
 
+  let frame: HTMLDivElement | undefined = $state();
   let viewport: HTMLDivElement | undefined = $state();
   let scrollTop = $state(0);
   let headerShift = $state(0);
@@ -90,10 +93,14 @@
   let seenGeneration = $state(0);
 
   const virtualTotalCount = $derived(totalCount ?? 40);
-  const rowViewportHeight = $derived(Math.max(
-    rowHeight,
-    Math.min(Math.max(rowHeight, maxViewportHeight - headerHeight), virtualTotalCount * rowHeight),
-  ));
+  const rowViewportHeight = $derived(
+    fillAvailable
+      ? Math.max(rowHeight, viewportHeight)
+      : Math.max(
+        rowHeight,
+        Math.min(Math.max(rowHeight, maxViewportHeight - headerHeight), virtualTotalCount * rowHeight),
+      ),
+  );
   const range = $derived(getVirtualRange(
     scrollTop,
     viewportHeight,
@@ -128,13 +135,21 @@
       const shortDesktop = window.matchMedia('(max-height: 680px) and (min-width: 621px)').matches;
       rowHeight = narrow ? compactRowHeight : shortDesktop ? shortDesktopRowHeight : baseRowHeight;
       headerHeight = narrow ? compactHeaderHeight : baseHeaderHeight;
-      maxViewportHeight = Math.max(160, Math.min(maxHeight, Math.floor(window.innerHeight * 0.65)));
+      if (!fillAvailable) {
+        maxViewportHeight = Math.max(160, Math.min(maxHeight, Math.floor(window.innerHeight * 0.65)));
+      }
       viewportHeight = viewport?.clientHeight ?? viewportHeight;
       if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     };
     updateMetrics();
     window.addEventListener('resize', updateMetrics);
-    return () => window.removeEventListener('resize', updateMetrics);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateMetrics);
+    if (observer && frame) observer.observe(frame);
+    if (observer && viewport) observer.observe(viewport);
+    return () => {
+      window.removeEventListener('resize', updateMetrics);
+      observer?.disconnect();
+    };
   });
 
   function updateViewport(): void {
@@ -186,6 +201,8 @@
 
 <div
   class="paged-virtual-frame"
+  class:fill-available={fillAvailable}
+  bind:this={frame}
   style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
 >
   <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;padding-right:${headerGutter}px`}>
@@ -203,7 +220,7 @@
     aria-activedescendant={activeDescendantId}
     aria-busy={pending || totalCount === null}
     tabindex="0"
-    style={`height:${rowViewportHeight}px;--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
+    style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
     onscroll={updateViewport}
     onkeydown={handleKeydown}
   >
@@ -262,6 +279,12 @@
     background: rgba(var(--text-rgb), 0.012);
   }
 
+  .paged-virtual-frame.fill-available {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+  }
+
   .paged-virtual-viewport {
     position: relative;
     width: 100%;
@@ -270,6 +293,12 @@
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
     outline: none;
+  }
+
+  .paged-virtual-frame.fill-available .paged-virtual-viewport {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
   }
 
   .paged-virtual-viewport:focus-visible {

@@ -907,6 +907,14 @@ input:focus-visible {
   border-bottom: 1px solid var(--line);
 }
 
+.topbar-title-block {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .page-title {
   min-width: 0;
   margin: 0;
@@ -918,6 +926,63 @@ input:focus-visible {
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.page-title-count {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: var(--font-caption);
+  font-weight: 400;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-scroll.is-list-page {
+  display: flex;
+  overflow: hidden;
+  flex-direction: column;
+}
+
+.page-content.is-list-page {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 18px;
+}
+
+.library-section,
+.playlist-section,
+.queue-page {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.library-section > .library-toolbar,
+.library-section > .section-heading,
+.playlist-section > .section-heading,
+.queue-page > .section-heading {
+  flex: 0 0 auto;
+}
+
+.playlist-browser,
+.playlist-detail {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.playlist-detail > .playlist-detail-heading {
+  flex: 0 0 auto;
 }
 
 .section-heading-toolbar {
@@ -3459,16 +3524,13 @@ input:focus-visible {
 }
 
 .playlist-browser {
-  display: block;
   width: 100%;
-  min-width: 0;
 }
 
 .playlist-detail {
   width: 100%;
   box-sizing: border-box;
   align-self: stretch;
-  min-width: 0;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -3817,7 +3879,12 @@ input:focus-visible {
   .app-shell[data-active-view="playlists"] .sidebar-playlist-tree-host .playlist-tree {
     max-height: min(58vh, calc(100dvh - 140px));
   }
-  .playlist-browser { display: block; }
+  .playlist-browser {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
   .playlist-detail { padding: 9px; }
   .playlist-detail-heading { align-items: flex-start; flex-wrap: wrap; }
   .playlist-detail-title { flex-basis: 100%; }

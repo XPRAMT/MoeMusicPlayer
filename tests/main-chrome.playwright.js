@@ -1,11 +1,36 @@
 async page => {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const assertSingleListScroll = async (label, requireViewport = true) => {
+    const geometry = await page.evaluate(() => {
+      const pageScroll = document.querySelector('.page-scroll');
+      const viewport = document.querySelector('.paged-virtual-viewport');
+      if (!pageScroll) return null;
+      return {
+        hasViewport: Boolean(viewport),
+        pageScrollOverflowY: getComputedStyle(pageScroll).overflowY,
+        pageCanScroll: pageScroll.scrollHeight > pageScroll.clientHeight + 1,
+        viewportCanScroll: viewport ? viewport.scrollHeight > viewport.clientHeight + 1 : false,
+      };
+    });
+    assert(geometry !== null, label + ' missing page-scroll');
+    assert(geometry.pageScrollOverflowY === 'hidden', label + ' page-scroll overflow: ' + geometry.pageScrollOverflowY);
+    assert(!geometry.pageCanScroll, label + ' still has outer page scroll: ' + JSON.stringify(geometry));
+    if (requireViewport) assert(geometry.hasViewport, label + ' missing list viewport');
+  };
+
   await page.setViewportSize({ width: 1280, height: 800 });
   page.on('pageerror', (error) => { throw error; });
-  await page.goto('http://127.0.0.1:4173/', { waitUntil: 'domcontentloaded' });
+  await page.goto('http://127.0.0.1:1453/tests/volume-slider-harness.html', { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.page-title');
   const libraryTitle = await page.locator('#page-heading').innerText();
   assert(libraryTitle === '我的曲庫', 'library top bar title: ' + libraryTitle);
+  assert(await page.locator('.track-list-count').count() === 0, 'library still shows the bottom range label');
+  await page.waitForSelector('.page-title-count');
+  const libraryCount = await page.locator('.page-title-count').innerText();
+  assert(/^\d[\d,]* 首曲目$/.test(libraryCount), 'library top-bar track count: ' + libraryCount);
+  assert(await page.locator('.page-scroll.is-list-page').count() === 1, 'library missing list-page scroll class');
+  await page.waitForSelector('.paged-virtual-viewport');
+  await assertSingleListScroll('library');
   assert(/^MoeMusicPlayer \d+\.\d+\.\d+$/.test(await page.title()), 'window title is not the build date: ' + await page.title());
   assert(await page.locator('.section-kicker').count() === 0, 'english section kickers remain on the library page');
   assert(await page.getByRole('heading', { name: '我的曲庫', exact: true }).count() === 1, 'library title is duplicated');
@@ -22,6 +47,11 @@ async page => {
   await page.getByRole('button', { name: '播放佇列' }).click();
   assert(await page.locator('#page-heading').innerText() === '播放佇列', 'queue title missing');
   assert(await page.getByRole('heading', { name: '播放佇列', exact: true }).count() === 1, 'queue title is duplicated');
+  assert(await page.locator('.track-list-count').count() === 0, 'queue still shows the bottom range label');
+  await page.waitForSelector('.page-title-count');
+  const queueCount = await page.locator('.page-title-count').innerText();
+  assert(/^\d[\d,]* 首曲目$/.test(queueCount), 'queue top-bar track count: ' + queueCount);
+  await assertSingleListScroll('queue', false);
 
   const brandBox = await page.locator('.brand-mark img').boundingBox();
   assert(brandBox && brandBox.width >= 47 && brandBox.height >= 47, 'brand icon size: ' + JSON.stringify(brandBox));
@@ -34,6 +64,8 @@ async page => {
 
   await page.getByRole('button', { name: '設定', exact: true }).click();
   assert(await page.locator('#page-heading').innerText() === '設定', 'settings title missing');
+  assert(await page.locator('.page-title-count').count() === 0, 'settings still shows track count');
+  assert(await page.locator('.page-scroll.is-list-page').count() === 0, 'settings kept list-page scroll class');
   assert(await page.getByRole('tab', { name: '主介面', exact: true }).count() === 1, 'main interface settings tab missing');
   const gaps = await page.locator('.main-interface-panel > *').evaluateAll((nodes) => {
     const boxes = nodes.map((node) => node.getBoundingClientRect()).filter((box) => box.height > 0);
@@ -48,5 +80,5 @@ async page => {
   await page.getByRole('tab', { name: '音樂來源' }).click();
   assert(await page.getByRole('heading', { name: '管理音樂來源', exact: true }).count() === 1, 'sources heading missing');
   assert(await page.locator('.section-kicker').count() === 0, 'english kicker remains in sources');
-  return { result: 'PASS', libraryTitle };
+  return { result: 'PASS', libraryTitle, libraryCount, queueCount };
 }
