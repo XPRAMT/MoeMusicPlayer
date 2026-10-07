@@ -83,12 +83,15 @@ test('the sidebar playlist group is the single playlist navigation entry and wor
 });
 
 test('Now Playing overlays the retained route without duplicating sync or native playback details', () => {
-  const pageContentElement = /<div\b(?=[^>]*\bclass="[^"]*\bpage-content\b[^"]*")[^>]*>/.exec(appSource);
-  const pageContentStart = pageContentElement?.index ?? -1;
-  const syncBannerStart = appSource.indexOf('class="sync-progress-banner"', pageContentStart);
-  assert.ok(pageContentStart >= 0 && syncBannerStart > pageContentStart, 'library sync banner should remain in the shared page content');
-  const syncCondition = appSource.slice(pageContentStart, syncBannerStart);
+  const sourcesPanel = appSource.indexOf('id="{scope}sources-panel"');
+  const syncBannerStart = appSource.indexOf('class="sync-progress-banner"', sourcesPanel);
+  assert.ok(sourcesPanel >= 0 && syncBannerStart > sourcesPanel, 'library sync banner belongs on the music-sources settings panel');
+  const syncCondition = appSource.slice(sourcesPanel, syncBannerStart);
   assert.match(syncCondition, /\{#if syncProgress\}/);
+  const librarySection = appSource.indexOf('class="library-section"');
+  const playlistSection = appSource.indexOf('class="playlist-section"', librarySection);
+  assert.doesNotMatch(appSource.slice(librarySection, playlistSection), /sync-progress-banner/);
+  assert.doesNotMatch(appSource, /LIBRARY SYNC|你的音樂空間|LOCAL FIRST|MoeMusicPlayer <span>0\.1/);
 
   const overlayStart = appSource.indexOf('class="now-playing-overlay"');
   const nowPlayingStart = appSource.indexOf('<section class="now-playing-view"', overlayStart);
@@ -149,13 +152,13 @@ test('visible UI icons use Tabler components except the original brand mark', ()
     assert.match(appSource, new RegExp(`<${name}\\b`), `${name} should be used by the interface`);
   }
   assert.match(playlistTreeSource, /<IconPlaylist\b/);
-  assert.match(trackListSource, /<IconPlayerPlayFilled\b/);
-  assert.match(playlistEntrySource, /<IconPlayerPlayFilled\b/);
+  assert.doesNotMatch(trackListSource, /<IconPlayerPlayFilled\b/);
+  assert.doesNotMatch(playlistEntrySource, /<IconPlayerPlayFilled\b/);
 
   assert.match(appSource, /aria-label="搜尋曲庫"/);
   assert.match(appSource, /title="上移欄位"/);
   assert.match(appSource, /title="下移欄位"/);
   assert.match(appSource, /aria-label="音量"/);
-  assert.match(trackListSource, /aria-label=\{`播放 \$\{row\.item\.title/);
-  assert.match(playlistEntrySource, /aria-label=\{`播放 \$\{row\.item\.title/);
+  assert.match(trackListSource, /ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目"/);
+  assert.match(playlistEntrySource, /ariaLabel="播放清單項目；使用方向鍵瀏覽，按 Enter 播放目前項目"/);
 });

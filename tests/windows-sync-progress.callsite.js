@@ -128,6 +128,11 @@
   if (!startupSyncListenerEvents.includes('library-sync-progress') || !startupSyncListenerEvents.includes('library-sync-finished')) {
     throw new Error(`Startup synchronization command began before both listeners were ready: ${startupSyncListenerEvents.join(', ')}`);
   }
+  if (await page.locator('[data-testid="sync-progress-banner"]').count()) {
+    throw new Error('Startup sync status must stay off the library page.');
+  }
+  await page.getByRole('button', { name: '設定', exact: true }).click();
+  await page.getByRole('tab', { name: '音樂來源' }).click();
   const startupBanner = page.locator('[data-testid="sync-progress-banner"]');
   await startupBanner.waitFor({ timeout: 2000 });
   if (!(await startupBanner.innerText()).includes('啟動來源')) {
@@ -149,9 +154,8 @@
   }
   if (liveText.includes('%')) throw new Error(`Unknown-total scanning must not show a percentage: ${liveText}`);
 
-  await page.getByRole('button', { name: '來源設定' }).click();
   if (!(await page.locator('[data-testid="sync-progress-banner"]').isVisible())) {
-    throw new Error('The global sync status must remain visible on the source settings page.');
+    throw new Error('The sync status must remain visible on the music sources page.');
   }
 
   await page.evaluate(payload => window.__emitSyncProgress(payload), {
@@ -177,11 +181,13 @@
   }
 
   await page.getByRole('button', { name: '曲庫' }).click();
-  if (!(await page.locator('[data-testid="sync-progress-banner"]').isVisible())) {
-    throw new Error('The same sync summary should remain visible on the library page.');
+  if (await page.locator('[data-testid="sync-progress-banner"]').count()) {
+    throw new Error('The sync summary must not stay on the library page.');
   }
 
   await page.getByRole('button', { name: '重新整理' }).click();
+  await page.getByRole('button', { name: '設定', exact: true }).click();
+  await page.getByRole('tab', { name: '音樂來源' }).click();
   const manualProgress = page.locator('[data-testid="sync-progress-banner"]');
   await page.getByText('手動同步來源').waitFor({ timeout: 2000 });
   if (!(await manualProgress.innerText()).includes('背景同步進行中')) {
@@ -190,7 +196,7 @@
   await page.evaluate(() => window.__finishCurrentProgress());
   await page.getByText('最近一次同步摘要').waitFor({ timeout: 2000 });
 
-  await page.getByRole('button', { name: '來源設定' }).click();
+  await page.getByRole('tab', { name: '音樂來源' }).click();
   await page.evaluate(() => {
     window.__sourcePickerResponse = {
       id: 'selected-source', kind: 'windowsFilesystem', displayName: '新增的音樂資料夾',

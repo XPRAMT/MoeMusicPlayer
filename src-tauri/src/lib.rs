@@ -5953,7 +5953,7 @@ pub fn run() {
             });
 
             if let Some(window) = app.get_webview_window("main") {
-                window.set_title("MoeMusicPlayer")?;
+                window.set_title(concat!("MoeMusicPlayer ", env!("MOE_BUILD_VERSION")))?;
                 #[cfg(target_os = "windows")]
                 window.set_always_on_top(false)?;
                 #[cfg(target_os = "windows")]

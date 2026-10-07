@@ -107,6 +107,7 @@
   import LyricsView from './lib/LyricsView.svelte';
   import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
   import WindowTitlebar from './lib/WindowTitlebar.svelte';
+  import { APP_WINDOW_TITLE } from './lib/app-version';
   import {
     createActiveTrackArtworkController,
     type ActiveArtworkState,
@@ -193,6 +194,15 @@
   let settingsSourceRegistryAuthoritative = $state(true);
   let capabilities = $state<RuntimeCapabilities | null>(null);
   const showCustomTitlebar = $derived(capabilities?.platform === 'windows');
+  const pageTitle = $derived(
+    activeView === 'library'
+      ? '我的曲庫'
+      : activeView === 'playlists'
+        ? '我的播放清單'
+        : activeView === 'queue'
+          ? '播放佇列'
+          : '設定',
+  );
   let runtimeError = $state<string | null>(null);
   let libraryTrackCount = $state<number | null>(null);
   let libraryListRevision = $state(0);
@@ -391,6 +401,7 @@
   });
 
   onMount(() => {
+    document.title = APP_WINDOW_TITLE;
     let disposed = false;
     const applyAndroidInsets = (value?: AndroidWindowInsets): void => {
       let insets = value;
@@ -2141,11 +2152,52 @@
               <div id="{scope}sources-panel" class="settings-source-panel" role="tabpanel" aria-labelledby="{scope}sources-tab" tabindex="0">
                 <section class="settings-view" aria-labelledby="{scope}source-settings-heading">
                   <div class="section-heading settings-heading">
-                    <div><p class="section-kicker">SOURCES</p><h2 id="{scope}source-settings-heading">管理音樂來源</h2></div>
+                    <div><h2 id="{scope}source-settings-heading">管理音樂來源</h2></div>
                     <button class="outline-button" type="button" onclick={() => void loadSources()} disabled={!sourceSyncReady || isLoadingSources}>
                       {isLoadingSources ? '載入中' : '重新載入'}
                     </button>
                   </div>
+            {#if syncProgress}
+              <section
+                class="sync-progress-banner"
+                class:sync-progress-finished={!syncProgress.active}
+                class:sync-progress-error={Boolean(syncProgress.error)}
+                data-testid="sync-progress-banner"
+                role="status"
+                aria-live="polite"
+                aria-label="音樂來源同步狀態"
+              >
+                <div class="sync-progress-heading">
+                  <strong>{syncProgress.active ? '背景同步進行中' : '最近一次同步摘要'}</strong>
+                  {#if syncProgress.active}
+                    <span class="sync-progress-count">{syncProgressDoneCount} / {syncProgress.sourceCount} 個來源完成</span>
+                  {/if}
+                </div>
+                {#if syncProgress.summary}
+                  <p class="sync-progress-summary">{syncProgress.summary}</p>
+                {/if}
+                {#if syncProgressSources.length > 0}
+                  <ul class="sync-progress-sources">
+                    {#each syncProgressSources as source (source.sourceId)}
+                      <li data-source-id={source.sourceId}>
+                        <span class="sync-progress-source-name">{source.displayName}</span>
+                        <span class="sync-progress-source-detail">{syncProgressLine(source)}</span>
+                        {#if source.total !== null && source.stage !== 'finished'}
+                          <progress
+                            aria-label={`${source.displayName} 階段進度`}
+                            max={Math.max(1, source.total)}
+                            value={Math.min(source.processed, Math.max(1, source.total))}
+                          ></progress>
+                        {/if}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+                {#if !syncProgress.active}
+                  <SyncErrorDetails results={sourceSyncResults} sources={sources} />
+                {/if}
+              </section>
+            {/if}
             <div class="source-status-card">
               <div class="source-status-icon" aria-hidden="true">
                 <IconFolder size={24} stroke={1.6} aria-hidden="true" />
@@ -2263,7 +2315,6 @@
       </div>
     </div>
 
-    <div class="sidebar-caption">你的音樂空間</div>
     <nav class="primary-nav">
       <button
         class="nav-link"
@@ -2306,28 +2357,11 @@
         onSelect={selectPlaylist}
       />
     </div>
-
-    <div class="sidebar-rule"></div>
-    <div class="sidebar-source">
-      <span class="source-mini-icon" aria-hidden="true">
-        <IconFolder size={18} stroke={1.6} aria-hidden="true" />
-      </span>
-      <div class="source-copy">
-        <span>本機曲庫</span>
-        <small>{capabilityLabel(capabilities?.library)}</small>
-      </div>
-      <span class="status-dot" class:ready={libraryReady} aria-hidden="true"></span>
-    </div>
-
-    <div class="sidebar-bottom">
-      <span class="local-badge"><span aria-hidden="true">●</span> LOCAL FIRST</span>
-      <span class="sidebar-version">MoeMusicPlayer <span>0.1</span></span>
-    </div>
   </aside>
 
   <main class="workspace" inert={isNowPlayingOpen}>
     <header class="topbar">
-      <div class="breadcrumbs"><span>MOEMUSIC</span><span class="breadcrumb-slash">/</span><strong>{activeView === 'library' ? 'LIBRARY' : activeView === 'playlists' ? 'PLAYLISTS' : activeView === 'queue' ? 'QUEUE' : 'SOURCES'}</strong></div>
+      <h1 id="page-heading" class="page-title">{pageTitle}</h1>
       <div class="topbar-actions">
         <div class="runtime-pill" class:ready={runtimeServiceReady}>
           <span class="status-dot" class:ready={runtimeServiceReady} aria-hidden="true"></span>
@@ -2341,58 +2375,9 @@
 
     <div class="page-scroll">
       <div class="page-content" class:wide-list-page={activeView === 'playlists' || activeView === 'queue'}>
-        {#if syncProgress}
-          <section
-            class="sync-progress-banner"
-            class:sync-progress-finished={!syncProgress.active}
-            class:sync-progress-error={Boolean(syncProgress.error)}
-            data-testid="sync-progress-banner"
-            role="status"
-            aria-live="polite"
-            aria-label="音樂來源同步狀態"
-          >
-            <div class="sync-progress-heading">
-              <div>
-                <span class="section-kicker">LIBRARY SYNC</span>
-                <strong>{syncProgress.active ? '背景同步進行中' : '最近一次同步摘要'}</strong>
-              </div>
-              {#if syncProgress.active}
-                <span class="sync-progress-count">{syncProgressDoneCount} / {syncProgress.sourceCount} 個來源完成</span>
-              {/if}
-            </div>
-            {#if syncProgress.summary}
-              <p class="sync-progress-summary">{syncProgress.summary}</p>
-            {/if}
-            {#if syncProgressSources.length > 0}
-              <ul class="sync-progress-sources">
-                {#each syncProgressSources as source (source.sourceId)}
-                  <li data-source-id={source.sourceId}>
-                    <span class="sync-progress-source-name">{source.displayName}</span>
-                    <span class="sync-progress-source-detail">{syncProgressLine(source)}</span>
-                    {#if source.total !== null && source.stage !== 'finished'}
-                      <progress
-                        aria-label={`${source.displayName} 階段進度`}
-                        max={Math.max(1, source.total)}
-                        value={Math.min(source.processed, Math.max(1, source.total))}
-                      ></progress>
-                    {/if}
-                  </li>
-                {/each}
-              </ul>
-            {/if}
-            {#if !syncProgress.active}
-              <SyncErrorDetails results={sourceSyncResults} sources={sources} />
-            {/if}
-          </section>
-        {/if}
-
         {#if activeView === 'library'}
-          <section class="library-section" aria-labelledby="library-heading">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">COLLECTION</p>
-                <h2 id="library-heading">我的曲庫</h2>
-              </div>
+          <section class="library-section" aria-labelledby="page-heading">
+            <div class="section-heading section-heading-toolbar">
               <div class="section-heading-actions">
                 <span class="page-count">{libraryTrackCount?.toLocaleString() ?? '—'} <small>首曲目</small></span>
                 <button
@@ -2456,12 +2441,8 @@
             {/if}
           </section>
         {:else if activeView === 'playlists'}
-          <section class="playlist-section" aria-labelledby="playlists-heading">
-            <div class="section-heading">
-              <div>
-                <p class="section-kicker">PLAYLISTS</p>
-                <h2 id="playlists-heading">我的播放清單</h2>
-              </div>
+          <section class="playlist-section" aria-labelledby="page-heading">
+            <div class="section-heading section-heading-toolbar">
               <div class="section-heading-actions">
                 <span class="page-count">{playlists.length.toLocaleString()} <small>份清單</small></span>
                 <button
@@ -2508,7 +2489,6 @@
                       <div class="playlist-detail-title">
                         <span class="playlist-detail-artwork" aria-hidden="true"><IconMusic size={27} stroke={1.5} aria-hidden="true" /></span>
                         <div>
-                          <p class="section-kicker">PLAYLIST</p>
                           <h3 id="selected-playlist-heading">{selectedPlaylist.name.trim() || '未命名播放清單'}</h3>
                           <p class="playlist-detail-count">{selectedPlaylist.entryCount.toLocaleString()} 個項目</p>
                         </div>
@@ -2554,11 +2534,9 @@
             {/if}
           </section>
         {:else if activeView === 'queue'}
-          <section class="queue-page" aria-labelledby="queue-heading">
+          <section class="queue-page" aria-labelledby="page-heading">
             <div class="section-heading">
               <div>
-                <p class="section-kicker">PLAYBACK QUEUE</p>
-                <h2 id="queue-heading">播放佇列</h2>
                 <p class="queue-current-track">
                   {#if playback?.currentTrack}
                     目前播放：{currentTrackTitle(playback.currentTrack)}
@@ -2584,11 +2562,7 @@
             {/if}
           </section>
         {:else}
-          <section class="settings-page" aria-labelledby="settings-heading">
-            <div class="section-heading settings-heading">
-              <div><p class="section-kicker">SETTINGS</p><h2 id="settings-heading">設定</h2></div>
-            </div>
-
+          <section class="settings-page" aria-labelledby="page-heading">
           {@render settingsPanels('')}
           </section>
         {/if}

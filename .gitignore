@@ -9,6 +9,7 @@
 # Generated native build output
 /target/
 /release/
+/src-tauri/build-version.txt
 /src-tauri/target/
 /src-tauri/gen/android/.gradle/
 /src-tauri/gen/android/.kotlin/

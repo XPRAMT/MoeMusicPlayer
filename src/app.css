@@ -853,6 +853,23 @@ input:focus-visible {
   border-bottom: 1px solid var(--line);
 }
 
+.page-title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.section-heading-toolbar {
+  justify-content: flex-end;
+}
+
 .breadcrumbs {
   display: flex;
   min-width: 0;
@@ -3887,7 +3904,7 @@ input:focus-visible {
 
 @media (max-width: 390px) {
   .runtime-pill { max-width: 141px; overflow: hidden; text-overflow: ellipsis; }
-  .breadcrumbs { gap: 6px; font-size: var(--font-caption); }
+  .page-title { font-size: var(--font-title); }
   .topbar { padding: 0 11px; }
   .page-content { padding-right: 11px; padding-left: 11px; }
   .section-heading-actions { gap: 6px; }

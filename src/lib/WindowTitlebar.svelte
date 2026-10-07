@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import type { UnlistenFn } from '@tauri-apps/api/event';
+  import { APP_WINDOW_TITLE } from './app-version';
 
   type Props = {
     transparent?: boolean;
@@ -49,6 +50,10 @@
   }
 
   onMount(() => {
+    document.title = APP_WINDOW_TITLE;
+    void appWindow?.setTitle(APP_WINDOW_TITLE).catch(() => {
+      /* harness / non-desktop */
+    });
     window.addEventListener('moemusicplayer-toggle-fullscreen', onToggleFullscreenRequest);
     void refreshWindowChromeState();
     if (!appWindow) return;
@@ -130,10 +135,10 @@
   <div
     class="window-titlebar-drag"
     data-tauri-drag-region
-    title="MoeMusicPlayer"
+    title={APP_WINDOW_TITLE}
     ondblclick={() => void toggleMaximize()}
   >
-    <span class="window-titlebar-label" data-tauri-drag-region>MoeMusicPlayer</span>
+    <span class="window-titlebar-label" data-tauri-drag-region>{APP_WINDOW_TITLE}</span>
   </div>
   <div class="window-titlebar-controls" role="group" aria-label={LABEL_CONTROLS}>
     <button
