@@ -27,11 +27,12 @@ use crate::lyrics_provider::{
 
 const MAX_PROVIDER_HITS: usize = 20;
 const MAX_SEARCH_CANDIDATES: usize = 20;
-const MAX_FETCH_CANDIDATES: usize = 8;
+const MAX_FETCH_CANDIDATES: usize = 20;
 const MAX_CONCURRENT_LYRIC_FETCHES: usize = 3;
 const HIGH_CONFIDENCE_SCORE: f32 = 0.90;
 const MAX_REQUEST_ID_BYTES: usize = 128;
 const MAX_PROVIDER_SEARCH_DURATION: Duration = Duration::from_secs(20);
+const QQ_MISSING_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 #[cfg(target_os = "windows")]
 use player_platform_windows::{find_all_lyrics, find_lyrics, LyricsLookup};
@@ -323,10 +324,55 @@ async fn fetch_provider_candidates<T: crate::lyrics_provider::HttpTransport + 's
     metadata: LyricsTrackMetadata,
     cancellation: CancellationToken,
 ) -> Result<Vec<LyricCandidate>, ProviderError> {
-    let (netease, qqmusic) = tokio::join!(
-        client.search(LyricProvider::NetEase, &metadata, &cancellation),
-        client.search(LyricProvider::Qq, &metadata, &cancellation),
-    );
+    let first =
+        fetch_provider_candidates_once(client.clone(), &metadata, &cancellation, false).await;
+    let retry_qq = match &first {
+        Ok(candidates) => !candidates
+            .iter()
+            .any(|candidate| candidate.provider == LyricProvider::Qq),
+        Err(ProviderError::Cancelled) => false,
+        Err(_) => true,
+    };
+    if !retry_qq || cancellation.is_cancelled() {
+        return first;
+    }
+    tokio::select! {
+        _ = cancellation.cancelled() => return Err(ProviderError::Cancelled),
+        _ = tokio::time::sleep(QQ_MISSING_RETRY_DELAY) => {}
+    }
+    if cancellation.is_cancelled() {
+        return Err(ProviderError::Cancelled);
+    }
+    match fetch_provider_candidates_once(client, &metadata, &cancellation, true).await {
+        Ok(retry) => {
+            let mut merged = first.unwrap_or_default();
+            merged.extend(retry);
+            Ok(merged)
+        }
+        Err(ProviderError::Cancelled) => Err(ProviderError::Cancelled),
+        Err(_) => first,
+    }
+}
+
+async fn fetch_provider_candidates_once<T: crate::lyrics_provider::HttpTransport + 'static>(
+    client: Arc<LyricsProviderClient<T>>,
+    metadata: &LyricsTrackMetadata,
+    cancellation: &CancellationToken,
+    qq_only: bool,
+) -> Result<Vec<LyricCandidate>, ProviderError> {
+    let (netease, qqmusic) = if qq_only {
+        (
+            Ok(Vec::new()),
+            client
+                .search(LyricProvider::Qq, metadata, cancellation)
+                .await,
+        )
+    } else {
+        tokio::join!(
+            client.search(LyricProvider::NetEase, metadata, cancellation),
+            client.search(LyricProvider::Qq, metadata, cancellation),
+        )
+    };
     if cancellation.is_cancelled() {
         return Err(ProviderError::Cancelled);
     }
@@ -1765,8 +1811,8 @@ mod tests {
             })
             .count();
         assert!(candidates.len() <= MAX_SEARCH_CANDIDATES);
-        assert!(candidates.len() <= 8);
-        assert!(lyric_fetches <= 8);
+        assert!(candidates.len() <= 20);
+        assert!(lyric_fetches <= 20);
         assert_eq!(search_requests, 3, "one QQ and at most two NetEase queries");
         assert!(requests
             .iter()
