@@ -10,11 +10,11 @@ mod windows_locator;
 
 pub use artwork::{ArtworkImage, MAX_ARTWORK_BYTES, MAX_ARTWORK_DIMENSION, MAX_ARTWORK_PIXELS};
 pub use library::{
-    FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaScanProgress,
-    MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, SourceId,
-    SourceScan, SourceScanState, SyncCancellation, TrackField, TrackFieldFilter, TrackId,
-    TrackIdentity, TrackMetadata, TrackMetadataError, TrackSummary, UserMetadataField,
-    TRACK_METADATA_VERSION,
+    display_track_title, locator_display_file_stem, FileFingerprint, LibraryRoot, ListTracksQuery,
+    MediaIndex, MediaLocator, MediaScanProgress, MediaScanProgressUnit, MediaSourceError,
+    MediaSourceKind, MediaTrackRecord, Page, SourceId, SourceScan, SourceScanState,
+    SyncCancellation, TrackField, TrackFieldFilter, TrackId, TrackIdentity, TrackMetadata,
+    TrackMetadataError, TrackSummary, UserMetadataField, TRACK_METADATA_VERSION,
 };
 pub use lyrics::{
     auto_lyric_candidate, explain_lyric_candidate_match, merge_lrc_auxiliary,

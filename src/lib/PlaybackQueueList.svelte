@@ -28,6 +28,7 @@
     columns?: TrackListColumnPreference[];
     fetchPage?: (request: { offset: number; limit: number }) => Promise<PlaybackQueuePage>;
     livePlayCount?: { trackId: string; playedMs: number } | null;
+    onPlay?: (entry: PlaybackQueuePageItem) => void;
   }
 
   let {
@@ -36,6 +37,7 @@
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     fetchPage,
     livePlayCount = null,
+    onPlay = () => {},
   }: Props = $props();
 
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
@@ -181,7 +183,7 @@
     compactHeaderHeight={33}
     maxViewportHeight={680}
     listId="playback-queue"
-    ariaLabel="目前播放佇列；使用方向鍵瀏覽"
+    ariaLabel="目前播放佇列；使用方向鍵瀏覽，按 Enter 播放目前項目"
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
     minContentWidth={listMinWidth}
@@ -189,8 +191,9 @@
     rowClassName="track-row virtual-track-row configurable-track-grid playback-queue-row"
     listName="播放佇列"
     onRange={handleRange}
-    onPlay={() => {}}
-    rowActivates={false}
+    onPlay={(entry) => {
+      if (entry) onPlay(entry);
+    }}
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">

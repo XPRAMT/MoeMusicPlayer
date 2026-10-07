@@ -14,6 +14,8 @@ use std::{
 };
 
 #[cfg(target_os = "windows")]
+use player_core::display_track_title;
+#[cfg(target_os = "windows")]
 use player_core::PlaybackCheckpoint;
 use player_core::{
     LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceError, MediaSourceKind, Page,
@@ -1394,7 +1396,7 @@ impl WindowsSystemMediaService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .update(track_id, database);
         let current_metadata = current_track.map(|track| MediaControlMetadata {
-            title: track.title,
+            title: display_track_title(track.title.as_deref(), track.file_name.as_deref()),
             artist: track.artist,
             album: track.album,
             thumbnail: None,
@@ -1740,6 +1742,12 @@ enum PlaybackQueueSource {
         #[serde(rename = "entryPosition")]
         entry_position: u64,
     },
+    /// Jump within the active queue. `traversal_position` is the cursor index
+    /// shown by the queue page, not the source entry index.
+    Queue {
+        #[serde(rename = "traversalPosition")]
+        traversal_position: u64,
+    },
 }
 
 #[derive(Clone, Serialize)]
@@ -1877,6 +1885,21 @@ mod playback_queue_ipc_tests {
                 query: Some(query),
                 field_filter: None,
             } if query == "ambient"
+        ));
+    }
+
+    #[test]
+    fn queue_row_source_deserializes_traversal_position() {
+        let source: PlaybackQueueSource = serde_json::from_value(serde_json::json!({
+            "kind": "queue",
+            "traversalPosition": 4
+        }))
+        .expect("deserialize queue row source");
+        assert!(matches!(
+            source,
+            PlaybackQueueSource::Queue {
+                traversal_position: 4
+            }
         ));
     }
 
@@ -4974,6 +4997,9 @@ fn queue_for_track(
                 selected,
             )
         }
+        Some(PlaybackQueueSource::Queue { .. }) => {
+            return Err("播放佇列選曲不會重建佇列。".to_owned());
+        }
         None => {
             let track_ids = database
                 .list_track_ids(None)
@@ -5604,7 +5630,6 @@ fn play_track_from_database(
     let path = database
         .resolve_playable_filesystem_locator(track_id)
         .map_err(|error| error.to_string())?;
-    let selection_intent = source.is_some();
 
     let _gate = service
         .command_gate
@@ -5620,10 +5645,30 @@ fn play_track_from_database(
         .queue
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let preserve_queue = source.is_none()
-        && existing_queue
-            .as_ref()
-            .is_some_and(|queue| queue.current() == track_id);
+    let (queue_cursor, same_queue_slot) = match &source {
+        Some(PlaybackQueueSource::Queue { traversal_position }) => {
+            let queue = existing_queue
+                .as_ref()
+                .ok_or_else(|| "沒有播放佇列。".to_owned())?;
+            let cursor = usize::try_from(*traversal_position)
+                .map_err(|_| "播放佇列位置無效。".to_owned())?;
+            let entry_track = queue
+                .track_at_cursor(cursor)
+                .ok_or_else(|| "播放佇列項目已不存在，請重新整理。".to_owned())?;
+            if entry_track != track_id {
+                return Err("播放佇列項目已變更，請重新整理。".to_owned());
+            }
+            let same_slot = queue.cursor() == cursor && current_track_id == Some(track_id);
+            (Some(cursor), same_slot)
+        }
+        _ => (None, false),
+    };
+    let explicit_play = source.is_none();
+    let preserve_queue = queue_cursor.is_some()
+        || (explicit_play
+            && existing_queue
+                .as_ref()
+                .is_some_and(|queue| queue.current() == track_id));
     let replacement_queue = if preserve_queue {
         None
     } else {
@@ -5642,22 +5687,24 @@ fn play_track_from_database(
     };
     drop(existing_queue);
     let audio_snapshot = service.player.snapshot();
-    let ticket = if !selection_intent
-        && current_track_id == Some(track_id)
+    let resume_loaded = (same_queue_slot
         && matches!(
             audio_snapshot.state,
-            AudioPlaybackState::Ready | AudioPlaybackState::Paused
-        ) {
+            AudioPlaybackState::Ready | AudioPlaybackState::Paused | AudioPlaybackState::Playing
+        ))
+        || (explicit_play
+            && current_track_id == Some(track_id)
+            && matches!(
+                audio_snapshot.state,
+                AudioPlaybackState::Ready | AudioPlaybackState::Paused
+            ));
+    let ticket = if resume_loaded {
         service
             .player
             .request_play()
             .map_err(|error| playback_audio_error_message(&error))?
-    } else if selection_intent {
-        service
-            .player
-            .request_load_preserving_playback_accounted(path, service.accounting_id_for(track_id))
-            .map_err(|error| playback_audio_error_message(&error))?
     } else {
+        // Library, playlist, and queue-row clicks start playback immediately.
         service
             .player
             .request_load_and_play_accounted(path, service.accounting_id_for(track_id))
@@ -5667,7 +5714,7 @@ fn play_track_from_database(
         ticket,
         track,
         replacement_queue,
-        target_cursor: None,
+        target_cursor: if same_queue_slot { None } else { queue_cursor },
     })
 }
 
@@ -6538,6 +6585,7 @@ mod windows_library_integration_tests {
             year: None,
             bit_depth: None,
             played_ms: 0,
+            file_name: None,
         });
         let before_playback = serde_json::to_value(service.snapshot())
             .expect("serialize playback snapshot before query");
@@ -6803,8 +6851,8 @@ mod windows_library_integration_tests {
         .expect("commit previous track");
         assert_eq!(service.snapshot().state, "paused");
 
-        // Selecting another library row while paused must keep the intent,
-        // while selecting during playback must leave playback active.
+        // Selecting another library or playlist row starts playback immediately,
+        // including while paused. Next and previous still keep a paused session paused.
         let selected_id = tracks.items[1].id;
         let selected = play_track_from_database(
             &database,
@@ -6828,7 +6876,7 @@ mod windows_library_integration_tests {
             selected.target_cursor,
         )
         .expect("commit paused selection");
-        assert_eq!(service.snapshot().state, "paused");
+        assert_eq!(service.snapshot().state, "playing");
 
         let mut playlist = Playlist::new("paused playlist selection");
         for (position, id) in [first_id, first_id, selected_id].into_iter().enumerate() {
@@ -6869,7 +6917,7 @@ mod windows_library_integration_tests {
             playlist_selection.target_cursor,
         )
         .expect("commit duplicate playlist selection");
-        assert_eq!(service.snapshot().state, "paused");
+        assert_eq!(service.snapshot().state, "playing");
         assert_eq!(
             service
                 .queue
@@ -6882,6 +6930,50 @@ mod windows_library_integration_tests {
             1,
             "selecting the repeated playlist row keeps its exact entry position"
         );
+
+        pause_playback(&service)
+            .expect("pause before queue-row selection")
+            .wait(Duration::from_secs(2))
+            .expect("pause playlist track");
+        let queue_before_jump = service
+            .queue
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("playlist queue")
+            .snapshot();
+        let queue_jump = play_track_from_database(
+            &database,
+            &service,
+            &first_id.to_string(),
+            Some(PlaybackQueueSource::Queue {
+                traversal_position: 0,
+            }),
+        )
+        .expect("play a paused queue row");
+        queue_jump
+            .ticket
+            .wait(Duration::from_secs(2))
+            .expect("queue row ACK");
+        commit_track_change(
+            &database,
+            &service,
+            queue_jump.track,
+            queue_jump.replacement_queue,
+            queue_jump.target_cursor,
+        )
+        .expect("commit queue row");
+        assert_eq!(service.snapshot().state, "playing");
+        let queue_after_jump = service
+            .queue
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("queue after row click")
+            .snapshot();
+        assert_eq!(queue_after_jump.cursor, 0);
+        assert_eq!(queue_after_jump.entries, queue_before_jump.entries);
+        assert_eq!(queue_after_jump.play_order, queue_before_jump.play_order);
 
         let explicit_play =
             play_track_from_database(&database, &service, &selected_id.to_string(), None)
@@ -6916,8 +7008,8 @@ mod windows_library_integration_tests {
         .expect("commit playing selection");
         assert_eq!(service.snapshot().state, "playing");
 
-        // Restored sessions load to Ready; replacing their selected track must
-        // not turn startup restoration into autoplay.
+        // Restored sessions stay Ready until the user clicks a list row.
+        // That click starts playback instead of leaving the player paused or ready.
         let restored_path = database
             .resolve_playable_filesystem_locator(first_id)
             .expect("resolve restored fixture path");
@@ -6947,7 +7039,7 @@ mod windows_library_integration_tests {
             .ticket
             .wait(Duration::from_secs(2))
             .expect("Ready selection ACK");
-        assert_eq!(service.snapshot().state, "ready");
+        assert_eq!(service.snapshot().state, "playing");
     }
 
     #[test]

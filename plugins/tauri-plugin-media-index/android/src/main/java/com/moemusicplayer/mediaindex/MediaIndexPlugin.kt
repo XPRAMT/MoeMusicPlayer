@@ -1157,7 +1157,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         sampleRateHz: Int? = null,
         bitDepth: Int? = null,
     ): JSONObject = JSONObject().apply {
-        put("title", title ?: JSONObject.NULL)
+        put("title", title?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
         put("artist", artist ?: JSONObject.NULL)
         put("album", album ?: JSONObject.NULL)
         put("albumArtist", albumArtist ?: JSONObject.NULL)

@@ -35,6 +35,9 @@ async page => {
   state = await page.evaluate(() => window.playbackQueueHarness.snapshot());
   assert(state.activeView === 'queue', 'clicking the playback queue navigation did not open the queue page');
   assert(await page.locator('.playback-queue-row').count() > 0, 'clicking the playback queue navigation did not display queue entries');
+  await page.locator('.playback-queue-row').nth(1).locator('.list-column-title').click();
+  state = await page.evaluate(() => window.playbackQueueHarness.snapshot());
+  assert(JSON.stringify(state.queuePlays) === JSON.stringify([{ trackId: 'duplicate-track', traversalPosition: 1 }]), 'queue row click did not select that traversal slot');
   await treeHost.locator('.playlist-tree-open').click();
   state = await page.evaluate(() => window.playbackQueueHarness.snapshot());
   assert(state.activeView === 'playlists', 'playlist tree heading did not open the playlist page');

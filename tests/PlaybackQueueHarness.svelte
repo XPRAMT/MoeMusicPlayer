@@ -43,6 +43,7 @@
       queueListWidth: number;
       documentWidth: number;
       viewportWidth: number;
+      queuePlays: Array<{ trackId: string; traversalPosition: number }>;
     };
   }
 
@@ -62,6 +63,7 @@
   let generatedItems = 0;
   const queueRequestLog: Array<{ offset: number; limit: number; revision: number }> = [];
   let columns = $state(DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column })));
+  let queuePlays = $state<Array<{ trackId: string; traversalPosition: number }>>([]);
   const playlists: PlaylistSummary[] = [
     { id: 'playlist-hanser', name: 'Hanser 精選', entryCount: 2 },
     { id: 'playlist-live', name: '現場演出', entryCount: 1_284 },
@@ -221,6 +223,7 @@
       queueListWidth: queueList?.getBoundingClientRect().width ?? 0,
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
+      queuePlays,
     };
   }
 
@@ -286,6 +289,9 @@
               cursorChangeKey={cursorChangeKey}
               columns={columns}
               fetchPage={fetchQueuePage}
+              onPlay={(entry) => {
+                queuePlays = [...queuePlays, { trackId: entry.trackId, traversalPosition: entry.traversalPosition }];
+              }}
             />
           </section>
         {/if}

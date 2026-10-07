@@ -89,7 +89,10 @@ WITH resolved_entries AS (
                 )
            END AS track_id,
            pe.title AS entry_title,
-           pe.duration_ms AS entry_duration_ms
+           pe.duration_ms AS entry_duration_ms,
+           pe.locator_kind,
+           pe.locator_encoding,
+           pe.locator_data
     FROM playlist_entries pe
     WHERE pe.playlist_id=?1
 )
@@ -106,7 +109,8 @@ SELECT e.position, e.track_id,
            JOIN library_roots r ON r.source_id=m.source_id
            WHERE m.track_id=e.track_id AND r.enabled=1
        ),
-       COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0)
+       COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0),
+       e.locator_kind, e.locator_encoding, e.locator_data
 FROM resolved_entries e
 LEFT JOIN tracks t ON t.track_id=e.track_id
 ORDER BY e.position
@@ -1166,6 +1170,9 @@ impl Database {
                     row.get::<_, Option<i64>>(10)?,
                     row.get::<_, bool>(11)?,
                     row.get::<_, i64>(12)?,
+                    row.get::<_, String>(13)?,
+                    row.get::<_, String>(14)?,
+                    row.get::<_, Vec<u8>>(15)?,
                 ))
             },
         )?;
@@ -1185,6 +1192,9 @@ impl Database {
                     bit_depth,
                     has_enabled_mapping,
                     played_ms,
+                    locator_kind,
+                    locator_encoding,
+                    locator_data,
                 ) = row?;
                 let position = u64::try_from(position).map_err(|_| {
                     DatabaseError::CorruptData("negative playlist entry position".to_owned())
@@ -1202,10 +1212,13 @@ impl Database {
                 let played_ms = u64::try_from(played_ms.max(0)).map_err(|_| {
                     DatabaseError::CorruptData("playlist played_ms is negative".to_owned())
                 })?;
+                let file_name = locator::decode(&locator_kind, &locator_encoding, &locator_data)
+                    .ok()
+                    .and_then(|locator| player_core::locator_display_file_stem(&locator));
                 Ok(PlaylistEntrySummary {
                     position,
                     track_id,
-                    title,
+                    title: blank_to_none(title),
                     artist,
                     album,
                     duration_ms,
@@ -1220,6 +1233,7 @@ impl Database {
                         .and_then(|value| u8::try_from(value).ok())
                         .filter(|value| *value > 0),
                     played_ms,
+                    file_name,
                 })
             })
             .collect::<Result<Vec<_>, DatabaseError>>()?;
@@ -1383,13 +1397,17 @@ impl Database {
         track_id: TrackId,
     ) -> Result<Option<TrackSummary>, DatabaseError> {
         let connection = self.lock()?;
-        Ok(connection
+        let mut summary = connection
             .query_row(
                 TRACK_SUMMARY_SQL,
                 [track_id.to_string()],
                 row_to_track_summary,
             )
-            .optional()?)
+            .optional()?;
+        if let Some(summary) = summary.as_mut() {
+            attach_file_names(&connection, std::slice::from_mut(summary))?;
+        }
+        Ok(summary)
     }
 
     /// Resolve a bounded batch of Track IDs to their current user-facing metadata.
@@ -1399,16 +1417,28 @@ impl Database {
         track_ids: &[TrackId],
     ) -> Result<Vec<Option<TrackSummary>>, DatabaseError> {
         let connection = self.lock()?;
-        let mut statement = connection.prepare_cached(TRACK_SUMMARY_SQL)?;
-        track_ids
+        let mut summaries = {
+            let mut statement = connection.prepare_cached(TRACK_SUMMARY_SQL)?;
+            let collected = track_ids
+                .iter()
+                .map(|track_id| {
+                    statement
+                        .query_row([track_id.to_string()], row_to_track_summary)
+                        .optional()
+                        .map_err(DatabaseError::from)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            collected
+        };
+        let ids = summaries
             .iter()
-            .map(|track_id| {
-                statement
-                    .query_row([track_id.to_string()], row_to_track_summary)
-                    .optional()
-                    .map_err(DatabaseError::from)
-            })
-            .collect()
+            .filter_map(|item| item.as_ref().map(|summary| summary.id))
+            .collect::<Vec<_>>();
+        let names = file_names_for_tracks(&connection, &ids)?;
+        for summary in summaries.iter_mut().flatten() {
+            summary.file_name = names.get(&summary.id).cloned();
+        }
+        Ok(summaries)
     }
 
     /// Read the selected lyrics cache for one internal track identity.
@@ -2596,20 +2626,24 @@ fn fetch_tracks_window_filtered(
     limit: u32,
 ) -> Result<Vec<TrackSummary>, DatabaseError> {
     let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter);
-    let mut statement = connection.prepare(TRACKS_PAGE_SQL)?;
-    let items = statement
-        .query_map(
-            params![
-                query,
-                i64::from(limit),
-                query_limit_i64(offset),
-                title_filter,
-                artist_filter,
-                album_filter
-            ],
-            row_to_track_summary,
-        )?
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut items = {
+        let mut statement = connection.prepare(TRACKS_PAGE_SQL)?;
+        let collected = statement
+            .query_map(
+                params![
+                    query,
+                    i64::from(limit),
+                    query_limit_i64(offset),
+                    title_filter,
+                    artist_filter,
+                    album_filter
+                ],
+                row_to_track_summary,
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        collected
+    };
+    attach_file_names(connection, &mut items)?;
     Ok(items)
 }
 
@@ -2640,7 +2674,7 @@ fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummar
     })?;
     Ok(TrackSummary {
         id,
-        title: row.get(1)?,
+        title: blank_to_none(row.get(1)?),
         artist: row.get(2)?,
         album: row.get(3)?,
         album_artist: row.get(4)?,
@@ -2669,7 +2703,71 @@ fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummar
             .and_then(|value| u8::try_from(value).ok())
             .filter(|value| *value > 0),
         played_ms: row.get::<_, i64>(13)?.max(0) as u64,
+        file_name: None,
     })
+}
+
+fn blank_to_none(value: Option<String>) -> Option<String> {
+    value.filter(|text| !text.trim().is_empty())
+}
+
+fn attach_file_names(
+    connection: &Connection,
+    items: &mut [TrackSummary],
+) -> Result<(), DatabaseError> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
+    let names = file_names_for_tracks(connection, &ids)?;
+    for item in items {
+        item.file_name = names.get(&item.id).cloned();
+    }
+    Ok(())
+}
+
+fn file_names_for_tracks(
+    connection: &Connection,
+    track_ids: &[TrackId],
+) -> Result<HashMap<TrackId, String>, DatabaseError> {
+    let mut names = HashMap::new();
+    for chunk in track_ids.chunks(200) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT m.track_id, m.locator_kind, m.locator_encoding, m.locator_data
+             FROM source_mappings m
+             JOIN library_roots r ON r.source_id = m.source_id
+             WHERE m.track_id IN ({placeholders})
+             ORDER BY r.enabled DESC,
+                      CASE m.locator_kind WHEN 'filesystem_path' THEN 0 ELSE 1 END,
+                      m.source_id"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let mut rows = statement.query(rusqlite::params_from_iter(
+            chunk.iter().map(ToString::to_string),
+        ))?;
+        while let Some(row) = rows.next()? {
+            let id = parse_track_id(&row.get::<_, String>(0)?)?;
+            if names.contains_key(&id) {
+                continue;
+            }
+            let kind: String = row.get(1)?;
+            let encoding: String = row.get(2)?;
+            let data: Vec<u8> = row.get(3)?;
+            let Ok(locator) = locator::decode(&kind, &encoding, &data) else {
+                continue;
+            };
+            if let Some(stem) = player_core::locator_display_file_stem(&locator) {
+                names.insert(id, stem);
+            }
+        }
+    }
+    Ok(names)
 }
 
 fn resolve_track_id(
@@ -4138,6 +4236,83 @@ mod tests {
             .is_none());
         assert!(db.delete_playlist(playlist.id).expect("delete playlist"));
         assert!(db.list_playlists().expect("list after delete").is_empty());
+    }
+
+    #[test]
+    fn missing_title_summary_uses_file_stem_from_the_locator() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "untitled");
+        let mut record = record(&root, "blank", "blank-key", "ignored", 10, 100);
+        record.metadata.as_mut().expect("metadata").title = Some("   ".to_owned());
+        record.locator = MediaLocator::FileSystem(if cfg!(windows) {
+            PathBuf::from(r"\\?\D:\Music\資料夾\曲 目.flac")
+        } else {
+            PathBuf::from("資料夾").join("曲 目.flac")
+        });
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&record),
+            std::slice::from_ref(&record),
+            1000,
+        );
+        let page = list(&db, 0, 10);
+        assert_eq!(page.total_count, 1);
+        assert_eq!(page.items[0].title, None);
+        assert_eq!(page.items[0].file_name.as_deref(), Some("曲 目"));
+        assert_eq!(page.items[0].artist.as_deref(), Some("artist"));
+        let summary = db
+            .get_track_summary(page.items[0].id)
+            .expect("summary")
+            .expect("track");
+        assert_eq!(summary.file_name.as_deref(), Some("曲 目"));
+        let batch = db.get_track_summaries(&[page.items[0].id]).expect("batch");
+        assert_eq!(
+            batch[0]
+                .as_ref()
+                .and_then(|item| item.file_name.clone())
+                .as_deref(),
+            Some("曲 目")
+        );
+
+        let mut playlist = player_core::Playlist::new("untitled entries");
+        playlist.entries = vec![
+            PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::ContentUri(
+                    "content://com.android.externalstorage.documents/document/primary%3AMusic%2F%E6%99%B4%E5%A4%A9.flac?displayName=secret.mp3".into(),
+                ),
+                title: Some("  ".to_owned()),
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::ContentUri(
+                    "content://media/external/audio/media/42?title=Nope".into(),
+                ),
+                title: None,
+                duration_ms: None,
+            },
+        ];
+        db.save_playlist(&playlist).expect("save playlist");
+        let entries = db
+            .get_playlist_page(playlist.id, 0, 10)
+            .expect("page")
+            .expect("playlist");
+        assert_eq!(entries.items[0].title, None);
+        assert_eq!(entries.items[0].file_name.as_deref(), Some("晴天"));
+        assert_eq!(entries.items[0].track_id, None);
+        assert_eq!(entries.items[1].title, None);
+        assert_eq!(entries.items[1].file_name, None);
+
+        let id = page.items[0].id;
+        let json = format!(
+            r#"{{"id":"{id}","title":"kept","artist":null,"album":null,"albumArtist":null,"trackNumber":null,"discNumber":null,"durationMs":null,"codec":null,"bitrateBps":null,"sampleRateHz":null,"year":null,"bitDepth":null,"playedMs":0}}"#
+        );
+        let loaded: player_core::TrackSummary = serde_json::from_str(&json).expect("old summary");
+        assert_eq!(loaded.title.as_deref(), Some("kept"));
+        assert_eq!(loaded.file_name, None);
     }
 
     #[test]

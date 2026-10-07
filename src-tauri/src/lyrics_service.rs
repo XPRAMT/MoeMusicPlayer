@@ -1620,6 +1620,7 @@ mod tests {
             year: None,
             bit_depth: None,
             played_ms: 0,
+            file_name: None,
         }
     }
 

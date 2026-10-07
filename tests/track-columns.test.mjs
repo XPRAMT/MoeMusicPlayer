@@ -4,6 +4,7 @@ import {
   DEFAULT_TRACK_COLUMN_PREFERENCES,
   formatAudioFormat,
   formatPlayCount,
+  displayTrackTitle,
   formatTrackColumnValue,
   formatYear,
   isHiResTrack,
@@ -111,6 +112,24 @@ test('playlist entries show placeholders for missing metadata without an artist 
   }
   assert.equal(formatTrackColumnValue('title', missing, formatDuration, '未命名項目'), '未命名項目');
   assert.equal(formatTrackColumnValue('artist', { ...missing, artist: 'hanser' }, formatDuration), 'hanser');
+});
+
+test('a missing or whitespace title shows the file name and not artist or album', () => {
+  const untitled = {
+    title: '   ',
+    artist: 'hanser',
+    album: 'album',
+    fileName: '  曲 目  ',
+  };
+  assert.equal(displayTrackTitle(untitled, '未命名曲目'), '曲 目');
+  assert.equal(formatTrackColumnValue('title', untitled, formatDuration), '曲 目');
+  assert.equal(formatTrackColumnValue('title', untitled, formatDuration, '未命名項目'), '曲 目');
+  assert.equal(formatTrackColumnValue('artist', untitled, formatDuration), 'hanser');
+  assert.equal(
+    formatTrackColumnValue('title', { title: null, artist: 'hanser', album: 'album', fileName: '   ' }, formatDuration, '未命名項目'),
+    '未命名項目',
+  );
+  assert.equal(displayTrackTitle({ title: ' 晴天 ' }, '未命名曲目'), '晴天');
 });
 
 test('play count is played_ms / duration_ms with tidy precision', () => {

@@ -133,6 +133,12 @@ impl PlaybackQueue {
         self.cursor
     }
 
+    /// Track at a traversal cursor. `None` when the cursor is outside the queue.
+    pub fn track_at_cursor(&self, cursor: usize) -> Option<TrackId> {
+        let index = *self.play_order.get(cursor)?;
+        self.entries.get(index).map(|entry| entry.track_id)
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

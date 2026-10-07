@@ -420,7 +420,9 @@ impl MediaIndex for WindowsMediaIndex {
         let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
 
         Ok(TrackMetadata {
-            title: tag.and_then(|tag| text(tag.title())),
+            title: tag
+                .and_then(|tag| text(tag.title()))
+                .filter(|value| !value.trim().is_empty()),
             artist: tag.and_then(|tag| text(tag.artist())),
             album: tag.and_then(|tag| text(tag.album())),
             album_artist: tag

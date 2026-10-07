@@ -182,7 +182,6 @@
           cells={visibleColumns.map((column) => ({
             id: column.id,
             text: formatTrackColumnValue(column.id, withLivePlayedMs(row.item!, livePlayCount), formatDuration),
-            title: column.id === 'title' && !row.item?.title?.trim() ? '未命名曲目' : undefined,
           }))}
         />
       {:else}

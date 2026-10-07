@@ -181,15 +181,27 @@ export function isHiResTrack(item) {
 }
 
 /**
+ * Title tag when it has text; otherwise the file stem. Artist and album are never used as a title.
+ * @param {{ title?: string | null, fileName?: string | null } | null | undefined} item
+ * @param {string} fallback
+ */
+export function displayTrackTitle(item, fallback = '') {
+  const title = typeof item?.title === 'string' ? item.title.trim() : '';
+  if (title) return title;
+  const fileName = typeof item?.fileName === 'string' ? item.fileName.trim() : '';
+  return fileName || fallback;
+}
+
+/**
  * @param {TrackColumnId} id
- * @param {{ title?: string | null, artist?: string | null, album?: string | null, year?: number | string | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null }} item
+ * @param {{ title?: string | null, fileName?: string | null, artist?: string | null, album?: string | null, year?: number | string | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null }} item
  * @param {(durationMs: number | null | undefined) => string} formatDuration
  * @param {string} titleFallback
  */
 export function formatTrackColumnValue(id, item, formatDuration, titleFallback = '未命名曲目') {
   switch (id) {
     case 'title':
-      return typeof item.title === 'string' && item.title.trim() ? item.title.trim() : titleFallback;
+      return displayTrackTitle(item, titleFallback);
     case 'artist':
       return typeof item.artist === 'string' && item.artist.trim() ? item.artist.trim() : '—';
     case 'album':

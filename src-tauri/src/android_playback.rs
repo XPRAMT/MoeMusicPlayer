@@ -19,8 +19,8 @@ use std::{
 };
 
 use player_core::{
-    MediaLocator, PlaybackCheckpoint, PlaybackQueue, PlaybackQueueSnapshot, QueueRepeatMode,
-    QueueTrackListeningStats, TrackId, TrackSummary,
+    display_track_title, MediaLocator, PlaybackCheckpoint, PlaybackQueue, PlaybackQueueSnapshot,
+    QueueRepeatMode, QueueTrackListeningStats, TrackId, TrackSummary,
 };
 use player_db::{Database, PlaybackSessionCheckpoint};
 use serde::{Deserialize, Serialize};
@@ -525,6 +525,9 @@ impl AndroidActor {
             }
             return self.reload_current_for_explicit_play(request_id, track_id);
         }
+        if let Some(PlaybackQueueSource::Queue { traversal_position }) = source {
+            return self.select_queue_entry(request_id, track_id, traversal_position);
+        }
         let track = self
             .database
             .get_track_summary(track_id)
@@ -538,16 +541,101 @@ impl AndroidActor {
         let mut replacement_queue = replacement_queue;
         replacement_queue.set_repeat_mode(queue_repeat_mode(self.repeat_mode));
         set_queue_shuffle_with_latest_stats(&self.database, &mut replacement_queue, self.shuffle)?;
-        let was_playing = self.native.state == "playing";
-        let play_when_ready =
-            was_playing || !matches!(self.native.state.as_str(), "paused" | "ready" | "stopped");
+        self.load_track_and_replace_queue(request_id, track, uri, replacement_queue, true)
+    }
 
+    fn select_queue_entry(
+        &mut self,
+        request_id: &str,
+        track_id: TrackId,
+        traversal_position: u64,
+    ) -> Result<PlaybackSnapshot, String> {
+        let cursor =
+            usize::try_from(traversal_position).map_err(|_| "播放佇列位置無效。".to_owned())?;
+        let entry_track = self
+            .queue
+            .as_ref()
+            .and_then(|queue| queue.track_at_cursor(cursor))
+            .ok_or_else(|| "播放佇列項目已不存在，請重新整理。".to_owned())?;
+        if entry_track != track_id {
+            return Err("播放佇列項目已變更，請重新整理。".to_owned());
+        }
+        let same_slot = self
+            .queue
+            .as_ref()
+            .is_some_and(|queue| queue.cursor() == cursor)
+            && self
+                .current_track
+                .as_ref()
+                .is_some_and(|track| track.id == track_id);
+        if same_slot {
+            let track_id_text = track_id.to_string();
+            if self.native.track_id.as_deref() == Some(track_id_text.as_str())
+                && self.native.media_key.is_some()
+            {
+                return self.native_command(request_id, "play", None, None, None);
+            }
+            return self.reload_current_for_explicit_play(request_id, track_id);
+        }
+        let track = self
+            .database
+            .get_track_summary(track_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
+        let uri = self
+            .database
+            .resolve_playable_content_uri(track_id)
+            .map_err(|error| error.to_string())?;
         self.meter.seal_segment(&self.native, Instant::now());
         self.flush_statistics()?;
         let command = self.new_command(
             request_id,
             "load",
             Some(track_id.to_string()),
+            Some(uri),
+            Some(self.native_metadata(&track)),
+            Some(0),
+            None,
+            Some(true),
+            None,
+            None,
+        );
+        let native = match self.transact(command) {
+            Ok(native) => native,
+            Err(error) => {
+                self.meter.reset_segment(&self.native, Instant::now());
+                return Err(error);
+            }
+        };
+        self.native = native;
+        self.restored_position_ms = None;
+        self.current_track = Some(track);
+        self.queue
+            .as_mut()
+            .ok_or_else(|| "播放佇列在曲目切換期間消失。".to_owned())?
+            .set_cursor(cursor)
+            .map_err(|error| format!("播放佇列游標無效：{error}"))?;
+        self.publish_queue();
+        self.checkpoint_position(true)?;
+        self.last_flush = Instant::now();
+        self.update_capabilities(request_id)?;
+        self.publish_snapshot_checked(false)
+    }
+
+    fn load_track_and_replace_queue(
+        &mut self,
+        request_id: &str,
+        track: TrackSummary,
+        uri: String,
+        replacement_queue: PlaybackQueue,
+        play_when_ready: bool,
+    ) -> Result<PlaybackSnapshot, String> {
+        self.meter.seal_segment(&self.native, Instant::now());
+        self.flush_statistics()?;
+        let command = self.new_command(
+            request_id,
+            "load",
+            Some(track.id.to_string()),
             Some(uri),
             Some(self.native_metadata(&track)),
             Some(0),
@@ -1232,7 +1320,7 @@ impl AndroidActor {
                 })
             });
         NativeTrackMetadata {
-            title: track.title.clone(),
+            title: display_track_title(track.title.as_deref(), track.file_name.as_deref()),
             artist: track.artist.clone(),
             album: track.album.clone(),
             duration_ms: track.duration_ms,

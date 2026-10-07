@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -299,7 +299,7 @@ pub struct Page<T> {
     pub total_count: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackSummary {
     pub id: TrackId,
@@ -317,6 +317,92 @@ pub struct TrackSummary {
     pub bit_depth: Option<u8>,
     /// Cumulative credited listening time from `track_playback_statistics`.
     pub played_ms: u64,
+    /// File stem used when `title` is missing. Never a directory, full path, or URI query.
+    #[serde(default)]
+    pub file_name: Option<String>,
+}
+
+/// Title shown in lists and playback chrome. A blank tag is missing; artist and album are not used.
+pub fn display_track_title(title: Option<&str>, file_name: Option<&str>) -> Option<String> {
+    non_blank(title)
+        .or_else(|| non_blank(file_name))
+        .map(str::to_owned)
+}
+
+fn non_blank(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|text| !text.is_empty())
+}
+
+/// File stem for a library or playlist locator. Content URIs contribute only a decoded file name.
+pub fn locator_display_file_stem(locator: &MediaLocator) -> Option<String> {
+    match locator {
+        MediaLocator::FileSystem(path) => file_stem_from_path(path),
+        MediaLocator::ContentUri(uri) => file_stem_from_content_uri(uri),
+    }
+}
+
+fn file_stem_from_path(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_string_lossy();
+    non_blank(Some(stem.as_ref())).map(str::to_owned)
+}
+
+fn file_stem_from_content_uri(uri: &str) -> Option<String> {
+    let without_fragment = uri.split_once('#').map(|(head, _)| head).unwrap_or(uri);
+    let path = without_fragment
+        .split_once('?')
+        .map(|(head, _)| head)
+        .unwrap_or(without_fragment);
+    let segment = path.rsplit('/').find(|part| !part.is_empty())?;
+    let decoded = percent_decode(segment)?;
+    if decoded.contains("://") || decoded.contains('?') || decoded.contains('#') {
+        return None;
+    }
+    let name = decoded
+        .rsplit(['/', '\\'])
+        .find(|part| !part.trim().is_empty())?
+        .trim();
+    let name = match name.split_once(':') {
+        Some((volume, rest))
+            if !volume.is_empty()
+                && !volume.contains('.')
+                && volume
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+                && !rest.contains(':') =>
+        {
+            rest.trim()
+        }
+        _ => name,
+    };
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains(['/', '\\', '?', '#', '&', '=', ':'])
+        || name.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    file_stem_from_path(Path::new(name))
+}
+
+fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3]) {
+                if let Ok(value) = u8::from_str_radix(hex, 16) {
+                    decoded.push(value);
+                    index += 3;
+                    continue;
+                }
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(decoded).ok()
 }
 
 /// Fields which the user is allowed to override independently of source metadata.
@@ -326,4 +412,74 @@ pub enum UserMetadataField {
     Artist,
     Album,
     AlbumArtist,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{display_track_title, locator_display_file_stem, MediaLocator};
+
+    #[test]
+    fn missing_title_uses_file_stem_and_ignores_other_tags() {
+        assert_eq!(
+            display_track_title(Some("  晴天  "), Some("ignored")).as_deref(),
+            Some("晴天")
+        );
+        assert_eq!(
+            display_track_title(Some("   "), Some("曲 目")).as_deref(),
+            Some("曲 目")
+        );
+        assert_eq!(display_track_title(None, Some("  ")), None);
+        assert_eq!(display_track_title(Some(""), None), None);
+    }
+
+    #[test]
+    fn locator_file_stem_keeps_only_the_file_name() {
+        assert_eq!(
+            locator_display_file_stem(&MediaLocator::ContentUri(
+                "content://com.android.externalstorage.documents/document/primary%3AMusic%2F%E6%9B%B2%20%E7%9B%AE.flac?displayName=secret.mp3#frag".into()
+            ))
+            .as_deref(),
+            Some("曲 目")
+        );
+        assert_eq!(
+            locator_display_file_stem(&MediaLocator::ContentUri(
+                "content://com.android.externalstorage.documents/document/primary%3Asong.flac"
+                    .into()
+            ))
+            .as_deref(),
+            Some("song")
+        );
+        assert_eq!(
+            locator_display_file_stem(&MediaLocator::ContentUri(
+                "content://media/external/audio/media/42?title=Nope".into()
+            )),
+            None
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_extended_path_file_stem_drops_the_prefix_and_directory() {
+        assert_eq!(
+            locator_display_file_stem(&MediaLocator::FileSystem(std::path::PathBuf::from(
+                r"D:\Music\資料夾\曲 目.live.flac"
+            )))
+            .as_deref(),
+            Some("曲 目.live")
+        );
+        assert_eq!(
+            locator_display_file_stem(&MediaLocator::FileSystem(std::path::PathBuf::from(
+                r"\\?\D:\Music\資料夾\曲 目.flac"
+            )))
+            .as_deref(),
+            Some("曲 目")
+        );
+        assert_eq!(
+            locator_display_file_stem(&MediaLocator::FileSystem(std::path::PathBuf::from(
+                r"\\?\UNC\server\share\音樂 東京\track.flac"
+            )))
+            .as_deref(),
+            Some("track")
+        );
+    }
 }

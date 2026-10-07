@@ -47,6 +47,7 @@
     type NowPlayingAppearancePreferences,
     type PlaylistEntrySummary,
     type PlaylistSummary,
+    type PlaybackQueuePageItem,
     type PlaybackSnapshot,
     type PlaybackQueueSource,
     type ResamplingMode,
@@ -70,6 +71,7 @@
   import {
     DEFAULT_TRACK_COLUMN_PREFERENCES,
     TRACK_COLUMN_DEFINITIONS,
+    displayTrackTitle,
     formatTrackColumnValue,
     isHiResTrack,
     moveTrackColumn,
@@ -1347,6 +1349,19 @@
     );
   }
 
+  async function playQueueEntry(entry: PlaybackQueuePageItem): Promise<void> {
+    if (!playbackReady || isSendingPlaybackCommand) return;
+    selectedTrackId = entry.trackId;
+    const queueSource: PlaybackQueueSource = {
+      kind: 'queue',
+      traversalPosition: entry.traversalPosition,
+    };
+    await sendPlaybackCommand(
+      () => invokeCommand('playback_play', { trackId: entry.trackId, queueSource }),
+      { forceQueueCursorProbe: true },
+    );
+  }
+
   async function pickWindowsFolder(): Promise<void> {
     if (!sourceSyncReady || isUpdatingSource) return;
     isUpdatingSource = true;
@@ -1547,6 +1562,7 @@
   }
 
   function trackFieldLabel(track: TrackSummary | null | undefined, field: TrackFieldFilter['field']): string {
+    if (field === 'title') return displayTrackTitle(track, '—');
     return trackFieldValue(track, field)?.trim() ?? '—';
   }
 
@@ -1796,7 +1812,8 @@
   }
 
   function currentTrackTitle(track: TrackSummary | null | undefined): string {
-    return track?.title?.trim() || '尚未選擇曲目';
+    if (!track) return '尚未選擇曲目';
+    return displayTrackTitle(track, '未命名曲目');
   }
 
   function currentTrackArtist(track: TrackSummary | null | undefined): string {
@@ -2561,7 +2578,8 @@
                 resetKey={playbackQueueResetKey}
                 cursorChangeKey={playbackQueueCursorChangeKey}
                 columns={trackColumnPreferences}
-                  livePlayCount={livePlayCount}
+                livePlayCount={livePlayCount}
+                onPlay={playQueueEntry}
               />
             {/if}
           </section>
@@ -2614,7 +2632,7 @@
             <span
               class="now-playing-track-title"
               data-track-field="title"
-              title={trackFieldValue(playback?.currentTrack, 'title') ?? '沒有曲名'}
+              title={displayTrackTitle(playback?.currentTrack, '') || '沒有曲名'}
             >{trackFieldLabel(playback?.currentTrack, 'title')}</span>
           </nav>
           <p class="now-playing-format" aria-label="音質格式">

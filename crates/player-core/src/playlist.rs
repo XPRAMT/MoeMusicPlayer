@@ -85,7 +85,7 @@ pub struct PlaylistSummary {
 }
 
 /// IPC-safe playlist entry view. It intentionally has no native locator field.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistEntrySummary {
     pub position: u64,
@@ -104,6 +104,9 @@ pub struct PlaylistEntrySummary {
     pub bit_depth: Option<u8>,
     /// Cumulative credited listening time; 0 when unmatched or never played.
     pub played_ms: u64,
+    /// File stem from this entry's locator. Never a directory, full path, or URI query.
+    #[serde(default)]
+    pub file_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

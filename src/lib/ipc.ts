@@ -133,6 +133,8 @@ export interface TrackSummary {
   bitDepth?: number | null;
   /** Cumulative credited listening time in milliseconds. */
   playedMs?: number | null;
+  /** File stem used when `title` is missing. Never a directory or URI query. */
+  fileName?: string | null;
 }
 
 export interface TrackPage {
@@ -174,6 +176,8 @@ export interface PlaylistEntrySummary {
   bitDepth?: number | null;
   bitrateBps?: number | null;
   playedMs?: number | null;
+  /** File stem from the playlist locator when the entry has no title. */
+  fileName?: string | null;
 }
 
 export interface PlaylistPage {
@@ -215,7 +219,8 @@ export type RepeatMode = 'off' | 'one' | 'all';
 
 export type PlaybackQueueSource =
   | { kind: 'library'; query: string | null; fieldFilter?: TrackFieldFilter | null }
-  | { kind: 'playlist'; playlistId: string; entryPosition: number };
+  | { kind: 'playlist'; playlistId: string; entryPosition: number }
+  | { kind: 'queue'; traversalPosition: number };
 export type PlaybackState =
   | 'initializing'
   | 'empty'
