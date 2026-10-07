@@ -12,7 +12,7 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'year', label: '年份', min: '86px', minPx: 86 },
   { id: 'audioFormat', label: '音訊格式', min: '172px', minPx: 172 },
   { id: 'duration', label: '長度', min: '72px', minPx: 72 },
-  { id: 'playCount', label: '播放次數', min: '72px', minPx: 72 },
+  { id: 'playCount', label: '播放次數', min: '78px', minPx: 78 },
 ]);
 
 /** @type {TrackColumnPreference[]} */

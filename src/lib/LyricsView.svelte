@@ -768,7 +768,7 @@
     place-items: center;
     margin: 0;
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--font-body);
     line-height: 1.7;
     text-align: center;
   }
@@ -896,7 +896,7 @@
     justify-content: space-between;
     gap: 10px;
     color: var(--muted);
-    font-size: 11px;
+    font-size: var(--font-caption);
   }
 
   .lyrics-error {
@@ -967,7 +967,7 @@
     color: var(--text);
     background: transparent;
     font: inherit;
-    font-size: 11px;
+    font-size: var(--font-caption);
   }
 
   .lyrics-candidates-search-input::placeholder {
@@ -1012,7 +1012,7 @@
   .lyrics-candidate-empty {
     padding: 18px 10px;
     color: var(--muted);
-    font-size: 14px;
+    font-size: var(--font-title);
     line-height: 1.6;
     text-align: center;
     list-style: none;
@@ -1045,14 +1045,14 @@
 
   .candidate-copy strong {
     color: var(--text);
-    font-size: 15px;
+    font-size: var(--font-title);
     line-height: 1.35;
   }
 
   .candidate-copy span,
   .candidate-copy small {
     color: var(--muted);
-    font-size: 13px;
+    font-size: var(--font-body);
     line-height: 1.4;
   }
 
@@ -1062,7 +1062,7 @@
 
   .candidate-preview-note {
     color: var(--muted);
-    font-size: 13px;
+    font-size: var(--font-body);
     line-height: 1.5;
   }
 
@@ -1084,14 +1084,14 @@
 
   .lyrics-timing-panel-header strong {
     color: var(--text-soft);
-    font-size: 11px;
+    font-size: var(--font-caption);
     font-weight: 650;
   }
 
   .lyrics-timing-panel-header span {
     margin-right: auto;
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--font-body);
     font-variant-numeric: tabular-nums;
   }
 
@@ -1111,7 +1111,7 @@
   .lyrics-timing-hint {
     margin: 0;
     color: var(--muted);
-    font-size: 10px;
+    font-size: var(--font-caption);
     line-height: 1.5;
   }
 

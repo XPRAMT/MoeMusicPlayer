@@ -243,7 +243,7 @@
   .track-list-empty,
   .track-list-count {
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--font-body);
   }
 
   .track-list-error {
@@ -273,13 +273,5 @@
     padding-top: 8px;
     text-align: right;
     font-variant-numeric: tabular-nums;
-  }
-
-  @media (max-width: 620px) {
-    .track-list-count,
-    .track-list-error,
-    .track-list-empty {
-      font-size: 10px;
-    }
   }
 </style>

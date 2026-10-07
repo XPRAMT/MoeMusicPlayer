@@ -74,7 +74,7 @@
     border-radius: 8px;
     color: var(--text-soft);
     background: rgba(var(--text-rgb), 0.025);
-    font-size: 12px;
+    font-size: var(--font-body);
     line-height: 1.5;
   }
 
@@ -84,7 +84,7 @@
     align-items: baseline;
     gap: 4px 8px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-body);
   }
 
   .sync-error-group summary:focus-visible {
@@ -128,7 +128,7 @@
     color: var(--text);
     font-family: var(--font-mono, ui-monospace, monospace);
     overflow-wrap: anywhere;
-    font-size: 12px;
+    font-size: var(--font-body);
   }
 
   .sync-error-group li > span {

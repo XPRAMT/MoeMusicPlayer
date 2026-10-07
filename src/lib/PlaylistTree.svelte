@@ -113,7 +113,7 @@
     color: var(--text);
     background: transparent;
     font: inherit;
-    font-size: 11px;
+    font-size: var(--font-caption);
     font-weight: 650;
     cursor: pointer;
   }
@@ -172,7 +172,7 @@
     margin-left: auto;
     color: var(--text-soft);
     font-family: 'DM Mono', monospace;
-    font-size: 9px;
+    font-size: var(--font-caption);
     font-weight: 500;
   }
 
@@ -244,13 +244,13 @@
 
   .playlist-tree-copy strong {
     color: inherit;
-    font-size: 10px;
+    font-size: var(--font-caption);
     font-weight: 550;
   }
 
   .playlist-tree-copy small {
     color: var(--text-soft);
-    font-size: 8px;
+    font-size: var(--font-caption);
   }
 
   @media (max-width: 820px) {

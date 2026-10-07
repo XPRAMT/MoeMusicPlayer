@@ -225,7 +225,7 @@
   .queue-entry-state {
     overflow: hidden;
     color: var(--accent-text);
-    font-size: 12px;
+    font-size: var(--font-body);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -237,6 +237,6 @@
   .queue-cursor-error {
     margin: 0 0 8px;
     color: var(--text-soft);
-    font-size: 10px;
+    font-size: var(--font-caption);
   }
 </style>
