@@ -276,12 +276,12 @@ input:focus-visible {
 }
 
 .app-shell.has-main-backdrop .player-dock {
-  background: color-mix(in srgb, var(--page) 28%, transparent);
+  background: rgba(var(--text-rgb), 0.1);
   backdrop-filter: blur(18px);
 }
 
 .app-shell.has-main-backdrop .settings-tab {
-  background: color-mix(in srgb, var(--page) 28%, transparent);
+  background: rgba(var(--text-rgb), 0.1);
 }
 
 .now-playing-overlay {
@@ -732,14 +732,14 @@ input:focus-visible {
 
 .nav-link:hover:not(:disabled):not(.active) {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(var(--text-rgb), 0.1);
 }
 
 .nav-link.active,
 .nav-link.active:hover:not(:disabled) {
   border-color: transparent;
   color: var(--accent-text);
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(var(--text-rgb), 0.2);
 }
 
 .nav-link.active::before {
@@ -1357,7 +1357,7 @@ input:focus-visible {
   min-height: 38px;
   border-bottom: 1px solid var(--line);
   color: var(--text-soft);
-  background: color-mix(in srgb, var(--page) 35%, transparent);
+  background: rgba(var(--text-rgb), 0.14);
   font-family: Consolas, monospace;
   font-size: var(--font-body);
   letter-spacing: 0.07em;
@@ -1378,13 +1378,28 @@ input:focus-visible {
   border-bottom: 0;
 }
 
-.track-row:hover {
-  background: rgba(255, 255, 255, 0.1);
+.track-row::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background: rgb(var(--text-rgb));
+  opacity: 0;
+  pointer-events: none;
 }
 
-.track-row.selected,
-.track-row.selected:hover {
-  background: rgba(255, 255, 255, 0.3);
+.track-row > * {
+  position: relative;
+  z-index: 1;
+}
+
+.track-row:hover::before {
+  opacity: 0.1;
+}
+
+.track-row.selected::before,
+.track-row.selected:hover::before {
+  opacity: 0.22;
 }
 
 .column-index,
@@ -2577,7 +2592,7 @@ input:focus-visible {
   border: 1px solid var(--line-strong);
   border-radius: 9px;
   outline: 0;
-  background: rgba(0, 0, 0, 0.17);
+  background: rgba(var(--text-rgb), 0.12);
   font-size: var(--font-caption);
 }
 

@@ -154,7 +154,7 @@
   .playlist-tree-open:focus-visible,
   .playlist-tree-toggle:hover,
   .playlist-tree-toggle:focus-visible {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(var(--text-rgb), 0.1);
   }
 
   .playlist-tree-open:focus-visible,
@@ -213,20 +213,41 @@
     background: transparent;
     text-align: left;
     cursor: pointer;
+    position: relative;
+    isolation: isolate;
   }
 
   .playlist-tree-item:hover,
-  .playlist-tree-item:focus-visible {
+  .playlist-tree-item:focus-visible,
+  .playlist-tree-item.selected {
     color: var(--text);
-    background: rgba(255, 255, 255, 0.1);
   }
 
-  .playlist-tree-item.selected,
-  .playlist-tree-item.selected:hover,
-  .playlist-tree-item.selected:focus-visible {
-    border-color: transparent;
-    color: var(--text);
-    background: rgba(255, 255, 255, 0.2);
+  .playlist-tree-item::before {
+    content: '';
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    border-radius: inherit;
+    background: rgb(var(--text-rgb));
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .playlist-tree-item > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .playlist-tree-item:hover::before,
+  .playlist-tree-item:focus-visible::before {
+    opacity: 0.1;
+  }
+
+  .playlist-tree-item.selected::before,
+  .playlist-tree-item.selected:hover::before,
+  .playlist-tree-item.selected:focus-visible::before {
+    opacity: 0.2;
   }
 
   .playlist-tree-item > :global(svg) {

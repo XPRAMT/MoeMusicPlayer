@@ -2,24 +2,26 @@ async page => {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   await page.goto('http://127.0.0.1:4173/', { waitUntil: 'domcontentloaded' });
   const found = await page.evaluate(() => {
-    const wanted = [
-      '.nav-link.active, .nav-link.active:hover:not(:disabled)',
-      '.track-row:hover',
-      '.track-row.selected, .track-row.selected:hover',
-    ];
+    const wanted = {
+      '.nav-link:hover:not(:disabled):not(.active)': 'backgroundColor',
+      '.nav-link.active, .nav-link.active:hover:not(:disabled)': 'backgroundColor',
+      '.track-row:hover::before': 'opacity',
+      '.track-row.selected::before, .track-row.selected:hover::before': 'opacity',
+    };
     const hits = {};
     for (const sheet of document.styleSheets) {
       let rules;
       try { rules = sheet.cssRules; } catch { continue; }
       for (const rule of rules) {
         if (!(rule instanceof CSSStyleRule)) continue;
-        if (wanted.includes(rule.selectorText)) hits[rule.selectorText] = rule.style.backgroundColor;
+        if (wanted[rule.selectorText]) hits[rule.selectorText] = rule.style[wanted[rule.selectorText]];
       }
     }
     return hits;
   });
-  assert(found['.nav-link.active, .nav-link.active:hover:not(:disabled)'] === 'rgba(255, 255, 255, 0.2)', JSON.stringify(found));
-  assert(found['.track-row:hover'] === 'rgba(255, 255, 255, 0.1)', JSON.stringify(found));
-  assert(found['.track-row.selected, .track-row.selected:hover'] === 'rgba(255, 255, 255, 0.3)', JSON.stringify(found));
+  assert(found['.nav-link:hover:not(:disabled):not(.active)'] === 'rgba(var(--text-rgb), 0.1)', JSON.stringify(found));
+  assert(found['.nav-link.active, .nav-link.active:hover:not(:disabled)'] === 'rgba(var(--text-rgb), 0.2)', JSON.stringify(found));
+  assert(found['.track-row:hover::before'] === '0.1', JSON.stringify(found));
+  assert(found['.track-row.selected::before, .track-row.selected:hover::before'] === '0.22', JSON.stringify(found));
   return { result: 'PASS', found };
 }
