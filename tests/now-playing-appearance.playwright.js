@@ -39,13 +39,11 @@ async page => {
   }
   await setRange(brightness, 52);
   const preview = await page.evaluate(() => ({
-    blur: document.querySelector('.now-playing-appearance-preview').style.getPropertyValue('--preview-blur'),
-    alpha: document.querySelector('.now-playing-appearance-preview').style.getPropertyValue('--preview-background-overlay-alpha'),
     blurValue: document.querySelector('[aria-label="封面背景模糊程度"]').value,
     brightnessValue: document.querySelector('[aria-label="封面背景亮度"]').value,
+    previewGone: document.querySelector('.now-playing-appearance-preview') === null,
   }));
-  assert.equal(preview.blur, '25px', 'blur preview should update immediately');
-  assert.equal(preview.alpha, '0.48', 'background overlay preview should update immediately');
+  assert.equal(preview.previewGone, true, 'the appearance sample preview is removed');
   assert.equal(preview.blurValue, '25', 'blur slider should keep the latest pointer value');
   assert.equal(preview.brightnessValue, '52', 'brightness slider should keep the latest pointer value');
   await wait(220);

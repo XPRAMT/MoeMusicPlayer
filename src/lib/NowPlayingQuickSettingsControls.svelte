@@ -56,15 +56,6 @@
         </button>
       </div>
     </div>
-    <div
-      class="now-playing-appearance-preview"
-      style={`--preview-blur: ${appearance.backgroundBlurPx}px; --preview-background-overlay-alpha: ${(100 - appearance.backgroundBrightnessPercent) / 100};`}
-      role="img"
-      aria-label={`外觀預覽：模糊 ${appearance.backgroundBlurPx} 像素，封面背景亮度 ${appearance.backgroundBrightnessPercent}%`}
-    >
-      <span class="now-playing-appearance-preview-surface">播放頁工具列</span>
-      <span class="now-playing-appearance-preview-dock">底部播放控制</span>
-    </div>
     <label class="lyrics-preference-range">
       <span><strong>封面背景模糊</strong><output>{appearance.backgroundBlurPx}px</output></span>
       <input type="range" min="0" max="40" step="1" value={appearance.backgroundBlurPx} aria-label="封面背景模糊程度" oninput={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) }, true)} />
