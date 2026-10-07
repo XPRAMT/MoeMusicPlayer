@@ -10,7 +10,7 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'artist', label: '演出者', min: 'minmax(110px,1.15fr)', minPx: 110 },
   { id: 'album', label: '專輯', min: 'minmax(120px,1.25fr)', minPx: 120 },
   { id: 'year', label: '年份', min: '86px', minPx: 86 },
-  { id: 'audioFormat', label: '音訊格式', min: '258px', minPx: 258 },
+  { id: 'audioFormat', label: '音訊格式', min: '172px', minPx: 172 },
   { id: 'duration', label: '長度', min: '72px', minPx: 72 },
   { id: 'playCount', label: '播放次數', min: '72px', minPx: 72 },
 ]);
