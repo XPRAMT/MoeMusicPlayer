@@ -1,5 +1,5 @@
 /** @typedef {'fullscreen' | 'playPause' | 'seekBack' | 'seekForward' | 'previous' | 'next'} ShortcutAction */
-/** @typedef {'keyboard' | 'mouse'} ShortcutDevice */
+/** @typedef {'keyboard' | 'mouse' | 'gamepad'} ShortcutDevice */
 /**
  * @typedef {Object} ShortcutBinding
  * @property {ShortcutDevice} device
@@ -22,6 +22,24 @@ export const SHORTCUT_ACTIONS = [
 /** @type {ShortcutAction[]} */
 const ACTIONS = SHORTCUT_ACTIONS.map((action) => action.id);
 const MOUSE_CODES = new Set(['wheelUp', 'wheelDown', 'back', 'forward']);
+const GAMEPAD_LABELS = {
+  button0: '手柄 A',
+  button1: '手柄 B',
+  button2: '手柄 X',
+  button3: '手柄 Y',
+  button4: '手柄 LB',
+  button5: '手柄 RB',
+  button6: '手柄 LT',
+  button7: '手柄 RT',
+  button8: '手柄返回',
+  button9: '手柄開始',
+  button10: '手柄左搖桿',
+  button11: '手柄右搖桿',
+  button12: '手柄方向上',
+  button13: '手柄方向下',
+  button14: '手柄方向左',
+  button15: '手柄方向右',
+};
 const KEY_LABELS = {
   F11: 'F11',
   Space: '空白鍵',
@@ -79,6 +97,9 @@ function normalizeBinding(binding) {
     return { device, code };
   }
   if (device === 'mouse' && typeof code === 'string' && MOUSE_CODES.has(code)) {
+    return { device, code };
+  }
+  if (device === 'gamepad' && typeof code === 'string' && /^button(?:[0-9]|1[0-5])$/.test(code)) {
     return { device, code };
   }
   return null;
@@ -144,6 +165,9 @@ function correctLegacyWheelDirection(settings) {
 export function shortcutBindingLabel(binding) {
   if (Object.prototype.hasOwnProperty.call(KEY_LABELS, binding.code)) {
     return KEY_LABELS[/** @type {keyof typeof KEY_LABELS} */ (binding.code)];
+  }
+  if (Object.prototype.hasOwnProperty.call(GAMEPAD_LABELS, binding.code)) {
+    return GAMEPAD_LABELS[/** @type {keyof typeof GAMEPAD_LABELS} */ (binding.code)];
   }
   return binding.code;
 }

@@ -296,7 +296,7 @@ export interface LyricsCandidate {
 export type LyricsResultStatus = 'ready' | 'empty' | 'candidates' | 'error';
 
 export type ShortcutAction = 'fullscreen' | 'playPause' | 'seekBack' | 'seekForward' | 'previous' | 'next';
-export type ShortcutDevice = 'keyboard' | 'mouse';
+export type ShortcutDevice = 'keyboard' | 'mouse' | 'gamepad';
 export interface ShortcutBinding {
   device: ShortcutDevice;
   code: string;

@@ -542,6 +542,7 @@ pub fn clamp_window_geometry_to_monitors(
 pub enum ShortcutDevice {
     Keyboard,
     Mouse,
+    Gamepad,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -617,6 +618,11 @@ impl ShortcutSettings {
                             "wheelUp" | "wheelDown" | "back" | "forward"
                         )
                     }
+                    ShortcutDevice::Gamepad => binding
+                        .code
+                        .strip_prefix("button")
+                        .and_then(|index| index.parse::<u8>().ok())
+                        .is_some_and(|index| index <= 15),
                 };
                 if !ok {
                     return Err(SettingsError::InvalidData(

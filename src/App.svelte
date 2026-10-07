@@ -420,6 +420,7 @@
     window.addEventListener('keydown', handleShortcutKeydown, true);
     window.addEventListener('mousedown', handleShortcutMouseDown, true);
     window.addEventListener('wheel', handleShortcutWheel, { capture: true, passive: false });
+    gamepadFrame = requestAnimationFrame(pollGamepads);
     applyAndroidInsets();
     if (isTauri()) {
       playbackPollTimer = setInterval(() => {
@@ -512,6 +513,7 @@
     window.removeEventListener('keydown', handleShortcutKeydown, true);
     window.removeEventListener('mousedown', handleShortcutMouseDown, true);
     window.removeEventListener('wheel', handleShortcutWheel, true);
+    cancelAnimationFrame(gamepadFrame);
   });
 
   async function loadThemePreferences(): Promise<void> {
@@ -777,6 +779,34 @@
     if (!action) return;
     event.preventDefault();
     runShortcut(action);
+  }
+
+  const gamepadPressed = new Map<string, boolean>();
+  let gamepadFrame = 0;
+
+  function pollGamepads(): void {
+    const pads = navigator.getGamepads?.() ?? [];
+    let captured = false;
+    for (const pad of pads) {
+      if (!pad || captured) continue;
+      for (let index = 0; index < pad.buttons.length && index <= 15; index += 1) {
+        const button = pad.buttons[index];
+        const key = `${pad.index}:${index}`;
+        const pressed = button.pressed || button.value > 0.55;
+        const wasPressed = gamepadPressed.get(key) === true;
+        gamepadPressed.set(key, pressed);
+        if (!pressed || wasPressed) continue;
+        const code = `button${index}`;
+        if (capturingShortcut) {
+          recordShortcutBinding({ device: 'gamepad', code });
+          captured = true;
+          break;
+        }
+        const action = shortcutActionFor(shortcutSettings, 'gamepad', code);
+        if (action) runShortcut(action);
+      }
+    }
+    gamepadFrame = requestAnimationFrame(pollGamepads);
   }
 
   function handleShortcutWheel(event: WheelEvent): void {
@@ -2038,11 +2068,11 @@
                 <div class="settings-panel-header">
                   <div>
                     <h3>快捷鍵</h3>
-                    <p>可綁定鍵盤、滑鼠滾輪與滑鼠側鍵。點「新增」後按下要使用的操作，Esc 取消。輸入文字時不會觸發。</p>
+                    <p>可綁定鍵盤、滑鼠滾輪、滑鼠側鍵與手柄按鈕。預設不含手柄按鍵。點「新增」後按下要使用的操作，Esc 取消。輸入文字時不會觸發。</p>
                   </div>
                 </div>
                 {#if capturingShortcut}
-                  <p class="settings-preference-status" role="status">正在設定「{SHORTCUT_ACTIONS.find((action) => action.id === capturingShortcut)?.label}」。請按下按鍵、滾動滾輪或按滑鼠側鍵。</p>
+                  <p class="settings-preference-status" role="status">正在設定「{SHORTCUT_ACTIONS.find((action) => action.id === capturingShortcut)?.label}」。請按下按鍵、滾動滾輪、按滑鼠側鍵或手柄按鈕。</p>
                 {/if}
                 <div class="shortcut-list">
                   {#each SHORTCUT_ACTIONS as action (action.id)}

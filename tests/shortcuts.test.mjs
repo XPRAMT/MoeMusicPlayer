@@ -25,6 +25,18 @@ test('shortcut defaults bind keyboard and mouse the way the player starts', () =
   assert.equal(shortcutBindingLabel(shortcuts.previous[1]), '滑鼠上頁');
 });
 
+test('gamepad buttons can be bound and are absent from the defaults', () => {
+  const defaults = defaultShortcutSettings();
+  const boundDevices = Object.values(defaults).flat().map((binding) => binding.device);
+  assert.equal(boundDevices.includes('gamepad'), false);
+  const bound = addShortcutBinding(defaults, 'playPause', { device: 'gamepad', code: 'button0' });
+  assert.equal(shortcutActionFor(bound, 'gamepad', 'button0'), 'playPause');
+  assert.equal(shortcutActionFor(bound, 'keyboard', 'Space'), 'playPause');
+  assert.equal(shortcutBindingLabel(bound.playPause.find((binding) => binding.device === 'gamepad')), '手柄 A');
+  const rejected = normalizeShortcutSettings({ playPause: [{ device: 'gamepad', code: 'button99' }] });
+  assert.equal(shortcutActionFor(rejected, 'gamepad', 'button99'), null);
+});
+
 test('rebinding a shortcut moves it off the previous action', () => {
   const moved = addShortcutBinding(defaultShortcutSettings(), 'playPause', {
     device: 'keyboard',
