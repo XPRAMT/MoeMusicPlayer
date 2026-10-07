@@ -179,7 +179,7 @@
 - 歌詞候選面板底列固定顯示「移除歌詞」（不因目前畫面沒有歌詞物件而隱藏）：會關閉選擇器並透過 `lyrics_clear_track` 清除該曲已套用／快取歌詞（本機 sidecar／內嵌檔不刪）；標題列「關閉」仍只取消選擇、不移除歌詞。候選清單在封面等高面板內捲動，底列不被裁切。手動搜尋若未帶回歌詞物件，仍保留進入選擇前的歌詞。
 - 「設定 → 歌詞」與快速設定可開啟簡體轉繁體。播放時以 opencc-js 在記憶體轉換整首歌的原文與譯文（`STCharacters`、`STPhrases`、`TWVariants`），不載入 `TWPhrases`，不改用詞，不把結果寫回歌詞檔或 SQLite。羅馬拼音不轉換。授權全文在 `licenses/opencc-js-MIT.txt` 與 `licenses/opencc-data-Apache-2.0.txt`。
 - 歌詞外觀新增文字效果三選一（陰影／描邊／關閉），欄位 `textEffect`（`shadow`｜`stroke`｜`none`，預設陰影），設定頁與快速設定歌詞區可切換，並與其他歌詞偏好一併持久化；套用至原文與譯文／羅馬拼音。
-- Windows Release：`npm run release:windows` 已完成時間軸點擊不再先跳回舊位置的建置、原子替換與固定輸出核對；`release/moemusicplayer.exe` 大小為 20,801,536 bytes，SHA-256 `C95D5765D1B3BE95365DCF264576717FA64EBC836D454A918206E0B0DA0EE06A`。點選後滑桿留在目標，直到播放進度跟上。最大化工作區與全螢幕切換仍待使用者重開此 EXE 後確認。
+- Windows Release：`npm run release:windows` 已完成歌詞簡轉繁的建置、原子替換與固定輸出核對；`release/moemusicplayer.exe` 大小為 21,208,576 bytes，SHA-256 `B436F6F099D47AF4CBA846FBAE2DE9EF3FF7209F35271AA81F07A13CAC77E1B3`。設定 → 歌詞可開啟，只載入 STCharacters、STPhrases、TWVariants。播放中的程式若鎖住舊檔，`.bak` 會保留，新 EXE 已核對。最大化工作區與全螢幕切換仍待使用者重開此 EXE 後確認。
 - 封面與歌詞外層 `.now-playing-card` 半透明白框／淡底已移除（border/background 透明），A/B 僅保留分欄與間距。
 - 正在播放曲目的「播放次數」每秒依 in-memory 聆聽進度更新一次（base `playedMs` + 播放中自然 position 前進），不重查整庫；僅目前曲目受影響。Now Playing 頂列與曲庫／播放清單／佇列中可見的目前列同步覆寫顯示。
 - 同時間戳多行 LRC 已改為主文／譯文／羅馬拼音合併（見產品需求「同時間戳多行 LRC」）；手動指定歌詞改為優先於本機 sidecar／內嵌歌詞，`lyrics_get_track`／`lyrics_search` 初始載入與 `lyrics_clear_track` 後重載共用 `load_track_result_with_context` 的此優先序。Rust 測試：player-core lyrics 17/17（含 `[00:13.64]二番なんて望んでない`／`[00:13.64]才不稀罕當第二呢` 範例、三行角色、第四行忽略、非相鄰同時間戳、空白行、外部 tlyric 只補缺）、Windows platform lyrics 4/4、Tauri lyrics 27/27（含 Windows sidecar 同時間戳譯文、自動快取不遮蔽本機、手動指定優先於 sidecar、清除後回落本機、舊快取讀取折疊）。正式 Tauri 視窗中手動指定後切歌再回來的實際行為仍待人工驗收。
