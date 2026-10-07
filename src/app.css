@@ -1357,7 +1357,7 @@ input:focus-visible {
   min-height: 38px;
   border-bottom: 1px solid var(--line);
   color: var(--text-soft);
-  background: rgba(var(--text-rgb), 0.14);
+  background: rgba(var(--text-rgb), 0.2);
   font-family: Consolas, monospace;
   font-size: var(--font-body);
   letter-spacing: 0.07em;
@@ -1393,8 +1393,7 @@ input:focus-visible {
   z-index: 1;
 }
 
-.track-row:hover::before,
-.track-row.active:not(.selected)::before {
+.track-row:hover::before {
   opacity: 0.1;
 }
 

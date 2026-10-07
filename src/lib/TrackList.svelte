@@ -213,7 +213,7 @@
     box-sizing: border-box;
     height: var(--paged-header-height, 37px);
     min-height: var(--paged-header-height, 37px);
-    background: rgba(var(--text-rgb), 0.14);
+    background: rgba(var(--text-rgb), 0.2);
   }
 
   :global(.virtual-track-row) {

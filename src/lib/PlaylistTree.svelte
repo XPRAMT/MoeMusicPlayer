@@ -84,7 +84,7 @@
     padding: 6px;
     border: 1px solid var(--line);
     border-radius: 12px;
-    background: rgba(var(--text-rgb), 0.014);
+    background: transparent;
   }
 
   .playlist-tree-heading {
