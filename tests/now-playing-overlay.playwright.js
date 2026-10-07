@@ -47,7 +47,7 @@ async page => {
   async function selectLayoutInSettings(layout) {
     await page.getByRole('button', { name: '設定', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.app-shell')?.getAttribute('data-active-view') === 'settings');
-    await page.getByRole('tab', { name: '正在播放' }).click();
+    await page.getByRole('tab', { name: '播放頁' }).click();
     assert.equal(await page.locator('#now-playing-layout-panel input[aria-label="封面背景亮度"]').count(), 1, 'main settings exposes cover background brightness');
     assert.equal(await page.locator('#now-playing-layout-panel input[aria-label="元件底色透明度"]').count(), 0, 'main settings removes surface transparency');
     await page.getByRole('button', { name: layout === 'a' ? '排列 A：封面在前，歌詞在後' : '排列 B：歌詞在前，封面在後' }).click();
@@ -226,7 +226,7 @@ async page => {
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '封面背景亮度', 'Shift+Tab stays inside the settings dialog');
   await page.keyboard.press('Tab');
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '關閉快速設定', 'Tab wraps focus to the close button');
-  await quickSettings.getByRole('tab', { name: '正在播放' }).click();
+  await quickSettings.getByRole('tab', { name: '播放頁' }).click();
   for (const label of ['封面背景模糊程度', '封面背景亮度']) {
     assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
   }
@@ -237,7 +237,7 @@ async page => {
   assert.equal(await quickSettings.getByRole('checkbox', { name: '簡體轉繁體' }).count(), 1, 'drawer exposes simplified-to-traditional');
   await quickSettings.getByRole('tab', { name: '外觀' }).click();
   assert.equal(await quickSettings.locator('input[aria-label="快速設定面板透明度"]').inputValue(), '70', 'drawer shares the appearance opacity control at 70%');
-  await quickSettings.getByRole('tab', { name: '正在播放' }).click();
+  await quickSettings.getByRole('tab', { name: '播放頁' }).click();
   assert.equal(await page.locator('.now-playing-overlay-body').evaluate((element) => element.inert), true, 'quick settings modal makes the covered playback view inert');
   assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), true, 'modal drawer blocks dock controls while open');
   assert.equal(await quickSettings.locator('input[aria-label="元件底色透明度"]').count(), 0, 'surface transparency is not configurable');
@@ -365,7 +365,7 @@ async page => {
     assertOnlyDrawerMoved(afterWheel, afterOverscroll, `${viewport.width}x${viewport.height} bottom overscroll`);
     assert.ok(afterOverscroll.ownScroll === afterOverscroll.ownMaxScroll || afterOverscroll.ownMaxScroll === 0, `${viewport.width}x${viewport.height}: overscroll does not chain to the playback page`);
 
-    await quickSettings.getByRole('tab', { name: '正在播放', exact: true }).click();
+    await quickSettings.getByRole('tab', { name: '播放頁', exact: true }).click();
     await page.waitForTimeout(320);
     const afterReturnNavigation = await captureDrawerScrollState();
     assertOnlyDrawerMoved(afterOverscroll, afterReturnNavigation, `${viewport.width}x${viewport.height} return navigation`);

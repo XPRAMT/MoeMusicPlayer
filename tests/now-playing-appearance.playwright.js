@@ -25,7 +25,7 @@ async page => {
   await page.reload();
   await page.waitForFunction(() => document.querySelector('.dock-art-image')?.naturalWidth === 800);
   await page.getByRole('button', { name: '設定', exact: true }).click();
-  await page.getByRole('tab', { name: '正在播放' }).click();
+  await page.getByRole('tab', { name: '播放頁' }).click();
   const blur = page.getByRole('slider', { name: '封面背景模糊程度' });
   const brightness = page.getByRole('slider', { name: '封面背景亮度' });
   await page.waitForFunction(() => document.querySelector('[aria-label="封面背景模糊程度"]')?.value === '20');
@@ -68,7 +68,7 @@ async page => {
   await page.reload();
   await page.waitForFunction(() => document.querySelector('.dock-art')?.disabled === false);
   await page.getByRole('button', { name: '設定', exact: true }).click();
-  await page.getByRole('tab', { name: '正在播放' }).click();
+  await page.getByRole('tab', { name: '播放頁' }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="封面背景模糊程度"]')?.value === '25');
   await page.waitForFunction(() => document.querySelector('[aria-label="封面背景亮度"]')?.value === '52');
   await page.evaluate(() => { window.__appearanceStep = 'preferences restored'; });

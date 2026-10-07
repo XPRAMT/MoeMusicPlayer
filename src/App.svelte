@@ -1637,7 +1637,7 @@
                 aria-selected={settingsSection === 'now-playing'}
                 aria-controls="{scope}now-playing-layout-panel"
                 onclick={() => (settingsSection = 'now-playing')}
-              >正在播放</button>
+              >播放頁</button>
               <button
                 id="{scope}lyrics-tab"
                 class="settings-tab"
