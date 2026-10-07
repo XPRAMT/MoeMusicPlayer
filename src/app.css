@@ -2765,20 +2765,16 @@ input:focus-visible {
   border-radius: 10px;
   color: #ffffff;
   font: inherit;
-  cursor: pointer;
+  cursor: inherit;
   background:
     radial-gradient(circle at 70% 24%, rgba(136, 201, 180, 0.1), transparent 40%),
     linear-gradient(145deg, #272a2b, #1c2026);
-  transition: border-color 140ms ease, transform 140ms ease;
 }
 
-.dock-art:hover:not(:disabled) {
-  border-color: rgba(var(--accent-rgb), 0.55);
-  transform: translateY(-1px);
-}
-
+.dock-art:hover,
 .dock-art:disabled {
-  cursor: default;
+  cursor: inherit;
+  transform: none;
 }
 
 .dock-art svg {
