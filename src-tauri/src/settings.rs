@@ -581,8 +581,8 @@ impl Default for ShortcutSettings {
         Self {
             fullscreen: vec![keyboard_binding("F11")],
             play_pause: vec![keyboard_binding("Space")],
-            seek_back: vec![keyboard_binding("ArrowLeft"), mouse_binding("wheelUp")],
-            seek_forward: vec![keyboard_binding("ArrowRight"), mouse_binding("wheelDown")],
+            seek_back: vec![keyboard_binding("ArrowLeft"), mouse_binding("wheelDown")],
+            seek_forward: vec![keyboard_binding("ArrowRight"), mouse_binding("wheelUp")],
             previous: vec![keyboard_binding("PageUp"), mouse_binding("back")],
             next: vec![keyboard_binding("PageDown"), mouse_binding("forward")],
         }
@@ -633,7 +633,36 @@ fn lenient_shortcuts(value: Option<serde_json::Value>) -> ShortcutSettings {
     value
         .and_then(|value| serde_json::from_value::<ShortcutSettings>(value).ok())
         .filter(|shortcuts| shortcuts.validate().is_ok())
+        .map(correct_legacy_wheel_direction)
         .unwrap_or_default()
+}
+
+/// The first release bound wheel-up to seek backward. Flip that saved pair once.
+fn correct_legacy_wheel_direction(mut shortcuts: ShortcutSettings) -> ShortcutSettings {
+    let back_up = shortcuts.seek_back.iter().any(|binding| {
+        binding.device == ShortcutDevice::Mouse && binding.code == "wheelUp"
+    });
+    let forward_down = shortcuts.seek_forward.iter().any(|binding| {
+        binding.device == ShortcutDevice::Mouse && binding.code == "wheelDown"
+    });
+    if !(back_up && forward_down) {
+        return shortcuts;
+    }
+    for binding in shortcuts
+        .seek_back
+        .iter_mut()
+        .chain(shortcuts.seek_forward.iter_mut())
+    {
+        if binding.device != ShortcutDevice::Mouse {
+            continue;
+        }
+        if binding.code == "wheelUp" {
+            binding.code = "wheelDown".to_owned();
+        } else if binding.code == "wheelDown" {
+            binding.code = "wheelUp".to_owned();
+        }
+    }
+    shortcuts
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -15,8 +15,8 @@ test('shortcut defaults bind keyboard and mouse the way the player starts', () =
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'Space'), 'playPause');
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'ArrowLeft'), 'seekBack');
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'ArrowRight'), 'seekForward');
-  assert.equal(shortcutActionFor(shortcuts, 'mouse', 'wheelUp'), 'seekBack');
-  assert.equal(shortcutActionFor(shortcuts, 'mouse', 'wheelDown'), 'seekForward');
+  assert.equal(shortcutActionFor(shortcuts, 'mouse', 'wheelUp'), 'seekForward');
+  assert.equal(shortcutActionFor(shortcuts, 'mouse', 'wheelDown'), 'seekBack');
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'PageUp'), 'previous');
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'PageDown'), 'next');
   assert.equal(shortcutActionFor(shortcuts, 'mouse', 'back'), 'previous');
@@ -34,6 +34,21 @@ test('rebinding a shortcut moves it off the previous action', () => {
   assert.equal(shortcutActionFor(moved, 'keyboard', 'Space'), 'playPause');
   const removed = removeShortcutBinding(moved, 'playPause', { device: 'keyboard', code: 'Space' });
   assert.equal(shortcutActionFor(removed, 'keyboard', 'Space'), null);
+});
+
+test('saved wheel-up seek-back bindings flip to the corrected default', () => {
+  const corrected = normalizeShortcutSettings({
+    seekBack: [
+      { device: 'keyboard', code: 'ArrowLeft' },
+      { device: 'mouse', code: 'wheelUp' },
+    ],
+    seekForward: [
+      { device: 'keyboard', code: 'ArrowRight' },
+      { device: 'mouse', code: 'wheelDown' },
+    ],
+  });
+  assert.equal(shortcutActionFor(corrected, 'mouse', 'wheelUp'), 'seekForward');
+  assert.equal(shortcutActionFor(corrected, 'mouse', 'wheelDown'), 'seekBack');
 });
 
 test('invalid shortcut settings fall back per action without dropping the rest', () => {

@@ -42,11 +42,11 @@ export function defaultShortcutSettings() {
     playPause: [{ device: 'keyboard', code: 'Space' }],
     seekBack: [
       { device: 'keyboard', code: 'ArrowLeft' },
-      { device: 'mouse', code: 'wheelUp' },
+      { device: 'mouse', code: 'wheelDown' },
     ],
     seekForward: [
       { device: 'keyboard', code: 'ArrowRight' },
-      { device: 'mouse', code: 'wheelDown' },
+      { device: 'mouse', code: 'wheelUp' },
     ],
     previous: [
       { device: 'keyboard', code: 'PageUp' },
@@ -110,7 +110,31 @@ export function normalizeShortcutSettings(value) {
     }
     next[action] = bindings;
   }
-  return next;
+  return correctLegacyWheelDirection(next);
+}
+
+/**
+ * The first shortcut release mapped wheel-up to seek backward. Saved copies of
+ * that pair are flipped once; any other wheel assignment is left alone.
+ * @param {ShortcutSettings} settings
+ * @returns {ShortcutSettings}
+ */
+function correctLegacyWheelDirection(settings) {
+  const backUp = settings.seekBack.some((binding) => binding.device === 'mouse' && binding.code === 'wheelUp');
+  const forwardDown = settings.seekForward.some((binding) => binding.device === 'mouse' && binding.code === 'wheelDown');
+  if (!backUp || !forwardDown) return settings;
+  /** @param {ShortcutBinding[]} bindings */
+  const swap = (bindings) => bindings.map((binding) => {
+    if (binding.device !== 'mouse') return binding;
+    if (binding.code === 'wheelUp') return { device: binding.device, code: 'wheelDown' };
+    if (binding.code === 'wheelDown') return { device: binding.device, code: 'wheelUp' };
+    return binding;
+  });
+  return {
+    ...settings,
+    seekBack: swap(settings.seekBack),
+    seekForward: swap(settings.seekForward),
+  };
 }
 
 /**

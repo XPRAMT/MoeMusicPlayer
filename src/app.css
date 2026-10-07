@@ -2258,7 +2258,6 @@ input:focus-visible {
 
 .shortcut-list {
   display: grid;
-  gap: 10px;
   margin-top: 14px;
 }
 
@@ -2267,6 +2266,12 @@ input:focus-visible {
   grid-template-columns: minmax(7rem, 9rem) minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid color-mix(in srgb, #fff 34%, transparent);
+}
+
+.shortcut-row:last-child {
+  border-bottom: none;
 }
 
 .shortcut-bindings {
