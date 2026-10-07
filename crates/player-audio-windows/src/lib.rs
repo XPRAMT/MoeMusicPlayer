@@ -135,7 +135,7 @@ pub enum DseeHxState {
     Off,
     /// The 32-bit helper is streaming this track through the installed filter.
     Active,
-    /// The switch is on, but this track is above 48 kHz, not stereo, or 48 kHz 24-bit lossless.
+    /// The switch is on, but this track is above 48 kHz or is not stereo.
     Bypassed,
     /// The switch is on, but Music Center or the helper is unavailable.
     Unavailable,
@@ -344,8 +344,7 @@ pub trait AudioBackend: 'static {
         Ok(())
     }
     /// Turn Sony DSEE HX streaming on or off. A loaded track restarts at its
-    /// current position. Stereo 44.1 kHz always enters. Stereo 48 kHz enters
-    /// unless the file is lossless and explicitly 24-bit. Higher rates do not.
+    /// current position. Stereo at or below 48 kHz enters. Higher rates do not.
     fn set_dsee_hx(&mut self, _enabled: bool) -> Result<(), AudioError> {
         Ok(())
     }
@@ -664,8 +663,7 @@ impl PlayerHandle {
     }
 
     /// Enable or disable DSEE HX. A loaded track continues from its position.
-    /// Stereo 44.1 kHz always enters. Stereo 48 kHz enters unless it is
-    /// lossless and explicitly 24-bit. Rates above 48 kHz do not.
+    /// Stereo at or below 48 kHz enters. Rates above 48 kHz do not.
     pub fn request_set_dsee_hx(&self, enabled: bool) -> Result<CommandTicket, AudioError> {
         if let Some(config) = self.inner.resampling.as_ref() {
             config.set_dsee_hx(enabled);

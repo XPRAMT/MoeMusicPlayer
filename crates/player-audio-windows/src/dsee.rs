@@ -53,35 +53,12 @@ pub(crate) fn filter_installed() -> bool {
 
 /// True when the source format is allowed to enter the filter.
 ///
-/// Stereo 44.1 kHz always enters, including 24-bit lossless. Stereo 48 kHz
-/// enters unless the file is lossless and explicitly 24-bit. Anything above
-/// 48 kHz stays out. Other rates at or below 48 kHz still need a stored depth
-/// of 1–16 bits, or a lossy file with no stored depth. Lossy audio is sent
-/// to the filter as 32-bit integer PCM. Lossless audio keeps its stored
-/// depth, using 16, 24, or 32-bit integer PCM.
-pub(crate) fn eligible(
-    sample_rate: u32,
-    channels: u16,
-    bits_per_sample: Option<u16>,
-    lossy: bool,
-) -> bool {
-    if channels != 2 || sample_rate == 0 || sample_rate > 48_000 {
-        return false;
-    }
-    if sample_rate == 44_100 {
-        return true;
-    }
-    if sample_rate == 48_000 {
-        return !explicit_24bit_lossless(bits_per_sample, lossy);
-    }
-    match bits_per_sample {
-        Some(bits) => bits > 0 && bits <= 16,
-        None => lossy,
-    }
-}
-
-fn explicit_24bit_lossless(bits_per_sample: Option<u16>, lossy: bool) -> bool {
-    bits_per_sample == Some(24) && !lossy
+/// Stereo at or below 48 kHz enters regardless of bit depth. Anything above
+/// 48 kHz, or a file that is not stereo, stays out. Lossy audio is sent to
+/// the filter as 32-bit integer PCM. Lossless audio keeps its stored depth,
+/// using 16, 24, or 32-bit integer PCM.
+pub(crate) fn eligible(sample_rate: u32, channels: u16) -> bool {
+    channels == 2 && sample_rate > 0 && sample_rate <= 48_000
 }
 
 /// Integer PCM width sent to the Sony filter.
@@ -148,22 +125,13 @@ pub(crate) fn plan(enabled: bool, path: &Path, signal: &TrackSignal) -> DseePlan
     let probed = probe_file(path);
     let (bits_per_sample, lossy) = match probed {
         Some(probed) => (probed.bits_per_sample, probed.lossy),
-        None if signal.sample_rate == 44_100 && signal.channels == 2 => (None, false),
-        None => {
-            return DseePlan {
-                output_rate: signal.sample_rate,
-                engagement: Engagement::Bypass(
-                    "無法確認這首曲目的取樣率與位深，已略過 DSEE HX。".to_owned(),
-                ),
-            };
-        }
+        None => (None, false),
     };
-    if !eligible(signal.sample_rate, signal.channels, bits_per_sample, lossy) {
+    if !eligible(signal.sample_rate, signal.channels) {
         return DseePlan {
             output_rate: signal.sample_rate,
             engagement: Engagement::Bypass(
-                "這首曲目高於 48 kHz、不是雙聲道，或是 48 kHz 的 24-bit 無損，DSEE HX 未處理。"
-                    .to_owned(),
+                "這首曲目高於 48 kHz 或不是雙聲道，DSEE HX 未處理。".to_owned(),
             ),
         };
     }
@@ -820,24 +788,15 @@ mod tests {
 
     #[test]
     fn eligibility_keeps_cd_and_lossy_and_skips_hires() {
-        assert!(eligible(44_100, 2, Some(16), false));
-        assert!(eligible(44_100, 2, Some(24), false));
-        assert!(eligible(44_100, 2, Some(32), false));
-        assert!(eligible(44_100, 2, None, false));
-        assert!(eligible(44_100, 2, None, true));
-        assert!(eligible(48_000, 2, Some(16), false));
-        assert!(eligible(48_000, 2, Some(8), false));
-        assert!(eligible(48_000, 2, Some(32), false));
-        assert!(eligible(48_000, 2, None, true));
-        assert!(eligible(48_000, 2, None, false));
-        assert!(eligible(48_000, 2, Some(24), true));
-        assert!(!eligible(48_000, 2, Some(24), false));
-        assert!(!eligible(96_000, 2, Some(16), false));
-        assert!(!eligible(88_200, 2, Some(24), false));
-        assert!(!eligible(44_100, 1, Some(24), false));
-        assert!(eligible(32_000, 2, Some(16), false));
-        assert!(!eligible(32_000, 2, Some(24), false));
-        assert!(!eligible(0, 2, Some(16), false));
+        assert!(eligible(44_100, 2));
+        assert!(eligible(48_000, 2));
+        assert!(eligible(32_000, 2));
+        assert!(eligible(22_050, 2));
+        assert!(!eligible(96_000, 2));
+        assert!(!eligible(88_200, 2));
+        assert!(!eligible(44_100, 1));
+        assert!(!eligible(48_000, 1));
+        assert!(!eligible(0, 2));
         assert_eq!(expected_hx_rate(44_100), 176_400);
         assert_eq!(expected_hx_rate(22_050), 176_400);
         assert_eq!(expected_hx_rate(48_000), 96_000);
