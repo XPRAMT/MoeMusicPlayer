@@ -246,6 +246,7 @@
     z-index: 2;
     top: 0;
     box-sizing: border-box;
+    background: var(--panel);
   }
 
   .paged-virtual-spacer {
