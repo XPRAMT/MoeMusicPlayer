@@ -93,6 +93,10 @@
       <input type="checkbox" checked={lyrics.showRomanization} onchange={(event) => onLyricsChange({ showRomanization: event.currentTarget.checked }, true)} />
       <span><strong>顯示羅馬拼音</strong><small>在每行原文下方顯示拼音</small></span>
     </label>
+    <label class="lyrics-preference-toggle">
+      <input type="checkbox" checked={lyrics.simplifiedToTraditional} onchange={(event) => onLyricsChange({ simplifiedToTraditional: event.currentTarget.checked }, true)} />
+      <span><strong>簡體轉繁體</strong><small>播放時把整首歌詞轉成繁體字形，不改用詞，也不另存檔案</small></span>
+    </label>
     <div class="cover-corner-setting" role="group" aria-labelledby="lyrics-text-effect-label">
       <span id="lyrics-text-effect-label" class="cover-corner-setting-label"><strong>歌詞文字效果</strong></span>
       <div class="layout-choice-row cover-corner-choice-row">

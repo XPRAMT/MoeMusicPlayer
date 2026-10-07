@@ -2,6 +2,7 @@
   import { onDestroy, tick } from 'svelte';
   import { invokeCommand } from './ipc';
   import type {
+    LyricLine,
     LyricsCandidate,
     LyricsPreferences,
     LyricsTrackResult,
@@ -9,6 +10,7 @@
     TrackLyrics,
   } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
+  import { convertTrackLyrics } from './lyrics-traditional.js';
   import { filterLyricsCandidates, getCandidatePresentation } from './lyrics-candidate-preview.js';
   import {
     DEFAULT_LYRICS_PREFERENCES,
@@ -137,8 +139,37 @@
     },
   });
 
-  let lines = $derived(viewState.lyrics?.lines ?? []);
+  let traditionalLines = $state<LyricLine[] | null>(null);
+  let traditionalTrackId = $state<string | null>(null);
   let preferences = $derived(normalizeLyricsPreferences(lyricsPreferences));
+
+  $effect(() => {
+    const lyrics = viewState.lyrics;
+    const enabled = preferences.simplifiedToTraditional;
+    if (!enabled || !lyrics) {
+      traditionalLines = null;
+      traditionalTrackId = null;
+      return;
+    }
+    let cancelled = false;
+    const trackId = lyrics.trackId;
+    void convertTrackLyrics(lyrics).then((converted) => {
+      if (cancelled) return;
+      traditionalTrackId = trackId;
+      traditionalLines = converted.lines;
+    });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  let lines = $derived(
+    preferences.simplifiedToTraditional
+      && traditionalLines
+      && traditionalTrackId === viewState.lyrics?.trackId
+      ? traditionalLines
+      : (viewState.lyrics?.lines ?? []),
+  );
   let effectivePlaybackState = $derived(playbackState ?? (isPlaying ? 'playing' : 'paused'));
   let timedLines = $derived(
     viewState.lyrics?.synced ? buildTimedLyricTimeline(lines) : [],

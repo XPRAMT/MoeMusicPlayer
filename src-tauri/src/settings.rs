@@ -51,6 +51,9 @@ pub struct LyricsPreferences {
     pub line_gap_px: u8,
     #[serde(default = "default_lyrics_text_effect")]
     pub text_effect: LyricsTextEffect,
+    /// Display-only Simplified-to-Traditional conversion. Not written into lyric files.
+    #[serde(default)]
+    pub simplified_to_traditional: bool,
 }
 
 fn default_line_gap_px() -> u8 {
@@ -67,6 +70,7 @@ impl Default for LyricsPreferences {
             auxiliary_font_size_px: 10,
             line_gap_px: default_line_gap_px(),
             text_effect: default_lyrics_text_effect(),
+            simplified_to_traditional: false,
         }
     }
 }
@@ -1514,6 +1518,7 @@ mod tests {
                 auxiliary_font_size_px: 10,
                 line_gap_px: 24,
                 text_effect: LyricsTextEffect::Shadow,
+                simplified_to_traditional: false,
             }
         );
 
@@ -1525,7 +1530,18 @@ mod tests {
         assert_eq!(value["auxiliaryFontSizePx"], 10);
         assert_eq!(value["lineGapPx"], 24);
         assert_eq!(value["textEffect"], "shadow");
+        assert_eq!(value["simplifiedToTraditional"], false);
         assert!(value.get("show_translation").is_none());
+        let mut without_conversion = value.clone();
+        without_conversion
+            .as_object_mut()
+            .unwrap()
+            .remove("simplifiedToTraditional");
+        assert!(
+            !serde_json::from_value::<LyricsPreferences>(without_conversion)
+                .unwrap()
+                .simplified_to_traditional
+        );
         assert_eq!(
             serde_json::from_value::<LyricsPreferences>(value).unwrap(),
             preferences
@@ -1829,6 +1845,7 @@ mod tests {
             auxiliary_font_size_px: 17,
             line_gap_px: 42,
             text_effect: LyricsTextEffect::Shadow,
+            simplified_to_traditional: true,
         };
         let mut columns = TrackListColumnSettings::default();
         columns.columns.swap(0, 2);

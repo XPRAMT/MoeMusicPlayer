@@ -8,6 +8,7 @@ export const DEFAULT_LYRICS_PREFERENCES = Object.freeze({
   auxiliaryFontSizePx: 10,
   lineGapPx: 24,
   textEffect: 'shadow',
+  simplifiedToTraditional: false,
 });
 
 export const LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);
@@ -59,6 +60,9 @@ export function normalizeLyricsPreferences(value) {
     textEffect: LYRICS_TEXT_EFFECTS.includes(/** @type {string} */ (candidate.textEffect))
       ? /** @type {import('./ipc').LyricsTextEffect} */ (candidate.textEffect)
       : DEFAULT_LYRICS_PREFERENCES.textEffect,
+    simplifiedToTraditional: typeof candidate.simplifiedToTraditional === 'boolean'
+      ? candidate.simplifiedToTraditional
+      : DEFAULT_LYRICS_PREFERENCES.simplifiedToTraditional,
   };
 }
 

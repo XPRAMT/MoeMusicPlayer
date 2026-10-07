@@ -309,6 +309,7 @@ export interface LyricsPreferences {
   auxiliaryFontSizePx: number;
   lineGapPx: number;
   textEffect: LyricsTextEffect;
+  simplifiedToTraditional: boolean;
 }
 
 export interface NowPlayingAppearancePreferences {

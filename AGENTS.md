@@ -177,6 +177,7 @@
 - 底欄播放／暫停鍵改為空心樣式：移除實心 accent 圓底、陰影與 hover 放大，改與其他底欄控制相同的透明底、`--text` 線條圖示、8px 圓角與 hover 淡底／`--accent-text`；Tabler `IconPlayerPlay`／`IconPlayerPause` stroke 由 1.9 改為與其他控制一致的 1.7，36px 點擊區與 21px 圖示保留作為主要控制的尺寸差異。
 - Now Playing dock 時間軸回歸已修正：`dd0453e` 誤把 `.progress-slider` 與 `.volume-state { display: none }` 併在同一選擇器，導致進度條消失、時間標籤落到錯誤欄位；已恢復 `.progress-slider, .volume-slider` 共用樣式，並另以 `.volume-state { display: none }` 隱藏音量文字。封面／歌詞垂直置中強化（artwork `place-content/place-items` + 對稱 overlay padding；lyrics-view 高度僅在 `--np-cover-height` 有值時鎖定）。
 - 歌詞候選面板底列固定顯示「移除歌詞」（不因目前畫面沒有歌詞物件而隱藏）：會關閉選擇器並透過 `lyrics_clear_track` 清除該曲已套用／快取歌詞（本機 sidecar／內嵌檔不刪）；標題列「關閉」仍只取消選擇、不移除歌詞。候選清單在封面等高面板內捲動，底列不被裁切。手動搜尋若未帶回歌詞物件，仍保留進入選擇前的歌詞。
+- 「設定 → 歌詞」與快速設定可開啟簡體轉繁體。播放時以 opencc-js 在記憶體轉換整首歌的原文與譯文（`STCharacters`、`STPhrases`、`TWVariants`），不載入 `TWPhrases`，不改用詞，不把結果寫回歌詞檔或 SQLite。羅馬拼音不轉換。授權全文在 `licenses/opencc-js-MIT.txt` 與 `licenses/opencc-data-Apache-2.0.txt`。
 - 歌詞外觀新增文字效果三選一（陰影／描邊／關閉），欄位 `textEffect`（`shadow`｜`stroke`｜`none`，預設陰影），設定頁與快速設定歌詞區可切換，並與其他歌詞偏好一併持久化；套用至原文與譯文／羅馬拼音。
 - Windows Release：`npm run release:windows` 已完成時間軸點擊不再先跳回舊位置的建置、原子替換與固定輸出核對；`release/moemusicplayer.exe` 大小為 20,801,536 bytes，SHA-256 `C95D5765D1B3BE95365DCF264576717FA64EBC836D454A918206E0B0DA0EE06A`。點選後滑桿留在目標，直到播放進度跟上。最大化工作區與全螢幕切換仍待使用者重開此 EXE 後確認。
 - 封面與歌詞外層 `.now-playing-card` 半透明白框／淡底已移除（border/background 透明），A/B 僅保留分欄與間距。

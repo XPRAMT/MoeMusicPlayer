@@ -122,7 +122,9 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
     auxiliaryFontSizePx: 9,
     lineGapPx: 64,
     textEffect: 'shadow',
+    simplifiedToTraditional: false,
   });
+  assert.equal(normalizeLyricsPreferences({ simplifiedToTraditional: true }).simplifiedToTraditional, true);
   assert.equal(normalizeLyricsPreferences({ inactiveOpacityPercent: 100.4 }).inactiveOpacityPercent, 100);
   assert.equal(normalizeLyricsPreferences({ lineGapPx: -1 }).lineGapPx, 0);
 });
