@@ -108,6 +108,7 @@
   import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
   import WindowTitlebar from './lib/WindowTitlebar.svelte';
   import { APP_WINDOW_TITLE } from './lib/app-version';
+  import brandIcon from '../icon/SilverWolfIcon.png';
   import {
     createActiveTrackArtworkController,
     type ActiveArtworkState,
@@ -2303,15 +2304,12 @@
   {/if}
   <aside class="sidebar" aria-label="主要導覽" inert={isNowPlayingOpen}>
     <div class="brand-lockup">
-      <div class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 40 40" fill="none">
-          <path d="M16 8v19.2a5.1 5.1 0 1 1-3-4.65V13.7L29 10v13.2a5.1 5.1 0 1 1-3-4.65v-12L16 8Z" fill="currentColor" />
-          <path d="M10 32.5h20" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity=".46" />
-        </svg>
+      <div class="brand-mark">
+        <img src={brandIcon} alt="MOE" />
       </div>
       <div class="brand-wordmark">
         <strong>MOE</strong>
-        <span>LOCAL SOUND</span>
+        <span>Music Otaku Elite</span>
       </div>
     </div>
 

@@ -14,7 +14,10 @@ async page => {
     assert(!sidebar.includes(removed), 'sidebar still shows ' + removed);
   }
   assert(await page.locator('[data-testid="sync-progress-banner"]').count() === 0, 'sync banner is on the library page');
-  assert(await page.locator('.avatar-button').count() === 0, 'placeholder avatar remains');
+  const brand = await page.locator('.brand-lockup').innerText();
+  assert(brand.includes('MOE') && brand.includes('Music Otaku Elite'), 'brand slogan: ' + brand);
+  const brandSrc = await page.locator('.brand-mark img').getAttribute('src');
+  assert(Boolean(brandSrc && brandSrc.includes('SilverWolfIcon')), 'brand icon source: ' + brandSrc);
 
   await page.getByRole('button', { name: '播放佇列' }).click();
   assert(await page.locator('#page-heading').innerText() === '播放佇列', 'queue title missing');

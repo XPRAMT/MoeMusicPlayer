@@ -585,16 +585,12 @@ input:focus-visible {
   height: 39px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid rgba(var(--accent-rgb), 0.34);
-  border-radius: 13px;
-  color: var(--accent-text);
-  background: linear-gradient(145deg, var(--panel-soft), var(--panel));
-  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.13);
 }
 
-.brand-mark svg {
-  width: 27px;
-  height: 27px;
+.brand-mark img {
+  width: 39px;
+  height: 39px;
+  object-fit: contain;
 }
 
 .brand-wordmark {
@@ -623,6 +619,7 @@ input:focus-visible {
 .brand-wordmark span {
   color: var(--text-soft);
   font-size: var(--font-caption);
+  letter-spacing: 0.02em;
 }
 
 .sidebar-caption {
@@ -3676,8 +3673,8 @@ input:focus-visible {
   }
 
   .brand-lockup { margin: 0; }
-  .brand-mark { width: 33px; height: 33px; border-radius: 11px; }
-  .brand-mark svg { width: 23px; height: 23px; }
+  .brand-mark,
+  .brand-mark img { width: 33px; height: 33px; }
   .primary-nav { display: flex; width: auto; align-items: center; gap: 5px; }
   .nav-link { width: 38px; min-height: 38px; border-radius: 10px; }
   .nav-link.active::before { top: auto; right: 11px; bottom: -6px; left: 11px; width: auto; height: 2px; border-radius: 3px 3px 0 0; }
