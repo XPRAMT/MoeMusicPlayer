@@ -23,8 +23,25 @@ async page => {
   assert(await page.locator('#page-heading').innerText() === '播放佇列', 'queue title missing');
   assert(await page.getByRole('heading', { name: '播放佇列', exact: true }).count() === 1, 'queue title is duplicated');
 
+  const brandBox = await page.locator('.brand-mark img').boundingBox();
+  assert(brandBox && brandBox.width >= 47 && brandBox.height >= 47, 'brand icon size: ' + JSON.stringify(brandBox));
+  const brandFit = await page.evaluate(() => {
+    const sidebar = document.querySelector('.sidebar').getBoundingClientRect();
+    const lockup = document.querySelector('.brand-lockup').getBoundingClientRect();
+    return { sidebarRight: Math.round(sidebar.right), lockupRight: Math.round(lockup.right) };
+  });
+  assert(brandFit.lockupRight <= brandFit.sidebarRight + 1, 'brand overflows the sidebar: ' + JSON.stringify(brandFit));
+
   await page.getByRole('button', { name: '設定', exact: true }).click();
   assert(await page.locator('#page-heading').innerText() === '設定', 'settings title missing');
+  assert(await page.getByRole('tab', { name: '主介面', exact: true }).count() === 1, 'main interface settings tab missing');
+  const gaps = await page.locator('.main-interface-panel > *').evaluateAll((nodes) => {
+    const boxes = nodes.map((node) => node.getBoundingClientRect()).filter((box) => box.height > 0);
+    const spaces = [];
+    for (let index = 1; index < boxes.length; index += 1) spaces.push(Math.round(boxes[index].top - boxes[index - 1].bottom));
+    return spaces;
+  });
+  assert(gaps.length >= 4 && gaps.every((gap) => gap >= 18), 'main interface settings are cramped: ' + JSON.stringify(gaps));
   assert(await page.getByRole('button', { name: '選擇背景圖片' }).count() === 1, 'background picker missing');
   assert(await page.getByRole('slider', { name: '主介面背景模糊程度' }).count() === 1, 'background blur missing');
   assert(await page.getByRole('slider', { name: '主介面背景亮度' }).count() === 1, 'background brightness missing');

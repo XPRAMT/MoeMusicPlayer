@@ -1919,7 +1919,7 @@
                 aria-selected={settingsSection === 'appearance'}
                 aria-controls="{scope}appearance-panel"
                 onclick={() => (settingsSection = 'appearance')}
-              >外觀</button>
+              >主介面</button>
               <button
                 id="{scope}track-columns-tab"
                 class="settings-tab"
@@ -1989,7 +1989,7 @@
             {/if}
 
             {#if settingsSection === 'appearance'}
-              <div id="{scope}appearance-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}appearance-tab" tabindex="0">
+              <div id="{scope}appearance-panel" class="settings-panel main-interface-panel" role="tabpanel" aria-labelledby="{scope}appearance-tab" tabindex="0">
                 <div class="settings-panel-header">
                   <div>
                     <h3>顏色</h3>
@@ -2027,7 +2027,7 @@
                 </div>
                 <div class="theme-preview" role="img" aria-label="顏色即時預覽">
                   <div class="theme-preview-copy">
-                    <strong>外觀預覽</strong>
+                    <strong>主介面預覽</strong>
                     <small>文字會自動調整對比</small>
                   </div>
                   <span class="theme-preview-chip">主色按鈕</span>

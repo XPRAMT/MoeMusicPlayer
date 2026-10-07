@@ -627,15 +627,15 @@ input:focus-visible {
 
 .brand-mark {
   display: grid;
-  width: 39px;
-  height: 39px;
+  width: 48px;
+  height: 48px;
   flex: 0 0 auto;
   place-items: center;
 }
 
 .brand-mark img {
-  width: 39px;
-  height: 39px;
+  width: 48px;
+  height: 48px;
   object-fit: contain;
 }
 
@@ -663,9 +663,12 @@ input:focus-visible {
 }
 
 .brand-wordmark span {
+  overflow: hidden;
   color: var(--text-soft);
   font-size: var(--font-caption);
   letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-caption {
@@ -2368,6 +2371,19 @@ input:focus-visible {
   color: var(--accent-text);
 }
 
+.main-interface-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.main-interface-panel > .settings-panel-header,
+.main-interface-panel > .theme-preview,
+.main-interface-panel > .source-action-row,
+.main-interface-panel > .theme-save-status {
+  margin: 0;
+}
+
 .appearance-color-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3742,7 +3758,7 @@ input:focus-visible {
 
   .brand-lockup { margin: 0; }
   .brand-mark,
-  .brand-mark img { width: 33px; height: 33px; }
+  .brand-mark img { width: 40px; height: 40px; }
   .primary-nav { display: flex; width: auto; align-items: center; gap: 5px; }
   .nav-link { width: 38px; min-height: 38px; border-radius: 10px; }
   .nav-link.active::before { top: auto; right: 11px; bottom: -6px; left: 11px; width: auto; height: 2px; border-radius: 3px 3px 0 0; }
