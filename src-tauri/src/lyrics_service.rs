@@ -34,7 +34,10 @@ const MAX_REQUEST_ID_BYTES: usize = 128;
 const MAX_PROVIDER_SEARCH_DURATION: Duration = Duration::from_secs(20);
 
 #[cfg(target_os = "windows")]
-use player_platform_windows::{find_lyrics, LyricsLookup};
+use player_platform_windows::{find_all_lyrics, find_lyrics, LyricsLookup};
+
+const LOCAL_SIDECAR_CANDIDATE_ID: &str = "local:sidecar";
+const LOCAL_EMBEDDED_CANDIDATE_ID: &str = "local:embedded";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum LyricsSourceDto {
@@ -83,12 +86,16 @@ pub enum LyricsResultStatusDto {
     Error,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum LyricsProviderDto {
     #[serde(rename = "netease")]
     NetEase,
     #[serde(rename = "qqmusic")]
     QqMusic,
+    #[serde(rename = "local")]
+    Local,
+    #[serde(rename = "embedded")]
+    Embedded,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -568,7 +575,8 @@ fn candidate_dto(metadata: &LyricsTrackMetadata, candidate: &LyricCandidate) -> 
         provider: match candidate.provider {
             LyricProvider::NetEase => LyricsProviderDto::NetEase,
             LyricProvider::Qq => LyricsProviderDto::QqMusic,
-            LyricProvider::Sidecar | LyricProvider::Embedded => LyricsProviderDto::NetEase,
+            LyricProvider::Sidecar => LyricsProviderDto::Local,
+            LyricProvider::Embedded => LyricsProviderDto::Embedded,
         },
         title: candidate.title.clone().unwrap_or_default(),
         artist: candidate.artist.clone().unwrap_or_default(),
@@ -710,13 +718,39 @@ pub async fn lyrics_search(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    let mut result = state
+    let local_candidates = if manual {
+        local_source_candidates(database, track_id, &track)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let searched = state
         .lyrics_service
         .search_track(database, track_id, &track, cancellation, !manual, query)
-        .await?;
-    if manual && result.lyrics.is_none() {
-        // Keep already-playing lyrics so dismiss can restore playback UI without reload.
-        result.lyrics = initial.lyrics;
+        .await;
+    let mut result = match searched {
+        Ok(result) => result,
+        Err(_) if manual && !local_candidates.is_empty() => LyricsTrackResultDto {
+            lyrics: None,
+            candidates: Vec::new(),
+            status: LyricsResultStatusDto::Candidates,
+            error: None,
+        },
+        Err(error) => return Err(error),
+    };
+    if manual {
+        let room = MAX_SEARCH_CANDIDATES.saturating_sub(local_candidates.len());
+        if result.candidates.len() > room {
+            result.candidates.truncate(room);
+        }
+        let mut merged = local_candidates;
+        merged.append(&mut result.candidates);
+        result.candidates = merged;
+        if result.lyrics.is_none() {
+            // Keep already-playing lyrics so dismiss can restore playback UI without reload.
+            result.lyrics = initial.lyrics;
+        }
     }
     Ok(result)
 }
@@ -781,6 +815,15 @@ fn select_candidate_from_database(
     candidate_id: &str,
     selected_at_utc_ms: i64,
 ) -> Result<TrackLyricsDto, String> {
+    if let Some(provider) = local_candidate_provider(candidate_id) {
+        return select_local_lyric_candidate(
+            database,
+            track_id,
+            provider,
+            candidate_id,
+            selected_at_utc_ms,
+        );
+    }
     let track = database
         .get_track_summary(track_id)
         .map_err(|error| error.to_string())?
@@ -789,6 +832,14 @@ fn select_candidate_from_database(
         .select_lyric_candidate(track_id, candidate_id, selected_at_utc_ms)
         .map_err(|error| error.to_string())?;
     Ok(persisted_lyrics_dto(&track, selected))
+}
+
+fn local_candidate_provider(candidate_id: &str) -> Option<LyricProvider> {
+    match candidate_id {
+        LOCAL_SIDECAR_CANDIDATE_ID => Some(LyricProvider::Sidecar),
+        LOCAL_EMBEDDED_CANDIDATE_ID => Some(LyricProvider::Embedded),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -876,6 +927,128 @@ async fn local_lyrics_for_track(
         LyricsLookup::Missing => Ok(LocalLyricsLookup::Missing),
         LyricsLookup::Oversized => Ok(LocalLyricsLookup::Oversized),
     }
+}
+
+async fn local_source_candidates(
+    database: &Database,
+    track_id: TrackId,
+    track: &TrackSummary,
+) -> Result<Vec<LyricsCandidateDto>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let locators = database
+            .track_locators(track_id)
+            .map_err(|error| error.to_string())?;
+        let found = tauri::async_runtime::spawn_blocking(move || find_all_lyrics(&locators))
+            .await
+            .map_err(|error| format!("讀取本機歌詞工作失敗：{error}"))?;
+        Ok(found
+            .iter()
+            .filter_map(|item| local_source_candidate_dto(track, item.provider, &item.lyrics))
+            .collect())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (database, track_id, track);
+        Ok(Vec::new())
+    }
+}
+
+fn local_source_candidate_dto(
+    track: &TrackSummary,
+    provider: LyricProvider,
+    lyrics: &ParsedLyrics,
+) -> Option<LyricsCandidateDto> {
+    let (id, dto_provider, reason) = match provider {
+        LyricProvider::Sidecar => (
+            LOCAL_SIDECAR_CANDIDATE_ID,
+            LyricsProviderDto::Local,
+            "同資料夾同名 LRC",
+        ),
+        LyricProvider::Embedded => (
+            LOCAL_EMBEDDED_CANDIDATE_ID,
+            LyricsProviderDto::Embedded,
+            "音訊檔內嵌歌詞",
+        ),
+        LyricProvider::NetEase | LyricProvider::Qq => return None,
+    };
+    Some(LyricsCandidateDto {
+        id: id.to_owned(),
+        provider: dto_provider,
+        title: track.title.clone().unwrap_or_default(),
+        artist: track.artist.clone().unwrap_or_default(),
+        album: track.album.clone(),
+        duration_ms: track.duration_ms,
+        score: 1.0,
+        confidence: LyricsConfidenceDto::High,
+        reasons: vec![reason.to_owned()],
+        preview_lines: lyrics
+            .lines
+            .iter()
+            .filter(|line| !line.text.trim().is_empty())
+            .take(3)
+            .map(|line| line.text.clone())
+            .collect(),
+        has_synced_lyrics: lyrics.synced,
+    })
+}
+
+fn select_local_lyric_candidate(
+    database: &Database,
+    track_id: TrackId,
+    provider: LyricProvider,
+    candidate_id: &str,
+    selected_at_utc_ms: i64,
+) -> Result<TrackLyricsDto, String> {
+    let track = database
+        .get_track_summary(track_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "找不到這首曲目。".to_owned())?;
+    let lyrics = read_local_lyric_source(database, track_id, provider)?;
+    let saved = TrackLyrics {
+        track_id,
+        provider,
+        candidate_id: Some(candidate_id.to_owned()),
+        lyrics,
+        manually_selected: true,
+        updated_at_utc_ms: selected_at_utc_ms,
+    };
+    database
+        .save_manual_track_lyrics(&saved)
+        .map_err(|error| error.to_string())?;
+    Ok(track_lyrics_dto(
+        track.id,
+        &track,
+        provider,
+        true,
+        &saved.lyrics,
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn read_local_lyric_source(
+    database: &Database,
+    track_id: TrackId,
+    provider: LyricProvider,
+) -> Result<ParsedLyrics, String> {
+    let locators = database
+        .track_locators(track_id)
+        .map_err(|error| error.to_string())?;
+    find_all_lyrics(&locators)
+        .into_iter()
+        .find(|item| item.provider == provider)
+        .map(|item| item.lyrics)
+        .ok_or_else(|| "找不到這份本機歌詞。".to_owned())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_local_lyric_source(
+    database: &Database,
+    track_id: TrackId,
+    provider: LyricProvider,
+) -> Result<ParsedLyrics, String> {
+    let _ = (database, track_id, provider);
+    Err("這個平台還不能從候選清單套用本機歌詞。".to_owned())
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "android")))]
@@ -1991,6 +2164,37 @@ mod tests {
         assert_eq!(
             result.lyrics.expect("local lyrics after clear").source,
             LyricsSourceDto::Local
+        );
+
+        let track = database
+            .get_track_summary(track_id)
+            .expect("read track")
+            .expect("track summary");
+        let candidates = super::local_source_candidates(&database, track_id, &track)
+            .await
+            .expect("list local lyric sources");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, super::LOCAL_SIDECAR_CANDIDATE_ID);
+        assert_eq!(candidates[0].provider, super::LyricsProviderDto::Local);
+        assert!(candidates[0]
+            .preview_lines
+            .iter()
+            .any(|line| line.contains("本機逐行歌詞")));
+        let selected = super::select_candidate_from_database(
+            &database,
+            track_id,
+            super::LOCAL_SIDECAR_CANDIDATE_ID,
+            1_800_000_000_500,
+        )
+        .expect("select the sidecar candidate");
+        assert_eq!(selected.source, LyricsSourceDto::Manual);
+        assert_eq!(selected.lines[0].text, "本機逐行歌詞");
+        let result = super::load_track_result(&database, track_id)
+            .await
+            .expect("load after selecting the local sidecar");
+        assert_eq!(
+            result.lyrics.expect("manual sidecar link").source,
+            LyricsSourceDto::Manual
         );
     }
 

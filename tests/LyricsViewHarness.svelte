@@ -27,6 +27,7 @@
       plainFirstIndex: number | null;
       getCount: number;
       searchCount: number;
+      lastSearchQuery: string | null;
       cancelCount: number;
       selectedSource: string | null;
       qrcNoticeVisible: boolean;
@@ -78,6 +79,7 @@
   let lyricsPreferences = $state<LyricsPreferences>(normalizeLyricsPreferences(DEFAULT_LYRICS_PREFERENCES));
   let getCount = 0;
   let searchCount = 0;
+  let lastSearchQuery: string | null = null;
   let cancelCount = 0;
   let selectedSource: string | null = null;
 
@@ -128,8 +130,9 @@
         error: null,
       };
     },
-    async search({ trackId: requestedTrackId }: { trackId: string; requestId: string; manual?: boolean; query?: string }): Promise<LyricsTrackResult> {
+    async search({ trackId: requestedTrackId, query }: { trackId: string; requestId: string; manual?: boolean; query?: string }): Promise<LyricsTrackResult> {
       searchCount += 1;
+      lastSearchQuery = query ?? null;
       if (requestedTrackId === 'candidate-track') {
         return { lyrics: null, candidates: [candidate], status: 'candidates', error: null };
       }
@@ -197,6 +200,7 @@
       plainFirstIndex: firstPlain ? Number(firstPlain.dataset.lyricIndex) : null,
       getCount,
       searchCount,
+      lastSearchQuery,
       cancelCount,
       selectedSource,
       qrcNoticeVisible: document.querySelector('.candidate-preview-note') !== null,

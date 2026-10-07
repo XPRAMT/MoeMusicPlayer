@@ -276,7 +276,7 @@ export interface TrackLyrics {
   lines: LyricLine[];
 }
 
-export type LyricsProvider = 'netease' | 'qqmusic';
+export type LyricsProvider = 'netease' | 'qqmusic' | 'local' | 'embedded';
 export type LyricsConfidence = 'high' | 'medium' | 'low';
 
 export interface LyricsCandidate {

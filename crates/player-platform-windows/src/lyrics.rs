@@ -62,6 +62,47 @@ pub fn find_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
     }
 }
 
+/// Sidecar and embedded lyrics for the same track, when both exist. Playback lookup still uses
+/// [`find_lyrics`], which returns only the sidecar when one is present.
+pub fn find_all_lyrics(locators: &[MediaLocator]) -> Vec<FoundLyrics> {
+    let paths = locators
+        .iter()
+        .filter_map(|locator| match locator {
+            MediaLocator::FileSystem(path) => Some(path),
+            MediaLocator::ContentUri(_) => None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut found = Vec::new();
+    let mut oversized = false;
+    let mut saw_sidecar = false;
+    let mut saw_embedded = false;
+    for path in &paths {
+        if !saw_sidecar {
+            if let Some(lyrics) = sidecar_lyrics(path, &mut oversized) {
+                found.push(FoundLyrics {
+                    provider: LyricProvider::Sidecar,
+                    lyrics,
+                });
+                saw_sidecar = true;
+            }
+        }
+        if !saw_embedded {
+            if let Some(lyrics) = embedded_lyrics(path, &mut oversized) {
+                found.push(FoundLyrics {
+                    provider: LyricProvider::Embedded,
+                    lyrics,
+                });
+                saw_embedded = true;
+            }
+        }
+        if saw_sidecar && saw_embedded {
+            break;
+        }
+    }
+    found
+}
+
 fn sidecar_lyrics(audio_path: &Path, oversized: &mut bool) -> Option<ParsedLyrics> {
     let audio_parent = audio_path.parent()?;
     let native_parent = to_extended_path(audio_parent).ok()?;
@@ -171,7 +212,7 @@ impl WindowsOpenOptionsExt for OpenOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_lyrics, LyricsLookup};
+    use super::{find_all_lyrics, find_lyrics, LyricsLookup};
     use player_core::{LyricProvider, MediaLocator};
     use std::{
         fs,
@@ -257,6 +298,26 @@ mod tests {
                 assert_eq!(found.lyrics.lines[0].text, "第一行");
             }
             other => panic!("expected sidecar lyrics, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sidecar_and_embedded_lyrics_are_both_listed() {
+        let dir = TestDirectory::new();
+        let audio = dir.path().join("both.mp3");
+        write_id3v2_unsynced_lyrics(&audio, "[00:03.00]嵌入式歌詞");
+        fs::write(dir.path().join("both.lrc"), "[00:01.00]同名歌詞").expect("write LRC sidecar");
+
+        let found = find_all_lyrics(&only_path(audio.clone()));
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].provider, LyricProvider::Sidecar);
+        assert_eq!(found[0].lyrics.lines[0].text, "同名歌詞");
+        assert_eq!(found[1].provider, LyricProvider::Embedded);
+        assert_eq!(found[1].lyrics.lines[0].text, "嵌入式歌詞");
+
+        match find_lyrics(&only_path(audio)) {
+            LyricsLookup::Found(found) => assert_eq!(found.provider, LyricProvider::Sidecar),
+            other => panic!("playback lookup should keep sidecar precedence, got {other:?}"),
         }
     }
 

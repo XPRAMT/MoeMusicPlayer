@@ -26,4 +26,4 @@ pub use windows::{is_supported_audio_file, is_video_mp4, WindowsMediaIndex};
 pub use artwork::{find_artwork, ArtworkLookup};
 
 #[cfg(windows)]
-pub use lyrics::{find_lyrics, LyricsLookup};
+pub use lyrics::{find_all_lyrics, find_lyrics, FoundLyrics, LyricsLookup};

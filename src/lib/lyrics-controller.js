@@ -51,6 +51,7 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
     selectingCandidateId: null,
     selectionMode: selectionMode || phase === 'candidates' || (selectionMode && phase === 'empty'),
     failedStage: phase === 'error' ? failedStage : null,
+    pickerClosed: false,
   };
 }
 
@@ -188,6 +189,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       selectingCandidateId: null,
       selectionMode: false,
       failedStage: null,
+      pickerClosed: false,
     };
   }
 
@@ -233,10 +235,11 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
         ...state,
         phase: 'searching',
         error: null,
-        isSearching: true,
-        selectionMode: true,
-        failedStage: null,
-      });
+      isSearching: true,
+      selectionMode: true,
+      failedStage: null,
+      pickerClosed: false,
+    });
       await startSearch(trackId, generation, { manual: true, query: query || undefined });
     },
 
@@ -271,7 +274,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
 
 
     async removeLyrics() {
-      if (disposed || !activeTrackId || !state.selectionMode) return;
+      if (disposed || !activeTrackId) return;
       if (typeof api.clearTrack !== 'function') {
         update({
           ...state,
@@ -303,6 +306,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
           isSearching: false,
           candidates: [],
           failedStage: null,
+          pickerClosed: true,
         });
       } catch (error) {
         if (!isCurrent(trackId, requestGeneration)) return;
@@ -319,7 +323,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
     },
 
     dismissSelection() {
-      if (disposed || !state.selectionMode) return;
+      if (disposed || !state.trackId) return;
       generation += 1;
       cancelActiveRequest();
       update({
@@ -331,6 +335,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
         selectionMode: false,
         selectingCandidateId: null,
         failedStage: null,
+        pickerClosed: true,
       });
     },
 
@@ -364,6 +369,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
           selectingCandidateId: null,
           selectionMode: false,
           failedStage: null,
+          pickerClosed: true,
         });
       } catch (error) {
         if (!isCurrent(trackId, requestGeneration)) return;
@@ -396,6 +402,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
  * isSearching: boolean,
  * selectingCandidateId: string | null,
  * selectionMode: boolean,
- * failedStage: 'load'|'search'|'selection'|null
+ * failedStage: 'load'|'search'|'selection'|null,
+ * pickerClosed: boolean
  * }} LyricsControllerState
  */

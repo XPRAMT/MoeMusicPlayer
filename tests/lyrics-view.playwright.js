@@ -224,7 +224,30 @@
   assert.equal(await page.locator('[data-testid="lyrics-candidates"]').count(), 1, 'empty search still shows the candidate picker panel');
   assert.equal(await page.locator('[data-testid="lyrics-remove"]').count(), 1, 'empty search still shows remove lyrics');
   assert.equal(await page.locator('[data-testid="lyrics-candidates-search"]').count(), 1, 'empty search still shows the text search field');
+  assert.equal(await page.getByRole('heading', { name: '選擇歌詞' }).count(), 0, 'candidate picker has no title row');
+  assert.equal(await page.getByRole('button', { name: '再次搜尋' }).count(), 0, 'candidate picker has no second search button');
+  const emptyActions = await page.locator('.lyrics-candidates-actions').evaluate((actions) => {
+    const form = actions.closest('form');
+    const input = form?.querySelector('[data-testid="lyrics-candidates-search"]');
+    const actionsRect = actions.getBoundingClientRect();
+    const formRect = form?.getBoundingClientRect();
+    const inputRect = input?.getBoundingClientRect();
+    return {
+      labels: [...actions.querySelectorAll('button')].map((button) => button.textContent?.trim()),
+      flushRight: formRect ? Math.abs(actionsRect.right - formRect.right) < 2 : false,
+      besideOrBelowInput: inputRect ? actionsRect.left >= inputRect.left - 1 : false,
+    };
+  });
+  assert.deepEqual(emptyActions.labels, ['搜尋', '關閉', '移除歌詞'], 'picker chrome is search, close, and remove');
+  assert.equal(emptyActions.flushRight, true, 'picker chrome sits on the right edge');
+  assert.equal(emptyActions.besideOrBelowInput, true, 'picker chrome stays with the search field');
   assert.match(await page.locator('.lyrics-candidate-empty').innerText(), /找不到符合的歌詞/);
+  const emptySearches = (await page.evaluate(() => window.lyricsViewHarness.snapshot())).searchCount;
+  await page.locator('.lyrics-candidates-search button[type="submit"]').click();
+  await page.waitForFunction((previous) => window.lyricsViewHarness.snapshot().searchCount > previous, emptySearches);
+  assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).lastSearchQuery, null, 'an empty search box searches with the current track');
+  await page.locator('[data-testid="lyrics-remove"]').click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="lyrics-candidates"]') === null);
 
   const searchCountBeforeCandidates = (await page.evaluate(() => window.lyricsViewHarness.snapshot())).searchCount;
   await page.evaluate(() => window.lyricsViewHarness.setTrack('candidate-track'));
@@ -237,7 +260,9 @@
   assert.ok(await page.locator('.lyrics-candidates').evaluate((element) => Number.parseFloat(getComputedStyle(element).maxHeight)) > 260, 'candidate selector is taller than its previous 260px cap');
   assert.equal(await page.locator('[data-testid="lyrics-candidates-search"]').count(), 1, 'candidate picker keeps the text search field');
   async function focusRingInsideClip(locator, label) {
-    await locator.focus();
+    await locator.evaluate((element) => {
+      if (typeof element.focus === 'function') element.focus({ focusVisible: true });
+    });
     const ring = await locator.evaluate((element) => {
       const style = getComputedStyle(element);
       const outset = Math.max(0, Number.parseFloat(style.outlineOffset) + Number.parseFloat(style.outlineWidth));
@@ -260,7 +285,7 @@
   }
   await focusRingInsideClip(page.locator('[data-testid="lyrics-candidates-search"]'), 'candidate search input');
   await focusRingInsideClip(page.locator('.lyrics-candidates-search button[type="submit"]'), 'candidate search button');
-  await focusRingInsideClip(page.locator('.lyrics-candidates-title-row button'), 'candidate close button');
+  await focusRingInsideClip(page.locator('[data-testid="lyrics-dismiss"]'), 'candidate close button');
   assert.equal(await page.locator('[data-testid="lyrics-dismiss"]').count(), 1, 'header close remains cancel-only dismiss');
   assert.equal(await page.locator('[data-testid="lyrics-remove"]').count(), 1, 'footer always exposes remove-lyrics');
   const removeInsidePanel = await page.locator('[data-testid="lyrics-remove"]').evaluate((button) => {
@@ -291,6 +316,19 @@
     return visible;
   });
   assert.equal(removeInsideShortPane, true, 'remove-lyrics stays visible when the cover is taller than the lyrics pane');
+  const typedSearches = (await page.evaluate(() => window.lyricsViewHarness.snapshot())).searchCount;
+  await page.locator('[data-testid="lyrics-candidates-search"]').fill('拼湊的斷音');
+  await page.locator('.lyrics-candidates-search button[type="submit"]').click();
+  await page.waitForFunction((previous) => window.lyricsViewHarness.snapshot().searchCount > previous, typedSearches);
+  assert.equal((await page.evaluate(() => window.lyricsViewHarness.snapshot())).lastSearchQuery, '拼湊的斷音', 'typed text overrides the provider query');
+  await page.locator('[data-testid="lyrics-candidates-search"]').fill('');
+  await page.locator('[data-testid="lyrics-dismiss"]').click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="lyrics-candidates"]') === null);
+  await page.evaluate(async () => {
+    await window.lyricsViewHarness.setTrack(null);
+    await window.lyricsViewHarness.setTrack('candidate-track');
+  });
+  await page.waitForFunction(() => window.lyricsViewHarness.snapshot().phase === 'candidates');
   await focusRingInsideClip(page.getByRole('button', { name: '選擇' }), 'candidate select button');
   await page.getByRole('button', { name: '選擇' }).click();
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().selectedSource === 'manual');

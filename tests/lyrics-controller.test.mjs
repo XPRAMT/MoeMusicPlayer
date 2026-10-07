@@ -468,8 +468,32 @@ test('manual searchAgain keeps selection open when lyrics already exist', async 
   controller.dismissSelection();
   assert.equal(controller.getState().phase, 'ready');
   assert.equal(controller.getState().selectionMode, false);
+  assert.equal(controller.getState().pickerClosed, true);
   assert.equal(controller.getState().candidates.length, 0);
   assert.equal(controller.getState().lyrics?.source, 'local');
+  controller.dispose();
+});
+
+test('dismiss closes the picker when it opened without selection mode', async () => {
+  const controller = createLyricsController({
+    api: {
+      getTrack: async () => ({ lyrics: null, candidates: [], status: 'empty', error: null }),
+      search: async () => ({ lyrics: null, candidates: [], status: 'empty', error: null }),
+      selectCandidate: async () => {
+        throw new Error('unused');
+      },
+      cancelSearch: () => {},
+      clearTrack: async () => ({ lyrics: null, candidates: [], status: 'empty', error: null }),
+    },
+    onChange: () => {},
+  });
+  await controller.setTrack('track-empty');
+  assert.equal(controller.getState().selectionMode, false);
+  assert.equal(controller.getState().pickerClosed, false);
+  controller.dismissSelection();
+  assert.equal(controller.getState().pickerClosed, true);
+  assert.equal(controller.getState().phase, 'empty');
+  assert.equal(controller.getState().selectionMode, false);
   controller.dispose();
 });
 
@@ -571,6 +595,7 @@ test('removeLyrics clears persisted lyrics, dismisses picker, and skips auto-sea
   await controller.removeLyrics();
   assert.equal(clearCalls, 1);
   assert.equal(controller.getState().selectionMode, false);
+  assert.equal(controller.getState().pickerClosed, true);
   assert.equal(controller.getState().lyrics, null);
   assert.equal(controller.getState().phase, 'empty');
   assert.equal(searchCalls, searchesBefore, 'explicit remove must not auto-search');

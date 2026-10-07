@@ -57,6 +57,7 @@
     selectingCandidateId: string | null;
     selectionMode: boolean;
     failedStage: 'load' | 'search' | 'selection' | null;
+    pickerClosed: boolean;
   };
 
   export type LyricsTopbarStatus = {
@@ -108,6 +109,7 @@
     selectingCandidateId: null,
     selectionMode: false,
     failedStage: null,
+    pickerClosed: false,
   });
   let timedViewport = $state<HTMLDivElement | null>(null);
   let plainViewport = $state<HTMLDivElement | null>(null);
@@ -214,10 +216,12 @@
   );
   let filteredCandidates = $derived(filterLyricsCandidates(viewState.candidates, candidateQuery));
   let showCandidatePicker = $derived(
-    !viewState.isSearching
+    !viewState.pickerClosed
+      && !viewState.isSearching
       && (
         viewState.candidates.length > 0
-        || (viewState.phase === 'empty' && !viewState.error && (selectionUiOpen || !viewState.lyrics))
+        || viewState.selectionMode
+        || (viewState.phase === 'empty' && !viewState.error && !viewState.lyrics)
       ),
   );
 
@@ -463,7 +467,10 @@
   }
 
   function providerLabel(provider: LyricsCandidate['provider']): string {
-    return provider === 'netease' ? '網易雲' : 'QQ 音樂';
+    if (provider === 'qqmusic') return 'QQ 音樂';
+    if (provider === 'local') return '本機 LRC';
+    if (provider === 'embedded') return '內嵌歌詞';
+    return '網易雲';
   }
 
   function confidenceLabel(confidence: LyricsCandidate['confidence']): string {
@@ -665,26 +672,24 @@
       </div>
     {:else if showCandidatePicker}
       <section class="lyrics-candidates" aria-label="歌詞候選" data-testid="lyrics-candidates">
-        <div class="lyrics-candidates-header">
-          <div class="lyrics-candidates-title-row">
-            <h4>選擇歌詞</h4>
-            <button type="button" class="lyrics-action secondary" data-testid="lyrics-dismiss" onclick={dismissSelection}>關閉</button>
-          </div>
-          <form class="lyrics-candidates-search" onsubmit={submitCandidateSearch}>
-            <input
-              class="lyrics-candidates-search-input"
-              type="search"
-              value={candidateQuery}
-              oninput={onCandidateQueryInput}
-              placeholder="搜尋歌詞關鍵字…"
-              aria-label="搜尋歌詞關鍵字"
-              autocomplete="off"
-              spellcheck="false"
-              data-testid="lyrics-candidates-search"
-            />
+        <form class="lyrics-candidates-search" onsubmit={submitCandidateSearch}>
+          <input
+            class="lyrics-candidates-search-input"
+            type="search"
+            value={candidateQuery}
+            oninput={onCandidateQueryInput}
+            placeholder="搜尋歌詞關鍵字…"
+            aria-label="搜尋歌詞關鍵字"
+            autocomplete="off"
+            spellcheck="false"
+            data-testid="lyrics-candidates-search"
+          />
+          <div class="lyrics-candidates-actions">
             <button type="submit" class="lyrics-action secondary">搜尋</button>
-          </form>
-        </div>
+            <button type="button" class="lyrics-action secondary" data-testid="lyrics-dismiss" onclick={dismissSelection}>關閉</button>
+            <button type="button" class="lyrics-action secondary" data-testid="lyrics-remove" onclick={removeLyrics}>移除歌詞</button>
+          </div>
+        </form>
         <ul>
           {#each filteredCandidates as candidate (candidate.id)}
             {@const presentation = getCandidatePresentation(candidate)}
@@ -721,10 +726,6 @@
             </li>
           {/each}
         </ul>
-        <div class="lyrics-candidates-footer lyrics-message">
-          <button type="button" class="lyrics-action secondary" onclick={searchAgain}>再次搜尋</button>
-          <button type="button" class="lyrics-action secondary" data-testid="lyrics-remove" onclick={removeLyrics}>移除歌詞</button>
-        </div>
       </section>
     {/if}
   {/if}
@@ -917,46 +918,28 @@
     background: transparent;
   }
 
-  .lyrics-candidates-header {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    display: grid;
-    flex: 0 0 auto;
-    gap: 8px;
-    padding: 0 0 8px;
-    border: 0;
-    background: transparent;
-  }
-
-  .lyrics-candidates-title-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .lyrics-candidates-header h4,
-  .lyrics-candidates h4 {
-    margin: 0;
-    padding: 0;
-    color: var(--text-soft);
-    background: transparent;
-    font-size: 11px;
-    font-weight: 600;
-  }
-
   .lyrics-candidates-search {
     display: flex;
     min-width: 0;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
     align-items: center;
     gap: 7px;
+  }
+
+  .lyrics-candidates-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+    margin-left: auto;
+    gap: 6px;
   }
 
   .lyrics-candidates-search-input {
     box-sizing: border-box;
     min-width: 0;
-    flex: 1 1 auto;
+    flex: 1 1 180px;
     min-height: 34px;
     padding: 0 11px;
     border: 1px solid rgba(var(--text-rgb), 0.18);
@@ -1006,11 +989,6 @@
     line-height: 1.6;
     text-align: center;
     list-style: none;
-  }
-
-  .lyrics-candidates-footer {
-    flex: 0 0 auto;
-    padding-top: 2px;
   }
 
   .lyrics-candidate {
