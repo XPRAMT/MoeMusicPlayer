@@ -397,8 +397,10 @@ fn form_component(value: &str) -> String {
 }
 
 fn qq_search_body(query: &str) -> String {
+    // ct 24 / cv 0 still returns HTTP 200 with an empty song list. The desktop
+    // client identity below is what currently returns song rows.
     json!({
-        "comm": {"ct": 24, "cv": 0},
+        "comm": {"ct": 19, "cv": 1873, "uin": "0"},
         "req_1": {
             "module": "music.search.SearchCgiService",
             "method": "DoSearchForQQMusicDesktop",
@@ -511,8 +513,8 @@ fn parse_qq_search(root: &Value) -> Result<Vec<ProviderCandidate>, ProviderError
         .iter()
         .take(QQ_SEARCH_LIMIT)
         .filter_map(|song| {
-            let mid = value_string(song.get("songmid"))?;
-            let song_id = value_u64(song.get("songid"));
+            let mid = value_string(song.get("mid").or_else(|| song.get("songmid")))?;
+            let song_id = value_u64(song.get("id").or_else(|| song.get("songid")));
             let artist = song
                 .get("singer")
                 .and_then(Value::as_array)
@@ -524,12 +526,14 @@ fn parse_qq_search(root: &Value) -> Result<Vec<ProviderCandidate>, ProviderError
                         .join(" / ")
                 })
                 .filter(|value| !value.is_empty());
-            let album = value_string(song.get("albumname"));
+            let album = value_string(song.get("albumname"))
+                .or_else(|| value_string(song.get("album")))
+                .or_else(|| value_string(song.pointer("/album/name")));
             Some(ProviderCandidate {
                 candidate_id: format!("qqmusic:{mid}"),
                 provider: LyricProvider::Qq,
                 provider_track_id: mid.clone(),
-                title: value_string(song.get("songname")),
+                title: value_string(song.get("name").or_else(|| song.get("songname"))),
                 artist,
                 album,
                 duration_ms: value_u64(song.get("interval"))
@@ -958,10 +962,30 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("music.search.SearchCgiService"));
+        assert!(request.body.as_deref().unwrap().contains("\"ct\":19"));
+        assert!(request.body.as_deref().unwrap().contains("\"cv\":1873"));
         assert!(request
             .headers
             .iter()
             .any(|(name, value)| name == "Referer" && value == QQ_REFERER));
+    }
+
+    #[tokio::test]
+    async fn qq_search_reads_current_desktop_song_fields() {
+        let transport = MockTransport::with_responses([response(
+            r#"{"req_1":{"data":{"body":{"song":{"list":[{"mid":"0039MnYb0qxYhV","id":97773,"name":"晴天","singer":[{"name":"周杰伦"}],"album":{"name":"叶惠美"},"interval":269}]}}}}}"#,
+        )]);
+        let client = LyricsProviderClient::new(transport);
+        let hits = client
+            .search(LyricProvider::Qq, &metadata(), &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(hits[0].candidate_id, "qqmusic:0039MnYb0qxYhV");
+        assert_eq!(hits[0].title.as_deref(), Some("晴天"));
+        assert_eq!(hits[0].artist.as_deref(), Some("周杰伦"));
+        assert_eq!(hits[0].album.as_deref(), Some("叶惠美"));
+        assert_eq!(hits[0].qq_song_id, Some(97773));
+        assert_eq!(hits[0].duration_ms, Some(269_000));
     }
 
     #[tokio::test]
