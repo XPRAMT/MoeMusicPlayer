@@ -716,7 +716,7 @@
               </div>
               <button
                 type="button"
-                class="lyrics-action"
+                class="lyrics-action secondary"
                 disabled={viewState.selectingCandidateId !== null}
                 onclick={() => selectCandidate(candidate.id)}
               >
