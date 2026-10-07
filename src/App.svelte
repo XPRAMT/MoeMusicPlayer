@@ -2021,7 +2021,7 @@
                 <div class="settings-panel-header">
                   <div>
                     <h3>DSEE HX</h3>
-                    <p>串流透過本機已安裝的 Sony Music Center 濾鏡處理。只在 48 kHz／16-bit 以下的雙聲道啟動。48 kHz 系列輸出 96 kHz／24-bit，44.1 kHz 系列輸出 176.4 kHz／24-bit，之後仍依目前的取樣率轉換接到輸出裝置。有損格式沒有來源位深，會以 16-bit PCM 送入。24-bit、更高取樣率或非雙聲道不處理。需要先安裝 Sony Music Center。播放器只載入 C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax，不會內含或散佈這個檔案。</p>
+                    <p>串流透過本機已安裝的 Sony Music Center 濾鏡處理。44.1 kHz 雙聲道一律處理。48 kHz 雙聲道也處理，但明確標成 24-bit 的無損檔除外。高於 48 kHz 或非雙聲道不處理。48 kHz 系列輸出 96 kHz／24-bit，44.1 kHz 系列輸出 176.4 kHz／24-bit，之後仍依目前的取樣率轉換接到輸出裝置。送進濾鏡前會轉成 16-bit PCM。需要先安裝 Sony Music Center。播放器只載入 C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax，不會內含或散佈這個檔案。</p>
                   </div>
                 </div>
                 <label class="resampling-option">
