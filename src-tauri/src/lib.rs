@@ -5720,6 +5720,7 @@ pub fn run() {
             playback_set_shuffle,
             lyrics_service::lyrics_get_track,
             lyrics_service::lyrics_search,
+            lyrics_service::lyrics_load_more,
             lyrics_service::lyrics_select_candidate,
             lyrics_service::lyrics_cancel_search,
             lyrics_service::lyrics_clear_track,

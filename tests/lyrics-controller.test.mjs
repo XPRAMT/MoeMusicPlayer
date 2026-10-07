@@ -602,3 +602,51 @@ test('removeLyrics clears persisted lyrics, dismisses picker, and skips auto-sea
   controller.dispose();
 });
 
+test('load more appends the next lyric page until the source is exhausted', async () => {
+  const candidate = (id) => ({
+    id,
+    provider: 'qqmusic',
+    title: id,
+    artist: '歌手',
+    album: null,
+    durationMs: null,
+    score: 0.5,
+    confidence: 'low',
+    reasons: [],
+    previewLines: [],
+    hasSyncedLyrics: true,
+  });
+  const controller = createLyricsController({
+    api: {
+      getTrack: async () => ({ lyrics: null, candidates: [], status: 'empty', error: null }),
+      search: async () => ({
+        lyrics: null,
+        candidates: [candidate('first')],
+        status: 'candidates',
+        error: null,
+        hasMore: true,
+      }),
+      selectCandidate: async () => lyric('t-more', 'manual', '手動'),
+      cancelSearch: async () => {},
+      clearTrack: async () => ({ lyrics: null, candidates: [], status: 'empty', error: null }),
+      loadMore: async () => ({
+        lyrics: null,
+        candidates: [candidate('second')],
+        status: 'candidates',
+        error: null,
+        hasMore: false,
+      }),
+    },
+    onChange() {},
+  });
+  await controller.setTrack('t-more');
+  assert.equal(controller.getState().hasMore, true);
+  assert.deepEqual(controller.getState().candidates.map((item) => item.id), ['first']);
+  await controller.loadMore();
+  assert.deepEqual(controller.getState().candidates.map((item) => item.id), ['first', 'second']);
+  assert.equal(controller.getState().hasMore, false);
+  await controller.loadMore();
+  assert.deepEqual(controller.getState().candidates.map((item) => item.id), ['first', 'second']);
+  controller.dispose();
+});
+

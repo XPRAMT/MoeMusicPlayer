@@ -45,6 +45,7 @@
     selectCandidate: (args: { trackId: string; candidateId: string }) => Promise<TrackLyrics>;
     cancelSearch: (args: { requestId: string }) => Promise<void>;
     clearTrack: (args: { trackId: string }) => Promise<LyricsTrackResult>;
+    loadMore?: (args: { trackId: string }) => Promise<LyricsTrackResult>;
   };
 
   type LyricsViewState = {
@@ -58,6 +59,8 @@
     selectionMode: boolean;
     failedStage: 'load' | 'search' | 'selection' | null;
     pickerClosed: boolean;
+    hasMore: boolean;
+    isLoadingMore: boolean;
   };
 
   export type LyricsTopbarStatus = {
@@ -86,6 +89,7 @@
     selectCandidate: (args) => invokeCommand('lyrics_select_candidate', args),
     cancelSearch: (args) => invokeCommand('lyrics_cancel_search', args),
     clearTrack: (args) => invokeCommand('lyrics_clear_track', args),
+    loadMore: (args) => invokeCommand('lyrics_load_more', args),
   };
 
   let {
@@ -110,6 +114,8 @@
     selectionMode: false,
     failedStage: null,
     pickerClosed: false,
+    hasMore: false,
+    isLoadingMore: false,
   });
   let timedViewport = $state<HTMLDivElement | null>(null);
   let plainViewport = $state<HTMLDivElement | null>(null);
@@ -135,6 +141,7 @@
       selectCandidate: (args) => api.selectCandidate(args),
       cancelSearch: (args) => api.cancelSearch(args),
       clearTrack: (args) => api.clearTrack(args),
+      loadMore: (args) => api.loadMore?.(args) ?? Promise.resolve({ lyrics: null, candidates: [], status: 'empty', error: null, hasMore: false }),
     },
     onChange(nextState: LyricsViewState) {
       viewState = nextState;
@@ -725,6 +732,19 @@
               {/if}
             </li>
           {/each}
+          {#if viewState.hasMore}
+            <li class="lyrics-load-more">
+              <button
+                type="button"
+                class="lyrics-action secondary"
+                data-testid="lyrics-load-more"
+                disabled={viewState.isLoadingMore}
+                onclick={() => void controller.loadMore()}
+              >
+                {viewState.isLoadingMore ? '載入中…' : '載入更多歌詞'}
+              </button>
+            </li>
+          {/if}
         </ul>
       </section>
     {/if}
@@ -980,6 +1000,13 @@
     list-style: none;
     scrollbar-color: color-mix(in srgb, var(--accent) 42%, transparent) transparent;
     scrollbar-width: thin;
+  }
+
+  .lyrics-load-more {
+    display: flex;
+    justify-content: center;
+    padding: 8px 0 4px;
+    list-style: none;
   }
 
   .lyrics-candidate-empty {

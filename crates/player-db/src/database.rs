@@ -29,7 +29,6 @@ const MAX_PAGE_SIZE: u32 = 500;
 const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
 const MAX_LYRIC_CANDIDATE_JSON_BYTES: usize = 4 * 1024 * 1024;
-const MAX_LYRIC_CANDIDATES_PER_TRACK: usize = 20;
 const MAX_LYRIC_CANDIDATE_CACHE_BYTES: i64 = 16 * 1024 * 1024;
 const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT track_id) FROM source_mappings";
 const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
@@ -1554,36 +1553,63 @@ impl Database {
             "DELETE FROM lyric_candidates WHERE track_id=?1",
             [track_id.to_string()],
         )?;
-        for candidate in candidates.iter().take(MAX_LYRIC_CANDIDATES_PER_TRACK) {
-            let json = serde_json::to_string(candidate)
-                .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
-            if json.len() > MAX_LYRIC_CANDIDATE_JSON_BYTES {
-                continue;
-            }
-            let payload_bytes = i64::try_from(json.len())
-                .map_err(|_| DatabaseError::InvalidNumber("lyric candidate bytes"))?;
-            tx.execute(
-                "INSERT INTO lyric_candidates
+        insert_lyric_candidate_rows(&tx, track_id, candidates, fetched_at_utc_ms)?;
+        prune_lyric_candidate_cache(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Add candidates from a later page without dropping lyrics already shown.
+    pub fn append_lyric_candidates(
+        &self,
+        track_id: TrackId,
+        candidates: &[LyricCandidate],
+        fetched_at_utc_ms: i64,
+    ) -> Result<(), DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        insert_lyric_candidate_rows(&tx, track_id, candidates, fetched_at_utc_ms)?;
+        prune_lyric_candidate_cache(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+fn insert_lyric_candidate_rows(
+    tx: &rusqlite::Transaction<'_>,
+    track_id: TrackId,
+    candidates: &[LyricCandidate],
+    fetched_at_utc_ms: i64,
+) -> Result<(), DatabaseError> {
+    for candidate in candidates {
+        let json = serde_json::to_string(candidate)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        if json.len() > MAX_LYRIC_CANDIDATE_JSON_BYTES {
+            continue;
+        }
+        let payload_bytes = i64::try_from(json.len())
+            .map_err(|_| DatabaseError::InvalidNumber("lyric candidate bytes"))?;
+        tx.execute(
+            "INSERT INTO lyric_candidates
                      (track_id, candidate_id, candidate_json, fetched_at_utc_ms, payload_bytes)
                  VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(track_id, candidate_id) DO UPDATE SET
                      candidate_json=excluded.candidate_json,
                      fetched_at_utc_ms=excluded.fetched_at_utc_ms,
                      payload_bytes=excluded.payload_bytes",
-                params![
-                    track_id.to_string(),
-                    candidate.candidate_id,
-                    json,
-                    fetched_at_utc_ms,
-                    payload_bytes,
-                ],
-            )?;
-        }
-        prune_lyric_candidate_cache(&tx)?;
-        tx.commit()?;
-        Ok(())
+            params![
+                track_id.to_string(),
+                candidate.candidate_id,
+                json,
+                fetched_at_utc_ms,
+                payload_bytes,
+            ],
+        )?;
     }
+    Ok(())
+}
 
+impl Database {
     /// Resolve a candidate returned by an earlier search and make it the durable manual choice.
     pub fn select_lyric_candidate(
         &self,

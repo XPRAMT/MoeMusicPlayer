@@ -18,8 +18,8 @@ const NETEASE_LYRIC_URL: &str = "https://music.163.com/api/song/lyric";
 const QQ_API_URL: &str = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 const QQ_LYRIC_URL: &str = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg";
 const NETEASE_CLOUD_SEARCH_URL: &str = "https://music.163.com/api/cloudsearch/pc";
-const NETEASE_SEARCH_LIMIT: usize = 5;
-const QQ_SEARCH_LIMIT: usize = 20;
+const NETEASE_SEARCH_LIMIT: usize = 10;
+const QQ_SEARCH_LIMIT: usize = 10;
 const QQ_REFERER: &str = "https://y.qq.com/portal/player.html";
 const QQ_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
@@ -206,32 +206,51 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
     }
 
     /// Return raw search hits in provider order. This method deliberately does not dedupe or rank.
+    #[cfg(test)]
     pub async fn search(
         &self,
         provider: LyricProvider,
         metadata: &LyricsTrackMetadata,
         cancellation: &CancellationToken,
     ) -> Result<Vec<ProviderCandidate>, ProviderError> {
+        self.search_page(provider, metadata, 1, cancellation).await
+    }
+
+    /// `page` is 1-based. Each page asks the provider for one batch of songs.
+    pub async fn search_page(
+        &self,
+        provider: LyricProvider,
+        metadata: &LyricsTrackMetadata,
+        page: u32,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<ProviderCandidate>, ProviderError> {
         match provider {
-            LyricProvider::NetEase => self.search_netease(metadata, cancellation).await,
-            LyricProvider::Qq => {
-                let query = search_query(metadata);
-                if query.is_empty() {
-                    return Ok(Vec::new());
-                }
-                let request = HttpRequest {
-                    method: HttpMethod::Post,
-                    url: QQ_API_URL.to_owned(),
-                    body: Some(qq_search_body(&query)),
-                    headers: qq_headers(),
-                };
-                let response = self.request(request, cancellation).await?;
-                parse_qq_search(&parse_json(&response.body)?)
-            }
+            LyricProvider::NetEase => self.search_netease(metadata, page, cancellation).await,
+            LyricProvider::Qq => self.search_qq(metadata, page, cancellation).await,
             LyricProvider::Sidecar | LyricProvider::Embedded => {
                 Err(ProviderError::UnsupportedProvider)
             }
         }
+    }
+
+    async fn search_qq(
+        &self,
+        metadata: &LyricsTrackMetadata,
+        page: u32,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<ProviderCandidate>, ProviderError> {
+        let query = search_query(metadata);
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let request = HttpRequest {
+            method: HttpMethod::Post,
+            url: QQ_API_URL.to_owned(),
+            body: Some(qq_search_body(&query, page)),
+            headers: qq_headers(),
+        };
+        let response = self.request(request, cancellation).await?;
+        parse_qq_search(&parse_json(&response.body)?)
     }
 
     /// Fetch lyrics for a selected search hit. The caller controls how many hits are fetched.
@@ -278,6 +297,7 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
     async fn search_netease(
         &self,
         metadata: &LyricsTrackMetadata,
+        page: u32,
         cancellation: &CancellationToken,
     ) -> Result<Vec<ProviderCandidate>, ProviderError> {
         let Some(title) = metadata
@@ -297,14 +317,20 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
         {
             variants.push(format!("{title} {artist}"));
         }
-        if variants.last().is_none_or(|query| query != title) {
+        // Later pages stay on the first query. Repeating the title-only query
+        // would replay the first page under a different offset.
+        if page <= 1 && variants.last().is_none_or(|query| query != title) {
             variants.push(title.to_owned());
         }
+        if variants.is_empty() {
+            variants.push(title.to_owned());
+        }
+        let offset = (page.saturating_sub(1) as usize).saturating_mul(NETEASE_SEARCH_LIMIT);
 
         let mut results = Vec::new();
         for query in variants {
             let primary = self
-                .netease_search_request(NETEASE_SEARCH_URL, &query, cancellation)
+                .netease_search_request(NETEASE_SEARCH_URL, &query, offset, cancellation)
                 .await;
             let primary_hits = match primary {
                 Ok(response) => {
@@ -321,7 +347,7 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
             let mut hits = primary_hits.unwrap_or_default();
             if hits.is_empty() {
                 let fallback = self
-                    .netease_search_request(NETEASE_CLOUD_SEARCH_URL, &query, cancellation)
+                    .netease_search_request(NETEASE_CLOUD_SEARCH_URL, &query, offset, cancellation)
                     .await?;
                 hits = parse_netease_search(&parse_json(&fallback.body)?)?;
             }
@@ -334,13 +360,14 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
         &self,
         endpoint: &str,
         query: &str,
+        offset: usize,
         cancellation: &CancellationToken,
     ) -> Result<HttpResponse, ProviderError> {
         self.request(
             HttpRequest {
                 method: HttpMethod::Get,
                 url: format!(
-                    "{endpoint}?s={}&type=1&limit={NETEASE_SEARCH_LIMIT}&offset=0",
+                    "{endpoint}?s={}&type=1&limit={NETEASE_SEARCH_LIMIT}&offset={offset}",
                     form_component(query)
                 ),
                 body: None,
@@ -396,7 +423,7 @@ fn form_component(value: &str) -> String {
     output
 }
 
-fn qq_search_body(query: &str) -> String {
+fn qq_search_body(query: &str, page: u32) -> String {
     // ct 24 / cv 0 still returns HTTP 200 with an empty song list. The desktop
     // client identity below is what currently returns song rows.
     json!({
@@ -408,7 +435,7 @@ fn qq_search_body(query: &str) -> String {
                 "query": query,
                 "search_type": 0,
                 "num_per_page": QQ_SEARCH_LIMIT,
-                "page_num": 1
+                "page_num": page.max(1)
             }
         }
     })
@@ -873,7 +900,7 @@ mod tests {
             .any(|(name, value)| name == "Referer" && value == "https://music.163.com/")));
         assert!(requests
             .iter()
-            .all(|request| request.url.contains("limit=5")));
+            .all(|request| request.url.contains("limit=10")));
     }
 
     #[tokio::test]

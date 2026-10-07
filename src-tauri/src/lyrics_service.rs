@@ -1,7 +1,7 @@
 //! Track-scoped lyric lookup and IPC DTO conversion.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -25,9 +25,7 @@ use crate::lyrics_provider::{
     LyricsProviderClient, ProviderCandidate, ProviderError, RawLyricCandidate, ReqwestHttpTransport,
 };
 
-const MAX_PROVIDER_HITS: usize = 20;
-const MAX_SEARCH_CANDIDATES: usize = 20;
-const MAX_FETCH_CANDIDATES: usize = 20;
+const LYRIC_BATCH_SIZE: usize = 10;
 const MAX_CONCURRENT_LYRIC_FETCHES: usize = 3;
 const HIGH_CONFIDENCE_SCORE: f32 = 0.90;
 const MAX_REQUEST_ID_BYTES: usize = 128;
@@ -130,6 +128,8 @@ pub struct LyricsTrackResultDto {
     pub candidates: Vec<LyricsCandidateDto>,
     pub status: LyricsResultStatusDto,
     pub error: Option<String>,
+    /// More provider songs can still be downloaded, ten lyrics at a time.
+    pub has_more: bool,
 }
 
 struct ActiveLyricsSearch {
@@ -137,10 +137,23 @@ struct ActiveLyricsSearch {
     cancellation: CancellationToken,
 }
 
+struct LyricBrowseSession {
+    track_id: TrackId,
+    score_metadata: LyricsTrackMetadata,
+    search_metadata: LyricsTrackMetadata,
+    pending: VecDeque<ProviderCandidate>,
+    seen: HashSet<String>,
+    /// Next 1-based provider page to request once `pending` is empty.
+    next_page: u32,
+    exhausted: bool,
+    generation: u64,
+}
+
 pub struct LyricsService<T: crate::lyrics_provider::HttpTransport = ReqwestHttpTransport> {
     client: Arc<LyricsProviderClient<T>>,
     active_searches: Arc<Mutex<HashMap<String, ActiveLyricsSearch>>>,
     next_generation: AtomicU64,
+    browse: Mutex<Option<LyricBrowseSession>>,
 }
 
 impl Default for LyricsService<ReqwestHttpTransport> {
@@ -155,6 +168,7 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
             client: Arc::new(client),
             active_searches: Arc::new(Mutex::new(HashMap::new())),
             next_generation: AtomicU64::new(1),
+            browse: Mutex::new(None),
         }
     }
 
@@ -232,9 +246,10 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
             },
             None => metadata.clone(),
         };
-        let candidates = match tokio::time::timeout(
+        self.open_browse(track_id, metadata.clone(), search_metadata);
+        let (candidates, has_more) = match tokio::time::timeout(
             MAX_PROVIDER_SEARCH_DURATION,
-            fetch_provider_candidates(self.client.clone(), search_metadata, cancellation.clone()),
+            self.next_lyric_batch(&cancellation, LYRIC_BATCH_SIZE),
         )
         .await
         {
@@ -244,7 +259,7 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
                     &ProviderError::Timeout,
                 ))));
             }
-            Ok(Ok(candidates)) => candidates,
+            Ok(Ok(batch)) => batch,
             Ok(Err(ProviderError::Cancelled)) => return Ok(LyricsTrackResultDto::empty(None)),
             Ok(Err(error)) => {
                 return Ok(LyricsTrackResultDto::empty(Some(provider_error_message(
@@ -303,7 +318,6 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
 
         let candidates = ranked
             .iter()
-            .take(MAX_SEARCH_CANDIDATES)
             .map(|candidate| candidate_dto(&metadata, candidate))
             .collect::<Vec<_>>();
         if candidates.is_empty() {
@@ -314,113 +328,268 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
                 candidates,
                 status: LyricsResultStatusDto::Candidates,
                 error: None,
+                has_more,
             })
         }
     }
+
+    fn open_browse(
+        &self,
+        track_id: TrackId,
+        score_metadata: LyricsTrackMetadata,
+        search_metadata: LyricsTrackMetadata,
+    ) {
+        *self
+            .browse
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(LyricBrowseSession {
+            track_id,
+            score_metadata,
+            search_metadata,
+            pending: VecDeque::new(),
+            seen: HashSet::new(),
+            next_page: 1,
+            exhausted: false,
+            generation: self.next_generation.fetch_add(1, Ordering::Relaxed),
+        });
+    }
+
+    async fn next_lyric_batch(
+        &self,
+        cancellation: &CancellationToken,
+        limit: usize,
+    ) -> Result<(Vec<LyricCandidate>, bool), ProviderError> {
+        let mut session = self
+            .browse
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .ok_or_else(|| ProviderError::InvalidResponse("lyric search is not active".into()))?;
+        let generation = session.generation;
+        let pulled = pull_lyric_batch(self.client.clone(), &mut session, cancellation, limit).await;
+        let has_more = !session.pending.is_empty() || !session.exhausted;
+        let mut slot = self
+            .browse
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot
+            .as_ref()
+            .is_none_or(|current| current.generation == generation)
+        {
+            *slot = Some(session);
+        }
+        pulled.map(|candidates| (candidates, has_more))
+    }
+
+    pub async fn load_more_track(
+        &self,
+        database: &Database,
+        track_id: TrackId,
+        cancellation: CancellationToken,
+    ) -> Result<LyricsTrackResultDto, String> {
+        if self
+            .browse
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_none_or(|session| session.track_id != track_id)
+        {
+            return Ok(LyricsTrackResultDto::empty(None));
+        }
+        let (candidates, has_more) = match tokio::time::timeout(
+            MAX_PROVIDER_SEARCH_DURATION,
+            self.next_lyric_batch(&cancellation, LYRIC_BATCH_SIZE),
+        )
+        .await
+        {
+            Err(_) => {
+                cancellation.cancel();
+                return Ok(LyricsTrackResultDto::empty(Some(provider_error_message(
+                    &ProviderError::Timeout,
+                ))));
+            }
+            Ok(Ok(batch)) => batch,
+            Ok(Err(ProviderError::Cancelled)) => return Ok(LyricsTrackResultDto::empty(None)),
+            Ok(Err(error)) => {
+                return Ok(LyricsTrackResultDto::empty(Some(provider_error_message(
+                    &error,
+                ))))
+            }
+        };
+        if candidates.is_empty() {
+            return Ok(LyricsTrackResultDto {
+                lyrics: None,
+                candidates: Vec::new(),
+                status: LyricsResultStatusDto::Candidates,
+                error: None,
+                has_more: false,
+            });
+        }
+        let now = super::now_utc_epoch_ms()?;
+        database
+            .append_lyric_candidates(track_id, &candidates, now)
+            .map_err(|error| error.to_string())?;
+        let metadata = self
+            .browse
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|session| session.score_metadata.clone())
+            .unwrap_or_else(|| LyricsTrackMetadata {
+                title: None,
+                artist: None,
+                album: None,
+                duration_ms: None,
+            });
+        Ok(LyricsTrackResultDto {
+            lyrics: None,
+            candidates: candidates
+                .iter()
+                .map(|candidate| candidate_dto(&metadata, candidate))
+                .collect(),
+            status: LyricsResultStatusDto::Candidates,
+            error: None,
+            has_more,
+        })
+    }
 }
 
+#[cfg(test)]
 async fn fetch_provider_candidates<T: crate::lyrics_provider::HttpTransport + 'static>(
     client: Arc<LyricsProviderClient<T>>,
     metadata: LyricsTrackMetadata,
     cancellation: CancellationToken,
 ) -> Result<Vec<LyricCandidate>, ProviderError> {
-    let first =
-        fetch_provider_candidates_once(client.clone(), &metadata, &cancellation, false).await;
-    let retry_qq = match &first {
-        Ok(candidates) => !candidates
-            .iter()
-            .any(|candidate| candidate.provider == LyricProvider::Qq),
-        Err(ProviderError::Cancelled) => false,
-        Err(_) => true,
+    let mut session = LyricBrowseSession {
+        track_id: TrackId::new(),
+        score_metadata: metadata.clone(),
+        search_metadata: metadata,
+        pending: VecDeque::new(),
+        seen: HashSet::new(),
+        next_page: 1,
+        exhausted: false,
+        generation: 0,
     };
-    if !retry_qq || cancellation.is_cancelled() {
-        return first;
-    }
-    tokio::select! {
-        _ = cancellation.cancelled() => return Err(ProviderError::Cancelled),
-        _ = tokio::time::sleep(QQ_MISSING_RETRY_DELAY) => {}
-    }
-    if cancellation.is_cancelled() {
-        return Err(ProviderError::Cancelled);
-    }
-    match fetch_provider_candidates_once(client, &metadata, &cancellation, true).await {
-        Ok(retry) => {
-            let mut merged = first.unwrap_or_default();
-            merged.extend(retry);
-            Ok(merged)
-        }
-        Err(ProviderError::Cancelled) => Err(ProviderError::Cancelled),
-        Err(_) => first,
-    }
+    pull_lyric_batch(client, &mut session, &cancellation, LYRIC_BATCH_SIZE).await
 }
 
-async fn fetch_provider_candidates_once<T: crate::lyrics_provider::HttpTransport + 'static>(
+async fn pull_lyric_batch<T: crate::lyrics_provider::HttpTransport + 'static>(
+    client: Arc<LyricsProviderClient<T>>,
+    session: &mut LyricBrowseSession,
+    cancellation: &CancellationToken,
+    limit: usize,
+) -> Result<Vec<LyricCandidate>, ProviderError> {
+    let mut batch = Vec::new();
+    while batch.len() < limit {
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::Cancelled);
+        }
+        if let Some(hit) = session.pending.pop_front() {
+            batch.push(hit);
+            continue;
+        }
+        if session.exhausted {
+            break;
+        }
+        let page = session.next_page;
+        let (fresh, might_have_more) =
+            load_search_page(client.clone(), &session.search_metadata, page, cancellation).await?;
+        session.next_page = page.saturating_add(1);
+        let mut added = Vec::new();
+        for hit in fresh {
+            if hit.candidate_id.is_empty()
+                || hit.candidate_id.len() > 256
+                || hit.provider_track_id.len() > 128
+            {
+                continue;
+            }
+            if session.seen.insert(hit.candidate_id.clone()) {
+                added.push(hit);
+            }
+        }
+        if added.is_empty() || !might_have_more {
+            session.exhausted = true;
+        }
+        if added.is_empty() {
+            break;
+        }
+        let mut queued: Vec<_> = session.pending.drain(..).collect();
+        queued.extend(added);
+        let ranked = rank_lyric_candidates(
+            &session.score_metadata,
+            queued.iter().map(provider_hit_to_lyric_candidate),
+        );
+        let mut by_id = queued
+            .into_iter()
+            .map(|hit| (hit.candidate_id.clone(), hit))
+            .collect::<HashMap<_, _>>();
+        for candidate in ranked {
+            if let Some(hit) = by_id.remove(&candidate.candidate_id) {
+                session.pending.push_back(hit);
+            }
+        }
+    }
+    fetch_lyrics_for_hits(client, batch, cancellation).await
+}
+
+async fn load_search_page<T: crate::lyrics_provider::HttpTransport + 'static>(
     client: Arc<LyricsProviderClient<T>>,
     metadata: &LyricsTrackMetadata,
+    page: u32,
     cancellation: &CancellationToken,
-    qq_only: bool,
-) -> Result<Vec<LyricCandidate>, ProviderError> {
-    let (netease, qqmusic) = if qq_only {
-        (
-            Ok(Vec::new()),
-            client
-                .search(LyricProvider::Qq, metadata, cancellation)
-                .await,
-        )
-    } else {
-        tokio::join!(
-            client.search(LyricProvider::NetEase, metadata, cancellation),
-            client.search(LyricProvider::Qq, metadata, cancellation),
-        )
-    };
+) -> Result<(Vec<ProviderCandidate>, bool), ProviderError> {
+    let (netease, mut qqmusic) = tokio::join!(
+        client.search_page(LyricProvider::NetEase, metadata, page, cancellation),
+        client.search_page(LyricProvider::Qq, metadata, page, cancellation),
+    );
     if cancellation.is_cancelled() {
         return Err(ProviderError::Cancelled);
     }
-    let failed_searches = usize::from(netease.is_err()) + usize::from(qqmusic.is_err());
-    if failed_searches == 2 {
-        return Err(netease.err().unwrap_or(ProviderError::InvalidResponse(
-            "provider search failed".to_owned(),
-        )));
+    let qq_missing = match &qqmusic {
+        Ok(hits) => hits.is_empty(),
+        Err(ProviderError::Cancelled) => return Err(ProviderError::Cancelled),
+        Err(_) => true,
+    };
+    if page <= 1 && qq_missing && !cancellation.is_cancelled() {
+        tokio::select! {
+            _ = cancellation.cancelled() => return Err(ProviderError::Cancelled),
+            _ = tokio::time::sleep(QQ_MISSING_RETRY_DELAY) => {}
+        }
+        qqmusic = client
+            .search_page(LyricProvider::Qq, metadata, page, cancellation)
+            .await;
     }
+    if cancellation.is_cancelled() {
+        return Err(ProviderError::Cancelled);
+    }
+    let failed = usize::from(netease.is_err()) + usize::from(qqmusic.is_err());
+    if failed == 2 {
+        return Err(netease
+            .err()
+            .or(qqmusic.err())
+            .unwrap_or(ProviderError::InvalidResponse(
+                "provider search failed".to_owned(),
+            )));
+    }
+    let netease_hits = netease.unwrap_or_default();
+    let qq_hits = qqmusic.unwrap_or_default();
+    let might_have_more = netease_hits.len() >= 10 || qq_hits.len() >= 10;
+    let mut hits = netease_hits;
+    hits.extend(qq_hits);
+    Ok((hits, might_have_more))
+}
 
-    let mut hits = Vec::new();
-    if let Ok(mut found) = netease {
-        found.truncate(MAX_PROVIDER_HITS);
-        hits.extend(found);
-    }
-    if let Ok(mut found) = qqmusic {
-        found.truncate(MAX_PROVIDER_HITS);
-        hits.extend(found);
-    }
-
-    let mut seen = HashSet::new();
-    hits.retain(|hit| {
-        !hit.candidate_id.is_empty()
-            && hit.candidate_id.len() <= 256
-            && hit.provider_track_id.len() <= 128
-            && seen.insert(hit.candidate_id.clone())
-    });
+async fn fetch_lyrics_for_hits<T: crate::lyrics_provider::HttpTransport + 'static>(
+    client: Arc<LyricsProviderClient<T>>,
+    hits: Vec<ProviderCandidate>,
+    cancellation: &CancellationToken,
+) -> Result<Vec<LyricCandidate>, ProviderError> {
     if hits.is_empty() {
         return Ok(Vec::new());
     }
-
-    let hit_by_id = hits
-        .iter()
-        .cloned()
-        .map(|hit| (hit.candidate_id.clone(), hit))
-        .collect::<HashMap<_, _>>();
-    let preliminary =
-        rank_lyric_candidates(&metadata, hits.iter().map(provider_hit_to_lyric_candidate))
-            .into_iter()
-            .take(MAX_SEARCH_CANDIDATES)
-            .collect::<Vec<_>>();
-
     let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_LYRIC_FETCHES));
     let mut tasks = JoinSet::new();
-    for ranked_hit in preliminary.into_iter().take(MAX_FETCH_CANDIDATES) {
-        let Some(hit) = hit_by_id.get(&ranked_hit.candidate_id).cloned() else {
-            continue;
-        };
+    for hit in hits {
         let client = client.clone();
         let cancellation = cancellation.clone();
         let permits = permits.clone();
@@ -433,7 +602,6 @@ async fn fetch_provider_candidates_once<T: crate::lyrics_provider::HttpTransport
             raw_to_lyric_candidate(raw)
         });
     }
-
     let mut candidates = Vec::new();
     let mut first_fetch_error = None;
     while let Some(result) = tasks.join_next().await {
@@ -683,6 +851,7 @@ impl LyricsTrackResultDto {
             candidates: Vec::new(),
             status: LyricsResultStatusDto::Ready,
             error: None,
+            has_more: false,
         }
     }
 
@@ -696,6 +865,7 @@ impl LyricsTrackResultDto {
                 LyricsResultStatusDto::Empty
             },
             error,
+            has_more: false,
         }
     }
 }
@@ -782,14 +952,11 @@ pub async fn lyrics_search(
             candidates: Vec::new(),
             status: LyricsResultStatusDto::Candidates,
             error: None,
+            has_more: false,
         },
         Err(error) => return Err(error),
     };
     if manual {
-        let room = MAX_SEARCH_CANDIDATES.saturating_sub(local_candidates.len());
-        if result.candidates.len() > room {
-            result.candidates.truncate(room);
-        }
         let mut merged = local_candidates;
         merged.append(&mut result.candidates);
         result.candidates = merged;
@@ -799,6 +966,25 @@ pub async fn lyrics_search(
         }
     }
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn lyrics_load_more(
+    state: State<'_, super::AppState>,
+    track_id: String,
+) -> Result<LyricsTrackResultDto, String> {
+    let _database_work = super::enter_database_work(&state)?;
+    let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    state
+        .lyrics_service
+        .load_more_track(database, track_id, CancellationToken::new())
+        .await
 }
 
 #[tauri::command]
@@ -1288,7 +1474,7 @@ fn line_dto(line: &LyricLine) -> LyricLineDto {
 mod tests {
     use super::{
         fetch_provider_candidates, raw_to_lyric_candidate, LyricsService, LyricsSourceDto,
-        MAX_SEARCH_CANDIDATES,
+        LYRIC_BATCH_SIZE,
     };
     use crate::lyrics_provider::{
         HttpMethod, HttpRequest, HttpResponse, HttpTransport, LyricsProviderClient, ProviderError,
@@ -1611,11 +1797,12 @@ mod tests {
             candidates: vec![super::candidate_dto(&metadata, &candidate)],
             status: super::LyricsResultStatusDto::Candidates,
             error: None,
+            has_more: false,
         };
         let value = serde_json::to_value(result).expect("serialize result DTO");
         assert_eq!(
             keys(&value),
-            ["candidates", "error", "lyrics", "status"]
+            ["candidates", "error", "hasMore", "lyrics", "status"]
                 .into_iter()
                 .collect()
         );
@@ -1810,9 +1997,8 @@ mod tests {
                         .is_some_and(|body| body.contains("SearchCgiService"))
             })
             .count();
-        assert!(candidates.len() <= MAX_SEARCH_CANDIDATES);
-        assert!(candidates.len() <= 20);
-        assert!(lyric_fetches <= 20);
+        assert!(candidates.len() <= LYRIC_BATCH_SIZE);
+        assert!(lyric_fetches <= LYRIC_BATCH_SIZE);
         assert_eq!(search_requests, 3, "one QQ and at most two NetEase queries");
         assert!(requests
             .iter()

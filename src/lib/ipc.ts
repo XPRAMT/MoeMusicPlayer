@@ -300,6 +300,7 @@ export interface LyricsTrackResult {
   candidates: LyricsCandidate[];
   status: LyricsResultStatus;
   error: string | null;
+  hasMore?: boolean;
 }
 
 export interface LyricsPreferences {

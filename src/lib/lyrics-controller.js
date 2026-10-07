@@ -52,6 +52,8 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
     selectionMode: selectionMode || phase === 'candidates' || (selectionMode && phase === 'empty'),
     failedStage: phase === 'error' ? failedStage : null,
     pickerClosed: false,
+    hasMore: Boolean(result.hasMore),
+    isLoadingMore: false,
   };
 }
 
@@ -63,7 +65,8 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
  *     getTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
  *     search: (args: {trackId:string, requestId:string, manual?:boolean, query?:string}) => Promise<LyricsTrackResult>,
  *     selectCandidate: (args: {trackId:string, candidateId:string}) => Promise<TrackLyrics>,
- *     clearTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
+     *     clearTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
+     *     loadMore: (args: {trackId:string}) => Promise<LyricsTrackResult>,
  *     cancelSearch: (args: {requestId:string}) => Promise<void> | void
  *   },
  *   onChange: (state: LyricsControllerState) => void,
@@ -190,6 +193,8 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       selectionMode: false,
       failedStage: null,
       pickerClosed: false,
+      hasMore: false,
+      isLoadingMore: false,
     };
   }
 
@@ -225,6 +230,38 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
     /**
      * @param {{ query?: string }} [options]
      */
+    async loadMore() {
+      if (disposed || !activeTrackId || !state.hasMore || state.isLoadingMore) return;
+      if (typeof api.loadMore !== 'function') return;
+      const trackId = activeTrackId;
+      const requestGeneration = generation;
+      update({ ...state, isLoadingMore: true, error: null });
+      try {
+        const result = await api.loadMore({ trackId });
+        if (!isCurrent(trackId, requestGeneration)) return;
+        const incoming = Array.isArray(result.candidates) ? result.candidates : [];
+        const seen = new Set(state.candidates.map((candidate) => candidate.id));
+        update({
+          ...state,
+          candidates: [
+            ...state.candidates,
+            ...incoming.filter((candidate) => !seen.has(candidate.id)),
+          ],
+          hasMore: Boolean(result.hasMore),
+          isLoadingMore: false,
+          error: result.error,
+          phase: state.phase === 'empty' && incoming.length > 0 ? 'candidates' : state.phase,
+        });
+      } catch (error) {
+        if (!isCurrent(trackId, requestGeneration)) return;
+        update({
+          ...state,
+          isLoadingMore: false,
+          error: errorMessage(error),
+        });
+      }
+    },
+
     async searchAgain(options = {}) {
       if (disposed || !activeTrackId) return;
       generation += 1;
