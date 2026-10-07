@@ -985,7 +985,7 @@
   .lyrics-candidate-empty {
     padding: 18px 10px;
     color: var(--muted);
-    font-size: 11px;
+    font-size: 14px;
     line-height: 1.6;
     text-align: center;
     list-style: none;
@@ -1006,7 +1006,7 @@
   .candidate-copy {
     display: grid;
     min-width: 0;
-    gap: 3px;
+    gap: 4px;
   }
 
   .candidate-copy strong,
@@ -1018,13 +1018,15 @@
 
   .candidate-copy strong {
     color: var(--text);
-    font-size: 11px;
+    font-size: 15px;
+    line-height: 1.35;
   }
 
   .candidate-copy span,
   .candidate-copy small {
     color: var(--muted);
-    font-size: 9px;
+    font-size: 13px;
+    line-height: 1.4;
   }
 
   .candidate-preview {
@@ -1033,7 +1035,7 @@
 
   .candidate-preview-note {
     color: var(--muted);
-    font-size: 10px;
+    font-size: 13px;
     line-height: 1.5;
   }
 
