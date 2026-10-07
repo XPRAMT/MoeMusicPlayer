@@ -2,7 +2,6 @@
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
 
 const INDEX_COLUMN_PX = 26;
-const ACTION_COLUMN_PX = 42;
 
 /** @type {ReadonlyArray<{ id: TrackColumnId, label: string, min: string, minPx: number }>} */
 export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
@@ -53,23 +52,23 @@ export function visibleTrackColumns(preferences) {
 }
 
 /**
- * Fixed row number and play operation are always present.
+ * The row number is always present. Playback starts from a click on the row.
  * @param {TrackColumnPreference[]} preferences
  */
 export function trackListColumnCount(preferences) {
-  return visibleTrackColumns(preferences).length + 2;
+  return visibleTrackColumns(preferences).length + 1;
 }
 
 /** @param {TrackColumnPreference[]} preferences */
 export function trackListGridTemplate(preferences) {
   const informationColumns = visibleTrackColumns(preferences)
     .map(({ id }) => COLUMN_DEFINITION_BY_ID.get(id)?.min ?? 'minmax(100px,1fr)');
-  return [`${INDEX_COLUMN_PX}px`, ...informationColumns, `${ACTION_COLUMN_PX}px`].join(' ');
+  return [`${INDEX_COLUMN_PX}px`, ...informationColumns].join(' ');
 }
 
 /**
  * Width the shared grid needs before a long cell is allowed to grow the row.
- * Includes the index column, the action column, horizontal padding, and gaps.
+ * Includes the index column, horizontal padding, and gaps.
  * @param {TrackColumnPreference[]} preferences
  */
 export function trackListMinWidthPx(preferences) {
@@ -78,9 +77,9 @@ export function trackListMinWidthPx(preferences) {
     (sum, column) => sum + (COLUMN_DEFINITION_BY_ID.get(column.id)?.minPx ?? 100),
     0,
   );
-  const gaps = (visible.length + 1) * 10;
+  const gaps = visible.length * 10;
   const padding = 28;
-  return INDEX_COLUMN_PX + information + ACTION_COLUMN_PX + gaps + padding;
+  return INDEX_COLUMN_PX + information + gaps + padding;
 }
 
 /**

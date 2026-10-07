@@ -1,5 +1,4 @@
 <script lang="ts">
-import { IconPlayerPlayFilled } from '@tabler/icons-svelte-runes';
 import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistPage, type TrackListColumnPreference } from './ipc';
 import { formatDuration } from './format';
 import {
@@ -139,7 +138,7 @@ import { withLivePlayedMs } from './live-play-count.js';
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
-        <TrackColumnCells variant="header" columns={visibleColumns} trailingLabel="播放操作" />
+        <TrackColumnCells variant="header" columns={visibleColumns} />
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<PlaylistEntrySummary>)}
@@ -153,21 +152,7 @@ import { withLivePlayedMs } from './live-play-count.js';
             text: formatTrackColumnValue(column.id, withLivePlayedMs(row.item!, livePlayCount), formatDuration, '未命名項目'),
             title: column.id === 'title' && !row.item?.hasEnabledMapping ? '目前未對應到可播放的曲庫曲目' : undefined,
           }))}
-        >
-          {#snippet trailing()}
-            <button
-              class="row-play column-action"
-              type="button"
-              tabindex="-1"
-              aria-label={`播放 ${row.item?.title?.trim() || '播放清單項目'}`}
-              title={row.item?.trackId && row.item?.hasEnabledMapping ? '播放曲目' : '這個項目尚未對應到可播放的曲庫曲目'}
-              disabled={!row.item?.trackId || !row.item?.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand}
-              onclick={row.play}
-            >
-              <IconPlayerPlayFilled size={17} aria-hidden="true" />
-            </button>
-          {/snippet}
-        </TrackColumnCells>
+        />
       {:else}
         <TrackColumnCells variant="placeholder" columns={visibleColumns} placeholderTitle="正在載入項目…" />
       {/if}

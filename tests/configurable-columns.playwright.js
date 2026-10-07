@@ -13,8 +13,8 @@ async page => {
   assert(JSON.stringify(state.playlist.header) === JSON.stringify(defaultOrder), 'playlist default header order differs');
   for (const [name, list] of [['library', state.library], ['playlist', state.playlist]]) {
     assert(JSON.stringify(list.skeleton) === JSON.stringify(defaultOrder), name + ' skeleton columns differ');
-    assert(list.headerCellCount === 9 && list.rowCellCount === 9, name + ' fixed/skeleton cells not synchronized');
-    assert(list.ariaColumnCount === '9', name + ' aria-colcount does not match default grid');
+    assert(list.headerCellCount === 8 && list.rowCellCount === 8, name + ' fixed/skeleton cells not synchronized');
+    assert(list.ariaColumnCount === '8', name + ' aria-colcount does not match default grid');
     assert(list.scrollWidth > list.clientWidth, name + ' list does not contain its own horizontal scrolling');
   }
   assert(mobileMetrics.documentWidth <= mobileMetrics.viewportWidth, 'outer page horizontally overflows at 360px');
@@ -41,8 +41,8 @@ async page => {
   for (const [name, list] of [['library', state.library], ['playlist', state.playlist]]) {
     assert(JSON.stringify(list.header) === JSON.stringify(movedOrder), name + ' loaded header order not applied');
     assert(JSON.stringify(list.row) === JSON.stringify(movedOrder), name + ' loaded row order differs from header');
-    assert(list.headerCellCount === 9 && list.rowCellCount === 9, name + ' loaded cell count mismatch');
-    assert(list.ariaColumnCount === '9', name + ' loaded aria-colcount mismatch');
+    assert(list.headerCellCount === 8 && list.rowCellCount === 8, name + ' loaded cell count mismatch');
+    assert(list.ariaColumnCount === '8', name + ' loaded aria-colcount mismatch');
   }
 
   const missing = await page.locator('.playlist-entry-row').filter({ hasText: 'M3U 項目' }).evaluate(row => ({
@@ -62,9 +62,9 @@ async page => {
     for (const [name, list] of [['library', state.library], ['playlist', state.playlist]]) {
       assert(JSON.stringify(list.header) === JSON.stringify(expectedVisible), name + ' did not hide ' + hiddenId + ' in header');
       assert(JSON.stringify(list.row) === JSON.stringify(expectedVisible), name + ' did not hide ' + hiddenId + ' in row');
-      assert(list.headerCellCount === expectedVisible.length + 2, name + ' header has stale cells after hiding ' + hiddenId);
-      assert(list.rowCellCount === expectedVisible.length + 2, name + ' row has stale cells after hiding ' + hiddenId);
-      assert(list.ariaColumnCount === String(expectedVisible.length + 2), name + ' aria-colcount is stale after hiding ' + hiddenId);
+      assert(list.headerCellCount === expectedVisible.length + 1, name + ' header has stale cells after hiding ' + hiddenId);
+      assert(list.rowCellCount === expectedVisible.length + 1, name + ' row has stale cells after hiding ' + hiddenId);
+      assert(list.ariaColumnCount === String(expectedVisible.length + 1), name + ' aria-colcount is stale after hiding ' + hiddenId);
     }
   }
 
@@ -106,6 +106,20 @@ async page => {
   });
   assert(wideB.order.join(',') === 'lyrics,artwork', 'wide B DOM order mismatch');
   assert(wideB.lefts[0] < wideB.lefts[1] && wideB.tops[0] === wideB.tops[1], 'wide B did not put lyrics before artwork horizontally');
+
+  await page.evaluate(columns => window.configurableColumnsHarness.setColumns(columns), defaultOrder.map(id => ({ id, visible: true })));
+  await page.evaluate(() => window.configurableColumnsHarness.releasePages());
+  await page.waitForSelector('#track-list-test .paged-virtual-row .list-column-title');
+  await page.waitForSelector('#playlist-list-test .playlist-entry-row .list-column-title');
+  assert(await page.locator('.row-play').count() === 0, 'list rows still show a play button');
+  await page.locator('#track-list-test .paged-virtual-row .list-column-album').first().click();
+  await page.locator('#playlist-list-test .playlist-entry-row').nth(0).locator('.list-column-title').click();
+  await page.locator('#playlist-list-test .playlist-entry-row').nth(1).locator('.list-column-artist').click();
+  const played = await page.evaluate(() => window.configurableColumnsHarness.snapshot().plays);
+  assert(JSON.stringify(played) === JSON.stringify([
+    { kind: 'library', id: 'column-track-0' },
+    { kind: 'playlist', id: 'column-track-1' },
+  ]), 'row click did not play the library cell and the matched playlist cell: ' + JSON.stringify(played));
   return {
     result: 'PASS',
     viewport360: { documentWidth: mobileMetrics.documentWidth, viewportWidth: mobileMetrics.viewportWidth },

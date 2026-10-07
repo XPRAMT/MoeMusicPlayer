@@ -1,5 +1,4 @@
 ﻿<script lang="ts">
-  import { IconPlayerPlayFilled } from '@tabler/icons-svelte-runes';
   import {
     getErrorText,
     invokeCommand,
@@ -171,7 +170,7 @@
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
-        <TrackColumnCells variant="header" columns={visibleColumns} trailingLabel="播放操作" />
+        <TrackColumnCells variant="header" columns={visibleColumns} />
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<TrackSummary>)}
@@ -185,21 +184,7 @@
             text: formatTrackColumnValue(column.id, withLivePlayedMs(row.item!, livePlayCount), formatDuration),
             title: column.id === 'title' && !row.item?.title?.trim() ? '未命名曲目' : undefined,
           }))}
-        >
-          {#snippet trailing()}
-            <button
-              class="row-play column-action"
-              type="button"
-              tabindex="-1"
-              aria-label={`播放 ${row.item?.title?.trim() || '未命名曲目'}`}
-              title={playbackReady ? '播放曲目' : '播放功能尚未就緒'}
-              disabled={!playbackReady || isSendingPlaybackCommand}
-              onclick={row.play}
-            >
-              <IconPlayerPlayFilled size={17} aria-hidden="true" />
-            </button>
-          {/snippet}
-        </TrackColumnCells>
+        />
       {:else}
         <TrackColumnCells variant="placeholder" columns={visibleColumns} placeholderTitle="正在載入曲目…" />
       {/if}

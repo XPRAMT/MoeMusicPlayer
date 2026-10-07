@@ -50,6 +50,7 @@
       page: { documentWidth: number; viewportWidth: number; contentWidth: number; contentClientWidth: number };
       layout: { paneOrder: string[]; paneTops: number[]; lyricsText: string | null };
       switches: Array<{ role: string | null; pressed: Array<string | null> }>;
+      plays: Array<{ kind: 'library' | 'playlist'; id: string }>;
     };
   }
 
@@ -61,6 +62,7 @@
 
   let columns = $state(DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column })));
   let layout = $state<NowPlayingLayout>('a');
+  let plays = $state<Array<{ kind: 'library' | 'playlist'; id: string }>>([]);
   let heldTrackPages: DeferredPage<TrackPage>[] = [];
   let heldPlaylistPages: DeferredPage<PlaylistPage>[] = [];
 
@@ -230,6 +232,7 @@
           role: group.getAttribute('role'),
           pressed: [...group.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-pressed')),
         })),
+      plays,
     };
   }
 
@@ -260,7 +263,9 @@
               isSendingPlaybackCommand={false}
               fetchPage={fetchTrackPage}
               {columns}
-              onPlay={() => {}}
+              onPlay={(track) => {
+                plays = [...plays, { kind: 'library', id: track.id }];
+              }}
             />
           </div>
         </section>
@@ -273,7 +278,9 @@
               isSendingPlaybackCommand={false}
               fetchPage={fetchPlaylistPage}
               {columns}
-              onPlay={() => {}}
+              onPlay={(entry) => {
+                plays = [...plays, { kind: 'playlist', id: entry.trackId ?? '' }];
+              }}
             />
           </div>
         </section>

@@ -190,10 +190,11 @@
     listName="播放佇列"
     onRange={handleRange}
     onPlay={() => {}}
+    rowActivates={false}
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
-        <TrackColumnCells variant="header" columns={visibleColumns} trailingLabel="佇列狀態" />
+        <TrackColumnCells variant="header" columns={visibleColumns} />
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<PlaybackQueuePageItem>)}
@@ -207,11 +208,7 @@
             text: displayValue(column.id, row.item!),
             title: column.id === 'title' && row.item?.track === null ? '曲目目前無法取得中繼資料' : undefined,
           }))}
-        >
-          {#snippet trailing()}
-            <span class="queue-entry-state column-action" role="gridcell">{isCurrent(row.item!) ? '正在播放' : ''}</span>
-          {/snippet}
-        </TrackColumnCells>
+        />
       {:else}
         <TrackColumnCells variant="placeholder" columns={visibleColumns} placeholderTitle="正在載入項目…" />
       {/if}
@@ -222,14 +219,6 @@
 <div class="track-list-count" role="status" aria-live="polite">{rangeLabel}</div>
 
 <style>
-  .queue-entry-state {
-    overflow: hidden;
-    color: var(--accent-text);
-    font-size: var(--font-body);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .queue-empty {
     margin: 12px 0;
   }

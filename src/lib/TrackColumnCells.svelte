@@ -1,5 +1,4 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
   import MiddleEllipsis from './MiddleEllipsis.svelte';
 
   interface Column {
@@ -19,8 +18,6 @@
     indexLabel?: string;
     cells?: Cell[];
     placeholderTitle?: string;
-    trailingLabel?: string;
-    trailing?: Snippet;
   }
 
   let {
@@ -29,8 +26,6 @@
     indexLabel = '',
     cells = [],
     placeholderTitle = '正在載入…',
-    trailingLabel = '',
-    trailing,
   }: Props = $props();
 </script>
 
@@ -39,7 +34,6 @@
   {#each columns as column (column.id)}
     <span class={`list-column list-column-${column.id}`} role="columnheader">{column.label}</span>
   {/each}
-  <span class="column-action" role="columnheader" aria-label={trailingLabel}></span>
 {:else if variant === 'item'}
   <span class="track-index column-index" role="gridcell">{indexLabel}</span>
   {#each cells as cell (cell.id)}
@@ -51,11 +45,6 @@
       {/if}
     </span>
   {/each}
-  {#if trailing}
-    {@render trailing()}
-  {:else}
-    <span class="column-action" role="gridcell"></span>
-  {/if}
 {:else}
   <span class="track-index column-index" role="gridcell" aria-hidden="true">—</span>
   {#each columns as column (column.id)}
@@ -63,5 +52,4 @@
       {column.id === 'title' ? placeholderTitle : '—'}
     </span>
   {/each}
-  <span class="column-action" role="gridcell" aria-hidden="true"></span>
 {/if}

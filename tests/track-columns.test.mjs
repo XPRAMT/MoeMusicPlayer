@@ -18,15 +18,15 @@ import {
 
 const formatDuration = (value) => `${Math.floor(value / 60_000)}:${String(Math.floor(value / 1000) % 60).padStart(2, '0')}`;
 
-test('default list columns are shared and keep index/play as fixed extra columns', () => {
+test('default list columns are shared and keep the index as the only fixed column', () => {
   assert.deepEqual(DEFAULT_TRACK_COLUMN_PREFERENCES.map(({ id }) => id), [
     'title', 'artist', 'album', 'year', 'audioFormat', 'duration', 'playCount',
   ]);
-  assert.equal(trackListColumnCount(DEFAULT_TRACK_COLUMN_PREFERENCES), 9);
-  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ').length, 9);
+  assert.equal(trackListColumnCount(DEFAULT_TRACK_COLUMN_PREFERENCES), 8);
+  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ').length, 8);
 });
 
-test('column order can move the first and last information columns without moving fixed actions', () => {
+test('column order can move the first and last information columns without moving the index', () => {
   const movedFirst = moveTrackColumn(DEFAULT_TRACK_COLUMN_PREFERENCES, 'title', 'down');
   assert.deepEqual(movedFirst.map(({ id }) => id), [
     'artist', 'title', 'album', 'year', 'audioFormat', 'duration', 'playCount',
@@ -38,7 +38,7 @@ test('column order can move the first and last information columns without movin
   assert.deepEqual(moveTrackColumn(movedLast, 'artist', 'up'), movedLast);
   assert.deepEqual(moveTrackColumn(movedLast, 'duration', 'down'), movedLast);
   assert.equal(trackListGridTemplate(movedLast).split(' ').at(0), '26px');
-  assert.equal(trackListGridTemplate(movedLast).split(' ').at(-1), '42px');
+  assert.notEqual(trackListGridTemplate(movedLast).split(' ').at(-1), '42px');
 });
 
 test('visibility omits any information column from rows, skeletons, header count and grid template', () => {
@@ -47,10 +47,10 @@ test('visibility omits any information column from rows, skeletons, header count
     preferences = setTrackColumnVisibility(preferences, id, false);
     const visible = visibleTrackColumns(preferences);
     assert.equal(visible.some((column) => column.id === id), false);
-    assert.equal(trackListColumnCount(preferences), visible.length + 2);
-    assert.equal(trackListGridTemplate(preferences).split(' ').length, visible.length + 2);
+    assert.equal(trackListColumnCount(preferences), visible.length + 1);
+    assert.equal(trackListGridTemplate(preferences).split(' ').length, visible.length + 1);
   }
-  assert.equal(trackListColumnCount(preferences), 2);
+  assert.equal(trackListColumnCount(preferences), 1);
 });
 
 test('malformed stored column settings safely fall back to defaults', () => {

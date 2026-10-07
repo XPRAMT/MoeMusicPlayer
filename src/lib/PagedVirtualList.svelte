@@ -43,6 +43,7 @@
     listName: string;
     onRange: (range: VirtualRange) => void;
     onPlay: (item: Item, index: number) => void;
+    rowActivates?: boolean;
     header?: Snippet;
     row: Snippet<[VirtualListRow<Item>]>;
   }
@@ -72,6 +73,7 @@
     listName,
     onRange,
     onPlay,
+    rowActivates = true,
     header,
     row,
   }: Props<Item> = $props();
@@ -211,8 +213,18 @@
       role="row"
       aria-rowindex={virtualRow.index + 2}
       aria-selected={selected}
+      tabindex={rowActivates && virtualRow.item !== null ? -1 : undefined}
       aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
       style={`height:${rowHeight}px;transform:translateY(${headerHeight + virtualRow.index * rowHeight}px)`}
+      class:activates={rowActivates && virtualRow.item !== null}
+      onclick={() => {
+        if (rowActivates) playRow(virtualRow.item, virtualRow.index);
+      }}
+      onkeydown={(event) => {
+        if (!rowActivates || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        playRow(virtualRow.item, virtualRow.index);
+      }}
     >
       {@render row({
         item: virtualRow.item,
@@ -264,6 +276,10 @@
     left: 0;
     box-sizing: border-box;
     overflow: hidden;
+  }
+
+  .paged-virtual-row.activates {
+    cursor: pointer;
   }
 
   .paged-virtual-row.configurable-track-grid {

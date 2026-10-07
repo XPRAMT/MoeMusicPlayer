@@ -1412,39 +1412,6 @@ input:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-.row-play {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  justify-self: end;
-  place-items: center;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  color: var(--accent-text);
-  background: transparent;
-  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
-}
-
-.row-play svg {
-  width: 17px;
-  height: 17px;
-}
-
-.row-play:not(:disabled) {
-  cursor: pointer;
-}
-
-.row-play:not(:disabled):hover {
-  border-color: rgba(var(--accent-rgb), 0.23);
-  color: var(--accent-text);
-  background: var(--panel-soft);
-}
-
-.row-play:disabled {
-  color: var(--text-soft);
-  cursor: not-allowed;
-}
-
 .pagination-bar {
   display: flex;
   min-height: 49px;
@@ -3748,7 +3715,6 @@ input:focus-visible {
   .track-row { gap: 8px; padding: 0 9px; }
   .track-table-head { min-height: 33px; }
   .track-row { min-height: 53px; }
-  .row-play { width: 29px; height: 29px; }
   .page-content.wide-list-page { padding: 16px 14px 26px; }
   .app-shell[data-active-view="playlists"] .sidebar-playlist-tree-host {
     top: calc(100% + 6px);
