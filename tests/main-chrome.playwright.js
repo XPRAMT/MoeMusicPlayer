@@ -25,6 +25,9 @@ async page => {
 
   await page.getByRole('button', { name: '設定', exact: true }).click();
   assert(await page.locator('#page-heading').innerText() === '設定', 'settings title missing');
+  assert(await page.getByRole('button', { name: '選擇背景圖片' }).count() === 1, 'background picker missing');
+  assert(await page.getByRole('slider', { name: '主介面背景模糊程度' }).count() === 1, 'background blur missing');
+  assert(await page.getByRole('slider', { name: '主介面背景亮度' }).count() === 1, 'background brightness missing');
   await page.getByRole('tab', { name: '音樂來源' }).click();
   assert(await page.getByRole('heading', { name: '管理音樂來源', exact: true }).count() === 1, 'sources heading missing');
   assert(await page.locator('.section-kicker').count() === 0, 'english kicker remains in sources');

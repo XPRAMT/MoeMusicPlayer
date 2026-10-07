@@ -23,6 +23,8 @@ export interface ThemePreferences {
   backgroundHex: string;
   accentHex: string;
   quickSettingsOpacityPercent: number;
+  mainBackgroundBlurPx: number;
+  mainBackgroundBrightnessPercent: number;
 }
 
 export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount';
@@ -355,6 +357,14 @@ interface IpcContract {
     args: { preferences: ThemePreferences };
     result: ThemePreferences;
   };
+  appearance_pick_main_background: {
+    args: Record<string, never>;
+    result: boolean | null;
+  };
+  appearance_clear_main_background: {
+    args: Record<string, never>;
+    result: void;
+  };
   settings_get_track_list_columns: {
     args: Record<string, never>;
     result: TrackListColumnSettings;
@@ -567,6 +577,15 @@ export function getTrackArtworkBytes(trackId: string): Promise<ArrayBuffer> {
     );
   }
   return invoke<ArrayBuffer>('library_get_track_artwork', { trackId });
+}
+
+export function getMainBackgroundBytes(): Promise<ArrayBuffer> {
+  if (!isTauri()) {
+    return Promise.reject(
+      new Error('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。'),
+    );
+  }
+  return invoke<ArrayBuffer>('appearance_get_main_background', {});
 }
 
 export function getNowPlayingAppearancePreferences(): Promise<NowPlayingAppearancePreferences> {

@@ -30,10 +30,23 @@ pub struct ThemeSettings {
     pub accent_hex: String,
     #[serde(default = "default_quick_settings_opacity_percent")]
     pub quick_settings_opacity_percent: u8,
+    /// Main-window photo background blur. The image itself lives at `UserData/background`.
+    #[serde(default = "default_main_background_blur_px")]
+    pub main_background_blur_px: u8,
+    #[serde(default = "default_main_background_brightness_percent")]
+    pub main_background_brightness_percent: u8,
 }
 
 fn default_quick_settings_opacity_percent() -> u8 {
     70
+}
+
+fn default_main_background_blur_px() -> u8 {
+    20
+}
+
+fn default_main_background_brightness_percent() -> u8 {
+    40
 }
 
 impl Default for ThemeSettings {
@@ -42,6 +55,8 @@ impl Default for ThemeSettings {
             background_hex: "#000000".to_owned(),
             accent_hex: "#55D9FF".to_owned(),
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
+            main_background_blur_px: default_main_background_blur_px(),
+            main_background_brightness_percent: default_main_background_brightness_percent(),
         }
     }
 }
@@ -658,12 +673,14 @@ fn lenient_shortcuts(value: Option<serde_json::Value>) -> ShortcutSettings {
 
 /// The first release bound wheel-up to seek backward. Flip that saved pair once.
 fn correct_legacy_wheel_direction(mut shortcuts: ShortcutSettings) -> ShortcutSettings {
-    let back_up = shortcuts.seek_back.iter().any(|binding| {
-        binding.device == ShortcutDevice::Mouse && binding.code == "wheelUp"
-    });
-    let forward_down = shortcuts.seek_forward.iter().any(|binding| {
-        binding.device == ShortcutDevice::Mouse && binding.code == "wheelDown"
-    });
+    let back_up = shortcuts
+        .seek_back
+        .iter()
+        .any(|binding| binding.device == ShortcutDevice::Mouse && binding.code == "wheelUp");
+    let forward_down = shortcuts
+        .seek_forward
+        .iter()
+        .any(|binding| binding.device == ShortcutDevice::Mouse && binding.code == "wheelDown");
     if !(back_up && forward_down) {
         return shortcuts;
     }
@@ -743,7 +760,7 @@ impl AppSettings {
             theme: ThemeSettings {
                 background_hex: theme.background_hex,
                 accent_hex: theme.accent_hex,
-                quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
+                ..ThemeSettings::default()
             },
             ..Self::default()
         };
@@ -764,6 +781,16 @@ impl AppSettings {
         if self.theme.quick_settings_opacity_percent > 100 {
             return Err(SettingsError::InvalidData(
                 "quickSettingsOpacityPercent must be between 0 and 100".into(),
+            ));
+        }
+        if self.theme.main_background_blur_px > 40 {
+            return Err(SettingsError::InvalidData(
+                "mainBackgroundBlurPx must be between 0 and 40".into(),
+            ));
+        }
+        if self.theme.main_background_brightness_percent > 100 {
+            return Err(SettingsError::InvalidData(
+                "mainBackgroundBrightnessPercent must be between 0 and 100".into(),
             ));
         }
         self.lyrics_preferences.validate()?;
@@ -959,6 +986,10 @@ impl SettingsStore {
             settings.source_registry_authoritative = true;
             Ok(())
         })
+    }
+
+    pub(crate) fn data_directory(&self) -> Option<&Path> {
+        self.path.parent()
     }
 
     #[cfg(test)]
@@ -1840,6 +1871,7 @@ mod tests {
                 background_hex: "#123456".into(),
                 accent_hex: "#ABCDEF".into(),
                 quick_settings_opacity_percent: 70,
+                ..ThemeSettings::default()
             },
             sources: vec![source.clone()],
             shuffle: true,

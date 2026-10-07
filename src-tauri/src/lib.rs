@@ -91,10 +91,22 @@ struct ThemePreferencesDto {
     accent_hex: String,
     #[serde(default = "default_quick_settings_opacity_percent")]
     quick_settings_opacity_percent: u8,
+    #[serde(default = "default_main_background_blur_px")]
+    main_background_blur_px: u8,
+    #[serde(default = "default_main_background_brightness_percent")]
+    main_background_brightness_percent: u8,
 }
 
 fn default_quick_settings_opacity_percent() -> u8 {
     70
+}
+
+fn default_main_background_blur_px() -> u8 {
+    20
+}
+
+fn default_main_background_brightness_percent() -> u8 {
+    40
 }
 
 impl From<ThemePreferences> for ThemePreferencesDto {
@@ -103,6 +115,8 @@ impl From<ThemePreferences> for ThemePreferencesDto {
             background_hex: preferences.background_hex,
             accent_hex: preferences.accent_hex,
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
+            main_background_blur_px: default_main_background_blur_px(),
+            main_background_brightness_percent: default_main_background_brightness_percent(),
         }
     }
 }
@@ -122,6 +136,8 @@ impl From<ThemeSettings> for ThemePreferencesDto {
             background_hex: preferences.background_hex,
             accent_hex: preferences.accent_hex,
             quick_settings_opacity_percent: preferences.quick_settings_opacity_percent,
+            main_background_blur_px: preferences.main_background_blur_px,
+            main_background_brightness_percent: preferences.main_background_brightness_percent,
         }
     }
 }
@@ -2829,6 +2845,8 @@ fn theme_set_preferences(
         background_hex: preferences.background_hex,
         accent_hex: preferences.accent_hex,
         quick_settings_opacity_percent: preferences.quick_settings_opacity_percent,
+        main_background_blur_px: preferences.main_background_blur_px,
+        main_background_brightness_percent: preferences.main_background_brightness_percent,
     };
     state
         .settings
@@ -2838,6 +2856,139 @@ fn theme_set_preferences(
         })
         .map(|settings| settings.theme.into())
         .map_err(|error| error.to_string())
+}
+
+const MAIN_BACKGROUND_FILE_NAME: &str = "background";
+const MAIN_BACKGROUND_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+fn user_data_directory(state: &AppState) -> Result<std::path::PathBuf, String> {
+    state
+        .settings
+        .data_directory()
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| "無法定位 UserData 資料夾。".to_owned())
+}
+
+fn supported_background_image(bytes: &[u8]) -> bool {
+    let jpeg = bytes.len() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff;
+    let png = bytes.len() >= 8 && bytes.starts_with(b"\x89PNG\r\n\x1a\n");
+    let gif = bytes.len() >= 6 && (bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"));
+    let webp = bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP";
+    let bmp = bytes.len() >= 2 && bytes.starts_with(b"BM");
+    jpeg || png || gif || webp || bmp
+}
+
+#[cfg(test)]
+mod main_background_tests {
+    use super::supported_background_image;
+
+    #[test]
+    fn accepts_png_jpeg_and_rejects_plain_text() {
+        assert!(supported_background_image(b"\x89PNG\r\n\x1a\nrest"));
+        assert!(supported_background_image(&[0xff, 0xd8, 0xff, 0x00]));
+        assert!(!supported_background_image(b"not an image"));
+    }
+}
+
+fn install_main_background(state: &AppState, source: &std::path::Path) -> Result<(), String> {
+    let metadata =
+        std::fs::metadata(source).map_err(|error| format!("無法讀取背景圖片：{error}"))?;
+    if !metadata.is_file() {
+        return Err("請選擇一個圖片檔。".to_owned());
+    }
+    if metadata.len() == 0 || metadata.len() > MAIN_BACKGROUND_MAX_BYTES {
+        return Err("背景圖片必須小於 32 MiB。".to_owned());
+    }
+    let bytes = std::fs::read(source).map_err(|error| format!("無法讀取背景圖片：{error}"))?;
+    if !supported_background_image(&bytes) {
+        return Err("只接受 PNG、JPEG、WebP、GIF 或 BMP 圖片。".to_owned());
+    }
+    let directory = user_data_directory(state)?;
+    std::fs::create_dir_all(&directory).map_err(|error| format!("無法建立 UserData：{error}"))?;
+    let destination = directory.join(MAIN_BACKGROUND_FILE_NAME);
+    if let (Ok(source_canonical), Ok(destination_canonical)) = (
+        std::fs::canonicalize(source),
+        std::fs::canonicalize(&destination),
+    ) {
+        if source_canonical == destination_canonical {
+            return Ok(());
+        }
+    }
+    let temporary = destination.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&temporary, &bytes).map_err(|error| format!("無法寫入背景圖片：{error}"))?;
+    if destination.exists() {
+        let backup = destination.with_extension("replacing");
+        if std::fs::rename(&destination, &backup).is_err() {
+            let _ = std::fs::remove_file(&temporary);
+            return Err("無法替換現有的背景圖片。".to_owned());
+        }
+        if let Err(error) = std::fs::rename(&temporary, &destination) {
+            let _ = std::fs::rename(&backup, &destination);
+            return Err(format!("無法保存背景圖片：{error}"));
+        }
+        let _ = std::fs::remove_file(backup);
+    } else if let Err(error) = std::fs::rename(&temporary, &destination) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("無法保存背景圖片：{error}"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn appearance_pick_main_background(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<bool>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let selected = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("選擇主介面背景")
+            .add_filter("圖片", &["png", "jpg", "jpeg", "webp", "gif", "bmp"])
+            .blocking_pick_file();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| format!("無法取得選取的圖片路徑：{error}"))?;
+        install_main_background(&state, &path)?;
+        Ok(Some(true))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, window, state);
+        Err("此平台尚未提供背景圖片選擇。".to_owned())
+    }
+}
+
+#[tauri::command]
+fn appearance_clear_main_background(state: State<'_, AppState>) -> Result<(), String> {
+    let path = user_data_directory(&state)?.join(MAIN_BACKGROUND_FILE_NAME);
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("無法移除背景圖片：{error}")),
+    }
+}
+
+#[tauri::command]
+fn appearance_get_main_background(state: State<'_, AppState>) -> Result<Response, String> {
+    let path = user_data_directory(&state)?.join(MAIN_BACKGROUND_FILE_NAME);
+    match std::fs::read(path) {
+        Ok(bytes)
+            if supported_background_image(&bytes)
+                && bytes.len() as u64 <= MAIN_BACKGROUND_MAX_BYTES =>
+        {
+            Ok(Response::new(bytes))
+        }
+        Ok(_) | Err(_) => Ok(Response::new(Vec::new())),
+    }
 }
 
 #[tauri::command]
@@ -5752,6 +5903,9 @@ pub fn run() {
             settings_confirm_source_registry,
             theme_get_preferences,
             theme_set_preferences,
+            appearance_pick_main_background,
+            appearance_clear_main_background,
+            appearance_get_main_background,
             settings_get_lyrics_preferences,
             settings_set_lyrics_preferences,
             settings_get_now_playing_appearance_preferences,

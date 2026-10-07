@@ -33,6 +33,7 @@
     getErrorText,
     getNowPlayingAppearancePreferences,
     getTrackArtworkBytes,
+    getMainBackgroundBytes,
     invokeCommand,
     isReady,
     setNowPlayingAppearancePreferences,
@@ -107,6 +108,7 @@
   import LyricsView from './lib/LyricsView.svelte';
   import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
   import WindowTitlebar from './lib/WindowTitlebar.svelte';
+  import { detectArtworkMimeType } from './lib/active-track-artwork';
   import { APP_WINDOW_TITLE } from './lib/app-version';
   import brandIcon from '../icon/SilverWolfIcon.png';
   import {
@@ -189,6 +191,10 @@
   let lyricsPreferencesState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let lyricsPreferencesError = $state<string | null>(null);
   let themePreferences = $state<ThemePreferences>({ ...DEFAULT_THEME_PREFERENCES });
+  let mainBackgroundUrl = $state<string | null>(null);
+  let mainBackgroundObjectUrl: string | null = null;
+  let mainBackgroundError = $state<string | null>(null);
+  let mainBackgroundBusy = $state(false);
   let themeSaveState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let themeSaveError = $state<string | null>(null);
   let settingsRecoveryWarning = $state<string | null>(null);
@@ -489,6 +495,7 @@
       await Promise.all([
         loadCapabilities(),
         loadThemePreferences(),
+        loadMainBackground(),
         loadSettingsRecoveryWarning(),
         loadTrackColumnSettings(),
         loadNowPlayingLayout(),
@@ -528,8 +535,74 @@
     window.removeEventListener('keydown', handleShortcutKeydown, true);
     window.removeEventListener('mousedown', handleShortcutMouseDown, true);
     window.removeEventListener('wheel', handleShortcutWheel, true);
-    cancelAnimationFrame(gamepadFrame);
+    if (mainBackgroundObjectUrl) URL.revokeObjectURL(mainBackgroundObjectUrl);
   });
+
+  async function loadMainBackground(): Promise<void> {
+    if (!isTauri()) return;
+    try {
+      setMainBackgroundBytes(await getMainBackgroundBytes());
+      mainBackgroundError = null;
+    } catch (error) {
+      mainBackgroundError = `無法讀取主介面背景：${getErrorText(error)}`;
+    }
+  }
+
+  function setMainBackgroundBytes(bytes: ArrayBuffer): void {
+    if (mainBackgroundObjectUrl) URL.revokeObjectURL(mainBackgroundObjectUrl);
+    const mimeType = bytes.byteLength > 0 ? detectArtworkMimeType(bytes) : null;
+    if (!mimeType) {
+      mainBackgroundObjectUrl = null;
+      mainBackgroundUrl = null;
+      return;
+    }
+    mainBackgroundObjectUrl = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    mainBackgroundUrl = mainBackgroundObjectUrl;
+  }
+
+  function updateMainBackgroundLook(patch: Partial<ThemePreferences>): void {
+    const next = normalizeThemePreferences({ ...themePreferences, ...patch });
+    themePreferences = next;
+    themeSaveError = null;
+    themeSaveState = isTauri() ? 'saving' : 'preview';
+    const revision = ++themeRevision;
+    if (themeSaveTimer !== undefined) clearTimeout(themeSaveTimer);
+    themeSaveTimer = setTimeout(() => {
+      themeSaveTimer = undefined;
+      queueThemeSave(next, revision);
+    }, 300);
+  }
+
+  async function pickMainBackground(): Promise<void> {
+    if (!isTauri() || mainBackgroundBusy) {
+      mainBackgroundError = isTauri() ? null : '瀏覽器預覽無法選擇背景圖片。';
+      return;
+    }
+    mainBackgroundBusy = true;
+    mainBackgroundError = null;
+    try {
+      const picked = await invokeCommand('appearance_pick_main_background', {});
+      if (picked) setMainBackgroundBytes(await getMainBackgroundBytes());
+    } catch (error) {
+      mainBackgroundError = getErrorText(error);
+    } finally {
+      mainBackgroundBusy = false;
+    }
+  }
+
+  async function clearMainBackground(): Promise<void> {
+    if (!isTauri() || mainBackgroundBusy) return;
+    mainBackgroundBusy = true;
+    mainBackgroundError = null;
+    try {
+      await invokeCommand('appearance_clear_main_background', {});
+      setMainBackgroundBytes(new ArrayBuffer(0));
+    } catch (error) {
+      mainBackgroundError = getErrorText(error);
+    } finally {
+      mainBackgroundBusy = false;
+    }
+  }
 
   async function loadThemePreferences(): Promise<void> {
     const revision = themeRevision;
@@ -1963,6 +2036,31 @@
                   <span><strong>快速設定面板透明度</strong><output>{themePreferences.quickSettingsOpacityPercent}%</output></span>
                   <input type="range" min="0" max="100" step="1" value={themePreferences.quickSettingsOpacityPercent} aria-label="快速設定面板透明度" oninput={(event) => updateQuickSettingsOpacity(Number(event.currentTarget.value))} onchange={saveThemePreferencesNow} />
                 </label>
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>主介面背景</h3>
+                    <p>選擇一張圖片後會複製到 UserData，並命名為 background。模糊與亮度只影響主介面，不改變播放頁封面背景。</p>
+                  </div>
+                </div>
+                <div class="source-action-row source-action-buttons">
+                  <button class="outline-button" type="button" onclick={() => void pickMainBackground()} disabled={mainBackgroundBusy}>
+                    {mainBackgroundBusy ? '處理中' : '選擇背景圖片'}
+                  </button>
+                  <button class="outline-button" type="button" onclick={() => void clearMainBackground()} disabled={mainBackgroundBusy || !mainBackgroundUrl}>
+                    移除背景
+                  </button>
+                </div>
+                <label class="lyrics-preference-range">
+                  <span><strong>背景模糊</strong><output>{themePreferences.mainBackgroundBlurPx}px</output></span>
+                  <input type="range" min="0" max="40" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label="主介面背景模糊程度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                </label>
+                <label class="lyrics-preference-range">
+                  <span><strong>背景亮度</strong><output>{themePreferences.mainBackgroundBrightnessPercent}%</output></span>
+                  <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundBrightnessPercent} aria-label="主介面背景亮度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBrightnessPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                </label>
+                {#if mainBackgroundError}
+                  <p class="theme-save-status error" role="alert">{mainBackgroundError}</p>
+                {/if}
                 <p class="theme-save-status" class:error={themeSaveState === 'error'} role="status">{themeSaveMessage}</p>
               </div>
             {:else if settingsSection === 'track-columns'}
@@ -2290,10 +2388,16 @@
   class:has-now-playing-backdrop={isNowPlayingOpen}
   class:has-custom-titlebar={showCustomTitlebar}
   data-active-view={activeView}
-  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-overlay-alpha: ${(100 - nowPlayingAppearancePreferences.backgroundBrightnessPercent) / 100};`}
+  class:has-main-backdrop={mainBackgroundUrl !== null}
+  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-overlay-alpha: ${(100 - nowPlayingAppearancePreferences.backgroundBrightnessPercent) / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-overlay-alpha: ${(100 - themePreferences.mainBackgroundBrightnessPercent) / 100};`}
 >
   {#if showCustomTitlebar}
     <WindowTitlebar transparent={isNowPlayingOpen} />
+  {/if}
+  {#if mainBackgroundUrl}
+    <div class="main-backdrop" data-testid="main-backdrop" aria-hidden="true">
+      <img src={mainBackgroundUrl} alt="" />
+    </div>
   {/if}
   {#if isNowPlayingOpen}
     <div class="now-playing-backdrop" data-testid="now-playing-backdrop" aria-hidden="true">

@@ -233,6 +233,52 @@ input:focus-visible {
   opacity: var(--np-background-overlay-alpha, 0.6);
 }
 
+.main-backdrop {
+  position: fixed;
+  z-index: 0;
+  inset: -48px;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--page);
+}
+
+.main-backdrop img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(var(--main-background-blur, 20px));
+  transform: scale(1.08);
+}
+
+.main-backdrop::after {
+  position: absolute;
+  inset: 0;
+  background: var(--page);
+  content: '';
+  opacity: var(--main-background-overlay-alpha, 0.6);
+}
+
+.app-shell.has-main-backdrop {
+  background: transparent;
+}
+
+.app-shell.has-main-backdrop .sidebar,
+.app-shell.has-main-backdrop .workspace,
+.app-shell.has-main-backdrop .player-dock {
+  position: relative;
+  z-index: 1;
+}
+
+.app-shell.has-main-backdrop .sidebar {
+  background: transparent;
+}
+
+.app-shell.has-main-backdrop .player-dock {
+  background: color-mix(in srgb, var(--dock-bg) 72%, transparent);
+}
+
 .now-playing-overlay {
   position: relative;
   z-index: 20;

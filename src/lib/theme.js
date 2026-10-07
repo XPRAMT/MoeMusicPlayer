@@ -5,6 +5,8 @@ export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   backgroundHex: '#000000',
   accentHex: '#55D9FF',
   quickSettingsOpacityPercent: 70,
+  mainBackgroundBlurPx: 20,
+  mainBackgroundBrightnessPercent: 40,
 });
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
@@ -28,15 +30,25 @@ export function normalizeThemePreferences(value) {
       ? candidate.accentHex.toUpperCase()
       : DEFAULT_THEME_PREFERENCES.accentHex,
     quickSettingsOpacityPercent: normalizeOpacityPercent(candidate.quickSettingsOpacityPercent),
+    mainBackgroundBlurPx: normalizeRange(candidate.mainBackgroundBlurPx, 0, 40, DEFAULT_THEME_PREFERENCES.mainBackgroundBlurPx),
+    mainBackgroundBrightnessPercent: normalizeRange(
+      candidate.mainBackgroundBrightnessPercent,
+      0,
+      100,
+      DEFAULT_THEME_PREFERENCES.mainBackgroundBrightnessPercent,
+    ),
   };
 }
 
 /** @param {unknown} value */
 function normalizeOpacityPercent(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return DEFAULT_THEME_PREFERENCES.quickSettingsOpacityPercent;
-  }
-  return Math.max(0, Math.min(100, Math.round(value)));
+  return normalizeRange(value, 0, 100, DEFAULT_THEME_PREFERENCES.quickSettingsOpacityPercent);
+}
+
+/** @param {unknown} value @param {number} min @param {number} max @param {number} fallback */
+function normalizeRange(value, min, max, fallback) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 /** @param {string} hex */
