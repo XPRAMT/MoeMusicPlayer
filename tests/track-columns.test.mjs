@@ -37,7 +37,7 @@ test('column order can move the first and last information columns without movin
   ]);
   assert.deepEqual(moveTrackColumn(movedLast, 'artist', 'up'), movedLast);
   assert.deepEqual(moveTrackColumn(movedLast, 'duration', 'down'), movedLast);
-  assert.equal(trackListGridTemplate(movedLast).split(' ').at(0), '42px');
+  assert.equal(trackListGridTemplate(movedLast).split(' ').at(0), '26px');
   assert.equal(trackListGridTemplate(movedLast).split(' ').at(-1), '42px');
 });
 

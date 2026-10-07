@@ -225,7 +225,7 @@
   .queue-entry-state {
     overflow: hidden;
     color: var(--accent-text);
-    font-size: 8px;
+    font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }

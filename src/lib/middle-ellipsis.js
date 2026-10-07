@@ -1,4 +1,4 @@
-const ELLIPSIS = '....';
+const ELLIPSIS = '···';
 
 /**
  * Keep the start and end of text that does not fit, hiding the middle.

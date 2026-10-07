@@ -17,7 +17,7 @@ test('short text stays intact', () => {
 
 test('long mixed text keeps the head and the tail', () => {
   const fitted = fitMiddleEllipsis(sample, 24, widthOf);
-  assert.match(fitted, /^崩壞星.+\.{4}.+Vol\.6$/);
+  assert.match(fitted, /^崩壞星.+···.+Vol\.6$/);
   assert.ok(!fitted.includes('行於命途'));
   assert.ok(widthOf(fitted) <= 24);
 });

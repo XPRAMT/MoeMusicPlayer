@@ -1302,7 +1302,7 @@ input:focus-visible {
   color: var(--text-soft);
   background: var(--panel);
   font-family: Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
   letter-spacing: 0.07em;
 }
 
@@ -1330,7 +1330,7 @@ input:focus-visible {
 .track-index {
   color: var(--text-soft);
   font-family: 'DM Mono', monospace;
-  font-size: 9px;
+  font-size: 13px;
 }
 
 .track-main {
@@ -1370,7 +1370,7 @@ input:focus-visible {
   min-width: 0;
   overflow: hidden;
   color: var(--text-soft);
-  font-size: 9px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1383,7 +1383,7 @@ input:focus-visible {
 
 .list-column-title {
   color: var(--text);
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -1393,7 +1393,6 @@ input:focus-visible {
 }
 
 .list-column-audioFormat {
-  font-size: 8px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3743,9 +3742,11 @@ input:focus-visible {
   .not-ready-meta { display: none; }
   .track-table-head,
   .track-row { gap: 8px; padding: 0 9px; }
-  .track-table-head { min-height: 33px; font-size: 7px; }
+  .track-table-head { min-height: 33px; font-size: 11px; }
   .track-row { min-height: 53px; }
-  .track-index { font-size: 8px; }
+  .track-index { font-size: 12px; }
+  .list-column { font-size: 12px; }
+  .list-column-title { font-size: 13px; }
   .track-title { font-size: 9px; }
   .track-artist { font-size: 8px; }
   .row-play { width: 29px; height: 29px; }

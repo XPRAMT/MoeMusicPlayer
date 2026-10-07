@@ -1,15 +1,18 @@
 /** @typedef {'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
 
+const INDEX_COLUMN_PX = 26;
+const ACTION_COLUMN_PX = 42;
+
 /** @type {ReadonlyArray<{ id: TrackColumnId, label: string, min: string, minPx: number }>} */
 export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
-  { id: 'title', label: '曲目', min: 'minmax(150px,1.5fr)', minPx: 150 },
-  { id: 'artist', label: '演出者', min: 'minmax(110px,1fr)', minPx: 110 },
-  { id: 'album', label: '專輯', min: 'minmax(120px,1fr)', minPx: 120 },
-  { id: 'year', label: '年份', min: '62px', minPx: 62 },
-  { id: 'audioFormat', label: '音訊格式', min: 'minmax(175px,1.35fr)', minPx: 175 },
-  { id: 'duration', label: '長度', min: '70px', minPx: 70 },
-  { id: 'playCount', label: '播放次數', min: '78px', minPx: 78 },
+  { id: 'title', label: '曲目', min: 'minmax(150px,1.7fr)', minPx: 150 },
+  { id: 'artist', label: '演出者', min: 'minmax(110px,1.15fr)', minPx: 110 },
+  { id: 'album', label: '專輯', min: 'minmax(120px,1.25fr)', minPx: 120 },
+  { id: 'year', label: '年份', min: '86px', minPx: 86 },
+  { id: 'audioFormat', label: '音訊格式', min: '258px', minPx: 258 },
+  { id: 'duration', label: '長度', min: '72px', minPx: 72 },
+  { id: 'playCount', label: '播放次數', min: '72px', minPx: 72 },
 ]);
 
 /** @type {TrackColumnPreference[]} */
@@ -61,7 +64,7 @@ export function trackListColumnCount(preferences) {
 export function trackListGridTemplate(preferences) {
   const informationColumns = visibleTrackColumns(preferences)
     .map(({ id }) => COLUMN_DEFINITION_BY_ID.get(id)?.min ?? 'minmax(100px,1fr)');
-  return ['42px', ...informationColumns, '42px'].join(' ');
+  return [`${INDEX_COLUMN_PX}px`, ...informationColumns, `${ACTION_COLUMN_PX}px`].join(' ');
 }
 
 /**
@@ -77,7 +80,7 @@ export function trackListMinWidthPx(preferences) {
   );
   const gaps = (visible.length + 1) * 10;
   const padding = 28;
-  return 42 + information + 42 + gaps + padding;
+  return INDEX_COLUMN_PX + information + ACTION_COLUMN_PX + gaps + padding;
 }
 
 /**
