@@ -80,6 +80,8 @@
 
   let viewport: HTMLDivElement | undefined = $state();
   let scrollTop = $state(0);
+  let headerShift = $state(0);
+  let headerGutter = $state(0);
   let viewportHeight = $state(480);
   let activeIndex = $state(0);
   let rowHeight = $state(57);
@@ -128,6 +130,7 @@
       headerHeight = narrow ? compactHeaderHeight : baseHeaderHeight;
       maxViewportHeight = Math.max(160, Math.min(maxHeight, Math.floor(window.innerHeight * 0.65)));
       viewportHeight = viewport?.clientHeight ?? viewportHeight;
+      if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     };
     updateMetrics();
     window.addEventListener('resize', updateMetrics);
@@ -137,6 +140,8 @@
   function updateViewport(): void {
     if (!viewport) return;
     scrollTop = viewport.scrollTop;
+    headerShift = viewport.scrollLeft;
+    headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     viewportHeight = viewport.clientHeight;
   }
 
@@ -179,9 +184,14 @@
   }
 </script>
 
-<div class="paged-virtual-frame">
-  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px`}>
-    {#if header}{@render header()}{/if}
+<div
+  class="paged-virtual-frame"
+  style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
+>
+  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;padding-right:${headerGutter}px`}>
+    <div class="paged-virtual-header-shift" style={`transform:translateX(${-headerShift}px)`}>
+      {#if header}{@render header()}{/if}
+    </div>
   </div>
   <div
     class={`paged-virtual-viewport ${className}`}
@@ -271,8 +281,14 @@
     position: relative;
     z-index: 2;
     flex: 0 0 auto;
+    overflow: hidden;
     box-sizing: border-box;
-    background: color-mix(in srgb, var(--page) 55%, transparent);
+    background: color-mix(in srgb, var(--page) 72%, transparent);
+  }
+
+  .paged-virtual-header-shift {
+    width: max(100%, var(--track-list-min-width, 0px));
+    min-width: max(100%, var(--track-list-min-width, 0px));
   }
 
   .paged-virtual-spacer {
