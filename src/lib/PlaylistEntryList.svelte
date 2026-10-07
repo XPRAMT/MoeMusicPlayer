@@ -26,6 +26,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     fetchPage?: (request: { playlistId: string; offset: number; limit: number }) => Promise<PlaylistPage>;
     columns?: TrackListColumnPreference[];
     livePlayCount?: { trackId: string; playedMs: number } | null;
+    currentTrackId?: string | null;
   }
 
   let {
@@ -37,6 +38,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     livePlayCount = null,
+    currentTrackId = null,
   }: Props = $props();
 
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
@@ -119,6 +121,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     generation={snapshot.generation}
     {itemAt}
     getKey={(entry) => entry.position}
+    isSelected={(entry) => entry.trackId !== null && entry.trackId === currentTrackId}
     rowHeight={57}
     compactRowHeight={53}
     shortDesktopRowHeight={49}

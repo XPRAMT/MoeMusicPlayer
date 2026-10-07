@@ -2392,7 +2392,7 @@
   style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-overlay-alpha: ${(100 - nowPlayingAppearancePreferences.backgroundBrightnessPercent) / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-overlay-alpha: ${(100 - themePreferences.mainBackgroundBrightnessPercent) / 100};`}
 >
   {#if showCustomTitlebar}
-    <WindowTitlebar transparent={isNowPlayingOpen} />
+    <WindowTitlebar transparent={isNowPlayingOpen || mainBackgroundUrl !== null} />
   {/if}
   {#if mainBackgroundUrl}
     <div class="main-backdrop" data-testid="main-backdrop" aria-hidden="true">
@@ -2623,7 +2623,8 @@
                         {playbackReady}
                         {isSendingPlaybackCommand}
                         columns={trackColumnPreferences}
-                  livePlayCount={livePlayCount}
+                        livePlayCount={livePlayCount}
+                        currentTrackId={playback?.currentTrack?.id ?? null}
                         onPlay={playPlaylistEntry}
                       />
                     {/key}

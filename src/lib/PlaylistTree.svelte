@@ -97,8 +97,10 @@
     border-radius: 8px;
   }
 
-  .playlist-tree-heading.active {
-    background: rgba(var(--accent-rgb), 0.07);
+  .playlist-tree-heading.active,
+  .playlist-tree-heading.active .playlist-tree-open,
+  .playlist-tree-heading.active .playlist-tree-open:hover {
+    background: rgba(255, 255, 255, 0.2);
   }
 
   .playlist-tree-open,
@@ -150,7 +152,7 @@
   .playlist-tree-open:focus-visible,
   .playlist-tree-toggle:hover,
   .playlist-tree-toggle:focus-visible {
-    background: rgba(var(--text-rgb), 0.045);
+    background: rgba(255, 255, 255, 0.1);
   }
 
   .playlist-tree-open:focus-visible,
@@ -214,13 +216,15 @@
   .playlist-tree-item:hover,
   .playlist-tree-item:focus-visible {
     color: var(--text);
-    background: rgba(var(--text-rgb), 0.045);
+    background: rgba(255, 255, 255, 0.1);
   }
 
-  .playlist-tree-item.selected {
-    border-color: rgba(var(--accent-rgb), 0.28);
-    color: var(--accent-text);
-    background: rgba(var(--accent-rgb), 0.09);
+  .playlist-tree-item.selected,
+  .playlist-tree-item.selected:hover,
+  .playlist-tree-item.selected:focus-visible {
+    border-color: transparent;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.2);
   }
 
   .playlist-tree-item > :global(svg) {

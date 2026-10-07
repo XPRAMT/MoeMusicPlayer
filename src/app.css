@@ -276,7 +276,15 @@ input:focus-visible {
 }
 
 .app-shell.has-main-backdrop .player-dock {
-  background: color-mix(in srgb, var(--dock-bg) 72%, transparent);
+  background: color-mix(in srgb, var(--page) 28%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.app-shell.has-main-backdrop .settings-tab,
+.app-shell.has-main-backdrop .track-table-head,
+.app-shell.has-main-backdrop .track-list-header,
+.app-shell.has-main-backdrop .paged-virtual-header {
+  background: color-mix(in srgb, var(--page) 28%, transparent);
 }
 
 .now-playing-overlay {
@@ -998,7 +1006,7 @@ input:focus-visible {
   border: 1px solid rgba(var(--accent-rgb), 0.2);
   border-radius: 12px;
   color: var(--text);
-  background: var(--panel);
+  background: rgba(var(--text-rgb), 0.018);
 }
 
 .sync-progress-banner.sync-progress-finished {
@@ -1372,9 +1380,13 @@ input:focus-visible {
   border-bottom: 0;
 }
 
-.track-row.selected,
 .track-row:hover {
-  background: var(--panel);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.track-row.selected,
+.track-row.selected:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .column-index,
@@ -2030,9 +2042,9 @@ input:focus-visible {
 .settings-panel {
   min-width: 0;
   padding: 20px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 14px;
-  background: var(--panel);
+  background: transparent;
 }
 
 .settings-panel-header {
@@ -2405,8 +2417,10 @@ input:focus-visible {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 11px;
-  color: var(--preview-text);
-  background: var(--preview-background);
+  color: var(--text);
+  background:
+    radial-gradient(ellipse at 15% 0%, rgba(var(--accent-rgb), 0.05), transparent 38%),
+    rgba(var(--text-rgb), 0.018);
 }
 
 .theme-preview-copy {
