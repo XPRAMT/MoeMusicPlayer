@@ -1469,6 +1469,14 @@
     nowPlayingBackButton?.focus();
   }
 
+  function toggleNowPlayingFromDock(event: MouseEvent): void {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest('button, a, input, textarea, select, .progress-slider, .dock-controls, .volume-popover')) return;
+    if (isNowPlayingOpen) void closeNowPlaying();
+    else void openNowPlaying();
+  }
+
   async function closeNowPlaying(): Promise<void> {
     if (!isNowPlayingOpen) return;
     isQuickSettingsOpen = false;
@@ -2652,7 +2660,9 @@
     </section>
   {/if}
 
-  <footer class="player-dock" data-timeline-style={nowPlayingAppearancePreferences.timelineStyle} aria-label="播放控制" inert={isQuickSettingsOpen}>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <footer class="player-dock" data-timeline-style={nowPlayingAppearancePreferences.timelineStyle} aria-label="播放控制" inert={isQuickSettingsOpen} onclick={toggleNowPlayingFromDock}>
     <div class="dock-track" class:dock-track-dismiss={isNowPlayingOpen}>
       {#if isNowPlayingOpen}
         <button

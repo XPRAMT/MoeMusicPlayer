@@ -2718,11 +2718,12 @@ input:focus-visible {
   border-top: 1px solid rgba(var(--text-rgb), 0.11);
   background: linear-gradient(100deg, var(--dock-bg), var(--panel-soft) 50%, var(--dock-bg));
   box-shadow: 0 -15px 35px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
 }
 
 .dock-spacer {
   min-width: 0;
-  pointer-events: none;
+  height: 100%;
 }
 
 .app-shell.has-now-playing-backdrop .player-dock {
