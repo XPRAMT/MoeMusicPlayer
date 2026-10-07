@@ -129,10 +129,7 @@ impl<'de> Deserialize<'de> for TimelineStyle {
         match raw.as_str() {
             // The line look is gone. Older line/bar/minimal values stay valid and become edge.
             "edge" | "line" | "bar" | "minimal" => Ok(Self::Edge),
-            other => Err(serde::de::Error::unknown_variant(
-                other,
-                &["edge", "line"],
-            )),
+            other => Err(serde::de::Error::unknown_variant(other, &["edge", "line"])),
         }
     }
 }

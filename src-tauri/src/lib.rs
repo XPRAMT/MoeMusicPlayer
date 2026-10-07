@@ -36,6 +36,8 @@ mod database_lifecycle;
 #[cfg(target_os = "windows")]
 mod maximized_work_area;
 mod playlist_exchange;
+#[cfg(target_os = "windows")]
+mod window_icon;
 use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImportResult};
 #[cfg(target_os = "windows")]
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
@@ -5878,6 +5880,10 @@ pub fn run() {
                 window.set_title("MoeMusicPlayer")?;
                 #[cfg(target_os = "windows")]
                 window.set_always_on_top(false)?;
+                #[cfg(target_os = "windows")]
+                if let Ok(hwnd) = window.hwnd() {
+                    window_icon::apply_embedded_taskbar_icon(hwnd);
+                }
                 // Window starts with visible:false so we can apply saved geometry before first paint.
                 #[cfg(target_os = "windows")]
                 if let Some(geometry) = initial_settings.window_geometry.clone() {
