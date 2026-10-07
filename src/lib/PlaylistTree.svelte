@@ -55,9 +55,9 @@
         <li>
           <button
             class="playlist-tree-item"
-            class:selected={selectedPlaylistId === playlist.id}
+            class:selected={active && selectedPlaylistId === playlist.id}
             type="button"
-            aria-current={selectedPlaylistId === playlist.id ? 'page' : undefined}
+            aria-current={active && selectedPlaylistId === playlist.id ? 'page' : undefined}
             title={playlist.name.trim() || '未命名播放清單'}
             onclick={() => choosePlaylist(playlist.id)}
           >
@@ -154,7 +154,7 @@
   .playlist-tree-open:focus-visible,
   .playlist-tree-toggle:hover,
   .playlist-tree-toggle:focus-visible {
-    background: rgba(var(--text-rgb), 0.1);
+    background: rgba(var(--text-rgb), 0.05);
   }
 
   .playlist-tree-open:focus-visible,
@@ -241,13 +241,13 @@
 
   .playlist-tree-item:hover::before,
   .playlist-tree-item:focus-visible::before {
-    opacity: 0.1;
+    opacity: 0.05;
   }
 
   .playlist-tree-item.selected::before,
   .playlist-tree-item.selected:hover::before,
   .playlist-tree-item.selected:focus-visible::before {
-    opacity: 0.2;
+    opacity: 0.1;
   }
 
   .playlist-tree-item > :global(svg) {

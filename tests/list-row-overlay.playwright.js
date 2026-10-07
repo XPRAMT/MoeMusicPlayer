@@ -19,10 +19,10 @@ async page => {
     }
     return hits;
   });
-  assert(found['.nav-link:hover:not(:disabled):not(.active)'] === 'rgba(var(--text-rgb), 0.1)', JSON.stringify(found));
-  assert(found['.nav-link.active, .nav-link.active:hover:not(:disabled)'] === 'rgba(var(--text-rgb), 0.2)', JSON.stringify(found));
-  assert(found['.track-row:hover::before'] === '0.1', JSON.stringify(found));
-  assert(found['.track-row.selected::before, .track-row.selected:hover::before, .track-row.selected.active::before'] === '0.2', JSON.stringify(found));
+  assert(found['.nav-link:hover:not(:disabled):not(.active)'] === 'rgba(var(--text-rgb), 0.05)', JSON.stringify(found));
+  assert(found['.nav-link.active, .nav-link.active:hover:not(:disabled)'] === 'rgba(var(--text-rgb), 0.1)', JSON.stringify(found));
+  assert(found['.track-row:hover::before'] === '0.05', JSON.stringify(found));
+  assert(found['.track-row.selected::before, .track-row.selected:hover::before, .track-row.selected.active::before'] === '0.1', JSON.stringify(found));
   const accentRow = await page.evaluate(() => {
     for (const sheet of document.styleSheets) {
       let rules;
@@ -59,8 +59,8 @@ async page => {
       unselectedItemOpacity: item ? getComputedStyle(item, '::before').opacity : null,
     };
   });
-  assert(surfaces.headerRules.some((rule) => rule.includes('rgba(var(--text-rgb), 0.2)')), JSON.stringify(surfaces));
-  assert(!surfaces.headerRules.some((rule) => rule.includes('0.14')), JSON.stringify(surfaces));
+  assert(surfaces.headerRules.some((rule) => rule.includes('rgba(var(--text-rgb), 0.15)')), JSON.stringify(surfaces));
+  assert(!surfaces.headerRules.some((rule) => rule.includes('0.2')), JSON.stringify(surfaces));
   assert(surfaces.tree === 'rgba(0, 0, 0, 0)', JSON.stringify(surfaces));
   if (surfaces.unselectedItemOpacity !== null) assert(surfaces.unselectedItemOpacity === '0', JSON.stringify(surfaces));
   return { result: 'PASS', found, surfaces };

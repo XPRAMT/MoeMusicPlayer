@@ -732,14 +732,14 @@ input:focus-visible {
 
 .nav-link:hover:not(:disabled):not(.active) {
   color: var(--text);
-  background: rgba(var(--text-rgb), 0.1);
+  background: rgba(var(--text-rgb), 0.05);
 }
 
 .nav-link.active,
 .nav-link.active:hover:not(:disabled) {
   border-color: transparent;
   color: var(--accent-text);
-  background: rgba(var(--text-rgb), 0.2);
+  background: rgba(var(--text-rgb), 0.1);
 }
 
 .nav-link.active::before {
@@ -1357,7 +1357,7 @@ input:focus-visible {
   min-height: 38px;
   border-bottom: 1px solid var(--line);
   color: var(--text-soft);
-  background: rgba(var(--text-rgb), 0.2);
+  background: rgba(var(--text-rgb), 0.15);
   font-family: Consolas, monospace;
   font-size: var(--font-body);
   letter-spacing: 0.07em;
@@ -1394,13 +1394,13 @@ input:focus-visible {
 }
 
 .track-row:hover::before {
-  opacity: 0.1;
+  opacity: 0.05;
 }
 
 .track-row.selected::before,
 .track-row.selected:hover::before,
 .track-row.selected.active::before {
-  opacity: 0.2;
+  opacity: 0.1;
 }
 
 .column-index,
