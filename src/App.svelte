@@ -2505,21 +2505,6 @@
       <div class="page-content" class:wide-list-page={isListPage} class:is-list-page={isListPage}>
         {#if activeView === 'library'}
           <section class="library-section" aria-labelledby="page-heading">
-            <div class="section-heading section-heading-toolbar">
-              <div class="section-heading-actions">
-                <button
-                  class="outline-button"
-                  type="button"
-                  onclick={syncLibrary}
-                  disabled={!sourceSyncReady || isSyncing}
-                  title={sourceSyncReady ? '重新同步本機來源' : showCapabilityDetail(capabilities?.sourceSync)}
-                >
-                  <IconRefresh size={15} stroke={1.6} class={isSyncing ? 'spin' : ''} aria-hidden="true" />
-                  <span>{isSyncing ? '同步中' : '重新整理'}</span>
-                </button>
-              </div>
-            </div>
-
             <div class="library-toolbar">
               <label class="search-field">
                 <IconSearch size={17} stroke={1.6} aria-hidden="true" />
@@ -2537,6 +2522,16 @@
               <button class="filter-button" type="button" disabled title="篩選功能尚未接通">
                 <IconFilter size={15} stroke={1.6} aria-hidden="true" />
                 <span>篩選</span>
+              </button>
+              <button
+                class="outline-button"
+                type="button"
+                onclick={syncLibrary}
+                disabled={!sourceSyncReady || isSyncing}
+                title={sourceSyncReady ? '重新同步本機來源' : showCapabilityDetail(capabilities?.sourceSync)}
+              >
+                <IconRefresh size={15} stroke={1.6} class={isSyncing ? 'spin' : ''} aria-hidden="true" />
+                <span>{isSyncing ? '同步中' : '重新整理'}</span>
               </button>
             </div>
 
@@ -2569,20 +2564,6 @@
           </section>
         {:else if activeView === 'playlists'}
           <section class="playlist-section" aria-labelledby="page-heading">
-            <div class="section-heading section-heading-toolbar">
-              <div class="section-heading-actions">
-                <button
-                  class="primary-button playlist-import-button"
-                  type="button"
-                  onclick={() => void importPlaylist()}
-                  disabled={!playlistExchangeReady || isPlaylistOperation}
-                  title={showCapabilityDetail(capabilities?.playlistExchange)}
-                >
-                  {isPlaylistOperation ? '處理中' : '匯入 M3U/M3U8'}
-                </button>
-              </div>
-            </div>
-
             {#if playlistError}
               <div class="inline-message" role="alert">
                 <span class="message-mark"><IconAlertCircle size={16} stroke={1.8} aria-hidden="true" /></span>
@@ -2606,6 +2587,15 @@
                 <div class="empty-wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
                 <h3>尚無播放清單</h3>
                 <p>{playlistExchangeReady ? '匯入 M3U 或 M3U8 檔案；不在目前曲庫中的項目也會保留。' : showCapabilityDetail(capabilities?.playlistExchange)}</p>
+                <button
+                  class="primary-button playlist-import-button"
+                  type="button"
+                  onclick={() => void importPlaylist()}
+                  disabled={!playlistExchangeReady || isPlaylistOperation}
+                  title={showCapabilityDetail(capabilities?.playlistExchange)}
+                >
+                  {isPlaylistOperation ? '處理中' : '匯入 M3U/M3U8'}
+                </button>
               </div>
             {:else}
               <div class="playlist-browser">
@@ -2613,12 +2603,18 @@
                   <section class="playlist-detail" aria-labelledby="selected-playlist-heading">
                     <div class="playlist-detail-heading">
                       <div class="playlist-detail-title">
-                        <span class="playlist-detail-artwork" aria-hidden="true"><IconMusic size={27} stroke={1.5} aria-hidden="true" /></span>
-                        <div>
-                          <h3 id="selected-playlist-heading">{selectedPlaylist.name.trim() || '未命名播放清單'}</h3>
-                        </div>
+                        <h3 id="selected-playlist-heading">{selectedPlaylist.name.trim() || '未命名播放清單'}</h3>
                       </div>
-                      <div class="playlist-export-actions">
+                      <div class="playlist-toolbar-actions">
+                        <button
+                          class="primary-button playlist-import-button"
+                          type="button"
+                          onclick={() => void importPlaylist()}
+                          disabled={!playlistExchangeReady || isPlaylistOperation}
+                          title={showCapabilityDetail(capabilities?.playlistExchange)}
+                        >
+                          {isPlaylistOperation ? '處理中' : '匯入 M3U/M3U8'}
+                        </button>
                         <label class="playlist-export-format">
                           <span>格式</span>
                           <select bind:value={playlistExportFormat} disabled={!playlistExchangeReady || isPlaylistOperation}>
@@ -2656,6 +2652,21 @@
                       />
                     {/key}
                   </section>
+                {:else}
+                  <div class="playlist-detail-heading playlist-detail-heading-solo">
+                    <p class="playlist-select-hint">從左側選擇播放清單</p>
+                    <div class="playlist-toolbar-actions">
+                      <button
+                        class="primary-button playlist-import-button"
+                        type="button"
+                        onclick={() => void importPlaylist()}
+                        disabled={!playlistExchangeReady || isPlaylistOperation}
+                        title={showCapabilityDetail(capabilities?.playlistExchange)}
+                      >
+                        {isPlaylistOperation ? '處理中' : '匯入 M3U/M3U8'}
+                      </button>
+                    </div>
+                  </div>
                 {/if}
               </div>
             {/if}

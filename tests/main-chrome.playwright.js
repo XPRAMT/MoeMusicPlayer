@@ -44,6 +44,9 @@ async page => {
   const brandSrc = await page.locator('.brand-mark img').getAttribute('src');
   assert(Boolean(brandSrc && brandSrc.includes('SilverWolfIcon')), 'brand icon source: ' + brandSrc);
 
+  assert(await page.locator('.library-section .section-heading-toolbar').count() === 0, 'library still has a nested toolbar heading');
+  assert(await page.locator('.library-toolbar .outline-button').count() === 1, 'library refresh is not in the search toolbar');
+
   await page.getByRole('button', { name: '播放佇列' }).click();
   assert(await page.locator('#page-heading').innerText() === '播放佇列', 'queue title missing');
   assert(await page.getByRole('heading', { name: '播放佇列', exact: true }).count() === 1, 'queue title is duplicated');
@@ -52,6 +55,27 @@ async page => {
   const queueCount = await page.locator('.page-title-count').innerText();
   assert(/^\d[\d,]* 首曲目$/.test(queueCount), 'queue top-bar track count: ' + queueCount);
   await assertSingleListScroll('queue', false);
+
+  await page.locator('.playlist-tree-open').click();
+  assert(await page.locator('#page-heading').innerText() === '我的播放清單', 'playlist title missing');
+  assert(await page.locator('.playlist-section .section-heading-toolbar').count() === 0, 'playlist still has a nested import toolbar');
+  assert(await page.getByRole('button', { name: '匯入 M3U/M3U8' }).count() === 1, 'playlist import action missing');
+  const playlistChrome = await page.evaluate(() => {
+    const detail = document.querySelector('.playlist-detail');
+    if (!detail) return { hasDetail: false };
+    const style = getComputedStyle(detail);
+    return {
+      hasDetail: true,
+      borderTopWidth: style.borderTopWidth,
+      backgroundImage: style.backgroundImage,
+      backgroundColor: style.backgroundColor,
+      paddingTop: style.paddingTop,
+    };
+  });
+  if (playlistChrome.hasDetail) {
+    assert(playlistChrome.borderTopWidth === '0px', 'playlist detail still has a nested border: ' + JSON.stringify(playlistChrome));
+    assert(playlistChrome.paddingTop === '0px', 'playlist detail still has nested padding: ' + JSON.stringify(playlistChrome));
+  }
 
   const brandBox = await page.locator('.brand-mark img').boundingBox();
   assert(brandBox && brandBox.width >= 47 && brandBox.height >= 47, 'brand icon size: ' + JSON.stringify(brandBox));
