@@ -86,7 +86,7 @@
   assert.equal(emptyCue.currentRowCount, 0, 'an empty-content cue is not rendered or transferred to the next line');
   assert.equal(emptyCue.allTextOpaque, true, 'an empty-content cue does not dim every visible row');
 
-  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 36, auxiliaryFontSizePx: 24, lineGapPx: 50 }));
+  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 50, auxiliaryFontSizePx: 50, lineGapPx: 50 }));
   await page.evaluate(() => window.lyricsViewHarness.setPosition(90_000));
   await page.waitForTimeout(40);
   const maximum = await page.evaluate(() => window.lyricsViewHarness.snapshot());
@@ -338,8 +338,8 @@
   await page.evaluate(() => window.lyricsViewHarness.setPreferences({
     showTranslation: true,
     showRomanization: true,
-    primaryFontSizePx: 36,
-    auxiliaryFontSizePx: 24,
+    primaryFontSizePx: 50,
+    auxiliaryFontSizePx: 50,
     lineGapPx: 0,
   }));
   await page.evaluate(() => window.lyricsViewHarness.scrollPlainTo(60));
@@ -382,6 +382,8 @@
   assert.equal(settingsControls.translationDefault, false);
   assert.equal(settingsControls.romanizationDefault, false);
   assert.deepEqual(settingsControls.values, ['70', '14', '10', '24']);
+  assert.deepEqual(settingsControls.bounds[1], ['0', '50']);
+  assert.deepEqual(settingsControls.bounds[2], ['0', '50']);
   assert.deepEqual(settingsControls.bounds[3], ['0', '50']);
   assert.ok(settingsControls.lineGapLabel.includes('24px'));
   assert.equal(settingsControls.activeTab, 'true');

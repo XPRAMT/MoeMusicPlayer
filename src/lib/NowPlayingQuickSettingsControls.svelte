@@ -126,11 +126,11 @@
     </label>
     <label class="lyrics-preference-range">
       <span><strong>原文字級</strong><output>{lyrics.primaryFontSizePx}px</output></span>
-      <input type="range" min="12" max="36" step="1" value={lyrics.primaryFontSizePx} aria-label="原文字級" oninput={(event) => onLyricsChange({ primaryFontSizePx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ primaryFontSizePx: Number(event.currentTarget.value) }, true)} />
+      <input type="range" min="0" max="50" step="1" value={lyrics.primaryFontSizePx} aria-label="原文字級" oninput={(event) => onLyricsChange({ primaryFontSizePx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ primaryFontSizePx: Number(event.currentTarget.value) }, true)} />
     </label>
     <label class="lyrics-preference-range">
       <span><strong>譯文與羅馬拼音字級</strong><output>{lyrics.auxiliaryFontSizePx}px</output></span>
-      <input type="range" min="9" max="24" step="1" value={lyrics.auxiliaryFontSizePx} aria-label="譯文與羅馬拼音字級" oninput={(event) => onLyricsChange({ auxiliaryFontSizePx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ auxiliaryFontSizePx: Number(event.currentTarget.value) }, true)} />
+      <input type="range" min="0" max="50" step="1" value={lyrics.auxiliaryFontSizePx} aria-label="譯文與羅馬拼音字級" oninput={(event) => onLyricsChange({ auxiliaryFontSizePx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ auxiliaryFontSizePx: Number(event.currentTarget.value) }, true)} />
     </label>
     <label class="lyrics-preference-range">
       <span><strong>句間距</strong><output>{lyrics.lineGapPx}px</output></span>

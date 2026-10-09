@@ -116,14 +116,14 @@ impl LyricsPreferences {
                 "inactiveOpacityPercent must be between 10 and 100".into(),
             ));
         }
-        if !(12..=36).contains(&self.primary_font_size_px) {
+        if self.primary_font_size_px > 50 {
             return Err(SettingsError::InvalidData(
-                "primaryFontSizePx must be between 12 and 36".into(),
+                "primaryFontSizePx must be between 0 and 50".into(),
             ));
         }
-        if !(9..=24).contains(&self.auxiliary_font_size_px) {
+        if self.auxiliary_font_size_px > 50 {
             return Err(SettingsError::InvalidData(
-                "auxiliaryFontSizePx must be between 9 and 24".into(),
+                "auxiliaryFontSizePx must be between 0 and 50".into(),
             ));
         }
         if self.line_gap_px > 50 {
@@ -1772,16 +1772,16 @@ mod tests {
     fn lyrics_preference_numeric_ranges_are_inclusive_and_reject_out_of_range_values() {
         let mut minimum = LyricsPreferences {
             inactive_opacity_percent: 10,
-            primary_font_size_px: 12,
-            auxiliary_font_size_px: 9,
+            primary_font_size_px: 0,
+            auxiliary_font_size_px: 0,
             ..LyricsPreferences::default()
         };
         minimum.validate().expect("accept lower bounds");
 
         let maximum = LyricsPreferences {
             inactive_opacity_percent: 100,
-            primary_font_size_px: 36,
-            auxiliary_font_size_px: 24,
+            primary_font_size_px: 50,
+            auxiliary_font_size_px: 50,
             ..LyricsPreferences::default()
         };
         maximum.validate().expect("accept upper bounds");
@@ -1802,15 +1802,11 @@ mod tests {
         assert!(minimum.validate().is_err());
 
         minimum.inactive_opacity_percent = 70;
-        minimum.primary_font_size_px = 11;
-        assert!(minimum.validate().is_err());
-        minimum.primary_font_size_px = 37;
+        minimum.primary_font_size_px = 51;
         assert!(minimum.validate().is_err());
 
         minimum.primary_font_size_px = 14;
-        minimum.auxiliary_font_size_px = 8;
-        assert!(minimum.validate().is_err());
-        minimum.auxiliary_font_size_px = 25;
+        minimum.auxiliary_font_size_px = 51;
         assert!(minimum.validate().is_err());
     }
 
@@ -1823,7 +1819,7 @@ mod tests {
 
         let result = store.update(|settings| {
             settings.lyrics_preferences = LyricsPreferences {
-                auxiliary_font_size_px: 25,
+                auxiliary_font_size_px: 51,
                 ..LyricsPreferences::default()
             };
             Ok(())

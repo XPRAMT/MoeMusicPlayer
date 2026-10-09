@@ -118,8 +118,8 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
     showTranslation: true,
     showRomanization: false,
     inactiveOpacityPercent: 10,
-    primaryFontSizePx: 36,
-    auxiliaryFontSizePx: 9,
+    primaryFontSizePx: 50,
+    auxiliaryFontSizePx: 4,
     lineGapPx: 50,
     textEffect: 'shadow',
     simplifiedToTraditional: false,
@@ -127,6 +127,8 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
   assert.equal(normalizeLyricsPreferences({ simplifiedToTraditional: true }).simplifiedToTraditional, true);
   assert.equal(normalizeLyricsPreferences({ inactiveOpacityPercent: 100.4 }).inactiveOpacityPercent, 100);
   assert.equal(normalizeLyricsPreferences({ lineGapPx: -1 }).lineGapPx, 0);
+  assert.equal(normalizeLyricsPreferences({ primaryFontSizePx: -1 }).primaryFontSizePx, 0);
+  assert.equal(normalizeLyricsPreferences({ auxiliaryFontSizePx: -1 }).auxiliaryFontSizePx, 0);
 });
 
 test('variable row geometry adds only nonempty enabled auxiliary lines', () => {
