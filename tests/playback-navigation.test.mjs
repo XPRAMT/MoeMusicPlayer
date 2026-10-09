@@ -78,7 +78,8 @@ test('the sidebar playlist group is the single playlist navigation entry and wor
   assert.ok(treeHost, 'playlist tree must always render in the sidebar');
   assert.match(treeHost[1], /onOpen=/, 'playlist group heading must open the playlist page');
   assert.match(playlistTreeSource, /aria-label=\{expanded \? '收合播放清單' : '展開播放清單'\}/);
-  assert.match(appSource, /class="primary-button playlist-import-button"/, 'the playlist page must retain its import action');
+  assert.match(appSource, /我的播放清單．\$\{selectedPlaylist\.name/, 'playlist top bar must include the selected playlist name');
+  assert.doesNotMatch(appSource, /playlist-import-button|匯入 M3U\/M3U8|exportPlaylist|importPlaylist/, 'playlist page must not show M3U import/export UI');
   assert.doesNotMatch(appSource, /\{#if playlists\.length > 0\}\s*<div class="sidebar-playlist-tree-host"/);
 });
 

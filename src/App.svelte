@@ -219,15 +219,6 @@
   let settingsSourceRegistryAuthoritative = $state(true);
   let capabilities = $state<RuntimeCapabilities | null>(null);
   const showCustomTitlebar = $derived(capabilities?.platform === 'windows');
-  const pageTitle = $derived(
-    activeView === 'library'
-      ? '我的曲庫'
-      : activeView === 'playlists'
-        ? '我的播放清單'
-        : activeView === 'queue'
-          ? '播放佇列'
-          : '設定',
-  );
   let runtimeError = $state<string | null>(null);
   let libraryTrackCount = $state<number | null>(null);
   let playlistTrackCount = $state<number | null>(null);
@@ -252,9 +243,6 @@
   let selectedPlaylistId = $state<string | null>(null);
   let playlistListRevision = $state(0);
   let playlistError = $state<string | null>(null);
-  let playlistMessage = $state<string | null>(null);
-  let playlistExportFormat = $state<'m3u' | 'm3u8'>('m3u8');
-  let playlistExportRelativePaths = $state(false);
   let query = $state('');
   let libraryFieldFilter = $state<TrackFieldFilter | null>(null);
   let selectedTrackId = $state<string | null>(null);
@@ -350,6 +338,17 @@
   const playlistExchangeReady = $derived(isReady(capabilities?.playlistExchange));
   const selectedPlaylist = $derived(
     playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null,
+  );
+  const pageTitle = $derived(
+    activeView === 'library'
+      ? '我的曲庫'
+      : activeView === 'playlists'
+        ? selectedPlaylist
+          ? `我的播放清單．${selectedPlaylist.name.trim() || '未命名播放清單'}`
+          : '我的播放清單'
+        : activeView === 'queue'
+          ? '播放佇列'
+          : '設定',
   );
   const isListPage = $derived(
     activeView === 'library' || activeView === 'playlists' || activeView === 'queue',
@@ -1471,51 +1470,10 @@
     playlistTrackCount = null;
     activeView = 'playlists';
     playlistListRevision += 1;
-    playlistMessage = null;
   }
 
   function refreshPlaylistEntries(): void {
     playlistListRevision += 1;
-  }
-
-  async function importPlaylist(): Promise<void> {
-    if (!playlistExchangeReady || isPlaylistOperation) return;
-    isPlaylistOperation = true;
-    playlistError = null;
-    playlistMessage = null;
-    try {
-      const result = await invokeCommand('playlist_import_m3u', {});
-      if (!result) return;
-      activeView = 'playlists';
-      await loadPlaylists(result.playlist.id);
-      await loadSources();
-      playlistMessage = `已匯入「${result.playlist.name}」：${result.playlist.entryCount.toLocaleString()} 個項目，其中 ${result.matchedEntries.toLocaleString()} 個對應到曲庫。`;
-    } catch (error) {
-      playlistError = getErrorText(error);
-    } finally {
-      isPlaylistOperation = false;
-    }
-  }
-
-  async function exportPlaylist(playlistId: string): Promise<void> {
-    if (!playlistExchangeReady || isPlaylistOperation) return;
-    isPlaylistOperation = true;
-    playlistError = null;
-    playlistMessage = null;
-    try {
-      const result = await invokeCommand('playlist_export_m3u', {
-        playlistId,
-        format: playlistExportFormat,
-        relativePaths: playlistExportRelativePaths,
-      });
-      if (result) {
-        playlistMessage = `已匯出「${result.playlistName}」的 ${result.entryCount.toLocaleString()} 個項目。`;
-      }
-    } catch (error) {
-      playlistError = getErrorText(error);
-    } finally {
-      isPlaylistOperation = false;
-    }
   }
 
   async function playPlaylistEntry(entry: PlaylistEntrySummary, playlistId: string): Promise<void> {
@@ -2649,9 +2607,6 @@
                 <button class="text-button" type="button" onclick={() => { if (selectedPlaylistId) refreshPlaylistEntries(); else void loadPlaylists(); }}>再試一次</button>
               </div>
             {/if}
-            {#if playlistMessage}
-              <div class="source-result-message playlist-result-message" role="status">{playlistMessage}</div>
-            {/if}
 
             {#if !libraryReady}
               <div class="not-ready-panel">
@@ -2664,88 +2619,30 @@
               <div class="empty-panel">
                 <div class="empty-wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
                 <h3>尚無播放清單</h3>
-                <p>{playlistExchangeReady ? '匯入 M3U 或 M3U8 檔案；不在目前曲庫中的項目也會保留。' : showCapabilityDetail(capabilities?.playlistExchange)}</p>
-                <button
-                  class="primary-button playlist-import-button"
-                  type="button"
-                  onclick={() => void importPlaylist()}
-                  disabled={!playlistExchangeReady || isPlaylistOperation}
-                  title={showCapabilityDetail(capabilities?.playlistExchange)}
-                >
-                  {isPlaylistOperation ? '處理中' : '匯入 M3U/M3U8'}
-                </button>
+                <p>在「設定 → 音樂來源」選擇播放清單檔案加入來源。</p>
+              </div>
+            {:else if selectedPlaylist}
+              <div class="playlist-browser">
+                <section class="playlist-detail" aria-label={selectedPlaylist.name.trim() || '未命名播放清單'}>
+                  {#key selectedPlaylist.id}
+                    <PlaylistEntryList
+                      playlistId={selectedPlaylist.id}
+                      resetKey={playlistListRevision}
+                      {playbackReady}
+                      {isSendingPlaybackCommand}
+                      columns={trackColumnPreferences}
+                      livePlayCount={livePlayCount}
+                      currentTrackId={playback?.currentTrack?.id ?? null}
+                      onPlay={playPlaylistEntry}
+                      onTotalCount={(count) => (playlistTrackCount = count)}
+                    />
+                  {/key}
+                </section>
               </div>
             {:else}
-              <div class="playlist-browser">
-                {#if selectedPlaylist}
-                  <section class="playlist-detail" aria-labelledby="selected-playlist-heading">
-                    <div class="playlist-detail-heading">
-                      <div class="playlist-detail-title">
-                        <h3 id="selected-playlist-heading">{selectedPlaylist.name.trim() || '未命名播放清單'}</h3>
-                      </div>
-                      <div class="playlist-toolbar-actions">
-                        <button
-                          class="primary-button playlist-import-button"
-                          type="button"
-                          onclick={() => void importPlaylist()}
-                          disabled={!playlistExchangeReady || isPlaylistOperation}
-                          title={showCapabilityDetail(capabilities?.playlistExchange)}
-                        >
-                          {isPlaylistOperation ? '處理中' : '匯入 M3U/M3U8'}
-                        </button>
-                        <label class="playlist-export-format">
-                          <span>格式</span>
-                          <select bind:value={playlistExportFormat} disabled={!playlistExchangeReady || isPlaylistOperation}>
-                            <option value="m3u8">M3U8</option>
-                            <option value="m3u">M3U</option>
-                          </select>
-                        </label>
-                        <label class="playlist-relative-toggle">
-                          <input type="checkbox" bind:checked={playlistExportRelativePaths} disabled={!playlistExchangeReady || isPlaylistOperation} />
-                          <span>相對路徑</span>
-                        </label>
-                        <button
-                          class="outline-button"
-                          type="button"
-                          onclick={() => void exportPlaylist(selectedPlaylist.id)}
-                          disabled={!playlistExchangeReady || isPlaylistOperation}
-                          title={showCapabilityDetail(capabilities?.playlistExchange)}
-                        >
-                          {isPlaylistOperation ? '處理中' : `匯出 ${playlistExportFormat.toUpperCase()}`}
-                        </button>
-                      </div>
-                    </div>
-
-                    {#key selectedPlaylist.id}
-                      <PlaylistEntryList
-                        playlistId={selectedPlaylist.id}
-                        resetKey={playlistListRevision}
-                        {playbackReady}
-                        {isSendingPlaybackCommand}
-                        columns={trackColumnPreferences}
-                        livePlayCount={livePlayCount}
-                        currentTrackId={playback?.currentTrack?.id ?? null}
-                        onPlay={playPlaylistEntry}
-                        onTotalCount={(count) => (playlistTrackCount = count)}
-                      />
-                    {/key}
-                  </section>
-                {:else}
-                  <div class="playlist-detail-heading playlist-detail-heading-solo">
-                    <p class="playlist-select-hint">從左側選擇播放清單</p>
-                    <div class="playlist-toolbar-actions">
-                      <button
-                        class="primary-button playlist-import-button"
-                        type="button"
-                        onclick={() => void importPlaylist()}
-                        disabled={!playlistExchangeReady || isPlaylistOperation}
-                        title={showCapabilityDetail(capabilities?.playlistExchange)}
-                      >
-                        {isPlaylistOperation ? '處理中' : '匯入 M3U/M3U8'}
-                      </button>
-                    </div>
-                  </div>
-                {/if}
+              <div class="empty-panel">
+                <h3>尚未選擇播放清單</h3>
+                <p>從左側選擇播放清單。</p>
               </div>
             {/if}
           </section>

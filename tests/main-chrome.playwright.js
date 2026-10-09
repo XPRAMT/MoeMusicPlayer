@@ -57,7 +57,8 @@ async page => {
   assert(Boolean(brandSrc && brandSrc.includes('SilverWolfIcon')), 'brand icon source: ' + brandSrc);
 
   assert(await page.locator('.library-section .section-heading-toolbar').count() === 0, 'library still has a nested toolbar heading');
-  assert(await page.locator('.library-toolbar .outline-button').count() === 1, 'library refresh is not in the search toolbar');
+  assert(await page.locator('.library-toolbar .outline-button').count() === 0, 'library search toolbar still has a refresh button');
+  assert(await page.locator('.topbar-refresh-button').count() === 1, 'top-bar refresh control missing');
 
   await page.getByRole('button', { name: '播放佇列' }).click();
   assert(await page.locator('#page-heading').innerText() === '播放佇列', 'queue title missing');
@@ -69,21 +70,35 @@ async page => {
   await assertSingleListScroll('queue', false);
 
   await page.locator('.playlist-tree-open').click();
-  assert(await page.locator('#page-heading').innerText() === '我的播放清單', 'playlist title missing');
+  await page.waitForFunction(() => {
+    const heading = document.querySelector('#page-heading');
+    return heading && heading.textContent === '我的播放清單．hanser';
+  });
+  assert(await page.locator('#page-heading').innerText() === '我的播放清單．hanser', 'playlist title with name missing');
   assert(await page.locator('.playlist-section .section-heading-toolbar').count() === 0, 'playlist still has a nested import toolbar');
-  assert(await page.getByRole('button', { name: '匯入 M3U/M3U8' }).count() === 1, 'playlist import action missing');
+  assert(await page.getByRole('button', { name: '匯入 M3U/M3U8' }).count() === 0, 'playlist page still shows import');
+  assert(await page.getByRole('button', { name: /匯出 M3U/i }).count() === 0, 'playlist page still shows export');
   const playlistChrome = await page.evaluate(() => {
+    const page = document.querySelector('.page-content.wide-list-page');
     const detail = document.querySelector('.playlist-detail');
-    if (!detail) return { hasDetail: false };
+    if (!page) return { hasPage: false };
+    const pageStyle = getComputedStyle(page);
+    if (!detail) {
+      return { hasPage: true, hasDetail: false, pagePaddingTop: pageStyle.paddingTop };
+    }
     const style = getComputedStyle(detail);
     return {
+      hasPage: true,
       hasDetail: true,
+      pagePaddingTop: pageStyle.paddingTop,
       borderTopWidth: style.borderTopWidth,
       backgroundImage: style.backgroundImage,
       backgroundColor: style.backgroundColor,
       paddingTop: style.paddingTop,
     };
   });
+  assert(playlistChrome.hasPage, 'playlist wide list page missing');
+  assert(playlistChrome.pagePaddingTop === '0px', 'playlist page still has top padding: ' + JSON.stringify(playlistChrome));
   if (playlistChrome.hasDetail) {
     assert(playlistChrome.borderTopWidth === '0px', 'playlist detail still has a nested border: ' + JSON.stringify(playlistChrome));
     assert(playlistChrome.paddingTop === '0px', 'playlist detail still has nested padding: ' + JSON.stringify(playlistChrome));

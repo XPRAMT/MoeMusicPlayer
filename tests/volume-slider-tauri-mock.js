@@ -218,7 +218,47 @@
           };
         }
         case 'playlist_list':
-          return [];
+          return [{ id: 'playlist-hanser', name: 'hanser', entryCount: 2 }];
+        case 'playlist_get_page':
+          return {
+            items: [
+              {
+                position: 0,
+                trackId: 'track-1',
+                title: 'Morning Window',
+                artist: 'Studio North',
+                album: 'Quiet Hours',
+                durationMs: 214_000,
+                hasEnabledMapping: true,
+                year: 2024,
+                codec: 'FLAC',
+                sampleRateHz: 96_000,
+                bitDepth: 24,
+                bitrateBps: 2_800_000,
+                playedMs: 428_000,
+                fileName: 'Morning Window',
+              },
+              {
+                position: 1,
+                trackId: 'track-2',
+                title: 'Harbor Lights',
+                artist: 'Studio North',
+                album: 'Quiet Hours',
+                durationMs: 198_000,
+                hasEnabledMapping: true,
+                year: 2023,
+                codec: 'FLAC',
+                sampleRateHz: 48_000,
+                bitDepth: 24,
+                bitrateBps: 1_600_000,
+                playedMs: 0,
+                fileName: 'Harbor Lights',
+              },
+            ],
+            offset: args.offset ?? 0,
+            limit: args.limit ?? 40,
+            totalCount: 2,
+          };
         case 'playback_get_queue_page':
           return {
             revision: 0,

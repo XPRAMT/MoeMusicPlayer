@@ -108,7 +108,7 @@ import { withLivePlayedMs } from './live-play-count.js';
 {/if}
 
 {#if snapshot.totalCount === 0}
-  <div class="empty-panel playlist-empty"><h3>這份清單沒有項目</h3><p>可以重新匯入其他播放清單。</p></div>
+  <div class="empty-panel playlist-empty"><h3>這份清單沒有項目</h3><p>在「設定 → 音樂來源」更新此播放清單來源後再重新整理。</p></div>
 {:else}
   <PagedVirtualList
     totalCount={snapshot.totalCount}
