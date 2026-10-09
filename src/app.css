@@ -1925,26 +1925,6 @@ input:focus-visible {
   min-height: 64px;
 }
 
-.lyrics-text-effect-row {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-bottom: 0;
-}
-
-.lyrics-text-effect-row button {
-  display: grid;
-  min-height: 36px;
-  place-items: center;
-  padding: 8px 10px;
-  text-align: center;
-  font: inherit;
-  font-size: var(--font-body);
-  font-weight: 600;
-}
-
-.lyrics-text-effect-row button.chosen {
-  color: var(--accent-text);
-}
-
 .cover-stage-image {
   position: absolute;
   inset: 0;
@@ -2434,6 +2414,11 @@ input:focus-visible {
   gap: 10px;
 }
 
+.layout-choice-row.lyrics-text-effect-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 0;
+}
+
 .layout-choice-row button {
   display: grid;
   min-width: 0;
@@ -2442,6 +2427,22 @@ input:focus-visible {
   gap: 5px;
   padding: 12px;
   text-align: left;
+}
+
+.layout-choice-row.lyrics-text-effect-row button {
+  min-height: 36px;
+  align-content: center;
+  place-items: center;
+  gap: 0;
+  padding: 8px 10px;
+  text-align: center;
+  font: inherit;
+  font-size: var(--font-body);
+  font-weight: 600;
+}
+
+.layout-choice-row.lyrics-text-effect-row button.chosen {
+  color: var(--accent-text);
 }
 
 .layout-choice-row button strong {

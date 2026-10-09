@@ -33,11 +33,13 @@ test('lyrics view CSS exposes shadow, stroke, and none text effects', () => {
 
 test('quick settings offers three text-effect choices', () => {
   const source = readFileSync(path.join(root, 'src/lib/NowPlayingQuickSettingsControls.svelte'), 'utf8');
+  const css = readFileSync(path.join(root, 'src/app.css'), 'utf8');
   assert.match(source, /textEffect: 'shadow'/);
   assert.match(source, /textEffect: 'stroke'/);
   assert.match(source, /textEffect: 'none'/);
   assert.match(source, /歌詞文字效果/);
   assert.match(source, /lyrics-text-effect-row/);
+  assert.match(css, /\.layout-choice-row\.lyrics-text-effect-row\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s);
   assert.doesNotMatch(source, /文字加上柔和陰影/);
   assert.doesNotMatch(source, /文字加上外框描邊/);
   assert.doesNotMatch(source, /不描邊也不加陰影/);

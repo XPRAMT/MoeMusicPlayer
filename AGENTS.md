@@ -48,19 +48,30 @@
 ## 播放命令意圖規則
 
 - 曲庫、播放清單與播放佇列的列點擊都會立刻開始播放，暫停或啟動還原後的 Ready 也不維持不播放。播放佇列點擊只把游標移到該 traversal 位置，不重建佇列；點同一列且曲目已載入時從目前位置續播。上一首／下一首在暫停時仍保持不播放。明確 Play（含 SMTC Play）與自然 Ended 自動前進仍會開始播放。音訊 worker 必須在命令執行順序中取樣播放意圖；不可用 renderer/Tauri 可能過期的播放快照推定。
-仍未完成或未驗證：
+  仍未完成或未驗證：
 
 - Windows AAC/M4A 已修復：Rodio Windows feature 啟用 `mp4`，帶入 Symphonia ISO-MP4 demuxer 與 AAC decoder。合成 AAC-LC/M4A regression 在修正前失敗、修正後通過；另以 `MOEMUSICPLAYER_AAC_M4A_PATH` 對使用者指定的 `hanser - Cyberangel(純真夢歌).m4a` 完整解碼，讀取 167.018 秒、16,033,792 個非零樣本，未初始化音訊輸出裝置。`cargo test --workspace --locked --offline`、音訊 pipeline tests、格式檢查與嚴格 Clippy 通過。使用者已人工確認 AAC/M4A 實際發聲正常；此結果不推廣至其他格式。
+
 - 本輪 Now Playing 全內容區覆蓋層與雙返回控制已通過五尺寸幾何測試，以及掛載真實 App.svelte 的曲庫／播放清單／佇列／設定往返與列表捲動保留測試；真實 Tauri WebView 尚待人工複驗。
+
 - 頂部宣傳 Banner 已移除並通過 Svelte 型別檢查、正式前端建置與 Node 69/69；新版 Tauri 視窗尚未人工確認各頁內容起始位置與同步資訊布局。
+
 - Windows 原生資料夾選擇器已由使用者在隔離 app-data 選取 `D:\Music` 並完成唯讀同步；正式 AppData 未觸碰。Cancel 不新增來源的路徑尚未單獨確認；播放清單原生對話框仍待使用者驗收。使用者已人工確認 SMTC 切歌封面更新；Windows 媒體 flyout 其他操作與硬體媒體按鍵仍待驗收。
+
 - Windows Tauri/音訊 IPC 的命令 ACK 與 queue/mode 已接線；`npm run check/build`、workspace Rust tests、嚴格 Tauri Clippy 及 Windows release build 通過。服務整合測試以臨時 Unicode 音樂資料夾與合成 MP3 驗證 TrackId 路徑、worker 播放、暫停與音量，並驗證重複 playlist TrackId 依 entry position 建 queue。Headless DOM harness 已覆蓋 seek failure、鍵盤操作、切歌及拖曳生命週期；worker snapshot 維持外部唯一權威，seek ACK 前的 poll 由 request fence 隔離，失敗會丟棄草稿並顯示錯誤。Rodio Symphonia paths 對 MP3/FLAC/Vorbis/WAV 的合成 duration/seek tests 通過，並不保證任意檔案格式均可 seek。使用者已在最新隔離 Tauri debug 視窗實際確認 slider 點擊／拖曳可正常 seek、啟動播放速度符合已知曲目時長、點歌維持目前頁面而底部封面可進正在播放頁；個別曲目格式、執行檔 hash 與 app-data identifier 未記錄。前次加速回報於最新驗收未再重現，但未找到可證明的程式碼根因；底部右側音量滑桿拖曳已通過 headless App DOM 回歸，但尚待 Windows Tauri 視窗人工複驗；SMTC flyout／硬體媒體鍵（包含最小化時 WebView timer 節流）仍待驗收。
+
 - 設定頁與真實 Tauri 視窗的自訂色對比、偏好重啟回讀及縮放版面尚未人工驗收。欄位偏好與 Now Playing A/B 已接版本化設定 JSON；Svelte 型別檢查、純函式測試與 headless DOM harness 通過。
+
 - 播放清單來源的程式級隔離測試已通過，但 Windows 真實 Tauri 啟動同步、原生匯入對話框與檔案外部修改後的畫面更新尚未 GUI 驗收。Android 與 Windows 都已接入 playlist-file source registry 與 startup/manual sync；Android 使用持久 SAF tree grant、受限相對 locator 解析與 Content URI 權限 probe。來源離線、權限失效或播放清單解析失敗時保留既有投影。Windows GUI 與 Android 真機行為仍未驗收。
+
 - Hanser `hanser.m3u8` 已以唯讀隔離來源資料庫透過 SQLite backup API 複製到 `target/` 新資料庫，未觸碰正式資料庫或音樂原檔。嚴格 UTF-8 驗證為 176 個絕對路徑且全數存在。來源舊清單 ID `8bf3f89c-04c0-418e-b29b-a33d867b15ab` 原有 176 項、0 匹配；觸發頁面/queue 查詢後全清單重對應為 176/176，queue 為 176 項。實際匯入另建立新清單 ID `ca39c101-c843-48a4-a100-9d72cf351736`，176/176 匹配；來源清單數 1→2，兩份清單項目順序 0..175，關閉重開後仍一致。Core 共用 Windows locator key 正規化涵蓋一般與 extended path、Unicode、空白及長路徑；Android playlist sync 以隔離 fixture 驗證來源身分、同內容 hash、重複 URI slot、權限失效及失敗保留投影。
+
 - 最新 ARM64 APK 已安裝至 NX809J；WebView edge-to-edge 與互動內容安全區的 policy、Kotlin 編譯及 headless 幾何測試通過。新版裝置視覺仍待使用者手動開啟確認，因此不沿用舊版啟動畫面未遮擋狀態作為新版驗收。NX809J 曲庫顯示 207 首、封面與歌詞畫面可呈現，MediaSession 已建立；實際聲音、播放／背景控制、MediaStore/SAF 存取及歌詞內容仍待人工驗收。一個文件資料夾來源回報暫不可用，原因待確認。固定 APK 為 `release/moemusicplayer-android-arm64-debug.apk`；v2 簽章與 16 KiB `zipalign` 驗證通過，APK 驗證時 workspace Rust 基線 274 passed、3 ignored。
+
 - 歌詞前端與 Rust IPC/Provider 及歌詞偏好儲存已通過 fixture、SQLite、取消、DTO 契約、偏好範圍／migration／重開保存測試；`npm run check/build`、Node 與 LyricsView Playwright 幾何／偏好測試通過，Windows Tauri `--no-bundle` release 編譯亦成功。尚未由真實 Windows Tauri 視窗確認 sidecar/內嵌歌詞、網路候選、手動套用、譯文／羅馬拼音切換、偏好實際回讀與切歌取消。NetEase/QQ 使用非官方 HTTP 端點，端點格式或來源檢查可能變動。2026-10-07 14:16（UTC+8）實測：QQ `DoSearchForQQMusicDesktop` 在 `ct:24, cv:0` 仍回 HTTP 200 但 `song.list` 為空；改為 `ct:19, cv:1873, uin:"0"` 後「晴天 / 周杰伦」回 5 首。現行回應欄位是 `name`／`mid`／`id`／`album.name`，舊欄位 `songname`／`songmid`／`songid`／`albumname` 仍相容。同一首的 `fcg_query_lyric_new.fcg` 回傳含時間戳的 LRC。QRC-only 原始內容目前不能解碼為可讀行；候選明確標示原始 QRC 未解碼／目前不可預覽，仍可手動選取並保存，但套用後沒有可顯示歌詞；後續只需評估 QRC 解碼與呈現方式。LyricsView Edge harness 測過混合空／缺譯文與羅馬拼音、偏好切換不增高缺內容列、透明 pane/row、句間距 0/50、最大字級、variable prefix/spacer 對齊、遠距 seek/scroll、目前行自動置中及停止／paused；Node 69/69 含 100,000 列中僅 3 列可見的有界 window 測試；這些自動測試不代表真實 Tauri GUI 驗收。Android 本機歌詞已接入授權 SAF 同目錄 LRC 與有界 Content URI lease／Lofty 內嵌標籤讀取；Android target check 通過，尚無裝置端歌詞驗收。`lyrics_search` 會在先前 `lyrics_get_track` 回空後重查本機來源，避免本機歌詞更新競態；同一首曲目可能因此再解析一次 Lofty 內嵌標籤。
+
 - Windows 封面讀取已啟用本機檔案來源；Android 封面已接入二進位 IPC、原始圖片位元組與 header-only 尺寸／上限驗證。Android parser fixture 通過，Android 真實 Tauri 畫面、Content URI 權限與圖片顯示仍待裝置驗收。封面上限內仍可能遇到瀏覽器無法解碼的容器資料，該路徑會回到占位圖。
+
 - 100,000 首真實曲庫端到端效能、真實 Tauri WebView 的捲動影格表現及完整 Windows SystemIndex 使用判準尚無實測結論；目前共用列表的 Node 與 headless Chrome harness 已驗證合成 100,000 項、虛擬 DOM 最多 25 列、LRU 最多 240 項，不能替代正式 Tauri 視窗效能量測。
 
 下一步：請使用者在隔離 Windows Tauri 視窗驗收歌詞本機優先、Provider 候選顯示與手動保存，並確認譯文／羅馬拼音控制、字級／非目前歌詞文字透明度與偏好關閉重開回讀；網路端點未實測，先以 fixtures 維持測試。另於真實 Tauri 視窗確認新版頂部 Banner 移除後的頁面間距、共享欄位設定保存／重啟回讀，以及 Now Playing 覆蓋側欄、兩種返回均回到原頁、歌詞與列表狀態保留和窄視窗播放列可用；headless 幾何與真實 App DOM 測試已通過但不代表 Tauri WebView 人工驗收。另需在隔離 Tauri 視窗人工確認：暫停後的 next/previous 不會自動播放；曲庫、播放清單與播放佇列的列點擊會立刻開始播放，播放佇列不重建；明確 Play 和自然播完自動前進仍可播放。自動測試不替代此驗收。保持已確認正常的 seek、音量拖曳及點歌／封面導覽行為。仍需在隔離 Tauri app-data 中驗收來源暫不可用時 queue/checkpoint 保留；重啟恢復佇列、曲目與位置已由使用者確認。其他待驗包括播放清單來源啟動同步與外部變更、原生匯入對話框、degraded registry 重新登記確認、舊 Hanser 清單播放與 queue 控制、SMTC flyout 其他操作／硬體媒體按鍵、真實封面畫面與其他格式實際輸出；不得操作使用者正在使用的視窗或正式曲庫。`D:\Music` 已在隔離資料庫唯讀掃描完成，不重複掃描或寫入音樂檔。正式 Tauri WebView 的捲動與縮放效能仍待量測；Android 待驗包含 NX809J 實際聲音輸出與播放控制、背景控制、長時間／直橫向安全區、MediaStore/SAF 掃描與來源授權、歌詞實際讀取及來源離線恢復；曲庫顯示 207 首且封面／歌詞畫面可呈現，但一個文件資料夾來源回報暫不可用，原因待確認。APK 已安裝並啟動，啟動與畫面呈現不代表播放驗收。
@@ -103,7 +114,7 @@
 - 至少涵蓋寬橫向、一般橫向、近正方形、窄直向，以及 Windows 可縮放小視窗與 Android 橫直向；不可只用單一寬度斷點或裝置名稱決定整體布局。空間不足時改為堆疊或抽屜，封面尺寸受 viewport 約束；高 DPI、拖曳縮放及方向切換後仍須可讀、可操作且不卡頓。
 - 播放頁、側邊欄、佇列、設定、歌詞與專輯頁都要遵循相同布局原則；具體閾值由畫面實測決定。布局模式改變只重新排布 UI，不得重建播放核心或中斷音訊。
 
-響應式驗收至少覆蓋：3840×2160、2560×1440、1920×1080、1600×900、1366×768、1280×1024、1024×768、900×900、800×1200、720×1280、412×915、360×800；同時檢查無水平溢出、重要按鈕可見、歌詞可讀、封面比例、列表操作、抽屜/對話框邊界、視窗縮放與方向切換後的狀態保持。
+響應式驗收至少覆蓋：3840×2160、2560×1440、1920×1080、1600×900、900×900、800×1200；同時檢查無水平溢出、重要按鈕可見、歌詞可讀、封面比例、列表操作、抽屜/對話框邊界、視窗縮放與方向切換後的狀態保持。
 
 ## 架構邊界
 
@@ -160,30 +171,53 @@
 ## 本輪 Now Playing UI
 
 - 時間軸只保留貼邊緣：軌道全寬貼齊底欄頂緣，已播／總長時間在軌道下方兩側。設定頁與快速設定不再提供時間軸樣式選擇。舊 `line`／`bar`／`minimal` 讀入後都當成 `edge`。底欄外高固定 74px（`--dock-height`），不隨視窗變窄而縮短。底欄沒有模糊、白覆蓋、深色漸層、頂緣線或向上陰影；有無主介面背景圖、正在播放開或關都一樣。頂欄仍可在窄寬時變矮。傳輸鍵比先前略大。
+
 - Now Playing 頂欄：窄寬仍顯示「手動指定」「同步歌詞」；曲目 meta 永遠左對齊（不用 space-between／均分）。底欄進度時間字級固定 12px，離開 NP 不縮小。
+
 - 自訂標題列在最小化左側提供全螢幕切換（進入／結束）；圖示與 aria-pressed 隨 `isFullscreen` 更新，視窗 resized 時同步狀態。無邊框視窗最大化時，`WM_GETMINMAXINFO` 把最大尺寸限制在目前螢幕工作區（不含工作列），避免工作列位置被畫成黑條。從最大化進入全螢幕會先 `unmaximize` 再 `setFullscreen`，結束後若原本是最大化則還原；否則 Windows 會維持工作區裁切，全螢幕蓋不住工作列。
+
 - 啟動時主視窗 `visible: false`，套用已存 `windowGeometry`（夾住螢幕）後再 `show`，避免還原前空白／過大閃爍。
+
 - 主視窗幾何：關閉時將 outer 位置、inner 大小與 maximized 寫入 settings.json（schema v6 windowGeometry）；下次啟動還原，並以可用螢幕矩形夾住避免跑出顯示器。移動/縮放時記住非最大化外框以便還原。
+
 - 底欄布局：控制列置中群組（收藏→隨機→prev→play→next→循環→音量）；非 NP ≤720 藏收藏+音量，≤520（stage2）再藏隨機+循環且三鍵**靠右**。edge 進度條滿寬；時間標籤在條下方並以 `--dock-pad-x`（等同 dock 水平 padding / 舊 clamp 18–38）內縮，不貼視窗左右緣。隱藏模式封面固定 `--dock-hide-height`。音量 popover。NP 不套用非 NP 隱藏。
 
 - 播放次數字體與音質文字同字級／字重／顏色（外層 .now-playing-format）。
+
 - 頂列「手動指定」「同步歌詞」已接線：前者以 manual=true 呼叫 lyrics_search，即使已有本機／快取歌詞也會繼續抓 Provider 候選且不自動套用；候選／搜尋 UI 會蓋住播放歌詞直到使用者選取或按關閉／取消。後者對同步歌詞顯示延遲滑桿（±5 秒、0.1 秒），偏移依曲目持久化。播放列隨機／循環與頂列譯／羅開關啟用時只套用主題強調色於圖示／文字，不加暗色圓角底；正在播放頂列「返回」「快速設定」僅顯示圖示（保留 aria-label／title）。
+
 - 封面邊框移除 1px 深色細線；保留 coverCornerStyle 圓角／直角開關與主題自訂色。舊 backdrop WIP。
+
 - 正在播放頂列按鈕（返回、手動指定、同步歌詞、譯、羅、快速設定）統一高度 34px、圓角 10px、透明底；游標接近改用主題色漸層高亮與柔光陰影，不再出現黑底／`--panel-soft` 填色。啟用中的譯／羅與同步歌詞只保留強調色邊框與文字，不加暗色填底。
+
 - 歌詞候選「選擇歌詞」面板：移除半透明白底／玻璃漸層與面板邊框；按鈕「選擇」改「選擇」。即使一開始找不到候選也顯示文字搜尋框；輸入可本機篩選，送出可帶 `query` 覆寫 Provider 搜尋關鍵字。面板高度以 `--np-cover-height` 與封面實際高度相等（去掉會被歌詞欄 padding 壓矮的 `min(100%, …)`；開啟候選時歌詞欄垂直置中並取消垂直 padding）。
+
 - 底欄進度時間標籤、音量區文字與音量%字體與演出者一致：移除 `DM Mono`，改繼承字型；一般 9px、Now Playing 開啟時 12px（對齊 `.dock-track-artist-link`／`.dock-track-copy span`）。
+
 - Now Playing 頂欄曲目資訊順序改為「演出者．專輯．曲名」，字級固定為標題 16px、字重 600，不再隨視窗縮放。曲名改純文字顯示，取消點擊曲名跳轉／曲庫篩選。演出者標籤以 `|`、`\`、`/`、`;`、`,` 或空白拆成個別名稱，頂欄各自可點，曲庫篩選比對該名稱（含 `hanser/yousa` 這類組合標籤），大小寫仍區分；專輯仍以完整值精確篩選。
+
 - 歌詞譯文／羅馬拼音改自動換行，長句不可再用 ellipsis／overflow hidden 隱藏；主歌詞行仍維持至多兩行 clamp。
+
 - 歌詞候選搜尋框聚焦時左緣被裁切：根因是 `.lyrics-candidates`（及外層 `.now-playing-lyrics`）為了讓候選清單在封面等高面板內捲動而 `overflow: hidden`，搜尋框貼齊面板左緣，`:focus-visible` 外框為 2px + `outline-offset: 2px` 向外突出 4px 而被裁掉。修正為面板內焦點外框改畫在元件內側（`outline-offset: -2px`，搜尋框另以 `border-color: var(--accent)` 強調），搜尋框、搜尋／關閉與「選擇」按鈕皆適用；不移除 overflow 以免破壞清單捲動。`tests/lyrics-view.playwright.js` 新增焦點外框不得超出任何 overflow 祖先的斷言（修正前失敗：外框 left 16 < 裁切 left 20），並修正 `ab1cbd0` 遺留的 `assert.match` 缺失與累計 `searchCount` 斷言。
+
 - 底欄播放／暫停鍵改為空心樣式：移除實心 accent 圓底、陰影與 hover 放大，改與其他底欄控制相同的透明底、`--text` 線條圖示、8px 圓角與 hover 淡底／`--accent-text`；Tabler `IconPlayerPlay`／`IconPlayerPause` stroke 由 1.9 改為與其他控制一致的 1.7，36px 點擊區與 21px 圖示保留作為主要控制的尺寸差異。
+
 - Now Playing dock 時間軸回歸已修正：`dd0453e` 誤把 `.progress-slider` 與 `.volume-state { display: none }` 併在同一選擇器，導致進度條消失、時間標籤落到錯誤欄位；已恢復 `.progress-slider, .volume-slider` 共用樣式，並另以 `.volume-state { display: none }` 隱藏音量文字。封面／歌詞垂直置中強化（artwork `place-content/place-items` + 對稱 overlay padding；lyrics-view 高度僅在 `--np-cover-height` 有值時鎖定）。
+
 - 歌詞候選面板只保留搜尋框與右側「搜尋」「關閉」「移除歌詞」。沒有「選擇歌詞」標題，也沒有「再次搜尋」。搜尋框空白時用目前曲目資訊再搜；有文字時該文字覆寫 Provider 關鍵字。每列「選擇」仍在，樣式與「搜尋」「關閉」「移除歌詞」相同，不套用主題色。候選清單曲名為標題階 16px、演出者／預覽／說明為內文 13px。「關閉」只收起面板並保留已套用歌詞（即使面板不是由 selectionMode 打開）。「移除歌詞」呼叫 `lyrics_clear_track` 解除曲目關聯（不刪本機 sidecar／內嵌檔）並關閉面板。手動搜尋會把同資料夾同名 LRC（`local:sidecar`）與音訊檔內嵌歌詞（`local:embedded`）放在線上候選之前；選取會重讀該來源並以手動指定寫入 `track_lyrics`，之後優先於另一份本機來源與自動快取。Windows 播放載入仍維持 sidecar 優先於內嵌。Android 候選清單尚未列出這兩種本機來源。
+
 - 「設定 → 歌詞」與快速設定可開啟簡體轉繁體。播放時以 opencc-js 在記憶體轉換整首歌的原文與譯文（`STCharacters`、`STPhrases`、`TWVariants`），不載入 `TWPhrases`，不改用詞，不把結果寫回歌詞檔或 SQLite。羅馬拼音不轉換。授權全文在 `licenses/opencc-js-MIT.txt` 與 `licenses/opencc-data-Apache-2.0.txt`。
+
 - 播放頁快速設定與「設定」共用同一組分頁與控件。抽屜只有一層底色（與文字相反的 `--text-inverse`，不再另加內層墊底區塊），透明度 `quickSettingsOpacityPercent`（預設 70，0–100）與模糊 `quickSettingsBlurPx`（預設 12，0–50，`backdrop-filter`）在「設定 → 播放頁」調整。「設定 → 播放頁」與快速設定不再顯示「播放頁工具列／底部播放控制」外觀預覽；封面背景模糊與「封面背景透明度」、主介面「背景透明度」皆以圖片 opacity 疊在主題底色上。「設定 → 快捷鍵」可綁定鍵盤、滾輪、滑鼠側鍵與手柄按鈕、左右搖桿四個方向（預設不綁任何手柄鍵或搖桿）。預設：全螢幕 F11、播放／暫停空白鍵、後退／前進 5 秒為左右方向鍵與滾輪（向上前進、向下後退）、上一首／下一首為 Page Up／Page Down 與滑鼠上頁／下頁。輸入文字、按鈕或可捲動清單上的滾輪不觸發。
+
 - 歌詞外觀文字效果三選一（陰影／描邊／關閉），欄位 `textEffect`（`shadow`｜`stroke`｜`none`，預設陰影）；設定頁與快速設定歌詞區以同一列三個短按鈕切換（無效果說明），並與其他歌詞偏好一併持久化；套用至原文與譯文／羅馬拼音。
-- Windows Release：應用程式圖示仍是 `icon/SilverWolfIcon.png`，已改回完整原圖、不再放大裁切。工作列大圖示在顯示視窗前從 resource 32512 設定，避免沿用舊的殼層快取。QQ 搜尋已改用目前會回歌曲的 desktop client 參數。`npm run release:windows` 已完成建置、原子替換與固定輸出核對；`release/moemusicplayer.exe` 大小為 23,388,160 bytes，SHA-256 `6F90D61BB8908AF58E6D7261262556387A9ABAB0DA88AFF906165B52BA492284`，與 `target/release/moemusicplayer.exe` 一致。主介面與正在播放封面背景皆改以圖片 opacity（「背景透明度」／「封面背景透明度」）疊在主題底色上，不再用頁面色遮罩；舊 `mainBackgroundBrightnessPercent`／`backgroundBrightnessPercent` 可讀入。文字／面板對比依「底色＋圖片 opacity」的全域平均亮度分別為主介面與播放頁取樣（`--page` 仍為主題底色）；無圖或透明度 0 時回落主題底色。全域 `.soft-button` 供播放頁頂列與音樂來源選擇鈕共用；同步摘要不重複。若舊執行檔仍被播放中程式鎖住，替換後的 `.bak` 會保留。半透明覆蓋用對比色（黑底為白、白底為黑）。側欄選中 10%，游標碰到 5%。列表游標碰到 5%，選中或正在播放 10%，兩者同時仍是 10%，不混入強調色。列表標題在捲動區外且為 15% 對比色半透明，資料列不會疊到標題下。側欄播放清單只在播放清單頁的選中項鋪白色。頂欄只顯示中文頁名與桌面服務狀態，沒有 M 頭像；曲庫／播放清單／播放佇列在標題下方以小字顯示「n 首曲目」，列表底部不再顯示範圍摘要；列表頁只保留列表本身一條捲軸。同步狀態只在「設定 → 音樂來源」，視窗標題為編譯日期。曲庫、播放清單與播放佇列點擊列上任一處都會立刻開始播放，暫停或 Ready 也不維持不播放；播放佇列只移動游標，不重建佇列。未對應的播放清單項目點擊不會播放。上一首／下一首在暫停時仍保持不播放。播放頁頂欄演出者、專輯與曲名固定為標題 16px。介面字級為四階：說明 12px、內文 13px、標題 16px、頁面標題 20px。曲庫列表各欄含曲名都用內文 13px，曲名為正常字重。音訊格式欄收成可容納「FLAC．192 kHz．24 bit」。列表省略符號為 `···`。欄位頂欄為 15% 對比色半透明。DSEE HX 對 48 kHz 以下的雙聲道一律處理，不看位深。面板右側只有「搜尋」「關閉」「移除歌詞」；空白搜尋用目前曲目，關閉只收起面板，移除歌詞解除關聯並關閉。同名 LRC 與內嵌歌詞會出現在候選清單，清單曲名為標題階 16px、其餘文字為內文 13px。使用者需關閉舊程式後重開此 EXE。Android 候選清單尚未列出這兩種本機來源。舊執行檔若仍被播放中的程式鎖住，替換後的 `.bak` 會保留。
+
+- Windows Release：應用程式圖示仍是 `icon/SilverWolfIcon.png`，已改回完整原圖、不再放大裁切。工作列大圖示在顯示視窗前從 resource 32512 設定，避免沿用舊的殼層快取。QQ 搜尋已改用目前會回歌曲的 desktop client 參數。`npm run release:windows` 已完成建置、原子替換與固定輸出核對；`release/moemusicplayer.exe` 大小為 23,388,160 bytes，SHA-256 `83FA2592E93ED18A15FC101B19539E8B15283728B055A43AB6897EBF24DF0091`，與 `target/release/moemusicplayer.exe` 一致。主介面與正在播放封面背景皆改以圖片 opacity（「背景透明度」／「封面背景透明度」）疊在主題底色上，不再用頁面色遮罩；舊 `mainBackgroundBrightnessPercent`／`backgroundBrightnessPercent` 可讀入。文字／面板對比依「底色＋圖片 opacity」的全域平均亮度分別為主介面與播放頁取樣（`--page` 仍為主題底色）；無圖或透明度 0 時回落主題底色。全域 `.soft-button` 供播放頁頂列與音樂來源選擇鈕共用；同步摘要不重複。若舊執行檔仍被播放中程式鎖住，替換後的 `.bak` 會保留。半透明覆蓋用對比色（黑底為白、白底為黑）。側欄選中 10%，游標碰到 5%。列表游標碰到 5%，選中或正在播放 10%，兩者同時仍是 10%，不混入強調色。列表標題在捲動區外且為 15% 對比色半透明，資料列不會疊到標題下。側欄播放清單只在播放清單頁的選中項鋪白色。頂欄只顯示中文頁名與桌面服務狀態，沒有 M 頭像；曲庫／播放清單／播放佇列在標題下方以小字顯示「n 首曲目」，列表底部不再顯示範圍摘要；列表頁只保留列表本身一條捲軸。同步狀態只在「設定 → 音樂來源」，視窗標題為編譯日期。曲庫、播放清單與播放佇列點擊列上任一處都會立刻開始播放，暫停或 Ready 也不維持不播放；播放佇列只移動游標，不重建佇列。未對應的播放清單項目點擊不會播放。上一首／下一首在暫停時仍保持不播放。播放頁頂欄演出者、專輯與曲名固定為標題 16px。介面字級為四階：說明 12px、內文 13px、標題 16px、頁面標題 20px。曲庫列表各欄含曲名都用內文 13px，曲名為正常字重。音訊格式欄收成可容納「FLAC．192 kHz．24 bit」。列表省略符號為 `···`。欄位頂欄為 15% 對比色半透明。DSEE HX 對 48 kHz 以下的雙聲道一律處理，不看位深。面板右側只有「搜尋」「關閉」「移除歌詞」；空白搜尋用目前曲目，關閉只收起面板，移除歌詞解除關聯並關閉。同名 LRC 與內嵌歌詞會出現在候選清單，清單曲名為標題階 16px、其餘文字為內文 13px。使用者需關閉舊程式後重開此 EXE。Android 候選清單尚未列出這兩種本機來源。舊執行檔若仍被播放中的程式鎖住，替換後的 `.bak` 會保留。
+
 - 封面與歌詞外層 `.now-playing-card` 半透明白框／淡底已移除（border/background 透明），A/B 僅保留分欄與間距。
+
 - 正在播放曲目的「播放次數」每秒依 in-memory 聆聽進度更新一次（base `playedMs` + 播放中自然 position 前進），不重查整庫；僅目前曲目受影響。Now Playing 頂列與曲庫／播放清單／佇列中可見的目前列同步覆寫顯示。
+
 - 同時間戳多行 LRC 已改為主文／譯文／羅馬拼音合併（見產品需求「同時間戳多行 LRC」）；手動指定歌詞改為優先於本機 sidecar／內嵌歌詞，`lyrics_get_track`／`lyrics_search` 初始載入與 `lyrics_clear_track` 後重載共用 `load_track_result_with_context` 的此優先序。Rust 測試：player-core lyrics 17/17（含 `[00:13.64]二番なんて望んでない`／`[00:13.64]才不稀罕當第二呢` 範例、三行角色、第四行忽略、非相鄰同時間戳、空白行、外部 tlyric 只補缺）、Windows platform lyrics 4/4、Tauri lyrics 27/27（含 Windows sidecar 同時間戳譯文、自動快取不遮蔽本機、手動指定優先於 sidecar、清除後回落本機、舊快取讀取折疊）。正式 Tauri 視窗中手動指定後切歌再回來的實際行為仍待人工驗收。
 
 ## 工作方式與下一步
@@ -202,4 +236,3 @@
 5. 核心穩定後評估無縫播放、進階音訊裝置、DSP/EQ、遠端曲庫/同步與插件；Phase 1 不先投入大量視覺特效。
 
 目前可重現的驗證命令為 `npm run check`、`npm run build`、`node --test`、`node node_modules/vite/bin/vite.js build --config vite.now-playing-layout-harness.config.ts`（重建布局 harness）與 `node node_modules/vite/bin/vite.js build --config vite.volume-slider-harness.config.ts`（重建實際 App harness）、`playwright-cli -s=now-playing-layout open --browser msedge http://127.0.0.1:4174/tests/now-playing-layout-harness.html`、`playwright-cli -s=now-playing-layout run-code --filename=tests/now-playing-layout.playwright.js`、`node node_modules/vite/bin/vite.js preview --config vite.volume-slider-harness.config.ts --host 127.0.0.1 --port 1453 --strictPort`（服務建置後的實際 App harness）、`playwright-cli -s=now-playing-overlay open --browser msedge http://127.0.0.1:1453/tests/volume-slider-harness.html`、`playwright-cli -s=now-playing-overlay run-code --filename=tests/now-playing-overlay.playwright.js`、`playwright-cli -s=main-chrome open --browser msedge http://127.0.0.1:1453/tests/volume-slider-harness.html`、`playwright-cli -s=main-chrome run-code --filename=tests/main-chrome.playwright.js`、`playwright-cli -s=now-playing-appearance run-code --filename=tests/now-playing-appearance.playwright.js`、`npm exec vite -- --host 127.0.0.1 --port 1450 --strictPort`（LyricsView harness 開發伺服器）、`playwright-cli -s=lyrics-view open --browser=msedge http://127.0.0.1:1450/tests/lyrics-view-harness.html` 與 `playwright-cli -s=lyrics-view run-code --filename=tests/lyrics-view.playwright.js`、`python -X utf8 tests/volume-slider-dom.py`、`cargo check -p moemusicplayer --locked`、`cargo test --workspace --locked --offline`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all -- --check` 與 `npm run tauri -- build --ci`。最新 `npm run check` 0 errors／warnings、Node 112/112 通過；後端歌詞設定驗證 settings 26/26 與嚴格 Tauri Clippy 通過；Headless Microsoft Edge Playwright 的 Now Playing A/B 12 尺寸幾何、三種來源比例各於三種 viewport 的 A/B 貼邊測試與實際 `App.svelte` overlay 四頁往返、四行曲目資訊、Hi-Res、兩種返回及曲庫列表捲動保留均通過；新增右側快速設定 drawer Edge 測試驗證 A/B、背景模糊與句間距 JSON 保存、譯文開關、焦點圈限／Escape 還焦、modal inert 與不重載曲目／歌詞；3840×2160、1920×1080、1366×768、360×800 的實際 App 測試確認導覽、wheel 與底部 overscroll 只改抽屜 scrollTop，頁面／overlay／封面／歌詞／dock 幾何不變，標頭、導覽列與 dock 保持可見。LyricsView Edge 測試驗證自然一至兩行測量、寬度變更回算、缺少輔助文字不增高、Fenwick prefix/spacer 同步且 timed DOM 最多 41 列；Edge 驗證 viewport 邊界漸層、第一／末句置中、無歌詞分隔線、正常 cue smooth scroll 中途位置、250 ms 同 cue 更新不重啟動畫、快速 cue 以最新目標取代、reduced-motion 即時定位，以及 360×800 下候選區 max-height 400 px。截圖證據為 `target/lyrics-spatial-fade.png`；Now Playing 其他截圖包括 `target/now-playing-quick-settings-desktop.png`、`target/now-playing-quick-settings-narrow.png`、`target/now-playing-layout-a-1920x1080.png`、`target/now-playing-layout-b-1366x768.png`、`target/lyrics-line-gap-settings.png` 與 `target/lyrics-transparent-row-gap.png`。真實 Tauri WebView 仍待人工驗收。最新完整 workspace Rust 測試為 326 passed、0 failed、6 ignored（Tauri 122 passed／2 ignored、Windows audio lib 51 passed／2 ignored、音訊整合 4 passed／1 ignored、SMTC 3 passed、Core 56 passed、DB 51 passed／1 ignored、Windows platform 30 passed、Android plugin 9 passed）。離線還原測試先以 2 秒截止時間等待 worker 結束 Initializing，再執行 restore，保持 `empty`、錯誤與 checkpoint 保存的精確斷言；完整 suite 已通過。Node 112/112、`npm run check` 0 errors／warnings；Windows `npm run release:windows` 已完成建置、原子替換與固定輸出核對；大小與 SHA-256 見「Windows Release」現況。曲庫／播放清單／播放佇列列表頁單捲軸與頂欄「n 首曲目」已發布。本輪 portable path 修改後的 Android target check 未通過：環境缺少 `aarch64-linux-android-clang`，在 `ring` 編譯時停止。應用程式圖示來源 PNG 已覆寫 Android launcher mipmap，但未重打包 APK。先前 Android ARM64 target cargo check、`cargo clippy -p moemusicplayer --target aarch64-linux-android --locked -- -D warnings`、actor integration 5/5、protocol 6/6、artwork 3/3、playlist sync 11/11 通過；固定輸出 `release/moemusicplayer-android-arm64-debug.apk` 的 SHA-256 與建置產物核對相符，`apksigner` v2 及 16 KiB `zipalign` 驗證通過。NX809J 已安裝並啟動 APK，曲庫可見 207 首且封面／歌詞畫面可呈現；實際播放、背景控制、來源存取與歌詞行為仍待人工驗收，一個文件資料夾來源的暫不可用錯誤待確認。歌詞服務 fixture/IPC/SQLite 測試確認本機優先、手動與自動快取優先序、匹配門檻、逐時間戳輔助行、YRC/QRC 原始資料、取消及 response/query 數量界限；provider 測試不連真實端點。正式 Tauri WebView、實際 NetEase/QQ endpoint 行為與 Windows 硬體媒體鍵仍待驗收；Windows SMTC 隱藏 HWND 測試已讀回有效 PNG stream 並確認缺圖清除，ArtworkPump 在 Pending 時保留舊 metadata，Ready 時同步發布新 metadata／封面或缺圖狀態；Tauri focused system-media 7/7、Windows audio SMTC integration 3/3 通過。使用者已人工確認 SMTC 切歌封面更新、重啟恢復佇列／曲目／位置與 AAC/M4A 實際發聲正常；本次執行檔 hash 未記錄，這些結果不推廣至所有格式或其他 SMTC 操作。Android Media3 playback 已接線，固定 ARM64 APK 已安裝並啟動；曲庫顯示 207 首且封面／歌詞畫面可呈現。實際播放、背景控制、來源存取與歌詞行為尚待人工驗收。
-
