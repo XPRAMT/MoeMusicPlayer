@@ -7,6 +7,15 @@
 )
 
 $ErrorActionPreference = 'Stop'
+function Get-PackageSha256([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try { return [System.BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+        finally { $sha256.Dispose() }
+    }
+    finally { $stream.Dispose() }
+}
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($Executable)) { $Executable = Join-Path $repoRoot 'release\moemusicplayer.exe' }
 if ([string]::IsNullOrWhiteSpace($Helper)) { $Helper = Join-Path $repoRoot 'release\moemusicplayer-updater.exe' }
@@ -56,12 +65,12 @@ $manifest = [ordered]@{
     architecture = 'windows-x86_64'
     executable = [ordered]@{
         name = 'moemusicplayer.exe'
-        sha256 = (Get-FileHash -LiteralPath $Executable -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = Get-PackageSha256 -Path $Executable
         size = (Get-Item -LiteralPath $Executable).Length
     }
     helper = [ordered]@{
         name = 'moemusicplayer-updater.exe'
-        sha256 = (Get-FileHash -LiteralPath $Helper -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = Get-PackageSha256 -Path $Helper
         size = (Get-Item -LiteralPath $Helper).Length
     }
 }
@@ -88,7 +97,7 @@ try {
 finally { $zipFile.Dispose() }
 Write-Output "Package: $zipPath"
 Write-Output "Build: $($identity.buildTimestampUtc)@$($identity.gitCommit)"
-Write-Output "Manifest SHA256: $((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant())"
+Write-Output "Manifest SHA256: $(Get-PackageSha256 -Path $manifestPath)"
 if ($Upload) {
     if ([string]::IsNullOrWhiteSpace($ReleaseTag)) { throw '-ReleaseTag is required for explicit upload to an existing release.' }
     $ghCommands = @(Get-Command gh -CommandType Application -ErrorAction Stop)
