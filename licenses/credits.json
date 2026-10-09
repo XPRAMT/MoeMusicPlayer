@@ -1,0 +1,170 @@
+[
+  {
+    "name": "Tauri",
+    "version": "2.12.0",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/tauri-apps/tauri",
+    "purpose": "桌面與行動應用框架"
+  },
+  {
+    "name": "Svelte",
+    "version": "5.57.1",
+    "license": "MIT",
+    "repositoryUrl": "https://github.com/sveltejs/svelte",
+    "purpose": "使用者介面"
+  },
+  {
+    "name": "Tabler Icons",
+    "version": "3.48.0",
+    "license": "MIT",
+    "repositoryUrl": "https://github.com/tabler/tabler-icons",
+    "purpose": "介面圖示"
+  },
+  {
+    "name": "opencc-js",
+    "version": "1.4.2",
+    "license": "MIT AND Apache-2.0",
+    "repositoryUrl": "https://github.com/nk2028/opencc-js",
+    "purpose": "歌詞簡體轉繁體字典"
+  },
+  {
+    "name": "Rodio",
+    "version": "0.22.2",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/RustAudio/rodio",
+    "purpose": "Windows 音訊播放"
+  },
+  {
+    "name": "Symphonia",
+    "version": "0.5.5",
+    "license": "MPL-2.0",
+    "repositoryUrl": "https://github.com/pdeljanov/Symphonia",
+    "purpose": "音訊解碼"
+  },
+  {
+    "name": "rubato",
+    "version": "5.0.1",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/HEnquist/rubato",
+    "purpose": "高品質取樣率轉換"
+  },
+  {
+    "name": "Lofty",
+    "version": "0.25.4",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/Serial-ATA/lofty-rs",
+    "purpose": "音樂標籤與內嵌封面"
+  },
+  {
+    "name": "rusqlite",
+    "version": "0.40.2",
+    "license": "MIT",
+    "repositoryUrl": "https://github.com/rusqlite/rusqlite",
+    "purpose": "SQLite 資料存取"
+  },
+  {
+    "name": "serde",
+    "version": "1.0.229",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/serde-rs/serde",
+    "purpose": "資料序列化"
+  },
+  {
+    "name": "serde_json",
+    "version": "1.0.151",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/serde-rs/json",
+    "purpose": "JSON 設定與通訊"
+  },
+  {
+    "name": "reqwest",
+    "version": "0.12.28",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/seanmonstar/reqwest",
+    "purpose": "HTTPS 歌詞與更新下載"
+  },
+  {
+    "name": "tokio",
+    "version": "1.53.1",
+    "license": "MIT",
+    "repositoryUrl": "https://github.com/tokio-rs/tokio",
+    "purpose": "非同步工作"
+  },
+  {
+    "name": "sha2",
+    "version": "0.10.9",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/RustCrypto/hashes",
+    "purpose": "更新檔案 SHA-256 驗證"
+  },
+  {
+    "name": "uuid",
+    "version": "1.26.1",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/uuid-rs/uuid",
+    "purpose": "穩定資料識別"
+  },
+  {
+    "name": "windows-rs",
+    "version": "0.62.2",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/microsoft/windows-rs",
+    "purpose": "Windows 平台介面"
+  },
+  {
+    "name": "AndroidX Media3",
+    "version": "1.11.1",
+    "license": "Apache-2.0",
+    "repositoryUrl": "https://github.com/androidx/media",
+    "purpose": "Android 音訊與媒體工作階段"
+  },
+  {
+    "name": "AndroidX",
+    "version": "Activity 1.10.1; WebKit 1.14.0; AppCompat 1.7.1; Lifecycle 2.10.0",
+    "license": "Apache-2.0",
+    "repositoryUrl": "https://github.com/androidx/androidx",
+    "purpose": "Android 活動與背景服務"
+  },
+  {
+    "name": "Material Components for Android",
+    "version": "1.12.0",
+    "license": "Apache-2.0",
+    "repositoryUrl": "https://github.com/material-components/material-components-android",
+    "purpose": "Android 系統介面元件"
+  },
+  {
+    "name": "CPAL",
+    "version": "0.17.3",
+    "license": "Apache-2.0",
+    "repositoryUrl": "https://github.com/RustAudio/cpal",
+    "purpose": "Windows 音訊輸出裝置與串流"
+  },
+  {
+    "name": "SQLite",
+    "version": "3.53.2 (libsqlite3-sys 0.38.2)",
+    "license": "Public domain",
+    "repositoryUrl": "https://sqlite.org",
+    "purpose": "曲庫、播放清單與播放狀態資料庫"
+  },
+  {
+    "name": "rustls",
+    "version": "0.23.41",
+    "license": "Apache-2.0 OR ISC OR MIT",
+    "repositoryUrl": "https://github.com/rustls/rustls",
+    "purpose": "HTTPS 安全連線"
+  },
+  {
+    "name": "Vite",
+    "version": "8.3.1",
+    "license": "MIT",
+    "repositoryUrl": "https://github.com/vitejs/vite",
+    "purpose": "前端開發與建置"
+  },
+  {
+    "name": "TypeScript",
+    "version": "6.0.3",
+    "license": "Apache-2.0",
+    "repositoryUrl": "https://github.com/microsoft/TypeScript",
+    "purpose": "前端型別與程式編譯"
+  }
+]

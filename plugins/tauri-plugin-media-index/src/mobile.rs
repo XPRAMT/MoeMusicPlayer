@@ -37,6 +37,11 @@ use crate::{
 pub(crate) struct PlatformMediaIndex<R: Runtime>(Arc<PluginHandle<R>>);
 
 impl<R: Runtime> PlatformMediaIndex<R> {
+    pub(crate) fn open_official_url(&self, url: &str) -> Result<()> {
+        self.0
+            .run_mobile_plugin::<serde_json::Value>("openOfficialUrl", json!({ "url": url }))?;
+        Ok(())
+    }
     pub(crate) fn init<C: DeserializeOwned>(
         _app: &AppHandle<R>,
         api: PluginApi<R, C>,

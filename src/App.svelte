@@ -109,6 +109,10 @@
   import LyricsView from './lib/LyricsView.svelte';
   import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
   import WindowTitlebar from './lib/WindowTitlebar.svelte';
+  import AboutPage from './lib/AboutPage.svelte';
+  import UpdateCenter from './lib/UpdateCenter.svelte';
+  import { EMPTY_UPDATE_STATE } from './lib/update-controller';
+  import type { UpdateState } from './lib/ipc';
   import { detectArtworkMimeType } from './lib/active-track-artwork';
   import { APP_WINDOW_TITLE } from './lib/app-version';
   import brandIcon from '../icon/SilverWolfIcon.png';
@@ -136,7 +140,7 @@
   };
 
   type View = 'library' | 'playlists' | 'queue' | 'settings';
-  type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'playback' | 'shortcuts' | 'sources';
+  type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'playback' | 'shortcuts' | 'sources' | 'about';
   type SyncProgressViewState = {
     runId: string;
     sourceCount: number;
@@ -168,6 +172,8 @@
   let dockArtworkButton = $state<HTMLButtonElement | undefined>(undefined);
   let librarySearchInput = $state<HTMLInputElement | undefined>(undefined);
   let settingsSection = $state<SettingsSection>('appearance');
+  let updateState = $state<UpdateState>({ ...EMPTY_UPDATE_STATE });
+  let updateCenter: UpdateCenter | undefined;
   let shortcutSettings = $state<ShortcutSettings>(defaultShortcutSettings());
   let capturingShortcut = $state<ShortcutAction | null>(null);
   let trackColumnPreferences = $state<TrackListColumnPreference[]>(
@@ -931,6 +937,7 @@
   }
 
   function handleShortcutKeydown(event: KeyboardEvent): void {
+    if (document.querySelector('.update-dialog[open]')) return;
     if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
     if (capturingShortcut) {
       event.preventDefault();
@@ -950,6 +957,7 @@
   }
 
   function handleShortcutMouseDown(event: MouseEvent): void {
+    if (document.querySelector('.update-dialog[open]')) return;
     const code = event.button === 3 ? 'back' : event.button === 4 ? 'forward' : null;
     if (!code) return;
     if (capturingShortcut) {
@@ -967,6 +975,10 @@
   let gamepadFrame = 0;
 
   function pollGamepads(): void {
+    if (document.querySelector('.update-dialog[open]')) {
+      gamepadFrame = requestAnimationFrame(pollGamepads);
+      return;
+    }
     const pads = navigator.getGamepads?.() ?? [];
     let captured = false;
     for (const pad of pads) {
@@ -1016,6 +1028,7 @@
   }
 
   function handleShortcutWheel(event: WheelEvent): void {
+    if (document.querySelector('.update-dialog[open]')) return;
     if (event.deltaY === 0) return;
     const code = event.deltaY < 0 ? 'wheelUp' : 'wheelDown';
     if (capturingShortcut) {
@@ -1777,6 +1790,7 @@
   }
 
   function handleQuickSettingsKeydown(event: KeyboardEvent): void {
+    if (document.querySelector('.update-dialog[open]')) return;
     if (!isQuickSettingsOpen || !quickSettingsDialog) return;
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -2072,6 +2086,15 @@
                 aria-controls="{scope}sources-panel"
                 onclick={() => selectSettingsSection('sources')}
               >音樂來源</button>
+              <button
+                id="{scope}about-tab"
+                class="soft-button settings-tab"
+                type="button"
+                role="tab"
+                aria-selected={settingsSection === 'about'}
+                aria-controls="{scope}about-panel"
+                onclick={() => selectSettingsSection('about')}
+              >關於</button>
             </div>
 {/snippet}
 
@@ -2319,6 +2342,10 @@
                     </div>
                   {/each}
                 </div>
+              </div>
+            {:else if settingsSection === 'about'}
+              <div id="{scope}about-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}about-tab" tabindex="0">
+                <AboutPage idPrefix={scope} platform={capabilities?.platform} {updateState} checkUpdate={() => updateCenter?.check()} showUpdate={() => updateCenter?.show()} />
               </div>
             {:else}
               <div id="{scope}sources-panel" class="settings-source-panel" role="tabpanel" aria-labelledby="{scope}sources-tab" tabindex="0">
@@ -3044,3 +3071,5 @@
     <div class="dock-spacer" aria-hidden="true"></div>
   </footer>
 </div>
+
+<UpdateCenter bind:this={updateCenter} enabled={capabilities?.platform === 'windows'} bind:updateState />

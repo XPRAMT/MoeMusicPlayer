@@ -91,6 +91,12 @@ impl DatabaseWorkGate {
         }
         true
     }
+
+    #[cfg(any(target_os = "windows", test))]
+    fn reopen(&self) {
+        lock_unpoisoned(&self.inner.state).accepting_work = true;
+        self.inner.changed.notify_all();
+    }
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -168,6 +174,39 @@ pub(crate) fn finish_shutdown<T>(
     Ok(result)
 }
 
+/// Updates must not grant an executable replacement permit when persistence
+/// fails. Unlike normal close, a failed finalizer reopens both admission and
+/// the coordinator so the running application can continue.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn finish_update_shutdown(
+    coordinator: &ShutdownCoordinator,
+    gate: &DatabaseWorkGate,
+    timeout: Duration,
+    finalize: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if !gate.close_and_wait(timeout) {
+        coordinator.reopen();
+        return Err("曲庫工作未能及時完成，已取消更新。".into());
+    }
+    match finalize() {
+        Ok(()) => {
+            coordinator.mark_ready();
+            Ok(())
+        }
+        Err(error) => {
+            gate.reopen();
+            coordinator.reopen();
+            Err(error)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn abort_update_shutdown(coordinator: &ShutdownCoordinator, gate: &DatabaseWorkGate) {
+    gate.reopen();
+    coordinator.reopen();
+}
+
 impl Drop for DatabaseWorkGuard {
     fn drop(&mut self) {
         let mut state = lock_unpoisoned(&self.inner.state);
@@ -199,6 +238,27 @@ mod tests {
     };
 
     use player_db::{Database, ThemePreferences};
+
+    #[test]
+    fn update_checkpoint_failure_reopens_coordinator_and_work_gate() {
+        let coordinator = ShutdownCoordinator::default();
+        let gate = DatabaseWorkGate::default();
+        assert_eq!(coordinator.request(), ShutdownRequest::Start);
+        assert!(super::finish_update_shutdown(
+            &coordinator,
+            &gate,
+            Duration::from_secs(1),
+            || Err("save failed".into())
+        )
+        .is_err());
+        assert!(gate.try_enter().is_some());
+        assert_eq!(coordinator.request(), ShutdownRequest::Start);
+        assert!(
+            super::finish_update_shutdown(&coordinator, &gate, Duration::from_secs(1), || Ok(()))
+                .is_ok()
+        );
+        assert_eq!(coordinator.request(), ShutdownRequest::Ready);
+    }
 
     struct TestDirectory(PathBuf);
 

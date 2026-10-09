@@ -44,6 +44,7 @@ use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImpo
 #[cfg(target_os = "windows")]
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
+pub mod updater;
 use settings::{
     clamp_window_geometry_to_monitors, AppSettings, LyricsPreferences,
     NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode, ResamplingMode, SettingsStore,
@@ -5592,6 +5593,94 @@ fn apply_saved_window_geometry(window: &WebviewWindow, geometry: WindowGeometry)
 }
 
 #[cfg(target_os = "windows")]
+pub(crate) fn apply_downloaded_update(
+    app: &AppHandle,
+    pending: &updater::PendingUpdate,
+) -> Result<updater::UpdateState, String> {
+    // Validate executable/helper and paths while playback is still running.
+    updater::validate_for_apply(pending)?;
+    let state = app.state::<AppState>();
+    if state.shutdown.request() != database_lifecycle::ShutdownRequest::Start {
+        return Err("程式正在關閉，無法開始更新。".into());
+    }
+    let was_playing = state
+        .playback
+        .as_ref()
+        .is_some_and(|playback| playback.player.snapshot().state == AudioPlaybackState::Playing);
+    let result = database_lifecycle::finish_update_shutdown(
+        &state.shutdown,
+        &state.database_work,
+        Duration::from_secs(30),
+        || {
+            if let (Some(database), Some(playback)) =
+                (state.database.as_ref(), state.playback.as_ref())
+            {
+                let _command_gate = playback
+                    .command_gate
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let has_track = playback
+                    .current_track
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some();
+                if has_track || !playback.player.playback_accounting_checkpoints().is_empty() {
+                    playback
+                        .player
+                        .request_pause()
+                        .and_then(|ticket| ticket.wait(Duration::from_secs(2)))
+                        .map_err(|error| format!("無法安全暫停播放，已取消更新：{error}"))?;
+                    playback
+                        .player
+                        .request_playback_accounting_checkpoint()
+                        .and_then(|ticket| ticket.wait(Duration::from_secs(2)))
+                        .map_err(|error| format!("無法取得播放統計尾段，已取消更新：{error}"))?;
+                    playback.player.request_playback_accounting_flush();
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while !playback.player.playback_accounting_checkpoints().is_empty() {
+                        if Instant::now() >= deadline {
+                            return Err("播放時長尚未保存，已取消更新；程式仍可繼續使用。".into());
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }
+                checkpoint_playback_position(database, playback, true)?;
+                database
+                    .checkpoint_wal()
+                    .map_err(|error| format!("SQLite checkpoint 失敗，已取消更新：{error}"))?;
+            } else if let Some(database) = state.database.as_ref() {
+                database
+                    .checkpoint_wal()
+                    .map_err(|error| error.to_string())?;
+            }
+            // Do not stop SMTC/the statistics collector here: a failed strict save
+            // must leave the existing services usable. Paused/ACKed counters are
+            // already durable, so no unbounded collector join is needed for update.
+            Ok(())
+        },
+    );
+    let result = result.and_then(|()| {
+        let plan = updater::launch_helper(pending)?;
+        updater::grant_permit(&plan)
+    });
+    if let Err(error) = result {
+        database_lifecycle::abort_update_shutdown(&state.shutdown, &state.database_work);
+        if was_playing {
+            if let Some(playback) = state.playback.as_ref() {
+                let _ = playback.player.request_play();
+            }
+        }
+        return Err(error);
+    }
+    let service = app.state::<updater::UpdateService>();
+    let result = updater::publish(app, &service, |state| state.status = "restarting".into());
+    // ExitRequested observes READY and allows normal process teardown. The
+    // helper independently waits for this exact process object before writing.
+    app.exit(0);
+    Ok(result)
+}
+
+#[cfg(target_os = "windows")]
 fn schedule_database_shutdown(app: AppHandle, request: database_lifecycle::ShutdownRequest) {
     if request != database_lifecycle::ShutdownRequest::Start {
         return;
@@ -5910,6 +5999,12 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            updater::about_get_info,
+            updater::update_get_state,
+            updater::update_check,
+            updater::update_download,
+            updater::update_ignore,
+            updater::app_open_external_url,
             settings_get_recovery_warning,
             settings_source_registry_authoritative,
             settings_confirm_source_registry,
@@ -6086,6 +6181,7 @@ pub fn run() {
                     ),
                 ),
             };
+            app.manage(updater::UpdateService::default());
             app.manage(AppState {
                 database,
                 database_path: stored_path.clone(),

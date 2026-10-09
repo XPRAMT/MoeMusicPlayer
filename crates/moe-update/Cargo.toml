@@ -1,0 +1,27 @@
+[package]
+name = "moemusicplayer-updater"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+
+[lib]
+name = "moe_update"
+
+[[bin]]
+name = "moemusicplayer-updater"
+path = "src/main.rs"
+
+[features]
+test-fixtures = []
+
+[[bin]]
+name = "updater-test-fixture"
+path = "tests/fixtures/process.rs"
+required-features = ["test-fixtures"]
+test = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"

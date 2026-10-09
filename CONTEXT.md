@@ -54,6 +54,16 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **System media control**: Windows' operating-system-facing representation of the current playback session. It shows supported metadata and sends transport requests; the application audio backend remains authoritative for playback state.
 
+## Portable updates
+
+**Build identity（建置識別）**: Embedded UTC time with millisecond precision plus the full git commit. Display dates and package SemVer cannot order same-day builds.
+
+**Pending update（待套用更新）**: Verified application/helper bytes and their fixed target in the separate `UserData/updates` journal, applied before the database opens at the next launch.
+
+**Update permit（更新許可）**: A nonce written after strict persistence succeeds, or before database initialization at next launch. A process exit alone does not grant replacement permission.
+
+**Launch acknowledgement（啟動交接確認）**: Confirmation by the new executable before Tauri/database initialization; it does not certify later UI, audio, or migrations.
+
 ## Lyrics
 
 **Lyrics document (歌詞文件)**: One lyric text associated with a track. It may contain line timing or untimed text and may come from a local file, embedded track content, or an online provider.

@@ -33,6 +33,11 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 @InvokeArg
+class OfficialUrlArgs {
+    var url: String? = null
+}
+
+@InvokeArg
 class MediaStoreScanArgs {
     var sourceId: String? = null
     var volumeName: String? = null
@@ -103,6 +108,26 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     private val appContext = activity.applicationContext
     private val io = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "moe-media-index").apply { isDaemon = true }
+    }
+
+    @Command
+    fun openOfficialUrl(invoke: Invoke) {
+        val value = invoke.parseArgs(OfficialUrlArgs::class.java).url
+        val uri = value?.let(Uri::parse)
+        // The Rust command owns the exact official-link whitelist; the native
+        // bridge additionally rejects non-HTTPS schemes and URL credentials.
+        if (uri?.scheme != "https" || uri.host.isNullOrBlank() || uri.userInfo != null) {
+            invoke.reject("Only official HTTPS links are supported")
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+                invoke.resolve(JSObject())
+            } catch (error: Exception) {
+                invoke.reject("Could not open browser: ${error.message}")
+            }
+        }
     }
 
     @Command

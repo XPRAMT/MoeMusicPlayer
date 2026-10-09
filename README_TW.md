@@ -6,6 +6,8 @@ MoeMusicPlayer 是以本機優先為設計方向的 Windows 與 Android 音樂�
 
 ## 功能
 
+- 「設定 → 關於」顯示作者 [XPRAMT](https://github.com/XPRAMT)、含 UTC 時間的建置識別與來源提交，以及開源套件的版本、授權、用途與官方連結。
+- Windows x64 啟動時會檢查公開的 [GitHub Releases](https://github.com/XPRAMT/MoeMusicPlayer/releases)。有新版時可選「忽略」（僅此次通知）、「自動重新啟動」或「下次啟動完成更新」。後兩者都會立即下載並驗證；重新啟動會先嚴格保存播放狀態與統計再退出，下次啟動則在開啟 SQLite 前套用。更新只替換兩個應用程式執行檔，保留 `UserData`；沒有發布、不支援的建置或驗證失敗會在關於頁呈現。
 - 在「設定 → 音樂來源」以「選擇資料夾」或「選擇播放清單」加入來源並在背景增量掃描；取消不會新增來源。
 - Android 可透過 MediaStore 選擇共享音樂儲存空間，或用系統文件選擇器（SAF）選擇資料夾；播放使用 Media3，切到背景後由前景媒體服務持續播放。
 - 來源暫時不可用或掃描未完成時，保留先前已索引的曲目。
@@ -35,7 +37,9 @@ Android Media3 播放整合已完成，ARM64 APK 已安裝至 NX809J 並成功�
 
 Windows 會將設定與 SQLite 資料保存在目前執行檔旁的 `UserData` 資料夾。固定版請讓 `release/UserData/` 與 `release/moemusicplayer.exe` 放在一起；只移動執行檔會使用另一份空曲庫。Windows 不會回退使用 Roaming 或 LocalCache，也不會自動搬移不同位置的資料。Android 仍使用平台管理的 App 資料目錄。
 
-建置 Windows 執行檔請執行 `npm run release:windows`。命令一律使用 repo 的 `target` 目錄建置，不受呼叫端的 `CARGO_TARGET_DIR` 影響，產物固定在 `release/moemusicplayer.exe`。建置失敗會保留先前版本。
+建置 Windows 執行檔請執行 `npm run release:windows`。命令一律使用儲存庫的 `target` 目錄建置，不受呼叫端的 `CARGO_TARGET_DIR` 影響，產物為 `release/moemusicplayer.exe` 與 `release/moemusicplayer-updater.exe`；請將兩者與 `UserData` 放在一起。建置失敗會保留先前執行檔。可供檢查的 Release 資產（兩個執行檔、更新清單，以及只含這三個檔案的 ZIP）會放在 `release/update-assets/`；打包不會自動發布。
+
+更新器信任固定儲存庫的 HTTPS GitHub Release API：先以 GitHub 資產的 SHA-256 digest 驗證更新清單，再依清單驗證兩個下載檔案。這是 GitHub 信任範圍內的完整性驗證，並非獨立的發布者簽章；程式不會讀取本機 GitHub token。輔助程式等待確切的原程序正常退出，不會強制終止它。替換或進入資料庫前的啟動失敗會在安全時還原舊執行檔；新版仍在執行但未確認交接時，會保留新版及備份。還原不會逆轉資料庫／設定遷移，也不代表聲音或介面已通過驗收。更新資產不包含 `UserData` 或 Sony 專有濾鏡。
 
 ## 建置 Android 版
 

@@ -19,6 +19,44 @@ export interface RuntimeCapabilities {
   systemMediaControls: FeatureCapability;
 }
 
+export interface OpenSourceCredit {
+  name: string;
+  version: string;
+  license: string;
+  repositoryUrl: string;
+}
+
+export interface AboutInfo {
+  name: string;
+  author: string;
+  authorUrl: string;
+  repositoryUrl: string;
+  buildVersion: string;
+  buildTimestampUtc: string;
+  gitCommit: string;
+  architecture: string;
+  credits: OpenSourceCredit[];
+}
+
+export interface UpdateRelease {
+  buildId: string;
+  version: string;
+  publishedAt: string;
+  notes: string;
+  downloadBytes: number;
+}
+
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'ready' | 'deferred' | 'restarting' | 'unpublished' | 'unsupported' | 'error';
+  currentBuildId: string;
+  latest: UpdateRelease | null;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  error: string | null;
+}
+
+export type UpdateInstallMode = 'restartNow' | 'nextLaunch';
+
 export interface ThemePreferences {
   backgroundHex: string;
   accentHex: string;
@@ -341,6 +379,12 @@ export interface NowPlayingAppearancePreferences {
 }
 
 interface IpcContract {
+  about_get_info: { args: Record<string, never>; result: AboutInfo };
+  app_open_external_url: { args: { url: string }; result: void };
+  update_get_state: { args: Record<string, never>; result: UpdateState };
+  update_check: { args: Record<string, never>; result: UpdateState };
+  update_ignore: { args: Record<string, never>; result: UpdateState };
+  update_download: { args: { mode: UpdateInstallMode }; result: UpdateState };
   settings_get_recovery_warning: {
     args: Record<string, never>;
     result: string | null;

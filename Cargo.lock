@@ -2063,6 +2063,7 @@ dependencies = [
  "imagesize",
  "jni",
  "lofty",
+ "moemusicplayer-updater",
  "player-audio-windows",
  "player-core",
  "player-db",
@@ -2079,6 +2080,15 @@ dependencies = [
  "tokio-util",
  "uuid",
  "windows",
+]
+
+[[package]]
+name = "moemusicplayer-updater"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

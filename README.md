@@ -6,6 +6,8 @@ MoeMusicPlayer is a local-first music library for Windows and Android. User pref
 
 ## Features
 
+- **Settings → About** shows author [XPRAMT](https://github.com/XPRAMT), the UTC build identity and source commit, and acknowledgements with versions, licenses, purposes, and official links.
+- Windows x64 checks public [GitHub Releases](https://github.com/XPRAMT/MoeMusicPlayer/releases) on startup. A newer build offers **Ignore** (this notification only), **Automatically restart**, or **Complete the update on next launch**. Both update choices download and verify immediately. Restart saves playback/session/statistics strictly before exiting; next launch applies the pending update before opening SQLite. Updates replace only the two application executables and keep `UserData`. Missing releases, unsupported builds, or verification errors remain visible in About.
 - On Windows, add a folder or an M3U/M3U8 playlist file from **Settings → Music Sources** and scan in the background. Canceling the picker does not add a source.
 - On Android, select shared-audio storage through MediaStore or choose a folder with the system document picker (SAF); playback uses Media3 and continues through the foreground media service when the app is backgrounded.
 - Keep previously indexed tracks when a source is unavailable or a scan is incomplete.
@@ -35,7 +37,9 @@ Android Media3 playback integration is implemented. The ARM64 APK is installed o
 
 On Windows, the running executable stores all settings and SQLite data in a `UserData` folder beside that executable. For the fixed release build, keep `release/UserData/` beside `release/moemusicplayer.exe`; moving only the executable starts with a separate empty library. Windows does not fall back to Roaming or LocalCache and does not automatically move data between locations. Android continues to use its platform-managed app data directory.
 
-To build the Windows executable, run `npm run release:windows`. The command always builds under the repository's `target` directory, regardless of the caller's `CARGO_TARGET_DIR`, and writes the result to `release/moemusicplayer.exe`. A failed build leaves the previous executable in place.
+To build the Windows executables, run `npm run release:windows`. The command always builds under the repository's `target` directory, regardless of the caller's `CARGO_TARGET_DIR`, and writes `release/moemusicplayer.exe` and `release/moemusicplayer-updater.exe`. Keep both files beside `UserData`. A failed build leaves the previous executables in place. Reviewable Release assets (the two executables, update manifest, and a ZIP containing exactly those three files) are written to `release/update-assets/`; packaging does not publish them.
+
+The updater trusts the fixed repository's HTTPS GitHub Release API: it verifies the manifest against GitHub's asset SHA-256 digest, then verifies both downloads against that manifest. This provides integrity within that GitHub trust boundary; it is not an independent publisher signature. No local GitHub token is read by the app. The helper waits for the exact original process and never kills it. Replacement or pre-database launch failures restore the previous executables when safe; a new process still running without acknowledging launch is kept with its backups. Rollback does not reverse database/settings migrations or prove audio/UI health. Neither `UserData` nor Sony's proprietary filter is included in update assets.
 
 ## Build for Android
 

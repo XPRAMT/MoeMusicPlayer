@@ -112,6 +112,11 @@ impl<R: Runtime, T: Manager<R>> MediaIndexExt<R> for T {
 }
 
 impl<R: Runtime> MediaIndex<R> {
+    /// Open a Rust-validated official HTTPS link in Android's browser.
+    #[cfg(target_os = "android")]
+    pub fn open_official_url(&self, url: &str) -> Result<()> {
+        self.platform.open_official_url(url)
+    }
     /// Enumerate a configured source. Only `SourceScanState::Complete` authorizes reconciliation.
     pub fn scan(&self, root: &LibraryRoot) -> SourceScan {
         self.platform.scan(root)
