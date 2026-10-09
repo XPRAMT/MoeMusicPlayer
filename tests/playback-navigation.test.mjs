@@ -135,7 +135,7 @@ test('Tabler icons keep the Chinese playback labels and settings navigation acce
 test('visible UI icons use Tabler components except the original brand mark', () => {
   assert.equal([...appSource.matchAll(/<svg\b/g)].length, 0, 'App markup should use the SilverWolf image instead of an inline brand SVG');
   assert.match(appSource, /SilverWolfIcon\.png/);
-  assert.match(appSource, /<strong>MOE<\/strong>\s*<span>Music Otaku Elite<\/span>/);
+  assert.match(appSource, /<strong>MOE<\/strong>\s*<span>Music Otaku Edge<\/span>/);
   assert.doesNotMatch(trackListSource, /<svg\b/);
   assert.doesNotMatch(playlistEntrySource, /<svg\b/);
 

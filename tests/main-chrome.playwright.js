@@ -40,7 +40,7 @@ async page => {
   }
   assert(await page.locator('[data-testid="sync-progress-banner"]').count() === 0, 'sync banner is on the library page');
   const brand = await page.locator('.brand-lockup').innerText();
-  assert(brand.includes('MOE') && brand.includes('Music Otaku Elite'), 'brand slogan: ' + brand);
+  assert(brand.includes('MOE') && brand.includes('Music Otaku Edge'), 'brand slogan: ' + brand);
   const brandSrc = await page.locator('.brand-mark img').getAttribute('src');
   assert(Boolean(brandSrc && brandSrc.includes('SilverWolfIcon')), 'brand icon source: ' + brandSrc);
 

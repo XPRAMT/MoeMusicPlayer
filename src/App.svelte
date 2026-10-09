@@ -2489,7 +2489,7 @@
       </div>
       <div class="brand-wordmark">
         <strong>MOE</strong>
-        <span>Music Otaku Elite</span>
+        <span>Music Otaku Edge</span>
       </div>
     </div>
 
