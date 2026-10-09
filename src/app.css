@@ -2122,9 +2122,9 @@ input:focus-visible {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  padding: 20px;
-  border: 1px solid transparent;
-  border-radius: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   background: transparent;
 }
 
@@ -4044,7 +4044,7 @@ input:focus-visible {
 
 @media (max-width: 620px) {
   .settings-page > .settings-heading h2 { font-size: var(--font-display); }
-  .settings-panel { padding: 14px; }
+  .settings-panel { padding: 0; }
   .lyrics-preference-grid { grid-template-columns: minmax(0, 1fr); }
   .appearance-color-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-tab { flex: 1 1 auto; }
