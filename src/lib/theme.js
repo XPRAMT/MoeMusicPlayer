@@ -150,7 +150,9 @@ export function createThemeCssVariables(value, options = {}) {
     ? options.contrastBackgroundHex.toUpperCase()
     : preferences.backgroundHex;
   const textColor = contrastingTextColor(contrastBackground);
+  const textInverse = contrastingTextColor(textColor);
   const textChannels = channels(textColor);
+  const textInverseChannels = channels(textInverse);
   const panel = readableSurfaceBlend(contrastBackground, textColor, 0.075);
   const panelSoft = readableSurfaceBlend(contrastBackground, textColor, 0.13);
   const sidebar = readableSurfaceBlend(contrastBackground, textColor, 0.035);
@@ -175,6 +177,8 @@ export function createThemeCssVariables(value, options = {}) {
     '--dock-bg': dock,
     '--text': textColor,
     '--text-rgb': textChannels,
+    '--text-inverse': textInverse,
+    '--text-inverse-rgb': textInverseChannels,
     '--text-soft': textColor,
     '--muted': textColor,
     '--quiet': textColor,

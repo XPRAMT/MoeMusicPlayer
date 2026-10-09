@@ -152,14 +152,22 @@ async page => {
     const translation = document.querySelector('.lyric-translation');
     const romanization = document.querySelector('.lyric-romanization');
     const viewport = document.querySelector('.lyrics-lines-viewport');
+    const root = getComputedStyle(document.documentElement);
+    const inverseRgb = root.getPropertyValue('--text-inverse-rgb').trim().replace(/\s+/g, ' ');
     return {
       shadows: [primary, translation, romanization].map((element) => getComputedStyle(element).textShadow),
+      textColor: root.getPropertyValue('--text').trim().toUpperCase(),
+      inverseRgb,
       opacity: getComputedStyle(primary).opacity,
       lineBackground: getComputedStyle(primary.closest('.lyric-line')).backgroundColor,
       mask: getComputedStyle(viewport).maskImage,
     };
   });
-  assert.ok(lyricContrast.shadows.every((shadow) => shadow.includes('rgba(0, 0, 0')), 'original, translation, and romanization lyrics use dark text shadows over bright covers');
+  assert.equal(lyricContrast.textColor, '#000000', 'bright cover contrast sensing uses black lyric text');
+  assert.ok(
+    lyricContrast.shadows.every((shadow) => shadow.includes('255, 255, 255')),
+    'lyric shadows use the inverse of the text color (white on black text)',
+  );
   assert.equal(lyricContrast.lineBackground, 'rgba(0, 0, 0, 0)', 'lyric text shadow does not add a row background');
   assert.equal(lyricContrast.mask.includes('linear-gradient'), true, 'lyric viewport gradient mask remains enabled');
   assert.equal(lyricContrast.opacity, '1', 'current lyric opacity remains unchanged');

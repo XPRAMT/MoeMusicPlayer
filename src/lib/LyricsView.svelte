@@ -829,14 +829,16 @@
   .lyrics-view[data-text-effect='shadow'] .lyric-primary,
   .lyrics-view[data-text-effect='shadow'] .lyric-translation,
   .lyrics-view[data-text-effect='shadow'] .lyric-romanization {
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.82), 0 0 8px rgba(0, 0, 0, 0.38);
+    text-shadow:
+      0 1px 3px rgba(var(--text-inverse-rgb), 0.82),
+      0 0 8px rgba(var(--text-inverse-rgb), 0.38);
   }
 
   .lyrics-view[data-text-effect='stroke'] .lyric-primary,
   .lyrics-view[data-text-effect='stroke'] .lyric-translation,
   .lyrics-view[data-text-effect='stroke'] .lyric-romanization {
     text-shadow: none;
-    -webkit-text-stroke: 0.85px rgba(0, 0, 0, 0.88);
+    -webkit-text-stroke: 0.85px rgba(var(--text-inverse-rgb), 0.88);
     paint-order: stroke fill;
   }
 

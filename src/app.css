@@ -18,6 +18,8 @@
   --line-strong: rgba(245, 251, 255, 0.19);
   --text: #f5fbff;
   --text-rgb: 245, 251, 255;
+  --text-inverse: #000000;
+  --text-inverse-rgb: 0, 0, 0;
   --text-soft: rgba(245, 251, 255, 0.84);
   --muted: rgba(245, 251, 255, 0.72);
   --quiet: rgba(245, 251, 255, 0.6);
@@ -456,7 +458,7 @@ input:focus-visible {
   overflow: hidden;
   border: 0;
   border-left: 1px solid var(--line-strong);
-  background: color-mix(in srgb, var(--page) var(--quick-settings-opacity, 70%), transparent);
+  background: color-mix(in srgb, var(--text-inverse) var(--quick-settings-opacity, 70%), transparent);
   box-sizing: border-box;
 }
 
@@ -479,7 +481,7 @@ input:focus-visible {
 
 .quick-settings-drawer-scroll { min-height: 0; flex: 1 1 0; overflow: auto; overscroll-behavior: contain; padding: 16px 20px 26px; }
 .now-playing-quick-settings-drawer .settings-panel {
-  background: color-mix(in srgb, var(--panel) var(--quick-settings-opacity, 70%), transparent);
+  background: color-mix(in srgb, var(--text-inverse) var(--quick-settings-opacity, 70%), transparent);
 }
 .quick-settings-controls { display: grid; gap: 24px; }
 .quick-settings-group { display: grid; min-width: 0; gap: 12px; scroll-margin-top: 12px; }

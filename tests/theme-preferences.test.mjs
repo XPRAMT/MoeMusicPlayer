@@ -50,8 +50,19 @@ test('contrast background can flip text while keeping the solid page color', () 
   );
   assert.equal(variables['--page'], '#000000');
   assert.equal(variables['--text'], '#000000');
+  assert.equal(variables['--text-inverse'], '#FFFFFF');
+  assert.equal(variables['--text-inverse-rgb'], '255, 255, 255');
   assert.equal(variables['--color-scheme'], 'light');
   assert.ok(contrastRatio(variables['--panel'], variables['--text']) >= 4.5);
+});
+
+test('text inverse is always the opposite of the chosen text color', () => {
+  const dark = createThemeCssVariables({ backgroundHex: '#000000', accentHex: '#55D9FF' });
+  assert.equal(dark['--text'], '#FFFFFF');
+  assert.equal(dark['--text-inverse'], '#000000');
+  const light = createThemeCssVariables({ backgroundHex: '#FFFFFF', accentHex: '#55D9FF' });
+  assert.equal(light['--text'], '#000000');
+  assert.equal(light['--text-inverse'], '#FFFFFF');
 });
 
 test('accent and status text colors retain readable contrast on either background', () => {
