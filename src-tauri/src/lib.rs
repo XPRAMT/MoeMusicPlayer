@@ -4281,6 +4281,38 @@ fn validate_source_folder_not_excluded(
     Ok(())
 }
 
+/// Resolve the sidebar playlist projection for a playlist-file root that is no longer configured.
+/// Older builds cleared `playlist_file_sync_state` without deleting the playlist; recover those by
+/// exact display-name match when exactly one non-retained playlist remains.
+#[cfg(target_os = "windows")]
+fn resolve_orphan_playlist_file_id(
+    database: &Database,
+    source_id: SourceId,
+    display_name: &str,
+    retained_playlist_ids: &std::collections::HashSet<PlaylistId>,
+) -> Result<Option<PlaylistId>, String> {
+    if let Some(state) = database
+        .playlist_file_sync_state(source_id)
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(Some(state.playlist_id));
+    }
+    let matches = database
+        .list_playlists()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|playlist| {
+            playlist.name == display_name && !retained_playlist_ids.contains(&playlist.id)
+        })
+        .map(|playlist| playlist.id)
+        .collect::<Vec<_>>();
+    Ok(if matches.len() == 1 {
+        Some(matches[0])
+    } else {
+        None
+    })
+}
+
 #[cfg(target_os = "windows")]
 fn sync_windows_configured_sources<F>(
     database: &mut Database,
@@ -4300,6 +4332,13 @@ where
         .iter()
         .map(|source| source.id)
         .collect::<std::collections::HashSet<_>>();
+    let retained_playlist_ids = configured_sources
+        .iter()
+        .filter_map(|source| match source.kind {
+            SourceEntryKind::PlaylistFile { playlist_id, .. } => Some(playlist_id),
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
     for mut root in database
         .library_roots()
         .map_err(|error| error.to_string())?
@@ -4308,10 +4347,14 @@ where
             root.kind == MediaSourceKind::PlaylistFile && !configured_ids.contains(&root.id)
         })
     {
-        let orphan_playlist_id = database
-            .playlist_file_sync_state(root.id)
-            .map_err(|error| error.to_string())?
-            .map(|state| state.playlist_id);
+        // Prefer sync_state; if an older build already cleared it, fall back to the unique
+        // sidebar playlist that still matches this orphan root's display name.
+        let orphan_playlist_id = resolve_orphan_playlist_file_id(
+            database,
+            root.id,
+            &root.display_name,
+            &retained_playlist_ids,
+        )?;
         database
             .remove_playlist_file_source(root.id)
             .map_err(|error| error.to_string())?;
@@ -6646,6 +6689,61 @@ mod windows_library_integration_tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn authoritative_orphan_cleanup_recovers_playlist_when_sync_state_already_cleared() {
+        let temporary = TestDirectory::new();
+        let media_folder = temporary.0.join("曲目");
+        fs::create_dir_all(&media_folder).expect("create media folder");
+        let media_path = media_folder.join("保留曲目.mp3");
+        write_tagged_mp3(&media_path);
+        let playlist_path = temporary.0.join("hanser hr.m3u8");
+        fs::write(
+            &playlist_path,
+            format!("#EXTM3U\n{}\n", media_path.display()),
+        )
+        .expect("write playlist source");
+        let playlist_id = super::PlaylistId::new();
+        let source = super::SourceEntry {
+            id: SourceId::new(),
+            display_name: "hanser hr".to_owned(),
+            enabled: true,
+            kind: super::SourceEntryKind::PlaylistFile {
+                playlist_id,
+                path: super::settings::StoredPath::from_path(&playlist_path)
+                    .expect("store native playlist path"),
+                tree_uri: None,
+            },
+        };
+        let mut database = Database::open_in_memory().expect("database");
+        super::playlist_source_sync::sync_playlist_file_source(
+            &mut database,
+            &source,
+            &[],
+            1_800_000_000_000,
+        )
+        .expect("create playlist projection")
+        .expect("playlist source is readable");
+        // Older remove path cleared sync_state / mappings but left the sidebar playlist.
+        database
+            .remove_playlist_file_source(source.id)
+            .expect("simulate prior incomplete source removal");
+        assert!(database
+            .playlist_file_sync_state(source.id)
+            .expect("read cleared sync state")
+            .is_none());
+        assert!(database
+            .get_playlist(playlist_id)
+            .expect("stale playlist remains")
+            .is_some());
+
+        super::sync_windows_configured_sources(&mut database, &[], &[], true, &mut |_, _, _, _| {})
+            .expect("name-fallback orphan cleanup");
+        assert!(database
+            .get_playlist(playlist_id)
+            .expect("stale sidebar playlist removed")
+            .is_none());
     }
 
     #[test]

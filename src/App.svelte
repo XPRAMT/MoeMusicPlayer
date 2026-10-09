@@ -1471,6 +1471,8 @@
         ? '尚未加入可同步的音樂來源。'
         : `${result.sources.length} 個來源已檢查；${completed} 個掃描完整，${attention} 個需要留意；${errorCount} 個項目錯誤。`;
       await loadSources();
+      // Playlist-file orphan cleanup may delete sidebar projections during sync.
+      if (libraryReady) await loadPlaylists();
     } catch (error) {
       sourceError = getErrorText(error);
     } finally {
