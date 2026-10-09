@@ -24,7 +24,8 @@ export interface ThemePreferences {
   accentHex: string;
   quickSettingsOpacityPercent: number;
   mainBackgroundBlurPx: number;
-  mainBackgroundBrightnessPercent: number;
+  /** Image opacity percent (0–100); UI label is 背景透明度, same convention as quickSettingsOpacityPercent. */
+  mainBackgroundOpacityPercent: number;
 }
 
 export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount';

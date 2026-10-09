@@ -6,7 +6,7 @@ export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   accentHex: '#55D9FF',
   quickSettingsOpacityPercent: 70,
   mainBackgroundBlurPx: 20,
-  mainBackgroundBrightnessPercent: 40,
+  mainBackgroundOpacityPercent: 40,
 });
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
@@ -31,11 +31,11 @@ export function normalizeThemePreferences(value) {
       : DEFAULT_THEME_PREFERENCES.accentHex,
     quickSettingsOpacityPercent: normalizeOpacityPercent(candidate.quickSettingsOpacityPercent),
     mainBackgroundBlurPx: normalizeRange(candidate.mainBackgroundBlurPx, 0, 40, DEFAULT_THEME_PREFERENCES.mainBackgroundBlurPx),
-    mainBackgroundBrightnessPercent: normalizeRange(
-      candidate.mainBackgroundBrightnessPercent,
+    mainBackgroundOpacityPercent: normalizeRange(
+      candidate.mainBackgroundOpacityPercent ?? candidate.mainBackgroundBrightnessPercent,
       0,
       100,
-      DEFAULT_THEME_PREFERENCES.mainBackgroundBrightnessPercent,
+      DEFAULT_THEME_PREFERENCES.mainBackgroundOpacityPercent,
     ),
   };
 }

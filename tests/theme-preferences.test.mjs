@@ -15,7 +15,7 @@ test('default appearance uses pure black and a water-blue accent', () => {
     accentHex: '#55D9FF',
     quickSettingsOpacityPercent: 70,
     mainBackgroundBlurPx: 20,
-    mainBackgroundBrightnessPercent: 40,
+    mainBackgroundOpacityPercent: 40,
   });
 });
 
@@ -90,10 +90,11 @@ test('invalid persisted values fall back to safe defaults', () => {
     accentHex: '#55D9FF',
     quickSettingsOpacityPercent: 70,
     mainBackgroundBlurPx: 20,
-    mainBackgroundBrightnessPercent: 40,
+    mainBackgroundOpacityPercent: 40,
   });
   assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: 140 }).quickSettingsOpacityPercent, 100);
   assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: -4 }).quickSettingsOpacityPercent, 0);
   assert.equal(normalizeThemePreferences({ mainBackgroundBlurPx: 80 }).mainBackgroundBlurPx, 40);
-  assert.equal(normalizeThemePreferences({ mainBackgroundBrightnessPercent: -2 }).mainBackgroundBrightnessPercent, 0);
+  assert.equal(normalizeThemePreferences({ mainBackgroundOpacityPercent: -2 }).mainBackgroundOpacityPercent, 0);
+  assert.equal(normalizeThemePreferences({ mainBackgroundBrightnessPercent: 55 }).mainBackgroundOpacityPercent, 55);
 });

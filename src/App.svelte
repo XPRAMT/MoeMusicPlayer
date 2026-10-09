@@ -2086,8 +2086,8 @@
                   <input type="range" min="0" max="40" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label="主介面背景模糊程度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                 </label>
                 <label class="lyrics-preference-range">
-                  <span><strong>背景亮度</strong><output>{themePreferences.mainBackgroundBrightnessPercent}%</output></span>
-                  <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundBrightnessPercent} aria-label="主介面背景亮度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBrightnessPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                  <span><strong>背景透明度</strong><output>{themePreferences.mainBackgroundOpacityPercent}%</output></span>
+                  <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundOpacityPercent} aria-label="主介面背景透明度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                 </label>
                 {#if mainBackgroundError}
                   <p class="theme-save-status error" role="alert">{mainBackgroundError}</p>
@@ -2425,7 +2425,7 @@
   class:has-custom-titlebar={showCustomTitlebar}
   data-active-view={activeView}
   class:has-main-backdrop={mainBackgroundUrl !== null}
-  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-overlay-alpha: ${(100 - nowPlayingAppearancePreferences.backgroundBrightnessPercent) / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-overlay-alpha: ${(100 - themePreferences.mainBackgroundBrightnessPercent) / 100};`}
+  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-overlay-alpha: ${(100 - nowPlayingAppearancePreferences.backgroundBrightnessPercent) / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100};`}
 >
   {#if showCustomTitlebar}
     <WindowTitlebar transparent={isNowPlayingOpen || mainBackgroundUrl !== null} />

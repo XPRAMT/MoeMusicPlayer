@@ -33,8 +33,12 @@ pub struct ThemeSettings {
     /// Main-window photo background blur. The image itself lives at `UserData/background`.
     #[serde(default = "default_main_background_blur_px")]
     pub main_background_blur_px: u8,
-    #[serde(default = "default_main_background_brightness_percent")]
-    pub main_background_brightness_percent: u8,
+    /// Image opacity percent (0–100). UI label is 背景透明度.
+    #[serde(
+        default = "default_main_background_opacity_percent",
+        alias = "mainBackgroundBrightnessPercent"
+    )]
+    pub main_background_opacity_percent: u8,
 }
 
 fn default_quick_settings_opacity_percent() -> u8 {
@@ -45,7 +49,7 @@ fn default_main_background_blur_px() -> u8 {
     20
 }
 
-fn default_main_background_brightness_percent() -> u8 {
+fn default_main_background_opacity_percent() -> u8 {
     40
 }
 
@@ -56,7 +60,7 @@ impl Default for ThemeSettings {
             accent_hex: "#55D9FF".to_owned(),
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
             main_background_blur_px: default_main_background_blur_px(),
-            main_background_brightness_percent: default_main_background_brightness_percent(),
+            main_background_opacity_percent: default_main_background_opacity_percent(),
         }
     }
 }
@@ -788,9 +792,9 @@ impl AppSettings {
                 "mainBackgroundBlurPx must be between 0 and 40".into(),
             ));
         }
-        if self.theme.main_background_brightness_percent > 100 {
+        if self.theme.main_background_opacity_percent > 100 {
             return Err(SettingsError::InvalidData(
-                "mainBackgroundBrightnessPercent must be between 0 and 100".into(),
+                "mainBackgroundOpacityPercent must be between 0 and 100".into(),
             ));
         }
         self.lyrics_preferences.validate()?;
@@ -2483,6 +2487,21 @@ mod tests {
                     .is_null()
             );
         }
+    }
+
+    #[test]
+    fn theme_reads_legacy_main_background_brightness_as_opacity() {
+        let theme: ThemeSettings = serde_json::from_value(serde_json::json!({
+            "backgroundHex": "#000000",
+            "accentHex": "#55D9FF",
+            "mainBackgroundBrightnessPercent": 62
+        }))
+        .expect("deserialize legacy brightness key");
+        assert_eq!(theme.main_background_opacity_percent, 62);
+
+        let written = serde_json::to_value(&theme).expect("serialize theme");
+        assert_eq!(written["mainBackgroundOpacityPercent"], 62);
+        assert!(written.get("mainBackgroundBrightnessPercent").is_none());
     }
 
     #[test]
