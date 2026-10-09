@@ -164,10 +164,6 @@ export function createThemeCssVariables(value) {
     '--status-success': statusText('#1F6B4F'),
     '--status-warning': statusText('#805500'),
     '--color-scheme': textColor === '#000000' ? 'light' : 'dark',
-    '--preview-background': preferences.backgroundHex,
-    '--preview-text': textColor,
-    '--preview-accent': preferences.accentHex,
-    '--preview-accent-text': contrastingTextColor(preferences.accentHex),
   };
 }
 

@@ -30,10 +30,6 @@
   --status-success: #1f6b4f;
   --status-warning: #805500;
   --color-scheme: dark;
-  --preview-background: var(--page);
-  --preview-text: var(--text);
-  --preview-accent: var(--accent);
-  --preview-accent-text: var(--accent-foreground);
   --mint: var(--status-success);
   --warn: var(--status-warning);
   --dock-bg: #141414;
@@ -2433,7 +2429,6 @@ input:focus-visible {
 }
 
 .main-interface-panel > .settings-panel-header,
-.main-interface-panel > .theme-preview,
 .main-interface-panel > .source-action-row,
 .main-interface-panel > .theme-save-status {
   margin: 0;
@@ -2484,48 +2479,6 @@ input:focus-visible {
   font-family: Consolas, monospace;
   font-size: var(--font-caption);
   text-transform: uppercase;
-}
-
-.theme-preview {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin-top: 13px;
-  padding: 16px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  color: var(--text);
-  background:
-    radial-gradient(ellipse at 15% 0%, rgba(var(--accent-rgb), 0.05), transparent 38%),
-    rgba(var(--text-rgb), 0.018);
-}
-
-.theme-preview-copy {
-  display: grid;
-  min-width: 0;
-  gap: 5px;
-}
-
-.theme-preview-copy strong {
-  font-size: var(--font-body);
-}
-
-.theme-preview-copy small {
-  color: currentColor;
-  font-size: var(--font-caption);
-}
-
-.theme-preview-chip {
-  flex: 0 0 auto;
-  padding: 8px 11px;
-  border-radius: 8px;
-  color: var(--preview-accent-text);
-  background: var(--preview-accent);
-  font-size: var(--font-caption);
-  font-weight: 700;
 }
 
 .theme-save-status {
@@ -4059,8 +4012,6 @@ input:focus-visible {
 }
 
 @media (max-width: 390px) {
-  .theme-preview { align-items: flex-start; flex-direction: column; }
-  .theme-preview-chip { align-self: flex-start; }
 }
 
 @media (prefers-reduced-motion: reduce) {

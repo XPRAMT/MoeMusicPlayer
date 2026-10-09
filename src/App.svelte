@@ -2063,13 +2063,6 @@
                     </span>
                   </label>
                 </div>
-                <div class="theme-preview" role="img" aria-label="顏色即時預覽">
-                  <div class="theme-preview-copy">
-                    <strong>主介面預覽</strong>
-                    <small>文字會自動調整對比</small>
-                  </div>
-                  <span class="theme-preview-chip">主色按鈕</span>
-                </div>
                 <label class="lyrics-preference-range">
                   <span><strong>快速設定面板透明度</strong><output>{themePreferences.quickSettingsOpacityPercent}%</output></span>
                   <input type="range" min="0" max="100" step="1" value={themePreferences.quickSettingsOpacityPercent} aria-label="快速設定面板透明度" oninput={(event) => updateQuickSettingsOpacity(Number(event.currentTarget.value))} onchange={saveThemePreferencesNow} />
