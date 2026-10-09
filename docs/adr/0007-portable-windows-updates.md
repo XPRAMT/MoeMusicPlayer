@@ -26,6 +26,8 @@ Windows uses a portable executable with `UserData` beside it. Settings and SQLit
 
 ## Verification and publishing
 
+The Release API and manifest use a 15-second request limit. Binary staging uses 10-second connection establishment, a 30-second no-data watchdog (including initial response headers), and a 30-minute total limit around both transfers. An interrupted download removes its nonce stage and creates no pending journal. The bounded transfer budget permits real slow GitHub asset connections while preventing an indefinite wait.
+
 `cargo test -p moemusicplayer-updater --features test-fixtures -- --test-threads=1` exercises real temporary child processes for parent wait, replacement/relaunch, timeout, permit refusal, rollback, and identity. Fixtures preserve a UserData sentinel. Strict-save orchestration separately tests finalizer failure and gate/coordinator reopening.
 
 `npm run release:windows` builds both executables and packages assets. `scripts/package-windows-update.ps1` reads the exact executable's pre-app `--update-build-info` metadata, drains output asynchronously, and preserves the raw UTC ISO string independently of PowerShell's JSON date conversion. Publication requires explicit `-Upload -ReleaseTag` or a separate `gh release` command. The app never reads local GitHub credentials. Diagnostic CLI `--update-check-json` and `--update-stage-next-launch` share the production Release metadata/download validation and have no configurable endpoint; they support live public Release checks in isolated directories.

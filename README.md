@@ -29,6 +29,8 @@ Android Media3 playback integration is implemented. The ARM64 APK is installed o
 
 ## Run on Windows
 
+Release checks and manifest requests have a 15-second limit. Executable transfers allow a 10-second connection timeout, cancel after 30 seconds without data, and have a bounded 30-minute total download limit so a continuously progressing slow connection can finish. Failed transfers never create an applicable pending update.
+
 1. Install Node.js 20.19+ (or 22.12+), Rust 1.90+, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 2. Run `npm install`.
 3. Run `npm run tauri -- dev`.

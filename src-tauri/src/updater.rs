@@ -16,6 +16,8 @@ const AUTHOR: &str = "https://github.com/XPRAMT";
 const RELEASE_API: &str = "https://api.github.com/repos/XPRAMT/MoeMusicPlayer/releases/latest";
 const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
 const MANIFEST_NAME: &str = "moemusicplayer-update.json";
+const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -225,6 +227,7 @@ fn client() -> Result<reqwest::Client, String> {
 async fn bounded_bytes(client: &reqwest::Client, url: &str, limit: u64) -> Result<Vec<u8>, String> {
     let mut response = client
         .get(url)
+        .timeout(Duration::from_secs(15))
         .send()
         .await
         .map_err(|error| error.to_string())?
@@ -482,13 +485,17 @@ async fn download_file(
     identity: &FileIdentity,
     path: &Path,
 ) -> Result<(), String> {
-    let mut response = client
-        .get(&asset.browser_download_url)
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
+    let mut response = wait_for_download_progress(
+        client
+            .get(&asset.browser_download_url)
+            .timeout(DOWNLOAD_TOTAL_TIMEOUT)
+            .send(),
+        DOWNLOAD_IDLE_TIMEOUT,
+    )
+    .await?
+    .map_err(download_error)?
+    .error_for_status()
+    .map_err(|error| error.to_string())?;
     if response
         .content_length()
         .is_some_and(|size| size != identity.size)
@@ -502,7 +509,10 @@ async fn download_file(
         .map_err(|error| error.to_string())?;
     let mut size = 0u64;
     let mut hash = Sha256::new();
-    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+    while let Some(chunk) = wait_for_download_progress(response.chunk(), DOWNLOAD_IDLE_TIMEOUT)
+        .await?
+        .map_err(download_error)?
+    {
         size += chunk.len() as u64;
         if size > identity.size {
             return Err("更新下載超過清單大小。".into());
@@ -530,6 +540,25 @@ async fn download_file(
     Ok(())
 }
 
+async fn wait_for_download_progress<T>(
+    work: impl std::future::Future<Output = T>,
+    idle_timeout: Duration,
+) -> Result<T, String> {
+    tokio::time::timeout(idle_timeout, work)
+        .await
+        .map_err(|_| "更新下載已連續 30 秒沒有收到資料，請稍後重試。".into())
+}
+
+fn download_error(error: reqwest::Error) -> String {
+    if error.is_connect() && error.is_timeout() {
+        "更新下載連線未能在 10 秒內建立，請稍後重試。".into()
+    } else if error.is_timeout() {
+        "更新下載已超過 30 分鐘總上限，請稍後重試。".into()
+    } else {
+        format!("更新下載中斷：{}", error.without_url())
+    }
+}
+
 #[cfg(target_os = "windows")]
 async fn stage_release(
     app: Option<&AppHandle>,
@@ -539,7 +568,7 @@ async fn stage_release(
     let directory = updates_directory()?;
     let stage_directory = directory.join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir(&stage_directory).map_err(|error| error.to_string())?;
-    let result = async {
+    let result = tokio::time::timeout(DOWNLOAD_TOTAL_TIMEOUT, async {
         let client = client()?;
         download_file(
             app,
@@ -567,8 +596,9 @@ async fn stage_release(
         validate_for_apply(&pending)?;
         save_pending(&directory, &pending)?;
         Ok(pending)
-    }
-    .await;
+    })
+    .await
+    .unwrap_or_else(|_| Err("更新下載已超過 30 分鐘總上限，請稍後重試。".into()));
     if result.is_err() {
         // This nonce directory was created by this invocation under the
         // canonical, validated update root; no user music/settings are inside.
@@ -887,6 +917,22 @@ pub fn app_open_external_url(app: AppHandle, url: String) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test(flavor = "current_thread")]
+    async fn download_watchdog_bounds_stalls_and_accepts_progress() {
+        assert_eq!(
+            wait_for_download_progress(std::future::ready(42), Duration::from_millis(10))
+                .await
+                .unwrap(),
+            42
+        );
+        let error =
+            wait_for_download_progress(std::future::pending::<()>(), Duration::from_millis(5))
+                .await
+                .unwrap_err();
+        assert!(error.contains("沒有收到資料"));
+        assert_eq!(DOWNLOAD_TOTAL_TIMEOUT, Duration::from_secs(1800));
+        assert_eq!(DOWNLOAD_IDLE_TIMEOUT, Duration::from_secs(30));
+    }
     #[test]
     fn update_urls_reject_foreign_hosts_paths_and_schemes() {
         assert!(trusted_download_url(

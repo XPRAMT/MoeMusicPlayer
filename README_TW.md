@@ -29,6 +29,8 @@ Android Media3 播放整合已完成，ARM64 APK 已安裝至 NX809J 並成功�
 
 ## 在 Windows 執行
 
+Release 檢查與更新清單請求上限為 15 秒。執行檔下載允許 10 秒建立連線，連續 30 秒無資料便取消，整個下載上限為 30 分鐘，讓持續有進度的慢速連線可以完成。下載失敗不會建立可套用的 pending。
+
 1. 安裝 Node.js 20.19+（或 22.12+）、Rust 1.90+，以及 [Tauri 先決條件](https://v2.tauri.app/start/prerequisites/)。
 2. 執行 `npm install`。
 3. 執行 `npm run tauri -- dev`。
