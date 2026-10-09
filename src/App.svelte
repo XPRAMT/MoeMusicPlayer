@@ -465,7 +465,7 @@
       availableHeight: artworkPane.clientHeight,
       maxWidth: maxDimension,
       maxHeight: maxDimension,
-      border: 1,
+      border: 0,
     });
     if (!nextFrame) {
       coverFrame = null;
@@ -1656,17 +1656,6 @@
     }
   }
 
-  function sourceStateLabel(state: string | null): string {
-    switch (state) {
-      case 'complete': return '同步完成';
-      case 'incomplete': return '掃描未完成，保留既有曲目';
-      case 'unavailable': return '來源暫不可用，保留既有曲目';
-      case 'permission_revoked':
-      case 'permissionRevoked': return '需要重新授權，保留既有曲目';
-      default: return '尚未同步';
-    }
-  }
-
   function sourceKindLabel(kind: string): string {
     switch (kind) {
       case 'playlist_file': return '播放清單檔案';
@@ -2453,7 +2442,6 @@
                 {#each sources as source (source.id)}
                   <div class="configured-source">
                     <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{sourceKindLabel(source.kind)}</small><small class="configured-source-location" title={source.location}>{source.location}</small></div>
-                    <div class="configured-source-state"><span>{source.enabled ? sourceStateLabel(source.syncState) : '已停用'}</span>{#if source.enabled && source.errorCount > 0}<small>{source.errorCount} 個項目需要留意</small>{/if}</div>
                     <div class="configured-source-actions">
                       <label><input type="checkbox" checked={source.enabled} disabled={isUpdatingSource} onchange={(event) => void setSourceEnabled(source, event.currentTarget.checked)} />啟用</label>
                       <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeSource(source)}>移除</button>
@@ -2556,19 +2544,17 @@
         {/if}
       </div>
       <div class="topbar-actions">
-        {#if activeView === 'settings' && settingsSection === 'sources'}
-          <button
-            class="soft-button topbar-refresh-button"
-            type="button"
-            aria-label="重新整理音樂來源"
-            title="重新整理音樂來源"
-            onclick={() => void loadSources()}
-            disabled={!sourceSyncReady || isLoadingSources}
-          >
-            <IconRefresh size={16} stroke={1.7} class={isLoadingSources ? 'spin' : ''} aria-hidden="true" />
-            <span>{isLoadingSources ? '整理中' : '重新整理'}</span>
-          </button>
-        {/if}
+        <button
+          class="soft-button topbar-refresh-button"
+          type="button"
+          aria-label="重新整理音樂來源"
+          title={sourceSyncReady ? '重新同步本機來源' : showCapabilityDetail(capabilities?.sourceSync)}
+          onclick={() => void syncLibrary()}
+          disabled={!sourceSyncReady || isSyncing}
+        >
+          <IconRefresh size={16} stroke={1.7} class={isSyncing ? 'spin' : ''} aria-hidden="true" />
+          <span>{isSyncing ? '同步中' : '重新整理'}</span>
+        </button>
       </div>
     </header>
 
@@ -2593,16 +2579,6 @@
               <button class="filter-button" type="button" disabled title="篩選功能尚未接通">
                 <IconFilter size={15} stroke={1.6} aria-hidden="true" />
                 <span>篩選</span>
-              </button>
-              <button
-                class="outline-button"
-                type="button"
-                onclick={syncLibrary}
-                disabled={!sourceSyncReady || isSyncing}
-                title={sourceSyncReady ? '重新同步本機來源' : showCapabilityDetail(capabilities?.sourceSync)}
-              >
-                <IconRefresh size={15} stroke={1.6} class={isSyncing ? 'spin' : ''} aria-hidden="true" />
-                <span>{isSyncing ? '同步中' : '重新整理'}</span>
               </button>
             </div>
 

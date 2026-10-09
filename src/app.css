@@ -2835,18 +2835,19 @@ input:focus-visible {
 
 .dock-art {
   display: grid;
-  width: 50px;
-  height: 50px;
+  width: 58px;
+  height: 58px;
   flex: 0 0 auto;
   place-items: center;
   /* No default nudge — only edge timeline times sit on the left border. */
   margin-left: 0;
   padding: 0;
-  border: 1px solid rgba(var(--accent-rgb), 0.13);
+  border: 0;
   border-radius: 10px;
   color: #ffffff;
   font: inherit;
   cursor: inherit;
+  overflow: hidden;
   background:
     radial-gradient(circle at 70% 24%, rgba(136, 201, 180, 0.1), transparent 40%),
     linear-gradient(145deg, #272a2b, #1c2026);
@@ -3229,6 +3230,30 @@ input:focus-visible {
 .control-active {
   color: var(--accent-text);
   background: transparent;
+}
+
+/* Now Playing: transport and top-bar controls stay neutral (no accent tint). */
+.app-shell.has-now-playing-backdrop .control-active,
+.app-shell.has-now-playing-backdrop .control-button:not(:disabled):hover,
+.app-shell.has-now-playing-backdrop .play-button:not(:disabled):hover {
+  color: var(--text);
+  background: transparent;
+}
+
+.app-shell.has-now-playing-backdrop .control-button:not(:disabled):hover,
+.app-shell.has-now-playing-backdrop .play-button:not(:disabled):hover {
+  background: rgba(var(--text-rgb), 0.06);
+}
+
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button:not(:disabled):hover,
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button:not(:disabled):active,
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button.is-active,
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button[aria-pressed='true'],
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button[aria-selected='true'] {
+  border-color: rgba(var(--text-rgb), 0.34);
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
 }
 
 .play-button {
@@ -3750,7 +3775,7 @@ input:focus-visible {
   .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; --dock-pad-x: 16px; padding-right: var(--dock-pad-x); padding-left: var(--dock-pad-x); }
   .dock-volume { gap: 7px; }
   .volume-popover .volume-slider { width: 110px; }
-  .dock-art { width: 46px; height: 46px; }
+  .dock-art { width: 54px; height: 54px; }
 }
 
 @media (max-width: 620px) {

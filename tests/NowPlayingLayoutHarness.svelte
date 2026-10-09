@@ -96,7 +96,7 @@
       availableHeight: pane.clientHeight,
       maxWidth: maxDimension,
       maxHeight: maxDimension,
-      border: 1,
+      border: 0,
     });
     coverFrame = frame ? { width: frame.width, height: frame.height } : null;
   }
