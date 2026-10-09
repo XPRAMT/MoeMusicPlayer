@@ -1884,7 +1884,8 @@ input:focus-visible {
 }
 
 .cover-stage.has-artwork {
-  background: #101216;
+  /* Avoid dark letterbox seams that read as thin side borders at subpixel sizes. */
+  background: transparent;
 }
 
 .cover-stage.cover-corner-square {
@@ -1916,6 +1917,14 @@ input:focus-visible {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+.cover-stage.has-artwork .cover-stage-image {
+  /* Bleed 1px past the frame so rounded/subpixel edges do not show a hairline. */
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  object-fit: cover;
 }
 
 .cover-fallback-message {
@@ -3232,30 +3241,6 @@ input:focus-visible {
   background: transparent;
 }
 
-/* Now Playing: transport and top-bar controls stay neutral (no accent tint). */
-.app-shell.has-now-playing-backdrop .control-active,
-.app-shell.has-now-playing-backdrop .control-button:not(:disabled):hover,
-.app-shell.has-now-playing-backdrop .play-button:not(:disabled):hover {
-  color: var(--text);
-  background: transparent;
-}
-
-.app-shell.has-now-playing-backdrop .control-button:not(:disabled):hover,
-.app-shell.has-now-playing-backdrop .play-button:not(:disabled):hover {
-  background: rgba(var(--text-rgb), 0.06);
-}
-
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button:not(:disabled):hover,
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button:not(:disabled):active,
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button.is-active,
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button[aria-pressed='true'],
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button[aria-selected='true'] {
-  border-color: rgba(var(--text-rgb), 0.34);
-  color: var(--text);
-  background: transparent;
-  box-shadow: none;
-}
-
 .play-button {
   /* Hollow outline glyph like the other dock controls; only the hit target stays slightly larger. */
   width: 44px;
@@ -3281,6 +3266,37 @@ input:focus-visible {
 .play-button:not(:disabled):hover {
   color: var(--accent-text);
   background: rgba(var(--text-rgb), 0.04);
+}
+
+/* Now Playing: keep dock + overlay controls monochrome (must follow accent hover/active rules). */
+.app-shell.has-now-playing-backdrop .player-dock .control-button.control-active,
+.app-shell.has-now-playing-backdrop .player-dock .control-button.control-active svg,
+.app-shell.has-now-playing-backdrop .player-dock .control-button:not(:disabled):hover,
+.app-shell.has-now-playing-backdrop .player-dock .control-button:not(:disabled):hover svg,
+.app-shell.has-now-playing-backdrop .player-dock .play-button:not(:disabled):hover,
+.app-shell.has-now-playing-backdrop .player-dock .play-button:not(:disabled):hover svg {
+  color: var(--text);
+  stroke: currentColor;
+  background: transparent;
+}
+
+.app-shell.has-now-playing-backdrop .player-dock .control-button:not(:disabled):hover,
+.app-shell.has-now-playing-backdrop .player-dock .play-button:not(:disabled):hover {
+  background: rgba(var(--text-rgb), 0.06);
+}
+
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button:not(:disabled):hover,
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button:not(:disabled):active,
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button.is-active,
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button[aria-pressed='true'],
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button[aria-selected='true'],
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button[aria-pressed='true'] svg,
+.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button.is-active svg {
+  border-color: rgba(var(--text-rgb), 0.34);
+  color: var(--text);
+  stroke: currentColor;
+  background: transparent;
+  box-shadow: none;
 }
 
 .control-button:disabled,

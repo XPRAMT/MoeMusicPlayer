@@ -471,8 +471,12 @@
       coverFrame = null;
       return;
     }
-    if (!coverFrame || coverFrame.width !== nextFrame.width || coverFrame.height !== nextFrame.height) {
-      coverFrame = { width: nextFrame.width, height: nextFrame.height };
+    const nextSize = {
+      width: Math.max(1, Math.round(nextFrame.width)),
+      height: Math.max(1, Math.round(nextFrame.height)),
+    };
+    if (!coverFrame || coverFrame.width !== nextSize.width || coverFrame.height !== nextSize.height) {
+      coverFrame = nextSize;
     }
   }
 
