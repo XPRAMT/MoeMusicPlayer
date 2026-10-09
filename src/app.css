@@ -3032,8 +3032,8 @@ input:focus-visible {
   justify-self: center;
 }
 
-/* Edge progress sits entirely above the dock (painted track flush to the top
-   edge from outside). Dock chrome vertically centers in the full 74px height;
+/* Edge progress: 16px hit band straddles the dock top so the 3px painted track
+   sits on the top edge. Dock chrome still centers in the full 74px height;
    time labels hang under the track into the dock and are not part of that center. */
 .player-dock[data-timeline-style="edge"] {
   height: var(--dock-height);
@@ -3061,15 +3061,15 @@ input:focus-visible {
   width: auto;
   max-width: none;
   height: auto;
-  /* 16px hit/track band ends at dock top — nothing reserved inside the dock. */
-  margin-top: -16px;
+  /* Half of the 16px hit band above the dock, half below → track centered on the edge. */
+  margin-top: -8px;
   padding: 0;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 16px auto;
   align-items: center;
   column-gap: 0;
-  /* Space times away from the track (was 1px — too tight). */
-  row-gap: 8px;
+  /* Space times below the hit band (track is mid-band). */
+  row-gap: 6px;
   pointer-events: none;
   grid-column: 1 / -1;
   grid-row: auto;
@@ -3089,7 +3089,6 @@ input:focus-visible {
   height: 16px;
   margin: 0;
   border-radius: 0;
-  background: transparent;
 }
 
 /* Under full-width track; horizontal inset matches dock padding (pre-full-bleed labels). */
@@ -3361,51 +3360,44 @@ input:focus-visible {
   background-size: 100% 3px;
 }
 
-/* Progress track: darkest at both ends, brightest at the playhead (--progress-pct). */
+/* Progress track: darkest at both ends, brightest at the playhead (--progress-pct).
+   Paint the 3px line on the input itself (centered) so the thumb — also centered in
+   the same hit box — stays vertically aligned without fragile track margin math. */
 .progress-slider {
   --progress-pct: 0%;
   --progress-glow: color-mix(in srgb, var(--accent-bright) 40%, white);
-  background: transparent;
   border-radius: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(var(--accent-rgb), 0.1) 0%,
+    rgba(var(--accent-rgb), 0.22) max(0%, calc(var(--progress-pct) - 32%)),
+    rgba(var(--accent-rgb), 0.55) max(0%, calc(var(--progress-pct) - 12%)),
+    var(--progress-glow) var(--progress-pct),
+    rgba(var(--accent-rgb), 0.55) min(100%, calc(var(--progress-pct) + 12%)),
+    rgba(var(--accent-rgb), 0.22) min(100%, calc(var(--progress-pct) + 32%)),
+    rgba(var(--accent-rgb), 0.1) 100%
+  );
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 3px;
 }
 
 .progress-slider::-webkit-slider-runnable-track {
-  height: 3px;
+  height: 100%;
   border: 0;
-  border-radius: 99px;
-  background: linear-gradient(
-    90deg,
-    rgba(var(--accent-rgb), 0.1) 0%,
-    rgba(var(--accent-rgb), 0.22) max(0%, calc(var(--progress-pct) - 32%)),
-    rgba(var(--accent-rgb), 0.55) max(0%, calc(var(--progress-pct) - 12%)),
-    var(--progress-glow) var(--progress-pct),
-    rgba(var(--accent-rgb), 0.55) min(100%, calc(var(--progress-pct) + 12%)),
-    rgba(var(--accent-rgb), 0.22) min(100%, calc(var(--progress-pct) + 32%)),
-    rgba(var(--accent-rgb), 0.1) 100%
-  );
+  background: transparent;
 }
 
 .progress-slider::-moz-range-track {
-  height: 3px;
+  height: 100%;
   border: 0;
-  border-radius: 99px;
-  background: linear-gradient(
-    90deg,
-    rgba(var(--accent-rgb), 0.1) 0%,
-    rgba(var(--accent-rgb), 0.22) max(0%, calc(var(--progress-pct) - 32%)),
-    rgba(var(--accent-rgb), 0.55) max(0%, calc(var(--progress-pct) - 12%)),
-    var(--progress-glow) var(--progress-pct),
-    rgba(var(--accent-rgb), 0.55) min(100%, calc(var(--progress-pct) + 12%)),
-    rgba(var(--accent-rgb), 0.22) min(100%, calc(var(--progress-pct) + 32%)),
-    rgba(var(--accent-rgb), 0.1) 100%
-  );
+  background: transparent;
 }
 
 .progress-slider::-webkit-slider-thumb {
-  /* (10 − 3) / 2 → center the thumb on the 3px track. */
   width: 10px;
   height: 10px;
-  margin-top: -3.5px;
+  margin-top: 0;
   border: 1px solid var(--progress-glow);
   border-radius: 50%;
   background: var(--progress-glow);
