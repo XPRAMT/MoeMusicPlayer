@@ -215,9 +215,9 @@ impl Default for NowPlayingAppearancePreferences {
 
 impl NowPlayingAppearancePreferences {
     fn validate(&self) -> Result<(), SettingsError> {
-        if self.background_blur_px > 40 {
+        if self.background_blur_px > 50 {
             return Err(SettingsError::InvalidData(
-                "backgroundBlurPx must be between 0 and 40".into(),
+                "backgroundBlurPx must be between 0 and 50".into(),
             ));
         }
         if self.background_opacity_percent > 100 {
@@ -799,14 +799,14 @@ impl AppSettings {
                 "quickSettingsOpacityPercent must be between 0 and 100".into(),
             ));
         }
-        if self.theme.quick_settings_blur_px > 40 {
+        if self.theme.quick_settings_blur_px > 50 {
             return Err(SettingsError::InvalidData(
-                "quickSettingsBlurPx must be between 0 and 40".into(),
+                "quickSettingsBlurPx must be between 0 and 50".into(),
             ));
         }
-        if self.theme.main_background_blur_px > 40 {
+        if self.theme.main_background_blur_px > 50 {
             return Err(SettingsError::InvalidData(
-                "mainBackgroundBlurPx must be between 0 and 40".into(),
+                "mainBackgroundBlurPx must be between 0 and 50".into(),
             ));
         }
         if self.theme.main_background_opacity_percent > 100 {
@@ -2272,7 +2272,7 @@ mod tests {
 
         for invalid in [
             NowPlayingAppearancePreferences {
-                background_blur_px: 41,
+                background_blur_px: 51,
                 ..preferences
             },
             NowPlayingAppearancePreferences {

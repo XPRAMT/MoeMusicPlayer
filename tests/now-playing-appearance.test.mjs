@@ -30,7 +30,7 @@ test('appearance preferences default and clamp to supported ranges', () => {
     coverCornerStyle: 'nope',
     timelineStyle: 'nope',
   }), {
-    backgroundBlurPx: 40,
+    backgroundBlurPx: 50,
     backgroundOpacityPercent: 22,
     coverCornerStyle: 'rounded',
     timelineStyle: 'edge',

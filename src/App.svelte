@@ -2152,7 +2152,7 @@
                 </div>
                 <label class="lyrics-preference-range">
                   <span><strong>背景模糊</strong><output>{themePreferences.mainBackgroundBlurPx}px</output></span>
-                  <input type="range" min="0" max="40" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label="主介面背景模糊程度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                  <input type="range" min="0" max="50" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label="主介面背景模糊程度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                 </label>
                 <label class="lyrics-preference-range">
                   <span><strong>背景透明度</strong><output>{themePreferences.mainBackgroundOpacityPercent}%</output></span>
@@ -2303,7 +2303,7 @@
                 </label>
                 <label class="lyrics-preference-range">
                   <span><strong>面板模糊</strong><output>{themePreferences.quickSettingsBlurPx}px</output></span>
-                  <input type="range" min="0" max="40" step="1" value={themePreferences.quickSettingsBlurPx} aria-label="快速設定面板模糊程度" oninput={(event) => updateQuickSettingsLook({ quickSettingsBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                  <input type="range" min="0" max="50" step="1" value={themePreferences.quickSettingsBlurPx} aria-label="快速設定面板模糊程度" oninput={(event) => updateQuickSettingsLook({ quickSettingsBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                 </label>
                 <p class="theme-save-status" class:error={themeSaveState === 'error'} role="status">{themeSaveMessage}</p>
               </div>

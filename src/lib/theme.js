@@ -34,10 +34,10 @@ export function normalizeThemePreferences(value) {
     quickSettingsBlurPx: normalizeRange(
       candidate.quickSettingsBlurPx,
       0,
-      40,
+      50,
       DEFAULT_THEME_PREFERENCES.quickSettingsBlurPx,
     ),
-    mainBackgroundBlurPx: normalizeRange(candidate.mainBackgroundBlurPx, 0, 40, DEFAULT_THEME_PREFERENCES.mainBackgroundBlurPx),
+    mainBackgroundBlurPx: normalizeRange(candidate.mainBackgroundBlurPx, 0, 50, DEFAULT_THEME_PREFERENCES.mainBackgroundBlurPx),
     mainBackgroundOpacityPercent: normalizeRange(
       candidate.mainBackgroundOpacityPercent ?? candidate.mainBackgroundBrightnessPercent,
       0,

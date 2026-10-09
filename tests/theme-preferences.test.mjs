@@ -126,8 +126,8 @@ test('invalid persisted values fall back to safe defaults', () => {
   });
   assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: 140 }).quickSettingsOpacityPercent, 100);
   assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: -4 }).quickSettingsOpacityPercent, 0);
-  assert.equal(normalizeThemePreferences({ quickSettingsBlurPx: 80 }).quickSettingsBlurPx, 40);
-  assert.equal(normalizeThemePreferences({ mainBackgroundBlurPx: 80 }).mainBackgroundBlurPx, 40);
+  assert.equal(normalizeThemePreferences({ quickSettingsBlurPx: 80 }).quickSettingsBlurPx, 50);
+  assert.equal(normalizeThemePreferences({ mainBackgroundBlurPx: 80 }).mainBackgroundBlurPx, 50);
   assert.equal(normalizeThemePreferences({ mainBackgroundOpacityPercent: -2 }).mainBackgroundOpacityPercent, 0);
   assert.equal(normalizeThemePreferences({ mainBackgroundBrightnessPercent: 55 }).mainBackgroundOpacityPercent, 55);
 });

@@ -23,7 +23,7 @@ export function normalizeNowPlayingAppearancePreferences(value = {}) {
   const timelineStyle = 'edge';
   return {
     backgroundBlurPx: Number.isFinite(blur)
-      ? Math.round(Math.max(0, Math.min(40, blur)))
+      ? Math.round(Math.max(0, Math.min(50, blur)))
       : DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES.backgroundBlurPx,
     backgroundOpacityPercent: Number.isFinite(opacity)
       ? Math.round(Math.max(0, Math.min(100, opacity)))

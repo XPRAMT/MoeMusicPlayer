@@ -58,7 +58,7 @@
     </div>
     <label class="lyrics-preference-range">
       <span><strong>封面背景模糊</strong><output>{appearance.backgroundBlurPx}px</output></span>
-      <input type="range" min="0" max="40" step="1" value={appearance.backgroundBlurPx} aria-label="封面背景模糊程度" oninput={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) }, true)} />
+      <input type="range" min="0" max="50" step="1" value={appearance.backgroundBlurPx} aria-label="封面背景模糊程度" oninput={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) }, true)} />
     </label>
     <label class="lyrics-preference-range">
       <span><strong>封面背景透明度</strong><output>{appearance.backgroundOpacityPercent}%</output></span>
