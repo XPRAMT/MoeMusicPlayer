@@ -2225,9 +2225,10 @@
                     <p>曲目的取樣率與輸出裝置不同時的轉換方式。兩種方式都使用 Windows 共享模式輸出，並非 bit-perfect；取樣率相同時不做任何轉換。</p>
                   </div>
                 </div>
-                <div class="layout-choice-row resampling-mode-row" role="group" aria-label="取樣率轉換方式">
+                <div class="resampling-stack" role="group" aria-label="取樣率轉換與 DSEE HX">
                   <button
                     type="button"
+                    class="layout-choice-button"
                     aria-label="高品質取樣率轉換"
                     aria-pressed={resamplingMode === 'highQuality'}
                     class:chosen={resamplingMode === 'highQuality'}
@@ -2239,6 +2240,7 @@
                   </button>
                   <button
                     type="button"
+                    class="layout-choice-button"
                     aria-label="Windows 內建取樣率轉換"
                     aria-pressed={resamplingMode === 'windowsBuiltin'}
                     class:chosen={resamplingMode === 'windowsBuiltin'}
@@ -2248,28 +2250,22 @@
                     <strong>Windows 內建</strong>
                     <span>以曲目的取樣率開啟輸出，交由 Windows 音訊引擎轉換為裝置格式。前後曲目取樣率不同時需重新開啟輸出，換曲時可能短暫停頓；裝置無法以該取樣率開啟時會自動改用高品質轉換。</span>
                   </button>
+                  <label class="resampling-option">
+                    <input
+                      type="checkbox"
+                      checked={dseeHx}
+                      disabled={dseeHxState === 'loading' || dseeHxState === 'saving'}
+                      onchange={(event) => setDseeHx(event.currentTarget.checked)}
+                    />
+                    <span class="resampling-option-copy">
+                      <strong>啟用 DSEE HX</strong>
+                      <small>串流透過 Sony Music Center 濾鏡處理，需要先安裝 Sony Music Center，播放器載入 'C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax'，本專案不會散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。</small>
+                    </span>
+                  </label>
                 </div>
                 <p class="settings-preference-status" class:error={resamplingModeState === 'error'} role="status">
                   {resamplingModeError ?? (resamplingModeState === 'loading' ? '正在讀取取樣率轉換設定…' : resamplingModeState === 'saving' ? '正在切換取樣率轉換方式…' : resamplingModeState === 'preview' ? '瀏覽器預覽不會保存取樣率轉換設定。' : '取樣率轉換設定已保存。')}
                 </p>
-                <div class="settings-panel-header">
-                  <div>
-                    <h3>DSEE HX</h3>
-                    <p>串流透過 Sony Music Center 濾鏡處理，需要先安裝 Sony Music Center，播放器載入 'C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax'，本專案不會散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。</p>
-                  </div>
-                </div>
-                <label class="resampling-option">
-                  <input
-                    type="checkbox"
-                    checked={dseeHx}
-                    disabled={dseeHxState === 'loading' || dseeHxState === 'saving'}
-                    onchange={(event) => setDseeHx(event.currentTarget.checked)}
-                  />
-                  <span class="resampling-option-copy">
-                    <strong>啟用 DSEE HX</strong>
-                    <small>關閉時維持原本的解碼與取樣率轉換。開啟後，符合格式的曲目才會進入濾鏡；濾鏡不存在或處理失敗時仍播放原解碼。</small>
-                  </span>
-                </label>
                 <p class="settings-preference-status" class:error={dseeHxState === 'error'} role="status">
                   {dseeHxError ?? (dseeHxState === 'loading' ? '正在讀取 DSEE HX 設定…' : dseeHxState === 'saving' ? '正在套用 DSEE HX…' : dseeHxState === 'preview' ? '瀏覽器預覽不會保存 DSEE HX 設定。' : dseeHx ? 'DSEE HX 已開啟。' : 'DSEE HX 已關閉。')}
                 </p>
