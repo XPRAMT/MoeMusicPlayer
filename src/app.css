@@ -3086,24 +3086,23 @@ input:focus-visible {
 }
 
 .player-dock[data-timeline-style="edge"] .progress-hit {
+  position: relative;
   grid-column: 1 / -1;
   grid-row: 1;
-  display: flex;
-  align-items: flex-end;
   width: 100%;
   height: var(--dock-progress-hit);
   min-height: var(--dock-progress-hit);
 }
 
 .player-dock[data-timeline-style="edge"] .progress-slider {
-  position: static;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  /* Fill the hit band for clicks; paint stays 3px at the bottom edge. */
   height: 100%;
   margin: 0;
   border-radius: 0;
-  background-position: center bottom;
-  background-size: 100% var(--dock-progress-track);
+  /* Hit target only — the 3px line is painted by .progress-hit::after. */
+  background: transparent;
 }
 
 /* Under full-width track; horizontal inset matches dock padding (pre-full-bleed labels). */
@@ -3376,17 +3375,24 @@ input:focus-visible {
 }
 
 .progress-hit {
+  --progress-pct: 0%;
+  --progress-glow: color-mix(in srgb, var(--accent) 72%, var(--accent-bright));
+  --progress-thumb: 10px;
+  position: relative;
   min-width: 0;
 }
 
-/* Progress track: darkest at both ends, brightest at the playhead (--progress-pct).
-   Edge layout pins this 3px control to the bottom of .progress-hit (= dock top). */
-.progress-slider {
-  --progress-pct: 0%;
-  /* Peak stays accent-tinted, not near-white. */
-  --progress-glow: color-mix(in srgb, var(--accent) 72%, var(--accent-bright));
-  --progress-thumb: 10px;
-  border-radius: 0;
+/* 3px painted track only — never used as the click height. */
+.progress-hit::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 0;
+  height: var(--dock-progress-track, 3px);
+  border-radius: 99px;
+  pointer-events: none;
   background: linear-gradient(
     90deg,
     rgba(var(--accent-rgb), 0.32) 0%,
@@ -3397,9 +3403,16 @@ input:focus-visible {
     rgba(var(--accent-rgb), 0.42) min(100%, calc(var(--progress-pct) + 32%)),
     rgba(var(--accent-rgb), 0.32) 100%
   );
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: 100% 100%;
+}
+
+.progress-hit:has(.progress-slider:disabled)::after {
+  opacity: 0.4;
+}
+
+.progress-slider {
+  z-index: 1;
+  border-radius: 0;
+  background: transparent;
 }
 
 .progress-slider::-webkit-slider-runnable-track {
@@ -3417,8 +3430,7 @@ input:focus-visible {
 .progress-slider::-webkit-slider-thumb {
   width: var(--progress-thumb);
   height: var(--progress-thumb);
-  /* Full-height hit + bottom-painted 3px track: shift thumb down onto that track.
-     margin-top = hit/2 − track/2 (WebKit offsets from the centered default). */
+  /* Sit on the bottom 3px painted track inside the taller hit band. */
   margin-top: calc(var(--dock-progress-hit, 28px) / 2 - var(--dock-progress-track, 3px) / 2);
   border: 1px solid var(--progress-glow);
   border-radius: 50%;

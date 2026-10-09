@@ -128,14 +128,13 @@
 
 <div class="progress-row" data-timeline-style={timelineStyle}>
   <span class="progress-time progress-time-elapsed">{formatDuration(displayedPositionMs)}</span>
-  <div class="progress-hit">
+  <div class="progress-hit" style={`--progress-pct: ${progressPercent}%`}>
     <input
       class="progress-slider"
       type="range"
       min="0"
       max={Math.max(1, durationMs ?? 0)}
       value={displayedPositionMs}
-      style={`--progress-pct: ${progressPercent}%`}
       aria-label="播放進度"
       disabled={!seekEnabled}
       onpointerdown={beginPointerSeek}
