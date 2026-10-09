@@ -2844,8 +2844,8 @@ input:focus-visible {
 
 .dock-art {
   display: grid;
-  width: 58px;
-  height: 58px;
+  width: 64px;
+  height: 64px;
   flex: 0 0 auto;
   place-items: center;
   /* No default nudge — only edge timeline times sit on the left border. */
@@ -3032,13 +3032,17 @@ input:focus-visible {
   justify-self: center;
 }
 
-/* Pin the painted track onto the content↔dock border-top. */
+/* Edge progress sits entirely above the dock (painted track flush to the top
+   edge from outside). Dock chrome vertically centers in the full 74px height;
+   time labels hang under the track into the dock and are not part of that center. */
 .player-dock[data-timeline-style="edge"] {
-  /* No extra top pad for time labels — labels may overlap the control band. Symmetric pad so controls center under the edge track. */
+  height: var(--dock-height);
   min-height: var(--dock-height);
-  padding-top: 5px;
-  padding-bottom: 5px;
+  padding-top: 0;
+  padding-bottom: 0;
   align-items: center;
+  grid-template-rows: minmax(0, 1fr);
+  row-gap: 0;
 }
 
 .player-dock[data-timeline-style="edge"] .dock-center {
@@ -3057,7 +3061,8 @@ input:focus-visible {
   width: auto;
   max-width: none;
   height: auto;
-  margin-top: -8px;
+  /* 16px hit/track band ends at dock top — nothing reserved inside the dock. */
+  margin-top: -16px;
   padding: 0;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 16px auto;
@@ -3083,6 +3088,8 @@ input:focus-visible {
   height: 16px;
   margin: 0;
   border-radius: 0;
+  /* Keep the 3px painted line on the dock top edge (bottom of this band). */
+  background-position: center bottom;
 }
 
 /* Under full-width track; horizontal inset matches dock padding (pre-full-bleed labels). */
@@ -3118,6 +3125,7 @@ input:focus-visible {
   grid-column: 1;
   grid-row: 1;
   align-self: center;
+  min-height: 0;
 }
 
 .player-dock[data-timeline-style="edge"] .dock-controls {
@@ -3125,15 +3133,18 @@ input:focus-visible {
   grid-row: 1;
   align-self: center;
   justify-self: center;
+  min-height: 0;
 }
 
 .player-dock[data-timeline-style="edge"] .dock-spacer {
   grid-column: 3;
   grid-row: 1;
+  align-self: center;
+  min-height: 0;
 }
 
 .app-shell.has-now-playing-backdrop .player-dock[data-timeline-style="edge"] {
-  grid-template-rows: minmax(44px, auto);
+  grid-template-rows: minmax(0, 1fr);
   row-gap: 0;
 }
 
@@ -3777,7 +3788,7 @@ input:focus-visible {
   .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; --dock-pad-x: 16px; padding-right: var(--dock-pad-x); padding-left: var(--dock-pad-x); }
   .dock-volume { gap: 7px; }
   .volume-popover .volume-slider { width: 110px; }
-  .dock-art { width: 54px; height: 54px; }
+  .dock-art { width: 58px; height: 58px; }
 }
 
 @media (max-width: 620px) {
