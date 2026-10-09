@@ -8,6 +8,7 @@ export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   quickSettingsBlurPx: 12,
   mainBackgroundBlurPx: 20,
   mainBackgroundOpacityPercent: 40,
+  autoTextColorThresholdPercent: 50,
 });
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
@@ -44,6 +45,12 @@ export function normalizeThemePreferences(value) {
       100,
       DEFAULT_THEME_PREFERENCES.mainBackgroundOpacityPercent,
     ),
+    autoTextColorThresholdPercent: normalizeRange(
+      candidate.autoTextColorThresholdPercent,
+      0,
+      100,
+      DEFAULT_THEME_PREFERENCES.autoTextColorThresholdPercent,
+    ),
   };
 }
 
@@ -74,25 +81,39 @@ function linearize(channel) {
   return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
 }
 
+/**
+ * WCAG relative luminance Y for an sRGB hex color (0–1).
+ * @param {string} hex
+ */
+export function relativeLuminance(hex) {
+  const [red, green, blue] = parseHexColor(isHexColor(hex) ? hex : DEFAULT_THEME_PREFERENCES.backgroundHex);
+  return 0.2126 * linearize(red) + 0.7152 * linearize(green) + 0.0722 * linearize(blue);
+}
+
 /** @param {string} first @param {string} second */
 export function contrastRatio(first, second) {
-  const luminance = (/** @type {string} */ color) => {
-    const [red, green, blue] = parseHexColor(color);
-    return 0.2126 * linearize(red) + 0.7152 * linearize(green) + 0.0722 * linearize(blue);
-  };
-  const left = luminance(first);
-  const right = luminance(second);
+  const left = relativeLuminance(first);
+  const right = relativeLuminance(second);
   const lighter = Math.max(left, right);
   const darker = Math.min(left, right);
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/** @param {string} backgroundHex */
-export function contrastingTextColor(backgroundHex) {
+/**
+ * Pick black or white text from relative luminance Y vs a 0–100 threshold.
+ * Y at or above the threshold → black; below → white.
+ * @param {string} backgroundHex
+ * @param {number} [thresholdPercent]
+ */
+export function contrastingTextColor(backgroundHex, thresholdPercent = DEFAULT_THEME_PREFERENCES.autoTextColorThresholdPercent) {
   const background = isHexColor(backgroundHex) ? backgroundHex : DEFAULT_THEME_PREFERENCES.backgroundHex;
-  const whiteContrast = contrastRatio(background, '#FFFFFF');
-  const blackContrast = contrastRatio(background, '#000000');
-  return whiteContrast >= blackContrast ? '#FFFFFF' : '#000000';
+  const threshold = normalizeRange(
+    thresholdPercent,
+    0,
+    100,
+    DEFAULT_THEME_PREFERENCES.autoTextColorThresholdPercent,
+  ) / 100;
+  return relativeLuminance(background) >= threshold ? '#000000' : '#FFFFFF';
 }
 
 /** @param {number[]} channels */
@@ -156,8 +177,10 @@ export function createThemeCssVariables(value, options = {}) {
   const contrastBackground = isHexColor(options.contrastBackgroundHex)
     ? options.contrastBackgroundHex.toUpperCase()
     : preferences.backgroundHex;
-  const textColor = contrastingTextColor(contrastBackground);
-  const textInverse = contrastingTextColor(textColor);
+  const threshold = preferences.autoTextColorThresholdPercent;
+  const textColor = contrastingTextColor(contrastBackground, threshold);
+  // Inverse is always the other of black/white; do not re-run the Y threshold on the text color.
+  const textInverse = textColor === '#000000' ? '#FFFFFF' : '#000000';
   const textChannels = channels(textColor);
   const textInverseChannels = channels(textInverse);
   const panel = readableSurfaceBlend(contrastBackground, textColor, 0.075);
@@ -195,7 +218,7 @@ export function createThemeCssVariables(value, options = {}) {
     '--accent-rgb': channels(preferences.accentHex),
     '--accent-bright': blend(preferences.accentHex, textColor, 0.18),
     '--accent-text': accentText,
-    '--accent-foreground': contrastingTextColor(preferences.accentHex),
+    '--accent-foreground': contrastingTextColor(preferences.accentHex, threshold),
     '--status-danger': statusText('#A61B1B'),
     '--status-success': statusText('#1F6B4F'),
     '--status-warning': statusText('#805500'),

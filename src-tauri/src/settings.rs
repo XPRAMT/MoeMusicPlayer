@@ -42,6 +42,9 @@ pub struct ThemeSettings {
         alias = "mainBackgroundBrightnessPercent"
     )]
     pub main_background_opacity_percent: u8,
+    /// Relative-luminance Y threshold (0–100). At/above → black text; below → white text.
+    #[serde(default = "default_auto_text_color_threshold_percent")]
+    pub auto_text_color_threshold_percent: u8,
 }
 
 fn default_quick_settings_opacity_percent() -> u8 {
@@ -60,6 +63,10 @@ fn default_main_background_opacity_percent() -> u8 {
     40
 }
 
+fn default_auto_text_color_threshold_percent() -> u8 {
+    50
+}
+
 impl Default for ThemeSettings {
     fn default() -> Self {
         Self {
@@ -69,6 +76,7 @@ impl Default for ThemeSettings {
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
             main_background_opacity_percent: default_main_background_opacity_percent(),
+            auto_text_color_threshold_percent: default_auto_text_color_threshold_percent(),
         }
     }
 }
@@ -894,6 +902,11 @@ impl AppSettings {
         if self.theme.main_background_opacity_percent > 100 {
             return Err(SettingsError::InvalidData(
                 "mainBackgroundOpacityPercent must be between 0 and 100".into(),
+            ));
+        }
+        if self.theme.auto_text_color_threshold_percent > 100 {
+            return Err(SettingsError::InvalidData(
+                "autoTextColorThresholdPercent must be between 0 and 100".into(),
             ));
         }
         self.lyrics_preferences.validate()?;

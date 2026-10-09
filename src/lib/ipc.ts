@@ -66,6 +66,11 @@ export interface ThemePreferences {
   mainBackgroundBlurPx: number;
   /** Image opacity percent (0–100); UI label is 背景透明度, same convention as quickSettingsOpacityPercent. */
   mainBackgroundOpacityPercent: number;
+  /**
+   * Relative-luminance Y threshold (0–100). At/above → black text; below → white text.
+   * UI label is 自動切換文字顏色閥值.
+   */
+  autoTextColorThresholdPercent: number;
 }
 
 export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount';

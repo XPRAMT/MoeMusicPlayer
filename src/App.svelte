@@ -462,6 +462,7 @@
     void nowPlayingContrastBackgroundHex;
     void themePreferences.backgroundHex;
     void themePreferences.accentHex;
+    void themePreferences.autoTextColorThresholdPercent;
     applyActiveTheme();
   });
 
@@ -2164,7 +2165,7 @@
                 <div class="settings-panel-header">
                   <div>
                     <h3>顏色</h3>
-                    <p>自訂背景與主色。文字會依背景自動選擇黑色或白色，保持清楚對比。</p>
+                    <p>自訂背景與主色。文字黑白依下方閥值與背景相對亮度自動切換。</p>
                   </div>
                   <button class="soft-button" type="button" onclick={resetThemePreferences}>恢復預設</button>
                 </div>
@@ -2196,6 +2197,19 @@
                     </span>
                   </label>
                 </div>
+                <label class="lyrics-preference-range">
+                  <span><strong>自動切換文字顏色閥值</strong><output>{themePreferences.autoTextColorThresholdPercent}%</output></span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={themePreferences.autoTextColorThresholdPercent}
+                    aria-label="自動切換文字顏色閥值"
+                    oninput={(event) => updateMainBackgroundLook({ autoTextColorThresholdPercent: Number(event.currentTarget.value) })}
+                    onchange={saveThemePreferencesNow}
+                  />
+                </label>
                 <div class="settings-panel-header">
                   <div>
                     <h3>主介面背景</h3>

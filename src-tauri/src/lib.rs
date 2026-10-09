@@ -101,6 +101,8 @@ struct ThemePreferencesDto {
         alias = "mainBackgroundBrightnessPercent"
     )]
     main_background_opacity_percent: u8,
+    #[serde(default = "default_auto_text_color_threshold_percent")]
+    auto_text_color_threshold_percent: u8,
 }
 
 fn default_quick_settings_opacity_percent() -> u8 {
@@ -119,6 +121,10 @@ fn default_main_background_opacity_percent() -> u8 {
     40
 }
 
+fn default_auto_text_color_threshold_percent() -> u8 {
+    50
+}
+
 impl From<ThemePreferences> for ThemePreferencesDto {
     fn from(preferences: ThemePreferences) -> Self {
         Self {
@@ -128,6 +134,7 @@ impl From<ThemePreferences> for ThemePreferencesDto {
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
             main_background_opacity_percent: default_main_background_opacity_percent(),
+            auto_text_color_threshold_percent: default_auto_text_color_threshold_percent(),
         }
     }
 }
@@ -150,6 +157,7 @@ impl From<ThemeSettings> for ThemePreferencesDto {
             quick_settings_blur_px: preferences.quick_settings_blur_px,
             main_background_blur_px: preferences.main_background_blur_px,
             main_background_opacity_percent: preferences.main_background_opacity_percent,
+            auto_text_color_threshold_percent: preferences.auto_text_color_threshold_percent,
         }
     }
 }
@@ -2875,6 +2883,7 @@ fn theme_set_preferences(
         quick_settings_blur_px: preferences.quick_settings_blur_px,
         main_background_blur_px: preferences.main_background_blur_px,
         main_background_opacity_percent: preferences.main_background_opacity_percent,
+        auto_text_color_threshold_percent: preferences.auto_text_color_threshold_percent,
     };
     state
         .settings

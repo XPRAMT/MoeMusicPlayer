@@ -7,6 +7,7 @@ import {
   contrastingTextColor,
   createThemeCssVariables,
   normalizeThemePreferences,
+  relativeLuminance,
   applyTheme,
 } from '../src/lib/theme.js';
 
@@ -18,14 +19,22 @@ test('default appearance uses pure black and a water-blue accent', () => {
     quickSettingsBlurPx: 12,
     mainBackgroundBlurPx: 20,
     mainBackgroundOpacityPercent: 40,
+    autoTextColorThresholdPercent: 50,
   });
 });
 
-test('text color automatically reaches WCAG AA contrast on light and dark backgrounds', () => {
-  for (const background of ['#000000', '#FFFFFF', '#55D9FF', '#7A3CE7', '#A8B0B8']) {
-    const text = contrastingTextColor(background);
-    assert.ok(contrastRatio(background, text) >= 4.5, `${text} on ${background} must reach 4.5:1`);
-  }
+test('text color follows relative-luminance Y against the threshold', () => {
+  assert.equal(contrastingTextColor('#000000', 50), '#FFFFFF');
+  assert.equal(contrastingTextColor('#FFFFFF', 50), '#000000');
+  assert.ok(relativeLuminance('#808080') < 0.5);
+  assert.equal(contrastingTextColor('#808080', 50), '#FFFFFF');
+  assert.equal(contrastingTextColor('#808080', 10), '#000000');
+  // Threshold 100%: only Y >= 1 (pure white) uses black text.
+  assert.equal(contrastingTextColor('#FFFFFF', 100), '#000000');
+  assert.equal(contrastingTextColor('#FEFEFE', 100), '#FFFFFF');
+  // Threshold 0%: every color uses black text.
+  assert.equal(contrastingTextColor('#000000', 0), '#000000');
+  assert.equal(contrastingTextColor('#FFFFFF', 0), '#000000');
 });
 
 test('theme variables follow both selected colors and derive coordinated surfaces', () => {
@@ -34,7 +43,10 @@ test('theme variables follow both selected colors and derive coordinated surface
   assert.equal(variables['--accent'], '#D84A9A');
   assert.equal(variables['--text'], '#FFFFFF');
   assert.notEqual(variables['--panel'], variables['--page']);
-  assert.ok(contrastRatio('#D84A9A', variables['--accent-foreground']) >= 4.5);
+  assert.equal(
+    variables['--accent-foreground'],
+    contrastingTextColor('#D84A9A', DEFAULT_THEME_PREFERENCES.autoTextColorThresholdPercent),
+  );
 });
 
 test('composite background mixes page color with image average by opacity', () => {
@@ -66,42 +78,45 @@ test('text inverse is always the opposite of the chosen text color', () => {
   assert.equal(light['--text-inverse'], '#FFFFFF');
 });
 
-test('accent and status text colors retain readable contrast on either background', () => {
-  const backgrounds = ['#FFFFFF', '#000000', '#55D9FF', '#4A226E'];
+test('threshold preference switches text without using contrast comparison', () => {
+  const low = createThemeCssVariables({
+    backgroundHex: '#808080',
+    accentHex: '#55D9FF',
+    autoTextColorThresholdPercent: 10,
+  });
+  assert.equal(low['--text'], '#000000');
+  assert.equal(low['--color-scheme'], 'light');
+  const high = createThemeCssVariables({
+    backgroundHex: '#808080',
+    accentHex: '#55D9FF',
+    autoTextColorThresholdPercent: 50,
+  });
+  assert.equal(high['--text'], '#FFFFFF');
+  assert.equal(high['--color-scheme'], 'dark');
+});
+
+test('color scheme follows the Y threshold for every gray background', () => {
   for (let channel = 0; channel <= 255; channel += 1) {
     const value = channel.toString(16).padStart(2, '0');
-    backgrounds.push(`#${value}${value}${value}`);
-  }
-  for (const backgroundHex of backgrounds) {
+    const backgroundHex = `#${value}${value}${value}`;
     const variables = createThemeCssVariables({ backgroundHex, accentHex: '#55D9FF' });
-    const surfaces = ['--page', '--panel', '--panel-soft', '--sidebar-bg', '--dock-bg']
-      .map((name) => variables[name]);
-    for (const name of ['--text', '--text-soft', '--muted', '--quiet', '--accent-text', '--status-danger', '--status-success', '--status-warning']) {
-      for (const surface of surfaces) {
-        assert.ok(
-          contrastRatio(surface, variables[name]) >= 4.5,
-          `${name} must remain readable against ${surface} derived from ${backgroundHex}`,
-        );
-      }
-    }
-    const expectedColorScheme = contrastRatio(backgroundHex, '#000000') > contrastRatio(backgroundHex, '#FFFFFF')
-      ? 'light'
-      : 'dark';
-    assert.equal(variables['--color-scheme'], expectedColorScheme);
+    const expectedText = relativeLuminance(backgroundHex)
+      >= DEFAULT_THEME_PREFERENCES.autoTextColorThresholdPercent / 100
+      ? '#000000'
+      : '#FFFFFF';
+    assert.equal(variables['--text'], expectedText, backgroundHex);
+    assert.equal(variables['--color-scheme'], expectedText === '#000000' ? 'light' : 'dark');
+    assert.equal(variables['--text-inverse'], expectedText === '#000000' ? '#FFFFFF' : '#000000');
   }
 });
 
-test('low-luminance accents keep labels and filled-control text readable', () => {
-  for (const backgroundHex of ['#000000', '#FFFFFF', '#636363']) {
-    for (const accentHex of ['#000000', '#03060B', '#171717', '#FFFFFF', '#55D9FF']) {
-      const variables = createThemeCssVariables({ backgroundHex, accentHex });
-      const surfaces = ['--page', '--panel', '--panel-soft', '--sidebar-bg', '--dock-bg']
-        .map((name) => variables[name]);
-      for (const surface of surfaces) {
-        assert.ok(contrastRatio(surface, variables['--accent-text']) >= 4.5);
-      }
-      assert.ok(contrastRatio(accentHex, variables['--accent-foreground']) >= 4.5);
-    }
+test('low-luminance accents keep filled-control text on the threshold rule', () => {
+  for (const accentHex of ['#000000', '#03060B', '#171717', '#FFFFFF', '#55D9FF', '#D84A9A']) {
+    const variables = createThemeCssVariables({ backgroundHex: '#000000', accentHex });
+    assert.equal(
+      variables['--accent-foreground'],
+      contrastingTextColor(accentHex, DEFAULT_THEME_PREFERENCES.autoTextColorThresholdPercent),
+    );
   }
 });
 
@@ -123,6 +138,7 @@ test('invalid persisted values fall back to safe defaults', () => {
     quickSettingsBlurPx: 12,
     mainBackgroundBlurPx: 20,
     mainBackgroundOpacityPercent: 40,
+    autoTextColorThresholdPercent: 50,
   });
   assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: 140 }).quickSettingsOpacityPercent, 100);
   assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: -4 }).quickSettingsOpacityPercent, 0);
@@ -130,4 +146,6 @@ test('invalid persisted values fall back to safe defaults', () => {
   assert.equal(normalizeThemePreferences({ mainBackgroundBlurPx: 80 }).mainBackgroundBlurPx, 50);
   assert.equal(normalizeThemePreferences({ mainBackgroundOpacityPercent: -2 }).mainBackgroundOpacityPercent, 0);
   assert.equal(normalizeThemePreferences({ mainBackgroundBrightnessPercent: 55 }).mainBackgroundOpacityPercent, 55);
+  assert.equal(normalizeThemePreferences({ autoTextColorThresholdPercent: 140 }).autoTextColorThresholdPercent, 100);
+  assert.equal(normalizeThemePreferences({ autoTextColorThresholdPercent: -3 }).autoTextColorThresholdPercent, 0);
 });
