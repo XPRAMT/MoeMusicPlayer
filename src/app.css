@@ -528,8 +528,8 @@ input:focus-visible {
 }
 
 .sidebar {
-  /* Window top → icon (= titlebar + inset) equals icon → 曲庫 (brand-lockup margin-bottom). */
-  --sidebar-brand-size: 56px;
+  /* Space above the icon (below the titlebar) equals space from icon to 曲庫. */
+  --sidebar-brand-size: 64px;
   --sidebar-brand-inset: 28px;
   grid-column: 1;
   grid-row: 1;
@@ -546,7 +546,7 @@ input:focus-visible {
   align-items: center;
   gap: 11px;
   min-width: 0;
-  margin: 0 0 calc(var(--window-titlebar-height, 0px) + var(--sidebar-brand-inset)) 5px;
+  margin: 0 0 var(--sidebar-brand-inset) 5px;
 }
 
 .brand-mark {
@@ -3816,7 +3816,7 @@ input:focus-visible {
   }
   .brand-lockup {
     justify-content: center;
-    margin: 0 0 calc(var(--window-titlebar-height, 0px) + var(--sidebar-brand-inset));
+    margin: 0 0 var(--sidebar-brand-inset);
   }
   .brand-wordmark,
   .sidebar-caption,

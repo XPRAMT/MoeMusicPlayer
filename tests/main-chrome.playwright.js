@@ -78,7 +78,7 @@ async page => {
   }
 
   const brandBox = await page.locator('.brand-mark img').boundingBox();
-  assert(brandBox && brandBox.width >= 55 && brandBox.height >= 55, 'brand icon size: ' + JSON.stringify(brandBox));
+  assert(brandBox && brandBox.width >= 63 && brandBox.height >= 63, 'brand icon size: ' + JSON.stringify(brandBox));
   const brandFit = await page.evaluate(() => {
     const sidebar = document.querySelector('.sidebar').getBoundingClientRect();
     const lockup = document.querySelector('.brand-lockup').getBoundingClientRect();
