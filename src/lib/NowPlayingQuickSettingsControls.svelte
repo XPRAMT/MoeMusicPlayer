@@ -11,18 +11,23 @@
     onLyricsChange: (patch: Partial<LyricsPreferences>, flush?: boolean) => void;
     onLyricsReset: () => void;
     groups?: 'playback' | 'lyrics' | 'both';
+    showGroupHeading?: boolean;
   }
 
   let {
     layout, appearance, lyrics,
-    onLayoutChange, onAppearanceChange, onLyricsChange, onLyricsReset, groups = 'both',
+    onLayoutChange, onAppearanceChange, onLyricsChange, onLyricsReset,
+    groups = 'both',
+    showGroupHeading = true,
   }: Props = $props();
 </script>
 
 <div class="quick-settings-controls">
   {#if groups === 'playback' || groups === 'both'}
-  <section class="quick-settings-group" aria-labelledby="quick-settings-playback-heading">
-    <h3 id="quick-settings-playback-heading">播放頁</h3>
+  <section class="quick-settings-group" aria-label={showGroupHeading ? undefined : '封面與歌詞排列'} aria-labelledby={showGroupHeading ? 'quick-settings-playback-heading' : undefined}>
+    {#if showGroupHeading}
+      <h3 id="quick-settings-playback-heading">播放頁</h3>
+    {/if}
     <NowPlayingLayoutSwitch {layout} onChange={onLayoutChange} />
     <div class="cover-corner-setting" role="group" aria-labelledby="cover-corner-style-label">
       <span id="cover-corner-style-label" class="cover-corner-setting-label"><strong>專輯封面造型</strong></span>
@@ -59,11 +64,13 @@
   {/if}
 
   {#if groups === 'lyrics' || groups === 'both'}
-  <section class="quick-settings-group" aria-labelledby="quick-settings-lyrics-heading">
-    <div class="quick-settings-group-heading">
-      <h3 id="quick-settings-lyrics-heading">歌詞外觀</h3>
-      <button class="outline-button" type="button" onclick={onLyricsReset}>恢復預設</button>
-    </div>
+  <section class="quick-settings-group" aria-label={showGroupHeading ? undefined : '歌詞顯示'} aria-labelledby={showGroupHeading ? 'quick-settings-lyrics-heading' : undefined}>
+    {#if showGroupHeading}
+      <div class="quick-settings-group-heading">
+        <h3 id="quick-settings-lyrics-heading">歌詞外觀</h3>
+        <button class="outline-button" type="button" onclick={onLyricsReset}>恢復預設</button>
+      </div>
+    {/if}
     <label class="lyrics-preference-toggle">
       <input type="checkbox" checked={lyrics.showTranslation} onchange={(event) => onLyricsChange({ showTranslation: event.currentTarget.checked }, true)} />
       <span><strong>顯示譯文</strong><small>在每行原文下方顯示翻譯</small></span>
@@ -77,7 +84,7 @@
       <span><strong>簡體轉繁體</strong><small>播放時把整首歌詞轉成繁體字形，不改用詞，也不另存檔案</small></span>
     </label>
     <div class="cover-corner-setting" role="group" aria-labelledby="lyrics-text-effect-label">
-      <span id="lyrics-text-effect-label" class="cover-corner-setting-label"><strong>歌詞文字效果</strong></span>
+      <span id="lyrics-text-effect-label" class="cover-corner-setting-label"><strong>歌詞外觀</strong></span>
       <div class="layout-choice-row lyrics-text-effect-row">
         <button
           type="button"
@@ -95,7 +102,7 @@
         >描邊</button>
         <button
           type="button"
-          aria-label="關閉歌詞文字效果"
+          aria-label="關閉歌詞外觀"
           aria-pressed={lyrics.textEffect === 'none'}
           class:chosen={lyrics.textEffect === 'none'}
           onclick={() => onLyricsChange({ textEffect: 'none' }, true)}

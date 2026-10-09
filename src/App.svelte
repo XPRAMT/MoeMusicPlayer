@@ -2256,12 +2256,12 @@
               <div id="{scope}now-playing-layout-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}now-playing-tab" tabindex="0">
                 <div class="settings-panel-header">
                   <div>
-                    <h3>正在播放排列</h3>
-                    <p>只調整封面與歌詞區域的排列，不會重新載入播放或歌詞狀態。窄視窗會依選項順序堆疊。</p>
+                    <h3>封面與歌詞排列</h3>
                   </div>
                 </div>
                 <NowPlayingQuickSettingsControls
                   groups="playback"
+                  showGroupHeading={false}
                   layout={nowPlayingLayout}
                   appearance={nowPlayingAppearancePreferences}
                   lyrics={lyricsPreferences}
@@ -2290,11 +2290,12 @@
                 <div class="settings-panel-header">
                   <div>
                     <h3>歌詞顯示</h3>
-                    <p>設定會套用到所有歌曲；播放頁上方的「譯」「羅」按鈕也會更新同一組偏好。</p>
                   </div>
+                  <button class="outline-button" type="button" onclick={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}>恢復預設</button>
                 </div>
                 <NowPlayingQuickSettingsControls
                   groups="lyrics"
+                  showGroupHeading={false}
                   layout={nowPlayingLayout}
                   appearance={nowPlayingAppearancePreferences}
                   lyrics={lyricsPreferences}
