@@ -37,4 +37,8 @@ test('quick settings offers three text-effect choices', () => {
   assert.match(source, /textEffect: 'stroke'/);
   assert.match(source, /textEffect: 'none'/);
   assert.match(source, /歌詞文字效果/);
+  assert.match(source, /lyrics-text-effect-row/);
+  assert.doesNotMatch(source, /文字加上柔和陰影/);
+  assert.doesNotMatch(source, /文字加上外框描邊/);
+  assert.doesNotMatch(source, /不描邊也不加陰影/);
 });

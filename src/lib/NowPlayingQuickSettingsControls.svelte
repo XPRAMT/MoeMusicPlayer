@@ -90,34 +90,28 @@
     </label>
     <div class="cover-corner-setting" role="group" aria-labelledby="lyrics-text-effect-label">
       <span id="lyrics-text-effect-label" class="cover-corner-setting-label"><strong>歌詞文字效果</strong></span>
-      <div class="layout-choice-row cover-corner-choice-row">
+      <div class="layout-choice-row lyrics-text-effect-row">
         <button
           type="button"
           aria-label="歌詞陰影"
           aria-pressed={lyrics.textEffect === 'shadow'}
           class:chosen={lyrics.textEffect === 'shadow'}
           onclick={() => onLyricsChange({ textEffect: 'shadow' }, true)}
-        >
-          <strong>陰影</strong><span>文字加上柔和陰影</span>
-        </button>
+        >陰影</button>
         <button
           type="button"
           aria-label="歌詞描邊"
           aria-pressed={lyrics.textEffect === 'stroke'}
           class:chosen={lyrics.textEffect === 'stroke'}
           onclick={() => onLyricsChange({ textEffect: 'stroke' }, true)}
-        >
-          <strong>描邊</strong><span>文字加上外框描邊</span>
-        </button>
+        >描邊</button>
         <button
           type="button"
           aria-label="關閉歌詞文字效果"
           aria-pressed={lyrics.textEffect === 'none'}
           class:chosen={lyrics.textEffect === 'none'}
           onclick={() => onLyricsChange({ textEffect: 'none' }, true)}
-        >
-          <strong>關閉</strong><span>不描邊也不加陰影</span>
-        </button>
+        >關閉</button>
       </div>
     </div>
     <label class="lyrics-preference-range">
