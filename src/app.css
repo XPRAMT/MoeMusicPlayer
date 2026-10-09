@@ -2428,8 +2428,7 @@ input:focus-visible {
   text-align: left;
 }
 
-.layout-choice-row.lyrics-text-effect-row button,
-.layout-choice-row.resampling-mode-row button {
+.layout-choice-row.lyrics-text-effect-row button {
   min-height: 36px;
   align-content: center;
   place-items: center;
@@ -2441,8 +2440,7 @@ input:focus-visible {
   font-weight: 600;
 }
 
-.layout-choice-row.lyrics-text-effect-row button.chosen,
-.layout-choice-row.resampling-mode-row button.chosen {
+.layout-choice-row.lyrics-text-effect-row button.chosen {
   color: var(--accent-text);
 }
 

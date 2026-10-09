@@ -2233,7 +2233,10 @@
                     class:chosen={resamplingMode === 'highQuality'}
                     disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
                     onclick={() => setResamplingMode('highQuality')}
-                  >高品質</button>
+                  >
+                    <strong>高品質</strong>
+                    <span>輸出維持在裝置的混音取樣率，由 rubato 的 FFT 進行取樣率轉換（區塊大小 2048）。濾波範圍依來源與輸出取樣率自動調整；取樣率相同時直接輸出。切換不同取樣率的曲目時不必重新開啟輸出。</span>
+                  </button>
                   <button
                     type="button"
                     aria-label="Windows 內建取樣率轉換"
@@ -2241,7 +2244,10 @@
                     class:chosen={resamplingMode === 'windowsBuiltin'}
                     disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
                     onclick={() => setResamplingMode('windowsBuiltin')}
-                  >Windows 內建</button>
+                  >
+                    <strong>Windows 內建</strong>
+                    <span>以曲目的取樣率開啟輸出，交由 Windows 音訊引擎轉換為裝置格式。前後曲目取樣率不同時需重新開啟輸出，換曲時可能短暫停頓；裝置無法以該取樣率開啟時會自動改用高品質轉換。</span>
+                  </button>
                 </div>
                 <p class="settings-preference-status" class:error={resamplingModeState === 'error'} role="status">
                   {resamplingModeError ?? (resamplingModeState === 'loading' ? '正在讀取取樣率轉換設定…' : resamplingModeState === 'saving' ? '正在切換取樣率轉換方式…' : resamplingModeState === 'preview' ? '瀏覽器預覽不會保存取樣率轉換設定。' : '取樣率轉換設定已保存。')}
