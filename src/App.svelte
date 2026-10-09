@@ -2492,7 +2492,7 @@
   class:has-custom-titlebar={showCustomTitlebar}
   data-active-view={activeView}
   class:has-main-backdrop={mainBackgroundUrl !== null}
-  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-opacity: ${nowPlayingAppearancePreferences.backgroundOpacityPercent / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100};`}
+  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-opacity: ${nowPlayingAppearancePreferences.backgroundOpacityPercent / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100}; --quick-settings-opacity: ${themePreferences.quickSettingsOpacityPercent}%; --quick-settings-blur: ${themePreferences.quickSettingsBlurPx}px;`}
 >
   {#if showCustomTitlebar}
     <WindowTitlebar transparent={isNowPlayingOpen || mainBackgroundUrl !== null} />
@@ -2751,17 +2751,6 @@
           </section>
         {:else if activeView === 'queue'}
           <section class="queue-page" aria-labelledby="page-heading">
-            <div class="section-heading">
-              <div>
-                <p class="queue-current-track">
-                  {#if playback?.currentTrack}
-                    目前播放：{currentTrackTitle(playback.currentTrack)}
-                  {:else}
-                    尚未選擇曲目
-                  {/if}
-                </p>
-              </div>
-            </div>
             {#if !playbackReady}
               <div class="not-ready-panel" role="status">
                 <div class="not-ready-icon" aria-hidden="true"><IconList size={22} stroke={1.6} /></div>

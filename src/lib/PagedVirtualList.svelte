@@ -52,6 +52,8 @@
     rowActivates?: boolean;
     longPressReorder?: boolean;
     onReorder?: (from: number, to: number) => void | Promise<void>;
+    /** Bump `token` to scroll `index` into view (centered when possible). */
+    scrollToIndexRequest?: { index: number; token: number } | null;
     header?: Snippet;
     row: Snippet<[VirtualListRow<Item>]>;
   }
@@ -85,6 +87,7 @@
     rowActivates = true,
     longPressReorder = false,
     onReorder = () => {},
+    scrollToIndexRequest = null,
     header,
     row,
   }: Props<Item> = $props();
@@ -196,6 +199,38 @@
     }
     if (nextScrollTop !== viewport.scrollTop) viewport.scrollTo({ top: nextScrollTop });
   }
+
+  function scrollIndexIntoView(index: number, align: 'nearest' | 'center' = 'center'): void {
+    const maxIndex = Math.max(0, virtualTotalCount - 1);
+    const target = Math.max(0, Math.min(maxIndex, index));
+    activeIndex = target;
+    if (!viewport) return;
+    const rowTop = target * rowHeight;
+    let nextScrollTop = viewport.scrollTop;
+    if (align === 'center') {
+      nextScrollTop = rowTop - Math.max(0, (viewport.clientHeight - rowHeight) / 2);
+    } else {
+      const rowBottom = rowTop + rowHeight;
+      if (rowTop < nextScrollTop) nextScrollTop = rowTop;
+      else if (rowBottom > nextScrollTop + viewport.clientHeight) {
+        nextScrollTop = rowBottom - viewport.clientHeight;
+      }
+    }
+    const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    nextScrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
+    viewport.scrollTo({ top: nextScrollTop });
+    scrollTop = nextScrollTop;
+  }
+
+  let seenScrollRequestToken = $state<number | null>(null);
+  $effect(() => {
+    const request = scrollToIndexRequest;
+    const readyViewport = viewport;
+    if (!request || !readyViewport) return;
+    if (seenScrollRequestToken === request.token) return;
+    seenScrollRequestToken = request.token;
+    scrollIndexIntoView(request.index, 'center');
+  });
 
   function playRow(item: Item | null, index: number): void {
     if (item === null) return;

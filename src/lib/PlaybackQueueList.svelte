@@ -52,12 +52,17 @@
   let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
   let currentEntryPosition = $state<number | null>(null);
+  let currentTraversalIndex = $state<number | null>(null);
   let cursorError = $state<string | null>(null);
+  let locateError = $state<string | null>(null);
   let reorderError = $state<string | null>(null);
   let reordering = $state(false);
+  let locating = $state(false);
   let cursorProbeGeneration = 0;
   let reorderGeneration = 0;
   let seenCursorChangeKey: number | undefined;
+  let scrollToIndexRequest = $state<{ index: number; token: number } | null>(null);
+  let scrollRequestToken = 0;
 
   type ListSnapshot = ReturnType<PagedListController<PlaybackQueuePageItem, number>['snapshot']>;
   let queueSnapshot = $state<ListSnapshot>({
@@ -90,6 +95,7 @@
     const currentResetKey = resetKey;
     cursorProbeGeneration += 1;
     currentEntryPosition = null;
+    currentTraversalIndex = null;
     cursorError = null;
     queue.reset(currentResetKey, currentResetKey);
     void queue.ensureRange(0, TRACK_PAGE_SIZE);
@@ -115,19 +121,27 @@
   function updateCurrentEntry(page: PlaybackQueuePage, requestedResetKey: number, requestedCursorGeneration: number): void {
     if (requestedResetKey !== resetKey || requestedCursorGeneration !== cursorProbeGeneration) return;
     currentEntryPosition = playbackQueueCurrentEntryPosition(page);
+    const cursor = page.cursor;
+    currentTraversalIndex = cursor === null || cursor === undefined
+      ? null
+      : Number.isSafeInteger(cursor) && cursor >= 0
+        ? cursor
+        : null;
   }
 
-  async function refreshCurrentEntry(): Promise<void> {
+  async function refreshCurrentEntry(): Promise<PlaybackQueuePage | null> {
     const requestedResetKey = resetKey;
     const requestedCursorGeneration = ++cursorProbeGeneration;
     cursorError = null;
     try {
       const page = await requestPage({ offset: 0, limit: 1 });
       updateCurrentEntry(page, requestedResetKey, requestedCursorGeneration);
+      return page;
     } catch (error) {
       if (requestedResetKey === resetKey && requestedCursorGeneration === cursorProbeGeneration) {
         cursorError = getErrorText(error);
       }
+      return null;
     }
   }
 
@@ -165,6 +179,7 @@
       }
       cursorProbeGeneration += 1;
       currentEntryPosition = null;
+      currentTraversalIndex = null;
       reorderGeneration += 1;
       // reset() is a no-op when scope and resetKey are unchanged; bump the key.
       queue.reset(resetKey, `${resetKey}:reorder:${reorderGeneration}`);
@@ -175,9 +190,38 @@
       reordering = false;
     }
   }
+
+  async function locateCurrentTrack(): Promise<void> {
+    if (locating || snapshot.totalCount === 0) return;
+    locating = true;
+    locateError = null;
+    try {
+      let index = currentTraversalIndex;
+      if (index === null) {
+        const page = await refreshCurrentEntry();
+        index = page && page.cursor !== null && Number.isSafeInteger(page.cursor) && page.cursor >= 0
+          ? page.cursor
+          : null;
+      }
+      if (index === null) {
+        locateError = '目前沒有可定位的播放曲目。';
+        return;
+      }
+      const start = Math.max(0, index - Math.floor(TRACK_PAGE_SIZE / 2));
+      await queue.ensureRange(start, start + TRACK_PAGE_SIZE);
+      scrollRequestToken += 1;
+      scrollToIndexRequest = { index, token: scrollRequestToken };
+    } catch (error) {
+      locateError = getErrorText(error);
+    } finally {
+      locating = false;
+    }
+  }
+
+  const canLocateCurrent = $derived(snapshot.totalCount !== null && snapshot.totalCount > 0);
 </script>
 
-<div class="track-list-shell">
+<div class="track-list-shell queue-list-shell">
 {#if snapshot.errors.length > 0}
   <div class="track-list-error" role="alert">
     <span>{getErrorText(snapshot.errors[0]?.message)}</span>
@@ -190,6 +234,9 @@
 {#if reorderError}
   <div class="queue-cursor-error" role="alert">調整順序失敗：{reorderError}</div>
 {/if}
+{#if locateError}
+  <div class="queue-cursor-error" role="status">{locateError}</div>
+{/if}
 
 {#if snapshot.totalCount === 0}
   <div class="empty-panel queue-empty" role="status">
@@ -199,7 +246,7 @@
 {:else}
   <PagedVirtualList
     totalCount={snapshot.totalCount}
-    pending={snapshot.pendingPageCount > 0 || reordering}
+    pending={snapshot.pendingPageCount > 0 || reordering || locating}
     revision={snapshot.revision}
     generation={snapshot.generation}
     {itemAt}
@@ -220,6 +267,7 @@
     rowClassName="track-row virtual-track-row configurable-track-grid playback-queue-row"
     listName="播放佇列"
     longPressReorder={true}
+    {scrollToIndexRequest}
     onRange={handleRange}
     onPlay={(entry) => {
       if (entry) onPlay(entry);
@@ -248,6 +296,14 @@
       {/if}
     {/snippet}
   </PagedVirtualList>
+  <button
+    type="button"
+    class="queue-locate-fab"
+    aria-label="定位到目前播放曲目"
+    title="定位到目前播放曲目"
+    disabled={!canLocateCurrent || locating}
+    onclick={() => void locateCurrentTrack()}
+  >◎</button>
 {/if}
 </div>
 
@@ -260,6 +316,10 @@
     flex-direction: column;
   }
 
+  .queue-list-shell {
+    position: relative;
+  }
+
   .queue-empty {
     margin: 12px 0;
   }
@@ -268,5 +328,41 @@
     margin: 0 0 8px;
     color: var(--text-soft);
     font-size: var(--font-caption);
+  }
+
+  .queue-locate-fab {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 4;
+    display: grid;
+    width: 48px;
+    height: 48px;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    color: var(--text);
+    background: color-mix(in srgb, var(--text-inverse) var(--quick-settings-opacity, 70%), transparent);
+    -webkit-backdrop-filter: blur(var(--quick-settings-blur, 12px));
+    backdrop-filter: blur(var(--quick-settings-blur, 12px));
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  }
+
+  .queue-locate-fab:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent-text) 55%, var(--line));
+    color: var(--accent-text);
+  }
+
+  .queue-locate-fab:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+
+  .queue-locate-fab:focus-visible {
+    outline: 2px solid var(--accent-text);
+    outline-offset: 2px;
   }
 </style>

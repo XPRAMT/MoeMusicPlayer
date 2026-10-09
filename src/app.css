@@ -3763,16 +3763,6 @@ input:focus-visible {
   min-width: 0;
 }
 
-.queue-current-track {
-  max-width: min(70vw, 760px);
-  overflow: hidden;
-  margin: 6px 0 0;
-  color: var(--text-soft);
-  font-size: var(--font-caption);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .playlist-relative-toggle {
   display: inline-flex;
   min-height: 30px;
@@ -4055,7 +4045,6 @@ input:focus-visible {
   .playlist-entry-row:not(.track-row) { min-height: 47px; }
   .playlist-entry-title strong { font-size: var(--font-caption); }
   .playlist-entry-title small { font-size: var(--font-caption); }
-  .queue-current-track { max-width: 88vw; font-size: var(--font-caption); }
   .pagination-bar { min-height: 43px; font-size: var(--font-caption); }
   .now-playing-card { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 16px; padding: 16px; }
   .cover-stage { border-radius: 12px; }

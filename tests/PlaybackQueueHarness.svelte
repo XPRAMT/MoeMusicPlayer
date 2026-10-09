@@ -38,6 +38,7 @@
       queueRequestLog: Array<{ offset: number; limit: number; revision: number }>;
       queueReorderLog: Array<{ from: number; to: number }>;
       queueTitles: string[];
+      locateFabVisible: boolean;
       treeHostParent: string | null;
       treeVisible: boolean;
       pageContentWidth: number;
@@ -252,6 +253,7 @@
       queueReorderLog: queueReorderLog.slice(),
       queueTitles: [...document.querySelectorAll<HTMLElement>('.playback-queue-row .list-column-title')]
         .map((element) => element.textContent?.trim() ?? ''),
+      locateFabVisible: document.querySelector('.queue-locate-fab') !== null,
       treeHostParent: document.querySelector('.sidebar-playlist-tree-host')?.parentElement?.className ?? null,
       treeVisible: tree !== null && getComputedStyle(tree).display !== 'none' && tree.getBoundingClientRect().width > 0,
       pageContentWidth: content?.getBoundingClientRect().width ?? 0,
@@ -319,8 +321,11 @@
             </div>
           </section>
         {:else}
-          <section class="queue-page" aria-label="目前播放佇列">
-            <div class="section-heading"><div><p class="section-kicker">PLAYBACK QUEUE</p><h2>播放佇列</h2></div></div>
+          <section
+            class="queue-page"
+            aria-label="目前播放佇列"
+            style="--quick-settings-opacity: 70%; --quick-settings-blur: 12px"
+          >
             <PlaybackQueueList
               resetKey={queueResetKey}
               cursorChangeKey={cursorChangeKey}
