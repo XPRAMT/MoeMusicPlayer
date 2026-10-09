@@ -1612,9 +1612,12 @@
     try {
       sources = await invokeCommand('library_remove_source', { sourceId: source.id });
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
-      sourceSyncSummary = source.kind === 'playlist_file'
-        ? '已移除播放清單檔案同步來源；原有播放清單內容仍會保留。'
-        : '已移除音樂來源；曲庫資料仍會保留，之後不再同步此位置。';
+      if (source.kind === 'playlist_file') {
+        await loadPlaylists();
+        sourceSyncSummary = '已移除播放清單來源；側欄清單已刪除，曲庫中的曲目仍會保留。';
+      } else {
+        sourceSyncSummary = '已移除音樂來源；曲庫資料仍會保留，之後不再同步此位置。';
+      }
     } catch (error) {
       sourceError = getErrorText(error);
       await loadSources();

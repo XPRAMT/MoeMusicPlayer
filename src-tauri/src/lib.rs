@@ -3630,9 +3630,13 @@ fn library_remove_source(
         .remove_source(id)
         .map_err(|error| error.to_string())?;
     if let Some(database) = state.database.as_ref() {
-        if matches!(removed.kind, SourceEntryKind::PlaylistFile { .. }) {
+        if let SourceEntryKind::PlaylistFile { playlist_id, .. } = removed.kind {
             database
                 .remove_playlist_file_source(id)
+                .map_err(|error| error.to_string())?;
+            // Drop the sidebar playlist projection for this source. Shared Track rows stay.
+            database
+                .delete_playlist(playlist_id)
                 .map_err(|error| error.to_string())?;
         }
         let mut root = removed
@@ -4304,9 +4308,18 @@ where
             root.kind == MediaSourceKind::PlaylistFile && !configured_ids.contains(&root.id)
         })
     {
+        let orphan_playlist_id = database
+            .playlist_file_sync_state(root.id)
+            .map_err(|error| error.to_string())?
+            .map(|state| state.playlist_id);
         database
             .remove_playlist_file_source(root.id)
             .map_err(|error| error.to_string())?;
+        if let Some(playlist_id) = orphan_playlist_id {
+            database
+                .delete_playlist(playlist_id)
+                .map_err(|error| error.to_string())?;
+        }
         root.enabled = false;
         database
             .save_library_root(&root)
@@ -6633,6 +6646,78 @@ mod windows_library_integration_tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn authoritative_orphan_playlist_cleanup_deletes_sidebar_playlist_but_keeps_tracks() {
+        let temporary = TestDirectory::new();
+        let media_folder = temporary.0.join("曲目");
+        fs::create_dir_all(&media_folder).expect("create media folder");
+        let media_path = media_folder.join("保留曲目.mp3");
+        write_tagged_mp3(&media_path);
+        let playlist_path = temporary.0.join("側欄清單.m3u8");
+        fs::write(
+            &playlist_path,
+            format!("#EXTM3U\n{}\n", media_path.display()),
+        )
+        .expect("write playlist source");
+        let playlist_id = super::PlaylistId::new();
+        let source = super::SourceEntry {
+            id: SourceId::new(),
+            display_name: "側欄清單".to_owned(),
+            enabled: true,
+            kind: super::SourceEntryKind::PlaylistFile {
+                playlist_id,
+                path: super::settings::StoredPath::from_path(&playlist_path)
+                    .expect("store native playlist path"),
+                tree_uri: None,
+            },
+        };
+        let mut database = Database::open_in_memory().expect("database");
+        super::playlist_source_sync::sync_playlist_file_source(
+            &mut database,
+            &source,
+            &[],
+            1_800_000_000_000,
+        )
+        .expect("create playlist projection")
+        .expect("playlist source is readable");
+        assert!(database
+            .get_playlist(playlist_id)
+            .expect("read playlist")
+            .is_some());
+        assert_eq!(database.count_tracks(None).expect("track count"), 1);
+        let track_id = database
+            .resolve_track_id_for_locator(&player_core::MediaLocator::FileSystem(
+                media_path.clone(),
+            ))
+            .expect("resolve track")
+            .expect("track exists after playlist sync");
+
+        let result = super::sync_windows_configured_sources(
+            &mut database,
+            &[],
+            &[],
+            true,
+            &mut |_, _, _, _| {},
+        )
+        .expect("authoritative empty registry cleans orphans");
+        assert!(result.sources.is_empty());
+        assert!(database
+            .get_playlist(playlist_id)
+            .expect("playlist removed from sidebar")
+            .is_none());
+        // Library pages only count mapped tracks; the Track row itself must remain.
+        assert_eq!(
+            database
+                .count_tracks(None)
+                .expect("unmapped tracks leave library"),
+            0
+        );
+        assert!(database
+            .get_track_summary(track_id)
+            .expect("read preserved track row")
+            .is_some());
     }
 
     #[test]
