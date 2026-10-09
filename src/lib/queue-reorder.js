@@ -1,5 +1,5 @@
 /** Long-press delay before a queue row can be dragged. */
-export const QUEUE_REORDER_LONG_PRESS_MS = 420;
+export const QUEUE_REORDER_LONG_PRESS_MS = 500;
 
 /** Pointer movement that cancels a pending long-press before drag starts. */
 export const QUEUE_REORDER_MOVE_CANCEL_PX = 8;

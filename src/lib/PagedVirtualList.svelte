@@ -389,7 +389,7 @@
       aria-hidden="true"
       style={`height:${virtualTotalCount * rowHeight}px`}
     ></div>
-    {#if dragFromIndex !== null && dragToIndex !== null}
+    {#if dragFromIndex !== null && dragToIndex !== null && dragToIndex !== dragFromIndex}
       <div
         class="paged-virtual-drop-line"
         role="presentation"
