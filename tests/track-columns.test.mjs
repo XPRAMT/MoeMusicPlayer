@@ -1,7 +1,9 @@
 ﻿import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  DEFAULT_LIBRARY_SORT,
   DEFAULT_TRACK_COLUMN_PREFERENCES,
+  DEFAULT_TRACK_COLUMN_WIDTHS,
   TRACK_COLUMN_DEFINITIONS,
   formatAudioFormat,
   formatPlayCount,
@@ -12,9 +14,13 @@ import {
   isHiResTrack,
   isLosslessCodec,
   moveTrackColumn,
+  normalizeLibrarySort,
   normalizeTrackColumnPreferences,
+  normalizeTrackColumnWidths,
   nowPlayingLayoutOrder,
   setTrackColumnVisibility,
+  setTrackColumnWidth,
+  toggleLibrarySort,
   trackListColumnCount,
   trackListGridTemplate,
   visibleTrackColumns,
@@ -28,6 +34,27 @@ test('default list columns are shared and keep the index as the only fixed colum
   ]);
   assert.equal(trackListColumnCount(DEFAULT_TRACK_COLUMN_PREFERENCES), 8);
   assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ').length, 8);
+  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES, DEFAULT_TRACK_COLUMN_WIDTHS).split(' ')[1], '220px');
+});
+
+test('flexible column widths clamp and feed the shared grid template', () => {
+  const widths = setTrackColumnWidth(DEFAULT_TRACK_COLUMN_WIDTHS, 'artist', 12);
+  assert.equal(widths.artist, 80);
+  const wide = setTrackColumnWidth(widths, 'title', 1200);
+  assert.equal(wide.title, 800);
+  assert.deepEqual(normalizeTrackColumnWidths(null), DEFAULT_TRACK_COLUMN_WIDTHS);
+  assert.match(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES, wide), /^26px 800px /);
+});
+
+test('library sort toggles direction on the same field and resets on a new field', () => {
+  assert.deepEqual(normalizeLibrarySort(null), DEFAULT_LIBRARY_SORT);
+  const byArtist = toggleLibrarySort(DEFAULT_LIBRARY_SORT, 'artist');
+  assert.deepEqual(byArtist, { field: 'artist', direction: 'asc' });
+  assert.deepEqual(toggleLibrarySort(byArtist, 'artist'), { field: 'artist', direction: 'desc' });
+  assert.deepEqual(toggleLibrarySort({ field: 'artist', direction: 'desc' }, 'album'), {
+    field: 'album',
+    direction: 'asc',
+  });
 });
 
 test('column order can move the first and last information columns without moving the index', () => {

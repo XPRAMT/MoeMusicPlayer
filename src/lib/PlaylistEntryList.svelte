@@ -1,12 +1,14 @@
 <script lang="ts">
-import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistPage, type TrackListColumnPreference } from './ipc';
+import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistPage, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
 import { formatDuration } from './format';
 import {
   DEFAULT_TRACK_COLUMN_PREFERENCES,
+  DEFAULT_TRACK_COLUMN_WIDTHS,
   TRACK_COLUMN_DEFINITIONS,
   formatTrackColumnValue,
   isHiResTrack,
   normalizeTrackColumnPreferences,
+  normalizeTrackColumnWidths,
   trackListColumnCount,
   trackListGridTemplate,
   trackListMinWidthPx,
@@ -27,6 +29,8 @@ import { withLivePlayedMs } from './live-play-count.js';
     onTotalCount?: (count: number | null) => void;
     fetchPage?: (request: { playlistId: string; offset: number; limit: number }) => Promise<PlaylistPage>;
     columns?: TrackListColumnPreference[];
+    columnWidths?: TrackColumnWidths;
+    onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     livePlayCount?: { trackId: string; playedMs: number } | null;
     currentTrackId?: string | null;
   }
@@ -40,16 +44,19 @@ import { withLivePlayedMs } from './live-play-count.js';
     onTotalCount,
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
+    columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
+    onColumnResize,
     livePlayCount = null,
     currentTrackId = null,
   }: Props = $props();
 
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
+  let normalizedWidths = $derived(normalizeTrackColumnWidths(columnWidths));
   let visibleColumns = $derived(visibleTrackColumns(normalizedColumns).map(({ id }) =>
     TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
   ));
-  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns));
-  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns));
+  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths));
+  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
 
   type ListSnapshot = ReturnType<PagedListController<PlaylistEntrySummary, string>['snapshot']>;
@@ -138,7 +145,12 @@ import { withLivePlayedMs } from './live-play-count.js';
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
-        <TrackColumnCells variant="header" columns={visibleColumns} />
+        <TrackColumnCells
+          variant="header"
+          columns={visibleColumns}
+          resizable={true}
+          onResize={(columnId, widthPx) => onColumnResize?.(columnId as TrackListColumnPreference['id'], widthPx)}
+        />
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<PlaylistEntrySummary>)}

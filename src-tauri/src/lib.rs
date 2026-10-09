@@ -22,7 +22,7 @@ use player_core::{
     PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId,
     PlaylistPage, PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId,
     SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId,
-    TrackMetadataError, TrackSummary,
+    TrackListSort, TrackMetadataError, TrackSummary,
 };
 #[cfg(target_os = "windows")]
 use player_db::PlaybackSessionCheckpoint;
@@ -863,6 +863,7 @@ mod system_media_artwork_tests {
                 limit: 10,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("list fixture tracks")
             .items;
@@ -1763,6 +1764,8 @@ enum PlaybackQueueSource {
         query: Option<String>,
         #[serde(default, rename = "fieldFilter")]
         field_filter: Option<TrackFieldFilter>,
+        #[serde(default)]
+        sort: TrackListSort,
     },
     Playlist {
         #[serde(rename = "playlistId")]
@@ -1865,7 +1868,7 @@ mod playback_queue_ipc_tests {
         LibrarySource, MediaLocator, MediaSourceError, MediaSourceKind, OutputConversion,
         PlaybackOutputFormat, PlaybackQueuePage, PlaybackQueuePageItem, PlaybackQueueSource,
         PlaybackSnapshot, RepeatMode, ResamplingMode, RuntimeCapabilities, SourceId,
-        SourceScanState, SyncReport, TrackId, TrackMetadataError,
+        SourceScanState, SyncReport, TrackId, TrackListSort, TrackMetadataError,
     };
 
     #[test]
@@ -1912,6 +1915,7 @@ mod playback_queue_ipc_tests {
             PlaybackQueueSource::Library {
                 query: Some(query),
                 field_filter: None,
+                sort: _,
             } if query == "ambient"
         ));
     }
@@ -1947,6 +1951,7 @@ mod playback_queue_ipc_tests {
                     field: player_core::TrackField::Artist,
                     value: "演出者 🎧".to_owned(),
                 }),
+                sort: TrackListSort::default(),
             }
         );
     }
@@ -2360,6 +2365,7 @@ fn library_get_page(
     state: State<'_, AppState>,
     query: Option<String>,
     field_filter: Option<TrackFieldFilter>,
+    sort: Option<TrackListSort>,
     offset: u64,
     limit: u32,
 ) -> Result<Page<TrackSummary>, String> {
@@ -2376,6 +2382,7 @@ fn library_get_page(
             field_filter,
             offset,
             limit,
+            sort: sort.unwrap_or_default(),
         })
         .map_err(|error| error.to_string())
 }
@@ -3075,7 +3082,9 @@ fn settings_set_track_list_columns(
     state
         .settings
         .update(|settings| {
-            settings.track_list_columns = preferences.clone();
+            let mut next = preferences.clone();
+            next.widths = next.widths.clamp();
+            settings.track_list_columns = next;
             Ok(())
         })
         .map(|settings| settings.track_list_columns)
@@ -4883,7 +4892,8 @@ async fn playback_reorder_queue(
     to: u64,
 ) -> Result<PlaybackSnapshot, String> {
     let _database_work = enter_database_work(&state)?;
-    let from_index = usize::try_from(from).map_err(|_| "播放佇列來源位置超出支援範圍。".to_owned())?;
+    let from_index =
+        usize::try_from(from).map_err(|_| "播放佇列來源位置超出支援範圍。".to_owned())?;
     let to_index = usize::try_from(to).map_err(|_| "播放佇列目標位置超出支援範圍。".to_owned())?;
     #[cfg(target_os = "windows")]
     {
@@ -5160,9 +5170,10 @@ fn queue_for_track(
         Some(PlaybackQueueSource::Library {
             query,
             field_filter,
+            sort,
         }) => {
             let track_ids = database
-                .list_track_ids_filtered(query.as_deref(), field_filter.as_ref())
+                .list_track_ids_filtered(query.as_deref(), field_filter.as_ref(), sort)
                 .map_err(|error| error.to_string())?;
             let selected = track_ids
                 .iter()
@@ -5180,6 +5191,7 @@ fn queue_for_track(
                 PlaybackQueueContext::Library {
                     query,
                     field_filter,
+                    sort,
                 },
                 selected,
             )
@@ -5238,6 +5250,7 @@ fn queue_for_track(
                 PlaybackQueueContext::Library {
                     query: None,
                     field_filter: None,
+                    sort: Default::default(),
                 },
                 selected,
             )
@@ -6696,6 +6709,7 @@ mod windows_library_integration_tests {
                     field_filter: None,
                     offset: 0,
                     limit: 25,
+                    sort: Default::default(),
                 })
                 .expect("load first library page");
             assert_eq!(page.total_count, 1);
@@ -6711,6 +6725,7 @@ mod windows_library_integration_tests {
                     field_filter: None,
                     offset: 0,
                     limit: 25,
+                    sort: Default::default(),
                 })
                 .expect("search only the requested page");
             assert_eq!(filtered.total_count, 1);
@@ -6741,6 +6756,7 @@ mod windows_library_integration_tests {
                 field_filter: None,
                 offset: 0,
                 limit: 25,
+                sort: Default::default(),
             })
             .expect("read persisted library page after reopen");
         assert_eq!(reopened_page.total_count, 1);
@@ -6812,6 +6828,7 @@ mod windows_library_integration_tests {
                 field_filter: Some(filter.clone()),
                 offset: 0,
                 limit: 10,
+                sort: Default::default(),
             })
             .expect("read exact-filtered page");
         assert_eq!(page.total_count, 2);
@@ -6822,6 +6839,7 @@ mod windows_library_integration_tests {
             Some(PlaybackQueueSource::Library {
                 query: Some("needle".to_owned()),
                 field_filter: Some(filter.clone()),
+                sort: Default::default(),
             }),
         )
         .expect("construct library queue from same filter");
@@ -6832,6 +6850,7 @@ mod windows_library_integration_tests {
             PlaybackQueueContext::Library {
                 query: Some("needle".to_owned()),
                 field_filter: Some(filter),
+                sort: Default::default(),
             }
         );
     }
@@ -7083,6 +7102,7 @@ mod windows_library_integration_tests {
                 field_filter: None,
                 offset: 0,
                 limit: 10,
+                sort: Default::default(),
             })
             .expect("read isolated tracks");
         assert_eq!(tracks.total_count, 2);
@@ -7103,6 +7123,7 @@ mod windows_library_integration_tests {
             Some(PlaybackQueueSource::Library {
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             }),
         )
         .expect("play selected initial track");
@@ -7179,6 +7200,7 @@ mod windows_library_integration_tests {
             Some(PlaybackQueueSource::Library {
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             }),
         )
         .expect("select library row while paused");
@@ -7309,6 +7331,7 @@ mod windows_library_integration_tests {
             Some(PlaybackQueueSource::Library {
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             }),
         )
         .expect("select library row while playing");
@@ -7350,6 +7373,7 @@ mod windows_library_integration_tests {
             Some(PlaybackQueueSource::Library {
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             }),
         )
         .expect("select track from restored Ready state");
@@ -7384,6 +7408,7 @@ mod windows_library_integration_tests {
                 field_filter: None,
                 offset: 0,
                 limit: 10,
+                sort: Default::default(),
             })
             .expect("read track page");
         assert_eq!(page.total_count, 1);

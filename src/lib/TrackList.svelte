@@ -6,14 +6,20 @@
     type TrackPageRequest,
     type TrackSummary,
     type TrackListColumnPreference,
+    type TrackColumnWidths,
+    type LibraryListSort,
   } from './ipc';
   import { formatDuration, formatTrackIndex } from './format';
   import {
+    DEFAULT_LIBRARY_SORT,
     DEFAULT_TRACK_COLUMN_PREFERENCES,
+    DEFAULT_TRACK_COLUMN_WIDTHS,
     TRACK_COLUMN_DEFINITIONS,
     formatTrackColumnValue,
     isHiResTrack,
+    normalizeLibrarySort,
     normalizeTrackColumnPreferences,
+    normalizeTrackColumnWidths,
     trackListColumnCount,
     trackListGridTemplate,
     trackListMinWidthPx,
@@ -38,6 +44,10 @@
     onTotalCount?: (count: number | null) => void;
     fetchPage?: (request: TrackPageRequest) => Promise<TrackPage>;
     columns?: TrackListColumnPreference[];
+    columnWidths?: TrackColumnWidths;
+    onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
+    sort?: LibraryListSort;
+    onSort?: (columnId: TrackListColumnPreference['id']) => void;
     fieldFilter?: TrackPageRequest['fieldFilter'];
     livePlayCount?: { trackId: string; playedMs: number } | null;
   }
@@ -52,16 +62,22 @@
     onTotalCount,
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
+    columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
+    onColumnResize,
+    sort = DEFAULT_LIBRARY_SORT,
+    onSort,
     livePlayCount = null,
     fieldFilter = null,
   }: Props = $props();
 
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
+  let normalizedWidths = $derived(normalizeTrackColumnWidths(columnWidths));
+  let normalizedSort = $derived(normalizeLibrarySort(sort));
   let visibleColumns = $derived(visibleTrackColumns(normalizedColumns).map(({ id }) =>
     TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
   ));
-  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns));
-  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns));
+  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths));
+  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
 
   type ListSnapshot = ReturnType<PagedListController<TrackSummary, string>['snapshot']>;
@@ -78,11 +94,18 @@
   });
   const listData = new PagedListController<TrackSummary, string>(
     ({ scope, offset, limit }) => {
-      const requestScope = JSON.parse(scope || '{"query":null,"fieldFilter":null}') as {
+      const requestScope = JSON.parse(scope || '{"query":null,"fieldFilter":null,"sort":null}') as {
         query: string | null;
         fieldFilter: TrackPageRequest['fieldFilter'];
+        sort: LibraryListSort;
       };
-      const request = { ...requestScope, offset, limit };
+      const request: TrackPageRequest = {
+        query: requestScope.query,
+        fieldFilter: requestScope.fieldFilter,
+        sort: requestScope.sort,
+        offset,
+        limit,
+      };
       return fetchPage
         ? fetchPage(request)
         : invokeCommand('library_get_page', request);
@@ -94,9 +117,11 @@
     const normalizedQuery = query.trim();
     const currentResetKey = resetKey;
     const currentFieldFilter = fieldFilter;
+    const currentSort = normalizeLibrarySort(sort);
     const scope = JSON.stringify({
       query: normalizedQuery || null,
       fieldFilter: currentFieldFilter ?? null,
+      sort: currentSort,
     });
     listData.reset(scope, currentResetKey);
     void listData.ensureRange(0, TRACK_PAGE_SIZE);
@@ -121,6 +146,14 @@
 
   function itemAt(index: number): TrackSummary | null {
     return listData.itemAt(index);
+  }
+
+  function handleSort(columnId: string): void {
+    onSort?.(columnId as TrackListColumnPreference['id']);
+  }
+
+  function handleResize(columnId: string, widthPx: number): void {
+    onColumnResize?.(columnId as TrackListColumnPreference['id'], widthPx);
   }
 </script>
 
@@ -150,7 +183,7 @@
     compactHeaderHeight={33}
     fillAvailable={true}
     listId="library-track"
-    ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目"
+    ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序"
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
     minContentWidth={listMinWidth}
@@ -162,7 +195,15 @@
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
-        <TrackColumnCells variant="header" columns={visibleColumns} />
+        <TrackColumnCells
+          variant="header"
+          columns={visibleColumns}
+          sortable={true}
+          sort={normalizedSort}
+          onSort={handleSort}
+          resizable={true}
+          onResize={handleResize}
+        />
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<TrackSummary>)}

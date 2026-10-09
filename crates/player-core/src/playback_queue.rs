@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{TrackFieldFilter, TrackId};
+use crate::{TrackFieldFilter, TrackId, TrackListSort};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -19,6 +19,8 @@ pub enum PlaybackQueueContext {
         query: Option<String>,
         #[serde(default)]
         field_filter: Option<TrackFieldFilter>,
+        #[serde(default)]
+        sort: TrackListSort,
     },
     Playlist {
         playlist_id: String,
@@ -86,6 +88,7 @@ impl PlaybackQueue {
             PlaybackQueueContext::Library {
                 query: None,
                 field_filter: None,
+                sort: TrackListSort::default(),
             },
             selected_index,
             random_state,
@@ -509,7 +512,10 @@ mod tests {
         assert_eq!(queue.snapshot().play_order, vec![1, 0, 2, 3]);
         assert_eq!(queue.cursor(), 0);
         assert_eq!(queue.current(), tracks[1]);
-        assert_eq!(queue.move_traversal(0, 4).unwrap_err(), "queue traversal index is out of range");
+        assert_eq!(
+            queue.move_traversal(0, 4).unwrap_err(),
+            "queue traversal index is out of range"
+        );
     }
 
     #[test]

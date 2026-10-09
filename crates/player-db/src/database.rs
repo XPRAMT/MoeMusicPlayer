@@ -14,8 +14,8 @@ use player_core::{
     PlaybackStatistics, Playlist, PlaylistEntry, PlaylistEntrySummary, PlaylistId, PlaylistPage,
     PlaylistSummary, QueueRepeatMode, SourceId, SourceScanState, SyncApplyOutcome,
     SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackField, TrackFieldFilter, TrackId,
-    TrackIdentity, TrackLyrics, TrackMetadata, TrackSummary, TrackSyncState, UserMetadataField,
-    TRACK_METADATA_VERSION,
+    TrackIdentity, TrackListSort, TrackLyrics, TrackMetadata, TrackSortDirection, TrackSortField,
+    TrackSummary, TrackSyncState, UserMetadataField, TRACK_METADATA_VERSION,
 };
 use rusqlite::{
     params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
@@ -47,6 +47,27 @@ const COUNT_FIELD_FILTER_SQL: &str = "SELECT COUNT(DISTINCT t.track_id) FROM tra
       AND (?2 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?2 COLLATE BINARY)
       AND (CASE WHEN ?3 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?3 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' ', '|') || '|', '|' || ?3 || '|') > 0 THEN 1 ELSE 0 END) = 1
       AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?4 COLLATE BINARY)";
+const TRACKS_PAGE_SELECT_SQL: &str = "SELECT t.track_id,
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
+    t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
+    t.year, t.release_date, t.bit_depth,
+    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
+ FROM tracks t
+ WHERE EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=t.track_id)
+   AND (?1 IS NULL
+        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
+        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
+        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
+        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
+   AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?4 COLLATE BINARY)
+   AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' ', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
+   AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)";
+
+/// Default title order retained for EXPLAIN QUERY PLAN coverage.
+#[cfg_attr(not(test), allow(dead_code))]
 const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
@@ -1237,7 +1258,11 @@ impl Database {
                 let year = year
                     .and_then(|value| u16::try_from(value).ok())
                     .filter(|value| *value > 0)
-                    .or_else(|| release_date.as_deref().and_then(player_core::recording_date_year));
+                    .or_else(|| {
+                        release_date
+                            .as_deref()
+                            .and_then(player_core::recording_date_year)
+                    });
                 Ok(PlaylistEntrySummary {
                     position,
                     track_id,
@@ -1287,8 +1312,14 @@ impl Database {
         let search_value = search.as_deref();
         let filter = request.field_filter.as_ref();
         let total_count = count_tracks_filtered_in(&connection, search_value, filter)?;
-        let items =
-            fetch_tracks_window_filtered(&connection, search_value, filter, request.offset, limit)?;
+        let items = fetch_tracks_window_filtered(
+            &connection,
+            search_value,
+            filter,
+            request.sort,
+            request.offset,
+            limit,
+        )?;
         Ok(Page {
             items,
             offset: request.offset,
@@ -1300,19 +1331,20 @@ impl Database {
     /// Return stable IDs in exactly the same filter and order as library pages.
     /// Playback queue setup keeps these compact IDs inside Rust.
     pub fn list_track_ids(&self, query: Option<&str>) -> Result<Vec<TrackId>, DatabaseError> {
-        self.list_track_ids_filtered(query, None)
+        self.list_track_ids_filtered(query, None, TrackListSort::default())
     }
 
-    /// Return stable IDs using the same query and exact field filter as library pages.
+    /// Return stable IDs using the same query, field filter, and sort as library pages.
     pub fn list_track_ids_filtered(
         &self,
         query: Option<&str>,
         field_filter: Option<&TrackFieldFilter>,
+        sort: TrackListSort,
     ) -> Result<Vec<TrackId>, DatabaseError> {
         let connection = self.lock()?;
         let query = query.filter(|text| !text.trim().is_empty());
         let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter);
-        let mut statement = connection.prepare(
+        let sql = format!(
             "SELECT t.track_id
              FROM tracks t
              WHERE EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=t.track_id)
@@ -1324,8 +1356,10 @@ impl Database {
                AND (?2 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?2 COLLATE BINARY)
                AND (CASE WHEN ?3 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?3 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' ', '|') || '|', '|' || ?3 || '|') > 0 THEN 1 ELSE 0 END) = 1
                AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?4 COLLATE BINARY)
-             ORDER BY t.sort_title, t.track_id",
-        )?;
+             ORDER BY {}",
+            tracks_order_by_sql(sort)
+        );
+        let mut statement = connection.prepare(&sql)?;
         let rows = statement.query_map(
             params![query, title_filter, artist_filter, album_filter],
             |row| row.get::<_, String>(0),
@@ -1896,6 +1930,7 @@ impl Database {
                 PlaybackQueueContext::Library {
                     query,
                     field_filter,
+                    sort: _,
                 } => (
                     "library",
                     None,
@@ -2021,6 +2056,7 @@ impl Database {
                     .map(|json| serde_json::from_str(&json))
                     .transpose()
                     .map_err(|error| DatabaseError::CorruptData(error.to_string()))?,
+                sort: Default::default(),
             },
             "playlist" if query.is_none() && field_filter_json.is_none() => {
                 PlaybackQueueContext::Playlist {
@@ -2637,19 +2673,76 @@ fn fetch_tracks_window(
     offset: u64,
     limit: u32,
 ) -> Result<Vec<TrackSummary>, DatabaseError> {
-    fetch_tracks_window_filtered(connection, query, None, offset, limit)
+    fetch_tracks_window_filtered(
+        connection,
+        query,
+        None,
+        TrackListSort::default(),
+        offset,
+        limit,
+    )
+}
+
+fn tracks_order_by_sql(sort: TrackListSort) -> &'static str {
+    let asc = matches!(sort.direction, TrackSortDirection::Asc);
+    match (sort.field, asc) {
+        (TrackSortField::Title, true) => "t.sort_title ASC, t.track_id ASC",
+        (TrackSortField::Title, false) => "t.sort_title DESC, t.track_id DESC",
+        (TrackSortField::Artist, true) => {
+            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE NOCASE ASC, t.track_id ASC"
+        }
+        (TrackSortField::Artist, false) => {
+            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE NOCASE DESC, t.track_id DESC"
+        }
+        (TrackSortField::Album, true) => {
+            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE NOCASE ASC, t.track_id ASC"
+        }
+        (TrackSortField::Album, false) => {
+            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE NOCASE DESC, t.track_id DESC"
+        }
+        (TrackSortField::Year, true) => {
+            "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date ASC, (t.year IS NULL) ASC, t.year ASC, t.track_id ASC"
+        }
+        (TrackSortField::Year, false) => {
+            "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date DESC, (t.year IS NULL) ASC, t.year DESC, t.track_id DESC"
+        }
+        (TrackSortField::AudioFormat, true) => {
+            "t.codec COLLATE NOCASE ASC, t.sample_rate_hz ASC, t.bit_depth ASC, t.track_id ASC"
+        }
+        (TrackSortField::AudioFormat, false) => {
+            "t.codec COLLATE NOCASE DESC, t.sample_rate_hz DESC, t.bit_depth DESC, t.track_id DESC"
+        }
+        (TrackSortField::Duration, true) => {
+            "(t.duration_ms IS NULL) ASC, t.duration_ms ASC, t.track_id ASC"
+        }
+        (TrackSortField::Duration, false) => {
+            "(t.duration_ms IS NULL) ASC, t.duration_ms DESC, t.track_id DESC"
+        }
+        (TrackSortField::PlayCount, true) => {
+            "COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0) ASC, t.track_id ASC"
+        }
+        (TrackSortField::PlayCount, false) => {
+            "COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0) DESC, t.track_id DESC"
+        }
+    }
 }
 
 fn fetch_tracks_window_filtered(
     connection: &Connection,
     query: Option<&str>,
     field_filter: Option<&TrackFieldFilter>,
+    sort: TrackListSort,
     offset: u64,
     limit: u32,
 ) -> Result<Vec<TrackSummary>, DatabaseError> {
     let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter);
+    let sql = format!(
+        "{} ORDER BY {} LIMIT ?2 OFFSET ?3",
+        TRACKS_PAGE_SELECT_SQL,
+        tracks_order_by_sql(sort)
+    );
     let mut items = {
-        let mut statement = connection.prepare(TRACKS_PAGE_SQL)?;
+        let mut statement = connection.prepare(&sql)?;
         let collected = statement
             .query_map(
                 params![
@@ -2700,7 +2793,11 @@ fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummar
         .get::<_, Option<i64>>(11)?
         .and_then(|value| u16::try_from(value).ok())
         .filter(|value| *value > 0)
-        .or_else(|| release_date.as_deref().and_then(player_core::recording_date_year));
+        .or_else(|| {
+            release_date
+                .as_deref()
+                .and_then(player_core::recording_date_year)
+        });
     Ok(TrackSummary {
         id,
         title: blank_to_none(row.get(1)?),
@@ -2875,7 +2972,10 @@ fn persist_metadata(
         .as_deref()
         .and_then(player_core::recording_date_year)
         .or(metadata.year.filter(|value| *value > 0 && *value <= 9999));
-    if metadata.year.is_some_and(|value| value == 0 || value > 9999) {
+    if metadata
+        .year
+        .is_some_and(|value| value == 0 || value > 9999)
+    {
         return Err(DatabaseError::InvalidNumber("year"));
     }
     if metadata
@@ -3294,8 +3394,9 @@ mod tests {
         PlaybackCheckpoint, PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry,
         PlaybackStatistics, Playlist, PlaylistEntry, PlaylistId, QueueRepeatMode, SourceId,
         SourceScan, SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackField,
-        TrackFieldFilter, TrackId, TrackIdentity, TrackLyrics, TrackMetadata, TrackMetadataError,
-        UserMetadataField, TRACK_METADATA_VERSION,
+        TrackFieldFilter, TrackId, TrackIdentity, TrackListSort, TrackLyrics, TrackMetadata,
+        TrackMetadataError, TrackSortDirection, TrackSortField, UserMetadataField,
+        TRACK_METADATA_VERSION,
     };
     use rusqlite::{params, Connection, OptionalExtension};
 
@@ -3425,6 +3526,7 @@ mod tests {
             limit,
             query: None,
             field_filter: None,
+            sort: Default::default(),
         })
         .expect("list tracks")
     }
@@ -3435,6 +3537,7 @@ mod tests {
             limit: 20,
             query: Some(query.to_owned()),
             field_filter: None,
+            sort: Default::default(),
         })
         .expect("find track")
         .items
@@ -4389,6 +4492,7 @@ mod tests {
                 limit: 20,
                 query: Some("a".to_owned()),
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("query matching library page")
             .items
@@ -5377,6 +5481,50 @@ mod tests {
     }
 
     #[test]
+    fn library_pages_and_queue_ids_share_explicit_sort_order() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "sort-source");
+        let alpha = record(&root, "a", "path:a", "Alpha", 10, 100);
+        let beta = record(&root, "b", "path:b", "Beta", 20, 200);
+        let gamma = record(&root, "c", "path:c", "Gamma", 30, 300);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &[alpha.clone(), beta.clone(), gamma.clone()],
+            &[alpha.clone(), beta.clone(), gamma.clone()],
+            1000,
+        );
+        let desc = TrackListSort {
+            field: TrackSortField::Title,
+            direction: TrackSortDirection::Desc,
+        };
+        let page = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: desc,
+            })
+            .expect("title desc page");
+        let ids = db
+            .list_track_ids_filtered(None, None, desc)
+            .expect("title desc queue ids");
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|track| track.title.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("Gamma"), Some("Beta"), Some("Alpha")]
+        );
+        assert_eq!(
+            ids,
+            page.items.iter().map(|track| track.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn paginated_query_returns_total_without_loading_the_entire_library() {
         let mut db = Database::open_in_memory().expect("database");
         let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "source");
@@ -5397,6 +5545,7 @@ mod tests {
                 limit: 1,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("page query");
         assert_eq!(page.items.len(), 1);
@@ -5410,6 +5559,7 @@ mod tests {
                 limit: 50,
                 query: Some("alpha".to_owned()),
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("text filter");
         assert_eq!(filtered.total_count, 1);
@@ -5481,10 +5631,11 @@ mod tests {
                     limit: 1,
                     query: Some("needle".to_owned()),
                     field_filter: Some(filter.clone()),
+                    sort: Default::default(),
                 })
                 .expect("exact field filtered page");
             let queue_ids = db
-                .list_track_ids_filtered(Some("needle"), Some(&filter))
+                .list_track_ids_filtered(Some("needle"), Some(&filter), Default::default())
                 .expect("same exact field filter for queue");
             assert_eq!(queue_ids, expected);
             assert_eq!(page.total_count, expected.len() as u64);
@@ -5498,6 +5649,7 @@ mod tests {
                     limit: 1,
                     query: Some("needle".to_owned()),
                     field_filter: Some(filter),
+                    sort: Default::default(),
                 })
                 .expect("second exact field filtered page");
             assert_eq!(second_page.total_count, expected.len() as u64);
@@ -5512,7 +5664,7 @@ mod tests {
             value: "Hanser".to_owned(),
         };
         assert!(db
-            .list_track_ids_filtered(None, Some(&binary_case_mismatch))
+            .list_track_ids_filtered(None, Some(&binary_case_mismatch), Default::default())
             .expect("binary case-sensitive value")
             .is_empty());
 
@@ -5523,7 +5675,7 @@ mod tests {
             value: "手動・夜曲".to_owned(),
         };
         assert_eq!(
-            db.list_track_ids_filtered(None, Some(&overridden))
+            db.list_track_ids_filtered(None, Some(&overridden), Default::default())
                 .expect("filter current user-facing title"),
             vec![third_id]
         );
@@ -5581,6 +5733,7 @@ mod tests {
                     field: TrackField::Artist,
                     value: "hanser".to_owned(),
                 }),
+                Default::default(),
             )
             .expect("hanser membership");
         assert_eq!(
@@ -5604,6 +5757,7 @@ mod tests {
                     field: TrackField::Artist,
                     value: "yousa".to_owned(),
                 }),
+                sort: Default::default(),
             })
             .expect("yousa page");
         let yousa_ids = db
@@ -5613,6 +5767,7 @@ mod tests {
                     field: TrackField::Artist,
                     value: "yousa".to_owned(),
                 }),
+                Default::default(),
             )
             .expect("yousa membership");
         assert_eq!(yousa_page.total_count, yousa_ids.len() as u64);
@@ -5635,6 +5790,7 @@ mod tests {
                     field: TrackField::Artist,
                     value: "Hanser".to_owned(),
                 }),
+                Default::default(),
             )
             .expect("case sensitive artist token")
             .is_empty());
@@ -6389,6 +6545,7 @@ mod tests {
             PlaybackQueueContext::Library {
                 query: Some("ambient".to_owned()),
                 field_filter: None,
+                sort: Default::default(),
             }
         );
     }
@@ -6412,6 +6569,7 @@ mod tests {
             PlaybackQueueContext::Library {
                 query: Some("ambient".to_owned()),
                 field_filter: Some(filter),
+                sort: Default::default(),
             },
             0,
         )

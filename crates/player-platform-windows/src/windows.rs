@@ -708,6 +708,7 @@ mod tests {
                 limit: 10,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("page");
         assert_eq!(page.items.len(), 1);
@@ -769,6 +770,7 @@ mod tests {
                 limit: 10,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("initial page");
         assert_eq!(original_page.items.len(), 2);
@@ -801,6 +803,7 @@ mod tests {
                 limit: 10,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("remaining page");
         assert_eq!(remaining.items.len(), 1);
@@ -821,6 +824,7 @@ mod tests {
                 limit: 10,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("retained offline track")
             .items[0]
@@ -936,6 +940,7 @@ mod tests {
                 limit: 10,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("read library");
         assert_eq!(page.total_count, 0);
@@ -1027,6 +1032,7 @@ mod tests {
                 limit: 10,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("first page");
         assert_eq!(first.items.len(), 1);
@@ -1055,6 +1061,7 @@ mod tests {
                 limit: 10,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("fallback page");
         assert_eq!(after_fallback.items.len(), 1);

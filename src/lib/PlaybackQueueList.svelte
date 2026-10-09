@@ -1,12 +1,14 @@
 <script lang="ts">
-  import { getErrorText, invokeCommand, type PlaybackQueuePage, type PlaybackQueuePageItem, type TrackListColumnPreference } from './ipc';
+  import { getErrorText, invokeCommand, type PlaybackQueuePage, type PlaybackQueuePageItem, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
   import { formatDuration } from './format';
   import {
     DEFAULT_TRACK_COLUMN_PREFERENCES,
+    DEFAULT_TRACK_COLUMN_WIDTHS,
     TRACK_COLUMN_DEFINITIONS,
     formatTrackColumnValue,
     isHiResTrack,
     normalizeTrackColumnPreferences,
+    normalizeTrackColumnWidths,
     trackListColumnCount,
     trackListGridTemplate,
     trackListMinWidthPx,
@@ -27,6 +29,8 @@
     resetKey: number;
     cursorChangeKey: number;
     columns?: TrackListColumnPreference[];
+    columnWidths?: TrackColumnWidths;
+    onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     fetchPage?: (request: { offset: number; limit: number }) => Promise<PlaybackQueuePage>;
     reorderPage?: (from: number, to: number) => Promise<void>;
     livePlayCount?: { trackId: string; playedMs: number } | null;
@@ -38,6 +42,8 @@
     resetKey,
     cursorChangeKey,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
+    columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
+    onColumnResize,
     fetchPage,
     reorderPage,
     livePlayCount = null,
@@ -46,11 +52,12 @@
   }: Props = $props();
 
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
+  let normalizedWidths = $derived(normalizeTrackColumnWidths(columnWidths));
   let visibleColumns = $derived(visibleTrackColumns(normalizedColumns).map(({ id }) =>
     TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
   ));
-  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns));
-  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns));
+  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths));
+  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
   let currentEntryPosition = $state<number | null>(null);
   let currentTraversalIndex = $state<number | null>(null);
@@ -277,7 +284,12 @@
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
-        <TrackColumnCells variant="header" columns={visibleColumns} />
+        <TrackColumnCells
+          variant="header"
+          columns={visibleColumns}
+          resizable={true}
+          onResize={(columnId, widthPx) => onColumnResize?.(columnId as TrackListColumnPreference['id'], widthPx)}
+        />
       </div>
     {/snippet}
     {#snippet row(row: VirtualListRow<PlaybackQueuePageItem>)}

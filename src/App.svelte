@@ -8,7 +8,6 @@
     IconArrowsRight,
     IconArrowsShuffle,
     IconChevronRight,
-    IconFilter,
     IconFolder,
     IconHeart,
     IconLibrary,
@@ -55,6 +54,8 @@
     type RuntimeCapabilities,
     type ThemePreferences,
     type TrackListColumnPreference,
+    type TrackColumnWidths,
+    type LibraryListSort,
     type TrackFieldFilter,
     type TrackSummary,
   } from './lib/ipc';
@@ -71,15 +72,21 @@
   import hiResBadgeUrl from './assets/hi-res-badge.png';
   import { calculateArtworkFrame } from './lib/artwork-frame.js';
   import {
+    DEFAULT_LIBRARY_SORT,
     DEFAULT_TRACK_COLUMN_PREFERENCES,
+    DEFAULT_TRACK_COLUMN_WIDTHS,
     TRACK_COLUMN_DEFINITIONS,
     displayTrackTitle,
     formatAudioFormat,
     formatTrackColumnValue,
     isHiResTrack,
     moveTrackColumn,
+    normalizeLibrarySort,
     normalizeTrackColumnPreferences,
+    normalizeTrackColumnWidths,
     setTrackColumnVisibility,
+    setTrackColumnWidth,
+    toggleLibrarySort,
   } from './lib/track-columns.js';
   import {
     applyLivePlayCountSample,
@@ -180,6 +187,8 @@
   let trackColumnPreferences = $state<TrackListColumnPreference[]>(
     normalizeTrackColumnPreferences(DEFAULT_TRACK_COLUMN_PREFERENCES),
   );
+  let trackColumnWidths = $state<TrackColumnWidths>({ ...DEFAULT_TRACK_COLUMN_WIDTHS });
+  let librarySort = $state<LibraryListSort>({ ...DEFAULT_LIBRARY_SORT });
   let trackColumnSettingsState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let trackColumnSettingsError = $state<string | null>(null);
   let nowPlayingLayout = $state<NowPlayingLayout>('a');
@@ -726,6 +735,8 @@
       const stored = await invokeCommand('settings_get_track_list_columns', {});
       if (revision !== trackColumnSettingsRevision) return;
       trackColumnPreferences = normalizeTrackColumnPreferences(stored.columns);
+      trackColumnWidths = normalizeTrackColumnWidths(stored.widths);
+      librarySort = normalizeLibrarySort(stored.librarySort);
       trackColumnSettingsState = 'saved';
       trackColumnSettingsError = null;
     } catch (error) {
@@ -735,8 +746,20 @@
     }
   }
 
-  function updateTrackColumnSettings(next: TrackListColumnPreference[]): void {
-    trackColumnPreferences = normalizeTrackColumnPreferences(next);
+  function persistTrackColumnSettings(options?: {
+    columns?: TrackListColumnPreference[];
+    widths?: TrackColumnWidths;
+    librarySort?: LibraryListSort;
+  }): void {
+    if (options?.columns) {
+      trackColumnPreferences = normalizeTrackColumnPreferences(options.columns);
+    }
+    if (options?.widths) {
+      trackColumnWidths = normalizeTrackColumnWidths(options.widths);
+    }
+    if (options?.librarySort) {
+      librarySort = normalizeLibrarySort(options.librarySort);
+    }
     trackColumnSettingsError = null;
     const revision = ++trackColumnSettingsRevision;
     if (!isTauri()) {
@@ -750,10 +773,16 @@
       if (revision !== trackColumnSettingsRevision) return;
       try {
         const saved = await invokeCommand('settings_set_track_list_columns', {
-          preferences: { columns: trackColumnPreferences.map((column) => ({ ...column })) },
+          preferences: {
+            columns: trackColumnPreferences.map((column) => ({ ...column })),
+            widths: { ...trackColumnWidths },
+            librarySort: { ...librarySort },
+          },
         });
         if (revision !== trackColumnSettingsRevision) return;
         trackColumnPreferences = normalizeTrackColumnPreferences(saved.columns);
+        trackColumnWidths = normalizeTrackColumnWidths(saved.widths);
+        librarySort = normalizeLibrarySort(saved.librarySort);
         trackColumnSettingsState = 'saved';
         trackColumnSettingsError = null;
       } catch (error) {
@@ -764,12 +793,24 @@
     });
   }
 
+  function updateTrackColumnSettings(next: TrackListColumnPreference[]): void {
+    persistTrackColumnSettings({ columns: next });
+  }
+
   function setTrackColumnVisible(id: TrackListColumnPreference['id'], visible: boolean): void {
     updateTrackColumnSettings(setTrackColumnVisibility(trackColumnPreferences, id, visible));
   }
 
   function moveConfiguredTrackColumn(id: TrackListColumnPreference['id'], direction: 'up' | 'down'): void {
     updateTrackColumnSettings(moveTrackColumn(trackColumnPreferences, id, direction));
+  }
+
+  function handleTrackColumnResize(id: TrackListColumnPreference['id'], widthPx: number): void {
+    persistTrackColumnSettings({ widths: setTrackColumnWidth(trackColumnWidths, id, widthPx) });
+  }
+
+  function handleLibrarySort(id: TrackListColumnPreference['id']): void {
+    persistTrackColumnSettings({ librarySort: toggleLibrarySort(librarySort, id) });
   }
 
   async function loadNowPlayingLayout(): Promise<void> {
@@ -1405,6 +1446,9 @@
   function handleSearchInput(event: Event): void {
     query = (event.currentTarget as HTMLInputElement).value;
     libraryFieldFilter = null;
+    if (activeView !== 'library') {
+      activeView = 'library';
+    }
   }
 
   async function syncLibrary(): Promise<void> {
@@ -1670,6 +1714,7 @@
       kind: 'library',
       query: query.trim() || null,
       fieldFilter: libraryFieldFilter ?? undefined,
+      sort: librarySort,
     };
     await sendPlaybackCommand(
       () => invokeCommand('playback_play', { trackId: track.id, queueSource }),
@@ -2479,6 +2524,19 @@
       </div>
     </div>
 
+    <label class="sidebar-search-field">
+      <IconSearch size={16} stroke={1.6} aria-hidden="true" />
+      <input
+        bind:this={librarySearchInput}
+        type="search"
+        aria-label="搜尋曲庫"
+        placeholder="搜尋歌名、演出者或專輯"
+        value={query}
+        oninput={handleSearchInput}
+        disabled={!libraryReady}
+      />
+    </label>
+
     <nav class="primary-nav">
       <button
         class="nav-link"
@@ -2552,26 +2610,6 @@
       <div class="page-content" class:wide-list-page={isListPage} class:is-list-page={isListPage}>
         {#if activeView === 'library'}
           <section class="library-section" aria-labelledby="page-heading">
-            <div class="library-toolbar">
-              <label class="search-field">
-                <IconSearch size={17} stroke={1.6} aria-hidden="true" />
-                <input
-                  bind:this={librarySearchInput}
-                  type="search"
-                  aria-label="搜尋曲庫"
-                  placeholder="搜尋歌名、演出者或專輯"
-                  value={query}
-                  oninput={handleSearchInput}
-                  disabled={!libraryReady}
-                />
-                <kbd aria-hidden="true"><IconSearch size={11} stroke={1.8} aria-hidden="true" /></kbd>
-              </label>
-              <button class="filter-button" type="button" disabled title="篩選功能尚未接通">
-                <IconFilter size={15} stroke={1.6} aria-hidden="true" />
-                <span>篩選</span>
-              </button>
-            </div>
-
             {#if !libraryReady}
               <div class="not-ready-panel">
                 <div class="not-ready-icon" aria-hidden="true">
@@ -2593,8 +2631,12 @@
                 playbackReady={playbackReady}
                 isSendingPlaybackCommand={isSendingPlaybackCommand}
                 columns={trackColumnPreferences}
+                columnWidths={trackColumnWidths}
+                sort={librarySort}
                 livePlayCount={livePlayCount}
                 onPlay={playTrack}
+                onSort={handleLibrarySort}
+                onColumnResize={handleTrackColumnResize}
                 onTotalCount={(count) => (libraryTrackCount = count)}
               />
             {/if}
@@ -2632,9 +2674,11 @@
                       {playbackReady}
                       {isSendingPlaybackCommand}
                       columns={trackColumnPreferences}
+                      columnWidths={trackColumnWidths}
                       livePlayCount={livePlayCount}
                       currentTrackId={playback?.currentTrack?.id ?? null}
                       onPlay={playPlaylistEntry}
+                      onColumnResize={handleTrackColumnResize}
                       onTotalCount={(count) => (playlistTrackCount = count)}
                     />
                   {/key}
@@ -2659,9 +2703,11 @@
                 resetKey={playbackQueueResetKey}
                 cursorChangeKey={playbackQueueCursorChangeKey}
                 columns={trackColumnPreferences}
+                columnWidths={trackColumnWidths}
                 livePlayCount={livePlayCount}
                 onPlay={playQueueEntry}
                 onTotalCount={(count) => (queueTrackCount = count)}
+                onColumnResize={handleTrackColumnResize}
               />
             {/if}
           </section>

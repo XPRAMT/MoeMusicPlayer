@@ -249,12 +249,70 @@ pub struct TrackListColumnPreference {
     pub visible: bool,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackListFlexibleWidths {
+    pub title: u32,
+    pub artist: u32,
+    pub album: u32,
+}
+
+impl Default for TrackListFlexibleWidths {
+    fn default() -> Self {
+        Self {
+            title: 220,
+            artist: 150,
+            album: 160,
+        }
+    }
+}
+
+impl TrackListFlexibleWidths {
+    pub(crate) fn clamp(self) -> Self {
+        const MIN: u32 = 80;
+        const MAX: u32 = 800;
+        Self {
+            title: self.title.clamp(MIN, MAX),
+            artist: self.artist.clamp(MIN, MAX),
+            album: self.album.clamp(MIN, MAX),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LibrarySortDirection {
+    #[default]
+    Asc,
+    Desc,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryListSort {
+    pub field: TrackListColumnId,
+    pub direction: LibrarySortDirection,
+}
+
+impl Default for LibraryListSort {
+    fn default() -> Self {
+        Self {
+            field: TrackListColumnId::Title,
+            direction: LibrarySortDirection::Asc,
+        }
+    }
+}
+
 /// Configurable information columns. Row index and play action are deliberately absent.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackListColumnSettings {
     /// Column order is represented by array order and must contain every information column once.
     pub columns: Vec<TrackListColumnPreference>,
+    #[serde(default)]
+    pub widths: TrackListFlexibleWidths,
+    #[serde(default)]
+    pub library_sort: LibraryListSort,
 }
 
 impl Default for TrackListColumnSettings {
@@ -272,6 +330,8 @@ impl Default for TrackListColumnSettings {
             .into_iter()
             .map(|id| TrackListColumnPreference { id, visible: true })
             .collect(),
+            widths: TrackListFlexibleWidths::default(),
+            library_sort: LibraryListSort::default(),
         }
     }
 }
@@ -297,6 +357,11 @@ impl TrackListColumnSettings {
         }
         Ok(())
     }
+
+    fn normalize(mut self) -> Self {
+        self.widths = self.widths.clamp();
+        self
+    }
 }
 
 /// Accept persisted preferences that predate the playCount column.
@@ -304,7 +369,7 @@ fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColu
     use TrackListColumnId::{Album, Artist, AudioFormat, Duration, PlayCount, Title, Year};
 
     if settings.validate().is_ok() {
-        return settings;
+        return settings.normalize();
     }
 
     const LEGACY: [TrackListColumnId; 6] = [Title, Artist, Album, Year, AudioFormat, Duration];
@@ -320,7 +385,11 @@ fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColu
             id: PlayCount,
             visible: true,
         });
-        return TrackListColumnSettings { columns };
+        return TrackListColumnSettings {
+            columns,
+            widths: settings.widths.clamp(),
+            library_sort: settings.library_sort,
+        };
     }
 
     TrackListColumnSettings::default()
@@ -2028,6 +2097,7 @@ mod tests {
         assert!(columns[6].visible);
         TrackListColumnSettings {
             columns: columns.clone(),
+            ..TrackListColumnSettings::default()
         }
         .validate()
         .expect("repaired columns validate");

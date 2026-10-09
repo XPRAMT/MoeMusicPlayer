@@ -601,6 +601,51 @@ input:focus-visible {
   font-size: var(--font-caption);
 }
 
+.sidebar-search-field {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text-soft);
+  background: rgba(var(--text-rgb), 0.025);
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.sidebar-search-field:focus-within {
+  border-color: rgba(var(--accent-rgb), 0.38);
+  background: rgba(var(--text-rgb), 0.04);
+}
+
+.sidebar-search-field > svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.sidebar-search-field input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font-size: var(--font-caption);
+}
+
+.sidebar-search-field input::placeholder {
+  color: var(--text-soft);
+}
+
+.sidebar-search-field input:disabled {
+  cursor: not-allowed;
+}
+
 .primary-nav {
   display: grid;
   gap: 5px;
@@ -880,8 +925,7 @@ input:focus-visible {
   padding-bottom: 0;
 }
 
-/* Keep search / headings inset; the virtual track list itself is edge-flush. */
-.page-content.is-list-page > .library-section > .library-toolbar,
+/* Keep headings inset; the virtual track list itself is edge-flush. */
 .page-content.is-list-page > .library-section > .not-ready-panel,
 .page-content.is-list-page > .playlist-section > .inline-message,
 .page-content.is-list-page > .playlist-section > .not-ready-panel,
@@ -903,7 +947,6 @@ input:focus-visible {
   flex-direction: column;
 }
 
-.library-section > .library-toolbar,
 .library-section > .section-heading,
 .playlist-section > .section-heading,
 .queue-page > .section-heading {
@@ -3892,12 +3935,8 @@ input:focus-visible {
   .page-count { font-size: var(--font-body); }
   .page-count small { display: none; }
   .outline-button { min-height: 33px; padding: 0 9px; font-size: var(--font-caption); }
-  .library-toolbar { gap: 7px; }
-  .search-field { height: 36px; gap: 6px; padding: 0 8px; }
-  .search-field input { font-size: var(--font-caption); }
-  .search-field kbd { display: none; }
-  .filter-button { height: 36px; padding: 0 8px; }
-  .filter-button span { display: none; }
+  .sidebar-search-field { height: 34px; gap: 6px; padding: 0 8px; }
+  .sidebar-search-field input { font-size: var(--font-caption); }
   .not-ready-panel { align-items: flex-start; gap: 11px; padding: 14px 12px; }
   .not-ready-icon { width: 37px; height: 37px; border-radius: 10px; }
   .not-ready-icon svg { width: 21px; height: 21px; }

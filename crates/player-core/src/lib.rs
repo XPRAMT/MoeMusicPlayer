@@ -14,8 +14,8 @@ pub use library::{
     FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaScanProgress,
     MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, SourceId,
     SourceScan, SourceScanState, SyncCancellation, TrackField, TrackFieldFilter, TrackId,
-    TrackIdentity, TrackMetadata, TrackMetadataError, TrackSummary, UserMetadataField,
-    TRACK_METADATA_VERSION,
+    TrackIdentity, TrackListSort, TrackMetadata, TrackMetadataError, TrackSortDirection,
+    TrackSortField, TrackSummary, UserMetadataField, TRACK_METADATA_VERSION,
 };
 pub use lyrics::{
     auto_lyric_candidate, explain_lyric_candidate_match, merge_lrc_auxiliary,

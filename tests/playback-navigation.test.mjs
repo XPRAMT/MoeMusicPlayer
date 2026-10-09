@@ -148,7 +148,7 @@ test('visible UI icons use Tabler components except the original brand mark', ()
 
   for (const name of [
     'IconAlertCircle', 'IconArrowDown', 'IconArrowUp', 'IconChevronRight',
-    'IconFilter', 'IconFolder', 'IconHeart', 'IconLibrary', 'IconMusic',
+    'IconFolder', 'IconHeart', 'IconLibrary', 'IconMusic',
     'IconRefresh', 'IconSearch', 'IconVolume2',
   ]) {
     assert.match(appSource, new RegExp(`<${name}\\b`), `${name} should be used by the interface`);
@@ -157,10 +157,12 @@ test('visible UI icons use Tabler components except the original brand mark', ()
   assert.doesNotMatch(trackListSource, /<IconPlayerPlayFilled\b/);
   assert.doesNotMatch(playlistEntrySource, /<IconPlayerPlayFilled\b/);
 
+  assert.match(appSource, /class="sidebar-search-field"/);
   assert.match(appSource, /aria-label="搜尋曲庫"/);
+  assert.doesNotMatch(appSource, /篩選功能尚未接通/);
   assert.match(appSource, /title="上移欄位"/);
   assert.match(appSource, /title="下移欄位"/);
   assert.match(appSource, /aria-label="音量"/);
-  assert.match(trackListSource, /ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目"/);
+  assert.match(trackListSource, /ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序"/);
   assert.match(playlistEntrySource, /ariaLabel="播放清單項目；使用方向鍵瀏覽，按 Enter 播放目前項目"/);
 });

@@ -316,7 +316,37 @@ pub trait MediaIndex {
     ) -> Result<TrackMetadata, TrackMetadataError>;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrackSortField {
+    #[default]
+    Title,
+    Artist,
+    Album,
+    Year,
+    AudioFormat,
+    Duration,
+    PlayCount,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrackSortDirection {
+    #[default]
+    Asc,
+    Desc,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackListSort {
+    #[serde(default)]
+    pub field: TrackSortField,
+    #[serde(default)]
+    pub direction: TrackSortDirection,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListTracksQuery {
     pub offset: u64,
@@ -324,6 +354,8 @@ pub struct ListTracksQuery {
     pub query: Option<String>,
     #[serde(default)]
     pub field_filter: Option<TrackFieldFilter>,
+    #[serde(default)]
+    pub sort: TrackListSort,
 }
 
 /// A binary filter on one user-facing metadata field.

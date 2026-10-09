@@ -1,4 +1,4 @@
-﻿//! One-off fixed-input repair workflow for the isolated 2026-10-04 library rebuild.
+//! One-off fixed-input repair workflow for the isolated 2026-10-04 library rebuild.
 //! This is not a general product tool: it reads the current settings for reference,
 //! scans only the hard-coded D:\\Music sources, and refuses to overwrite its fixed
 //! candidate directory under `target/`.
@@ -242,6 +242,7 @@ mod windows_only {
                 limit: 1,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })?
             .total_count;
         if library_count != music_report.observed {

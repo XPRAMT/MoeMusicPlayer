@@ -75,8 +75,23 @@ export interface TrackListColumnPreference {
   visible: boolean;
 }
 
+export interface TrackColumnWidths {
+  title: number;
+  artist: number;
+  album: number;
+}
+
+export type LibrarySortDirection = 'asc' | 'desc';
+
+export interface LibraryListSort {
+  field: TrackListColumnId;
+  direction: LibrarySortDirection;
+}
+
 export interface TrackListColumnSettings {
   columns: TrackListColumnPreference[];
+  widths?: TrackColumnWidths;
+  librarySort?: LibraryListSort;
 }
 
 export type NowPlayingLayout = 'a' | 'b';
@@ -192,6 +207,7 @@ export interface TrackPage {
 export interface TrackPageRequest {
   query: string | null;
   fieldFilter?: TrackFieldFilter | null;
+  sort?: LibraryListSort | null;
   offset: number;
   limit: number;
 }
@@ -264,7 +280,7 @@ export interface PlaylistExportResult {
 export type RepeatMode = 'off' | 'one' | 'all';
 
 export type PlaybackQueueSource =
-  | { kind: 'library'; query: string | null; fieldFilter?: TrackFieldFilter | null }
+  | { kind: 'library'; query: string | null; fieldFilter?: TrackFieldFilter | null; sort?: LibraryListSort | null }
   | { kind: 'playlist'; playlistId: string; entryPosition: number }
   | { kind: 'queue'; traversalPosition: number };
 export type PlaybackState =

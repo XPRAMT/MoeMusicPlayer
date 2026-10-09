@@ -20,9 +20,7 @@ use tauri::{
     plugin::{PluginApi, PluginHandle},
 };
 
-use crate::adapter::{
-    looks_like_tree_uri, media_store_volume, scan_from_response,
-};
+use crate::adapter::{looks_like_tree_uri, media_store_volume, scan_from_response};
 use crate::models::{
     BooleanResponse, ContentCacheLeaseResponse, ContentUriProbeResponse, LyricsTextResponse,
     PermissionResponse, ResolvedSafPlaylistEntryResponse, SafPlaylistImportResponse,

@@ -1,7 +1,12 @@
 /** @typedef {'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
+/** @typedef {{ title: number, artist: number, album: number }} TrackColumnWidths */
+/** @typedef {'asc' | 'desc'} LibrarySortDirection */
+/** @typedef {{ field: TrackColumnId, direction: LibrarySortDirection }} LibraryListSort */
 
 const INDEX_COLUMN_PX = 26;
+const FLEXIBLE_WIDTH_MIN_PX = 80;
+const FLEXIBLE_WIDTH_MAX_PX = 800;
 
 /** @type {ReadonlyArray<{ id: TrackColumnId, label: string, min: string, minPx: number }>} */
 export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
@@ -17,10 +22,100 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
 /** @type {TrackColumnPreference[]} */
 export const DEFAULT_TRACK_COLUMN_PREFERENCES = TRACK_COLUMN_DEFINITIONS.map(({ id }) => ({ id, visible: true }));
 
+/** @type {TrackColumnWidths} */
+export const DEFAULT_TRACK_COLUMN_WIDTHS = Object.freeze({
+  title: 220,
+  artist: 150,
+  album: 160,
+});
+
+/** @type {LibraryListSort} */
+export const DEFAULT_LIBRARY_SORT = Object.freeze({ field: 'title', direction: 'asc' });
+
+/** @type {ReadonlySet<TrackColumnId>} */
+export const RESIZABLE_TRACK_COLUMN_IDS = Object.freeze(new Set(/** @type {TrackColumnId[]} */ (['title', 'artist', 'album'])));
+
 /** @type {Set<TrackColumnId>} */
 const COLUMN_IDS = new Set(TRACK_COLUMN_DEFINITIONS.map(({ id }) => id));
 const COLUMN_DEFINITION_BY_ID = new Map(TRACK_COLUMN_DEFINITIONS.map((column) => [column.id, column]));
 
+/**
+ * @param {unknown} value
+ * @returns {number}
+ */
+function clampFlexibleWidth(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_TRACK_COLUMN_WIDTHS.title;
+  }
+  return Math.min(FLEXIBLE_WIDTH_MAX_PX, Math.max(FLEXIBLE_WIDTH_MIN_PX, Math.round(value)));
+}
+
+/**
+ * @param {unknown} value
+ * @returns {TrackColumnWidths}
+ */
+export function normalizeTrackColumnWidths(value) {
+  if (!value || typeof value !== 'object') {
+    return { ...DEFAULT_TRACK_COLUMN_WIDTHS };
+  }
+  const record = /** @type {Record<string, unknown>} */ (value);
+  return {
+    title: typeof record.title === 'number' && Number.isFinite(record.title)
+      ? clampFlexibleWidth(record.title)
+      : DEFAULT_TRACK_COLUMN_WIDTHS.title,
+    artist: typeof record.artist === 'number' && Number.isFinite(record.artist)
+      ? clampFlexibleWidth(record.artist)
+      : DEFAULT_TRACK_COLUMN_WIDTHS.artist,
+    album: typeof record.album === 'number' && Number.isFinite(record.album)
+      ? clampFlexibleWidth(record.album)
+      : DEFAULT_TRACK_COLUMN_WIDTHS.album,
+  };
+}
+
+/**
+ * @param {unknown} value
+ * @returns {LibraryListSort}
+ */
+export function normalizeLibrarySort(value) {
+  if (!value || typeof value !== 'object') {
+    return { ...DEFAULT_LIBRARY_SORT };
+  }
+  const record = /** @type {Record<string, unknown>} */ (value);
+  const field = COLUMN_IDS.has(/** @type {TrackColumnId} */ (record.field))
+    ? /** @type {TrackColumnId} */ (record.field)
+    : DEFAULT_LIBRARY_SORT.field;
+  const direction = record.direction === 'desc' ? 'desc' : 'asc';
+  return { field, direction };
+}
+
+/**
+ * @param {LibraryListSort} current
+ * @param {TrackColumnId} field
+ * @returns {LibraryListSort}
+ */
+export function toggleLibrarySort(current, field) {
+  const normalized = normalizeLibrarySort(current);
+  if (normalized.field === field) {
+    return { field, direction: normalized.direction === 'asc' ? 'desc' : 'asc' };
+  }
+  return { field, direction: 'asc' };
+}
+
+/**
+ * @param {TrackColumnWidths} widths
+ * @param {TrackColumnId} id
+ * @param {number} widthPx
+ * @returns {TrackColumnWidths}
+ */
+export function setTrackColumnWidth(widths, id, widthPx) {
+  if (!RESIZABLE_TRACK_COLUMN_IDS.has(id)) {
+    return normalizeTrackColumnWidths(widths);
+  }
+  return normalizeTrackColumnWidths({
+    ...normalizeTrackColumnWidths(widths),
+    [id]: widthPx,
+  });
+}
 /** Codecs that store source PCM without a useful average bitrate in the list. */
 const LOSSLESS_CODECS = new Set([
   'FLAC',
@@ -75,10 +170,18 @@ export function trackListColumnCount(preferences) {
   return visibleTrackColumns(preferences).length + 1;
 }
 
-/** @param {TrackColumnPreference[]} preferences */
-export function trackListGridTemplate(preferences) {
-  const informationColumns = visibleTrackColumns(preferences)
-    .map(({ id }) => COLUMN_DEFINITION_BY_ID.get(id)?.min ?? 'minmax(100px,1fr)');
+/**
+ * @param {TrackColumnPreference[]} preferences
+ * @param {TrackColumnWidths | null | undefined} [widths]
+ */
+export function trackListGridTemplate(preferences, widths) {
+  const flexible = normalizeTrackColumnWidths(widths);
+  const informationColumns = visibleTrackColumns(preferences).map(({ id }) => {
+    if (RESIZABLE_TRACK_COLUMN_IDS.has(id)) {
+      return `${flexible[/** @type {'title' | 'artist' | 'album'} */ (id)]}px`;
+    }
+    return COLUMN_DEFINITION_BY_ID.get(id)?.min ?? 'minmax(100px,1fr)';
+  });
   return [`${INDEX_COLUMN_PX}px`, ...informationColumns].join(' ');
 }
 
@@ -86,13 +189,17 @@ export function trackListGridTemplate(preferences) {
  * Width the shared grid needs before a long cell is allowed to grow the row.
  * Includes the index column, horizontal padding, and gaps.
  * @param {TrackColumnPreference[]} preferences
+ * @param {TrackColumnWidths | null | undefined} [widths]
  */
-export function trackListMinWidthPx(preferences) {
+export function trackListMinWidthPx(preferences, widths) {
+  const flexible = normalizeTrackColumnWidths(widths);
   const visible = visibleTrackColumns(preferences);
-  const information = visible.reduce(
-    (sum, column) => sum + (COLUMN_DEFINITION_BY_ID.get(column.id)?.minPx ?? 100),
-    0,
-  );
+  const information = visible.reduce((sum, column) => {
+    if (RESIZABLE_TRACK_COLUMN_IDS.has(column.id)) {
+      return sum + flexible[/** @type {'title' | 'artist' | 'album'} */ (column.id)];
+    }
+    return sum + (COLUMN_DEFINITION_BY_ID.get(column.id)?.minPx ?? 100);
+  }, 0);
   const gaps = visible.length * 10;
   const padding = 28;
   return INDEX_COLUMN_PX + information + gaps + padding;

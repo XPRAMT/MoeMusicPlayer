@@ -438,6 +438,7 @@ mod tests {
                 limit: 10,
                 query: None,
                 field_filter: None,
+                sort: Default::default(),
             })
             .expect("read library projection");
         assert_eq!(page.items[0].id, stable_track_id);
