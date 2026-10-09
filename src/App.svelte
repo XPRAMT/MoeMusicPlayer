@@ -2339,7 +2339,7 @@
               <div class="source-action-card source-folder-picker">
                 <div class="source-action-row source-action-buttons">
                   <button
-                    class="outline-button"
+                    class="soft-button"
                     type="button"
                     onclick={() => void pickWindowsFolder()}
                     disabled={!sourceSyncReady || isUpdatingSource}
@@ -2347,7 +2347,7 @@
                     {isUpdatingSource ? '處理中' : '選擇資料夾'}
                   </button>
                   <button
-                    class="outline-button"
+                    class="soft-button"
                     type="button"
                     onclick={() => void pickWindowsPlaylistSource()}
                     disabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation}
@@ -2744,7 +2744,7 @@
       <header class="topbar now-playing-overlay-topbar" inert={isQuickSettingsOpen}>
         <button
           bind:this={nowPlayingBackButton}
-          class="outline-button now-playing-overlay-return"
+          class="soft-button icon-button now-playing-overlay-return"
           type="button"
           aria-label="返回播放前頁面"
           title="返回播放前頁面"
@@ -2784,7 +2784,7 @@
             <div class="lyrics-topbar-status" role="group" aria-label="歌詞來源與同步操作">
               <button
                 type="button"
-                class="lyrics-topbar-action"
+                class="soft-button lyrics-topbar-action"
                 title={`目前來源：${lyricsTopbarStatus.source}（開啟候選以手動指定）`}
                 aria-label="手動指定歌詞"
                 disabled={!playback?.currentTrack}
@@ -2792,7 +2792,7 @@
               >手動指定</button>
               <button
                 type="button"
-                class="lyrics-topbar-action"
+                class="soft-button lyrics-topbar-action"
                 class:is-active={lyricsTopbarStatus.timingPanelOpen}
                 title={lyricsTopbarStatus.canAdjustTiming ? `目前：${lyricsTopbarStatus.sync}（調整延遲 ±5 秒）` : '目前不是同步歌詞，無法調整延遲'}
                 aria-label="同步歌詞延遲調整"
@@ -2803,10 +2803,10 @@
             </div>
           {/if}
           <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
-            <button type="button" class="lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label="切換譯文顯示" onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>譯</button>
-            <button type="button" class="lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label="切換羅馬拼音顯示" onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>羅</button>
+            <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label="切換譯文顯示" onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>譯</button>
+            <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label="切換羅馬拼音顯示" onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>羅</button>
           </div>
-          <button bind:this={quickSettingsTrigger} class="outline-button now-playing-quick-settings-trigger" type="button" aria-label="開啟快速設定" title="快速設定" aria-haspopup="dialog" aria-expanded={isQuickSettingsOpen} onclick={() => void openQuickSettings()}>
+          <button bind:this={quickSettingsTrigger} class="soft-button icon-button now-playing-quick-settings-trigger" type="button" aria-label="開啟快速設定" title="快速設定" aria-haspopup="dialog" aria-expanded={isQuickSettingsOpen} onclick={() => void openQuickSettings()}>
             <IconSettings size={18} stroke={1.7} aria-hidden="true" />
           </button>
         </div>
@@ -2868,7 +2868,7 @@
         >
           <header class="quick-settings-drawer-header">
             <h2 id="now-playing-quick-settings-title">快速設定</h2>
-            <button bind:this={quickSettingsCloseButton} class="outline-button icon-button" type="button" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}><IconX size={18} stroke={1.8} aria-hidden="true" /></button>
+            <button bind:this={quickSettingsCloseButton} class="soft-button icon-button" type="button" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}><IconX size={18} stroke={1.8} aria-hidden="true" /></button>
           </header>
           <div class="quick-settings-drawer-scroll">
             {@render settingsPanels('quick-')}

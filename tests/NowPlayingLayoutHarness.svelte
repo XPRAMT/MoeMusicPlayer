@@ -305,7 +305,7 @@
   </main>
   <section class="now-playing-overlay is-open" data-testid="now-playing-overlay" aria-label="正在播放">
     <header class="topbar now-playing-overlay-topbar" data-testid="layout-topbar">
-      <button class="outline-button now-playing-overlay-return" type="button" aria-label="返回播放前頁面" title="返回播放前頁面">返回</button>
+      <button class="soft-button icon-button now-playing-overlay-return" type="button" aria-label="返回播放前頁面" title="返回播放前頁面">返回</button>
       <div class="now-playing-header-track">
         <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類">
           <button data-track-field="artist" type="button">測試演出者</button><span class="now-playing-track-sep" aria-hidden="true">．</span>
