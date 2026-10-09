@@ -79,8 +79,10 @@ test('progress slider publishes playhead percent for the edge glow gradient', ()
   const css = readFileSync(path.join(root, 'src/app.css'), 'utf8');
   assert.match(progressSource, /const progressPercent = \$derived\(/);
   assert.match(progressSource, /style=\{`--progress-pct: \$\{progressPercent\}%`\}/);
+  assert.match(progressSource, /class="progress-hit"/);
   assert.match(css, /--progress-pct/);
-  assert.match(css, /background-size:\s*100% 3px/);
-  assert.match(css, /\.player-dock\[data-timeline-style="edge"\] \.progress-row[\s\S]*?margin-top:\s*-8px/);
+  assert.match(css, /--dock-progress-hit:\s*14px/);
+  assert.match(css, /align-items:\s*flex-end/);
+  assert.match(css, /margin-top:\s*calc\(-1 \* var\(--dock-progress-hit\)\)/);
 });
 

@@ -3032,10 +3032,12 @@ input:focus-visible {
   justify-self: center;
 }
 
-/* Edge progress: 16px hit band straddles the dock top so the 3px painted track
-   sits on the top edge. Dock chrome still centers in the full 74px height;
-   time labels hang under the track into the dock and are not part of that center. */
+/* Edge progress sits above the dock: hit band ends at the dock top, 3px track
+   pinned to that bottom edge (貼齊底欄上緣). Dock chrome centers in the full
+   74px height; time labels hang under the track into the dock. */
 .player-dock[data-timeline-style="edge"] {
+  --dock-progress-hit: 14px;
+  --dock-progress-track: 3px;
   height: var(--dock-height);
   min-height: var(--dock-height);
   padding-top: 0;
@@ -3061,15 +3063,14 @@ input:focus-visible {
   width: auto;
   max-width: none;
   height: auto;
-  /* Half of the 16px hit band above the dock, half below → track centered on the edge. */
-  margin-top: -8px;
+  /* Entire hit band is above the dock; its bottom edge is the dock top. */
+  margin-top: calc(-1 * var(--dock-progress-hit));
   padding: 0;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: 16px auto;
+  grid-template-rows: var(--dock-progress-hit) auto;
   align-items: center;
   column-gap: 0;
-  /* Space times below the hit band (track is mid-band). */
-  row-gap: 6px;
+  row-gap: 8px;
   pointer-events: none;
   grid-column: 1 / -1;
   grid-row: auto;
@@ -3081,12 +3082,20 @@ input:focus-visible {
   pointer-events: auto;
 }
 
-.player-dock[data-timeline-style="edge"] .progress-slider {
-  position: static;
+.player-dock[data-timeline-style="edge"] .progress-hit {
   grid-column: 1 / -1;
   grid-row: 1;
+  display: flex;
+  align-items: flex-end;
   width: 100%;
-  height: 16px;
+  height: var(--dock-progress-hit);
+  min-height: var(--dock-progress-hit);
+}
+
+.player-dock[data-timeline-style="edge"] .progress-slider {
+  position: static;
+  width: 100%;
+  height: var(--dock-progress-track);
   margin: 0;
   border-radius: 0;
 }
@@ -3360,26 +3369,31 @@ input:focus-visible {
   background-size: 100% 3px;
 }
 
+.progress-hit {
+  min-width: 0;
+}
+
 /* Progress track: darkest at both ends, brightest at the playhead (--progress-pct).
-   Paint the 3px line on the input itself (centered) so the thumb — also centered in
-   the same hit box — stays vertically aligned without fragile track margin math. */
+   Edge layout pins this 3px control to the bottom of .progress-hit (= dock top). */
 .progress-slider {
   --progress-pct: 0%;
-  --progress-glow: color-mix(in srgb, var(--accent-bright) 40%, white);
+  /* Peak stays accent-tinted, not near-white. */
+  --progress-glow: color-mix(in srgb, var(--accent) 72%, var(--accent-bright));
+  --progress-thumb: 10px;
   border-radius: 0;
   background: linear-gradient(
     90deg,
     rgba(var(--accent-rgb), 0.1) 0%,
-    rgba(var(--accent-rgb), 0.22) max(0%, calc(var(--progress-pct) - 32%)),
-    rgba(var(--accent-rgb), 0.55) max(0%, calc(var(--progress-pct) - 12%)),
+    rgba(var(--accent-rgb), 0.2) max(0%, calc(var(--progress-pct) - 32%)),
+    rgba(var(--accent-rgb), 0.42) max(0%, calc(var(--progress-pct) - 12%)),
     var(--progress-glow) var(--progress-pct),
-    rgba(var(--accent-rgb), 0.55) min(100%, calc(var(--progress-pct) + 12%)),
-    rgba(var(--accent-rgb), 0.22) min(100%, calc(var(--progress-pct) + 32%)),
+    rgba(var(--accent-rgb), 0.42) min(100%, calc(var(--progress-pct) + 12%)),
+    rgba(var(--accent-rgb), 0.2) min(100%, calc(var(--progress-pct) + 32%)),
     rgba(var(--accent-rgb), 0.1) 100%
   );
   background-position: center;
   background-repeat: no-repeat;
-  background-size: 100% 3px;
+  background-size: 100% 100%;
 }
 
 .progress-slider::-webkit-slider-runnable-track {
@@ -3395,23 +3409,24 @@ input:focus-visible {
 }
 
 .progress-slider::-webkit-slider-thumb {
-  width: 10px;
-  height: 10px;
-  margin-top: 0;
+  width: var(--progress-thumb);
+  height: var(--progress-thumb);
+  /* Edge input height is 3px; (3 − 10) / 2 centers the thumb on the track. */
+  margin-top: calc((var(--dock-progress-track, 3px) - var(--progress-thumb)) / 2);
   border: 1px solid var(--progress-glow);
   border-radius: 50%;
   background: var(--progress-glow);
-  box-shadow: 0 0 7px rgba(var(--accent-rgb), 0.75);
+  box-shadow: 0 0 5px rgba(var(--accent-rgb), 0.45);
   appearance: none;
 }
 
 .progress-slider::-moz-range-thumb {
-  width: 10px;
-  height: 10px;
+  width: var(--progress-thumb);
+  height: var(--progress-thumb);
   border: 1px solid var(--progress-glow);
   border-radius: 50%;
   background: var(--progress-glow);
-  box-shadow: 0 0 7px rgba(var(--accent-rgb), 0.75);
+  box-shadow: 0 0 5px rgba(var(--accent-rgb), 0.45);
 }
 
 .volume-slider::-webkit-slider-thumb {

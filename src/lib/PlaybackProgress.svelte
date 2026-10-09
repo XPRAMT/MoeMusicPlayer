@@ -128,19 +128,21 @@
 
 <div class="progress-row" data-timeline-style={timelineStyle}>
   <span class="progress-time progress-time-elapsed">{formatDuration(displayedPositionMs)}</span>
-  <input
-    class="progress-slider"
-    type="range"
-    min="0"
-    max={Math.max(1, durationMs ?? 0)}
-    value={displayedPositionMs}
-    style={`--progress-pct: ${progressPercent}%`}
-    aria-label="播放進度"
-    disabled={!seekEnabled}
-    onpointerdown={beginPointerSeek}
-    oninput={updateDraft}
-    onchange={commitDraft}
-    onblur={commitDraft}
-  />
+  <div class="progress-hit">
+    <input
+      class="progress-slider"
+      type="range"
+      min="0"
+      max={Math.max(1, durationMs ?? 0)}
+      value={displayedPositionMs}
+      style={`--progress-pct: ${progressPercent}%`}
+      aria-label="播放進度"
+      disabled={!seekEnabled}
+      onpointerdown={beginPointerSeek}
+      oninput={updateDraft}
+      onchange={commitDraft}
+      onblur={commitDraft}
+    />
+  </div>
   <span class="progress-time progress-time-duration">{formatDuration(durationMs)}</span>
 </div>
