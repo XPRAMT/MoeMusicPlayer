@@ -2,6 +2,7 @@
 import test from 'node:test';
 import {
   DEFAULT_THEME_PREFERENCES,
+  compositeBackgroundHex,
   contrastRatio,
   contrastingTextColor,
   createThemeCssVariables,
@@ -33,6 +34,24 @@ test('theme variables follow both selected colors and derive coordinated surface
   assert.equal(variables['--text'], '#FFFFFF');
   assert.notEqual(variables['--panel'], variables['--page']);
   assert.ok(contrastRatio('#D84A9A', variables['--accent-foreground']) >= 4.5);
+});
+
+test('composite background mixes page color with image average by opacity', () => {
+  assert.equal(compositeBackgroundHex('#000000', '#FFFFFF', 0), '#000000');
+  assert.equal(compositeBackgroundHex('#000000', '#FFFFFF', 100), '#FFFFFF');
+  assert.equal(compositeBackgroundHex('#000000', '#FFFFFF', 40), '#666666');
+  assert.equal(compositeBackgroundHex('#102030', null, 80), '#102030');
+});
+
+test('contrast background can flip text while keeping the solid page color', () => {
+  const variables = createThemeCssVariables(
+    { backgroundHex: '#000000', accentHex: '#55D9FF' },
+    { contrastBackgroundHex: '#E8E8E8' },
+  );
+  assert.equal(variables['--page'], '#000000');
+  assert.equal(variables['--text'], '#000000');
+  assert.equal(variables['--color-scheme'], 'light');
+  assert.ok(contrastRatio(variables['--panel'], variables['--text']) >= 4.5);
 });
 
 test('accent and status text colors retain readable contrast on either background', () => {

@@ -63,6 +63,7 @@
     isHexColor,
     normalizeThemePreferences,
   } from './lib/theme';
+  import { resolveBackdropContrast } from './lib/backdrop-contrast.js';
   import { splitArtists } from './lib/artist-names.js';
   import { formatVolume } from './lib/format';
   import { describeOutputFormat } from './lib/output-format.js';
@@ -194,6 +195,16 @@
   let mainBackgroundObjectUrl: string | null = null;
   let mainBackgroundError = $state<string | null>(null);
   let mainBackgroundBusy = $state(false);
+  /** Average page+image mix for main-window text contrast; null means use page color only. */
+  let mainContrastBackgroundHex = $state<string | null>(null);
+  /** Average page+cover mix for Now Playing text contrast; null means use page color only. */
+  let nowPlayingContrastBackgroundHex = $state<string | null>(null);
+  let mainImageAverageHex: string | null = null;
+  let mainImageAverageUrl: string | null = null;
+  let nowPlayingImageAverageHex: string | null = null;
+  let nowPlayingImageAverageUrl: string | null = null;
+  let mainContrastRevision = 0;
+  let nowPlayingContrastRevision = 0;
   let themeSaveState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let themeSaveError = $state<string | null>(null);
   let settingsRecoveryWarning = $state<string | null>(null);
@@ -375,6 +386,72 @@
     } else {
       artworkController.setTrack(snapshot.currentTrack.id);
     }
+  });
+
+  function applyActiveTheme(): void {
+    const contrastBackgroundHex = isNowPlayingOpen
+      ? (nowPlayingContrastBackgroundHex ?? themePreferences.backgroundHex)
+      : (mainContrastBackgroundHex ?? themePreferences.backgroundHex);
+    applyTheme(document.documentElement, themePreferences, { contrastBackgroundHex });
+  }
+
+  $effect(() => {
+    const pageHex = themePreferences.backgroundHex;
+    const imageUrl = mainBackgroundUrl;
+    const opacityPercent = themePreferences.mainBackgroundOpacityPercent;
+    const revision = ++mainContrastRevision;
+    const cachedImageAverageHex = mainImageAverageUrl === imageUrl ? mainImageAverageHex : null;
+    void resolveBackdropContrast({
+      pageHex,
+      imageUrl,
+      opacityPercent,
+      cachedImageAverageHex,
+    }).then((result) => {
+      if (revision !== mainContrastRevision) return;
+      if (imageUrl && result.imageAverageHex) {
+        mainImageAverageUrl = imageUrl;
+        mainImageAverageHex = result.imageAverageHex;
+      } else if (!imageUrl) {
+        mainImageAverageUrl = null;
+        mainImageAverageHex = null;
+      }
+      mainContrastBackgroundHex = result.contrastHex;
+    });
+  });
+
+  $effect(() => {
+    const pageHex = themePreferences.backgroundHex;
+    const imageUrl = activeArtwork.status === 'ready' ? activeArtwork.objectUrl : null;
+    const opacityPercent = nowPlayingAppearancePreferences.backgroundOpacityPercent;
+    const revision = ++nowPlayingContrastRevision;
+    const cachedImageAverageHex = nowPlayingImageAverageUrl === imageUrl
+      ? nowPlayingImageAverageHex
+      : null;
+    void resolveBackdropContrast({
+      pageHex,
+      imageUrl,
+      opacityPercent,
+      cachedImageAverageHex,
+    }).then((result) => {
+      if (revision !== nowPlayingContrastRevision) return;
+      if (imageUrl && result.imageAverageHex) {
+        nowPlayingImageAverageUrl = imageUrl;
+        nowPlayingImageAverageHex = result.imageAverageHex;
+      } else if (!imageUrl) {
+        nowPlayingImageAverageUrl = null;
+        nowPlayingImageAverageHex = null;
+      }
+      nowPlayingContrastBackgroundHex = result.contrastHex;
+    });
+  });
+
+  $effect(() => {
+    void isNowPlayingOpen;
+    void mainContrastBackgroundHex;
+    void nowPlayingContrastBackgroundHex;
+    void themePreferences.backgroundHex;
+    void themePreferences.accentHex;
+    applyActiveTheme();
   });
 
   function updateCoverFrame(): void {
@@ -630,7 +707,6 @@
       const stored = await invokeCommand('theme_get_preferences', {});
       if (revision !== themeRevision) return;
       themePreferences = normalizeThemePreferences(stored);
-      applyTheme(document.documentElement, themePreferences);
       themeSaveState = 'saved';
       themeSaveError = null;
     } catch (error) {
@@ -1117,7 +1193,6 @@
     if (!isHexColor(value)) return;
     const next = normalizeThemePreferences({ ...themePreferences, [key]: value });
     themePreferences = next;
-    applyTheme(document.documentElement, next);
     themeSaveError = null;
     themeSaveState = isTauri() ? 'saving' : 'preview';
     const revision = ++themeRevision;
@@ -1148,7 +1223,6 @@
         const saved = await invokeCommand('theme_set_preferences', { preferences });
         if (revision !== themeRevision) return;
         themePreferences = normalizeThemePreferences(saved);
-        applyTheme(document.documentElement, themePreferences);
         themeSaveState = 'saved';
         themeSaveError = null;
       } catch (error) {
@@ -1161,7 +1235,6 @@
 
   function resetThemePreferences(): void {
     themePreferences = { ...DEFAULT_THEME_PREFERENCES };
-    applyTheme(document.documentElement, themePreferences);
     themeSaveError = null;
     themeSaveState = isTauri() ? 'saving' : 'preview';
     const revision = ++themeRevision;

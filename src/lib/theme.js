@@ -100,6 +100,23 @@ function blend(color, tint, amount) {
   return channelsToHex(source.map((channel, index) => channel + (target[index] - channel) * amount));
 }
 
+/**
+ * Page color under an image at the given opacity percent (0–100).
+ * @param {string} pageHex
+ * @param {string | null | undefined} imageAverageHex
+ * @param {number} opacityPercent
+ */
+export function compositeBackgroundHex(pageHex, imageAverageHex, opacityPercent) {
+  const page = isHexColor(pageHex) ? pageHex.toUpperCase() : DEFAULT_THEME_PREFERENCES.backgroundHex;
+  const image = isHexColor(imageAverageHex) ? imageAverageHex.toUpperCase() : null;
+  const amount = typeof opacityPercent === 'number' && Number.isFinite(opacityPercent)
+    ? Math.max(0, Math.min(100, opacityPercent)) / 100
+    : 0;
+  if (!image || amount <= 0) return page;
+  if (amount >= 1) return image;
+  return blend(page, image, amount);
+}
+
 /** @param {string} background @param {string} foreground @param {number} requestedAmount */
 function readableSurfaceBlend(background, foreground, requestedAmount) {
   const requested = blend(background, foreground, requestedAmount);
@@ -121,16 +138,24 @@ function channels(color) {
   return parseHexColor(color).join(', ');
 }
 
-/** @param {ThemePreferences | unknown} value */
-export function createThemeCssVariables(value) {
+/**
+ * @typedef {{ contrastBackgroundHex?: string | null }} ThemeCssOptions
+ * `contrastBackgroundHex` is the visual average after page+image mix; `--page` stays the solid theme color.
+ */
+
+/** @param {ThemePreferences | unknown} value @param {ThemeCssOptions} [options] */
+export function createThemeCssVariables(value, options = {}) {
   const preferences = normalizeThemePreferences(value);
-  const textColor = contrastingTextColor(preferences.backgroundHex);
+  const contrastBackground = isHexColor(options.contrastBackgroundHex)
+    ? options.contrastBackgroundHex.toUpperCase()
+    : preferences.backgroundHex;
+  const textColor = contrastingTextColor(contrastBackground);
   const textChannels = channels(textColor);
-  const panel = readableSurfaceBlend(preferences.backgroundHex, textColor, 0.075);
-  const panelSoft = readableSurfaceBlend(preferences.backgroundHex, textColor, 0.13);
-  const sidebar = readableSurfaceBlend(preferences.backgroundHex, textColor, 0.035);
-  const dock = readableSurfaceBlend(preferences.backgroundHex, textColor, 0.08);
-  const textSurfaces = [preferences.backgroundHex, panel, panelSoft, sidebar, dock];
+  const panel = readableSurfaceBlend(contrastBackground, textColor, 0.075);
+  const panelSoft = readableSurfaceBlend(contrastBackground, textColor, 0.13);
+  const sidebar = readableSurfaceBlend(contrastBackground, textColor, 0.035);
+  const dock = readableSurfaceBlend(contrastBackground, textColor, 0.08);
+  const textSurfaces = [contrastBackground, panel, panelSoft, sidebar, dock];
   /** @param {string} foreground */
   const readableOnSurfaces = (foreground) => textSurfaces.every(
     (surface) => contrastRatio(foreground, surface) >= 4.5,
@@ -167,9 +192,9 @@ export function createThemeCssVariables(value) {
   };
 }
 
-/** @param {HTMLElement} root @param {ThemePreferences | unknown} preferences */
-export function applyTheme(root, preferences) {
-  const variables = createThemeCssVariables(preferences);
+/** @param {HTMLElement} root @param {ThemePreferences | unknown} preferences @param {ThemeCssOptions} [options] */
+export function applyTheme(root, preferences, options = {}) {
+  const variables = createThemeCssVariables(preferences, options);
   for (const [name, value] of Object.entries(variables)) root.style.setProperty(name, value);
   return variables;
 }
