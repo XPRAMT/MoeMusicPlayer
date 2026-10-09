@@ -1244,14 +1244,6 @@
     queueThemeSave({ ...themePreferences }, revision);
   }
 
-  const themeSaveMessage = $derived.by(() => {
-    if (themeSaveError) return themeSaveError;
-    if (themeSaveState === 'loading') return '正在讀取外觀設定…';
-    if (themeSaveState === 'saving') return '正在保存到此裝置…';
-    if (themeSaveState === 'preview') return '目前為預覽；桌面版會將設定保存到此裝置。';
-    return '外觀設定已保存到此裝置。';
-  });
-
   function handleLibrarySyncProgress(event: LibrarySyncProgressEvent): void {
     const current = syncProgress?.runId === event.runId
       ? syncProgress
@@ -2174,7 +2166,6 @@
                 {#if mainBackgroundError}
                   <p class="theme-save-status error" role="alert">{mainBackgroundError}</p>
                 {/if}
-                <p class="theme-save-status" class:error={themeSaveState === 'error'} role="status">{themeSaveMessage}</p>
               </div>
             {:else if settingsSection === 'track-columns'}
               <div id="{scope}track-columns-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}track-columns-tab" tabindex="0">
@@ -2205,9 +2196,6 @@
                     </li>
                   {/each}
                 </ol>
-                <p class="settings-preference-status" class:error={trackColumnSettingsState === 'error'} role="status">
-                  {trackColumnSettingsError ?? (trackColumnSettingsState === 'loading' ? '正在讀取欄位設定…' : trackColumnSettingsState === 'saving' ? '正在保存欄位設定…' : trackColumnSettingsState === 'preview' ? '瀏覽器預覽不會保存欄位設定。' : '欄位設定已保存。')}
-                </p>
               </div>
             {:else if settingsSection === 'playback'}
               {@const outputStatus = describeOutputFormat(playback?.outputFormat)}
@@ -2263,12 +2251,6 @@
                     </span>
                   </label>
                 </div>
-                <p class="settings-preference-status" class:error={resamplingModeState === 'error'} role="status">
-                  {resamplingModeError ?? (resamplingModeState === 'loading' ? '正在讀取取樣率轉換設定…' : resamplingModeState === 'saving' ? '正在切換取樣率轉換方式…' : resamplingModeState === 'preview' ? '瀏覽器預覽不會保存取樣率轉換設定。' : '取樣率轉換設定已保存。')}
-                </p>
-                <p class="settings-preference-status" class:error={dseeHxState === 'error'} role="status">
-                  {dseeHxError ?? (dseeHxState === 'loading' ? '正在讀取 DSEE HX 設定…' : dseeHxState === 'saving' ? '正在套用 DSEE HX…' : dseeHxState === 'preview' ? '瀏覽器預覽不會保存 DSEE HX 設定。' : dseeHx ? 'DSEE HX 已開啟。' : 'DSEE HX 已關閉。')}
-                </p>
               </div>
             {:else if settingsSection === 'now-playing'}
               <div id="{scope}now-playing-layout-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}now-playing-tab" tabindex="0">
@@ -2283,12 +2265,6 @@
                   layout={nowPlayingLayout}
                   appearance={nowPlayingAppearancePreferences}
                   lyrics={lyricsPreferences}
-                  appearanceState={nowPlayingAppearanceState}
-                  appearanceError={nowPlayingAppearanceError}
-                  lyricsState={lyricsPreferencesState}
-                  lyricsError={lyricsPreferencesError}
-                  layoutState={nowPlayingLayoutState}
-                  layoutError={nowPlayingLayoutError}
                   onLayoutChange={setNowPlayingLayout}
                   onAppearanceChange={updateNowPlayingAppearancePreferences}
                   onLyricsChange={updateLyricsPreferences}
@@ -2308,7 +2284,6 @@
                   <span><strong>面板模糊</strong><output>{themePreferences.quickSettingsBlurPx}px</output></span>
                   <input type="range" min="0" max="50" step="1" value={themePreferences.quickSettingsBlurPx} aria-label="快速設定面板模糊程度" oninput={(event) => updateQuickSettingsLook({ quickSettingsBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                 </label>
-                <p class="theme-save-status" class:error={themeSaveState === 'error'} role="status">{themeSaveMessage}</p>
               </div>
             {:else if settingsSection === 'lyrics'}
               <div id="{scope}lyrics-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}lyrics-tab" tabindex="0">
@@ -2323,12 +2298,6 @@
                   layout={nowPlayingLayout}
                   appearance={nowPlayingAppearancePreferences}
                   lyrics={lyricsPreferences}
-                  appearanceState={nowPlayingAppearanceState}
-                  appearanceError={nowPlayingAppearanceError}
-                  lyricsState={lyricsPreferencesState}
-                  lyricsError={lyricsPreferencesError}
-                  layoutState={nowPlayingLayoutState}
-                  layoutError={nowPlayingLayoutError}
                   onLayoutChange={setNowPlayingLayout}
                   onAppearanceChange={updateNowPlayingAppearancePreferences}
                   onLyricsChange={updateLyricsPreferences}

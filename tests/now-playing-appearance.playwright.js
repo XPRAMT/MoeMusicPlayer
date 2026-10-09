@@ -54,14 +54,15 @@ async page => {
   assert.deepEqual(latest, { backgroundBlurPx: 25, backgroundOpacityPercent: 52, coverCornerStyle: 'rounded', timelineStyle: 'edge' }, 'the active request should flush only the latest preferences');
   assert.equal(await page.getByText('時間軸樣式').count(), 0, 'timeline style is no longer a setting');
   await page.evaluate(() => window.__appearanceHarness.releaseAck());
-  await page.waitForFunction(() => document.querySelector('#now-playing-layout-panel .quick-settings-group[aria-labelledby="quick-settings-playback-heading"] .settings-preference-status:last-of-type')?.textContent.includes('正在播放外觀已保存'));
+  await page.waitForFunction(() => window.__appearanceHarness.requests.length === 2 && window.__appearanceHarness.pendingAcks.length === 0);
 
   await page.evaluate(() => { window.__appearanceHarness.failNext = true; });
   await setRange(opacity, 68, 'change');
   await page.waitForFunction(() => window.__appearanceHarness.requests.length === 3);
   await page.evaluate(() => window.__appearanceHarness.releaseAck());
-  await page.waitForFunction(() => document.querySelector('#now-playing-layout-panel .quick-settings-group[aria-labelledby="quick-settings-playback-heading"] .settings-preference-status:last-of-type')?.textContent.includes('無法保存正在播放外觀'));
-  assert.equal(await page.evaluate(() => window.__appearanceHarness.requests.length), 3, 'a failed save must stop cleanly and show an error');
+  await page.waitForFunction(() => window.__appearanceHarness.pendingAcks.length === 0);
+  assert.equal(await page.evaluate(() => window.__appearanceHarness.requests.length), 3, 'a failed save must stop cleanly without enqueueing another write');
+  assert.equal(await opacity.inputValue(), '68', 'failed save keeps the attempted opacity value');
 
   await page.reload();
   await page.waitForFunction(() => document.querySelector('.dock-art')?.disabled === false);

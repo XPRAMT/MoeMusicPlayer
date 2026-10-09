@@ -50,8 +50,12 @@ async page => {
     await page.getByRole('tab', { name: '播放頁' }).click();
     assert.equal(await page.locator('#now-playing-layout-panel input[aria-label="封面背景透明度"]').count(), 1, 'main settings exposes cover background opacity');
     assert.equal(await page.locator('#now-playing-layout-panel input[aria-label="元件底色透明度"]').count(), 0, 'main settings removes surface transparency');
-    await page.getByRole('button', { name: layout === 'a' ? '排列 A：封面在前，歌詞在後' : '排列 B：歌詞在前，封面在後' }).click();
-    await page.waitForFunction((expected) => document.querySelector('#now-playing-layout-panel .quick-settings-group [role="status"]')?.textContent?.includes(`排列 ${expected.toUpperCase()} 已保存`), layout);
+    const label = layout === 'a' ? '排列 A：封面在前，歌詞在後' : '排列 B：歌詞在前，封面在後';
+    await page.getByRole('button', { name: label }).click();
+    await page.waitForFunction((expectedLabel) => {
+      const button = [...document.querySelectorAll('#now-playing-layout-panel button')].find((node) => node.getAttribute('aria-label') === expectedLabel);
+      return button?.getAttribute('aria-pressed') === 'true';
+    }, label);
   }
 
   async function readOverlayLayout() {

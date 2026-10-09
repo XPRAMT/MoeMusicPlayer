@@ -12,11 +12,6 @@ async page => {
   await toggle.waitFor();
   assert.equal(await toggle.isChecked(), false, 'conversion starts off');
   await toggle.check();
-  await page.waitForFunction(() => {
-    const saved = window.__volumeHarness && document.body;
-    return document.querySelector('#lyrics-panel [role="status"]')?.textContent?.includes('瀏覽器預覽')
-      || document.querySelector('#lyrics-panel [role="status"]')?.textContent?.includes('歌詞設定已保存');
-  });
   assert.equal(await toggle.isChecked(), true, 'conversion toggle stays on');
   await page.locator('.dock-art').click();
   await page.waitForFunction(() => document.querySelector('.now-playing-overlay')?.classList.contains('is-open'));

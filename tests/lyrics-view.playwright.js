@@ -393,7 +393,7 @@
     input.dispatchEvent(new Event('change', { bubbles: true }));
   });
   assert.equal(await page.locator('input[aria-label="歌詞句間距"]').inputValue(), '50', 'settings control updates the preference draft');
-  await page.waitForFunction(() => document.querySelector('#lyrics-panel [role="status"]')?.textContent?.includes('歌詞設定已保存'));
+  await page.waitForFunction(() => document.querySelector('input[aria-label="歌詞句間距"]')?.value === '50');
   await page.reload();
   await page.waitForFunction(() => document.querySelector('.nav-link') !== null);
   await page.locator('.nav-link').filter({ hasText: '設定' }).click();

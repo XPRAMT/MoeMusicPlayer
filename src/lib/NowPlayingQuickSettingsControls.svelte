@@ -6,12 +6,6 @@
     layout: NowPlayingLayout;
     appearance: NowPlayingAppearancePreferences;
     lyrics: LyricsPreferences;
-    appearanceState: 'loading' | 'saved' | 'saving' | 'error' | 'preview';
-    appearanceError: string | null;
-    lyricsState: 'loading' | 'saved' | 'saving' | 'error' | 'preview';
-    lyricsError: string | null;
-    layoutState: 'loading' | 'saved' | 'saving' | 'error' | 'preview';
-    layoutError: string | null;
     onLayoutChange: (layout: NowPlayingLayout) => void;
     onAppearanceChange: (patch: Partial<NowPlayingAppearancePreferences>, flush?: boolean) => void;
     onLyricsChange: (patch: Partial<LyricsPreferences>, flush?: boolean) => void;
@@ -20,7 +14,7 @@
   }
 
   let {
-    layout, appearance, lyrics, appearanceState, appearanceError, lyricsState, lyricsError, layoutState, layoutError,
+    layout, appearance, lyrics,
     onLayoutChange, onAppearanceChange, onLyricsChange, onLyricsReset, groups = 'both',
   }: Props = $props();
 </script>
@@ -30,9 +24,6 @@
   <section class="quick-settings-group" aria-labelledby="quick-settings-playback-heading">
     <h3 id="quick-settings-playback-heading">播放頁</h3>
     <NowPlayingLayoutSwitch {layout} onChange={onLayoutChange} />
-    <p class="settings-preference-status" class:error={layoutState === 'error'} role="status">
-      {layoutError ?? (layoutState === 'loading' ? '正在讀取正在播放排列…' : layoutState === 'saving' ? '正在保存排列…' : layoutState === 'preview' ? '瀏覽器預覽不會保存排列。' : `排列 ${layout.toUpperCase()} 已保存。`)}
-    </p>
     <div class="cover-corner-setting" role="group" aria-labelledby="cover-corner-style-label">
       <span id="cover-corner-style-label" class="cover-corner-setting-label"><strong>專輯封面造型</strong></span>
       <div class="layout-choice-row cover-corner-choice-row">
@@ -64,9 +55,6 @@
       <span><strong>封面背景透明度</strong><output>{appearance.backgroundOpacityPercent}%</output></span>
       <input type="range" min="0" max="100" step="1" value={appearance.backgroundOpacityPercent} aria-label="封面背景透明度" oninput={(event) => onAppearanceChange({ backgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundOpacityPercent: Number(event.currentTarget.value) }, true)} />
     </label>
-    <p class="settings-preference-status" class:error={appearanceState === 'error'} role="status">
-      {appearanceError ?? (appearanceState === 'loading' ? '正在讀取正在播放外觀…' : appearanceState === 'saving' ? '正在保存正在播放外觀…' : appearanceState === 'preview' ? '瀏覽器預覽不會保存正在播放外觀。' : '正在播放外觀已保存。')}
-    </p>
   </section>
   {/if}
 
@@ -130,9 +118,6 @@
       <span><strong>句間距</strong><output>{lyrics.lineGapPx}px</output></span>
       <input type="range" min="0" max="50" step="1" value={lyrics.lineGapPx} aria-label="歌詞句間距" oninput={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) }, true)} />
     </label>
-    <p class="settings-preference-status" class:error={lyricsState === 'error'} role="status">
-      {lyricsError ?? (lyricsState === 'loading' ? '正在讀取歌詞設定…' : lyricsState === 'saving' ? '正在保存歌詞設定…' : lyricsState === 'preview' ? '瀏覽器預覽不會保存歌詞設定。' : '歌詞設定已保存。')}
-    </p>
   </section>
   {/if}
 </div>
