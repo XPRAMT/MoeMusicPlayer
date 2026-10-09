@@ -61,8 +61,8 @@
       <input type="range" min="0" max="40" step="1" value={appearance.backgroundBlurPx} aria-label="封面背景模糊程度" oninput={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) }, true)} />
     </label>
     <label class="lyrics-preference-range">
-      <span><strong>封面背景亮度</strong><output>{appearance.backgroundBrightnessPercent}%</output></span>
-      <input type="range" min="0" max="100" step="1" value={appearance.backgroundBrightnessPercent} aria-label="封面背景亮度" oninput={(event) => onAppearanceChange({ backgroundBrightnessPercent: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundBrightnessPercent: Number(event.currentTarget.value) }, true)} />
+      <span><strong>封面背景透明度</strong><output>{appearance.backgroundOpacityPercent}%</output></span>
+      <input type="range" min="0" max="100" step="1" value={appearance.backgroundOpacityPercent} aria-label="封面背景透明度" oninput={(event) => onAppearanceChange({ backgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundOpacityPercent: Number(event.currentTarget.value) }, true)} />
     </label>
     <p class="settings-preference-status" class:error={appearanceState === 'error'} role="status">
       {appearanceError ?? (appearanceState === 'loading' ? '正在讀取正在播放外觀…' : appearanceState === 'saving' ? '正在保存正在播放外觀…' : appearanceState === 'preview' ? '瀏覽器預覽不會保存正在播放外觀。' : '正在播放外觀已保存。')}

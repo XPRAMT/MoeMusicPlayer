@@ -332,7 +332,8 @@ export interface LyricsPreferences {
 
 export interface NowPlayingAppearancePreferences {
   backgroundBlurPx: number;
-  backgroundBrightnessPercent: number;
+  /** Cover backdrop image opacity percent (0–100); UI label is 封面背景透明度. */
+  backgroundOpacityPercent: number;
   coverCornerStyle: CoverCornerStyle;
   timelineStyle: TimelineStyle;
 }

@@ -3,18 +3,20 @@
 
 export const DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES = Object.freeze({
   backgroundBlurPx: 20,
-  backgroundBrightnessPercent: 40,
+  backgroundOpacityPercent: 40,
   coverCornerStyle: /** @type {const} */ ('rounded'),
   timelineStyle: /** @type {const} */ ('edge'),
 });
 
 /**
- * @param {Partial<NowPlayingAppearancePreferences> | null | undefined} [value]
+ * @param {Partial<NowPlayingAppearancePreferences> & { backgroundBrightnessPercent?: number } | null | undefined} [value]
  * @returns {NowPlayingAppearancePreferences}
  */
 export function normalizeNowPlayingAppearancePreferences(value = {}) {
   const blur = Number(value?.backgroundBlurPx);
-  const brightness = Number(value?.backgroundBrightnessPercent);
+  const opacity = Number(
+    value?.backgroundOpacityPercent ?? value?.backgroundBrightnessPercent,
+  );
   /** @type {import('./ipc').CoverCornerStyle} */
   const coverCornerStyle = value?.coverCornerStyle === 'square' ? 'square' : 'rounded';
   /** @type {import('./ipc').TimelineStyle} */
@@ -23,9 +25,9 @@ export function normalizeNowPlayingAppearancePreferences(value = {}) {
     backgroundBlurPx: Number.isFinite(blur)
       ? Math.round(Math.max(0, Math.min(40, blur)))
       : DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES.backgroundBlurPx,
-    backgroundBrightnessPercent: Number.isFinite(brightness)
-      ? Math.round(Math.max(0, Math.min(100, brightness)))
-      : DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES.backgroundBrightnessPercent,
+    backgroundOpacityPercent: Number.isFinite(opacity)
+      ? Math.round(Math.max(0, Math.min(100, opacity)))
+      : DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES.backgroundOpacityPercent,
     coverCornerStyle,
     timelineStyle,
   };

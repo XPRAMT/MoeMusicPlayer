@@ -178,15 +178,19 @@ fn default_cover_corner_style() -> CoverCornerStyle {
 #[serde(rename_all = "camelCase")]
 pub struct NowPlayingAppearancePreferences {
     pub background_blur_px: u8,
-    #[serde(default = "default_background_brightness_percent")]
-    pub background_brightness_percent: u8,
+    /// Cover backdrop image opacity percent (0–100). UI label is 封面背景透明度.
+    #[serde(
+        default = "default_background_opacity_percent",
+        alias = "backgroundBrightnessPercent"
+    )]
+    pub background_opacity_percent: u8,
     #[serde(default = "default_cover_corner_style")]
     pub cover_corner_style: CoverCornerStyle,
     #[serde(default = "default_timeline_style")]
     pub timeline_style: TimelineStyle,
 }
 
-fn default_background_brightness_percent() -> u8 {
+fn default_background_opacity_percent() -> u8 {
     40
 }
 
@@ -194,7 +198,7 @@ impl Default for NowPlayingAppearancePreferences {
     fn default() -> Self {
         Self {
             background_blur_px: 20,
-            background_brightness_percent: 40,
+            background_opacity_percent: 40,
             cover_corner_style: CoverCornerStyle::Rounded,
             timeline_style: TimelineStyle::Edge,
         }
@@ -208,9 +212,9 @@ impl NowPlayingAppearancePreferences {
                 "backgroundBlurPx must be between 0 and 40".into(),
             ));
         }
-        if self.background_brightness_percent > 100 {
+        if self.background_opacity_percent > 100 {
             return Err(SettingsError::InvalidData(
-                "backgroundBrightnessPercent must be between 0 and 100".into(),
+                "backgroundOpacityPercent must be between 0 and 100".into(),
             ));
         }
         Ok(())
@@ -1982,7 +1986,7 @@ mod tests {
             "nowPlayingLayout": "a",
             "nowPlayingAppearancePreferences": {
                 "backgroundBlurPx": 20,
-                "backgroundBrightnessPercent": 40,
+                "backgroundOpacityPercent": 40,
                 "coverCornerStyle": "rounded"
             },
             "sourceRegistryAuthoritative": true,
@@ -2209,7 +2213,7 @@ mod tests {
             20
         );
         assert_eq!(
-            persisted["nowPlayingAppearancePreferences"]["backgroundBrightnessPercent"],
+            persisted["nowPlayingAppearancePreferences"]["backgroundOpacityPercent"],
             40
         );
         assert_eq!(
@@ -2232,7 +2236,7 @@ mod tests {
         let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
         let preferences = NowPlayingAppearancePreferences {
             background_blur_px: 0,
-            background_brightness_percent: 100,
+            background_opacity_percent: 100,
             cover_corner_style: CoverCornerStyle::Square,
             timeline_style: TimelineStyle::Edge,
         };
@@ -2259,7 +2263,7 @@ mod tests {
                 ..preferences
             },
             NowPlayingAppearancePreferences {
-                background_brightness_percent: 101,
+                background_opacity_percent: 101,
                 ..preferences
             },
         ] {
@@ -2283,13 +2287,13 @@ mod tests {
     fn appearance_preferences_dto_uses_camel_case_json_keys() {
         let preferences = NowPlayingAppearancePreferences {
             background_blur_px: 12,
-            background_brightness_percent: 67,
+            background_opacity_percent: 67,
             cover_corner_style: CoverCornerStyle::Square,
             timeline_style: TimelineStyle::Edge,
         };
         let value = serde_json::to_value(preferences).unwrap();
         assert_eq!(value["backgroundBlurPx"], 12);
-        assert_eq!(value["backgroundBrightnessPercent"], 67);
+        assert_eq!(value["backgroundOpacityPercent"], 67);
         assert_eq!(value["coverCornerStyle"], "square");
         assert_eq!(value["timelineStyle"], "edge");
         assert_eq!(
@@ -2299,7 +2303,7 @@ mod tests {
         assert!(
             serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
                 "backgroundBlurPx": -1,
-                "backgroundBrightnessPercent": 50
+                "backgroundOpacityPercent": 50
             }))
             .is_err()
         );
@@ -2313,7 +2317,7 @@ mod tests {
         json["schemaVersion"] = serde_json::json!(5);
         json["nowPlayingAppearancePreferences"] = serde_json::json!({
             "backgroundBlurPx": 15,
-            "backgroundBrightnessPercent": 55
+            "backgroundOpacityPercent": 55
         });
         fs::write(&path, serde_json::to_vec(&json).unwrap())
             .expect("write settings without cover corner");
@@ -2350,7 +2354,7 @@ mod tests {
         assert!(
             serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
                 "backgroundBlurPx": 12,
-                "backgroundBrightnessPercent": 50,
+                "backgroundOpacityPercent": 50,
                 "coverCornerStyle": "circle"
             }))
             .is_err()
@@ -2365,7 +2369,7 @@ mod tests {
         json["schemaVersion"] = serde_json::json!(5);
         json["nowPlayingAppearancePreferences"] = serde_json::json!({
             "backgroundBlurPx": 15,
-            "backgroundBrightnessPercent": 55,
+            "backgroundOpacityPercent": 55,
             "coverCornerStyle": "square"
         });
         fs::write(&path, serde_json::to_vec(&json).unwrap())
@@ -2399,7 +2403,7 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
                 "backgroundBlurPx": 12,
-                "backgroundBrightnessPercent": 50,
+                "backgroundOpacityPercent": 50,
                 "timelineStyle": "minimal"
             }))
             .unwrap()
@@ -2409,7 +2413,7 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
                 "backgroundBlurPx": 12,
-                "backgroundBrightnessPercent": 50,
+                "backgroundOpacityPercent": 50,
                 "timelineStyle": "line"
             }))
             .unwrap()
@@ -2420,7 +2424,7 @@ mod tests {
         assert!(
             serde_json::from_value::<NowPlayingAppearancePreferences>(serde_json::json!({
                 "backgroundBlurPx": 12,
-                "backgroundBrightnessPercent": 50,
+                "backgroundOpacityPercent": 50,
                 "timelineStyle": "chunky"
             }))
             .is_err()
@@ -2466,7 +2470,7 @@ mod tests {
             assert_eq!(
                 migrated
                     .now_playing_appearance_preferences
-                    .background_brightness_percent,
+                    .background_opacity_percent,
                 40
             );
             assert!(migrated.shuffle);
@@ -2479,7 +2483,7 @@ mod tests {
             let persisted: serde_json::Value =
                 serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
             assert_eq!(
-                persisted["nowPlayingAppearancePreferences"]["backgroundBrightnessPercent"],
+                persisted["nowPlayingAppearancePreferences"]["backgroundOpacityPercent"],
                 40
             );
             assert!(
@@ -2487,6 +2491,21 @@ mod tests {
                     .is_null()
             );
         }
+    }
+
+    #[test]
+    fn appearance_reads_legacy_background_brightness_as_opacity() {
+        let preferences: NowPlayingAppearancePreferences =
+            serde_json::from_value(serde_json::json!({
+                "backgroundBlurPx": 18,
+                "backgroundBrightnessPercent": 58
+            }))
+            .expect("deserialize legacy brightness key");
+        assert_eq!(preferences.background_opacity_percent, 58);
+
+        let written = serde_json::to_value(preferences).expect("serialize appearance");
+        assert_eq!(written["backgroundOpacityPercent"], 58);
+        assert!(written.get("backgroundBrightnessPercent").is_none());
     }
 
     #[test]

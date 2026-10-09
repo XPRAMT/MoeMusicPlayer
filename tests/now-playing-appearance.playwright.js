@@ -27,7 +27,7 @@ async page => {
   await page.getByRole('button', { name: '設定', exact: true }).click();
   await page.getByRole('tab', { name: '播放頁' }).click();
   const blur = page.getByRole('slider', { name: '封面背景模糊程度' });
-  const brightness = page.getByRole('slider', { name: '封面背景亮度' });
+  const opacity = page.getByRole('slider', { name: '封面背景透明度' });
   await page.waitForFunction(() => document.querySelector('[aria-label="封面背景模糊程度"]')?.value === '20');
 
   await page.evaluate(() => { window.__appearanceHarness.holdAcks = true; });
@@ -37,27 +37,27 @@ async page => {
     await setRange(blur, value);
     await wait(9);
   }
-  await setRange(brightness, 52);
+  await setRange(opacity, 52);
   const preview = await page.evaluate(() => ({
     blurValue: document.querySelector('[aria-label="封面背景模糊程度"]').value,
-    brightnessValue: document.querySelector('[aria-label="封面背景亮度"]').value,
+    opacityValue: document.querySelector('[aria-label="封面背景透明度"]').value,
     previewGone: document.querySelector('.now-playing-appearance-preview') === null,
   }));
   assert.equal(preview.previewGone, true, 'the appearance sample preview is removed');
   assert.equal(preview.blurValue, '25', 'blur slider should keep the latest pointer value');
-  assert.equal(preview.brightnessValue, '52', 'brightness slider should keep the latest pointer value');
+  assert.equal(preview.opacityValue, '52', 'opacity slider should keep the latest pointer value');
   await wait(220);
   assert.equal(await page.evaluate(() => window.__appearanceHarness.requests.length), 1, 'rapid input should not enqueue writes behind a slow ACK');
   await page.evaluate(() => window.__appearanceHarness.releaseAck());
   await page.waitForFunction(() => window.__appearanceHarness.requests.length === 2);
   const latest = await page.evaluate(() => window.__appearanceHarness.requests[1]);
-  assert.deepEqual(latest, { backgroundBlurPx: 25, backgroundBrightnessPercent: 52, coverCornerStyle: 'rounded', timelineStyle: 'edge' }, 'the active request should flush only the latest preferences');
+  assert.deepEqual(latest, { backgroundBlurPx: 25, backgroundOpacityPercent: 52, coverCornerStyle: 'rounded', timelineStyle: 'edge' }, 'the active request should flush only the latest preferences');
   assert.equal(await page.getByText('時間軸樣式').count(), 0, 'timeline style is no longer a setting');
   await page.evaluate(() => window.__appearanceHarness.releaseAck());
   await page.waitForFunction(() => document.querySelector('#now-playing-layout-panel .quick-settings-group[aria-labelledby="quick-settings-playback-heading"] .settings-preference-status:last-of-type')?.textContent.includes('正在播放外觀已保存'));
 
   await page.evaluate(() => { window.__appearanceHarness.failNext = true; });
-  await setRange(brightness, 68, 'change');
+  await setRange(opacity, 68, 'change');
   await page.waitForFunction(() => window.__appearanceHarness.requests.length === 3);
   await page.evaluate(() => window.__appearanceHarness.releaseAck());
   await page.waitForFunction(() => document.querySelector('#now-playing-layout-panel .quick-settings-group[aria-labelledby="quick-settings-playback-heading"] .settings-preference-status:last-of-type')?.textContent.includes('無法保存正在播放外觀'));
@@ -68,7 +68,7 @@ async page => {
   await page.getByRole('button', { name: '設定', exact: true }).click();
   await page.getByRole('tab', { name: '播放頁' }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="封面背景模糊程度"]')?.value === '25');
-  await page.waitForFunction(() => document.querySelector('[aria-label="封面背景亮度"]')?.value === '52');
+  await page.waitForFunction(() => document.querySelector('[aria-label="封面背景透明度"]')?.value === '52');
   await page.evaluate(() => { window.__appearanceStep = 'preferences restored'; });
   await page.locator('.dock-art').click();
   await page.evaluate(() => { window.__appearanceStep = 'dock clicked'; });

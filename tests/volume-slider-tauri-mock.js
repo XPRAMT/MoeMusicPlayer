@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   const ready = { state: 'ready', detail: null };
   const unavailable = { state: 'unavailable', detail: 'Not included in the volume interaction test.' };
   const track = {
@@ -41,7 +41,7 @@
   let activeVolumeCommands = 0;
   let storedAppearance = JSON.parse(localStorage.getItem('__appearancePreferences') || 'null') ?? {
   backgroundBlurPx: 20,
-  backgroundBrightnessPercent: 40,
+  backgroundOpacityPercent: 40,
   coverCornerStyle: 'rounded',
   timelineStyle: 'edge',
 };
@@ -231,10 +231,10 @@
               offsetMs: 0,
               synced: true,
               lines: [
-                { startMs: 0, text: '晨光落在窗沿', translation: 'Morning light rests on the window', romanization: 'chen guang luo zai chuang yan' },
-                { startMs: 8_000, text: '微風輕輕唱著歌，在漫長的午後沿著旋律慢慢走向遠方', translation: 'A long translated lyric line for the drawer layout check', romanization: 'wei feng qing qing chang zhe ge' },
-                { startMs: 16_000, text: '沿著旋律慢慢前行', translation: null, romanization: 'yan zhe xuan lv man man qian xing' },
-                { startMs: 24_000, text: '把今天交給遠方', translation: null, romanization: null },
+                { startMs: 0, text: '?典??賢蝒窒', translation: 'Morning light rests on the window', romanization: 'chen guang luo zai chuang yan' },
+                { startMs: 8_000, text: '敺桅◢頛??梯?甇??冽憤?瑞???瘝輯????Ｘ韏啣??', translation: 'A long translated lyric line for the drawer layout check', romanization: 'wei feng qing qing chang zhe ge' },
+                { startMs: 16_000, text: '瘝輯????Ｘ??', translation: null, romanization: 'yan zhe xuan lv man man qian xing' },
+                { startMs: 24_000, text: '??憭拐漱蝯阡???, translation: null, romanization: null },
               ],
             },
             candidates: [],
@@ -285,3 +285,4 @@
     unregisterListener() {},
   };
 })();
+

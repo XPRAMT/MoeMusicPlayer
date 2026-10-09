@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createNowPlayingAppearanceWriter,
@@ -9,29 +9,29 @@ import {
 test('appearance preferences default and clamp to supported ranges', () => {
   assert.deepEqual(normalizeNowPlayingAppearancePreferences(), {
     backgroundBlurPx: 20,
-    backgroundBrightnessPercent: 40,
+    backgroundOpacityPercent: 40,
     coverCornerStyle: 'rounded',
     timelineStyle: 'edge',
   });
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: -4,
-    backgroundBrightnessPercent: 140,
+    backgroundOpacityPercent: 140,
     coverCornerStyle: 'square',
     timelineStyle: 'edge',
   }), {
     backgroundBlurPx: 0,
-    backgroundBrightnessPercent: 100,
+    backgroundOpacityPercent: 100,
     coverCornerStyle: 'square',
     timelineStyle: 'edge',
   });
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: 80.4,
-    backgroundBrightnessPercent: 21.6,
+    backgroundOpacityPercent: 21.6,
     coverCornerStyle: 'nope',
     timelineStyle: 'nope',
   }), {
     backgroundBlurPx: 40,
-    backgroundBrightnessPercent: 22,
+    backgroundOpacityPercent: 22,
     coverCornerStyle: 'rounded',
     timelineStyle: 'edge',
   });
@@ -39,26 +39,30 @@ test('appearance preferences default and clamp to supported ranges', () => {
   for (const legacy of ['line', 'bar', 'minimal']) {
     assert.deepEqual(normalizeNowPlayingAppearancePreferences({
       backgroundBlurPx: 10,
-      backgroundBrightnessPercent: 40,
+      backgroundOpacityPercent: 40,
       coverCornerStyle: 'rounded',
       timelineStyle: legacy,
     }), {
       backgroundBlurPx: 10,
-      backgroundBrightnessPercent: 40,
+      backgroundOpacityPercent: 40,
       coverCornerStyle: 'rounded',
       timelineStyle: 'edge',
     });
   }
   assert.deepEqual(normalizeNowPlayingAppearancePreferences({
     backgroundBlurPx: Number.NaN,
-    backgroundBrightnessPercent: Infinity,
+    backgroundOpacityPercent: Infinity,
   }), DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES);
   for (const legacySurface of [0, 100]) {
     assert.deepEqual(normalizeNowPlayingAppearancePreferences({
       backgroundBlurPx: 27,
       surfaceTransparencyPercent: legacySurface,
-    }), { backgroundBlurPx: 27, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'edge' });
+    }), { backgroundBlurPx: 27, backgroundOpacityPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'edge' });
   }
+  assert.equal(
+    normalizeNowPlayingAppearancePreferences({ backgroundBrightnessPercent: 55 }).backgroundOpacityPercent,
+    55,
+  );
 });
 
 test('slow saves coalesce drag updates and ignore stale acknowledgements', async () => {
@@ -87,25 +91,25 @@ test('slow saves coalesce drag updates and ignore stale acknowledgements', async
     request.resolve(request.preferences);
   };
 
-  writer.schedule({ backgroundBlurPx: 20, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'line' });
+  writer.schedule({ backgroundBlurPx: 20, backgroundOpacityPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'line' });
   await wait(35);
   assert.equal(requests.length, 1, 'debounced change should start one write');
-  writer.schedule({ backgroundBlurPx: 21, backgroundBrightnessPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'line' });
+  writer.schedule({ backgroundBlurPx: 21, backgroundOpacityPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'line' });
   await wait(8);
-  writer.schedule({ backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'edge' });
+  writer.schedule({ backgroundBlurPx: 22, backgroundOpacityPercent: 48, coverCornerStyle: 'square', timelineStyle: 'edge' });
   await wait(35);
   assert.equal(requests.length, 1, 'new values must wait behind the slow acknowledgement');
   resolveNext();
   await wait(0);
   assert.equal(requests.length, 2, 'one latest value should follow the active write');
-  assert.deepEqual(requests[1], { backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'edge' });
+  assert.deepEqual(requests[1], { backgroundBlurPx: 22, backgroundOpacityPercent: 48, coverCornerStyle: 'square', timelineStyle: 'edge' });
   resolveNext();
   await wait(0);
-  assert.deepEqual(saved, [{ backgroundBlurPx: 22, backgroundBrightnessPercent: 48, coverCornerStyle: 'square', timelineStyle: 'edge' }]);
+  assert.deepEqual(saved, [{ backgroundBlurPx: 22, backgroundOpacityPercent: 48, coverCornerStyle: 'square', timelineStyle: 'edge' }]);
   assert.equal(maxActive, 1, 'settings writes must not overlap');
   assert.deepEqual(errors, []);
 
-  writer.schedule({ backgroundBlurPx: 24, backgroundBrightnessPercent: 50, coverCornerStyle: 'rounded', timelineStyle: 'line' }, true);
+  writer.schedule({ backgroundBlurPx: 24, backgroundOpacityPercent: 50, coverCornerStyle: 'rounded', timelineStyle: 'line' }, true);
   await wait(0);
   const failed = held.shift();
   assert.ok(failed);
@@ -116,3 +120,4 @@ test('slow saves coalesce drag updates and ignore stale acknowledgements', async
   assert.match(errors[0].message, /settings unavailable/);
   writer.invalidate();
 });
+

@@ -2425,7 +2425,7 @@
   class:has-custom-titlebar={showCustomTitlebar}
   data-active-view={activeView}
   class:has-main-backdrop={mainBackgroundUrl !== null}
-  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-overlay-alpha: ${(100 - nowPlayingAppearancePreferences.backgroundBrightnessPercent) / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100};`}
+  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-opacity: ${nowPlayingAppearancePreferences.backgroundOpacityPercent / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100};`}
 >
   {#if showCustomTitlebar}
     <WindowTitlebar transparent={isNowPlayingOpen || mainBackgroundUrl !== null} />
