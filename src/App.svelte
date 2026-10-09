@@ -5,6 +5,7 @@
     IconArrowLeft,
     IconArrowDown,
     IconArrowUp,
+    IconArrowsRight,
     IconArrowsShuffle,
     IconChevronRight,
     IconFilter,
@@ -334,14 +335,6 @@
   const libraryReady = $derived(isReady(capabilities?.library));
   const sourceSyncReady = $derived(isReady(capabilities?.sourceSync));
   const playbackReady = $derived(isReady(capabilities?.playback));
-  const runtimeServiceReady = $derived(
-    capabilities?.platform === 'android' ? playbackReady : isReady(capabilities?.desktopRuntime),
-  );
-  const runtimeServiceLabel = $derived(
-    capabilities?.platform === 'android'
-      ? playbackReady ? 'Android 音訊服務已連線' : 'Android 音訊服務未連線'
-      : isReady(capabilities?.desktopRuntime) ? '桌面服務已連線' : '桌面服務未連線',
-  );
   const playbackNavigationReady = $derived(isReady(capabilities?.playbackNavigation));
   const playbackModesReady = $derived(isReady(capabilities?.playbackModes));
   const playbackDurationMs = $derived(effectivePlaybackDurationMs(
@@ -2291,7 +2284,6 @@
                   <div>
                     <h3>歌詞顯示</h3>
                   </div>
-                  <button class="outline-button" type="button" onclick={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}>恢復預設</button>
                 </div>
                 <NowPlayingQuickSettingsControls
                   groups="lyrics"
@@ -2342,9 +2334,6 @@
                     <div>
                       <h3 id="{scope}source-settings-heading">管理音樂來源</h3>
                     </div>
-                    <button class="outline-button" type="button" onclick={() => void loadSources()} disabled={!sourceSyncReady || isLoadingSources}>
-                      {isLoadingSources ? '載入中' : '重新載入'}
-                    </button>
                   </div>
             {#if syncProgress}
               <section
@@ -2567,10 +2556,19 @@
         {/if}
       </div>
       <div class="topbar-actions">
-        <div class="runtime-pill" class:ready={runtimeServiceReady}>
-          <span class="status-dot" class:ready={runtimeServiceReady} aria-hidden="true"></span>
-          <span>{runtimeServiceLabel}</span>
-        </div>
+        {#if activeView === 'settings' && settingsSection === 'sources'}
+          <button
+            class="soft-button topbar-refresh-button"
+            type="button"
+            aria-label="重新整理音樂來源"
+            title="重新整理音樂來源"
+            onclick={() => void loadSources()}
+            disabled={!sourceSyncReady || isLoadingSources}
+          >
+            <IconRefresh size={16} stroke={1.7} class={isLoadingSources ? 'spin' : ''} aria-hidden="true" />
+            <span>{isLoadingSources ? '整理中' : '重新整理'}</span>
+          </button>
+        {/if}
       </div>
     </header>
 
@@ -2981,8 +2979,12 @@
         <button class="dock-favorite control-button" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
           <IconHeart size={21} stroke={1.6} aria-hidden="true" />
         </button>
-        <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} onclick={toggleShuffle}>
-          <IconArrowsShuffle size={23} stroke={1.7} aria-hidden="true" />
+        <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} aria-pressed={playback?.shuffle === true} onclick={toggleShuffle}>
+          {#if playback?.shuffle}
+            <IconArrowsShuffle size={23} stroke={1.7} aria-hidden="true" />
+          {:else}
+            <IconArrowsRight size={23} stroke={1.7} aria-hidden="true" />
+          {/if}
         </button>
         <button class="control-button" type="button" aria-label="上一首" title={playback?.canPrevious ? '播放佇列上一首' : showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || !playback?.canPrevious || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
           <IconPlayerTrackPrev size={23} stroke={1.7} aria-hidden="true" />

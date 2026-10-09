@@ -41,7 +41,7 @@ async page => {
     await page.waitForFunction(() => document.querySelector('.now-playing-overlay')?.classList.contains('is-open'));
     await page.locator('.now-playing-card').waitFor({ state: 'visible' });
     assert.equal(await page.locator('.now-playing-overlay .now-playing-layout-switch').count(), 0, 'Now Playing page must not contain an A/B switch');
-    assert.equal(await page.locator('.now-playing-overlay .runtime-pill').count(), 0, 'Now Playing header must not show desktop service status');
+    assert.equal(await page.locator('.now-playing-overlay .topbar-refresh-button').count(), 0, 'Now Playing header must not show sources refresh');
   }
 
   async function selectLayoutInSettings(layout) {

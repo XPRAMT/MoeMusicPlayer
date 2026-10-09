@@ -941,26 +941,9 @@ input:focus-visible {
   gap: 14px;
 }
 
-.runtime-pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 11px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  color: var(--text-soft);
-  font-size: var(--font-caption);
-  white-space: nowrap;
-}
-
-.runtime-pill.ready {
-  color: var(--status-success);
-  border-color: rgba(136, 201, 180, 0.17);
-}
-
-.runtime-pill .status-dot {
-  width: 6px;
-  height: 6px;
+.soft-button.topbar-refresh-button {
+  gap: 6px;
+  padding: 0 12px;
 }
 
 .page-scroll {
@@ -3803,8 +3786,6 @@ input:focus-visible {
   .topbar { padding: 0 15px; }
   .now-playing-overlay-topbar .topbar-actions { display: none; }
   .topbar-actions { gap: 7px; }
-  .runtime-pill { gap: 6px; padding: 6px 8px; font-size: var(--font-caption); }
-  .runtime-pill .status-dot { width: 5px; height: 5px; }
   .page-content { padding: 16px 14px 26px; }
   .sync-progress-banner { gap: 8px; padding: 11px 12px; }
   .sync-progress-sources li { grid-template-columns: minmax(0, 1fr); gap: 3px; }
@@ -4007,7 +3988,6 @@ input:focus-visible {
 }
 
 @media (max-width: 390px) {
-  .runtime-pill { max-width: 141px; overflow: hidden; text-overflow: ellipsis; }
   .page-title { font-size: var(--font-title); }
   .topbar { padding: 0 11px; }
   .page-content { padding-right: 11px; padding-left: 11px; }

@@ -107,6 +107,11 @@ async page => {
   assert(await page.getByRole('slider', { name: '快速設定面板模糊程度' }).count() === 1, 'quick settings blur missing on playback page');
   await page.getByRole('tab', { name: '音樂來源' }).click();
   assert(await page.getByRole('heading', { name: '管理音樂來源', exact: true }).count() === 1, 'sources heading missing');
+  assert(await page.getByRole('button', { name: '重新整理音樂來源' }).count() === 1, 'sources refresh belongs in the top bar');
+  assert(await page.locator('#sources-panel').getByRole('button', { name: /重新載入|重新整理/ }).count() === 0, 'sources panel must not keep a local reload button');
+  assert(await page.locator('.runtime-pill').count() === 0, 'desktop service status pill is removed');
   assert(await page.locator('.section-kicker').count() === 0, 'english kicker remains in sources');
+  await page.getByRole('tab', { name: '歌詞' }).click();
+  assert(await page.getByRole('button', { name: '恢復預設' }).count() === 0, 'lyrics settings must not show reset defaults');
   return { result: 'PASS', libraryTitle, libraryCount, queueCount };
 }
