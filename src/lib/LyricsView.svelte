@@ -228,6 +228,8 @@
       && (
         viewState.candidates.length > 0
         || viewState.selectionMode
+        // Empty after a failed/empty search may open the picker; cleared tracks keep
+        // pickerClosed=true so they stay on the empty playback UI until 「手動指定」.
         || (viewState.phase === 'empty' && !viewState.error && !viewState.lyrics)
       ),
   );

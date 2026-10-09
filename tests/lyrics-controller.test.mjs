@@ -540,7 +540,7 @@ test('searchAgain forwards optional query to lyrics_search', async () => {
   controller.dispose();
 });
 
-test('cleared getTrack status skips automatic provider search on later loads', async () => {
+test('cleared getTrack status skips automatic provider search and keeps the picker closed', async () => {
   const calls = [];
   const controller = createLyricsController({
     api: {
@@ -562,6 +562,12 @@ test('cleared getTrack status skips automatic provider search on later loads', a
   assert.deepEqual(calls, [['get', { trackId: 'track-cleared' }]]);
   assert.equal(controller.getState().phase, 'empty');
   assert.equal(controller.getState().lyrics, null);
+  assert.equal(controller.getState().selectionMode, false);
+  assert.equal(
+    controller.getState().pickerClosed,
+    true,
+    'cleared tracks must not reopen the candidate picker on the next visit',
+  );
   controller.dispose();
 });
 

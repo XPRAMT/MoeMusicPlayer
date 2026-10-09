@@ -41,6 +41,10 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
           ? 'error'
           : 'empty'; // includes status 'cleared'
 
+  // Cleared tracks must not reopen the candidate picker on the next load; the user
+  // has to press 「手動指定」again. Other empty results may still surface the picker.
+  const pickerClosed = result.status === 'cleared';
+
   return {
     trackId,
     phase,
@@ -51,7 +55,7 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
     selectingCandidateId: null,
     selectionMode: selectionMode || phase === 'candidates' || (selectionMode && phase === 'empty'),
     failedStage: phase === 'error' ? failedStage : null,
-    pickerClosed: false,
+    pickerClosed,
     hasMore: Boolean(result.hasMore),
     isLoadingMore: false,
   };
