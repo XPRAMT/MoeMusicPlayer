@@ -75,3 +75,13 @@ test('progress slider remains visible and is not collapsed with volume-state hid
   assert.match(progressSource, /<div class="progress-row" data-timeline-style=\{timelineStyle\}>/);
 });
 
+test('progress slider publishes playhead percent for the edge glow gradient', () => {
+  const css = readFileSync(path.join(root, 'src/app.css'), 'utf8');
+  assert.match(progressSource, /const progressPercent = \$derived\(/);
+  assert.match(progressSource, /style=\{`--progress-pct: \$\{progressPercent\}%`\}/);
+  assert.match(css, /--progress-pct/);
+  assert.match(css, /::-webkit-slider-runnable-track/);
+  assert.match(css, /margin-top:\s*-3\.5px/);
+  assert.match(css, /row-gap:\s*8px/);
+});
+

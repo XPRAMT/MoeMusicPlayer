@@ -40,6 +40,11 @@
       draftTrackId === trackId ? draftPositionMs : null,
     ),
   );
+  const progressPercent = $derived(
+    durationMs != null && durationMs > 0
+      ? Math.min(100, Math.max(0, (displayedPositionMs / durationMs) * 100))
+      : 0,
+  );
   const seekEnabled = $derived(canControl && trackId !== null && isPlaybackSeekableDuration(durationMs));
   // Keep the range input enabled while non-seek commands are busy so :disabled opacity does not flash the timeline.
 
@@ -129,6 +134,7 @@
     min="0"
     max={Math.max(1, durationMs ?? 0)}
     value={displayedPositionMs}
+    style={`--progress-pct: ${progressPercent}%`}
     aria-label="播放進度"
     disabled={!seekEnabled}
     onpointerdown={beginPointerSeek}

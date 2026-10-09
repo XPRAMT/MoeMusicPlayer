@@ -3068,7 +3068,8 @@ input:focus-visible {
   grid-template-rows: 16px auto;
   align-items: center;
   column-gap: 0;
-  row-gap: 1px;
+  /* Space times away from the track (was 1px — too tight). */
+  row-gap: 8px;
   pointer-events: none;
   grid-column: 1 / -1;
   grid-row: auto;
@@ -3088,8 +3089,7 @@ input:focus-visible {
   height: 16px;
   margin: 0;
   border-radius: 0;
-  /* Keep the 3px painted line on the dock top edge (bottom of this band). */
-  background-position: center bottom;
+  background: transparent;
 }
 
 /* Under full-width track; horizontal inset matches dock padding (pre-full-bleed labels). */
@@ -3350,15 +3350,78 @@ input:focus-visible {
   height: 24px;
   margin: 0;
   border-radius: 99px;
-  background: linear-gradient(90deg, var(--accent), rgba(var(--text-rgb), 0.2));
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: 100% 3px;
   appearance: none;
   accent-color: var(--accent);
 }
 
-.progress-slider::-webkit-slider-thumb,
+.volume-slider {
+  background: linear-gradient(90deg, var(--accent), rgba(var(--text-rgb), 0.2));
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 3px;
+}
+
+/* Progress track: darkest at both ends, brightest at the playhead (--progress-pct). */
+.progress-slider {
+  --progress-pct: 0%;
+  --progress-glow: color-mix(in srgb, var(--accent-bright) 40%, white);
+  background: transparent;
+  border-radius: 0;
+}
+
+.progress-slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border: 0;
+  border-radius: 99px;
+  background: linear-gradient(
+    90deg,
+    rgba(var(--accent-rgb), 0.1) 0%,
+    rgba(var(--accent-rgb), 0.22) max(0%, calc(var(--progress-pct) - 32%)),
+    rgba(var(--accent-rgb), 0.55) max(0%, calc(var(--progress-pct) - 12%)),
+    var(--progress-glow) var(--progress-pct),
+    rgba(var(--accent-rgb), 0.55) min(100%, calc(var(--progress-pct) + 12%)),
+    rgba(var(--accent-rgb), 0.22) min(100%, calc(var(--progress-pct) + 32%)),
+    rgba(var(--accent-rgb), 0.1) 100%
+  );
+}
+
+.progress-slider::-moz-range-track {
+  height: 3px;
+  border: 0;
+  border-radius: 99px;
+  background: linear-gradient(
+    90deg,
+    rgba(var(--accent-rgb), 0.1) 0%,
+    rgba(var(--accent-rgb), 0.22) max(0%, calc(var(--progress-pct) - 32%)),
+    rgba(var(--accent-rgb), 0.55) max(0%, calc(var(--progress-pct) - 12%)),
+    var(--progress-glow) var(--progress-pct),
+    rgba(var(--accent-rgb), 0.55) min(100%, calc(var(--progress-pct) + 12%)),
+    rgba(var(--accent-rgb), 0.22) min(100%, calc(var(--progress-pct) + 32%)),
+    rgba(var(--accent-rgb), 0.1) 100%
+  );
+}
+
+.progress-slider::-webkit-slider-thumb {
+  /* (10 − 3) / 2 → center the thumb on the 3px track. */
+  width: 10px;
+  height: 10px;
+  margin-top: -3.5px;
+  border: 1px solid var(--progress-glow);
+  border-radius: 50%;
+  background: var(--progress-glow);
+  box-shadow: 0 0 7px rgba(var(--accent-rgb), 0.75);
+  appearance: none;
+}
+
+.progress-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--progress-glow);
+  border-radius: 50%;
+  background: var(--progress-glow);
+  box-shadow: 0 0 7px rgba(var(--accent-rgb), 0.75);
+}
+
 .volume-slider::-webkit-slider-thumb {
   width: 12px;
   height: 12px;
