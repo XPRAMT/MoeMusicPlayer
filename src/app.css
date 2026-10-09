@@ -2679,8 +2679,8 @@ input:focus-visible {
   flex-wrap: wrap;
 }
 
-.source-folder-picker > .source-action-row {
-  margin-top: 0;
+.source-folder-picker {
+  margin-top: 13px;
 }
 
 .media-volume-list {

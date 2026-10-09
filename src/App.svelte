@@ -2033,7 +2033,7 @@
                     <h3>顏色</h3>
                     <p>自訂背景與主色。文字會依背景自動選擇黑色或白色，保持清楚對比。</p>
                   </div>
-                  <button class="outline-button" type="button" onclick={resetThemePreferences}>恢復預設</button>
+                  <button class="soft-button" type="button" onclick={resetThemePreferences}>恢復預設</button>
                 </div>
                 <div class="appearance-color-grid">
                   <label class="theme-color-control">
@@ -2081,10 +2081,10 @@
                   </div>
                 </div>
                 <div class="source-action-row source-action-buttons">
-                  <button class="outline-button" type="button" onclick={() => void pickMainBackground()} disabled={mainBackgroundBusy}>
+                  <button class="soft-button" type="button" onclick={() => void pickMainBackground()} disabled={mainBackgroundBusy}>
                     {mainBackgroundBusy ? '處理中' : '選擇背景圖片'}
                   </button>
-                  <button class="outline-button" type="button" onclick={() => void clearMainBackground()} disabled={mainBackgroundBusy || !mainBackgroundUrl}>
+                  <button class="soft-button" type="button" onclick={() => void clearMainBackground()} disabled={mainBackgroundBusy || !mainBackgroundUrl}>
                     移除背景
                   </button>
                 </div>
@@ -2336,26 +2336,24 @@
               </section>
             {/if}
             {#if capabilities?.platform === 'windows'}
-              <div class="source-action-card source-folder-picker">
-                <div class="source-action-row source-action-buttons">
-                  <button
-                    class="soft-button"
-                    type="button"
-                    onclick={() => void pickWindowsFolder()}
-                    disabled={!sourceSyncReady || isUpdatingSource}
-                  >
-                    {isUpdatingSource ? '處理中' : '選擇資料夾'}
-                  </button>
-                  <button
-                    class="soft-button"
-                    type="button"
-                    onclick={() => void pickWindowsPlaylistSource()}
-                    disabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation}
-                    title={showCapabilityDetail(capabilities?.playlistExchange)}
-                  >
-                    {isUpdatingSource ? '處理中' : '選擇播放清單'}
-                  </button>
-                </div>
+              <div class="source-action-row source-action-buttons source-folder-picker">
+                <button
+                  class="soft-button"
+                  type="button"
+                  onclick={() => void pickWindowsFolder()}
+                  disabled={!sourceSyncReady || isUpdatingSource}
+                >
+                  {isUpdatingSource ? '處理中' : '選擇資料夾'}
+                </button>
+                <button
+                  class="soft-button"
+                  type="button"
+                  onclick={() => void pickWindowsPlaylistSource()}
+                  disabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation}
+                  title={showCapabilityDetail(capabilities?.playlistExchange)}
+                >
+                  {isUpdatingSource ? '處理中' : '選擇播放清單'}
+                </button>
               </div>
             {:else if capabilities?.platform === 'android'}
               <div class="source-action-card android-source-actions">
