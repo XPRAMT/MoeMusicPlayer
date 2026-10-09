@@ -989,6 +989,11 @@ input:focus-visible {
   padding: clamp(16px, 2.5vh, 28px) 0 0;
 }
 
+/* Queue has no page chrome above the list; flush to the topbar bottom edge. */
+.page-content.wide-list-page:has(> .queue-page) {
+  padding-top: 0;
+}
+
 .sync-progress-banner {
   display: grid;
   gap: 10px;
@@ -4015,6 +4020,7 @@ input:focus-visible {
   .track-table-head { min-height: 33px; }
   .track-row { min-height: 53px; }
   .page-content.wide-list-page { padding: 16px 0 0; }
+  .page-content.wide-list-page:has(> .queue-page) { padding-top: 0; }
   .page-content.is-list-page { --list-chrome-pad-x: 14px; }
   .app-shell[data-active-view="playlists"] .sidebar-playlist-tree-host {
     top: calc(100% + 6px);
