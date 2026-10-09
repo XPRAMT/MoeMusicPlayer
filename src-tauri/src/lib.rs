@@ -6899,6 +6899,7 @@ mod windows_library_integration_tests {
             codec: None,
             bitrate_bps: None,
             sample_rate_hz: None,
+            release_date: None,
             year: None,
             bit_depth: None,
             played_ms: 0,

@@ -8,7 +8,7 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'title', label: '曲目', min: 'minmax(150px,1.7fr)', minPx: 150 },
   { id: 'artist', label: '演出者', min: 'minmax(110px,1.15fr)', minPx: 110 },
   { id: 'album', label: '專輯', min: 'minmax(120px,1.25fr)', minPx: 120 },
-  { id: 'year', label: '年份', min: '86px', minPx: 86 },
+  { id: 'year', label: '發行時間', min: '108px', minPx: 108 },
   { id: 'audioFormat', label: '音訊格式', min: '172px', minPx: 172 },
   { id: 'duration', label: '長度', min: '72px', minPx: 72 },
   { id: 'playCount', label: '播放次數', min: '78px', minPx: 78 },
@@ -20,6 +20,22 @@ export const DEFAULT_TRACK_COLUMN_PREFERENCES = TRACK_COLUMN_DEFINITIONS.map(({ 
 /** @type {Set<TrackColumnId>} */
 const COLUMN_IDS = new Set(TRACK_COLUMN_DEFINITIONS.map(({ id }) => id));
 const COLUMN_DEFINITION_BY_ID = new Map(TRACK_COLUMN_DEFINITIONS.map((column) => [column.id, column]));
+
+/** Codecs that store source PCM without a useful average bitrate in the list. */
+const LOSSLESS_CODECS = new Set([
+  'FLAC',
+  'WAV',
+  'WAVE',
+  'AIFF',
+  'AIF',
+  'ALAC',
+  'APE',
+  'WV',
+  'WAVPACK',
+  'PCM',
+  'TAK',
+  'TTA',
+]);
 
 /**
  * Normalize the persisted preference boundary without trusting its order or fields.
@@ -127,31 +143,68 @@ export function formatPlayCount(playedMs, durationMs) {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-/** @param {unknown} value */
-export function formatYear(value) {
-  if (typeof value === 'number') {
-    return Number.isInteger(value) && value >= 0 && value <= 9999
-      ? value.toString().padStart(4, '0')
+/**
+ * Display release date as YYYY, YYYY-MM, or YYYY-MM-DD.
+ * Accepts a normalized releaseDate string, a legacy year number, or YYYY[-MM[-DD]].
+ * @param {unknown} releaseDate
+ * @param {unknown} [year]
+ */
+/**
+ * @param {unknown} releaseDate
+ * @param {unknown} [year]
+ */
+export function formatReleaseDate(releaseDate, year) {
+  if (typeof releaseDate === 'number' && (year === undefined || year === null)) {
+    return formatReleaseDate(null, releaseDate);
+  }
+  if (typeof releaseDate === 'string') {
+    const match = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(releaseDate.trim());
+    if (!match) return '—';
+    const y = Number(match[1]);
+    if (y === 0 || y > 9999) return '—';
+    if (match[2] === undefined) return match[1];
+    const month = Number(match[2]);
+    if (month < 1 || month > 12) return '—';
+    if (match[3] === undefined) return `${match[1]}-${match[2]}`;
+    const day = Number(match[3]);
+    if (day < 1 || day > 31) return '—';
+    const date = new Date(Date.UTC(y, month - 1, day));
+    return date.getUTCFullYear() === y && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+      ? `${match[1]}-${match[2]}-${match[3]}`
       : '—';
   }
-  if (typeof value !== 'string') return '—';
-  const match = /^(\d{4})(?:-(\d{2})-(\d{2}))?$/.exec(value.trim());
-  if (!match) return '—';
-  if (match[2] === undefined) return match[1];
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (year === 0 || month < 1 || month > 12 || day < 1 || day > 31) return '—';
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
-    ? match[1]
-    : '—';
+  if (typeof year === 'number') {
+    return Number.isInteger(year) && year >= 1 && year <= 9999
+      ? year.toString().padStart(4, '0')
+      : '—';
+  }
+  if (typeof year === 'string') {
+    return formatReleaseDate(year);
+  }
+  return '—';
+}
+
+/** @deprecated Prefer formatReleaseDate; kept for callers that only have a year. */
+/** @param {unknown} value */
+export function formatYear(value) {
+  return formatReleaseDate(null, value);
+}
+
+/**
+ * @param {unknown} codec
+ */
+export function isLosslessCodec(codec) {
+  if (typeof codec !== 'string') return false;
+  const name = codec.trim().toUpperCase();
+  return LOSSLESS_CODECS.has(name);
 }
 
 /**
  * @param {{ codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null }} item
+ * @param {{ omitLosslessBitrate?: boolean }} [options]
  */
-export function formatAudioFormat(item) {
+export function formatAudioFormat(item, options = {}) {
+  const omitLosslessBitrate = options.omitLosslessBitrate === true;
   const parts = [];
   if (typeof item.codec === 'string' && item.codec.trim()) {
     parts.push(item.codec.trim().toUpperCase());
@@ -163,7 +216,13 @@ export function formatAudioFormat(item) {
   if (typeof item.bitDepth === 'number' && Number.isInteger(item.bitDepth) && item.bitDepth > 0) {
     parts.push(`${item.bitDepth} bit`);
   }
-  if (typeof item.bitrateBps === 'number' && Number.isFinite(item.bitrateBps) && item.bitrateBps > 0) {
+  const hideBitrate = omitLosslessBitrate && isLosslessCodec(item.codec);
+  if (
+    !hideBitrate
+    && typeof item.bitrateBps === 'number'
+    && Number.isFinite(item.bitrateBps)
+    && item.bitrateBps > 0
+  ) {
     parts.push(`${Math.round(item.bitrateBps / 1000)} kbps`);
   }
   return parts.length > 0 ? parts.join('．') : '—';
@@ -194,7 +253,7 @@ export function displayTrackTitle(item, fallback = '') {
 
 /**
  * @param {TrackColumnId} id
- * @param {{ title?: string | null, fileName?: string | null, artist?: string | null, album?: string | null, year?: number | string | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null }} item
+ * @param {{ title?: string | null, fileName?: string | null, artist?: string | null, album?: string | null, releaseDate?: string | null, year?: number | string | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null }} item
  * @param {(durationMs: number | null | undefined) => string} formatDuration
  * @param {string} titleFallback
  */
@@ -207,9 +266,9 @@ export function formatTrackColumnValue(id, item, formatDuration, titleFallback =
     case 'album':
       return typeof item.album === 'string' && item.album.trim() ? item.album.trim() : '—';
     case 'year':
-      return formatYear(item.year);
+      return formatReleaseDate(item.releaseDate, item.year);
     case 'audioFormat':
-      return formatAudioFormat(item);
+      return formatAudioFormat(item, { omitLosslessBitrate: true });
     case 'duration':
       return item.durationMs === null || item.durationMs === undefined
         ? '—'

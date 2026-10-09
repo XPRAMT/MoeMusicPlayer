@@ -74,6 +74,7 @@
     DEFAULT_TRACK_COLUMN_PREFERENCES,
     TRACK_COLUMN_DEFINITIONS,
     displayTrackTitle,
+    formatAudioFormat,
     formatTrackColumnValue,
     isHiResTrack,
     moveTrackColumn,
@@ -2713,7 +2714,7 @@
             >{trackFieldLabel(playback?.currentTrack, 'title')}</span>
           </nav>
           <p class="now-playing-format" aria-label="音質格式">
-            <span>{formatTrackColumnValue('audioFormat', playback?.currentTrack ?? {}, () => '—')}</span>
+            <span>{formatAudioFormat(playback?.currentTrack ?? {})}</span>
             {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}
             <span class="now-playing-play-count" aria-label="播放次數">
               播放次數 {formatTrackColumnValue('playCount', withLivePlayedMs(playback?.currentTrack ?? {}, livePlayCount), () => '—')}

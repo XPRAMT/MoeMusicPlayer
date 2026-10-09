@@ -100,6 +100,8 @@ pub struct PlaylistEntrySummary {
     pub codec: Option<String>,
     pub bitrate_bps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
+    #[serde(default)]
+    pub release_date: Option<String>,
     pub year: Option<u16>,
     pub bit_depth: Option<u8>,
     /// Cumulative credited listening time; 0 when unmatched or never played.

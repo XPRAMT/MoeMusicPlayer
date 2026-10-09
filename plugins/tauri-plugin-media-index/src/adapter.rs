@@ -5,42 +5,6 @@ use player_core::{
 
 use crate::models::{ScanResponse, ScanState};
 
-pub(crate) fn parse_recording_date_year(value: &str) -> Option<u16> {
-    let bytes = value.as_bytes();
-    let year = parse_four_digit_year(bytes.get(..4)?)?;
-    match bytes.len() {
-        4 => Some(year),
-        10 if bytes[4] == b'-' && bytes[7] == b'-' => {
-            let month = parse_two_digits(&bytes[5..7])?;
-            let day = parse_two_digits(&bytes[8..10])?;
-            let days_in_month = match month {
-                1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-                4 | 6 | 9 | 11 => 30,
-                2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
-                2 => 28,
-                _ => return None,
-            };
-            (1..=days_in_month).contains(&day).then_some(year)
-        }
-        _ => None,
-    }
-}
-
-fn parse_four_digit_year(bytes: &[u8]) -> Option<u16> {
-    if bytes.len() != 4 || !bytes.iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    let year = std::str::from_utf8(bytes).ok()?.parse::<u16>().ok()?;
-    (year != 0).then_some(year)
-}
-
-fn parse_two_digits(bytes: &[u8]) -> Option<u8> {
-    if bytes.len() != 2 || !bytes.iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    std::str::from_utf8(bytes).ok()?.parse().ok()
-}
-
 pub(crate) fn scan_from_response(root: &LibraryRoot, response: ScanResponse) -> SourceScan {
     let mut state = match response.state {
         ScanState::Complete => SourceScanState::Complete,
@@ -107,6 +71,20 @@ fn incomplete_from(state: SourceScanState, fallback_reason: &str) -> SourceScanS
 }
 
 pub(crate) fn into_core_metadata(metadata: crate::models::TrackMetadata) -> TrackMetadata {
+    let release_date = metadata
+        .release_date
+        .as_deref()
+        .and_then(player_core::parse_recording_date)
+        .or_else(|| {
+            metadata
+                .year
+                .filter(|year| *year > 0)
+                .map(|year| format!("{year:04}"))
+        });
+    let year = release_date
+        .as_deref()
+        .and_then(player_core::recording_date_year)
+        .or(metadata.year.filter(|year| *year > 0));
     TrackMetadata {
         title: metadata.title,
         artist: metadata.artist,
@@ -118,7 +96,8 @@ pub(crate) fn into_core_metadata(metadata: crate::models::TrackMetadata) -> Trac
         codec: metadata.codec,
         bitrate_bps: metadata.bitrate_bps,
         sample_rate_hz: metadata.sample_rate_hz,
-        year: metadata.year,
+        release_date,
+        year,
         bit_depth: metadata.bit_depth,
     }
 }
@@ -149,18 +128,6 @@ mod tests {
             locator: MediaLocator::ContentUri(locator.into()),
             enabled: true,
         }
-    }
-
-    #[test]
-    fn recording_date_year_accepts_valid_year_or_calendar_date_only() {
-        assert_eq!(parse_recording_date_year("2024"), Some(2024));
-        assert_eq!(parse_recording_date_year("2000-02-29"), Some(2000));
-        assert_eq!(parse_recording_date_year("1900-02-29"), None);
-        assert_eq!(parse_recording_date_year("2024-02-30"), None);
-        assert_eq!(parse_recording_date_year("2024-13-01"), None);
-        assert_eq!(parse_recording_date_year("0000"), None);
-        assert_eq!(parse_recording_date_year("2024-01"), None);
-        assert_eq!(parse_recording_date_year("not-a-date"), None);
     }
 
     #[test]
@@ -204,6 +171,7 @@ mod tests {
         .expect("older Android payload remains readable");
         let converted = into_core_metadata(legacy);
         assert_eq!(converted.artist.as_deref(), Some("ARTIST"));
+        assert_eq!(converted.release_date, None);
         assert_eq!(converted.year, None);
         assert_eq!(converted.bit_depth, None);
 
@@ -218,13 +186,33 @@ mod tests {
             "codec": "FLAC",
             "bitrateBps": null,
             "sampleRateHz": 96000,
+            "releaseDate": "2024-03-15",
             "year": 2024,
             "bitDepth": 24
         }))
         .expect("new Android metadata payload");
         let converted = into_core_metadata(current);
+        assert_eq!(converted.release_date.as_deref(), Some("2024-03-15"));
         assert_eq!(converted.year, Some(2024));
         assert_eq!(converted.bit_depth, Some(24));
+
+        let year_only: crate::models::TrackMetadata = serde_json::from_value(serde_json::json!({
+            "title": "year-only",
+            "artist": null,
+            "album": null,
+            "albumArtist": null,
+            "trackNumber": null,
+            "discNumber": null,
+            "durationMs": 1,
+            "codec": null,
+            "bitrateBps": null,
+            "sampleRateHz": null,
+            "year": 1999
+        }))
+        .expect("year-only Android payload");
+        let converted = into_core_metadata(year_only);
+        assert_eq!(converted.release_date.as_deref(), Some("1999"));
+        assert_eq!(converted.year, Some(1999));
     }
 
     #[test]

@@ -12,6 +12,7 @@
     DEFAULT_TRACK_COLUMN_PREFERENCES,
     TRACK_COLUMN_DEFINITIONS,
     formatTrackColumnValue,
+    isHiResTrack,
     normalizeTrackColumnPreferences,
     trackListColumnCount,
     trackListGridTemplate,
@@ -170,10 +171,14 @@
           variant="item"
           columns={visibleColumns}
           indexLabel={formatTrackIndex(row.item.trackNumber, row.item.discNumber)}
-          cells={visibleColumns.map((column) => ({
-            id: column.id,
-            text: formatTrackColumnValue(column.id, withLivePlayedMs(row.item!, livePlayCount), formatDuration),
-          }))}
+          cells={visibleColumns.map((column) => {
+            const item = withLivePlayedMs(row.item!, livePlayCount);
+            return {
+              id: column.id,
+              text: formatTrackColumnValue(column.id, item, formatDuration),
+              hiRes: column.id === 'audioFormat' ? isHiResTrack(item) : false,
+            };
+          })}
         />
       {:else}
         <TrackColumnCells variant="placeholder" columns={visibleColumns} placeholderTitle="正在載入曲目…" />

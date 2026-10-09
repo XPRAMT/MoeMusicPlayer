@@ -5,6 +5,7 @@ import {
   DEFAULT_TRACK_COLUMN_PREFERENCES,
   TRACK_COLUMN_DEFINITIONS,
   formatTrackColumnValue,
+  isHiResTrack,
   normalizeTrackColumnPreferences,
   trackListColumnCount,
   trackListGridTemplate,
@@ -146,11 +147,15 @@ import { withLivePlayedMs } from './live-play-count.js';
           variant="item"
           columns={visibleColumns}
           indexLabel={String(row.item.position + 1)}
-          cells={visibleColumns.map((column) => ({
-            id: column.id,
-            text: formatTrackColumnValue(column.id, withLivePlayedMs(row.item!, livePlayCount), formatDuration, '未命名項目'),
-            title: column.id === 'title' && !row.item?.hasEnabledMapping ? '目前未對應到可播放的曲庫曲目' : undefined,
-          }))}
+          cells={visibleColumns.map((column) => {
+            const item = withLivePlayedMs(row.item!, livePlayCount);
+            return {
+              id: column.id,
+              text: formatTrackColumnValue(column.id, item, formatDuration, '未命名項目'),
+              title: column.id === 'title' && !row.item?.hasEnabledMapping ? '目前未對應到可播放的曲庫曲目' : undefined,
+              hiRes: column.id === 'audioFormat' ? isHiResTrack(item) : false,
+            };
+          })}
         />
       {:else}
         <TrackColumnCells variant="placeholder" columns={visibleColumns} placeholderTitle="正在載入項目…" />

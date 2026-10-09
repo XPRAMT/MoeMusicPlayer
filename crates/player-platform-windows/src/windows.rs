@@ -418,6 +418,12 @@ impl MediaIndex for WindowsMediaIndex {
             .or_else(|| tagged_file.first_tag());
         let properties = tagged_file.properties();
         let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
+        let release_date = tag
+            .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
+            .and_then(player_core::parse_recording_date);
+        let year = release_date
+            .as_deref()
+            .and_then(player_core::recording_date_year);
 
         Ok(TrackMetadata {
             title: tag
@@ -435,9 +441,8 @@ impl MediaIndex for WindowsMediaIndex {
                 .audio_bitrate()
                 .map(|kbps| kbps.saturating_mul(1000)),
             sample_rate_hz: properties.sample_rate(),
-            year: tag
-                .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
-                .and_then(parse_recording_date_year),
+            release_date,
+            year,
             bit_depth: reliable_source_bit_depth(file_type, properties.bit_depth()),
         })
     }
@@ -449,42 +454,6 @@ fn mpeg_codec_name(layer: Layer) -> &'static str {
         Layer::Layer2 => "MP2",
         Layer::Layer3 => "MP3",
     }
-}
-
-fn parse_recording_date_year(value: &str) -> Option<u16> {
-    let bytes = value.as_bytes();
-    let year = parse_four_digit_year(bytes.get(..4)?)?;
-    match bytes.len() {
-        4 => Some(year),
-        10 if bytes[4] == b'-' && bytes[7] == b'-' => {
-            let month = parse_two_digits(&bytes[5..7])?;
-            let day = parse_two_digits(&bytes[8..10])?;
-            let days_in_month = match month {
-                1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-                4 | 6 | 9 | 11 => 30,
-                2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
-                2 => 28,
-                _ => return None,
-            };
-            (1..=days_in_month).contains(&day).then_some(year)
-        }
-        _ => None,
-    }
-}
-
-fn parse_four_digit_year(bytes: &[u8]) -> Option<u16> {
-    if bytes.len() != 4 || !bytes.iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    let year = std::str::from_utf8(bytes).ok()?.parse::<u16>().ok()?;
-    (year != 0).then_some(year)
-}
-
-fn parse_two_digits(bytes: &[u8]) -> Option<u8> {
-    if bytes.len() != 2 || !bytes.iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    std::str::from_utf8(bytes).ok()?.parse().ok()
 }
 
 /// Lofty exposes the encoded source bit depth, but some containers can carry lossy codecs.
@@ -574,8 +543,8 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        mpeg_codec_name, parse_recording_date_year, reliable_source_bit_depth, to_extended_path,
-        windows_locator_key, WindowsMediaIndex,
+        mpeg_codec_name, reliable_source_bit_depth, to_extended_path, windows_locator_key,
+        WindowsMediaIndex,
     };
     use lofty::file::FileType;
     use lofty::mpeg::Layer;
@@ -1117,6 +1086,7 @@ mod tests {
         assert_eq!(metadata.artist.as_deref(), Some("測試演出者"));
         assert_eq!(metadata.track_number, Some(4));
         assert_eq!(metadata.album_artist.as_deref(), Some("專輯演出者"));
+        assert_eq!(metadata.release_date.as_deref(), Some("2024-02-29"));
         assert_eq!(metadata.year, Some(2024));
         assert_eq!(metadata.codec.as_deref(), Some("MP3"));
         assert_eq!(metadata.bit_depth, None, "MP3 is lossy");
@@ -1128,19 +1098,6 @@ mod tests {
         assert_eq!(mpeg_codec_name(Layer::Layer1), "MP1");
         assert_eq!(mpeg_codec_name(Layer::Layer2), "MP2");
         assert_eq!(mpeg_codec_name(Layer::Layer3), "MP3");
-    }
-
-    #[test]
-    fn recording_date_year_accepts_only_year_or_valid_iso_calendar_date() {
-        assert_eq!(parse_recording_date_year("2024"), Some(2024));
-        assert_eq!(parse_recording_date_year("2024-02-29"), Some(2024));
-        assert_eq!(parse_recording_date_year("2023-02-29"), None);
-        assert_eq!(parse_recording_date_year("2024-13-01"), None);
-        assert_eq!(parse_recording_date_year("2024-04-31"), None);
-        assert_eq!(parse_recording_date_year("0000"), None);
-        assert_eq!(parse_recording_date_year(" 2024"), None);
-        assert_eq!(parse_recording_date_year("2024-02"), None);
-        assert_eq!(parse_recording_date_year("1999-01-01T00:00:00"), None);
     }
 
     #[test]

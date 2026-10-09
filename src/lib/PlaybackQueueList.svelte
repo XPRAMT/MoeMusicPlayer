@@ -5,6 +5,7 @@
     DEFAULT_TRACK_COLUMN_PREFERENCES,
     TRACK_COLUMN_DEFINITIONS,
     formatTrackColumnValue,
+    isHiResTrack,
     normalizeTrackColumnPreferences,
     trackListColumnCount,
     trackListGridTemplate,
@@ -289,6 +290,7 @@
             id: column.id,
             text: displayValue(column.id, row.item!),
             title: column.id === 'title' && row.item?.track === null ? '曲目目前無法取得中繼資料' : undefined,
+            hiRes: column.id === 'audioFormat' ? isHiResTrack(row.item?.track) : false,
           }))}
         />
       {:else}

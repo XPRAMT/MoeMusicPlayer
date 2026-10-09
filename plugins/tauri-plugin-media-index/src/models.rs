@@ -78,6 +78,8 @@ pub(crate) struct TrackMetadata {
     pub bitrate_bps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
     #[serde(default)]
+    pub release_date: Option<String>,
+    #[serde(default)]
     pub year: Option<u16>,
     #[serde(default)]
     pub bit_depth: Option<u8>,

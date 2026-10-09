@@ -10,8 +10,59 @@ use serde::{Deserialize, Serialize};
 
 /// Increment when the metadata parser adds or changes persisted fields or extraction rules.
 /// Existing tracks below this version are eligible for bounded background backfill.
-pub const TRACK_METADATA_VERSION: u32 = 3;
+pub const TRACK_METADATA_VERSION: u32 = 4;
 use uuid::Uuid;
+
+/// Normalize Lofty `RecordingDate` to `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`.
+/// Rejects zero years, invalid calendar dates, and values with time or other suffixes.
+pub fn parse_recording_date(value: &str) -> Option<String> {
+    let bytes = value.trim().as_bytes();
+    let year = parse_four_digit_year(bytes.get(..4)?)?;
+    match bytes.len() {
+        4 => Some(format!("{year:04}")),
+        7 if bytes[4] == b'-' => {
+            let month = parse_two_digits(bytes.get(5..7)?)?;
+            (1..=12)
+                .contains(&month)
+                .then(|| format!("{year:04}-{month:02}"))
+        }
+        10 if bytes[4] == b'-' && bytes[7] == b'-' => {
+            let month = parse_two_digits(bytes.get(5..7)?)?;
+            let day = parse_two_digits(bytes.get(8..10)?)?;
+            let days_in_month = match month {
+                1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+                4 | 6 | 9 | 11 => 30,
+                2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
+                2 => 28,
+                _ => return None,
+            };
+            (1..=days_in_month)
+                .contains(&day)
+                .then(|| format!("{year:04}-{month:02}-{day:02}"))
+        }
+        _ => None,
+    }
+}
+
+/// Calendar year from a normalized release date (`YYYY…`).
+pub fn recording_date_year(release_date: &str) -> Option<u16> {
+    parse_four_digit_year(release_date.as_bytes().get(..4)?)
+}
+
+fn parse_four_digit_year(bytes: &[u8]) -> Option<u16> {
+    if bytes.len() != 4 || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let year = std::str::from_utf8(bytes).ok()?.parse::<u16>().ok()?;
+    (year != 0).then_some(year)
+}
+
+fn parse_two_digits(bytes: &[u8]) -> Option<u8> {
+    if bytes.len() != 2 || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()?.parse().ok()
+}
 
 /// Stable identity owned by the application, independent of any OS media index.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -133,6 +184,9 @@ pub struct TrackMetadata {
     pub codec: Option<String>,
     pub bitrate_bps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
+    /// Normalized `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` from `RecordingDate`.
+    pub release_date: Option<String>,
+    /// Calendar year derived from `release_date` (kept for older consumers).
     pub year: Option<u16>,
     /// Source bits per sample, populated only for codecs known to be lossless.
     pub bit_depth: Option<u8>,
@@ -313,6 +367,9 @@ pub struct TrackSummary {
     pub codec: Option<String>,
     pub bitrate_bps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
+    /// Normalized `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` when known.
+    #[serde(default)]
+    pub release_date: Option<String>,
     pub year: Option<u16>,
     pub bit_depth: Option<u8>,
     /// Cumulative credited listening time from `track_playback_statistics`.
@@ -416,7 +473,10 @@ pub enum UserMetadataField {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_track_title, locator_display_file_stem, MediaLocator};
+    use super::{
+        display_track_title, locator_display_file_stem, parse_recording_date, recording_date_year,
+        MediaLocator,
+    };
 
     #[test]
     fn missing_title_uses_file_stem_and_ignores_other_tags() {
@@ -455,6 +515,22 @@ mod tests {
             )),
             None
         );
+    }
+
+    #[test]
+    fn recording_date_keeps_available_precision() {
+        assert_eq!(parse_recording_date("2024").as_deref(), Some("2024"));
+        assert_eq!(parse_recording_date("2024-03").as_deref(), Some("2024-03"));
+        assert_eq!(
+            parse_recording_date("2024-02-29").as_deref(),
+            Some("2024-02-29")
+        );
+        assert_eq!(parse_recording_date("2023-02-29"), None);
+        assert_eq!(parse_recording_date("2024-13"), None);
+        assert_eq!(parse_recording_date("2024-02-30"), None);
+        assert_eq!(parse_recording_date("0000"), None);
+        assert_eq!(parse_recording_date("2024-01-01T00:00:00"), None);
+        assert_eq!(recording_date_year("2024-03-15"), Some(2024));
     }
 
     #[cfg(windows)]

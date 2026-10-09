@@ -21,7 +21,7 @@ use tauri::{
 };
 
 use crate::adapter::{
-    looks_like_tree_uri, media_store_volume, parse_recording_date_year, scan_from_response,
+    looks_like_tree_uri, media_store_volume, scan_from_response,
 };
 use crate::models::{
     BooleanResponse, ContentCacheLeaseResponse, ContentUriProbeResponse, LyricsTextResponse,
@@ -415,9 +415,12 @@ fn parse_lofty_metadata(
         .or_else(|| tagged_file.first_tag());
     let properties = tagged_file.properties();
     let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
-    let year = tag
+    let release_date = tag
         .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
-        .and_then(parse_recording_date_year);
+        .and_then(player_core::parse_recording_date);
+    let year = release_date
+        .as_deref()
+        .and_then(player_core::recording_date_year);
     Ok(TrackMetadata {
         title: tag.and_then(|tag| text(tag.title())),
         artist: tag.and_then(|tag| text(tag.artist())),
@@ -431,6 +434,7 @@ fn parse_lofty_metadata(
             .audio_bitrate()
             .map(|kbps| kbps.saturating_mul(1000)),
         sample_rate_hz: properties.sample_rate(),
+        release_date,
         year,
         bit_depth: if matches!(file_type, FileType::Flac | FileType::Ape) {
             properties

@@ -172,6 +172,8 @@ export interface TrackSummary {
   codec: string | null;
   bitrateBps: number | null;
   sampleRateHz: number | null;
+  /** Normalized YYYY, YYYY-MM, or YYYY-MM-DD when known. */
+  releaseDate?: string | null;
   year?: number | null;
   bitDepth?: number | null;
   /** Cumulative credited listening time in milliseconds. */
@@ -213,6 +215,7 @@ export interface PlaylistEntrySummary {
   album: string | null;
   durationMs: number | null;
   hasEnabledMapping: boolean;
+  releaseDate?: string | null;
   year?: number | null;
   codec?: string | null;
   sampleRateHz?: number | null;

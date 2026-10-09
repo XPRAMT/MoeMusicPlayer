@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 const MAX_PAGE_SIZE: u32 = 500;
 const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
@@ -53,7 +53,7 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
-    t.year, t.bit_depth,
+    t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=t.track_id)
@@ -73,7 +73,7 @@ const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
-    t.year, t.bit_depth,
+    t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
  FROM tracks t WHERE t.track_id=?1";
 const PLAYLIST_PAGE_SQL: &str = r#"
@@ -103,7 +103,7 @@ SELECT e.position, e.track_id,
        COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist),
        COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album),
        COALESCE(e.entry_duration_ms, t.duration_ms),
-       t.codec, t.bitrate_bps, t.sample_rate_hz, t.year, t.bit_depth,
+       t.codec, t.bitrate_bps, t.sample_rate_hz, t.year, t.release_date, t.bit_depth,
        EXISTS (
            SELECT 1 FROM source_mappings m
            JOIN library_roots r ON r.source_id=m.source_id
@@ -311,6 +311,14 @@ CREATE TABLE playback_statistics_checkpoints (
 "#;
 
 const SCHEMA_V10: &str = "ALTER TABLE playback_session ADD COLUMN source_field_filter_json TEXT;";
+
+const SCHEMA_V11: &str = r#"
+ALTER TABLE tracks ADD COLUMN release_date TEXT;
+UPDATE tracks
+   SET release_date = printf('%04d', year)
+ WHERE year IS NOT NULL
+   AND (release_date IS NULL OR length(trim(release_date)) = 0);
+"#;
 
 fn repeat_mode_name(mode: QueueRepeatMode) -> &'static str {
     match mode {
@@ -652,6 +660,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V10)?;
             tx.pragma_update(None, "user_version", 10)?;
+            tx.commit()?;
+            version = 10;
+        }
+        if version == 10 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V11)?;
+            tx.pragma_update(None, "user_version", 11)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -1167,12 +1182,13 @@ impl Database {
                     row.get::<_, Option<i64>>(7)?,
                     row.get::<_, Option<i64>>(8)?,
                     row.get::<_, Option<i64>>(9)?,
-                    row.get::<_, Option<i64>>(10)?,
-                    row.get::<_, bool>(11)?,
-                    row.get::<_, i64>(12)?,
-                    row.get::<_, String>(13)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, bool>(12)?,
+                    row.get::<_, i64>(13)?,
                     row.get::<_, String>(14)?,
-                    row.get::<_, Vec<u8>>(15)?,
+                    row.get::<_, String>(15)?,
+                    row.get::<_, Vec<u8>>(16)?,
                 ))
             },
         )?;
@@ -1189,6 +1205,7 @@ impl Database {
                     bitrate_bps,
                     sample_rate_hz,
                     year,
+                    release_date,
                     bit_depth,
                     has_enabled_mapping,
                     played_ms,
@@ -1215,6 +1232,12 @@ impl Database {
                 let file_name = locator::decode(&locator_kind, &locator_encoding, &locator_data)
                     .ok()
                     .and_then(|locator| player_core::locator_display_file_stem(&locator));
+                let release_date = blank_to_none(release_date)
+                    .and_then(|value| player_core::parse_recording_date(&value));
+                let year = year
+                    .and_then(|value| u16::try_from(value).ok())
+                    .filter(|value| *value > 0)
+                    .or_else(|| release_date.as_deref().and_then(player_core::recording_date_year));
                 Ok(PlaylistEntrySummary {
                     position,
                     track_id,
@@ -1226,9 +1249,8 @@ impl Database {
                     codec,
                     bitrate_bps: bitrate_bps.map(|value| value.max(0) as u32),
                     sample_rate_hz: sample_rate_hz.map(|value| value.max(0) as u32),
-                    year: year
-                        .and_then(|value| u16::try_from(value).ok())
-                        .filter(|value| *value > 0),
+                    release_date,
+                    year,
                     bit_depth: bit_depth
                         .and_then(|value| u8::try_from(value).ok())
                         .filter(|value| *value > 0),
@@ -2672,6 +2694,13 @@ fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummar
     let id = TrackId::parse(&raw_id).map_err(|error| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
     })?;
+    let release_date = blank_to_none(row.get::<_, Option<String>>(12)?)
+        .and_then(|value| player_core::parse_recording_date(&value));
+    let year = row
+        .get::<_, Option<i64>>(11)?
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .or_else(|| release_date.as_deref().and_then(player_core::recording_date_year));
     Ok(TrackSummary {
         id,
         title: blank_to_none(row.get(1)?),
@@ -2694,15 +2723,13 @@ fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummar
         sample_rate_hz: row
             .get::<_, Option<i64>>(10)?
             .map(|value| value.max(0) as u32),
-        year: row
-            .get::<_, Option<i64>>(11)?
-            .and_then(|value| u16::try_from(value).ok())
-            .filter(|value| *value > 0),
+        release_date,
+        year,
         bit_depth: row
-            .get::<_, Option<i64>>(12)?
+            .get::<_, Option<i64>>(13)?
             .and_then(|value| u8::try_from(value).ok())
             .filter(|value| *value > 0),
-        played_ms: row.get::<_, i64>(13)?.max(0) as u64,
+        played_ms: row.get::<_, i64>(14)?.max(0) as u64,
         file_name: None,
     })
 }
@@ -2834,7 +2861,21 @@ fn persist_metadata(
         .or_else(|| metadata.title.clone())
         .unwrap_or_default()
         .to_lowercase();
-    if metadata.year.is_some_and(|year| year == 0 || year > 9999) {
+    let release_date = metadata
+        .release_date
+        .as_deref()
+        .and_then(player_core::parse_recording_date)
+        .or_else(|| {
+            metadata
+                .year
+                .filter(|year| *year > 0 && *year <= 9999)
+                .map(|year| format!("{year:04}"))
+        });
+    let year = release_date
+        .as_deref()
+        .and_then(player_core::recording_date_year)
+        .or(metadata.year.filter(|value| *value > 0 && *value <= 9999));
+    if metadata.year.is_some_and(|value| value == 0 || value > 9999) {
         return Err(DatabaseError::InvalidNumber("year"));
     }
     if metadata
@@ -2847,15 +2888,15 @@ fn persist_metadata(
     tx.prepare_cached(
         "INSERT INTO tracks
             (track_id, metadata_loaded, sort_title, title, artist, album, album_artist, track_number,
-             disc_number, duration_ms, codec, bitrate_bps, sample_rate_hz, year, bit_depth, metadata_version)
-         VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+             disc_number, duration_ms, codec, bitrate_bps, sample_rate_hz, year, release_date, bit_depth, metadata_version)
+         VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT(track_id) DO UPDATE SET
             metadata_loaded=1, sort_title=excluded.sort_title, title=excluded.title,
             artist=excluded.artist, album=excluded.album,
             album_artist=excluded.album_artist, track_number=excluded.track_number,
             disc_number=excluded.disc_number, duration_ms=excluded.duration_ms, codec=excluded.codec,
             bitrate_bps=excluded.bitrate_bps, sample_rate_hz=excluded.sample_rate_hz,
-            year=excluded.year, bit_depth=excluded.bit_depth,
+            year=excluded.year, release_date=excluded.release_date, bit_depth=excluded.bit_depth,
             metadata_version=excluded.metadata_version",
     )?
     .execute(params![
@@ -2871,7 +2912,8 @@ fn persist_metadata(
             metadata.codec,
             metadata.bitrate_bps.map(i64::from),
             metadata.sample_rate_hz.map(i64::from),
-            metadata.year.map(i64::from),
+            year.map(i64::from),
+            release_date,
             metadata.bit_depth.map(i64::from),
             i64::from(TRACK_METADATA_VERSION),
         ])?;
@@ -3311,6 +3353,7 @@ mod tests {
                 codec: Some("FLAC".to_owned()),
                 bitrate_bps: Some(900_000),
                 sample_rate_hz: Some(48_000),
+                release_date: Some("2001".to_owned()),
                 year: Some(2001),
                 bit_depth: Some(24),
             }),
@@ -3419,7 +3462,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 10);
+            assert_eq!(version, 11);
         }
         {
             let db = Database::open(&path).expect("reopen migrated database");
@@ -3463,13 +3506,23 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 10);
+        assert_eq!(current_version, 11);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
             .query_row("SELECT COUNT(*) FROM library_roots", [], |row| row.get(0))
             .expect("legacy roots remain");
         assert_eq!(preserved_roots, 1);
+        let release_date_column: i64 = db
+            .lock()
+            .expect("connection")
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name='release_date'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("release_date column");
+        assert_eq!(release_date_column, 1);
         let locator_index: Option<String> = db
             .lock()
             .expect("connection")
@@ -3512,7 +3565,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -3552,7 +3605,7 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
     }
 
@@ -3592,7 +3645,7 @@ mod tests {
                     .expect("sync-state table lookup"),
             )
         };
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
         assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
     }
 
@@ -3768,7 +3821,7 @@ mod tests {
                     .expect("lyric candidates table"),
             )
         };
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
         assert_eq!(lyric_table, "track_lyrics");
         assert_eq!(candidate_table, "lyric_candidates");
         assert_eq!(
@@ -3805,7 +3858,7 @@ mod tests {
             [],
             |row| row.get(0),
         ).expect("playback session tables");
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
         assert_eq!(tables, 2);
     }
 
@@ -6244,7 +6297,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v8_migrates_to_v10_without_requiring_track_rows_for_statistics() {
+    fn schema_v8_migrates_to_v11_without_requiring_track_rows_for_statistics() {
         let connection = rusqlite::Connection::open_in_memory().expect("legacy v8 database");
         connection.execute_batch(SCHEMA_V1).expect("schema v1");
         connection.execute_batch(SCHEMA_V2).expect("schema v2");
@@ -6258,13 +6311,13 @@ mod tests {
             .pragma_update(None, "user_version", 8)
             .expect("mark v8");
 
-        let db = Database::from_connection(connection).expect("migrate to v10");
+        let db = Database::from_connection(connection).expect("migrate to v11");
         let version: i64 = db
             .lock()
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
         let table_count: i64 = db
             .lock()
             .expect("connection")
@@ -6278,6 +6331,16 @@ mod tests {
             )
             .expect("statistics tables");
         assert_eq!(table_count, 3);
+        let release_date_column: i64 = db
+            .lock()
+            .expect("connection")
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name='release_date'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("release_date column");
+        assert_eq!(release_date_column, 1);
     }
 
     #[test]

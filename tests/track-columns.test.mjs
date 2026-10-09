@@ -2,12 +2,15 @@
 import test from 'node:test';
 import {
   DEFAULT_TRACK_COLUMN_PREFERENCES,
+  TRACK_COLUMN_DEFINITIONS,
   formatAudioFormat,
   formatPlayCount,
   displayTrackTitle,
+  formatReleaseDate,
   formatTrackColumnValue,
   formatYear,
   isHiResTrack,
+  isLosslessCodec,
   moveTrackColumn,
   normalizeTrackColumnPreferences,
   nowPlayingLayoutOrder,
@@ -63,26 +66,41 @@ test('malformed stored column settings safely fall back to defaults', () => {
   ]), DEFAULT_TRACK_COLUMN_PREFERENCES);
 });
 
-test('YEAR displays only YYYY or valid YYYY-MM-DD and never accepts other date sources', () => {
+test('release date column keeps available YYYY / YYYY-MM / YYYY-MM-DD precision', () => {
+  assert.equal(TRACK_COLUMN_DEFINITIONS.find((column) => column.id === 'year')?.label, '發行時間');
+  assert.equal(formatReleaseDate('2024'), '2024');
+  assert.equal(formatReleaseDate('2024-03'), '2024-03');
+  assert.equal(formatReleaseDate('2024-02-29'), '2024-02-29');
+  assert.equal(formatReleaseDate(null, 2024), '2024');
+  assert.equal(formatReleaseDate('2023-02-29'), '—');
+  assert.equal(formatReleaseDate('2024-13'), '—');
+  assert.equal(formatReleaseDate('2024-13-01'), '—');
+  assert.equal(formatReleaseDate('2024/01/02'), '—');
   assert.equal(formatYear(2024), '2024');
-  assert.equal(formatYear('2024'), '2024');
-  assert.equal(formatYear('2024-02-29'), '2024');
-  assert.equal(formatYear('2023-02-29'), '—');
-  assert.equal(formatYear('2024-13-01'), '—');
-  assert.equal(formatYear('2024/01/02'), '—');
-  assert.equal(formatYear('not a year'), '—');
-  assert.equal(formatYear(null), '—');
+  assert.equal(formatTrackColumnValue('year', { releaseDate: '2024-06-01' }, formatDuration), '2024-06-01');
+  assert.equal(formatTrackColumnValue('year', { year: 1999 }, formatDuration), '1999');
 });
 
 test('audio format uses only supplied source fields and formats nullable values', () => {
+  assert.equal(isLosslessCodec('flac'), true);
+  assert.equal(isLosslessCodec('mp3'), false);
   assert.equal(formatAudioFormat({
     codec: 'flac', sampleRateHz: 48_000, bitDepth: 16, bitrateBps: 1_024_000,
   }), 'FLAC．48 kHz．16 bit．1024 kbps');
   assert.equal(formatAudioFormat({
     codec: 'flac', sampleRateHz: 48_000, bitDepth: 24, bitrateBps: 1_989_000,
-  }), 'FLAC．48 kHz．24 bit．1989 kbps');
+  }, { omitLosslessBitrate: true }), 'FLAC．48 kHz．24 bit');
+  assert.equal(formatAudioFormat({
+    codec: 'wav', sampleRateHz: 44_100, bitDepth: null, bitrateBps: 1_411_000,
+  }, { omitLosslessBitrate: true }), 'WAV．44.1 kHz');
   assert.equal(formatAudioFormat({ codec: null, sampleRateHz: null, bitDepth: null, bitrateBps: null }), '—');
   assert.equal(formatAudioFormat({ codec: 'mp3', sampleRateHz: 44_100, bitDepth: null, bitrateBps: 192_000 }), 'MP3．44.1 kHz．192 kbps');
+  assert.equal(
+    formatTrackColumnValue('audioFormat', {
+      codec: 'flac', sampleRateHz: 96_000, bitDepth: 24, bitrateBps: 2_800_000,
+    }, formatDuration),
+    'FLAC．96 kHz．24 bit',
+  );
 });
 
 test('Hi-Res badge requires at least 48 kHz sample rate and 24-bit source depth', () => {
