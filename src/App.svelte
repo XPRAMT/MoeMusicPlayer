@@ -543,7 +543,7 @@
         if (playbackReady && !isSendingPlaybackCommand) {
           void loadPlaybackSnapshot(false);
         }
-      }, 250);
+      }, 100);
       livePlayCountTimer = setInterval(() => {
         publishLivePlayCount();
       }, 1000);
