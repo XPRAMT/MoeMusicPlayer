@@ -224,6 +224,14 @@
 
 - 同時間戳多行 LRC 已改為主文／譯文／羅馬拼音合併（見產品需求「同時間戳多行 LRC」）；手動指定歌詞改為優先於本機 sidecar／內嵌歌詞，`lyrics_get_track`／`lyrics_search` 初始載入與 `lyrics_clear_track` 後重載共用 `load_track_result_with_context` 的此優先序。Rust 測試：player-core lyrics 17/17（含 `[00:13.64]二番なんて望んでない`／`[00:13.64]才不稀罕當第二呢` 範例、三行角色、第四行忽略、非相鄰同時間戳、空白行、外部 tlyric 只補缺）、Windows platform lyrics 4/4、Tauri lyrics 27/27（含 Windows sidecar 同時間戳譯文、自動快取不遮蔽本機、手動指定優先於 sidecar、清除後回落本機、舊快取讀取折疊）。正式 Tauri 視窗中手動指定後切歌再回來的實際行為仍待人工驗收。
 
+## Windows 更新驗證暫停狀態（2026-10-09T22:13:29+08:00）
+
+- 本輪依使用者要求停止後續測試、建置與更新套用；以下是目前最後可驗證狀態，不代表尚未完成的項目已通過驗收。
+- 公開儲存庫目前的 HEAD 為 `40c3ef0`（`origin/master` 同步），公開 Release 為 [`v26.10.9-20261009T125148Z`](https://github.com/XPRAMT/MoeMusicPlayer/releases/tag/v26.10.9-20261009T125148Z)。固定 `release/` 主程式 SHA-256 為 `5F09DD28AF7365EEF79E4E5A1073B2D7E7C970269564E5367305CDFA02548176`、helper SHA-256 為 `096CB07C46269D6D799D17A93F44CAAE94F4757F68A43122ABFCADA5358AE12A`；該候選身份為 `26.10.9`、`2026-10-09T12:51:48.773Z`、git `84f3f2bb3c240307529f053d9127ac61b270e4f7`、`windows-x86_64`。
+- 公開 `--update-check-json` 已回報 `current`；隔離 next-launch 實測已從公開 Release 完整下載 24,681,472 bytes、建立 pending，UserData sentinel 保留，但 helper 在 `ReplaceFileW` 套用主 EXE 時收到 Windows `os error 32`（sharing violation），隨後安全回復舊版。舊版與 helper 都未被破壞，pending／stage 已清理；這證明下載、雜湊驗證與 rollback 路徑，不證明成功替換。
+- 原生 UI 更新視窗截圖已確認三個選項文字為「忽略」「自動重新啟動」「下次啟動完成更新」；因 WebView 原生自動化未暴露內部文字，restart-now、About 內容與正常重啟交接沒有完成端到端驗收。正式使用者播放器與正式 UserData 未被這次隔離測試操作。
+- 已完成的自動化證據仍有效：`npm run check` 0 errors／warnings、Node 118/118、workspace Rust 348 passed／0 failed／7 ignored、helper child-process 6/6、fmt／strict Clippy 通過；這些數字是先前結果，本輪沒有重跑。下一步是針對 `ReplaceFileW` sharing violation 設計有界 retry／鎖定來源診斷，然後重新做隔離 next-launch 與 restart-now 驗證；目前尚未實作或宣稱完成。
+
 ## 工作方式與下一步
 
 1. 開工先閱讀本文件、相關程式碼與 ADR；以最新需求、程式和測試結果修正過時敘述。較大修改先說明目標、落點層級與硬限制，區分平台硬限制、工程限制和慣例假設；比較至少兩種方案，必要時用原型或 benchmark 找瓶頸。重大架構變更寫入 `docs/adr/`，優先修正根因，不以 UI 權宜作法掩蓋後端問題。
