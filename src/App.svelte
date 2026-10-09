@@ -2337,8 +2337,10 @@
             {:else}
               <div id="{scope}sources-panel" class="settings-source-panel" role="tabpanel" aria-labelledby="{scope}sources-tab" tabindex="0">
                 <section class="settings-view" aria-labelledby="{scope}source-settings-heading">
-                  <div class="section-heading settings-heading">
-                    <div><h2 id="{scope}source-settings-heading">管理音樂來源</h2></div>
+                  <div class="settings-panel-header settings-source-heading">
+                    <div>
+                      <h3 id="{scope}source-settings-heading">管理音樂來源</h3>
+                    </div>
                     <button class="outline-button" type="button" onclick={() => void loadSources()} disabled={!sourceSyncReady || isLoadingSources}>
                       {isLoadingSources ? '載入中' : '重新載入'}
                     </button>

@@ -2096,15 +2096,6 @@ input:focus-visible {
   min-width: 0;
 }
 
-.settings-page > .settings-heading {
-  align-items: flex-start;
-  margin-bottom: 17px;
-}
-
-.settings-page > .settings-heading h2 {
-  font-size: var(--font-display);
-}
-
 .settings-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -2540,8 +2531,8 @@ input:focus-visible {
   margin-top: 0;
 }
 
-.settings-heading {
-  margin-bottom: 21px;
+.settings-source-heading {
+  margin-bottom: 8px;
 }
 
 .primary-button {
@@ -4043,7 +4034,6 @@ input:focus-visible {
 }
 
 @media (max-width: 620px) {
-  .settings-page > .settings-heading h2 { font-size: var(--font-display); }
   .settings-panel { padding: 0; }
   .lyrics-preference-grid { grid-template-columns: minmax(0, 1fr); }
   .appearance-color-grid { grid-template-columns: minmax(0, 1fr); }
