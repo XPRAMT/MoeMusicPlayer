@@ -1951,7 +1951,7 @@
             <div class="settings-tabs" role="tablist" aria-label="設定分類">
               <button
                 id="{scope}appearance-tab"
-                class="settings-tab"
+                class="soft-button settings-tab"
                 type="button"
                 role="tab"
                 aria-selected={settingsSection === 'appearance'}
@@ -1960,7 +1960,7 @@
               >主介面</button>
               <button
                 id="{scope}track-columns-tab"
-                class="settings-tab"
+                class="soft-button settings-tab"
                 type="button"
                 role="tab"
                 aria-selected={settingsSection === 'track-columns'}
@@ -1969,7 +1969,7 @@
               >曲目欄位</button>
               <button
                 id="{scope}now-playing-tab"
-                class="settings-tab"
+                class="soft-button settings-tab"
                 type="button"
                 role="tab"
                 aria-selected={settingsSection === 'now-playing'}
@@ -1978,7 +1978,7 @@
               >播放頁</button>
               <button
                 id="{scope}lyrics-tab"
-                class="settings-tab"
+                class="soft-button settings-tab"
                 type="button"
                 role="tab"
                 aria-selected={settingsSection === 'lyrics'}
@@ -1988,7 +1988,7 @@
               {#if capabilities?.platform === 'windows'}
                 <button
                   id="{scope}playback-tab"
-                  class="settings-tab"
+                  class="soft-button settings-tab"
                   type="button"
                   role="tab"
                   aria-selected={settingsSection === 'playback'}
@@ -1998,7 +1998,7 @@
               {/if}
               <button
                 id="{scope}shortcuts-tab"
-                class="settings-tab"
+                class="soft-button settings-tab"
                 type="button"
                 role="tab"
                 aria-selected={settingsSection === 'shortcuts'}
@@ -2007,7 +2007,7 @@
               >快捷鍵</button>
               <button
                 id="{scope}sources-tab"
-                class="settings-tab"
+                class="soft-button settings-tab"
                 type="button"
                 role="tab"
                 aria-selected={settingsSection === 'sources'}

@@ -275,9 +275,6 @@ input:focus-visible {
   background: transparent;
 }
 
-.app-shell.has-main-backdrop .settings-tab {
-  background: rgba(var(--text-rgb), 0.1);
-}
 
 .now-playing-overlay {
   position: relative;
@@ -499,8 +496,7 @@ input:focus-visible {
 .quick-settings-nav button:hover { border-color: var(--accent); color: var(--accent-text); }
 
 .quick-settings-drawer-scroll { min-height: 0; flex: 1 1 0; overflow: auto; overscroll-behavior: contain; padding: 16px 20px 26px; }
-.now-playing-quick-settings-drawer .settings-panel,
-.now-playing-quick-settings-drawer .settings-tab {
+.now-playing-quick-settings-drawer .settings-panel {
   background: color-mix(in srgb, var(--panel) var(--quick-settings-opacity, 70%), transparent);
 }
 .quick-settings-controls { display: grid; gap: 24px; }
@@ -1221,7 +1217,8 @@ input:focus-visible {
 }
 
 .soft-button.is-active,
-.soft-button[aria-pressed='true'] {
+.soft-button[aria-pressed='true'],
+.soft-button[aria-selected='true'] {
   border-color: color-mix(in srgb, var(--accent) 48%, transparent);
   color: var(--accent-text);
   background: transparent;
@@ -2105,26 +2102,8 @@ input:focus-visible {
 }
 
 .settings-tab {
-  display: inline-flex;
-  min-height: 38px;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 0 14px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  color: var(--muted);
-  background: var(--panel);
-  font-size: var(--font-caption);
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
-}
-
-.settings-tab[aria-selected='true'] {
-  border-color: rgba(var(--accent-rgb), 0.42);
-  color: var(--accent-text);
-  background: var(--panel-soft);
+  flex: 0 1 auto;
+  padding: 0 12px;
 }
 
 .settings-panel {
