@@ -27,6 +27,7 @@
     cursorChangeKey: number;
     columns?: TrackListColumnPreference[];
     fetchPage?: (request: { offset: number; limit: number }) => Promise<PlaybackQueuePage>;
+    reorderPage?: (from: number, to: number) => Promise<void>;
     livePlayCount?: { trackId: string; playedMs: number } | null;
     onPlay?: (entry: PlaybackQueuePageItem) => void;
     onTotalCount?: (count: number | null) => void;
@@ -37,6 +38,7 @@
     cursorChangeKey,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     fetchPage,
+    reorderPage,
     livePlayCount = null,
     onPlay = () => {},
     onTotalCount,
@@ -51,7 +53,10 @@
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
   let currentEntryPosition = $state<number | null>(null);
   let cursorError = $state<string | null>(null);
+  let reorderError = $state<string | null>(null);
+  let reordering = $state(false);
   let cursorProbeGeneration = 0;
+  let reorderGeneration = 0;
   let seenCursorChangeKey: number | undefined;
 
   type ListSnapshot = ReturnType<PagedListController<PlaybackQueuePageItem, number>['snapshot']>;
@@ -147,6 +152,29 @@
     if (!item.track) return id === 'title' ? '曲目資訊暫不可用' : '—';
     return formatTrackColumnValue(id, withLivePlayedMs(item.track, livePlayCount), formatDuration);
   }
+
+  async function handleReorder(from: number, to: number): Promise<void> {
+    if (reordering || from === to) return;
+    reordering = true;
+    reorderError = null;
+    try {
+      if (reorderPage) {
+        await reorderPage(from, to);
+      } else {
+        await invokeCommand('playback_reorder_queue', { from, to });
+      }
+      cursorProbeGeneration += 1;
+      currentEntryPosition = null;
+      reorderGeneration += 1;
+      // reset() is a no-op when scope and resetKey are unchanged; bump the key.
+      queue.reset(resetKey, `${resetKey}:reorder:${reorderGeneration}`);
+      await queue.ensureRange(0, TRACK_PAGE_SIZE);
+    } catch (error) {
+      reorderError = getErrorText(error);
+    } finally {
+      reordering = false;
+    }
+  }
 </script>
 
 <div class="track-list-shell">
@@ -159,6 +187,9 @@
 {#if cursorError}
   <div class="queue-cursor-error" role="status">佇列位置更新失敗：{cursorError}</div>
 {/if}
+{#if reorderError}
+  <div class="queue-cursor-error" role="alert">調整順序失敗：{reorderError}</div>
+{/if}
 
 {#if snapshot.totalCount === 0}
   <div class="empty-panel queue-empty" role="status">
@@ -168,7 +199,7 @@
 {:else}
   <PagedVirtualList
     totalCount={snapshot.totalCount}
-    pending={snapshot.pendingPageCount > 0}
+    pending={snapshot.pendingPageCount > 0 || reordering}
     revision={snapshot.revision}
     generation={snapshot.generation}
     {itemAt}
@@ -181,17 +212,19 @@
     compactHeaderHeight={33}
     fillAvailable={true}
     listId="playback-queue"
-    ariaLabel="目前播放佇列；使用方向鍵瀏覽，按 Enter 播放目前項目"
+    ariaLabel="目前播放佇列；長按拖曳可調整順序，使用方向鍵瀏覽，按 Enter 播放目前項目"
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
     minContentWidth={listMinWidth}
     className="track-list-viewport playback-queue-viewport"
     rowClassName="track-row virtual-track-row configurable-track-grid playback-queue-row"
     listName="播放佇列"
+    longPressReorder={true}
     onRange={handleRange}
     onPlay={(entry) => {
       if (entry) onPlay(entry);
     }}
+    onReorder={handleReorder}
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">

@@ -4877,6 +4877,60 @@ async fn playback_set_repeat(
 }
 
 #[tauri::command]
+async fn playback_reorder_queue(
+    state: State<'_, AppState>,
+    from: u64,
+    to: u64,
+) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
+    let from_index = usize::try_from(from).map_err(|_| "播放佇列來源位置超出支援範圍。".to_owned())?;
+    let to_index = usize::try_from(to).map_err(|_| "播放佇列目標位置超出支援範圍。".to_owned())?;
+    #[cfg(target_os = "windows")]
+    {
+        let service = windows_playback_service(&state)?;
+        let _gate = service
+            .command_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        {
+            let mut queue = service
+                .queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(queue) = queue.as_mut() else {
+                return Err("目前沒有播放佇列可調整順序。".to_owned());
+            };
+            let before = queue.snapshot();
+            queue
+                .move_traversal(from_index, to_index)
+                .map_err(|_| "播放佇列位置超出範圍。".to_owned())?;
+            let after = queue.snapshot();
+            if before.play_order != after.play_order || before.cursor != after.cursor {
+                bump_queue_revision(service);
+            }
+        }
+        if let Some(database) = state.database.as_ref() {
+            save_playback_session(database, service)?;
+        }
+        Ok(service.snapshot())
+    }
+    #[cfg(target_os = "android")]
+    {
+        android_playback_service(&state)?
+            .execute(android_playback::PlaybackAction::ReorderQueue {
+                from: from_index,
+                to: to_index,
+            })
+            .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = (state, from_index, to_index);
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
+}
+
+#[tauri::command]
 async fn playback_set_shuffle(
     state: State<'_, AppState>,
     enabled: bool,
@@ -6054,6 +6108,7 @@ pub fn run() {
             playback_set_volume,
             playback_set_repeat,
             playback_set_shuffle,
+            playback_reorder_queue,
             lyrics_service::lyrics_get_track,
             lyrics_service::lyrics_search,
             lyrics_service::lyrics_load_more,

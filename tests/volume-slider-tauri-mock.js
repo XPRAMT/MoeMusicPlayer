@@ -228,6 +228,8 @@
             currentEntryPosition: null,
             items: [],
           };
+        case 'playback_reorder_queue':
+          return volumeHarness.snapshot();
         case 'lyrics_get_track':
           volumeHarness.lyricsGetCount += 1;
           return {

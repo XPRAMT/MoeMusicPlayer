@@ -7,6 +7,11 @@
     getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
+  import {
+    QUEUE_REORDER_LONG_PRESS_MS,
+    QUEUE_REORDER_MOVE_CANCEL_PX,
+    queueDropIndexFromPointer,
+  } from './queue-reorder.js';
 
   export interface VirtualListRow<Item> {
     item: Item | null;
@@ -45,6 +50,8 @@
     onRange: (range: VirtualRange) => void;
     onPlay: (item: Item, index: number) => void;
     rowActivates?: boolean;
+    longPressReorder?: boolean;
+    onReorder?: (from: number, to: number) => void | Promise<void>;
     header?: Snippet;
     row: Snippet<[VirtualListRow<Item>]>;
   }
@@ -76,6 +83,8 @@
     onRange,
     onPlay,
     rowActivates = true,
+    longPressReorder = false,
+    onReorder = () => {},
     header,
     row,
   }: Props<Item> = $props();
@@ -91,6 +100,19 @@
   let headerHeight = $state(37);
   let maxViewportHeight = $state(680);
   let seenGeneration = $state(0);
+  let dragFromIndex = $state<number | null>(null);
+  let dragToIndex = $state<number | null>(null);
+  let suppressNextClick = false;
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingPointer: {
+    pointerId: number;
+    fromIndex: number;
+    startX: number;
+    startY: number;
+  } | null = null;
+  let activePointerId: number | null = null;
+  let autoScrollFrame = 0;
+  let latestPointerClientY = 0;
 
   const virtualTotalCount = $derived(totalCount ?? 40);
   const rowViewportHeight = $derived(
@@ -149,6 +171,7 @@
     return () => {
       window.removeEventListener('resize', updateMetrics);
       observer?.disconnect();
+      endDragState();
     };
   });
 
@@ -178,6 +201,141 @@
     if (item === null) return;
     activeIndex = index;
     onPlay(item, index);
+  }
+
+  function clearLongPressTimer(): void {
+    if (longPressTimer !== null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function stopAutoScroll(): void {
+    if (autoScrollFrame !== 0) {
+      cancelAnimationFrame(autoScrollFrame);
+      autoScrollFrame = 0;
+    }
+  }
+
+  function endDragState(): void {
+    clearLongPressTimer();
+    stopAutoScroll();
+    pendingPointer = null;
+    activePointerId = null;
+    dragFromIndex = null;
+    dragToIndex = null;
+  }
+
+  function dropIndexAtPointer(clientY: number): number {
+    if (!viewport) return 0;
+    return queueDropIndexFromPointer({
+      scrollTop: viewport.scrollTop,
+      pointerClientY: clientY,
+      viewportTop: viewport.getBoundingClientRect().top,
+      rowHeight,
+      totalCount: virtualTotalCount,
+    });
+  }
+
+  function updateDragTarget(clientY: number): void {
+    latestPointerClientY = clientY;
+    if (dragFromIndex === null || !viewport) return;
+    dragToIndex = dropIndexAtPointer(clientY);
+    const edge = 36;
+    const rect = viewport.getBoundingClientRect();
+    const nearTop = clientY - rect.top < edge;
+    const nearBottom = rect.bottom - clientY < edge;
+    if (!nearTop && !nearBottom) {
+      stopAutoScroll();
+      return;
+    }
+    if (autoScrollFrame !== 0) return;
+    const step = () => {
+      if (!viewport || dragFromIndex === null) {
+        stopAutoScroll();
+        return;
+      }
+      const bounds = viewport.getBoundingClientRect();
+      let delta = 0;
+      if (latestPointerClientY - bounds.top < edge) delta = -14;
+      else if (bounds.bottom - latestPointerClientY < edge) delta = 14;
+      if (delta !== 0) {
+        viewport.scrollTop = Math.max(0, viewport.scrollTop + delta);
+        scrollTop = viewport.scrollTop;
+        dragToIndex = dropIndexAtPointer(latestPointerClientY);
+        autoScrollFrame = requestAnimationFrame(step);
+      } else {
+        autoScrollFrame = 0;
+      }
+    };
+    autoScrollFrame = requestAnimationFrame(step);
+  }
+
+  function beginDrag(fromIndex: number, pointerId: number, target: Element): void {
+    if (!viewport) return;
+    dragFromIndex = fromIndex;
+    dragToIndex = fromIndex;
+    activePointerId = pointerId;
+    pendingPointer = null;
+    suppressNextClick = true;
+    try {
+      target.setPointerCapture(pointerId);
+    } catch {
+      // Capture can fail if the pointer already ended; drag still tracks window events.
+    }
+  }
+
+  function handleRowPointerDown(event: PointerEvent, index: number, item: Item | null): void {
+    if (!longPressReorder || item === null || event.button !== 0) return;
+    clearLongPressTimer();
+    pendingPointer = {
+      pointerId: event.pointerId,
+      fromIndex: index,
+      startX: event.clientX,
+      startY: event.clientY,
+    };
+    const target = event.currentTarget as Element;
+    longPressTimer = setTimeout(() => {
+      if (!pendingPointer || pendingPointer.pointerId !== event.pointerId) return;
+      beginDrag(pendingPointer.fromIndex, pendingPointer.pointerId, target);
+    }, QUEUE_REORDER_LONG_PRESS_MS);
+  }
+
+  function handleRowPointerMove(event: PointerEvent): void {
+    if (pendingPointer && pendingPointer.pointerId === event.pointerId && dragFromIndex === null) {
+      const dx = event.clientX - pendingPointer.startX;
+      const dy = event.clientY - pendingPointer.startY;
+      if ((dx * dx) + (dy * dy) > QUEUE_REORDER_MOVE_CANCEL_PX * QUEUE_REORDER_MOVE_CANCEL_PX) {
+        clearLongPressTimer();
+        pendingPointer = null;
+      }
+      return;
+    }
+    if (dragFromIndex === null || activePointerId !== event.pointerId) return;
+    event.preventDefault();
+    updateDragTarget(event.clientY);
+  }
+
+  async function finishRowPointer(event: PointerEvent): Promise<void> {
+    if (pendingPointer?.pointerId === event.pointerId) {
+      clearLongPressTimer();
+      pendingPointer = null;
+    }
+    if (dragFromIndex === null || activePointerId !== event.pointerId) return;
+    event.preventDefault();
+    const from = dragFromIndex;
+    const to = dragToIndex ?? dragFromIndex;
+    endDragState();
+    if (from !== to) {
+      await onReorder(from, to);
+    }
+  }
+
+  function handleRowPointerCancel(event: PointerEvent): void {
+    if (pendingPointer?.pointerId === event.pointerId || activePointerId === event.pointerId) {
+      endDragState();
+      suppressNextClick = true;
+    }
   }
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -221,6 +379,7 @@
     aria-busy={pending || totalCount === null}
     tabindex="0"
     style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
+    class:is-reordering={dragFromIndex !== null}
     onscroll={updateViewport}
     onkeydown={handleKeydown}
   >
@@ -230,6 +389,14 @@
       aria-hidden="true"
       style={`height:${virtualTotalCount * rowHeight}px`}
     ></div>
+    {#if dragFromIndex !== null && dragToIndex !== null}
+      <div
+        class="paged-virtual-drop-line"
+        role="presentation"
+        aria-hidden="true"
+        style={`transform:translateY(${dragToIndex * rowHeight + (dragToIndex > dragFromIndex ? rowHeight - 2 : 0)}px)`}
+      ></div>
+    {/if}
     {#each virtualRows as virtualRow (virtualRow.key)}
       {@const id = `${listId}-row-${virtualRow.index}`}
       {@const selected = virtualRow.item !== null && isSelected(virtualRow.item, virtualRow.index)}
@@ -238,6 +405,7 @@
         class={`paged-virtual-row ${rowClassName}`}
         class:selected
         class:active={activeIndex === virtualRow.index}
+        class:is-dragging={dragFromIndex === virtualRow.index}
         role="row"
         aria-rowindex={virtualRow.index + 2}
         aria-selected={selected}
@@ -245,7 +413,16 @@
         aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
         style={`height:${rowHeight}px;transform:translateY(${virtualRow.index * rowHeight}px)`}
         class:activates={rowActivates && virtualRow.item !== null}
+        class:reorderable={longPressReorder && virtualRow.item !== null}
+        onpointerdown={longPressReorder ? (event) => handleRowPointerDown(event, virtualRow.index, virtualRow.item) : undefined}
+        onpointermove={longPressReorder ? handleRowPointerMove : undefined}
+        onpointerup={longPressReorder ? finishRowPointer : undefined}
+        onpointercancel={longPressReorder ? handleRowPointerCancel : undefined}
         onclick={() => {
+          if (suppressNextClick) {
+            suppressNextClick = false;
+            return;
+          }
           if (rowActivates) playRow(virtualRow.item, virtualRow.index);
         }}
         onkeydown={(event) => {
@@ -308,9 +485,36 @@
     max-height: none;
   }
 
+  .paged-virtual-viewport.is-reordering {
+    cursor: grabbing;
+    user-select: none;
+    touch-action: none;
+  }
+
   .paged-virtual-viewport:focus-visible {
     outline: 2px solid var(--accent-text);
     outline-offset: 2px;
+  }
+
+  .paged-virtual-row.reorderable {
+    touch-action: pan-y;
+  }
+
+  .paged-virtual-row.is-dragging {
+    opacity: 0.38;
+    z-index: 2;
+  }
+
+  .paged-virtual-drop-line {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 3;
+    height: 2px;
+    pointer-events: none;
+    background: var(--accent-text);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-text) 35%, transparent);
   }
 
   .paged-virtual-header {

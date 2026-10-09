@@ -22,6 +22,7 @@
     setColumns: (columns: TrackListColumnPreference[]) => Promise<void>;
     setCurrentEntry: (entryPosition: number) => Promise<void>;
     replaceQueue: () => Promise<void>;
+    reorderQueue: (from: number, to: number) => Promise<void>;
     scrollSweep: (stepRows?: number) => Promise<{
       steps: number;
       maxDomRows: number;
@@ -35,6 +36,8 @@
       selectedPlaylistId: string;
       queueCurrentRows: string[];
       queueRequestLog: Array<{ offset: number; limit: number; revision: number }>;
+      queueReorderLog: Array<{ from: number; to: number }>;
+      queueTitles: string[];
       treeHostParent: string | null;
       treeVisible: boolean;
       pageContentWidth: number;
@@ -61,7 +64,10 @@
   let queueRevision = 1;
   let requestCount = 0;
   let generatedItems = 0;
+  /** @type {Uint32Array | null} */
+  let playOrder: Uint32Array | null = null;
   const queueRequestLog: Array<{ offset: number; limit: number; revision: number }> = [];
+  const queueReorderLog: Array<{ from: number; to: number }> = [];
   let columns = $state(DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column })));
   let queuePlays = $state<Array<{ trackId: string; traversalPosition: number }>>([]);
   const playlists: PlaylistSummary[] = [
@@ -88,12 +94,20 @@
     };
   }
 
+  function ensurePlayOrder(): Uint32Array {
+    if (!playOrder) {
+      playOrder = new Uint32Array(totalQueueItems);
+      for (let index = 0; index < totalQueueItems; index += 1) playOrder[index] = index;
+    }
+    return playOrder;
+  }
+
   function makeQueueItem(traversalPosition: number): PlaybackQueuePageItem {
-    const entryPosition = traversalPosition;
+    const entryPosition = playOrder ? playOrder[traversalPosition]! : traversalPosition;
     return {
       traversalPosition,
       entryPosition,
-      sourcePosition: traversalPosition < 2 ? 0 : traversalPosition,
+      sourcePosition: entryPosition < 2 ? 0 : entryPosition,
       trackId: entryPosition < 2 ? 'duplicate-track' : `queue-track-${entryPosition}`,
       track: entryPosition === 11 ? null : makeTrack(entryPosition),
       isCurrent: entryPosition === currentEntryPosition,
@@ -162,10 +176,30 @@
   }
 
   async function replaceQueue(): Promise<void> {
+    playOrder = null;
     queueRevision += 1;
     currentEntryPosition = 3;
     queueResetKey += 1;
     await settle();
+  }
+
+  async function applyQueueReorder(from: number, to: number, remount: boolean): Promise<void> {
+    const order = ensurePlayOrder();
+    if (from === to || from < 0 || to < 0 || from >= order.length || to >= order.length) return;
+    const moved = order[from]!;
+    if (from < to) order.copyWithin(from, from + 1, to + 1);
+    else order.copyWithin(to + 1, to, from);
+    order[to] = moved;
+    queueReorderLog.push({ from, to });
+    queueRevision += 1;
+    if (remount) {
+      queueResetKey += 1;
+      await settle();
+    }
+  }
+
+  async function reorderQueue(from: number, to: number): Promise<void> {
+    await applyQueueReorder(from, to, true);
   }
 
   async function scrollSweep(stepRows = 1_000) {
@@ -215,6 +249,9 @@
       queueCurrentRows: [...document.querySelectorAll<HTMLElement>('.playback-queue-row.selected .column-index')]
         .map((element) => element.textContent?.trim() ?? ''),
       queueRequestLog: queueRequestLog.slice(),
+      queueReorderLog: queueReorderLog.slice(),
+      queueTitles: [...document.querySelectorAll<HTMLElement>('.playback-queue-row .list-column-title')]
+        .map((element) => element.textContent?.trim() ?? ''),
       treeHostParent: document.querySelector('.sidebar-playlist-tree-host')?.parentElement?.className ?? null,
       treeVisible: tree !== null && getComputedStyle(tree).display !== 'none' && tree.getBoundingClientRect().width > 0,
       pageContentWidth: content?.getBoundingClientRect().width ?? 0,
@@ -232,7 +269,7 @@
   });
 
   $effect(() => {
-    window.playbackQueueHarness = { setView, setColumns, setCurrentEntry, replaceQueue, scrollSweep, snapshot };
+    window.playbackQueueHarness = { setView, setColumns, setCurrentEntry, replaceQueue, reorderQueue, scrollSweep, snapshot };
   });
 </script>
 
@@ -289,6 +326,7 @@
               cursorChangeKey={cursorChangeKey}
               columns={columns}
               fetchPage={fetchQueuePage}
+              reorderPage={(from, to) => applyQueueReorder(from, to, false)}
               onPlay={(entry) => {
                 queuePlays = [...queuePlays, { trackId: entry.trackId, traversalPosition: entry.traversalPosition }];
               }}

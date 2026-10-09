@@ -61,6 +61,19 @@ async page => {
   assert(afterCursor.queueRequestLog.length - beforeReplacementCalls >= 2, 'queue replacement did not reload paged data');
   assert(afterCursor.documentWidth <= afterCursor.viewportWidth, 'desktop queue page horizontally overflows');
 
+  await page.evaluate(() => window.playbackQueueHarness.setView('queue'));
+  await page.waitForSelector('.playback-queue-row.reorderable');
+  const beforeReorderTitles = await page.evaluate(() => window.playbackQueueHarness.snapshot().queueTitles.slice(0, 4));
+  assert(beforeReorderTitles.length >= 4, 'queue does not have enough visible titles for reorder');
+  await page.evaluate(() => window.playbackQueueHarness.reorderQueue(0, 2));
+  await page.waitForFunction((expected) => {
+    const titles = window.playbackQueueHarness.snapshot().queueTitles;
+    return titles[0] !== expected[0] && titles[2] === expected[0];
+  }, beforeReorderTitles);
+  const afterReorder = await page.evaluate(() => window.playbackQueueHarness.snapshot());
+  assert(afterReorder.queueReorderLog.at(-1).from === 0 && afterReorder.queueReorderLog.at(-1).to === 2, 'reorder log mismatch');
+  assert(await page.locator('.playback-queue-row.reorderable').count() > 0, 'queue rows lost reorderable long-press affordance');
+
   const sweep = await page.evaluate(() => window.playbackQueueHarness.scrollSweep(2_500));
   assert(sweep.total === 100_000, 'synthetic queue did not expose all entries');
   assert(sweep.maxDomRows <= 30, 'queue virtualization rendered too many rows');

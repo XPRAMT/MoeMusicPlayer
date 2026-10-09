@@ -322,6 +322,28 @@ impl PlaybackQueue {
         Ok(())
     }
 
+    /// Move one item in the active traversal so it ends at `to`.
+    /// Keeps the same current entry selected when the dragged slot moves.
+    pub fn move_traversal(&mut self, from: usize, to: usize) -> Result<(), &'static str> {
+        let length = self.play_order.len();
+        if from >= length || to >= length {
+            return Err("queue traversal index is out of range");
+        }
+        if from == to {
+            return Ok(());
+        }
+        let moved = self.play_order.remove(from);
+        self.play_order.insert(to, moved);
+        if self.cursor == from {
+            self.cursor = to;
+        } else if from < self.cursor && self.cursor <= to {
+            self.cursor -= 1;
+        } else if to <= self.cursor && self.cursor < from {
+            self.cursor += 1;
+        }
+        Ok(())
+    }
+
     fn shuffle_from(&mut self, current_source_index: usize) {
         self.play_order.swap(0, current_source_index);
         for upper in (2..self.play_order.len()).rev() {
@@ -472,6 +494,36 @@ mod tests {
             assert_eq!(queue.previous(), Some(*expected));
         }
         assert_eq!(queue.previous(), None);
+    }
+
+    #[test]
+    fn move_traversal_reorders_play_order_and_keeps_current_entry() {
+        let tracks = ids(4);
+        let mut queue = PlaybackQueue::new(tracks.clone(), 1).unwrap();
+        assert_eq!(queue.current(), tracks[1]);
+        queue.move_traversal(1, 3).unwrap();
+        assert_eq!(queue.snapshot().play_order, vec![0, 2, 3, 1]);
+        assert_eq!(queue.cursor(), 3);
+        assert_eq!(queue.current(), tracks[1]);
+        queue.move_traversal(3, 0).unwrap();
+        assert_eq!(queue.snapshot().play_order, vec![1, 0, 2, 3]);
+        assert_eq!(queue.cursor(), 0);
+        assert_eq!(queue.current(), tracks[1]);
+        assert_eq!(queue.move_traversal(0, 4).unwrap_err(), "queue traversal index is out of range");
+    }
+
+    #[test]
+    fn move_traversal_shifts_cursor_when_other_items_cross_it() {
+        let tracks = ids(5);
+        let mut queue = PlaybackQueue::new(tracks.clone(), 2).unwrap();
+        queue.move_traversal(0, 3).unwrap();
+        assert_eq!(queue.snapshot().play_order, vec![1, 2, 3, 0, 4]);
+        assert_eq!(queue.cursor(), 1);
+        assert_eq!(queue.current(), tracks[2]);
+        queue.move_traversal(4, 0).unwrap();
+        assert_eq!(queue.snapshot().play_order, vec![4, 1, 2, 3, 0]);
+        assert_eq!(queue.cursor(), 2);
+        assert_eq!(queue.current(), tracks[2]);
     }
 
     #[test]

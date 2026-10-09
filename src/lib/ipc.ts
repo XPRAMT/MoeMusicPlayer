@@ -573,6 +573,10 @@ interface IpcContract {
     args: { enabled: boolean };
     result: PlaybackSnapshot;
   };
+  playback_reorder_queue: {
+    args: { from: number; to: number };
+    result: PlaybackSnapshot;
+  };
   lyrics_get_track: {
     args: { trackId: string };
     result: LyricsTrackResult;

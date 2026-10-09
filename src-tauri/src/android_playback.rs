@@ -88,6 +88,10 @@ pub(crate) enum PlaybackAction {
     SetVolume(f64),
     SetRepeat(RepeatMode),
     SetShuffle(bool),
+    ReorderQueue {
+        from: usize,
+        to: usize,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -499,6 +503,18 @@ impl AndroidActor {
                     self.publish_queue();
                     self.save_session()?;
                 }
+                self.update_capabilities(request_id)?;
+                Ok(self.publish_snapshot())
+            }
+            PlaybackAction::ReorderQueue { from, to } => {
+                let Some(queue) = self.queue.as_mut() else {
+                    return Err("目前沒有播放佇列可調整順序。".to_owned());
+                };
+                queue
+                    .move_traversal(from, to)
+                    .map_err(|_| "播放佇列位置超出範圍。".to_owned())?;
+                self.publish_queue();
+                self.save_session()?;
                 self.update_capabilities(request_id)?;
                 Ok(self.publish_snapshot())
             }
