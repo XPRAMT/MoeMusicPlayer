@@ -30,6 +30,9 @@ pub struct ThemeSettings {
     pub accent_hex: String,
     #[serde(default = "default_quick_settings_opacity_percent")]
     pub quick_settings_opacity_percent: u8,
+    /// Backdrop blur for the Now Playing quick-settings drawer.
+    #[serde(default = "default_quick_settings_blur_px")]
+    pub quick_settings_blur_px: u8,
     /// Main-window photo background blur. The image itself lives at `UserData/background`.
     #[serde(default = "default_main_background_blur_px")]
     pub main_background_blur_px: u8,
@@ -43,6 +46,10 @@ pub struct ThemeSettings {
 
 fn default_quick_settings_opacity_percent() -> u8 {
     70
+}
+
+fn default_quick_settings_blur_px() -> u8 {
+    12
 }
 
 fn default_main_background_blur_px() -> u8 {
@@ -59,6 +66,7 @@ impl Default for ThemeSettings {
             background_hex: "#000000".to_owned(),
             accent_hex: "#55D9FF".to_owned(),
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
+            quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
             main_background_opacity_percent: default_main_background_opacity_percent(),
         }
@@ -789,6 +797,11 @@ impl AppSettings {
         if self.theme.quick_settings_opacity_percent > 100 {
             return Err(SettingsError::InvalidData(
                 "quickSettingsOpacityPercent must be between 0 and 100".into(),
+            ));
+        }
+        if self.theme.quick_settings_blur_px > 40 {
+            return Err(SettingsError::InvalidData(
+                "quickSettingsBlurPx must be between 0 and 40".into(),
             ));
         }
         if self.theme.main_background_blur_px > 40 {

@@ -5,6 +5,7 @@ export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   backgroundHex: '#000000',
   accentHex: '#55D9FF',
   quickSettingsOpacityPercent: 70,
+  quickSettingsBlurPx: 12,
   mainBackgroundBlurPx: 20,
   mainBackgroundOpacityPercent: 40,
 });
@@ -30,6 +31,12 @@ export function normalizeThemePreferences(value) {
       ? candidate.accentHex.toUpperCase()
       : DEFAULT_THEME_PREFERENCES.accentHex,
     quickSettingsOpacityPercent: normalizeOpacityPercent(candidate.quickSettingsOpacityPercent),
+    quickSettingsBlurPx: normalizeRange(
+      candidate.quickSettingsBlurPx,
+      0,
+      40,
+      DEFAULT_THEME_PREFERENCES.quickSettingsBlurPx,
+    ),
     mainBackgroundBlurPx: normalizeRange(candidate.mainBackgroundBlurPx, 0, 40, DEFAULT_THEME_PREFERENCES.mainBackgroundBlurPx),
     mainBackgroundOpacityPercent: normalizeRange(
       candidate.mainBackgroundOpacityPercent ?? candidate.mainBackgroundBrightnessPercent,

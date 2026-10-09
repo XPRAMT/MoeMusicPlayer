@@ -23,6 +23,8 @@ export interface ThemePreferences {
   backgroundHex: string;
   accentHex: string;
   quickSettingsOpacityPercent: number;
+  /** Backdrop blur for the Now Playing quick-settings drawer (0–40 px). */
+  quickSettingsBlurPx: number;
   mainBackgroundBlurPx: number;
   /** Image opacity percent (0–100); UI label is 背景透明度, same convention as quickSettingsOpacityPercent. */
   mainBackgroundOpacityPercent: number;

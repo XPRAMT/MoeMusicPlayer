@@ -101,6 +101,10 @@ async page => {
   assert(await page.getByRole('button', { name: '選擇背景圖片' }).count() === 1, 'background picker missing');
   assert(await page.getByRole('slider', { name: '主介面背景模糊程度' }).count() === 1, 'background blur missing');
   assert(await page.getByRole('slider', { name: '主介面背景透明度' }).count() === 1, 'background opacity missing');
+  assert(await page.getByRole('slider', { name: '快速設定面板透明度' }).count() === 0, 'quick settings opacity stays out of main interface');
+  await page.getByRole('tab', { name: '播放頁', exact: true }).click();
+  assert(await page.getByRole('slider', { name: '快速設定面板透明度' }).count() === 1, 'quick settings opacity missing on playback page');
+  assert(await page.getByRole('slider', { name: '快速設定面板模糊程度' }).count() === 1, 'quick settings blur missing on playback page');
   await page.getByRole('tab', { name: '音樂來源' }).click();
   assert(await page.getByRole('heading', { name: '管理音樂來源', exact: true }).count() === 1, 'sources heading missing');
   assert(await page.locator('.section-kicker').count() === 0, 'english kicker remains in sources');

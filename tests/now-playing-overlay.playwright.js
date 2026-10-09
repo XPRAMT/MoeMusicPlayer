@@ -235,9 +235,9 @@ async page => {
     assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
   }
   assert.equal(await quickSettings.getByRole('checkbox', { name: '簡體轉繁體' }).count(), 1, 'drawer exposes simplified-to-traditional');
-  await quickSettings.getByRole('tab', { name: '主介面' }).click();
-  assert.equal(await quickSettings.locator('input[aria-label="快速設定面板透明度"]').inputValue(), '70', 'drawer shares the appearance opacity control at 70%');
   await quickSettings.getByRole('tab', { name: '播放頁' }).click();
+  assert.equal(await quickSettings.locator('input[aria-label="快速設定面板透明度"]').inputValue(), '70', 'drawer shares the playback opacity control at 70%');
+  assert.equal(await quickSettings.locator('input[aria-label="快速設定面板模糊程度"]').inputValue(), '12', 'drawer shares the playback blur control at 12px');
   assert.equal(await page.locator('.now-playing-overlay-body').evaluate((element) => element.inert), true, 'quick settings modal makes the covered playback view inert');
   assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), true, 'modal drawer blocks dock controls while open');
   assert.equal(await quickSettings.locator('input[aria-label="元件底色透明度"]').count(), 0, 'surface transparency is not configurable');

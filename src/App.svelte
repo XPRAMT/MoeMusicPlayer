@@ -1176,8 +1176,8 @@
     }
   }
 
-  function updateQuickSettingsOpacity(value: number): void {
-    const next = normalizeThemePreferences({ ...themePreferences, quickSettingsOpacityPercent: value });
+  function updateQuickSettingsLook(patch: Partial<ThemePreferences>): void {
+    const next = normalizeThemePreferences({ ...themePreferences, ...patch });
     themePreferences = next;
     themeSaveError = null;
     themeSaveState = isTauri() ? 'saving' : 'preview';
@@ -2136,14 +2136,10 @@
                     </span>
                   </label>
                 </div>
-                <label class="lyrics-preference-range">
-                  <span><strong>快速設定面板透明度</strong><output>{themePreferences.quickSettingsOpacityPercent}%</output></span>
-                  <input type="range" min="0" max="100" step="1" value={themePreferences.quickSettingsOpacityPercent} aria-label="快速設定面板透明度" oninput={(event) => updateQuickSettingsOpacity(Number(event.currentTarget.value))} onchange={saveThemePreferencesNow} />
-                </label>
                 <div class="settings-panel-header">
                   <div>
                     <h3>主介面背景</h3>
-                    <p>選擇一張圖片後會複製到 UserData，並命名為 background。模糊與亮度只影響主介面，不改變播放頁封面背景。</p>
+                    <p>選擇一張圖片後會複製到 UserData，並命名為 background。模糊與透明度只影響主介面，不改變播放頁封面背景。</p>
                   </div>
                 </div>
                 <div class="source-action-row source-action-buttons">
@@ -2295,6 +2291,21 @@
                   onLyricsChange={updateLyricsPreferences}
                   onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
                 />
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>快速設定面板</h3>
+                    <p>調整播放頁右側快速設定抽屜的底色不透明度與背景模糊。底色與文字相反。</p>
+                  </div>
+                </div>
+                <label class="lyrics-preference-range">
+                  <span><strong>面板透明度</strong><output>{themePreferences.quickSettingsOpacityPercent}%</output></span>
+                  <input type="range" min="0" max="100" step="1" value={themePreferences.quickSettingsOpacityPercent} aria-label="快速設定面板透明度" oninput={(event) => updateQuickSettingsLook({ quickSettingsOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                </label>
+                <label class="lyrics-preference-range">
+                  <span><strong>面板模糊</strong><output>{themePreferences.quickSettingsBlurPx}px</output></span>
+                  <input type="range" min="0" max="40" step="1" value={themePreferences.quickSettingsBlurPx} aria-label="快速設定面板模糊程度" oninput={(event) => updateQuickSettingsLook({ quickSettingsBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                </label>
+                <p class="theme-save-status" class:error={themeSaveState === 'error'} role="status">{themeSaveMessage}</p>
               </div>
             {:else if settingsSection === 'lyrics'}
               <div id="{scope}lyrics-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}lyrics-tab" tabindex="0">
@@ -2929,6 +2940,7 @@
           aria-labelledby="now-playing-quick-settings-title"
           data-testid="now-playing-quick-settings"
           style:--quick-settings-opacity={`${themePreferences.quickSettingsOpacityPercent}%`}
+          style:--quick-settings-blur={`${themePreferences.quickSettingsBlurPx}px`}
         >
           <header class="quick-settings-drawer-header">
             <h2 id="now-playing-quick-settings-title">快速設定</h2>

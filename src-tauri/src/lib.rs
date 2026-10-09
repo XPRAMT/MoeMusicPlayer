@@ -91,6 +91,8 @@ struct ThemePreferencesDto {
     accent_hex: String,
     #[serde(default = "default_quick_settings_opacity_percent")]
     quick_settings_opacity_percent: u8,
+    #[serde(default = "default_quick_settings_blur_px")]
+    quick_settings_blur_px: u8,
     #[serde(default = "default_main_background_blur_px")]
     main_background_blur_px: u8,
     #[serde(
@@ -102,6 +104,10 @@ struct ThemePreferencesDto {
 
 fn default_quick_settings_opacity_percent() -> u8 {
     70
+}
+
+fn default_quick_settings_blur_px() -> u8 {
+    12
 }
 
 fn default_main_background_blur_px() -> u8 {
@@ -118,6 +124,7 @@ impl From<ThemePreferences> for ThemePreferencesDto {
             background_hex: preferences.background_hex,
             accent_hex: preferences.accent_hex,
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
+            quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
             main_background_opacity_percent: default_main_background_opacity_percent(),
         }
@@ -139,6 +146,7 @@ impl From<ThemeSettings> for ThemePreferencesDto {
             background_hex: preferences.background_hex,
             accent_hex: preferences.accent_hex,
             quick_settings_opacity_percent: preferences.quick_settings_opacity_percent,
+            quick_settings_blur_px: preferences.quick_settings_blur_px,
             main_background_blur_px: preferences.main_background_blur_px,
             main_background_opacity_percent: preferences.main_background_opacity_percent,
         }
@@ -2848,6 +2856,7 @@ fn theme_set_preferences(
         background_hex: preferences.background_hex,
         accent_hex: preferences.accent_hex,
         quick_settings_opacity_percent: preferences.quick_settings_opacity_percent,
+        quick_settings_blur_px: preferences.quick_settings_blur_px,
         main_background_blur_px: preferences.main_background_blur_px,
         main_background_opacity_percent: preferences.main_background_opacity_percent,
     };

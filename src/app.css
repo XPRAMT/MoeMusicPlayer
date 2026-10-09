@@ -459,6 +459,8 @@ input:focus-visible {
   border: 0;
   border-left: 1px solid var(--line-strong);
   background: color-mix(in srgb, var(--text-inverse) var(--quick-settings-opacity, 70%), transparent);
+  -webkit-backdrop-filter: blur(var(--quick-settings-blur, 12px));
+  backdrop-filter: blur(var(--quick-settings-blur, 12px));
   box-sizing: border-box;
 }
 
@@ -481,7 +483,10 @@ input:focus-visible {
 
 .quick-settings-drawer-scroll { min-height: 0; flex: 1 1 0; overflow: auto; overscroll-behavior: contain; padding: 16px 20px 26px; }
 .now-playing-quick-settings-drawer .settings-panel {
-  background: color-mix(in srgb, var(--text-inverse) var(--quick-settings-opacity, 70%), transparent);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .quick-settings-controls { display: grid; gap: 24px; }
 .quick-settings-group { display: grid; min-width: 0; gap: 12px; scroll-margin-top: 12px; }
