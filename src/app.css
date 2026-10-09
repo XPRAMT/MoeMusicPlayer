@@ -3035,11 +3035,11 @@ input:focus-visible {
   justify-self: center;
 }
 
-/* Edge progress sits above the dock: hit band ends at the dock top, 3px track
-   pinned to that bottom edge (貼齊底欄上緣). Dock chrome centers in the full
-   74px height; time labels hang under the track into the dock. */
+/* Edge progress sits above the dock: tall invisible hit band ends at the dock
+   top; 3px painted track pinned to that bottom edge (顯示粗細不變). Dock chrome
+   centers in the full 74px height; time labels hang under the track into the dock. */
 .player-dock[data-timeline-style="edge"] {
-  --dock-progress-hit: 14px;
+  --dock-progress-hit: 28px;
   --dock-progress-track: 3px;
   height: var(--dock-height);
   min-height: var(--dock-height);
@@ -3098,9 +3098,12 @@ input:focus-visible {
 .player-dock[data-timeline-style="edge"] .progress-slider {
   position: static;
   width: 100%;
-  height: var(--dock-progress-track);
+  /* Fill the hit band for clicks; paint stays 3px at the bottom edge. */
+  height: 100%;
   margin: 0;
   border-radius: 0;
+  background-position: center bottom;
+  background-size: 100% var(--dock-progress-track);
 }
 
 /* Under full-width track; horizontal inset matches dock padding (pre-full-bleed labels). */
@@ -3414,8 +3417,9 @@ input:focus-visible {
 .progress-slider::-webkit-slider-thumb {
   width: var(--progress-thumb);
   height: var(--progress-thumb);
-  /* Edge input height is 3px; (3 − 10) / 2 centers the thumb on the track. */
-  margin-top: calc((var(--dock-progress-track, 3px) - var(--progress-thumb)) / 2);
+  /* Full-height hit + bottom-painted 3px track: shift thumb down onto that track.
+     margin-top = hit/2 − track/2 (WebKit offsets from the centered default). */
+  margin-top: calc(var(--dock-progress-hit, 28px) / 2 - var(--dock-progress-track, 3px) / 2);
   border: 1px solid var(--progress-glow);
   border-radius: 50%;
   background: var(--progress-glow);
