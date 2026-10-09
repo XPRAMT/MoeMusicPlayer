@@ -2212,42 +2212,6 @@
             {:else if settingsSection === 'playback'}
               {@const outputStatus = describeOutputFormat(playback?.outputFormat)}
               <div id="{scope}playback-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}playback-tab" tabindex="0">
-                <div class="settings-panel-header">
-                  <div>
-                    <h3>取樣率轉換</h3>
-                    <p>曲目的取樣率與輸出裝置不同時的轉換方式。兩種方式都使用 Windows 共享模式輸出，並非 bit-perfect；取樣率相同時不做任何轉換。</p>
-                  </div>
-                </div>
-                <div class="resampling-options" role="radiogroup" aria-label="取樣率轉換方式">
-                  <label class="resampling-option">
-                    <input
-                      type="radio"
-                      name="{scope}resampling-mode"
-                      value="highQuality"
-                      checked={resamplingMode === 'highQuality'}
-                      disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
-                      onchange={() => setResamplingMode('highQuality')}
-                    />
-                    <span class="resampling-option-copy">
-                      <strong>高品質（預設）</strong>
-                      <small>輸出維持在裝置的混音取樣率，由 rubato 的 FFT 進行取樣率轉換（區塊大小 2048）。濾波範圍依來源與輸出取樣率自動調整；取樣率相同時直接輸出。切換不同取樣率的曲目時不必重新開啟輸出。</small>
-                    </span>
-                  </label>
-                  <label class="resampling-option">
-                    <input
-                      type="radio"
-                      name="{scope}resampling-mode"
-                      value="windowsBuiltin"
-                      checked={resamplingMode === 'windowsBuiltin'}
-                      disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
-                      onchange={() => setResamplingMode('windowsBuiltin')}
-                    />
-                    <span class="resampling-option-copy">
-                      <strong>Windows 內建</strong>
-                      <small>以曲目的取樣率開啟輸出，交由 Windows 音訊引擎轉換為裝置格式。前後曲目取樣率不同時需重新開啟輸出，換曲時可能短暫停頓；裝置無法以該取樣率開啟時會自動改用高品質轉換。</small>
-                    </span>
-                  </label>
-                </div>
                 <div class="resampling-status" role="status">
                   <span>目前輸出</span>
                   <strong>{outputStatus.text}</strong>
@@ -2255,13 +2219,37 @@
                     <p title={playback?.outputFormat?.fallbackReason ?? undefined}>{outputStatus.notice}</p>
                   {/if}
                 </div>
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>取樣率轉換</h3>
+                    <p>曲目的取樣率與輸出裝置不同時的轉換方式。兩種方式都使用 Windows 共享模式輸出，並非 bit-perfect；取樣率相同時不做任何轉換。</p>
+                  </div>
+                </div>
+                <div class="layout-choice-row resampling-mode-row" role="group" aria-label="取樣率轉換方式">
+                  <button
+                    type="button"
+                    aria-label="高品質取樣率轉換"
+                    aria-pressed={resamplingMode === 'highQuality'}
+                    class:chosen={resamplingMode === 'highQuality'}
+                    disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
+                    onclick={() => setResamplingMode('highQuality')}
+                  >高品質</button>
+                  <button
+                    type="button"
+                    aria-label="Windows 內建取樣率轉換"
+                    aria-pressed={resamplingMode === 'windowsBuiltin'}
+                    class:chosen={resamplingMode === 'windowsBuiltin'}
+                    disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
+                    onclick={() => setResamplingMode('windowsBuiltin')}
+                  >Windows 內建</button>
+                </div>
                 <p class="settings-preference-status" class:error={resamplingModeState === 'error'} role="status">
                   {resamplingModeError ?? (resamplingModeState === 'loading' ? '正在讀取取樣率轉換設定…' : resamplingModeState === 'saving' ? '正在切換取樣率轉換方式…' : resamplingModeState === 'preview' ? '瀏覽器預覽不會保存取樣率轉換設定。' : '取樣率轉換設定已保存。')}
                 </p>
                 <div class="settings-panel-header">
                   <div>
                     <h3>DSEE HX</h3>
-                    <p>串流透過本機已安裝的 Sony Music Center 濾鏡處理。48 kHz 以下的雙聲道都會處理，不看位深。高於 48 kHz 或非雙聲道不處理。48 kHz 系列輸出 96 kHz／24-bit，44.1 kHz 系列輸出 176.4 kHz／24-bit，之後仍依目前的取樣率轉換接到輸出裝置。有損格式送進濾鏡前轉成 32-bit PCM，無損格式保持原來的位深。需要先安裝 Sony Music Center。播放器只載入 C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax，不會內含或散佈這個檔案。</p>
+                    <p>串流透過 Sony Music Center 濾鏡處理，需要先安裝 Sony Music Center，播放器載入 'C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax'，本專案不會散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。</p>
                   </div>
                 </div>
                 <label class="resampling-option">
@@ -2370,7 +2358,7 @@
                           <span class="shortcut-empty">未綁定</span>
                         {/each}
                       </div>
-                      <button class="outline-button" type="button" onclick={() => beginShortcutCapture(action.id)}>新增</button>
+                      <button class="soft-button" type="button" onclick={() => beginShortcutCapture(action.id)}>新增</button>
                     </div>
                   {/each}
                 </div>

@@ -2257,11 +2257,6 @@ input:focus-visible {
   accent-color: var(--accent);
 }
 
-.resampling-options {
-  display: grid;
-  gap: 8px;
-}
-
 .resampling-option {
   display: grid;
   min-width: 0;
@@ -2299,7 +2294,7 @@ input:focus-visible {
 .resampling-status {
   display: grid;
   gap: 4px;
-  margin: 0;
+  margin: 0 0 8px;
   padding: 11px 12px;
   border-radius: 9px;
   background: rgba(var(--text-rgb), 0.04);
@@ -2414,9 +2409,13 @@ input:focus-visible {
   gap: 10px;
 }
 
+.layout-choice-row.lyrics-text-effect-row,
+.layout-choice-row.resampling-mode-row {
+  margin-bottom: 0;
+}
+
 .layout-choice-row.lyrics-text-effect-row {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-bottom: 0;
 }
 
 .layout-choice-row button {
@@ -2429,7 +2428,8 @@ input:focus-visible {
   text-align: left;
 }
 
-.layout-choice-row.lyrics-text-effect-row button {
+.layout-choice-row.lyrics-text-effect-row button,
+.layout-choice-row.resampling-mode-row button {
   min-height: 36px;
   align-content: center;
   place-items: center;
@@ -2441,7 +2441,8 @@ input:focus-visible {
   font-weight: 600;
 }
 
-.layout-choice-row.lyrics-text-effect-row button.chosen {
+.layout-choice-row.lyrics-text-effect-row button.chosen,
+.layout-choice-row.resampling-mode-row button.chosen {
   color: var(--accent-text);
 }
 
@@ -4093,7 +4094,7 @@ input:focus-visible {
 }
 
 @media (max-width: 620px) {
-  .layout-choice-row:not(.lyrics-text-effect-row) {
+  .layout-choice-row:not(.lyrics-text-effect-row):not(.resampling-mode-row) {
     grid-template-columns: minmax(0, 1fr);
   }
 }
