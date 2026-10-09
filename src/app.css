@@ -3383,13 +3383,13 @@ input:focus-visible {
   border-radius: 0;
   background: linear-gradient(
     90deg,
-    rgba(var(--accent-rgb), 0.1) 0%,
-    rgba(var(--accent-rgb), 0.2) max(0%, calc(var(--progress-pct) - 32%)),
-    rgba(var(--accent-rgb), 0.42) max(0%, calc(var(--progress-pct) - 12%)),
+    rgba(var(--accent-rgb), 0.32) 0%,
+    rgba(var(--accent-rgb), 0.42) max(0%, calc(var(--progress-pct) - 32%)),
+    rgba(var(--accent-rgb), 0.62) max(0%, calc(var(--progress-pct) - 12%)),
     var(--progress-glow) var(--progress-pct),
-    rgba(var(--accent-rgb), 0.42) min(100%, calc(var(--progress-pct) + 12%)),
-    rgba(var(--accent-rgb), 0.2) min(100%, calc(var(--progress-pct) + 32%)),
-    rgba(var(--accent-rgb), 0.1) 100%
+    rgba(var(--accent-rgb), 0.62) min(100%, calc(var(--progress-pct) + 12%)),
+    rgba(var(--accent-rgb), 0.42) min(100%, calc(var(--progress-pct) + 32%)),
+    rgba(var(--accent-rgb), 0.32) 100%
   );
   background-position: center;
   background-repeat: no-repeat;
