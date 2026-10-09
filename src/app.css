@@ -1026,7 +1026,8 @@ input:focus-visible {
   padding: clamp(16px, 2.5vh, 28px) 0 0;
 }
 
-/* Playlist / queue have no page chrome above the list; flush to the topbar bottom edge. */
+/* Library / playlist / queue have no page chrome above the list; flush to the topbar. */
+.page-content.wide-list-page:has(> .library-section),
 .page-content.wide-list-page:has(> .queue-page),
 .page-content.wide-list-page:has(> .playlist-section) {
   padding-top: 0;
@@ -1590,7 +1591,7 @@ input:focus-visible {
 }
 
 .list-column-year {
-  text-align: center;
+  text-align: left;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1600,13 +1601,13 @@ input:focus-visible {
 
 .list-column-duration {
   font-family: 'DM Mono', monospace;
-  text-align: right;
+  text-align: left;
   font-variant-numeric: tabular-nums;
 }
 
 .list-column-playCount {
   font-family: 'DM Mono', monospace;
-  text-align: right;
+  text-align: left;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3948,6 +3949,7 @@ input:focus-visible {
   .track-table-head { min-height: 33px; }
   .track-row { min-height: 53px; }
   .page-content.wide-list-page { padding: 16px 0 0; }
+  .page-content.wide-list-page:has(> .library-section),
   .page-content.wide-list-page:has(> .queue-page),
   .page-content.wide-list-page:has(> .playlist-section) { padding-top: 0; }
   .page-content.is-list-page { --list-chrome-pad-x: 14px; }

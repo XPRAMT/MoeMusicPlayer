@@ -2718,11 +2718,18 @@ fn tracks_order_by_sql(sort: TrackListSort) -> &'static str {
         (TrackSortField::Duration, false) => {
             "(t.duration_ms IS NULL) ASC, t.duration_ms DESC, t.track_id DESC"
         }
+        // Match the list "播放次數" = played_ms / duration_ms (unknown duration last).
         (TrackSortField::PlayCount, true) => {
-            "COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0) ASC, t.track_id ASC"
+            "(t.duration_ms IS NULL OR t.duration_ms <= 0) ASC, \
+             CASE WHEN t.duration_ms IS NULL OR t.duration_ms <= 0 THEN 0 \
+                  ELSE CAST(COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0) AS REAL) / t.duration_ms \
+             END ASC, t.track_id ASC"
         }
         (TrackSortField::PlayCount, false) => {
-            "COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0) DESC, t.track_id DESC"
+            "(t.duration_ms IS NULL OR t.duration_ms <= 0) ASC, \
+             CASE WHEN t.duration_ms IS NULL OR t.duration_ms <= 0 THEN 0 \
+                  ELSE CAST(COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0) AS REAL) / t.duration_ms \
+             END DESC, t.track_id DESC"
         }
     }
 }
@@ -5521,6 +5528,85 @@ mod tests {
         assert_eq!(
             ids,
             page.items.iter().map(|track| track.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn play_count_sort_uses_played_over_duration_not_raw_played_ms() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "play-count-sort");
+        let mut short = record(&root, "short", "path:short", "Short", 10, 100);
+        short.metadata.as_mut().unwrap().duration_ms = Some(100_000);
+        let mut long = record(&root, "long", "path:long", "Long", 20, 200);
+        long.metadata.as_mut().unwrap().duration_ms = Some(1_000_000);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &[short.clone(), long.clone()],
+            &[short, long],
+            1000,
+        );
+        let page = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            })
+            .expect("base page");
+        let short_id = page
+            .items
+            .iter()
+            .find(|track| track.title.as_deref() == Some("Short"))
+            .expect("short track")
+            .id;
+        let long_id = page
+            .items
+            .iter()
+            .find(|track| track.title.as_deref() == Some("Long"))
+            .expect("long track")
+            .id;
+        db.lock()
+            .expect("connection")
+            .execute(
+                "INSERT INTO track_playback_statistics(track_id, played_ms) VALUES (?1, ?2), (?3, ?4)",
+                params![
+                    short_id.to_string(),
+                    200_000_i64,
+                    long_id.to_string(),
+                    500_000_i64
+                ],
+            )
+            .expect("seed listening totals");
+
+        let desc = TrackListSort {
+            field: TrackSortField::PlayCount,
+            direction: TrackSortDirection::Desc,
+        };
+        let sorted = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: desc,
+            })
+            .expect("play-count desc page");
+        assert_eq!(
+            sorted
+                .items
+                .iter()
+                .map(|track| track.title.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("Short"), Some("Long")],
+            "2.0 plays should rank above 0.5 plays even when raw played_ms is lower"
+        );
+        assert_eq!(
+            db.list_track_ids_filtered(None, None, desc)
+                .expect("matching queue order"),
+            sorted.items.iter().map(|track| track.id).collect::<Vec<_>>()
         );
     }
 
