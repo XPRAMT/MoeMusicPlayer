@@ -14,7 +14,7 @@ Shuffle should favor tracks with less listening relative to their duration while
 - The actor keeps cumulative per-track counters under opaque runtime identities and exposes dirty checkpoints. It does not write SQLite. A background service collector maps identities to stable Track IDs, persists batches transactionally, and clears only counters acknowledged by SQLite.
 - SQLite uses a fresh runtime UUID plus owner PID and process-start identity. Checkpoints are idempotent watermarks. Normal shutdown pauses audio, flushes the final batch, then finishes the runtime. A missing process or reused PID can be cleaned up; unknown process identity or access errors preserve the runtime.
 - The collector checkpoints at most every five seconds while healthy and wakes at playback boundaries. On database errors it retains dirty counters and retries; the five-second crash-loss bound applies only while persistence is healthy. Persistence errors are exposed through the existing playback snapshot error path without replacing an audio or restore error.
-- For a track with positive known duration, shuffle weight is `1 / (1 + played_ms / duration_ms)`. Unknown or zero duration uses neutral weight `1`. A new shuffle traversal uses weighted sampling without replacement and pins the selected entry first. Duplicate playlist entries remain separate traversal slots but use their Track ID's shared statistics.
+- For a track with positive known duration, shuffle weight is `1 / (1 + played_ms / duration_ms)`. Unknown or zero duration uses neutral weight `1`. A new shuffle traversal assigns each remaining slot `score = weight + U` with `U ~ Uniform(0, 1)`, sorts slots by descending score, and pins the selected entry first. Duplicate playlist entries remain separate traversal slots but use their Track ID's shared statistics.
 - Statistics are read when a new queue traversal is generated or shuffle is turned on. The current traversal is not reordered during playback or at Repeat-All boundaries; Previous, restart, and the saved traversal therefore remain exact.
 - Preferences (including shuffle/repeat mode) remain authoritative in versioned JSON. Queue/session and listening totals remain in App SQLite. No filesystem path is stored as a statistics identity.
 
@@ -24,7 +24,7 @@ Shuffle should favor tracks with less listening relative to their duration while
 - Lossy audio events were rejected as the sole counter because a full event queue can drop updates. The actor instead maintains cumulative dirty counters until database acknowledgement.
 - Writing SQLite from the audio actor or once per position poll was rejected because blocking storage work would affect playback and create excessive writes.
 - Reweighting each next track or every Repeat-All boundary was rejected because it changes an already visible traversal and invalidates exact Previous/restart behavior.
-- Strictly sorting by ratio was rejected because shuffle must remain randomized.
+- Strictly sorting by ratio alone was rejected because shuffle must remain randomized; adding a uniform `U` keeps randomness while still favoring higher weights.
 
 ## Consequences
 

@@ -362,12 +362,14 @@ fn weighted_order(
             .copied()
             .unwrap_or_default()
             .shuffle_weight();
-        let exponential_key = -random.next_unit().ln() / weight;
-        keyed_slots.push((exponential_key, source_index));
+        // score = weight + U; larger scores appear earlier in the traversal.
+        let score = weight + random.next_unit();
+        keyed_slots.push((score, source_index));
     }
     keyed_slots.sort_by(|left, right| {
-        left.0
-            .total_cmp(&right.0)
+        right
+            .0
+            .total_cmp(&left.0)
             .then_with(|| left.1.cmp(&right.1))
     });
     order.extend(
@@ -522,7 +524,7 @@ mod tests {
 
         let observed = favorable_first as f64 / 2_000.0;
         assert!(
-            (0.79..0.88).contains(&observed),
+            observed > 0.90,
             "lower-ratio track was first in {observed:.3} of trials"
         );
     }
