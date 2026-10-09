@@ -203,7 +203,7 @@
       enabled: true, syncState: null, lastAttemptUtcMs: null, lastSuccessUtcMs: null, errorCount: 0,
     };
   });
-  await page.getByRole('button', { name: '選擇資料夾並同步' }).click();
+  await page.getByRole('button', { name: '選擇資料夾', exact: true }).click();
   await page.getByText('新增的音樂資料夾', { exact: true }).waitFor({ timeout: 2000 });
   const selectedSourceProgress = page.locator('[data-testid="sync-progress-banner"]');
   if (!(await selectedSourceProgress.innerText()).includes('背景同步進行中')) {

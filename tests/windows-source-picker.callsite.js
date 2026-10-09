@@ -53,13 +53,9 @@
   await page.getByRole('tab', { name: '音樂來源' }).click();
   await page.locator('.source-folder-form, .source-folder-picker').first().waitFor();
 
-  const pickerButton = page.getByRole('button', { name: '選擇資料夾並同步' });
-  if (await pickerButton.count()) {
-    await pickerButton.click();
-  } else {
-    await page.locator('#windows-folder-path').fill('C:\\Acceptance\\音樂');
-    await page.getByRole('button', { name: '加入並掃描' }).click();
-  }
+  const pickerButton = page.getByRole('button', { name: '選擇資料夾', exact: true });
+  await pickerButton.waitFor();
+  await pickerButton.click();
 
   await page.waitForTimeout(250);
   const cancelCommands = await page.evaluate(() => window.__sourcePickerCalls.map(call => call.command));

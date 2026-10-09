@@ -6,7 +6,6 @@
     IconArrowDown,
     IconArrowUp,
     IconArrowsShuffle,
-    IconCheck,
     IconChevronRight,
     IconFilter,
     IconFolder,
@@ -1486,6 +1485,23 @@
     }
   }
 
+  async function pickWindowsPlaylistSource(): Promise<void> {
+    if (!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation) return;
+    isUpdatingSource = true;
+    sourceError = null;
+    try {
+      const result = await invokeCommand('playlist_import_m3u', {});
+      if (!result) return;
+      await loadPlaylists(result.playlist.id);
+      await loadSources();
+      sourceSyncSummary = `已加入播放清單「${result.playlist.name}」。`;
+    } catch (error) {
+      sourceError = getErrorText(error);
+    } finally {
+      isUpdatingSource = false;
+    }
+  }
+
   async function setSourceEnabled(source: LibrarySource, enabled: boolean): Promise<void> {
     if (isUpdatingSource) return;
     isUpdatingSource = true;
@@ -2319,21 +2335,27 @@
                 {/if}
               </section>
             {/if}
-            <div class="source-status-card">
-              <div class="source-status-icon" aria-hidden="true">
-                <IconFolder size={24} stroke={1.6} aria-hidden="true" />
-              </div>
-              <div class="source-status-copy"><h3>本機音樂來源</h3><p>啟動時先顯示已保存曲目，再於背景掃描來源；只有完整掃描才會確認移除項目。</p></div>
-              <span class="status-pill" class:not-ready={!sourceSyncReady}>{capabilityLabel(capabilities?.sourceSync)}</span>
-            </div>
-
             {#if capabilities?.platform === 'windows'}
               <div class="source-action-card source-folder-picker">
-                <div class="source-action-heading"><strong>Windows 音樂資料夾</strong><span>本機</span></div>
-                <p>使用 Windows 原生資料夾選擇器；取消時不會加入來源或開始同步。</p>
-                <button class="primary-button" type="button" onclick={() => void pickWindowsFolder()} disabled={!sourceSyncReady || isUpdatingSource}>
-                  {isUpdatingSource ? '處理中' : '選擇資料夾並同步'}
-                </button>
+                <div class="source-action-row source-action-buttons">
+                  <button
+                    class="outline-button"
+                    type="button"
+                    onclick={() => void pickWindowsFolder()}
+                    disabled={!sourceSyncReady || isUpdatingSource}
+                  >
+                    {isUpdatingSource ? '處理中' : '選擇資料夾'}
+                  </button>
+                  <button
+                    class="outline-button"
+                    type="button"
+                    onclick={() => void pickWindowsPlaylistSource()}
+                    disabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation}
+                    title={showCapabilityDetail(capabilities?.playlistExchange)}
+                  >
+                    {isUpdatingSource ? '處理中' : '選擇播放清單'}
+                  </button>
+                </div>
               </div>
             {:else if capabilities?.platform === 'android'}
               <div class="source-action-card android-source-actions">
@@ -2375,10 +2397,12 @@
             {#if sourceError}
               <div class="source-error-message" role="status">{sourceError}</div>
             {/if}
-            {#if sourceSyncSummary}
+            {#if sourceSyncSummary && sourceSyncSummary !== syncProgress?.summary}
               <div class="source-result-message" role="status">{sourceSyncSummary}</div>
             {/if}
-            <SyncErrorDetails results={sourceSyncResults} sources={sources} />
+            {#if !syncProgress}
+              <SyncErrorDetails results={sourceSyncResults} sources={sources} />
+            {/if}
 
             <div class="configured-sources" aria-live="polite">
               <div class="configured-sources-heading"><strong>已加入的來源</strong><span>{sources.length}</span></div>
@@ -2399,7 +2423,6 @@
                 {/each}
               {/if}
             </div>
-                  <div class="settings-footnote"><span><IconCheck size={13} stroke={2} aria-hidden="true" />保留既有曲庫與人工資料</span><span><IconCheck size={13} stroke={2} aria-hidden="true" />來源暫時離線時不會當成刪除</span></div>
                 </section>
               </div>
             {/if}

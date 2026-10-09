@@ -6,7 +6,7 @@ MoeMusicPlayer is a local-first music library for Windows and Android. User pref
 
 ## Features
 
-- Choose Windows music folders with the native folder picker and incrementally scan them in the background. Canceling the picker does not add a source.
+- On Windows, add a folder or an M3U/M3U8 playlist file from **Settings → Music Sources** and scan in the background. Canceling the picker does not add a source.
 - On Android, select shared-audio storage through MediaStore or choose a folder with the system document picker (SAF); playback uses Media3 and continues through the foreground media service when the app is backgrounded.
 - Keep previously indexed tracks when a source is unavailable or a scan is incomplete.
 - Browse and search the saved library with paginated results; the interface never loads the whole collection. The top bar shows the current page in Chinese, with a small track-count line such as `5,284 首曲目` under the Library, Playlist, and Queue titles. Those list pages use a single scrollbar inside the table. Source sync status appears only in **Settings → Music Sources**. The window title includes the build date, such as `MoeMusicPlayer 26.10.8`.
@@ -30,7 +30,7 @@ Android Media3 playback integration is implemented. The ARM64 APK is installed o
 1. Install Node.js 20.19+ (or 22.12+), Rust 1.90+, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 2. Run `npm install`.
 3. Run `npm run tauri -- dev`.
-4. Open **Settings → Music Sources**, choose **Select folder and sync**, and select an existing music folder. Canceling leaves the source list unchanged.
+4. Open **Settings → Music Sources**, then use **選擇資料夾** or **選擇播放清單** to add a source. Canceling leaves the source list unchanged.
 5. Open **Settings → Main interface** to choose a background and accent color. The defaults are pure black and water blue. Open **Settings → Track Columns** to reorder or hide metadata columns for both lists. Choose Now Playing layout A or B, or adjust cover background blur and **Cover background brightness** (`封面背景亮度`), in **Settings → Playback Page**. **Settings → Shortcuts** changes fullscreen, play/pause, 5-second seek, and previous/next, and can also bind gamepad buttons and stick directions. Defaults are F11, Space, the arrow keys plus the mouse wheel, and Page Up/Page Down plus the mouse side buttons. No gamepad button or stick direction is bound by default. Now Playing surfaces are fully transparent. Preferences and registered source paths are saved in the app data directory as `settings.json`; SQLite stores music data, playback-session checkpoints, and listening-time totals.
 
 On Windows, the running executable stores all settings and SQLite data in a `UserData` folder beside that executable. For the fixed release build, keep `release/UserData/` beside `release/moemusicplayer.exe`; moving only the executable starts with a separate empty library. Windows does not fall back to Roaming or LocalCache and does not automatically move data between locations. Android continues to use its platform-managed app data directory.

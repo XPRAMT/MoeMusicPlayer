@@ -2696,6 +2696,10 @@ input:focus-visible {
   flex-wrap: wrap;
 }
 
+.source-folder-picker > .source-action-row {
+  margin-top: 0;
+}
+
 .media-volume-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
