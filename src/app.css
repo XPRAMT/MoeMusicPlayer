@@ -3035,8 +3035,8 @@ input:focus-visible {
   justify-self: center;
 }
 
-/* Edge progress: entire 10px hit (±5px around the line) stays above the dock;
-   3px track pinned to the hit bottom = dock top edge (不侵入底欄). */
+/* Edge progress: 3px painted track stays on/above the dock top (不侵入底欄);
+   10px click hit is track-center ±5px and may extend into the dock. */
 .player-dock[data-timeline-style="edge"] {
   --dock-progress-hit: 10px;
   --dock-progress-track: 3px;
@@ -3065,8 +3065,8 @@ input:focus-visible {
   width: auto;
   max-width: none;
   height: auto;
-  /* Whole hit band above the dock; bottom edge is the dock top. */
-  margin-top: calc(-1 * var(--dock-progress-hit));
+  /* Hit top = track-center − 5px; track bottom lands on the dock top. */
+  margin-top: calc(-0.5 * var(--dock-progress-hit) - 0.5 * var(--dock-progress-track));
   padding: 0;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: var(--dock-progress-hit) auto;
@@ -3381,17 +3381,19 @@ input:focus-visible {
   min-width: 0;
 }
 
-/* 3px painted track on the bottom of the above-dock hit (= dock top edge). */
+/* 3px painted track centered in the hit band; hit placement keeps this line
+   on/above the dock top while the lower half of the hit may enter the dock. */
 .progress-hit::after {
   content: '';
   position: absolute;
+  top: 50%;
   right: 0;
-  bottom: 0;
   left: 0;
   z-index: 0;
   height: var(--dock-progress-track, 3px);
   border-radius: 99px;
   pointer-events: none;
+  transform: translateY(-50%);
   background: linear-gradient(
     90deg,
     rgba(var(--accent-rgb), 0.32) 0%,
@@ -3429,8 +3431,8 @@ input:focus-visible {
 .progress-slider::-webkit-slider-thumb {
   width: var(--progress-thumb);
   height: var(--progress-thumb);
-  /* Shift thumb down onto the bottom-pinned 3px track. */
-  margin-top: calc(var(--dock-progress-hit, 10px) / 2 - var(--dock-progress-track, 3px) / 2);
+  /* Same vertical center as the painted track. */
+  margin-top: 0;
   border: 1px solid var(--progress-glow);
   border-radius: 50%;
   background: var(--progress-glow);
