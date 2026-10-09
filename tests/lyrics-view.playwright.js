@@ -86,7 +86,7 @@
   assert.equal(emptyCue.currentRowCount, 0, 'an empty-content cue is not rendered or transferred to the next line');
   assert.equal(emptyCue.allTextOpaque, true, 'an empty-content cue does not dim every visible row');
 
-  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 36, auxiliaryFontSizePx: 24, lineGapPx: 64 }));
+  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 36, auxiliaryFontSizePx: 24, lineGapPx: 50 }));
   await page.evaluate(() => window.lyricsViewHarness.setPosition(90_000));
   await page.waitForTimeout(40);
   const maximum = await page.evaluate(() => window.lyricsViewHarness.snapshot());
@@ -382,22 +382,22 @@
   assert.equal(settingsControls.translationDefault, false);
   assert.equal(settingsControls.romanizationDefault, false);
   assert.deepEqual(settingsControls.values, ['70', '14', '10', '24']);
-  assert.deepEqual(settingsControls.bounds[3], ['0', '64']);
+  assert.deepEqual(settingsControls.bounds[3], ['0', '50']);
   assert.ok(settingsControls.lineGapLabel.includes('24px'));
   assert.equal(settingsControls.activeTab, 'true');
   await page.locator('input[aria-label="歌詞句間距"]').evaluate((input) => {
-    input.value = '64';
+    input.value = '50';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   });
-  assert.equal(await page.locator('input[aria-label="歌詞句間距"]').inputValue(), '64', 'settings control updates the preference draft');
+  assert.equal(await page.locator('input[aria-label="歌詞句間距"]').inputValue(), '50', 'settings control updates the preference draft');
   await page.waitForFunction(() => document.querySelector('#lyrics-panel [role="status"]')?.textContent?.includes('歌詞設定已保存'));
   await page.reload();
   await page.waitForFunction(() => document.querySelector('.nav-link') !== null);
   await page.locator('.nav-link').filter({ hasText: '設定' }).click();
   await page.getByRole('tab', { name: '歌詞' }).click();
-  await page.waitForFunction(() => document.querySelector('input[aria-label="歌詞句間距"]')?.value === '64');
-  assert.equal(await page.locator('input[aria-label="歌詞句間距"]').inputValue(), '64', 'saved line gap is loaded after app reload');
+  await page.waitForFunction(() => document.querySelector('input[aria-label="歌詞句間距"]')?.value === '50');
+  assert.equal(await page.locator('input[aria-label="歌詞句間距"]').inputValue(), '50', 'saved line gap is loaded after app reload');
 
   await page.goto(`${baseUrl}/tests/lyrics-view-harness.html`);
   await page.waitForFunction(() => window.lyricsViewHarness?.snapshot().phase === 'ready');

@@ -134,7 +134,7 @@
     </label>
     <label class="lyrics-preference-range">
       <span><strong>句間距</strong><output>{lyrics.lineGapPx}px</output></span>
-      <input type="range" min="0" max="64" step="1" value={lyrics.lineGapPx} aria-label="歌詞句間距" oninput={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) }, true)} />
+      <input type="range" min="0" max="50" step="1" value={lyrics.lineGapPx} aria-label="歌詞句間距" oninput={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) }, true)} />
     </label>
     <p class="settings-preference-status" class:error={lyricsState === 'error'} role="status">
       {lyricsError ?? (lyricsState === 'loading' ? '正在讀取歌詞設定…' : lyricsState === 'saving' ? '正在保存歌詞設定…' : lyricsState === 'preview' ? '瀏覽器預覽不會保存歌詞設定。' : '歌詞設定已保存。')}

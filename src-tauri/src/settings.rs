@@ -126,9 +126,9 @@ impl LyricsPreferences {
                 "auxiliaryFontSizePx must be between 9 and 24".into(),
             ));
         }
-        if self.line_gap_px > 64 {
+        if self.line_gap_px > 50 {
             return Err(SettingsError::InvalidData(
-                "lineGapPx must be between 0 and 64".into(),
+                "lineGapPx must be between 0 and 50".into(),
             ));
         }
         Ok(())
@@ -1110,7 +1110,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
     if version > SETTINGS_SCHEMA_VERSION {
         return Err(SettingsError::UnsupportedVersion(version));
     }
-    let settings = AppSettings {
+    let mut settings = AppSettings {
         schema_version: SETTINGS_SCHEMA_VERSION,
         theme: raw.theme.unwrap_or_default(),
         lyrics_preferences: raw.lyrics_preferences.unwrap_or_default(),
@@ -1128,6 +1128,10 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         window_geometry: raw.window_geometry,
         shortcuts: lenient_shortcuts(raw.shortcuts),
     };
+    // Former max was 64; clamp so older saved values still load.
+    if settings.lyrics_preferences.line_gap_px > 50 {
+        settings.lyrics_preferences.line_gap_px = 50;
+    }
     settings.validate()?;
     Ok((settings, version != SETTINGS_SCHEMA_VERSION))
 }
@@ -1787,9 +1791,9 @@ mod tests {
             ..LyricsPreferences::default()
         };
         line_gap.validate().expect("accept zero line gap");
-        line_gap.line_gap_px = 64;
+        line_gap.line_gap_px = 50;
         line_gap.validate().expect("accept maximum line gap");
-        line_gap.line_gap_px = 65;
+        line_gap.line_gap_px = 51;
         assert!(line_gap.validate().is_err());
 
         minimum.inactive_opacity_percent = 9;
@@ -1873,13 +1877,26 @@ mod tests {
         let original = fs::read(&path).expect("read original settings");
 
         let result = store.update(|settings| {
-            settings.lyrics_preferences.line_gap_px = 65;
+            settings.lyrics_preferences.line_gap_px = 51;
             Ok(())
         });
 
         assert!(result.is_err());
         assert_eq!(store.snapshot().unwrap().lyrics_preferences.line_gap_px, 24);
         assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn legacy_line_gap_above_fifty_clamps_on_load() {
+        let directory = test_directory("legacy-lyrics-line-gap-clamp");
+        let path = directory.join("settings.json");
+        let mut value = serde_json::to_value(AppSettings::default()).expect("serialize defaults");
+        value["lyricsPreferences"]["lineGapPx"] = serde_json::json!(64);
+        fs::write(&path, serde_json::to_vec_pretty(&value).unwrap())
+            .expect("write legacy line gap");
+
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("open clamped");
+        assert_eq!(store.snapshot().unwrap().lyrics_preferences.line_gap_px, 50);
     }
 
     #[test]

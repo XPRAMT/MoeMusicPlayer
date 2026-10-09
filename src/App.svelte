@@ -154,6 +154,7 @@
   let quickSettingsTrigger = $state<HTMLButtonElement | undefined>(undefined);
   let quickSettingsCloseButton = $state<HTMLButtonElement | undefined>(undefined);
   let quickSettingsDialog = $state<HTMLElement | undefined>(undefined);
+  let quickSettingsScroll = $state<HTMLElement | undefined>(undefined);
   let lyricsTopbarStatus = $state<{
     source: string;
     sync: string;
@@ -1777,10 +1778,16 @@
     librarySearchInput?.focus();
   }
 
+  function selectSettingsSection(section: SettingsSection): void {
+    settingsSection = section;
+    if (quickSettingsScroll) quickSettingsScroll.scrollTop = 0;
+  }
+
   async function openQuickSettings(): Promise<void> {
     if (isQuickSettingsOpen) return;
     isQuickSettingsOpen = true;
     await tick();
+    if (quickSettingsScroll) quickSettingsScroll.scrollTop = 0;
     quickSettingsCloseButton?.focus();
   }
 
@@ -2020,7 +2027,7 @@
 
 <svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleDockPointerDown} onkeydown={handleQuickSettingsKeydown} />
 
-{#snippet settingsPanels(scope: string)}
+{#snippet settingsTabs(scope: string)}
             <div class="settings-tabs" role="tablist" aria-label="設定分類">
               <button
                 id="{scope}appearance-tab"
@@ -2029,7 +2036,7 @@
                 role="tab"
                 aria-selected={settingsSection === 'appearance'}
                 aria-controls="{scope}appearance-panel"
-                onclick={() => (settingsSection = 'appearance')}
+                onclick={() => selectSettingsSection('appearance')}
               >主介面</button>
               <button
                 id="{scope}track-columns-tab"
@@ -2038,7 +2045,7 @@
                 role="tab"
                 aria-selected={settingsSection === 'track-columns'}
                 aria-controls="{scope}track-columns-panel"
-                onclick={() => (settingsSection = 'track-columns')}
+                onclick={() => selectSettingsSection('track-columns')}
               >曲目欄位</button>
               <button
                 id="{scope}now-playing-tab"
@@ -2047,7 +2054,7 @@
                 role="tab"
                 aria-selected={settingsSection === 'now-playing'}
                 aria-controls="{scope}now-playing-layout-panel"
-                onclick={() => (settingsSection = 'now-playing')}
+                onclick={() => selectSettingsSection('now-playing')}
               >播放頁</button>
               <button
                 id="{scope}lyrics-tab"
@@ -2056,7 +2063,7 @@
                 role="tab"
                 aria-selected={settingsSection === 'lyrics'}
                 aria-controls="{scope}lyrics-panel"
-                onclick={() => (settingsSection = 'lyrics')}
+                onclick={() => selectSettingsSection('lyrics')}
               >歌詞</button>
               {#if capabilities?.platform === 'windows'}
                 <button
@@ -2066,7 +2073,7 @@
                   role="tab"
                   aria-selected={settingsSection === 'playback'}
                   aria-controls="{scope}playback-panel"
-                  onclick={() => (settingsSection = 'playback')}
+                  onclick={() => selectSettingsSection('playback')}
                 >輸出</button>
               {/if}
               <button
@@ -2076,7 +2083,7 @@
                 role="tab"
                 aria-selected={settingsSection === 'shortcuts'}
                 aria-controls="{scope}shortcuts-panel"
-                onclick={() => (settingsSection = 'shortcuts')}
+                onclick={() => selectSettingsSection('shortcuts')}
               >快捷鍵</button>
               <button
                 id="{scope}sources-tab"
@@ -2085,9 +2092,15 @@
                 role="tab"
                 aria-selected={settingsSection === 'sources'}
                 aria-controls="{scope}sources-panel"
-                onclick={() => (settingsSection = 'sources')}
+                onclick={() => selectSettingsSection('sources')}
               >音樂來源</button>
             </div>
+{/snippet}
+
+{#snippet settingsPanels(scope: string, options?: { includeTabs?: boolean })}
+            {#if options?.includeTabs !== false}
+              {@render settingsTabs(scope)}
+            {/if}
 
             {#if settingsRecoveryWarning}
               <div class="source-error-message" role="status">
@@ -2946,14 +2959,26 @@
             <h2 id="now-playing-quick-settings-title">快速設定</h2>
             <button bind:this={quickSettingsCloseButton} class="soft-button icon-button" type="button" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}><IconX size={18} stroke={1.8} aria-hidden="true" /></button>
           </header>
-          <div class="quick-settings-drawer-scroll">
-            {@render settingsPanels('quick-')}
+          <div class="quick-settings-drawer-nav">
+            {@render settingsTabs('quick-')}
+          </div>
+          <div class="quick-settings-drawer-scroll" bind:this={quickSettingsScroll}>
+            {@render settingsPanels('quick-', { includeTabs: false })}
           </div>
         </dialog>
       {/if}
     </section>
   {/if}
 
+  {#if isQuickSettingsOpen}
+    <button
+      type="button"
+      class="now-playing-quick-settings-dock-dismiss"
+      tabindex="-1"
+      aria-label="關閉快速設定"
+      onclick={() => void closeQuickSettings()}
+    ></button>
+  {/if}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <footer class="player-dock" data-timeline-style={nowPlayingAppearancePreferences.timelineStyle} aria-label="播放控制" inert={isQuickSettingsOpen} onclick={toggleNowPlayingFromDock}>

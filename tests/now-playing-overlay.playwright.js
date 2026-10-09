@@ -220,14 +220,14 @@ async page => {
   await page.getByRole('button', { name: '開啟快速設定' }).click();
   const quickSettings = page.getByRole('dialog', { name: '快速設定' });
   await quickSettings.waitFor({ state: 'visible' });
-  assert.equal(await page.locator('.now-playing-topbar-tools .lyrics-topbar-status span').count(), 2, 'provider and sync labels are shown in the page toolbar');
+  assert.equal(await page.locator('.now-playing-topbar-tools .lyrics-topbar-status button').count(), 2, 'manual and sync lyric controls are shown in the page toolbar');
   assert.equal(await page.locator('.now-playing-overlay .lyrics-panel-heading').count(), 0, 'LyricsView has no heading');
   await page.keyboard.press('Shift+Tab');
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '封面背景透明度', 'Shift+Tab stays inside the settings dialog');
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '快速設定面板模糊程度', 'Shift+Tab stays inside the settings dialog');
   await page.keyboard.press('Tab');
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '關閉快速設定', 'Tab wraps focus to the close button');
   await quickSettings.getByRole('tab', { name: '播放頁' }).click();
-  for (const label of ['封面背景模糊程度', '封面背景透明度']) {
+  for (const label of ['封面背景模糊程度', '封面背景透明度', '快速設定面板透明度', '快速設定面板模糊程度']) {
     assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
   }
   await quickSettings.getByRole('tab', { name: '歌詞' }).click();
@@ -239,7 +239,8 @@ async page => {
   assert.equal(await quickSettings.locator('input[aria-label="快速設定面板透明度"]').inputValue(), '70', 'drawer shares the playback opacity control at 70%');
   assert.equal(await quickSettings.locator('input[aria-label="快速設定面板模糊程度"]').inputValue(), '12', 'drawer shares the playback blur control at 12px');
   assert.equal(await page.locator('.now-playing-overlay-body').evaluate((element) => element.inert), true, 'quick settings modal makes the covered playback view inert');
-  assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), true, 'modal drawer blocks dock controls while open');
+  assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), true, 'modal drawer keeps dock controls inert while open');
+  assert.equal(await page.locator('.now-playing-quick-settings-dock-dismiss').count(), 1, 'dock dismiss layer covers the playback bar while quick settings is open');
   assert.equal(await quickSettings.locator('input[aria-label="元件底色透明度"]').count(), 0, 'surface transparency is not configurable');
   const drawerGeometry = await page.evaluate(() => {
     const rect = (element) => {
@@ -420,6 +421,7 @@ async page => {
     input.dispatchEvent(new Event('change', { bubbles: true }));
   });
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('__appearancePreferences') || '{}').backgroundBlurPx === 20);
+  await quickSettings.getByRole('tab', { name: '歌詞', exact: true }).click();
   const drawerGap = quickSettings.locator('input[aria-label="歌詞句間距"]');
   await drawerGap.evaluate((input) => {
     input.value = '40';
@@ -432,6 +434,7 @@ async page => {
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('__lyricsPreferences') || '{}').showTranslation === true);
   await drawerTranslation.uncheck();
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('__lyricsPreferences') || '{}').showTranslation === false);
+  await quickSettings.getByRole('tab', { name: '播放頁', exact: true }).click();
   await quickSettings.getByRole('button', { name: '排列 A：封面在前，歌詞在後' }).click();
   await page.waitForFunction(() => localStorage.getItem('__nowPlayingLayout') === 'a');
   await page.setViewportSize({ width: 360, height: 800 });
@@ -461,6 +464,16 @@ async page => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.waitForTimeout(50);
   await page.getByRole('button', { name: '開啟快速設定' }).click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="now-playing-quick-settings"]'));
+  const playingBeforeDockDismiss = await page.evaluate(() => window.__volumeHarness.snapshot().isPlaying);
+  await page.locator('.now-playing-quick-settings-dock-dismiss').click({ position: { x: 24, y: 36 } });
+  await page.waitForFunction(() => !document.querySelector('[data-testid="now-playing-quick-settings"]'));
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '開啟快速設定', 'dock click closes quick settings and restores trigger focus');
+  assert.equal(await page.evaluate(() => window.__volumeHarness.snapshot().isPlaying), playingBeforeDockDismiss, 'dock dismiss of quick settings does not change playback');
+  assert.equal(await page.locator('[data-testid="now-playing-overlay"]').evaluate((element) => element.classList.contains('is-open')), true, 'dock dismiss of quick settings keeps Now Playing open');
+  assert.equal(await page.locator('.now-playing-quick-settings-dock-dismiss').count(), 0, 'dock dismiss layer is removed after closing quick settings');
+  await page.getByRole('button', { name: '開啟快速設定' }).click();
+  await page.getByRole('dialog', { name: '快速設定' }).getByRole('tab', { name: '歌詞', exact: true }).click();
   await page.locator('.now-playing-quick-settings-drawer input[aria-label="歌詞句間距"]').evaluate((input) => {
     input.value = '24';
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -507,10 +520,15 @@ async page => {
       const bandMid = (state.topbar.bottom + state.dock.top) / 2;
       assert.ok(Math.abs(coverMid - bandMid) <= 48, `cover should sit near the vertical center between topbar and dock (coverMid=${coverMid}, bandMid=${bandMid})`);
     }
-    assert.ok(state.progress.bottom <= state.controls.top && state.progress.bottom <= state.dockTrack.top && state.progress.bottom <= state.volume.top, 'progress and time row sits above the entire bottom control row');
-    assert.ok(Math.abs(state.progress.left - state.dock.left - state.dockPadding.left) <= 2
-      && Math.abs(state.dock.right - state.dockPadding.right - state.progress.right) <= 2,
-    'progress and time row spans the full usable dock width');
+    assert.ok(state.progress.top <= state.controls.top + 1, 'edge progress track starts at or above the control row');
+    assert.ok(state.progress.bottom <= state.dock.bottom + 1, 'progress and time labels stay inside the dock');
+    assert.ok(state.progressSlider && state.progressSlider.height >= 8, 'progress slider remains a usable hit target above the control glyphs');
+    assert.ok(Math.abs(state.progress.left - state.dock.left) <= 2
+      && Math.abs(state.dock.right - state.progress.right) <= 2,
+    'edge progress track spans the full dock width');
+    assert.ok(Math.abs(state.progressTimes[0].left - state.progress.left) <= 2
+      && Math.abs(state.progress.right - state.progressTimes[1].right) <= 2,
+    'progress time labels sit on the left and right edges of the progress row');
     assert.ok(state.lyricsViewport.height >= 64 && ['auto', 'scroll'].includes(state.lyricsOverflow), 'lyrics must keep an independently scrollable viewport');
     assert.equal(state.pageOverflow, 'hidden', 'the Now Playing page itself must not scroll');
     assert.ok(state.return.left >= 0 && state.return.right <= 1920 && state.topbar.bottom <= state.dock.top, 'return control must fit above the dock');
@@ -547,13 +565,10 @@ async page => {
     && narrowOverlay.lyricsToggles.right <= narrowOverlay.quickSettingsTrigger.left
     && narrowOverlay.quickSettingsTrigger.right <= 360,
   'narrow topbar keeps return, lyric toggles and quick settings visible without overlap');
-  assert.ok(Math.abs(narrowOverlay.progress.left - narrowOverlay.dock.left - narrowOverlay.dockPadding.left) <= 2
-    && Math.abs(narrowOverlay.dock.right - narrowOverlay.dockPadding.right - narrowOverlay.progress.right) <= 2,
-  'narrow progress row spans all three dock columns through volume');
-  assert.ok(narrowOverlay.progress.bottom <= narrowOverlay.dockTrack.top
-    && narrowOverlay.progress.bottom <= narrowOverlay.controls.top
-    && narrowOverlay.progress.bottom <= narrowOverlay.volume.top,
-  'narrow progress row remains above track, transport and volume controls');
+  assert.ok(narrowOverlay.progress.width >= narrowOverlay.dock.width - 2, 'narrow edge progress track spans at least the full dock width');
+  assert.ok(narrowOverlay.progress.top <= narrowOverlay.controls.top + 1
+    && narrowOverlay.progress.bottom <= narrowOverlay.dock.bottom + 1,
+  'narrow progress row stays within the dock and starts at or above the control row');
   await page.screenshot({ path: 'C:/APP/@Audio/MoeMusicPlayer/target/now-playing-layout-narrow-360x800.png' });
   await verifyAndRestore('topbar');
   await page.setViewportSize({ width: 1280, height: 800 });

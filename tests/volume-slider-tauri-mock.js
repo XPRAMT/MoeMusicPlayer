@@ -198,7 +198,17 @@
         case 'library_get_page': {
           volumeHarness.libraryRequests.push(clone(args));
           let matches = libraryTracks;
-          if (args.fieldFilter) matches = matches.filter((item) => item[args.fieldFilter.field] === args.fieldFilter.value);
+          if (args.fieldFilter) {
+            const { field, value } = args.fieldFilter;
+            matches = matches.filter((item) => {
+              const raw = item[field];
+              if (raw === value) return true;
+              if (field === 'artist' && typeof raw === 'string') {
+                return raw.split(/[|\\/;,\s]+/).filter(Boolean).includes(value);
+              }
+              return false;
+            });
+          }
           if (args.query) matches = matches.filter((item) => [item.title, item.artist, item.album].some((value) => value?.toLocaleLowerCase().includes(args.query.toLocaleLowerCase())));
           return {
             items: matches.slice(args.offset ?? 0, (args.offset ?? 0) + (args.limit ?? 40)),
@@ -231,10 +241,10 @@
               offsetMs: 0,
               synced: true,
               lines: [
-                { startMs: 0, text: '?典??賢蝒窒', translation: 'Morning light rests on the window', romanization: 'chen guang luo zai chuang yan' },
-                { startMs: 8_000, text: '敺桅◢頛??梯?甇??冽憤?瑞???瘝輯????Ｘ韏啣??', translation: 'A long translated lyric line for the drawer layout check', romanization: 'wei feng qing qing chang zhe ge' },
-                { startMs: 16_000, text: '瘝輯????Ｘ??', translation: null, romanization: 'yan zhe xuan lv man man qian xing' },
-                { startMs: 24_000, text: '??憭拐漱蝯阡???, translation: null, romanization: null },
+                { startMs: 0, text: '晨光落在窗沿', translation: 'Morning light rests on the window', romanization: 'chen guang luo zai chuang yan' },
+                { startMs: 8_000, text: '微風輕輕唱著歌，緩慢地沿著旋律慢慢走遠方', translation: 'A long translated lyric line for the drawer layout check', romanization: 'wei feng qing qing chang zhe ge' },
+                { startMs: 16_000, text: '沿著旋律慢慢前行', translation: null, romanization: 'yan zhe xuan lv man man qian xing' },
+                { startMs: 24_000, text: '把明天交給時間', translation: null, romanization: null },
               ],
             },
             candidates: [],

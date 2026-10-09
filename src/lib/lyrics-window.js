@@ -110,7 +110,7 @@ function fenwickPrefix(tree, endExclusive) {
 /** @param {unknown} value */
 function hasVisibleText(value) { return typeof value === 'string' && value.trim().length > 0; }
 /** @param {number} value */
-function normalizeGap(value) { return Number.isFinite(value) ? Math.max(0, Math.min(64, Math.round(value))) : 24; }
+function normalizeGap(value) { return Number.isFinite(value) ? Math.max(0, Math.min(50, Math.round(value))) : 24; }
 
 /** @param {TimedLyric[]} timeline @param {number} positionMs @param {number} [offsetMs] */
 export function findActiveLyricIndex(timeline, positionMs, offsetMs = 0) {

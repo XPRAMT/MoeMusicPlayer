@@ -120,7 +120,7 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
     inactiveOpacityPercent: 10,
     primaryFontSizePx: 36,
     auxiliaryFontSizePx: 9,
-    lineGapPx: 64,
+    lineGapPx: 50,
     textEffect: 'shadow',
     simplifiedToTraditional: false,
   });
@@ -185,13 +185,13 @@ test('layout binary search skips empty rows, honors gap extremes and keeps all-e
     { text: '乙', translation: null, romanization: null },
   ];
   const noGap = buildLyricsLayout(lines, DEFAULT_LYRICS_PREFERENCES, 0);
-  const maxGap = buildLyricsLayout(lines, DEFAULT_LYRICS_PREFERENCES, 64);
-  assert.ok(Math.abs(maxGap.totalHeight - noGap.totalHeight - 64) < 0.001);
+  const maxGap = buildLyricsLayout(lines, DEFAULT_LYRICS_PREFERENCES, 50);
+  assert.ok(Math.abs(maxGap.totalHeight - noGap.totalHeight - 50) < 0.001);
   assert.equal(findLyricsRowAtOffset(maxGap, maxGap.offsets[1]), 2);
-  assert.equal(maxGap.gaps[0], 64);
+  assert.equal(maxGap.gaps[0], 50);
   assert.equal(maxGap.gaps[2], 0);
 
-  const empty = buildLyricsLayout(Array.from({ length: 100_000 }, () => ({ text: ' ', translation: null, romanization: null })), DEFAULT_LYRICS_PREFERENCES, 64);
+  const empty = buildLyricsLayout(Array.from({ length: 100_000 }, () => ({ text: ' ', translation: null, romanization: null })), DEFAULT_LYRICS_PREFERENCES, 50);
   assert.equal(empty.totalHeight, 0);
   assert.equal(findLyricsRowAtOffset(empty, 0), -1);
   assert.deepEqual(getPlainLyricWindow(empty, 0, 480).rows, []);
