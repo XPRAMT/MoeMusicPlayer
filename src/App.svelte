@@ -39,6 +39,7 @@
     type LibrarySyncFinishedEvent,
     type LibrarySyncProgressEvent,
     type LibrarySource,
+    type ExcludedFolder,
     type SourceSyncResult,
     type MediaStoreVolumeOption,
     type FeatureCapability,
@@ -243,6 +244,7 @@
   let coverStageElement = $state<HTMLDivElement | null>(null);
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   let sources = $state<LibrarySource[]>([]);
+  let excludedFolders = $state<ExcludedFolder[]>([]);
   let sourceError = $state<string | null>(null);
   let sourceSyncSummary = $state<string | null>(null);
   let sourceSyncResults = $state<SourceSyncResult[]>([]);
@@ -1481,6 +1483,11 @@
     sourceError = null;
     try {
       sources = await invokeCommand('library_list_sources', {});
+      if (capabilities?.platform === 'windows') {
+        excludedFolders = await invokeCommand('library_list_excluded_folders', {});
+      } else {
+        excludedFolders = [];
+      }
     } catch (error) {
       sourceError = getErrorText(error);
     } finally {
@@ -1607,6 +1614,41 @@
       sourceSyncSummary = source.kind === 'playlist_file'
         ? '已移除播放清單檔案同步來源；原有播放清單內容仍會保留。'
         : '已移除音樂來源；曲庫資料仍會保留，之後不再同步此位置。';
+    } catch (error) {
+      sourceError = getErrorText(error);
+      await loadSources();
+    } finally {
+      isUpdatingSource = false;
+    }
+  }
+
+  async function pickExcludedFolder(): Promise<void> {
+    if (!sourceSyncReady || isUpdatingSource || capabilities?.platform !== 'windows') return;
+    isUpdatingSource = true;
+    sourceError = null;
+    try {
+      const excluded = await invokeCommand('library_pick_excluded_folder', {});
+      if (excluded) {
+        await loadSources();
+        await syncLibrary();
+      }
+    } catch (error) {
+      sourceError = getErrorText(error);
+    } finally {
+      isUpdatingSource = false;
+    }
+  }
+
+  async function removeExcludedFolder(excluded: ExcludedFolder): Promise<void> {
+    if (isUpdatingSource) return;
+    isUpdatingSource = true;
+    sourceError = null;
+    try {
+      excludedFolders = await invokeCommand('library_remove_excluded_folder', {
+        excludedId: excluded.id,
+      });
+      sourceSyncSummary = '已移除排除資料夾；下次同步會重新掃入此位置的曲目。';
+      await syncLibrary();
     } catch (error) {
       sourceError = getErrorText(error);
       await loadSources();
@@ -2485,6 +2527,36 @@
                 {/each}
               {/if}
             </div>
+
+            {#if capabilities?.platform === 'windows'}
+              <div class="source-action-row source-action-buttons source-folder-picker excluded-folder-picker">
+                <button
+                  class="soft-button"
+                  type="button"
+                  onclick={() => void pickExcludedFolder()}
+                  disabled={!sourceSyncReady || isUpdatingSource}
+                >
+                  {isUpdatingSource ? '處理中' : '選擇排除資料夾'}
+                </button>
+              </div>
+              <div class="configured-sources excluded-folders" aria-live="polite">
+                <div class="configured-sources-heading"><strong>已排除的來源</strong><span>{excludedFolders.length}</span></div>
+                {#if isLoadingSources && excludedFolders.length === 0}
+                  <p class="source-muted-note">正在讀取排除清單…</p>
+                {:else if excludedFolders.length === 0}
+                  <p class="source-muted-note">尚未排除資料夾。排除後，同步會略過該資料夾內的曲目。</p>
+                {:else}
+                  {#each excludedFolders as excluded (excluded.id)}
+                    <div class="configured-source">
+                      <div class="configured-source-copy"><strong>{excluded.displayName}</strong><small class="configured-source-location" title={excluded.location}>{excluded.location}</small></div>
+                      <div class="configured-source-actions">
+                        <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeExcludedFolder(excluded)}>移除</button>
+                      </div>
+                    </div>
+                  {/each}
+                {/if}
+              </div>
+            {/if}
                 </section>
               </div>
             {/if}

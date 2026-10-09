@@ -113,6 +113,12 @@ export interface LibrarySource {
   lastError: string | null;
 }
 
+export interface ExcludedFolder {
+  id: string;
+  displayName: string;
+  location: string;
+}
+
 export interface MediaStoreVolumeOption {
   volumeName: string;
   displayName: string;
@@ -507,6 +513,18 @@ interface IpcContract {
   library_pick_windows_folder: {
     args: Record<string, never>;
     result: LibrarySource | null;
+  };
+  library_list_excluded_folders: {
+    args: Record<string, never>;
+    result: ExcludedFolder[];
+  };
+  library_pick_excluded_folder: {
+    args: Record<string, never>;
+    result: ExcludedFolder | null;
+  };
+  library_remove_excluded_folder: {
+    args: { excludedId: string };
+    result: ExcludedFolder[];
   };
   library_set_source_enabled: {
     args: { sourceId: string; enabled: boolean };

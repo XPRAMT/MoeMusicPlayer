@@ -25,12 +25,38 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 /// Windows media index provider. Until SystemIndex can prove full root coverage and freshness,
 /// this provider uses a complete filesystem walk. A zero-result Windows Search query is never
 /// treated as a complete empty library.
-#[derive(Default)]
-pub struct WindowsMediaIndex;
+#[derive(Clone, Debug, Default)]
+pub struct WindowsMediaIndex {
+    /// Canonical folder paths whose trees are omitted from walks and playlist media scans.
+    excluded_folders: Vec<PathBuf>,
+}
 
 impl WindowsMediaIndex {
     pub fn new() -> Self {
-        Self
+        Self {
+            excluded_folders: Vec::new(),
+        }
+    }
+
+    /// Prefer already-canonical paths. Non-canonical entries are resolved when possible.
+    pub fn with_excluded_folders(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        let mut excluded_folders: Vec<PathBuf> = Vec::new();
+        for path in paths {
+            let canonical = fs::canonicalize(&path).unwrap_or(path);
+            if !excluded_folders
+                .iter()
+                .any(|existing| path_is_same_or_under(&canonical, existing.as_path()))
+            {
+                excluded_folders.push(canonical);
+            }
+        }
+        Self { excluded_folders }
+    }
+
+    fn is_excluded(&self, path: &Path) -> bool {
+        self.excluded_folders
+            .iter()
+            .any(|excluded| path_is_same_or_under(path, excluded))
     }
 
     /// Inspect the unique audio files referenced by a parsed M3U/M3U8 source. The playlist
@@ -70,6 +96,9 @@ impl WindowsMediaIndex {
                     continue;
                 }
             };
+            if self.is_excluded(&canonical_path) {
+                continue;
+            }
             let metadata = match fs::metadata(&canonical_path) {
                 Ok(metadata) if metadata.is_file() => metadata,
                 Ok(_) => continue,
@@ -205,6 +234,11 @@ impl MediaIndex for WindowsMediaIndex {
             }
         };
 
+        if self.is_excluded(&canonical_root) {
+            scan.state = SourceScanState::Complete;
+            return scan;
+        }
+
         if root.kind == MediaSourceKind::WindowsSystemIndex {
             scan.errors.push(MediaSourceError {
                 source_item_id: None,
@@ -300,10 +334,16 @@ impl MediaIndex for WindowsMediaIndex {
                     continue;
                 }
                 if entry_type.is_dir() {
+                    if self.is_excluded(&entry_path) {
+                        continue;
+                    }
                     directories.push(entry_path);
                     continue;
                 }
                 if !entry_type.is_file() || !is_supported_audio_file(&entry_path) {
+                    continue;
+                }
+                if self.is_excluded(&entry_path) {
                     continue;
                 }
 
@@ -464,6 +504,10 @@ fn reliable_source_bit_depth(file_type: FileType, bit_depth: Option<u8>) -> Opti
         return None;
     }
     bit_depth.filter(|depth| (8..=32).contains(depth))
+}
+
+fn path_is_same_or_under(path: &Path, ancestor: &Path) -> bool {
+    path == ancestor || path.starts_with(ancestor)
 }
 
 fn empty_scan(source_id: player_core::SourceId) -> SourceScan {
@@ -1119,6 +1163,34 @@ mod tests {
         assert_eq!(reliable_source_bit_depth(FileType::WavPack, Some(24)), None);
         assert_eq!(reliable_source_bit_depth(FileType::Mp4, Some(24)), None);
         assert_eq!(reliable_source_bit_depth(FileType::Flac, Some(4)), None);
+    }
+
+    #[test]
+    fn filesystem_scan_skips_excluded_subfolders() {
+        let base = temp_path("scan-exclude");
+        let keep = base.join("keep");
+        let skip = base.join("skip");
+        fs::create_dir_all(&keep).expect("keep");
+        fs::create_dir_all(&skip).expect("skip");
+        write_tagged_mp3(&keep.join("keep.mp3"), "Keep");
+        write_tagged_mp3(&skip.join("skip.mp3"), "Skip");
+
+        let root = LibraryRoot {
+            id: player_core::SourceId::new(),
+            kind: MediaSourceKind::WindowsFilesystem,
+            display_name: "exclude test".to_owned(),
+            locator: MediaLocator::FileSystem(base.clone()),
+            enabled: true,
+        };
+        let scan = WindowsMediaIndex::with_excluded_folders([skip.clone()]).scan(&root);
+        fs::remove_dir_all(&base).expect("cleanup");
+
+        assert!(matches!(scan.state, SourceScanState::Complete));
+        assert_eq!(scan.tracks.len(), 1);
+        assert!(matches!(
+            &scan.tracks[0].locator,
+            MediaLocator::FileSystem(path) if path.file_name().is_some_and(|name| name == "keep.mp3")
+        ));
     }
 
     #[test]

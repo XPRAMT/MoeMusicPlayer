@@ -52,6 +52,7 @@ pub fn source_ids_for_path(
 pub fn sync_playlist_file_source(
     database: &mut Database,
     source: &SourceEntry,
+    excluded_folders: &[PathBuf],
     synced_at_utc_ms: i64,
 ) -> Result<Option<SyncReport>, String> {
     let SourceEntryKind::PlaylistFile {
@@ -128,10 +129,11 @@ pub fn sync_playlist_file_source(
             MediaLocator::ContentUri(_) => None,
         })
         .collect::<Vec<_>>();
-    let scan = WindowsMediaIndex::new().scan_playlist_paths(source.id, &media_paths);
+    let mut windows = WindowsMediaIndex::with_excluded_folders(excluded_folders.iter().cloned());
+    let scan = windows.scan_playlist_paths(source.id, &media_paths);
     let mut index = PlaylistMediaIndex {
         scan: Some(scan),
-        windows: WindowsMediaIndex::new(),
+        windows,
     };
     let report =
         SyncEngine::sync_with_progress(&root, &mut index, database, synced_at_utc_ms, |_| {})
@@ -229,6 +231,7 @@ impl MediaIndex for PlaylistMediaIndex {
 pub fn sync_playlist_file_source(
     _database: &mut Database,
     _source: &SourceEntry,
+    _excluded_folders: &[std::path::PathBuf],
     _synced_at_utc_ms: i64,
 ) -> Result<Option<SyncReport>, String> {
     Ok(None)
@@ -345,7 +348,7 @@ mod tests {
         let source = playlist_source(&playlist_path, source_id, playlist_id);
         let mut database = Database::open_in_memory().expect("database");
 
-        let first = sync_playlist_file_source(&mut database, &source, 1_800_000_000_000)
+        let first = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_000)
             .expect("initial sync")
             .expect("playlist is readable");
         assert_eq!(
@@ -427,7 +430,7 @@ mod tests {
             .expect("seed stale MP4 playlist link");
 
         write_tagged_mp3(&song, "第二版・中繼資料已更新");
-        let second = sync_playlist_file_source(&mut database, &source, 1_800_000_000_001)
+        let second = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_001)
             .expect("unchanged playlist media check")
             .expect("playlist remains readable");
         assert_eq!(second.metadata_reads, 1, "changed audio tags are refreshed");
@@ -470,7 +473,7 @@ mod tests {
 
         fs::remove_file(&playlist_path).expect("take playlist source offline");
         assert!(
-            sync_playlist_file_source(&mut database, &source, 1_800_000_000_002)
+            sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_002)
                 .expect("offline source is recoverable")
                 .is_none()
         );
@@ -481,7 +484,7 @@ mod tests {
 
         fs::write(&playlist_path, "#EXTM3U\n../夜の音樂 東京/暫時缺席.mp3\n")
             .expect("write changed playlist without previous song");
-        let changed = sync_playlist_file_source(&mut database, &source, 1_800_000_000_003)
+        let changed = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_003)
             .expect("reconcile changed playlist")
             .expect("changed playlist is readable");
         assert_eq!(changed.observed, 0);
@@ -503,7 +506,7 @@ mod tests {
 
         let recovered = music.join("暫時缺席.mp3");
         write_tagged_mp3(&recovered, "恢復的曲目");
-        let recovery = sync_playlist_file_source(&mut database, &source, 1_800_000_000_004)
+        let recovery = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_004)
             .expect("rescan restored entry")
             .expect("playlist readable");
         assert_eq!(recovery.observed, 1);
@@ -553,7 +556,7 @@ mod tests {
             .expect("initial mtime");
         let source = playlist_source(&playlist_path, SourceId::new(), PlaylistId::new());
         let mut database = Database::open_in_memory().expect("database");
-        sync_playlist_file_source(&mut database, &source, 1_800_000_000_000)
+        sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_000)
             .expect("initial source sync");
 
         let changed = b"#EXTM3U\nsong-b.mp3\n";
@@ -566,7 +569,7 @@ mod tests {
             .set_times(std::fs::FileTimes::new().set_modified(original_modified))
             .expect("restore original mtime");
 
-        let report = sync_playlist_file_source(&mut database, &source, 1_800_000_000_001)
+        let report = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_001)
             .expect("digest check")
             .expect("valid changed M3U8");
         assert_eq!(report.observed, 0);

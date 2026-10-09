@@ -521,6 +521,15 @@ pub struct SourceEntry {
     pub kind: SourceEntryKind,
 }
 
+/// A filesystem folder skipped during Windows library walks (and playlist media under it).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcludedFolderEntry {
+    pub id: SourceId,
+    pub display_name: String,
+    pub path: StoredPath,
+}
+
 impl SourceEntry {
     pub fn from_library_root(root: &LibraryRoot) -> Result<Self, SettingsError> {
         Ok(Self {
@@ -807,6 +816,9 @@ pub struct AppSettings {
     /// Sync must remain paused until the user rebuilds and confirms the registry.
     pub source_registry_authoritative: bool,
     pub sources: Vec<SourceEntry>,
+    /// Windows folders omitted from source walks. Missing values mean none excluded.
+    #[serde(default)]
+    pub excluded_folders: Vec<ExcludedFolderEntry>,
     /// Last main-window outer position / inner size / maximized flag (desktop).
     #[serde(default)]
     pub window_geometry: Option<WindowGeometry>,
@@ -830,6 +842,7 @@ impl Default for AppSettings {
             dsee_hx: false,
             source_registry_authoritative: true,
             sources: Vec::new(),
+            excluded_folders: Vec::new(),
             window_geometry: None,
             shortcuts: ShortcutSettings::default(),
         }
@@ -903,6 +916,24 @@ impl AppSettings {
             if source.path().display_lossy().is_empty() {
                 return Err(SettingsError::InvalidData(
                     "source path cannot be empty".into(),
+                ));
+            }
+        }
+        for excluded in &self.excluded_folders {
+            if !ids.insert(excluded.id) {
+                return Err(SettingsError::InvalidData(format!(
+                    "duplicate excluded folder id {}",
+                    excluded.id
+                )));
+            }
+            if excluded.display_name.trim().is_empty() {
+                return Err(SettingsError::InvalidData(
+                    "excluded folder display name cannot be empty".into(),
+                ));
+            }
+            if excluded.path.display_lossy().is_empty() {
+                return Err(SettingsError::InvalidData(
+                    "excluded folder path cannot be empty".into(),
                 ));
             }
         }
@@ -1146,6 +1177,44 @@ impl SettingsStore {
         Ok((settings, removed.expect("source removed in update")))
     }
 
+    pub fn upsert_excluded_folder(
+        &self,
+        excluded: ExcludedFolderEntry,
+    ) -> Result<AppSettings, SettingsError> {
+        self.update(|settings| {
+            if let Some(existing) = settings
+                .excluded_folders
+                .iter_mut()
+                .find(|item| item.id == excluded.id)
+            {
+                *existing = excluded;
+            } else {
+                settings.excluded_folders.push(excluded);
+            }
+            Ok(())
+        })
+    }
+
+    pub fn remove_excluded_folder(
+        &self,
+        id: SourceId,
+    ) -> Result<(AppSettings, ExcludedFolderEntry), SettingsError> {
+        let mut removed = None;
+        let settings = self.update(|settings| {
+            let index = settings
+                .excluded_folders
+                .iter()
+                .position(|entry| entry.id == id)
+                .ok_or_else(|| SettingsError::InvalidData("excluded folder not found".into()))?;
+            removed = Some(settings.excluded_folders.remove(index));
+            Ok(())
+        })?;
+        Ok((
+            settings,
+            removed.expect("excluded folder removed in update"),
+        ))
+    }
+
     #[cfg(test)]
     pub fn migration_marker(&self) -> PathBuf {
         self.path.with_extension("migration-v1-done")
@@ -1167,6 +1236,7 @@ struct RawSettings {
     dsee_hx: Option<serde_json::Value>,
     source_registry_authoritative: Option<bool>,
     sources: Option<Vec<SourceEntry>>,
+    excluded_folders: Option<Vec<ExcludedFolderEntry>>,
     window_geometry: Option<WindowGeometry>,
     shortcuts: Option<serde_json::Value>,
 }
@@ -1194,6 +1264,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         dsee_hx: matches!(raw.dsee_hx, Some(serde_json::Value::Bool(true))),
         source_registry_authoritative: raw.source_registry_authoritative.unwrap_or(true),
         sources: raw.sources.unwrap_or_default(),
+        excluded_folders: raw.excluded_folders.unwrap_or_default(),
         window_geometry: raw.window_geometry,
         shortcuts: lenient_shortcuts(raw.shortcuts),
     };
@@ -1558,6 +1629,31 @@ mod tests {
         assert!(after_remove.sources.is_empty());
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
         assert!(reopened.snapshot().unwrap().sources.is_empty());
+    }
+
+    #[test]
+    fn excluded_folders_upsert_and_remove_are_persisted() {
+        let directory = test_directory("excluded-folders");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        let excluded = ExcludedFolderEntry {
+            id: SourceId::new(),
+            display_name: "Podcasts".into(),
+            path: StoredPath::Utf8(r"D:/Music/Podcasts".into()),
+        };
+        let id = excluded.id;
+        store
+            .upsert_excluded_folder(excluded.clone())
+            .expect("register excluded folder");
+        assert_eq!(store.snapshot().unwrap().excluded_folders, vec![excluded]);
+
+        let (after_remove, removed) = store
+            .remove_excluded_folder(id)
+            .expect("remove excluded folder");
+        assert_eq!(removed.id, id);
+        assert!(after_remove.excluded_folders.is_empty());
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert!(reopened.snapshot().unwrap().excluded_folders.is_empty());
     }
 
     #[test]

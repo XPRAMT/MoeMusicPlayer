@@ -5606,7 +5606,11 @@ mod tests {
         assert_eq!(
             db.list_track_ids_filtered(None, None, desc)
                 .expect("matching queue order"),
-            sorted.items.iter().map(|track| track.id).collect::<Vec<_>>()
+            sorted
+                .items
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>()
         );
     }
 

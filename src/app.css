@@ -2816,6 +2816,14 @@ input:focus-visible {
   padding-bottom: 7px;
 }
 
+.excluded-folder-picker {
+  margin-top: 14px;
+}
+
+.configured-sources.excluded-folders {
+  margin-top: 4px;
+}
+
 .configured-sources-heading {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--line);

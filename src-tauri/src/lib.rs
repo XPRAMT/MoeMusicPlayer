@@ -46,7 +46,7 @@ use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 pub mod updater;
 use settings::{
-    clamp_window_geometry_to_monitors, AppSettings, LyricsPreferences,
+    clamp_window_geometry_to_monitors, AppSettings, ExcludedFolderEntry, LyricsPreferences,
     NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode, ResamplingMode, SettingsStore,
     SourceEntry, SourceEntryKind, ThemeSettings, TrackListColumnSettings, WindowGeometry,
 };
@@ -1699,6 +1699,14 @@ struct LibrarySource {
     last_success_utc_ms: Option<i64>,
     error_count: u64,
     last_error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExcludedFolder {
+    id: String,
+    display_name: String,
+    location: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -3358,6 +3366,7 @@ fn add_windows_folder_path_to_settings(
     }
     let canonical_key = windows_locator_key(&canonical_path);
     let current = settings.snapshot().map_err(|error| error.to_string())?;
+    validate_source_folder_not_excluded(&canonical_path, &current.excluded_folders)?;
     let existing = current.sources.iter().find(|source| {
         matches!(source.kind, SourceEntryKind::Folder { .. })
             && source
@@ -3405,6 +3414,133 @@ fn add_windows_folder_path_to_settings(
         .save_library_root(&root)
         .map_err(|error| error.to_string())?;
     source_entry_summary(Some(database), &entry)
+}
+
+#[tauri::command]
+fn library_list_excluded_folders(
+    state: State<'_, AppState>,
+) -> Result<Vec<ExcludedFolder>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let settings = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        Ok(settings
+            .excluded_folders
+            .iter()
+            .map(excluded_folder_summary)
+            .collect())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = state;
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+async fn library_pick_excluded_folder(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<ExcludedFolder>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let selected = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("選擇排除資料夾")
+            .blocking_pick_folder();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| format!("無法取得選取的資料夾路徑：{error}"))?;
+        let _database_work = enter_database_work(&state)?;
+        add_excluded_folder_path_to_settings(&state.settings, &path).map(Some)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, window, state);
+        Err("排除資料夾只適用於 Windows。".to_owned())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn add_excluded_folder_path_to_settings(
+    settings: &SettingsStore,
+    requested_path: &std::path::Path,
+) -> Result<ExcludedFolder, String> {
+    let canonical_path = std::fs::canonicalize(requested_path)
+        .map_err(|error| format!("無法開啟排除資料夾：{error}"))?;
+    if !canonical_path.is_dir() {
+        return Err("指定路徑不是資料夾。".to_owned());
+    }
+    let current = settings.snapshot().map_err(|error| error.to_string())?;
+    validate_excluded_folder_path(&canonical_path, &current.sources)?;
+    let canonical_key = windows_locator_key(&canonical_path);
+    if let Some(existing) = current.excluded_folders.iter().find(|entry| {
+        entry
+            .path
+            .to_path_buf()
+            .is_ok_and(|path| windows_locator_key(&path) == canonical_key)
+    }) {
+        return Ok(excluded_folder_summary(existing));
+    }
+    let display_name = canonical_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "排除資料夾".to_owned());
+    let entry = ExcludedFolderEntry {
+        id: SourceId::new(),
+        display_name,
+        path: settings::StoredPath::from_path(&canonical_path)
+            .map_err(|error| error.to_string())?,
+    };
+    settings
+        .upsert_excluded_folder(entry.clone())
+        .map_err(|error| error.to_string())?;
+    Ok(excluded_folder_summary(&entry))
+}
+
+#[tauri::command]
+fn library_remove_excluded_folder(
+    state: State<'_, AppState>,
+    excluded_id: String,
+) -> Result<Vec<ExcludedFolder>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _database_work = enter_database_work(&state)?;
+        let id = SourceId::parse(&excluded_id)
+            .map_err(|error| format!("排除資料夾 ID 無效：{error}"))?;
+        state
+            .settings
+            .remove_excluded_folder(id)
+            .map_err(|error| error.to_string())?;
+        let settings = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        Ok(settings
+            .excluded_folders
+            .iter()
+            .map(excluded_folder_summary)
+            .collect())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, excluded_id);
+        Err("排除資料夾只適用於 Windows。".to_owned())
+    }
 }
 
 #[tauri::command]
@@ -3751,10 +3887,15 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
                 progress,
             );
         };
+        #[cfg(target_os = "windows")]
+        let excluded_folders = excluded_folder_paths(&source_settings);
+        #[cfg(not(target_os = "windows"))]
+        let excluded_folders = Vec::new();
         sync_configured_sources(
             &sync_app,
             &mut database,
             &source_settings.sources,
+            &excluded_folders,
             source_registry_authoritative,
             &mut on_progress,
         )
@@ -3771,6 +3912,7 @@ fn sync_configured_sources<F>(
     app: &AppHandle,
     database: &mut Database,
     configured_sources: &[SourceEntry],
+    excluded_folders: &[std::path::PathBuf],
     source_registry_authoritative: bool,
     on_progress: &mut F,
 ) -> Result<LibrarySyncResult, String>
@@ -3786,6 +3928,7 @@ where
         sync_windows_configured_sources(
             database,
             configured_sources,
+            excluded_folders,
             source_registry_authoritative,
             on_progress,
         )
@@ -3793,6 +3936,7 @@ where
 
     #[cfg(target_os = "android")]
     {
+        let _ = excluded_folders;
         let roots = configured_sources
             .iter()
             .filter_map(|source| source.library_root().ok().flatten())
@@ -3977,7 +4121,7 @@ where
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
-        let _ = (app, database);
+        let _ = (app, database, configured_sources, excluded_folders);
         return Err("目前平台尚未提供媒體來源同步。".to_owned());
     }
 }
@@ -4053,9 +4197,82 @@ fn authorized_android_playlist_content_uris(
 }
 
 #[cfg(target_os = "windows")]
+fn excluded_folder_paths(settings: &AppSettings) -> Vec<std::path::PathBuf> {
+    settings
+        .excluded_folders
+        .iter()
+        .filter_map(|entry| entry.path.to_path_buf().ok())
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_path_is_same_or_under(path: &std::path::Path, ancestor: &std::path::Path) -> bool {
+    path == ancestor || path.starts_with(ancestor)
+}
+
+#[cfg(target_os = "windows")]
+fn excluded_folder_summary(entry: &ExcludedFolderEntry) -> ExcludedFolder {
+    ExcludedFolder {
+        id: entry.id.to_string(),
+        display_name: entry.display_name.clone(),
+        location: entry.path.display_lossy(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn validate_excluded_folder_path(
+    excluded: &std::path::Path,
+    sources: &[SourceEntry],
+) -> Result<(), String> {
+    let excluded_canonical =
+        std::fs::canonicalize(excluded).map_err(|error| format!("無法開啟排除資料夾：{error}"))?;
+    if !excluded_canonical.is_dir() {
+        return Err("指定路徑不是資料夾。".to_owned());
+    }
+    let excluded_key = windows_locator_key(&excluded_canonical);
+    for source in sources {
+        let SourceEntryKind::Folder { path, .. } = &source.kind else {
+            continue;
+        };
+        let Ok(source_path) = path.to_path_buf() else {
+            continue;
+        };
+        let source_canonical = std::fs::canonicalize(&source_path).unwrap_or(source_path);
+        let source_key = windows_locator_key(&source_canonical);
+        if source_key == excluded_key {
+            return Err("不能排除已加入的來源根目錄。".to_owned());
+        }
+        if windows_path_is_same_or_under(&source_canonical, &excluded_canonical) {
+            return Err("排除資料夾不能包含已加入的來源根目錄。".to_owned());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn validate_source_folder_not_excluded(
+    source: &std::path::Path,
+    excluded_folders: &[ExcludedFolderEntry],
+) -> Result<(), String> {
+    let source_canonical =
+        std::fs::canonicalize(source).map_err(|error| format!("無法開啟指定資料夾：{error}"))?;
+    for excluded in excluded_folders {
+        let Ok(excluded_path) = excluded.path.to_path_buf() else {
+            continue;
+        };
+        let excluded_canonical = std::fs::canonicalize(&excluded_path).unwrap_or(excluded_path);
+        if windows_path_is_same_or_under(&source_canonical, &excluded_canonical) {
+            return Err("此資料夾位於已排除路徑內，請先移除排除。".to_owned());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 fn sync_windows_configured_sources<F>(
     database: &mut Database,
     configured_sources: &[SourceEntry],
+    excluded_folders: &[std::path::PathBuf],
     source_registry_authoritative: bool,
     on_progress: &mut F,
 ) -> Result<LibrarySyncResult, String>
@@ -4100,6 +4317,7 @@ where
         .collect();
     let source_count = sources.len();
     let mut results = Vec::new();
+    let mut index = WindowsMediaIndex::with_excluded_folders(excluded_folders.iter().cloned());
     for (source_index, source) in sources.iter().enumerate() {
         match &source.kind {
             SourceEntryKind::Folder { .. } => {
@@ -4110,7 +4328,6 @@ where
                 database
                     .save_library_root(&root)
                     .map_err(|error| error.to_string())?;
-                let mut index = WindowsMediaIndex::new();
                 let report = SyncEngine::sync_with_progress(
                     &root,
                     &mut index,
@@ -4138,6 +4355,7 @@ where
                 if let Some(report) = playlist_source_sync::sync_playlist_file_source(
                     database,
                     source,
+                    excluded_folders,
                     synced_at_utc_ms,
                 )? {
                     on_progress(
@@ -6103,6 +6321,9 @@ pub fn run() {
             library_list_sources,
             library_add_windows_folder,
             library_pick_windows_folder,
+            library_list_excluded_folders,
+            library_pick_excluded_folder,
+            library_remove_excluded_folder,
             library_set_source_enabled,
             library_remove_source,
             android_media_request_permission,
@@ -6433,6 +6654,7 @@ mod windows_library_integration_tests {
         super::playlist_source_sync::sync_playlist_file_source(
             &mut database,
             &source,
+            &[],
             1_800_000_000_000,
         )
         .expect("create an existing playlist projection")
@@ -6442,8 +6664,13 @@ mod windows_library_integration_tests {
             1
         );
 
-        let result =
-            super::sync_windows_configured_sources(&mut database, &[], false, &mut |_, _, _, _| {});
+        let result = super::sync_windows_configured_sources(
+            &mut database,
+            &[],
+            &[],
+            false,
+            &mut |_, _, _, _| {},
+        );
         let error = match result {
             Ok(_) => panic!("non-authoritative registry must stop cleanup"),
             Err(error) => error,
