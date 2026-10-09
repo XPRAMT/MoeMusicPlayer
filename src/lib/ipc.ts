@@ -366,7 +366,7 @@ export interface LyricsCandidate {
   hasSyncedLyrics: boolean;
 }
 
-export type LyricsResultStatus = 'ready' | 'empty' | 'candidates' | 'error';
+export type LyricsResultStatus = 'ready' | 'empty' | 'cleared' | 'candidates' | 'error';
 
 export type ShortcutAction = 'fullscreen' | 'playPause' | 'seekBack' | 'seekForward' | 'previous' | 'next';
 export type ShortcutDevice = 'keyboard' | 'mouse' | 'gamepad';

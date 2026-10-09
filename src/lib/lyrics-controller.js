@@ -39,7 +39,7 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
         ? 'ready'
         : result.status === 'error'
           ? 'error'
-          : 'empty';
+          : 'empty'; // includes status 'cleared'
 
   return {
     trackId,
@@ -165,7 +165,8 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       const result = await api.getTrack({ trackId });
       if (!isCurrent(trackId, requestGeneration)) return;
       update(stateFromResult(trackId, result, 'load'));
-      if (!result.lyrics && result.status !== 'error') {
+      // Cleared means the user removed lyrics; do not auto-search or auto-apply again.
+      if (!result.lyrics && result.status !== 'error' && result.status !== 'cleared') {
         await startSearch(trackId, requestGeneration);
       }
     } catch (error) {
@@ -335,7 +336,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       try {
         const result = await api.clearTrack({ trackId });
         if (!isCurrent(trackId, requestGeneration)) return;
-        // Do not auto-search after an explicit remove; leave empty or rediscovered local/sidecar lyrics.
+        // Do not auto-search after an explicit remove; backend persists a cleared sentinel.
         update({
           ...stateFromResult(trackId, result, null, { selectionMode: false }),
           selectionMode: false,

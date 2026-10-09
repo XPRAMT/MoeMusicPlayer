@@ -540,6 +540,31 @@ test('searchAgain forwards optional query to lyrics_search', async () => {
   controller.dispose();
 });
 
+test('cleared getTrack status skips automatic provider search on later loads', async () => {
+  const calls = [];
+  const controller = createLyricsController({
+    api: {
+      getTrack: async (args) => {
+        calls.push(['get', args]);
+        return { lyrics: null, candidates: [], status: 'cleared', error: null };
+      },
+      search: async (args) => {
+        calls.push(['search', args]);
+        return emptyResult();
+      },
+      selectCandidate: async () => { throw new Error('unexpected candidate selection'); },
+      cancelSearch: async () => {},
+    },
+    onChange() {},
+  });
+
+  await controller.setTrack('track-cleared');
+  assert.deepEqual(calls, [['get', { trackId: 'track-cleared' }]]);
+  assert.equal(controller.getState().phase, 'empty');
+  assert.equal(controller.getState().lyrics, null);
+  controller.dispose();
+});
+
 test('removeLyrics clears persisted lyrics, dismisses picker, and skips auto-search', async () => {
   let clearCalls = 0;
   let searchCalls = 0;
@@ -575,7 +600,7 @@ test('removeLyrics clears persisted lyrics, dismisses picker, and skips auto-sea
       clearTrack: async ({ trackId }) => {
         clearCalls += 1;
         assert.equal(trackId, 't-remove');
-        return { lyrics: null, candidates: [], status: 'empty', error: null };
+        return { lyrics: null, candidates: [], status: 'cleared', error: null };
       },
     },
     onChange: () => {},

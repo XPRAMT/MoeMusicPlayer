@@ -1580,7 +1580,8 @@ impl Database {
     /// Persist an explicit candidate selection. This row is protected from automatic updates
     /// and automatic-cache eviction.
     /// Remove persisted lyrics and cached candidates for one track.
-    /// Sidecar/embedded files are left untouched; the next load may rediscover them.
+    /// Sidecar/embedded files are left untouched. Callers that want to suppress rediscovery
+    /// should write an empty manual sentinel after this delete.
     pub fn clear_track_lyrics(&self, track_id: TrackId) -> Result<bool, DatabaseError> {
         let connection = self.lock()?;
         let deleted = connection.execute(

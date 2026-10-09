@@ -2817,11 +2817,13 @@ input:focus-visible {
 }
 
 .excluded-folder-picker {
-  margin-top: 14px;
+  /* Match the top 「選擇資料夾」row spacing after the registered-sources list. */
+  margin-top: 13px;
 }
 
 .configured-sources.excluded-folders {
-  margin-top: 4px;
+  /* Same gap as between the top picker row and 「已加入的來源」. */
+  margin-top: 13px;
 }
 
 .configured-sources-heading {

@@ -37,6 +37,9 @@ use player_platform_windows::{find_all_lyrics, find_lyrics, LyricsLookup};
 
 const LOCAL_SIDECAR_CANDIDATE_ID: &str = "local:sidecar";
 const LOCAL_EMBEDDED_CANDIDATE_ID: &str = "local:embedded";
+/// Persisted after 「移除歌詞」: blocks local rediscovery and automatic provider search until
+/// the user manually picks lyrics again.
+const CLEARED_LYRICS_CANDIDATE_ID: &str = "cleared:";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum LyricsSourceDto {
@@ -81,6 +84,8 @@ pub struct TrackLyricsDto {
 pub enum LyricsResultStatusDto {
     Ready,
     Empty,
+    /// User cleared lyrics for this track; do not auto-load local or auto-search providers.
+    Cleared,
     Candidates,
     Error,
 }
@@ -868,6 +873,23 @@ impl LyricsTrackResultDto {
             has_more: false,
         }
     }
+
+    fn cleared() -> Self {
+        Self {
+            lyrics: None,
+            candidates: Vec::new(),
+            status: LyricsResultStatusDto::Cleared,
+            error: None,
+            has_more: false,
+        }
+    }
+}
+
+fn is_cleared_lyrics(lyrics: &TrackLyrics) -> bool {
+    lyrics.manually_selected
+        && lyrics.candidate_id.as_deref() == Some(CLEARED_LYRICS_CANDIDATE_ID)
+        && lyrics.lyrics.lines.is_empty()
+        && lyrics.lyrics.raw_text.is_empty()
 }
 
 #[tauri::command]
@@ -919,7 +941,10 @@ pub async fn lyrics_search(
         load_track_result_with_context(database, track_id, Some(&app), &settings.sources).await?;
     // Automatic follow-up after an empty get may rediscover local/embedded lyrics.
     // Explicit manual selection must continue to provider candidates even when lyrics exist.
-    if !manual && initial.lyrics.is_some() {
+    // Cleared tracks skip automatic provider search until the user searches manually.
+    if !manual
+        && (initial.lyrics.is_some() || matches!(initial.status, LyricsResultStatusDto::Cleared))
+    {
         return Ok(initial);
     }
     if cancellation.is_cancelled() {
@@ -1006,14 +1031,24 @@ pub async fn lyrics_clear_track(
             .clone()
             .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
     })?;
+    let _ = app;
+    let now = super::now_utc_epoch_ms()?;
+    // Persist an empty manual sentinel so local sidecar/embedded lyrics and automatic provider
+    // search stay suppressed until the user manually picks lyrics again.
     database
         .clear_track_lyrics(track_id)
         .map_err(|error| error.to_string())?;
-    let settings = state
-        .settings
-        .snapshot()
+    database
+        .save_manual_track_lyrics(&TrackLyrics {
+            track_id,
+            provider: LyricProvider::Sidecar,
+            candidate_id: Some(CLEARED_LYRICS_CANDIDATE_ID.to_owned()),
+            lyrics: empty_parsed_lyrics(),
+            manually_selected: true,
+            updated_at_utc_ms: now,
+        })
         .map_err(|error| error.to_string())?;
-    load_track_result_with_context(database, track_id, Some(&app), &settings.sources).await
+    Ok(LyricsTrackResultDto::cleared())
 }
 
 #[tauri::command]
@@ -1098,8 +1133,12 @@ async fn load_track_result_with_context(
 
     // Resolution order: a lyric candidate the user explicitly picked is linked to this TrackId in
     // the library database and wins over local sidecar/embedded lyrics until it is cleared or
-    // re-picked. Without a manual link, local lyrics beat the automatic provider cache.
+    // re-picked. A cleared sentinel (empty manual row) suppresses local rediscovery and auto
+    // search. Without a manual link, local lyrics beat the automatic provider cache.
     if let Some(selected) = cached.as_ref().filter(|cached| cached.manually_selected) {
+        if is_cleared_lyrics(selected) {
+            return Ok(LyricsTrackResultDto::cleared());
+        }
         return Ok(LyricsTrackResultDto::ready(persisted_lyrics_dto(
             &track,
             selected.clone(),
@@ -2388,7 +2427,7 @@ mod tests {
         assert_eq!(lyrics.lines[0].text, "人工指定");
         assert_eq!(lyrics.lines[0].translation.as_deref(), Some("人工譯文"));
 
-        // Clearing the link falls back to local lyrics again.
+        // Clearing without a suppress sentinel still falls back to local lyrics.
         assert!(database
             .clear_track_lyrics(track_id)
             .expect("clear manual selection"));
@@ -2399,6 +2438,26 @@ mod tests {
             result.lyrics.expect("local lyrics after clear").source,
             LyricsSourceDto::Local
         );
+
+        // 「移除歌詞」persists an empty manual sentinel so local/auto search stay off.
+        database
+            .save_manual_track_lyrics(&player_core::TrackLyrics {
+                track_id,
+                provider: LyricProvider::Sidecar,
+                candidate_id: Some(super::CLEARED_LYRICS_CANDIDATE_ID.to_owned()),
+                lyrics: super::empty_parsed_lyrics(),
+                manually_selected: true,
+                updated_at_utc_ms: 1_800_000_000_002,
+            })
+            .expect("save cleared sentinel");
+        let result = super::load_track_result(&database, track_id)
+            .await
+            .expect("load after cleared sentinel");
+        assert!(result.lyrics.is_none());
+        assert!(matches!(
+            result.status,
+            super::LyricsResultStatusDto::Cleared
+        ));
 
         let track = database
             .get_track_summary(track_id)
