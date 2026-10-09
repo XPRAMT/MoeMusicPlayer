@@ -37,7 +37,7 @@ async page => {
   assert(await page.locator('.playback-queue-row').count() > 0, 'clicking the playback queue navigation did not display queue entries');
   assert(state.locateFabVisible, 'queue locate FAB is missing');
   assert(await page.locator('.queue-current-track').count() === 0, 'queue page still shows current-track caption');
-  assert(await page.locator('.queue-locate-fab').innerText() === '○', 'queue locate FAB label is wrong');
+  assert(await page.locator('.queue-locate-fab .queue-locate-fab-dot').count() === 1, 'queue locate FAB dot is missing');
   await page.locator('.playback-queue-row').nth(1).locator('.list-column-title').click();
   state = await page.evaluate(() => window.playbackQueueHarness.snapshot());
   assert(JSON.stringify(state.queuePlays) === JSON.stringify([{ trackId: 'duplicate-track', traversalPosition: 1 }]), 'queue row click did not select that traversal slot');

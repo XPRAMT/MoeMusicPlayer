@@ -303,7 +303,7 @@
     title="定位到目前播放曲目"
     disabled={!canLocateCurrent || locating}
     onclick={() => void locateCurrentTrack()}
-  >○</button>
+  ><span class="queue-locate-fab-dot" aria-hidden="true"></span></button>
 {/if}
 </div>
 
@@ -339,16 +339,22 @@
     width: 38px;
     height: 38px;
     place-items: center;
+    padding: 0;
     border: 1px solid var(--line);
     border-radius: 50%;
     color: var(--text);
     background: color-mix(in srgb, var(--text-inverse) var(--quick-settings-opacity, 70%), transparent);
     -webkit-backdrop-filter: blur(var(--quick-settings-blur, 12px));
     backdrop-filter: blur(var(--quick-settings-blur, 12px));
-    font-size: 26px;
-    line-height: 1;
     cursor: pointer;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  }
+
+  .queue-locate-fab-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: currentColor;
   }
 
   .queue-locate-fab:hover:not(:disabled) {
