@@ -572,10 +572,10 @@
         <div class="lyrics-timing-panel-header">
           <strong>同步歌詞延遲</strong>
           <span data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingOffsetSec)}</span>
-          <button type="button" class="lyrics-action secondary" onclick={() => { timingPanelOpen = false; }}>關閉</button>
+          <button type="button" class="soft-button" onclick={() => { timingPanelOpen = false; }}>關閉</button>
         </div>
         <div class="lyrics-timing-controls">
-          <button type="button" class="lyrics-action secondary" aria-label="延遲減少 0.1 秒" onclick={() => nudgeTimingOffset(-LYRICS_TIMING_OFFSET_STEP_SEC)}>−0.1</button>
+          <button type="button" class="soft-button" aria-label="延遲減少 0.1 秒" onclick={() => nudgeTimingOffset(-LYRICS_TIMING_OFFSET_STEP_SEC)}>−0.1</button>
           <input
             class="lyrics-timing-slider"
             type="range"
@@ -589,8 +589,8 @@
             aria-valuenow={timingOffsetSec}
             oninput={onTimingOffsetInput}
           />
-          <button type="button" class="lyrics-action secondary" aria-label="延遲增加 0.1 秒" onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
-          <button type="button" class="lyrics-action secondary" onclick={resetTimingOffset}>重設</button>
+          <button type="button" class="soft-button" aria-label="延遲增加 0.1 秒" onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
+          <button type="button" class="soft-button" onclick={resetTimingOffset}>重設</button>
         </div>
         <p class="lyrics-timing-hint">正值延後歌詞，負值提前歌詞；範圍 ±5 秒，步進 0.1 秒。</p>
       </div>
@@ -662,12 +662,12 @@
       <div class="lyrics-message lyrics-error" role="alert">
         <span>{viewState.error}</span>
         {#if viewState.failedStage === 'load'}
-          <button type="button" class="lyrics-action" onclick={retry}>重試讀取</button>
-          <button type="button" class="lyrics-action secondary" onclick={searchAgain}>線上搜尋</button>
+          <button type="button" class="soft-button" onclick={retry}>重試讀取</button>
+          <button type="button" class="soft-button" onclick={searchAgain}>線上搜尋</button>
         {:else if viewState.failedStage === 'selection'}
-          <button type="button" class="lyrics-action" onclick={retry}>重試指定</button>
+          <button type="button" class="soft-button" onclick={retry}>重試指定</button>
         {:else}
-          <button type="button" class="lyrics-action" onclick={searchAgain}>重試搜尋</button>
+          <button type="button" class="soft-button" onclick={searchAgain}>重試搜尋</button>
         {/if}
       </div>
     {/if}
@@ -675,7 +675,7 @@
     {#if viewState.isSearching}
       <div class="lyrics-message lyrics-searching" role="status">
         <span>正在搜尋網易雲與 QQ 音樂歌詞…</span>
-        <button type="button" class="lyrics-action secondary" onclick={cancelSearch}>取消搜尋</button>
+        <button type="button" class="soft-button" onclick={cancelSearch}>取消搜尋</button>
       </div>
     {:else if showCandidatePicker}
       <section class="lyrics-candidates" aria-label="歌詞候選" data-testid="lyrics-candidates">
@@ -692,9 +692,9 @@
             data-testid="lyrics-candidates-search"
           />
           <div class="lyrics-candidates-actions">
-            <button type="submit" class="lyrics-action secondary">搜尋</button>
-            <button type="button" class="lyrics-action secondary" data-testid="lyrics-dismiss" onclick={dismissSelection}>關閉</button>
-            <button type="button" class="lyrics-action secondary" data-testid="lyrics-remove" onclick={removeLyrics}>移除歌詞</button>
+            <button type="submit" class="soft-button">搜尋</button>
+            <button type="button" class="soft-button" data-testid="lyrics-dismiss" onclick={dismissSelection}>關閉</button>
+            <button type="button" class="soft-button" data-testid="lyrics-remove" onclick={removeLyrics}>移除歌詞</button>
           </div>
         </form>
         <ul>
@@ -716,7 +716,7 @@
               </div>
               <button
                 type="button"
-                class="lyrics-action secondary"
+                class="soft-button"
                 disabled={viewState.selectingCandidateId !== null}
                 onclick={() => selectCandidate(candidate.id)}
               >
@@ -736,7 +736,7 @@
             <li class="lyrics-load-more">
               <button
                 type="button"
-                class="lyrics-action secondary"
+                class="soft-button"
                 data-testid="lyrics-load-more"
                 disabled={viewState.isLoadingMore}
                 onclick={() => void controller.loadMore()}
@@ -905,26 +905,8 @@
     color: var(--status-danger, #ff8b88);
   }
 
-  .lyrics-action {
+  .lyrics-view :global(.soft-button) {
     flex: 0 0 auto;
-    padding: 6px 10px;
-    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
-    border-radius: 7px;
-    color: var(--accent-text);
-    background: color-mix(in srgb, var(--accent) 9%, transparent);
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .lyrics-action.secondary {
-    border-color: var(--line);
-    color: var(--text-soft);
-    background: transparent;
-  }
-
-  .lyrics-action:disabled {
-    cursor: wait;
-    opacity: 0.65;
   }
 
   .lyrics-candidates {
@@ -986,7 +968,7 @@
     outline-offset: -2px;
   }
 
-  .lyrics-candidates .lyrics-action:focus-visible {
+  .lyrics-candidates :global(.soft-button:focus-visible) {
     outline-offset: -2px;
   }
 
@@ -1120,10 +1102,6 @@
   @media (max-width: 560px) {
     .lyrics-candidate {
       align-items: flex-start;
-    }
-
-    .lyrics-action {
-      padding: 6px 8px;
     }
 
     .lyrics-timing-controls {

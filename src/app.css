@@ -420,13 +420,13 @@ input:focus-visible {
   font-size: var(--font-caption);
 }
 
-.lyrics-topbar-action {
+.soft-button.lyrics-topbar-action {
+  /* Keep overflow visible so the shared soft-button hover glow is not clipped. */
   max-width: 118px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
 }
 
-.lyrics-toggle {
+.soft-button.lyrics-toggle:not([aria-pressed='true']):not(:hover):not(:active) {
   color: var(--muted);
 }
 
@@ -3268,7 +3268,7 @@ input:focus-visible {
   background: rgba(var(--text-rgb), 0.04);
 }
 
-/* Now Playing: keep dock + overlay controls monochrome (must follow accent hover/active rules). */
+/* Now Playing dock transport stays monochrome; top-bar / lyrics soft-buttons keep shared accent glow. */
 .app-shell.has-now-playing-backdrop .player-dock .control-button.control-active,
 .app-shell.has-now-playing-backdrop .player-dock .control-button.control-active svg,
 .app-shell.has-now-playing-backdrop .player-dock .control-button:not(:disabled):hover,
@@ -3283,20 +3283,6 @@ input:focus-visible {
 .app-shell.has-now-playing-backdrop .player-dock .control-button:not(:disabled):hover,
 .app-shell.has-now-playing-backdrop .player-dock .play-button:not(:disabled):hover {
   background: rgba(var(--text-rgb), 0.06);
-}
-
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button:not(:disabled):hover,
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button:not(:disabled):active,
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button.is-active,
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button[aria-pressed='true'],
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button[aria-selected='true'],
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button[aria-pressed='true'] svg,
-.app-shell.has-now-playing-backdrop .now-playing-overlay .soft-button.is-active svg {
-  border-color: rgba(var(--text-rgb), 0.34);
-  color: var(--text);
-  stroke: currentColor;
-  background: transparent;
-  box-shadow: none;
 }
 
 .control-button:disabled,
