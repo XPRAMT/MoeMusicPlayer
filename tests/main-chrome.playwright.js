@@ -29,6 +29,18 @@ async page => {
   const libraryCount = await page.locator('.page-title-count').innerText();
   assert(/^\d[\d,]* 首曲目$/.test(libraryCount), 'library top-bar track count: ' + libraryCount);
   assert(await page.locator('.page-scroll.is-list-page').count() === 1, 'library missing list-page scroll class');
+  const listFlush = await page.evaluate(() => {
+    const workspace = document.querySelector('.workspace');
+    const frame = document.querySelector('.paged-virtual-frame.fill-available');
+    if (!workspace || !frame) return null;
+    const workspaceBox = workspace.getBoundingClientRect();
+    const frameBox = frame.getBoundingClientRect();
+    return {
+      leftDelta: Math.round(frameBox.left - workspaceBox.left),
+      rightDelta: Math.round(workspaceBox.right - frameBox.right),
+    };
+  });
+  assert(listFlush && Math.abs(listFlush.leftDelta) <= 1 && Math.abs(listFlush.rightDelta) <= 1, 'library list is not edge-flush: ' + JSON.stringify(listFlush));
   await page.waitForSelector('.paged-virtual-viewport');
   await assertSingleListScroll('library');
   assert(/^MoeMusicPlayer \d+\.\d+\.\d+$/.test(await page.title()), 'window title is not the build date: ' + await page.title());

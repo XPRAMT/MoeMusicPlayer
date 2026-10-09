@@ -871,12 +871,28 @@ input:focus-visible {
 }
 
 .page-content.is-list-page {
+  --list-chrome-pad-x: clamp(18px, 2vw, 34px);
   display: flex;
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
-  padding-bottom: 18px;
+  padding-bottom: 0;
+}
+
+/* Keep search / headings inset; the virtual track list itself is edge-flush. */
+.page-content.is-list-page > .library-section > .library-toolbar,
+.page-content.is-list-page > .library-section > .not-ready-panel,
+.page-content.is-list-page > .playlist-section > .inline-message,
+.page-content.is-list-page > .playlist-section > .playlist-result-message,
+.page-content.is-list-page > .playlist-section > .not-ready-panel,
+.page-content.is-list-page > .playlist-section > .loading-panel,
+.page-content.is-list-page > .playlist-section > .empty-panel,
+.page-content.is-list-page .playlist-detail-heading,
+.page-content.is-list-page > .queue-page > .section-heading,
+.page-content.is-list-page > .queue-page > .not-ready-panel {
+  padding-right: var(--list-chrome-pad-x);
+  padding-left: var(--list-chrome-pad-x);
 }
 
 .library-section,
@@ -969,8 +985,8 @@ input:focus-visible {
   width: 100%;
   max-width: none;
   margin: 0;
-  padding-right: clamp(18px, 2vw, 34px);
-  padding-left: clamp(18px, 2vw, 34px);
+  /* Horizontal pad is 0 so the track list can meet the workspace edges. */
+  padding: clamp(16px, 2.5vh, 28px) 0 0;
 }
 
 .sync-progress-banner {
@@ -4008,7 +4024,8 @@ input:focus-visible {
   .track-row { gap: 8px; padding: 0 9px; }
   .track-table-head { min-height: 33px; }
   .track-row { min-height: 53px; }
-  .page-content.wide-list-page { padding: 16px 14px 26px; }
+  .page-content.wide-list-page { padding: 16px 0 0; }
+  .page-content.is-list-page { --list-chrome-pad-x: 14px; }
   .app-shell[data-active-view="playlists"] .sidebar-playlist-tree-host {
     top: calc(100% + 6px);
     left: 8px;
@@ -4186,7 +4203,8 @@ input:focus-visible {
 @media (max-width: 390px) {
   .page-title { font-size: var(--font-title); }
   .topbar { padding: 0 11px; }
-  .page-content { padding-right: 11px; padding-left: 11px; }
+  .page-content:not(.wide-list-page) { padding-right: 11px; padding-left: 11px; }
+  .page-content.is-list-page { --list-chrome-pad-x: 11px; }
   .section-heading-actions { gap: 6px; }
   .playlist-import-button { padding: 0 7px; font-size: var(--font-caption); }
   .page-count { font-size: var(--font-caption); }

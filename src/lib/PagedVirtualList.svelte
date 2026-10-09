@@ -283,6 +283,13 @@
     flex: 1 1 auto;
     min-height: 0;
     height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .paged-virtual-frame.fill-available .paged-virtual-viewport:focus-visible {
+    outline-offset: -2px;
   }
 
   .paged-virtual-viewport {
