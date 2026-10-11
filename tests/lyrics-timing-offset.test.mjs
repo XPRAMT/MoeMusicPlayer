@@ -33,11 +33,11 @@ test('formatLyricsTimingOffsetSec keeps one decimal and sign', () => {
   assert.equal(formatLyricsTimingOffsetSec(-0.5), '-0.5 秒');
 });
 
-test('timing panel overlays lyrics and shows guidance on its header', async () => {
+test('timing panel overlays lyrics without extra header guidance', async () => {
   const source = await readFile(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
   assert.match(source, /class="lyrics-timing-panel floating-surface"/);
   assert.match(source, /\.lyrics-timing-panel \{[\s\S]*?position: absolute;[\s\S]*?top: 0;[\s\S]*?left: 0;/);
-  assert.match(source, /<span class="lyrics-timing-hint">\(正值延後歌詞，負值提前歌詞\)<\/span>/);
+  assert.doesNotMatch(source, /正值延後歌詞，負值提前歌詞/);
   assert.doesNotMatch(source, /範圍 ±5 秒/);
 });
 

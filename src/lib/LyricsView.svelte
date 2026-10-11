@@ -583,7 +583,6 @@
         <div class="lyrics-timing-panel-header">
           <strong>同步歌詞延遲</strong>
           <span class="lyrics-timing-value" data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingOffsetSec)}</span>
-          <span class="lyrics-timing-hint">(正值延後歌詞，負值提前歌詞)</span>
           <button type="button" class="soft-button" onclick={() => { timingPanelOpen = false; }}>關閉</button>
         </div>
         <div class="lyrics-timing-controls">
@@ -1091,12 +1090,6 @@
     color: var(--text);
     font-size: var(--font-body);
     font-variant-numeric: tabular-nums;
-  }
-
-  .lyrics-timing-hint {
-    color: var(--muted);
-    font-size: var(--font-caption);
-    line-height: 1.5;
   }
 
   .lyrics-timing-controls {
