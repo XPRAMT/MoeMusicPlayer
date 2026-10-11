@@ -2078,6 +2078,7 @@ input:focus-visible {
   width: 20.8px;
   height: 11.2px;
   object-fit: contain;
+  transform: translateY(0.5px);
 }
 
 .now-playing-copy h2 {
