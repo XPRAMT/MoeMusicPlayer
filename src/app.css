@@ -398,11 +398,12 @@ input:focus-visible {
 }
 
 .now-playing-topbar-tools {
+  --now-playing-tool-gap: 5px;
   display: flex;
   min-width: 0;
   flex: 0 1 auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--now-playing-tool-gap);
 }
 
 .lyrics-topbar-status,
@@ -410,7 +411,7 @@ input:focus-visible {
   display: flex;
   flex: 0 1 auto;
   align-items: center;
-  gap: 5px;
+  gap: var(--now-playing-tool-gap);
 }
 
 .lyrics-topbar-status {
@@ -4334,7 +4335,7 @@ input:focus-visible {
     flex: 0 1 auto;
     max-width: 100%;
   }
-  .now-playing-topbar-tools { grid-column: 2; grid-row: 1; justify-content: flex-end; gap: 5px; min-width: 0; }
+  .now-playing-topbar-tools { grid-column: 2; grid-row: 1; justify-content: flex-end; gap: var(--now-playing-tool-gap); min-width: 0; }
   /* 手動指定 / 同步歌詞 must remain visible at every width. */
   .lyrics-topbar-status {
     display: flex !important;
