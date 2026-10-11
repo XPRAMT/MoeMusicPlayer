@@ -34,6 +34,15 @@ if (!(closed.artworkWidth > before.artworkWidth * 1.8)) throw new Error(`removin
 if (Math.abs(closed.coverCenter - closed.artworkCenter) > 1) throw new Error(`cover is not horizontally centered with lyrics hidden: ${JSON.stringify(closed)}`);
 if (closed.lyricsDisplay !== 'none') throw new Error(`lyrics pane remained visible: ${JSON.stringify(closed)}`);
 
+await page.getByRole('button', { name: '手動指定歌詞' }).click();
+await page.waitForFunction(() => document.querySelector('.now-playing-card')?.dataset.lyricsVisible === 'true'
+  && document.querySelector('[data-testid="lyrics-candidates"]'));
+if (await page.getByTestId('lyrics-candidates').isVisible() !== true) {
+  throw new Error('manual lyric selection should be visible after the current lyrics were removed');
+}
+await page.getByTestId('lyrics-dismiss').click();
+await page.waitForFunction(() => document.querySelector('.now-playing-card')?.dataset.lyricsVisible === 'false');
+
 await page.evaluate(() => window.nowPlayingLayoutHarness.setTrackId('layout-cleared'));
 await page.waitForFunction(() => document.querySelector('.now-playing-card')?.dataset.lyricsVisible === 'false');
 const reopened = await page.evaluate(() => {

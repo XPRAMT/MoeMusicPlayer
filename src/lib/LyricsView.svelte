@@ -158,7 +158,7 @@
 
   $effect(() => {
     if (viewState.phase === 'loading' || viewState.phase === 'idle') return;
-    onLyricsRemovedChange?.(viewState.lyricsRemoved);
+    onLyricsRemovedChange?.(viewState.lyricsRemoved && !selectionUiOpen);
   });
 
   $effect(() => {
