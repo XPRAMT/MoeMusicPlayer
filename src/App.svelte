@@ -527,7 +527,7 @@
       const devicePixelRatio = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
       document.documentElement.style.setProperty(
         '--track-header-text-optical-offset',
-        `${-2 / devicePixelRatio}px`,
+        `${-3.25 / devicePixelRatio}px`,
       );
     };
     const applyAndroidInsets = (value?: AndroidWindowInsets): void => {

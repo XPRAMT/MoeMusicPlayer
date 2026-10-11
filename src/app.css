@@ -1491,7 +1491,7 @@ input:focus-visible {
 .track-table-head .column-sort-label,
 .track-table-head .column-sort-indicator {
   position: relative;
-  top: var(--track-header-text-optical-offset, -2px);
+  top: var(--track-header-text-optical-offset, -3.25px);
 }
 
 .track-table-body {

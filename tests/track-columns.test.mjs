@@ -49,8 +49,8 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
   assert.match(virtualHeaderLine, /bottom:\s*0/);
   assert.match(virtualHeaderLine, /height:\s*1px/);
   assert.match(virtualHeaderLine, /background:\s*var\(--line\)/);
-  assert.match(headerTextOffset, /top:\s*var\(--track-header-text-optical-offset,\s*-2px\)/);
-  assert.match(app, /-2\s*\/\s*devicePixelRatio/);
+  assert.match(headerTextOffset, /top:\s*var\(--track-header-text-optical-offset,\s*-3\.25px\)/);
+  assert.match(app, /-3\.25\s*\/\s*devicePixelRatio/);
   assert.match(app, /addEventListener\('resize', updateTrackHeaderTextOffset\)/);
   assert.match(sortButton, /width:\s*100%/);
   assert.match(sortButton, /height:\s*100%/);
