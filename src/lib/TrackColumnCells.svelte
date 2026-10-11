@@ -258,6 +258,5 @@
     flex: 0 0 auto;
     align-self: center;
     object-fit: contain;
-    transform: translateY(1px);
   }
 </style>
