@@ -9,7 +9,8 @@
     type TrackColumnWidths,
     type LibraryListSort,
   } from './ipc';
-  import { formatDuration, formatTrackIndex } from './format';
+  import { formatDuration } from './format';
+  import { formatListOrder } from './list-order.js';
   import {
     DEFAULT_LIBRARY_SORT,
     DEFAULT_TRACK_COLUMN_PREFERENCES,
@@ -212,7 +213,7 @@
         <TrackColumnCells
           variant="item"
           columns={visibleColumns}
-          indexLabel={formatTrackIndex(row.item.trackNumber, row.item.discNumber)}
+          indexLabel={formatListOrder(row.index)}
           cells={visibleColumns.map((column) => {
             const item = withLivePlayedMs(row.item!, livePlayCount);
             return {

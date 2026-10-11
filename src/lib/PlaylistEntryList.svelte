@@ -1,6 +1,7 @@
 <script lang="ts">
 import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistPage, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
 import { formatDuration } from './format';
+import { formatListOrder } from './list-order.js';
 import {
   DEFAULT_TRACK_COLUMN_PREFERENCES,
   DEFAULT_TRACK_COLUMN_WIDTHS,
@@ -159,7 +160,7 @@ import { withLivePlayedMs } from './live-play-count.js';
         <TrackColumnCells
           variant="item"
           columns={visibleColumns}
-          indexLabel={String(row.item.position + 1)}
+          indexLabel={formatListOrder(row.item.position)}
           cells={visibleColumns.map((column) => {
             const item = withLivePlayedMs(row.item!, livePlayCount);
             return {

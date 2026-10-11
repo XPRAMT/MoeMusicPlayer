@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getErrorText, invokeCommand, type PlaybackQueuePage, type PlaybackQueuePageItem, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
   import { formatDuration } from './format';
+  import { formatListOrder } from './list-order.js';
   import {
     DEFAULT_TRACK_COLUMN_PREFERENCES,
     DEFAULT_TRACK_COLUMN_WIDTHS,
@@ -295,7 +296,7 @@
         <TrackColumnCells
           variant="item"
           columns={visibleColumns}
-          indexLabel={String(row.item.traversalPosition + 1)}
+          indexLabel={formatListOrder(row.item.traversalPosition)}
           cells={visibleColumns.map((column) => ({
             id: column.id,
             text: displayValue(column.id, row.item!),

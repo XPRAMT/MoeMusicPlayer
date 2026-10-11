@@ -44,6 +44,8 @@ async page => {
     assert(list.headerCellCount === 8 && list.rowCellCount === 8, name + ' loaded cell count mismatch');
     assert(list.ariaColumnCount === '8', name + ' loaded aria-colcount mismatch');
   }
+  assert(state.library.indexLabels[0] === '1', 'library # must be the displayed list position, not the track metadata number');
+  assert(state.playlist.indexLabels[0] === '1' && state.playlist.indexLabels[1] === '2', 'playlist # must follow stored playlist positions');
 
   const missing = await page.locator('.playlist-entry-row').filter({ hasText: 'M3U 項目' }).evaluate(row => ({
     cells: [...row.querySelectorAll('.list-column')].map(cell => ({ className: cell.className, text: cell.textContent.trim() })),

@@ -9,7 +9,8 @@ export function formatDuration(durationMs: number | null | undefined): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-export function formatTrackIndex(trackNumber: number | null, discNumber: number | null): string {
+/** Format the track/disc number stored in the audio file for an album view. */
+export function formatAlbumTrackNumber(trackNumber: number | null, discNumber: number | null): string {
   const track = trackNumber?.toString().padStart(2, '0') ?? '—';
   if (discNumber === null) return track;
   return `${discNumber}-${track}`;

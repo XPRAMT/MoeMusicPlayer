@@ -11,6 +11,11 @@
 - 公開 GitHub 儲存庫為 [XPRAMT/MoeMusicPlayer](https://github.com/XPRAMT/MoeMusicPlayer)，作者 XPRAMT；`origin` 使用 `master` 作為發布分支。使用者已授權公開儲存庫及實際 GitHub Release 更新驗證。
 - `release/` 是本機建置輸出，`UserData/` 含本機使用者資料；兩者不得提交或上傳。`.gitignore` 已排除這些路徑。
 
+## 由開發者編輯的待辦清單
+
+"待辦清單.md" 為開發者控制編輯的待辦清單
+有最高優先級 禁止由Agent修改
+
 目前已完成：
 
 - 「設定 → 關於」與快速設定共用 `AboutPage.svelte`，由 `src-tauri/src/updater.rs::about_get_info` 單一 DTO 提供作者、官方連結、日期顯示版號、UTC 毫秒建置時間、git commit、架構與 `licenses/credits.json` 的套件／版本／授權／用途。`build.rs` 嵌入 UTC＋commit，`scripts/release-windows.ps1` 每次設定新的 UTC 時間；不能用固定 SemVer 0.1.0 或同日日期版號判斷新版。Windows 官方連結走 HTTPS 精確白名單與 ShellExecuteW，Android 走既有 media-index 的 ACTION_VIEW；無任意 scheme／host command。Sony 濾鏡不列為開源依賴。
@@ -97,6 +102,14 @@
 以下「必須／不得」是功能或安全邊界；「預設／優先／建議」是待原型與測量驗證的方案。不得把尚未實作的需求從規格中移除，或把規劃文字當成已完成狀態。
 
 ## 必須維持的產品行為
+
+### 列表「#」欄位語意
+
+- 曲庫與演出者頁面的「#」表示目前列表順序，從 1 開始；排序或篩選後依畫面中的新順序重新編號。曲庫目前由 `TrackList` 以虛擬列表的全域 `row.index` 顯示。
+- 專輯頁面的「#」表示音檔標籤記錄的曲序（多碟時以碟序－曲序呈現），不按頁面列表重新編號；未來頁面使用 `formatAlbumTrackNumber`。
+- 播放佇列的「#」表示目前佇列 traversal 順序，隨機播放時也依目前實際順序編號；`PlaybackQueueList` 使用 `traversalPosition`。
+- 播放清單的「#」表示該播放清單內儲存的實際位置；重複曲目仍各自保留位置與序號；`PlaylistEntryList` 使用穩定的 `position`。
+- 專輯與演出者頁面目前尚未實作；製作時遵守以上語意。三種已實作的列表順序共用 `formatListOrder` 將 0 基底位置轉為 1 基底顯示值。`npm run check` 0 errors／warnings；序號與欄位 Node 測試 15/15 通過。Headless browser harness 因本機 Vite 請求逾時未完成，真實 Tauri UI 尚未驗收。
 
 - **音樂庫：**使用者可加入多個來源。啟動時先顯示上次保存在 App SQLite 的可用曲庫，再背景同步並增量更新畫面；提供手動重新整理，但正確性不可依賴手動操作。每次啟動自動同步是最低要求，無需為此強制常駐檔案監控。來源暫時離線、根目錄不可讀或 SAF 授權失效時，不得將歌曲當成已永久刪除。
 - **增量同步：**Windows 一般檔案至少比較正規化路徑、大小與修改時間；只解析新增或變更檔案。只有來源成功完成掃描且可確認缺席後，才能處理刪除。單一壞檔須記錄錯誤並繼續整批同步。Android 一般共享媒體優先使用 MediaStore，特殊授權來源使用 SAF；不得套用 Windows 式任意路徑掃描。
@@ -231,6 +244,7 @@
 - 固定便攜版位於 `release/moemusicplayer.exe` 與同層 `moemusicplayer-updater.exe`，使用者資料固定在同層 `UserData/`。建置身份可由主 EXE 的 `--update-build-info` 讀取，不要把舊版本或雜湊當成最新值。
 - 正式播放器仍在執行時，直接背景替換新版，不要要求使用者關閉播放器，也不要強制終止程序。先在 `release/` 準備並核對新檔，再把目前主 EXE 改名為唯一的舊版備份，將新版放回 `moemusicplayer.exe`；更新同層 helper。替換失敗時恢復原檔。保留所有仍可能被執行中 PID 使用的舊 EXE 備份，直到該 PID 結束；不觸碰 `UserData/`。
 - queue reorder 長按啟動拖曳的門檻為 300 ms；列表 refresh 保留原列，在背景載入目前可見分頁後一次替換，避免 placeholder 閃爍，並維持捲動位置。門檻回歸測試 3/3 通過。Playwright harness 曾遇到本機 Vite GET 逾時，真實 Tauri 視窗拖曳與閃爍效果仍待人工驗收。
+
 ## 工作方式與下一步
 
 1. 開工先閱讀本文件、相關程式碼與 ADR；以最新需求、程式和測試結果修正過時敘述。較大修改先說明目標、落點層級與硬限制，區分平台硬限制、工程限制和慣例假設；比較至少兩種方案，必要時用原型或 benchmark 找瓶頸。重大架構變更寫入 `docs/adr/`，優先修正根因，不以 UI 權宜作法掩蓋後端問題。

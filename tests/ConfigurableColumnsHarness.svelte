@@ -28,6 +28,7 @@
     ariaColumnCount: string | null;
     header: string[];
     row: string[] | null;
+    indexLabels: string[];
     skeleton: string[] | null;
     headerCellCount: number;
     rowCellCount: number | null;
@@ -75,7 +76,7 @@
         ? '崩壞星穹鐵道-行於命途6 Experience the Paths Vol.6'
         : '專輯',
       albumArtist: null,
-      trackNumber: index + 1,
+      trackNumber: 90 - index,
       discNumber: 1,
       durationMs: 185_000,
       codec: 'FLAC',
@@ -163,6 +164,9 @@
       ?? root.querySelector<HTMLElement>('[role="row"][aria-rowindex="1"]');
     const row = root.querySelector<HTMLElement>('.paged-virtual-row[role="row"]');
     const rowIsSkeleton = row?.getAttribute('aria-label')?.includes('正在載入') ?? false;
+    const indexLabels = [...root.querySelectorAll<HTMLElement>('.paged-virtual-row[role="row"]')]
+      .filter((candidate) => !candidate.getAttribute('aria-label')?.includes('正在載入'))
+      .map((candidate) => candidate.querySelector<HTMLElement>('.column-index')?.textContent?.trim() ?? '');
     const columnsIn = (element: HTMLElement | null) => element
       ? [...element.querySelectorAll<HTMLElement>(':scope > .list-column')].map((cell) => cell.className.match(/list-column-([\w-]+)/)?.[1] ?? '')
       : null;
@@ -170,6 +174,7 @@
       ariaColumnCount: root.getAttribute('aria-colcount'),
       header: columnsIn(header) ?? [],
       row: row && !rowIsSkeleton ? columnsIn(row) : null,
+      indexLabels,
       skeleton: row && rowIsSkeleton ? columnsIn(row) : null,
       headerCellCount: header?.children.length ?? 0,
       rowCellCount: row?.children.length ?? null,
