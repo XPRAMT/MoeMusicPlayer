@@ -46,10 +46,10 @@ use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 pub mod updater;
 use settings::{
-    clamp_window_geometry_to_monitors, AppSettings, ExcludedFolderEntry, LyricsPreferences,
-    MainBackgroundMode, NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode,
-    ResamplingMode, SettingsStore, SlideshowOrder, SourceEntry, SourceEntryKind, ThemeSettings,
-    TrackListColumnSettings, WindowGeometry,
+    clamp_window_geometry_to_monitors, AppSettings, BackgroundOpacityTextColor,
+    ExcludedFolderEntry, LyricsPreferences, MainBackgroundMode, NowPlayingAppearancePreferences,
+    NowPlayingLayout, RepeatMode, ResamplingMode, SettingsStore, SlideshowOrder, SourceEntry,
+    SourceEntryKind, ThemeColorMode, ThemeSettings, TrackListColumnSettings, WindowGeometry,
 };
 #[cfg(any(target_os = "android", test))]
 mod android_artwork;
@@ -92,6 +92,10 @@ const SOURCE_SYNC_ERROR_DETAILS_LIMIT: usize = 100;
 struct ThemePreferencesDto {
     background_hex: String,
     accent_hex: String,
+    #[serde(default)]
+    color_mode: ThemeColorMode,
+    #[serde(default)]
+    background_opacity_text_color: BackgroundOpacityTextColor,
     #[serde(default = "default_quick_settings_opacity_percent")]
     quick_settings_opacity_percent: u8,
     #[serde(default = "default_quick_settings_blur_px")]
@@ -144,6 +148,8 @@ impl From<ThemePreferences> for ThemePreferencesDto {
         Self {
             background_hex: preferences.background_hex,
             accent_hex: preferences.accent_hex,
+            color_mode: ThemeColorMode::default(),
+            background_opacity_text_color: BackgroundOpacityTextColor::default(),
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
@@ -171,6 +177,8 @@ impl From<ThemeSettings> for ThemePreferencesDto {
         Self {
             background_hex: preferences.background_hex,
             accent_hex: preferences.accent_hex,
+            color_mode: preferences.color_mode,
+            background_opacity_text_color: preferences.background_opacity_text_color,
             quick_settings_opacity_percent: preferences.quick_settings_opacity_percent,
             quick_settings_blur_px: preferences.quick_settings_blur_px,
             main_background_blur_px: preferences.main_background_blur_px,
@@ -2912,6 +2920,8 @@ fn theme_set_preferences(
     let preferences = ThemeSettings {
         background_hex: preferences.background_hex,
         accent_hex: preferences.accent_hex,
+        color_mode: preferences.color_mode,
+        background_opacity_text_color: preferences.background_opacity_text_color,
         quick_settings_opacity_percent: preferences.quick_settings_opacity_percent,
         quick_settings_blur_px: preferences.quick_settings_blur_px,
         main_background_blur_px: preferences.main_background_blur_px,

@@ -60,6 +60,8 @@ export type UpdateInstallMode = 'restartNow' | 'nextLaunch';
 export interface ThemePreferences {
   backgroundHex: string;
   accentHex: string;
+  colorMode: 'autoTextColor' | 'autoBackgroundOpacity';
+  backgroundOpacityTextColor: 'white' | 'black';
   quickSettingsOpacityPercent: number;
   /** Backdrop blur for the Now Playing quick-settings drawer (0–50 px). */
   quickSettingsBlurPx: number;

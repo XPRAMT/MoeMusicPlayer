@@ -1,4 +1,4 @@
-import { compositeBackgroundHex, isHexColor } from './theme.js';
+import { compositeBackgroundHex, isHexColor, relativeLuminance } from './theme.js';
 
 const SAMPLE_SIZE = 32;
 
@@ -59,28 +59,53 @@ export async function sampleImageAverageHex(imageUrl) {
  *   pageHex: string,
  *   imageUrl?: string | null,
  *   opacityPercent: number,
+ *   automaticTextColor?: 'white' | 'black' | null,
  *   cachedImageAverageHex?: string | null,
  * }} input
- * @returns {Promise<{ contrastHex: string | null, imageAverageHex: string | null }>}
+ * @returns {Promise<{ contrastHex: string | null, imageAverageHex: string | null, opacityPercent: number }>}
  */
 export async function resolveBackdropContrast(input) {
   const pageHex = isHexColor(input.pageHex) ? input.pageHex.toUpperCase() : '#000000';
-  const opacityPercent = typeof input.opacityPercent === 'number' && Number.isFinite(input.opacityPercent)
+  const requestedOpacityPercent = typeof input.opacityPercent === 'number' && Number.isFinite(input.opacityPercent)
     ? Math.max(0, Math.min(100, Math.round(input.opacityPercent)))
     : 0;
-  if (!input.imageUrl || opacityPercent <= 0) {
-    return { contrastHex: null, imageAverageHex: null };
+  if (!input.imageUrl) {
+    return { contrastHex: null, imageAverageHex: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent };
   }
 
   const imageAverageHex = isHexColor(input.cachedImageAverageHex)
     ? input.cachedImageAverageHex.toUpperCase()
     : await sampleImageAverageHex(input.imageUrl);
   if (!imageAverageHex) {
-    return { contrastHex: null, imageAverageHex: null };
+    return { contrastHex: null, imageAverageHex: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent };
+  }
+
+  let opacityPercent = requestedOpacityPercent;
+  if (input.automaticTextColor) {
+    // Preserve as much of the background image as possible while keeping its
+    // average composited relative luminance strictly on the requested side of 0.5.
+    opacityPercent = 0;
+    for (let candidate = 0; candidate <= 100; candidate += 1) {
+      const average = compositeBackgroundHex(pageHex, imageAverageHex, candidate);
+      const luminance = relativeLuminance(average);
+      const satisfies = input.automaticTextColor === 'white'
+        ? luminance < 0.5
+        : luminance > 0.5;
+      if (satisfies) opacityPercent = candidate;
+    }
+  }
+
+  if (opacityPercent <= 0) {
+    return {
+      contrastHex: pageHex,
+      imageAverageHex,
+      opacityPercent,
+    };
   }
 
   return {
     contrastHex: compositeBackgroundHex(pageHex, imageAverageHex, opacityPercent),
     imageAverageHex,
+    opacityPercent,
   };
 }

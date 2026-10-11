@@ -15,6 +15,8 @@ test('default appearance uses pure black and a water-blue accent', () => {
   assert.deepEqual(DEFAULT_THEME_PREFERENCES, {
     backgroundHex: '#000000',
     accentHex: '#55D9FF',
+    colorMode: 'autoTextColor',
+    backgroundOpacityTextColor: 'white',
     quickSettingsOpacityPercent: 70,
     quickSettingsBlurPx: 12,
     mainBackgroundBlurPx: 20,
@@ -51,6 +53,26 @@ test('theme variables follow both selected colors and derive coordinated surface
     variables['--accent-foreground'],
     contrastingTextColor('#D84A9A', DEFAULT_THEME_PREFERENCES.autoTextColorThresholdPercent),
   );
+});
+
+test('automatic background opacity fixes page and text colors without overwriting the saved custom background', () => {
+  const preferences = {
+    ...DEFAULT_THEME_PREFERENCES,
+    backgroundHex: '#203040',
+    colorMode: 'autoBackgroundOpacity',
+    backgroundOpacityTextColor: 'black',
+  };
+  const variables = createThemeCssVariables(preferences, { pageBackgroundHex: '#FFFFFF' });
+  assert.equal(variables['--page'], '#FFFFFF');
+  assert.equal(variables['--text'], '#000000');
+  assert.equal(normalizeThemePreferences(preferences).backgroundHex, '#203040');
+
+  const whiteTextVariables = createThemeCssVariables(
+    { ...preferences, backgroundOpacityTextColor: 'white' },
+    { pageBackgroundHex: '#000000' },
+  );
+  assert.equal(whiteTextVariables['--page'], '#000000');
+  assert.equal(whiteTextVariables['--text'], '#FFFFFF');
 });
 
 test('composite background mixes page color with image average by opacity', () => {
@@ -138,6 +160,8 @@ test('invalid persisted values fall back to safe defaults', () => {
   assert.deepEqual(normalizeThemePreferences({ backgroundHex: 'red', accentHex: '#fff' }), {
     backgroundHex: '#000000',
     accentHex: '#55D9FF',
+    colorMode: 'autoTextColor',
+    backgroundOpacityTextColor: 'white',
     quickSettingsOpacityPercent: 70,
     quickSettingsBlurPx: 12,
     mainBackgroundBlurPx: 20,

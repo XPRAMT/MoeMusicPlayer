@@ -4,6 +4,8 @@
 export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   backgroundHex: '#000000',
   accentHex: '#55D9FF',
+  colorMode: 'autoTextColor',
+  backgroundOpacityTextColor: 'white',
   quickSettingsOpacityPercent: 70,
   quickSettingsBlurPx: 12,
   mainBackgroundBlurPx: 20,
@@ -44,6 +46,12 @@ export function normalizeThemePreferences(value) {
     accentHex: isHexColor(candidate.accentHex)
       ? candidate.accentHex.toUpperCase()
       : DEFAULT_THEME_PREFERENCES.accentHex,
+    colorMode: candidate.colorMode === 'autoBackgroundOpacity'
+      ? 'autoBackgroundOpacity'
+      : DEFAULT_THEME_PREFERENCES.colorMode,
+    backgroundOpacityTextColor: candidate.backgroundOpacityTextColor === 'black'
+      ? 'black'
+      : DEFAULT_THEME_PREFERENCES.backgroundOpacityTextColor,
     quickSettingsOpacityPercent: normalizeOpacityPercent(candidate.quickSettingsOpacityPercent),
     quickSettingsBlurPx: normalizeRange(
       candidate.quickSettingsBlurPx,
@@ -195,7 +203,7 @@ function channels(color) {
 }
 
 /**
- * @typedef {{ contrastBackgroundHex?: string | null }} ThemeCssOptions
+ * @typedef {{ contrastBackgroundHex?: string | null, pageBackgroundHex?: string | null }} ThemeCssOptions
  * `contrastBackgroundHex` is the visual average after page+image mix; `--page` stays the solid theme color.
  */
 
@@ -205,8 +213,13 @@ export function createThemeCssVariables(value, options = {}) {
   const contrastBackground = isHexColor(options.contrastBackgroundHex)
     ? options.contrastBackgroundHex.toUpperCase()
     : preferences.backgroundHex;
+  const pageBackground = isHexColor(options.pageBackgroundHex)
+    ? options.pageBackgroundHex.toUpperCase()
+    : preferences.backgroundHex;
   const threshold = preferences.autoTextColorThresholdPercent;
-  const textColor = contrastingTextColor(contrastBackground, threshold);
+  const textColor = preferences.colorMode === 'autoBackgroundOpacity'
+    ? (preferences.backgroundOpacityTextColor === 'black' ? '#000000' : '#FFFFFF')
+    : contrastingTextColor(contrastBackground, threshold);
   // Inverse is always the other of black/white; do not re-run the Y threshold on the text color.
   const textInverse = textColor === '#000000' ? '#FFFFFF' : '#000000';
   const textChannels = channels(textColor);
@@ -227,8 +240,8 @@ export function createThemeCssVariables(value, options = {}) {
   const statusText = (foreground) => readableOnSurfaces(foreground) ? foreground : textColor;
 
   return {
-    '--page': preferences.backgroundHex,
-    '--page-rgb': channels(preferences.backgroundHex),
+    '--page': pageBackground,
+    '--page-rgb': channels(pageBackground),
     '--panel': panel,
     '--panel-soft': panelSoft,
     '--sidebar-bg': sidebar,

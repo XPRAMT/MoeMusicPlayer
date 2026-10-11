@@ -222,6 +222,8 @@
   let systemWallpaperNextInSeconds = $state<number | null>(null);
   let mainBackgroundError = $state<string | null>(null);
   let mainBackgroundBusy = $state(false);
+  let mainBackgroundEffectiveOpacityPercent = $state(0);
+  let nowPlayingBackgroundEffectiveOpacityPercent = $state(0);
   /** Average page+image mix for main-window text contrast; null means use page color only. */
   let mainContrastBackgroundHex = $state<string | null>(null);
   /** Average page+cover mix for Now Playing text contrast; null means use page color only. */
@@ -419,22 +421,31 @@
   });
 
   function applyActiveTheme(): void {
+    const pageBackgroundHex = themePreferences.colorMode === 'autoBackgroundOpacity'
+      ? (themePreferences.backgroundOpacityTextColor === 'white' ? '#000000' : '#FFFFFF')
+      : themePreferences.backgroundHex;
     const contrastBackgroundHex = isNowPlayingOpen
-      ? (nowPlayingContrastBackgroundHex ?? themePreferences.backgroundHex)
-      : (mainContrastBackgroundHex ?? themePreferences.backgroundHex);
-    applyTheme(document.documentElement, themePreferences, { contrastBackgroundHex });
+      ? (nowPlayingContrastBackgroundHex ?? pageBackgroundHex)
+      : (mainContrastBackgroundHex ?? pageBackgroundHex);
+    applyTheme(document.documentElement, themePreferences, { contrastBackgroundHex, pageBackgroundHex });
   }
 
   $effect(() => {
-    const pageHex = themePreferences.backgroundHex;
+    const pageHex = themePreferences.colorMode === 'autoBackgroundOpacity'
+      ? (themePreferences.backgroundOpacityTextColor === 'white' ? '#000000' : '#FFFFFF')
+      : themePreferences.backgroundHex;
     const imageUrl = effectiveMainBackgroundUrl;
     const opacityPercent = themePreferences.mainBackgroundOpacityPercent;
+    const automaticTextColor = themePreferences.colorMode === 'autoBackgroundOpacity'
+      ? themePreferences.backgroundOpacityTextColor
+      : null;
     const revision = ++mainContrastRevision;
     const cachedImageAverageHex = mainImageAverageUrl === imageUrl ? mainImageAverageHex : null;
     void resolveBackdropContrast({
       pageHex,
       imageUrl,
       opacityPercent,
+      automaticTextColor,
       cachedImageAverageHex,
     }).then((result) => {
       if (revision !== mainContrastRevision) return;
@@ -446,6 +457,7 @@
         mainImageAverageHex = null;
       }
       mainContrastBackgroundHex = result.contrastHex;
+      mainBackgroundEffectiveOpacityPercent = result.opacityPercent;
     });
   });
 
@@ -531,9 +543,14 @@
   });
 
   $effect(() => {
-    const pageHex = themePreferences.backgroundHex;
+    const pageHex = themePreferences.colorMode === 'autoBackgroundOpacity'
+      ? (themePreferences.backgroundOpacityTextColor === 'white' ? '#000000' : '#FFFFFF')
+      : themePreferences.backgroundHex;
     const imageUrl = activeArtwork.status === 'ready' ? activeArtwork.objectUrl : null;
     const opacityPercent = nowPlayingAppearancePreferences.backgroundOpacityPercent;
+    const automaticTextColor = themePreferences.colorMode === 'autoBackgroundOpacity'
+      ? themePreferences.backgroundOpacityTextColor
+      : null;
     const revision = ++nowPlayingContrastRevision;
     const cachedImageAverageHex = nowPlayingImageAverageUrl === imageUrl
       ? nowPlayingImageAverageHex
@@ -542,6 +559,7 @@
       pageHex,
       imageUrl,
       opacityPercent,
+      automaticTextColor,
       cachedImageAverageHex,
     }).then((result) => {
       if (revision !== nowPlayingContrastRevision) return;
@@ -553,6 +571,7 @@
         nowPlayingImageAverageHex = null;
       }
       nowPlayingContrastBackgroundHex = result.contrastHex;
+      nowPlayingBackgroundEffectiveOpacityPercent = result.opacityPercent;
     });
   });
 
@@ -561,6 +580,8 @@
     void mainContrastBackgroundHex;
     void nowPlayingContrastBackgroundHex;
     void themePreferences.backgroundHex;
+    void themePreferences.colorMode;
+    void themePreferences.backgroundOpacityTextColor;
     void themePreferences.accentHex;
     void themePreferences.autoTextColorThresholdPercent;
     applyActiveTheme();
@@ -2357,24 +2378,39 @@
                 <div class="settings-panel-header">
                   <div>
                     <h3>顏色</h3>
-                    <p>自訂背景與主色。文字黑白依下方閥值與背景相對亮度自動切換。</p>
+                    <p>選擇文字顏色或圖片透明度的自動調整方式，並自訂主色。</p>
                   </div>
                   <button class="soft-button" type="button" onclick={resetThemePreferences}>恢復預設</button>
                 </div>
+                <div class="main-background-mode-picker" role="group" aria-label="顏色模式">
+                  <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoTextColor'} type="button" aria-pressed={themePreferences.colorMode === 'autoTextColor'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoTextColor' }); saveThemePreferencesNow(); }}>自動文字顏色</button>
+                  <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoBackgroundOpacity'} type="button" aria-pressed={themePreferences.colorMode === 'autoBackgroundOpacity'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoBackgroundOpacity' }); saveThemePreferencesNow(); }}>自動背景透明度</button>
+                </div>
                 <div class="appearance-color-grid">
-                  <label class="theme-color-control">
-                    <input
-                      type="color"
-                      aria-label="背景色"
-                      value={themePreferences.backgroundHex}
-                      oninput={(event) => updateThemeColor('backgroundHex', event.currentTarget.value)}
-                      onchange={saveThemePreferencesNow}
-                    />
-                    <span class="theme-color-copy">
-                      <strong>背景色</strong>
-                      <code>{themePreferences.backgroundHex}</code>
-                    </span>
-                  </label>
+                  {#if themePreferences.colorMode === 'autoTextColor'}
+                    <label class="theme-color-control">
+                      <input
+                        type="color"
+                        aria-label="背景色"
+                        value={themePreferences.backgroundHex}
+                        oninput={(event) => updateThemeColor('backgroundHex', event.currentTarget.value)}
+                        onchange={saveThemePreferencesNow}
+                      />
+                      <span class="theme-color-copy">
+                        <strong>背景色</strong>
+                        <code>{themePreferences.backgroundHex}</code>
+                      </span>
+                    </label>
+                  {:else}
+                    <div class="cover-corner-setting" role="group" aria-label="文字顏色">
+                      <span class="cover-corner-setting-label"><strong>文字顏色</strong></span>
+                      <div class="layout-choice-row">
+                        <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'white'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'white'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'white' }); saveThemePreferencesNow(); }}>白色字</button>
+                        <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'black'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'black'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'black' }); saveThemePreferencesNow(); }}>黑色字</button>
+                      </div>
+                      <p class="source-muted-note">{themePreferences.backgroundOpacityTextColor === 'white' ? '背景色固定為純黑，圖片透明度自動調整至平均亮度 Y < 0.5。' : '背景色固定為純白，圖片透明度自動調整至平均亮度 Y > 0.5。'}</p>
+                    </div>
+                  {/if}
                   <label class="theme-color-control">
                     <input
                       type="color"
@@ -2389,19 +2425,21 @@
                     </span>
                   </label>
                 </div>
-                <label class="lyrics-preference-range">
-                  <span><strong>自動切換文字顏色閥值</strong><output>{themePreferences.autoTextColorThresholdPercent}%</output></span>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="1"
-                    value={themePreferences.autoTextColorThresholdPercent}
-                    aria-label="自動切換文字顏色閥值"
-                    oninput={(event) => updateMainBackgroundLook({ autoTextColorThresholdPercent: Number(event.currentTarget.value) })}
-                    onchange={saveThemePreferencesNow}
-                  />
-                </label>
+                {#if themePreferences.colorMode === 'autoTextColor'}
+                  <label class="lyrics-preference-range">
+                    <span><strong>自動切換文字顏色閥值</strong><output>{themePreferences.autoTextColorThresholdPercent}%</output></span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={themePreferences.autoTextColorThresholdPercent}
+                      aria-label="自動切換文字顏色閥值"
+                      oninput={(event) => updateMainBackgroundLook({ autoTextColorThresholdPercent: Number(event.currentTarget.value) })}
+                      onchange={saveThemePreferencesNow}
+                    />
+                  </label>
+                {/if}
                 <div class="settings-panel-header">
                   <div>
                     <h3>主介面背景</h3>
@@ -2471,8 +2509,12 @@
                     <input type="range" min="0" max="50" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label="主介面背景模糊程度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                   </label>
                   <label class="lyrics-preference-range">
-                    <span><strong>背景透明度</strong><output>{themePreferences.mainBackgroundOpacityPercent}%</output></span>
-                    <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundOpacityPercent} aria-label="主介面背景透明度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                    <span><strong>背景透明度</strong><output>{themePreferences.colorMode === 'autoBackgroundOpacity' ? `自動 ${mainBackgroundEffectiveOpacityPercent}%` : `${themePreferences.mainBackgroundOpacityPercent}%`}</output></span>
+                    {#if themePreferences.colorMode === 'autoBackgroundOpacity'}
+                      <small>依目前背景圖片的平均亮度與文字顏色自動計算。</small>
+                    {:else}
+                      <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundOpacityPercent} aria-label="主介面背景透明度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                    {/if}
                   </label>
                 {/if}
                 {#if mainBackgroundError}
@@ -2576,6 +2618,8 @@
                   showGroupHeading={false}
                   layout={nowPlayingLayout}
                   appearance={nowPlayingAppearancePreferences}
+                  autoBackgroundOpacity={themePreferences.colorMode === 'autoBackgroundOpacity'}
+                  calculatedOpacityPercent={nowPlayingBackgroundEffectiveOpacityPercent}
                   lyrics={lyricsPreferences}
                   onLayoutChange={setNowPlayingLayout}
                   onAppearanceChange={updateNowPlayingAppearancePreferences}
@@ -2609,6 +2653,8 @@
                   showGroupHeading={false}
                   layout={nowPlayingLayout}
                   appearance={nowPlayingAppearancePreferences}
+                  autoBackgroundOpacity={themePreferences.colorMode === 'autoBackgroundOpacity'}
+                  calculatedOpacityPercent={nowPlayingBackgroundEffectiveOpacityPercent}
                   lyrics={lyricsPreferences}
                   onLayoutChange={setNowPlayingLayout}
                   onAppearanceChange={updateNowPlayingAppearancePreferences}
@@ -2825,7 +2871,7 @@
   class:has-custom-titlebar={showCustomTitlebar}
   data-active-view={activeView}
   class:has-main-backdrop={effectiveMainBackgroundUrl !== null}
-  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-bleed: ${nowPlayingAppearancePreferences.backgroundBlurPx * 1.5}px; --np-background-opacity: ${nowPlayingAppearancePreferences.backgroundOpacityPercent / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-bleed: ${themePreferences.mainBackgroundBlurPx * 1.5}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100}; --quick-settings-opacity: ${themePreferences.quickSettingsOpacityPercent}%; --quick-settings-blur: ${themePreferences.quickSettingsBlurPx}px;`}
+  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-bleed: ${nowPlayingAppearancePreferences.backgroundBlurPx * 1.5}px; --np-background-opacity: ${(themePreferences.colorMode === 'autoBackgroundOpacity' ? nowPlayingBackgroundEffectiveOpacityPercent : nowPlayingAppearancePreferences.backgroundOpacityPercent) / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-bleed: ${themePreferences.mainBackgroundBlurPx * 1.5}px; --main-background-opacity: ${(themePreferences.colorMode === 'autoBackgroundOpacity' ? mainBackgroundEffectiveOpacityPercent : themePreferences.mainBackgroundOpacityPercent) / 100}; --quick-settings-opacity: ${themePreferences.quickSettingsOpacityPercent}%; --quick-settings-blur: ${themePreferences.quickSettingsBlurPx}px;`}
 >
   {#if showCustomTitlebar}
     <WindowTitlebar transparent={isNowPlayingOpen || effectiveMainBackgroundUrl !== null} />

@@ -28,6 +28,10 @@ pub enum RepeatMode {
 pub struct ThemeSettings {
     pub background_hex: String,
     pub accent_hex: String,
+    #[serde(default)]
+    pub color_mode: ThemeColorMode,
+    #[serde(default)]
+    pub background_opacity_text_color: BackgroundOpacityTextColor,
     #[serde(default = "default_quick_settings_opacity_percent")]
     pub quick_settings_opacity_percent: u8,
     /// Backdrop blur for the Now Playing quick-settings drawer.
@@ -56,6 +60,22 @@ pub struct ThemeSettings {
     /// Relative-luminance Y threshold (0–100). At/above → black text; below → white text.
     #[serde(default = "default_auto_text_color_threshold_percent")]
     pub auto_text_color_threshold_percent: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemeColorMode {
+    #[default]
+    AutoTextColor,
+    AutoBackgroundOpacity,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundOpacityTextColor {
+    #[default]
+    White,
+    Black,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -111,6 +131,8 @@ impl Default for ThemeSettings {
         Self {
             background_hex: "#000000".to_owned(),
             accent_hex: "#55D9FF".to_owned(),
+            color_mode: ThemeColorMode::default(),
+            background_opacity_text_color: BackgroundOpacityTextColor::default(),
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
@@ -2795,6 +2817,33 @@ mod tests {
         let written = serde_json::to_value(&theme).expect("serialize theme");
         assert_eq!(written["mainBackgroundOpacityPercent"], 62);
         assert!(written.get("mainBackgroundBrightnessPercent").is_none());
+    }
+
+    #[test]
+    fn theme_color_mode_defaults_for_old_settings_and_round_trips_new_selection() {
+        let old: ThemeSettings = serde_json::from_value(serde_json::json!({
+            "backgroundHex": "#000000",
+            "accentHex": "#55D9FF"
+        }))
+        .expect("deserialize old theme settings");
+        assert_eq!(old.color_mode, ThemeColorMode::AutoTextColor);
+        assert_eq!(
+            old.background_opacity_text_color,
+            BackgroundOpacityTextColor::White
+        );
+
+        let selected = ThemeSettings {
+            color_mode: ThemeColorMode::AutoBackgroundOpacity,
+            background_opacity_text_color: BackgroundOpacityTextColor::Black,
+            ..ThemeSettings::default()
+        };
+        let json = serde_json::to_value(&selected).expect("serialize selected theme");
+        let restored: ThemeSettings = serde_json::from_value(json).expect("restore selected theme");
+        assert_eq!(restored.color_mode, ThemeColorMode::AutoBackgroundOpacity);
+        assert_eq!(
+            restored.background_opacity_text_color,
+            BackgroundOpacityTextColor::Black
+        );
     }
 
     #[test]
