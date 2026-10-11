@@ -68,7 +68,7 @@
     isHexColor,
     normalizeThemePreferences,
   } from './lib/theme';
-  import { resolveBackdropContrast } from './lib/backdrop-contrast.js';
+  import { getBackdropTargetPercent, resolveBackdropContrast } from './lib/backdrop-contrast.js';
   import { splitArtists } from './lib/artist-names.js';
   import { formatVolume } from './lib/format';
   import { describeOutputFormat } from './lib/output-format.js';
@@ -214,6 +214,10 @@
   let lyricsPreferencesState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let lyricsPreferencesError = $state<string | null>(null);
   let themePreferences = $state<ThemePreferences>({ ...DEFAULT_THEME_PREFERENCES });
+  let backgroundOpacityTargetPercent = $derived(getBackdropTargetPercent(
+    themePreferences.backgroundOpacityTextColor,
+    themePreferences.backgroundClarityPercent,
+  ));
   let mainBackgroundUrl = $state<string | null>(null);
   let mainBackgroundObjectUrl: string | null = null;
   let mainBackgroundBytesHash = '';
@@ -2433,7 +2437,7 @@
                         <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'white'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'white'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'white' }); saveThemePreferencesNow(); }}>白色字</button>
                         <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'black'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'black'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'black' }); saveThemePreferencesNow(); }}>黑色字</button>
                       </div>
-                      <p class="source-muted-note">{themePreferences.backgroundOpacityTextColor === 'white' ? '背景色固定為純黑，圖片透明度自動調整至平均亮度 Y < 0.5。' : '背景色固定為純白，圖片透明度自動調整至平均亮度 Y > 0.5。'}</p>
+                      <p class="source-muted-note">{themePreferences.backgroundOpacityTextColor === 'white' ? `背景色固定為純黑，圖片透明度自動調整至平均亮度 Y < ${backgroundOpacityTargetPercent}。` : `背景色固定為純白，圖片透明度自動調整至平均亮度 Y > ${backgroundOpacityTargetPercent}。`}</p>
                       <label class="lyrics-preference-range">
                         <span><strong>清晰度</strong><output>{themePreferences.backgroundClarityPercent}%</output></span>
                         <input
@@ -2447,7 +2451,6 @@
                           onchange={saveThemePreferencesNow}
                         />
                       </label>
-                      <p class="source-muted-note">清晰度 0% 以 Y=0.5 為界；50% 時目標為白字 Y&lt;0.25、黑字 Y&gt;0.75；100% 時分別為 Y=0 與 Y=1。</p>
                     </div>
                   {/if}
                 </div>

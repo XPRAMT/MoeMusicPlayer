@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveBackdropContrast } from '../src/lib/backdrop-contrast.js';
+import { getBackdropTargetPercent, resolveBackdropContrast } from '../src/lib/backdrop-contrast.js';
 import { relativeLuminance } from '../src/lib/theme.js';
 
 test('resolveBackdropContrast skips sampling when opacity is zero or image is missing', async () => {
@@ -29,6 +29,17 @@ test('resolveBackdropContrast reuses a cached image average without loading', as
   assert.equal(resolved.contrastHex, '#666666');
   assert.equal(resolved.opacityPercent, 40);
   assert.equal(resolved.calculation, null);
+});
+
+test('backdrop target text follows selected text color and clarity', () => {
+  assert.deepEqual(
+    [0, 50, 100].map((clarity) => getBackdropTargetPercent('white', clarity)),
+    [50, 25, 0],
+  );
+  assert.deepEqual(
+    [0, 50, 100].map((clarity) => getBackdropTargetPercent('black', clarity)),
+    [50, 75, 100],
+  );
 });
 
 test('automatic opacity uses the direct Y ratio for white text on a black base', async () => {

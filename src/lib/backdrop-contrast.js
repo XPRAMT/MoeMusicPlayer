@@ -4,6 +4,18 @@ import { compositeBackgroundHex, isHexColor, relativeLuminance } from './theme.j
 
 const SAMPLE_SIZE = 32;
 
+/** @param {'white' | 'black'} textColor @param {number} clarityPercent @returns {number} */
+export function getBackdropTargetPercent(textColor, clarityPercent) {
+  const safeClarityPercent = typeof clarityPercent === 'number' && Number.isFinite(clarityPercent)
+    ? Math.max(0, Math.min(100, clarityPercent))
+    : 0;
+  const clarity = safeClarityPercent / 100;
+  const targetY = textColor === 'white'
+    ? 0.5 * (1 - clarity)
+    : 0.5 + 0.5 * clarity;
+  return Math.round(targetY * 100);
+}
+
 /** @param {string} imageUrl @returns {Promise<HTMLImageElement>} */
 function loadImage(imageUrl) {
   return new Promise((resolve, reject) => {
@@ -102,7 +114,7 @@ export async function resolveBackdropContrast(input) {
       opacityPercent = !needsAdjustment
         ? 100
         : Math.min(100, (targetY / imageY) * 100);
-      const targetPercent = Math.round(nominalTargetY * 100);
+      const targetPercent = getBackdropTargetPercent('white', clarityPercent);
       const imagePercent = Math.round(imageY * 100);
       calculation = {
         kind: needsAdjustment ? 'ratio' : 'noAdjustment',
@@ -123,7 +135,7 @@ export async function resolveBackdropContrast(input) {
       opacityPercent = !needsAdjustment
         ? 100
         : Math.min(100, ((1 - targetY) / (1 - imageY)) * 100);
-      const targetPercent = Math.round(nominalTargetY * 100);
+      const targetPercent = getBackdropTargetPercent('black', clarityPercent);
       const imagePercent = Math.round(imageY * 100);
       calculation = {
         kind: needsAdjustment ? 'inverseRatio' : 'noAdjustment',
