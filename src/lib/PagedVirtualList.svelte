@@ -566,6 +566,18 @@
     background: transparent;
   }
 
+  .paged-virtual-header::after {
+    content: '';
+    position: absolute;
+    z-index: 3;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 1px;
+    pointer-events: none;
+    background: var(--line);
+  }
+
   .paged-virtual-header-shift {
     width: max(100%, var(--track-list-min-width, 0px));
     min-width: max(100%, var(--track-list-min-width, 0px));

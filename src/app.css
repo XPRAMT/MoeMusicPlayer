@@ -1481,7 +1481,6 @@ input:focus-visible {
 
 .track-table-head {
   min-height: 38px;
-  border-bottom: 1px solid var(--line);
   color: var(--text-soft);
   font-family: Consolas, monospace;
   font-size: var(--font-body);
