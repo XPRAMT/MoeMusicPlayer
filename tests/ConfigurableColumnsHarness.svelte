@@ -5,14 +5,18 @@
   import NowPlayingArrangement from '../src/lib/NowPlayingArrangement.svelte';
   import NowPlayingLayoutSwitch from '../src/lib/NowPlayingLayoutSwitch.svelte';
   import {
+    DEFAULT_LIBRARY_SORT,
     DEFAULT_TRACK_COLUMN_PREFERENCES,
     normalizeTrackColumnPreferences,
+    toggleLibrarySort,
   } from '../src/lib/track-columns.js';
   import type {
     NowPlayingLayout,
+    LibraryListSort,
     PlaylistEntrySummary,
     PlaylistPage,
     TrackListColumnPreference,
+    PlaylistListSort,
     TrackPage,
     TrackPageRequest,
     TrackSummary,
@@ -52,6 +56,8 @@
       layout: { paneOrder: string[]; paneTops: number[]; lyricsText: string | null };
       switches: Array<{ role: string | null; pressed: Array<string | null> }>;
       plays: Array<{ kind: 'library' | 'playlist'; id: string }>;
+      librarySortRequests: LibraryListSort[];
+      playlistSortRequests: PlaylistListSort[];
     };
   }
 
@@ -62,8 +68,11 @@
   }
 
   let columns = $state(DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column })));
+  let librarySort = $state<LibraryListSort>({ ...DEFAULT_LIBRARY_SORT });
   let layout = $state<NowPlayingLayout>('a');
   let plays = $state<Array<{ kind: 'library' | 'playlist'; id: string }>>([]);
+  let playlistSortRequests = $state<PlaylistListSort[]>([]);
+  let librarySortRequests = $state<LibraryListSort[]>([]);
   let heldTrackPages: DeferredPage<TrackPage>[] = [];
   let heldPlaylistPages: DeferredPage<PlaylistPage>[] = [];
 
@@ -128,6 +137,7 @@
   }
 
   function fetchTrackPage(request: TrackPageRequest): Promise<TrackPage> {
+    if (request.sort) librarySortRequests = [...librarySortRequests, request.sort];
     const totalCount = 3;
     const count = Math.min(request.limit, Math.max(0, totalCount - request.offset));
     const page: TrackPage = {
@@ -139,11 +149,20 @@
     return holdPage(heldTrackPages, page);
   }
 
-  function fetchPlaylistPage(request: { playlistId: string; offset: number; limit: number }): Promise<PlaylistPage> {
-    const totalCount = 2;
+  function fetchPlaylistPage(request: { playlistId: string; sort: PlaylistListSort; offset: number; limit: number }): Promise<PlaylistPage> {
+    playlistSortRequests = [...playlistSortRequests, request.sort];
+    const allEntries = [makePlaylistEntry(0), makePlaylistEntry(1)];
+    const direction = request.sort.direction === 'desc' ? -1 : 1;
+    allEntries.sort((left, right) => {
+      if (request.sort.field === 'position') return (left.position - right.position) * direction;
+      const leftValue = left[request.sort.field] ?? '';
+      const rightValue = right[request.sort.field] ?? '';
+      return String(leftValue).localeCompare(String(rightValue)) * direction || left.position - right.position;
+    });
+    const totalCount = allEntries.length;
     const count = Math.min(request.limit, Math.max(0, totalCount - request.offset));
     const page: PlaylistPage = {
-      items: Array.from({ length: count }, (_, index) => makePlaylistEntry(request.offset + index)),
+      items: allEntries.slice(request.offset, request.offset + count),
       offset: request.offset,
       limit: request.limit,
       totalCount,
@@ -201,6 +220,10 @@
     await tick();
   }
 
+  function handleLibrarySort(columnId: TrackListColumnPreference['id']): void {
+    librarySort = toggleLibrarySort(librarySort, columnId);
+  }
+
   async function setLayout(nextLayout: NowPlayingLayout) {
     const previousArtwork = document.querySelector('[data-layout-pane="artwork"]');
     const previousLyrics = document.querySelector('[data-layout-pane="lyrics"]');
@@ -239,6 +262,8 @@
           pressed: [...group.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-pressed')),
         })),
       plays,
+      librarySortRequests,
+      playlistSortRequests,
     };
   }
 
@@ -268,6 +293,8 @@
               playbackReady={true}
               isSendingPlaybackCommand={false}
               fetchPage={fetchTrackPage}
+              sort={librarySort}
+              onSort={handleLibrarySort}
               {columns}
               onPlay={(track) => {
                 plays = [...plays, { kind: 'library', id: track.id }];

@@ -47,6 +47,36 @@ async page => {
   assert(state.library.indexLabels[0] === '1', 'library # must be the displayed list position, not the track metadata number');
   assert(state.playlist.indexLabels[0] === '1' && state.playlist.indexLabels[1] === '2', 'playlist # must follow stored playlist positions');
 
+  let sortRequestCount = state.playlistSortRequests.length;
+  await page.getByRole('button', { name: '依播放清單中的順序排序' }).click();
+  await page.waitForFunction(count => window.configurableColumnsHarness.snapshot().playlistSortRequests.length > count, sortRequestCount);
+  await page.evaluate(() => window.configurableColumnsHarness.releasePages());
+  await page.waitForFunction(() => {
+    const snapshot = window.configurableColumnsHarness.snapshot();
+    return snapshot.playlist.indexLabels.join(',') === '2,1'
+      && snapshot.playlistSortRequests.at(-1)?.field === 'position'
+      && snapshot.playlistSortRequests.at(-1)?.direction === 'desc';
+  });
+  sortRequestCount = await page.evaluate(() => window.configurableColumnsHarness.snapshot().playlistSortRequests.length);
+  await page.getByRole('button', { name: '依播放清單中的順序排序' }).click();
+  await page.waitForFunction(count => window.configurableColumnsHarness.snapshot().playlistSortRequests.length > count, sortRequestCount);
+  await page.evaluate(() => window.configurableColumnsHarness.releasePages());
+  await page.waitForFunction(() => {
+    const snapshot = window.configurableColumnsHarness.snapshot();
+    return snapshot.playlist.indexLabels.join(',') === '1,2'
+      && snapshot.playlistSortRequests.at(-1)?.field === 'position'
+      && snapshot.playlistSortRequests.at(-1)?.direction === 'asc';
+  });
+
+  let librarySortRequestCount = state.librarySortRequests.length;
+  await page.getByRole('button', { name: '音訊格式' }).first().click();
+  await page.waitForFunction(count => window.configurableColumnsHarness.snapshot().librarySortRequests.length > count, librarySortRequestCount);
+  await page.evaluate(() => window.configurableColumnsHarness.releasePages());
+  await page.waitForFunction(() => {
+    const request = window.configurableColumnsHarness.snapshot().librarySortRequests.at(-1);
+    return request?.field === 'audioFormat' && request?.direction === 'asc';
+  });
+
   const missing = await page.locator('.playlist-entry-row').filter({ hasText: 'M3U 項目' }).evaluate(row => ({
     cells: [...row.querySelectorAll('.list-column')].map(cell => ({ className: cell.className, text: cell.textContent.trim() })),
     artistSubtitles: row.querySelectorAll('.playlist-entry-title small').length,

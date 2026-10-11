@@ -141,19 +141,24 @@ fn playlist_order_by(sort: PlaylistListSort, direction: &str) -> String {
     if sort.field == PlaylistSortField::AudioFormat {
         // Rank by the requested codec sequence, then source sample rate, then the
         // codec-appropriate source quality metric. Lossy bit depth is never consulted.
-        return format!(
-            "CASE UPPER(COALESCE(t.codec, '')) \
-             WHEN 'WAV' THEN 0 WHEN 'FLAC' THEN 1 WHEN 'VORBIS' THEN 2 \
-             WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 4 WHEN 'MP3' THEN 5 ELSE 6 END {direction}, \
-             COALESCE(t.sample_rate_hz, 0) {direction}, \
-             CASE WHEN UPPER(COALESCE(t.codec, '')) IN ('WAV','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','PCM','TAK','TTA') \
-                  THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction}, \
-             e.position ASC"
-        );
+        return audio_format_order_by(direction, "e.position");
     }
 
     let expression = playlist_sort_expression(sort.field);
     format!("{expression} {direction}, e.position ASC")
+}
+
+fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
+    // Keep one quality ordering for library and playlist views. Normalize older codec labels.
+    format!(
+        "CASE TRIM(UPPER(COALESCE(t.codec, ''))) \
+         WHEN 'WAV' THEN 0 WHEN 'WAVE' THEN 0 WHEN 'FLAC' THEN 1 WHEN 'VORBIS' THEN 2 WHEN 'OGG VORBIS' THEN 2 \
+         WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 4 WHEN 'M4A' THEN 4 WHEN 'AAC' THEN 4 WHEN 'MP4A' THEN 4 WHEN 'MP3' THEN 5 ELSE 6 END {direction}, \
+         COALESCE(t.sample_rate_hz, 0) {direction}, \
+         CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) IN ('WAV','WAVE','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','PCM','TAK','TTA') \
+              THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction}, \
+         {tie_breaker} ASC"
+    )
 }
 
 fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
@@ -2754,12 +2759,7 @@ fn tracks_order_by_sql(sort: TrackListSort) -> &'static str {
         (TrackSortField::Year, false) => {
             "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date DESC, (t.year IS NULL) ASC, t.year DESC, t.track_id DESC"
         }
-        (TrackSortField::AudioFormat, true) => {
-            "t.codec COLLATE NOCASE ASC, t.sample_rate_hz ASC, t.bit_depth ASC, t.track_id ASC"
-        }
-        (TrackSortField::AudioFormat, false) => {
-            "t.codec COLLATE NOCASE DESC, t.sample_rate_hz DESC, t.bit_depth DESC, t.track_id DESC"
-        }
+        (TrackSortField::AudioFormat, _) => unreachable!("audio format has a compound sort key"),
         (TrackSortField::Duration, true) => {
             "(t.duration_ms IS NULL) ASC, t.duration_ms ASC, t.track_id ASC"
         }
@@ -2791,10 +2791,18 @@ fn fetch_tracks_window_filtered(
     limit: u32,
 ) -> Result<Vec<TrackSummary>, DatabaseError> {
     let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter);
+    let order_by = if sort.field == TrackSortField::AudioFormat {
+        let direction = match sort.direction {
+            TrackSortDirection::Asc => "ASC",
+            TrackSortDirection::Desc => "DESC",
+        };
+        audio_format_order_by(direction, "t.track_id")
+    } else {
+        tracks_order_by_sql(sort).to_owned()
+    };
     let sql = format!(
         "{} ORDER BY {} LIMIT ?2 OFFSET ?3",
-        TRACKS_PAGE_SELECT_SQL,
-        tracks_order_by_sql(sort)
+        TRACKS_PAGE_SELECT_SQL, order_by
     );
     let mut items = {
         let mut statement = connection.prepare(&sql)?;
@@ -4620,6 +4628,32 @@ mod tests {
         assert_eq!(sorted.items[5].bitrate_bps, Some(96_000));
         assert_eq!(sorted.items[6].bitrate_bps, Some(160_000));
         assert_eq!(sorted.items[7].sample_rate_hz, Some(96_000));
+
+        let library_sorted = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 20,
+                query: None,
+                field_filter: None,
+                sort: player_core::TrackListSort {
+                    field: player_core::TrackSortField::AudioFormat,
+                    direction: player_core::TrackSortDirection::Asc,
+                },
+            })
+            .expect("sort library by audio format");
+        assert_eq!(
+            library_sorted
+                .items
+                .iter()
+                .map(|item| item.title.as_deref().expect("title"))
+                .collect::<Vec<_>>(),
+            vec![
+                "wav", "flac44", "flac16", "flac24", "vorbis", "opus96", "opus160", "opus96k",
+                "mp4", "mp3"
+            ]
+        );
+        assert_eq!(library_sorted.items[5].bitrate_bps, Some(96_000));
+        assert_eq!(library_sorted.items[6].bitrate_bps, Some(160_000));
     }
 
     #[test]
