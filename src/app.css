@@ -1304,7 +1304,7 @@ input:focus-visible {
 }
 
 .spin {
-  animation: spin 1.3s linear infinite;
+  animation: spin 1.3s linear infinite reverse;
 }
 
 .library-toolbar {

@@ -2,6 +2,8 @@
 
 ## 專案現況與目標
 
+- 頂欄右上角「同步中」的 IconRefresh 需逆時針旋轉；CSS `.spin` 只套用於此同步圖示，`.loader-ring` 等載入圓環維持原本方向。
+
 專案已有可建置的 Tauri 2、Svelte 5、TypeScript 與 Vite 骨架，並包含 Rust Core、SQLite 曲庫、Windows 與 Android 媒體來源 adapter，以及雙語 README。
 
 ## GitHub 與版控
