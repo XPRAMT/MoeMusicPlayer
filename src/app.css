@@ -1798,6 +1798,15 @@ input:focus-visible {
   background: transparent;
 }
 
+.now-playing-card.lyrics-hidden {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.now-playing-card.lyrics-hidden .now-playing-lyrics {
+  display: none;
+}
+
 .now-playing-view {
   display: flex;
   min-width: 0;
@@ -4192,6 +4201,10 @@ input:focus-visible {
 
   .now-playing-view .now-playing-card.layout-b {
     grid-template-rows: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  }
+
+  .now-playing-view .now-playing-card.lyrics-hidden {
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .now-playing-view .now-playing-artwork {

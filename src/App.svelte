@@ -207,6 +207,7 @@
   let nowPlayingAppearanceState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let nowPlayingAppearanceError = $state<string | null>(null);
   let lyricsPreferences = $state<LyricsPreferences>(normalizeLyricsPreferences(DEFAULT_LYRICS_PREFERENCES));
+  let nowPlayingLyricsVisible = $state(true);
   let lyricsPreferencesState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let lyricsPreferencesError = $state<string | null>(null);
   let themePreferences = $state<ThemePreferences>({ ...DEFAULT_THEME_PREFERENCES });
@@ -2895,7 +2896,15 @@
               >同步歌詞</button>
             </div>
           {/if}
-          <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
+          <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞顯示">
+            <button
+              type="button"
+              class="soft-button lyrics-toggle"
+              aria-pressed={nowPlayingLyricsVisible}
+              aria-label={nowPlayingLyricsVisible ? '關閉歌詞' : '開啟歌詞'}
+              title={nowPlayingLyricsVisible ? '關閉歌詞' : '開啟歌詞'}
+              onclick={() => { nowPlayingLyricsVisible = !nowPlayingLyricsVisible; }}
+            >歌詞</button>
             <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label="切換譯文顯示" onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>譯</button>
             <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label="切換羅馬拼音顯示" onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>羅</button>
           </div>
@@ -2907,7 +2916,7 @@
       <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body" inert={isQuickSettingsOpen}>
         <div class="now-playing-overlay-content">
           <section class="now-playing-view" aria-label="正在播放" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}>
-            <NowPlayingArrangement layout={nowPlayingLayout}>
+            <NowPlayingArrangement layout={nowPlayingLayout} lyricsVisible={nowPlayingLyricsVisible}>
               {#snippet artwork()}
                 <div
                   bind:this={coverStageElement}

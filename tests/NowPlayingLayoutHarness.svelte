@@ -55,6 +55,7 @@
 
   interface LayoutHarnessApi {
     setLayout: (layout: NowPlayingLayout) => Promise<void>;
+    setLyricsVisible: (visible: boolean) => Promise<void>;
     setArtworkVariant: (variant: 'square' | 'portrait' | 'landscape') => Promise<void>;
     snapshot: () => LayoutSnapshot;
     scrollLyrics: () => Promise<boolean>;
@@ -66,6 +67,7 @@
   }
 
   let layout = $state<NowPlayingLayout>('a');
+  let lyricsVisible = $state(true);
   let artworkVariant = $state<'square' | 'portrait' | 'landscape'>('landscape');
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   let coverStageElement: HTMLDivElement;
@@ -144,6 +146,11 @@
 
   async function setLayout(nextLayout: NowPlayingLayout): Promise<void> {
     layout = nextLayout;
+    await tick();
+  }
+
+  async function setLyricsVisible(visible: boolean): Promise<void> {
+    lyricsVisible = visible;
     await tick();
   }
 
@@ -292,7 +299,7 @@
   }
 
   $effect(() => {
-      window.nowPlayingLayoutHarness = { setLayout, setArtworkVariant, snapshot, scrollLyrics, attemptOuterScroll };
+      window.nowPlayingLayoutHarness = { setLayout, setLyricsVisible, setArtworkVariant, snapshot, scrollLyrics, attemptOuterScroll };
   });
 </script>
 
@@ -315,7 +322,8 @@
         <p class="now-playing-format"><span>FLAC．48 kHz．24 bit</span><img src={hiResBadgeUrl} alt="Hi-Res" /></p>
       </div>
       <div class="now-playing-topbar-tools">
-        <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
+        <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞顯示">
+          <button type="button" class="lyrics-toggle" aria-label={lyricsVisible ? '關閉歌詞' : '開啟歌詞'} aria-pressed={lyricsVisible} onclick={() => lyricsVisible = !lyricsVisible}>歌詞</button>
           <button type="button" class="lyrics-toggle" aria-pressed="true" aria-label="切換譯文顯示">譯</button>
           <button type="button" class="lyrics-toggle" aria-pressed="false" aria-label="切換羅馬拼音顯示">羅</button>
         </div>
@@ -325,7 +333,7 @@
       <div class="now-playing-overlay-content">
         <section class="now-playing-view" aria-label="正在播放版面" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}>
           <NowPlayingLayoutSwitch {layout} variant="compact" onChange={setLayout} />
-          <NowPlayingArrangement {layout}>
+          <NowPlayingArrangement {layout} {lyricsVisible}>
             {#snippet artwork()}
               <div
                 bind:this={coverStageElement}
