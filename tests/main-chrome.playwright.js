@@ -179,11 +179,11 @@ async page => {
       viewport: { width: innerWidth, height: innerHeight },
     };
   });
-  assert(Math.abs(tenPixelBlurGeometry.imageBox.left + 10) < 0.1
-    && Math.abs(tenPixelBlurGeometry.imageBox.top + 10) < 0.1
-    && Math.abs(tenPixelBlurGeometry.imageBox.width - tenPixelBlurGeometry.viewport.width - 20) < 0.1
-    && Math.abs(tenPixelBlurGeometry.imageBox.height - tenPixelBlurGeometry.viewport.height - 20) < 0.1,
-  '10px blur should extend the image by 10px on each edge: ' + JSON.stringify(tenPixelBlurGeometry));
+  assert(Math.abs(tenPixelBlurGeometry.imageBox.left + 15) < 0.1
+    && Math.abs(tenPixelBlurGeometry.imageBox.top + 15) < 0.1
+    && Math.abs(tenPixelBlurGeometry.imageBox.width - tenPixelBlurGeometry.viewport.width - 30) < 0.1
+    && Math.abs(tenPixelBlurGeometry.imageBox.height - tenPixelBlurGeometry.viewport.height - 30) < 0.1,
+  '10px blur should apply 1.5σ and extend the image by 15px on each edge: ' + JSON.stringify(tenPixelBlurGeometry));
   await mainBlurSlider.evaluate((input) => {
     input.value = '20';
     input.dispatchEvent(new Event('input', { bubbles: true }));

@@ -2740,7 +2740,7 @@
   class:has-custom-titlebar={showCustomTitlebar}
   data-active-view={activeView}
   class:has-main-backdrop={effectiveMainBackgroundUrl !== null}
-  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-opacity: ${nowPlayingAppearancePreferences.backgroundOpacityPercent / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100}; --quick-settings-opacity: ${themePreferences.quickSettingsOpacityPercent}%; --quick-settings-blur: ${themePreferences.quickSettingsBlurPx}px;`}
+  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-bleed: ${nowPlayingAppearancePreferences.backgroundBlurPx * 1.5}px; --np-background-opacity: ${nowPlayingAppearancePreferences.backgroundOpacityPercent / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-bleed: ${themePreferences.mainBackgroundBlurPx * 1.5}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100}; --quick-settings-opacity: ${themePreferences.quickSettingsOpacityPercent}%; --quick-settings-blur: ${themePreferences.quickSettingsBlurPx}px;`}
 >
   {#if showCustomTitlebar}
     <WindowTitlebar transparent={isNowPlayingOpen || effectiveMainBackgroundUrl !== null} />
