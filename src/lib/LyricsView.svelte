@@ -52,6 +52,7 @@
     trackId: string | null;
     phase: 'idle' | 'loading' | 'ready' | 'empty' | 'candidates' | 'searching' | 'error';
     lyrics: TrackLyrics | null;
+    lyricsRemoved: boolean;
     candidates: LyricsCandidate[];
     error: string | null;
     isSearching: boolean;
@@ -79,6 +80,7 @@
     playbackState?: PlaybackState;
     lyricsPreferences?: LyricsPreferences;
     onPreferencesChange?: (patch: Partial<LyricsPreferences>) => void;
+    onLyricsRemovedChange?: (removed: boolean) => void;
     onStatusChange?: (status: LyricsTopbarStatus | null) => void;
     api?: LyricsApi;
   }
@@ -99,6 +101,7 @@
     playbackState,
     lyricsPreferences = DEFAULT_LYRICS_PREFERENCES,
     onPreferencesChange = () => {},
+    onLyricsRemovedChange,
     onStatusChange,
     api = defaultLyricsApi,
   }: Props = $props();
@@ -107,6 +110,7 @@
     trackId: null,
     phase: 'idle',
     lyrics: null,
+    lyricsRemoved: false,
     candidates: [],
     error: null,
     isSearching: false,
@@ -151,6 +155,11 @@
   let traditionalLines = $state<LyricLine[] | null>(null);
   let traditionalTrackId = $state<string | null>(null);
   let preferences = $derived(normalizeLyricsPreferences(lyricsPreferences));
+
+  $effect(() => {
+    if (viewState.phase === 'loading' || viewState.phase === 'idle') return;
+    onLyricsRemovedChange?.(viewState.lyricsRemoved);
+  });
 
   $effect(() => {
     const lyrics = viewState.lyrics;

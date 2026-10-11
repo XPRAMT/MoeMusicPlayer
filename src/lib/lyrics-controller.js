@@ -49,6 +49,7 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
     trackId,
     phase,
     lyrics: result.lyrics ?? null,
+    lyricsRemoved: result.status === 'cleared',
     candidates,
     error: result.error,
     isSearching: false,
@@ -148,6 +149,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       if (!next.lyrics && state.lyrics && (manual || state.selectionMode)) {
         next.lyrics = state.lyrics;
       }
+      if (state.lyricsRemoved && !next.lyrics) next.lyricsRemoved = true;
       update(next);
     } catch (error) {
       if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
@@ -191,6 +193,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       trackId,
       phase: trackId ? 'loading' : 'idle',
       lyrics: null,
+      lyricsRemoved: false,
       candidates: [],
       error: null,
       isSearching: false,
@@ -343,6 +346,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
         // Do not auto-search after an explicit remove; backend persists a cleared sentinel.
         update({
           ...stateFromResult(trackId, result, null, { selectionMode: false }),
+          lyricsRemoved: true,
           selectionMode: false,
           selectingCandidateId: null,
           isSearching: false,
@@ -405,6 +409,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
           trackId,
           phase: 'ready',
           lyrics,
+          lyricsRemoved: false,
           candidates: [],
           error: null,
           isSearching: false,
@@ -441,6 +446,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
  * trackId: string | null,
  * phase: 'idle'|'loading'|'ready'|'empty'|'candidates'|'searching'|'error',
  * lyrics: TrackLyrics | null,
+ * lyricsRemoved: boolean,
  * candidates: import('./ipc').LyricsCandidate[],
  * error: string | null,
  * isSearching: boolean,

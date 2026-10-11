@@ -8,6 +8,7 @@
     IconRepeat,
   } from '@tabler/icons-svelte-runes';
   import LyricsView from '../src/lib/LyricsView.svelte';
+  import type { LyricsTopbarStatus } from '../src/lib/LyricsView.svelte';
   import NowPlayingArrangement from '../src/lib/NowPlayingArrangement.svelte';
   import NowPlayingLayoutSwitch from '../src/lib/NowPlayingLayoutSwitch.svelte';
   import { calculateArtworkFrame } from '../src/lib/artwork-frame.js';
@@ -55,7 +56,7 @@
 
   interface LayoutHarnessApi {
     setLayout: (layout: NowPlayingLayout) => Promise<void>;
-    setLyricsVisible: (visible: boolean) => Promise<void>;
+    setTrackId: (trackId: string) => Promise<void>;
     setArtworkVariant: (variant: 'square' | 'portrait' | 'landscape') => Promise<void>;
     snapshot: () => LayoutSnapshot;
     scrollLyrics: () => Promise<boolean>;
@@ -67,7 +68,9 @@
   }
 
   let layout = $state<NowPlayingLayout>('a');
-  let lyricsVisible = $state(true);
+  let trackId = $state('layout-probe');
+  let lyricsRemoved = $state(false);
+  let lyricsTopbarStatus = $state<LyricsTopbarStatus | null>(null);
   let artworkVariant = $state<'square' | 'portrait' | 'landscape'>('landscape');
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   let coverStageElement: HTMLDivElement;
@@ -132,6 +135,7 @@
 
   const lyricsApi = {
     async getTrack({ trackId }: { trackId: string }): Promise<LyricsTrackResult> {
+      if (trackId === 'layout-cleared') return { lyrics: null, candidates: [], status: 'cleared', error: null };
       return { lyrics: makeLyrics(trackId), candidates: [], status: 'ready', error: null };
     },
     async search(): Promise<LyricsTrackResult> {
@@ -141,7 +145,7 @@
       return makeLyrics(trackId);
     },
     async cancelSearch(): Promise<void> {},
-    async clearTrack(): Promise<LyricsTrackResult> { return { lyrics: null, candidates: [], status: 'empty', error: null }; },
+    async clearTrack(): Promise<LyricsTrackResult> { return { lyrics: null, candidates: [], status: 'cleared', error: null }; },
   };
 
   async function setLayout(nextLayout: NowPlayingLayout): Promise<void> {
@@ -149,8 +153,8 @@
     await tick();
   }
 
-  async function setLyricsVisible(visible: boolean): Promise<void> {
-    lyricsVisible = visible;
+  async function setTrackId(nextTrackId: string): Promise<void> {
+    trackId = nextTrackId;
     await tick();
   }
 
@@ -299,7 +303,7 @@
   }
 
   $effect(() => {
-      window.nowPlayingLayoutHarness = { setLayout, setLyricsVisible, setArtworkVariant, snapshot, scrollLyrics, attemptOuterScroll };
+      window.nowPlayingLayoutHarness = { setLayout, setTrackId, setArtworkVariant, snapshot, scrollLyrics, attemptOuterScroll };
   });
 </script>
 
@@ -322,8 +326,8 @@
         <p class="now-playing-format"><span>FLAC．48 kHz．24 bit</span><img src={hiResBadgeUrl} alt="Hi-Res" /></p>
       </div>
       <div class="now-playing-topbar-tools">
-        <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞顯示">
-          <button type="button" class="lyrics-toggle" aria-label={lyricsVisible ? '關閉歌詞' : '開啟歌詞'} aria-pressed={lyricsVisible} onclick={() => lyricsVisible = !lyricsVisible}>歌詞</button>
+        <button type="button" class="soft-button lyrics-topbar-action" aria-label="手動指定歌詞" onclick={() => lyricsTopbarStatus?.openManualSelection()}>手動指定</button>
+        <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
           <button type="button" class="lyrics-toggle" aria-pressed="true" aria-label="切換譯文顯示">譯</button>
           <button type="button" class="lyrics-toggle" aria-pressed="false" aria-label="切換羅馬拼音顯示">羅</button>
         </div>
@@ -333,7 +337,7 @@
       <div class="now-playing-overlay-content">
         <section class="now-playing-view" aria-label="正在播放版面" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}>
           <NowPlayingLayoutSwitch {layout} variant="compact" onChange={setLayout} />
-          <NowPlayingArrangement {layout} {lyricsVisible}>
+          <NowPlayingArrangement {layout} lyricsVisible={!lyricsRemoved}>
             {#snippet artwork()}
               <div
                 bind:this={coverStageElement}
@@ -352,12 +356,14 @@
             {/snippet}
             {#snippet lyrics()}
               <LyricsView
-                trackId="layout-probe"
+                {trackId}
                 positionMs={50_000}
                 isPlaying={true}
                 playbackState="playing"
                 lyricsPreferences={{ showTranslation: true, showRomanization: true, inactiveOpacityPercent: 70, primaryFontSizePx: 14, auxiliaryFontSizePx: 10, textEffect: 'shadow' }}
                 api={lyricsApi}
+                onLyricsRemovedChange={(removed) => { lyricsRemoved = removed; }}
+                onStatusChange={(status) => { lyricsTopbarStatus = status; }}
               />
             {/snippet}
           </NowPlayingArrangement>

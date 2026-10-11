@@ -183,20 +183,6 @@
     focusedGeometry.push({ viewport: `${viewport.width}x${viewport.height}`, variant, frame: `${state.cover.width.toFixed(1)}x${state.cover.height.toFixed(1)}`, image: `${state.renderedImage.width.toFixed(1)}x${state.renderedImage.height.toFixed(1)}` });
   }
 
-  await page.setViewportSize({ width: 1920, height: 1080 });
-  await page.evaluate(() => window.nowPlayingLayoutHarness.setLayout('a'));
-  await page.getByRole('button', { name: '關閉歌詞' }).click();
-  const lyricsClosed = await readLayout();
-  const closedArtwork = lyricsClosed.panes.find(pane => pane.name === 'artwork');
-  assert.equal(lyricsClosed.panes.find(pane => pane.name === 'lyrics').width, 0, 'closing lyrics hides the lyric pane');
-  assert.ok(Math.abs((lyricsClosed.cover.left + lyricsClosed.cover.right) / 2 - (closedArtwork.left + closedArtwork.right) / 2) <= 1,
-    'cover must be horizontally centered in the expanded artwork pane while lyrics are closed');
-  await page.getByRole('button', { name: '開啟歌詞' }).click();
-  const lyricsReopened = await readLayout();
-  assert.ok(lyricsReopened.panes.find(pane => pane.name === 'lyrics').width > 0, 'reopening lyrics restores the split pane');
-  assert.ok(Math.abs((lyricsReopened.cover.left + lyricsReopened.cover.right) / 2 - (lyricsReopened.panes.find(pane => pane.name === 'artwork').left + lyricsReopened.panes.find(pane => pane.name === 'artwork').right) / 2) <= 1,
-    'cover returns to the artwork pane center after lyrics reopen');
-
   const androidInsetsGeometry = [];
   for (const testCase of [
     { name: 'gesture-nav-hidden', safeLeft: 0, safeTop: 42, safeRight: 0, safeBottom: 0 },

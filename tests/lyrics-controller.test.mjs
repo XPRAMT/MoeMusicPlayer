@@ -562,6 +562,7 @@ test('cleared getTrack status skips automatic provider search and keeps the pick
   assert.deepEqual(calls, [['get', { trackId: 'track-cleared' }]]);
   assert.equal(controller.getState().phase, 'empty');
   assert.equal(controller.getState().lyrics, null);
+  assert.equal(controller.getState().lyricsRemoved, true);
   assert.equal(controller.getState().selectionMode, false);
   assert.equal(
     controller.getState().pickerClosed,
@@ -630,6 +631,7 @@ test('removeLyrics clears persisted lyrics, dismisses picker, and skips auto-sea
   assert.equal(controller.getState().selectionMode, false);
   assert.equal(controller.getState().pickerClosed, true);
   assert.equal(controller.getState().lyrics, null);
+  assert.equal(controller.getState().lyricsRemoved, true);
   assert.equal(controller.getState().phase, 'empty');
   assert.equal(searchCalls, searchesBefore, 'explicit remove must not auto-search');
   controller.dispose();

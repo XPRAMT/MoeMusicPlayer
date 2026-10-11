@@ -10,7 +10,14 @@ const before = await page.evaluate(() => {
   const cover = document.querySelector('[data-testid="cover-stage"]').getBoundingClientRect();
   return { artworkWidth: artwork.width, coverCenter: (cover.left + cover.right) / 2, artworkCenter: (artwork.left + artwork.right) / 2 };
 });
-await page.getByRole('button', { name: '關閉歌詞' }).click();
+await page.getByRole('button', { name: '手動指定歌詞' }).click();
+await page.getByTestId('lyrics-dismiss').click();
+if (await page.locator('.now-playing-card').getAttribute('data-lyrics-visible') !== 'true') {
+  throw new Error('dismissing the candidate picker alone must leave the lyrics pane visible');
+}
+await page.getByRole('button', { name: '手動指定歌詞' }).click();
+await page.getByTestId('lyrics-remove').click();
+await page.waitForFunction(() => document.querySelector('.now-playing-card')?.dataset.lyricsVisible === 'false');
 await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 const closed = await page.evaluate(() => {
   const artwork = document.querySelector('[data-layout-pane="artwork"]').getBoundingClientRect();
@@ -23,24 +30,38 @@ const closed = await page.evaluate(() => {
     lyricsDisplay: getComputedStyle(lyrics).display,
   };
 });
-if (!(closed.artworkWidth > before.artworkWidth * 1.8)) throw new Error(`hidden lyrics should release the second column: ${JSON.stringify({ before, closed })}`);
+if (!(closed.artworkWidth > before.artworkWidth * 1.8)) throw new Error(`removing lyrics should release the second column: ${JSON.stringify({ before, closed })}`);
 if (Math.abs(closed.coverCenter - closed.artworkCenter) > 1) throw new Error(`cover is not horizontally centered with lyrics hidden: ${JSON.stringify(closed)}`);
 if (closed.lyricsDisplay !== 'none') throw new Error(`lyrics pane remained visible: ${JSON.stringify(closed)}`);
 
-await page.getByRole('button', { name: '開啟歌詞' }).click();
-await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+await page.evaluate(() => window.nowPlayingLayoutHarness.setTrackId('layout-cleared'));
+await page.waitForFunction(() => document.querySelector('.now-playing-card')?.dataset.lyricsVisible === 'false');
 const reopened = await page.evaluate(() => {
   const artwork = document.querySelector('[data-layout-pane="artwork"]').getBoundingClientRect();
   const cover = document.querySelector('[data-testid="cover-stage"]').getBoundingClientRect();
   const lyrics = document.querySelector('[data-layout-pane="lyrics"]');
   return { artworkWidth: artwork.width, coverCenter: (cover.left + cover.right) / 2, artworkCenter: (artwork.left + artwork.right) / 2, lyricsDisplay: getComputedStyle(lyrics).display };
 });
-if (!(reopened.artworkWidth < closed.artworkWidth / 1.8)) throw new Error(`reopening lyrics should restore the split layout: ${JSON.stringify(reopened)}`);
-if (reopened.lyricsDisplay === 'none') throw new Error(`lyrics pane did not reopen: ${JSON.stringify(reopened)}`);
-if (Math.abs(reopened.coverCenter - reopened.artworkCenter) > 1) throw new Error(`cover did not recenter in the artwork column: ${JSON.stringify(reopened)}`);
+if (reopened.artworkWidth !== closed.artworkWidth) throw new Error(`a previously removed track unexpectedly revealed lyrics: ${JSON.stringify(reopened)}`);
+if (reopened.lyricsDisplay !== 'none') throw new Error(`previously removed lyrics pane became visible: ${JSON.stringify(reopened)}`);
+
+await page.evaluate(() => window.nowPlayingLayoutHarness.setTrackId('restored-track'));
+await page.waitForFunction(() => document.querySelector('.now-playing-card')?.dataset.lyricsVisible === 'true');
+await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+const restored = await page.evaluate(() => {
+  const artwork = document.querySelector('[data-layout-pane="artwork"]').getBoundingClientRect();
+  const cover = document.querySelector('[data-testid="cover-stage"]').getBoundingClientRect();
+  const lyrics = document.querySelector('[data-layout-pane="lyrics"]');
+  return { artworkWidth: artwork.width, coverCenter: (cover.left + cover.right) / 2, artworkCenter: (artwork.left + artwork.right) / 2, lyricsDisplay: getComputedStyle(lyrics).display };
+});
+if (!(restored.artworkWidth < closed.artworkWidth / 1.8)) throw new Error(`new lyrics should restore the split layout: ${JSON.stringify(restored)}`);
+if (restored.lyricsDisplay === 'none') throw new Error(`lyrics pane did not reopen after new lyrics became available: ${JSON.stringify(restored)}`);
+if (Math.abs(restored.coverCenter - restored.artworkCenter) > 1) throw new Error(`cover did not recenter in the artwork column: ${JSON.stringify(restored)}`);
 
 await page.evaluate(() => window.nowPlayingLayoutHarness.setLayout('b'));
-await page.getByRole('button', { name: '關閉歌詞' }).click();
+await page.getByRole('button', { name: '手動指定歌詞' }).click();
+await page.getByTestId('lyrics-remove').click();
+await page.waitForFunction(() => document.querySelector('.now-playing-card')?.dataset.lyricsVisible === 'false');
 await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 const layoutBClosed = await page.evaluate(() => {
   const artwork = document.querySelector('[data-layout-pane="artwork"]').getBoundingClientRect();
@@ -51,8 +72,11 @@ if (layoutBClosed > 1) throw new Error(`layout B cover is not centered with lyri
 
 await page.setViewportSize({ width: 360, height: 800 });
 await page.evaluate(() => window.nowPlayingLayoutHarness.setLayout('a'));
-await page.getByRole('button', { name: '開啟歌詞' }).click();
-await page.getByRole('button', { name: '關閉歌詞' }).click();
+await page.evaluate(() => window.nowPlayingLayoutHarness.setTrackId('restored-mobile'));
+await page.waitForFunction(() => document.querySelector('.now-playing-card')?.dataset.lyricsVisible === 'true');
+await page.getByRole('button', { name: '手動指定歌詞' }).click();
+await page.getByTestId('lyrics-remove').click();
+await page.waitForFunction(() => document.querySelector('.now-playing-card')?.dataset.lyricsVisible === 'false');
 await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 const narrowClosed = await page.evaluate(() => {
   const artwork = document.querySelector('[data-layout-pane="artwork"]').getBoundingClientRect();
@@ -61,5 +85,5 @@ const narrowClosed = await page.evaluate(() => {
 });
 if (narrowClosed > 1) throw new Error(`narrow layout cover is not horizontally centered with lyrics hidden: ${narrowClosed}px error`);
 
-console.log(JSON.stringify({ before, closed, reopened, layoutBClosed, narrowClosed }));
+console.log(JSON.stringify({ before, closed, reopened, restored, layoutBClosed, narrowClosed }));
 }
