@@ -5,7 +5,17 @@
   import { invokeCommand, type UpdateInstallMode, type UpdateState } from './ipc';
   import { createUpdateController, EMPTY_UPDATE_STATE, formatBuildTime, updateProgressPercent, updateStatusText } from './update-controller';
 
-  let { enabled, updateState = $bindable<UpdateState>({ ...EMPTY_UPDATE_STATE }) }: { enabled: boolean; updateState?: UpdateState } = $props();
+  let {
+    enabled,
+    updateState = $bindable<UpdateState>({ ...EMPTY_UPDATE_STATE }),
+    surfaceOpacityPercent = 70,
+    surfaceBlurPx = 12,
+  }: {
+    enabled: boolean;
+    updateState?: UpdateState;
+    surfaceOpacityPercent?: number;
+    surfaceBlurPx?: number;
+  } = $props();
   let visible = $state(false);
   let dialog = $state<HTMLDialogElement>();
   let ignoreButton = $state<HTMLButtonElement>();
@@ -52,7 +62,15 @@
   });
 </script>
 
-<dialog bind:this={dialog} class="update-dialog" aria-labelledby="update-title" aria-describedby="update-description" oncancel={dismiss} onkeydown={handleDialogKeydown}>
+<dialog
+  bind:this={dialog}
+  class="update-dialog floating-surface"
+  style={`--quick-settings-opacity:${surfaceOpacityPercent}%;--quick-settings-blur:${surfaceBlurPx}px`}
+  aria-labelledby="update-title"
+  aria-describedby="update-description"
+  oncancel={dismiss}
+  onkeydown={handleDialogKeydown}
+>
   <div class="update-dialog-content">
     <h2 id="update-title">發現新版本{updateState.latest ? ` ${updateState.latest.version}` : ''}</h2>
     <p id="update-description">選擇更新方式。下載期間可繼續播放；下載並驗證成功後才會依選擇完成更新。</p>

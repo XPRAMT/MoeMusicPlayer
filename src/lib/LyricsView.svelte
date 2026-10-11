@@ -579,7 +579,7 @@
     <p class="lyrics-placeholder" role="status">正在讀取本機與已保存的歌詞…</p>
   {:else}
     {#if timingPanelOpen && isTimed}
-      <div class="lyrics-timing-panel" role="group" aria-label="歌詞同步延遲" data-testid="lyrics-timing-panel">
+      <div class="lyrics-timing-panel floating-surface" role="group" aria-label="歌詞同步延遲" data-testid="lyrics-timing-panel">
         <div class="lyrics-timing-panel-header">
           <strong>同步歌詞延遲</strong>
           <span data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingOffsetSec)}</span>
@@ -1065,9 +1065,6 @@
     display: grid;
     gap: 8px;
     padding: 10px 10px 8px;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--panel, #111) 88%, transparent);
   }
 
   .lyrics-timing-panel-header {

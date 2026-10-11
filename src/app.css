@@ -35,6 +35,8 @@
   --mint: var(--status-success);
   --warn: var(--status-warning);
   --dock-bg: #141414;
+  --floating-surface-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+  --floating-surface-radius: 12px;
   --android-safe-left: env(safe-area-inset-left, 0px);
   --android-safe-top: env(safe-area-inset-top, 0px);
   --android-safe-right: env(safe-area-inset-right, 0px);
@@ -470,10 +472,29 @@ input:focus-visible {
   overflow: hidden;
   border: 0;
   border-left: 1px solid var(--line-strong);
+  border-radius: 0;
+  box-sizing: border-box;
+}
+
+/* All floating surfaces use the same translucent color, blur, border contrast, and shadow. */
+.floating-surface,
+.app-shell[data-active-view="playlists"] .sidebar-playlist-tree-host .playlist-tree {
+  color: var(--text);
+  border: 1px solid var(--line-strong);
   background: color-mix(in srgb, var(--text-inverse) var(--quick-settings-opacity, 70%), transparent);
   -webkit-backdrop-filter: blur(var(--quick-settings-blur, 12px));
   backdrop-filter: blur(var(--quick-settings-blur, 12px));
-  box-sizing: border-box;
+  box-shadow: var(--floating-surface-shadow);
+}
+
+.floating-surface:not(.now-playing-quick-settings-drawer) {
+  border-radius: var(--floating-surface-radius);
+}
+
+.now-playing-quick-settings-drawer.floating-surface {
+  border: 0;
+  border-left: 1px solid var(--line-strong);
+  border-radius: 0;
 }
 
 .quick-settings-drawer-header,
@@ -2246,12 +2267,7 @@ input:focus-visible {
   width: min(560px, calc(100vw - 32px));
   max-height: calc(100dvh - 48px - var(--android-safe-top, 0px) - var(--android-safe-bottom, 0px));
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  color: var(--text);
-  background: var(--page);
   font-size: var(--font-body);
-  box-shadow: 0 18px 64px #0008;
   overflow: auto;
   overscroll-behavior: contain;
 }
@@ -3781,11 +3797,7 @@ input:focus-visible {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border: 1px solid rgba(var(--text-rgb), 0.16);
-  border-radius: 12px;
   color: var(--text-soft);
-  background: color-mix(in srgb, var(--panel) 92%, black);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
 }
 
 .volume-popover[hidden] {
@@ -3806,11 +3818,6 @@ input:focus-visible {
   font-family: inherit;
   font-size: var(--font-caption);
   text-align: right;
-}
-
-.app-shell.has-now-playing-backdrop .volume-popover {
-  background: color-mix(in srgb, rgba(20, 24, 30, 0.94) 88%, var(--panel));
-  backdrop-filter: blur(10px);
 }
 
 .volume-slider {
@@ -3988,9 +3995,8 @@ input:focus-visible {
     max-height: min(60vh, calc(100dvh - 130px));
     overflow: auto;
     padding: 6px;
-    border-color: var(--line);
-    background: var(--panel);
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+    border-color: var(--line-strong);
+    border-radius: var(--floating-surface-radius);
   }
   :root { --chrome-bar-height: 63px; }
   .page-content { padding-top: 26px; }

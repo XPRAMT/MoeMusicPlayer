@@ -3315,7 +3315,7 @@
         <button class="now-playing-quick-settings-scrim" type="button" tabindex="-1" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}></button>
         <dialog open
           bind:this={quickSettingsDialog}
-          class="now-playing-quick-settings-drawer"
+          class="now-playing-quick-settings-drawer floating-surface"
           aria-modal="true"
           aria-labelledby="now-playing-quick-settings-title"
           data-testid="now-playing-quick-settings"
@@ -3433,7 +3433,7 @@
             <IconVolume2 size={23} stroke={1.6} aria-hidden="true" />
           </button>
           <div
-            class="volume-popover"
+            class="volume-popover floating-surface"
             role="dialog"
             aria-label="音量控制"
             hidden={!volumeExpanded}
@@ -3472,4 +3472,10 @@
   </footer>
 </div>
 
-<UpdateCenter bind:this={updateCenter} enabled={capabilities?.platform === 'windows'} bind:updateState />
+<UpdateCenter
+  bind:this={updateCenter}
+  enabled={capabilities?.platform === 'windows'}
+  bind:updateState
+  surfaceOpacityPercent={themePreferences.quickSettingsOpacityPercent}
+  surfaceBlurPx={themePreferences.quickSettingsBlurPx}
+/>
