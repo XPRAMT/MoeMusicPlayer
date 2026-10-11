@@ -39,6 +39,6 @@ test('queueDropIndexFromPointer maps viewport coordinates into a clamped row ind
 });
 
 test('long-press reorder constants stay intentional', () => {
-  assert.equal(QUEUE_REORDER_LONG_PRESS_MS, 500);
+  assert.equal(QUEUE_REORDER_LONG_PRESS_MS, 300);
   assert.ok(QUEUE_REORDER_MOVE_CANCEL_PX >= 4);
 });
