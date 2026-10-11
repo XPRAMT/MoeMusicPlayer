@@ -61,10 +61,7 @@ test('image RGB average alpha-weights visible pixels and skips fully transparent
   };
   globalThis.document = {
     createElement: () => ({
-      getContext: () => ({
-        drawImage() {},
-        getImageData: () => ({ data }),
-      }),
+      getContext: () => ({ drawImage() {}, getImageData: () => ({ data }) }),
     }),
   };
   try {
@@ -72,6 +69,55 @@ test('image RGB average alpha-weights visible pixels and skips fully transparent
       averageHex: '#996666',
       alpha: (2 + 128 / 255) / (32 * 32),
     });
+  } finally {
+    if (previousImage) Object.defineProperty(globalThis, 'Image', previousImage);
+    else delete globalThis.Image;
+    if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
+    else delete globalThis.document;
+  }
+});
+
+test('automatic sampling averages the brightest or darkest half after compositing against its text base', async () => {
+  const previousImage = Object.getOwnPropertyDescriptor(globalThis, 'Image');
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const data = new Uint8ClampedArray(32 * 32 * 4);
+  for (let pixel = 0; pixel < 512; pixel += 1) {
+    data.set([255, 255, 255, 26], pixel * 4);
+    data.set([64, 64, 64, 51], (pixel + 512) * 4);
+  }
+  globalThis.Image = class {
+    set src(_value) { this.onload(); }
+  };
+  globalThis.document = {
+    createElement: () => ({
+      getContext: () => {
+        let base = [0, 0, 0];
+        let flattened = data;
+        return {
+          set fillStyle(value) {
+            base = value === '#FFFFFF' ? [255, 255, 255] : [0, 0, 0];
+          },
+          fillRect() {},
+          drawImage() {
+            flattened = new Uint8ClampedArray(data.length);
+            for (let offset = 0; offset < data.length; offset += 4) {
+              const alpha = data[offset + 3] / 255;
+              for (let channel = 0; channel < 3; channel += 1) {
+                flattened[offset + channel] = Math.round(data[offset + channel] * alpha + base[channel] * (1 - alpha));
+              }
+              flattened[offset + 3] = 255;
+            }
+          },
+          getImageData: () => ({ data: flattened }),
+        };
+      },
+    }),
+  };
+  try {
+    const whiteTextSample = await sampleImageAverage('fixture', 'white');
+    const blackTextSample = await sampleImageAverage('fixture', 'black');
+    assert.deepEqual(whiteTextSample, { averageHex: '#1A1A1A', alpha: 1 });
+    assert.deepEqual(blackTextSample, { averageHex: '#D9D9D9', alpha: 1 });
   } finally {
     if (previousImage) Object.defineProperty(globalThis, 'Image', previousImage);
     else delete globalThis.Image;

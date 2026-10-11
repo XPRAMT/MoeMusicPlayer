@@ -238,9 +238,11 @@
   let mainImageAverageHex: string | null = null;
   let mainImageAverageAlpha: number | null = null;
   let mainImageAverageUrl: string | null = null;
+  let mainImageAverageTextColor: 'white' | 'black' | null = null;
   let nowPlayingImageAverageHex: string | null = null;
   let nowPlayingImageAverageAlpha: number | null = null;
   let nowPlayingImageAverageUrl: string | null = null;
+  let nowPlayingImageAverageTextColor: 'white' | 'black' | null = null;
   let mainContrastRevision = 0;
   let nowPlayingContrastRevision = 0;
   let themeSaveState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
@@ -450,8 +452,10 @@
       : null;
     const clarityPercent = themePreferences.mainBackgroundClarityPercent;
     const revision = ++mainContrastRevision;
-    const cachedImageAverageHex = mainImageAverageUrl === imageUrl ? mainImageAverageHex : null;
-    const cachedImageAlpha = mainImageAverageUrl === imageUrl ? mainImageAverageAlpha : null;
+    const hasCurrentImageSample = mainImageAverageUrl === imageUrl
+      && mainImageAverageTextColor === automaticTextColor;
+    const cachedImageAverageHex = hasCurrentImageSample ? mainImageAverageHex : null;
+    const cachedImageAlpha = hasCurrentImageSample ? mainImageAverageAlpha : null;
     void resolveBackdropContrast({
       pageHex,
       imageUrl,
@@ -464,10 +468,12 @@
       if (revision !== mainContrastRevision) return;
       if (imageUrl && result.imageAverageHex) {
         mainImageAverageUrl = imageUrl;
+        mainImageAverageTextColor = automaticTextColor;
         mainImageAverageHex = result.imageAverageHex;
         mainImageAverageAlpha = result.imageAlpha;
       } else if (!imageUrl) {
         mainImageAverageUrl = null;
+        mainImageAverageTextColor = null;
         mainImageAverageHex = null;
         mainImageAverageAlpha = null;
       }
@@ -569,10 +575,12 @@
       : null;
     const clarityPercent = themePreferences.coverBackgroundClarityPercent;
     const revision = ++nowPlayingContrastRevision;
-    const cachedImageAverageHex = nowPlayingImageAverageUrl === imageUrl
+    const hasCurrentNowPlayingImageSample = nowPlayingImageAverageUrl === imageUrl
+      && nowPlayingImageAverageTextColor === automaticTextColor;
+    const cachedImageAverageHex = hasCurrentNowPlayingImageSample
       ? nowPlayingImageAverageHex
       : null;
-    const cachedImageAlpha = nowPlayingImageAverageUrl === imageUrl
+    const cachedImageAlpha = hasCurrentNowPlayingImageSample
       ? nowPlayingImageAverageAlpha
       : null;
     void resolveBackdropContrast({
@@ -587,10 +595,12 @@
       if (revision !== nowPlayingContrastRevision) return;
       if (imageUrl && result.imageAverageHex) {
         nowPlayingImageAverageUrl = imageUrl;
+        nowPlayingImageAverageTextColor = automaticTextColor;
         nowPlayingImageAverageHex = result.imageAverageHex;
         nowPlayingImageAverageAlpha = result.imageAlpha;
       } else if (!imageUrl) {
         nowPlayingImageAverageUrl = null;
+        nowPlayingImageAverageTextColor = null;
         nowPlayingImageAverageHex = null;
         nowPlayingImageAverageAlpha = null;
       }

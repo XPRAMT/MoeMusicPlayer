@@ -36,12 +36,14 @@ function loadImage(imageUrl) {
 }
 
 /**
- * Downscale the image and return alpha-weighted RGB averages and mean alpha.
- * Blur is ignored; average color is nearly unchanged by a uniform blur.
+ * Downscale the image and return an RGB average and mean alpha.
+ * Automatic text-color modes first flatten the thumbnail over the matching
+ * black/white base, then average the brightest/darkest half of its opaque pixels.
+ * @param {'white' | 'black' | null} [textColor]
  * @param {string | null | undefined} imageUrl
  * @returns {Promise<{ averageHex: string, alpha: number } | null>}
  */
-export async function sampleImageAverage(imageUrl) {
+export async function sampleImageAverage(imageUrl, textColor = null) {
   if (!imageUrl || typeof document === 'undefined') return null;
   try {
     const image = await loadImage(imageUrl);
@@ -50,19 +52,47 @@ export async function sampleImageAverage(imageUrl) {
     canvas.height = SAMPLE_SIZE;
     const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) return null;
+    if (textColor === 'white' || textColor === 'black') {
+      context.fillStyle = textColor === 'white' ? '#000000' : '#FFFFFF';
+      context.fillRect(0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
+    }
     context.drawImage(image, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
     const { data } = context.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
+    /** @type {{ red: number, green: number, blue: number, alpha: number, brightness: number }[]} */
+    const pixels = [];
+    for (let index = 0; index < data.length; index += 4) {
+      const alpha = data[index + 3] / 255;
+      if (!textColor && alpha <= 0) continue;
+      const red = data[index];
+      const green = data[index + 1];
+      const blue = data[index + 2];
+      pixels.push({
+        red,
+        green,
+        blue,
+        alpha: textColor ? 1 : alpha,
+        brightness: (red + green + blue) / 3,
+      });
+    }
+    if (pixels.length === 0) return null;
+
+    if (textColor === 'white' || textColor === 'black') {
+      pixels.sort((left, right) => textColor === 'white'
+        ? right.brightness - left.brightness
+        : left.brightness - right.brightness);
+      pixels.length = Math.ceil(pixels.length / 2);
+    }
+
     let red = 0;
     let green = 0;
     let blue = 0;
     let weight = 0;
-    for (let index = 0; index < data.length; index += 4) {
-      const alpha = data[index + 3] / 255;
-      if (alpha <= 0) continue;
-      red += data[index] * alpha;
-      green += data[index + 1] * alpha;
-      blue += data[index + 2] * alpha;
-      weight += alpha;
+    for (const pixel of pixels) {
+      const pixelWeight = textColor ? 1 : pixel.alpha;
+      red += pixel.red * pixelWeight;
+      green += pixel.green * pixelWeight;
+      blue += pixel.blue * pixelWeight;
+      weight += pixelWeight;
     }
     if (weight <= 0) return null;
     /** @param {number} value */
@@ -71,7 +101,7 @@ export async function sampleImageAverage(imageUrl) {
       .padStart(2, '0');
     return {
       averageHex: `#${toByte(red)}${toByte(green)}${toByte(blue)}`.toUpperCase(),
-      alpha: weight / (SAMPLE_SIZE * SAMPLE_SIZE),
+      alpha: textColor ? 1 : weight / (SAMPLE_SIZE * SAMPLE_SIZE),
     };
   } catch {
     return null;
@@ -108,7 +138,7 @@ export async function resolveBackdropContrast(input) {
         ? Math.max(0, Math.min(1, input.cachedImageAlpha))
         : 1,
     }
-    : await sampleImageAverage(input.imageUrl);
+    : await sampleImageAverage(input.imageUrl, input.automaticTextColor ?? null);
   if (!cachedImageSample) {
     return { contrastHex: null, imageAverageHex: null, imageAlpha: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent, calculation: null };
   }
