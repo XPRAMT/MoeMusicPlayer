@@ -42,6 +42,13 @@
     "purpose": "音訊解碼"
   },
   {
+    "name": "matroska",
+    "version": "0.30.1",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/tuffy/matroska",
+    "purpose": "Matroska 音訊標籤讀取"
+  },
+  {
     "name": "rubato",
     "version": "5.0.1",
     "license": "MIT OR Apache-2.0",

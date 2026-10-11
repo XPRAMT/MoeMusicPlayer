@@ -7,6 +7,8 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 player-core = { path = "../player-core" }
 lofty = "0.25.4"
+matroska = "=0.30.1"
+symphonia = { version = "=0.5.5", default-features = false, features = ["mkv"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [

@@ -22,6 +22,10 @@ use player_core::{
     TrackMetadataError,
 };
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use symphonia::{
+    core::{formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint},
+    default::get_probe,
+};
 
 /// Windows media index provider. Until SystemIndex can prove full root coverage and freshness,
 /// this provider uses a complete filesystem walk. A zero-result Windows Search query is never
@@ -453,6 +457,14 @@ impl MediaIndex for WindowsMediaIndex {
             }
         };
 
+        if path
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mka"))
+        {
+            return read_matroska_audio_metadata(path);
+        }
+
         let probe = Probe::open(path).map_err(|error| TrackMetadataError {
             message: format!("could not open audio metadata: {error}"),
         })?;
@@ -772,8 +784,8 @@ fn empty_scan(source_id: player_core::SourceId) -> SourceScan {
     }
 }
 
-/// Whether the path has an audio extension understood by Lofty, excluding MP4 video files.
-/// M4A remains accepted as an audio container; this filter does not infer or constrain its codec.
+/// Whether the path has a supported audio extension, excluding MP4/MKV video files.
+/// M4A and MKA remain accepted as audio containers; this filter does not infer or constrain their codec.
 pub fn is_supported_audio_file(path: &Path) -> bool {
     if is_video_mp4(path) {
         return false;
@@ -782,9 +794,11 @@ pub fn is_supported_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(OsStr::to_str)
         .is_some_and(|extension| {
-            EXTENSIONS
-                .iter()
-                .any(|known| known.eq_ignore_ascii_case(extension))
+            extension.eq_ignore_ascii_case("mka")
+                || extension.eq_ignore_ascii_case("oga")
+                || EXTENSIONS
+                    .iter()
+                    .any(|known| known.eq_ignore_ascii_case(extension))
         })
 }
 
@@ -797,11 +811,162 @@ pub fn is_video_mp4(path: &Path) -> bool {
 
 /// File extensions accepted by the library scanner, formatted for Windows association keys.
 pub fn supported_audio_extensions() -> Vec<String> {
-    EXTENSIONS
+    let mut extensions: Vec<String> = EXTENSIONS
         .iter()
         .filter(|extension| !extension.eq_ignore_ascii_case("mp4"))
         .map(|extension| format!(".{extension}"))
-        .collect()
+        .collect();
+    for extension in [".mka", ".oga"] {
+        if !extensions
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(extension))
+        {
+            extensions.push(extension.to_owned());
+        }
+    }
+    extensions
+}
+
+fn read_matroska_audio_metadata(path: &Path) -> Result<TrackMetadata, TrackMetadataError> {
+    use symphonia::core::codecs::{
+        CODEC_TYPE_AAC, CODEC_TYPE_ALAC, CODEC_TYPE_FLAC, CODEC_TYPE_MP3, CODEC_TYPE_OPUS,
+        CODEC_TYPE_VORBIS,
+    };
+
+    let file = fs::File::open(path).map_err(|error| TrackMetadataError {
+        message: format!("could not open Matroska audio file: {error}"),
+    })?;
+    let stream = MediaSourceStream::new(Box::new(file), Default::default());
+    // Symphonia identifies Matroska from the EBML header; the supported demuxer advertises .mkv,
+    // so use that container hint for audio-only .mka files as well.
+    let mut hint = Hint::new();
+    hint.with_extension("mkv");
+    let mut probed = get_probe()
+        .format(
+            &hint,
+            stream,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|error| TrackMetadataError {
+            message: format!("could not parse Matroska audio metadata: {error}"),
+        })?;
+    let reader = &mut probed.format;
+    let track = reader
+        .tracks()
+        .iter()
+        .find(|track| track.codec_params.sample_rate.is_some())
+        .ok_or_else(|| TrackMetadataError {
+            message: "Matroska file contains no audio track".to_owned(),
+        })?;
+    let params = track.codec_params.clone();
+    let symphonia_tags = reader
+        .metadata()
+        .current()
+        .map(|revision| revision.tags().to_vec())
+        .unwrap_or_default();
+    // Symphonia demuxes Matroska audio but does not expose the container Info title
+    // consistently. Read only Info and Tags elements separately; this avoids loading
+    // large attached artwork while keeping audio probing on Symphonia.
+    let info =
+        matroska::get_from::<_, matroska::Info>(path).map_err(|error| TrackMetadataError {
+            message: format!("could not read Matroska Info metadata: {error}"),
+        })?;
+    let container_tags = matroska::get_from::<_, matroska::Tag>(path)
+        .map_err(|error| TrackMetadataError {
+            message: format!("could not read Matroska Tags metadata: {error}"),
+        })?
+        .unwrap_or_default();
+    let container_tracks = matroska::get_from::<_, matroska::Track>(path)
+        .map_err(|error| TrackMetadataError {
+            message: format!("could not read Matroska track metadata: {error}"),
+        })?
+        .unwrap_or_default();
+    let matroska_tag_text = |keys: &[&str]| {
+        container_tags
+            .iter()
+            .flat_map(|tag| tag.simple.iter())
+            .find(|tag| keys.iter().any(|key| tag.name.eq_ignore_ascii_case(key)))
+            .and_then(|tag| match &tag.value {
+                Some(matroska::TagValue::String(value)) => Some(value.clone()),
+                _ => None,
+            })
+            .filter(|value| !value.trim().is_empty())
+    };
+    let symphonia_tag_text = |keys: &[&str]| {
+        symphonia_tags
+            .iter()
+            .find(|tag| keys.iter().any(|key| tag.key.eq_ignore_ascii_case(key)))
+            .map(|tag| tag.value.to_string())
+            .filter(|value| !value.trim().is_empty())
+    };
+    let tag_text = |keys: &[&str]| matroska_tag_text(keys).or_else(|| symphonia_tag_text(keys));
+    let parse_number = |keys: &[&str]| {
+        tag_text(keys).and_then(|value| {
+            value
+                .split('/')
+                .next()
+                .and_then(|number| number.trim().parse::<u32>().ok())
+        })
+    };
+    let codec = if params.codec == CODEC_TYPE_AAC {
+        "AAC"
+    } else if params.codec == CODEC_TYPE_ALAC {
+        "ALAC"
+    } else if params.codec == CODEC_TYPE_FLAC {
+        "FLAC"
+    } else if params.codec == CODEC_TYPE_MP3 {
+        "MP3"
+    } else if params.codec == CODEC_TYPE_OPUS {
+        "Opus"
+    } else if params.codec == CODEC_TYPE_VORBIS {
+        "Vorbis"
+    } else {
+        "Matroska audio"
+    };
+    let duration_ms = params
+        .time_base
+        .zip(params.n_frames)
+        .map(|(time_base, frames)| {
+            let duration = time_base.calc_time(frames);
+            (duration.seconds as u128 * 1000 + (duration.frac * 1000.0).round() as u128)
+                .min(u64::MAX as u128) as u64
+        });
+    let release_date = tag_text(&["DATE_RECORDED", "RECORDING_DATE", "DATE"])
+        .and_then(|value| player_core::parse_recording_date(&value));
+    let year = release_date
+        .as_deref()
+        .and_then(player_core::recording_date_year);
+
+    Ok(TrackMetadata {
+        title: matroska_tag_text(&["TITLE"])
+            .or_else(|| info.as_ref().and_then(|info| info.title.clone()))
+            .or_else(|| {
+                container_tracks
+                    .iter()
+                    .find(|track| track.is_audio())
+                    .and_then(|track| track.name.clone())
+            })
+            .or_else(|| symphonia_tag_text(&["TITLE", "TRACK_NAME"])),
+        artist: tag_text(&["ARTIST", "LEAD_PERFORMER", "ARTIST/LEADPERFORMER"]),
+        album: tag_text(&["ALBUM"]),
+        album_artist: tag_text(&["ALBUM_ARTIST", "ALBUMARTIST", "ARTIST/ALBUMARTIST"]),
+        track_number: parse_number(&["PART_NUMBER", "TRACK_NUMBER", "TRACKNUMBER"]),
+        disc_number: parse_number(&["DISC_NUMBER", "DISCNUMBER"]),
+        duration_ms,
+        codec: Some(codec.to_owned()),
+        bitrate_bps: None,
+        sample_rate_hz: params.sample_rate,
+        release_date,
+        year,
+        bit_depth: if matches!(codec, "FLAC" | "ALAC" | "Matroska audio") {
+            params
+                .bits_per_sample
+                .and_then(|value| u8::try_from(value).ok())
+        } else {
+            None
+        },
+    })
 }
 
 fn system_time_to_utc_ms(time: SystemTime) -> Option<i64> {
@@ -847,15 +1012,16 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        mpeg_codec_name, read_lossless_wav_bit_depth, reliable_source_bit_depth, to_extended_path,
+        is_supported_audio_file, mpeg_codec_name, read_lossless_wav_bit_depth,
+        reliable_source_bit_depth, supported_audio_extensions, to_extended_path,
         windows_locator_key, WindowsMediaIndex,
     };
     use lofty::file::FileType;
     use lofty::mpeg::Layer;
     use player_core::{
         FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgressUnit,
-        MediaSourceKind, SourceId, SourceScanState, SyncCancellation, TrackIdentity,
-        UserMetadataField,
+        MediaSourceKind, MediaTrackRecord, SourceId, SourceScanState, SyncCancellation,
+        TrackIdentity, UserMetadataField,
     };
     use player_db::Database;
     use std::{
@@ -1540,6 +1706,93 @@ mod tests {
         let metadata = index.read_metadata(&track).expect("WAV metadata");
         assert_eq!(metadata.bit_depth, Some(24));
         fs::remove_dir_all(base).expect("cleanup fixture directory");
+    }
+
+    #[test]
+    fn audio_extension_filter_accepts_mka_and_ogg_audio_but_rejects_video() {
+        for path in ["track.mka", "track.OGG", "track.oga", "track.opus"] {
+            assert!(is_supported_audio_file(Path::new(path)), "{path}");
+        }
+        for path in ["movie.mkv", "movie.mp4"] {
+            assert!(!is_supported_audio_file(Path::new(path)), "{path}");
+        }
+        let extensions = supported_audio_extensions();
+        for extension in [".mka", ".ogg", ".oga", ".opus"] {
+            assert!(extensions
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case(extension)));
+        }
+        assert!(!extensions
+            .iter()
+            .any(|item| item.eq_ignore_ascii_case(".mkv")));
+        assert!(!extensions
+            .iter()
+            .any(|item| item.eq_ignore_ascii_case(".mp4")));
+    }
+
+    #[test]
+    fn matroska_audio_metadata_reads_container_tags_and_codec_properties() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("player-audio-windows")
+            .join("tests")
+            .join("fixtures")
+            .join("metadata-smoke.mka");
+        let track = MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: SourceId::new(),
+                source_item_id: fixture.to_string_lossy().into_owned(),
+                locator_key: None,
+            },
+            locator: MediaLocator::FileSystem(fixture),
+            fingerprint: FileFingerprint {
+                size_bytes: 0,
+                modified_at_utc_ms: None,
+            },
+            metadata: None,
+        };
+        let metadata = WindowsMediaIndex::new()
+            .read_metadata(&track)
+            .expect("Matroska audio metadata");
+        assert_eq!(metadata.title.as_deref(), Some("Matroska test title"));
+        assert_eq!(metadata.artist.as_deref(), Some("Matroska test artist"));
+        assert_eq!(metadata.album.as_deref(), Some("Matroska test album"));
+        assert_eq!(metadata.track_number, Some(3));
+        assert_eq!(metadata.year, Some(2026));
+        assert_eq!(metadata.codec.as_deref(), Some("FLAC"));
+        assert_eq!(metadata.sample_rate_hz, Some(24_000));
+        assert_eq!(metadata.duration_ms, Some(500));
+    }
+
+    #[test]
+    fn ogg_vorbis_metadata_remains_readable() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("player-audio-windows")
+            .join("tests")
+            .join("fixtures")
+            .join("metadata-smoke.ogg");
+        let track = MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: SourceId::new(),
+                source_item_id: fixture.to_string_lossy().into_owned(),
+                locator_key: None,
+            },
+            locator: MediaLocator::FileSystem(fixture),
+            fingerprint: FileFingerprint {
+                size_bytes: 0,
+                modified_at_utc_ms: None,
+            },
+            metadata: None,
+        };
+        let metadata = WindowsMediaIndex::new()
+            .read_metadata(&track)
+            .expect("OGG Vorbis metadata");
+        assert_eq!(metadata.title.as_deref(), Some("Ogg test title"));
+        assert_eq!(metadata.artist.as_deref(), Some("Ogg test artist"));
+        assert_eq!(metadata.codec.as_deref(), Some("Vorbis"));
+        assert_eq!(metadata.sample_rate_hz, Some(24_000));
+        assert_eq!(metadata.duration_ms, Some(500));
     }
 
     #[test]

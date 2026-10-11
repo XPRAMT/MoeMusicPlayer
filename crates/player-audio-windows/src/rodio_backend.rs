@@ -1110,6 +1110,27 @@ mod tests {
             .join(name)
     }
 
+    #[test]
+    fn matroska_flac_and_ogg_vorbis_decode_and_seek() {
+        for name in ["metadata-smoke.mka", "metadata-smoke.ogg"] {
+            let mut decoder = open_decoder(&fixture(name)).expect("audio decoder opens");
+            assert_eq!(decoder.sample_rate().get(), 24_000, "{name}");
+            let duration = decoder.total_duration().expect("container duration");
+            assert!((Duration::from_millis(490)..=Duration::from_millis(510)).contains(&duration));
+            assert!(
+                decoder.next().is_some(),
+                "decoder yields samples for {name}"
+            );
+            decoder
+                .try_seek(Duration::from_millis(250))
+                .expect("container seek");
+            assert!(
+                decoder.next().is_some(),
+                "decoder resumes after seek for {name}"
+            );
+        }
+    }
+
     /// A mixer whose output is never pulled behaves exactly like a WASAPI
     /// stream whose render thread exited after AUDCLNT_E_DEVICE_INVALIDATED.
     const MIXER_RATE: SampleRate = SampleRate::new(48_000).unwrap();
