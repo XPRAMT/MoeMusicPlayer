@@ -3,6 +3,7 @@
 ## 專案現況與目標
 
 - 頂欄右上角「同步中」的 IconRefresh 需逆時針旋轉；CSS `.spin` 只套用於此同步圖示，`.loader-ring` 等載入圓環維持原本方向。
+- Windows WAV 音質欄位的位元深度由 `crates/player-platform-windows/src/windows.rs` 讀取 RIFF/RF64 `fmt ` 區塊；僅 PCM／IEEE float（含 WAVE_FORMAT_EXTENSIBLE）提供位元深度，Extensible 使用有效位元數。有損 WAV 編碼不顯示此欄。前端既有 `formatAudioFormat` 會在收到此值時顯示，例如 `WAV．48 kHz．24 bit`。
 
 專案已有可建置的 Tauri 2、Svelte 5、TypeScript 與 Vite 骨架，並包含 Rust Core、SQLite 曲庫、Windows 與 Android 媒體來源 adapter，以及雙語 README。
 

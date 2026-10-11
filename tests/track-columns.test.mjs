@@ -120,6 +120,9 @@ test('audio format uses only supplied source fields and formats nullable values'
   assert.equal(formatAudioFormat({
     codec: 'wav', sampleRateHz: 44_100, bitDepth: null, bitrateBps: 1_411_000,
   }, { omitLosslessBitrate: true }), 'WAV．44.1 kHz');
+  assert.equal(formatAudioFormat({
+    codec: 'wav', sampleRateHz: 48_000, bitDepth: 24, bitrateBps: 2_304_000,
+  }, { omitLosslessBitrate: true }), 'WAV．48 kHz．24 bit');
   assert.equal(formatAudioFormat({ codec: null, sampleRateHz: null, bitDepth: null, bitrateBps: null }), '—');
   assert.equal(formatAudioFormat({ codec: 'mp3', sampleRateHz: 44_100, bitDepth: null, bitrateBps: 192_000 }), 'MP3．44.1 kHz．192 kbps');
   assert.equal(

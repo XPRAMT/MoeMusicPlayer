@@ -491,7 +491,11 @@ impl MediaIndex for WindowsMediaIndex {
             sample_rate_hz: properties.sample_rate(),
             release_date,
             year,
-            bit_depth: reliable_source_bit_depth(file_type, properties.bit_depth()),
+            bit_depth: if file_type == FileType::Wav {
+                read_lossless_wav_bit_depth(path)
+            } else {
+                reliable_source_bit_depth(file_type, properties.bit_depth())
+            },
         })
     }
 }
@@ -638,6 +642,89 @@ fn reliable_source_bit_depth(file_type: FileType, bit_depth: Option<u8>) -> Opti
     bit_depth.filter(|depth| (8..=32).contains(depth))
 }
 
+/// WAV is a container and may carry lossy codecs such as ADPCM or companded audio. Verify its
+/// format chunk and report a depth only for integer PCM or IEEE float (including extensible WAV).
+fn read_lossless_wav_bit_depth(path: &Path) -> Option<u8> {
+    let mut file = fs::File::open(path).ok()?;
+    let file_len = file.metadata().ok()?.len();
+    let mut header = [0; 12];
+    file.read_exact(&mut header).ok()?;
+    let is_rf64 = &header[..4] == b"RF64";
+    if (!is_rf64 && &header[..4] != b"RIFF") || &header[8..12] != b"WAVE" {
+        return None;
+    }
+    let declared_end =
+        u64::from(u32::from_le_bytes(header[4..8].try_into().ok()?)).checked_add(8)?;
+    let riff_end = if is_rf64 {
+        file_len
+    } else {
+        declared_end.min(file_len)
+    };
+    let mut offset = 12_u64;
+
+    // WAV chunks have even-byte alignment. Bound both the number and size of inspected chunks;
+    // metadata parsing must never allocate according to an untrusted chunk length.
+    for _ in 0..256 {
+        if offset.checked_add(8)? > riff_end {
+            return None;
+        }
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        let mut chunk_header = [0; 8];
+        file.read_exact(&mut chunk_header).ok()?;
+        let chunk_size = u64::from(u32::from_le_bytes(chunk_header[4..8].try_into().ok()?));
+        let chunk_start = offset.checked_add(8)?;
+        let chunk_end = chunk_start.checked_add(chunk_size)?;
+        if chunk_end > riff_end {
+            return None;
+        }
+
+        if &chunk_header[..4] == b"fmt " {
+            if !(16..=1_048_576).contains(&chunk_size) {
+                return None;
+            }
+            let mut format = vec![0; usize::try_from(chunk_size).ok()?];
+            file.read_exact(&mut format).ok()?;
+            let format_tag = u16::from_le_bytes(format[0..2].try_into().ok()?);
+            let container_depth = u16::from_le_bytes(format[14..16].try_into().ok()?);
+            let depth = match format_tag {
+                0x0001 | 0x0003 => container_depth,
+                0xfffe if format.len() >= 40 => {
+                    let extension_size = u16::from_le_bytes(format[16..18].try_into().ok()?);
+                    if extension_size < 22 {
+                        return None;
+                    }
+                    let valid_depth = u16::from_le_bytes(format[18..20].try_into().ok()?);
+                    let sub_format = &format[24..40];
+                    const PCM_GUID_TAIL: [u8; 12] = [0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113];
+                    let subtype = u32::from_le_bytes(sub_format[..4].try_into().ok()?);
+                    if !matches!(subtype, 1 | 3) || sub_format[4..] != PCM_GUID_TAIL {
+                        return None;
+                    }
+                    if valid_depth == 0 {
+                        container_depth
+                    } else if valid_depth <= container_depth {
+                        valid_depth
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            };
+            return u8::try_from(depth)
+                .ok()
+                .filter(|depth| (8..=32).contains(depth));
+        }
+
+        // A valid WAV fmt chunk precedes the audio data. Don't scan into a large data region
+        // looking for bytes that happen to resemble another chunk.
+        if &chunk_header[..4] == b"data" {
+            return None;
+        }
+        offset = chunk_end.checked_add(chunk_size & 1)?;
+    }
+    None
+}
+
 fn path_is_same_or_under(path: &Path, ancestor: &Path) -> bool {
     path == ancestor || path.starts_with(ancestor)
 }
@@ -719,14 +806,15 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        mpeg_codec_name, reliable_source_bit_depth, to_extended_path, windows_locator_key,
-        WindowsMediaIndex,
+        mpeg_codec_name, read_lossless_wav_bit_depth, reliable_source_bit_depth, to_extended_path,
+        windows_locator_key, WindowsMediaIndex,
     };
     use lofty::file::FileType;
     use lofty::mpeg::Layer;
     use player_core::{
-        LibraryRoot, MediaIndex, MediaLocator, MediaScanProgressUnit, MediaSourceKind, SourceId,
-        SourceScanState, SyncCancellation, UserMetadataField,
+        FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgressUnit,
+        MediaSourceKind, SourceId, SourceScanState, SyncCancellation, TrackIdentity,
+        UserMetadataField,
     };
     use player_db::Database;
     use std::{
@@ -1319,6 +1407,98 @@ mod tests {
         assert_eq!(reliable_source_bit_depth(FileType::WavPack, Some(24)), None);
         assert_eq!(reliable_source_bit_depth(FileType::Mp4, Some(24)), None);
         assert_eq!(reliable_source_bit_depth(FileType::Flac, Some(4)), None);
+    }
+
+    fn write_wav_with_format(path: &Path, format: &[u8]) {
+        let mut bytes = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+        bytes.extend_from_slice(&(format.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(format);
+        if format.len() % 2 != 0 {
+            bytes.push(0);
+        }
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+        bytes.extend_from_slice(&[0; 8]);
+        let riff_size = (bytes.len() - 8) as u32;
+        bytes[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        fs::write(path, bytes).expect("write WAV fixture");
+    }
+
+    fn pcm_wav_format(format_tag: u16, container_depth: u16) -> Vec<u8> {
+        let mut format = Vec::new();
+        format.extend_from_slice(&format_tag.to_le_bytes());
+        format.extend_from_slice(&2_u16.to_le_bytes()); // channels
+        format.extend_from_slice(&48_000_u32.to_le_bytes());
+        format.extend_from_slice(&192_000_u32.to_le_bytes());
+        format.extend_from_slice(&4_u16.to_le_bytes());
+        format.extend_from_slice(&container_depth.to_le_bytes());
+        format
+    }
+
+    #[test]
+    fn wav_bit_depth_is_reported_only_for_pcm_and_ieee_float() {
+        let base = temp_path("wav-bit-depth");
+        fs::create_dir_all(&base).expect("create fixture directory");
+
+        let pcm = base.join("pcm.wav");
+        write_wav_with_format(&pcm, &pcm_wav_format(1, 24));
+        assert_eq!(read_lossless_wav_bit_depth(&pcm), Some(24));
+
+        let float = base.join("float.wav");
+        write_wav_with_format(&float, &pcm_wav_format(3, 32));
+        assert_eq!(read_lossless_wav_bit_depth(&float), Some(32));
+
+        let adpcm = base.join("adpcm.wav");
+        write_wav_with_format(&adpcm, &pcm_wav_format(0x0011, 4));
+        assert_eq!(read_lossless_wav_bit_depth(&adpcm), None);
+
+        fs::remove_dir_all(base).expect("cleanup fixture directory");
+    }
+
+    #[test]
+    fn wav_extensible_uses_valid_bits_and_rejects_unknown_subtypes() {
+        let base = temp_path("wav-extensible-bit-depth");
+        fs::create_dir_all(&base).expect("create fixture directory");
+        let path = base.join("valid-20-in-24.wav");
+
+        let mut format = pcm_wav_format(0xfffe, 24);
+        format.extend_from_slice(&22_u16.to_le_bytes()); // cbSize
+        format.extend_from_slice(&20_u16.to_le_bytes()); // valid bits per sample
+        format.extend_from_slice(&3_u32.to_le_bytes()); // channel mask
+        format.extend_from_slice(&1_u32.to_le_bytes()); // PCM subtype
+        format.extend_from_slice(&[0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113]);
+        write_wav_with_format(&path, &format);
+        assert_eq!(read_lossless_wav_bit_depth(&path), Some(20));
+
+        format[24..28].copy_from_slice(&2_u32.to_le_bytes()); // ADPCM subtype
+        write_wav_with_format(&path, &format);
+        assert_eq!(read_lossless_wav_bit_depth(&path), None);
+        fs::remove_dir_all(base).expect("cleanup fixture directory");
+    }
+
+    #[test]
+    fn wav_metadata_scan_carries_pcm_bit_depth_to_track_metadata() {
+        let base = temp_path("wav-metadata-bit-depth");
+        fs::create_dir_all(&base).expect("create fixture directory");
+        let wav_path = base.join("pcm-24bit.wav");
+        write_wav_with_format(&wav_path, &pcm_wav_format(1, 24));
+        let track = player_core::MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: SourceId::new(),
+                source_item_id: wav_path.to_string_lossy().into_owned(),
+                locator_key: None,
+            },
+            locator: MediaLocator::FileSystem(wav_path),
+            fingerprint: FileFingerprint {
+                size_bytes: 0,
+                modified_at_utc_ms: None,
+            },
+            metadata: None,
+        };
+        let mut index = WindowsMediaIndex::new();
+        let metadata = index.read_metadata(&track).expect("WAV metadata");
+        assert_eq!(metadata.bit_depth, Some(24));
+        fs::remove_dir_all(base).expect("cleanup fixture directory");
     }
 
     #[test]
