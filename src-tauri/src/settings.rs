@@ -32,6 +32,9 @@ pub struct ThemeSettings {
     pub color_mode: ThemeColorMode,
     #[serde(default)]
     pub background_opacity_text_color: BackgroundOpacityTextColor,
+    /// Target background clarity for automatic image opacity (0–100).
+    #[serde(default)]
+    pub background_clarity_percent: u8,
     #[serde(default = "default_quick_settings_opacity_percent")]
     pub quick_settings_opacity_percent: u8,
     /// Backdrop blur for the Now Playing quick-settings drawer.
@@ -133,6 +136,7 @@ impl Default for ThemeSettings {
             accent_hex: "#55D9FF".to_owned(),
             color_mode: ThemeColorMode::default(),
             background_opacity_text_color: BackgroundOpacityTextColor::default(),
+            background_clarity_percent: 0,
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
@@ -977,6 +981,11 @@ impl AppSettings {
         if self.theme.auto_text_color_threshold_percent > 100 {
             return Err(SettingsError::InvalidData(
                 "autoTextColorThresholdPercent must be between 0 and 100".into(),
+            ));
+        }
+        if self.theme.background_clarity_percent > 100 {
+            return Err(SettingsError::InvalidData(
+                "backgroundClarityPercent must be between 0 and 100".into(),
             ));
         }
         self.lyrics_preferences.validate()?;
@@ -2831,10 +2840,12 @@ mod tests {
             old.background_opacity_text_color,
             BackgroundOpacityTextColor::White
         );
+        assert_eq!(old.background_clarity_percent, 0);
 
         let selected = ThemeSettings {
             color_mode: ThemeColorMode::AutoBackgroundOpacity,
             background_opacity_text_color: BackgroundOpacityTextColor::Black,
+            background_clarity_percent: 50,
             ..ThemeSettings::default()
         };
         let json = serde_json::to_value(&selected).expect("serialize selected theme");
@@ -2844,6 +2855,7 @@ mod tests {
             restored.background_opacity_text_color,
             BackgroundOpacityTextColor::Black
         );
+        assert_eq!(restored.background_clarity_percent, 50);
     }
 
     #[test]

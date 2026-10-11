@@ -69,3 +69,34 @@ test('automatic opacity preserves a full-strength image when it matches the fixe
   assert.equal(whiteText.opacityPercent, 100);
   assert.equal(blackText.opacityPercent, 100);
 });
+
+test('clarity sets the white-text target Y to 0.5, 0.25, and 0 at 0, 50, and 100 percent', async () => {
+  const imageY = relativeLuminance('#DADADA');
+  for (const [clarityPercent, expectedTargetY] of [[0, 0.5], [50, 0.25], [100, 0]]) {
+    const resolved = await resolveBackdropContrast({
+      pageHex: '#000000',
+      imageUrl: 'image',
+      opacityPercent: 100,
+      automaticTextColor: 'white',
+      clarityPercent,
+      cachedImageAverageHex: '#DADADA',
+    });
+    assert.ok(Math.abs((resolved.opacityPercent / 100) * imageY - expectedTargetY) < 0.00002);
+  }
+});
+
+test('clarity sets the black-text target Y to 0.5, 0.75, and 1 at 0, 50, and 100 percent', async () => {
+  const imageY = relativeLuminance('#7C7C7C');
+  for (const [clarityPercent, expectedTargetY] of [[0, 0.5], [50, 0.75], [100, 1]]) {
+    const resolved = await resolveBackdropContrast({
+      pageHex: '#FFFFFF',
+      imageUrl: 'image',
+      opacityPercent: 100,
+      automaticTextColor: 'black',
+      clarityPercent,
+      cachedImageAverageHex: '#7C7C7C',
+    });
+    const compositedY = 1 - (resolved.opacityPercent / 100) * (1 - imageY);
+    assert.ok(Math.abs(compositedY - expectedTargetY) < 0.00002);
+  }
+});

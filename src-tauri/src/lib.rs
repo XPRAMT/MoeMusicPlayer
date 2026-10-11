@@ -96,6 +96,8 @@ struct ThemePreferencesDto {
     color_mode: ThemeColorMode,
     #[serde(default)]
     background_opacity_text_color: BackgroundOpacityTextColor,
+    #[serde(default)]
+    background_clarity_percent: u8,
     #[serde(default = "default_quick_settings_opacity_percent")]
     quick_settings_opacity_percent: u8,
     #[serde(default = "default_quick_settings_blur_px")]
@@ -150,6 +152,7 @@ impl From<ThemePreferences> for ThemePreferencesDto {
             accent_hex: preferences.accent_hex,
             color_mode: ThemeColorMode::default(),
             background_opacity_text_color: BackgroundOpacityTextColor::default(),
+            background_clarity_percent: 0,
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
@@ -179,6 +182,7 @@ impl From<ThemeSettings> for ThemePreferencesDto {
             accent_hex: preferences.accent_hex,
             color_mode: preferences.color_mode,
             background_opacity_text_color: preferences.background_opacity_text_color,
+            background_clarity_percent: preferences.background_clarity_percent,
             quick_settings_opacity_percent: preferences.quick_settings_opacity_percent,
             quick_settings_blur_px: preferences.quick_settings_blur_px,
             main_background_blur_px: preferences.main_background_blur_px,
@@ -2922,6 +2926,7 @@ fn theme_set_preferences(
         accent_hex: preferences.accent_hex,
         color_mode: preferences.color_mode,
         background_opacity_text_color: preferences.background_opacity_text_color,
+        background_clarity_percent: preferences.background_clarity_percent,
         quick_settings_opacity_percent: preferences.quick_settings_opacity_percent,
         quick_settings_blur_px: preferences.quick_settings_blur_px,
         main_background_blur_px: preferences.main_background_blur_px,

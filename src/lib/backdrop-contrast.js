@@ -60,6 +60,7 @@ export async function sampleImageAverageHex(imageUrl) {
  *   imageUrl?: string | null,
  *   opacityPercent: number,
  *   automaticTextColor?: 'white' | 'black' | null,
+ *   clarityPercent?: number,
  *   cachedImageAverageHex?: string | null,
  * }} input
  * @returns {Promise<{ contrastHex: string | null, imageAverageHex: string | null, opacityPercent: number }>}
@@ -83,18 +84,25 @@ export async function resolveBackdropContrast(input) {
   let opacityPercent = requestedOpacityPercent;
   if (input.automaticTextColor) {
     const imageY = relativeLuminance(imageAverageHex);
-    const targetY = 0.5;
+    const clarityPercent = typeof input.clarityPercent === 'number' && Number.isFinite(input.clarityPercent)
+      ? Math.max(0, Math.min(100, input.clarityPercent))
+      : 0;
+    const clarity = clarityPercent / 100;
     const strictnessMargin = 0.00001;
     if (input.automaticTextColor === 'white') {
+      // Higher clarity asks for a darker result: Y < 0.5 × (1 - clarity).
+      const targetY = Math.max(0, 0.5 * (1 - clarity) - strictnessMargin);
       // On black, assume mixed luminance is opacity × image Y.
-      opacityPercent = imageY < targetY
+      opacityPercent = imageY <= targetY
         ? 100
-        : Math.min(100, ((targetY - strictnessMargin) / imageY) * 100);
+        : Math.min(100, (targetY / imageY) * 100);
     } else {
+      // Higher clarity asks for a brighter result: Y > 0.5 + 0.5 × clarity.
+      const targetY = Math.min(1, 0.5 + 0.5 * clarity + strictnessMargin);
       // On white, assume mixed luminance is 1 - opacity × (1 - image Y).
-      opacityPercent = imageY > targetY
+      opacityPercent = imageY >= targetY
         ? 100
-        : Math.min(100, ((targetY - strictnessMargin) / (1 - imageY)) * 100);
+        : Math.min(100, ((1 - targetY) / (1 - imageY)) * 100);
     }
   }
 

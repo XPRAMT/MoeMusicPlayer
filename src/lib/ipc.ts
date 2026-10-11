@@ -62,6 +62,8 @@ export interface ThemePreferences {
   accentHex: string;
   colorMode: 'autoTextColor' | 'autoBackgroundOpacity';
   backgroundOpacityTextColor: 'white' | 'black';
+  /** Target-background clarity (0–100), used by autoBackgroundOpacity. */
+  backgroundClarityPercent: number;
   quickSettingsOpacityPercent: number;
   /** Backdrop blur for the Now Playing quick-settings drawer (0–50 px). */
   quickSettingsBlurPx: number;

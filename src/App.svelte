@@ -439,6 +439,7 @@
     const automaticTextColor = themePreferences.colorMode === 'autoBackgroundOpacity'
       ? themePreferences.backgroundOpacityTextColor
       : null;
+    const clarityPercent = themePreferences.backgroundClarityPercent;
     const revision = ++mainContrastRevision;
     const cachedImageAverageHex = mainImageAverageUrl === imageUrl ? mainImageAverageHex : null;
     void resolveBackdropContrast({
@@ -446,6 +447,7 @@
       imageUrl,
       opacityPercent,
       automaticTextColor,
+      clarityPercent,
       cachedImageAverageHex,
     }).then((result) => {
       if (revision !== mainContrastRevision) return;
@@ -551,6 +553,7 @@
     const automaticTextColor = themePreferences.colorMode === 'autoBackgroundOpacity'
       ? themePreferences.backgroundOpacityTextColor
       : null;
+    const clarityPercent = themePreferences.backgroundClarityPercent;
     const revision = ++nowPlayingContrastRevision;
     const cachedImageAverageHex = nowPlayingImageAverageUrl === imageUrl
       ? nowPlayingImageAverageHex
@@ -560,6 +563,7 @@
       imageUrl,
       opacityPercent,
       automaticTextColor,
+      clarityPercent,
       cachedImageAverageHex,
     }).then((result) => {
       if (revision !== nowPlayingContrastRevision) return;
@@ -2382,6 +2386,21 @@
                   </div>
                   <button class="soft-button" type="button" onclick={resetThemePreferences}>恢復預設</button>
                 </div>
+                <div class="appearance-color-grid">
+                  <label class="theme-color-control">
+                    <input
+                      type="color"
+                      aria-label="主色"
+                      value={themePreferences.accentHex}
+                      oninput={(event) => updateThemeColor('accentHex', event.currentTarget.value)}
+                      onchange={saveThemePreferencesNow}
+                    />
+                    <span class="theme-color-copy">
+                      <strong>主色</strong>
+                      <code>{themePreferences.accentHex}</code>
+                    </span>
+                  </label>
+                </div>
                 <div class="main-background-mode-picker" role="group" aria-label="顏色模式">
                   <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoTextColor'} type="button" aria-pressed={themePreferences.colorMode === 'autoTextColor'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoTextColor' }); saveThemePreferencesNow(); }}>自動文字顏色</button>
                   <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoBackgroundOpacity'} type="button" aria-pressed={themePreferences.colorMode === 'autoBackgroundOpacity'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoBackgroundOpacity' }); saveThemePreferencesNow(); }}>自動背景透明度</button>
@@ -2409,21 +2428,22 @@
                         <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'black'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'black'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'black' }); saveThemePreferencesNow(); }}>黑色字</button>
                       </div>
                       <p class="source-muted-note">{themePreferences.backgroundOpacityTextColor === 'white' ? '背景色固定為純黑，圖片透明度自動調整至平均亮度 Y < 0.5。' : '背景色固定為純白，圖片透明度自動調整至平均亮度 Y > 0.5。'}</p>
+                      <label class="lyrics-preference-range">
+                        <span><strong>清晰度</strong><output>{themePreferences.backgroundClarityPercent}%</output></span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={themePreferences.backgroundClarityPercent}
+                          aria-label="自動背景透明度清晰度"
+                          oninput={(event) => updateMainBackgroundLook({ backgroundClarityPercent: Number(event.currentTarget.value) })}
+                          onchange={saveThemePreferencesNow}
+                        />
+                      </label>
+                      <p class="source-muted-note">清晰度 0% 以 Y=0.5 為界；50% 時目標為白字 Y&lt;0.25、黑字 Y&gt;0.75；100% 時分別為 Y=0 與 Y=1。</p>
                     </div>
                   {/if}
-                  <label class="theme-color-control">
-                    <input
-                      type="color"
-                      aria-label="主色"
-                      value={themePreferences.accentHex}
-                      oninput={(event) => updateThemeColor('accentHex', event.currentTarget.value)}
-                      onchange={saveThemePreferencesNow}
-                    />
-                    <span class="theme-color-copy">
-                      <strong>主色</strong>
-                      <code>{themePreferences.accentHex}</code>
-                    </span>
-                  </label>
                 </div>
                 {#if themePreferences.colorMode === 'autoTextColor'}
                   <label class="lyrics-preference-range">
