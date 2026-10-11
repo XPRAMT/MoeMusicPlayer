@@ -230,12 +230,12 @@
     left: 4px;
     width: 2px;
     border-radius: 1px;
-    background: transparent;
+    background: rgba(var(--text-rgb), 0.3);
   }
 
   .list-column.is-resizable:hover .column-resize-handle::after,
   .column-resize-handle:hover::after {
-    background: rgba(var(--text-rgb), 0.35);
+    background: rgba(var(--text-rgb), 0.65);
   }
 
   .list-audio-format {

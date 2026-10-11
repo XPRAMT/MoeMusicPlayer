@@ -8,6 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const readSource = (relativePath) => readFileSync(path.join(root, relativePath), 'utf8').replace(/\r\n/g, '\n');
 const appSource = readSource('src/App.svelte');
 const appStyles = readSource('src/app.css');
+const trackColumnCellsSource = readSource('src/lib/TrackColumnCells.svelte');
 const trackListSource = readSource('src/lib/TrackList.svelte');
 const playlistEntrySource = readSource('src/lib/PlaylistEntryList.svelte');
 const playlistTreeSource = readSource('src/lib/PlaylistTree.svelte');
@@ -19,6 +20,20 @@ function functionSource(startText, endText) {
   assert.notEqual(end, -1, `missing boundary ${endText}`);
   return appSource.slice(start, end);
 }
+
+test('previous button seeks to the start after three seconds and navigates before that', () => {
+  const handler = functionSource('async function controlPlayback(', 'async function commitPlaybackSeek(');
+  assert.match(handler, /command === 'playback_previous' && \(playback\?\.positionMs \?\? 0\) > 3000/);
+  assert.match(handler, /invokeCommand\('playback_seek', \{ positionMs: 0 \}\)/);
+  assert.match(handler, /return;[\s\S]*invokeCommand\(command, \{\}\)/);
+});
+
+test('resizable list header separators remain visible without hover', () => {
+  const baseRule = /\.column-resize-handle::after\s*\{[^}]*background:\s*rgba\(var\(--text-rgb\),\s*0\.3\)/;
+  const hoverRule = /\.list-column\.is-resizable:hover \.column-resize-handle::after,[\s\S]*?\.column-resize-handle:hover::after\s*\{[^}]*background:\s*rgba\(var\(--text-rgb\),\s*0\.65\)/;
+  assert.match(trackColumnCellsSource, baseRule);
+  assert.match(trackColumnCellsSource, hoverRule);
+});
 
 test('playing a library or playlist item does not change the current page', () => {
   const libraryPlay = functionSource('async function playTrack(', 'function openNowPlaying(');

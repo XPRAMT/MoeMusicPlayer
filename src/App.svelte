@@ -1881,6 +1881,10 @@
     command: 'playback_pause' | 'playback_next' | 'playback_previous',
   ): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand) return;
+    if (command === 'playback_previous' && (playback?.positionMs ?? 0) > 3000) {
+      await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs: 0 }));
+      return;
+    }
     await sendPlaybackCommand(() => invokeCommand(command, {}), {
       forceQueueCursorProbe: command === 'playback_next' || command === 'playback_previous',
     });

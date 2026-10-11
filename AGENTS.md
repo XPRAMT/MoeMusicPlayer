@@ -3,6 +3,7 @@
 ## 專案現況與目標
 
 - 頂欄右上角「同步中」的 IconRefresh 需逆時針旋轉；CSS `.spin` 只套用於此同步圖示，`.loader-ring` 等載入圓環維持原本方向。
+- 上一首控制使用共用 `controlPlayback`：目前播放時間嚴格大於 3000 ms 時 seek 至目前歌曲 0 ms 並保留播放狀態，否則切到佇列上一首；列表標題可調整欄寬的垂直分隔把手常駐淡色顯示，hover 時提高對比。
 - Windows WAV 音質欄位的位元深度由 `crates/player-platform-windows/src/windows.rs` 讀取 RIFF/RF64 `fmt ` 區塊；僅 PCM／IEEE float（含 WAVE_FORMAT_EXTENSIBLE）提供位元深度，Extensible 使用有效位元數。有損 WAV 編碼不顯示此欄。前端既有 `formatAudioFormat` 會在收到此值時顯示，例如 `WAV．48 kHz．24 bit`。
 - Hi-Res 標籤由 `src/assets/hi-res-badge.svg` 提供向量圖，金黃色底與黑色 HR 字樣可隨螢幕縮放保持清晰；曲庫／播放清單／佇列顯示為 20.4×12.2 CSS px，並以 `translateY(0.5px)` 向下光學微調。Now Playing 主資訊區為 20.4×12.2 CSS px、緊湊頂列為 17.4×10.4 CSS px，皆不額外垂直位移。SVG 比例依原圖繪製，避免 `object-fit` 留下橫向空隙。
 
