@@ -10,38 +10,41 @@ use serde::{Deserialize, Serialize};
 
 /// Increment when the metadata parser adds or changes persisted fields or extraction rules.
 /// Existing tracks below this version are eligible for bounded background backfill.
-pub const TRACK_METADATA_VERSION: u32 = 4;
+pub const TRACK_METADATA_VERSION: u32 = 5;
 use uuid::Uuid;
 
-/// Normalize Lofty `RecordingDate` to `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`.
-/// Rejects zero years, invalid calendar dates, and values with time or other suffixes.
+/// Normalize a recording date to `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`.
+/// Accepts one- or two-digit month/day components; rejects invalid dates and suffixes.
 pub fn parse_recording_date(value: &str) -> Option<String> {
-    let bytes = value.trim().as_bytes();
-    let year = parse_four_digit_year(bytes.get(..4)?)?;
-    match bytes.len() {
-        4 => Some(format!("{year:04}")),
-        7 if bytes[4] == b'-' => {
-            let month = parse_two_digits(bytes.get(5..7)?)?;
-            (1..=12)
-                .contains(&month)
-                .then(|| format!("{year:04}-{month:02}"))
-        }
-        10 if bytes[4] == b'-' && bytes[7] == b'-' => {
-            let month = parse_two_digits(bytes.get(5..7)?)?;
-            let day = parse_two_digits(bytes.get(8..10)?)?;
-            let days_in_month = match month {
-                1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-                4 | 6 | 9 | 11 => 30,
-                2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
-                2 => 28,
-                _ => return None,
-            };
-            (1..=days_in_month)
-                .contains(&day)
-                .then(|| format!("{year:04}-{month:02}-{day:02}"))
-        }
-        _ => None,
+    let mut parts = value.trim().split('-');
+    let year = parse_four_digit_year(parts.next()?.as_bytes())?;
+    let Some(month_text) = parts.next() else {
+        return Some(format!("{year:04}"));
+    };
+    let month = parse_one_or_two_digits(month_text.as_bytes())?;
+    if !(1..=12).contains(&month) {
+        return None;
     }
+    let Some(day_text) = parts.next() else {
+        return parts
+            .next()
+            .is_none()
+            .then(|| format!("{year:04}-{month:02}"));
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    let day = parse_one_or_two_digits(day_text.as_bytes())?;
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
+        2 => 28,
+        _ => return None,
+    };
+    (1..=days_in_month)
+        .contains(&day)
+        .then(|| format!("{year:04}-{month:02}-{day:02}"))
 }
 
 /// Calendar year from a normalized release date (`YYYY…`).
@@ -57,8 +60,8 @@ fn parse_four_digit_year(bytes: &[u8]) -> Option<u16> {
     (year != 0).then_some(year)
 }
 
-fn parse_two_digits(bytes: &[u8]) -> Option<u8> {
-    if bytes.len() != 2 || !bytes.iter().all(u8::is_ascii_digit) {
+fn parse_one_or_two_digits(bytes: &[u8]) -> Option<u8> {
+    if !(1..=2).contains(&bytes.len()) || !bytes.iter().all(u8::is_ascii_digit) {
         return None;
     }
     std::str::from_utf8(bytes).ok()?.parse().ok()
@@ -553,9 +556,18 @@ mod tests {
     fn recording_date_keeps_available_precision() {
         assert_eq!(parse_recording_date("2024").as_deref(), Some("2024"));
         assert_eq!(parse_recording_date("2024-03").as_deref(), Some("2024-03"));
+        assert_eq!(parse_recording_date("2024-3").as_deref(), Some("2024-03"));
         assert_eq!(
             parse_recording_date("2024-02-29").as_deref(),
             Some("2024-02-29")
+        );
+        assert_eq!(
+            parse_recording_date("2024-2-9").as_deref(),
+            Some("2024-02-09")
+        );
+        assert_eq!(
+            parse_recording_date("2024-02-9").as_deref(),
+            Some("2024-02-09")
         );
         assert_eq!(parse_recording_date("2023-02-29"), None);
         assert_eq!(parse_recording_date("2024-13"), None);

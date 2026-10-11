@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
     fs,
-    io::{self, Seek},
+    io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -432,6 +432,11 @@ impl MediaIndex for WindowsMediaIndex {
         let file_type = probe.file_type().ok_or_else(|| TrackMetadataError {
             message: "could not identify audio file type".to_owned(),
         })?;
+        let raw_id3_recording_date = if file_type == FileType::Mpeg {
+            read_id3v2_text_frame(path, b"TDRC").ok().flatten()
+        } else {
+            None
+        };
         let (tagged_file, codec) = if file_type == FileType::Mpeg {
             let mut reader = probe.into_inner();
             reader
@@ -458,9 +463,12 @@ impl MediaIndex for WindowsMediaIndex {
             .or_else(|| tagged_file.first_tag());
         let properties = tagged_file.properties();
         let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
-        let release_date = tag
-            .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
-            .and_then(player_core::parse_recording_date);
+        let release_date = match raw_id3_recording_date.as_deref() {
+            Some(value) => player_core::parse_recording_date(value),
+            None => tag
+                .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
+                .and_then(player_core::parse_recording_date),
+        };
         let year = release_date
             .as_deref()
             .and_then(player_core::recording_date_year);
@@ -485,6 +493,130 @@ impl MediaIndex for WindowsMediaIndex {
             year,
             bit_depth: reliable_source_bit_depth(file_type, properties.bit_depth()),
         })
+    }
+}
+
+/// Read an ID3v2 text frame without Lofty's semantic timestamp conversion. Lofty's timestamp
+/// parser treats an unpadded segment such as `2024-2-9` as `2024-02`, losing the day before the
+/// shared date normalizer can inspect it. Unsupported or malformed tag layouts fall back to Lofty.
+fn read_id3v2_text_frame(path: &Path, target_id: &[u8; 4]) -> Result<Option<String>, ()> {
+    let mut file = fs::File::open(path).map_err(|_| ())?;
+    let mut header = [0; 10];
+    file.read_exact(&mut header).map_err(|_| ())?;
+    if &header[..3] != b"ID3" || !matches!(header[3], 3 | 4) {
+        return Ok(None);
+    }
+    // Extended headers have version-specific layouts. Leave those to Lofty rather than guessing
+    // their offset; ordinary ID3v2.3/v2.4 frames can be scanned without loading APIC data.
+    if header[5] & 0x40 != 0 {
+        return Err(());
+    }
+    let tag_size = decode_synchsafe_size(&header[6..10]).ok_or(())? as u64;
+    let tag_end = 10_u64.checked_add(tag_size).ok_or(())?;
+    let mut offset = 10_u64;
+    while offset.checked_add(10).is_some_and(|end| end <= tag_end) {
+        file.seek(SeekFrom::Start(offset)).map_err(|_| ())?;
+        let mut frame_header = [0; 10];
+        file.read_exact(&mut frame_header).map_err(|_| ())?;
+        if frame_header[..4].iter().all(|byte| *byte == 0) {
+            return Ok(None);
+        }
+        let frame_size = if header[3] == 4 {
+            decode_synchsafe_size(&frame_header[4..8]).ok_or(())? as u64
+        } else {
+            u32::from_be_bytes(frame_header[4..8].try_into().map_err(|_| ())?) as u64
+        };
+        let content_start = offset.checked_add(10).ok_or(())?;
+        let content_end = content_start.checked_add(frame_size).ok_or(())?;
+        if content_end > tag_end {
+            return Err(());
+        }
+        if &frame_header[..4] == target_id {
+            if frame_size > 4096 {
+                return Err(());
+            }
+            let format_flags = frame_header[9];
+            let unsupported_flags = if header[3] == 4 {
+                format_flags & 0x0c != 0 // compressed or encrypted
+            } else {
+                format_flags & 0xc0 != 0 // compressed or encrypted
+            };
+            if unsupported_flags {
+                return Err(());
+            }
+            let mut frame = vec![0; usize::try_from(frame_size).map_err(|_| ())?];
+            file.read_exact(&mut frame).map_err(|_| ())?;
+            let prefix = if header[3] == 4 {
+                usize::from(format_flags & 0x40 != 0) + if format_flags & 0x01 != 0 { 4 } else { 0 }
+            } else {
+                usize::from(format_flags & 0x20 != 0)
+            };
+            return decode_id3_text(frame.get(prefix..).ok_or(())?).map(Some);
+        }
+        offset = content_end;
+    }
+    Ok(None)
+}
+
+fn decode_synchsafe_size(bytes: &[u8]) -> Option<u32> {
+    if bytes.len() != 4 || bytes.iter().any(|byte| byte & 0x80 != 0) {
+        return None;
+    }
+    Some(
+        (u32::from(bytes[0]) << 21)
+            | (u32::from(bytes[1]) << 14)
+            | (u32::from(bytes[2]) << 7)
+            | u32::from(bytes[3]),
+    )
+}
+
+fn decode_id3_text(frame: &[u8]) -> Result<String, ()> {
+    let (&encoding, content) = frame.split_first().ok_or(())?;
+    match encoding {
+        0 => Ok(content
+            .iter()
+            .copied()
+            .take_while(|byte| *byte != 0)
+            .map(char::from)
+            .collect()),
+        1 | 2 => {
+            if content.len() % 2 != 0 {
+                return Err(());
+            }
+            let little_endian = if encoding == 1 {
+                match content.get(..2) {
+                    Some([0xff, 0xfe, ..]) => true,
+                    Some([0xfe, 0xff, ..]) => false,
+                    _ => return Err(()),
+                }
+            } else {
+                false
+            };
+            let content = if encoding == 1 {
+                &content[2..]
+            } else {
+                content
+            };
+            let units = content
+                .chunks_exact(2)
+                .map(|pair| {
+                    if little_endian {
+                        u16::from_le_bytes([pair[0], pair[1]])
+                    } else {
+                        u16::from_be_bytes([pair[0], pair[1]])
+                    }
+                })
+                .take_while(|unit| *unit != 0)
+                .collect::<Vec<_>>();
+            String::from_utf16(&units).map_err(|_| ())
+        }
+        3 => {
+            let content = content.split(|byte| *byte == 0).next().ok_or(())?;
+            std::str::from_utf8(content)
+                .map(str::to_owned)
+                .map_err(|_| ())
+        }
+        _ => Err(()),
     }
 }
 
@@ -622,6 +754,10 @@ mod tests {
     }
 
     fn write_tagged_mp3(path: &Path, title: &str) {
+        write_tagged_mp3_with_date(path, title, "2024-02-29");
+    }
+
+    fn write_tagged_mp3_with_date(path: &Path, title: &str, recording_date: &str) {
         fn add_frame(body: &mut Vec<u8>, name: &[u8; 4], text: &str) {
             let mut value = vec![3]; // ID3v2.4 UTF-8 text encoding
             value.extend(text.as_bytes());
@@ -644,7 +780,7 @@ mod tests {
         add_frame(&mut body, b"TPE1", "測試演出者");
         add_frame(&mut body, b"TPE2", "專輯演出者");
         add_frame(&mut body, b"TRCK", "4");
-        add_frame(&mut body, b"TDRC", "2024-02-29");
+        add_frame(&mut body, b"TDRC", recording_date);
         let size = body.len() as u32;
         let header = [
             b'I',
@@ -1141,6 +1277,26 @@ mod tests {
         assert_eq!(metadata.year, Some(2024));
         assert_eq!(metadata.codec.as_deref(), Some("MP3"));
         assert_eq!(metadata.bit_depth, None, "MP3 is lossy");
+
+        let unpadded_path = base.join("unpadded.mp3");
+        write_tagged_mp3_with_date(&unpadded_path, "Unpadded", "2024-2-9");
+        let record = WindowsMediaIndex::new()
+            .scan(&root)
+            .tracks
+            .into_iter()
+            .find(|record| {
+                matches!(
+                    &record.locator,
+                    MediaLocator::FileSystem(path)
+                        if path.file_name().is_some_and(|name| {
+                            name.to_string_lossy().eq_ignore_ascii_case("unpadded.mp3")
+                        })
+                )
+            })
+            .expect("unpadded-date record");
+        let unpadded = index.read_metadata(&record).expect("unpadded metadata");
+        assert_eq!(unpadded.release_date.as_deref(), Some("2024-02-09"));
+        assert_eq!(unpadded.year, Some(2024));
         fs::remove_dir_all(base).expect("cleanup");
     }
 
