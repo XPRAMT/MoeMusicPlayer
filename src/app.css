@@ -3791,7 +3791,7 @@ input:focus-visible {
   position: absolute;
   left: 50%;
   right: auto;
-  bottom: calc(100% + 18px);
+  bottom: calc(100% + 14px);
   transform: translateX(calc(-50% - var(--volume-popover-shift-left, 0px)));
   z-index: 40;
   display: flex;
@@ -4000,7 +4000,6 @@ input:focus-visible {
     border-color: var(--line-strong);
     border-radius: var(--floating-surface-radius);
   }
-  :root { --chrome-bar-height: 63px; }
   .page-content { padding-top: 26px; }
   /* Dock height stays width-invariant; only tighten horizontal padding / art size. */
   .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; --dock-pad-x: 16px; padding-right: var(--dock-pad-x); padding-left: var(--dock-pad-x); }
@@ -4038,7 +4037,6 @@ input:focus-visible {
   .sidebar-source { display: none; }
   .workspace { grid-column: 1; grid-row: 2; }
   .now-playing-overlay { grid-row: 1 / 3; }
-  :root { --chrome-bar-height: 52px; }
   .topbar { padding: 0 15px; }
   .now-playing-overlay-topbar .topbar-actions { display: none; }
   .topbar-actions { gap: 7px; }
@@ -4111,13 +4109,6 @@ input:focus-visible {
     grid-column: 1;
     grid-row: 3;
   }
-  .control-button { width: 32px; height: 32px; }
-  .control-button svg { width: 20px; height: 20px; }
-  .play-button { width: 36px; height: 36px; }
-  .play-button svg { width: 22px; height: 22px; }
-  .volume-toggle { width: 32px; height: 32px; }
-  .volume-toggle svg { width: 20px; height: 20px; }
-  .dock-controls { height: 36px; }
   .dock-error { top: calc(100% + 2px); }
 
   /* Now Playing: never apply non-NP hide stages. */
@@ -4331,13 +4322,17 @@ input:focus-visible {
 @media (max-width: 560px) {
   .now-playing-overlay-topbar {
     display: grid;
-    min-height: 88px;
+    width: 100%;
+    height: var(--chrome-bar-height);
+    min-height: var(--chrome-bar-height);
+    max-height: var(--chrome-bar-height);
     grid-template-columns: auto minmax(0, 1fr);
-    grid-template-rows: auto auto;
+    grid-template-rows: 34px minmax(0, 1fr);
     align-content: center;
     justify-content: flex-start;
-    gap: 4px 8px;
-    padding: 6px 10px;
+    gap: 2px 8px;
+    padding: 2px 10px;
+    overflow: hidden;
   }
   .now-playing-overlay-return { grid-column: 1; grid-row: 1; width: 34px; min-width: 34px; min-height: 34px; height: 34px; }
   .now-playing-header-track { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; }
@@ -4371,7 +4366,6 @@ input:focus-visible {
 }
 
 @media (max-width: 390px) {
-  .now-playing-overlay-topbar { min-height: 82px; }
   .now-playing-header-track .now-playing-format { font-size: var(--font-caption); }
   .app-shell.has-now-playing-backdrop .player-dock { padding-right: 8px; padding-left: 8px; }
   .app-shell.has-now-playing-backdrop .dock-track { gap: 4px; }

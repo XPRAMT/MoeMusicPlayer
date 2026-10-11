@@ -569,6 +569,9 @@ async page => {
     && narrowOverlay.lyricsToggles.right <= narrowOverlay.quickSettingsTrigger.left
     && narrowOverlay.quickSettingsTrigger.right <= 360,
   'narrow topbar keeps return, lyric toggles and quick settings visible without overlap');
+  assert.equal(narrowOverlay.topbar.height, layoutA1920.topbar.height, 'Now Playing topbar height stays unchanged at narrow widths');
+  assert.equal(narrowOverlay.dock.height, layoutA1920.dock.height, 'playback dock height stays unchanged at narrow widths');
+  assert.equal(narrowOverlay.controls.height, layoutA1920.controls.height, 'playback control row height stays unchanged at narrow widths');
   assert.ok(narrowOverlay.progress.width >= narrowOverlay.dock.width - 2, 'narrow edge progress track spans at least the full dock width');
   assert.ok(narrowOverlay.progress.top <= narrowOverlay.controls.top + 1
     && narrowOverlay.progress.bottom <= narrowOverlay.dock.bottom + 1,
