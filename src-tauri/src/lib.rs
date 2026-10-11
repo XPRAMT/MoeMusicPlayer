@@ -25,6 +25,8 @@ use player_core::{
     TrackListSort, TrackMetadataError, TrackSummary,
 };
 #[cfg(target_os = "windows")]
+use player_db::natural_title_cmp;
+#[cfg(target_os = "windows")]
 use player_db::PlaybackSessionCheckpoint;
 use player_db::{Database, ThemePreferences};
 use serde::{Deserialize, Serialize};
@@ -5937,10 +5939,7 @@ fn same_folder_audio_files(
     paths.sort_by(|left, right| {
         let left_name = left.file_name().unwrap_or_default().to_string_lossy();
         let right_name = right.file_name().unwrap_or_default().to_string_lossy();
-        left_name
-            .to_lowercase()
-            .cmp(&right_name.to_lowercase())
-            .then_with(|| left_name.cmp(&right_name))
+        natural_title_cmp(&left_name, &right_name).then_with(|| left_name.cmp(&right_name))
     });
     paths.dedup();
     Ok(paths)
@@ -7294,7 +7293,7 @@ mod windows_library_integration_tests {
     }
 
     #[test]
-    fn shell_open_collects_only_supported_sibling_files_in_name_order() {
+    fn shell_open_sorts_supported_sibling_files_by_natural_filename_order() {
         let directory = TestDirectory::new();
         fs::create_dir_all(directory.0.join("subfolder")).unwrap();
         fs::write(directory.0.join("z-last.mp3"), b"audio").unwrap();
@@ -7302,6 +7301,10 @@ mod windows_library_integration_tests {
         fs::write(directory.0.join("middle.m4a"), b"audio").unwrap();
         fs::write(directory.0.join("movie.mp4"), b"video").unwrap();
         fs::write(directory.0.join("subfolder\u{005c}nested.wav"), b"audio").unwrap();
+        fs::write(directory.0.join("AUDIO_Ex_Dorm_CN_1.flac"), b"audio").unwrap();
+        fs::write(directory.0.join("AUDIO_Ex_Dorm_CN_2.flac"), b"audio").unwrap();
+        fs::write(directory.0.join("AUDIO_Ex_Dorm_CN_10.flac"), b"audio").unwrap();
+        fs::write(directory.0.join("AUDIO_Ex_Dorm_CN_100.flac"), b"audio").unwrap();
 
         let files = same_folder_audio_files(&directory.0.join("middle.m4a")).unwrap();
         let names = files
@@ -7311,7 +7314,18 @@ mod windows_library_integration_tests {
                     .map(|name| name.to_string_lossy().into_owned())
             })
             .collect::<Vec<_>>();
-        assert_eq!(names, ["a-first.flac", "middle.m4a", "z-last.mp3"]);
+        assert_eq!(
+            names,
+            [
+                "a-first.flac",
+                "AUDIO_Ex_Dorm_CN_1.flac",
+                "AUDIO_Ex_Dorm_CN_2.flac",
+                "AUDIO_Ex_Dorm_CN_10.flac",
+                "AUDIO_Ex_Dorm_CN_100.flac",
+                "middle.m4a",
+                "z-last.mp3"
+            ]
+        );
     }
 
     #[test]

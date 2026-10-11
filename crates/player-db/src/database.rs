@@ -384,7 +384,7 @@ CREATE INDEX tracks_sort_title
     ON tracks(sort_title COLLATE NATURAL_NOCASE, track_id);
 "#;
 
-fn natural_title_cmp(left: &str, right: &str) -> Ordering {
+pub fn natural_title_cmp(left: &str, right: &str) -> Ordering {
     let left = left.as_bytes();
     let right = right.as_bytes();
     let (mut left_index, mut right_index) = (0, 0);

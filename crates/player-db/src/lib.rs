@@ -2,6 +2,6 @@ mod database;
 mod locator;
 
 pub use database::{
-    Database, DatabaseError, LibrarySyncState, PlaybackSessionCheckpoint,
+    natural_title_cmp, Database, DatabaseError, LibrarySyncState, PlaybackSessionCheckpoint,
     PlaybackStatisticsRuntime, PlaylistFileSyncState, ThemePreferences,
 };
