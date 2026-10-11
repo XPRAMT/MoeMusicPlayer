@@ -12,7 +12,7 @@ use std::{
 use player_core::{LibraryRoot, MediaLocator, MediaSourceKind, PlaylistId, SourceId};
 use serde::{Deserialize, Serialize};
 
-const SETTINGS_SCHEMA_VERSION: u32 = 8;
+const SETTINGS_SCHEMA_VERSION: u32 = 9;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -42,9 +42,48 @@ pub struct ThemeSettings {
         alias = "mainBackgroundBrightnessPercent"
     )]
     pub main_background_opacity_percent: u8,
+    /// Main-window background source. Legacy settings are resolved in `SettingsStore::open`.
+    #[serde(default = "legacy_main_background_mode")]
+    pub main_background_mode: MainBackgroundMode,
+    /// Recursive image folder for slideshow mode.
+    #[serde(default)]
+    pub slideshow_folder: Option<StoredPath>,
+    /// Slideshow interval in minutes (1–120).
+    #[serde(default = "default_slideshow_interval_minutes")]
+    pub slideshow_interval_minutes: u8,
+    #[serde(default)]
+    pub slideshow_order: SlideshowOrder,
     /// Relative-luminance Y threshold (0–100). At/above → black text; below → white text.
     #[serde(default = "default_auto_text_color_threshold_percent")]
     pub auto_text_color_threshold_percent: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MainBackgroundMode {
+    /// Compatibility default for pre-v9 settings; open() resolves this based on the legacy image.
+    #[default]
+    SingleImage,
+    Solid,
+    Slideshow,
+    AlbumCover,
+    SystemWallpaper,
+}
+
+fn legacy_main_background_mode() -> MainBackgroundMode {
+    MainBackgroundMode::SingleImage
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SlideshowOrder {
+    #[default]
+    Sequential,
+    Random,
+}
+
+fn default_slideshow_interval_minutes() -> u8 {
+    10
 }
 
 fn default_quick_settings_opacity_percent() -> u8 {
@@ -76,6 +115,10 @@ impl Default for ThemeSettings {
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
             main_background_opacity_percent: default_main_background_opacity_percent(),
+            main_background_mode: MainBackgroundMode::Solid,
+            slideshow_folder: None,
+            slideshow_interval_minutes: default_slideshow_interval_minutes(),
+            slideshow_order: SlideshowOrder::default(),
             auto_text_color_threshold_percent: default_auto_text_color_threshold_percent(),
         }
     }
@@ -904,6 +947,11 @@ impl AppSettings {
                 "mainBackgroundOpacityPercent must be between 0 and 100".into(),
             ));
         }
+        if !(1..=120).contains(&self.theme.slideshow_interval_minutes) {
+            return Err(SettingsError::InvalidData(
+                "slideshowIntervalMinutes must be between 1 and 120".into(),
+            ));
+        }
         if self.theme.auto_text_color_threshold_percent > 100 {
             return Err(SettingsError::InvalidData(
                 "autoTextColorThresholdPercent must be between 0 and 100".into(),
@@ -1009,7 +1057,7 @@ impl SettingsStore {
         }
         let migration_marker = path.with_extension("migration-v1-done");
         let backup_path = backup_path(&path);
-        let (settings, mut recovery_warning, must_persist) = if path.exists() {
+        let (mut settings, mut recovery_warning, mut must_persist) = if path.exists() {
             match read_settings(&path) {
                 Ok((settings, migrated)) => (settings, None, migrated),
                 Err(SettingsError::UnsupportedVersion(version)) => {
@@ -1079,6 +1127,15 @@ impl SettingsStore {
         } else {
             (legacy, None, true)
         };
+        if must_persist
+            && settings.theme.main_background_mode == MainBackgroundMode::SingleImage
+            && !path
+                .parent()
+                .is_some_and(|directory| directory.join("background").is_file())
+        {
+            settings.theme.main_background_mode = MainBackgroundMode::Solid;
+            must_persist = true;
+        }
         if !settings.source_registry_authoritative && recovery_warning.is_none() {
             recovery_warning = Some(
                 "來源清單尚未確認，來源同步暫停以保留既有曲庫。請重新登記所有來源並確認來源清單。"
@@ -2726,6 +2783,54 @@ mod tests {
         let written = serde_json::to_value(&theme).expect("serialize theme");
         assert_eq!(written["mainBackgroundOpacityPercent"], 62);
         assert!(written.get("mainBackgroundBrightnessPercent").is_none());
+    }
+
+    #[test]
+    fn schema_eight_background_migration_preserves_image_and_defaults_to_solid_without_one() {
+        for (label, has_image, expected_mode) in [
+            ("with-image", true, MainBackgroundMode::SingleImage),
+            ("without-image", false, MainBackgroundMode::Solid),
+        ] {
+            let directory = test_directory(&format!("background-v8-{label}"));
+            let path = directory.join("settings.json");
+            let mut json =
+                serde_json::to_value(AppSettings::default()).expect("serialize defaults");
+            json["schemaVersion"] = serde_json::json!(8);
+            let theme = json["theme"].as_object_mut().expect("theme object");
+            theme.remove("mainBackgroundMode");
+            theme.remove("slideshowFolder");
+            theme.remove("slideshowIntervalMinutes");
+            theme.remove("slideshowOrder");
+            fs::write(
+                &path,
+                serde_json::to_vec(&json).expect("serialize legacy settings"),
+            )
+            .expect("write legacy settings");
+            if has_image {
+                fs::write(directory.join("background"), b"legacy background marker")
+                    .expect("write legacy background marker");
+            }
+
+            let store =
+                SettingsStore::open(&path, AppSettings::default()).expect("open v8 settings");
+            let migrated = store.snapshot().expect("snapshot migrated settings");
+            assert_eq!(migrated.theme.main_background_mode, expected_mode);
+            assert_eq!(migrated.theme.slideshow_interval_minutes, 10);
+            assert_eq!(migrated.theme.slideshow_order, SlideshowOrder::Sequential);
+            let persisted: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).expect("read migrated settings"))
+                    .expect("parse migrated settings");
+            assert_eq!(persisted["schemaVersion"], SETTINGS_SCHEMA_VERSION);
+            assert_eq!(
+                persisted["theme"]["mainBackgroundMode"],
+                match expected_mode {
+                    MainBackgroundMode::SingleImage => "singleImage",
+                    MainBackgroundMode::Solid => "solid",
+                    _ => unreachable!(),
+                }
+            );
+            fs::remove_dir_all(directory).expect("remove test directory");
+        }
     }
 
     #[test]

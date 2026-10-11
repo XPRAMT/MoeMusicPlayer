@@ -33,6 +33,7 @@
     getNowPlayingAppearancePreferences,
     getTrackArtworkBytes,
     getMainBackgroundBytes,
+    nextSlideshowBackgroundBytes,
     invokeCommand,
     isReady,
     setNowPlayingAppearancePreferences,
@@ -213,6 +214,8 @@
   let themePreferences = $state<ThemePreferences>({ ...DEFAULT_THEME_PREFERENCES });
   let mainBackgroundUrl = $state<string | null>(null);
   let mainBackgroundObjectUrl: string | null = null;
+  let mainBackgroundBytesHash = '';
+  let mainBackgroundReadRevision = 0;
   let mainBackgroundError = $state<string | null>(null);
   let mainBackgroundBusy = $state(false);
   /** Average page+image mix for main-window text contrast; null means use page color only. */
@@ -390,6 +393,13 @@
   const syncProgressDoneCount = $derived(
     syncProgressSources.filter((source) => source.outcome !== null).length,
   );
+  const effectiveMainBackgroundUrl = $derived(
+    themePreferences.mainBackgroundMode === 'solid'
+      ? null
+      : themePreferences.mainBackgroundMode === 'albumCover'
+        ? activeArtwork.status === 'ready' ? activeArtwork.objectUrl : null
+        : mainBackgroundUrl,
+  );
 
   $effect(() => {
     const snapshot = playback;
@@ -409,7 +419,7 @@
 
   $effect(() => {
     const pageHex = themePreferences.backgroundHex;
-    const imageUrl = mainBackgroundUrl;
+    const imageUrl = effectiveMainBackgroundUrl;
     const opacityPercent = themePreferences.mainBackgroundOpacityPercent;
     const revision = ++mainContrastRevision;
     const cachedImageAverageHex = mainImageAverageUrl === imageUrl ? mainImageAverageHex : null;
@@ -429,6 +439,21 @@
       }
       mainContrastBackgroundHex = result.contrastHex;
     });
+  });
+
+  $effect(() => {
+    const mode = themePreferences.mainBackgroundMode;
+    const intervalMinutes = themePreferences.slideshowIntervalMinutes;
+    const platform = capabilities?.platform;
+    if (!isTauri() || (mode !== 'slideshow' && mode !== 'systemWallpaper')) return;
+    const timer = setInterval(() => {
+      if (mode === 'slideshow') {
+        void loadNextSlideshowBackground();
+      } else if (mode === 'systemWallpaper' && platform === 'windows') {
+        void loadMainBackground();
+      }
+    }, mode === 'slideshow' ? intervalMinutes * 60_000 : 60_000);
+    return () => clearInterval(timer);
   });
 
   $effect(() => {
@@ -618,6 +643,8 @@
       await Promise.all([
         loadCapabilities(),
         loadThemePreferences(),
+      ]);
+      await Promise.all([
         loadMainBackground(),
         loadSettingsRecoveryWarning(),
         loadTrackColumnSettings(),
@@ -664,15 +691,41 @@
 
   async function loadMainBackground(): Promise<void> {
     if (!isTauri()) return;
+    const revision = ++mainBackgroundReadRevision;
     try {
-      setMainBackgroundBytes(await getMainBackgroundBytes());
+      const bytes = await getMainBackgroundBytes();
+      if (revision !== mainBackgroundReadRevision) return;
+      setMainBackgroundBytes(bytes);
       mainBackgroundError = null;
     } catch (error) {
+      if (revision !== mainBackgroundReadRevision) return;
       mainBackgroundError = `無法讀取主介面背景：${getErrorText(error)}`;
     }
   }
 
+  async function loadNextSlideshowBackground(): Promise<void> {
+    const revision = ++mainBackgroundReadRevision;
+    try {
+      const bytes = await nextSlideshowBackgroundBytes();
+      if (revision !== mainBackgroundReadRevision || themePreferences.mainBackgroundMode !== 'slideshow') return;
+      setMainBackgroundBytes(bytes);
+      mainBackgroundError = null;
+    } catch (error) {
+      if (revision !== mainBackgroundReadRevision) return;
+      mainBackgroundError = getErrorText(error);
+    }
+  }
+
   function setMainBackgroundBytes(bytes: ArrayBuffer): void {
+    const data = new Uint8Array(bytes);
+    let hash = 2166136261;
+    for (const byte of data) {
+      hash ^= byte;
+      hash = Math.imul(hash, 16777619);
+    }
+    const nextHash = `${data.byteLength}:${hash >>> 0}`;
+    if (nextHash === mainBackgroundBytesHash) return;
+    mainBackgroundBytesHash = nextHash;
     if (mainBackgroundObjectUrl) URL.revokeObjectURL(mainBackgroundObjectUrl);
     const mimeType = bytes.byteLength > 0 ? detectArtworkMimeType(bytes) : null;
     if (!mimeType) {
@@ -704,9 +757,36 @@
     }
     mainBackgroundBusy = true;
     mainBackgroundError = null;
+    mainBackgroundReadRevision += 1;
     try {
+      await themeSaveQueue;
       const picked = await invokeCommand('appearance_pick_main_background', {});
-      if (picked) setMainBackgroundBytes(await getMainBackgroundBytes());
+      if (picked) {
+        await loadThemePreferences();
+        await loadMainBackground();
+      }
+    } catch (error) {
+      mainBackgroundError = getErrorText(error);
+    } finally {
+      mainBackgroundBusy = false;
+    }
+  }
+
+  async function pickSlideshowFolder(): Promise<void> {
+    if (!isTauri() || mainBackgroundBusy) {
+      mainBackgroundError = isTauri() ? null : '瀏覽器預覽無法選擇幻燈片資料夾。';
+      return;
+    }
+    mainBackgroundBusy = true;
+    mainBackgroundError = null;
+    mainBackgroundReadRevision += 1;
+    try {
+      await themeSaveQueue;
+      const picked = await invokeCommand('appearance_pick_slideshow_folder', {});
+      if (picked) {
+        await loadThemePreferences();
+        await loadMainBackground();
+      }
     } catch (error) {
       mainBackgroundError = getErrorText(error);
     } finally {
@@ -718,6 +798,7 @@
     if (!isTauri() || mainBackgroundBusy) return;
     mainBackgroundBusy = true;
     mainBackgroundError = null;
+    mainBackgroundReadRevision += 1;
     try {
       await invokeCommand('appearance_clear_main_background', {});
       setMainBackgroundBytes(new ArrayBuffer(0));
@@ -726,6 +807,17 @@
     } finally {
       mainBackgroundBusy = false;
     }
+  }
+
+  async function selectMainBackgroundMode(mode: ThemePreferences['mainBackgroundMode']): Promise<void> {
+    if (capabilities?.platform === 'android' && (mode === 'singleImage' || mode === 'slideshow' || mode === 'systemWallpaper')) return;
+    if (mode === 'systemWallpaper' && capabilities?.platform !== 'windows') return;
+    mainBackgroundReadRevision += 1;
+    updateMainBackgroundLook({ mainBackgroundMode: mode });
+    setMainBackgroundBytes(new ArrayBuffer(0));
+    saveThemePreferencesNow();
+    await themeSaveQueue;
+    await loadMainBackground();
   }
 
   async function loadThemePreferences(): Promise<void> {
@@ -2233,25 +2325,71 @@
                 <div class="settings-panel-header">
                   <div>
                     <h3>主介面背景</h3>
-                    <p>選擇一張圖片後會複製到 UserData，並命名為 background。模糊與透明度只影響主介面，不改變播放頁封面背景。</p>
+                    <p>選擇主介面的背景來源。模糊與透明度不會改變播放頁封面背景。</p>
                   </div>
                 </div>
-                <div class="source-action-row source-action-buttons">
-                  <button class="soft-button" type="button" onclick={() => void pickMainBackground()} disabled={mainBackgroundBusy}>
-                    {mainBackgroundBusy ? '處理中' : '選擇背景圖片'}
-                  </button>
-                  <button class="soft-button" type="button" onclick={() => void clearMainBackground()} disabled={mainBackgroundBusy || !mainBackgroundUrl}>
-                    移除背景
-                  </button>
+                <div class="main-background-mode-picker" role="group" aria-label="主介面背景模式">
+                  {#each [
+                    { mode: 'solid', label: '純色' },
+                    { mode: 'singleImage', label: '單圖' },
+                    { mode: 'slideshow', label: '幻燈片' },
+                    { mode: 'albumCover', label: '專輯封面' },
+                    { mode: 'systemWallpaper', label: '系統桌布' },
+                  ] as option (option.mode)}
+                    <button
+                      class="soft-button"
+                      class:is-active={themePreferences.mainBackgroundMode === option.mode}
+                      type="button"
+                      aria-pressed={themePreferences.mainBackgroundMode === option.mode}
+                      disabled={capabilities?.platform === 'android' && (option.mode === 'singleImage' || option.mode === 'slideshow' || option.mode === 'systemWallpaper')}
+                      title={capabilities?.platform === 'android' && option.mode === 'systemWallpaper' ? 'Android 系統桌布背景尚未支援' : undefined}
+                      onclick={() => void selectMainBackgroundMode(option.mode as ThemePreferences['mainBackgroundMode'])}
+                    >{option.label}</button>
+                  {/each}
                 </div>
-                <label class="lyrics-preference-range">
-                  <span><strong>背景模糊</strong><output>{themePreferences.mainBackgroundBlurPx}px</output></span>
-                  <input type="range" min="0" max="50" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label="主介面背景模糊程度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
-                </label>
-                <label class="lyrics-preference-range">
-                  <span><strong>背景透明度</strong><output>{themePreferences.mainBackgroundOpacityPercent}%</output></span>
-                  <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundOpacityPercent} aria-label="主介面背景透明度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
-                </label>
+                {#if capabilities?.platform === 'android'}
+                  <p class="source-muted-note">Android 暫不支援本機圖片選取、幻燈片與系統桌布；純色與專輯封面模式可用。</p>
+                {/if}
+                {#if themePreferences.mainBackgroundMode === 'singleImage'}
+                  <div class="source-action-row source-action-buttons">
+                    <button class="soft-button" type="button" onclick={() => void pickMainBackground()} disabled={mainBackgroundBusy}>
+                      {mainBackgroundBusy ? '處理中' : '選擇圖片'}
+                    </button>
+                    <button class="soft-button" type="button" onclick={() => void clearMainBackground()} disabled={mainBackgroundBusy || !mainBackgroundUrl}>
+                      移除圖片
+                    </button>
+                  </div>
+                  {#if !mainBackgroundUrl}<p class="source-muted-note">尚未選擇圖片，將顯示純色背景。</p>{/if}
+                {:else if themePreferences.mainBackgroundMode === 'slideshow'}
+                  <div class="source-action-row source-action-buttons">
+                    <button class="soft-button" type="button" onclick={() => void pickSlideshowFolder()} disabled={mainBackgroundBusy}>
+                      {mainBackgroundBusy ? '處理中' : '選擇資料夾'}
+                    </button>
+                  </div>
+                  <p class="source-muted-note">{themePreferences.slideshowFolder ?? '尚未選擇資料夾，請選擇包含圖片的資料夾。'}</p>
+                  <div class="main-background-mode-picker" role="group" aria-label="幻燈片播放順序">
+                    <button class="soft-button" class:is-active={themePreferences.slideshowOrder === 'sequential'} type="button" aria-pressed={themePreferences.slideshowOrder === 'sequential'} onclick={() => { updateMainBackgroundLook({ slideshowOrder: 'sequential' }); saveThemePreferencesNow(); }}>順序播放</button>
+                    <button class="soft-button" class:is-active={themePreferences.slideshowOrder === 'random'} type="button" aria-pressed={themePreferences.slideshowOrder === 'random'} onclick={() => { updateMainBackgroundLook({ slideshowOrder: 'random' }); saveThemePreferencesNow(); }}>隨機播放</button>
+                  </div>
+                  <label class="lyrics-preference-range">
+                    <span><strong>切換時間</strong><output>{themePreferences.slideshowIntervalMinutes} 分鐘</output></span>
+                    <input type="range" min="1" max="120" step="1" value={themePreferences.slideshowIntervalMinutes} aria-label="幻燈片切換時間" oninput={(event) => updateMainBackgroundLook({ slideshowIntervalMinutes: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                  </label>
+                {:else if themePreferences.mainBackgroundMode === 'albumCover'}
+                  <p class="source-muted-note">背景會跟隨目前播放歌曲的專輯封面；沒有可用封面時暫時顯示純色。</p>
+                {:else if themePreferences.mainBackgroundMode === 'systemWallpaper'}
+                  <p class="source-muted-note">讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更。</p>
+                {/if}
+                {#if themePreferences.mainBackgroundMode !== 'solid'}
+                  <label class="lyrics-preference-range">
+                    <span><strong>背景模糊</strong><output>{themePreferences.mainBackgroundBlurPx}px</output></span>
+                    <input type="range" min="0" max="50" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label="主介面背景模糊程度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                  </label>
+                  <label class="lyrics-preference-range">
+                    <span><strong>背景透明度</strong><output>{themePreferences.mainBackgroundOpacityPercent}%</output></span>
+                    <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundOpacityPercent} aria-label="主介面背景透明度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                  </label>
+                {/if}
                 {#if mainBackgroundError}
                   <p class="theme-save-status error" role="alert">{mainBackgroundError}</p>
                 {/if}
@@ -2601,15 +2739,15 @@
   class:has-now-playing-backdrop={isNowPlayingOpen}
   class:has-custom-titlebar={showCustomTitlebar}
   data-active-view={activeView}
-  class:has-main-backdrop={mainBackgroundUrl !== null}
+  class:has-main-backdrop={effectiveMainBackgroundUrl !== null}
   style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-opacity: ${nowPlayingAppearancePreferences.backgroundOpacityPercent / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100}; --quick-settings-opacity: ${themePreferences.quickSettingsOpacityPercent}%; --quick-settings-blur: ${themePreferences.quickSettingsBlurPx}px;`}
 >
   {#if showCustomTitlebar}
-    <WindowTitlebar transparent={isNowPlayingOpen || mainBackgroundUrl !== null} />
+    <WindowTitlebar transparent={isNowPlayingOpen || effectiveMainBackgroundUrl !== null} />
   {/if}
-  {#if mainBackgroundUrl}
+  {#if effectiveMainBackgroundUrl}
     <div class="main-backdrop" data-testid="main-backdrop" aria-hidden="true">
-      <img src={mainBackgroundUrl} alt="" />
+      <img src={effectiveMainBackgroundUrl} alt="" />
     </div>
   {/if}
   {#if isNowPlayingOpen}

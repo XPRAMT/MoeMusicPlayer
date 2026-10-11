@@ -18,6 +18,8 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **App settings**: User-owned preferences stored in a versioned JSON document, including theme colors, shuffle, repeat mode, Now Playing layout/appearance, and the source registry. JSON is the authority for these values; SQLite rows are rebuildable music-data projections.
 
+**Main-window background source**: A saved choice of solid color, a UserData-copied image, a recursive slideshow folder, the current track's artwork, or the current Windows desktop wallpaper image. Slideshow timing/order and blur/opacity live in the versioned JSON settings; artwork and wallpaper are display resources rather than SQLite data.
+
 **Source registry**: The stable list of enabled or disabled folders and explicitly registered playlist files. A playlist-file entry associates its source ID and native path with the internal Playlist ID; static playlists do not imply a source-file path.
 
 ## Playback

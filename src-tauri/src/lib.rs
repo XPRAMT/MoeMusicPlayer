@@ -47,8 +47,9 @@ mod settings;
 pub mod updater;
 use settings::{
     clamp_window_geometry_to_monitors, AppSettings, ExcludedFolderEntry, LyricsPreferences,
-    NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode, ResamplingMode, SettingsStore,
-    SourceEntry, SourceEntryKind, ThemeSettings, TrackListColumnSettings, WindowGeometry,
+    MainBackgroundMode, NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode,
+    ResamplingMode, SettingsStore, SlideshowOrder, SourceEntry, SourceEntryKind, ThemeSettings,
+    TrackListColumnSettings, WindowGeometry,
 };
 #[cfg(any(target_os = "android", test))]
 mod android_artwork;
@@ -59,6 +60,7 @@ mod android_playback;
 mod android_playlist_source_sync;
 mod lyrics_provider;
 mod lyrics_service;
+mod main_background;
 #[cfg(any(target_os = "windows", test))]
 mod playlist_source_sync;
 #[cfg(target_os = "windows")]
@@ -101,6 +103,14 @@ struct ThemePreferencesDto {
         alias = "mainBackgroundBrightnessPercent"
     )]
     main_background_opacity_percent: u8,
+    #[serde(default)]
+    main_background_mode: MainBackgroundMode,
+    #[serde(default)]
+    slideshow_folder: Option<String>,
+    #[serde(default = "default_slideshow_interval_minutes")]
+    slideshow_interval_minutes: u8,
+    #[serde(default)]
+    slideshow_order: SlideshowOrder,
     #[serde(default = "default_auto_text_color_threshold_percent")]
     auto_text_color_threshold_percent: u8,
 }
@@ -121,6 +131,10 @@ fn default_main_background_opacity_percent() -> u8 {
     40
 }
 
+fn default_slideshow_interval_minutes() -> u8 {
+    10
+}
+
 fn default_auto_text_color_threshold_percent() -> u8 {
     50
 }
@@ -134,6 +148,10 @@ impl From<ThemePreferences> for ThemePreferencesDto {
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
             main_background_opacity_percent: default_main_background_opacity_percent(),
+            main_background_mode: MainBackgroundMode::Solid,
+            slideshow_folder: None,
+            slideshow_interval_minutes: default_slideshow_interval_minutes(),
+            slideshow_order: SlideshowOrder::default(),
             auto_text_color_threshold_percent: default_auto_text_color_threshold_percent(),
         }
     }
@@ -157,6 +175,13 @@ impl From<ThemeSettings> for ThemePreferencesDto {
             quick_settings_blur_px: preferences.quick_settings_blur_px,
             main_background_blur_px: preferences.main_background_blur_px,
             main_background_opacity_percent: preferences.main_background_opacity_percent,
+            main_background_mode: preferences.main_background_mode,
+            slideshow_folder: preferences
+                .slideshow_folder
+                .as_ref()
+                .map(settings::StoredPath::display_lossy),
+            slideshow_interval_minutes: preferences.slideshow_interval_minutes,
+            slideshow_order: preferences.slideshow_order,
             auto_text_color_threshold_percent: preferences.auto_text_color_threshold_percent,
         }
     }
@@ -177,6 +202,7 @@ struct AppState {
     #[cfg(target_os = "windows")]
     shutdown: database_lifecycle::ShutdownCoordinator,
     settings: SettingsStore,
+    main_background: main_background::MainBackgroundRuntime,
     #[cfg(target_os = "windows")]
     window_frame: std::sync::Mutex<WindowFrameMemory>,
     lyrics_service: lyrics_service::LyricsService,
@@ -2877,6 +2903,12 @@ fn theme_set_preferences(
     state: State<'_, AppState>,
     preferences: ThemePreferencesDto,
 ) -> Result<ThemePreferencesDto, String> {
+    let saved_folder = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .theme
+        .slideshow_folder;
     let preferences = ThemeSettings {
         background_hex: preferences.background_hex,
         accent_hex: preferences.accent_hex,
@@ -2884,6 +2916,10 @@ fn theme_set_preferences(
         quick_settings_blur_px: preferences.quick_settings_blur_px,
         main_background_blur_px: preferences.main_background_blur_px,
         main_background_opacity_percent: preferences.main_background_opacity_percent,
+        main_background_mode: preferences.main_background_mode,
+        slideshow_folder: saved_folder,
+        slideshow_interval_minutes: preferences.slideshow_interval_minutes,
+        slideshow_order: preferences.slideshow_order,
         auto_text_color_threshold_percent: preferences.auto_text_color_threshold_percent,
     };
     state
@@ -2996,12 +3032,67 @@ async fn appearance_pick_main_background(
             .into_path()
             .map_err(|error| format!("無法取得選取的圖片路徑：{error}"))?;
         install_main_background(&state, &path)?;
+        state
+            .settings
+            .update(|settings| {
+                settings.theme.main_background_mode = MainBackgroundMode::SingleImage;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
         Ok(Some(true))
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (app, window, state);
         Err("此平台尚未提供背景圖片選擇。".to_owned())
+    }
+}
+
+#[tauri::command]
+async fn appearance_pick_slideshow_folder(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<bool>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let selected = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("選擇幻燈片圖片資料夾")
+            .blocking_pick_folder();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let folder = selected
+            .into_path()
+            .map_err(|error| format!("無法取得選取的資料夾路徑：{error}"))?;
+        let order = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?
+            .theme
+            .slideshow_order;
+        state.main_background.configure_slideshow(&folder, order)?;
+        let stored_path =
+            settings::StoredPath::from_path(&folder).map_err(|error| error.to_string())?;
+        state
+            .settings
+            .update(|settings| {
+                settings.theme.slideshow_folder = Some(stored_path);
+                settings.theme.main_background_mode = MainBackgroundMode::Slideshow;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(Some(true))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, window, state);
+        Err("此平台尚未提供幻燈片資料夾選擇。".to_owned())
     }
 }
 
@@ -3017,16 +3108,116 @@ fn appearance_clear_main_background(state: State<'_, AppState>) -> Result<(), St
 
 #[tauri::command]
 fn appearance_get_main_background(state: State<'_, AppState>) -> Result<Response, String> {
-    let path = user_data_directory(&state)?.join(MAIN_BACKGROUND_FILE_NAME);
-    match std::fs::read(path) {
-        Ok(bytes)
-            if supported_background_image(&bytes)
-                && bytes.len() as u64 <= MAIN_BACKGROUND_MAX_BYTES =>
-        {
-            Ok(Response::new(bytes))
+    let theme = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .theme;
+    let image = match theme.main_background_mode {
+        MainBackgroundMode::Solid | MainBackgroundMode::AlbumCover => None,
+        MainBackgroundMode::SingleImage => {
+            Some(user_data_directory(&state)?.join(MAIN_BACKGROUND_FILE_NAME))
         }
-        Ok(_) | Err(_) => Ok(Response::new(Vec::new())),
+        MainBackgroundMode::Slideshow => {
+            let folder = theme
+                .slideshow_folder
+                .as_ref()
+                .ok_or_else(|| "請先選擇幻燈片圖片資料夾。".to_owned())?
+                .to_path_buf()
+                .map_err(|error| error.to_string())?;
+            Some(
+                state
+                    .main_background
+                    .next_slideshow_image(&folder, theme.slideshow_order)?,
+            )
+        }
+        MainBackgroundMode::SystemWallpaper => {
+            #[cfg(target_os = "windows")]
+            {
+                match windows_system_wallpaper_path() {
+                    Ok(path) => Some(path),
+                    Err(_) => return Ok(Response::new(Vec::new())),
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                return Err("系統桌布背景目前只支援 Windows。".to_owned());
+            }
+        }
+    };
+    let Some(path) = image else {
+        return Ok(Response::new(Vec::new()));
+    };
+    match read_background_image(&path) {
+        Ok(bytes) => Ok(Response::new(bytes)),
+        Err(_) if theme.main_background_mode == MainBackgroundMode::SystemWallpaper => {
+            Ok(Response::new(Vec::new()))
+        }
+        Err(error) => Err(error),
     }
+}
+
+#[tauri::command]
+fn appearance_next_slideshow_background(state: State<'_, AppState>) -> Result<Response, String> {
+    let theme = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .theme;
+    if theme.main_background_mode != MainBackgroundMode::Slideshow {
+        return Err("目前沒有啟用幻燈片背景。".to_owned());
+    }
+    let folder = theme
+        .slideshow_folder
+        .as_ref()
+        .ok_or_else(|| "請先選擇幻燈片圖片資料夾。".to_owned())?
+        .to_path_buf()
+        .map_err(|error| error.to_string())?;
+    let path = state
+        .main_background
+        .next_slideshow_image(&folder, theme.slideshow_order)?;
+    read_background_image(&path).map(Response::new)
+}
+
+fn read_background_image(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let metadata = std::fs::metadata(path).map_err(|error| format!("無法讀取背景圖片：{error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAIN_BACKGROUND_MAX_BYTES {
+        return Err("背景圖片必須是小於 32 MiB 的圖片檔。".to_owned());
+    }
+    let bytes = std::fs::read(path).map_err(|error| format!("無法讀取背景圖片：{error}"))?;
+    if !supported_background_image(&bytes) {
+        return Err("背景檔案不是支援的 PNG、JPEG、WebP、GIF 或 BMP 圖片。".to_owned());
+    }
+    Ok(bytes)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_system_wallpaper_path() -> Result<std::path::PathBuf, String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETDESKWALLPAPER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+
+    let mut buffer = vec![0u16; 32_768];
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETDESKWALLPAPER,
+            buffer.len() as u32,
+            Some(buffer.as_mut_ptr().cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .map_err(|error| format!("無法讀取 Windows 系統桌布：{error}"))?;
+    }
+    let length = buffer
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(buffer.len());
+    if length == 0 || length == buffer.len() {
+        return Err("Windows 沒有回報目前的系統桌布圖片。".to_owned());
+    }
+    Ok(std::path::PathBuf::from(std::ffi::OsString::from_wide(
+        &buffer[..length],
+    )))
 }
 
 #[tauri::command]
@@ -6362,8 +6553,10 @@ pub fn run() {
             theme_get_preferences,
             theme_set_preferences,
             appearance_pick_main_background,
+            appearance_pick_slideshow_folder,
             appearance_clear_main_background,
             appearance_get_main_background,
+            appearance_next_slideshow_background,
             settings_get_lyrics_preferences,
             settings_set_lyrics_preferences,
             settings_get_now_playing_appearance_preferences,
@@ -6545,6 +6738,7 @@ pub fn run() {
                 #[cfg(target_os = "windows")]
                 shutdown: database_lifecycle::ShutdownCoordinator::default(),
                 settings,
+                main_background: main_background::MainBackgroundRuntime::default(),
                 #[cfg(target_os = "windows")]
                 window_frame: std::sync::Mutex::new(WindowFrameMemory {
                     normal: initial_settings.window_geometry.as_ref().map(|geometry| {

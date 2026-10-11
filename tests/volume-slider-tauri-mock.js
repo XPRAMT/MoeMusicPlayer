@@ -46,6 +46,14 @@
   timelineStyle: 'edge',
 };
   let storedNowPlayingLayout = localStorage.getItem('__nowPlayingLayout') === 'b' ? 'b' : 'a';
+  let storedTheme = {
+    backgroundHex: '#000000',
+    accentHex: '#55D9FF',
+    mainBackgroundMode: 'solid',
+    slideshowFolder: null,
+    slideshowIntervalMinutes: 10,
+    slideshowOrder: 'sequential',
+  };
   let storedLyricsPreferences = JSON.parse(localStorage.getItem('__lyricsPreferences') || 'null') ?? {
     showTranslation: false,
     showRomanization: false,
@@ -133,7 +141,7 @@
           return false;
         case 'get_runtime_capabilities':
           return {
-            platform: 'windows',
+            platform: localStorage.getItem('__platform') || 'windows',
             desktopRuntime: ready,
             library: ready,
             sourceSync: ready,
@@ -148,9 +156,18 @@
         case 'settings_source_registry_authoritative':
           return true;
         case 'theme_get_preferences':
-          return { backgroundHex: '#000000', accentHex: '#55D9FF' };
+          return clone(storedTheme);
         case 'theme_set_preferences':
-          return args;
+          storedTheme = clone(args.preferences);
+          return clone(storedTheme);
+        case 'appearance_get_main_background':
+        case 'appearance_next_slideshow_background':
+          return new ArrayBuffer(0);
+        case 'appearance_pick_main_background':
+        case 'appearance_pick_slideshow_folder':
+          return null;
+        case 'appearance_clear_main_background':
+          return null;
         case 'settings_get_track_list_columns':
           return { columns: [
             { id: 'title', visible: true },

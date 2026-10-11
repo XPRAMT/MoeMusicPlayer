@@ -8,6 +8,10 @@ export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   quickSettingsBlurPx: 12,
   mainBackgroundBlurPx: 20,
   mainBackgroundOpacityPercent: 40,
+  mainBackgroundMode: 'solid',
+  slideshowFolder: null,
+  slideshowIntervalMinutes: 10,
+  slideshowOrder: 'sequential',
   autoTextColorThresholdPercent: 50,
 });
 
@@ -16,6 +20,15 @@ const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 /** @param {unknown} value @returns {value is string} */
 export function isHexColor(value) {
   return typeof value === 'string' && HEX_COLOR_PATTERN.test(value);
+}
+
+/** @param {unknown} value @returns {value is ThemePreferences['mainBackgroundMode']} */
+function isMainBackgroundMode(value) {
+  return value === 'solid'
+    || value === 'singleImage'
+    || value === 'slideshow'
+    || value === 'albumCover'
+    || value === 'systemWallpaper';
 }
 
 /** @param {unknown} value @returns {ThemePreferences} */
@@ -45,6 +58,21 @@ export function normalizeThemePreferences(value) {
       100,
       DEFAULT_THEME_PREFERENCES.mainBackgroundOpacityPercent,
     ),
+    mainBackgroundMode: isMainBackgroundMode(candidate.mainBackgroundMode)
+      ? candidate.mainBackgroundMode
+      : DEFAULT_THEME_PREFERENCES.mainBackgroundMode,
+    slideshowFolder: typeof candidate.slideshowFolder === 'string' && candidate.slideshowFolder.length > 0
+      ? candidate.slideshowFolder
+      : null,
+    slideshowIntervalMinutes: normalizeRange(
+      candidate.slideshowIntervalMinutes,
+      1,
+      120,
+      DEFAULT_THEME_PREFERENCES.slideshowIntervalMinutes,
+    ),
+    slideshowOrder: candidate.slideshowOrder === 'random'
+      ? 'random'
+      : DEFAULT_THEME_PREFERENCES.slideshowOrder,
     autoTextColorThresholdPercent: normalizeRange(
       candidate.autoTextColorThresholdPercent,
       0,

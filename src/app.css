@@ -2758,6 +2758,20 @@ input:focus-visible {
   margin-top: 9px;
 }
 
+.main-background-mode-picker {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.main-background-mode-picker > .soft-button {
+  min-width: max-content;
+  flex: 1 0 auto;
+  justify-content: center;
+}
+
 .source-action-row input {
   min-width: 0;
   min-height: 38px;

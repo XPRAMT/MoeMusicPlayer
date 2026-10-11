@@ -19,6 +19,10 @@ test('default appearance uses pure black and a water-blue accent', () => {
     quickSettingsBlurPx: 12,
     mainBackgroundBlurPx: 20,
     mainBackgroundOpacityPercent: 40,
+    mainBackgroundMode: 'solid',
+    slideshowFolder: null,
+    slideshowIntervalMinutes: 10,
+    slideshowOrder: 'sequential',
     autoTextColorThresholdPercent: 50,
   });
 });
@@ -138,6 +142,10 @@ test('invalid persisted values fall back to safe defaults', () => {
     quickSettingsBlurPx: 12,
     mainBackgroundBlurPx: 20,
     mainBackgroundOpacityPercent: 40,
+    mainBackgroundMode: 'solid',
+    slideshowFolder: null,
+    slideshowIntervalMinutes: 10,
+    slideshowOrder: 'sequential',
     autoTextColorThresholdPercent: 50,
   });
   assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: 140 }).quickSettingsOpacityPercent, 100);
@@ -146,6 +154,11 @@ test('invalid persisted values fall back to safe defaults', () => {
   assert.equal(normalizeThemePreferences({ mainBackgroundBlurPx: 80 }).mainBackgroundBlurPx, 50);
   assert.equal(normalizeThemePreferences({ mainBackgroundOpacityPercent: -2 }).mainBackgroundOpacityPercent, 0);
   assert.equal(normalizeThemePreferences({ mainBackgroundBrightnessPercent: 55 }).mainBackgroundOpacityPercent, 55);
+  assert.equal(normalizeThemePreferences({ mainBackgroundMode: 'unknown' }).mainBackgroundMode, 'solid');
+  assert.equal(normalizeThemePreferences({ mainBackgroundMode: 'albumCover' }).mainBackgroundMode, 'albumCover');
+  assert.equal(normalizeThemePreferences({ slideshowIntervalMinutes: 0 }).slideshowIntervalMinutes, 1);
+  assert.equal(normalizeThemePreferences({ slideshowIntervalMinutes: 180 }).slideshowIntervalMinutes, 120);
+  assert.equal(normalizeThemePreferences({ slideshowOrder: 'random' }).slideshowOrder, 'random');
   assert.equal(normalizeThemePreferences({ autoTextColorThresholdPercent: 140 }).autoTextColorThresholdPercent, 100);
   assert.equal(normalizeThemePreferences({ autoTextColorThresholdPercent: -3 }).autoTextColorThresholdPercent, 0);
 });

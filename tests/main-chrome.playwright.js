@@ -125,9 +125,30 @@ async page => {
     return spaces;
   });
   assert(gaps.length >= 4 && gaps.every((gap) => gap === 8), 'main interface settings spacing: ' + JSON.stringify(gaps));
-  assert(await page.getByRole('button', { name: '選擇背景圖片' }).count() === 1, 'background picker missing');
-  assert(await page.getByRole('slider', { name: '主介面背景模糊程度' }).count() === 1, 'background blur missing');
-  assert(await page.getByRole('slider', { name: '主介面背景透明度' }).count() === 1, 'background opacity missing');
+  const modeGroup = page.getByRole('group', { name: '主介面背景模式' });
+  assert(await modeGroup.getByRole('button').count() === 5, 'main background mode count');
+  assert(await page.getByRole('button', { name: '純色', exact: true }).getAttribute('aria-pressed') === 'true', 'solid should be selected by default');
+  assert(await page.getByRole('slider', { name: '主介面背景模糊程度' }).count() === 0, 'solid mode must not show blur');
+  assert(await page.getByRole('slider', { name: '主介面背景透明度' }).count() === 0, 'solid mode must not show opacity');
+  await page.getByRole('button', { name: '單圖', exact: true }).click();
+  assert(await page.getByRole('button', { name: '選擇圖片' }).count() === 1, 'single-image picker missing');
+  assert(await page.getByRole('slider', { name: '主介面背景模糊程度' }).count() === 1, 'single-image blur missing');
+  assert(await page.getByRole('slider', { name: '主介面背景透明度' }).count() === 1, 'single-image opacity missing');
+  await page.getByRole('button', { name: '幻燈片', exact: true }).click();
+  assert(await page.getByRole('button', { name: '選擇資料夾' }).count() === 1, 'slideshow folder picker missing');
+  const slideshowOrder = page.getByRole('group', { name: '幻燈片播放順序' });
+  assert(await slideshowOrder.getByRole('button', { name: '順序播放' }).getAttribute('aria-pressed') === 'true', 'sequential should be the default order');
+  assert(await slideshowOrder.getByRole('button', { name: '隨機播放' }).count() === 1, 'random slideshow choice missing');
+  assert(await page.getByRole('slider', { name: '幻燈片切換時間' }).count() === 1, 'slideshow interval missing');
+  await page.getByRole('button', { name: '專輯封面', exact: true }).click();
+  assert((await page.getByText(/沒有可用封面時暫時顯示純色/).count()) === 1, 'album-cover fallback explanation missing');
+  await page.waitForSelector('.main-backdrop img');
+  assert(await page.locator('.main-backdrop img').count() === 1, 'album cover is not used as the main-window background');
+  assert(await page.getByRole('slider', { name: '主介面背景模糊程度' }).count() === 1, 'album-cover blur missing');
+  await page.getByRole('button', { name: '系統桌布', exact: true }).click();
+  assert((await page.getByText(/讀取 Windows 目前的系統桌布/).count()) === 1, 'system wallpaper explanation missing');
+  assert(await page.getByRole('slider', { name: '主介面背景透明度' }).count() === 1, 'system wallpaper opacity missing');
+  await page.getByRole('button', { name: '純色', exact: true }).click();
   assert(await page.getByRole('slider', { name: '快速設定面板透明度' }).count() === 0, 'quick settings opacity stays out of main interface');
   await page.getByRole('tab', { name: '播放頁', exact: true }).click();
   assert(await page.getByRole('slider', { name: '快速設定面板透明度' }).count() === 1, 'quick settings opacity missing on playback page');
@@ -141,5 +162,14 @@ async page => {
   assert(await page.locator('.section-kicker').count() === 0, 'english kicker remains in sources');
   await page.getByRole('tab', { name: '歌詞' }).click();
   assert(await page.getByRole('button', { name: '恢復預設' }).count() === 0, 'lyrics settings must not show reset defaults');
+  await page.evaluate(() => localStorage.setItem('__platform', 'android'));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.page-title');
+  await page.getByRole('button', { name: '設定', exact: true }).click();
+  await page.getByRole('tab', { name: '主介面', exact: true }).click();
+  for (const mode of ['單圖', '幻燈片', '系統桌布']) {
+    assert(await page.getByRole('button', { name: mode, exact: true }).isDisabled(), `Android must disable ${mode}`);
+  }
+  assert(await page.getByText(/Android 暫不支援本機圖片選取/).count() === 1, 'Android background limitations are not explained');
   return { result: 'PASS', libraryTitle, libraryCount, queueCount };
 }

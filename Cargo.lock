@@ -2079,6 +2079,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+ "walkdir",
  "windows",
 ]
 

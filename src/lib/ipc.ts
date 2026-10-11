@@ -66,6 +66,10 @@ export interface ThemePreferences {
   mainBackgroundBlurPx: number;
   /** Image opacity percent (0–100); UI label is 背景透明度, same convention as quickSettingsOpacityPercent. */
   mainBackgroundOpacityPercent: number;
+  mainBackgroundMode: 'solid' | 'singleImage' | 'slideshow' | 'albumCover' | 'systemWallpaper';
+  slideshowFolder: string | null;
+  slideshowIntervalMinutes: number;
+  slideshowOrder: 'sequential' | 'random';
   /**
    * Relative-luminance Y threshold (0–100). At/above → black text; below → white text.
    * UI label is 自動切換文字顏色閥值.
@@ -445,9 +449,21 @@ interface IpcContract {
     args: Record<string, never>;
     result: boolean | null;
   };
+  appearance_pick_slideshow_folder: {
+    args: Record<string, never>;
+    result: boolean | null;
+  };
   appearance_clear_main_background: {
     args: Record<string, never>;
     result: void;
+  };
+  appearance_get_main_background: {
+    args: Record<string, never>;
+    result: ArrayBuffer;
+  };
+  appearance_next_slideshow_background: {
+    args: Record<string, never>;
+    result: ArrayBuffer;
   };
   settings_get_track_list_columns: {
     args: Record<string, never>;
@@ -686,6 +702,15 @@ export function getMainBackgroundBytes(): Promise<ArrayBuffer> {
     );
   }
   return invoke<ArrayBuffer>('appearance_get_main_background', {});
+}
+
+export function nextSlideshowBackgroundBytes(): Promise<ArrayBuffer> {
+  if (!isTauri()) {
+    return Promise.reject(
+      new Error('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。'),
+    );
+  }
+  return invoke<ArrayBuffer>('appearance_next_slideshow_background', {});
 }
 
 export function getNowPlayingAppearancePreferences(): Promise<NowPlayingAppearancePreferences> {
