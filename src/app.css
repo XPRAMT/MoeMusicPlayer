@@ -3606,7 +3606,7 @@ input:focus-visible {
 }
 
 .volume-slider {
-  background: linear-gradient(90deg, var(--accent), rgba(var(--text-rgb), 0.2));
+  background: linear-gradient(270deg, var(--accent), rgba(var(--text-rgb), 0.2));
   background-position: center;
   background-repeat: no-repeat;
   background-size: 100% 3px;
