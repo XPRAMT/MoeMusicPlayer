@@ -156,6 +156,37 @@ async page => {
   }
   const countdownAfterAppearanceChanges = await page.locator('.slideshow-countdown').innerText();
   assert(countdownAfterAppearanceChanges !== '下一張 01:00', 'unrelated appearance changes reset the slideshow countdown: ' + countdownAfterAppearanceChanges);
+  const intervalSlider = page.getByRole('slider', { name: '幻燈片切換時間' });
+  await page.evaluate(() => {
+    const realNow = Date.now.bind(Date);
+    window.__slideshowTestClock = { realNow, offsetMs: 0 };
+    Date.now = () => window.__slideshowTestClock.realNow() + window.__slideshowTestClock.offsetMs;
+  });
+  await page.evaluate(() => { window.__slideshowTestClock.offsetMs = 5 * 60_000; });
+  await intervalSlider.evaluate((input, value) => {
+    input.value = String(value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, 10);
+  const retainedElapsedCountdown = await page.locator('.slideshow-countdown').innerText();
+  const retainedElapsedSeconds = Number(retainedElapsedCountdown.match(/(\d+):(\d{2})$/)?.[1]) * 60
+    + Number(retainedElapsedCountdown.match(/(\d+):(\d{2})$/)?.[2]);
+  assert(retainedElapsedSeconds >= 285 && retainedElapsedSeconds <= 300, 'changing to 10 minutes at 5 minutes elapsed should retain the elapsed time: ' + retainedElapsedCountdown);
+  await intervalSlider.evaluate((input, value) => {
+    input.value = String(value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, 20);
+  await page.evaluate(() => { window.__slideshowTestClock.offsetMs += 10 * 60_000; });
+  const previousSlideRequests = await page.evaluate(() => window.__appearanceHarness.slideshowRequests);
+  await intervalSlider.evaluate((input, value) => {
+    input.value = String(value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, 10);
+  await page.waitForFunction((previous) => window.__appearanceHarness.slideshowRequests === previous + 1, previousSlideRequests, { timeout: 2500 });
+  await page.waitForFunction(() => {
+    const value = document.querySelector('.slideshow-countdown')?.textContent?.trim();
+    return value === '下一張 10:00' || value === '下一張 09:59';
+  }, null, { timeout: 2500 });
+  await page.evaluate(() => { Date.now = window.__slideshowTestClock.realNow; });
   assert(await page.getByRole('slider', { name: '主介面背景縮放' }).count() === 0, 'slideshow mode must not show background zoom');
   await page.getByRole('button', { name: '專輯封面', exact: true }).click();
   assert((await page.getByText(/沒有可用封面時暫時顯示純色/).count()) === 1, 'album-cover fallback explanation missing');
@@ -252,7 +283,8 @@ async page => {
   await page.locator('.now-playing-overlay-return').click();
   assert(await page.getByRole('slider', { name: '主介面背景模糊程度' }).count() === 1, 'album-cover blur missing');
   await page.getByRole('button', { name: '系統桌布', exact: true }).click();
-  assert((await page.getByText(/讀取 Windows 目前的系統桌布/).count()) === 1, 'system wallpaper explanation missing');
+  assert((await page.getByText(/讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 60s。/).count()) === 1, 'system wallpaper countdown missing');
+  await page.waitForFunction(() => document.body.innerText.includes('下次檢查 59s。'), null, { timeout: 2500 });
   assert(await page.getByRole('slider', { name: '主介面背景透明度' }).count() === 1, 'system wallpaper opacity missing');
   assert(await page.getByRole('slider', { name: '主介面背景縮放' }).count() === 0, 'system wallpaper must not show background zoom');
   await page.getByRole('button', { name: '純色', exact: true }).click();

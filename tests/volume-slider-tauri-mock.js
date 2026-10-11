@@ -68,6 +68,7 @@
     holdAcks: false,
     pendingAcks: [],
     failNext: false,
+    slideshowRequests: 0,
     releaseAck() {
       appearanceHarness.pendingAcks.shift()?.();
     },
@@ -161,7 +162,9 @@
           storedTheme = clone(args.preferences);
           return clone(storedTheme);
         case 'appearance_get_main_background':
+          return new ArrayBuffer(0);
         case 'appearance_next_slideshow_background':
+          appearanceHarness.slideshowRequests += 1;
           return new ArrayBuffer(0);
         case 'appearance_pick_main_background':
         case 'appearance_pick_slideshow_folder':

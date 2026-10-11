@@ -217,6 +217,9 @@
   let mainBackgroundBytesHash = '';
   let mainBackgroundReadRevision = 0;
   let slideshowNextInSeconds = $state<number | null>(null);
+  let slideshowTimingScope: string | null = null;
+  let slideshowStartedAt: number | null = null;
+  let systemWallpaperNextInSeconds = $state<number | null>(null);
   let mainBackgroundError = $state<string | null>(null);
   let mainBackgroundBusy = $state(false);
   /** Average page+image mix for main-window text contrast; null means use page color only. */
@@ -453,24 +456,38 @@
     const platform = runtimePlatform;
     if (!isTauri()) {
       slideshowNextInSeconds = null;
+      systemWallpaperNextInSeconds = null;
+      slideshowTimingScope = null;
+      slideshowStartedAt = null;
       return;
     }
     if (mode === 'slideshow' && folder) {
+      systemWallpaperNextInSeconds = null;
       const intervalMs = intervalMinutes * 60_000;
-      let nextAt = Date.now() + intervalMs;
+      const timingScope = `${mode}\u0000${folder}`;
+      if (slideshowTimingScope !== timingScope || slideshowStartedAt === null) {
+        slideshowTimingScope = timingScope;
+        slideshowStartedAt = Date.now();
+      }
       let disposed = false;
       let switchTimer = 0;
+      const nextAt = () => (slideshowStartedAt ?? Date.now()) + intervalMs;
       const updateCountdown = () => {
-        slideshowNextInSeconds = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
+        slideshowNextInSeconds = Math.max(0, Math.ceil((nextAt() - Date.now()) / 1000));
       };
       const scheduleNext = () => {
         switchTimer = window.setTimeout(async () => {
+          if (disposed) return;
+          // Start the next interval as the image change begins. If the user
+          // adjusts the duration while it loads, the new deadline uses this
+          // same elapsed-time origin instead of scheduling a duplicate change.
+          slideshowStartedAt = Date.now();
+          updateCountdown();
           await loadNextSlideshowBackground();
           if (disposed) return;
-          nextAt = Date.now() + intervalMs;
           updateCountdown();
           scheduleNext();
-        }, Math.max(0, nextAt - Date.now()));
+        }, Math.max(0, nextAt() - Date.now()));
       };
       updateCountdown();
       const countdownTimer = window.setInterval(updateCountdown, 1000);
@@ -479,14 +496,38 @@
         disposed = true;
         window.clearInterval(countdownTimer);
         window.clearTimeout(switchTimer);
-        slideshowNextInSeconds = null;
       };
     }
     slideshowNextInSeconds = null;
+    slideshowTimingScope = null;
+    slideshowStartedAt = null;
     if (mode === 'systemWallpaper' && platform === 'windows') {
-      const timer = window.setInterval(() => void loadMainBackground(), 60_000);
-      return () => window.clearInterval(timer);
+      let nextAt = Date.now() + 60_000;
+      let disposed = false;
+      let checkTimer = 0;
+      const updateCountdown = () => {
+        systemWallpaperNextInSeconds = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
+      };
+      const scheduleCheck = () => {
+        checkTimer = window.setTimeout(async () => {
+          if (disposed) return;
+          await loadMainBackground();
+          if (disposed) return;
+          nextAt = Date.now() + 60_000;
+          updateCountdown();
+          scheduleCheck();
+        }, Math.max(0, nextAt - Date.now()));
+      };
+      updateCountdown();
+      const countdownTimer = window.setInterval(updateCountdown, 1000);
+      scheduleCheck();
+      return () => {
+        disposed = true;
+        window.clearInterval(countdownTimer);
+        window.clearTimeout(checkTimer);
+      };
     }
+    systemWallpaperNextInSeconds = null;
   });
 
   $effect(() => {
@@ -2422,7 +2463,7 @@
                 {:else if themePreferences.mainBackgroundMode === 'albumCover'}
                   <p class="source-muted-note">背景會跟隨目前播放歌曲的專輯封面；沒有可用封面時暫時顯示純色。</p>
                 {:else if themePreferences.mainBackgroundMode === 'systemWallpaper'}
-                  <p class="source-muted-note">讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更。</p>
+                  <p class="source-muted-note">讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {systemWallpaperNextInSeconds ?? 60}s。</p>
                 {/if}
                 {#if themePreferences.mainBackgroundMode !== 'solid'}
                   <label class="lyrics-preference-range">
