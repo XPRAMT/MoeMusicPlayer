@@ -120,6 +120,39 @@ pub struct PlaylistPage {
     pub total_count: u64,
 }
 
+/// Display ordering for a playlist page. Position always means the order recorded by the
+/// imported playlist; sorting a page never changes that persisted order.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaylistSortField {
+    #[default]
+    Position,
+    Title,
+    Artist,
+    Album,
+    Year,
+    AudioFormat,
+    Duration,
+    PlayCount,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaylistSortDirection {
+    #[default]
+    Asc,
+    Desc,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistListSort {
+    #[serde(default)]
+    pub field: PlaylistSortField,
+    #[serde(default)]
+    pub direction: PlaylistSortDirection,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlaylistError {
     InvalidUtf8 { byte_offset: usize },

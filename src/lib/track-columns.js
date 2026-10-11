@@ -3,6 +3,8 @@
 /** @typedef {{ title: number, artist: number, album: number }} TrackColumnWidths */
 /** @typedef {'asc' | 'desc'} LibrarySortDirection */
 /** @typedef {{ field: TrackColumnId, direction: LibrarySortDirection }} LibraryListSort */
+/** @typedef {'position' | TrackColumnId} PlaylistSortField */
+/** @typedef {{ field: PlaylistSortField, direction: LibrarySortDirection }} PlaylistListSort */
 
 const INDEX_COLUMN_PX = 26;
 const FLEXIBLE_WIDTH_MIN_PX = 80;
@@ -99,6 +101,27 @@ export function toggleLibrarySort(current, field) {
     return { field, direction: normalized.direction === 'asc' ? 'desc' : 'asc' };
   }
   return { field, direction: 'asc' };
+}
+
+/** @type {PlaylistListSort} */
+export const DEFAULT_PLAYLIST_SORT = Object.freeze({ field: 'position', direction: 'asc' });
+
+/** @param {unknown} value @returns {PlaylistListSort} */
+export function normalizePlaylistSort(value) {
+  if (!value || typeof value !== 'object') return { ...DEFAULT_PLAYLIST_SORT };
+  const record = /** @type {Record<string, unknown>} */ (value);
+  const field = record.field === 'position' || COLUMN_IDS.has(/** @type {TrackColumnId} */ (record.field))
+    ? /** @type {PlaylistSortField} */ (record.field)
+    : DEFAULT_PLAYLIST_SORT.field;
+  return { field, direction: record.direction === 'desc' ? 'desc' : 'asc' };
+}
+
+/** @param {PlaylistListSort} current @param {PlaylistSortField} field @returns {PlaylistListSort} */
+export function togglePlaylistSort(current, field) {
+  const normalized = normalizePlaylistSort(current);
+  return normalized.field === field
+    ? { field, direction: normalized.direction === 'asc' ? 'desc' : 'asc' }
+    : { field, direction: 'asc' };
 }
 
 /**

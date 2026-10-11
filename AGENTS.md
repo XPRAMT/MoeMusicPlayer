@@ -4,6 +4,7 @@
 
 - 頂欄右上角「同步中」的 IconRefresh 需逆時針旋轉；CSS `.spin` 只套用於此同步圖示，`.loader-ring` 等載入圓環維持原本方向。
 - 上一首控制使用共用 `controlPlayback`：目前播放時間嚴格大於 3000 ms 時 seek 至目前歌曲 0 ms 並保留播放狀態，否則切到佇列上一首；列表標題移除 15% 白色底，底線由 `PagedVirtualList` 標題容器的 1 px `::after` 以 `--line` 繪製，避免內層標題列溢出／裁切時看不到。標題可見字形上移 3.25 個螢幕實體像素，App 依 `window.devicePixelRatio` 換算 CSS 位移並在視窗 resize 時更新；不移動排序按鈕的整體命中範圍。可排序欄的按鈕填滿標題欄可用範圍，欄寬拖曳把手位於按鈕上層、常駐淡色顯示並於 hover 提高對比。
+- 播放清單所有可見資訊欄與 `#` 標題均可切換升冪／降冪；`#` 依清單項目在原始播放清單中的 `position` 排序。排序於 SQLite 分頁查詢執行，預設仍按原始位置升冪；任何排序只改變顯示頁面順序，不改寫已保存的播放清單位置。列表 key 與點歌使用的 entry position 一律保留原始值，以支援重複曲目及精確播放項目選取。
 - Windows WAV 音質欄位的位元深度由 `crates/player-platform-windows/src/windows.rs` 讀取 RIFF/RF64 `fmt ` 區塊；僅 PCM／IEEE float（含 WAVE_FORMAT_EXTENSIBLE）提供位元深度，Extensible 使用有效位元數。有損 WAV 編碼不顯示此欄。前端既有 `formatAudioFormat` 會在收到此值時顯示，例如 `WAV．48 kHz．24 bit`。
 - Hi-Res 標籤由 `src/assets/hi-res-badge.svg` 提供向量圖，金黃色底與黑色 HR 字樣可隨螢幕縮放保持清晰；曲庫／播放清單／佇列顯示為 20.4×12.2 CSS px，並以 `translateY(0.5px)` 向下光學微調。Now Playing 主資訊區為 20.4×12.2 CSS px、緊湊頂列為 17.4×10.4 CSS px，皆不額外垂直位移。SVG 比例依原圖繪製，避免 `object-fit` 留下橫向空隙。
 - 演出者字串自動分割只使用 `|`、反斜線、`/`、`;`、`,` 等明確分隔符；一般空白保留在人名內。曲庫演出者精確欄位篩選也採相同規則，並忽略標點分隔符周圍的空白。

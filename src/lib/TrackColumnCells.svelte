@@ -27,6 +27,7 @@
     cells?: Cell[];
     placeholderTitle?: string;
     sortable?: boolean;
+    sortableIndex?: boolean;
     sort?: SortState | null;
     onSort?: (columnId: string) => void;
     resizable?: boolean;
@@ -40,6 +41,7 @@
     cells = [],
     placeholderTitle = '正在載入…',
     sortable = false,
+    sortableIndex = false,
     sort = null,
     onSort,
     resizable = false,
@@ -53,13 +55,13 @@
   } | null = null;
 
   function ariaSortFor(columnId: string): 'ascending' | 'descending' | 'none' | undefined {
-    if (!sortable) return undefined;
+    if (columnId === 'position' ? !sortableIndex : !sortable) return undefined;
     if (sort?.field !== columnId) return 'none';
     return sort.direction === 'desc' ? 'descending' : 'ascending';
   }
 
   function handleSortClick(columnId: string): void {
-    if (!sortable || !onSort) return;
+    if ((columnId === 'position' ? !sortableIndex : !sortable) || !onSort) return;
     onSort(columnId);
   }
 
@@ -96,7 +98,18 @@
 </script>
 
 {#if variant === 'header'}
-  <span class="column-index" role="columnheader">#</span>
+  <span class="column-index" class:is-sortable={sortableIndex} role="columnheader" aria-sort={sortableIndex ? ariaSortFor('position') : undefined}>
+    {#if sortableIndex}
+      <button type="button" class="column-sort-button index-sort-button" onclick={() => handleSortClick('position')} title="依播放清單中的順序排序" aria-label="依播放清單中的順序排序">
+        <span class="column-sort-label">#</span>
+        {#if sort?.field === 'position'}
+          <span class="column-sort-indicator" aria-hidden="true">{sort.direction === 'asc' ? '▲' : '▼'}</span>
+        {/if}
+      </button>
+    {:else}
+      #
+    {/if}
+  </span>
   {#each columns as column (column.id)}
     <span
       class={`list-column list-column-${column.id}`}

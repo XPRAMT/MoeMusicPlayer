@@ -1,10 +1,11 @@
 <script lang="ts">
-import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistPage, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
+import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistListSort, type PlaylistPage, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
 import { formatDuration } from './format';
 import { formatListOrder } from './list-order.js';
 import {
   DEFAULT_TRACK_COLUMN_PREFERENCES,
   DEFAULT_TRACK_COLUMN_WIDTHS,
+  DEFAULT_PLAYLIST_SORT,
   TRACK_COLUMN_DEFINITIONS,
   formatTrackColumnValue,
   isHiResTrack,
@@ -13,6 +14,7 @@ import {
   trackListColumnCount,
   trackListGridTemplate,
   trackListMinWidthPx,
+  togglePlaylistSort,
   visibleTrackColumns,
 } from './track-columns.js';
 import { withLivePlayedMs } from './live-play-count.js';
@@ -28,7 +30,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     isSendingPlaybackCommand: boolean;
     onPlay: (entry: PlaylistEntrySummary, playlistId: string) => void;
     onTotalCount?: (count: number | null) => void;
-    fetchPage?: (request: { playlistId: string; offset: number; limit: number }) => Promise<PlaylistPage>;
+    fetchPage?: (request: { playlistId: string; sort: PlaylistListSort; offset: number; limit: number }) => Promise<PlaylistPage>;
     columns?: TrackListColumnPreference[];
     columnWidths?: TrackColumnWidths;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
@@ -59,6 +61,7 @@ import { withLivePlayedMs } from './live-play-count.js';
   let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths));
   let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
+  let sort = $state<PlaylistListSort>({ ...DEFAULT_PLAYLIST_SORT });
 
   type ListSnapshot = ReturnType<PagedListController<PlaylistEntrySummary, string>['snapshot']>;
   let snapshot = $state<ListSnapshot>({
@@ -73,16 +76,21 @@ import { withLivePlayedMs } from './live-play-count.js';
     revision: 0,
   });
   const entries = new PagedListController<PlaylistEntrySummary, string>(
-    ({ scope, offset, limit }) => fetchPage
-      ? fetchPage({ playlistId: scope, offset, limit })
-      : invokeCommand('playlist_get_page', { playlistId: scope, offset, limit }),
+    ({ scope, offset, limit }) => {
+      const requestScope = JSON.parse(scope) as { playlistId: string; sort: PlaylistListSort };
+      const request = { ...requestScope, offset, limit };
+      return fetchPage
+        ? fetchPage(request)
+        : invokeCommand('playlist_get_page', request);
+    },
     { listName: '播放清單', onChange: () => { snapshot = entries.snapshot(); } },
   );
 
   $effect(() => {
     const currentId = playlistId;
     const currentRevision = resetKey;
-    entries.reset(currentId, currentRevision);
+    const currentSort = sort;
+    entries.reset(JSON.stringify({ playlistId: currentId, sort: currentSort }), currentRevision);
     void entries.ensureRange(0, TRACK_PAGE_SIZE);
   });
 
@@ -101,6 +109,14 @@ import { withLivePlayedMs } from './live-play-count.js';
   function retryFirstError(): void {
     const error = snapshot.errors[0];
     if (error) void entries.retry(error.offset);
+  }
+
+  function handleSort(columnId: string): void {
+    const field = columnId === 'position' || TRACK_COLUMN_DEFINITIONS.some((column) => column.id === columnId)
+      ? columnId as PlaylistListSort['field']
+      : null;
+    if (!field) return;
+    sort = togglePlaylistSort(sort, field);
   }
 
   function playEntry(entry: PlaylistEntrySummary): void {
@@ -135,7 +151,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     compactHeaderHeight={33}
     fillAvailable={true}
     listId={`playlist-${playlistId}`}
-    ariaLabel="播放清單項目；使用方向鍵瀏覽，按 Enter 播放目前項目"
+    ariaLabel="播放清單項目；點擊欄位標題排序；使用方向鍵瀏覽，按 Enter 播放目前項目"
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
     minContentWidth={listMinWidth}
@@ -150,6 +166,10 @@ import { withLivePlayedMs } from './live-play-count.js';
         <TrackColumnCells
           variant="header"
           columns={visibleColumns}
+          sortable={true}
+          sortableIndex={true}
+          {sort}
+          onSort={handleSort}
           resizable={true}
           onResize={(columnId, widthPx) => onColumnResize?.(columnId as TrackListColumnPreference['id'], widthPx)}
         />

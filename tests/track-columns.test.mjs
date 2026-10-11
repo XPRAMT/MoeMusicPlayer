@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   DEFAULT_LIBRARY_SORT,
+  DEFAULT_PLAYLIST_SORT,
   DEFAULT_TRACK_COLUMN_PREFERENCES,
   DEFAULT_TRACK_COLUMN_WIDTHS,
   TRACK_COLUMN_DEFINITIONS,
@@ -16,12 +17,14 @@ import {
   isLosslessCodec,
   moveTrackColumn,
   normalizeLibrarySort,
+  normalizePlaylistSort,
   normalizeTrackColumnPreferences,
   normalizeTrackColumnWidths,
   nowPlayingLayoutOrder,
   setTrackColumnVisibility,
   setTrackColumnWidth,
   toggleLibrarySort,
+  togglePlaylistSort,
   trackListColumnCount,
   trackListGridTemplate,
   visibleTrackColumns,
@@ -82,6 +85,21 @@ test('library sort toggles direction on the same field and resets on a new field
   assert.deepEqual(toggleLibrarySort({ field: 'artist', direction: 'desc' }, 'album'), {
     field: 'album',
     direction: 'asc',
+  });
+});
+
+test('playlist sort includes the original entry position and toggles direction', () => {
+  assert.deepEqual(normalizePlaylistSort(null), DEFAULT_PLAYLIST_SORT);
+  const byTitle = togglePlaylistSort(DEFAULT_PLAYLIST_SORT, 'title');
+  assert.deepEqual(byTitle, { field: 'title', direction: 'asc' });
+  assert.deepEqual(togglePlaylistSort(byTitle, 'title'), { field: 'title', direction: 'desc' });
+  assert.deepEqual(togglePlaylistSort({ field: 'title', direction: 'desc' }, 'position'), {
+    field: 'position',
+    direction: 'asc',
+  });
+  assert.deepEqual(normalizePlaylistSort({ field: 'invalid', direction: 'desc' }), {
+    field: 'position',
+    direction: 'desc',
   });
 });
 

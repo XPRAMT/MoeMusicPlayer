@@ -30,7 +30,8 @@ pub use playback_queue::{
 pub use playback_statistics::{PlaybackCheckpoint, PlaybackStatistics};
 pub use playlist::{
     parse_m3u, parse_m3u8, write_m3u, write_m3u8, M3uExportOptions, Playlist, PlaylistEntry,
-    PlaylistEntrySummary, PlaylistError, PlaylistId, PlaylistPage, PlaylistSummary,
+    PlaylistEntrySummary, PlaylistError, PlaylistId, PlaylistListSort, PlaylistPage,
+    PlaylistSortDirection, PlaylistSortField, PlaylistSummary,
 };
 pub use sync::{
     LibraryRepository, SyncApplyOutcome, SyncApplyRequest, SyncApplyStats, SyncEngine, SyncError,

@@ -260,6 +260,12 @@ export interface PlaylistPage {
   totalCount: number;
 }
 
+export type PlaylistSortField = 'position' | TrackListColumnPreference['id'];
+export interface PlaylistListSort {
+  field: PlaylistSortField;
+  direction: 'asc' | 'desc';
+}
+
 export interface PlaybackQueuePageItem {
   traversalPosition: number;
   entryPosition: number;
@@ -564,7 +570,7 @@ interface IpcContract {
     result: PlaylistSummary[];
   };
   playlist_get_page: {
-    args: { playlistId: string; offset: number; limit: number };
+    args: { playlistId: string; sort?: PlaylistListSort; offset: number; limit: number };
     result: PlaylistPage;
   };
   playlist_import_m3u: {

@@ -11,11 +11,12 @@ use player_core::{
     FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, LyricCandidate,
     LyricProvider, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page,
     PlaybackCheckpoint, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot,
-    PlaybackStatistics, Playlist, PlaylistEntry, PlaylistEntrySummary, PlaylistId, PlaylistPage,
-    PlaylistSummary, QueueRepeatMode, SourceId, SourceScanState, SyncApplyOutcome,
-    SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackField, TrackFieldFilter, TrackId,
-    TrackIdentity, TrackListSort, TrackLyrics, TrackMetadata, TrackSortDirection, TrackSortField,
-    TrackSummary, TrackSyncState, UserMetadataField, TRACK_METADATA_VERSION,
+    PlaybackStatistics, Playlist, PlaylistEntry, PlaylistEntrySummary, PlaylistId,
+    PlaylistListSort, PlaylistPage, PlaylistSortDirection, PlaylistSortField, PlaylistSummary,
+    QueueRepeatMode, SourceId, SourceScanState, SyncApplyOutcome, SyncApplyRequest, SyncApplyStats,
+    SyncCancellation, TrackField, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
+    TrackLyrics, TrackMetadata, TrackSortDirection, TrackSortField, TrackSummary, TrackSyncState,
+    UserMetadataField, TRACK_METADATA_VERSION,
 };
 use rusqlite::{
     params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
@@ -134,9 +135,20 @@ SELECT e.position, e.track_id,
        e.locator_kind, e.locator_encoding, e.locator_data
 FROM resolved_entries e
 LEFT JOIN tracks t ON t.track_id=e.track_id
-ORDER BY e.position
-LIMIT ?2 OFFSET ?3
 "#;
+
+fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
+    match field {
+        PlaylistSortField::Position => "e.position",
+        PlaylistSortField::Title => "COALESCE(e.entry_title, (SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='title'), t.title, '') COLLATE NOCASE",
+        PlaylistSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist, '') COLLATE NOCASE",
+        PlaylistSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album, '') COLLATE NOCASE",
+        PlaylistSortField::Year => "COALESCE(t.release_date, printf('%04d', t.year), '')",
+        PlaylistSortField::AudioFormat => "COALESCE(t.codec, '') COLLATE NOCASE",
+        PlaylistSortField::Duration => "COALESCE(e.entry_duration_ms, t.duration_ms, -1)",
+        PlaylistSortField::PlayCount => "CASE WHEN COALESCE(e.entry_duration_ms, t.duration_ms, 0)>0 THEN COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0)*1.0/COALESCE(e.entry_duration_ms, t.duration_ms) ELSE -1 END",
+    }
+}
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE library_roots (
@@ -1167,6 +1179,16 @@ impl Database {
         offset: u64,
         limit: u32,
     ) -> Result<Option<PlaylistPage>, DatabaseError> {
+        self.get_playlist_page_sorted(playlist_id, offset, limit, PlaylistListSort::default())
+    }
+
+    pub fn get_playlist_page_sorted(
+        &self,
+        playlist_id: PlaylistId,
+        offset: u64,
+        limit: u32,
+        sort: PlaylistListSort,
+    ) -> Result<Option<PlaylistPage>, DatabaseError> {
         let mut connection = self.lock()?;
         let exists: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM playlists WHERE playlist_id=?1)",
@@ -1184,7 +1206,15 @@ impl Database {
             [playlist_id.to_string()],
             |row| row.get(0),
         )?;
-        let mut statement = connection.prepare_cached(PLAYLIST_PAGE_SQL)?;
+        let order_by = playlist_sort_expression(sort.field);
+        let direction = match sort.direction {
+            PlaylistSortDirection::Asc => "ASC",
+            PlaylistSortDirection::Desc => "DESC",
+        };
+        let query = format!(
+            "{PLAYLIST_PAGE_SQL} ORDER BY {order_by} {direction}, e.position ASC LIMIT ?2 OFFSET ?3"
+        );
+        let mut statement = connection.prepare(&query)?;
         let rows = statement.query_map(
             params![
                 playlist_id.to_string(),
@@ -3400,8 +3430,9 @@ mod tests {
         parse_lrc, FileFingerprint, LibraryRoot, ListTracksQuery, LyricCandidate, LyricProvider,
         MediaIndex, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord,
         PlaybackCheckpoint, PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry,
-        PlaybackStatistics, Playlist, PlaylistEntry, PlaylistId, QueueRepeatMode, SourceId,
-        SourceScan, SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackField,
+        PlaybackStatistics, Playlist, PlaylistEntry, PlaylistId, PlaylistListSort,
+        PlaylistSortDirection, PlaylistSortField, QueueRepeatMode, SourceId, SourceScan,
+        SourceScanState, SyncApplyRequest, SyncCancellation, SyncEngine, TrackField,
         TrackFieldFilter, TrackId, TrackIdentity, TrackListSort, TrackLyrics, TrackMetadata,
         TrackMetadataError, TrackSortDirection, TrackSortField, UserMetadataField,
         TRACK_METADATA_VERSION,
@@ -4400,6 +4431,100 @@ mod tests {
             .is_none());
         assert!(db.delete_playlist(playlist.id).expect("delete playlist"));
         assert!(db.list_playlists().expect("list after delete").is_empty());
+    }
+
+    #[test]
+    fn playlist_page_sort_is_paged_and_keeps_source_positions_for_rows() {
+        let db = Database::open_in_memory().expect("database");
+        let mut playlist = Playlist::new("sortable");
+        playlist.entries = vec![
+            PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::FileSystem(PathBuf::from(r"C:\Music\z.flac")),
+                title: Some("Zulu".to_owned()),
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::FileSystem(PathBuf::from(r"C:\Music\a.flac")),
+                title: Some("Alpha".to_owned()),
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::FileSystem(PathBuf::from(r"C:\Music\m.flac")),
+                title: Some("Mike".to_owned()),
+                duration_ms: None,
+            },
+        ];
+        db.save_playlist(&playlist).expect("save playlist");
+
+        let by_title = db
+            .get_playlist_page_sorted(
+                playlist.id,
+                0,
+                2,
+                PlaylistListSort {
+                    field: PlaylistSortField::Title,
+                    direction: PlaylistSortDirection::Asc,
+                },
+            )
+            .expect("sort playlist")
+            .expect("playlist exists");
+        assert_eq!(
+            by_title
+                .items
+                .iter()
+                .map(|item| item.title.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["Alpha", "Mike"]
+        );
+        assert_eq!(
+            by_title
+                .items
+                .iter()
+                .map(|item| item.position)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(by_title.total_count, 3);
+        assert_eq!(by_title.offset, 0);
+
+        let by_position = db
+            .get_playlist_page_sorted(
+                playlist.id,
+                0,
+                3,
+                PlaylistListSort {
+                    field: PlaylistSortField::Position,
+                    direction: PlaylistSortDirection::Desc,
+                },
+            )
+            .expect("sort by source position")
+            .expect("playlist exists");
+        assert_eq!(
+            by_position
+                .items
+                .iter()
+                .map(|item| item.position)
+                .collect::<Vec<_>>(),
+            vec![2, 1, 0]
+        );
+
+        // Sorting is a page view only; the persisted playlist sequence remains unchanged.
+        let original = db
+            .get_playlist_page(playlist.id, 0, 3)
+            .expect("default page")
+            .expect("playlist exists");
+        assert_eq!(
+            original
+                .items
+                .iter()
+                .map(|item| item.position)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert_eq!(original.items[0].title.as_deref(), Some("Zulu"));
     }
 
     #[test]

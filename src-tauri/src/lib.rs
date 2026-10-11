@@ -20,8 +20,8 @@ use player_core::PlaybackCheckpoint;
 use player_core::{
     LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceError, MediaSourceKind, Page,
     PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId,
-    PlaylistPage, PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId,
-    SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId,
+    PlaylistListSort, PlaylistPage, PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats,
+    SourceId, SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId,
     TrackListSort, TrackMetadataError, TrackSummary,
 };
 #[cfg(target_os = "windows")]
@@ -2418,6 +2418,7 @@ fn playlist_list(state: State<'_, AppState>) -> Result<Vec<PlaylistSummary>, Str
 fn playlist_get_page(
     state: State<'_, AppState>,
     playlist_id: String,
+    sort: Option<PlaylistListSort>,
     offset: u64,
     limit: u32,
 ) -> Result<PlaylistPage, String> {
@@ -2431,7 +2432,7 @@ fn playlist_get_page(
             .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
     })?;
     database
-        .get_playlist_page(playlist_id, offset, limit)
+        .get_playlist_page_sorted(playlist_id, offset, limit, sort.unwrap_or_default())
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "找不到這份播放清單，請重新載入清單。".to_owned())
 }
