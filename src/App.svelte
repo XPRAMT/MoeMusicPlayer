@@ -2588,6 +2588,19 @@
                     <p>曲庫、播放清單與播放佇列共用欄位順序、顯示及高度設定；序號與播放操作固定在兩側。</p>
                   </div>
                 </div>
+                <label class="lyrics-preference-range track-row-height-setting">
+                  <span><strong>列表高度</strong><output>{trackRowHeightPx}px</output></span>
+                  <input
+                    type="range"
+                    min="30"
+                    max="60"
+                    step="1"
+                    value={trackRowHeightPx}
+                    aria-label="列表高度"
+                    oninput={(event) => previewTrackRowHeight(Number(event.currentTarget.value))}
+                    onchange={(event) => commitTrackRowHeight(Number(event.currentTarget.value))}
+                  />
+                </label>
                 <ol class="track-column-settings" aria-label="曲目資訊欄位設定">
                   {#each trackColumnPreferences as preference, index (preference.id)}
                     {@const definition = TRACK_COLUMN_DEFINITIONS.find((column) => column.id === preference.id)!}
@@ -2609,19 +2622,6 @@
                     </li>
                   {/each}
                 </ol>
-                <label class="lyrics-preference-range track-row-height-setting">
-                  <span><strong>列表高度</strong><output>{trackRowHeightPx}px</output></span>
-                  <input
-                    type="range"
-                    min="30"
-                    max="60"
-                    step="1"
-                    value={trackRowHeightPx}
-                    aria-label="列表高度"
-                    oninput={(event) => previewTrackRowHeight(Number(event.currentTarget.value))}
-                    onchange={(event) => commitTrackRowHeight(Number(event.currentTarget.value))}
-                  />
-                </label>
               </div>
             {:else if settingsSection === 'playback'}
               {@const outputStatus = describeOutputFormat(playback?.outputFormat)}

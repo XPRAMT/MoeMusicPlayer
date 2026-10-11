@@ -153,7 +153,7 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
     format!(
         "CASE TRIM(UPPER(COALESCE(t.codec, ''))) \
          WHEN 'WAV' THEN 0 WHEN 'WAVE' THEN 0 WHEN 'FLAC' THEN 1 WHEN 'VORBIS' THEN 2 WHEN 'OGG VORBIS' THEN 2 \
-         WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 4 WHEN 'M4A' THEN 4 WHEN 'AAC' THEN 4 WHEN 'MP4A' THEN 4 WHEN 'MP3' THEN 5 ELSE 6 END ASC, \
+         WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 4 WHEN 'M4A' THEN 4 WHEN 'AAC' THEN 4 WHEN 'MP4A' THEN 4 WHEN 'MP3' THEN 5 ELSE 6 END {direction}, \
          COALESCE(t.sample_rate_hz, 0) {direction}, \
          CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) IN ('WAV','WAVE','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','PCM','TAK','TTA') \
               THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction}, \
@@ -4674,8 +4674,8 @@ mod tests {
                 .map(|item| item.title.as_deref().expect("title"))
                 .collect::<Vec<_>>(),
             vec![
-                "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160", "opus96",
-                "mp4", "mp3"
+                "mp3", "mp4", "opus96k", "opus160", "opus96", "vorbis", "flac24", "flac16",
+                "flac44", "wav"
             ]
         );
         let library_desc = db
@@ -4697,8 +4697,8 @@ mod tests {
                 .map(|item| item.title.as_deref().expect("title"))
                 .collect::<Vec<_>>(),
             vec![
-                "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160", "opus96",
-                "mp4", "mp3"
+                "mp3", "mp4", "opus96k", "opus160", "opus96", "vorbis", "flac24", "flac16",
+                "flac44", "wav"
             ]
         );
     }

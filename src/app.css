@@ -2385,7 +2385,7 @@ input:focus-visible {
 }
 
 .track-row-height-setting {
-  margin-top: 8px;
+  margin: 0 0 8px;
 }
 
 .track-column-setting-row {
