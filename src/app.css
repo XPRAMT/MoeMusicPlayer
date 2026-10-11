@@ -2358,7 +2358,7 @@ input:focus-visible {
   row-gap: 2px;
   margin: 2px 0 0;
   color: var(--text-soft);
-  font-size: var(--font-body);
+  font-size: var(--font-caption);
   line-height: 1.45;
 }
 
