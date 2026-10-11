@@ -144,6 +144,42 @@ async page => {
   assert((await page.getByText(/沒有可用封面時暫時顯示純色/).count()) === 1, 'album-cover fallback explanation missing');
   await page.waitForSelector('.main-backdrop img');
   assert(await page.locator('.main-backdrop img').count() === 1, 'album cover is not used as the main-window background');
+  const mainBackdropStyle = await page.locator('.main-backdrop img').evaluate((image) => {
+    const style = getComputedStyle(image);
+    return {
+      transform: style.transform,
+      objectFit: style.objectFit,
+      src: image.getAttribute('src'),
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight,
+      container: (() => {
+        const box = image.parentElement.getBoundingClientRect();
+        return { width: box.width, height: box.height };
+      })(),
+    };
+  });
+  await page.getByRole('button', { name: /開啟正在播放/ }).click();
+  await page.waitForSelector('.now-playing-backdrop img');
+  const nowPlayingBackdropStyle = await page.locator('.now-playing-backdrop img').evaluate((image) => {
+    const style = getComputedStyle(image);
+    return {
+      transform: style.transform,
+      objectFit: style.objectFit,
+      src: image.getAttribute('src'),
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight,
+      container: (() => {
+        const box = image.parentElement.getBoundingClientRect();
+        return { width: box.width, height: box.height };
+      })(),
+    };
+  });
+  assert(mainBackdropStyle.transform === nowPlayingBackdropStyle.transform, 'album-cover and playback backdrops use different zoom: ' + JSON.stringify({ mainBackdropStyle, nowPlayingBackdropStyle }));
+  assert(mainBackdropStyle.objectFit === nowPlayingBackdropStyle.objectFit, 'album-cover and playback backdrops use different image fit: ' + JSON.stringify({ mainBackdropStyle, nowPlayingBackdropStyle }));
+  assert(mainBackdropStyle.src === nowPlayingBackdropStyle.src, 'album-cover and playback backdrops use different artwork: ' + JSON.stringify({ mainBackdropStyle, nowPlayingBackdropStyle }));
+  assert(mainBackdropStyle.naturalWidth === nowPlayingBackdropStyle.naturalWidth && mainBackdropStyle.naturalHeight === nowPlayingBackdropStyle.naturalHeight, 'album-cover and playback backdrops decoded different image sizes');
+  assert(Math.abs(mainBackdropStyle.container.width - nowPlayingBackdropStyle.container.width) < 0.1 && Math.abs(mainBackdropStyle.container.height - nowPlayingBackdropStyle.container.height) < 0.1, 'album-cover and playback backdrops use different container sizes: ' + JSON.stringify({ mainBackdropStyle, nowPlayingBackdropStyle }));
+  await page.getByTestId('now-playing-overlay').getByRole('button', { name: '返回播放前頁面' }).click();
   assert(await page.getByRole('slider', { name: '主介面背景模糊程度' }).count() === 1, 'album-cover blur missing');
   await page.getByRole('button', { name: '系統桌布', exact: true }).click();
   assert((await page.getByText(/讀取 Windows 目前的系統桌布/).count()) === 1, 'system wallpaper explanation missing');

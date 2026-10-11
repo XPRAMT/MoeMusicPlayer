@@ -11,7 +11,7 @@
 
 專案已有可建置的 Tauri 2、Svelte 5、TypeScript 與 Vite 骨架，並包含 Rust Core、SQLite 曲庫、Windows 與 Android 媒體來源 adapter，以及雙語 README。
 
-- 「設定 → 主介面」背景來源保存於 settings.json schema v9：純色、單圖、幻燈片、目前歌曲專輯封面、Windows 系統桌布圖片。單圖複製至 `UserData/background`；幻燈片路徑、1–120 分鐘間隔及順序／隨機播放偏好保存於 JSON，並遞迴讀取子資料夾。非純色背景共用模糊與圖片透明度設定；專輯封面隨目前播放曲目更新，沒有封面時回到主題純色。Windows 系統桌布讀取當前桌布圖片，背景啟用時每 60 秒檢查一次；視窗維持不透明。v8 舊設定若存在 `UserData/background` 會遷移為單圖，否則為純色。Android 目前只支援純色與專輯封面；本機圖片選取、幻燈片及系統桌布入口停用，Android 系統桌布列於待辦。
+- 「設定 → 主介面」背景來源保存於 settings.json schema v9：純色、單圖、幻燈片、目前歌曲專輯封面、Windows 系統桌布圖片。單圖複製至 `UserData/background`；幻燈片路徑、1–120 分鐘間隔及順序／隨機播放偏好保存於 JSON，並遞迴讀取子資料夾。非純色背景共用模糊與圖片透明度設定；專輯封面隨目前播放曲目更新，沒有封面時回到主題純色。Windows 系統桌布讀取當前桌布圖片，背景啟用時每 60 秒檢查一次；視窗維持不透明。v8 舊設定若存在 `UserData/background` 會遷移為單圖，否則為純色。Android 目前只支援純色與專輯封面；本機圖片選取、幻燈片及系統桌布入口停用，Android 系統桌布列於待辦。主介面與正在播放頁的模糊封面背景共用 `scale(1.04)` 與 `object-fit: cover`，保持封面縮放一致；透明度和模糊程度仍由各自設定控制。`tests/main-chrome.playwright.js` 比對來源、解碼尺寸、容器幾何及 computed style。
 
 ## GitHub 與版控
 

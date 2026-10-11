@@ -221,7 +221,6 @@ input:focus-visible {
   object-fit: cover;
   opacity: var(--np-background-opacity, 0.4);
   filter: blur(var(--np-background-blur, 20px));
-  transform: scale(1.04);
 }
 
 .main-backdrop {
@@ -241,7 +240,13 @@ input:focus-visible {
   object-fit: cover;
   opacity: var(--main-background-opacity, 0.4);
   filter: blur(var(--main-background-blur, 20px));
-  transform: scale(1.08);
+}
+
+/* Both views render the same current-track artwork as a blurred viewport backdrop.
+   Keep cover scaling identical so the main-interface mode does not look more zoomed. */
+.now-playing-backdrop img,
+.main-backdrop img {
+  transform: scale(1.04);
 }
 
 .app-shell.has-main-backdrop {
