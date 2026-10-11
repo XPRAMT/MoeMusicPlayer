@@ -32,9 +32,12 @@ pub struct ThemeSettings {
     pub color_mode: ThemeColorMode,
     #[serde(default)]
     pub background_opacity_text_color: BackgroundOpacityTextColor,
-    /// Target background clarity for automatic image opacity (0–100).
+    /// Main-window target clarity for automatic image opacity (0–100).
     #[serde(default)]
-    pub background_clarity_percent: u8,
+    pub main_background_clarity_percent: u8,
+    /// Now Playing cover target clarity for automatic image opacity (0–100).
+    #[serde(default)]
+    pub cover_background_clarity_percent: u8,
     #[serde(default = "default_quick_settings_opacity_percent")]
     pub quick_settings_opacity_percent: u8,
     /// Backdrop blur for the Now Playing quick-settings drawer.
@@ -136,7 +139,8 @@ impl Default for ThemeSettings {
             accent_hex: "#55D9FF".to_owned(),
             color_mode: ThemeColorMode::default(),
             background_opacity_text_color: BackgroundOpacityTextColor::default(),
-            background_clarity_percent: 0,
+            main_background_clarity_percent: 0,
+            cover_background_clarity_percent: 0,
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
@@ -992,9 +996,14 @@ impl AppSettings {
                 "autoTextColorThresholdPercent must be between 0 and 100".into(),
             ));
         }
-        if self.theme.background_clarity_percent > 100 {
+        if self.theme.main_background_clarity_percent > 100 {
             return Err(SettingsError::InvalidData(
-                "backgroundClarityPercent must be between 0 and 100".into(),
+                "mainBackgroundClarityPercent must be between 0 and 100".into(),
+            ));
+        }
+        if self.theme.cover_background_clarity_percent > 100 {
+            return Err(SettingsError::InvalidData(
+                "coverBackgroundClarityPercent must be between 0 and 100".into(),
             ));
         }
         self.lyrics_preferences.validate()?;
@@ -1354,7 +1363,22 @@ struct RawSettings {
 fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
     let mut input = String::new();
     File::open(path)?.read_to_string(&mut input)?;
-    let raw: RawSettings = serde_json::from_str(&input)?;
+    let mut value: serde_json::Value = serde_json::from_str(&input)?;
+    let legacy_clarity_migrated = value
+        .get_mut("theme")
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|theme| {
+            let legacy = theme.remove("backgroundClarityPercent")?;
+            theme
+                .entry("mainBackgroundClarityPercent")
+                .or_insert_with(|| legacy.clone());
+            theme
+                .entry("coverBackgroundClarityPercent")
+                .or_insert(legacy);
+            Some(())
+        })
+        .is_some();
+    let raw: RawSettings = serde_json::from_value(value)?;
     let version = raw.schema_version.unwrap_or(0);
     if version > SETTINGS_SCHEMA_VERSION {
         return Err(SettingsError::UnsupportedVersion(version));
@@ -1383,7 +1407,10 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         settings.lyrics_preferences.line_gap_px = 50;
     }
     settings.validate()?;
-    Ok((settings, version != SETTINGS_SCHEMA_VERSION))
+    Ok((
+        settings,
+        version != SETTINGS_SCHEMA_VERSION || legacy_clarity_migrated,
+    ))
 }
 
 fn persist_settings(path: &Path, settings: &AppSettings) -> Result<(), SettingsError> {
@@ -2873,12 +2900,14 @@ mod tests {
             old.background_opacity_text_color,
             BackgroundOpacityTextColor::White
         );
-        assert_eq!(old.background_clarity_percent, 0);
+        assert_eq!(old.main_background_clarity_percent, 0);
+        assert_eq!(old.cover_background_clarity_percent, 0);
 
         let selected = ThemeSettings {
             color_mode: ThemeColorMode::AutoBackgroundOpacity,
             background_opacity_text_color: BackgroundOpacityTextColor::Black,
-            background_clarity_percent: 50,
+            main_background_clarity_percent: 35,
+            cover_background_clarity_percent: 72,
             ..ThemeSettings::default()
         };
         let json = serde_json::to_value(&selected).expect("serialize selected theme");
@@ -2888,7 +2917,41 @@ mod tests {
             restored.background_opacity_text_color,
             BackgroundOpacityTextColor::Black
         );
-        assert_eq!(restored.background_clarity_percent, 50);
+        assert_eq!(restored.main_background_clarity_percent, 35);
+        assert_eq!(restored.cover_background_clarity_percent, 72);
+    }
+
+    #[test]
+    fn legacy_shared_background_clarity_migrates_to_both_independent_settings() {
+        let directory = test_directory("legacy-shared-background-clarity");
+        let path = directory.join("settings.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": SETTINGS_SCHEMA_VERSION,
+                "theme": {
+                    "backgroundHex": "#000000",
+                    "accentHex": "#55D9FF",
+                    "backgroundClarityPercent": 64
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (settings, migrated) = read_settings(&path).expect("read legacy clarity settings");
+        assert!(migrated);
+        assert_eq!(settings.theme.main_background_clarity_percent, 64);
+        assert_eq!(settings.theme.cover_background_clarity_percent, 64);
+
+        let _store = SettingsStore::open(&path, AppSettings::default())
+            .expect("open and persist migrated clarity settings");
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read migrated settings"))
+                .expect("parse migrated settings");
+        assert_eq!(persisted["theme"]["mainBackgroundClarityPercent"], 64);
+        assert_eq!(persisted["theme"]["coverBackgroundClarityPercent"], 64);
+        assert!(persisted["theme"].get("backgroundClarityPercent").is_none());
     }
 
     #[test]

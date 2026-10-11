@@ -217,10 +217,6 @@
   let lyricsPreferencesState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let lyricsPreferencesError = $state<string | null>(null);
   let themePreferences = $state<ThemePreferences>({ ...DEFAULT_THEME_PREFERENCES });
-  let backgroundOpacityTargetPercent = $derived(getBackdropTargetPercent(
-    themePreferences.backgroundOpacityTextColor,
-    themePreferences.backgroundClarityPercent,
-  ));
   let mainBackgroundUrl = $state<string | null>(null);
   let mainBackgroundObjectUrl: string | null = null;
   let mainBackgroundBytesHash = '';
@@ -452,7 +448,7 @@
     const automaticTextColor = themePreferences.colorMode === 'autoBackgroundOpacity'
       ? themePreferences.backgroundOpacityTextColor
       : null;
-    const clarityPercent = themePreferences.backgroundClarityPercent;
+    const clarityPercent = themePreferences.mainBackgroundClarityPercent;
     const revision = ++mainContrastRevision;
     const cachedImageAverageHex = mainImageAverageUrl === imageUrl ? mainImageAverageHex : null;
     const cachedImageAlpha = mainImageAverageUrl === imageUrl ? mainImageAverageAlpha : null;
@@ -571,7 +567,7 @@
     const automaticTextColor = themePreferences.colorMode === 'autoBackgroundOpacity'
       ? themePreferences.backgroundOpacityTextColor
       : null;
-    const clarityPercent = themePreferences.backgroundClarityPercent;
+    const clarityPercent = themePreferences.coverBackgroundClarityPercent;
     const revision = ++nowPlayingContrastRevision;
     const cachedImageAverageHex = nowPlayingImageAverageUrl === imageUrl
       ? nowPlayingImageAverageHex
@@ -872,6 +868,11 @@
       themeSaveTimer = undefined;
       queueThemeSave(next, revision);
     }, 300);
+  }
+
+  function updateCoverBackgroundClarity(value: number, flush = false): void {
+    updateMainBackgroundLook({ coverBackgroundClarityPercent: value });
+    if (flush) saveThemePreferencesNow();
   }
 
   async function pickMainBackground(): Promise<void> {
@@ -2467,20 +2468,7 @@
                         <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'white'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'white'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'white' }); saveThemePreferencesNow(); }}>白色字</button>
                         <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'black'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'black'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'black' }); saveThemePreferencesNow(); }}>黑色字</button>
                       </div>
-                      <p class="source-muted-note">{themePreferences.backgroundOpacityTextColor === 'white' ? `背景色固定為純黑，圖片透明度自動調整至平均亮度 Y < ${backgroundOpacityTargetPercent}。` : `背景色固定為純白，圖片透明度自動調整至平均亮度 Y > ${backgroundOpacityTargetPercent}。`}</p>
-                      <label class="lyrics-preference-range">
-                        <span><strong>清晰度</strong><output>{themePreferences.backgroundClarityPercent}%</output></span>
-                        <input
-                          type="range"
-                          min="0"
-                          max="100"
-                          step="1"
-                          value={themePreferences.backgroundClarityPercent}
-                          aria-label="自動背景透明度清晰度"
-                          oninput={(event) => updateMainBackgroundLook({ backgroundClarityPercent: Number(event.currentTarget.value) })}
-                          onchange={saveThemePreferencesNow}
-                        />
-                      </label>
+                      <p class="source-muted-note">背景色固定為{themePreferences.backgroundOpacityTextColor === 'white' ? '純黑' : '純白'}；主介面與播放頁各自依照清晰度設定調整背景圖片透明度。</p>
                     </div>
                   {/if}
                 </div>
@@ -2567,6 +2555,12 @@
                     <span><strong>背景模糊</strong><output>{themePreferences.mainBackgroundBlurPx}px</output></span>
                     <input type="range" min="0" max="50" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label="主介面背景模糊程度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                   </label>
+                  {#if themePreferences.colorMode === 'autoBackgroundOpacity'}
+                    <label class="lyrics-preference-range">
+                      <span><strong>清晰度</strong><output>{themePreferences.mainBackgroundClarityPercent}%</output></span>
+                      <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundClarityPercent} aria-label="主介面背景清晰度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundClarityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                    </label>
+                  {/if}
                   <label class="lyrics-preference-range">
                     <span><strong>背景透明度</strong>{#if themePreferences.colorMode !== 'autoBackgroundOpacity'}<output>{themePreferences.mainBackgroundOpacityPercent}%</output>{/if}</span>
                     {#if themePreferences.colorMode === 'autoBackgroundOpacity'}
@@ -2691,6 +2685,8 @@
                   layout={nowPlayingLayout}
                   appearance={nowPlayingAppearancePreferences}
                   autoBackgroundOpacity={themePreferences.colorMode === 'autoBackgroundOpacity'}
+                  coverClarityPercent={themePreferences.coverBackgroundClarityPercent}
+                  onCoverClarityChange={updateCoverBackgroundClarity}
                   opacityCalculation={nowPlayingBackgroundOpacityCalculation}
                   lyrics={lyricsPreferences}
                   onLayoutChange={setNowPlayingLayout}
@@ -2726,6 +2722,8 @@
                   layout={nowPlayingLayout}
                   appearance={nowPlayingAppearancePreferences}
                   autoBackgroundOpacity={themePreferences.colorMode === 'autoBackgroundOpacity'}
+                  coverClarityPercent={themePreferences.coverBackgroundClarityPercent}
+                  onCoverClarityChange={updateCoverBackgroundClarity}
                   opacityCalculation={nowPlayingBackgroundOpacityCalculation}
                   lyrics={lyricsPreferences}
                   onLayoutChange={setNowPlayingLayout}

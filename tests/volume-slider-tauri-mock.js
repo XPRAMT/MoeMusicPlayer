@@ -53,6 +53,14 @@
     slideshowFolder: 'D:\\Pictures\\@美化\\wallpaper',
     slideshowIntervalMinutes: 1,
     slideshowOrder: 'sequential',
+    ...(JSON.parse(localStorage.getItem('__themePreferences') || 'null') ?? {}),
+  };
+  const themeHarness = {
+    get: () => clone(storedTheme),
+    set: (patch) => {
+      storedTheme = { ...storedTheme, ...clone(patch) };
+      localStorage.setItem('__themePreferences', JSON.stringify(storedTheme));
+    },
   };
   let storedLyricsPreferences = JSON.parse(localStorage.getItem('__lyricsPreferences') || 'null') ?? {
     showTranslation: false,
@@ -123,6 +131,7 @@
   globalThis.isTauri = true;
   window.__volumeHarness = volumeHarness;
   window.__appearanceHarness = appearanceHarness;
+  window.__themeHarness = themeHarness;
   window.__TAURI_INTERNALS__ = {
     async invoke(command, args = {}) {
       switch (command) {
@@ -160,6 +169,7 @@
           return clone(storedTheme);
         case 'theme_set_preferences':
           storedTheme = clone(args.preferences);
+          localStorage.setItem('__themePreferences', JSON.stringify(storedTheme));
           return clone(storedTheme);
         case 'appearance_get_main_background':
           return new ArrayBuffer(0);

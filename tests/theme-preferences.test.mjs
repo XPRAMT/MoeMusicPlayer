@@ -17,7 +17,8 @@ test('default appearance uses pure black and a water-blue accent', () => {
     accentHex: '#55D9FF',
     colorMode: 'autoTextColor',
     backgroundOpacityTextColor: 'white',
-    backgroundClarityPercent: 0,
+    mainBackgroundClarityPercent: 0,
+    coverBackgroundClarityPercent: 0,
     quickSettingsOpacityPercent: 70,
     quickSettingsBlurPx: 12,
     mainBackgroundBlurPx: 20,
@@ -163,7 +164,8 @@ test('invalid persisted values fall back to safe defaults', () => {
     accentHex: '#55D9FF',
     colorMode: 'autoTextColor',
     backgroundOpacityTextColor: 'white',
-    backgroundClarityPercent: 0,
+    mainBackgroundClarityPercent: 0,
+    coverBackgroundClarityPercent: 0,
     quickSettingsOpacityPercent: 70,
     quickSettingsBlurPx: 12,
     mainBackgroundBlurPx: 20,
@@ -188,6 +190,18 @@ test('invalid persisted values fall back to safe defaults', () => {
   assert.equal(normalizeThemePreferences({ slideshowOrder: 'random' }).slideshowOrder, 'random');
   assert.equal(normalizeThemePreferences({ autoTextColorThresholdPercent: 140 }).autoTextColorThresholdPercent, 100);
   assert.equal(normalizeThemePreferences({ autoTextColorThresholdPercent: -3 }).autoTextColorThresholdPercent, 0);
-  assert.equal(normalizeThemePreferences({ backgroundClarityPercent: 145 }).backgroundClarityPercent, 100);
-  assert.equal(normalizeThemePreferences({ backgroundClarityPercent: -2 }).backgroundClarityPercent, 0);
+  assert.equal(normalizeThemePreferences({ mainBackgroundClarityPercent: 145 }).mainBackgroundClarityPercent, 100);
+  assert.equal(normalizeThemePreferences({ mainBackgroundClarityPercent: -2 }).mainBackgroundClarityPercent, 0);
+  assert.equal(normalizeThemePreferences({ coverBackgroundClarityPercent: 145 }).coverBackgroundClarityPercent, 100);
+  assert.equal(normalizeThemePreferences({ coverBackgroundClarityPercent: -2 }).coverBackgroundClarityPercent, 0);
+  assert.deepEqual(normalizeThemePreferences({ backgroundClarityPercent: 64 }), {
+    ...DEFAULT_THEME_PREFERENCES,
+    mainBackgroundClarityPercent: 64,
+    coverBackgroundClarityPercent: 64,
+  });
+  assert.deepEqual(normalizeThemePreferences({ mainBackgroundClarityPercent: 22, coverBackgroundClarityPercent: 78 }), {
+    ...DEFAULT_THEME_PREFERENCES,
+    mainBackgroundClarityPercent: 22,
+    coverBackgroundClarityPercent: 78,
+  });
 });

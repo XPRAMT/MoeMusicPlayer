@@ -7,6 +7,8 @@
     layout: NowPlayingLayout;
     appearance: NowPlayingAppearancePreferences;
     autoBackgroundOpacity?: boolean;
+    coverClarityPercent?: number;
+    onCoverClarityChange?: (value: number, flush?: boolean) => void;
     opacityCalculation?: BackdropOpacityCalculation | null;
     lyrics: LyricsPreferences;
     onLayoutChange: (layout: NowPlayingLayout) => void;
@@ -20,6 +22,8 @@
   let {
     layout, appearance, lyrics,
     autoBackgroundOpacity = false,
+    coverClarityPercent = 0,
+    onCoverClarityChange = () => {},
     opacityCalculation = null,
     onLayoutChange, onAppearanceChange, onLyricsChange, onLyricsReset,
     groups = 'both',
@@ -61,6 +65,12 @@
       <span><strong>封面背景模糊</strong><output>{appearance.backgroundBlurPx}px</output></span>
       <input type="range" min="0" max="50" step="1" value={appearance.backgroundBlurPx} aria-label="封面背景模糊程度" oninput={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) }, true)} />
     </label>
+    {#if autoBackgroundOpacity}
+      <label class="lyrics-preference-range">
+        <span><strong>清晰度</strong><output>{coverClarityPercent}%</output></span>
+        <input type="range" min="0" max="100" step="1" value={coverClarityPercent} aria-label="封面背景清晰度" oninput={(event) => onCoverClarityChange(Number(event.currentTarget.value))} onchange={(event) => onCoverClarityChange(Number(event.currentTarget.value), true)} />
+      </label>
+    {/if}
     <label class="lyrics-preference-range">
       <span><strong>封面背景透明度</strong>{#if !autoBackgroundOpacity}<output>{appearance.backgroundOpacityPercent}%</output>{/if}</span>
       {#if autoBackgroundOpacity}

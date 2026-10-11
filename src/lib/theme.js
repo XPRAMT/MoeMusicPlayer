@@ -6,7 +6,8 @@ export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   accentHex: '#55D9FF',
   colorMode: 'autoTextColor',
   backgroundOpacityTextColor: 'white',
-  backgroundClarityPercent: 0,
+  mainBackgroundClarityPercent: 0,
+  coverBackgroundClarityPercent: 0,
   quickSettingsOpacityPercent: 70,
   quickSettingsBlurPx: 12,
   mainBackgroundBlurPx: 20,
@@ -53,11 +54,17 @@ export function normalizeThemePreferences(value) {
     backgroundOpacityTextColor: candidate.backgroundOpacityTextColor === 'black'
       ? 'black'
       : DEFAULT_THEME_PREFERENCES.backgroundOpacityTextColor,
-    backgroundClarityPercent: normalizeRange(
-      candidate.backgroundClarityPercent,
+    mainBackgroundClarityPercent: normalizeRange(
+      candidate.mainBackgroundClarityPercent ?? candidate.backgroundClarityPercent,
       0,
       100,
-      DEFAULT_THEME_PREFERENCES.backgroundClarityPercent,
+      DEFAULT_THEME_PREFERENCES.mainBackgroundClarityPercent,
+    ),
+    coverBackgroundClarityPercent: normalizeRange(
+      candidate.coverBackgroundClarityPercent ?? candidate.backgroundClarityPercent,
+      0,
+      100,
+      DEFAULT_THEME_PREFERENCES.coverBackgroundClarityPercent,
     ),
     quickSettingsOpacityPercent: normalizeOpacityPercent(candidate.quickSettingsOpacityPercent),
     quickSettingsBlurPx: normalizeRange(
