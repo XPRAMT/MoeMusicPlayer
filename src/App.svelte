@@ -401,6 +401,10 @@
         ? activeArtwork.status === 'ready' ? activeArtwork.objectUrl : null
         : mainBackgroundUrl,
   );
+  const mainBackgroundMode = $derived(themePreferences.mainBackgroundMode);
+  const slideshowFolder = $derived(themePreferences.slideshowFolder);
+  const slideshowIntervalMinutes = $derived(themePreferences.slideshowIntervalMinutes);
+  const runtimePlatform = $derived(capabilities?.platform);
 
   $effect(() => {
     const snapshot = playback;
@@ -443,15 +447,15 @@
   });
 
   $effect(() => {
-    const mode = themePreferences.mainBackgroundMode;
-    const intervalMinutes = themePreferences.slideshowIntervalMinutes;
-    const slideshowFolder = themePreferences.slideshowFolder;
-    const platform = capabilities?.platform;
+    const mode = mainBackgroundMode;
+    const intervalMinutes = slideshowIntervalMinutes;
+    const folder = slideshowFolder;
+    const platform = runtimePlatform;
     if (!isTauri()) {
       slideshowNextInSeconds = null;
       return;
     }
-    if (mode === 'slideshow' && slideshowFolder) {
+    if (mode === 'slideshow' && folder) {
       const intervalMs = intervalMinutes * 60_000;
       let nextAt = Date.now() + intervalMs;
       let disposed = false;
