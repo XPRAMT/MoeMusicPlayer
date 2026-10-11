@@ -196,18 +196,18 @@ input:focus-visible {
 }
 
 .app-shell.has-custom-titlebar .now-playing-backdrop {
-  /* Base inset:-48px already covers the 32px titlebar; keep the blur bleed and make the
+  /* Base inset:-56px already covers the 32px titlebar; keep the blur bleed and make the
      under-chrome intent explicit. Transparent titlebar (z=50) reveals this layer (z=15). */
-  top: -48px;
-  right: -48px;
-  bottom: -48px;
-  left: -48px;
+  top: -56px;
+  right: -56px;
+  bottom: -56px;
+  left: -56px;
 }
 
 .now-playing-backdrop {
   position: fixed;
   z-index: 15;
-  inset: -48px;
+  inset: -56px;
   overflow: hidden;
   pointer-events: none;
   background: var(--page);
@@ -215,9 +215,9 @@ input:focus-visible {
 
 .now-playing-backdrop img {
   position: absolute;
-  inset: 48px;
-  width: calc(100% - 96px);
-  height: calc(100% - 96px);
+  inset: calc(56px - var(--np-background-blur, 20px));
+  width: calc(100% - 112px + var(--np-background-blur, 20px) + var(--np-background-blur, 20px));
+  height: calc(100% - 112px + var(--np-background-blur, 20px) + var(--np-background-blur, 20px));
   object-fit: cover;
   opacity: var(--np-background-opacity, 0.4);
   filter: blur(var(--np-background-blur, 20px));
@@ -226,7 +226,7 @@ input:focus-visible {
 .main-backdrop {
   position: fixed;
   z-index: 0;
-  inset: -48px;
+  inset: -56px;
   overflow: hidden;
   pointer-events: none;
   background: var(--page);
@@ -234,9 +234,9 @@ input:focus-visible {
 
 .main-backdrop img {
   position: absolute;
-  inset: 48px;
-  width: calc(100% - 96px);
-  height: calc(100% - 96px);
+  inset: calc(56px - var(--main-background-blur, 20px));
+  width: calc(100% - 112px + var(--main-background-blur, 20px) + var(--main-background-blur, 20px));
+  height: calc(100% - 112px + var(--main-background-blur, 20px) + var(--main-background-blur, 20px));
   object-fit: cover;
   opacity: var(--main-background-opacity, 0.4);
   filter: blur(var(--main-background-blur, 20px));

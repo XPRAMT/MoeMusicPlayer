@@ -151,6 +151,11 @@ async page => {
   assert(await page.locator('.main-backdrop img').count() === 1, 'album cover is not used as the main-window background');
   assert(await page.getByRole('slider', { name: '主介面背景縮放' }).count() === 1, 'album-cover zoom missing');
   const mainZoomSlider = page.getByRole('slider', { name: '主介面背景縮放' });
+  const mainBlurSlider = page.getByRole('slider', { name: '主介面背景模糊程度' });
+  await mainBlurSlider.evaluate((input) => {
+    input.value = '0';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
   await mainZoomSlider.evaluate((input) => {
     input.value = '0';
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -169,6 +174,26 @@ async page => {
     && Math.abs(zeroZoomGeometry.imageBox.width - zeroZoomGeometry.viewport.width) < 0.1
     && Math.abs(zeroZoomGeometry.imageBox.height - zeroZoomGeometry.viewport.height) < 0.1,
   'zero zoom still sizes the background image from the blur-bleed container instead of the viewport: ' + JSON.stringify(zeroZoomGeometry));
+  await mainBlurSlider.evaluate((input) => {
+    input.value = '10';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const tenPixelBlurGeometry = await page.locator('.main-backdrop img').evaluate((image) => {
+    const imageBox = image.getBoundingClientRect();
+    return {
+      imageBox: { left: imageBox.left, top: imageBox.top, width: imageBox.width, height: imageBox.height },
+      viewport: { width: innerWidth, height: innerHeight },
+    };
+  });
+  assert(Math.abs(tenPixelBlurGeometry.imageBox.left + 10) < 0.1
+    && Math.abs(tenPixelBlurGeometry.imageBox.top + 10) < 0.1
+    && Math.abs(tenPixelBlurGeometry.imageBox.width - tenPixelBlurGeometry.viewport.width - 20) < 0.1
+    && Math.abs(tenPixelBlurGeometry.imageBox.height - tenPixelBlurGeometry.viewport.height - 20) < 0.1,
+  '10px blur should extend the image by 10px on each edge: ' + JSON.stringify(tenPixelBlurGeometry));
+  await mainBlurSlider.evaluate((input) => {
+    input.value = '20';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
   await mainZoomSlider.evaluate((input) => {
     input.value = '3';
     input.dispatchEvent(new Event('input', { bubbles: true }));
