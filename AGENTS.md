@@ -19,6 +19,14 @@
 
 - 幻燈片下一張倒數依模式、資料夾與切換間隔設定；背景模糊、透明度等其他外觀設定保存不會重設倒數期限。改變切換間隔時保留目前已經過的時間：未超過新間隔就依新期限繼續倒數；已超過新間隔則立即切換下一張並開始新一輪。Windows 系統桌布模式啟用時每 60 秒檢查，設定頁同步顯示下一次檢查剩餘秒數。
 
+## Windows 檔案總管開啟音樂
+
+- Windows 單一執行個體透過 Tauri single-instance 將後續檔案開啟參數轉送給既有播放器；第一個程序直接檢查啟動參數。相對路徑依呼叫工作目錄解析，只接受 `player-platform-windows::supported_audio_extensions` 列出的音訊格式。
+- 從檔案總管開啟音樂時以正規化後路徑逐首查 SQLite 曲庫；命中就沿用資料庫曲目／標籤，未命中才讀取 Lofty 標籤並用暫存 TrackId 與路徑留在記憶體。列舉同資料夾的直接子檔案、不進子目錄、不重複 canonical path，並以不分大小寫檔名排序；指定開啟曲目立即播放。
+- Windows「設定 → 關於」可將目前執行檔以 HKCU ProgID／Capabilities 登錄為支援格式的開啟程式，並開啟 Windows 預設應用程式設定供使用者選擇。登錄不會改變預設值；移動便攜資料夾後需重新登錄。
+- 檔案總管開啟所建立的佇列一律只在記憶體；啟用期間 `save_playback_session` 及位置 checkpoint 不寫入 SQLite，重啟保留先前保存的曲庫／播放清單 session。曲庫項目仍使用既有 TrackId 和統計，非曲庫暫存項目不寫入曲庫、播放時長統計或 session。佇列列資訊、外部封面與 SMTC 封面由暫存摘要／原始路徑提供。
+- 決策細節見 `docs/adr/0009-windows-shell-open-queue.md`。
+
 ## GitHub 與版控
 
 - 公開 GitHub 儲存庫為 [XPRAMT/MoeMusicPlayer](https://github.com/XPRAMT/MoeMusicPlayer)，作者 XPRAMT；`origin` 使用 `master` 作為發布分支。使用者已授權公開儲存庫及實際 GitHub Release 更新驗證。

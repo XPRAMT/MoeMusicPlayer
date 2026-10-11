@@ -17,8 +17,9 @@ use lofty::{
 };
 use player_core::{
     windows_locator_key, FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
-    MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, SourceScan,
-    SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata, TrackMetadataError,
+    MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, SourceId,
+    SourceScan, SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata,
+    TrackMetadataError,
 };
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
@@ -151,6 +152,37 @@ impl WindowsMediaIndex {
         }
         scan
     }
+}
+
+/// Read tags and codec properties for one file without adding it to a library or database.
+/// Used by Windows shell-open playback for files outside configured library roots.
+pub fn read_standalone_audio_metadata(path: &Path) -> Result<TrackMetadata, TrackMetadataError> {
+    let canonical_path = fs::canonicalize(path).map_err(|error| TrackMetadataError {
+        message: format!("could not resolve audio file: {error}"),
+    })?;
+    let metadata = fs::metadata(&canonical_path).map_err(|error| TrackMetadataError {
+        message: format!("could not inspect audio file: {error}"),
+    })?;
+    if !metadata.is_file() || !is_supported_audio_file(&canonical_path) {
+        return Err(TrackMetadataError {
+            message: "file is not a supported audio format".to_owned(),
+        });
+    }
+    let identity_key = windows_locator_key(&canonical_path);
+    let record = MediaTrackRecord {
+        identity: TrackIdentity {
+            source_id: SourceId::new(),
+            source_item_id: identity_key.clone(),
+            locator_key: Some(identity_key),
+        },
+        locator: MediaLocator::FileSystem(canonical_path),
+        fingerprint: FileFingerprint {
+            size_bytes: metadata.len(),
+            modified_at_utc_ms: None,
+        },
+        metadata: None,
+    };
+    WindowsMediaIndex::new().read_metadata(&record)
 }
 
 impl MediaIndex for WindowsMediaIndex {
@@ -761,6 +793,15 @@ pub fn is_video_mp4(path: &Path) -> bool {
     path.extension()
         .and_then(OsStr::to_str)
         .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+}
+
+/// File extensions accepted by the library scanner, formatted for Windows association keys.
+pub fn supported_audio_extensions() -> Vec<String> {
+    EXTENSIONS
+        .iter()
+        .filter(|extension| !extension.eq_ignore_ascii_case("mp4"))
+        .map(|extension| format!(".{extension}"))
+        .collect()
 }
 
 fn system_time_to_utc_ms(time: SystemTime) -> Option<i64> {

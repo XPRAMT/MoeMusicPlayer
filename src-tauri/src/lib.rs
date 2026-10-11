@@ -33,13 +33,15 @@ use tauri::{
     State, WebviewWindow,
 };
 use tauri_plugin_media_index::MediaIndexExt;
-
+#[cfg(target_os = "windows")]
 mod database_lifecycle;
 #[cfg(target_os = "windows")]
 mod maximized_work_area;
 mod playlist_exchange;
 #[cfg(target_os = "windows")]
 mod window_icon;
+#[cfg(target_os = "windows")]
+mod windows_file_associations;
 use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImportResult};
 #[cfg(target_os = "windows")]
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
@@ -68,7 +70,8 @@ mod windows_data_directory;
 
 #[cfg(target_os = "windows")]
 use player_platform_windows::{
-    find_artwork, windows_locator_key, ArtworkLookup, WindowsMediaIndex,
+    find_artwork, is_supported_audio_file, read_standalone_audio_metadata, windows_locator_key,
+    ArtworkLookup, WindowsMediaIndex,
 };
 
 #[cfg(target_os = "windows")]
@@ -264,12 +267,22 @@ struct WindowsPlaybackService {
     current_track: Mutex<Option<TrackSummary>>,
     command_gate: Mutex<()>,
     queue: Mutex<Option<PlaybackQueue>>,
+    external_tracks: Mutex<HashMap<TrackId, ExternalPlaybackTrack>>,
+    external_queue_active: AtomicBool,
     queue_revision: AtomicU64,
     repeat_mode: Mutex<RepeatMode>,
     shuffle: Mutex<bool>,
     queue_advance_pending: Mutex<bool>,
     last_position_checkpoint: Mutex<Instant>,
     restore_warning: Mutex<Option<String>>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone)]
+struct ExternalPlaybackTrack {
+    path: std::path::PathBuf,
+    summary: TrackSummary,
+    transient: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -467,10 +480,20 @@ impl ArtworkPump {
         }
     }
 
+    #[cfg(test)]
     fn update(
         &mut self,
         track_id: Option<TrackId>,
         database: Option<&Database>,
+    ) -> ArtworkAvailability {
+        self.update_with_external_locators(track_id, database, None)
+    }
+
+    fn update_with_external_locators(
+        &mut self,
+        track_id: Option<TrackId>,
+        database: Option<&Database>,
+        external_locators: Option<Vec<MediaLocator>>,
     ) -> ArtworkAvailability {
         if self.stopped {
             return ArtworkAvailability::Ready(None);
@@ -493,13 +516,16 @@ impl ArtworkPump {
             self.pending = None;
             self.image = None;
             self.lookup_complete = track_id.is_none() || database.is_none();
-            if let (Some(track_id), Some(database)) = (track_id, database) {
-                match database.track_locators(track_id) {
-                    Ok(locators) => {
+            if let Some(track_id) = track_id {
+                let locators = external_locators.or_else(|| {
+                    database.and_then(|database| database.track_locators(track_id).ok())
+                });
+                match locators {
+                    Some(locators) => {
                         self.pending = Some(ArtworkRequest { track_id, locators });
                         self.lookup_complete = false;
                     }
-                    Err(_) => self.lookup_complete = true,
+                    None => self.lookup_complete = true,
                 }
             }
         }
@@ -987,6 +1013,8 @@ impl WindowsPlaybackService {
             current_track: Mutex::new(None),
             command_gate: Mutex::new(()),
             queue: Mutex::new(None),
+            external_tracks: Mutex::new(HashMap::new()),
+            external_queue_active: AtomicBool::new(false),
             queue_revision: AtomicU64::new(0),
             repeat_mode: Mutex::new(repeat_mode),
             shuffle: Mutex::new(shuffle),
@@ -1469,11 +1497,19 @@ impl WindowsSystemMediaService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         let track_id = current_track.as_ref().map(|track| track.id);
+        let external_locators = track_id.and_then(|track_id| {
+            playback
+                .external_tracks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&track_id)
+                .map(|track| vec![MediaLocator::FileSystem(track.path.clone())])
+        });
         let artwork = self
             .artwork
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .update(track_id, database);
+            .update_with_external_locators(track_id, database, external_locators);
         let current_metadata = current_track.map(|track| MediaControlMetadata {
             title: display_track_title(track.title.as_deref(), track.file_name.as_deref()),
             artist: track.artist,
@@ -4963,7 +4999,20 @@ fn playback_get_queue_page(
     {
         let service = windows_playback_service(&state)?;
         let (revision, queue) = snapshot_playback_queue(service);
-        build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)
+        let mut page =
+            build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)?;
+        let transient = service
+            .external_tracks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for item in &mut page.items {
+            if item.track.is_none() {
+                item.track = transient
+                    .get(&item.track_id)
+                    .map(|track| track.summary.clone());
+            }
+        }
+        Ok(page)
     }
     #[cfg(target_os = "android")]
     {
@@ -4991,16 +5040,28 @@ async fn library_get_track_artwork(
     #[cfg(target_os = "windows")]
     {
         let _ = &app;
-        let database = state.database.as_ref().ok_or_else(|| {
-            state
-                .database_error
-                .clone()
-                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-        })?;
         let id = TrackId::parse(&track_id).map_err(|error| format!("曲目 ID 無效：{error}"))?;
-        let locators = database
-            .track_locators(id)
-            .map_err(|error| error.to_string())?;
+        let external_path = state.playback.as_ref().and_then(|service| {
+            service
+                .external_tracks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&id)
+                .map(|track| track.path.clone())
+        });
+        let locators = if let Some(path) = external_path {
+            vec![MediaLocator::FileSystem(path)]
+        } else {
+            let database = state.database.as_ref().ok_or_else(|| {
+                state
+                    .database_error
+                    .clone()
+                    .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+            })?;
+            database
+                .track_locators(id)
+                .map_err(|error| error.to_string())?
+        };
         let artwork = tauri::async_runtime::spawn_blocking(move || find_artwork(&locators))
             .await
             .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
@@ -5512,6 +5573,46 @@ fn windows_playback_service(state: &AppState) -> Result<&WindowsPlaybackService,
 }
 
 #[cfg(target_os = "windows")]
+fn first_supported_audio_argument(
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+    working_directory: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    arguments.into_iter().find_map(|argument| {
+        let path = std::path::PathBuf::from(argument);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            working_directory?.join(path)
+        };
+        is_supported_audio_file(&path).then_some(path)
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn dispatch_external_audio_open(app: AppHandle, path: std::path::PathBuf) {
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let _database_work = match enter_database_work(&state) {
+            Ok(guard) => guard,
+            Err(error) => {
+                eprintln!("無法開啟檔案總管傳入的音樂：{error}");
+                return;
+            }
+        };
+        let service = match windows_playback_service(&state) {
+            Ok(service) => service,
+            Err(error) => {
+                eprintln!("無法開啟檔案總管傳入的音樂：{error}");
+                return;
+            }
+        };
+        if let Err(error) = open_external_audio_path(state.database.as_ref(), service, &path) {
+            eprintln!("無法開啟檔案總管傳入的音樂：{error}");
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
 fn snapshot_playback_queue(
     service: &WindowsPlaybackService,
 ) -> (u64, Option<PlaybackQueueSnapshot>) {
@@ -5657,6 +5758,31 @@ fn set_queue_shuffle_with_latest_stats(
     Ok(())
 }
 
+#[tauri::command]
+fn windows_register_audio_associations() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        windows_file_associations::register_file_associations(&executable)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("此功能僅適用於 Windows。".to_owned())
+    }
+}
+
+#[tauri::command]
+fn windows_open_default_apps_settings() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_file_associations::open_default_apps_settings()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("此功能僅適用於 Windows。".to_owned())
+    }
+}
+
 fn queue_for_track(
     database: &Database,
     track_id: TrackId,
@@ -5757,12 +5883,226 @@ fn queue_for_track(
 }
 
 #[cfg(target_os = "windows")]
+fn external_track_summary(path: &std::path::Path, id: TrackId) -> TrackSummary {
+    let metadata = read_standalone_audio_metadata(path).unwrap_or_default();
+    let file_name = path
+        .file_stem()
+        .map(|name| name.to_string_lossy().into_owned());
+    TrackSummary {
+        id,
+        title: metadata.title,
+        artist: metadata.artist,
+        album: metadata.album,
+        album_artist: metadata.album_artist,
+        track_number: metadata.track_number,
+        disc_number: metadata.disc_number,
+        duration_ms: metadata.duration_ms,
+        codec: metadata.codec,
+        bitrate_bps: metadata.bitrate_bps,
+        sample_rate_hz: metadata.sample_rate_hz,
+        release_date: metadata.release_date,
+        year: metadata.year,
+        bit_depth: metadata.bit_depth,
+        played_ms: 0,
+        file_name,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn same_folder_audio_files(
+    selected_path: &std::path::Path,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let selected_path = std::fs::canonicalize(selected_path)
+        .map_err(|error| format!("無法開啟音樂檔案：{error}"))?;
+    if !selected_path.is_file() || !is_supported_audio_file(&selected_path) {
+        return Err("選取的檔案不是支援的音訊格式。".to_owned());
+    }
+    let parent = selected_path
+        .parent()
+        .ok_or_else(|| "無法判斷音樂檔案所在資料夾。".to_owned())?;
+    let mut paths = std::fs::read_dir(parent)
+        .map_err(|error| format!("無法讀取音樂檔案所在資料夾：{error}"))?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_file() || !is_supported_audio_file(&entry.path()) {
+                return None;
+            }
+            std::fs::canonicalize(entry.path()).ok()
+        })
+        .collect::<Vec<_>>();
+    if !paths.iter().any(|path| path == &selected_path) {
+        paths.push(selected_path);
+    }
+    paths.sort_by(|left, right| {
+        let left_name = left.file_name().unwrap_or_default().to_string_lossy();
+        let right_name = right.file_name().unwrap_or_default().to_string_lossy();
+        left_name
+            .to_lowercase()
+            .cmp(&right_name.to_lowercase())
+            .then_with(|| left_name.cmp(&right_name))
+    });
+    paths.dedup();
+    Ok(paths)
+}
+
+#[cfg(target_os = "windows")]
+fn open_external_audio_path(
+    database: Option<&Database>,
+    service: &WindowsPlaybackService,
+    selected_path: &std::path::Path,
+) -> Result<(), String> {
+    let selected_path = std::fs::canonicalize(selected_path)
+        .map_err(|error| format!("無法開啟音樂檔案：{error}"))?;
+    let paths = same_folder_audio_files(&selected_path)?;
+
+    let mut entries = Vec::with_capacity(paths.len());
+    let mut transient = HashMap::new();
+    let mut selected_index = None;
+    for (index, path) in paths.iter().enumerate() {
+        let library_track = database
+            .map(|database| {
+                database
+                    .resolve_track_id_for_locator(&MediaLocator::FileSystem(path.clone()))
+                    .map_err(|error| format!("檢查曲庫路徑失敗：{error}"))?
+                    .map(|id| {
+                        database
+                            .get_track_summary(id)
+                            .map_err(|error| format!("讀取曲庫曲目失敗：{error}"))?
+                            .map(|summary| (id, summary))
+                            .ok_or_else(|| "曲庫路徑指向不存在的曲目。".to_owned())
+                    })
+                    .transpose()
+            })
+            .transpose()?
+            .flatten();
+        let (track_id, summary, transient_track) = if let Some((id, summary)) = library_track {
+            (id, summary, false)
+        } else {
+            let id = TrackId::new();
+            let summary = external_track_summary(path, id);
+            (id, summary, true)
+        };
+        transient.insert(
+            track_id,
+            ExternalPlaybackTrack {
+                path: path.clone(),
+                summary,
+                transient: transient_track,
+            },
+        );
+        if path == &selected_path {
+            selected_index = Some(index);
+        }
+        entries.push(PlaybackQueueEntry {
+            track_id,
+            source_position: None,
+        });
+    }
+    let selected_index =
+        selected_index.ok_or_else(|| "選取的音樂檔案不在資料夾清單中。".to_owned())?;
+    let mut queue = PlaybackQueue::with_entries(
+        entries,
+        PlaybackQueueContext::Library {
+            query: None,
+            field_filter: None,
+            sort: Default::default(),
+        },
+        selected_index,
+    )
+    .ok_or_else(|| "此資料夾沒有可播放的音訊檔案。".to_owned())?;
+    let repeat_mode = *service
+        .repeat_mode
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    queue.set_repeat_mode(queue_repeat_mode(repeat_mode));
+    let shuffle = *service
+        .shuffle
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if shuffle {
+        if let Some(database) = database {
+            set_queue_shuffle_with_latest_stats(database, &mut queue, true)?;
+        } else {
+            queue.set_shuffle(true);
+        }
+    }
+    let selected_id = queue.current();
+    let selected_track = transient
+        .get(&selected_id)
+        .map(|track| track.summary.clone())
+        .ok_or_else(|| "無法讀取所選音樂檔案的曲目資訊。".to_owned())?;
+    let selected_file = transient
+        .get(&selected_id)
+        .map(|track| track.path.clone())
+        .ok_or_else(|| "無法解析所選音樂檔案路徑。".to_owned())?;
+    let ticket = if transient
+        .get(&selected_id)
+        .is_some_and(|track| track.transient)
+    {
+        service.player.request_load_and_play(selected_file)
+    } else {
+        service
+            .player
+            .request_load_and_play_accounted(selected_file, service.accounting_id_for(selected_id))
+    }
+    .map_err(|error| playback_audio_error_message(&error))?;
+    ticket
+        .wait(Duration::from_secs(10))
+        .map_err(|error| playback_audio_error_message(&error))?;
+
+    *service
+        .external_tracks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = transient;
+    *service
+        .queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(queue);
+    service.external_queue_active.store(true, Ordering::Release);
+    *service
+        .current_track
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(selected_track);
+    bump_queue_revision(service);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 fn prepare_track_load(
     database: &Database,
     service: &WindowsPlaybackService,
     track_id: TrackId,
     force_play: bool,
 ) -> Result<(CommandTicket, TrackSummary), String> {
+    if let Some(track) = service
+        .external_tracks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&track_id)
+        .cloned()
+    {
+        let ticket = if track.transient {
+            if force_play {
+                service.player.request_load_and_play(track.path)
+            } else {
+                service.player.request_load_preserving_playback(track.path)
+            }
+        } else {
+            let accounting_id = service.accounting_id_for(track_id);
+            if force_play {
+                service
+                    .player
+                    .request_load_and_play_accounted(track.path, accounting_id)
+            } else {
+                service
+                    .player
+                    .request_load_preserving_playback_accounted(track.path, accounting_id)
+            }
+        }
+        .map_err(|error| playback_audio_error_message(&error))?;
+        return Ok((ticket, track.summary));
+    }
     let track = database
         .get_track_summary(track_id)
         .map_err(|error| error.to_string())?
@@ -5992,6 +6332,13 @@ fn commit_track_change(
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *current_queue = Some(queue);
         bump_queue_revision(service);
+        *service
+            .external_tracks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = HashMap::new();
+        service
+            .external_queue_active
+            .store(false, Ordering::Release);
     } else if let Some(cursor) = target_cursor {
         let mut queue = service
             .queue
@@ -6026,6 +6373,9 @@ fn checkpoint_playback_position(
     service: &WindowsPlaybackService,
     force: bool,
 ) -> Result<(), String> {
+    if service.external_queue_active.load(Ordering::Acquire) {
+        return Ok(());
+    }
     if !force {
         let mut last = service
             .last_position_checkpoint
@@ -6319,6 +6669,9 @@ fn save_playback_session(
     database: &Database,
     service: &WindowsPlaybackService,
 ) -> Result<(), String> {
+    if service.external_queue_active.load(Ordering::Acquire) {
+        return Ok(());
+    }
     let queue = service
         .queue
         .lock()
@@ -6438,13 +6791,24 @@ fn play_track_from_database(
     source: Option<PlaybackQueueSource>,
 ) -> Result<PreparedTrackChange, String> {
     let track_id = TrackId::parse(track_id).map_err(|error| format!("曲目 ID 無效：{error}"))?;
-    let track = database
-        .get_track_summary(track_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
-    let path = database
-        .resolve_playable_filesystem_locator(track_id)
-        .map_err(|error| error.to_string())?;
+    let external_track = service
+        .external_tracks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&track_id)
+        .cloned();
+    let (track, path) = if let Some(external_track) = external_track.as_ref() {
+        (external_track.summary.clone(), external_track.path.clone())
+    } else {
+        let track = database
+            .get_track_summary(track_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
+        let path = database
+            .resolve_playable_filesystem_locator(track_id)
+            .map_err(|error| error.to_string())?;
+        (track, path)
+    };
 
     let _gate = service
         .command_gate
@@ -6480,7 +6844,8 @@ fn play_track_from_database(
     };
     let explicit_play = source.is_none();
     let preserve_queue = queue_cursor.is_some()
-        || (explicit_play
+        || (!service.external_queue_active.load(Ordering::Acquire)
+            && explicit_play
             && existing_queue
                 .as_ref()
                 .is_some_and(|queue| queue.current() == track_id));
@@ -6518,6 +6883,11 @@ fn play_track_from_database(
             .player
             .request_play()
             .map_err(|error| playback_audio_error_message(&error))?
+    } else if external_track.as_ref().is_some_and(|track| track.transient) {
+        service
+            .player
+            .request_load_and_play(path)
+            .map_err(|error| playback_audio_error_message(&error))?
     } else {
         // Library, playlist, and queue-row clicks start playback immediately.
         service
@@ -6535,7 +6905,27 @@ fn play_track_from_database(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().plugin(tauri_plugin_media_index::init());
+    #[cfg(target_os = "windows")]
+    let initial_audio_path = {
+        let working_directory = std::env::current_dir().ok();
+        first_supported_audio_argument(std::env::args_os().skip(1), working_directory.as_deref())
+    };
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, arguments, cwd| {
+        let working_directory = std::path::PathBuf::from(cwd);
+        if let Some(path) = first_supported_audio_argument(
+            arguments.into_iter().map(std::ffi::OsString::from),
+            Some(&working_directory),
+        ) {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            dispatch_external_audio_open(app.clone(), path);
+        }
+    }));
+    let builder = builder.plugin(tauri_plugin_media_index::init());
     #[cfg(target_os = "windows")]
     let builder = builder.plugin(tauri_plugin_dialog::init());
 
@@ -6623,6 +7013,8 @@ pub fn run() {
             playback_set_repeat,
             playback_set_shuffle,
             playback_reorder_queue,
+            windows_register_audio_associations,
+            windows_open_default_apps_settings,
             lyrics_service::lyrics_get_track,
             lyrics_service::lyrics_search,
             lyrics_service::lyrics_load_more,
@@ -6630,7 +7022,7 @@ pub fn run() {
             lyrics_service::lyrics_cancel_search,
             lyrics_service::lyrics_clear_track,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(target_os = "windows")]
             let app_data_dir = windows_data_directory::user_data_dir_for_executable(
                 &std::env::current_exe().map_err(|error| error.to_string())?,
@@ -6800,6 +7192,10 @@ pub fn run() {
                 window.show()?;
                 let _ = window.set_focus();
             }
+            #[cfg(target_os = "windows")]
+            if let Some(path) = initial_audio_path {
+                dispatch_external_audio_open(app.handle().clone(), path);
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -6825,11 +7221,12 @@ mod windows_library_integration_tests {
         add_windows_folder_path_to_database, add_windows_folder_to_database, sync_windows_sources,
     };
     use super::{
-        apply_system_media_event, build_playback_queue_page, commit_track_change, navigate_queue,
-        pause_playback, play_track_from_database, playback_audio_error_message, queue_for_track,
-        restore_playback_session, set_playback_volume, set_queue_shuffle_with_latest_stats,
-        snapshot_playback_queue, PlaybackQueueSource, PreparedTrackChange, TrackSummary,
-        WindowsPlaybackService,
+        apply_system_media_event, build_playback_queue_page, checkpoint_playback_position,
+        commit_track_change, first_supported_audio_argument, navigate_queue, pause_playback,
+        play_track_from_database, playback_audio_error_message, queue_for_track,
+        restore_playback_session, same_folder_audio_files, save_playback_session,
+        set_playback_volume, set_queue_shuffle_with_latest_stats, snapshot_playback_queue,
+        PlaybackQueueSource, PreparedTrackChange, TrackSummary, WindowsPlaybackService,
     };
     use player_audio_windows::{
         system_media::{SystemMediaController, SystemMediaEvent},
@@ -6842,6 +7239,7 @@ mod windows_library_integration_tests {
         TrackId, TrackIdentity, TrackMetadata,
     };
     use player_db::{Database, PlaybackSessionCheckpoint};
+    use std::sync::atomic::Ordering;
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -6863,6 +7261,76 @@ mod windows_library_integration_tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn shell_open_collects_only_supported_sibling_files_in_name_order() {
+        let directory = TestDirectory::new();
+        fs::create_dir_all(directory.0.join("subfolder")).unwrap();
+        fs::write(directory.0.join("z-last.mp3"), b"audio").unwrap();
+        fs::write(directory.0.join("a-first.flac"), b"audio").unwrap();
+        fs::write(directory.0.join("middle.m4a"), b"audio").unwrap();
+        fs::write(directory.0.join("movie.mp4"), b"video").unwrap();
+        fs::write(directory.0.join("subfolder\u{005c}nested.wav"), b"audio").unwrap();
+
+        let files = same_folder_audio_files(&directory.0.join("middle.m4a")).unwrap();
+        let names = files
+            .iter()
+            .filter_map(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["a-first.flac", "middle.m4a", "z-last.mp3"]);
+    }
+
+    #[test]
+    fn shell_open_argument_resolves_relative_paths_against_the_forwarded_working_directory() {
+        let directory = TestDirectory::new();
+        let path = first_supported_audio_argument(
+            [std::ffi::OsString::from(r"Music\picked song.m4a")],
+            Some(&directory.0),
+        )
+        .unwrap();
+        assert_eq!(path, directory.0.join(r"Music\picked song.m4a"));
+        assert!(first_supported_audio_argument(
+            [std::ffi::OsString::from("video.mp4")],
+            Some(&directory.0),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn external_open_queue_never_replaces_or_checkpoints_the_saved_session() {
+        let database = Database::open_in_memory().unwrap();
+        let player = PlayerHandle::with_backend_factory(|| {
+            Ok(Box::new(CapturingAudioBackend {
+                loaded_path: Arc::new(Mutex::new(None)),
+                position: Duration::ZERO,
+            }) as Box<dyn AudioBackend>)
+        })
+        .unwrap();
+        let service = WindowsPlaybackService::new(player);
+        let queue = PlaybackQueue::with_entries(
+            vec![PlaybackQueueEntry {
+                track_id: TrackId::new(),
+                source_position: None,
+            }],
+            PlaybackQueueContext::Library {
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            },
+            0,
+        )
+        .unwrap();
+        *service.queue.lock().unwrap() = Some(queue);
+        service.external_queue_active.store(true, Ordering::Release);
+
+        save_playback_session(&database, &service).unwrap();
+        checkpoint_playback_position(&database, &service, true).unwrap();
+
+        assert!(database.load_playback_session().unwrap().is_none());
     }
 
     #[test]

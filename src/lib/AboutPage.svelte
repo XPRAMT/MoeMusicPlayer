@@ -14,6 +14,8 @@
   let info = $state<AboutInfo | null>(null);
   let error = $state<string | null>(null);
   let linkError = $state<string | null>(null);
+  let associationStatus = $state<string | null>(null);
+  let associationError = $state<string | null>(null);
   let loading = $state(true);
   const progress = $derived(updateProgressPercent(updateState));
   const updateBusy = $derived(['checking', 'downloading', 'ready', 'restarting', 'deferred'].includes(updateState.status));
@@ -31,6 +33,20 @@
     try { await invokeCommand('app_open_external_url', { url }); }
     catch (cause) { linkError = getErrorText(cause); }
   }
+  async function registerFileAssociations() {
+    associationStatus = null;
+    associationError = null;
+    try {
+      await invokeCommand('windows_register_audio_associations', {});
+      associationStatus = '已登錄播放器支援的音訊格式。請在 Windows 預設應用程式設定中自行選擇 MoeMusicPlayer。';
+    } catch (cause) { associationError = getErrorText(cause); }
+  }
+  async function openDefaultAppsSettings() {
+    associationStatus = null;
+    associationError = null;
+    try { await invokeCommand('windows_open_default_apps_settings', {}); }
+    catch (cause) { associationError = getErrorText(cause); }
+  }
   onMount(() => { void loadInfo(); });
 </script>
 
@@ -47,6 +63,17 @@
       <div><dt>架構</dt><dd>{info.architecture}</dd></div>
       <div><dt>專案</dt><dd><a class="about-link" href={info.repositoryUrl} onclick={(event) => void openLink(event, info!.repositoryUrl)}>GitHub<IconExternalLink size={14} aria-hidden="true" /></a></dd></div>
     </dl>
+  {/if}
+  {#if platform === 'windows'}
+    <section class="about-file-associations" aria-labelledby="about-file-associations-heading">
+      <div class="settings-panel-header"><div><h3 id="about-file-associations-heading">預設播放器</h3><p>登錄播放器支援的音訊格式，再由 Windows 設定中選擇預設應用程式。</p></div></div>
+      <div class="about-association-actions">
+        <button class="soft-button" type="button" onclick={() => void registerFileAssociations()}>登錄音訊格式</button>
+        <button class="soft-button" type="button" onclick={() => void openDefaultAppsSettings()}>開啟 Windows 預設應用程式設定</button>
+      </div>
+      {#if associationStatus}<p role="status">{associationStatus}</p>{/if}
+      {#if associationError}<p class="source-error-message" role="alert">{associationError}</p>{/if}
+    </section>
   {/if}
   <section class="about-updates" aria-labelledby="{idPrefix}about-updates-heading">
     <div class="settings-panel-header">

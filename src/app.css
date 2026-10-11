@@ -2213,6 +2213,7 @@ input:focus-visible {
 
 .about-page,
 .about-updates,
+.about-file-associations,
 .about-credits {
   display: flex;
   flex-direction: column;
@@ -2222,6 +2223,7 @@ input:focus-visible {
 }
 
 .about-updates,
+.about-file-associations,
 .about-credits { margin-top: 16px; }
 .about-page p { margin: 0; line-height: 1.6; }
 .about-details { margin: 4px 0 0; display: grid; gap: 8px; }
@@ -2236,6 +2238,7 @@ input:focus-visible {
 .about-credits li > span { color: var(--muted); }
 .about-page > .soft-button,
 .about-updates > .soft-button { align-self: flex-start; }
+.about-association-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .about-updates progress,
 .update-dialog progress { width: 100%; accent-color: var(--accent); }
 

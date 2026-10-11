@@ -436,6 +436,8 @@ export interface NowPlayingAppearancePreferences {
 
 interface IpcContract {
   about_get_info: { args: Record<string, never>; result: AboutInfo };
+  windows_register_audio_associations: { args: Record<string, never>; result: void };
+  windows_open_default_apps_settings: { args: Record<string, never>; result: void };
   app_open_external_url: { args: { url: string }; result: void };
   update_get_state: { args: Record<string, never>; result: UpdateState };
   update_check: { args: Record<string, never>; result: UpdateState };
