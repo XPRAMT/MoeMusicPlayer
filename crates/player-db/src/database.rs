@@ -153,7 +153,7 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
     format!(
         "CASE TRIM(UPPER(COALESCE(t.codec, ''))) \
          WHEN 'WAV' THEN 0 WHEN 'WAVE' THEN 0 WHEN 'FLAC' THEN 1 WHEN 'VORBIS' THEN 2 WHEN 'OGG VORBIS' THEN 2 \
-         WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 4 WHEN 'M4A' THEN 4 WHEN 'AAC' THEN 4 WHEN 'MP4A' THEN 4 WHEN 'MP3' THEN 5 ELSE 6 END {direction}, \
+         WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 4 WHEN 'M4A' THEN 4 WHEN 'AAC' THEN 4 WHEN 'MP4A' THEN 4 WHEN 'MP3' THEN 5 ELSE 6 END ASC, \
          COALESCE(t.sample_rate_hz, 0) {direction}, \
          CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) IN ('WAV','WAVE','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','PCM','TAK','TTA') \
               THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction}, \
@@ -4654,6 +4654,53 @@ mod tests {
         );
         assert_eq!(library_sorted.items[5].bitrate_bps, Some(96_000));
         assert_eq!(library_sorted.items[6].bitrate_bps, Some(160_000));
+
+        let playlist_desc = db
+            .get_playlist_page_sorted(
+                playlist.id,
+                0,
+                20,
+                PlaylistListSort {
+                    field: PlaylistSortField::AudioFormat,
+                    direction: PlaylistSortDirection::Desc,
+                },
+            )
+            .expect("sort playlist quality descending")
+            .expect("playlist exists");
+        assert_eq!(
+            playlist_desc
+                .items
+                .iter()
+                .map(|item| item.title.as_deref().expect("title"))
+                .collect::<Vec<_>>(),
+            vec![
+                "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160", "opus96",
+                "mp4", "mp3"
+            ]
+        );
+        let library_desc = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 20,
+                query: None,
+                field_filter: None,
+                sort: player_core::TrackListSort {
+                    field: player_core::TrackSortField::AudioFormat,
+                    direction: player_core::TrackSortDirection::Desc,
+                },
+            })
+            .expect("sort library quality descending");
+        assert_eq!(
+            library_desc
+                .items
+                .iter()
+                .map(|item| item.title.as_deref().expect("title"))
+                .collect::<Vec<_>>(),
+            vec![
+                "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160", "opus96",
+                "mp4", "mp3"
+            ]
+        );
     }
 
     #[test]
