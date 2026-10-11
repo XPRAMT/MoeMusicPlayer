@@ -152,8 +152,8 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
     // Keep one quality ordering for library and playlist views. Normalize older codec labels.
     format!(
         "CASE TRIM(UPPER(COALESCE(t.codec, ''))) \
-         WHEN 'WAV' THEN 0 WHEN 'WAVE' THEN 0 WHEN 'FLAC' THEN 1 WHEN 'VORBIS' THEN 2 WHEN 'OGG VORBIS' THEN 2 \
-         WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 4 WHEN 'M4A' THEN 4 WHEN 'AAC' THEN 4 WHEN 'MP4A' THEN 4 WHEN 'MP3' THEN 5 ELSE 6 END {direction}, \
+         WHEN 'WAV' THEN 6 WHEN 'WAVE' THEN 6 WHEN 'FLAC' THEN 5 WHEN 'VORBIS' THEN 4 WHEN 'OGG VORBIS' THEN 4 \
+         WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 2 WHEN 'M4A' THEN 2 WHEN 'AAC' THEN 2 WHEN 'MP4A' THEN 2 WHEN 'MP3' THEN 1 ELSE 0 END {direction}, \
          COALESCE(t.sample_rate_hz, 0) {direction}, \
          CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) IN ('WAV','WAVE','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','PCM','TAK','TTA') \
               THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction}, \
@@ -4553,7 +4553,7 @@ mod tests {
     }
 
     #[test]
-    fn playlist_audio_format_sort_uses_codec_rate_then_lossless_depth_or_lossy_bitrate() {
+    fn audio_quality_sort_direction_applies_to_codec_rate_depth_and_bitrate() {
         let mut db = Database::open_in_memory().expect("database");
         let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "audio-sort");
         let definitions = [
@@ -4620,14 +4620,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             codecs,
-            vec!["Wav", "Flac", "Flac", "Flac", "Vorbis", "Opus", "Opus", "Opus", "Mp4", "MP3"]
+            vec!["MP3", "Mp4", "Opus", "Opus", "Opus", "Vorbis", "Flac", "Flac", "Flac", "Wav"]
         );
-        assert_eq!(sorted.items[1].sample_rate_hz, Some(44_100));
-        assert_eq!(sorted.items[2].bit_depth, Some(16));
-        assert_eq!(sorted.items[3].bit_depth, Some(24));
-        assert_eq!(sorted.items[5].bitrate_bps, Some(96_000));
-        assert_eq!(sorted.items[6].bitrate_bps, Some(160_000));
-        assert_eq!(sorted.items[7].sample_rate_hz, Some(96_000));
+        assert_eq!(sorted.items[2].bitrate_bps, Some(96_000));
+        assert_eq!(sorted.items[3].bitrate_bps, Some(160_000));
+        assert_eq!(sorted.items[4].sample_rate_hz, Some(96_000));
+        assert_eq!(sorted.items[6].sample_rate_hz, Some(44_100));
+        assert_eq!(sorted.items[7].bit_depth, Some(16));
+        assert_eq!(sorted.items[8].bit_depth, Some(24));
 
         let library_sorted = db
             .list_tracks_page(ListTracksQuery {
@@ -4648,12 +4648,16 @@ mod tests {
                 .map(|item| item.title.as_deref().expect("title"))
                 .collect::<Vec<_>>(),
             vec![
-                "wav", "flac44", "flac16", "flac24", "vorbis", "opus96", "opus160", "opus96k",
-                "mp4", "mp3"
+                "mp3", "mp4", "opus96", "opus160", "opus96k", "vorbis", "flac44", "flac16",
+                "flac24", "wav"
             ]
         );
-        assert_eq!(library_sorted.items[5].bitrate_bps, Some(96_000));
-        assert_eq!(library_sorted.items[6].bitrate_bps, Some(160_000));
+        assert_eq!(library_sorted.items[2].bitrate_bps, Some(96_000));
+        assert_eq!(library_sorted.items[3].bitrate_bps, Some(160_000));
+        assert_eq!(library_sorted.items[4].sample_rate_hz, Some(96_000));
+        assert_eq!(library_sorted.items[6].sample_rate_hz, Some(44_100));
+        assert_eq!(library_sorted.items[7].bit_depth, Some(16));
+        assert_eq!(library_sorted.items[8].bit_depth, Some(24));
 
         let playlist_desc = db
             .get_playlist_page_sorted(
@@ -4674,10 +4678,16 @@ mod tests {
                 .map(|item| item.title.as_deref().expect("title"))
                 .collect::<Vec<_>>(),
             vec![
-                "mp3", "mp4", "opus96k", "opus160", "opus96", "vorbis", "flac24", "flac16",
-                "flac44", "wav"
+                "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160", "opus96",
+                "mp4", "mp3"
             ]
         );
+        assert_eq!(playlist_desc.items[1].bit_depth, Some(24));
+        assert_eq!(playlist_desc.items[2].bit_depth, Some(16));
+        assert_eq!(playlist_desc.items[3].sample_rate_hz, Some(44_100));
+        assert_eq!(playlist_desc.items[5].sample_rate_hz, Some(96_000));
+        assert_eq!(playlist_desc.items[6].bitrate_bps, Some(160_000));
+        assert_eq!(playlist_desc.items[7].bitrate_bps, Some(96_000));
         let library_desc = db
             .list_tracks_page(ListTracksQuery {
                 offset: 0,
@@ -4697,10 +4707,16 @@ mod tests {
                 .map(|item| item.title.as_deref().expect("title"))
                 .collect::<Vec<_>>(),
             vec![
-                "mp3", "mp4", "opus96k", "opus160", "opus96", "vorbis", "flac24", "flac16",
-                "flac44", "wav"
+                "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160", "opus96",
+                "mp4", "mp3"
             ]
         );
+        assert_eq!(library_desc.items[1].bit_depth, Some(24));
+        assert_eq!(library_desc.items[2].bit_depth, Some(16));
+        assert_eq!(library_desc.items[3].sample_rate_hz, Some(44_100));
+        assert_eq!(library_desc.items[5].sample_rate_hz, Some(96_000));
+        assert_eq!(library_desc.items[6].bitrate_bps, Some(160_000));
+        assert_eq!(library_desc.items[7].bitrate_bps, Some(96_000));
     }
 
     #[test]
