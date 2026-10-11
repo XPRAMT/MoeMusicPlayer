@@ -6703,8 +6703,38 @@ fn restore_playback_session(
     else {
         return Ok(());
     };
-    let queue = PlaybackQueue::restore(checkpoint.queue)
+    let mut queue = PlaybackQueue::restore(checkpoint.queue)
         .map_err(|error| format!("保存的播放佇列無法還原：{error}"))?;
+    // The queue may have been last checkpointed before a temporary Explorer-open
+    // queue was played. Mode changes in that temporary queue still update the
+    // user's settings.json, so restore the latest preferences over the saved
+    // traversal while retaining its current track and position.
+    let preferred_shuffle = *service
+        .shuffle
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let preferred_repeat = *service
+        .repeat_mode
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let queue_modes_changed = queue.shuffle() != preferred_shuffle
+        || queue.repeat_mode() != queue_repeat_mode(preferred_repeat);
+    if queue.shuffle() != preferred_shuffle {
+        if preferred_shuffle {
+            set_queue_shuffle_with_latest_stats(database, &mut queue, true)?;
+        } else {
+            queue.set_shuffle(false);
+        }
+    }
+    queue.set_repeat_mode(queue_repeat_mode(preferred_repeat));
+    if queue_modes_changed {
+        database
+            .save_playback_session(&PlaybackSessionCheckpoint {
+                queue: queue.snapshot(),
+                position_ms: checkpoint.position_ms,
+            })
+            .map_err(|error| format!("保存播放模式失敗：{error}"))?;
+    }
     let track_id = queue.current();
     let track = database
         .get_track_summary(track_id)
@@ -8806,6 +8836,47 @@ mod windows_library_integration_tests {
             expected_checkpoint.queue
         );
 
+        // A temporary Explorer-open queue does not replace the saved queue,
+        // but its mode controls still update settings.json. On the next launch
+        // those settings are the service's initial modes and must win over an
+        // older queue checkpoint.
+        let preference_path = Arc::new(Mutex::new(None));
+        let path_for_backend = Arc::clone(&preference_path);
+        let preference_player = PlayerHandle::with_backend_factory(move || {
+            Ok(Box::new(CapturingAudioBackend {
+                loaded_path: path_for_backend,
+                position: Duration::ZERO,
+            }) as Box<dyn AudioBackend>)
+        })
+        .expect("create mode-preference restore worker");
+        let preference_service =
+            WindowsPlaybackService::with_modes(preference_player, true, super::RepeatMode::One);
+        restore_playback_session(&database, &preference_service)
+            .expect("apply current mode preferences while restoring the saved queue");
+        let preference_queue = preference_service
+            .queue
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .snapshot();
+        assert!(preference_queue.shuffle);
+        assert_eq!(preference_queue.repeat, QueueRepeatMode::One);
+        assert_eq!(preference_queue.entries, expected_checkpoint.queue.entries);
+        let saved_current_source_index =
+            expected_checkpoint.queue.play_order[expected_checkpoint.queue.cursor];
+        let preferred_current_source_index = preference_queue.play_order[preference_queue.cursor];
+        assert_eq!(
+            preference_queue.entries[preferred_current_source_index],
+            expected_checkpoint.queue.entries[saved_current_source_index]
+        );
+        let expected_checkpoint = database
+            .load_playback_session()
+            .expect("read queue after applying latest modes")
+            .unwrap();
+        assert_eq!(expected_checkpoint.queue, preference_queue);
+        assert_eq!(expected_checkpoint.position_ms, 1_250);
+
         let unavailable_path = track_path.with_extension("mp3.offline-fixture");
         fs::rename(&track_path, &unavailable_path).expect("make restored source unavailable");
         let offline_player = PlayerHandle::with_backend_factory(|| {
@@ -8823,7 +8894,8 @@ mod windows_library_integration_tests {
             );
             thread::sleep(Duration::from_millis(2));
         }
-        let offline_service = WindowsPlaybackService::new(offline_player);
+        let offline_service =
+            WindowsPlaybackService::with_modes(offline_player, true, super::RepeatMode::One);
         restore_playback_session(&database, &offline_service)
             .expect("offline restore is fail-soft");
         assert!(offline_service.queue.lock().unwrap().is_some());
