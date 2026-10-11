@@ -326,7 +326,7 @@
         <p class="now-playing-format"><span>FLAC．48 kHz．24 bit</span><img src={hiResBadgeUrl} alt="Hi-Res" /></p>
       </div>
       <div class="now-playing-topbar-tools">
-        <button type="button" class="soft-button lyrics-topbar-action" aria-label="手動指定歌詞" onclick={() => lyricsTopbarStatus?.openManualSelection()}>手動指定</button>
+        <button type="button" class="soft-button lyrics-topbar-action" aria-label="手動指定歌詞" onclick={() => lyricsTopbarStatus?.openManualSelection()}>歌詞</button>
         <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
           <button type="button" class="lyrics-toggle" aria-pressed="true" aria-label="切換譯文顯示">譯</button>
           <button type="button" class="lyrics-toggle" aria-pressed="false" aria-label="切換羅馬拼音顯示">羅</button>

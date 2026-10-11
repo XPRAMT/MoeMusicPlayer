@@ -233,7 +233,9 @@
 
 - Now Playing dock 時間軸回歸已修正：`dd0453e` 誤把 `.progress-slider` 與 `.volume-state { display: none }` 併在同一選擇器，導致進度條消失、時間標籤落到錯誤欄位；已恢復 `.progress-slider, .volume-slider` 共用樣式，並另以 `.volume-state { display: none }` 隱藏音量文字。封面／歌詞垂直置中強化（artwork `place-content/place-items` + 對稱 overlay padding；lyrics-view 高度僅在 `--np-cover-height` 有值時鎖定）。
 
-- 歌詞候選面板只保留搜尋框與右側「搜尋」「關閉」「移除歌詞」。沒有「選擇歌詞」標題，也沒有「再次搜尋」。搜尋框空白時用目前曲目資訊再搜；有文字時該文字覆寫 Provider 關鍵字。每列「選擇」仍在，樣式與「搜尋」「關閉」「移除歌詞」相同，不套用主題色。候選清單曲名為標題階 16px、演出者／預覽／說明為內文 13px。「關閉」只收起面板並保留已套用歌詞（即使面板不是由 selectionMode 打開）。「移除歌詞」呼叫 `lyrics_clear_track` 寫入 cleared sentinel（不刪本機 sidecar／內嵌檔）、關閉面板，之後該曲不再自動載入／搜尋歌詞，需再按「手動指定」才可選取。手動搜尋會把同資料夾同名 LRC（`local:sidecar`）與音訊檔內嵌歌詞（`local:embedded`）放在線上候選之前；選取會重讀該來源並以手動指定寫入 `track_lyrics`，之後優先於另一份本機來源與自動快取。Windows 播放載入仍維持 sidecar 優先於內嵌。Android 候選清單尚未列出這兩種本機來源。
+- Now Playing 歌詞頂欄的「歌詞」按鈕開啟候選選擇器，「同步」按鈕開啟／關閉同步歌詞延遲調整；兩者保留描述操作目的的無障礙名稱。歌詞副行「譯」「羅」控制保持不變。
+
+- 歌詞候選面板只保留搜尋框與右側「搜尋」「關閉」「移除歌詞」。沒有「選擇歌詞」標題，也沒有「再次搜尋」。搜尋框空白時用目前曲目資訊再搜；有文字時該文字覆寫 Provider 關鍵字。每列「選擇」仍在，樣式與「搜尋」「關閉」「移除歌詞」相同，不套用主題色。候選清單曲名為標題階 16px、演出者／預覽／說明為內文 13px。「關閉」只收起面板並保留已套用歌詞（即使面板不是由 selectionMode 打開）。「移除歌詞」呼叫 `lyrics_clear_track` 寫入 cleared sentinel（不刪本機 sidecar／內嵌檔）、關閉面板，之後該曲不再自動載入／搜尋歌詞，需再按頂欄「歌詞」才可選取。手動搜尋會把同資料夾同名 LRC（`local:sidecar`）與音訊檔內嵌歌詞（`local:embedded`）放在線上候選之前；選取會重讀該來源並以手動指定寫入 `track_lyrics`，之後優先於另一份本機來源與自動快取。Windows 播放載入仍維持 sidecar 優先於內嵌。Android 候選清單尚未列出這兩種本機來源。
 
 - 「設定 → 歌詞」與快速設定可開啟簡體轉繁體。播放時以 opencc-js 在記憶體轉換整首歌的原文與譯文（`STCharacters`、`STPhrases`、`TWVariants`），不載入 `TWPhrases`，不改用詞，不把結果寫回歌詞檔或 SQLite。羅馬拼音不轉換。授權全文在 `licenses/opencc-js-MIT.txt` 與 `licenses/opencc-data-Apache-2.0.txt`。
 

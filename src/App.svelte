@@ -2883,7 +2883,7 @@
                 aria-label="手動指定歌詞"
                 disabled={!playback?.currentTrack}
                 onclick={() => lyricsTopbarStatus?.openManualSelection()}
-              >手動指定</button>
+              >歌詞</button>
               <button
                 type="button"
                 class="soft-button lyrics-topbar-action"
@@ -2893,7 +2893,7 @@
                 aria-pressed={lyricsTopbarStatus.timingPanelOpen}
                 disabled={!lyricsTopbarStatus.canAdjustTiming}
                 onclick={() => lyricsTopbarStatus?.toggleTimingOffset()}
-              >同步歌詞</button>
+              >同步</button>
             </div>
           {/if}
           <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
