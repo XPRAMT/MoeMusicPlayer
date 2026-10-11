@@ -4322,17 +4322,13 @@ input:focus-visible {
 @media (max-width: 560px) {
   .now-playing-overlay-topbar {
     display: grid;
-    width: 100%;
-    height: var(--chrome-bar-height);
-    min-height: var(--chrome-bar-height);
-    max-height: var(--chrome-bar-height);
+    min-height: 88px;
     grid-template-columns: auto minmax(0, 1fr);
-    grid-template-rows: 34px minmax(0, 1fr);
+    grid-template-rows: auto auto;
     align-content: center;
     justify-content: flex-start;
-    gap: 2px 8px;
-    padding: 2px 10px;
-    overflow: hidden;
+    gap: 4px 8px;
+    padding: 6px 10px;
   }
   .now-playing-overlay-return { grid-column: 1; grid-row: 1; width: 34px; min-width: 34px; min-height: 34px; height: 34px; }
   .now-playing-header-track { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; }
@@ -4366,6 +4362,7 @@ input:focus-visible {
 }
 
 @media (max-width: 390px) {
+  .now-playing-overlay-topbar { min-height: 82px; }
   .now-playing-header-track .now-playing-format { font-size: var(--font-caption); }
   .app-shell.has-now-playing-backdrop .player-dock { padding-right: 8px; padding-left: 8px; }
   .app-shell.has-now-playing-backdrop .dock-track { gap: 4px; }
