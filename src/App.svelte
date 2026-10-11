@@ -2509,7 +2509,7 @@
                     <input type="range" min="0" max="50" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label="主介面背景模糊程度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                   </label>
                   <label class="lyrics-preference-range">
-                    <span><strong>背景透明度</strong><output>{themePreferences.colorMode === 'autoBackgroundOpacity' ? `自動 ${mainBackgroundEffectiveOpacityPercent}%` : `${themePreferences.mainBackgroundOpacityPercent}%`}</output></span>
+                    <span><strong>背景透明度</strong><output>{themePreferences.colorMode === 'autoBackgroundOpacity' ? `自動 ${Math.round(mainBackgroundEffectiveOpacityPercent)}%` : `${themePreferences.mainBackgroundOpacityPercent}%`}</output></span>
                     {#if themePreferences.colorMode === 'autoBackgroundOpacity'}
                       <small>依目前背景圖片的平均亮度與文字顏色自動計算。</small>
                     {:else}

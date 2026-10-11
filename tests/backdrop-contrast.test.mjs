@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { resolveBackdropContrast } from '../src/lib/backdrop-contrast.js';
-import { compositeBackgroundHex, relativeLuminance } from '../src/lib/theme.js';
+import { relativeLuminance } from '../src/lib/theme.js';
 
 test('resolveBackdropContrast skips sampling when opacity is zero or image is missing', async () => {
   assert.deepEqual(
@@ -30,30 +30,31 @@ test('resolveBackdropContrast reuses a cached image average without loading', as
   assert.equal(resolved.opacityPercent, 40);
 });
 
-test('automatic opacity keeps the brightest image contribution compatible with white text', async () => {
+test('automatic opacity uses the direct Y ratio for white text on a black base', async () => {
+  const imageY = relativeLuminance('#DADADA');
   const resolved = await resolveBackdropContrast({
     pageHex: '#000000',
     imageUrl: 'https://example.invalid/unused.jpg',
     opacityPercent: 100,
     automaticTextColor: 'white',
-    cachedImageAverageHex: '#FFFFFF',
+    cachedImageAverageHex: '#DADADA',
   });
-  assert.ok(relativeLuminance(resolved.contrastHex) < 0.5);
-  assert.ok(resolved.opacityPercent < 100);
-  assert.ok(relativeLuminance(compositeBackgroundHex('#000000', '#FFFFFF', resolved.opacityPercent + 1)) >= 0.5);
+  assert.ok(Math.abs(resolved.opacityPercent - ((0.5 - 0.00001) / imageY) * 100) < 0.000001);
+  assert.equal(Math.round(resolved.opacityPercent), 71);
+  assert.ok(resolved.opacityPercent * imageY / 100 < 0.5);
 });
 
-test('automatic opacity keeps the brightest image contribution compatible with black text', async () => {
+test('automatic opacity uses the direct Y ratio for black text on a white base', async () => {
+  const imageY = relativeLuminance('#7C7C7C');
   const resolved = await resolveBackdropContrast({
     pageHex: '#FFFFFF',
     imageUrl: 'https://example.invalid/unused.jpg',
     opacityPercent: 0,
     automaticTextColor: 'black',
-    cachedImageAverageHex: '#000000',
+    cachedImageAverageHex: '#7C7C7C',
   });
-  assert.ok(relativeLuminance(resolved.contrastHex) > 0.5);
-  assert.ok(resolved.opacityPercent < 100);
-  assert.ok(relativeLuminance(compositeBackgroundHex('#FFFFFF', '#000000', resolved.opacityPercent + 1)) <= 0.5);
+  assert.ok(Math.abs(resolved.opacityPercent - ((0.5 - 0.00001) / (1 - imageY)) * 100) < 0.000001);
+  assert.ok(1 - (resolved.opacityPercent / 100) * (1 - imageY) > 0.5);
 });
 
 test('automatic opacity preserves a full-strength image when it matches the fixed base color', async () => {

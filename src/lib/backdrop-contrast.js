@@ -82,16 +82,19 @@ export async function resolveBackdropContrast(input) {
 
   let opacityPercent = requestedOpacityPercent;
   if (input.automaticTextColor) {
-    // Preserve as much of the background image as possible while keeping its
-    // average composited relative luminance strictly on the requested side of 0.5.
-    opacityPercent = 0;
-    for (let candidate = 0; candidate <= 100; candidate += 1) {
-      const average = compositeBackgroundHex(pageHex, imageAverageHex, candidate);
-      const luminance = relativeLuminance(average);
-      const satisfies = input.automaticTextColor === 'white'
-        ? luminance < 0.5
-        : luminance > 0.5;
-      if (satisfies) opacityPercent = candidate;
+    const imageY = relativeLuminance(imageAverageHex);
+    const targetY = 0.5;
+    const strictnessMargin = 0.00001;
+    if (input.automaticTextColor === 'white') {
+      // On black, assume mixed luminance is opacity × image Y.
+      opacityPercent = imageY < targetY
+        ? 100
+        : Math.min(100, ((targetY - strictnessMargin) / imageY) * 100);
+    } else {
+      // On white, assume mixed luminance is 1 - opacity × (1 - image Y).
+      opacityPercent = imageY > targetY
+        ? 100
+        : Math.min(100, ((targetY - strictnessMargin) / (1 - imageY)) * 100);
     }
   }
 
