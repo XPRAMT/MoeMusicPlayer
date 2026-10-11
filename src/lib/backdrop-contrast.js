@@ -36,12 +36,12 @@ function loadImage(imageUrl) {
 }
 
 /**
- * Downscale the image and return its alpha-weighted arithmetic average RGB color.
+ * Downscale the image and return alpha-weighted RGB averages and mean alpha.
  * Blur is ignored; average color is nearly unchanged by a uniform blur.
  * @param {string | null | undefined} imageUrl
- * @returns {Promise<string | null>}
+ * @returns {Promise<{ averageHex: string, alpha: number } | null>}
  */
-export async function sampleImageAverageHex(imageUrl) {
+export async function sampleImageAverage(imageUrl) {
   if (!imageUrl || typeof document === 'undefined') return null;
   try {
     const image = await loadImage(imageUrl);
@@ -69,7 +69,10 @@ export async function sampleImageAverageHex(imageUrl) {
     const toByte = (value) => Math.max(0, Math.min(255, Math.round(value / weight)))
       .toString(16)
       .padStart(2, '0');
-    return `#${toByte(red)}${toByte(green)}${toByte(blue)}`.toUpperCase();
+    return {
+      averageHex: `#${toByte(red)}${toByte(green)}${toByte(blue)}`.toUpperCase(),
+      alpha: weight / (SAMPLE_SIZE * SAMPLE_SIZE),
+    };
   } catch {
     return null;
   }
@@ -85,8 +88,9 @@ export async function sampleImageAverageHex(imageUrl) {
  *   automaticTextColor?: 'white' | 'black' | null,
  *   clarityPercent?: number,
  *   cachedImageAverageHex?: string | null,
+ *   cachedImageAlpha?: number | null,
  * }} input
- * @returns {Promise<{ contrastHex: string | null, imageAverageHex: string | null, opacityPercent: number, calculation: BackdropOpacityCalculation | null }>}
+ * @returns {Promise<{ contrastHex: string | null, imageAverageHex: string | null, imageAlpha: number | null, opacityPercent: number, calculation: BackdropOpacityCalculation | null }>}
  */
 export async function resolveBackdropContrast(input) {
   const pageHex = isHexColor(input.pageHex) ? input.pageHex.toUpperCase() : '#000000';
@@ -94,21 +98,29 @@ export async function resolveBackdropContrast(input) {
     ? Math.max(0, Math.min(100, Math.round(input.opacityPercent)))
     : 0;
   if (!input.imageUrl) {
-    return { contrastHex: null, imageAverageHex: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent, calculation: null };
+    return { contrastHex: null, imageAverageHex: null, imageAlpha: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent, calculation: null };
   }
 
-  const imageAverageHex = isHexColor(input.cachedImageAverageHex)
-    ? input.cachedImageAverageHex.toUpperCase()
-    : await sampleImageAverageHex(input.imageUrl);
-  if (!imageAverageHex) {
-    return { contrastHex: null, imageAverageHex: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent, calculation: null };
+  const cachedImageSample = isHexColor(input.cachedImageAverageHex)
+    ? {
+      averageHex: input.cachedImageAverageHex.toUpperCase(),
+      alpha: typeof input.cachedImageAlpha === 'number' && Number.isFinite(input.cachedImageAlpha)
+        ? Math.max(0, Math.min(1, input.cachedImageAlpha))
+        : 1,
+    }
+    : await sampleImageAverage(input.imageUrl);
+  if (!cachedImageSample) {
+    return { contrastHex: null, imageAverageHex: null, imageAlpha: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent, calculation: null };
   }
+  const { averageHex: imageAverageHex, alpha: imageAlpha } = cachedImageSample;
 
   let opacityPercent = requestedOpacityPercent;
   /** @type {BackdropOpacityCalculation | null} */
   let calculation = null;
   if (input.automaticTextColor) {
-    const imageY = rgbAverageBrightness(imageAverageHex);
+    const pageY = rgbAverageBrightness(pageHex);
+    const imageColorY = rgbAverageBrightness(imageAverageHex);
+    const imageY = pageY + (imageColorY - pageY) * imageAlpha;
     const clarityPercent = typeof input.clarityPercent === 'number' && Number.isFinite(input.clarityPercent)
       ? Math.max(0, Math.min(100, input.clarityPercent))
       : 0;
@@ -163,14 +175,16 @@ export async function resolveBackdropContrast(input) {
     return {
       contrastHex: pageHex,
       imageAverageHex,
+      imageAlpha,
       opacityPercent,
       calculation,
     };
   }
 
   return {
-    contrastHex: compositeBackgroundHex(pageHex, imageAverageHex, opacityPercent),
+    contrastHex: compositeBackgroundHex(pageHex, imageAverageHex, opacityPercent * imageAlpha),
     imageAverageHex,
+    imageAlpha,
     opacityPercent,
     calculation,
   };

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getBackdropTargetPercent, resolveBackdropContrast, rgbAverageBrightness, sampleImageAverageHex } from '../src/lib/backdrop-contrast.js';
+import { getBackdropTargetPercent, resolveBackdropContrast, rgbAverageBrightness, sampleImageAverage } from '../src/lib/backdrop-contrast.js';
 
 test('resolveBackdropContrast skips sampling when opacity is zero or image is missing', async () => {
   assert.deepEqual(
     await resolveBackdropContrast({ pageHex: '#000000', imageUrl: null, opacityPercent: 40 }),
-    { contrastHex: null, imageAverageHex: null, opacityPercent: 40, calculation: null },
+    { contrastHex: null, imageAverageHex: null, imageAlpha: null, opacityPercent: 40, calculation: null },
   );
   assert.deepEqual(
     await resolveBackdropContrast({
@@ -13,7 +13,7 @@ test('resolveBackdropContrast skips sampling when opacity is zero or image is mi
       imageUrl: 'https://example.invalid/cover.jpg',
       opacityPercent: 0,
     }),
-    { contrastHex: null, imageAverageHex: null, opacityPercent: 0, calculation: null },
+    { contrastHex: null, imageAverageHex: null, imageAlpha: null, opacityPercent: 0, calculation: null },
   );
 });
 
@@ -25,6 +25,7 @@ test('resolveBackdropContrast reuses a cached image average without loading', as
     cachedImageAverageHex: '#FFFFFF',
   });
   assert.equal(resolved.imageAverageHex, '#FFFFFF');
+  assert.equal(resolved.imageAlpha, 1);
   assert.equal(resolved.contrastHex, '#666666');
   assert.equal(resolved.opacityPercent, 40);
   assert.equal(resolved.calculation, null);
@@ -67,13 +68,33 @@ test('image RGB average alpha-weights visible pixels and skips fully transparent
     }),
   };
   try {
-    assert.equal(await sampleImageAverageHex('fixture'), '#996666');
+    assert.deepEqual(await sampleImageAverage('fixture'), {
+      averageHex: '#996666',
+      alpha: (2 + 128 / 255) / (32 * 32),
+    });
   } finally {
     if (previousImage) Object.defineProperty(globalThis, 'Image', previousImage);
     else delete globalThis.Image;
     if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
     else delete globalThis.document;
   }
+});
+
+test('automatic opacity composites source alpha against the selected black or white base', async () => {
+  const whiteTextOnBlack = await resolveBackdropContrast({
+    pageHex: '#000000', imageUrl: 'image', opacityPercent: 100,
+    automaticTextColor: 'white', cachedImageAverageHex: '#000000', cachedImageAlpha: 0.5,
+  });
+  const blackTextOnWhite = await resolveBackdropContrast({
+    pageHex: '#FFFFFF', imageUrl: 'image', opacityPercent: 100,
+    automaticTextColor: 'black', clarityPercent: 50,
+    cachedImageAverageHex: '#000000', cachedImageAlpha: 0.5,
+  });
+  assert.equal(whiteTextOnBlack.calculation.imagePercent, 0);
+  assert.equal(whiteTextOnBlack.calculation.kind, 'noAdjustment');
+  assert.equal(blackTextOnWhite.calculation.imagePercent, 50);
+  assert.ok(Math.abs(blackTextOnWhite.opacityPercent - 50) < 0.01);
+  assert.equal(blackTextOnWhite.contrastHex, '#BFBFBF');
 });
 
 test('automatic opacity uses the direct Y ratio for white text on a black base', async () => {

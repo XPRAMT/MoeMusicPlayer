@@ -237,8 +237,10 @@
   /** Average page+cover mix for Now Playing text contrast; null means use page color only. */
   let nowPlayingContrastBackgroundHex = $state<string | null>(null);
   let mainImageAverageHex: string | null = null;
+  let mainImageAverageAlpha: number | null = null;
   let mainImageAverageUrl: string | null = null;
   let nowPlayingImageAverageHex: string | null = null;
+  let nowPlayingImageAverageAlpha: number | null = null;
   let nowPlayingImageAverageUrl: string | null = null;
   let mainContrastRevision = 0;
   let nowPlayingContrastRevision = 0;
@@ -450,6 +452,7 @@
     const clarityPercent = themePreferences.backgroundClarityPercent;
     const revision = ++mainContrastRevision;
     const cachedImageAverageHex = mainImageAverageUrl === imageUrl ? mainImageAverageHex : null;
+    const cachedImageAlpha = mainImageAverageUrl === imageUrl ? mainImageAverageAlpha : null;
     void resolveBackdropContrast({
       pageHex,
       imageUrl,
@@ -457,14 +460,17 @@
       automaticTextColor,
       clarityPercent,
       cachedImageAverageHex,
+      cachedImageAlpha,
     }).then((result) => {
       if (revision !== mainContrastRevision) return;
       if (imageUrl && result.imageAverageHex) {
         mainImageAverageUrl = imageUrl;
         mainImageAverageHex = result.imageAverageHex;
+        mainImageAverageAlpha = result.imageAlpha;
       } else if (!imageUrl) {
         mainImageAverageUrl = null;
         mainImageAverageHex = null;
+        mainImageAverageAlpha = null;
       }
       mainContrastBackgroundHex = result.contrastHex;
       mainBackgroundEffectiveOpacityPercent = result.opacityPercent;
@@ -567,6 +573,9 @@
     const cachedImageAverageHex = nowPlayingImageAverageUrl === imageUrl
       ? nowPlayingImageAverageHex
       : null;
+    const cachedImageAlpha = nowPlayingImageAverageUrl === imageUrl
+      ? nowPlayingImageAverageAlpha
+      : null;
     void resolveBackdropContrast({
       pageHex,
       imageUrl,
@@ -574,14 +583,17 @@
       automaticTextColor,
       clarityPercent,
       cachedImageAverageHex,
+      cachedImageAlpha,
     }).then((result) => {
       if (revision !== nowPlayingContrastRevision) return;
       if (imageUrl && result.imageAverageHex) {
         nowPlayingImageAverageUrl = imageUrl;
         nowPlayingImageAverageHex = result.imageAverageHex;
+        nowPlayingImageAverageAlpha = result.imageAlpha;
       } else if (!imageUrl) {
         nowPlayingImageAverageUrl = null;
         nowPlayingImageAverageHex = null;
+        nowPlayingImageAverageAlpha = null;
       }
       nowPlayingContrastBackgroundHex = result.contrastHex;
       nowPlayingBackgroundEffectiveOpacityPercent = result.opacityPercent;
