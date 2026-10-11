@@ -36,7 +36,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     columnWidths?: TrackColumnWidths;
     rowHeightPx?: number;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
-    livePlayCount?: { trackId: string; playedMs: number } | null;
+    livePlayCount?: { trackId: string; playedMs: number }[];
     currentTrackId?: string | null;
   }
 
@@ -52,7 +52,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
     rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX,
     onColumnResize,
-    livePlayCount = null,
+    livePlayCount = [],
     currentTrackId = null,
   }: Props = $props();
 

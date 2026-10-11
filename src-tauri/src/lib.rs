@@ -9445,6 +9445,15 @@ mod windows_library_integration_tests {
         };
         assert!(played_ms >= 80);
         assert_eq!(
+            temporary_database
+                .get_track_summary(resolved_id)
+                .unwrap()
+                .expect("temporary catalog keeps the transient track")
+                .played_ms,
+            played_ms,
+            "temporary catalog track summaries must expose the persisted play-count input"
+        );
+        assert_eq!(
             permanent.playback_statistics_for(&[resolved_id]).unwrap()[&resolved_id].played_ms,
             0,
             "temporary listening time must not enter the persistent library database"

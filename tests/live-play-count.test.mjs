@@ -4,6 +4,8 @@ import {
   applyLivePlayCountSample,
   createLivePlayCountState,
   getLivePlayedMs,
+  livePlayCountValues,
+  rememberLivePlayCount,
   toLivePlayCountView,
   withLivePlayedMs,
 } from '../src/lib/live-play-count.js';
@@ -110,4 +112,35 @@ test('withLivePlayedMs overlays playlist trackId rows', () => {
   assert.equal(row.playedMs, 12_345);
   assert.equal(row.title, 'x');
   assert.equal(withLivePlayedMs({ trackId: 'zzz', playedMs: 1_000 }, live).playedMs, 1_000);
+});
+
+test('play-count rows keep completed in-session totals after the current track changes', () => {
+  let state = applyLivePlayCountSample(createLivePlayCountState(), {
+    trackId: 'temporary-a', playedMs: 90_000, positionMs: 1_000, isPlaying: true,
+  });
+  state = applyLivePlayCountSample(state, {
+    trackId: 'temporary-a', playedMs: 90_000, positionMs: 2_000, isPlaying: true,
+  });
+  assert.equal(getLivePlayedMs(state), 91_000);
+  const remembered = new Map();
+  rememberLivePlayCount(remembered, toLivePlayCountView(state));
+  state = applyLivePlayCountSample(state, {
+    trackId: 'temporary-b', playedMs: 0, positionMs: 0, isPlaying: true,
+  });
+
+  assert.equal(
+    withLivePlayedMs({ id: 'temporary-a', playedMs: 0, durationMs: 100_000 }, livePlayCountValues(remembered)).playedMs,
+    91_000,
+    'cached list rows must not revert when another song becomes current',
+  );
+});
+
+test('play-count overlays never replace a newer SQLite value with an older live value', () => {
+  assert.equal(
+    withLivePlayedMs(
+      { id: 'temporary-a', playedMs: 103_000 },
+      { trackId: 'temporary-a', playedMs: 91_000 },
+    ).playedMs,
+    103_000,
+  );
 });

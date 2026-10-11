@@ -1,5 +1,8 @@
 /** @typedef {{ trackId: string | null, basePlayedMs: number, lastPositionMs: number, sessionCreditedMs: number, isPlaying: boolean }} LivePlayCountState */
 /** @typedef {{ trackId: string, playedMs: number }} LivePlayCountView */
+/** @typedef {Map<string, number>} LivePlayCountCache */
+
+const MAX_REMEMBERED_TRACKS = 512;
 
 /** @returns {LivePlayCountState} */
 export function createLivePlayCountState() {
@@ -89,16 +92,46 @@ export function toLivePlayCountView(state) {
 }
 
 /**
- * Overlay live playedMs onto a list/Now Playing item for the current track only.
+ * Keep the latest in-session total for recently played rows after the current
+ * track changes. Higher values are authoritative because SQLite may refresh a
+ * cached page after this overlay has already been published.
+ * @param {LivePlayCountCache} cache
+ * @param {LivePlayCountView | null | undefined} view
+ * @param {number} [limit]
+ */
+export function rememberLivePlayCount(cache, view, limit = MAX_REMEMBERED_TRACKS) {
+  if (!view || !view.trackId || !Number.isFinite(view.playedMs) || view.playedMs < 0) return;
+  const previous = cache.get(view.trackId) ?? 0;
+  cache.delete(view.trackId);
+  cache.set(view.trackId, Math.max(previous, view.playedMs));
+  while (cache.size > Math.max(1, Math.floor(limit))) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
+
+/** @param {LivePlayCountCache} cache @returns {LivePlayCountView[]} */
+export function livePlayCountValues(cache) {
+  return Array.from(cache, ([trackId, playedMs]) => ({ trackId, playedMs }));
+}
+
+/**
+ * Overlay the latest session total onto a list/Now Playing item without
+ * replacing a newer value already fetched from SQLite.
  * @template {{ playedMs?: number | null, id?: string | null, trackId?: string | null }} T
  * @param {T} item
- * @param {LivePlayCountView | null | undefined} live
+ * @param {LivePlayCountView | readonly LivePlayCountView[] | null | undefined} live
  * @returns {T}
  */
 export function withLivePlayedMs(item, live) {
   if (!live || !item) return item;
   const id = item.id ?? item.trackId ?? null;
-  if (!id || id !== live.trackId) return item;
-  if (item.playedMs === live.playedMs) return item;
-  return { ...item, playedMs: live.playedMs };
+  if (!id) return item;
+  const match = Array.isArray(live) ? live.find((entry) => entry.trackId === id) : live;
+  if (!match || id !== match.trackId) return item;
+  const storedPlayedMs = Number.isFinite(item.playedMs) ? Number(item.playedMs) : 0;
+  const playedMs = Math.max(storedPlayedMs, match.playedMs);
+  if (item.playedMs === playedMs) return item;
+  return { ...item, playedMs };
 }

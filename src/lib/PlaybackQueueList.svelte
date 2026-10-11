@@ -36,7 +36,7 @@
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     fetchPage?: (request: { offset: number; limit: number }) => Promise<PlaybackQueuePage>;
     reorderPage?: (from: number, to: number) => Promise<void>;
-    livePlayCount?: { trackId: string; playedMs: number } | null;
+    livePlayCount?: { trackId: string; playedMs: number }[];
     onPlay?: (entry: PlaybackQueuePageItem) => void;
     onTotalCount?: (count: number | null) => void;
   }
@@ -50,7 +50,7 @@
     onColumnResize,
     fetchPage,
     reorderPage,
-    livePlayCount = null,
+    livePlayCount = [],
     onPlay = () => {},
     onTotalCount,
   }: Props = $props();

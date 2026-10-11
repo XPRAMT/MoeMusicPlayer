@@ -52,7 +52,7 @@
     sort?: LibraryListSort;
     onSort?: (columnId: TrackListColumnPreference['id']) => void;
     fieldFilter?: TrackPageRequest['fieldFilter'];
-    livePlayCount?: { trackId: string; playedMs: number } | null;
+    livePlayCount?: { trackId: string; playedMs: number }[];
   }
 
   let {
@@ -70,7 +70,7 @@
     onColumnResize,
     sort = DEFAULT_LIBRARY_SORT,
     onSort,
-    livePlayCount = null,
+    livePlayCount = [],
     fieldFilter = null,
   }: Props = $props();
 

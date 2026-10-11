@@ -96,6 +96,8 @@
   import {
     applyLivePlayCountSample,
     createLivePlayCountState,
+    livePlayCountValues,
+    rememberLivePlayCount,
     toLivePlayCountView,
     withLivePlayedMs,
   } from './lib/live-play-count.js';
@@ -313,7 +315,8 @@
   let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
   let livePlayCountTimer: ReturnType<typeof setInterval> | undefined;
   let livePlayCountTracker = createLivePlayCountState();
-  let livePlayCount = $state<{ trackId: string; playedMs: number } | null>(null);
+  const livePlayCountCache = new Map<string, number>();
+  let livePlayCount = $state<{ trackId: string; playedMs: number }[]>([]);
   let playlistListRequestVersion = 0;
   let capabilityRefreshInFlight = false;
   let nextCapabilityRefreshAt = 0;
@@ -2150,7 +2153,8 @@
   }
 
   function publishLivePlayCount(): void {
-    livePlayCount = toLivePlayCountView(livePlayCountTracker);
+    rememberLivePlayCount(livePlayCountCache, toLivePlayCountView(livePlayCountTracker));
+    livePlayCount = livePlayCountValues(livePlayCountCache);
   }
 
   function applyPlaybackSnapshot(
@@ -2169,6 +2173,10 @@
     const previous = playback;
     const previousTrackId = previous?.currentTrack?.id ?? null;
     const nextTrackId = resolved.currentTrack?.id ?? null;
+    const previousLiveCount = toLivePlayCountView(livePlayCountTracker);
+    if (previousLiveCount && previousLiveCount.trackId !== nextTrackId) {
+      rememberLivePlayCount(livePlayCountCache, previousLiveCount);
+    }
     const trackChanged = nextTrackId !== null && previousTrackId !== null && nextTrackId !== previousTrackId;
     const positionReset = nextTrackId !== null
       && previousTrackId === nextTrackId
