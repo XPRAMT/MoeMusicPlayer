@@ -21,7 +21,7 @@
             <mrow><mtext>圖片平均亮度（{calculation.imagePercent}%）</mtext></mrow>
           </mfrac>
         </math>
-        <math class="opacity-result" aria-hidden="true"><mrow><mo>=</mo><mtext>透明度（{calculation.opacityPercent}%）</mtext></mrow></math>
+        <math class="opacity-result" aria-hidden="true"><mrow><mo>=</mo><mspace width="0.3em"/><mtext>透明度（{calculation.opacityPercent}%）</mtext></mrow></math>
       {:else if calculation.kind === 'inverseRatio'}
         <math aria-hidden="true" display="block">
           <mfrac>
@@ -29,7 +29,7 @@
             <mrow><mtext>100%</mtext><mo>−</mo><mtext>圖片平均亮度（{calculation.imagePercent}%）</mtext></mrow>
           </mfrac>
         </math>
-        <math class="opacity-result" aria-hidden="true"><mrow><mo>=</mo><mtext>透明度（{calculation.opacityPercent}%）</mtext></mrow></math>
+        <math class="opacity-result" aria-hidden="true"><mrow><mo>=</mo><mspace width="0.3em"/><mtext>透明度（{calculation.opacityPercent}%）</mtext></mrow></math>
       {:else}
         <span>目標亮度（{calculation.targetPercent}%）</span>
         <math class="opacity-compare-sign" aria-hidden="true"><mo>{calculation.textColor === 'white' ? '≥' : '≤'}</mo></math>

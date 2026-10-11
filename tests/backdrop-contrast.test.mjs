@@ -65,7 +65,7 @@ test('automatic opacity reports the white-text target, sampled brightness, and d
   });
   assert.equal(Math.round(relativeLuminance('#AAAAAA') * 100), 40);
   assert.equal(Math.round(resolved.opacityPercent), 50);
-  assert.equal(resolved.calculation.displayText, '目標亮度（20%）÷圖片平均亮度（40%）＝透明度（50%）');
+  assert.equal(resolved.calculation.displayText, '目標亮度（20%）÷圖片平均亮度（40%）= 透明度（50%）');
   assert.equal(resolved.calculation.kind, 'ratio');
 });
 
@@ -86,7 +86,7 @@ test('automatic opacity reports the inverse white-base equation for black text',
     automaticTextColor: 'black', clarityPercent: 60, cachedImageAverageHex: '#AAAAAA',
   });
   assert.equal(Math.round(resolved.opacityPercent), 33);
-  assert.equal(resolved.calculation.displayText, '（100%−目標亮度（80%））÷（100%−圖片平均亮度（40%））＝透明度（33%）');
+  assert.equal(resolved.calculation.displayText, '（100%−目標亮度（80%））÷（100%−圖片平均亮度（40%））= 透明度（33%）');
   assert.equal(resolved.calculation.kind, 'inverseRatio');
 });
 

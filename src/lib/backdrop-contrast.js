@@ -111,7 +111,7 @@ export async function resolveBackdropContrast(input) {
         imagePercent,
         opacityPercent: Math.round(opacityPercent),
         displayText: needsAdjustment
-          ? `目標亮度（${targetPercent}%）÷圖片平均亮度（${imagePercent}%）＝透明度（${Math.round(opacityPercent)}%）`
+          ? `目標亮度（${targetPercent}%）÷圖片平均亮度（${imagePercent}%）= 透明度（${Math.round(opacityPercent)}%）`
           : `目標亮度（${targetPercent}%）≥圖片平均亮度（${imagePercent}%），不處理`,
       };
     } else {
@@ -132,7 +132,7 @@ export async function resolveBackdropContrast(input) {
         imagePercent,
         opacityPercent: Math.round(opacityPercent),
         displayText: needsAdjustment
-          ? `（100%−目標亮度（${targetPercent}%））÷（100%−圖片平均亮度（${imagePercent}%））＝透明度（${Math.round(opacityPercent)}%）`
+          ? `（100%−目標亮度（${targetPercent}%））÷（100%−圖片平均亮度（${imagePercent}%））= 透明度（${Math.round(opacityPercent)}%）`
           : `目標亮度（${targetPercent}%）≤圖片平均亮度（${imagePercent}%），不處理`,
       };
     }
