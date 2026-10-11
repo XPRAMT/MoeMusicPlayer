@@ -3789,8 +3789,10 @@ input:focus-visible {
 
 .volume-popover {
   position: absolute;
-  right: 0;
+  left: 50%;
+  right: auto;
   bottom: calc(100% + 10px);
+  transform: translateX(calc(-50% - var(--volume-popover-shift-left, 0px)));
   z-index: 40;
   display: flex;
   min-width: 168px;

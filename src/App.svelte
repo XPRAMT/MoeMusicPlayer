@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, untrack } from 'svelte';
+  import { getVolumePopoverLeftShiftPx } from './lib/volume-popover-position.js';
   import {
     IconAlertCircle,
     IconArrowLeft,
@@ -297,6 +298,8 @@
   let confirmedVolume = $state<number | null>(null);
   let volumeExpanded = $state(false);
   let volumePanelElement = $state<HTMLElement | null>(null);
+  let volumePopoverElement = $state<HTMLElement | null>(null);
+  let volumePopoverLeftShiftPx = $state(0);
   let themeSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let themeSaveQueue: Promise<void> = Promise.resolve();
   let themeRevision = 0;
@@ -2222,6 +2225,26 @@
   function toggleVolumeExpanded(event: MouseEvent): void {
     event.stopPropagation();
     volumeExpanded = !volumeExpanded;
+    if (volumeExpanded) {
+      void tick().then(updateVolumePopoverAlignment);
+    } else {
+      volumePopoverLeftShiftPx = 0;
+    }
+  }
+
+  function updateVolumePopoverAlignment(): void {
+    const anchor = volumePanelElement;
+    const popover = volumePopoverElement;
+    if (!volumeExpanded || !anchor || !popover) {
+      volumePopoverLeftShiftPx = 0;
+      return;
+    }
+    const anchorRect = anchor.getBoundingClientRect();
+    volumePopoverLeftShiftPx = getVolumePopoverLeftShiftPx(
+      anchorRect.left + anchorRect.width / 2,
+      popover.getBoundingClientRect().width,
+      window.innerWidth,
+    );
   }
 
   function handleDockPointerDown(event: PointerEvent): void {
@@ -2340,7 +2363,7 @@
 
 </script>
 
-<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleDockPointerDown} onkeydown={handleQuickSettingsKeydown} />
+<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleDockPointerDown} onkeydown={handleQuickSettingsKeydown} onresize={updateVolumePopoverAlignment} />
 
 {#snippet settingsTabs(scope: string)}
             <div class="settings-tabs" role="tablist" aria-label="設定分類">
@@ -3437,6 +3460,8 @@
             role="dialog"
             aria-label="音量控制"
             hidden={!volumeExpanded}
+            bind:this={volumePopoverElement}
+            style:--volume-popover-shift-left={`${volumePopoverLeftShiftPx}px`}
           >
             <input
               class="volume-slider"
