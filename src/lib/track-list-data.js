@@ -160,6 +160,8 @@ export class PagedListController {
     this.activeLoads = new Set();
     /** @type {{ start: number, end: number } | null} */
     this.lastRange = null;
+    /** @type {{ generation: number, expected: Set<number>, staged: Map<number, PagedResponse<Item>> } | null} */
+    this.refreshState = null;
   }
 
   /**
@@ -177,6 +179,7 @@ export class PagedListController {
     this.pages.clear();
     this.errors.clear();
     this.lastRange = null;
+    this.refreshState = null;
     for (const state of this.queue) state.resolve();
     this.queue = [];
     this.loads.clear();
@@ -191,16 +194,25 @@ export class PagedListController {
    */
   refresh() {
     this.generation += 1;
-    this.pages.clear();
     this.errors.clear();
     for (const state of this.queue) state.resolve();
     this.queue = [];
     this.loads.clear();
+    if (this.totalCount === null || !this.lastRange) {
+      this.pages.clear();
+      this.refreshState = null;
+    } else {
+      this.refreshState = {
+        generation: this.generation,
+        expected: new Set(this.offsetsForRange(this.lastRange.start, this.lastRange.end)),
+        staged: new Map(),
+      };
+    }
     this.notify();
     this.scheduleRange();
   }
 
-  /** @returns {{ scope: unknown, totalCount: number | null, cachedPageCount: number, cachedItemCount: number, pendingPageCount: number, errors: Array<{ offset: number, message: string }>, generation: number, revision: number }} */
+  /** @returns {{ scope: unknown, totalCount: number | null, cachedPageCount: number, cachedItemCount: number, pendingPageCount: number, refreshing: boolean, errors: Array<{ offset: number, message: string }>, generation: number, revision: number }} */
   snapshot() {
     let cachedItemCount = 0;
     for (const page of this.pages.values()) cachedItemCount += page.items.length;
@@ -211,6 +223,7 @@ export class PagedListController {
       cachedPageCount: this.pages.size,
       cachedItemCount,
       pendingPageCount: [...this.loads.values()].filter((state) => state.generation === this.generation).length,
+      refreshing: this.refreshState?.generation === this.generation,
       errors: [...this.errors.entries()]
         .map(([offset, message]) => ({ offset, message }))
         .sort((left, right) => left.offset - right.offset),
@@ -270,6 +283,10 @@ export class PagedListController {
     const safeOffset = Math.max(0, Math.floor(offset / this.pageSize) * this.pageSize);
     this.errors.delete(safeOffset);
     this.notify();
+    if (this.refreshState?.generation === this.generation && this.lastRange) {
+      await this.ensureRange(this.lastRange.start, this.lastRange.end);
+      return;
+    }
     await this.ensureRange(safeOffset, safeOffset + this.pageSize);
   }
 
@@ -287,6 +304,15 @@ export class PagedListController {
       const firstOffset = Math.floor(start / this.pageSize) * this.pageSize;
       const lastOffset = Math.floor((last - 1) / this.pageSize) * this.pageSize;
       for (let offset = firstOffset; offset <= lastOffset; offset += this.pageSize) required.push(offset);
+    }
+
+    if (this.refreshState?.generation === this.generation) {
+      const nextExpected = new Set(required);
+      this.refreshState.expected = nextExpected;
+      for (const offset of this.refreshState.staged.keys()) {
+        if (!nextExpected.has(offset)) this.refreshState.staged.delete(offset);
+      }
+      if (required.length === 0) this.commitRefresh();
     }
 
     /** @type {number[]} */
@@ -309,7 +335,9 @@ export class PagedListController {
     this.queue = retainedQueue;
 
     for (const offset of wanted) {
-      if (this.pages.has(offset) || this.errors.has(offset) || this.loads.has(offset)) continue;
+      const mustRefresh = this.refreshState?.generation === this.generation
+        && this.refreshState.expected.has(offset);
+      if ((!mustRefresh && this.pages.has(offset)) || this.errors.has(offset) || this.loads.has(offset)) continue;
       this.queue.push(this.createLoadState(offset));
     }
 
@@ -368,9 +396,19 @@ export class PagedListController {
 
       this.totalCount = page.totalCount;
       this.errors.delete(state.offset);
-      this.pages.delete(state.offset);
-      this.pages.set(state.offset, page);
-      this.evictOldPages();
+      const refreshState = this.refreshState;
+      if (refreshState?.generation === this.generation) {
+        if (refreshState.expected.has(state.offset)) {
+          refreshState.staged.set(state.offset, page);
+          if ([...refreshState.expected].every((offset) => refreshState.staged.has(offset))) {
+            this.commitRefresh();
+          }
+        }
+      } else {
+        this.pages.delete(state.offset);
+        this.pages.set(state.offset, page);
+        this.evictOldPages();
+      }
     } catch (error) {
       if (this.isCurrent(state)) this.errors.set(state.offset, errorMessage(error));
     } finally {
@@ -410,6 +448,25 @@ export class PagedListController {
       if (oldestOffset === undefined) return;
       this.pages.delete(oldestOffset);
     }
+  }
+
+  commitRefresh() {
+    const refreshState = this.refreshState;
+    if (!refreshState || refreshState.generation !== this.generation) return;
+    /** @type {Array<[number, PagedResponse<Item>]>} */
+    const refreshedPages = [];
+    for (const offset of [...refreshState.expected].sort((left, right) => left - right)) {
+      const page = refreshState.staged.get(offset);
+      if (!page) return;
+      refreshedPages.push([offset, page]);
+    }
+
+    this.pages.clear();
+    for (const [offset, page] of refreshedPages) {
+      this.pages.set(offset, page);
+    }
+    this.refreshState = null;
+    this.evictOldPages();
   }
 
   /** @param {number} start @param {number} end @returns {number[]} */

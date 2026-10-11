@@ -93,12 +93,49 @@ test('data refresh reloads the visible range without discarding scroll geometry'
 
   data.refresh();
   assert.equal(data.snapshot().totalCount, 100_000);
-  assert.equal(data.itemAt(8_000), null);
+  assert.equal(data.itemAt(8_000).position, 8_000);
   await data.ensureRange(8_000, 8_080);
 
   assert.ok(requests.length > requestCount);
   assert.ok(requests.slice(requestCount).every(({ offset }) => offset >= 8_000 - (8_000 % TRACK_PAGE_SIZE)));
   assert.equal(data.itemAt(8_000).position, 8_000);
+});
+
+test('queue refresh keeps old visible rows until all replacement pages are ready', async () => {
+  const pendingRefreshPages = [];
+  let refreshing = false;
+  const data = new PagedListController(({ scope, offset, limit }) => {
+    const page = playlistPage(scope, offset, limit, 100_000);
+    if (!refreshing) return Promise.resolve(page);
+    return new Promise((resolve) => pendingRefreshPages.push({
+      offset,
+      resolve: () => resolve({
+        ...page,
+        items: page.items.map((item) => ({ ...item, title: `Fresh ${item.position}` })),
+      }),
+    }));
+  });
+
+  data.reset('queue');
+  await data.ensureRange(8_000, 8_080);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  refreshing = true;
+  data.refresh();
+
+  assert.equal(data.snapshot().refreshing, true);
+  assert.equal(data.itemAt(8_000).title, 'Entry 8000');
+  assert.deepEqual(pendingRefreshPages.map(({ offset }) => offset).sort((a, b) => a - b), [8_000, 8_040]);
+
+  pendingRefreshPages[0].resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(data.itemAt(8_000).title, 'Entry 8000');
+  assert.equal(data.itemAt(8_040).title, 'Entry 8040');
+  assert.equal(data.snapshot().refreshing, true);
+
+  pendingRefreshPages[1].resolve();
+  while (data.snapshot().refreshing) await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(data.itemAt(8_000).title, 'Fresh 8000');
+  assert.equal(data.itemAt(8_040).title, 'Fresh 8040');
 });
 
 test('100k playlist paging shares the bounded page and viewport budgets', async () => {

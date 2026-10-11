@@ -88,6 +88,7 @@
     cachedPageCount: 0,
     cachedItemCount: 0,
     pendingPageCount: 0,
+    refreshing: false,
     errors: [],
     generation: 0,
     revision: 0,
