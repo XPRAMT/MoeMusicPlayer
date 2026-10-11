@@ -19,6 +19,7 @@ test('floating panels share Quick Settings surface tokens', async () => {
 
   assert.match(app, /class="now-playing-quick-settings-drawer floating-surface"/);
   assert.match(app, /class="volume-popover floating-surface"/);
+  assert.match(css, /\.volume-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 18px\)/s);
   assert.match(lyrics, /class="lyrics-timing-panel floating-surface"/);
   assert.match(update, /class="update-dialog floating-surface"/);
   assert.match(app, /surfaceOpacityPercent=\{themePreferences\.quickSettingsOpacityPercent\}/);

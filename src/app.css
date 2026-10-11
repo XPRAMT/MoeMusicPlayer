@@ -3791,7 +3791,7 @@ input:focus-visible {
   position: absolute;
   left: 50%;
   right: auto;
-  bottom: calc(100% + 10px);
+  bottom: calc(100% + 18px);
   transform: translateX(calc(-50% - var(--volume-popover-shift-left, 0px)));
   z-index: 40;
   display: flex;
