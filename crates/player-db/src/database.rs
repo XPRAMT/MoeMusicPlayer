@@ -45,7 +45,7 @@ const COUNT_FIELD_FILTER_SQL: &str = "SELECT COUNT(DISTINCT t.track_id) FROM tra
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
       AND (?2 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?2 COLLATE BINARY)
-      AND (CASE WHEN ?3 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?3 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' ', '|') || '|', '|' || ?3 || '|') > 0 THEN 1 ELSE 0 END) = 1
+      AND (CASE WHEN ?3 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?3 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?3 || '|') > 0 THEN 1 ELSE 0 END) = 1
       AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?4 COLLATE BINARY)";
 const TRACKS_PAGE_SELECT_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
@@ -63,7 +63,7 @@ const TRACKS_PAGE_SELECT_SQL: &str = "SELECT t.track_id,
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
    AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?4 COLLATE BINARY)
-   AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' ', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
+   AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
    AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)";
 
 /// Default title order retained for EXPLAIN QUERY PLAN coverage.
@@ -84,7 +84,7 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
    AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?4 COLLATE BINARY)
-   AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' ', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
+   AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
    AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)
  ORDER BY t.sort_title, t.track_id
  LIMIT ?2 OFFSET ?3";
@@ -1354,7 +1354,7 @@ impl Database {
                     OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
                     OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
                AND (?2 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?2 COLLATE BINARY)
-               AND (CASE WHEN ?3 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?3 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' ', '|') || '|', '|' || ?3 || '|') > 0 THEN 1 ELSE 0 END) = 1
+               AND (CASE WHEN ?3 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?3 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?3 || '|') > 0 THEN 1 ELSE 0 END) = 1
                AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?4 COLLATE BINARY)
              ORDER BY {}",
             tracks_order_by_sql(sort)
@@ -5783,7 +5783,8 @@ mod tests {
             ("backslash", "hanser\\yousa"),
             ("semicolon", "hanser; yousa"),
             ("comma", "hanser,yousa"),
-            ("space", "hanser yousa"),
+            ("foreign-name", "John Lennon"),
+            ("foreign-collab", "John Lennon,hanser"),
             ("other", "yousa"),
             ("prefix", "hanser2"),
             ("suffix", "xyousa"),
@@ -5832,11 +5833,11 @@ mod tests {
             vec![
                 id_for("backslash"),
                 id_for("comma"),
+                id_for("foreign-collab"),
                 id_for("pipe"),
                 id_for("semicolon"),
                 id_for("slash"),
                 id_for("solo"),
-                id_for("space"),
             ]
         );
         let yousa_page = db
@@ -5871,8 +5872,32 @@ mod tests {
                 id_for("pipe"),
                 id_for("semicolon"),
                 id_for("slash"),
-                id_for("space"),
             ]
+        );
+        let john_ids = db
+            .list_track_ids_filtered(
+                None,
+                Some(&TrackFieldFilter {
+                    field: TrackField::Artist,
+                    value: "John".to_owned(),
+                }),
+                Default::default(),
+            )
+            .expect("foreign-name first name must not match as a separate artist");
+        assert!(john_ids.is_empty());
+        let john_lennon_ids = db
+            .list_track_ids_filtered(
+                None,
+                Some(&TrackFieldFilter {
+                    field: TrackField::Artist,
+                    value: "John Lennon".to_owned(),
+                }),
+                Default::default(),
+            )
+            .expect("complete artist name");
+        assert_eq!(
+            john_lennon_ids,
+            vec![id_for("foreign-collab"), id_for("foreign-name")]
         );
         assert!(db
             .list_track_ids_filtered(

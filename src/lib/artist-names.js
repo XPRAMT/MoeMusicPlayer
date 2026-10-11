@@ -1,5 +1,5 @@
-/** Separators for multiple names stored in one ARTIST tag: `| \ / ; ,` and space. */
-const ARTIST_SEPARATOR = /[|\\/;, ]+/;
+/** Separators for multiple names stored in one ARTIST tag: `| \ / ; ,` whitespace is preserved inside names. */
+const ARTIST_SEPARATOR = /[|\\/;,]+/;
 
 /**
  * Split one ARTIST tag into individual names, in order, without empty or repeated entries.
