@@ -3088,7 +3088,11 @@ input:focus-visible {
   display: grid;
   width: 64px;
   height: 64px;
-  flex: 0 0 auto;
+  min-width: 64px;
+  min-height: 64px;
+  max-width: 64px;
+  max-height: 64px;
+  flex: 0 0 64px;
   place-items: center;
   /* No default nudge — only edge timeline times sit on the left border. */
   margin-left: 0;
@@ -4001,11 +4005,10 @@ input:focus-visible {
     border-radius: var(--floating-surface-radius);
   }
   .page-content { padding-top: 26px; }
-  /* Dock height stays width-invariant; only tighten horizontal padding / art size. */
+  /* Dock height and cover size stay width-invariant; tighten only horizontal spacing. */
   .player-dock { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; --dock-pad-x: 16px; padding-right: var(--dock-pad-x); padding-left: var(--dock-pad-x); }
   .dock-volume { gap: 7px; }
   .volume-popover .volume-slider { width: 110px; }
-  .dock-art { width: 58px; height: 58px; }
 }
 
 @media (max-width: 620px) {
@@ -4127,7 +4130,7 @@ input:focus-visible {
   }
 }
 
-/* Non-NP Stage 1: hide favorite + volume; keep shuffle, prev, play, next, repeat centered. */
+/* Main dock stage 1: hide favorite + volume; retain shuffle, prev, play, next, repeat. */
 @media (max-width: 720px) {
   .app-shell:not(.has-now-playing-backdrop) .dock-favorite,
   .app-shell:not(.has-now-playing-backdrop) .dock-volume {
@@ -4135,8 +4138,8 @@ input:focus-visible {
   }
 }
 
-/* Non-NP Stage 2: also hide shuffle + repeat (+ times); keep prev, play, next centered.
-   Cover = fixed player-dock content height (never viewport/% chain), square, no radius. */
+/* Main dock stage 2: also hide shuffle + repeat (+ times); pin the cover left and transport right.
+   Cover stays fixed at the dock content height (74px), square, with no radius. */
 @media (max-width: 520px) {
   .app-shell:not(.has-now-playing-backdrop) .player-dock {
     /* Keep label inset token even when side pad is 0 (times hidden in stage2). */

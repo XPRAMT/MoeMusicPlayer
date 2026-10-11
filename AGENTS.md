@@ -233,7 +233,7 @@
 
 - 主視窗幾何：關閉時將 outer 位置、inner 大小與 maximized 寫入 settings.json（schema v6 windowGeometry）；下次啟動還原，並以可用螢幕矩形夾住避免跑出顯示器。移動/縮放時記住非最大化外框以便還原。
 
-- 底欄布局：控制列置中群組（收藏→隨機→prev→play→next→循環→音量）；非 NP ≤720 藏收藏+音量，≤520（stage2）再藏隨機+循環且三鍵**靠右**。edge 進度條滿寬；時間標籤在條下方並以 `--dock-pad-x`（等同 dock 水平 padding / 舊 clamp 18–38）內縮，不貼視窗左右緣。隱藏模式封面固定 `--dock-hide-height`。音量 popover。NP 不套用非 NP 隱藏。
+- 底欄布局：主介面控制列為置中群組（收藏→隨機→prev→play→next→循環→音量）；縮圖基準固定 64×64 CSS px，使用固定 flex basis／min／max 尺寸，任何寬度都不跟著收縮。主介面 ≤720px 第一階段隱藏收藏與音量；≤520px 第二階段再隱藏隨機與循環，封面在左、上一首／播放／下一首控制組靠右。第二階段縮圖為 74×74 CSS px（底欄固定高的方形封面），比基準放大而非縮小；不得新增會按寬度減小縮圖的覆寫。Now Playing 不套用主介面隱藏規則。edge 進度條滿寬；時間標籤在條下方並以 `--dock-pad-x`（等同 dock 水平 padding / 舊 clamp 18–38）內縮，不貼視窗左右緣。音量 popover。
 
 - 播放次數字體與音質文字同字級／字重／顏色（外層 .now-playing-format）。
 
