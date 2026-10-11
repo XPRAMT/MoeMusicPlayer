@@ -34,11 +34,11 @@ test('resolveBackdropContrast reuses a cached image average without loading', as
 test('backdrop target text follows selected text color and clarity', () => {
   assert.deepEqual(
     [0, 50, 100].map((clarity) => getBackdropTargetPercent('white', clarity)),
-    [50, 25, 0],
+    [100, 50, 0],
   );
   assert.deepEqual(
     [0, 50, 100].map((clarity) => getBackdropTargetPercent('black', clarity)),
-    [50, 75, 100],
+    [0, 50, 100],
   );
 });
 
@@ -93,8 +93,8 @@ test('automatic opacity composites source alpha against the selected black or wh
   assert.equal(whiteTextOnBlack.calculation.imagePercent, 0);
   assert.equal(whiteTextOnBlack.calculation.kind, 'noAdjustment');
   assert.equal(blackTextOnWhite.calculation.imagePercent, 50);
-  assert.ok(Math.abs(blackTextOnWhite.opacityPercent - 50) < 0.01);
-  assert.equal(blackTextOnWhite.contrastHex, '#BFBFBF');
+  assert.ok(blackTextOnWhite.opacityPercent > 99.99);
+  assert.equal(blackTextOnWhite.contrastHex, '#808080');
 });
 
 test('automatic opacity uses the direct Y ratio for white text on a black base', async () => {
@@ -104,6 +104,7 @@ test('automatic opacity uses the direct Y ratio for white text on a black base',
     imageUrl: 'https://example.invalid/unused.jpg',
     opacityPercent: 100,
     automaticTextColor: 'white',
+    clarityPercent: 50,
     cachedImageAverageHex: '#DADADA',
   });
   assert.ok(Math.abs(resolved.opacityPercent - ((0.5 - 0.00001) / imageY) * 100) < 0.000001);
@@ -118,6 +119,7 @@ test('automatic opacity uses the direct Y ratio for black text on a white base',
     imageUrl: 'https://example.invalid/unused.jpg',
     opacityPercent: 0,
     automaticTextColor: 'black',
+    clarityPercent: 50,
     cachedImageAverageHex: '#7C7C7C',
   });
   assert.ok(Math.abs(resolved.opacityPercent - ((0.5 - 0.00001) / (1 - imageY)) * 100) < 0.000001);
@@ -130,8 +132,8 @@ test('automatic opacity reports the white-text target, sampled brightness, and d
     automaticTextColor: 'white', clarityPercent: 60, cachedImageAverageHex: '#AAAAAA',
   });
   assert.equal(Math.round(rgbAverageBrightness('#AAAAAA') * 100), 67);
-  assert.equal(Math.round(resolved.opacityPercent), 30);
-  assert.equal(resolved.calculation.displayText, '目標亮度（20%）÷圖片平均亮度（67%）= 透明度（30%）');
+  assert.equal(Math.round(resolved.opacityPercent), 60);
+  assert.equal(resolved.calculation.displayText, '目標亮度（40%）÷圖片平均亮度（67%）= 透明度（60%）');
   assert.equal(resolved.calculation.kind, 'ratio');
 });
 
@@ -142,14 +144,14 @@ test('automatic opacity reports when the sampled background already meets the wh
   });
   assert.equal(Math.round(rgbAverageBrightness('#2E2E2E') * 100), 18);
   assert.equal(resolved.opacityPercent, 100);
-  assert.equal(resolved.calculation.displayText, '目標亮度（20%）≥圖片平均亮度（18%），不處理');
+  assert.equal(resolved.calculation.displayText, '目標亮度（40%）≥圖片平均亮度（18%），不處理');
   assert.equal(resolved.calculation.kind, 'noAdjustment');
 });
 
 test('automatic opacity reports the inverse white-base equation for black text', async () => {
   const resolved = await resolveBackdropContrast({
     pageHex: '#FFFFFF', imageUrl: 'image', opacityPercent: 100,
-    automaticTextColor: 'black', clarityPercent: 60, cachedImageAverageHex: '#AAAAAA',
+    automaticTextColor: 'black', clarityPercent: 80, cachedImageAverageHex: '#AAAAAA',
   });
   assert.equal(Math.round(resolved.opacityPercent), 60);
   assert.equal(resolved.calculation.displayText, '（100%−目標亮度（80%））÷（100%−圖片平均亮度（67%））= 透明度（60%）');
@@ -169,9 +171,9 @@ test('automatic opacity preserves a full-strength image when it matches the fixe
   assert.equal(blackText.opacityPercent, 100);
 });
 
-test('clarity sets the white-text target Y to 0.5, 0.25, and 0 at 0, 50, and 100 percent', async () => {
+test('clarity sets the white-text target Y to 1, 0.5, and 0 at 0, 50, and 100 percent', async () => {
   const imageY = rgbAverageBrightness('#DADADA');
-  for (const [clarityPercent, expectedTargetY] of [[0, 0.5], [50, 0.25], [100, 0]]) {
+  for (const [clarityPercent, expectedTargetY] of [[0, 1], [50, 0.5], [100, 0]]) {
     const resolved = await resolveBackdropContrast({
       pageHex: '#000000',
       imageUrl: 'image',
@@ -180,13 +182,16 @@ test('clarity sets the white-text target Y to 0.5, 0.25, and 0 at 0, 50, and 100
       clarityPercent,
       cachedImageAverageHex: '#DADADA',
     });
-    assert.ok(Math.abs((resolved.opacityPercent / 100) * imageY - expectedTargetY) < 0.00002);
+    const compositedY = (resolved.opacityPercent / 100) * imageY;
+    if (clarityPercent === 0) assert.ok(compositedY < expectedTargetY);
+    else if (clarityPercent === 50) assert.ok(compositedY < expectedTargetY);
+    else assert.equal(compositedY, expectedTargetY);
   }
 });
 
-test('clarity sets the black-text target Y to 0.5, 0.75, and 1 at 0, 50, and 100 percent', async () => {
+test('clarity sets the black-text target Y to 0, 0.5, and 1 at 0, 50, and 100 percent', async () => {
   const imageY = rgbAverageBrightness('#7C7C7C');
-  for (const [clarityPercent, expectedTargetY] of [[0, 0.5], [50, 0.75], [100, 1]]) {
+  for (const [clarityPercent, expectedTargetY] of [[0, 0], [50, 0.5], [100, 1]]) {
     const resolved = await resolveBackdropContrast({
       pageHex: '#FFFFFF',
       imageUrl: 'image',
@@ -196,6 +201,31 @@ test('clarity sets the black-text target Y to 0.5, 0.75, and 1 at 0, 50, and 100
       cachedImageAverageHex: '#7C7C7C',
     });
     const compositedY = 1 - (resolved.opacityPercent / 100) * (1 - imageY);
-    assert.ok(Math.abs(compositedY - expectedTargetY) < 0.00002);
+    if (clarityPercent === 0) assert.ok(compositedY > expectedTargetY);
+    else if (clarityPercent === 50) assert.ok(compositedY > expectedTargetY);
+    else assert.equal(compositedY, expectedTargetY);
   }
+});
+
+test('clarity strict bounds adjust exact boundary images except at explicit zero and one endpoints', async () => {
+  const whiteLow = await resolveBackdropContrast({
+    pageHex: '#000000', imageUrl: 'image', opacityPercent: 100,
+    automaticTextColor: 'white', clarityPercent: 0, cachedImageAverageHex: '#FFFFFF',
+  });
+  const whiteHigh = await resolveBackdropContrast({
+    pageHex: '#000000', imageUrl: 'image', opacityPercent: 100,
+    automaticTextColor: 'white', clarityPercent: 100, cachedImageAverageHex: '#000000',
+  });
+  const blackLow = await resolveBackdropContrast({
+    pageHex: '#FFFFFF', imageUrl: 'image', opacityPercent: 100,
+    automaticTextColor: 'black', clarityPercent: 0, cachedImageAverageHex: '#000000',
+  });
+  const blackHigh = await resolveBackdropContrast({
+    pageHex: '#FFFFFF', imageUrl: 'image', opacityPercent: 100,
+    automaticTextColor: 'black', clarityPercent: 100, cachedImageAverageHex: '#FFFFFF',
+  });
+  assert.ok(whiteLow.opacityPercent < 100);
+  assert.equal(whiteHigh.opacityPercent, 100);
+  assert.ok(blackLow.opacityPercent < 100);
+  assert.equal(blackHigh.opacityPercent, 100);
 });

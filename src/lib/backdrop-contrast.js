@@ -11,8 +11,8 @@ export function getBackdropTargetPercent(textColor, clarityPercent) {
     : 0;
   const clarity = safeClarityPercent / 100;
   const targetY = textColor === 'white'
-    ? 0.5 * (1 - clarity)
-    : 0.5 + 0.5 * clarity;
+    ? 1 - clarity
+    : clarity;
   return Math.round(targetY * 100);
 }
 
@@ -127,11 +127,13 @@ export async function resolveBackdropContrast(input) {
     const clarity = clarityPercent / 100;
     const strictnessMargin = 0.00001;
     if (input.automaticTextColor === 'white') {
-      // Higher clarity asks for a darker result: Y < 0.5 × (1 - clarity).
-      const nominalTargetY = 0.5 * (1 - clarity);
+      // Higher clarity asks for a darker result: Y < 1 - clarity.
+      const nominalTargetY = 1 - clarity;
       const targetY = Math.max(0, nominalTargetY - strictnessMargin);
       // On black, assume mixed luminance is opacity × image Y.
-      const needsAdjustment = imageY > nominalTargetY;
+      const needsAdjustment = nominalTargetY === 0
+        ? imageY > 0
+        : imageY >= nominalTargetY;
       opacityPercent = !needsAdjustment
         ? 100
         : Math.min(100, (targetY / imageY) * 100);
@@ -148,11 +150,13 @@ export async function resolveBackdropContrast(input) {
           : `目標亮度（${targetPercent}%）≥圖片平均亮度（${imagePercent}%），不處理`,
       };
     } else {
-      // Higher clarity asks for a brighter result: Y > 0.5 + 0.5 × clarity.
-      const nominalTargetY = 0.5 + 0.5 * clarity;
+      // Higher clarity asks for a brighter result: Y > clarity.
+      const nominalTargetY = clarity;
       const targetY = Math.min(1, nominalTargetY + strictnessMargin);
       // On white, assume mixed luminance is 1 - opacity × (1 - image Y).
-      const needsAdjustment = imageY < nominalTargetY;
+      const needsAdjustment = nominalTargetY === 1
+        ? imageY < 1
+        : imageY <= nominalTargetY;
       opacityPercent = !needsAdjustment
         ? 100
         : Math.min(100, ((1 - targetY) / (1 - imageY)) * 100);
