@@ -1,4 +1,4 @@
-import { compositeBackgroundHex, isHexColor, relativeLuminance } from './theme.js';
+import { compositeBackgroundHex, isHexColor } from './theme.js';
 
 /** @typedef {import('./ipc').BackdropOpacityCalculation} BackdropOpacityCalculation */
 
@@ -16,6 +16,15 @@ export function getBackdropTargetPercent(textColor, clarityPercent) {
   return Math.round(targetY * 100);
 }
 
+/** @param {string} hex @returns {number} */
+export function rgbAverageBrightness(hex) {
+  if (!isHexColor(hex)) return 0;
+  const red = Number.parseInt(hex.slice(1, 3), 16);
+  const green = Number.parseInt(hex.slice(3, 5), 16);
+  const blue = Number.parseInt(hex.slice(5, 7), 16);
+  return (red + green + blue) / (3 * 255);
+}
+
 /** @param {string} imageUrl @returns {Promise<HTMLImageElement>} */
 function loadImage(imageUrl) {
   return new Promise((resolve, reject) => {
@@ -27,7 +36,7 @@ function loadImage(imageUrl) {
 }
 
 /**
- * Downscale the image and return its alpha-weighted average color.
+ * Downscale the image and return its alpha-weighted arithmetic average RGB color.
  * Blur is ignored; average color is nearly unchanged by a uniform blur.
  * @param {string | null | undefined} imageUrl
  * @returns {Promise<string | null>}
@@ -99,7 +108,7 @@ export async function resolveBackdropContrast(input) {
   /** @type {BackdropOpacityCalculation | null} */
   let calculation = null;
   if (input.automaticTextColor) {
-    const imageY = relativeLuminance(imageAverageHex);
+    const imageY = rgbAverageBrightness(imageAverageHex);
     const clarityPercent = typeof input.clarityPercent === 'number' && Number.isFinite(input.clarityPercent)
       ? Math.max(0, Math.min(100, input.clarityPercent))
       : 0;

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getBackdropTargetPercent, resolveBackdropContrast } from '../src/lib/backdrop-contrast.js';
-import { relativeLuminance } from '../src/lib/theme.js';
+import { getBackdropTargetPercent, resolveBackdropContrast, rgbAverageBrightness, sampleImageAverageHex } from '../src/lib/backdrop-contrast.js';
 
 test('resolveBackdropContrast skips sampling when opacity is zero or image is missing', async () => {
   assert.deepEqual(
@@ -42,8 +41,43 @@ test('backdrop target text follows selected text color and clarity', () => {
   );
 });
 
+test('image Y is the unweighted arithmetic mean of RGB channels without linearization', () => {
+  assert.equal(rgbAverageBrightness('#808080'), 128 / 255);
+  assert.equal(rgbAverageBrightness('#FF0000'), 1 / 3);
+  assert.equal(rgbAverageBrightness('#00FF00'), 1 / 3);
+});
+
+test('image RGB average alpha-weights visible pixels and skips fully transparent pixels', async () => {
+  const previousImage = Object.getOwnPropertyDescriptor(globalThis, 'Image');
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const data = new Uint8ClampedArray(32 * 32 * 4);
+  data.set([0, 0, 0, 255], 0);
+  data.set([255, 255, 255, 255], 4);
+  data.set([255, 0, 0, 128], 8);
+  data.set([255, 255, 255, 0], 12);
+  globalThis.Image = class {
+    set src(_value) { this.onload(); }
+  };
+  globalThis.document = {
+    createElement: () => ({
+      getContext: () => ({
+        drawImage() {},
+        getImageData: () => ({ data }),
+      }),
+    }),
+  };
+  try {
+    assert.equal(await sampleImageAverageHex('fixture'), '#996666');
+  } finally {
+    if (previousImage) Object.defineProperty(globalThis, 'Image', previousImage);
+    else delete globalThis.Image;
+    if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
+    else delete globalThis.document;
+  }
+});
+
 test('automatic opacity uses the direct Y ratio for white text on a black base', async () => {
-  const imageY = relativeLuminance('#DADADA');
+  const imageY = rgbAverageBrightness('#DADADA');
   const resolved = await resolveBackdropContrast({
     pageHex: '#000000',
     imageUrl: 'https://example.invalid/unused.jpg',
@@ -52,12 +86,12 @@ test('automatic opacity uses the direct Y ratio for white text on a black base',
     cachedImageAverageHex: '#DADADA',
   });
   assert.ok(Math.abs(resolved.opacityPercent - ((0.5 - 0.00001) / imageY) * 100) < 0.000001);
-  assert.equal(Math.round(resolved.opacityPercent), 71);
+  assert.equal(Math.round(resolved.opacityPercent), 58);
   assert.ok(resolved.opacityPercent * imageY / 100 < 0.5);
 });
 
 test('automatic opacity uses the direct Y ratio for black text on a white base', async () => {
-  const imageY = relativeLuminance('#7C7C7C');
+  const imageY = rgbAverageBrightness('#7C7C7C');
   const resolved = await resolveBackdropContrast({
     pageHex: '#FFFFFF',
     imageUrl: 'https://example.invalid/unused.jpg',
@@ -74,20 +108,20 @@ test('automatic opacity reports the white-text target, sampled brightness, and d
     pageHex: '#000000', imageUrl: 'image', opacityPercent: 100,
     automaticTextColor: 'white', clarityPercent: 60, cachedImageAverageHex: '#AAAAAA',
   });
-  assert.equal(Math.round(relativeLuminance('#AAAAAA') * 100), 40);
-  assert.equal(Math.round(resolved.opacityPercent), 50);
-  assert.equal(resolved.calculation.displayText, '目標亮度（20%）÷圖片平均亮度（40%）= 透明度（50%）');
+  assert.equal(Math.round(rgbAverageBrightness('#AAAAAA') * 100), 67);
+  assert.equal(Math.round(resolved.opacityPercent), 30);
+  assert.equal(resolved.calculation.displayText, '目標亮度（20%）÷圖片平均亮度（67%）= 透明度（30%）');
   assert.equal(resolved.calculation.kind, 'ratio');
 });
 
 test('automatic opacity reports when the sampled background already meets the white-text target', async () => {
   const resolved = await resolveBackdropContrast({
     pageHex: '#000000', imageUrl: 'image', opacityPercent: 100,
-    automaticTextColor: 'white', clarityPercent: 60, cachedImageAverageHex: '#595959',
+    automaticTextColor: 'white', clarityPercent: 60, cachedImageAverageHex: '#2E2E2E',
   });
-  assert.equal(Math.round(relativeLuminance('#595959') * 100), 10);
+  assert.equal(Math.round(rgbAverageBrightness('#2E2E2E') * 100), 18);
   assert.equal(resolved.opacityPercent, 100);
-  assert.equal(resolved.calculation.displayText, '目標亮度（20%）≥圖片平均亮度（10%），不處理');
+  assert.equal(resolved.calculation.displayText, '目標亮度（20%）≥圖片平均亮度（18%），不處理');
   assert.equal(resolved.calculation.kind, 'noAdjustment');
 });
 
@@ -96,8 +130,8 @@ test('automatic opacity reports the inverse white-base equation for black text',
     pageHex: '#FFFFFF', imageUrl: 'image', opacityPercent: 100,
     automaticTextColor: 'black', clarityPercent: 60, cachedImageAverageHex: '#AAAAAA',
   });
-  assert.equal(Math.round(resolved.opacityPercent), 33);
-  assert.equal(resolved.calculation.displayText, '（100%−目標亮度（80%））÷（100%−圖片平均亮度（40%））= 透明度（33%）');
+  assert.equal(Math.round(resolved.opacityPercent), 60);
+  assert.equal(resolved.calculation.displayText, '（100%−目標亮度（80%））÷（100%−圖片平均亮度（67%））= 透明度（60%）');
   assert.equal(resolved.calculation.kind, 'inverseRatio');
 });
 
@@ -115,7 +149,7 @@ test('automatic opacity preserves a full-strength image when it matches the fixe
 });
 
 test('clarity sets the white-text target Y to 0.5, 0.25, and 0 at 0, 50, and 100 percent', async () => {
-  const imageY = relativeLuminance('#DADADA');
+  const imageY = rgbAverageBrightness('#DADADA');
   for (const [clarityPercent, expectedTargetY] of [[0, 0.5], [50, 0.25], [100, 0]]) {
     const resolved = await resolveBackdropContrast({
       pageHex: '#000000',
@@ -130,7 +164,7 @@ test('clarity sets the white-text target Y to 0.5, 0.25, and 0 at 0, 50, and 100
 });
 
 test('clarity sets the black-text target Y to 0.5, 0.75, and 1 at 0, 50, and 100 percent', async () => {
-  const imageY = relativeLuminance('#7C7C7C');
+  const imageY = rgbAverageBrightness('#7C7C7C');
   for (const [clarityPercent, expectedTargetY] of [[0, 0.5], [50, 0.75], [100, 1]]) {
     const resolved = await resolveBackdropContrast({
       pageHex: '#FFFFFF',
