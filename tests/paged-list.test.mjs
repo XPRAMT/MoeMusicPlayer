@@ -79,6 +79,28 @@ test('switching playlists and refreshing the same playlist discard stale page re
   assert.equal(data.itemAt(0).playlistId, 'playlist-new');
 });
 
+test('data refresh reloads the visible range without discarding scroll geometry', async () => {
+  const requests = [];
+  const data = new PagedListController(async ({ scope, offset, limit }) => {
+    requests.push({ scope, offset, limit });
+    return playlistPage(scope, offset, limit, 100_000);
+  });
+
+  data.reset('queue');
+  await data.ensureRange(8_000, 8_080);
+  const requestCount = requests.length;
+  assert.equal(data.snapshot().totalCount, 100_000);
+
+  data.refresh();
+  assert.equal(data.snapshot().totalCount, 100_000);
+  assert.equal(data.itemAt(8_000), null);
+  await data.ensureRange(8_000, 8_080);
+
+  assert.ok(requests.length > requestCount);
+  assert.ok(requests.slice(requestCount).every(({ offset }) => offset >= 8_000 - (8_000 % TRACK_PAGE_SIZE)));
+  assert.equal(data.itemAt(8_000).position, 8_000);
+});
+
 test('100k playlist paging shares the bounded page and viewport budgets', async () => {
   const totalCount = 100_000;
   let maxCachedPages = 0;

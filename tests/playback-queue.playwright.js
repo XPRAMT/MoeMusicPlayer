@@ -41,6 +41,36 @@ async page => {
   await page.locator('.playback-queue-row').nth(1).locator('.list-column-title').click();
   state = await page.evaluate(() => window.playbackQueueHarness.snapshot());
   assert(JSON.stringify(state.queuePlays) === JSON.stringify([{ trackId: 'duplicate-track', traversalPosition: 1 }]), 'queue row click did not select that traversal slot');
+
+  const queueViewport = page.locator('.playback-queue-viewport');
+  await queueViewport.evaluate((viewport) => {
+    viewport.scrollTop = 12_000;
+    viewport.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+  await page.waitForFunction(() => {
+    const viewport = document.querySelector('.playback-queue-viewport');
+    return viewport && viewport.scrollTop >= 12_000 && document.querySelectorAll('.playback-queue-row.reorderable').length >= 6;
+  });
+  const beforeReorderScrollTop = await queueViewport.evaluate((viewport) => viewport.scrollTop);
+  const beforeReorderCount = state.queueReorderLog.length;
+  const sourceRow = page.locator('.playback-queue-row.reorderable').nth(1);
+  const targetRow = page.locator('.playback-queue-row.reorderable').nth(3);
+  const sourceBox = await sourceRow.boundingBox();
+  const targetBox = await targetRow.boundingBox();
+  assert(sourceBox && targetBox, 'queue rows are unavailable for drag reorder');
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(550);
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForFunction((previousCount) => window.playbackQueueHarness.snapshot().queueReorderLog.length > previousCount, beforeReorderCount);
+  await page.waitForFunction(() => !document.querySelector('.playback-queue-viewport')?.classList.contains('is-reordering'));
+  const afterDragReorder = await page.evaluate(() => window.playbackQueueHarness.snapshot());
+  assert(afterDragReorder.queueReorderLog.at(-1).from !== afterDragReorder.queueReorderLog.at(-1).to, 'drag did not reorder the queue');
+  const afterReorderScrollTop = await queueViewport.evaluate((viewport) => viewport.scrollTop);
+  assert(Math.abs(afterReorderScrollTop - beforeReorderScrollTop) <= 1, `queue scroll position changed after reorder: ${beforeReorderScrollTop} -> ${afterReorderScrollTop}`);
+  assert(await page.locator('.playback-queue-row.reorderable').count() > 0, 'queue rows lost reorderable long-press affordance');
+
   await treeHost.locator('.playlist-tree-open').click();
   state = await page.evaluate(() => window.playbackQueueHarness.snapshot());
   assert(state.activeView === 'playlists', 'playlist tree heading did not open the playlist page');

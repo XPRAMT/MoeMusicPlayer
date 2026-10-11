@@ -67,7 +67,6 @@
   let reordering = $state(false);
   let locating = $state(false);
   let cursorProbeGeneration = 0;
-  let reorderGeneration = 0;
   let seenCursorChangeKey: number | undefined;
   let scrollToIndexRequest = $state<{ index: number; token: number } | null>(null);
   let scrollRequestToken = 0;
@@ -188,10 +187,7 @@
       cursorProbeGeneration += 1;
       currentEntryPosition = null;
       currentTraversalIndex = null;
-      reorderGeneration += 1;
-      // reset() is a no-op when scope and resetKey are unchanged; bump the key.
-      queue.reset(resetKey, `${resetKey}:reorder:${reorderGeneration}`);
-      await queue.ensureRange(0, TRACK_PAGE_SIZE);
+      queue.refresh();
     } catch (error) {
       reorderError = getErrorText(error);
     } finally {
@@ -257,6 +253,7 @@
     pending={snapshot.pendingPageCount > 0 || reordering || locating}
     revision={snapshot.revision}
     generation={snapshot.generation}
+    scrollResetKey={resetKey}
     {itemAt}
     getKey={(entry) => entry.entryPosition}
     isSelected={(entry) => isCurrent(entry)}

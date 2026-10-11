@@ -28,6 +28,8 @@
     pending?: boolean;
     revision: number;
     generation: number;
+    /** Override which generation changes reset the viewport, e.g. stable across data-only refreshes. */
+    scrollResetKey?: unknown;
     itemAt: (index: number) => Item | null;
     getKey: (item: Item, index: number) => string | number;
     isSelected?: (item: Item, index: number) => boolean;
@@ -63,6 +65,7 @@
     pending = false,
     revision,
     generation,
+    scrollResetKey,
     itemAt,
     getKey,
     isSelected = () => false,
@@ -102,7 +105,8 @@
   let rowHeight = $state(57);
   let headerHeight = $state(37);
   let maxViewportHeight = $state(680);
-  let seenGeneration = $state(0);
+  let seenScrollResetKey: unknown;
+  let hasSeenScrollResetKey = false;
   let dragFromIndex = $state<number | null>(null);
   let dragToIndex = $state<number | null>(null);
   let suppressNextClick = false;
@@ -143,13 +147,14 @@
   const activeDescendantId = $derived(`${listId}-row-${activeIndex}`);
 
   $effect(() => {
-    const currentGeneration = generation;
-    if (currentGeneration !== seenGeneration) {
-      seenGeneration = currentGeneration;
+    const currentScrollResetKey = scrollResetKey === undefined ? generation : scrollResetKey;
+    if (hasSeenScrollResetKey && !Object.is(currentScrollResetKey, seenScrollResetKey)) {
       activeIndex = 0;
       scrollTop = 0;
       viewport?.scrollTo({ top: 0 });
     }
+    seenScrollResetKey = currentScrollResetKey;
+    hasSeenScrollResetKey = true;
     const currentRange = range;
     onRange(currentRange);
   });

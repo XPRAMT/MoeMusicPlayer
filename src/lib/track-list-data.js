@@ -184,6 +184,22 @@ export class PagedListController {
     return true;
   }
 
+  /**
+   * Invalidate cached rows without changing the list scope, item count, or the
+   * last requested viewport range. Useful when an in-place reorder changes
+   * item contents but should not move the user's scroll position.
+   */
+  refresh() {
+    this.generation += 1;
+    this.pages.clear();
+    this.errors.clear();
+    for (const state of this.queue) state.resolve();
+    this.queue = [];
+    this.loads.clear();
+    this.notify();
+    this.scheduleRange();
+  }
+
   /** @returns {{ scope: unknown, totalCount: number | null, cachedPageCount: number, cachedItemCount: number, pendingPageCount: number, errors: Array<{ offset: number, message: string }>, generation: number, revision: number }} */
   snapshot() {
     let cachedItemCount = 0;
