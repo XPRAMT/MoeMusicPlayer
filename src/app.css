@@ -384,7 +384,6 @@ input:focus-visible {
 .now-playing-header-track .now-playing-format img {
   width: 17.4px;
   height: 10.4px;
-  transform: translateY(2px);
 }
 
 .now-playing-overlay-topbar .breadcrumbs {
@@ -2079,7 +2078,6 @@ input:focus-visible {
   width: 20.4px;
   height: 12.2px;
   object-fit: contain;
-  transform: translateY(2px);
 }
 
 .now-playing-copy h2 {
