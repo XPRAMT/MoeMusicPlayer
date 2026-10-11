@@ -1,4 +1,5 @@
 ﻿import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   DEFAULT_LIBRARY_SORT,
@@ -27,6 +28,23 @@ import {
 } from '../src/lib/track-columns.js';
 
 const formatDuration = (value) => `${Math.floor(value / 60_000)}:${String(Math.floor(value / 1000) % 60).padStart(2, '0')}`;
+
+test('list headers use only the shared bottom boundary and sort buttons fill their cells', async () => {
+  const [appCss, trackList, columnCells] = await Promise.all([
+    readFile(new URL('../src/app.css', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/TrackList.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/TrackColumnCells.svelte', import.meta.url), 'utf8'),
+  ]);
+  const tableHeader = appCss.match(/\.track-table-head\s*\{([^}]+)\}/)?.[1] ?? '';
+  const listHeader = trackList.match(/:global\(\.track-list-header\)\s*\{([^}]+)\}/)?.[1] ?? '';
+  const sortButton = columnCells.match(/\.column-sort-button\s*\{([^}]+)\}/)?.[1] ?? '';
+
+  assert.match(tableHeader, /border-bottom:\s*1px solid var\(--line\)/);
+  assert.doesNotMatch(tableHeader, /background\s*:/);
+  assert.doesNotMatch(listHeader, /background\s*:/);
+  assert.match(sortButton, /width:\s*100%/);
+  assert.match(sortButton, /height:\s*100%/);
+});
 
 test('default list columns are shared and keep the index as the only fixed column', () => {
   assert.deepEqual(DEFAULT_TRACK_COLUMN_PREFERENCES.map(({ id }) => id), [

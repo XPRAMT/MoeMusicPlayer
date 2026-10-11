@@ -1483,7 +1483,6 @@ input:focus-visible {
   min-height: 38px;
   border-bottom: 1px solid var(--line);
   color: var(--text-soft);
-  background: rgba(var(--text-rgb), 0.15);
   font-family: Consolas, monospace;
   font-size: var(--font-body);
   letter-spacing: 0.07em;

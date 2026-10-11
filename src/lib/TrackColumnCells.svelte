@@ -171,9 +171,12 @@
   }
 
   .column-sort-button {
-    display: inline-flex;
+    display: flex;
+    width: 100%;
+    height: 100%;
+    flex: 1 1 auto;
+    box-sizing: border-box;
     min-width: 0;
-    max-width: 100%;
     align-items: center;
     gap: 4px;
     margin: 0;
