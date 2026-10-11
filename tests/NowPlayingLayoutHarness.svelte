@@ -11,7 +11,7 @@
   import NowPlayingArrangement from '../src/lib/NowPlayingArrangement.svelte';
   import NowPlayingLayoutSwitch from '../src/lib/NowPlayingLayoutSwitch.svelte';
   import { calculateArtworkFrame } from '../src/lib/artwork-frame.js';
-  import hiResBadgeUrl from '../src/assets/hi-res-badge.png';
+  import hiResBadgeUrl from '../src/assets/hi-res-badge.svg';
   import type { LyricsCandidate, LyricsTrackResult, NowPlayingLayout, TrackLyrics } from '../src/lib/ipc';
 
   interface LayoutSnapshot {

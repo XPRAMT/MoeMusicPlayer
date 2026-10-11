@@ -4,7 +4,7 @@
 
 - 頂欄右上角「同步中」的 IconRefresh 需逆時針旋轉；CSS `.spin` 只套用於此同步圖示，`.loader-ring` 等載入圓環維持原本方向。
 - Windows WAV 音質欄位的位元深度由 `crates/player-platform-windows/src/windows.rs` 讀取 RIFF/RF64 `fmt ` 區塊；僅 PCM／IEEE float（含 WAVE_FORMAT_EXTENSIBLE）提供位元深度，Extensible 使用有效位元數。有損 WAV 編碼不顯示此欄。前端既有 `formatAudioFormat` 會在收到此值時顯示，例如 `WAV．48 kHz．24 bit`。
-- Hi-Res 標籤在曲庫／播放清單／佇列及 Now Playing 主資訊區固定按原尺寸 80% 顯示（26×14 → 20.8×11.2 CSS px）；Now Playing 緊湊頂列亦按 80% 縮至 17.6×9.6 CSS px，保持各介面的相對比例。因 PNG 可見區比透明畫布中心偏上，標籤在所有這些位置向下做 0.5 CSS px 光學校正，避免 Hi-Res 字樣與音質文字差約 1 個實體像素。
+- Hi-Res 標籤由 `src/assets/hi-res-badge.svg` 提供向量圖，金黃色底與黑色 HR 字樣可隨螢幕縮放保持清晰；曲庫／播放清單／佇列及 Now Playing 主資訊區顯示為 20.8×11.2 CSS px，Now Playing 緊湊頂列為 17.6×9.6 CSS px。圖示延用向下 0.5 CSS px 的光學校正，對齊格式文字基線。
 
 專案已有可建置的 Tauri 2、Svelte 5、TypeScript 與 Vite 骨架，並包含 Rust Core、SQLite 曲庫、Windows 與 Android 媒體來源 adapter，以及雙語 README。
 

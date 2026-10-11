@@ -1,6 +1,6 @@
 <script lang="ts">
   import MiddleEllipsis from './MiddleEllipsis.svelte';
-  import hiResBadgeUrl from '../assets/hi-res-badge.png';
+  import hiResBadgeUrl from '../assets/hi-res-badge.svg';
   import { RESIZABLE_TRACK_COLUMN_IDS } from './track-columns.js';
 
   interface Column {

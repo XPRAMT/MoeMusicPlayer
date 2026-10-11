@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="90" height="57" viewBox="0 0 90 57" role="img" aria-labelledby="title">
+  <title id="title">Hi-Res</title>
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe743"/>
+      <stop offset="0.12" stop-color="#f5d31d"/>
+      <stop offset="0.82" stop-color="#e7bc00"/>
+      <stop offset="1" stop-color="#fff06b"/>
+    </linearGradient>
+    <linearGradient id="bevel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff69a"/>
+      <stop offset="0.48" stop-color="#d99e00"/>
+      <stop offset="1" stop-color="#fff178"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="88" height="55" rx="2.5" fill="#17120a" stroke="#4e3b00" stroke-width="1.5"/>
+  <rect x="3.5" y="3.5" width="83" height="50" rx="1" fill="url(#gold)" stroke="url(#bevel)" stroke-width="1.5"/>
+  <path d="M5 5h3v47H5z" fill="#fff27a" opacity=".55"/>
+  <path d="M84 5h1v47h-1z" fill="#a57900" opacity=".58"/>
+  <text x="8" y="45" fill="#000" stroke="#382600" stroke-width=".65" paint-order="stroke" font-family="Arial, Helvetica, sans-serif" font-size="47" font-weight="700" letter-spacing="-2.3">HR</text>
+  <path d="M10 10h13M39 10h13M59 10h12" stroke="#fff39a" stroke-width="1" opacity=".7"/>
+</svg>

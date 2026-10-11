@@ -70,7 +70,7 @@
   import { splitArtists } from './lib/artist-names.js';
   import { formatVolume } from './lib/format';
   import { describeOutputFormat } from './lib/output-format.js';
-  import hiResBadgeUrl from './assets/hi-res-badge.png';
+  import hiResBadgeUrl from './assets/hi-res-badge.svg';
   import { calculateArtworkFrame } from './lib/artwork-frame.js';
   import {
     DEFAULT_LIBRARY_SORT,
