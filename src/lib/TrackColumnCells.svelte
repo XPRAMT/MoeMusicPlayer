@@ -253,11 +253,11 @@
 
   .list-hi-res-badge {
     display: block;
-    width: 20.8px;
-    height: 11.2px;
+    width: 20.4px;
+    height: 12.2px;
     flex: 0 0 auto;
     align-self: center;
     object-fit: contain;
-    transform: translateY(0.5px);
+    transform: translateY(2px);
   }
 </style>
