@@ -25,6 +25,7 @@
 - 從檔案總管開啟音樂時以正規化後路徑逐首查 SQLite 曲庫；命中就沿用資料庫曲目／標籤，未命中才讀取 Lofty 標籤並用暫存 TrackId 與路徑留在記憶體。列舉同資料夾的直接子檔案、不進子目錄、不重複 canonical path，並以不分大小寫檔名排序；指定開啟曲目立即播放。
 - Windows「設定 → 關於」可將目前執行檔以 HKCU ProgID／Capabilities 登錄為支援格式的開啟程式，並開啟 Windows 預設應用程式設定供使用者選擇。登錄不會改變預設值；移動便攜資料夾後需重新登錄。
 - 檔案總管開啟所建立的佇列一律只在記憶體；啟用期間 `save_playback_session` 及位置 checkpoint 不寫入 SQLite，重啟保留先前保存的曲庫／播放清單 session。曲庫項目仍使用既有 TrackId 和統計，非曲庫暫存項目不寫入曲庫、播放時長統計或 session。佇列列資訊、外部封面與 SMTC 封面由暫存摘要／原始路徑提供。
+- 驗證已通過 `npm run check`、Node 150/150、Rust workspace library/integration 及主程式 148 項測試、主程式 library strict Clippy、Rust 格式檢查與 Windows Release 建置。隔離副本以首個 WAV 啟動，再以第二個 WAV 呼叫單一執行個體轉送；第二程序正常退出，首程序正常關閉後 SQLite 曲目與播放 session 皆為 0。這確認檔案不匯入資料庫且佇列不保存；Windows「預設應用程式」設定中的使用者選擇仍需人工操作。
 - 決策細節見 `docs/adr/0009-windows-shell-open-queue.md`。
 
 ## GitHub 與版控
