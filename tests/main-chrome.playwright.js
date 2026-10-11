@@ -150,6 +150,29 @@ async page => {
   await page.waitForSelector('.main-backdrop img');
   assert(await page.locator('.main-backdrop img').count() === 1, 'album cover is not used as the main-window background');
   assert(await page.getByRole('slider', { name: '主介面背景縮放' }).count() === 1, 'album-cover zoom missing');
+  const mainZoomSlider = page.getByRole('slider', { name: '主介面背景縮放' });
+  await mainZoomSlider.evaluate((input) => {
+    input.value = '0';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const zeroZoomGeometry = await page.locator('.main-backdrop img').evaluate((image) => {
+    const imageBox = image.getBoundingClientRect();
+    return {
+      transform: getComputedStyle(image).transform,
+      imageBox: { left: imageBox.left, top: imageBox.top, width: imageBox.width, height: imageBox.height },
+      viewport: { width: innerWidth, height: innerHeight },
+    };
+  });
+  assert(zeroZoomGeometry.transform === 'matrix(1, 0, 0, 1, 0, 0)', 'zero zoom still applies a CSS scale: ' + JSON.stringify(zeroZoomGeometry));
+  assert(Math.abs(zeroZoomGeometry.imageBox.left) < 0.1
+    && Math.abs(zeroZoomGeometry.imageBox.top) < 0.1
+    && Math.abs(zeroZoomGeometry.imageBox.width - zeroZoomGeometry.viewport.width) < 0.1
+    && Math.abs(zeroZoomGeometry.imageBox.height - zeroZoomGeometry.viewport.height) < 0.1,
+  'zero zoom still sizes the background image from the blur-bleed container instead of the viewport: ' + JSON.stringify(zeroZoomGeometry));
+  await mainZoomSlider.evaluate((input) => {
+    input.value = '3';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
   const backgroundLabels = await page.locator('.main-interface-panel .lyrics-preference-range').evaluateAll((labels) => labels.map((label) => label.textContent));
   const opacityPosition = backgroundLabels.findIndex((text) => text.includes('背景透明度'));
   const zoomPosition = backgroundLabels.findIndex((text) => text.includes('背景縮放'));

@@ -215,9 +215,9 @@ input:focus-visible {
 
 .now-playing-backdrop img {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  inset: 48px;
+  width: calc(100% - 96px);
+  height: calc(100% - 96px);
   object-fit: cover;
   opacity: var(--np-background-opacity, 0.4);
   filter: blur(var(--np-background-blur, 20px));
@@ -234,9 +234,9 @@ input:focus-visible {
 
 .main-backdrop img {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  inset: 48px;
+  width: calc(100% - 96px);
+  height: calc(100% - 96px);
   object-fit: cover;
   opacity: var(--main-background-opacity, 0.4);
   filter: blur(var(--main-background-blur, 20px));
