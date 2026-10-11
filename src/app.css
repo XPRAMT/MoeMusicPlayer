@@ -2336,6 +2336,15 @@ input:focus-visible {
   accent-color: var(--accent);
 }
 
+.opacity-calculation-details {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--font-caption);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .track-column-settings {
   display: grid;
   gap: 8px;

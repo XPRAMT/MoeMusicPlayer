@@ -7,6 +7,7 @@
     appearance: NowPlayingAppearancePreferences;
     autoBackgroundOpacity?: boolean;
     calculatedOpacityPercent?: number;
+    opacityCalculationText?: string | null;
     lyrics: LyricsPreferences;
     onLayoutChange: (layout: NowPlayingLayout) => void;
     onAppearanceChange: (patch: Partial<NowPlayingAppearancePreferences>, flush?: boolean) => void;
@@ -20,6 +21,7 @@
     layout, appearance, lyrics,
     autoBackgroundOpacity = false,
     calculatedOpacityPercent = appearance.backgroundOpacityPercent,
+    opacityCalculationText = null,
     onLayoutChange, onAppearanceChange, onLyricsChange, onLyricsReset,
     groups = 'both',
     showGroupHeading = true,
@@ -63,7 +65,10 @@
     <label class="lyrics-preference-range">
       <span><strong>封面背景透明度</strong><output>{autoBackgroundOpacity ? `自動 ${Math.round(calculatedOpacityPercent)}%` : `${appearance.backgroundOpacityPercent}%`}</output></span>
       {#if autoBackgroundOpacity}
-        <small>依封面平均亮度與文字顏色自動計算。</small>
+        <div class="opacity-calculation-details">
+          <small>依目前封面圖片的平均亮度與文字顏色自動計算。</small>
+          <small>{opacityCalculationText ?? '沒有可讀取的封面圖片，使用固定底色。'}</small>
+        </div>
       {:else}
         <input type="range" min="0" max="100" step="1" value={appearance.backgroundOpacityPercent} aria-label="封面背景透明度" oninput={(event) => onAppearanceChange({ backgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundOpacityPercent: Number(event.currentTarget.value) }, true)} />
       {/if}

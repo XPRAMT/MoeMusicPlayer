@@ -224,6 +224,8 @@
   let mainBackgroundBusy = $state(false);
   let mainBackgroundEffectiveOpacityPercent = $state(0);
   let nowPlayingBackgroundEffectiveOpacityPercent = $state(0);
+  let mainBackgroundOpacityCalculation = $state<string | null>(null);
+  let nowPlayingBackgroundOpacityCalculation = $state<string | null>(null);
   /** Average page+image mix for main-window text contrast; null means use page color only. */
   let mainContrastBackgroundHex = $state<string | null>(null);
   /** Average page+cover mix for Now Playing text contrast; null means use page color only. */
@@ -460,6 +462,7 @@
       }
       mainContrastBackgroundHex = result.contrastHex;
       mainBackgroundEffectiveOpacityPercent = result.opacityPercent;
+      mainBackgroundOpacityCalculation = result.calculationText;
     });
   });
 
@@ -576,6 +579,7 @@
       }
       nowPlayingContrastBackgroundHex = result.contrastHex;
       nowPlayingBackgroundEffectiveOpacityPercent = result.opacityPercent;
+      nowPlayingBackgroundOpacityCalculation = result.calculationText;
     });
   });
 
@@ -2531,7 +2535,10 @@
                   <label class="lyrics-preference-range">
                     <span><strong>背景透明度</strong><output>{themePreferences.colorMode === 'autoBackgroundOpacity' ? `自動 ${Math.round(mainBackgroundEffectiveOpacityPercent)}%` : `${themePreferences.mainBackgroundOpacityPercent}%`}</output></span>
                     {#if themePreferences.colorMode === 'autoBackgroundOpacity'}
-                      <small>依目前背景圖片的平均亮度與文字顏色自動計算。</small>
+                      <div class="opacity-calculation-details">
+                        <small>依目前背景圖片的平均亮度與文字顏色自動計算。</small>
+                        <small>{mainBackgroundOpacityCalculation ?? '沒有可讀取的背景圖片，使用固定底色。'}</small>
+                      </div>
                     {:else}
                       <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundOpacityPercent} aria-label="主介面背景透明度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                     {/if}
@@ -2640,6 +2647,7 @@
                   appearance={nowPlayingAppearancePreferences}
                   autoBackgroundOpacity={themePreferences.colorMode === 'autoBackgroundOpacity'}
                   calculatedOpacityPercent={nowPlayingBackgroundEffectiveOpacityPercent}
+                  opacityCalculationText={nowPlayingBackgroundOpacityCalculation}
                   lyrics={lyricsPreferences}
                   onLayoutChange={setNowPlayingLayout}
                   onAppearanceChange={updateNowPlayingAppearancePreferences}
@@ -2675,6 +2683,7 @@
                   appearance={nowPlayingAppearancePreferences}
                   autoBackgroundOpacity={themePreferences.colorMode === 'autoBackgroundOpacity'}
                   calculatedOpacityPercent={nowPlayingBackgroundEffectiveOpacityPercent}
+                  opacityCalculationText={nowPlayingBackgroundOpacityCalculation}
                   lyrics={lyricsPreferences}
                   onLayoutChange={setNowPlayingLayout}
                   onAppearanceChange={updateNowPlayingAppearancePreferences}
