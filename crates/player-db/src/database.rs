@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet},
     error::Error,
     fmt,
@@ -25,7 +26,7 @@ use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 const MAX_PAGE_SIZE: u32 = 500;
 const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
@@ -87,7 +88,7 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
    AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?4 COLLATE BINARY)
    AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
    AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)
- ORDER BY t.sort_title, t.track_id
+ ORDER BY t.sort_title COLLATE NATURAL_NOCASE, t.track_id
  LIMIT ?2 OFFSET ?3";
 const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
@@ -164,7 +165,7 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
 fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
     match field {
         PlaylistSortField::Position => "e.position",
-        PlaylistSortField::Title => "COALESCE(e.entry_title, (SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='title'), t.title, '') COLLATE NOCASE",
+        PlaylistSortField::Title => "COALESCE(e.entry_title, (SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='title'), t.title, '') COLLATE NATURAL_NOCASE",
         PlaylistSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist, '') COLLATE NOCASE",
         PlaylistSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album, '') COLLATE NOCASE",
         PlaylistSortField::Year => "COALESCE(t.release_date, printf('%04d', t.year), '')",
@@ -377,6 +378,77 @@ UPDATE tracks
    AND (release_date IS NULL OR length(trim(release_date)) = 0);
 "#;
 
+const SCHEMA_V12: &str = r#"
+DROP INDEX tracks_sort_title;
+CREATE INDEX tracks_sort_title
+    ON tracks(sort_title COLLATE NATURAL_NOCASE, track_id);
+"#;
+
+fn natural_title_cmp(left: &str, right: &str) -> Ordering {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    let (mut left_index, mut right_index) = (0, 0);
+
+    while left_index < left.len() && right_index < right.len() {
+        let left_is_digit = left[left_index].is_ascii_digit();
+        let right_is_digit = right[right_index].is_ascii_digit();
+        if left_is_digit && right_is_digit {
+            let left_start = left_index;
+            let right_start = right_index;
+            while left_index < left.len() && left[left_index].is_ascii_digit() {
+                left_index += 1;
+            }
+            while right_index < right.len() && right[right_index].is_ascii_digit() {
+                right_index += 1;
+            }
+
+            let left_digits = &left[left_start..left_index];
+            let right_digits = &right[right_start..right_index];
+            let left_significant = left_digits
+                .iter()
+                .position(|digit| *digit != b'0')
+                .map_or(&left_digits[left_digits.len()..], |offset| {
+                    &left_digits[offset..]
+                });
+            let right_significant = right_digits
+                .iter()
+                .position(|digit| *digit != b'0')
+                .map_or(&right_digits[right_digits.len()..], |offset| {
+                    &right_digits[offset..]
+                });
+            let number_order = left_significant
+                .len()
+                .cmp(&right_significant.len())
+                .then_with(|| left_significant.cmp(right_significant));
+            if number_order != Ordering::Equal {
+                return number_order;
+            }
+            // Numerically equal runs are stable: fewer leading zeroes sort first.
+            let width_order = left_digits.len().cmp(&right_digits.len());
+            if width_order != Ordering::Equal {
+                return width_order;
+            }
+            continue;
+        }
+
+        let left_byte = left[left_index].to_ascii_lowercase();
+        let right_byte = right[right_index].to_ascii_lowercase();
+        match left_byte.cmp(&right_byte) {
+            Ordering::Equal => {
+                left_index += 1;
+                right_index += 1;
+            }
+            order => return order,
+        }
+    }
+
+    left.len().cmp(&right.len())
+}
+
+fn register_natural_title_collation(connection: &Connection) -> rusqlite::Result<()> {
+    connection.create_collation("NATURAL_NOCASE", natural_title_cmp)
+}
+
 fn repeat_mode_name(mode: QueueRepeatMode) -> &'static str {
     match mode {
         QueueRepeatMode::Off => "off",
@@ -578,6 +650,7 @@ impl Database {
         // recover/checkpoint a WAL while opening or closing that handle.
         let validation_connection =
             Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        register_natural_title_collation(&validation_connection)?;
         validation_connection.busy_timeout(Duration::from_secs(5))?;
         let check: String = validation_connection
             .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
@@ -633,6 +706,7 @@ impl Database {
     }
 
     fn from_connection(connection: Connection) -> Result<Self, DatabaseError> {
+        register_natural_title_collation(&connection)?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -724,6 +798,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V11)?;
             tx.pragma_update(None, "user_version", 11)?;
+            tx.commit()?;
+            version = 11;
+        }
+        if version == 11 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V12)?;
+            tx.pragma_update(None, "user_version", 12)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -2739,8 +2820,12 @@ fn fetch_tracks_window(
 fn tracks_order_by_sql(sort: TrackListSort) -> &'static str {
     let asc = matches!(sort.direction, TrackSortDirection::Asc);
     match (sort.field, asc) {
-        (TrackSortField::Title, true) => "t.sort_title ASC, t.track_id ASC",
-        (TrackSortField::Title, false) => "t.sort_title DESC, t.track_id DESC",
+        (TrackSortField::Title, true) => {
+            "t.sort_title COLLATE NATURAL_NOCASE ASC, t.track_id ASC"
+        }
+        (TrackSortField::Title, false) => {
+            "t.sort_title COLLATE NATURAL_NOCASE DESC, t.track_id DESC"
+        }
         (TrackSortField::Artist, true) => {
             "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE NOCASE ASC, t.track_id ASC"
         }
@@ -3465,10 +3550,10 @@ mod tests {
     use rusqlite::{params, Connection, OptionalExtension};
 
     use super::{
-        Database, DatabaseError, LibraryRepository, PlaybackSessionCheckpoint,
-        PlaylistFileSyncState, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2,
-        SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9,
-        TRACKS_PAGE_SQL,
+        natural_title_cmp, Database, DatabaseError, LibraryRepository, Ordering,
+        PlaybackSessionCheckpoint, PlaylistFileSyncState, ThemePreferences, COUNT_LIBRARY_SQL,
+        SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
+        SCHEMA_V9, TRACKS_PAGE_SQL,
     };
 
     fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
@@ -3629,10 +3714,10 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 11);
+            assert_eq!(version, 12);
         }
         {
-            let db = Database::open(&path).expect("reopen migrated database");
+            let db = Database::open_checked(&path).expect("read-only validate migrated database");
             assert!(db.library_roots().expect("read roots").is_empty());
             assert_eq!(
                 db.get_theme_preferences().expect("theme preferences"),
@@ -3673,7 +3758,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 11);
+        assert_eq!(current_version, 12);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -3732,7 +3817,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -3772,7 +3857,7 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
     }
 
@@ -3812,7 +3897,7 @@ mod tests {
                     .expect("sync-state table lookup"),
             )
         };
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
         assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
     }
 
@@ -3988,7 +4073,7 @@ mod tests {
                     .expect("lyric candidates table"),
             )
         };
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
         assert_eq!(lyric_table, "track_lyrics");
         assert_eq!(candidate_table, "lyric_candidates");
         assert_eq!(
@@ -4025,7 +4110,7 @@ mod tests {
             [],
             |row| row.get(0),
         ).expect("playback session tables");
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
         assert_eq!(tables, 2);
     }
 
@@ -4550,6 +4635,68 @@ mod tests {
             vec![0, 1, 2]
         );
         assert_eq!(original.items[0].title.as_deref(), Some("Zulu"));
+    }
+
+    #[test]
+    fn playlist_title_sort_uses_natural_numeric_order_in_both_directions() {
+        let db = Database::open_in_memory().expect("database");
+        let mut playlist = Playlist::new("natural title order");
+        playlist.entries = ["Track 100", "Track 10", "Track 2", "Track 1"]
+            .into_iter()
+            .map(|title| PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\{title}.flac"))),
+                title: Some(title.to_owned()),
+                duration_ms: None,
+            })
+            .collect();
+        db.save_playlist(&playlist).expect("save playlist");
+
+        for (direction, expected) in [
+            (
+                PlaylistSortDirection::Asc,
+                vec!["Track 1", "Track 2", "Track 10", "Track 100"],
+            ),
+            (
+                PlaylistSortDirection::Desc,
+                vec!["Track 100", "Track 10", "Track 2", "Track 1"],
+            ),
+        ] {
+            let page = db
+                .get_playlist_page_sorted(
+                    playlist.id,
+                    0,
+                    10,
+                    PlaylistListSort {
+                        field: PlaylistSortField::Title,
+                        direction,
+                    },
+                )
+                .expect("sort playlist")
+                .expect("playlist exists");
+            assert_eq!(
+                page.items
+                    .iter()
+                    .map(|item| item.title.as_deref().unwrap())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn natural_title_comparison_handles_long_numbers_case_and_leading_zeroes() {
+        let ascending = [
+            "Disc 2",
+            "Disc 02",
+            "Disc 10",
+            "Disc 999999999999999999999999999999999999999999",
+        ];
+        let mut actual = ascending.to_vec();
+        actual.sort_by(|left, right| natural_title_cmp(left, right));
+        assert_eq!(actual, ascending);
+        assert_eq!(natural_title_cmp("song 3", "Song 12"), Ordering::Less);
+        assert_eq!(natural_title_cmp("Song 12", "song 3"), Ordering::Greater);
     }
 
     #[test]
@@ -5850,6 +5997,69 @@ mod tests {
     }
 
     #[test]
+    fn library_title_sort_uses_natural_numeric_order_in_both_directions() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "natural-sort-source",
+        );
+        let records = ["Track 100", "Track 10", "Track 2", "Track 1"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, title)| {
+                record(
+                    &root,
+                    &format!("item-{index}"),
+                    &format!("path:item-{index}"),
+                    title,
+                    10 + index as u64,
+                    100 + index as i64,
+                )
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            1000,
+        );
+
+        for (direction, expected) in [
+            (
+                TrackSortDirection::Asc,
+                vec!["Track 1", "Track 2", "Track 10", "Track 100"],
+            ),
+            (
+                TrackSortDirection::Desc,
+                vec!["Track 100", "Track 10", "Track 2", "Track 1"],
+            ),
+        ] {
+            let page = db
+                .list_tracks_page(ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::Title,
+                        direction,
+                    },
+                })
+                .expect("sort library");
+            assert_eq!(
+                page.items
+                    .iter()
+                    .map(|item| item.title.as_deref().unwrap())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn play_count_sort_uses_played_over_duration_not_raw_played_ms() {
         let mut db = Database::open_in_memory().expect("database");
         let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "play-count-sort");
@@ -6886,7 +7096,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v8_migrates_to_v11_without_requiring_track_rows_for_statistics() {
+    fn schema_v8_migrates_to_v12_without_requiring_track_rows_for_statistics() {
         let connection = rusqlite::Connection::open_in_memory().expect("legacy v8 database");
         connection.execute_batch(SCHEMA_V1).expect("schema v1");
         connection.execute_batch(SCHEMA_V2).expect("schema v2");
@@ -6900,13 +7110,13 @@ mod tests {
             .pragma_update(None, "user_version", 8)
             .expect("mark v8");
 
-        let db = Database::from_connection(connection).expect("migrate to v11");
+        let db = Database::from_connection(connection).expect("migrate to v12");
         let version: i64 = db
             .lock()
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
         let table_count: i64 = db
             .lock()
             .expect("connection")
