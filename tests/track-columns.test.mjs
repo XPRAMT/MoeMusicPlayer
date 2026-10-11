@@ -5,6 +5,7 @@ import {
   DEFAULT_LIBRARY_SORT,
   DEFAULT_PLAYLIST_SORT,
   DEFAULT_TRACK_COLUMN_PREFERENCES,
+  DEFAULT_TRACK_ROW_HEIGHT_PX,
   DEFAULT_TRACK_COLUMN_WIDTHS,
   TRACK_COLUMN_DEFINITIONS,
   formatAudioFormat,
@@ -20,6 +21,7 @@ import {
   normalizePlaylistSort,
   normalizeTrackColumnPreferences,
   normalizeTrackColumnWidths,
+  normalizeTrackRowHeightPx,
   nowPlayingLayoutOrder,
   setTrackColumnVisibility,
   setTrackColumnWidth,
@@ -75,6 +77,40 @@ test('flexible column widths clamp and feed the shared grid template', () => {
   assert.equal(wide.title, 800);
   assert.deepEqual(normalizeTrackColumnWidths(null), DEFAULT_TRACK_COLUMN_WIDTHS);
   assert.match(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES, wide), /^26px 800px /);
+});
+
+test('shared list row height defaults to 50px and clamps to the supported range', () => {
+  assert.equal(DEFAULT_TRACK_ROW_HEIGHT_PX, 50);
+  assert.equal(normalizeTrackRowHeightPx(undefined), 50);
+  assert.equal(normalizeTrackRowHeightPx(30), 30);
+  assert.equal(normalizeTrackRowHeightPx(60), 60);
+  assert.equal(normalizeTrackRowHeightPx(12), 30);
+  assert.equal(normalizeTrackRowHeightPx(75), 60);
+  assert.equal(normalizeTrackRowHeightPx(Number.NaN), 50);
+});
+
+test('configured row height drives the three shared virtual lists and survives settings writes', async () => {
+  const [app, css, ...lists] = await Promise.all([
+    readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/app.css', import.meta.url), 'utf8'),
+    ...['TrackList', 'PlaylistEntryList', 'PlaybackQueueList'].map((name) =>
+      readFile(new URL(`../src/lib/${name}.svelte`, import.meta.url), 'utf8')),
+  ]);
+  assert.match(app, /min="30"\s+max="60"\s+step="1"/);
+  assert.match(app, /rowHeightPx:\s*trackRowHeightPx/);
+  assert.match(app, /trackRowHeightPx\s*=\s*normalizeTrackRowHeightPx\(stored\.rowHeightPx\)/);
+  assert.equal([...app.matchAll(/rowHeightPx=\{trackRowHeightPx\}/g)].length, 3);
+  assert.match(app, /oninput=\{\(event\) => previewTrackRowHeight/);
+  assert.match(app, /onchange=\{\(event\) => commitTrackRowHeight/);
+  assert.match(css, /\.track-row\s*\{[^}]*min-height:\s*var\(--paged-row-height,\s*50px\)/s);
+  assert.match(lists[0], /\.virtual-track-row\)\s*\{\s*min-height:\s*var\(--paged-row-height,\s*50px\)/);
+  assert.equal(lists.length, 3);
+  for (const list of lists) {
+    assert.match(list, /rowHeightPx\s*=\s*DEFAULT_TRACK_ROW_HEIGHT_PX/);
+    assert.match(list, /rowHeight=\{rowHeightPx\}/);
+    assert.match(list, /compactRowHeight=\{rowHeightPx\}/);
+    assert.match(list, /shortDesktopRowHeight=\{rowHeightPx\}/);
+  }
 });
 
 test('library sort toggles direction on the same field and resets on a new field', () => {

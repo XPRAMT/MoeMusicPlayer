@@ -114,6 +114,7 @@ export interface TrackListColumnSettings {
   columns: TrackListColumnPreference[];
   widths?: TrackColumnWidths;
   librarySort?: LibraryListSort;
+  rowHeightPx?: number;
 }
 
 export type NowPlayingLayout = 'a' | 'b';

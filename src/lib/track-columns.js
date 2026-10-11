@@ -31,6 +31,16 @@ export const DEFAULT_TRACK_COLUMN_WIDTHS = Object.freeze({
   album: 160,
 });
 
+export const DEFAULT_TRACK_ROW_HEIGHT_PX = 50;
+export const MIN_TRACK_ROW_HEIGHT_PX = 30;
+export const MAX_TRACK_ROW_HEIGHT_PX = 60;
+
+/** @param {unknown} value */
+export function normalizeTrackRowHeightPx(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_TRACK_ROW_HEIGHT_PX;
+  return Math.min(MAX_TRACK_ROW_HEIGHT_PX, Math.max(MIN_TRACK_ROW_HEIGHT_PX, Math.round(value)));
+}
+
 /** @type {LibraryListSort} */
 export const DEFAULT_LIBRARY_SORT = Object.freeze({ field: 'title', direction: 'asc' });
 

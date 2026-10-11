@@ -4,6 +4,7 @@ import { formatDuration } from './format';
 import { formatListOrder } from './list-order.js';
 import {
   DEFAULT_TRACK_COLUMN_PREFERENCES,
+  DEFAULT_TRACK_ROW_HEIGHT_PX,
   DEFAULT_TRACK_COLUMN_WIDTHS,
   DEFAULT_PLAYLIST_SORT,
   TRACK_COLUMN_DEFINITIONS,
@@ -33,6 +34,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     fetchPage?: (request: { playlistId: string; sort: PlaylistListSort; offset: number; limit: number }) => Promise<PlaylistPage>;
     columns?: TrackListColumnPreference[];
     columnWidths?: TrackColumnWidths;
+    rowHeightPx?: number;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     livePlayCount?: { trackId: string; playedMs: number } | null;
     currentTrackId?: string | null;
@@ -48,6 +50,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
+    rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX,
     onColumnResize,
     livePlayCount = null,
     currentTrackId = null,
@@ -144,9 +147,9 @@ import { withLivePlayedMs } from './live-play-count.js';
     {itemAt}
     getKey={(entry) => entry.position}
     isSelected={(entry) => entry.trackId !== null && entry.trackId === currentTrackId}
-    rowHeight={40}
-    compactRowHeight={40}
-    shortDesktopRowHeight={40}
+    rowHeight={rowHeightPx}
+    compactRowHeight={rowHeightPx}
+    shortDesktopRowHeight={rowHeightPx}
     headerHeight={37}
     compactHeaderHeight={37}
     fillAvailable={true}

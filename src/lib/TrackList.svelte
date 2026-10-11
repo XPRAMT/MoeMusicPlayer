@@ -14,6 +14,7 @@
   import {
     DEFAULT_LIBRARY_SORT,
     DEFAULT_TRACK_COLUMN_PREFERENCES,
+    DEFAULT_TRACK_ROW_HEIGHT_PX,
     DEFAULT_TRACK_COLUMN_WIDTHS,
     TRACK_COLUMN_DEFINITIONS,
     formatTrackColumnValue,
@@ -46,6 +47,7 @@
     fetchPage?: (request: TrackPageRequest) => Promise<TrackPage>;
     columns?: TrackListColumnPreference[];
     columnWidths?: TrackColumnWidths;
+    rowHeightPx?: number;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     sort?: LibraryListSort;
     onSort?: (columnId: TrackListColumnPreference['id']) => void;
@@ -64,6 +66,7 @@
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
+    rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX,
     onColumnResize,
     sort = DEFAULT_LIBRARY_SORT,
     onSort,
@@ -178,9 +181,9 @@
     {itemAt}
     getKey={(track) => track.id}
     isSelected={(track) => selectedTrackId === track.id}
-    rowHeight={40}
-    compactRowHeight={40}
-    shortDesktopRowHeight={40}
+    rowHeight={rowHeightPx}
+    compactRowHeight={rowHeightPx}
+    shortDesktopRowHeight={rowHeightPx}
     headerHeight={37}
     compactHeaderHeight={37}
     fillAvailable={true}
@@ -261,7 +264,7 @@
   }
 
   :global(.virtual-track-row) {
-    min-height: 0;
+    min-height: var(--paged-row-height, 50px);
   }
 
   .track-list-error,

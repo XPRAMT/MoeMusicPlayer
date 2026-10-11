@@ -3308,6 +3308,7 @@ fn settings_set_track_list_columns(
         .update(|settings| {
             let mut next = preferences.clone();
             next.widths = next.widths.clamp();
+            next.row_height_px = next.row_height_px.clamp(30, 60);
             settings.track_list_columns = next;
             Ok(())
         })

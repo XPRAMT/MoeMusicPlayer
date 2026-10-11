@@ -77,6 +77,7 @@
   import {
     DEFAULT_LIBRARY_SORT,
     DEFAULT_TRACK_COLUMN_PREFERENCES,
+    DEFAULT_TRACK_ROW_HEIGHT_PX,
     DEFAULT_TRACK_COLUMN_WIDTHS,
     TRACK_COLUMN_DEFINITIONS,
     displayTrackTitle,
@@ -86,6 +87,7 @@
     moveTrackColumn,
     normalizeLibrarySort,
     normalizeTrackColumnPreferences,
+    normalizeTrackRowHeightPx,
     normalizeTrackColumnWidths,
     setTrackColumnVisibility,
     setTrackColumnWidth,
@@ -192,6 +194,7 @@
     normalizeTrackColumnPreferences(DEFAULT_TRACK_COLUMN_PREFERENCES),
   );
   let trackColumnWidths = $state<TrackColumnWidths>({ ...DEFAULT_TRACK_COLUMN_WIDTHS });
+  let trackRowHeightPx = $state(DEFAULT_TRACK_ROW_HEIGHT_PX);
   let librarySort = $state<LibraryListSort>({ ...DEFAULT_LIBRARY_SORT });
   let trackColumnSettingsState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let trackColumnSettingsError = $state<string | null>(null);
@@ -963,6 +966,7 @@
       if (revision !== trackColumnSettingsRevision) return;
       trackColumnPreferences = normalizeTrackColumnPreferences(stored.columns);
       trackColumnWidths = normalizeTrackColumnWidths(stored.widths);
+      trackRowHeightPx = normalizeTrackRowHeightPx(stored.rowHeightPx);
       librarySort = normalizeLibrarySort(stored.librarySort);
       trackColumnSettingsState = 'saved';
       trackColumnSettingsError = null;
@@ -977,12 +981,16 @@
     columns?: TrackListColumnPreference[];
     widths?: TrackColumnWidths;
     librarySort?: LibraryListSort;
+    rowHeightPx?: number;
   }): void {
     if (options?.columns) {
       trackColumnPreferences = normalizeTrackColumnPreferences(options.columns);
     }
     if (options?.widths) {
       trackColumnWidths = normalizeTrackColumnWidths(options.widths);
+    }
+    if (options?.rowHeightPx !== undefined) {
+      trackRowHeightPx = normalizeTrackRowHeightPx(options.rowHeightPx);
     }
     if (options?.librarySort) {
       librarySort = normalizeLibrarySort(options.librarySort);
@@ -1004,11 +1012,13 @@
             columns: trackColumnPreferences.map((column) => ({ ...column })),
             widths: { ...trackColumnWidths },
             librarySort: { ...librarySort },
+            rowHeightPx: trackRowHeightPx,
           },
         });
         if (revision !== trackColumnSettingsRevision) return;
         trackColumnPreferences = normalizeTrackColumnPreferences(saved.columns);
         trackColumnWidths = normalizeTrackColumnWidths(saved.widths);
+        trackRowHeightPx = normalizeTrackRowHeightPx(saved.rowHeightPx);
         librarySort = normalizeLibrarySort(saved.librarySort);
         trackColumnSettingsState = 'saved';
         trackColumnSettingsError = null;
@@ -1034,6 +1044,14 @@
 
   function handleTrackColumnResize(id: TrackListColumnPreference['id'], widthPx: number): void {
     persistTrackColumnSettings({ widths: setTrackColumnWidth(trackColumnWidths, id, widthPx) });
+  }
+
+  function previewTrackRowHeight(value: number): void {
+    trackRowHeightPx = normalizeTrackRowHeightPx(value);
+  }
+
+  function commitTrackRowHeight(value: number): void {
+    persistTrackColumnSettings({ rowHeightPx: value });
   }
 
   function handleLibrarySort(id: TrackListColumnPreference['id']): void {
@@ -2566,8 +2584,8 @@
               <div id="{scope}track-columns-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}track-columns-tab" tabindex="0">
                 <div class="settings-panel-header">
                   <div>
-                    <h3>曲庫與播放清單欄位</h3>
-                    <p>兩種列表共用欄位順序與顯示設定；序號與播放操作固定在兩側。</p>
+                    <h3>曲目欄位與列表高度</h3>
+                    <p>曲庫、播放清單與播放佇列共用欄位順序、顯示及高度設定；序號與播放操作固定在兩側。</p>
                   </div>
                 </div>
                 <ol class="track-column-settings" aria-label="曲目資訊欄位設定">
@@ -2591,6 +2609,19 @@
                     </li>
                   {/each}
                 </ol>
+                <label class="lyrics-preference-range track-row-height-setting">
+                  <span><strong>列表高度</strong><output>{trackRowHeightPx}px</output></span>
+                  <input
+                    type="range"
+                    min="30"
+                    max="60"
+                    step="1"
+                    value={trackRowHeightPx}
+                    aria-label="列表高度"
+                    oninput={(event) => previewTrackRowHeight(Number(event.currentTarget.value))}
+                    onchange={(event) => commitTrackRowHeight(Number(event.currentTarget.value))}
+                  />
+                </label>
               </div>
             {:else if settingsSection === 'playback'}
               {@const outputStatus = describeOutputFormat(playback?.outputFormat)}
@@ -3048,6 +3079,7 @@
                 isSendingPlaybackCommand={isSendingPlaybackCommand}
                 columns={trackColumnPreferences}
                 columnWidths={trackColumnWidths}
+                rowHeightPx={trackRowHeightPx}
                 sort={librarySort}
                 livePlayCount={livePlayCount}
                 onPlay={playTrack}
@@ -3091,6 +3123,7 @@
                       {isSendingPlaybackCommand}
                       columns={trackColumnPreferences}
                       columnWidths={trackColumnWidths}
+                      rowHeightPx={trackRowHeightPx}
                       livePlayCount={livePlayCount}
                       currentTrackId={playback?.currentTrack?.id ?? null}
                       onPlay={playPlaylistEntry}
@@ -3120,6 +3153,7 @@
                 cursorChangeKey={playbackQueueCursorChangeKey}
                 columns={trackColumnPreferences}
                 columnWidths={trackColumnWidths}
+                rowHeightPx={trackRowHeightPx}
                 livePlayCount={livePlayCount}
                 onPlay={playQueueEntry}
                 onTotalCount={(count) => (queueTrackCount = count)}

@@ -390,6 +390,12 @@ pub struct TrackListColumnSettings {
     pub widths: TrackListFlexibleWidths,
     #[serde(default)]
     pub library_sort: LibraryListSort,
+    #[serde(default = "default_track_row_height_px")]
+    pub row_height_px: u8,
+}
+
+fn default_track_row_height_px() -> u8 {
+    50
 }
 
 impl Default for TrackListColumnSettings {
@@ -409,6 +415,7 @@ impl Default for TrackListColumnSettings {
             .collect(),
             widths: TrackListFlexibleWidths::default(),
             library_sort: LibraryListSort::default(),
+            row_height_px: default_track_row_height_px(),
         }
     }
 }
@@ -437,6 +444,7 @@ impl TrackListColumnSettings {
 
     fn normalize(mut self) -> Self {
         self.widths = self.widths.clamp();
+        self.row_height_px = self.row_height_px.clamp(30, 60);
         self
     }
 }
@@ -466,6 +474,7 @@ fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColu
             columns,
             widths: settings.widths.clamp(),
             library_sort: settings.library_sort,
+            row_height_px: settings.row_height_px.clamp(30, 60),
         };
     }
 
@@ -2000,6 +2009,7 @@ mod tests {
         assert_eq!(serde_json::to_value(NowPlayingLayout::B).unwrap(), "b");
         assert_eq!(value["trackListColumns"]["columns"][4]["id"], "audioFormat");
         assert_eq!(value["trackListColumns"]["columns"][4]["visible"], true);
+        assert_eq!(value["trackListColumns"]["rowHeightPx"], 50);
         assert!(serde_json::from_value::<AppSettings>(value).is_ok());
     }
 
@@ -2299,6 +2309,10 @@ mod tests {
         fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).expect("write legacy");
         let store = SettingsStore::open(&path, AppSettings::default()).expect("open repaired");
         let columns = store.snapshot().unwrap().track_list_columns.columns;
+        assert_eq!(
+            store.snapshot().unwrap().track_list_columns.row_height_px,
+            50
+        );
         assert_eq!(columns.len(), 7);
         assert_eq!(columns[1].id, TrackListColumnId::Artist);
         assert!(!columns[1].visible);
@@ -2337,6 +2351,23 @@ mod tests {
     }
 
     #[test]
+    fn track_row_height_defaults_for_old_settings_and_clamps_to_supported_limits() {
+        let old: TrackListColumnSettings = serde_json::from_value(serde_json::json!({
+            "columns": TrackListColumnSettings::default().columns,
+        }))
+        .expect("old track list settings remain readable");
+        assert_eq!(old.row_height_px, 50);
+
+        let mut too_short = TrackListColumnSettings::default();
+        too_short.row_height_px = 0;
+        assert_eq!(repair_track_list_columns(too_short).row_height_px, 30);
+
+        let mut too_tall = TrackListColumnSettings::default();
+        too_tall.row_height_px = u8::MAX;
+        assert_eq!(repair_track_list_columns(too_tall).row_height_px, 60);
+    }
+
+    #[test]
     fn display_preferences_persist_and_reopen_without_promoting_degraded_registry() {
         let directory = test_directory("display-preferences-restart");
         let path = directory.join("settings.json");
@@ -2360,6 +2391,7 @@ mod tests {
         let mut columns = TrackListColumnSettings::default();
         columns.columns.swap(0, 2);
         columns.columns[1].visible = false;
+        columns.row_height_px = 57;
         store
             .update(|settings| {
                 settings.track_list_columns = columns.clone();
@@ -2372,6 +2404,7 @@ mod tests {
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
         let settings = reopened.snapshot().unwrap();
         assert_eq!(settings.track_list_columns, columns);
+        assert_eq!(settings.track_list_columns.row_height_px, 57);
         assert_eq!(settings.now_playing_layout, NowPlayingLayout::B);
         assert_eq!(settings.lyrics_preferences, lyrics_preferences);
         assert_eq!(settings.sources, vec![source]);

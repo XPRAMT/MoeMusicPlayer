@@ -4,6 +4,7 @@
   import { formatListOrder } from './list-order.js';
   import {
     DEFAULT_TRACK_COLUMN_PREFERENCES,
+    DEFAULT_TRACK_ROW_HEIGHT_PX,
     DEFAULT_TRACK_COLUMN_WIDTHS,
     TRACK_COLUMN_DEFINITIONS,
     formatTrackColumnValue,
@@ -31,6 +32,7 @@
     cursorChangeKey: number;
     columns?: TrackListColumnPreference[];
     columnWidths?: TrackColumnWidths;
+    rowHeightPx?: number;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     fetchPage?: (request: { offset: number; limit: number }) => Promise<PlaybackQueuePage>;
     reorderPage?: (from: number, to: number) => Promise<void>;
@@ -44,6 +46,7 @@
     cursorChangeKey,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
+    rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX,
     onColumnResize,
     fetchPage,
     reorderPage,
@@ -259,9 +262,9 @@
     {itemAt}
     getKey={(entry) => entry.entryPosition}
     isSelected={(entry) => isCurrent(entry)}
-    rowHeight={40}
-    compactRowHeight={40}
-    shortDesktopRowHeight={40}
+    rowHeight={rowHeightPx}
+    compactRowHeight={rowHeightPx}
+    shortDesktopRowHeight={rowHeightPx}
     headerHeight={37}
     compactHeaderHeight={37}
     fillAvailable={true}
