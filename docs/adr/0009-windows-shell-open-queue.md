@@ -9,7 +9,7 @@ Opening an audio file from File Explorer must play the supplied path and include
 
 ## Decision
 
-- Register supported audio handlers per user under `HKCU`; never change Windows defaults programmatically. The About page offers registration and opens Windows Default Apps settings for the user to choose MoeMusicPlayer.
+- Register supported audio handlers per user under `HKCU`; never change Windows defaults programmatically. The About page offers registration and launches the `ms-settings:defaultapps` URI through `ShellExecuteW` for the user to choose MoeMusicPlayer. Do not pass the URI as an `explorer.exe` path argument.
 - Use Tauri's Windows single-instance plugin to forward later file-open arguments to the running process. The first process reads its own arguments. Resolve relative arguments against the forwarded working directory and accept only file paths with supported audio extensions.
 - Canonicalize the selected file, enumerate only regular audio files in its containing directory, exclude child directories, de-duplicate canonical paths, and sort by case-insensitive filename. Set the initial cursor to the selected file so it starts immediately; subsequent order follows the existing shuffle preference.
 - Resolve every sibling path against the persistent library. Reuse the existing `TrackId`, metadata, and statistics when found. For missing paths, read tags and codec properties into a generated in-memory track identity; do not insert a source, mapping, or track into SQLite.

@@ -62,11 +62,42 @@ pub fn register_file_associations(executable: &Path) -> Result<(), String> {
 }
 
 pub fn open_default_apps_settings() -> Result<(), String> {
-    std::process::Command::new("explorer.exe")
-        .arg("ms-settings:defaultapps?registeredAppUser=MoeMusicPlayer")
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("無法開啟 Windows 預設應用程式設定：{error}"))
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn ShellExecuteW(
+            window: *mut std::ffi::c_void,
+            operation: *const u16,
+            file: *const u16,
+            parameters: *const u16,
+            directory: *const u16,
+            show: i32,
+        ) -> isize;
+    }
+
+    let uri: Vec<u16> = std::ffi::OsStr::new(default_apps_settings_uri())
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            uri.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    if result <= 32 {
+        return Err(format!("無法開啟 Windows 預設應用程式設定（{result}）。"));
+    }
+    Ok(())
+}
+
+fn default_apps_settings_uri() -> &'static str {
+    "ms-settings:defaultapps?registeredAppUser=MoeMusicPlayer"
 }
 
 fn prog_id(extension: &str) -> String {
@@ -79,7 +110,7 @@ fn open_command(executable: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{open_command, prog_id};
+    use super::{default_apps_settings_uri, open_command, prog_id};
 
     #[test]
     fn associations_cover_supported_audio_without_video_mp4() {
@@ -95,6 +126,14 @@ mod tests {
         assert_eq!(
             open_command(r"C:\Program Files\MoeMusicPlayer\moemusicplayer.exe"),
             r#""C:\Program Files\MoeMusicPlayer\moemusicplayer.exe" "%1""#
+        );
+    }
+
+    #[test]
+    fn default_apps_settings_is_launched_through_the_windows_uri_scheme() {
+        assert_eq!(
+            default_apps_settings_uri(),
+            "ms-settings:defaultapps?registeredAppUser=MoeMusicPlayer"
         );
     }
 }
