@@ -523,6 +523,13 @@
   onMount(() => {
     document.title = APP_WINDOW_TITLE;
     let disposed = false;
+    const updateTrackHeaderTextOffset = (): void => {
+      const devicePixelRatio = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+      document.documentElement.style.setProperty(
+        '--track-header-text-optical-offset',
+        `${-2 / devicePixelRatio}px`,
+      );
+    };
     const applyAndroidInsets = (value?: AndroidWindowInsets): void => {
       let insets = value;
       if (!insets) {
@@ -550,11 +557,13 @@
     const handleAndroidInsets = (event: Event): void => {
       applyAndroidInsets((event as CustomEvent<AndroidWindowInsets>).detail);
     };
+    window.addEventListener('resize', updateTrackHeaderTextOffset);
     window.addEventListener('moe:android-insets', handleAndroidInsets);
     window.addEventListener('keydown', handleShortcutKeydown, true);
     window.addEventListener('mousedown', handleShortcutMouseDown, true);
     window.addEventListener('wheel', handleShortcutWheel, { capture: true, passive: false });
     gamepadFrame = requestAnimationFrame(pollGamepads);
+    updateTrackHeaderTextOffset();
     applyAndroidInsets();
     if (isTauri()) {
       playbackPollTimer = setInterval(() => {
@@ -623,6 +632,7 @@
 
     return () => {
       disposed = true;
+      window.removeEventListener('resize', updateTrackHeaderTextOffset);
       window.removeEventListener('moe:android-insets', handleAndroidInsets);
       unlistenSyncProgress?.();
       unlistenSyncFinished?.();

@@ -1487,6 +1487,13 @@ input:focus-visible {
   letter-spacing: 0.07em;
 }
 
+.track-table-head > .column-index,
+.track-table-head .column-sort-label,
+.track-table-head .column-sort-indicator {
+  position: relative;
+  top: var(--track-header-text-optical-offset, -2px);
+}
+
 .track-table-body {
   display: grid;
 }

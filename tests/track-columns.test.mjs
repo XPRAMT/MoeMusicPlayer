@@ -30,16 +30,18 @@ import {
 const formatDuration = (value) => `${Math.floor(value / 60_000)}:${String(Math.floor(value / 1000) % 60).padStart(2, '0')}`;
 
 test('list headers use only the shared bottom boundary and sort buttons fill their cells', async () => {
-  const [appCss, trackList, columnCells, virtualList] = await Promise.all([
+  const [appCss, trackList, columnCells, virtualList, app] = await Promise.all([
     readFile(new URL('../src/app.css', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/TrackList.svelte', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/TrackColumnCells.svelte', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/PagedVirtualList.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
   ]);
   const tableHeader = appCss.match(/\.track-table-head\s*\{([^}]+)\}/)?.[1] ?? '';
   const listHeader = trackList.match(/:global\(\.track-list-header\)\s*\{([^}]+)\}/)?.[1] ?? '';
   const sortButton = columnCells.match(/\.column-sort-button\s*\{([^}]+)\}/)?.[1] ?? '';
   const virtualHeaderLine = virtualList.match(/\.paged-virtual-header::after\s*\{([^}]+)\}/)?.[1] ?? '';
+  const headerTextOffset = appCss.match(/\.track-table-head > \.column-index,[\s\S]*?\{([^}]+)\}/)?.[1] ?? '';
 
   assert.doesNotMatch(tableHeader, /background\s*:/);
   assert.doesNotMatch(tableHeader, /border-bottom\s*:/);
@@ -47,6 +49,9 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
   assert.match(virtualHeaderLine, /bottom:\s*0/);
   assert.match(virtualHeaderLine, /height:\s*1px/);
   assert.match(virtualHeaderLine, /background:\s*var\(--line\)/);
+  assert.match(headerTextOffset, /top:\s*var\(--track-header-text-optical-offset,\s*-2px\)/);
+  assert.match(app, /-2\s*\/\s*devicePixelRatio/);
+  assert.match(app, /addEventListener\('resize', updateTrackHeaderTextOffset\)/);
   assert.match(sortButton, /width:\s*100%/);
   assert.match(sortButton, /height:\s*100%/);
 });
