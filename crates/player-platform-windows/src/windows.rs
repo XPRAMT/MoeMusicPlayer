@@ -909,6 +909,7 @@ fn read_matroska_audio_metadata(path: &Path) -> Result<TrackMetadata, TrackMetad
                 .and_then(|number| number.trim().parse::<u32>().ok())
         })
     };
+    let bitrate_bps = matroska_bitrate_bps(&container_tags, &symphonia_tags);
     let codec = if params.codec == CODEC_TYPE_AAC {
         "AAC"
     } else if params.codec == CODEC_TYPE_ALAC {
@@ -955,7 +956,7 @@ fn read_matroska_audio_metadata(path: &Path) -> Result<TrackMetadata, TrackMetad
         disc_number: parse_number(&["DISC_NUMBER", "DISCNUMBER"]),
         duration_ms,
         codec: Some(codec.to_owned()),
-        bitrate_bps: None,
+        bitrate_bps,
         sample_rate_hz: params.sample_rate,
         release_date,
         year,
@@ -967,6 +968,27 @@ fn read_matroska_audio_metadata(path: &Path) -> Result<TrackMetadata, TrackMetad
             None
         },
     })
+}
+
+fn matroska_bitrate_bps(
+    container_tags: &[matroska::Tag],
+    symphonia_tags: &[symphonia::core::meta::Tag],
+) -> Option<u32> {
+    let container_value = container_tags
+        .iter()
+        .flat_map(|tag| tag.simple.iter())
+        .find(|tag| tag.name.eq_ignore_ascii_case("BPS"))
+        .and_then(|tag| match &tag.value {
+            Some(matroska::TagValue::String(value)) => Some(value.clone()),
+            _ => None,
+        });
+    let value = container_value.or_else(|| {
+        symphonia_tags
+            .iter()
+            .find(|tag| tag.key.eq_ignore_ascii_case("BPS"))
+            .map(|tag| tag.value.to_string())
+    })?;
+    value.trim().parse::<u32>().ok().filter(|value| *value > 0)
 }
 
 fn system_time_to_utc_ms(time: SystemTime) -> Option<i64> {
@@ -1762,6 +1784,20 @@ mod tests {
         assert_eq!(metadata.codec.as_deref(), Some("FLAC"));
         assert_eq!(metadata.sample_rate_hz, Some(24_000));
         assert_eq!(metadata.duration_ms, Some(500));
+    }
+
+    #[test]
+    fn matroska_bps_tag_is_reported_as_bits_per_second() {
+        let tags = [matroska::Tag {
+            targets: None,
+            simple: vec![matroska::SimpleTag {
+                name: "BPS".to_owned(),
+                language: None,
+                default: true,
+                value: Some(matroska::TagValue::String("91353".to_owned())),
+            }],
+        }];
+        assert_eq!(super::matroska_bitrate_bps(&tags, &[]), Some(91_353));
     }
 
     #[test]
