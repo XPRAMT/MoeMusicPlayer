@@ -81,6 +81,15 @@ export interface ThemePreferences {
   autoTextColorThresholdPercent: number;
 }
 
+export interface BackdropOpacityCalculation {
+  kind: 'ratio' | 'inverseRatio' | 'noAdjustment';
+  textColor: 'white' | 'black';
+  targetPercent: number;
+  imagePercent: number;
+  opacityPercent: number;
+  displayText: string;
+}
+
 export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount';
 
 export interface TrackListColumnPreference {

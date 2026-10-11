@@ -1,13 +1,13 @@
 <script lang="ts">
-  import type { LyricsPreferences, NowPlayingAppearancePreferences, NowPlayingLayout } from './ipc';
+  import type { BackdropOpacityCalculation, LyricsPreferences, NowPlayingAppearancePreferences, NowPlayingLayout } from './ipc';
   import NowPlayingLayoutSwitch from './NowPlayingLayoutSwitch.svelte';
+  import OpacityCalculation from './OpacityCalculation.svelte';
 
   interface Props {
     layout: NowPlayingLayout;
     appearance: NowPlayingAppearancePreferences;
     autoBackgroundOpacity?: boolean;
-    calculatedOpacityPercent?: number;
-    opacityCalculationText?: string | null;
+    opacityCalculation?: BackdropOpacityCalculation | null;
     lyrics: LyricsPreferences;
     onLayoutChange: (layout: NowPlayingLayout) => void;
     onAppearanceChange: (patch: Partial<NowPlayingAppearancePreferences>, flush?: boolean) => void;
@@ -20,8 +20,7 @@
   let {
     layout, appearance, lyrics,
     autoBackgroundOpacity = false,
-    calculatedOpacityPercent = appearance.backgroundOpacityPercent,
-    opacityCalculationText = null,
+    opacityCalculation = null,
     onLayoutChange, onAppearanceChange, onLyricsChange, onLyricsReset,
     groups = 'both',
     showGroupHeading = true,
@@ -63,12 +62,9 @@
       <input type="range" min="0" max="50" step="1" value={appearance.backgroundBlurPx} aria-label="封面背景模糊程度" oninput={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundBlurPx: Number(event.currentTarget.value) }, true)} />
     </label>
     <label class="lyrics-preference-range">
-      <span><strong>封面背景透明度</strong><output>{autoBackgroundOpacity ? `自動 ${Math.round(calculatedOpacityPercent)}%` : `${appearance.backgroundOpacityPercent}%`}</output></span>
+      <span><strong>封面背景透明度</strong>{#if !autoBackgroundOpacity}<output>{appearance.backgroundOpacityPercent}%</output>{/if}</span>
       {#if autoBackgroundOpacity}
-        <div class="opacity-calculation-details">
-          <small>依目前封面圖片的平均亮度與文字顏色自動計算。</small>
-          <small>{opacityCalculationText ?? '沒有可讀取的封面圖片，使用固定底色。'}</small>
-        </div>
+        <OpacityCalculation calculation={opacityCalculation} description="依目前封面圖片的平均亮度與文字顏色自動計算。" emptyMessage="沒有可讀取的封面圖片，使用固定底色。" />
       {:else}
         <input type="range" min="0" max="100" step="1" value={appearance.backgroundOpacityPercent} aria-label="封面背景透明度" oninput={(event) => onAppearanceChange({ backgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={(event) => onAppearanceChange({ backgroundOpacityPercent: Number(event.currentTarget.value) }, true)} />
       {/if}

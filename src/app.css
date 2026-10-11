@@ -2340,9 +2340,23 @@ input:focus-visible {
   display: grid;
   gap: 4px;
   color: var(--muted);
-  font-size: var(--font-caption);
-  line-height: 1.45;
+  font-size: var(--font-body);
+  line-height: 1.55;
   overflow-wrap: anywhere;
+}
+
+.opacity-calculation-details small {
+  font-size: inherit;
+}
+
+.opacity-equation {
+  display: block;
+  max-width: 100%;
+  margin: 2px 0 0;
+  overflow-x: auto;
+  color: var(--text-soft);
+  font-size: var(--font-body);
+  line-height: 1.5;
 }
 
 .track-column-settings {
@@ -2599,6 +2613,17 @@ input:focus-visible {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.appearance-color-grid > .cover-corner-setting {
+  grid-column: 1 / -1;
+}
+
+.text-color-choice-row button {
+  min-height: 42px;
+  place-items: center;
+  padding: 8px 10px;
+  text-align: center;
 }
 
 .theme-color-control {

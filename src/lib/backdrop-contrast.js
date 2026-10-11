@@ -1,5 +1,7 @@
 import { compositeBackgroundHex, isHexColor, relativeLuminance } from './theme.js';
 
+/** @typedef {import('./ipc').BackdropOpacityCalculation} BackdropOpacityCalculation */
+
 const SAMPLE_SIZE = 32;
 
 /** @param {string} imageUrl @returns {Promise<HTMLImageElement>} */
@@ -63,7 +65,7 @@ export async function sampleImageAverageHex(imageUrl) {
  *   clarityPercent?: number,
  *   cachedImageAverageHex?: string | null,
  * }} input
- * @returns {Promise<{ contrastHex: string | null, imageAverageHex: string | null, opacityPercent: number, calculationText: string | null }>}
+ * @returns {Promise<{ contrastHex: string | null, imageAverageHex: string | null, opacityPercent: number, calculation: BackdropOpacityCalculation | null }>}
  */
 export async function resolveBackdropContrast(input) {
   const pageHex = isHexColor(input.pageHex) ? input.pageHex.toUpperCase() : '#000000';
@@ -71,18 +73,19 @@ export async function resolveBackdropContrast(input) {
     ? Math.max(0, Math.min(100, Math.round(input.opacityPercent)))
     : 0;
   if (!input.imageUrl) {
-    return { contrastHex: null, imageAverageHex: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent, calculationText: null };
+    return { contrastHex: null, imageAverageHex: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent, calculation: null };
   }
 
   const imageAverageHex = isHexColor(input.cachedImageAverageHex)
     ? input.cachedImageAverageHex.toUpperCase()
     : await sampleImageAverageHex(input.imageUrl);
   if (!imageAverageHex) {
-    return { contrastHex: null, imageAverageHex: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent, calculationText: null };
+    return { contrastHex: null, imageAverageHex: null, opacityPercent: input.automaticTextColor ? 0 : requestedOpacityPercent, calculation: null };
   }
 
   let opacityPercent = requestedOpacityPercent;
-  let calculationText = null;
+  /** @type {BackdropOpacityCalculation | null} */
+  let calculation = null;
   if (input.automaticTextColor) {
     const imageY = relativeLuminance(imageAverageHex);
     const clarityPercent = typeof input.clarityPercent === 'number' && Number.isFinite(input.clarityPercent)
@@ -99,9 +102,18 @@ export async function resolveBackdropContrast(input) {
       opacityPercent = !needsAdjustment
         ? 100
         : Math.min(100, (targetY / imageY) * 100);
-      calculationText = needsAdjustment
-        ? `目標亮度（${Math.round(nominalTargetY * 100)}%）÷圖片平均亮度（${Math.round(imageY * 100)}%）＝透明度（${Math.round(opacityPercent)}%）`
-        : `目標亮度（${Math.round(nominalTargetY * 100)}%）≥圖片平均亮度（${Math.round(imageY * 100)}%），不處理`;
+      const targetPercent = Math.round(nominalTargetY * 100);
+      const imagePercent = Math.round(imageY * 100);
+      calculation = {
+        kind: needsAdjustment ? 'ratio' : 'noAdjustment',
+        textColor: 'white',
+        targetPercent,
+        imagePercent,
+        opacityPercent: Math.round(opacityPercent),
+        displayText: needsAdjustment
+          ? `目標亮度（${targetPercent}%）÷圖片平均亮度（${imagePercent}%）＝透明度（${Math.round(opacityPercent)}%）`
+          : `目標亮度（${targetPercent}%）≥圖片平均亮度（${imagePercent}%），不處理`,
+      };
     } else {
       // Higher clarity asks for a brighter result: Y > 0.5 + 0.5 × clarity.
       const nominalTargetY = 0.5 + 0.5 * clarity;
@@ -111,9 +123,18 @@ export async function resolveBackdropContrast(input) {
       opacityPercent = !needsAdjustment
         ? 100
         : Math.min(100, ((1 - targetY) / (1 - imageY)) * 100);
-      calculationText = needsAdjustment
-        ? `（100%−目標亮度（${Math.round(nominalTargetY * 100)}%））÷（100%−圖片平均亮度（${Math.round(imageY * 100)}%））＝透明度（${Math.round(opacityPercent)}%）`
-        : `目標亮度（${Math.round(nominalTargetY * 100)}%）≤圖片平均亮度（${Math.round(imageY * 100)}%），不處理`;
+      const targetPercent = Math.round(nominalTargetY * 100);
+      const imagePercent = Math.round(imageY * 100);
+      calculation = {
+        kind: needsAdjustment ? 'inverseRatio' : 'noAdjustment',
+        textColor: 'black',
+        targetPercent,
+        imagePercent,
+        opacityPercent: Math.round(opacityPercent),
+        displayText: needsAdjustment
+          ? `（100%−目標亮度（${targetPercent}%））÷（100%−圖片平均亮度（${imagePercent}%））＝透明度（${Math.round(opacityPercent)}%）`
+          : `目標亮度（${targetPercent}%）≤圖片平均亮度（${imagePercent}%），不處理`,
+      };
     }
   }
 
@@ -122,7 +143,7 @@ export async function resolveBackdropContrast(input) {
       contrastHex: pageHex,
       imageAverageHex,
       opacityPercent,
-      calculationText,
+      calculation,
     };
   }
 
@@ -130,6 +151,6 @@ export async function resolveBackdropContrast(input) {
     contrastHex: compositeBackgroundHex(pageHex, imageAverageHex, opacityPercent),
     imageAverageHex,
     opacityPercent,
-    calculationText,
+    calculation,
   };
 }
