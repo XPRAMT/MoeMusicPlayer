@@ -137,6 +137,25 @@ FROM resolved_entries e
 LEFT JOIN tracks t ON t.track_id=e.track_id
 "#;
 
+fn playlist_order_by(sort: PlaylistListSort, direction: &str) -> String {
+    if sort.field == PlaylistSortField::AudioFormat {
+        // Rank by the requested codec sequence, then source sample rate, then the
+        // codec-appropriate source quality metric. Lossy bit depth is never consulted.
+        return format!(
+            "CASE UPPER(COALESCE(t.codec, '')) \
+             WHEN 'WAV' THEN 0 WHEN 'FLAC' THEN 1 WHEN 'VORBIS' THEN 2 \
+             WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 4 WHEN 'MP3' THEN 5 ELSE 6 END {direction}, \
+             COALESCE(t.sample_rate_hz, 0) {direction}, \
+             CASE WHEN UPPER(COALESCE(t.codec, '')) IN ('WAV','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','PCM','TAK','TTA') \
+                  THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction}, \
+             e.position ASC"
+        );
+    }
+
+    let expression = playlist_sort_expression(sort.field);
+    format!("{expression} {direction}, e.position ASC")
+}
+
 fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
     match field {
         PlaylistSortField::Position => "e.position",
@@ -144,7 +163,7 @@ fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
         PlaylistSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist, '') COLLATE NOCASE",
         PlaylistSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album, '') COLLATE NOCASE",
         PlaylistSortField::Year => "COALESCE(t.release_date, printf('%04d', t.year), '')",
-        PlaylistSortField::AudioFormat => "COALESCE(t.codec, '') COLLATE NOCASE",
+        PlaylistSortField::AudioFormat => unreachable!("audio format has a compound sort key"),
         PlaylistSortField::Duration => "COALESCE(e.entry_duration_ms, t.duration_ms, -1)",
         PlaylistSortField::PlayCount => "CASE WHEN COALESCE(e.entry_duration_ms, t.duration_ms, 0)>0 THEN COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0)*1.0/COALESCE(e.entry_duration_ms, t.duration_ms) ELSE -1 END",
     }
@@ -1206,14 +1225,12 @@ impl Database {
             [playlist_id.to_string()],
             |row| row.get(0),
         )?;
-        let order_by = playlist_sort_expression(sort.field);
         let direction = match sort.direction {
             PlaylistSortDirection::Asc => "ASC",
             PlaylistSortDirection::Desc => "DESC",
         };
-        let query = format!(
-            "{PLAYLIST_PAGE_SQL} ORDER BY {order_by} {direction}, e.position ASC LIMIT ?2 OFFSET ?3"
-        );
+        let order_by = playlist_order_by(sort, direction);
+        let query = format!("{PLAYLIST_PAGE_SQL} ORDER BY {order_by} LIMIT ?2 OFFSET ?3");
         let mut statement = connection.prepare(&query)?;
         let rows = statement.query_map(
             params![
@@ -4525,6 +4542,84 @@ mod tests {
             vec![0, 1, 2]
         );
         assert_eq!(original.items[0].title.as_deref(), Some("Zulu"));
+    }
+
+    #[test]
+    fn playlist_audio_format_sort_uses_codec_rate_then_lossless_depth_or_lossy_bitrate() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "audio-sort");
+        let definitions = [
+            ("mp3", "MP3", 48_000, None, Some(320_000)),
+            ("mp4", "Mp4", 96_000, None, Some(256_000)),
+            ("opus160", "Opus", 48_000, None, Some(160_000)),
+            ("opus96", "Opus", 48_000, None, Some(96_000)),
+            ("opus96k", "Opus", 96_000, None, Some(128_000)),
+            ("vorbis", "Vorbis", 48_000, None, Some(192_000)),
+            ("flac24", "Flac", 96_000, Some(24), None),
+            ("flac16", "Flac", 96_000, Some(16), None),
+            ("flac44", "Flac", 44_100, Some(24), None),
+            ("wav", "Wav", 44_100, Some(16), None),
+        ];
+        let records = definitions
+            .iter()
+            .map(|(name, codec, sample_rate, bit_depth, bitrate)| {
+                let mut item = record(&root, name, name, name, 10, 1_000);
+                let metadata = item.metadata.as_mut().expect("metadata");
+                metadata.codec = Some((*codec).to_owned());
+                metadata.sample_rate_hz = Some(*sample_rate);
+                metadata.bit_depth = *bit_depth;
+                metadata.bitrate_bps = *bitrate;
+                item
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            1_000,
+        );
+
+        let mut playlist = Playlist::new("audio format order");
+        playlist.entries = records
+            .iter()
+            .map(|item| PlaylistEntry {
+                track_id: None,
+                locator: item.locator.clone(),
+                title: None,
+                duration_ms: None,
+            })
+            .collect();
+        db.save_playlist(&playlist).expect("save playlist");
+
+        let sorted = db
+            .get_playlist_page_sorted(
+                playlist.id,
+                0,
+                20,
+                PlaylistListSort {
+                    field: PlaylistSortField::AudioFormat,
+                    direction: PlaylistSortDirection::Asc,
+                },
+            )
+            .expect("sort by audio format")
+            .expect("playlist exists");
+        let codecs = sorted
+            .items
+            .iter()
+            .map(|item| item.codec.as_deref().expect("codec"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codecs,
+            vec!["Wav", "Flac", "Flac", "Flac", "Vorbis", "Opus", "Opus", "Opus", "Mp4", "MP3"]
+        );
+        assert_eq!(sorted.items[1].sample_rate_hz, Some(44_100));
+        assert_eq!(sorted.items[2].bit_depth, Some(16));
+        assert_eq!(sorted.items[3].bit_depth, Some(24));
+        assert_eq!(sorted.items[5].bitrate_bps, Some(96_000));
+        assert_eq!(sorted.items[6].bitrate_bps, Some(160_000));
+        assert_eq!(sorted.items[7].sample_rate_hz, Some(96_000));
     }
 
     #[test]
