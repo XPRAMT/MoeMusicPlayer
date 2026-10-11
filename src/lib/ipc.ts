@@ -66,8 +66,6 @@ export interface ThemePreferences {
   mainBackgroundBlurPx: number;
   /** Image opacity percent (0–100); UI label is 背景透明度, same convention as quickSettingsOpacityPercent. */
   mainBackgroundOpacityPercent: number;
-  /** Main-window background zoom percent (0–10); UI label is 背景縮放. */
-  mainBackgroundZoomPercent: number;
   mainBackgroundMode: 'solid' | 'singleImage' | 'slideshow' | 'albumCover' | 'systemWallpaper';
   slideshowFolder: string | null;
   slideshowIntervalMinutes: number;

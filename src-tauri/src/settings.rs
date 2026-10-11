@@ -42,9 +42,6 @@ pub struct ThemeSettings {
         alias = "mainBackgroundBrightnessPercent"
     )]
     pub main_background_opacity_percent: u8,
-    /// Main-window background zoom percent (0–10).
-    #[serde(default = "default_main_background_zoom_percent")]
-    pub main_background_zoom_percent: u8,
     /// Main-window background source. Legacy settings are resolved in `SettingsStore::open`.
     #[serde(default = "legacy_main_background_mode")]
     pub main_background_mode: MainBackgroundMode,
@@ -105,10 +102,6 @@ fn default_main_background_opacity_percent() -> u8 {
     40
 }
 
-fn default_main_background_zoom_percent() -> u8 {
-    3
-}
-
 fn default_auto_text_color_threshold_percent() -> u8 {
     50
 }
@@ -122,7 +115,6 @@ impl Default for ThemeSettings {
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
             main_background_opacity_percent: default_main_background_opacity_percent(),
-            main_background_zoom_percent: default_main_background_zoom_percent(),
             main_background_mode: MainBackgroundMode::Solid,
             slideshow_folder: None,
             slideshow_interval_minutes: default_slideshow_interval_minutes(),
@@ -955,11 +947,6 @@ impl AppSettings {
                 "mainBackgroundOpacityPercent must be between 0 and 100".into(),
             ));
         }
-        if self.theme.main_background_zoom_percent > 10 {
-            return Err(SettingsError::InvalidData(
-                "mainBackgroundZoomPercent must be between 0 and 10".into(),
-            ));
-        }
         if !(1..=120).contains(&self.theme.slideshow_interval_minutes) {
             return Err(SettingsError::InvalidData(
                 "slideshowIntervalMinutes must be between 1 and 120".into(),
@@ -1469,6 +1456,18 @@ mod tests {
                 tree_uri: None,
             },
         }
+    }
+
+    #[test]
+    fn legacy_main_background_zoom_is_ignored_and_not_serialized() {
+        let settings: ThemeSettings = serde_json::from_value(serde_json::json!({
+            "backgroundHex": "#000000",
+            "accentHex": "#55D9FF",
+            "mainBackgroundZoomPercent": 8
+        }))
+        .expect("load settings written by the version with background zoom");
+        let saved = serde_json::to_value(settings).expect("serialize current theme settings");
+        assert!(saved.get("mainBackgroundZoomPercent").is_none());
     }
 
     #[test]
@@ -2173,7 +2172,6 @@ mod tests {
         assert_eq!(migrated.lyrics_preferences, LyricsPreferences::default());
         assert_eq!(migrated.theme.background_hex, "#123456");
         assert_eq!(migrated.theme.accent_hex, "#ABCDEF");
-        assert_eq!(migrated.theme.main_background_zoom_percent, 3);
         assert_eq!(migrated.sources, vec![source]);
         assert!(migrated.shuffle);
         assert_eq!(migrated.repeat_mode, RepeatMode::All);
@@ -2188,41 +2186,6 @@ mod tests {
         assert_eq!(persisted["lyricsPreferences"]["primaryFontSizePx"], 14);
         assert_eq!(persisted["lyricsPreferences"]["auxiliaryFontSizePx"], 10);
         assert_eq!(persisted["sourceRegistryAuthoritative"], false);
-    }
-
-    #[test]
-    fn main_background_zoom_is_bounded_and_defaults_to_three_percent() {
-        let directory = test_directory("main-background-zoom");
-        let path = directory.join("settings.json");
-        let store = SettingsStore::open(&path, AppSettings::default()).expect("open settings");
-        assert_eq!(
-            store.snapshot().unwrap().theme.main_background_zoom_percent,
-            3
-        );
-        store
-            .update(|settings| {
-                settings.theme.main_background_zoom_percent = 8;
-                Ok(())
-            })
-            .expect("save custom zoom");
-        drop(store);
-        let store = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
-        assert_eq!(
-            store.snapshot().unwrap().theme.main_background_zoom_percent,
-            8
-        );
-
-        let error = store
-            .update(|settings| {
-                settings.theme.main_background_zoom_percent = 11;
-                Ok(())
-            })
-            .expect_err("zoom above 10 percent must be rejected");
-        assert!(error.to_string().contains("mainBackgroundZoomPercent"));
-        assert_eq!(
-            store.snapshot().unwrap().theme.main_background_zoom_percent,
-            8
-        );
     }
 
     #[test]

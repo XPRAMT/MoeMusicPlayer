@@ -242,15 +242,6 @@ input:focus-visible {
   filter: blur(var(--main-background-blur, 20px));
 }
 
-/* The main-interface default matches the Now Playing backdrop; its zoom is independently adjustable. */
-.now-playing-backdrop img {
-  transform: scale(1.03);
-}
-
-.main-backdrop img {
-  transform: scale(var(--main-background-scale, 1.03));
-}
-
 .app-shell.has-main-backdrop {
   background: transparent;
 }

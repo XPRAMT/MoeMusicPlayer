@@ -103,8 +103,6 @@ struct ThemePreferencesDto {
         alias = "mainBackgroundBrightnessPercent"
     )]
     main_background_opacity_percent: u8,
-    #[serde(default = "default_main_background_zoom_percent")]
-    main_background_zoom_percent: u8,
     #[serde(default)]
     main_background_mode: MainBackgroundMode,
     #[serde(default)]
@@ -133,10 +131,6 @@ fn default_main_background_opacity_percent() -> u8 {
     40
 }
 
-fn default_main_background_zoom_percent() -> u8 {
-    3
-}
-
 fn default_slideshow_interval_minutes() -> u8 {
     10
 }
@@ -154,7 +148,6 @@ impl From<ThemePreferences> for ThemePreferencesDto {
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
             main_background_opacity_percent: default_main_background_opacity_percent(),
-            main_background_zoom_percent: default_main_background_zoom_percent(),
             main_background_mode: MainBackgroundMode::Solid,
             slideshow_folder: None,
             slideshow_interval_minutes: default_slideshow_interval_minutes(),
@@ -182,7 +175,6 @@ impl From<ThemeSettings> for ThemePreferencesDto {
             quick_settings_blur_px: preferences.quick_settings_blur_px,
             main_background_blur_px: preferences.main_background_blur_px,
             main_background_opacity_percent: preferences.main_background_opacity_percent,
-            main_background_zoom_percent: preferences.main_background_zoom_percent,
             main_background_mode: preferences.main_background_mode,
             slideshow_folder: preferences
                 .slideshow_folder
@@ -2924,7 +2916,6 @@ fn theme_set_preferences(
         quick_settings_blur_px: preferences.quick_settings_blur_px,
         main_background_blur_px: preferences.main_background_blur_px,
         main_background_opacity_percent: preferences.main_background_opacity_percent,
-        main_background_zoom_percent: preferences.main_background_zoom_percent,
         main_background_mode: preferences.main_background_mode,
         slideshow_folder: saved_folder,
         slideshow_interval_minutes: preferences.slideshow_interval_minutes,
