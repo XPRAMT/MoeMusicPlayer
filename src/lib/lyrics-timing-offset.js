@@ -1,7 +1,7 @@
 /** Per-track lyrics display delay (seconds). Positive delays lyrics relative to audio. */
 
-export const LYRICS_TIMING_OFFSET_MIN_SEC = -5;
-export const LYRICS_TIMING_OFFSET_MAX_SEC = 5;
+export const LYRICS_TIMING_OFFSET_MIN_SEC = -10;
+export const LYRICS_TIMING_OFFSET_MAX_SEC = 10;
 export const LYRICS_TIMING_OFFSET_STEP_SEC = 0.1;
 
 const STORAGE_PREFIX = 'moemusicplayer.lyricsTimingOffsetSec:';

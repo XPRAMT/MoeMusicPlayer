@@ -3248,7 +3248,7 @@
                 type="button"
                 class="soft-button lyrics-topbar-action"
                 class:is-active={lyricsTopbarStatus.timingPanelOpen}
-                title={lyricsTopbarStatus.canAdjustTiming ? `目前：${lyricsTopbarStatus.sync}（調整延遲 ±5 秒）` : '目前不是同步歌詞，無法調整延遲'}
+                title={lyricsTopbarStatus.canAdjustTiming ? `目前：${lyricsTopbarStatus.sync}（調整延遲 ±10 秒）` : '目前不是同步歌詞，無法調整延遲'}
                 aria-label="同步歌詞延遲調整"
                 aria-pressed={lyricsTopbarStatus.timingPanelOpen}
                 disabled={!lyricsTopbarStatus.canAdjustTiming}

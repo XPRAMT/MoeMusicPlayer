@@ -582,7 +582,8 @@
       <div class="lyrics-timing-panel floating-surface" role="group" aria-label="歌詞同步延遲" data-testid="lyrics-timing-panel">
         <div class="lyrics-timing-panel-header">
           <strong>同步歌詞延遲</strong>
-          <span data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingOffsetSec)}</span>
+          <span class="lyrics-timing-value" data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingOffsetSec)}</span>
+          <span class="lyrics-timing-hint">(正值延後歌詞，負值提前歌詞)</span>
           <button type="button" class="soft-button" onclick={() => { timingPanelOpen = false; }}>關閉</button>
         </div>
         <div class="lyrics-timing-controls">
@@ -603,7 +604,6 @@
           <button type="button" class="soft-button" aria-label="延遲增加 0.1 秒" onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
           <button type="button" class="soft-button" onclick={resetTimingOffset}>重設</button>
         </div>
-        <p class="lyrics-timing-hint">正值延後歌詞，負值提前歌詞；範圍 ±5 秒，步進 0.1 秒。</p>
       </div>
     {/if}
     {#if viewState.lyrics && isTimed && !selectionUiOpen}
@@ -764,6 +764,7 @@
 
 <style>
   .lyrics-view {
+    position: relative;
     display: flex;
     min-width: 0;
     min-height: 0;
@@ -1062,6 +1063,11 @@
   }
 
   .lyrics-timing-panel {
+    position: absolute;
+    z-index: 3;
+    top: 0;
+    right: 0;
+    left: 0;
     display: grid;
     gap: 8px;
     padding: 10px 10px 8px;
@@ -1080,11 +1086,17 @@
     font-weight: 650;
   }
 
-  .lyrics-timing-panel-header span {
+  .lyrics-timing-value {
     margin-right: auto;
     color: var(--text);
     font-size: var(--font-body);
     font-variant-numeric: tabular-nums;
+  }
+
+  .lyrics-timing-hint {
+    color: var(--muted);
+    font-size: var(--font-caption);
+    line-height: 1.5;
   }
 
   .lyrics-timing-controls {
@@ -1098,13 +1110,6 @@
     min-width: 0;
     flex: 1 1 auto;
     accent-color: var(--accent);
-  }
-
-  .lyrics-timing-hint {
-    margin: 0;
-    color: var(--muted);
-    font-size: var(--font-caption);
-    line-height: 1.5;
   }
 
   @media (max-width: 560px) {
