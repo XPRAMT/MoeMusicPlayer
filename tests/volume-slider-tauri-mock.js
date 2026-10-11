@@ -50,8 +50,8 @@
     backgroundHex: '#000000',
     accentHex: '#55D9FF',
     mainBackgroundMode: 'solid',
-    slideshowFolder: null,
-    slideshowIntervalMinutes: 10,
+    slideshowFolder: 'D:\\Pictures\\@美化\\wallpaper',
+    slideshowIntervalMinutes: 1,
     slideshowOrder: 'sequential',
   };
   let storedLyricsPreferences = JSON.parse(localStorage.getItem('__lyricsPreferences') || 'null') ?? {

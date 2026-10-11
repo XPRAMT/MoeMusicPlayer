@@ -143,6 +143,9 @@ async page => {
   assert(await slideshowOrder.getByRole('button', { name: '順序播放' }).getAttribute('aria-pressed') === 'true', 'sequential should be the default order');
   assert(await slideshowOrder.getByRole('button', { name: '隨機播放' }).count() === 1, 'random slideshow choice missing');
   assert(await page.getByRole('slider', { name: '幻燈片切換時間' }).count() === 1, 'slideshow interval missing');
+  const slideshowFolderNote = page.locator('.slideshow-folder-note');
+  assert((await slideshowFolderNote.innerText()).replace(/\s+/g, ' ').includes('D:\\Pictures\\@美化\\wallpaper 下一張 01:00'), 'slideshow folder note should include the countdown: ' + await slideshowFolderNote.innerText());
+  await page.waitForFunction(() => document.querySelector('.slideshow-countdown')?.textContent?.trim() === '下一張 00:59', null, { timeout: 2500 });
   assert(await page.getByRole('slider', { name: '主介面背景縮放' }).count() === 0, 'slideshow mode must not show background zoom');
   await page.getByRole('button', { name: '專輯封面', exact: true }).click();
   assert((await page.getByText(/沒有可用封面時暫時顯示純色/).count()) === 1, 'album-cover fallback explanation missing');

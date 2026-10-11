@@ -11,7 +11,7 @@
 
 專案已有可建置的 Tauri 2、Svelte 5、TypeScript 與 Vite 骨架，並包含 Rust Core、SQLite 曲庫、Windows 與 Android 媒體來源 adapter，以及雙語 README。
 
-- 「設定 → 主介面」背景來源保存於 settings.json schema v9：純色、單圖、幻燈片、目前歌曲專輯封面、Windows 系統桌布圖片。單圖複製至 `UserData/background`；幻燈片路徑、1–120 分鐘間隔及順序／隨機播放偏好保存於 JSON，並遞迴讀取子資料夾。非純色背景共用模糊與圖片透明度，不提供額外縮放設定。主介面與正在播放頁的所有背景圖片（含主介面專輯封面）依各自 CSS 高斯模糊值的 1.5σ 逐邊延伸，`blur(10px)` 時圖片四邊各延伸 15px；模糊為 0 時圖片正好按可視區尺寸排版。父容器向外延伸 80px，足以涵蓋最高 50px 模糊的 1.5σ（75px）並延伸至自訂標題列；播放頁封面與主介面封面採用相同自動尺寸計算，沒有額外固定放大比例。舊 settings.json 中的 `mainBackgroundZoomPercent` 作為未知欄位忽略，下一次保存時自然移除，不升設定 schema。專輯封面隨目前播放曲目更新，沒有封面時回到主題純色。Windows 系統桌布讀取當前桌布圖片，背景啟用時每 60 秒檢查一次；視窗維持不透明。v8 舊設定若存在 `UserData/background` 會遷移為單圖，否則為純色。Android 目前只支援純色與專輯封面；本機圖片選取、幻燈片及系統桌布入口停用，Android 系統桌布列於待辦。背景圖層均使用 `object-fit: cover`。`tests/main-chrome.playwright.js` 比對模糊邊緣補償、解碼尺寸、容器幾何、模式切換與 computed style。
+- 「設定 → 主介面」背景來源保存於 settings.json schema v9：純色、單圖、幻燈片、目前歌曲專輯封面、Windows 系統桌布圖片。單圖複製至 `UserData/background`；幻燈片路徑、1–120 分鐘間隔及順序／隨機播放偏好保存於 JSON，並遞迴讀取子資料夾；已選資料夾且幻燈片模式啟用時，路徑後顯示至下一張切換的倒數 `下一張 mm:ss`，總分鐘數不限制兩位，倒數與下一次換圖共用期限。非純色背景共用模糊與圖片透明度，不提供額外縮放設定。主介面與正在播放頁的所有背景圖片（含主介面專輯封面）依各自 CSS 高斯模糊值的 1.5σ 逐邊延伸，`blur(10px)` 時圖片四邊各延伸 15px；模糊為 0 時圖片正好按可視區尺寸排版。父容器向外延伸 80px，足以涵蓋最高 50px 模糊的 1.5σ（75px）並延伸至自訂標題列；播放頁封面與主介面封面採用相同自動尺寸計算，沒有額外固定放大比例。舊 settings.json 中的 `mainBackgroundZoomPercent` 作為未知欄位忽略，下一次保存時自然移除，不升設定 schema。專輯封面隨目前播放曲目更新，沒有封面時回到主題純色。Windows 系統桌布讀取當前桌布圖片，背景啟用時每 60 秒檢查一次；視窗維持不透明。v8 舊設定若存在 `UserData/background` 會遷移為單圖，否則為純色。Android 目前只支援純色與專輯封面；本機圖片選取、幻燈片及系統桌布入口停用，Android 系統桌布列於待辦。背景圖層均使用 `object-fit: cover`。`tests/main-chrome.playwright.js` 比對模糊邊緣補償、解碼尺寸、容器幾何、模式切換與 computed style。
 
 ## GitHub 與版控
 

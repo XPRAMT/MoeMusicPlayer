@@ -216,6 +216,7 @@
   let mainBackgroundObjectUrl: string | null = null;
   let mainBackgroundBytesHash = '';
   let mainBackgroundReadRevision = 0;
+  let slideshowNextInSeconds = $state<number | null>(null);
   let mainBackgroundError = $state<string | null>(null);
   let mainBackgroundBusy = $state(false);
   /** Average page+image mix for main-window text contrast; null means use page color only. */
@@ -444,16 +445,44 @@
   $effect(() => {
     const mode = themePreferences.mainBackgroundMode;
     const intervalMinutes = themePreferences.slideshowIntervalMinutes;
+    const slideshowFolder = themePreferences.slideshowFolder;
     const platform = capabilities?.platform;
-    if (!isTauri() || (mode !== 'slideshow' && mode !== 'systemWallpaper')) return;
-    const timer = setInterval(() => {
-      if (mode === 'slideshow') {
-        void loadNextSlideshowBackground();
-      } else if (mode === 'systemWallpaper' && platform === 'windows') {
-        void loadMainBackground();
-      }
-    }, mode === 'slideshow' ? intervalMinutes * 60_000 : 60_000);
-    return () => clearInterval(timer);
+    if (!isTauri()) {
+      slideshowNextInSeconds = null;
+      return;
+    }
+    if (mode === 'slideshow' && slideshowFolder) {
+      const intervalMs = intervalMinutes * 60_000;
+      let nextAt = Date.now() + intervalMs;
+      let disposed = false;
+      let switchTimer = 0;
+      const updateCountdown = () => {
+        slideshowNextInSeconds = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
+      };
+      const scheduleNext = () => {
+        switchTimer = window.setTimeout(async () => {
+          await loadNextSlideshowBackground();
+          if (disposed) return;
+          nextAt = Date.now() + intervalMs;
+          updateCountdown();
+          scheduleNext();
+        }, Math.max(0, nextAt - Date.now()));
+      };
+      updateCountdown();
+      const countdownTimer = window.setInterval(updateCountdown, 1000);
+      scheduleNext();
+      return () => {
+        disposed = true;
+        window.clearInterval(countdownTimer);
+        window.clearTimeout(switchTimer);
+        slideshowNextInSeconds = null;
+      };
+    }
+    slideshowNextInSeconds = null;
+    if (mode === 'systemWallpaper' && platform === 'windows') {
+      const timer = window.setInterval(() => void loadMainBackground(), 60_000);
+      return () => window.clearInterval(timer);
+    }
   });
 
   $effect(() => {
@@ -2174,6 +2203,12 @@
     return track?.artist?.trim() || '選取曲庫中的曲目開始播放';
   }
 
+  function formatSlideshowCountdown(totalSeconds: number): string {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
 </script>
 
 <svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleDockPointerDown} onkeydown={handleQuickSettingsKeydown} />
@@ -2366,7 +2401,12 @@
                       {mainBackgroundBusy ? '處理中' : '選擇資料夾'}
                     </button>
                   </div>
-                  <p class="source-muted-note">{themePreferences.slideshowFolder ?? '尚未選擇資料夾，請選擇包含圖片的資料夾。'}</p>
+                  <p class="source-muted-note slideshow-folder-note">
+                    <span>{themePreferences.slideshowFolder ?? '尚未選擇資料夾，請選擇包含圖片的資料夾。'}</span>
+                    {#if themePreferences.slideshowFolder && slideshowNextInSeconds !== null}
+                      <span class="slideshow-countdown">下一張 {formatSlideshowCountdown(slideshowNextInSeconds)}</span>
+                    {/if}
+                  </p>
                   <div class="main-background-mode-picker" role="group" aria-label="幻燈片播放順序">
                     <button class="soft-button" class:is-active={themePreferences.slideshowOrder === 'sequential'} type="button" aria-pressed={themePreferences.slideshowOrder === 'sequential'} onclick={() => { updateMainBackgroundLook({ slideshowOrder: 'sequential' }); saveThemePreferencesNow(); }}>順序播放</button>
                     <button class="soft-button" class:is-active={themePreferences.slideshowOrder === 'random'} type="button" aria-pressed={themePreferences.slideshowOrder === 'random'} onclick={() => { updateMainBackgroundLook({ slideshowOrder: 'random' }); saveThemePreferencesNow(); }}>隨機播放</button>
