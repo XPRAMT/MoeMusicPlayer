@@ -8,6 +8,7 @@ export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   quickSettingsBlurPx: 12,
   mainBackgroundBlurPx: 20,
   mainBackgroundOpacityPercent: 40,
+  mainBackgroundZoomPercent: 3,
   mainBackgroundMode: 'solid',
   slideshowFolder: null,
   slideshowIntervalMinutes: 10,
@@ -57,6 +58,12 @@ export function normalizeThemePreferences(value) {
       0,
       100,
       DEFAULT_THEME_PREFERENCES.mainBackgroundOpacityPercent,
+    ),
+    mainBackgroundZoomPercent: normalizeRange(
+      candidate.mainBackgroundZoomPercent,
+      0,
+      10,
+      DEFAULT_THEME_PREFERENCES.mainBackgroundZoomPercent,
     ),
     mainBackgroundMode: isMainBackgroundMode(candidate.mainBackgroundMode)
       ? candidate.mainBackgroundMode

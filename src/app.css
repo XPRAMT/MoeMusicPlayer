@@ -242,11 +242,13 @@ input:focus-visible {
   filter: blur(var(--main-background-blur, 20px));
 }
 
-/* Both views render the same current-track artwork as a blurred viewport backdrop.
-   Keep cover scaling identical so the main-interface mode does not look more zoomed. */
-.now-playing-backdrop img,
+/* The main-interface default matches the Now Playing backdrop; its zoom is independently adjustable. */
+.now-playing-backdrop img {
+  transform: scale(1.03);
+}
+
 .main-backdrop img {
-  transform: scale(1.04);
+  transform: scale(var(--main-background-scale, 1.03));
 }
 
 .app-shell.has-main-backdrop {

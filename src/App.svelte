@@ -2389,6 +2389,10 @@
                     <span><strong>背景透明度</strong><output>{themePreferences.mainBackgroundOpacityPercent}%</output></span>
                     <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundOpacityPercent} aria-label="主介面背景透明度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                   </label>
+                  <label class="lyrics-preference-range">
+                    <span><strong>背景縮放</strong><output>{themePreferences.mainBackgroundZoomPercent}%</output></span>
+                    <input type="range" min="0" max="10" step="1" value={themePreferences.mainBackgroundZoomPercent} aria-label="主介面背景縮放" oninput={(event) => updateMainBackgroundLook({ mainBackgroundZoomPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                  </label>
                 {/if}
                 {#if mainBackgroundError}
                   <p class="theme-save-status error" role="alert">{mainBackgroundError}</p>
@@ -2740,7 +2744,7 @@
   class:has-custom-titlebar={showCustomTitlebar}
   data-active-view={activeView}
   class:has-main-backdrop={effectiveMainBackgroundUrl !== null}
-  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-opacity: ${nowPlayingAppearancePreferences.backgroundOpacityPercent / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100}; --quick-settings-opacity: ${themePreferences.quickSettingsOpacityPercent}%; --quick-settings-blur: ${themePreferences.quickSettingsBlurPx}px;`}
+  style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-opacity: ${nowPlayingAppearancePreferences.backgroundOpacityPercent / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-opacity: ${themePreferences.mainBackgroundOpacityPercent / 100}; --main-background-scale: ${1 + themePreferences.mainBackgroundZoomPercent / 100}; --quick-settings-opacity: ${themePreferences.quickSettingsOpacityPercent}%; --quick-settings-blur: ${themePreferences.quickSettingsBlurPx}px;`}
 >
   {#if showCustomTitlebar}
     <WindowTitlebar transparent={isNowPlayingOpen || effectiveMainBackgroundUrl !== null} />

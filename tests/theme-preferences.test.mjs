@@ -19,6 +19,7 @@ test('default appearance uses pure black and a water-blue accent', () => {
     quickSettingsBlurPx: 12,
     mainBackgroundBlurPx: 20,
     mainBackgroundOpacityPercent: 40,
+    mainBackgroundZoomPercent: 3,
     mainBackgroundMode: 'solid',
     slideshowFolder: null,
     slideshowIntervalMinutes: 10,
@@ -142,6 +143,7 @@ test('invalid persisted values fall back to safe defaults', () => {
     quickSettingsBlurPx: 12,
     mainBackgroundBlurPx: 20,
     mainBackgroundOpacityPercent: 40,
+    mainBackgroundZoomPercent: 3,
     mainBackgroundMode: 'solid',
     slideshowFolder: null,
     slideshowIntervalMinutes: 10,
@@ -153,6 +155,9 @@ test('invalid persisted values fall back to safe defaults', () => {
   assert.equal(normalizeThemePreferences({ quickSettingsBlurPx: 80 }).quickSettingsBlurPx, 50);
   assert.equal(normalizeThemePreferences({ mainBackgroundBlurPx: 80 }).mainBackgroundBlurPx, 50);
   assert.equal(normalizeThemePreferences({ mainBackgroundOpacityPercent: -2 }).mainBackgroundOpacityPercent, 0);
+  assert.equal(normalizeThemePreferences({ mainBackgroundZoomPercent: -2 }).mainBackgroundZoomPercent, 0);
+  assert.equal(normalizeThemePreferences({ mainBackgroundZoomPercent: 11 }).mainBackgroundZoomPercent, 10);
+  assert.equal(normalizeThemePreferences({ mainBackgroundZoomPercent: 7 }).mainBackgroundZoomPercent, 7);
   assert.equal(normalizeThemePreferences({ mainBackgroundBrightnessPercent: 55 }).mainBackgroundOpacityPercent, 55);
   assert.equal(normalizeThemePreferences({ mainBackgroundMode: 'unknown' }).mainBackgroundMode, 'solid');
   assert.equal(normalizeThemePreferences({ mainBackgroundMode: 'albumCover' }).mainBackgroundMode, 'albumCover');
