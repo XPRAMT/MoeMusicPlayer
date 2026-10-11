@@ -8,6 +8,8 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **Track ID**: The stable application identity of a track. It remains the reference used by playlists and playback when a source-specific item or locator changes.
 
+**Temporary catalog（暫存曲庫）**: An in-memory SQLite catalog for unindexed tracks in the current Windows File Explorer queue. It supplies the same track, locator, lyric, candidate, and listening-statistics records as the library database, but its lifetime is limited to that queue and application run.
+
 **Source mapping**: The relationship between a track and one item observed in a configured source. It carries source identity and the locator/fingerprint used to synchronize that item.
 
 **Media locator**: A platform-specific address for reading media, such as a filesystem path or a content URI. It belongs to the native side of the application and is not a renderer-facing track identity.

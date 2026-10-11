@@ -2385,12 +2385,16 @@ mod tests {
         .expect("old track list settings remain readable");
         assert_eq!(old.row_height_px, 50);
 
-        let mut too_short = TrackListColumnSettings::default();
-        too_short.row_height_px = 0;
+        let too_short = TrackListColumnSettings {
+            row_height_px: 0,
+            ..TrackListColumnSettings::default()
+        };
         assert_eq!(repair_track_list_columns(too_short).row_height_px, 30);
 
-        let mut too_tall = TrackListColumnSettings::default();
-        too_tall.row_height_px = u8::MAX;
+        let too_tall = TrackListColumnSettings {
+            row_height_px: u8::MAX,
+            ..TrackListColumnSettings::default()
+        };
         assert_eq!(repair_track_list_columns(too_tall).row_height_px, 60);
     }
 

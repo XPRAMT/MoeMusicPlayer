@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "windows")]
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
@@ -18,11 +18,12 @@ use player_core::display_track_title;
 #[cfg(target_os = "windows")]
 use player_core::PlaybackCheckpoint;
 use player_core::{
-    LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceError, MediaSourceKind, Page,
-    PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId,
-    PlaylistListSort, PlaylistPage, PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats,
-    SourceId, SourceScanState, SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId,
-    TrackListSort, TrackMetadataError, TrackSummary,
+    FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, MediaLocator,
+    MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, PlaybackQueue, PlaybackQueueContext,
+    PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId, PlaylistListSort, PlaylistPage,
+    PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId, SourceScanState,
+    SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
+    TrackMetadata, TrackMetadataError, TrackSortDirection, TrackSortField, TrackSummary,
 };
 #[cfg(target_os = "windows")]
 use player_db::natural_title_cmp;
@@ -241,6 +242,59 @@ struct AppState {
     android_playback_error: Option<String>,
 }
 
+enum LyricsDatabase<'a> {
+    Library(&'a Database),
+    Temporary(Arc<Database>),
+}
+
+impl LyricsDatabase<'_> {
+    fn as_database(&self) -> &Database {
+        match self {
+            Self::Library(database) => database,
+            Self::Temporary(database) => database,
+        }
+    }
+}
+
+fn lyrics_database_for_track(
+    state: &AppState,
+    track_id: TrackId,
+) -> Result<LyricsDatabase<'_>, String> {
+    #[cfg(target_os = "windows")]
+    let temporary_database = state
+        .playback
+        .as_ref()
+        .and_then(|playback| playback.temporary_database_for_track(track_id));
+    #[cfg(not(target_os = "windows"))]
+    let temporary_database = None;
+    lyrics_database_from_databases(
+        state.database.as_ref(),
+        temporary_database,
+        track_id,
+        state.database_error.as_deref(),
+    )
+}
+
+fn lyrics_database_from_databases<'a>(
+    library: Option<&'a Database>,
+    temporary: Option<Arc<Database>>,
+    track_id: TrackId,
+    database_error: Option<&str>,
+) -> Result<LyricsDatabase<'a>, String> {
+    if let Some(database) = temporary {
+        if database
+            .get_track_summary(track_id)
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Ok(LyricsDatabase::Temporary(database));
+        }
+    }
+    library
+        .map(LyricsDatabase::Library)
+        .ok_or_else(|| database_error.unwrap_or("曲庫資料庫尚未開啟。").to_owned())
+}
+
 fn enter_database_work(state: &AppState) -> Result<database_lifecycle::DatabaseWorkGuard, String> {
     state
         .database_work
@@ -263,13 +317,15 @@ fn android_playback_service(
 #[cfg(target_os = "windows")]
 struct WindowsPlaybackService {
     player: PlayerHandle,
-    accounting_track_ids: Arc<Mutex<HashMap<PlaybackAccountingId, TrackId>>>,
+    accounting_track_ids: Arc<Mutex<HashMap<PlaybackAccountingId, AccountingTrack>>>,
+    statistics_runtime_id: Mutex<Option<uuid::Uuid>>,
     statistics_status: Arc<Mutex<Option<String>>>,
     statistics_collector: Mutex<Option<PlaybackStatisticsCollector>>,
     current_track: Mutex<Option<TrackSummary>>,
     command_gate: Mutex<()>,
     queue: Mutex<Option<PlaybackQueue>>,
     external_tracks: Mutex<HashMap<TrackId, ExternalPlaybackTrack>>,
+    temporary_catalog: Mutex<Option<Arc<Database>>>,
     external_queue_active: AtomicBool,
     queue_revision: AtomicU64,
     repeat_mode: Mutex<RepeatMode>,
@@ -277,6 +333,13 @@ struct WindowsPlaybackService {
     queue_advance_pending: Mutex<bool>,
     last_position_checkpoint: Mutex<Instant>,
     restore_warning: Mutex<Option<String>>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone)]
+struct AccountingTrack {
+    track_id: TrackId,
+    temporary_database: Option<Arc<Database>>,
 }
 
 #[cfg(target_os = "windows")]
@@ -1010,12 +1073,14 @@ impl WindowsPlaybackService {
         Self {
             player,
             accounting_track_ids: Arc::new(Mutex::new(HashMap::new())),
+            statistics_runtime_id: Mutex::new(None),
             statistics_status: Arc::new(Mutex::new(None)),
             statistics_collector: Mutex::new(None),
             current_track: Mutex::new(None),
             command_gate: Mutex::new(()),
             queue: Mutex::new(None),
             external_tracks: Mutex::new(HashMap::new()),
+            temporary_catalog: Mutex::new(None),
             external_queue_active: AtomicBool::new(false),
             queue_revision: AtomicU64::new(0),
             repeat_mode: Mutex::new(repeat_mode),
@@ -1031,8 +1096,49 @@ impl WindowsPlaybackService {
         self.accounting_track_ids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id, track_id);
+            .insert(
+                id,
+                AccountingTrack {
+                    track_id,
+                    temporary_database: None,
+                },
+            );
         id
+    }
+
+    fn accounting_id_for_temporary(
+        &self,
+        track_id: TrackId,
+        database: Arc<Database>,
+    ) -> PlaybackAccountingId {
+        let id = PlaybackAccountingId::new(track_id.as_uuid().as_u128());
+        self.accounting_track_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                id,
+                AccountingTrack {
+                    track_id,
+                    temporary_database: Some(database),
+                },
+            );
+        id
+    }
+
+    fn temporary_database_for_track(&self, track_id: TrackId) -> Option<Arc<Database>> {
+        let is_transient = self
+            .external_tracks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&track_id)
+            .is_some_and(|track| track.transient);
+        is_transient.then(|| {
+            self.temporary_catalog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .cloned()
+        })?
     }
 
     fn start_statistics_collector(&self, database_path: &std::path::Path) -> Result<(), String> {
@@ -1053,6 +1159,10 @@ impl WindowsPlaybackService {
                 owner_process_started_utc_ms,
             )
             .map_err(|error| format!("登記播放時長統計工作階段失敗：{error}"))?;
+        *self
+            .statistics_runtime_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(runtime_id);
 
         let player = self.player.clone();
         let track_ids = Arc::clone(&self.accounting_track_ids);
@@ -1234,7 +1344,7 @@ fn cleanup_stale_statistics_runtimes(database: &Database) {
 fn playback_statistics_worker(
     database: Database,
     player: PlayerHandle,
-    accounting_track_ids: Arc<Mutex<HashMap<PlaybackAccountingId, TrackId>>>,
+    accounting_track_ids: Arc<Mutex<HashMap<PlaybackAccountingId, AccountingTrack>>>,
     status: Arc<Mutex<Option<String>>>,
     stop: Arc<AtomicBool>,
     runtime_marker: TrackId,
@@ -1268,93 +1378,125 @@ fn playback_statistics_worker(
         let track_map = accounting_track_ids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut database_checkpoints = Vec::with_capacity(audio_checkpoints.len());
-        let mut mapped_audio_checkpoints = Vec::with_capacity(audio_checkpoints.len());
+        let mut library_group = (Vec::new(), Vec::new());
+        let mut temporary_groups: HashMap<usize, (Arc<Database>, Vec<PlaybackCheckpoint>, Vec<_>)> =
+            HashMap::new();
         let mut unmapped = false;
         for checkpoint in &audio_checkpoints {
-            if let Some(track_id) = track_map.get(&checkpoint.id) {
-                mapped_audio_checkpoints.push(*checkpoint);
-                database_checkpoints.push(PlaybackCheckpoint {
-                    track_id: *track_id,
+            if let Some(target) = track_map.get(&checkpoint.id) {
+                let database_checkpoint = PlaybackCheckpoint {
+                    track_id: target.track_id,
                     played_ms: checkpoint.played_ms,
                     duration_ms: checkpoint.duration_ms,
-                });
+                };
+                if let Some(temporary_database) = target.temporary_database.as_ref() {
+                    let key = Arc::as_ptr(temporary_database) as usize;
+                    let group = temporary_groups.entry(key).or_insert_with(|| {
+                        (Arc::clone(temporary_database), Vec::new(), Vec::new())
+                    });
+                    group.1.push(database_checkpoint);
+                    group.2.push(*checkpoint);
+                } else {
+                    library_group.0.push(database_checkpoint);
+                    library_group.1.push(*checkpoint);
+                }
             } else {
                 unmapped = true;
             }
         }
         drop(track_map);
 
-        if shutting_down {
-            if unmapped {
-                set_statistics_status(
-                    &status,
-                    Some(
-                        "部分播放時長無法對應曲目；未保存增量可能遺失，已提交統計仍保留。"
-                            .to_owned(),
-                    ),
-                );
-                return;
-            }
-            match database.finish_playback_statistics_runtime(runtime_id, &database_checkpoints) {
-                Ok(()) => {
-                    acknowledge_statistics_batch(&player, &mapped_audio_checkpoints);
-                    set_statistics_status(&status, None);
-                    return;
-                }
-                Err(error) => {
-                    shutdown_failures = shutdown_failures.saturating_add(1);
-                    set_statistics_status(
-                        &status,
-                        Some(format!("播放時長仍待保存，關閉時將重試：{error}")),
-                    );
-                    if shutdown_failures >= 10 {
-                        eprintln!(
-                            "播放時長檢查點仍待保存；已提交統計保留，未保存增量可能遺失：{error}"
-                        );
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_millis(500));
-                    continue;
-                }
-            }
-        }
-
-        if audio_checkpoints.is_empty() && !unmapped {
-            continue;
-        }
         if unmapped {
             set_statistics_status(
                 &status,
                 Some("部分播放時長仍待保存：找不到對應的曲目識別。".to_owned()),
             );
         }
-        if database_checkpoints.is_empty() {
-            if unmapped {
-                std::thread::sleep(Duration::from_secs(1));
-            }
+        if audio_checkpoints.is_empty() && !unmapped && !shutting_down {
             continue;
         }
-        match database.record_playback_checkpoints(runtime_id, &database_checkpoints) {
-            Ok(()) => {
-                acknowledge_statistics_batch(&player, &mapped_audio_checkpoints);
-                if unmapped {
+
+        let mut retry = false;
+        if !library_group.0.is_empty() {
+            match database.record_playback_checkpoints(runtime_id, &library_group.0) {
+                Ok(()) => acknowledge_statistics_batch(&player, &library_group.1),
+                Err(error) => {
+                    retry = true;
                     set_statistics_status(
                         &status,
-                        Some("部分播放時長仍待保存：找不到對應的曲目識別。".to_owned()),
+                        Some(format!("播放時長檢查點仍待保存，背景工作會重試：{error}")),
                     );
-                } else {
-                    set_statistics_status(&status, None);
+                    eprintln!("正式曲庫播放時長仍待保存：{error}");
                 }
             }
-            Err(error) => {
+        }
+        for (_, (temporary_database, checkpoints, audio)) in temporary_groups {
+            if checkpoints.is_empty() {
+                continue;
+            }
+            match temporary_database.record_playback_checkpoints(runtime_id, &checkpoints) {
+                Ok(()) => acknowledge_statistics_batch(&player, &audio),
+                Err(error) => {
+                    retry = true;
+                    set_statistics_status(
+                        &status,
+                        Some(format!("暫存曲庫播放時長仍待保存，背景工作會重試：{error}")),
+                    );
+                    eprintln!("暫存曲庫播放時長仍待保存：{error}");
+                }
+            }
+        }
+
+        if shutting_down {
+            if unmapped {
                 set_statistics_status(
                     &status,
-                    Some(format!("播放時長檢查點仍待保存，背景工作會重試：{error}")),
+                    Some("部分播放時長無法對應曲目；未保存增量可能遺失。".to_owned()),
                 );
-                eprintln!("播放時長檢查點仍待保存，背景工作會重試：{error}");
-                std::thread::sleep(Duration::from_secs(1));
+                return;
             }
+            if retry {
+                shutdown_failures = shutdown_failures.saturating_add(1);
+                if shutdown_failures >= 10 {
+                    eprintln!("關閉時播放時長仍有未保存檢查點；已提交統計保留。");
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+            if let Err(error) = database.finish_playback_statistics_runtime(runtime_id, &[]) {
+                eprintln!("無法結束正式曲庫播放統計工作階段：{error}");
+            }
+            let map = accounting_track_ids
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let temporary_databases = map
+                .values()
+                .filter_map(|target| target.temporary_database.clone())
+                .fold(
+                    HashMap::<usize, Arc<Database>>::new(),
+                    |mut databases, db| {
+                        databases.entry(Arc::as_ptr(&db) as usize).or_insert(db);
+                        databases
+                    },
+                );
+            drop(map);
+            for temporary_database in temporary_databases.into_values() {
+                if let Err(error) =
+                    temporary_database.finish_playback_statistics_runtime(runtime_id, &[])
+                {
+                    eprintln!("無法結束暫存曲庫播放統計工作階段：{error}");
+                }
+            }
+            set_statistics_status(&status, None);
+            return;
+        }
+
+        if !retry && !unmapped {
+            set_statistics_status(&status, None);
+        }
+        if retry {
+            std::thread::sleep(Duration::from_secs(1));
         }
     }
 }
@@ -2472,15 +2614,405 @@ fn library_get_page(
             .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
     })?;
 
+    let request = ListTracksQuery {
+        query,
+        field_filter,
+        offset,
+        limit,
+        sort: sort.unwrap_or_default(),
+    };
+    #[cfg(target_os = "windows")]
+    if let Some(temporary_database) = state
+        .playback
+        .as_ref()
+        .filter(|playback| playback.external_queue_active.load(Ordering::Acquire))
+        .and_then(|playback| {
+            playback
+                .temporary_catalog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        })
+    {
+        return merged_library_page(database, &temporary_database, request)
+            .map_err(|error| error.to_string());
+    }
     database
+        .list_tracks_page(request)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn file_locator_key(database: &Database, track_id: TrackId) -> Result<Option<String>, String> {
+    for locator in database
+        .track_locators(track_id)
+        .map_err(|error| error.to_string())?
+    {
+        if let MediaLocator::FileSystem(path) = locator {
+            let normalized = std::fs::canonicalize(&path).unwrap_or(path);
+            return Ok(Some(normalized.to_string_lossy().to_lowercase()));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(target_os = "windows")]
+fn merged_library_page(
+    database: &Database,
+    temporary_database: &Database,
+    request: ListTracksQuery,
+) -> Result<Page<TrackSummary>, String> {
+    const BATCH: u32 = 256;
+    let sort = request.sort;
+    let mut temporary_items = Vec::new();
+    loop {
+        let page = temporary_database
+            .list_tracks_page(ListTracksQuery {
+                query: request.query.clone(),
+                field_filter: request.field_filter.clone(),
+                sort,
+                offset: temporary_items.len() as u64,
+                limit: BATCH,
+            })
+            .map_err(|error| error.to_string())?;
+        let count = page.items.len();
+        temporary_items.extend(page.items);
+        if count < BATCH as usize || temporary_items.len() as u64 >= page.total_count {
+            break;
+        }
+    }
+
+    let mut temporary_paths = HashSet::new();
+    let mut duplicate_library_ids = HashSet::new();
+    for track in &temporary_items {
+        if let Some(path) = file_locator_key(temporary_database, track.id)? {
+            temporary_paths.insert(path);
+        }
+        if let Some(MediaLocator::FileSystem(path)) = temporary_database
+            .track_locators(track.id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|locator| matches!(locator, MediaLocator::FileSystem(_)))
+        {
+            if let Some(id) = database
+                .resolve_track_id_for_locator(&MediaLocator::FileSystem(path))
+                .map_err(|error| error.to_string())?
+            {
+                duplicate_library_ids.insert(id);
+            }
+        }
+    }
+
+    let persistent_total = database
         .list_tracks_page(ListTracksQuery {
+            query: request.query.clone(),
+            field_filter: request.field_filter.clone(),
+            sort,
+            offset: 0,
+            limit: 1,
+        })
+        .map_err(|error| error.to_string())?
+        .total_count;
+    let temporary_count = temporary_items.len() as u64;
+    let persistent_start = request.offset.saturating_sub(temporary_count);
+    let needed = u64::from(request.limit)
+        .saturating_add(temporary_count)
+        .min(persistent_total.saturating_sub(persistent_start));
+    let mut persistent_items = Vec::new();
+    while (persistent_items.len() as u64) < needed {
+        let page = database
+            .list_tracks_page(ListTracksQuery {
+                query: request.query.clone(),
+                field_filter: request.field_filter.clone(),
+                sort,
+                offset: persistent_start + persistent_items.len() as u64,
+                limit: BATCH,
+            })
+            .map_err(|error| error.to_string())?;
+        let count = page.items.len();
+        persistent_items.extend(page.items);
+        if count < BATCH as usize {
+            break;
+        }
+    }
+    let mut deduplicated_persistent = Vec::with_capacity(persistent_items.len());
+    for track in persistent_items {
+        if duplicate_library_ids.contains(&track.id) {
+            continue;
+        }
+        let duplicate_path = file_locator_key(database, track.id)?
+            .is_some_and(|path| temporary_paths.contains(&path));
+        if !duplicate_path {
+            deduplicated_persistent.push(track);
+        }
+    }
+    let mut persistent_items = deduplicated_persistent;
+    let duplicate_count = duplicate_library_ids.len() as u64;
+    persistent_items.extend(temporary_items);
+    persistent_items.sort_by(|left, right| compare_track_summaries(left, right, sort));
+    let offset =
+        usize::try_from(request.offset.saturating_sub(persistent_start)).unwrap_or(usize::MAX);
+    let limit = request.limit as usize;
+    let items = persistent_items
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect();
+    Ok(Page {
+        items,
+        offset: request.offset,
+        limit: request.limit,
+        total_count: persistent_total
+            .saturating_add(
+                temporary_database
+                    .list_tracks_page(ListTracksQuery {
+                        query: request.query,
+                        field_filter: request.field_filter,
+                        sort,
+                        offset: 0,
+                        limit: 1,
+                    })
+                    .map_err(|error| error.to_string())?
+                    .total_count,
+            )
+            .saturating_sub(duplicate_count),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn compare_track_summaries(
+    left: &TrackSummary,
+    right: &TrackSummary,
+    sort: TrackListSort,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let reverse = sort.direction == TrackSortDirection::Desc;
+    let compare_direction = |order: Ordering| if reverse { order.reverse() } else { order };
+    let order = match sort.field {
+        TrackSortField::Title => compare_direction(natural_title_cmp(
+            left.title
+                .as_deref()
+                .or(left.file_name.as_deref())
+                .unwrap_or_default(),
+            right
+                .title
+                .as_deref()
+                .or(right.file_name.as_deref())
+                .unwrap_or_default(),
+        )),
+        TrackSortField::Artist => compare_direction(
+            left.artist
+                .as_deref()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .cmp(
+                    &right
+                        .artist
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase(),
+                ),
+        ),
+        TrackSortField::Album => compare_direction(
+            left.album
+                .as_deref()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .cmp(
+                    &right
+                        .album
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase(),
+                ),
+        ),
+        TrackSortField::Year => {
+            let left_date = left.release_date.as_deref().unwrap_or_default();
+            let right_date = right.release_date.as_deref().unwrap_or_default();
+            match (left_date.is_empty(), right_date.is_empty()) {
+                (false, true) => Ordering::Less,
+                (true, false) => Ordering::Greater,
+                _ => compare_direction(left_date.cmp(right_date))
+                    .then_with(|| compare_direction(left.year.cmp(&right.year))),
+            }
+        }
+        TrackSortField::AudioFormat => {
+            let codec_rank = |codec: Option<&str>| match codec
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_uppercase()
+                .as_str()
+            {
+                "WAV" | "WAVE" => 6,
+                "FLAC" => 5,
+                "VORBIS" | "OGG VORBIS" => 4,
+                "OPUS" => 3,
+                "MP4" | "M4A" | "AAC" | "MP4A" => 2,
+                "MP3" => 1,
+                _ => 0,
+            };
+            let lossless = |codec: Option<&str>| {
+                matches!(
+                    codec
+                        .unwrap_or_default()
+                        .trim()
+                        .to_ascii_uppercase()
+                        .as_str(),
+                    "WAV"
+                        | "WAVE"
+                        | "FLAC"
+                        | "AIFF"
+                        | "AIF"
+                        | "ALAC"
+                        | "APE"
+                        | "WV"
+                        | "WAVPACK"
+                        | "PCM"
+                        | "TAK"
+                        | "TTA"
+                )
+            };
+            compare_direction(
+                codec_rank(left.codec.as_deref()).cmp(&codec_rank(right.codec.as_deref())),
+            )
+            .then_with(|| {
+                compare_direction(
+                    left.sample_rate_hz
+                        .unwrap_or_default()
+                        .cmp(&right.sample_rate_hz.unwrap_or_default()),
+                )
+            })
+            .then_with(|| {
+                let left_metric = if lossless(left.codec.as_deref()) {
+                    left.bit_depth.unwrap_or_default().into()
+                } else {
+                    left.bitrate_bps.unwrap_or_default()
+                };
+                let right_metric = if lossless(right.codec.as_deref()) {
+                    right.bit_depth.unwrap_or_default().into()
+                } else {
+                    right.bitrate_bps.unwrap_or_default()
+                };
+                compare_direction(left_metric.cmp(&right_metric))
+            })
+        }
+        TrackSortField::Duration => match (left.duration_ms, right.duration_ms) {
+            (Some(a), Some(b)) => compare_direction(a.cmp(&b)),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        },
+        TrackSortField::PlayCount => {
+            let ratio = |track: &TrackSummary| {
+                track
+                    .duration_ms
+                    .filter(|duration| *duration > 0)
+                    .map(|duration| track.played_ms as f64 / duration as f64)
+            };
+            match (ratio(left), ratio(right)) {
+                (Some(a), Some(b)) => compare_direction(a.total_cmp(&b)),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            }
+        }
+    };
+    if order == Ordering::Equal {
+        if sort.field == TrackSortField::AudioFormat || !reverse {
+            left.id.cmp(&right.id)
+        } else {
+            right.id.cmp(&left.id)
+        }
+    } else {
+        order
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn queue_for_merged_library_search(
+    database: &Database,
+    temporary_database: Option<&Database>,
+    selected_track_id: TrackId,
+    query: Option<String>,
+    field_filter: Option<TrackFieldFilter>,
+    sort: TrackListSort,
+    shuffle: bool,
+) -> Result<PlaybackQueue, String> {
+    let mut tracks = database
+        .list_track_ids_filtered(query.as_deref(), field_filter.as_ref(), sort)
+        .map_err(|error| error.to_string())?;
+    let mut summaries = database
+        .get_track_summaries(&tracks)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut temporary_tracks = Vec::new();
+    if let Some(temporary_database) = temporary_database {
+        let mut offset = 0u64;
+        loop {
+            let page = temporary_database
+                .list_tracks_page(ListTracksQuery {
+                    query: query.clone(),
+                    field_filter: field_filter.clone(),
+                    sort,
+                    offset,
+                    limit: 256,
+                })
+                .map_err(|error| error.to_string())?;
+            offset += page.items.len() as u64;
+            let count = page.items.len();
+            temporary_tracks.extend(page.items);
+            if count < 256 {
+                break;
+            }
+        }
+    }
+    let mut temporary_paths = HashSet::new();
+    for track in &temporary_tracks {
+        if let Some(temporary_database) = temporary_database {
+            if let Some(path) = file_locator_key(temporary_database, track.id)? {
+                temporary_paths.insert(path);
+            }
+        }
+    }
+    let mut retained = Vec::with_capacity(summaries.len());
+    let mut retained_ids = Vec::with_capacity(tracks.len());
+    for (track_id, summary) in tracks.drain(..).zip(summaries.drain(..)) {
+        if file_locator_key(database, track_id)?.is_none_or(|path| !temporary_paths.contains(&path))
+        {
+            retained_ids.push(track_id);
+            retained.push(summary);
+        }
+    }
+    tracks = retained_ids;
+    summaries = retained;
+    tracks.extend(temporary_tracks.iter().map(|track| track.id));
+    summaries.extend(temporary_tracks);
+    summaries.sort_by(|left, right| compare_track_summaries(left, right, sort));
+    tracks = summaries.iter().map(|track| track.id).collect();
+    let selected_index = tracks
+        .iter()
+        .position(|track_id| *track_id == selected_track_id)
+        .ok_or_else(|| "所選曲目已不在目前搜尋結果中。".to_owned())?;
+    let mut queue = PlaybackQueue::with_entries(
+        tracks
+            .into_iter()
+            .map(|track_id| PlaybackQueueEntry {
+                track_id,
+                source_position: None,
+            })
+            .collect(),
+        PlaybackQueueContext::Library {
             query,
             field_filter,
-            offset,
-            limit,
-            sort: sort.unwrap_or_default(),
-        })
-        .map_err(|error| error.to_string())
+            sort,
+        },
+        selected_index,
+    )
+    .ok_or_else(|| "目前搜尋結果沒有可播放的曲目。".to_owned())?;
+    set_queue_shuffle_with_mixed_stats(database, temporary_database, &mut queue, shuffle)?;
+    Ok(queue)
 }
 
 #[tauri::command]
@@ -5003,6 +5535,32 @@ fn playback_get_queue_page(
         let (revision, queue) = snapshot_playback_queue(service);
         let mut page =
             build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)?;
+        let temporary_database = service
+            .temporary_catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(temporary_database) = temporary_database.as_ref() {
+            let temporary_ids = page
+                .items
+                .iter()
+                .filter(|item| item.track.is_none())
+                .map(|item| item.track_id)
+                .collect::<Vec<_>>();
+            let temporary_tracks = temporary_database
+                .get_track_summaries(&temporary_ids)
+                .map_err(|error| error.to_string())?;
+            let temporary_by_id = temporary_ids
+                .into_iter()
+                .zip(temporary_tracks)
+                .filter_map(|(id, track)| track.map(|track| (id, track)))
+                .collect::<HashMap<_, _>>();
+            for item in &mut page.items {
+                if let Some(track) = temporary_by_id.get(&item.track_id) {
+                    item.track = Some(track.clone());
+                }
+            }
+        }
         let transient = service
             .external_tracks
             .lock()
@@ -5523,6 +6081,11 @@ async fn playback_set_shuffle(
             .shuffle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = enabled;
+        let temporary_database = service
+            .temporary_catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         if let Some(queue) = service
             .queue
             .lock()
@@ -5537,7 +6100,16 @@ async fn playback_set_shuffle(
                         .clone()
                         .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
                 })?;
-                set_queue_shuffle_with_latest_stats(database, queue, true)?;
+                if service.external_queue_active.load(Ordering::Acquire) {
+                    set_queue_shuffle_with_mixed_stats(
+                        database,
+                        temporary_database.as_deref(),
+                        queue,
+                        true,
+                    )?;
+                } else {
+                    set_queue_shuffle_with_latest_stats(database, queue, true)?;
+                }
             } else {
                 queue.set_shuffle(enabled);
             }
@@ -5760,6 +6332,71 @@ fn set_queue_shuffle_with_latest_stats(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn set_queue_shuffle_with_mixed_stats(
+    database: &Database,
+    temporary_database: Option<&Database>,
+    queue: &mut PlaybackQueue,
+    enabled: bool,
+) -> Result<(), String> {
+    if !enabled || queue.shuffle() {
+        queue.set_shuffle(enabled);
+        return Ok(());
+    }
+    let track_ids = queue
+        .snapshot()
+        .entries
+        .into_iter()
+        .map(|entry| entry.track_id)
+        .collect::<Vec<_>>();
+    let mut statistics = HashMap::new();
+    let mut library_ids = Vec::new();
+    let mut temporary_ids = Vec::new();
+    for track_id in track_ids {
+        if temporary_database
+            .map(|temporary| temporary.get_track_summary(track_id))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .flatten()
+            .is_some()
+        {
+            temporary_ids.push(track_id);
+        } else {
+            library_ids.push(track_id);
+        }
+    }
+    if !library_ids.is_empty() {
+        statistics.extend(
+            database
+                .playback_statistics_for(&library_ids)
+                .map_err(|error| format!("讀取正式曲庫播放時長失敗：{error}"))?,
+        );
+    }
+    if let Some(temporary_database) = temporary_database {
+        if !temporary_ids.is_empty() {
+            statistics.extend(
+                temporary_database
+                    .playback_statistics_for(&temporary_ids)
+                    .map_err(|error| format!("讀取暫存曲庫播放時長失敗：{error}"))?,
+            );
+        }
+    }
+    let stats_by_track = statistics
+        .into_iter()
+        .map(|(track_id, stats)| {
+            (
+                track_id,
+                QueueTrackListeningStats {
+                    played_ms: stats.played_ms,
+                    duration_ms: stats.duration_ms,
+                },
+            )
+        })
+        .collect();
+    queue.set_shuffle_with_stats(true, &stats_by_track);
+    Ok(())
+}
+
 #[tauri::command]
 fn windows_register_audio_associations() -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -5957,6 +6594,7 @@ fn open_external_audio_path(
 
     let mut entries = Vec::with_capacity(paths.len());
     let mut transient = HashMap::new();
+    let mut temporary_records = Vec::new();
     let mut selected_index = None;
     for (index, path) in paths.iter().enumerate() {
         let library_track = database
@@ -5980,6 +6618,40 @@ fn open_external_audio_path(
         } else {
             let id = TrackId::new();
             let summary = external_track_summary(path, id);
+            let file_metadata = std::fs::metadata(path)
+                .map_err(|error| format!("讀取音樂檔案資訊失敗：{error}"))?;
+            temporary_records.push(MediaTrackRecord {
+                identity: TrackIdentity {
+                    source_id: SourceId::new(),
+                    source_item_id: path.to_string_lossy().into_owned(),
+                    locator_key: Some(path.to_string_lossy().into_owned()),
+                },
+                locator: MediaLocator::FileSystem(path.clone()),
+                fingerprint: FileFingerprint {
+                    size_bytes: file_metadata.len(),
+                    modified_at_utc_ms: file_metadata.modified().ok().and_then(|modified| {
+                        modified
+                            .duration_since(UNIX_EPOCH)
+                            .ok()
+                            .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+                    }),
+                },
+                metadata: Some(TrackMetadata {
+                    title: summary.title.clone(),
+                    artist: summary.artist.clone(),
+                    album: summary.album.clone(),
+                    album_artist: summary.album_artist.clone(),
+                    track_number: summary.track_number,
+                    disc_number: summary.disc_number,
+                    duration_ms: summary.duration_ms,
+                    codec: summary.codec.clone(),
+                    bitrate_bps: summary.bitrate_bps,
+                    sample_rate_hz: summary.sample_rate_hz,
+                    release_date: summary.release_date.clone(),
+                    year: summary.year,
+                    bit_depth: summary.bit_depth,
+                }),
+            });
             (id, summary, true)
         };
         transient.insert(
@@ -6000,6 +6672,79 @@ fn open_external_audio_path(
     }
     let selected_index =
         selected_index.ok_or_else(|| "選取的音樂檔案不在資料夾清單中。".to_owned())?;
+
+    let temporary_database = if temporary_records.is_empty() {
+        None
+    } else {
+        let mut temporary_database =
+            Database::open_in_memory().map_err(|error| format!("建立暫存曲庫失敗：{error}"))?;
+        let parent = selected_path
+            .parent()
+            .ok_or_else(|| "無法判斷音樂檔案所在資料夾。".to_owned())?;
+        let root = temporary_database
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                parent
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "檔案總管佇列".to_owned()),
+                MediaLocator::FileSystem(parent.to_path_buf()),
+            )
+            .map_err(|error| format!("建立暫存曲庫來源失敗：{error}"))?;
+        for record in &mut temporary_records {
+            record.identity.source_id = root.id;
+        }
+        temporary_database
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Complete,
+                &temporary_records,
+                &temporary_records,
+                &[],
+                now_utc_epoch_ms().unwrap_or_default(),
+            )
+            .map_err(|error| format!("載入暫存曲庫失敗：{error}"))?;
+        let runtime_id = *service
+            .statistics_runtime_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(runtime_id) = runtime_id {
+            temporary_database
+                .register_playback_statistics_runtime(runtime_id, None, None)
+                .map_err(|error| format!("登記暫存曲庫統計工作階段失敗：{error}"))?;
+        }
+        let temporary_database = Arc::new(temporary_database);
+        for record in &temporary_records {
+            let MediaLocator::FileSystem(path) = &record.locator else {
+                continue;
+            };
+            let transient_id = transient
+                .iter()
+                .find_map(|(id, track)| (track.transient && track.path == *path).then_some(*id));
+            let Some(transient_id) = transient_id else {
+                continue;
+            };
+            let catalog_id = temporary_database
+                .resolve_track_id_for_locator(&record.locator)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "暫存曲庫沒有建立曲目對應。".to_owned())?;
+            let mut track = transient
+                .remove(&transient_id)
+                .ok_or_else(|| "暫存曲目在建立資料庫時消失。".to_owned())?;
+            track.summary = temporary_database
+                .get_track_summary(catalog_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "暫存曲庫曲目摘要不存在。".to_owned())?;
+            transient.insert(catalog_id, track);
+            for entry in &mut entries {
+                if entry.track_id == transient_id {
+                    entry.track_id = catalog_id;
+                }
+            }
+        }
+        Some(temporary_database)
+    };
+
     let mut queue = PlaybackQueue::with_entries(
         entries,
         PlaybackQueueContext::Library {
@@ -6021,7 +6766,12 @@ fn open_external_audio_path(
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if shuffle {
         if let Some(database) = database {
-            set_queue_shuffle_with_latest_stats(database, &mut queue, true)?;
+            set_queue_shuffle_with_mixed_stats(
+                database,
+                temporary_database.as_deref(),
+                &mut queue,
+                true,
+            )?;
         } else {
             queue.set_shuffle(true);
         }
@@ -6039,7 +6789,16 @@ fn open_external_audio_path(
         .get(&selected_id)
         .is_some_and(|track| track.transient)
     {
-        service.player.request_load_and_play(selected_file)
+        let accounting_id = temporary_database
+            .as_ref()
+            .map(|database| service.accounting_id_for_temporary(selected_id, Arc::clone(database)));
+        if let Some(accounting_id) = accounting_id {
+            service
+                .player
+                .request_load_and_play_accounted(selected_file, accounting_id)
+        } else {
+            service.player.request_load_and_play(selected_file)
+        }
     } else {
         service
             .player
@@ -6054,6 +6813,79 @@ fn open_external_audio_path(
         .external_tracks
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = transient;
+    let previous_temporary_database = {
+        let mut catalog = service
+            .temporary_catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::replace(&mut *catalog, temporary_database.clone())
+    };
+    if let Some(previous) = previous_temporary_database {
+        let old_ids = {
+            let accounting = service
+                .accounting_track_ids
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            accounting
+                .iter()
+                .filter_map(|(id, target)| {
+                    target
+                        .temporary_database
+                        .as_ref()
+                        .is_some_and(|database| Arc::ptr_eq(database, &previous))
+                        .then_some((*id, target.track_id))
+                })
+                .collect::<Vec<_>>()
+        };
+        let old_accounting_ids = old_ids
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<std::collections::HashSet<_>>();
+        if let Some(runtime_id) = *service
+            .statistics_runtime_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            let deadline = Instant::now() + Duration::from_secs(6);
+            service.player.request_playback_accounting_flush();
+            loop {
+                let pending = service
+                    .player
+                    .playback_accounting_checkpoints()
+                    .iter()
+                    .any(|checkpoint| old_accounting_ids.contains(&checkpoint.id));
+                if !pending || Instant::now() >= deadline {
+                    break;
+                }
+                service.player.request_playback_accounting_flush();
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let still_pending = service
+                .player
+                .playback_accounting_checkpoints()
+                .iter()
+                .any(|checkpoint| old_accounting_ids.contains(&checkpoint.id));
+            if !still_pending {
+                let _ = previous.finish_playback_statistics_runtime(runtime_id, &[]);
+                let mut accounting = service
+                    .accounting_track_ids
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                accounting.retain(|id, _| !old_accounting_ids.contains(id));
+            }
+        } else {
+            let mut accounting = service
+                .accounting_track_ids
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            accounting.retain(|_, target| {
+                !target
+                    .temporary_database
+                    .as_ref()
+                    .is_some_and(|database| Arc::ptr_eq(database, &previous))
+            });
+        }
+    }
     *service
         .queue
         .lock()
@@ -6082,8 +6914,26 @@ fn prepare_track_load(
         .cloned()
     {
         let ticket = if track.transient {
+            let temporary_database = service
+                .temporary_catalog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .cloned();
+            let accounting_id = temporary_database
+                .map(|database| service.accounting_id_for_temporary(track_id, database));
             if force_play {
-                service.player.request_load_and_play(track.path)
+                if let Some(accounting_id) = accounting_id {
+                    service
+                        .player
+                        .request_load_and_play_accounted(track.path, accounting_id)
+                } else {
+                    service.player.request_load_and_play(track.path)
+                }
+            } else if let Some(accounting_id) = accounting_id {
+                service
+                    .player
+                    .request_load_preserving_playback_accounted(track.path, accounting_id)
             } else {
                 service.player.request_load_preserving_playback(track.path)
             }
@@ -6325,19 +7175,29 @@ fn commit_track_change(
 ) -> Result<(), String> {
     let queue_replaced = replacement_queue.is_some();
     if let Some(queue) = replacement_queue {
+        let contains_temporary_tracks = queue.snapshot().entries.iter().any(|entry| {
+            service
+                .external_tracks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&entry.track_id)
+                .is_some_and(|track| track.transient)
+        });
         let mut current_queue = service
             .queue
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *current_queue = Some(queue);
         bump_queue_revision(service);
-        *service
-            .external_tracks
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = HashMap::new();
-        service
-            .external_queue_active
-            .store(false, Ordering::Release);
+        if !contains_temporary_tracks {
+            *service
+                .external_tracks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = HashMap::new();
+            service
+                .external_queue_active
+                .store(false, Ordering::Release);
+        }
     } else if let Some(cursor) = target_cursor {
         let mut queue = service
             .queue
@@ -6881,7 +7741,6 @@ fn play_track_from_database(
     let replacement_queue = if preserve_queue {
         None
     } else {
-        let mut queue = queue_for_track(database, track_id, source)?;
         let repeat_mode = *service
             .repeat_mode
             .lock()
@@ -6890,8 +7749,48 @@ fn play_track_from_database(
             .shuffle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temporary_database = service
+            .temporary_catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let used_merged_search = service.external_queue_active.load(Ordering::Acquire)
+            && matches!(&source, Some(PlaybackQueueSource::Library { .. }) | None);
+        let mut queue = match (
+            &source,
+            service.external_queue_active.load(Ordering::Acquire),
+        ) {
+            (
+                Some(PlaybackQueueSource::Library {
+                    query,
+                    field_filter,
+                    sort,
+                }),
+                true,
+            ) => queue_for_merged_library_search(
+                database,
+                temporary_database.as_deref(),
+                track_id,
+                query.clone(),
+                field_filter.clone(),
+                *sort,
+                shuffle,
+            )?,
+            (None, true) => queue_for_merged_library_search(
+                database,
+                temporary_database.as_deref(),
+                track_id,
+                None,
+                None,
+                TrackListSort::default(),
+                shuffle,
+            )?,
+            _ => queue_for_track(database, track_id, source)?,
+        };
         queue.set_repeat_mode(queue_repeat_mode(repeat_mode));
-        set_queue_shuffle_with_latest_stats(database, &mut queue, shuffle)?;
+        if !used_merged_search {
+            set_queue_shuffle_with_latest_stats(database, &mut queue, shuffle)?;
+        }
         Some(queue)
     };
     drop(existing_queue);
@@ -6913,10 +7812,24 @@ fn play_track_from_database(
             .request_play()
             .map_err(|error| playback_audio_error_message(&error))?
     } else if external_track.as_ref().is_some_and(|track| track.transient) {
-        service
-            .player
-            .request_load_and_play(path)
-            .map_err(|error| playback_audio_error_message(&error))?
+        let accounting_id = service
+            .temporary_catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .cloned()
+            .map(|database| service.accounting_id_for_temporary(track_id, database));
+        if let Some(accounting_id) = accounting_id {
+            service
+                .player
+                .request_load_and_play_accounted(path, accounting_id)
+                .map_err(|error| playback_audio_error_message(&error))?
+        } else {
+            service
+                .player
+                .request_load_and_play(path)
+                .map_err(|error| playback_audio_error_message(&error))?
+        }
     } else {
         // Library, playlist, and queue-row clicks start playback immediately.
         service
@@ -7251,11 +8164,12 @@ mod windows_library_integration_tests {
     };
     use super::{
         apply_system_media_event, build_playback_queue_page, checkpoint_playback_position,
-        commit_track_change, first_supported_audio_argument, navigate_queue, pause_playback,
-        play_track_from_database, playback_audio_error_message, queue_for_track,
-        restore_playback_session, same_folder_audio_files, save_playback_session,
-        set_playback_volume, set_queue_shuffle_with_latest_stats, snapshot_playback_queue,
-        PlaybackQueueSource, PreparedTrackChange, TrackSummary, WindowsPlaybackService,
+        commit_track_change, first_supported_audio_argument, lyrics_database_from_databases,
+        merged_library_page, navigate_queue, pause_playback, play_track_from_database,
+        playback_audio_error_message, queue_for_track, restore_playback_session,
+        same_folder_audio_files, save_playback_session, set_playback_volume,
+        set_queue_shuffle_with_latest_stats, snapshot_playback_queue, PlaybackQueueSource,
+        PreparedTrackChange, TrackSummary, WindowsPlaybackService,
     };
     use player_audio_windows::{
         system_media::{SystemMediaController, SystemMediaEvent},
@@ -7265,7 +8179,7 @@ mod windows_library_integration_tests {
         FileFingerprint, LibraryRepository, ListTracksQuery, MediaLocator, MediaSourceKind,
         MediaTrackRecord, PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, Playlist,
         PlaylistEntry, QueueRepeatMode, SourceId, SourceScanState, TrackField, TrackFieldFilter,
-        TrackId, TrackIdentity, TrackMetadata,
+        TrackId, TrackIdentity, TrackListSort, TrackMetadata,
     };
     use player_db::{Database, PlaybackSessionCheckpoint};
     use std::sync::atomic::Ordering;
@@ -8003,6 +8917,191 @@ mod windows_library_integration_tests {
     }
 
     #[test]
+    fn explorer_catalog_search_merges_naturally_paginates_and_deduplicates_paths() {
+        let directory = TestDirectory::new();
+        fs::create_dir_all(&directory.0).unwrap();
+        let duplicate_path = directory.0.join("duplicate.flac");
+        let first_path = directory.0.join("Song 1.flac");
+        let second_path = directory.0.join("Song 2.flac");
+        let last_path = directory.0.join("Song 10.flac");
+        for path in [&duplicate_path, &first_path, &second_path, &last_path] {
+            fs::write(path, b"fixture").unwrap();
+        }
+
+        let mut library = Database::open_in_memory().unwrap();
+        let library_root = library
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "persistent",
+                MediaLocator::FileSystem(directory.0.clone()),
+            )
+            .unwrap();
+        let mut temporary = Database::open_in_memory().unwrap();
+        let temporary_root = temporary
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "temporary",
+                MediaLocator::FileSystem(directory.0.clone()),
+            )
+            .unwrap();
+        let record = |root: SourceId, item: &str, title: &str, path: &Path| MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: root,
+                source_item_id: item.to_owned(),
+                locator_key: Some(item.to_owned()),
+            },
+            locator: MediaLocator::FileSystem(path.to_path_buf()),
+            fingerprint: FileFingerprint {
+                size_bytes: 1,
+                modified_at_utc_ms: Some(1),
+            },
+            metadata: Some(TrackMetadata {
+                title: Some(title.to_owned()),
+                ..TrackMetadata::default()
+            }),
+        };
+        let persistent_records = vec![
+            record(library_root.id, "first", "Song 1", &first_path),
+            record(library_root.id, "duplicate", "Duplicate", &duplicate_path),
+            record(library_root.id, "last", "Song 10", &last_path),
+        ];
+        library
+            .apply_source_scan(
+                &library_root,
+                &SourceScanState::Complete,
+                &persistent_records,
+                &persistent_records,
+                &[],
+                1,
+            )
+            .unwrap();
+        let transient_records = vec![
+            record(temporary_root.id, "middle", "Song 2", &second_path),
+            record(
+                temporary_root.id,
+                "duplicate-again",
+                "Duplicate",
+                &duplicate_path,
+            ),
+        ];
+        temporary
+            .apply_source_scan(
+                &temporary_root,
+                &SourceScanState::Complete,
+                &transient_records,
+                &transient_records,
+                &[],
+                1,
+            )
+            .unwrap();
+
+        let first_page = merged_library_page(
+            &library,
+            &temporary,
+            ListTracksQuery {
+                offset: 0,
+                limit: 2,
+                sort: TrackListSort::default(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(first_page.total_count, 4);
+        assert_eq!(
+            first_page
+                .items
+                .iter()
+                .map(|track| track.title.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["Duplicate", "Song 1"]
+        );
+        let second_page = merged_library_page(
+            &library,
+            &temporary,
+            ListTracksQuery {
+                offset: 2,
+                limit: 2,
+                sort: TrackListSort::default(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            second_page
+                .items
+                .iter()
+                .map(|track| track.title.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["Song 2", "Song 10"]
+        );
+    }
+
+    #[test]
+    fn lyrics_database_router_selects_memory_catalog_for_transient_track_id() {
+        let directory = TestDirectory::new();
+        fs::create_dir_all(&directory.0).unwrap();
+        let audio_path = directory.0.join("transient.mp3");
+        fs::write(&audio_path, b"fixture").unwrap();
+        let library = Database::open_in_memory().unwrap();
+        let mut temporary = Database::open_in_memory().unwrap();
+        let root = temporary
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "temporary lyrics fixture",
+                MediaLocator::FileSystem(directory.0.clone()),
+            )
+            .unwrap();
+        let record = MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: root.id,
+                source_item_id: "transient.mp3".to_owned(),
+                locator_key: None,
+            },
+            locator: MediaLocator::FileSystem(audio_path.clone()),
+            fingerprint: FileFingerprint {
+                size_bytes: 1,
+                modified_at_utc_ms: None,
+            },
+            metadata: Some(TrackMetadata {
+                title: Some("Transient lyrics target".to_owned()),
+                ..TrackMetadata::default()
+            }),
+        };
+        temporary
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Complete,
+                std::slice::from_ref(&record),
+                std::slice::from_ref(&record),
+                &[],
+                1,
+            )
+            .unwrap();
+        let track_id = temporary
+            .resolve_track_id_for_locator(&MediaLocator::FileSystem(audio_path))
+            .unwrap()
+            .unwrap();
+        let selected = lyrics_database_from_databases(
+            Some(&library),
+            Some(Arc::new(temporary)),
+            track_id,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            selected
+                .as_database()
+                .get_track_summary(track_id)
+                .unwrap()
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("Transient lyrics target")
+        );
+        assert!(library.get_track_summary(track_id).unwrap().is_none());
+    }
+
+    #[test]
     fn playback_queue_page_preserves_traversal_and_does_not_mutate_playback_or_session() {
         let database = Database::open_in_memory().expect("open isolated database");
         let first_track = TrackId::new();
@@ -8225,6 +9324,135 @@ mod windows_library_integration_tests {
         assert!(reopened
             .list_playback_statistics_runtimes()
             .expect("inspect statistics runtimes")
+            .is_empty());
+    }
+
+    #[test]
+    fn explorer_queue_statistics_are_written_only_to_the_temporary_catalog() {
+        let temporary = TestDirectory::new();
+        fs::create_dir_all(&temporary.0).unwrap();
+        let permanent_path = temporary.0.join("library.sqlite3");
+        let permanent = Database::open(&permanent_path).unwrap();
+        let audio_path = temporary.0.join("transient.wav");
+        fs::write(&audio_path, b"fixture").unwrap();
+        let mut temporary_database = Database::open_in_memory().unwrap();
+        let root = temporary_database
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "explorer queue",
+                MediaLocator::FileSystem(temporary.0.clone()),
+            )
+            .unwrap();
+        let record = MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: root.id,
+                source_item_id: "transient.wav".to_owned(),
+                locator_key: None,
+            },
+            locator: MediaLocator::FileSystem(audio_path.clone()),
+            fingerprint: FileFingerprint {
+                size_bytes: 1,
+                modified_at_utc_ms: None,
+            },
+            metadata: Some(TrackMetadata {
+                title: Some("Transient".to_owned()),
+                duration_ms: Some(60_000),
+                ..TrackMetadata::default()
+            }),
+        };
+        temporary_database
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Complete,
+                std::slice::from_ref(&record),
+                std::slice::from_ref(&record),
+                &[],
+                1,
+            )
+            .unwrap();
+        let resolved_id = temporary_database
+            .resolve_track_id_for_locator(&MediaLocator::FileSystem(audio_path.clone()))
+            .unwrap()
+            .unwrap();
+        let temporary_database = Arc::new(temporary_database);
+        let player = PlayerHandle::with_backend_factory(|| {
+            Ok(Box::new(ClockedAudioBackend {
+                loaded: false,
+                playing: false,
+                position: Duration::ZERO,
+                started_at: None,
+            }) as Box<dyn AudioBackend>)
+        })
+        .unwrap();
+        let ready_deadline = Instant::now() + Duration::from_secs(2);
+        while player.snapshot().state == AudioPlaybackState::Initializing {
+            assert!(Instant::now() < ready_deadline);
+            thread::sleep(Duration::from_millis(2));
+        }
+        let service = WindowsPlaybackService::with_modes(player, false, super::RepeatMode::Off);
+        service.start_statistics_collector(&permanent_path).unwrap();
+        let runtime_id = service
+            .statistics_runtime_id
+            .lock()
+            .unwrap()
+            .expect("collector registered runtime");
+        temporary_database
+            .register_playback_statistics_runtime(runtime_id, None, None)
+            .unwrap();
+        *service.temporary_catalog.lock().unwrap() = Some(Arc::clone(&temporary_database));
+        service.external_tracks.lock().unwrap().insert(
+            resolved_id,
+            super::ExternalPlaybackTrack {
+                path: audio_path.clone(),
+                summary: temporary_database
+                    .get_track_summary(resolved_id)
+                    .unwrap()
+                    .unwrap(),
+                transient: true,
+            },
+        );
+        let accounting_id =
+            service.accounting_id_for_temporary(resolved_id, Arc::clone(&temporary_database));
+        service
+            .player
+            .request_load_and_play_accounted(
+                audio_path.to_string_lossy().into_owned(),
+                accounting_id,
+            )
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap();
+        thread::sleep(Duration::from_millis(180));
+        service
+            .player
+            .request_pause()
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let played_ms = loop {
+            let stats = temporary_database
+                .playback_statistics_for(&[resolved_id])
+                .unwrap();
+            if stats[&resolved_id].played_ms > 0 {
+                break stats[&resolved_id].played_ms;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "temporary statistics did not flush"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(played_ms >= 80);
+        assert_eq!(
+            permanent.playback_statistics_for(&[resolved_id]).unwrap()[&resolved_id].played_ms,
+            0,
+            "temporary listening time must not enter the persistent library database"
+        );
+        service.shutdown_statistics_collector();
+        assert!(temporary_database
+            .list_playback_statistics_runtimes()
+            .unwrap()
             .is_empty());
     }
 

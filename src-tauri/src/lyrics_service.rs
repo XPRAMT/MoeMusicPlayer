@@ -899,17 +899,18 @@ pub async fn lyrics_get_track(
     track_id: String,
 ) -> Result<LyricsTrackResultDto, String> {
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
+    let database = super::lyrics_database_for_track(&state, track_id)?;
     let settings = state
         .settings
         .snapshot()
         .map_err(|error| error.to_string())?;
-    load_track_result_with_context(database, track_id, Some(&app), &settings.sources).await
+    load_track_result_with_context(
+        database.as_database(),
+        track_id,
+        Some(&app),
+        &settings.sources,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -925,20 +926,20 @@ pub async fn lyrics_search(
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
     validate_request_id(&request_id)?;
     let manual = manual.unwrap_or(false);
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
+    let database = super::lyrics_database_for_track(&state, track_id)?;
 
     let (cancellation, _guard) = state.lyrics_service.begin_search(&request_id)?;
     let settings = state
         .settings
         .snapshot()
         .map_err(|error| error.to_string())?;
-    let initial =
-        load_track_result_with_context(database, track_id, Some(&app), &settings.sources).await?;
+    let initial = load_track_result_with_context(
+        database.as_database(),
+        track_id,
+        Some(&app),
+        &settings.sources,
+    )
+    .await?;
     // Automatic follow-up after an empty get may rediscover local/embedded lyrics.
     // Explicit manual selection must continue to provider candidates even when lyrics exist.
     // Cleared tracks skip automatic provider search until the user searches manually.
@@ -951,6 +952,7 @@ pub async fn lyrics_search(
         return Ok(LyricsTrackResultDto::empty(None));
     }
     let track = database
+        .as_database()
         .get_track_summary(track_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "找不到這首曲目。".to_owned())?;
@@ -960,7 +962,7 @@ pub async fn lyrics_search(
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
     let local_candidates = if manual {
-        local_source_candidates(database, track_id, &track)
+        local_source_candidates(database.as_database(), track_id, &track)
             .await
             .unwrap_or_default()
     } else {
@@ -968,7 +970,14 @@ pub async fn lyrics_search(
     };
     let searched = state
         .lyrics_service
-        .search_track(database, track_id, &track, cancellation, !manual, query)
+        .search_track(
+            database.as_database(),
+            track_id,
+            &track,
+            cancellation,
+            !manual,
+            query,
+        )
         .await;
     let mut result = match searched {
         Ok(result) => result,
@@ -1000,15 +1009,10 @@ pub async fn lyrics_load_more(
 ) -> Result<LyricsTrackResultDto, String> {
     let _database_work = super::enter_database_work(&state)?;
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
+    let database = super::lyrics_database_for_track(&state, track_id)?;
     state
         .lyrics_service
-        .load_more_track(database, track_id, CancellationToken::new())
+        .load_more_track(database.as_database(), track_id, CancellationToken::new())
         .await
 }
 
@@ -1025,20 +1029,17 @@ pub async fn lyrics_clear_track(
 ) -> Result<LyricsTrackResultDto, String> {
     let _database_work = super::enter_database_work(&state)?;
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
+    let database = super::lyrics_database_for_track(&state, track_id)?;
     let _ = app;
     let now = super::now_utc_epoch_ms()?;
     // Persist an empty manual sentinel so local sidecar/embedded lyrics and automatic provider
     // search stay suppressed until the user manually picks lyrics again.
     database
+        .as_database()
         .clear_track_lyrics(track_id)
         .map_err(|error| error.to_string())?;
     database
+        .as_database()
         .save_manual_track_lyrics(&TrackLyrics {
             track_id,
             provider: LyricProvider::Sidecar,
@@ -1062,14 +1063,9 @@ pub fn lyrics_select_candidate(
     if candidate_id.is_empty() || candidate_id.len() > 256 {
         return Err("歌詞候選識別碼無效，請重新搜尋。".to_owned());
     }
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
+    let database = super::lyrics_database_for_track(&state, track_id)?;
     select_candidate_from_database(
-        database,
+        database.as_database(),
         track_id,
         &candidate_id,
         super::now_utc_epoch_ms()?,
@@ -2153,6 +2149,53 @@ mod tests {
         assert!(database
             .get_track_lyrics(track.id)
             .expect("read lyric cache")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn temporary_catalog_keeps_manual_lyrics_and_candidates_in_memory_only() {
+        let (persistent, _persistent_dir, persistent_track) =
+            seeded_test_database("Persistent Song", "Artist", "Album");
+        let (temporary, _temporary_dir, temporary_track) =
+            seeded_test_database("Transient Song", "Artist", "Album");
+        let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
+        let result = service
+            .search_track(
+                &temporary,
+                temporary_track.id,
+                &temporary_track,
+                CancellationToken::new(),
+                false,
+                None,
+            )
+            .await
+            .expect("search candidates using the temporary SQLite database");
+        assert!(!result.candidates.is_empty());
+        let candidate_id = result
+            .candidates
+            .iter()
+            .find(|candidate| candidate.id == "netease:0")
+            .expect("fixture candidate exists")
+            .id
+            .clone();
+        super::select_candidate_from_database(
+            &temporary,
+            temporary_track.id,
+            &candidate_id,
+            1_800_000_000_100,
+        )
+        .expect("save the selected document in the temporary catalog");
+        assert!(temporary
+            .get_track_lyrics(temporary_track.id)
+            .unwrap()
+            .is_some());
+        assert!(persistent
+            .get_track_lyrics(persistent_track.id)
+            .unwrap()
+            .is_none());
+        assert!(persistent
+            .get_track_summary(temporary_track.id)
+            .unwrap()
             .is_none());
     }
 

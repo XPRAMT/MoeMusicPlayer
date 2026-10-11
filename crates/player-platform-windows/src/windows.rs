@@ -1642,7 +1642,7 @@ mod tests {
         let mut bytes = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
         bytes.extend_from_slice(&(format.len() as u32).to_le_bytes());
         bytes.extend_from_slice(format);
-        if format.len() % 2 != 0 {
+        if !format.len().is_multiple_of(2) {
             bytes.push(0);
         }
         bytes.extend_from_slice(b"data");
