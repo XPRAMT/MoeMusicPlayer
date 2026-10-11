@@ -382,8 +382,8 @@ input:focus-visible {
 }
 
 .now-playing-header-track .now-playing-format img {
-  width: 22px;
-  height: 12px;
+  width: 17.6px;
+  height: 9.6px;
 }
 
 .now-playing-overlay-topbar .breadcrumbs {
@@ -2075,8 +2075,8 @@ input:focus-visible {
 }
 
 .now-playing-format img {
-  width: 26px;
-  height: 14px;
+  width: 20.8px;
+  height: 11.2px;
   object-fit: contain;
 }
 
