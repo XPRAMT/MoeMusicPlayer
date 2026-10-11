@@ -2429,7 +2429,7 @@
                   {:else}
                     <div class="cover-corner-setting" role="group" aria-label="文字顏色">
                       <span class="cover-corner-setting-label"><strong>文字顏色</strong></span>
-                      <div class="layout-choice-row text-color-choice-row">
+                      <div class="text-color-choice-row">
                         <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'white'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'white'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'white' }); saveThemePreferencesNow(); }}>白色字</button>
                         <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'black'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'black'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'black' }); saveThemePreferencesNow(); }}>黑色字</button>
                       </div>

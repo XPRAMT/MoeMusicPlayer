@@ -13,34 +13,30 @@
 <div class="opacity-calculation-details">
   <small>{description}</small>
   {#if calculation}
-    <math class="opacity-equation" display="block" aria-label={calculation.displayText}>
+    <div class="opacity-equation" role="img" aria-label={calculation.displayText}>
       {#if calculation.kind === 'ratio'}
-        <mrow>
+        <math aria-hidden="true" display="block">
           <mfrac>
             <mrow><mtext>目標亮度（{calculation.targetPercent}%）</mtext></mrow>
             <mrow><mtext>圖片平均亮度（{calculation.imagePercent}%）</mtext></mrow>
           </mfrac>
-          <mo>=</mo>
-          <mtext>透明度（{calculation.opacityPercent}%）</mtext>
-        </mrow>
+        </math>
+        <math class="opacity-result" aria-hidden="true"><mrow><mo>=</mo><mtext>透明度（{calculation.opacityPercent}%）</mtext></mrow></math>
       {:else if calculation.kind === 'inverseRatio'}
-        <mrow>
+        <math aria-hidden="true" display="block">
           <mfrac>
             <mrow><mtext>100%</mtext><mo>−</mo><mtext>目標亮度（{calculation.targetPercent}%）</mtext></mrow>
             <mrow><mtext>100%</mtext><mo>−</mo><mtext>圖片平均亮度（{calculation.imagePercent}%）</mtext></mrow>
           </mfrac>
-          <mo>=</mo>
-          <mtext>透明度（{calculation.opacityPercent}%）</mtext>
-        </mrow>
+        </math>
+        <math class="opacity-result" aria-hidden="true"><mrow><mo>=</mo><mtext>透明度（{calculation.opacityPercent}%）</mtext></mrow></math>
       {:else}
-        <mrow>
-          <mtext>目標亮度（{calculation.targetPercent}%）</mtext>
-          <mo>{calculation.textColor === 'white' ? '≥' : '≤'}</mo>
-          <mtext>圖片平均亮度（{calculation.imagePercent}%）</mtext>
-          <mtext>，不處理</mtext>
-        </mrow>
+        <span>目標亮度（{calculation.targetPercent}%）</span>
+        <math class="opacity-compare-sign" aria-hidden="true"><mo>{calculation.textColor === 'white' ? '≥' : '≤'}</mo></math>
+        <span>圖片平均亮度（{calculation.imagePercent}%）</span>
+        <span>，不處理</span>
       {/if}
-    </math>
+    </div>
   {:else}
     <small>{emptyMessage}</small>
   {/if}
