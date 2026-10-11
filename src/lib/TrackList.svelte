@@ -178,11 +178,11 @@
     {itemAt}
     getKey={(track) => track.id}
     isSelected={(track) => selectedTrackId === track.id}
-    rowHeight={57}
-    compactRowHeight={53}
-    shortDesktopRowHeight={49}
+    rowHeight={40}
+    compactRowHeight={40}
+    shortDesktopRowHeight={40}
     headerHeight={37}
-    compactHeaderHeight={33}
+    compactHeaderHeight={37}
     fillAvailable={true}
     listId="library-track"
     ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序"

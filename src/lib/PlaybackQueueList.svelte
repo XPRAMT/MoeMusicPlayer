@@ -259,11 +259,11 @@
     {itemAt}
     getKey={(entry) => entry.entryPosition}
     isSelected={(entry) => isCurrent(entry)}
-    rowHeight={57}
-    compactRowHeight={53}
-    shortDesktopRowHeight={49}
+    rowHeight={40}
+    compactRowHeight={40}
+    shortDesktopRowHeight={40}
     headerHeight={37}
-    compactHeaderHeight={33}
+    compactHeaderHeight={37}
     fillAvailable={true}
     listId="playback-queue"
     ariaLabel="目前播放佇列；長按拖曳可調整順序，使用方向鍵瀏覽，按 Enter 播放目前項目"

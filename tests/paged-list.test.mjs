@@ -149,9 +149,11 @@ test('100k playlist paging shares the bounded page and viewport budgets', async 
   });
   data.reset('large-playlist');
 
-  const maxScrollTop = totalCount * 49 - 420;
-  for (let scrollTop = 0; scrollTop < maxScrollTop; scrollTop += 49 * 36) {
-    const range = getVirtualRange(scrollTop, 420, totalCount, 49, 8, 33);
+  const rowHeight = 40;
+  const headerHeight = 37;
+  const maxScrollTop = totalCount * rowHeight - 420;
+  for (let scrollTop = 0; scrollTop < maxScrollTop; scrollTop += rowHeight * 36) {
+    const range = getVirtualRange(scrollTop, 420, totalCount, rowHeight, 8, headerHeight);
     await data.ensureRange(range.start, range.end);
     const snapshot = data.snapshot();
     const rows = buildVirtualRows(data, range, snapshot.revision, (entry) => entry.position);

@@ -39,7 +39,7 @@ function makePage(offset, limit, totalCount, prefix = 'track') {
 
 test('virtual range remains bounded near the beginning, middle, and end of 100k rows', () => {
   const viewportHeight = 680;
-  const rowHeight = 57;
+  const rowHeight = 40;
   const starts = [0, 500_000, TOTAL_TRACKS * rowHeight - viewportHeight];
   let maxRows = 0;
 
@@ -51,7 +51,7 @@ test('virtual range remains bounded near the beginning, middle, and end of 100k 
     maxRows = Math.max(maxRows, range.end - range.start);
   }
 
-  assert.ok(maxRows <= 30, `expected at most 30 rendered rows, got ${maxRows}`);
+  assert.ok(maxRows <= 36, `expected at most 36 rendered rows, got ${maxRows}`);
 });
 
 test('concurrent requests for the same page are deduplicated', async () => {
@@ -166,7 +166,7 @@ test('synthetic 100k scrolling keeps fetched cache and rendered rows bounded', a
   });
   data.reset('', '100k-benchmark');
 
-  const rowHeight = 57;
+  const rowHeight = 40;
   const headerHeight = 37;
   const viewportHeight = 680;
   const maxScrollTop = TOTAL_TRACKS * rowHeight - viewportHeight;
@@ -187,7 +187,7 @@ test('synthetic 100k scrolling keeps fetched cache and rendered rows bounded', a
   }
 
   const elapsedMs = performance.now() - startedAt;
-  assert.ok(maxRenderedRows <= 30, `render window grew to ${maxRenderedRows} rows`);
+  assert.ok(maxRenderedRows <= 36, `render window grew to ${maxRenderedRows} rows`);
   assert.ok(maxCachedPages <= TRACK_LIST_MAX_CACHED_PAGES);
   assert.ok(maxCachedItems <= TRACK_PAGE_SIZE * TRACK_LIST_MAX_CACHED_PAGES);
   assert.equal(data.snapshot().totalCount, TOTAL_TRACKS);

@@ -102,7 +102,7 @@
   let headerGutter = $state(0);
   let viewportHeight = $state(480);
   let activeIndex = $state(0);
-  let rowHeight = $state(57);
+  let rowHeight = $state(40);
   let headerHeight = $state(37);
   let maxViewportHeight = $state(680);
   let seenScrollResetKey: unknown;

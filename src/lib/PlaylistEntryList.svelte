@@ -144,11 +144,11 @@ import { withLivePlayedMs } from './live-play-count.js';
     {itemAt}
     getKey={(entry) => entry.position}
     isSelected={(entry) => entry.trackId !== null && entry.trackId === currentTrackId}
-    rowHeight={57}
-    compactRowHeight={53}
-    shortDesktopRowHeight={49}
+    rowHeight={40}
+    compactRowHeight={40}
+    shortDesktopRowHeight={40}
     headerHeight={37}
-    compactHeaderHeight={33}
+    compactHeaderHeight={37}
     fillAvailable={true}
     listId={`playlist-${playlistId}`}
     ariaLabel="播放清單項目；點擊欄位標題排序；使用方向鍵瀏覽，按 Enter 播放目前項目"
