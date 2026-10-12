@@ -259,8 +259,8 @@
       artworkCopyChildren: artworkCopy ? [...artworkCopy.children].map((child) => child.className.toString() || child.tagName.toLowerCase()) : [],
       artworkCopyTextAlign: artworkCopy ? getComputedStyle(artworkCopy).textAlign : 'missing',
       formatJustifyContent: formatRow ? getComputedStyle(formatRow).justifyContent : 'missing',
-      formatGroups: [...document.querySelectorAll<HTMLElement>('.now-playing-format > .now-playing-audio-quality, .now-playing-format > .now-playing-release-and-count')]
-        .map((group) => ({ name: group.classList.contains('now-playing-audio-quality') ? 'audio-quality' : 'release-and-count', ...rect(group) })),
+      formatGroups: [...document.querySelectorAll<HTMLElement>('.now-playing-format > .now-playing-audio-quality, .now-playing-format > .now-playing-release-date-block, .now-playing-format > .now-playing-play-count-block')]
+        .map((group) => ({ name: group.classList.contains('now-playing-audio-quality') ? 'audio-quality' : group.classList.contains('now-playing-release-date-block') ? 'release-date' : 'play-count', ...rect(group) })),
       lyricsPaneJustifyContent: (() => {
         const pane = document.querySelector<HTMLElement>('.now-playing-lyrics');
         return pane ? getComputedStyle(pane).justifyContent : 'missing';
@@ -344,12 +344,10 @@
         </nav>
         <p class="now-playing-format" aria-label="音質格式、發行日期與播放次數">
           <span class="now-playing-audio-quality">
-            <span>FLAC．44.1 kHz．16 bit．1030 kbps</span>
+            <span>MP3．44.1 kHz．320 kbps</span>
           </span>
-          <span class="now-playing-release-and-count">
-            <span class="now-playing-release-date" aria-label="發行日期">2025-08-15</span>
-            <span class="now-playing-play-count" aria-label="播放次數">播放次數 3.8</span>
-          </span>
+          <span class="now-playing-release-date-block now-playing-release-date" aria-label="發行日期">2019</span>
+          <span class="now-playing-play-count-block now-playing-play-count" aria-label="播放次數">播放次數 2.2</span>
         </p>
       </div>
       <div class="now-playing-topbar-tools">

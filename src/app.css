@@ -393,12 +393,16 @@ input:focus-visible {
 }
 
 .now-playing-header-track .now-playing-audio-quality,
-.now-playing-header-track .now-playing-release-and-count {
+.now-playing-header-track .now-playing-release-date-block,
+.now-playing-header-track .now-playing-play-count-block {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 8px;
   white-space: nowrap;
+}
+
+.now-playing-header-track .now-playing-audio-quality {
+  gap: 8px;
 }
 
 .now-playing-header-track .now-playing-play-count {
@@ -4407,7 +4411,6 @@ input:focus-visible {
     row-gap: 0;
     font-size: var(--font-caption);
   }
-  .now-playing-header-track .now-playing-release-and-count { flex-basis: 100%; }
   .app-shell.has-now-playing-backdrop .player-dock { padding-right: 8px; padding-left: 8px; }
   .app-shell.has-now-playing-backdrop .dock-track { gap: 4px; }
   .dock-track-title-link { font-size: var(--font-body); }
