@@ -25,10 +25,17 @@ pub(crate) fn set_playlist_membership(
         let insertion = playlist
             .entries
             .iter()
-            .position(|entry| {
-                natural_title_cmp(&locator_sort_key(&entry.locator), &key) == Ordering::Greater
+            .enumerate()
+            .filter_map(|(position, entry)| {
+                let existing_key = locator_sort_key(&entry.locator);
+                (natural_title_cmp(&existing_key, &key) != Ordering::Greater)
+                    .then_some((position, existing_key))
             })
-            .unwrap_or(playlist.entries.len());
+            .max_by(|(left_position, left_key), (right_position, right_key)| {
+                natural_title_cmp(left_key, right_key)
+                    .then_with(|| left_position.cmp(right_position))
+            })
+            .map_or(0, |(position, _)| position + 1);
         playlist.entries.insert(
             insertion,
             PlaylistEntry {
@@ -121,6 +128,55 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Some(first), Some(inserted), Some(second), Some(third)]
         );
+    }
+
+    #[test]
+    fn favorite_add_scans_the_whole_unsorted_playlist_before_choosing_position() {
+        let mut playlist = Playlist::new("Mix");
+        let old_paths = [
+            r"D:\Music\Loss\[hanser]\older.flac",
+            r"D:\Music\CD\[CD][hanser]\older.flac",
+            r"D:\Music\Hi-Res\[Hi-Res][hanser]\hanser - Hidden Heart.flac",
+            r"D:\Music\Hi-Res\[Hi-Res][hanser]\hanser - 速通滿級攻略.flac",
+            r"D:\Music\Hi-Res\@單曲\late.flac",
+        ];
+        playlist.entries = old_paths
+            .iter()
+            .map(|path| PlaylistEntry {
+                track_id: Some(TrackId::new()),
+                locator: MediaLocator::FileSystem(std::path::PathBuf::from(path)),
+                title: None,
+                duration_ms: None,
+            })
+            .collect();
+        let new_track = TrackId::new();
+
+        assert!(set_playlist_membership(
+            &mut playlist,
+            new_track,
+            MediaLocator::FileSystem(std::path::PathBuf::from(
+                r"D:\Music\Hi-Res\[Hi-Res][hanser]\hanser - M87黑洞.flac"
+            )),
+            true,
+        ));
+
+        let actual_paths = playlist
+            .entries
+            .iter()
+            .map(|entry| match &entry.locator {
+                MediaLocator::FileSystem(path) => path.to_string_lossy(),
+                MediaLocator::ContentUri(_) => panic!("expected filesystem path"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_paths[0], old_paths[0]);
+        assert_eq!(actual_paths[1], old_paths[1]);
+        assert_eq!(actual_paths[2], old_paths[2]);
+        assert_eq!(
+            actual_paths[3],
+            r"D:\Music\Hi-Res\[Hi-Res][hanser]\hanser - M87黑洞.flac"
+        );
+        assert_eq!(actual_paths[4], old_paths[3]);
+        assert_eq!(actual_paths[5], old_paths[4]);
     }
 
     #[test]
