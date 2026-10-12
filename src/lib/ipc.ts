@@ -640,6 +640,10 @@ interface IpcContract {
     args: Record<string, never>;
     result: void;
   };
+  favorites_create_playlist: {
+    args: Record<string, never>;
+    result: string | null;
+  };
   playback_get_snapshot: {
     args: Record<string, never>;
     result: PlaybackSnapshot;

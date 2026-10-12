@@ -29,11 +29,18 @@ use crate::models::{
 };
 use crate::{
     ContentCacheLease, MediaStoreVolume, MediaStoreVolumes, ResolvedSafPlaylistEntry, Result,
-    SafPlaylistImport,
+    SafPlaylistCreate, SafPlaylistImport,
 };
 
 #[derive(Clone)]
 pub(crate) struct PlatformMediaIndex<R: Runtime>(Arc<PluginHandle<R>>);
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaylistCreateResponse {
+    uri: Option<String>,
+    display_name: Option<String>,
+}
 
 impl<R: Runtime> PlatformMediaIndex<R> {
     pub(crate) fn open_official_url(&self, url: &str) -> Result<()> {
@@ -204,6 +211,26 @@ impl<R: Runtime> PlatformMediaIndex<R> {
             .0
             .run_mobile_plugin::<SafTreeResponse>("pickMyLoveFolder", ())?;
         Ok(response.uri)
+    }
+
+    pub(crate) fn pick_playlist_create(
+        &self,
+        suggested_name: &str,
+    ) -> Result<Option<SafPlaylistCreate>> {
+        let Some(tree_uri) = self.pick_my_love_folder()? else {
+            return Ok(None);
+        };
+        let response = self.0.run_mobile_plugin::<PlaylistCreateResponse>(
+            "pickPlaylistCreate",
+            json!({ "treeUri": tree_uri, "suggestedName": suggested_name }),
+        )?;
+        Ok(response.uri.map(|playlist_uri| SafPlaylistCreate {
+            playlist_uri,
+            tree_uri,
+            display_name: response
+                .display_name
+                .unwrap_or_else(|| suggested_name.to_owned()),
+        }))
     }
 
     pub(crate) fn ensure_my_love_playlist(&self, tree_uri: &str) -> Result<(String, String)> {

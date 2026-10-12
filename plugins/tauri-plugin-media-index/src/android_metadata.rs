@@ -175,7 +175,7 @@ fn read_mp4_properties(path: &Path) -> Result<TrackMetadata, TrackMetadataError>
                     message: "ISO base media metadata atom exceeds the 32 MiB limit".to_owned(),
                 });
             }
-            movie_atom = Some((position, size, header_size as u64));
+            movie_atom = Some((position, size, header_size));
         }
         position += size;
     }

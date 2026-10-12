@@ -27,6 +27,14 @@ pub struct SafPlaylistImport {
     pub display_name: String,
 }
 
+/// A newly created M3U8 document inside a persisted read/write SAF tree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SafPlaylistCreate {
+    pub playlist_uri: String,
+    pub tree_uri: String,
+    pub display_name: String,
+}
+
 /// Fingerprint metadata from an authorized Android content URI without copying its media bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContentUriMetadata {
@@ -236,6 +244,12 @@ impl<R: Runtime> MediaIndex<R> {
     /// Let the user choose an M3U/M3U8 document destination for export.
     pub fn pick_playlist_export(&self, suggested_name: &str) -> Result<Option<String>> {
         self.platform.pick_playlist_export(suggested_name)
+    }
+
+    /// Ask the user to choose a destination folder and create a new M3U8 there.
+    #[cfg(target_os = "android")]
+    pub fn pick_playlist_create(&self, suggested_name: &str) -> Result<Option<SafPlaylistCreate>> {
+        self.platform.pick_playlist_create(suggested_name)
     }
 
     /// Read an adjacent LRC only when both URIs are inside the same persisted SAF tree.

@@ -3382,6 +3382,240 @@ async fn favorites_create_my_love(
     }
 }
 
+#[tauri::command]
+async fn favorites_create_playlist(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let selected = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("建立播放清單")
+            .set_file_name("新播放清單.m3u8")
+            .add_filter("M3U8 播放清單", &["m3u8"])
+            .blocking_save_file();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let mut path = selected
+            .into_path()
+            .map_err(|error| format!("無法取得播放清單檔案路徑：{error}"))?;
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("m3u8"))
+        {
+            path.set_extension("m3u8");
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("無法建立播放清單資料夾：{error}"))?;
+        }
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                let name = path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("新播放清單")
+                    .replace(['\r', '\n'], " ");
+                file.write_all(format!("#EXTM3U\n#PLAYLIST:{name}\n").as_bytes())
+                    .map_err(|error| format!("無法初始化 M3U8 播放清單：{error}"))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Save dialogs may return an existing document after the user confirms the
+                // native overwrite prompt. Preserve its contents; this action registers it.
+            }
+            Err(error) => return Err(format!("無法建立 M3U8 播放清單：{error}")),
+        }
+
+        let _ = &window;
+        let _database_work = enter_database_work(&state)?;
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let settings = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        let (source_id, registered_playlist_id, path) =
+            playlist_source_sync::source_ids_for_path(&settings.sources, &path)?;
+        let parsed = read_playlist_file(&path)?;
+        let playlist_id = match registered_playlist_id {
+            Some(playlist_id) => playlist_id,
+            None => database
+                .unique_playlist_id_matching_locators(
+                    &parsed.name,
+                    &parsed
+                        .entries
+                        .iter()
+                        .map(|entry| entry.locator.clone())
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|error| error.to_string())?
+                .unwrap_or(parsed.id),
+        };
+        let imported = import_playlist_file_with_id(database, &path, playlist_id)?;
+        let display_name = imported.playlist.name;
+        state
+            .settings
+            .upsert_source(SourceEntry {
+                id: source_id,
+                display_name: display_name.clone(),
+                enabled: true,
+                kind: SourceEntryKind::PlaylistFile {
+                    playlist_id,
+                    path: settings::StoredPath::from_path(&path)
+                        .map_err(|error| error.to_string())?,
+                    tree_uri: None,
+                },
+            })
+            .map_err(|error| error.to_string())?;
+        database
+            .save_library_root(&LibraryRoot {
+                id: source_id,
+                kind: MediaSourceKind::PlaylistFile,
+                display_name: display_name.clone(),
+                locator: MediaLocator::FileSystem(path),
+                enabled: true,
+            })
+            .map_err(|error| error.to_string())?;
+        drop(_database_work);
+        library_sync(app.clone()).await?;
+        Ok(Some(display_name))
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let _ = &window;
+        let Some(created) = app
+            .media_index()
+            .pick_playlist_create("新播放清單.m3u8")
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        let playlist_uri = created.playlist_uri.clone();
+        let media_index_app = app.clone();
+        let playlist_bytes = tauri::async_runtime::spawn_blocking(move || {
+            let lease = media_index_app
+                .media_index()
+                .cache_content_uri(
+                    &playlist_uri,
+                    android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64,
+                )
+                .map_err(|error| error.to_string())?;
+            std::fs::read(lease.path()).map_err(|error| format!("讀取新播放清單失敗：{error}"))
+        })
+        .await
+        .map_err(|error| format!("讀取新播放清單工作失敗：{error}"))??;
+        let display_name = std::path::Path::new(&created.display_name)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| {
+                std::path::Path::new(name)
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("m3u8"))
+            })
+            .ok_or_else(|| "新播放清單必須使用 .m3u8 副檔名。".to_owned())?
+            .to_owned();
+        let parsed = playlist_exchange::read_playlist_bytes(
+            &playlist_bytes,
+            std::path::Path::new(&display_name),
+        )?;
+
+        let _database_work = enter_database_work(&state)?;
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let settings = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        let existing = settings.sources.iter().find(|source| {
+            matches!(
+                &source.kind,
+                SourceEntryKind::PlaylistFile {
+                    path: settings::StoredPath::Uri(uri),
+                    tree_uri: Some(tree),
+                    ..
+                } if uri == &created.playlist_uri && tree == &created.tree_uri
+            )
+        });
+        let (source_id, playlist_id) = if let Some(source) = existing {
+            let SourceEntryKind::PlaylistFile { playlist_id, .. } = &source.kind else {
+                unreachable!();
+            };
+            (source.id, *playlist_id)
+        } else {
+            let playlist_id = database
+                .unique_playlist_id_matching_locators(
+                    &parsed.name,
+                    &parsed
+                        .entries
+                        .iter()
+                        .map(|entry| entry.locator.clone())
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|error| error.to_string())?
+                .unwrap_or(parsed.id);
+            (SourceId::new(), playlist_id)
+        };
+        let mut playlist = parsed;
+        playlist.id = playlist_id;
+        let resolved_name = playlist.name.clone();
+        database
+            .save_playlist(&playlist)
+            .map_err(|error| error.to_string())?;
+        let source = SourceEntry {
+            id: source_id,
+            display_name: resolved_name.clone(),
+            enabled: true,
+            kind: SourceEntryKind::PlaylistFile {
+                playlist_id,
+                path: settings::StoredPath::Uri(created.playlist_uri.clone()),
+                tree_uri: Some(created.tree_uri.clone()),
+            },
+        };
+        state
+            .settings
+            .upsert_source(source.clone())
+            .map_err(|error| error.to_string())?;
+        let root = source
+            .database_projection()
+            .map_err(|error| error.to_string())?;
+        database
+            .save_library_root(&root)
+            .map_err(|error| error.to_string())?;
+        drop(_database_work);
+        library_sync(app.clone()).await?;
+        Ok(Some(resolved_name))
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = (app, window, state);
+        Err("建立 M3U8 播放清單目前只支援 Windows 與 Android。".to_owned())
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn ensure_windows_my_love_source(
     state: &AppState,
@@ -8612,6 +8846,7 @@ pub fn run() {
             favorites_get_playlists,
             favorites_set_membership,
             favorites_create_my_love,
+            favorites_create_playlist,
             library_list_sources,
             library_add_windows_folder,
             library_pick_windows_folder,

@@ -72,6 +72,12 @@ class PlaylistExportArgs {
 }
 
 @InvokeArg
+class PlaylistCreateArgs {
+    var treeUri: String? = null
+    var suggestedName: String? = null
+}
+
+@InvokeArg
 class WriteLeaseArgs {
     var token: String? = null
     var destinationUri: String? = null
@@ -361,6 +367,93 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         }
         startActivityForResult(invoke, intent, "onPlaylistExportPicked")
+    }
+
+    @Command
+    fun pickPlaylistCreate(invoke: Invoke) {
+        val args = invoke.parseArgs(PlaylistCreateArgs::class.java)
+        val rawTreeUri = args.treeUri
+        if (rawTreeUri.isNullOrBlank()) {
+            invoke.reject("treeUri is required")
+            return
+        }
+        val treeUri = Uri.parse(rawTreeUri)
+        if (!DocumentsContract.isTreeUri(treeUri) || !hasPersistedTreeWriteGrant(treeUri)) {
+            invoke.reject("The selected playlist folder has no persisted read/write access")
+            return
+        }
+        val suggestedName = args.suggestedName?.takeIf(String::isNotBlank) ?: "新播放清單.m3u8"
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/x-mpegurl"
+            putExtra(Intent.EXTRA_TITLE, suggestedName)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                putExtra(DocumentsContract.EXTRA_INITIAL_URI, treeUri)
+            }
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        startActivityForResult(invoke, intent, "onPlaylistCreatePicked")
+    }
+
+    @ActivityCallback
+    private fun onPlaylistCreatePicked(invoke: Invoke, result: ActivityResult) {
+        val args = invoke.parseArgs(PlaylistCreateArgs::class.java)
+        val rawTreeUri = args.treeUri
+        if (rawTreeUri.isNullOrBlank()) {
+            invoke.reject("treeUri is required")
+            return
+        }
+        val uri = result.data?.data
+        if (result.resultCode != Activity.RESULT_OK || uri == null) {
+            invoke.resolve(JSObject().put("uri", JSONObject.NULL).put("displayName", JSONObject.NULL))
+            return
+        }
+        val flags = result.data?.flags ?: 0
+        val readGrant = flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+        val writeGrant = flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        if (readGrant == 0 || writeGrant == 0) {
+            invoke.reject("The document provider did not grant playlist read/write access")
+            return
+        }
+        io.execute {
+            try {
+                val currentName = queryDisplayName(uri)
+                    ?: throw IOException("Could not read the created playlist filename")
+                val treeUri = Uri.parse(rawTreeUri)
+                val createdDocumentId = DocumentsContract.getDocumentId(uri)
+                var targetUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, createdDocumentId)
+                if (!currentName.endsWith(".m3u8", ignoreCase = true)) {
+                    val baseName = currentName.substringBeforeLast('.', currentName)
+                    val renamed = DocumentsContract.renameDocument(resolver, targetUri, "$baseName.m3u8")
+                        ?: throw IOException("Could not apply the .m3u8 extension")
+                    targetUri = DocumentsContract.buildDocumentUriUsingTree(
+                        treeUri,
+                        DocumentsContract.getDocumentId(renamed),
+                    )
+                }
+                val finalName = queryDisplayName(targetUri)
+                    ?: throw IOException("Could not read the final playlist filename")
+                resolver.openOutputStream(targetUri, "wt")?.use { output ->
+                    val playlistName = finalName.substringBeforeLast('.', finalName)
+                        .replace('\r', ' ').replace('\n', ' ')
+                    output.write("#EXTM3U\n#PLAYLIST:$playlistName\n".toByteArray(Charsets.UTF_8))
+                } ?: throw IOException("Could not initialize the new M3U8 playlist")
+                activity.runOnUiThread {
+                    invoke.resolve(
+                        JSObject()
+                            .put("uri", targetUri.toString())
+                            .put("displayName", finalName),
+                    )
+                }
+            } catch (error: Exception) {
+                activity.runOnUiThread {
+                    invoke.reject(error.message ?: "Could not create the M3U8 playlist")
+                }
+            }
+        }
     }
 
     @ActivityCallback

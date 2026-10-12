@@ -86,6 +86,15 @@ if (panelGeometry.left < 8 || panelGeometry.right > panelGeometry.viewportWidth 
   throw new Error(`Favorite panel did not keep the volume panel spacing and edge inset: ${JSON.stringify(panelGeometry)}`);
 }
 
+const createPlaylistButton = page.getByRole('button', { name: '建立播放清單' });
+await createPlaylistButton.waitFor();
+await createPlaylistButton.click();
+await page.waitForFunction(() => window.__favoriteDockHarness.calls.includes('create-playlist'));
+await page.getByText('新播放清單', { exact: true }).waitFor();
+if (!(await page.locator('.favorite-popover').count())) {
+  throw new Error('Creating a playlist unexpectedly closed the favorite panel.');
+}
+
 await page.setViewportSize({ width: 720, height: 800 });
 await page.waitForFunction(() => {
   const button = document.querySelector('.dock-favorite');
@@ -104,6 +113,6 @@ await page.locator('[aria-label="隨機播放"]').hover();
 const hoverColor = await page.locator('[aria-label="隨機播放"]').evaluate((element) => getComputedStyle(element).color);
 if (hoverColor !== 'rgb(230, 230, 230)') throw new Error(`Shuffle hover used theme color ${hoverColor}`);
 if (errors.length) throw new Error(`Browser errors: ${errors.join(' | ')}`);
-await page.evaluate(() => { document.title = 'PASS: favorite close parity and responsive alignment'; });
-console.log('PASS: live membership, stale-response fencing, outside-click close, non-Now-Playing responsive close, Now Playing visibility, edge alignment, and neutral dock colors.');
+await page.evaluate(() => { document.title = 'PASS: favorite playlist creation and responsive alignment'; });
+console.log('PASS: live membership, stale-response fencing, native create-playlist command, refreshed playlist list, outside-click close, responsive close/visibility, edge alignment, and neutral dock colors.');
 }

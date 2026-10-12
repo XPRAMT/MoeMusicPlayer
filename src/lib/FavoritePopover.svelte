@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { IconHeart } from '@tabler/icons-svelte-runes';
+  import { IconHeart, IconPlus } from '@tabler/icons-svelte-runes';
   import { invokeCommand, type FavoritePlaylist, type FavoritePlaylists } from './ipc';
   import { getPopoverHorizontalShiftPx } from './volume-popover-position.js';
 
@@ -149,6 +149,23 @@
     }
   }
 
+  async function createPlaylist(): Promise<void> {
+    if (loading) return;
+    loading = true;
+    error = null;
+    try {
+      const name = await invokeCommand('favorites_create_playlist', {});
+      if (name) {
+        await onChange?.();
+        await refresh();
+      }
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      loading = false;
+    }
+  }
+
   function onWindowPointerDown(event: PointerEvent): void {
     if (!open || !favoriteControlElement) return;
     const target = event.target;
@@ -187,7 +204,14 @@
     >
       <header class="favorite-popover-heading">
         <strong>加入播放清單</strong>
-        <button class="favorite-close soft-button icon-button" type="button" aria-label="關閉收藏面板" onclick={() => (open = false)}>×</button>
+        <button
+          class="favorite-close soft-button icon-button"
+          type="button"
+          aria-label="建立播放清單"
+          title="建立播放清單"
+          disabled={loading || busySourceId !== null}
+          onclick={() => void createPlaylist()}
+        ><IconPlus size={18} stroke={1.8} aria-hidden="true" /></button>
       </header>
       {#if setupRequired}
         <div class="favorite-setup">
