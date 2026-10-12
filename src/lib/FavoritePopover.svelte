@@ -21,6 +21,7 @@
   let requestRevision = 0;
   let notifiedWindowsSources = false;
   let lastObservedTrackId: string | null = null;
+  let favoriteButtonElement = $state<HTMLButtonElement | null>(null);
   let favoriteControlElement = $state<HTMLDivElement | null>(null);
   let favoritePopoverElement = $state<HTMLDivElement | null>(null);
   let favoritePopoverShiftX = $state(0);
@@ -60,7 +61,11 @@
 
     let active = true;
     const updateAlignment = (): void => {
-      if (!active || !favoriteControlElement || !favoritePopoverElement) return;
+      if (!active || !favoriteButtonElement || !favoriteControlElement || !favoritePopoverElement) return;
+      if (getComputedStyle(favoriteButtonElement).display === 'none') {
+        open = false;
+        return;
+      }
       const anchor = favoriteControlElement.getBoundingClientRect();
       favoritePopoverShiftX = getPopoverHorizontalShiftPx(
         anchor.left + anchor.width / 2,
@@ -144,19 +149,22 @@
     }
   }
 
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape' && open) {
-      event.stopPropagation();
-      open = false;
-    }
+  function onWindowPointerDown(event: PointerEvent): void {
+    if (!open || !favoriteControlElement) return;
+    const target = event.target;
+    if (target instanceof Node && favoriteControlElement.contains(target)) return;
+    open = false;
   }
 </script>
+
+<svelte:window onpointerdown={onWindowPointerDown} />
 
 <div class="favorite-control" bind:this={favoriteControlElement}>
   <button
     class="dock-favorite control-button"
     class:has-favorites={isFavorited}
     type="button"
+    bind:this={favoriteButtonElement}
     aria-label="收藏曲目"
     aria-haspopup="dialog"
     aria-expanded={open}
@@ -176,8 +184,6 @@
       data-testid="favorite-popover"
       bind:this={favoritePopoverElement}
       style:--favorite-popover-shift-x={`${favoritePopoverShiftX}px`}
-      onclick={(event) => event.stopPropagation()}
-      onkeydown={onKeydown}
     >
       <header class="favorite-popover-heading">
         <strong>加入播放清單</strong>

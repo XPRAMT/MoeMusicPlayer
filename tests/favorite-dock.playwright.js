@@ -62,7 +62,11 @@ if (!afterStaleReply.calls.includes('track-two') || !afterStaleReply.calls.inclu
 
 await heart.click();
 await page.getByRole('dialog', { name: '收藏到播放清單' }).waitFor();
-await page.setViewportSize({ width: 320, height: 800 });
+await page.getByTestId('next-track').click();
+await page.waitForFunction(() => !document.querySelector('.favorite-popover'));
+await heart.click();
+await page.getByRole('dialog', { name: '收藏到播放清單' }).waitFor();
+await page.setViewportSize({ width: 721, height: 800 });
 await page.waitForFunction(() => {
   const panel = document.querySelector('.favorite-popover')?.getBoundingClientRect();
   const anchor = document.querySelector('.favorite-control')?.getBoundingClientRect();
@@ -82,10 +86,24 @@ if (panelGeometry.left < 8 || panelGeometry.right > panelGeometry.viewportWidth 
   throw new Error(`Favorite panel did not keep the volume panel spacing and edge inset: ${JSON.stringify(panelGeometry)}`);
 }
 
+await page.setViewportSize({ width: 720, height: 800 });
+await page.waitForFunction(() => {
+  const button = document.querySelector('.dock-favorite');
+  return button && getComputedStyle(button).display === 'none' && !document.querySelector('.favorite-popover');
+});
+await page.evaluate(() => document.querySelector('.app-shell').classList.add('has-now-playing-backdrop'));
+await page.waitForFunction(() => getComputedStyle(document.querySelector('.dock-favorite')).display !== 'none');
+await heart.click();
+await page.getByRole('dialog', { name: '收藏到播放清單' }).waitFor();
+await page.setViewportSize({ width: 620, height: 800 });
+await page.waitForFunction(() => document.querySelector('.favorite-popover') !== null);
+await heart.click();
+await page.waitForFunction(() => !document.querySelector('.favorite-popover'));
+
 await page.locator('[aria-label="隨機播放"]').hover();
 const hoverColor = await page.locator('[aria-label="隨機播放"]').evaluate((element) => getComputedStyle(element).color);
 if (hoverColor !== 'rgb(230, 230, 230)') throw new Error(`Shuffle hover used theme color ${hoverColor}`);
 if (errors.length) throw new Error(`Browser errors: ${errors.join(' | ')}`);
-await page.evaluate(() => { document.title = 'PASS: favorite flicker and panel alignment'; });
-console.log('PASS: live per-track membership, stale-response fencing, solid heart, and neutral dock active/hover colors.');
+await page.evaluate(() => { document.title = 'PASS: favorite close parity and responsive alignment'; });
+console.log('PASS: live membership, stale-response fencing, outside-click close, non-Now-Playing responsive close, Now Playing visibility, edge alignment, and neutral dock colors.');
 }
