@@ -50,8 +50,27 @@ pub(crate) fn set_playlist_membership(
 
 fn locator_sort_key(locator: &MediaLocator) -> String {
     match locator {
-        MediaLocator::FileSystem(path) => path.to_string_lossy().replace('\\', "/"),
+        MediaLocator::FileSystem(path) => windows_path_sort_key(path),
         MediaLocator::ContentUri(uri) => uri.clone(),
+    }
+}
+
+fn windows_path_sort_key(path: &std::path::Path) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    // The Win32 extended-length marker changes file API behavior, not the path's
+    // natural order. Keep it on the stored locator but remove it from comparisons.
+    if path
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("//?/UNC/"))
+    {
+        format!("//{}", &path[8..])
+    } else if path
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("//?/"))
+    {
+        path[4..].to_owned()
+    } else {
+        path
     }
 }
 
@@ -61,7 +80,7 @@ mod tests {
 
     use player_core::{MediaLocator, Playlist, PlaylistEntry, TrackId};
 
-    use super::set_playlist_membership;
+    use super::{set_playlist_membership, windows_path_sort_key};
 
     fn entry(name: &str, id: TrackId) -> PlaylistEntry {
         PlaylistEntry {
@@ -101,6 +120,41 @@ mod tests {
                 .map(|item| item.track_id)
                 .collect::<Vec<_>>(),
             vec![Some(first), Some(inserted), Some(second), Some(third)]
+        );
+    }
+
+    #[test]
+    fn favorite_add_normalizes_windows_extended_path_prefix_for_sorting() {
+        let first = TrackId::new();
+        let second = TrackId::new();
+        let inserted = TrackId::new();
+        let mut playlist = Playlist::new("Mix");
+        playlist.entries = vec![entry("song 1.flac", first), entry("song 3.flac", second)];
+
+        assert!(set_playlist_membership(
+            &mut playlist,
+            inserted,
+            MediaLocator::FileSystem(PathBuf::from(r"\\?\D:\Music\song 2.flac")),
+            true,
+        ));
+
+        assert_eq!(
+            playlist
+                .entries
+                .iter()
+                .map(|item| item.track_id)
+                .collect::<Vec<_>>(),
+            vec![Some(first), Some(inserted), Some(second)]
+        );
+    }
+
+    #[test]
+    fn extended_unc_path_uses_the_same_sort_key_as_regular_unc_path() {
+        assert_eq!(
+            windows_path_sort_key(std::path::Path::new(
+                r"\\?\UNC\server\share\Music\song.flac"
+            )),
+            windows_path_sort_key(std::path::Path::new(r"\\server\share\Music\song.flac"))
         );
     }
 
