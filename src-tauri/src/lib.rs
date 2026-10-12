@@ -3021,13 +3021,132 @@ fn queue_for_merged_library_search(
 
 #[tauri::command]
 fn playlist_list(state: State<'_, AppState>) -> Result<Vec<PlaylistSummary>, String> {
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
     let database = state.database.as_ref().ok_or_else(|| {
         state
             .database_error
             .clone()
             .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
     })?;
-    database.list_playlists().map_err(|error| error.to_string())
+    let playlists = database
+        .list_playlists()
+        .map_err(|error| error.to_string())?;
+    Ok(playlists_for_enabled_sources(playlists, &settings.sources))
+}
+
+fn playlists_for_enabled_sources(
+    playlists: Vec<PlaylistSummary>,
+    sources: &[SourceEntry],
+) -> Vec<PlaylistSummary> {
+    let enabled_playlist_ids = sources
+        .iter()
+        .filter(|source| source.enabled)
+        .filter_map(|source| match &source.kind {
+            SourceEntryKind::PlaylistFile { playlist_id, .. } => Some(*playlist_id),
+            SourceEntryKind::Folder { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    playlists
+        .into_iter()
+        .filter(|playlist| enabled_playlist_ids.contains(&playlist.id))
+        .collect()
+}
+
+fn require_enabled_playlist_source(
+    sources: &[SourceEntry],
+    playlist_id: PlaylistId,
+) -> Result<(), String> {
+    if sources.iter().any(|source| {
+        source.enabled
+            && matches!(
+                &source.kind,
+                SourceEntryKind::PlaylistFile { playlist_id: registered, .. }
+                    if *registered == playlist_id
+            )
+    }) {
+        Ok(())
+    } else {
+        Err("此播放清單來源已停用或不存在。請到「設定 → 音樂來源」重新啟用。".to_owned())
+    }
+}
+
+#[cfg(test)]
+mod playlist_source_visibility_tests {
+    use super::{
+        playlists_for_enabled_sources, require_enabled_playlist_source, settings, PlaylistId,
+        PlaylistSummary, SourceEntry, SourceEntryKind, SourceId,
+    };
+
+    fn playlist_source(playlist_id: PlaylistId, enabled: bool) -> SourceEntry {
+        SourceEntry {
+            id: SourceId::new(),
+            display_name: "fixture.m3u8".to_owned(),
+            enabled,
+            kind: SourceEntryKind::PlaylistFile {
+                playlist_id,
+                path: settings::StoredPath::Uri("content://fixture/playlist".to_owned()),
+                tree_uri: None,
+            },
+        }
+    }
+
+    #[test]
+    fn playlist_projection_includes_only_enabled_registered_playlist_sources() {
+        let enabled = PlaylistId::new();
+        let disabled = PlaylistId::new();
+        let sources = [
+            playlist_source(enabled, true),
+            playlist_source(disabled, false),
+        ];
+
+        let visible = playlists_for_enabled_sources(
+            vec![
+                PlaylistSummary {
+                    id: enabled,
+                    name: "enabled".to_owned(),
+                    entry_count: 1,
+                },
+                PlaylistSummary {
+                    id: disabled,
+                    name: "disabled".to_owned(),
+                    entry_count: 2,
+                },
+            ],
+            &sources,
+        );
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, enabled);
+        assert_eq!(visible[0].name, "enabled");
+    }
+
+    #[test]
+    fn disabled_playlist_sources_cannot_be_opened_or_used_as_queue_sources() {
+        let enabled = PlaylistId::new();
+        let disabled = PlaylistId::new();
+        let sources = [
+            playlist_source(enabled, true),
+            playlist_source(disabled, false),
+        ];
+
+        assert!(require_enabled_playlist_source(&sources, enabled).is_ok());
+        assert!(require_enabled_playlist_source(&sources, disabled).is_err());
+        assert!(require_enabled_playlist_source(&sources, PlaylistId::new()).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn normalizing_my_love_source_name_does_not_enable_it() {
+        let mut source = playlist_source(PlaylistId::new(), false);
+        source.display_name = "MyLove.m3u8".to_owned();
+
+        assert!(super::normalize_windows_my_love_source(&mut source));
+        assert_eq!(source.display_name, "我的最愛");
+        assert!(!source.enabled);
+    }
 }
 
 #[tauri::command]
@@ -3041,6 +3160,11 @@ fn playlist_get_page(
     let _database_work = enter_database_work(&state)?;
     let playlist_id = PlaylistId::parse(&playlist_id)
         .map_err(|_| "播放清單識別碼無效，請重新載入清單。".to_owned())?;
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    require_enabled_playlist_source(&settings.sources, playlist_id)?;
     let database = state.database.as_ref().ok_or_else(|| {
         state
             .database_error
@@ -3095,7 +3219,7 @@ fn favorites_get_playlists(
         .snapshot()
         .map_err(|error| error.to_string())?;
     let mut playlists = Vec::new();
-    let mut has_my_love = false;
+    let has_my_love_source = settings.sources.iter().any(is_my_love_source);
     for source in settings.sources.iter().filter(|source| source.enabled) {
         let SourceEntryKind::PlaylistFile {
             playlist_id,
@@ -3107,7 +3231,6 @@ fn favorites_get_playlists(
         };
         let _ = (path, tree_uri);
         let is_my_love = source.display_name == "我的最愛" || is_my_love_path(path);
-        has_my_love |= is_my_love;
         let favorite = database
             .get_playlist(*playlist_id)
             .map_err(|error| error.to_string())?;
@@ -3143,7 +3266,7 @@ fn favorites_get_playlists(
     }
     Ok(FavoritePlaylistsDto {
         playlists,
-        my_love_setup_required: !has_my_love,
+        my_love_setup_required: !has_my_love_source,
     })
 }
 
@@ -3644,26 +3767,21 @@ fn ensure_windows_my_love_source(
         })
         .cloned()
     {
-        let mut root = source
-            .database_projection()
-            .map_err(|error| error.to_string())?;
-        let source_needs_save = !source.enabled || source.display_name != "我的最愛";
+        let source_needs_save = normalize_windows_my_love_source(&mut source);
         if source_needs_save {
-            source.enabled = true;
-            source.display_name = "我的最愛".to_owned();
-            root = source
-                .database_projection()
-                .map_err(|error| error.to_string())?;
             state
                 .settings
                 .upsert_source(source.clone())
                 .map_err(|error| error.to_string())?;
         }
+        let root = source
+            .database_projection()
+            .map_err(|error| error.to_string())?;
         if !database
             .library_roots()
             .map_err(|error| error.to_string())?
             .iter()
-            .any(|existing| existing.id == source.id && existing.enabled)
+            .any(|existing| existing.id == source.id && existing.enabled == source.enabled)
         {
             database
                 .save_library_root(&root)
@@ -3729,6 +3847,15 @@ fn ensure_windows_my_love_source(
         .save_playlist(&playlist)
         .map_err(|error| error.to_string())?;
     Ok(source)
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_windows_my_love_source(source: &mut SourceEntry) -> bool {
+    if source.display_name == "我的最愛" {
+        return false;
+    }
+    source.display_name = "我的最愛".to_owned();
+    true
 }
 
 fn is_my_love_source(source: &SourceEntry) -> bool {
@@ -6663,6 +6790,15 @@ async fn playback_play(
     queue_source: Option<PlaybackQueueSource>,
 ) -> Result<PlaybackSnapshot, String> {
     let _database_work = enter_database_work(&state)?;
+    if let Some(PlaybackQueueSource::Playlist { playlist_id, .. }) = queue_source.as_ref() {
+        let playlist_id = PlaylistId::parse(playlist_id)
+            .map_err(|_| "播放清單 ID 無效，請重新整理。".to_owned())?;
+        let settings = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        require_enabled_playlist_source(&settings.sources, playlist_id)?;
+    }
     #[cfg(target_os = "windows")]
     {
         let database = state.database.as_ref().ok_or_else(|| {
