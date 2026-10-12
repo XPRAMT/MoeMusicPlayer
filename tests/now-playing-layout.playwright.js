@@ -68,6 +68,13 @@
     assert.ok(isInside(state.lyricsToolbar, state.topbar), `${viewport.width}x${viewport.height}: lyric controls are missing or clipped in the top bar`);
     assert.deepEqual(state.artworkCopyChildren, [], `${viewport.width}x${viewport.height}: no text should be rendered below the cover`);
     assert.equal(state.formatJustifyContent, 'flex-start', `${viewport.width}x${viewport.height}: audio format follows the top track information`);
+    assert.deepEqual(state.formatGroups.map(group => group.name), ['audio-quality', 'release-and-count'], `${viewport.width}x${viewport.height}: format and date/count stay in separate wrapping groups`);
+    const [audioQuality, releaseAndCount] = state.formatGroups;
+    assert.ok(audioQuality.height < 24, `${viewport.width}x${viewport.height}: audio quality must not split across lines`);
+    assert.ok(releaseAndCount.height < 24, `${viewport.width}x${viewport.height}: date and play count must stay together`);
+    if (viewport.width <= 390) {
+      assert.ok(releaseAndCount.top > audioQuality.top, `${viewport.width}x${viewport.height}: narrow topbar wraps after the complete audio-quality text`);
+    }
     assert.deepEqual(state.lyricTextAlign, { primary: 'center', translation: 'center', romanization: 'center' }, `${viewport.width}x${viewport.height}: lyric text and auxiliary lines should be centered`);
     assert.ok(isInside(state.dockControls, state.dock), `${viewport.width}x${viewport.height}: playback controls are missing or clipped in the dock: ${JSON.stringify({ controls: state.dockControls, dock: state.dock })}`);
     assert.deepEqual(state.playerControlLabels, ['隨機播放', '上一首', '播放', '下一首', '循環播放'], `${viewport.width}x${viewport.height}: player controls must keep their Chinese accessible names`);

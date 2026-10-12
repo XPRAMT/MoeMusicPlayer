@@ -3254,13 +3254,17 @@
             >{trackFieldLabel(playback?.currentTrack, 'title')}</span>
           </nav>
           <p class="now-playing-format" aria-label="音質格式、發行日期與播放次數">
-            <span>{formatAudioFormat(playback?.currentTrack ?? {})}</span>
-            {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}
-            <span class="now-playing-release-date" aria-label="發行日期">
-              {formatTrackColumnValue('year', playback?.currentTrack ?? {}, () => '—')}
+            <span class="now-playing-audio-quality">
+              <span>{formatAudioFormat(playback?.currentTrack ?? {})}</span>
+              {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}
             </span>
-            <span class="now-playing-play-count" aria-label="播放次數">
-              播放次數 {formatTrackColumnValue('playCount', withLivePlayedMs(playback?.currentTrack ?? {}, livePlayCount), () => '—')}
+            <span class="now-playing-release-and-count">
+              <span class="now-playing-release-date" aria-label="發行日期">
+                {formatTrackColumnValue('year', playback?.currentTrack ?? {}, () => '—')}
+              </span>
+              <span class="now-playing-play-count" aria-label="播放次數">
+                播放次數 {formatTrackColumnValue('playCount', withLivePlayedMs(playback?.currentTrack ?? {}, livePlayCount), () => '—')}
+              </span>
             </span>
           </p>
         </div>
