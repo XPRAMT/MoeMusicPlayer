@@ -39,6 +39,8 @@ use tauri_plugin_media_index::MediaIndexExt;
 #[cfg(target_os = "windows")]
 mod database_lifecycle;
 #[cfg(target_os = "windows")]
+mod diagnostics;
+#[cfg(target_os = "windows")]
 mod maximized_work_area;
 mod playlist_exchange;
 #[cfg(target_os = "windows")]
@@ -7845,6 +7847,21 @@ fn play_track_from_database(
     })
 }
 
+#[cfg(target_os = "windows")]
+pub fn initialize_process_diagnostics() {
+    let user_data_dir = std::env::current_exe().ok().and_then(|executable| {
+        windows_data_directory::user_data_dir_for_executable(&executable).ok()
+    });
+    if let Some(user_data_dir) = user_data_dir {
+        diagnostics::install_panic_hook(user_data_dir);
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn diagnostics_json() -> Result<String, String> {
+    diagnostics::report_json()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -8084,6 +8101,13 @@ pub fn run() {
                     ),
                 ),
             };
+            #[cfg(target_os = "windows")]
+            let diagnostic_runtime_status = (
+                database.is_some(),
+                database_error.clone(),
+                playback.is_some(),
+                playback_error.clone(),
+            );
             app.manage(updater::UpdateService::default());
             app.manage(AppState {
                 database,
@@ -8117,6 +8141,17 @@ pub fn run() {
                 #[cfg(target_os = "android")]
                 android_playback_error,
             });
+
+            #[cfg(target_os = "windows")]
+            if let Err(error) = diagnostics::write_runtime_snapshot(
+                &app_data_dir,
+                diagnostic_runtime_status.0,
+                diagnostic_runtime_status.1.as_deref(),
+                diagnostic_runtime_status.2,
+                diagnostic_runtime_status.3.as_deref(),
+            ) {
+                eprintln!("無法寫入診斷執行狀態：{error}");
+            }
 
             if let Some(window) = app.get_webview_window("main") {
                 window.set_title(concat!("MoeMusicPlayer ", env!("MOE_BUILD_VERSION")))?;

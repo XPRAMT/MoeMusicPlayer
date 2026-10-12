@@ -1,6 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    if std::env::args().any(|argument| argument == "--diagnostics-json") {
+        match moemusicplayer_lib::diagnostics_json() {
+            Ok(report) => println!("{report}"),
+            Err(error) => {
+                eprintln!("diagnostics failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if std::env::args().any(|argument| argument == "--update-build-info") {
         println!(
             "{}",
@@ -53,5 +64,7 @@ fn main() {
             return;
         }
     }
+    #[cfg(target_os = "windows")]
+    moemusicplayer_lib::initialize_process_diagnostics();
     moemusicplayer_lib::run();
 }

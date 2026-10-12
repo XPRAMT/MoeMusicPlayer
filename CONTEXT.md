@@ -58,6 +58,12 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **System media control**: Windows' operating-system-facing representation of the current playback session. It shows supported metadata and sends transport requests; the application audio backend remains authoritative for playback state.
 
+## Diagnostics
+
+**Diagnostic snapshot（診斷快照）**: A versioned machine-readable summary of the application build, process, data-file health metadata, and last startup component status for a local support tool. It excludes music metadata and user-settings/database contents.
+
+**Panic record（panic 記錄）**: A timestamped record of an unhandled Rust panic with its thread, source location, message, and stack trace. It helps locate the original failure rather than only reporting a later recovery symptom.
+
 ## Portable updates
 
 **Build identity（建置識別）**: Embedded UTC time with millisecond precision plus the full git commit. Display dates and package SemVer cannot order same-day builds.

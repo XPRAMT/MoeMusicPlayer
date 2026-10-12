@@ -30,6 +30,8 @@ Android Media3 playback integration is implemented. The ARM64 APK is installed o
 
 ## Run on Windows
 
+For a Codex-ready diagnostic snapshot, run `moemusicplayer.exe --diagnostics-json` from a terminal. It prints one JSON report with the build identity, other processes with the same executable name, the last startup database/audio status, database/settings file sizes, and recent panic records. It does not read music metadata, settings contents, or SQLite contents. The report includes executable and `UserData` paths; review them before sharing. Runtime panic records are saved under `UserData/diagnostics/panic.jsonl` with bounded rotation.
+
 Release checks and manifest requests have a 15-second limit. Executable transfers allow a 10-second connection timeout, cancel after 30 seconds without data, and have a bounded 30-minute total download limit so a continuously progressing slow connection can finish. Failed transfers never create an applicable pending update.
 
 1. Install Node.js 20.19+ (or 22.12+), Rust 1.90+, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).

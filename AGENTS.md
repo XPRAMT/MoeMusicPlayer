@@ -79,6 +79,7 @@
 ## SQLite 耐久性與正式資料邊界
 
 - `Database` 連線 mutex 若因持鎖 panic 被 poison，下一次取鎖會先回滾仍開啟的 SQLite transaction，再執行 `SELECT 1` 驗證連線；成功後清除 poison 並恢復後續操作。回滾或驗證失敗時保留錯誤並不清除 poison。這只能恢復有效連線，不能從 `Poisoned` 訊息反推出先前 panic 的位置；診斷 panic 根因仍需原始 panic/backtrace。
+- Windows 版的 Codex 診斷入口為 `moemusicplayer.exe --diagnostics-json`，只輸出版本／建置身份、執行檔與 UserData 路徑、同名其他程序 PID、資料庫／WAL／SHM／settings 檔案存在及大小、最近啟動時資料庫／音訊服務狀態與最多 12 筆 panic。命令不啟動 Tauri UI、不開啟 SQLite，也不輸出曲目標籤、設定內容或資料庫內容。正常啟動會將未處理 Rust panic 以 UTC、執行緒、來源檔名與行列、清理過路徑的訊息及 backtrace 寫入 `UserData/diagnostics/panic.jsonl`；單檔約 1 MiB 後保留一份舊檔。診斷 JSON 最多讀取目前 log 尾端 512 KiB。啟動元件狀態快照位於 `UserData/diagnostics/runtime.json`；它代表上次啟動，不是持續更新的即時播放／掃描狀態。報告含本機資料路徑與 panic 堆疊，分享前應檢查；診斷命令僅以同名程序 PID 提供線索，不證明程序執行檔路徑相同。
 
 - Windows SQLite 啟動時先以真正唯讀連線執行 `PRAGMA quick_check(1)`，成功後才開可寫連線及執行 migration；既有空檔或檢查失敗時 fail closed，不自動重建或替換資料。唯讀檢查不能修復需要可寫 hot-journal recovery 的資料庫，該情況會安全拒絕開啟並需人工／隔離恢復；檢查只證明 SQLite 可一致讀取，不證明 main/WAL 的來源身分。
 - Windows `CloseRequested` 與 `RunEvent::ExitRequested` 共用同一個 shutdown coordinator 和 drain/finalize 流程；同時到達的事件只啟動一次排空，排空完成後再發出的關閉／退出請求才放行。資料庫工作 gate 涵蓋同步、來源與播放命令、播放佇列頁面查詢、會重對應播放清單項目的分頁、播放清單匯入同步後的重讀、Windows／Android 播放清單匯出讀取（Windows 儲存對話框返回後才取得 gate；Android 只在讀取清單時持有 gate），以及歌詞 provider 搜尋／快取／候選選取寫入；匯入在釋放原 guard 並等待同步後，必須重新通過 gate 才可重讀可能觸發 reconciliation 的播放清單。

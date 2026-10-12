@@ -30,6 +30,8 @@ Android Media3 播放整合已完成，ARM64 APK 已安裝至 NX809J 並成功�
 
 ## 在 Windows 執行
 
+若要提供 Codex 可讀的診斷快照，請在終端機執行 `moemusicplayer.exe --diagnostics-json`。程式會輸出一份 JSON，包含建置身份、同名執行個體 PID、上次啟動時的資料庫／音訊狀態、資料庫與設定檔大小，以及最近的 panic 記錄。它不讀取音樂標籤、設定內容或 SQLite 內容。報告會包含執行檔與 `UserData` 路徑，分享前請先檢查。執行期間的 panic 記錄保存在 `UserData/diagnostics/panic.jsonl`，並採有界輪替。
+
 Release 檢查與更新清單請求上限為 15 秒。執行檔下載允許 10 秒建立連線，連續 30 秒無資料便取消，整個下載上限為 30 分鐘，讓持續有進度的慢速連線可以完成。下載失敗不會建立可套用的 pending。
 
 1. 安裝 Node.js 20.19+（或 22.12+）、Rust 1.90+，以及 [Tauri 先決條件](https://v2.tauri.app/start/prerequisites/)。
