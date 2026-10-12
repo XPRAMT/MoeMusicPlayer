@@ -27,6 +27,9 @@ async page => {
     if (result.quality.height >= 24) throw new Error(`${width}px: quality summary occupies multiple lines`);
     if (result.metadata.height >= 24) throw new Error(`${width}px: release date and play count split apart`);
     if (width <= 390 && result.metadata.y <= result.quality.y) throw new Error(`${width}px: release date/count should wrap below the complete quality summary`);
+    if (width <= 390 && Math.abs(result.metadata.y - result.quality.y - result.quality.height) > 1) {
+      throw new Error(`${width}px: wrapped rows should keep the normal single-line spacing`);
+    }
     if (width > 390 && result.metadata.y !== result.quality.y) throw new Error(`${width}px: both groups should share a row when they fit`);
     cases.push({ width, ...result });
   }
