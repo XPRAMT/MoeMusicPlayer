@@ -103,6 +103,7 @@
     withLivePlayedMs,
   } from './lib/live-play-count.js';
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
+  import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
   import {
     SHORTCUT_ACTIONS,
     addShortcutBinding,
@@ -370,6 +371,7 @@
   const playbackReady = $derived(isReady(capabilities?.playback));
   const playbackNavigationReady = $derived(isReady(capabilities?.playbackNavigation));
   const playbackModesReady = $derived(isReady(capabilities?.playbackModes));
+  const playbackControlTooltips = $derived(getPlaybackControlTooltips(playback));
   const playbackDurationMs = $derived(effectivePlaybackDurationMs(
     playback?.durationMs,
     playback?.currentTrack?.durationMs,
@@ -3409,27 +3411,27 @@
         <button class="dock-favorite control-button" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
           <IconHeart size={21} stroke={1.6} aria-hidden="true" />
         </button>
-        <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} aria-pressed={playback?.shuffle === true} onclick={toggleShuffle}>
+        <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={playbackControlTooltips.shuffle} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} aria-pressed={playback?.shuffle === true} onclick={toggleShuffle}>
           {#if playback?.shuffle}
             <IconArrowsShuffle size={23} stroke={1.7} aria-hidden="true" />
           {:else}
             <IconArrowsRight size={23} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
-        <button class="control-button" type="button" aria-label="上一首" title={playback?.canPrevious ? '播放佇列上一首' : showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || !playback?.canPrevious || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
+        <button class="control-button" type="button" aria-label="上一首" title={playbackControlTooltips.previous} disabled={!playbackNavigationReady || !playback?.canPrevious || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
           <IconPlayerTrackPrev size={23} stroke={1.7} aria-hidden="true" />
         </button>
-        <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} title={showCapabilityDetail(capabilities?.playback)} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
+        <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} title={playbackControlTooltips.playPause} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
           {#if playback?.isPlaying}
             <IconPlayerPause size={26} stroke={1.7} aria-hidden="true" />
           {:else}
             <IconPlayerPlay size={26} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
-        <button class="control-button" type="button" aria-label="下一首" title={playback?.canNext ? '播放佇列下一首' : showCapabilityDetail(capabilities?.playbackNavigation)} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
+        <button class="control-button" type="button" aria-label="下一首" title={playbackControlTooltips.next} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
           <IconPlayerTrackNext size={23} stroke={1.7} aria-hidden="true" />
         </button>
-        <button class="control-button secondary-control" type="button" aria-label="循環播放" title={showCapabilityDetail(capabilities?.playbackModes)} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
+        <button class="control-button secondary-control" type="button" aria-label="循環播放" title={playbackControlTooltips.repeat} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
           {#if playback?.repeatMode === 'one'}
             <IconRepeatOnce size={23} stroke={1.7} aria-hidden="true" />
           {:else if playback?.repeatMode === 'all'}
