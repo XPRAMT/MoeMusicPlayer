@@ -1859,6 +1859,8 @@
     try {
       sources = await invokeCommand('library_set_source_enabled', { sourceId: source.id, enabled });
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
+      libraryTrackCount = null;
+      libraryListRevision += 1;
       await loadPlaylists();
       if (enabled) await syncLibrary();
     } catch (error) {

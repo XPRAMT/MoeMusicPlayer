@@ -199,6 +199,7 @@
 - **App SQLite**保存內部 ID、啟動/離線顯示所需的曲目投影、來源映射、使用者覆寫、播放清單、歌詞/封面快取與同步狀態；播放 session（精確佇列 traversal、目前 entry 與位置）及以 TrackId 為鍵的聆聽統計由 App SQLite 持久保存；theme、shuffle/repeat 偏好與媒體來源 registry 仍以版本化 `settings.json` 為權威。系統媒體索引用於確認來源現況，但不得覆蓋使用者資料。使用 migration、批次交易、索引與必要的 FTS；不得逐曲提交交易。快取有上限、可清除、可觀察。
 - SQLite 建議 WAL、prepared statements 與分頁查詢；啟動投影要足夠顯示上次曲庫，但不無條件複製系統資料庫所有欄位。實際播放事件次數、最後播放時間、收藏、歷史及人工匹配若實作，均屬 App 資料，不得被系統 metadata 更新清掉。
 - **身份與同步：**全平台以穩定 internal track ID 關聯播放清單與使用者資料；來源類型、來源 ID 與 locator 分開保存，不能單用路徑當全平台身份。系統索引切換到 fallback 或來源暫離線時，須保留對同一曲目的映射與人工資料。
+- **來源啟用與曲庫投影：**曲庫列表、總數、搜尋及佇列篩選只納入至少有一個啟用來源映射的曲目。停用資料夾來源後立即刷新列表；只屬於該來源的歌曲隱藏，仍由其他啟用來源提供的重複曲目保持可見。停用不刪除曲目、映射或播放歷史，重新啟用即可恢復。資料庫測試確認停用後查詢隱藏、保存資料仍在且重新啟用可恢復；本機 UI 尚待使用者驗收。
 - 身份來源例：Windows SystemIndex 項目、Windows filesystem fallback、Android MediaStore `_ID`、Android SAF document URI。這些來源 ID 與 locator 是平台資料，UI 與跨平台 Core 只使用 internal track ID；不得直接依賴 Content URI 或 Windows Property Key。
 - **音訊平台邊界：**共用播放政策與 AudioBackend 介面，不強迫共用底層解碼/輸出。Windows 評估原生音訊與 WASAPI；Android 的 MediaSessionService 是背景播放和系統控制的權威來源，WebView/Activity 銷毀不得使其錯誤停止。音訊路徑不得受掃描、圖片或 Provider 工作阻塞。
 - AudioBackend 至少容納載入、播放、暫停、停止、跳轉、音量、位置/長度查詢、前後首與裝置狀態；實作無縫播放時仍由音訊層維持時序，Renderer 不成為音訊真相來源。

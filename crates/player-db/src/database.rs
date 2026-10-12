@@ -32,15 +32,18 @@ const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
 const MAX_LYRIC_CANDIDATE_JSON_BYTES: usize = 4 * 1024 * 1024;
 const MAX_LYRIC_CANDIDATE_CACHE_BYTES: i64 = 16 * 1024 * 1024;
-const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT track_id) FROM source_mappings";
+const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
+    JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1";
 const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
+    JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1
     JOIN tracks t ON t.track_id=m.track_id
     WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE";
 const COUNT_FIELD_FILTER_SQL: &str = "SELECT COUNT(DISTINCT t.track_id) FROM tracks t
-    WHERE EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=t.track_id)
+    WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                  ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
       AND (?1 IS NULL
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
@@ -58,7 +61,8 @@ const TRACKS_PAGE_SELECT_SQL: &str = "SELECT t.track_id,
     t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
  FROM tracks t
- WHERE EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=t.track_id)
+ WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
    AND (?1 IS NULL
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
@@ -79,7 +83,8 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
  FROM tracks t
- WHERE EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=t.track_id)
+ WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
    AND (?1 IS NULL
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
         OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
@@ -1480,7 +1485,8 @@ impl Database {
         let sql = format!(
             "SELECT t.track_id
              FROM tracks t
-             WHERE EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=t.track_id)
+             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
                AND (?1 IS NULL
                     OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
                     OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
@@ -3727,6 +3733,64 @@ mod tests {
         .next()
         .expect("matching track")
         .id
+    }
+
+    #[test]
+    fn disabling_a_source_hides_its_tracks_but_keeps_them_for_reenable() {
+        let mut db = Database::open_in_memory().expect("database");
+        let mut root = add_root(&db, MediaSourceKind::WindowsFilesystem, "toggle source");
+        let record = record(&root, "only-item", "only-key", "Source-only song", 12, 100);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&record),
+            std::slice::from_ref(&record),
+            100,
+        );
+        let track_id = db
+            .resolve_track_id_for_locator(&record.locator)
+            .expect("resolve indexed track")
+            .expect("track remains stored");
+
+        assert_eq!(db.count_tracks(None).expect("count enabled tracks"), 1);
+        assert_eq!(
+            db.count_tracks(Some("Source-only"))
+                .expect("search enabled tracks"),
+            1
+        );
+
+        root.enabled = false;
+        db.save_library_root(&root).expect("disable source");
+
+        let hidden = list(&db, 0, 10);
+        assert!(hidden.items.is_empty());
+        assert_eq!(hidden.total_count, 0);
+        assert_eq!(db.count_tracks(None).expect("count after disabling"), 0);
+        assert_eq!(
+            db.count_tracks(Some("Source-only"))
+                .expect("search after disabling"),
+            0
+        );
+        assert!(db
+            .list_track_ids_filtered(
+                None,
+                Some(&TrackFieldFilter {
+                    field: TrackField::Title,
+                    value: "Source-only song".to_owned(),
+                }),
+                Default::default(),
+            )
+            .expect("filtered queue IDs")
+            .is_empty());
+        assert!(db
+            .get_track_summary(track_id)
+            .expect("stored row remains readable")
+            .is_some());
+
+        root.enabled = true;
+        db.save_library_root(&root).expect("reenable source");
+        assert_eq!(list(&db, 0, 10).total_count, 1);
     }
 
     #[test]
@@ -6720,7 +6784,15 @@ mod tests {
             std::slice::from_ref(&disabled_record),
             1000,
         );
-        let disabled_track_id = track_id_for_query(&db, "Disabled only track");
+        let disabled_track_id = db
+            .resolve_track_id_for_locator(&disabled_record.locator)
+            .expect("resolve disabled track locator")
+            .expect("disabled track metadata remains stored");
+        assert_eq!(
+            db.count_tracks(Some("Disabled only track"))
+                .expect("disabled track is hidden from search"),
+            0
+        );
         assert!(matches!(
             db.resolve_playable_filesystem_locator(disabled_track_id),
             Err(DatabaseError::NoEnabledTrackMapping(id)) if id == disabled_track_id
