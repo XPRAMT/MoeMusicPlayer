@@ -502,6 +502,8 @@ async page => {
   assert.equal(await page.locator('.now-playing-track-info [data-track-field="title"]').evaluate((el) => el.tagName), 'SPAN', 'title is display-only and not a navigation button');
   assert.equal(await page.locator('.now-playing-track-info button[data-track-field="title"]').count(), 0, 'title has no clickable filter button');
     assert.ok(state.formatText.includes('FLAC．48 kHz．24 bit'), 'format summary should use the shared full-width separator formatter');
+    assert.ok(state.formatText.includes('2025'), 'topbar format line should include the release year');
+    assert.ok(state.formatText.includes('播放次數'), 'topbar format line should include the live play-count ratio label');
     assert.equal(state.hiResBadge?.alt, 'Hi-Res', 'Hi-Res badge should have accessible alternative text');
     assert.ok(state.hiResBadge?.complete && state.hiResBadge.naturalWidth > 0, 'Hi-Res badge image should load for qualifying source depth');
     assert.ok(state.copy.bottom <= state.cover.top, 'title, artist, album, and format belong above the cover');

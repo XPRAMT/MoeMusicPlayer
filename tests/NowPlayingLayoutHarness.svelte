@@ -323,7 +323,11 @@
           <button data-track-field="album" type="button">測試專輯</button><span class="now-playing-track-sep" aria-hidden="true">．</span>
           <span class="now-playing-track-title" data-track-field="title">測試曲名</span>
         </nav>
-        <p class="now-playing-format"><span>FLAC．48 kHz．24 bit</span><img src={hiResBadgeUrl} alt="Hi-Res" /></p>
+        <p class="now-playing-format" aria-label="音質格式、發行日期與播放次數">
+          <span>FLAC．48 kHz．24 bit</span><img src={hiResBadgeUrl} alt="Hi-Res" />
+          <span class="now-playing-release-date" aria-label="發行日期">2025</span>
+          <span class="now-playing-play-count" aria-label="播放次數">播放次數 2.2</span>
+        </p>
       </div>
       <div class="now-playing-topbar-tools">
         <button type="button" class="soft-button lyrics-topbar-action" aria-label="手動指定歌詞" onclick={() => lyricsTopbarStatus?.openManualSelection()}>歌詞</button>

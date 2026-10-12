@@ -7,6 +7,7 @@
     artist: 'hanser/yousa',
     album: 'hanser Cover',
     albumArtist: 'Harness',
+    releaseDate: '2025',
     trackNumber: 1,
     discNumber: 1,
     durationMs: 60_000,

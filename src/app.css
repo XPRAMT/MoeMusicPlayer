@@ -381,6 +381,11 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.now-playing-header-track .now-playing-release-date {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .now-playing-header-track .now-playing-format img {
   width: 17.4px;
   height: 10.4px;
