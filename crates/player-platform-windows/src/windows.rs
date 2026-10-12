@@ -276,10 +276,9 @@ impl MediaIndex for WindowsMediaIndex {
         }
 
         if root.kind == MediaSourceKind::WindowsSystemIndex {
-            scan.errors.push(MediaSourceError {
-                source_item_id: None,
-                message: crate::system_index::diagnostic(&canonical_root),
-            });
+            use std::io::Write as _;
+            let diagnostic = crate::system_index::diagnostic(&canonical_root);
+            let _ = writeln!(std::io::stderr(), "{diagnostic}");
         }
 
         let mut directories = vec![canonical_root.clone()];
@@ -1070,6 +1069,29 @@ mod tests {
         .expect("add root")
     }
 
+    #[test]
+    fn system_index_diagnostic_is_not_reported_as_a_scan_error() {
+        let base = temp_path("system-index-diagnostic");
+        fs::create_dir_all(&base).expect("create empty test root");
+        let root = LibraryRoot {
+            id: SourceId::new(),
+            kind: MediaSourceKind::WindowsSystemIndex,
+            display_name: "SystemIndex test".to_owned(),
+            locator: MediaLocator::FileSystem(base.clone()),
+            enabled: true,
+        };
+        let mut index = WindowsMediaIndex::new();
+
+        let scan = index.scan(&root);
+
+        assert_eq!(scan.state, SourceScanState::Complete);
+        assert!(
+            scan.errors.is_empty(),
+            "a WSearch capability diagnostic must not become a source item error when filesystem traversal completed"
+        );
+        fs::remove_dir_all(&base).expect("remove empty test root");
+    }
+
     fn write_tagged_mp3(path: &Path, title: &str) {
         write_tagged_mp3_with_date(path, title, "2024-02-29");
     }
@@ -1547,10 +1569,10 @@ mod tests {
         let fallback = player_core::SyncEngine::sync(&systemindex_root, &mut index, &mut db, 2)
             .expect("filesystem fallback sync");
         assert_eq!(fallback.state, Some(SourceScanState::Complete));
-        assert!(fallback
-            .source_errors
-            .iter()
-            .any(|error| error.message.contains("filesystem fallback")));
+        assert!(
+            fallback.source_errors.is_empty(),
+            "SystemIndex capability diagnostics do not count as source errors"
+        );
 
         let after_fallback = db
             .list_tracks_page(player_core::ListTracksQuery {

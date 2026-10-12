@@ -2537,7 +2537,18 @@ impl Database {
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, DatabaseError> {
-        self.connection.lock().map_err(|_| DatabaseError::Poisoned)
+        match self.connection.lock() {
+            Ok(connection) => Ok(connection),
+            Err(poisoned) => {
+                let connection = poisoned.into_inner();
+                if !connection.is_autocommit() {
+                    connection.execute_batch("ROLLBACK")?;
+                }
+                connection.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?;
+                self.connection.clear_poison();
+                Ok(connection)
+            }
+        }
     }
 }
 
@@ -3569,6 +3580,30 @@ mod tests {
             MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\{name}"))),
         )
         .expect("add root")
+    }
+
+    #[test]
+    fn poisoned_connection_mutex_does_not_permanently_disable_database() {
+        let db = Database::open_in_memory().expect("open isolated database");
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let connection = db.connection.lock().expect("initial connection lock");
+            connection
+                .execute_batch("BEGIN IMMEDIATE")
+                .expect("start transaction held across the simulated panic");
+            panic!("simulate a panic while a database operation holds the connection");
+        }));
+        assert!(panic.is_err(), "fixture must poison the connection mutex");
+
+        assert!(
+            db.library_roots().is_ok(),
+            "a valid SQLite connection should remain usable after a lock-holder panic"
+        );
+        assert!(
+            db.lock()
+                .expect("recovered connection lock")
+                .is_autocommit(),
+            "recovery must roll back a transaction left open by the panic"
+        );
     }
 
     fn record(
