@@ -40,7 +40,7 @@
 
 - 播放列愛心開啟與快速設定一致的浮動表面收藏面板，逐一列出啟用的 M3U/M3U8 來源；一首歌可以同時勾選多個清單，既有路徑會預先勾選。勾選只把新歌按完整路徑自然數字順序插到第一個較後項目前，不重排既有項目；取消勾選移除該歌所有重複項，其他項目相對順序不變。操作明確授權寫入使用者所選的那一份外部清單，寫完只更新該清單的 SQLite 投影，不觸發整曲庫掃描。檔案總管暫存曲目的路徑可寫入 M3U，但暫存 TrackId 不寫入正式資料庫。
 - Windows 自動在 EXE 同層 UserData/MyLove.m3u8 建立並登錄「我的最愛」來源。Android 首次建立時以系統 SAF 選擇器優先開啟公用 Music 資料夾，使用者也可選其他資料夾；清單存於外部共享資料夾，檔案不隨解除安裝刪除。Android 加入播放清單來源時必須要求並保存 SAF 讀寫授權；舊來源缺寫入權時收藏勾選停用並提示重新加入來源授權。
-- 收藏功能由 src/lib/FavoritePopover.svelte、src-tauri/src/favorites.rs、src-tauri/src/lib.rs 與 tauri-plugin-media-index Android SAF bridge 實作；決策見 docs/adr/0010-explicit-playlist-favorites-writeback.md。前端檢查、Rust 自然路徑插入測試、Windows 發布建置與 Android ARM64 Debug APK 建置已通過。尚未在 Android 真機操作 SAF 選擇器及實際修改清單。
+- 收藏功能由 src/lib/FavoritePopover.svelte、src-tauri/src/favorites.rs、src-tauri/src/lib.rs 與 tauri-plugin-media-index Android SAF bridge 實作；決策見 docs/adr/0010-explicit-playlist-favorites-writeback.md。前端檢查、Rust 自然路徑插入測試、Windows 發布建置與 Android ARM64 Debug APK 建置已通過。2026-10-12 最新 APK 已安裝至 NX809J（Android 16），首次啟動一次出現 HWUI native abort，重新啟動後程序持續存活並顯示於前景；SAF 選擇器、MyLove 建立及實際清單寫入仍待人工驗收。
 
 ## GitHub 與版控
 
