@@ -3534,20 +3534,22 @@ input:focus-visible {
   background: rgba(var(--text-rgb), 0.04);
 }
 
-/* Now Playing dock transport stays monochrome; top-bar / lyrics soft-buttons keep shared accent glow. */
-.app-shell.has-now-playing-backdrop .player-dock .control-button.control-active,
-.app-shell.has-now-playing-backdrop .player-dock .control-button.control-active svg,
-.app-shell.has-now-playing-backdrop .player-dock .control-button:not(:disabled):hover,
-.app-shell.has-now-playing-backdrop .player-dock .control-button:not(:disabled):hover svg,
-.app-shell.has-now-playing-backdrop .player-dock .play-button:not(:disabled):hover,
-.app-shell.has-now-playing-backdrop .player-dock .play-button:not(:disabled):hover svg {
+/* Bottom playback controls stay neutral in every view and state; theme accents remain for other controls. */
+.player-dock .control-button.control-active,
+.player-dock .control-button.control-active svg,
+.player-dock .dock-favorite.has-favorites,
+.player-dock .dock-favorite.has-favorites svg,
+.player-dock .control-button:not(:disabled):hover,
+.player-dock .control-button:not(:disabled):hover svg,
+.player-dock .play-button:not(:disabled):hover,
+.player-dock .play-button:not(:disabled):hover svg {
   color: var(--text);
   stroke: currentColor;
   background: transparent;
 }
 
-.app-shell.has-now-playing-backdrop .player-dock .control-button:not(:disabled):hover,
-.app-shell.has-now-playing-backdrop .player-dock .play-button:not(:disabled):hover {
+.player-dock .control-button:not(:disabled):hover,
+.player-dock .play-button:not(:disabled):hover {
   background: rgba(var(--text-rgb), 0.06);
 }
 

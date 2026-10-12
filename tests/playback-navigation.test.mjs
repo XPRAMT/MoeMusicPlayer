@@ -12,6 +12,7 @@ const trackColumnCellsSource = readSource('src/lib/TrackColumnCells.svelte');
 const trackListSource = readSource('src/lib/TrackList.svelte');
 const playlistEntrySource = readSource('src/lib/PlaylistEntryList.svelte');
 const playlistTreeSource = readSource('src/lib/PlaylistTree.svelte');
+const favoritePopoverSource = readSource('src/lib/FavoritePopover.svelte');
 
 function functionSource(startText, endText) {
   const start = appSource.indexOf(startText);
@@ -166,7 +167,8 @@ test('visible UI icons use Tabler components except the original brand mark', ()
     'IconFolder', 'IconHeart', 'IconLibrary', 'IconMusic',
     'IconRefresh', 'IconSearch', 'IconVolume2',
   ]) {
-    assert.match(appSource, new RegExp(`<${name}\\b`), `${name} should be used by the interface`);
+    const source = name === 'IconHeart' ? favoritePopoverSource : appSource;
+    assert.match(source, new RegExp(`<${name}\\b`), `${name} should be used by the interface`);
   }
   assert.match(playlistTreeSource, /<IconPlaylist\b/);
   assert.doesNotMatch(trackListSource, /<IconPlayerPlayFilled\b/);

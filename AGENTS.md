@@ -40,6 +40,7 @@
 
 - 播放列愛心開啟與快速設定一致的浮動表面收藏面板，逐一列出啟用的 M3U/M3U8 來源；一首歌可以同時勾選多個清單，既有路徑會預先勾選。勾選新歌時掃描整份清單，找出完整路徑自然數字排序中最大且不晚於新歌的既有路徑，緊接其後插入；若沒有較前路徑則插在首位。即使匯入清單本身未排序，也不改變既有歌曲彼此的相對順序。Windows 路徑排序鍵會去除 `\\?\` 長路徑前綴，並把 `\\?\UNC\server\share` 正規化成一般 UNC 路徑。M3U/M3U8 輸出也會將 extended drive／UNC 前綴轉回一般 Windows 路徑格式；僅正規化輸出字串，內部 locator 仍保留原值以支援長路徑讀取。取消勾選移除該歌所有重複項，其他項目相對順序不變。操作明確授權寫入使用者所選的那一份外部清單，寫完只更新該清單的 SQLite 投影，不觸發整曲庫掃描。檔案總管暫存曲目的路徑可寫入 M3U，但暫存 TrackId 不寫入正式資料庫。
 - Windows 自動在 EXE 同層 UserData/MyLove.m3u8 建立並登錄「我的最愛」來源。Android 首次建立時以系統 SAF 選擇器優先開啟公用 Music 資料夾，使用者也可選其他資料夾；清單存於外部共享資料夾，檔案不隨解除安裝刪除。Android 加入播放清單來源時必須要求並保存 SAF 讀寫授權；舊來源缺寫入權時收藏勾選停用並提示重新加入來源授權。
+- 底欄播放控制（收藏、隨機、循環、播放與前後首）的普通、啟用與滑鼠懸停狀態一律使用中性色，不使用主題主色。播放列愛心需在每次目前曲目變更時查詢該曲目是否存在於任一啟用播放清單；存在時顯示實心愛心，並隔離過期非同步回應，避免快速切歌時沿用前一首狀態。`tests/favorite-dock-harness.html` 與 `tests/favorite-dock.playwright.js` 驗證逐曲查詢、快速切歌過期回應、實心愛心與啟用／懸停色彩。
 - 收藏功能由 src/lib/FavoritePopover.svelte、src-tauri/src/favorites.rs、src-tauri/src/lib.rs 與 tauri-plugin-media-index Android SAF bridge 實作；決策見 docs/adr/0010-explicit-playlist-favorites-writeback.md。收藏排序測試涵蓋一般自然排序、混用 `\\?\` 與一般磁碟路徑、未排序來源清單中依最近較前路徑選擇插入點、新歌曲插入而不移動既有項目、UNC 長路徑等價與冪等行為。M3U/M3U8 輸出回歸測試確認 Windows extended drive／UNC 前綴會轉回一般路徑，內部 locator 保留原值。Windows 固定 release EXE 每次程式碼修改提交後重建。NX809J（Android 16）最新來源掃描已驗證 2 個來源完成且 0 項錯誤；SAF 選擇器、MyLove 建立及實際清單寫入仍待人工驗收。
 
 ## GitHub 與版控

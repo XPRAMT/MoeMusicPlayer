@@ -17,18 +17,41 @@
   let error = $state<string | null>(null);
   let requestRevision = 0;
   let notifiedWindowsSources = false;
+  let lastObservedTrackId: string | null = null;
 
   $effect(() => {
-    if (open && trackId) void refresh();
+    const currentTrackId = trackId;
+    const isOpen = open;
+    if (!currentTrackId) {
+      if (lastObservedTrackId !== null) {
+        lastObservedTrackId = null;
+        requestRevision += 1;
+        playlists = [];
+        setupRequired = false;
+        loading = false;
+        error = null;
+      }
+      return;
+    }
+
+    if (currentTrackId !== lastObservedTrackId) {
+      lastObservedTrackId = currentTrackId;
+      playlists = [];
+      setupRequired = false;
+      error = null;
+      void refresh(currentTrackId);
+    } else if (isOpen) {
+      void refresh(currentTrackId);
+    }
   });
 
-  async function refresh(): Promise<void> {
-    if (!trackId) return;
+  async function refresh(currentTrackId: string | null = trackId): Promise<void> {
+    if (!currentTrackId) return;
     const revision = ++requestRevision;
     loading = true;
     error = null;
     try {
-      const result: FavoritePlaylists = await invokeCommand('favorites_get_playlists', { trackId });
+      const result: FavoritePlaylists = await invokeCommand('favorites_get_playlists', { trackId: currentTrackId });
       if (revision !== requestRevision) return;
       playlists = result.playlists;
       setupRequired = result.myLoveSetupRequired;
@@ -48,6 +71,8 @@
     if (!trackId || platform === 'unsupported') return;
     open = !open;
   }
+
+  let isFavorited = $derived(playlists.some((playlist) => playlist.selected));
 
   async function changeMembership(playlist: FavoritePlaylist, selected: boolean): Promise<void> {
     if (!trackId || busySourceId) return;
@@ -95,16 +120,17 @@
 <div class="favorite-control">
   <button
     class="dock-favorite control-button"
-    class:has-favorites={playlists.some((playlist) => playlist.selected)}
+    class:has-favorites={isFavorited}
     type="button"
     aria-label="收藏曲目"
     aria-haspopup="dialog"
     aria-expanded={open}
+    aria-pressed={isFavorited}
     title="加入或移出播放清單"
     disabled={!trackId || platform === 'unsupported'}
     onclick={toggle}
   >
-    <IconHeart size={21} stroke={1.6} aria-hidden="true" />
+    <IconHeart size={21} stroke={1.6} fill={isFavorited ? 'currentColor' : 'none'} aria-hidden="true" />
   </button>
   {#if open}
     <div
@@ -167,12 +193,8 @@
     flex: 0 0 auto;
   }
 
-  .dock-favorite.has-favorites {
-    color: var(--accent);
-  }
-
   .dock-favorite.has-favorites :global(svg) {
-    fill: color-mix(in srgb, var(--accent) 26%, transparent);
+    fill: currentColor;
   }
 
   .favorite-popover {
