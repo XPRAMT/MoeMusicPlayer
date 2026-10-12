@@ -2828,7 +2828,7 @@ fn fetch_tracks_window(
     )
 }
 
-fn tracks_order_by_sql(sort: TrackListSort) -> &'static str {
+fn tracks_order_by_sql(sort: TrackListSort) -> String {
     let asc = matches!(sort.direction, TrackSortDirection::Asc);
     match (sort.field, asc) {
         (TrackSortField::Title, true) => {
@@ -2855,7 +2855,12 @@ fn tracks_order_by_sql(sort: TrackListSort) -> &'static str {
         (TrackSortField::Year, false) => {
             "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date DESC, (t.year IS NULL) ASC, t.year DESC, t.track_id DESC"
         }
-        (TrackSortField::AudioFormat, _) => unreachable!("audio format has a compound sort key"),
+        (TrackSortField::AudioFormat, true) => {
+            return audio_format_order_by("ASC", "t.track_id");
+        }
+        (TrackSortField::AudioFormat, false) => {
+            return audio_format_order_by("DESC", "t.track_id");
+        }
         (TrackSortField::Duration, true) => {
             "(t.duration_ms IS NULL) ASC, t.duration_ms ASC, t.track_id ASC"
         }
@@ -2876,6 +2881,7 @@ fn tracks_order_by_sql(sort: TrackListSort) -> &'static str {
              END DESC, t.track_id DESC"
         }
     }
+    .to_owned()
 }
 
 fn fetch_tracks_window_filtered(
@@ -2887,15 +2893,7 @@ fn fetch_tracks_window_filtered(
     limit: u32,
 ) -> Result<Vec<TrackSummary>, DatabaseError> {
     let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter);
-    let order_by = if sort.field == TrackSortField::AudioFormat {
-        let direction = match sort.direction {
-            TrackSortDirection::Asc => "ASC",
-            TrackSortDirection::Desc => "DESC",
-        };
-        audio_format_order_by(direction, "t.track_id")
-    } else {
-        tracks_order_by_sql(sort).to_owned()
-    };
+    let order_by = tracks_order_by_sql(sort);
     let sql = format!(
         "{} ORDER BY {} LIMIT ?2 OFFSET ?3",
         TRACKS_PAGE_SELECT_SQL, order_by
@@ -4840,6 +4838,24 @@ mod tests {
         assert_eq!(library_sorted.items[6].sample_rate_hz, Some(44_100));
         assert_eq!(library_sorted.items[7].bit_depth, Some(16));
         assert_eq!(library_sorted.items[8].bit_depth, Some(24));
+        let queue_track_ids = db
+            .list_track_ids_filtered(
+                None,
+                None,
+                player_core::TrackListSort {
+                    field: player_core::TrackSortField::AudioFormat,
+                    direction: player_core::TrackSortDirection::Asc,
+                },
+            )
+            .expect("sort queue track IDs by audio format");
+        assert_eq!(
+            queue_track_ids,
+            library_sorted
+                .items
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>()
+        );
 
         let playlist_desc = db
             .get_playlist_page_sorted(
@@ -4899,6 +4915,24 @@ mod tests {
         assert_eq!(library_desc.items[5].sample_rate_hz, Some(96_000));
         assert_eq!(library_desc.items[6].bitrate_bps, Some(160_000));
         assert_eq!(library_desc.items[7].bitrate_bps, Some(96_000));
+        let queue_track_ids_desc = db
+            .list_track_ids_filtered(
+                None,
+                None,
+                player_core::TrackListSort {
+                    field: player_core::TrackSortField::AudioFormat,
+                    direction: player_core::TrackSortDirection::Desc,
+                },
+            )
+            .expect("sort queue track IDs by audio format descending");
+        assert_eq!(
+            queue_track_ids_desc,
+            library_desc
+                .items
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
