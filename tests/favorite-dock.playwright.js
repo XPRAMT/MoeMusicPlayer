@@ -1,7 +1,8 @@
 async page => {
 const errors = [];
 page.on('pageerror', (error) => errors.push(error.message));
-await page.goto('http://127.0.0.1:4175/tests/favorite-dock-harness.html');
+await page.goto('http://127.0.0.1:4176/tests/favorite-dock-harness.html');
+await page.setViewportSize({ width: 1280, height: 800 });
 await page.getByRole('button', { name: '隨機播放' }).waitFor();
 
 const heart = page.locator('.dock-favorite');
@@ -25,7 +26,23 @@ if (firstTrack.favoriteColor !== 'rgb(230, 230, 230)' || firstTrack.shuffleColor
   throw new Error(`Dock active controls used a non-neutral color: ${JSON.stringify(firstTrack)}`);
 }
 
+await page.evaluate(() => {
+  window.__favoriteStateChanges = [];
+  const heartButton = document.querySelector('.dock-favorite');
+  new MutationObserver(() => window.__favoriteStateChanges.push(heartButton.getAttribute('aria-pressed')))
+    .observe(heartButton, { attributes: true, attributeFilter: ['aria-pressed'] });
+});
 await page.getByTestId('next-track').click();
+await page.waitForFunction(() => document.querySelector('[data-testid="current-track"]')?.textContent === 'track-two');
+await page.waitForFunction(() => window.__favoriteDockHarness.calls.includes('track-two'));
+await page.waitForTimeout(80);
+const duringFavoriteLookup = await page.locator('.dock-favorite').getAttribute('aria-pressed');
+if (duringFavoriteLookup !== 'true' || (await page.evaluate(() => window.__favoriteStateChanges)).includes('false')) {
+  throw new Error(`Favorite state flickered while looking up another playlist member: ${JSON.stringify({
+    duringFavoriteLookup,
+    changes: await page.evaluate(() => window.__favoriteStateChanges),
+  })}`);
+}
 await page.getByTestId('next-track').click();
 await page.waitForFunction(() => document.querySelector('[data-testid="current-track"]')?.textContent === 'track-three');
 await page.waitForFunction(() => window.__favoriteDockHarness.calls.includes('track-three'));
@@ -43,9 +60,32 @@ if (!afterStaleReply.calls.includes('track-two') || !afterStaleReply.calls.inclu
   throw new Error(`Track change did not trigger fresh membership checks: ${JSON.stringify(afterStaleReply)}`);
 }
 
+await heart.click();
+await page.getByRole('dialog', { name: '收藏到播放清單' }).waitFor();
+await page.setViewportSize({ width: 320, height: 800 });
+await page.waitForFunction(() => {
+  const panel = document.querySelector('.favorite-popover')?.getBoundingClientRect();
+  const anchor = document.querySelector('.favorite-control')?.getBoundingClientRect();
+  return panel && anchor && panel.left >= 8 && panel.right <= innerWidth - 8 && Math.abs(anchor.top - panel.bottom - 14) <= 1;
+});
+const panelGeometry = await page.evaluate(() => {
+  const panel = document.querySelector('.favorite-popover').getBoundingClientRect();
+  const anchor = document.querySelector('.favorite-control').getBoundingClientRect();
+  return {
+    left: panel.left,
+    right: panel.right,
+    bottomGap: anchor.top - panel.bottom,
+    viewportWidth: innerWidth,
+  };
+});
+if (panelGeometry.left < 8 || panelGeometry.right > panelGeometry.viewportWidth - 8 || Math.abs(panelGeometry.bottomGap - 14) > 1) {
+  throw new Error(`Favorite panel did not keep the volume panel spacing and edge inset: ${JSON.stringify(panelGeometry)}`);
+}
+
 await page.locator('[aria-label="隨機播放"]').hover();
 const hoverColor = await page.locator('[aria-label="隨機播放"]').evaluate((element) => getComputedStyle(element).color);
 if (hoverColor !== 'rgb(230, 230, 230)') throw new Error(`Shuffle hover used theme color ${hoverColor}`);
 if (errors.length) throw new Error(`Browser errors: ${errors.join(' | ')}`);
+await page.evaluate(() => { document.title = 'PASS: favorite flicker and panel alignment'; });
 console.log('PASS: live per-track membership, stale-response fencing, solid heart, and neutral dock active/hover colors.');
 }

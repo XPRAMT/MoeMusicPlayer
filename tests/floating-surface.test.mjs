@@ -5,11 +5,12 @@ import { readFile } from 'node:fs/promises';
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
 test('floating panels share Quick Settings surface tokens', async () => {
-  const [css, app, lyrics, update] = await Promise.all([
+  const [css, app, lyrics, update, favorites] = await Promise.all([
     read('../src/app.css'),
     read('../src/App.svelte'),
     read('../src/lib/LyricsView.svelte'),
     read('../src/lib/UpdateCenter.svelte'),
+    read('../src/lib/FavoritePopover.svelte'),
   ]);
 
   assert.match(css, /\.floating-surface,[\s\S]*?background: color-mix\(in srgb, var\(--text-inverse\) var\(--quick-settings-opacity, 70%\), transparent\)/);
@@ -20,6 +21,9 @@ test('floating panels share Quick Settings surface tokens', async () => {
   assert.match(app, /class="now-playing-quick-settings-drawer floating-surface"/);
   assert.match(app, /class="volume-popover floating-surface"/);
   assert.match(css, /\.volume-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 14px\)/s);
+  assert.match(favorites, /class="favorite-popover floating-surface"/);
+  assert.match(favorites, /bottom:\s*calc\(100% \+ 14px\)/);
+  assert.match(favorites, /getPopoverHorizontalShiftPx/);
   assert.match(lyrics, /class="lyrics-timing-panel floating-surface"/);
   assert.match(update, /class="update-dialog floating-surface"/);
   assert.match(app, /surfaceOpacityPercent=\{themePreferences\.quickSettingsOpacityPercent\}/);

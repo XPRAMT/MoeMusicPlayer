@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { IconHeart } from '@tabler/icons-svelte-runes';
   import { invokeCommand, type FavoritePlaylist, type FavoritePlaylists } from './ipc';
+  import { getPopoverHorizontalShiftPx } from './volume-popover-position.js';
 
   interface Props {
     trackId: string | null;
@@ -11,6 +13,7 @@
   let { trackId, platform, onChange }: Props = $props();
   let open = $state(false);
   let playlists = $state<FavoritePlaylist[]>([]);
+  let isFavorited = $state(false);
   let setupRequired = $state(false);
   let loading = $state(false);
   let busySourceId = $state<string | null>(null);
@@ -18,6 +21,9 @@
   let requestRevision = 0;
   let notifiedWindowsSources = false;
   let lastObservedTrackId: string | null = null;
+  let favoriteControlElement = $state<HTMLDivElement | null>(null);
+  let favoritePopoverElement = $state<HTMLDivElement | null>(null);
+  let favoritePopoverShiftX = $state(0);
 
   $effect(() => {
     const currentTrackId = trackId;
@@ -27,6 +33,7 @@
         lastObservedTrackId = null;
         requestRevision += 1;
         playlists = [];
+        isFavorited = false;
         setupRequired = false;
         loading = false;
         error = null;
@@ -45,6 +52,31 @@
     }
   });
 
+  $effect(() => {
+    if (!open) {
+      favoritePopoverShiftX = 0;
+      return;
+    }
+
+    let active = true;
+    const updateAlignment = (): void => {
+      if (!active || !favoriteControlElement || !favoritePopoverElement) return;
+      const anchor = favoriteControlElement.getBoundingClientRect();
+      favoritePopoverShiftX = getPopoverHorizontalShiftPx(
+        anchor.left + anchor.width / 2,
+        favoritePopoverElement.getBoundingClientRect().width,
+        window.innerWidth,
+      );
+    };
+
+    window.addEventListener('resize', updateAlignment);
+    void tick().then(updateAlignment);
+    return () => {
+      active = false;
+      window.removeEventListener('resize', updateAlignment);
+    };
+  });
+
   async function refresh(currentTrackId: string | null = trackId): Promise<void> {
     if (!currentTrackId) return;
     const revision = ++requestRevision;
@@ -54,13 +86,18 @@
       const result: FavoritePlaylists = await invokeCommand('favorites_get_playlists', { trackId: currentTrackId });
       if (revision !== requestRevision) return;
       playlists = result.playlists;
+      isFavorited = result.playlists.some((playlist) => playlist.selected);
       setupRequired = result.myLoveSetupRequired;
       if (platform === 'windows' && !notifiedWindowsSources && !result.myLoveSetupRequired) {
         notifiedWindowsSources = true;
         await onChange?.();
       }
     } catch (cause) {
-      if (revision === requestRevision) error = cause instanceof Error ? cause.message : String(cause);
+      if (revision === requestRevision) {
+        error = cause instanceof Error ? cause.message : String(cause);
+        playlists = [];
+        isFavorited = false;
+      }
     } finally {
       if (revision === requestRevision) loading = false;
     }
@@ -71,8 +108,6 @@
     if (!trackId || platform === 'unsupported') return;
     open = !open;
   }
-
-  let isFavorited = $derived(playlists.some((playlist) => playlist.selected));
 
   async function changeMembership(playlist: FavoritePlaylist, selected: boolean): Promise<void> {
     if (!trackId || busySourceId) return;
@@ -117,7 +152,7 @@
   }
 </script>
 
-<div class="favorite-control">
+<div class="favorite-control" bind:this={favoriteControlElement}>
   <button
     class="dock-favorite control-button"
     class:has-favorites={isFavorited}
@@ -139,6 +174,8 @@
       tabindex="-1"
       aria-label="收藏到播放清單"
       data-testid="favorite-popover"
+      bind:this={favoritePopoverElement}
+      style:--favorite-popover-shift-x={`${favoritePopoverShiftX}px`}
       onclick={(event) => event.stopPropagation()}
       onkeydown={onKeydown}
     >
@@ -201,12 +238,12 @@
     position: absolute;
     z-index: 55;
     left: 50%;
-    bottom: calc(100% + 10px);
+    bottom: calc(100% + 14px);
     width: min(310px, calc(100vw - 24px));
     max-height: min(60vh, 420px);
     overflow-y: auto;
     padding: 12px;
-    transform: translateX(-50%);
+    transform: translateX(calc(-50% + var(--favorite-popover-shift-x, 0px)));
   }
 
   .favorite-popover-heading {
