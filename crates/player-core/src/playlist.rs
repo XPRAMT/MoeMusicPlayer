@@ -261,18 +261,28 @@ pub fn write_m3u8(
             return Err(PlaylistError::LineBreakInMetadata { entry_index });
         }
 
-        let reference = match &entry.locator {
+        let reference: std::borrow::Cow<'_, str> = match &entry.locator {
             MediaLocator::FileSystem(path) => {
                 let path = if let Some(root) = &options.relative_root {
                     relative_path_within_root(path, root, entry_index)?
                 } else {
                     path.as_path()
                 };
-                path.to_str()
-                    .ok_or(PlaylistError::UnrepresentablePath { entry_index })?
+                let reference = path
+                    .to_str()
+                    .ok_or(PlaylistError::UnrepresentablePath { entry_index })?;
+                #[cfg(windows)]
+                {
+                    normalize_windows_extended_path(reference)
+                }
+                #[cfg(not(windows))]
+                {
+                    std::borrow::Cow::Borrowed(reference)
+                }
             }
-            MediaLocator::ContentUri(uri) => uri.as_str(),
+            MediaLocator::ContentUri(uri) => std::borrow::Cow::Borrowed(uri.as_str()),
         };
+        let reference = reference.as_ref();
         if reference.is_empty() || contains_line_break(reference) || reference.contains('\0') {
             return Err(PlaylistError::LineBreakInEntry { entry_index });
         }
@@ -301,6 +311,25 @@ pub fn write_m3u8(
     }
 
     Ok(output.into_bytes())
+}
+
+#[cfg(windows)]
+fn normalize_windows_extended_path(path: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+
+    if path
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\?\UNC\"))
+    {
+        Cow::Owned(format!(r"\\{}", &path[8..]))
+    } else if path
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\?\"))
+    {
+        Cow::Borrowed(&path[4..])
+    } else {
+        Cow::Borrowed(path)
+    }
 }
 
 /// Write `.m3u` as UTF-8 too. The format name does not imply a locale-dependent ANSI codepage;
@@ -514,6 +543,34 @@ mod tests {
         PlaylistError,
     };
     use crate::MediaLocator;
+
+    #[cfg(windows)]
+    #[test]
+    fn m3u_export_writes_regular_windows_paths_for_extended_locators() {
+        let mut playlist = Playlist::new("paths");
+        for path in [
+            r"\\?\D:\Music\song.flac",
+            r"\\?\UNC\server\share\Music\remote.flac",
+        ] {
+            playlist.entries.push(PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::FileSystem(PathBuf::from(path)),
+                title: None,
+                duration_ms: None,
+            });
+        }
+
+        let output = write_m3u8(
+            &playlist,
+            Path::new(r"C:\Music\MyLove.m3u8"),
+            &M3uExportOptions::default(),
+        )
+        .expect("export paths");
+        let text = std::str::from_utf8(&output).expect("UTF-8 playlist");
+        assert!(text.contains(r"D:\Music\song.flac"));
+        assert!(text.contains(r"\\server\share\Music\remote.flac"));
+        assert!(!text.contains(r"\\?\"));
+    }
 
     #[test]
     fn m3u8_resolves_unicode_relative_path_and_preserves_extended_metadata() {
