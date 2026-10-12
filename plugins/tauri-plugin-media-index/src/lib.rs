@@ -7,6 +7,8 @@ use tauri::{Manager, Runtime, plugin::Builder, plugin::TauriPlugin};
 
 #[cfg(any(target_os = "android", test))]
 mod adapter;
+#[cfg(any(target_os = "android", test))]
+mod android_metadata;
 #[cfg(not(target_os = "android"))]
 mod desktop;
 mod error;

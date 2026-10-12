@@ -24,4 +24,30 @@ class MediaIndexMappingTest {
         assertFalse(MediaIndexPlugin.audioCandidate("image/jpeg", "cover.jpg") == AudioCandidate.YES)
         assertTrue(MediaIndexPlugin.audioCandidate("audio/ogg", null) == AudioCandidate.YES)
     }
+
+    @Test
+    fun incompleteScanAlwaysIncludesTheRequiredStateReason() {
+        assertEquals(
+            "Could not enumerate SAF directory",
+            MediaIndexPlugin.scanStateReason("incomplete", null, "Could not enumerate SAF directory"),
+        )
+        assertEquals(
+            "MediaStore changed while scanning",
+            MediaIndexPlugin.scanStateReason("incomplete", "MediaStore changed while scanning", null),
+        )
+        assertEquals(
+            "Android source scan did not complete",
+            MediaIndexPlugin.scanStateReason("incomplete", null, null),
+        )
+        assertEquals(null, MediaIndexPlugin.scanStateReason("complete", null, null))
+    }
+
+    @Test
+    fun hiddenSafArtifactsAreNotReportedAsUnknownAudio() {
+        assertTrue(MediaIndexPlugin.isHiddenDocument(".nomedia"))
+        assertTrue(MediaIndexPlugin.isHiddenDocument(".database_uuid"))
+        assertTrue(MediaIndexPlugin.isHiddenDocument(".thumbnails"))
+        assertFalse(MediaIndexPlugin.isHiddenDocument("song.m4a"))
+        assertFalse(MediaIndexPlugin.isHiddenDocument(null))
+    }
 }

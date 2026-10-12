@@ -85,6 +85,14 @@ pub(crate) struct TrackMetadata {
     pub bit_depth: Option<u8>,
 }
 
+#[cfg(target_os = "android")]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReadMetadataResponse {
+    pub metadata: Option<TrackMetadata>,
+    pub error: Option<String>,
+}
+
 #[cfg(any(target_os = "android", test))]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

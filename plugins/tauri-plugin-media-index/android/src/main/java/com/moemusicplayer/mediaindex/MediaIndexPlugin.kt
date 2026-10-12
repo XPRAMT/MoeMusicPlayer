@@ -760,6 +760,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                         val documentId = rows.stringOrNull(idColumn)
                         val displayName = rows.stringOrNull(nameColumn)
                         val mimeType = rows.stringOrNull(mimeColumn)
+                        if (isHiddenDocument(displayName)) continue
                         if (documentId == null || mimeType == null) {
                             incomplete = true
                             errors.put(sourceError(documentId, "SAF row has no document ID or MIME type"))
@@ -815,9 +816,11 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     private fun readMetadata(uri: Uri): JSObject {
         val response = JSObject()
         val retriever = android.media.MediaMetadataRetriever()
-        try {
+        val audioFormat = readAudioFormat(uri)
+        var retrieverError: String? = null
+        val retrieved = try {
             retriever.setDataSource(activity, uri)
-            val metadata = metadataObject(
+            metadataObject(
                 title = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE),
                 artist = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST),
                 album = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM),
@@ -825,20 +828,21 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                 trackNumber = parsePositiveInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)),
                 discNumber = parsePositiveInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)),
                 durationMs = parsePositiveLong(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)),
-                codec = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_MIMETYPE),
-                bitrateBps = parsePositiveInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_BITRATE)),
-                sampleRateHz = parsePositiveInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)),
+                codec = audioFormat?.stringOrNull(android.media.MediaFormat.KEY_MIME)
+                    ?: retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_MIMETYPE),
+                bitrateBps = audioFormat?.intOrNull(android.media.MediaFormat.KEY_BIT_RATE)
+                    ?: parsePositiveInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_BITRATE)),
+                sampleRateHz = audioFormat?.intOrNull(android.media.MediaFormat.KEY_SAMPLE_RATE)
+                    ?: parsePositiveInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)),
                 bitDepth = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     parsePositiveInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE))
                 } else {
                     null
                 },
             )
-            response.put("metadata", metadata)
-            response.put("error", JSONObject.NULL)
         } catch (error: Exception) {
-            response.put("metadata", JSONObject.NULL)
-            response.put("error", error.message ?: "Could not read metadata from content URI")
+            retrieverError = error.message
+            null
         } finally {
             try {
                 retriever.release()
@@ -846,7 +850,40 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                 // The metadata error above is the useful failure to report.
             }
         }
+        val metadata = retrieved ?: metadataObject(
+            durationMs = audioFormat?.longOrNull(android.media.MediaFormat.KEY_DURATION)?.div(1000L),
+            codec = audioFormat?.stringOrNull(android.media.MediaFormat.KEY_MIME),
+            bitrateBps = audioFormat?.intOrNull(android.media.MediaFormat.KEY_BIT_RATE),
+            sampleRateHz = audioFormat?.intOrNull(android.media.MediaFormat.KEY_SAMPLE_RATE),
+        )
+        val hasUsefulMetadata = listOf(
+            "title", "artist", "album", "durationMs", "codec", "bitrateBps", "sampleRateHz",
+        ).any { key -> metadata.opt(key).let { it != null && it != JSONObject.NULL && it != "" } }
+        response.put("metadata", if (hasUsefulMetadata) metadata else JSONObject.NULL)
+        response.put(
+            "error",
+            if (hasUsefulMetadata) JSONObject.NULL else retrieverError ?: "Android could not identify an audio track",
+        )
         return response
+    }
+
+    private fun readAudioFormat(uri: Uri): android.media.MediaFormat? {
+        val extractor = android.media.MediaExtractor()
+        return try {
+            extractor.setDataSource(activity, uri, null)
+            (0 until extractor.trackCount)
+                .asSequence()
+                .map(extractor::getTrackFormat)
+                .firstOrNull { it.stringOrNull(android.media.MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
+        } catch (_: Exception) {
+            null
+        } finally {
+            try {
+                extractor.release()
+            } catch (_: RuntimeException) {
+                // MetadataRetriever remains the fallback for tags and duration.
+            }
+        }
     }
 
     private fun cacheContentUri(uri: Uri, maxBytes: Long): JSObject {
@@ -1243,13 +1280,24 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         errors: JSONArray = JSONArray(),
     ): JSObject {
         val state = JSONObject().put("kind", kind)
-        if (reason != null) state.put("reason", reason)
+        scanStateReason(kind, reason, errors.optJSONObject(0)?.optString("message"))?.let {
+            state.put("reason", it)
+        }
         return JSObject().apply {
             put("state", state)
             put("tracks", tracks)
             put("errors", errors)
         }
     }
+
+    private fun android.media.MediaFormat.stringOrNull(key: String): String? =
+        if (containsKey(key)) getString(key) else null
+
+    private fun android.media.MediaFormat.intOrNull(key: String): Int? =
+        if (containsKey(key)) getInteger(key).takeIf { it > 0 } else null
+
+    private fun android.media.MediaFormat.longOrNull(key: String): Long? =
+        if (containsKey(key)) getLong(key).takeIf { it > 0L } else null
 
     private fun sourceError(itemId: String?, message: String): JSONObject = JSONObject().apply {
         put("sourceItemId", itemId ?: JSONObject.NULL)
@@ -1313,6 +1361,16 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     private fun parsePositiveLong(value: String?): Long? = value?.toLongOrNull()?.takeIf { it >= 0L }
 
     companion object {
+        internal fun scanStateReason(kind: String, reason: String?, firstErrorMessage: String?): String? {
+            if (kind == "complete") return null
+            return reason?.takeIf(String::isNotBlank)
+                ?: firstErrorMessage?.takeIf(String::isNotBlank)
+                ?: "Android source scan did not complete"
+        }
+
+        internal fun isHiddenDocument(displayName: String?): Boolean =
+            displayName?.startsWith('.') == true
+
         internal fun splitTrackNumber(encoded: Long?): Pair<Int?, Int?> {
             if (encoded == null || encoded < 0L) return null to null
             val disc = (encoded / 1000L).takeIf { it > 0L && it <= Int.MAX_VALUE }?.toInt()

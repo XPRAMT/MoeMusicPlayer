@@ -23,8 +23,9 @@ use tauri::{
 use crate::adapter::{looks_like_tree_uri, media_store_volume, scan_from_response};
 use crate::models::{
     BooleanResponse, ContentCacheLeaseResponse, ContentUriProbeResponse, LyricsTextResponse,
-    MyLovePlaylistResponse, PermissionResponse, ResolvedSafPlaylistEntryResponse,
-    SafPlaylistImportResponse, SafTreeResponse, ScanResponse, UriResponse, VolumesResponse,
+    MyLovePlaylistResponse, PermissionResponse, ReadMetadataResponse,
+    ResolvedSafPlaylistEntryResponse, SafPlaylistImportResponse, SafTreeResponse, ScanResponse,
+    UriResponse, VolumesResponse,
 };
 use crate::{
     ContentCacheLease, MediaStoreVolume, MediaStoreVolumes, ResolvedSafPlaylistEntry, Result,
@@ -106,7 +107,49 @@ impl<R: Runtime> PlatformMediaIndex<R> {
             .map_err(|error| TrackMetadataError {
                 message: format!("could not read authorized Android audio content: {error}"),
             })?;
-        parse_lofty_metadata(lease.path())
+        match parse_lofty_metadata(lease.path(), lease.mime_type()) {
+            Ok(metadata) => Ok(metadata),
+            Err(lofty_error) => {
+                match crate::android_metadata::read(lease.path()) {
+                    Ok(metadata) if has_useful_metadata(&metadata) => return Ok(metadata),
+                    _ => {}
+                }
+                match self.read_metadata_with_android(uri) {
+                    Ok(metadata) if has_useful_metadata(&metadata) => Ok(metadata),
+                    Ok(_) => Err(TrackMetadataError {
+                        message: format!(
+                            "{}; Symphonia and Android returned no usable audio properties",
+                            lofty_error.message
+                        ),
+                    }),
+                    Err(android_error) => Err(TrackMetadataError {
+                        message: format!(
+                            "{}; Android metadata fallback failed: {}",
+                            lofty_error.message, android_error.message
+                        ),
+                    }),
+                }
+            }
+        }
+    }
+
+    fn read_metadata_with_android(
+        &self,
+        uri: &str,
+    ) -> std::result::Result<TrackMetadata, TrackMetadataError> {
+        let response = self
+            .0
+            .run_mobile_plugin::<ReadMetadataResponse>("readMetadata", json!({ "contentUri": uri }))
+            .map_err(|error| TrackMetadataError {
+                message: error.to_string(),
+            })?;
+        let mut metadata = response.metadata.ok_or_else(|| TrackMetadataError {
+            message: response
+                .error
+                .unwrap_or_else(|| "Android returned no audio metadata".to_owned()),
+        })?;
+        metadata.codec = metadata.codec.as_deref().and_then(normalize_android_codec);
+        Ok(crate::adapter::into_core_metadata(metadata))
     }
 
     pub(crate) fn list_media_store_volumes(&self) -> Result<MediaStoreVolumes> {
@@ -395,6 +438,7 @@ impl<R: Runtime> PlatformMediaIndex<R> {
 
 fn parse_lofty_metadata(
     path: &std::path::Path,
+    mime_type: Option<&str>,
 ) -> std::result::Result<TrackMetadata, TrackMetadataError> {
     let probe = Probe::open(path).map_err(|error| TrackMetadataError {
         message: format!("could not open Android audio metadata: {error}"),
@@ -404,9 +448,17 @@ fn parse_lofty_metadata(
         .map_err(|error| TrackMetadataError {
             message: format!("could not identify Android audio format: {error}"),
         })?;
-    let file_type = probe.file_type().ok_or_else(|| TrackMetadataError {
-        message: "could not identify Android audio format".to_owned(),
-    })?;
+    let file_type = probe
+        .file_type()
+        .or_else(|| mime_file_type(mime_type))
+        .ok_or_else(|| TrackMetadataError {
+            message: "could not identify Android audio format".to_owned(),
+        })?;
+    let probe = if probe.file_type().is_some() {
+        probe
+    } else {
+        probe.set_file_type(file_type)
+    };
     let (tagged_file, codec) = if file_type == FileType::Mpeg {
         let mut reader = probe.into_inner();
         reader
@@ -465,6 +517,51 @@ fn parse_lofty_metadata(
             None
         },
     })
+}
+
+fn mime_file_type(mime_type: Option<&str>) -> Option<FileType> {
+    match mime_type?
+        .split(';')
+        .next()?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "audio/mpeg" | "audio/mp3" => Some(FileType::Mpeg),
+        "audio/mp4" | "audio/x-m4a" | "audio/m4a" | "video/mp4" => Some(FileType::Mp4),
+        "audio/aac" | "audio/aacp" => Some(FileType::Aac),
+        "audio/flac" | "audio/x-flac" => Some(FileType::Flac),
+        "audio/ogg" | "application/ogg" => Some(FileType::Vorbis),
+        "audio/opus" => Some(FileType::Opus),
+        "audio/wav" | "audio/x-wav" | "audio/wave" => Some(FileType::Wav),
+        "audio/aiff" | "audio/x-aiff" => Some(FileType::Aiff),
+        _ => None,
+    }
+}
+
+fn normalize_android_codec(value: &str) -> Option<String> {
+    let mime = value.split(';').next()?.trim().to_ascii_lowercase();
+    let codec = match mime.as_str() {
+        "audio/mp4a-latm" | "audio/aac" | "audio/aacp" => "AAC",
+        "audio/mpeg" | "audio/mp3" => "MP3",
+        "audio/alac" => "ALAC",
+        "audio/flac" => "FLAC",
+        "audio/3gpp" | "audio/amr" => "AMR",
+        "audio/opus" => "OPUS",
+        "audio/vorbis" => "VORBIS",
+        "audio/raw" => "PCM",
+        _ => return None,
+    };
+    Some(codec.to_owned())
+}
+
+fn has_useful_metadata(metadata: &TrackMetadata) -> bool {
+    metadata.title.is_some()
+        || metadata.artist.is_some()
+        || metadata.album.is_some()
+        || metadata.duration_ms.is_some()
+        || metadata.sample_rate_hz.is_some()
+        || metadata.bitrate_bps.is_some()
 }
 
 const MAX_PLAYLIST_BYTES: u64 = 32 * 1024 * 1024;
