@@ -311,27 +311,46 @@ input:focus-visible {
 .now-playing-track-info {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: flex-start;
   justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 5px;
-  overflow: hidden;
+  overflow: visible;
   color: var(--text-soft);
   font-size: var(--font-title);
   font-weight: 600;
+  white-space: normal;
+}
+
+.now-playing-track-block {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  align-items: baseline;
+}
+
+.now-playing-track-block:not(:last-child)::after {
+  flex: 0 0 auto;
+  margin-left: 5px;
+  color: var(--muted);
+  content: '．';
   white-space: nowrap;
 }
 
 .now-playing-track-info button {
   min-width: 0;
   flex: 0 1 auto;
-  overflow: hidden;
+  overflow: visible;
   padding: 0;
   border: 0;
   color: var(--text);
   background: transparent;
   font: inherit;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: left;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  white-space: normal;
   cursor: pointer;
 }
 
@@ -348,20 +367,20 @@ input:focus-visible {
   cursor: default;
 }
 
-.now-playing-artist-sep,
-.now-playing-track-info > .now-playing-track-sep {
+.now-playing-artist-sep {
   flex: 0 0 auto;
   color: var(--muted);
 }
 
-.now-playing-track-info > .now-playing-track-title {
+.now-playing-track-block > .now-playing-track-title {
   min-width: 0;
   flex: 0 1 auto;
-  overflow: hidden;
+  overflow: visible;
   color: var(--text);
   font: inherit;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  white-space: normal;
   cursor: default;
 }
 

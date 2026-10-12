@@ -58,6 +58,7 @@
   interface LayoutHarnessApi {
     setLayout: (layout: NowPlayingLayout) => Promise<void>;
     setTrackId: (trackId: string) => Promise<void>;
+    setTrackInfo: (info: { artists: string[]; album: string; title: string }) => Promise<void>;
     setArtworkVariant: (variant: 'square' | 'portrait' | 'landscape') => Promise<void>;
     snapshot: () => LayoutSnapshot;
     scrollLyrics: () => Promise<boolean>;
@@ -70,6 +71,7 @@
 
   let layout = $state<NowPlayingLayout>('a');
   let trackId = $state('layout-probe');
+  let trackInfo = $state({ artists: ['測試演出者'], album: '測試專輯', title: '測試曲名' });
   let lyricsRemoved = $state(false);
   let lyricsTopbarStatus = $state<LyricsTopbarStatus | null>(null);
   let artworkVariant = $state<'square' | 'portrait' | 'landscape'>('landscape');
@@ -156,6 +158,11 @@
 
   async function setTrackId(nextTrackId: string): Promise<void> {
     trackId = nextTrackId;
+    await tick();
+  }
+
+  async function setTrackInfo(info: { artists: string[]; album: string; title: string }): Promise<void> {
+    trackInfo = info;
     await tick();
   }
 
@@ -306,7 +313,7 @@
   }
 
   $effect(() => {
-      window.nowPlayingLayoutHarness = { setLayout, setTrackId, setArtworkVariant, snapshot, scrollLyrics, attemptOuterScroll };
+      window.nowPlayingLayoutHarness = { setLayout, setTrackId, setTrackInfo, setArtworkVariant, snapshot, scrollLyrics, attemptOuterScroll };
   });
 </script>
 
@@ -322,9 +329,18 @@
       <button class="soft-button icon-button now-playing-overlay-return" type="button" aria-label="返回播放前頁面" title="返回播放前頁面">返回</button>
       <div class="now-playing-header-track">
         <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類">
-          <button data-track-field="artist" type="button">測試演出者</button><span class="now-playing-track-sep" aria-hidden="true">．</span>
-          <button data-track-field="album" type="button">測試專輯</button><span class="now-playing-track-sep" aria-hidden="true">．</span>
-          <span class="now-playing-track-title" data-track-field="title">測試曲名</span>
+          <span class="now-playing-track-block now-playing-artist-block" data-track-block="artist">
+            {#each trackInfo.artists as artist, index (artist)}
+              {#if index > 0}<span class="now-playing-artist-sep" aria-hidden="true">/</span>{/if}
+              <button data-track-field="artist" type="button">{artist}</button>
+            {/each}
+          </span>
+          <span class="now-playing-track-block now-playing-album-block" data-track-block="album">
+            <button data-track-field="album" type="button">{trackInfo.album}</button>
+          </span>
+          <span class="now-playing-track-block now-playing-title-block" data-track-block="title">
+            <span class="now-playing-track-title" data-track-field="title">{trackInfo.title}</span>
+          </span>
         </nav>
         <p class="now-playing-format" aria-label="音質格式、發行日期與播放次數">
           <span class="now-playing-audio-quality">
