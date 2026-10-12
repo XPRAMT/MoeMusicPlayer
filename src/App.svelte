@@ -10,7 +10,6 @@
     IconArrowsShuffle,
     IconChevronRight,
     IconFolder,
-    IconHeart,
     IconLibrary,
     IconList,
     IconMusic,
@@ -75,6 +74,7 @@
   import { describeOutputFormat } from './lib/output-format.js';
   import hiResBadgeUrl from './assets/hi-res-badge.svg';
   import { calculateArtworkFrame } from './lib/artwork-frame.js';
+  import FavoritePopover from './lib/FavoritePopover.svelte';
   import {
     DEFAULT_LIBRARY_SORT,
     DEFAULT_TRACK_COLUMN_PREFERENCES,
@@ -3408,9 +3408,11 @@
 
     <div class="dock-center">
       <div class="dock-controls">
-        <button class="dock-favorite control-button" type="button" aria-label="收藏曲目" title="收藏功能尚未接通" disabled>
-          <IconHeart size={21} stroke={1.6} aria-hidden="true" />
-        </button>
+        <FavoritePopover
+          trackId={playback?.currentTrack?.id ?? null}
+          platform={capabilities?.platform ?? 'unsupported'}
+          onChange={async () => { await loadPlaylists(); await loadSources(); }}
+        />
         <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={playbackControlTooltips.shuffle} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} aria-pressed={playback?.shuffle === true} onclick={toggleShuffle}>
           {#if playback?.shuffle}
             <IconArrowsShuffle size={23} stroke={1.7} aria-hidden="true" />

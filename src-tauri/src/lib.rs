@@ -2,13 +2,14 @@
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::{
     collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
-        Arc, Mutex,
+        Mutex,
     },
     time::Instant,
 };
@@ -36,7 +37,7 @@ use tauri::{
     State, WebviewWindow,
 };
 use tauri_plugin_media_index::MediaIndexExt;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 mod database_lifecycle;
 #[cfg(target_os = "windows")]
 mod diagnostics;
@@ -65,6 +66,7 @@ mod android_artwork;
 mod android_playback;
 #[cfg(any(target_os = "android", test))]
 mod android_playlist_source_sync;
+mod favorites;
 mod lyrics_provider;
 mod lyrics_service;
 mod main_background;
@@ -3051,6 +3053,656 @@ fn playlist_get_page(
         .ok_or_else(|| "找不到這份播放清單，請重新載入清單。".to_owned())
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FavoritePlaylistDto {
+    source_id: String,
+    display_name: String,
+    selected: bool,
+    is_my_love: bool,
+    writable: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FavoritePlaylistsDto {
+    playlists: Vec<FavoritePlaylistDto>,
+    my_love_setup_required: bool,
+}
+
+#[tauri::command]
+fn favorites_get_playlists(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+    track_id: String,
+) -> Result<FavoritePlaylistsDto, String> {
+    let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
+    let _database_work = enter_database_work(&state)?;
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    let locators = favorite_track_locators(&state, database, track_id)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        ensure_windows_my_love_source(&state, database)?;
+    }
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    let mut playlists = Vec::new();
+    let mut has_my_love = false;
+    for source in settings.sources.iter().filter(|source| source.enabled) {
+        let SourceEntryKind::PlaylistFile {
+            playlist_id,
+            path,
+            tree_uri,
+        } = &source.kind
+        else {
+            continue;
+        };
+        let _ = (path, tree_uri);
+        let is_my_love = source.display_name == "我的最愛" || is_my_love_path(path);
+        has_my_love |= is_my_love;
+        let favorite = database
+            .get_playlist(*playlist_id)
+            .map_err(|error| error.to_string())?;
+        let selected = favorite.as_ref().is_some_and(|playlist| {
+            playlist.entries.iter().any(|entry| {
+                entry.track_id == Some(track_id)
+                    || locators
+                        .iter()
+                        .any(|locator| same_favorite_locator(locator, &entry.locator))
+            })
+        });
+        #[cfg(target_os = "android")]
+        let writable = tree_uri.as_deref().is_some_and(|tree| {
+            _app.media_index()
+                .has_saf_write_permission(tree)
+                .unwrap_or(false)
+        });
+        #[cfg(target_os = "windows")]
+        let writable = path.to_path_buf().is_ok();
+        #[cfg(not(any(target_os = "windows", target_os = "android")))]
+        let writable = false;
+        playlists.push(FavoritePlaylistDto {
+            source_id: source.id.to_string(),
+            display_name: if is_my_love {
+                "我的最愛".to_owned()
+            } else {
+                source.display_name.clone()
+            },
+            selected,
+            is_my_love,
+            writable,
+        });
+    }
+    Ok(FavoritePlaylistsDto {
+        playlists,
+        my_love_setup_required: !has_my_love,
+    })
+}
+
+#[tauri::command]
+async fn favorites_set_membership(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+    track_id: String,
+    selected: bool,
+) -> Result<(), String> {
+    let source_id =
+        SourceId::parse(&source_id).map_err(|_| "播放清單來源識別碼無效。".to_owned())?;
+    let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
+    {
+        let _database_work = enter_database_work(&state)?;
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let settings = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        let source = settings
+            .sources
+            .iter()
+            .find(|source| source.id == source_id && source.enabled)
+            .ok_or_else(|| "找不到已啟用的播放清單來源。".to_owned())?;
+        let SourceEntryKind::PlaylistFile {
+            playlist_id,
+            path,
+            tree_uri,
+        } = &source.kind
+        else {
+            return Err("只能收藏到播放清單檔案來源。".to_owned());
+        };
+        let _ = (path, tree_uri);
+        #[cfg(target_os = "android")]
+        if !tree_uri.as_deref().is_some_and(|tree| {
+            app.media_index()
+                .has_saf_write_permission(tree)
+                .unwrap_or(false)
+        }) {
+            return Err("此 Android 播放清單目前沒有 SAF 寫入授權。請在「設定 → 音樂來源」重新選取該播放清單來源並授予讀寫權限。".to_owned());
+        }
+        let target_locators = favorite_track_locators(&state, database, track_id)?;
+        let target_locator = target_locators
+            .first()
+            .cloned()
+            .ok_or_else(|| "此曲目沒有可用的原生路徑。".to_owned())?;
+        let (file_path, bytes) = read_favorite_source(&app, source)?;
+        let parse_path = file_path
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new(&source.display_name));
+        let mut playlist = playlist_exchange::read_playlist_bytes(&bytes, parse_path)?;
+        playlist.id = *playlist_id;
+        resolve_favorite_entry_ids(&app, database, source, &mut playlist)?;
+        for entry in &mut playlist.entries {
+            if target_locators
+                .iter()
+                .any(|locator| same_favorite_locator(locator, &entry.locator))
+            {
+                entry.track_id = Some(track_id);
+            }
+        }
+        let changed =
+            favorites::set_playlist_membership(&mut playlist, track_id, target_locator, selected);
+        if changed {
+            // Temporary file-open tracks are not persisted in the main library database. Their
+            // locator stays in M3U while the ephemeral TrackId must not leak into the main DB.
+            for entry in &mut playlist.entries {
+                if !target_locators
+                    .iter()
+                    .any(|locator| same_favorite_locator(locator, &entry.locator))
+                {
+                    continue;
+                }
+                if database
+                    .get_track_summary(track_id)
+                    .map_err(|error| error.to_string())?
+                    .is_none()
+                {
+                    entry.track_id = None;
+                }
+            }
+            let output = if source.display_name.to_ascii_lowercase().ends_with(".m3u") {
+                player_core::write_m3u(
+                    &playlist,
+                    parse_path,
+                    &player_core::M3uExportOptions::default(),
+                )
+            } else {
+                player_core::write_m3u8(
+                    &playlist,
+                    parse_path,
+                    &player_core::M3uExportOptions::default(),
+                )
+            }
+            .map_err(|error| error.to_string())?;
+            write_favorite_source(&app, source, file_path.as_deref(), &output)?;
+            database
+                .save_playlist(&playlist)
+                .map_err(|error| format!("播放清單檔已更新，但資料庫投影保存失敗：{error}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn favorites_create_my_love(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _database_work = enter_database_work(&state)?;
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        ensure_windows_my_love_source(&state, database)?;
+        Ok(())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let Some(selected_tree_uri) = _app
+            .media_index()
+            .pick_my_love_folder()
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(());
+        };
+        let (playlist_uri, display_name) = _app
+            .media_index()
+            .ensure_my_love_playlist(&selected_tree_uri)
+            .map_err(|error| error.to_string())?;
+        let _database_work = enter_database_work(&state)?;
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let settings = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        if let Some(existing) = settings
+            .sources
+            .iter()
+            .find(|source| is_my_love_source(source))
+        {
+            let mut source = existing.clone();
+            source.enabled = true;
+            let playlist_id = match &mut source.kind {
+                SourceEntryKind::PlaylistFile {
+                    playlist_id,
+                    path,
+                    tree_uri: source_tree_uri,
+                } => {
+                    *path = settings::StoredPath::Uri(playlist_uri.clone());
+                    *source_tree_uri = Some(selected_tree_uri.clone());
+                    *playlist_id
+                }
+                _ => return Err("我的最愛來源型態無效。".to_owned()),
+            };
+            state
+                .settings
+                .upsert_source(source.clone())
+                .map_err(|error| error.to_string())?;
+            let root = source
+                .database_projection()
+                .map_err(|error| error.to_string())?;
+            database
+                .save_library_root(&root)
+                .map_err(|error| error.to_string())?;
+            if database
+                .get_playlist(playlist_id)
+                .map_err(|error| error.to_string())?
+                .is_none()
+            {
+                database
+                    .save_playlist(&player_core::Playlist {
+                        id: playlist_id,
+                        name: "我的最愛".to_owned(),
+                        entries: Vec::new(),
+                    })
+                    .map_err(|error| error.to_string())?;
+            }
+            return Ok(());
+        }
+        let source_id = SourceId::new();
+        let playlist_id = PlaylistId::new();
+        state
+            .settings
+            .upsert_source(SourceEntry {
+                id: source_id,
+                display_name,
+                enabled: true,
+                kind: SourceEntryKind::PlaylistFile {
+                    playlist_id,
+                    path: settings::StoredPath::Uri(playlist_uri.clone()),
+                    tree_uri: Some(selected_tree_uri.clone()),
+                },
+            })
+            .map_err(|error| error.to_string())?;
+        let playlist = player_core::Playlist {
+            id: playlist_id,
+            name: "我的最愛".to_owned(),
+            entries: Vec::new(),
+        };
+        database
+            .save_playlist(&playlist)
+            .map_err(|error| error.to_string())?;
+        database
+            .save_library_root(&LibraryRoot {
+                id: source_id,
+                kind: MediaSourceKind::PlaylistFile,
+                display_name: "我的最愛".to_owned(),
+                locator: MediaLocator::ContentUri(playlist_uri),
+                enabled: true,
+            })
+            .map_err(|error| error.to_string())?;
+        drop(_database_work);
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = (_app, state);
+        Err("目前平台尚未提供收藏播放清單。".to_owned())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_windows_my_love_source(
+    state: &AppState,
+    database: &Database,
+) -> Result<SourceEntry, String> {
+    let directory = user_data_directory(state)?;
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("無法建立 UserData 目錄：{error}"))?;
+    let path = directory.join("MyLove.m3u8");
+    if !path.exists() {
+        std::fs::write(&path, "#EXTM3U\n#PLAYLIST:我的最愛\n")
+            .map_err(|error| format!("無法建立 UserData/MyLove.m3u8：{error}"))?;
+    }
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    let expected_path =
+        settings::StoredPath::from_path(&path).map_err(|error| error.to_string())?;
+    if let Some(mut source) = settings
+        .sources
+        .iter()
+        .find(|source| {
+            is_my_love_source(source)
+                && source.path().to_path_buf().ok().as_deref() == Some(path.as_path())
+        })
+        .cloned()
+    {
+        let mut root = source
+            .database_projection()
+            .map_err(|error| error.to_string())?;
+        let source_needs_save = !source.enabled || source.display_name != "我的最愛";
+        if source_needs_save {
+            source.enabled = true;
+            source.display_name = "我的最愛".to_owned();
+            root = source
+                .database_projection()
+                .map_err(|error| error.to_string())?;
+            state
+                .settings
+                .upsert_source(source.clone())
+                .map_err(|error| error.to_string())?;
+        }
+        if !database
+            .library_roots()
+            .map_err(|error| error.to_string())?
+            .iter()
+            .any(|existing| existing.id == source.id && existing.enabled)
+        {
+            database
+                .save_library_root(&root)
+                .map_err(|error| error.to_string())?;
+        }
+        let playlist_id = match &source.kind {
+            SourceEntryKind::PlaylistFile { playlist_id, .. } => *playlist_id,
+            _ => unreachable!(),
+        };
+        if database
+            .get_playlist(playlist_id)
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            let mut playlist = playlist_exchange::read_playlist_file(&path)?;
+            playlist.id = playlist_id;
+            for entry in &mut playlist.entries {
+                entry.track_id = database
+                    .resolve_track_id_for_locator(&entry.locator)
+                    .map_err(|error| error.to_string())?;
+            }
+            database
+                .save_playlist(&playlist)
+                .map_err(|error| error.to_string())?;
+        }
+        return Ok(source);
+    }
+    let source_id = SourceId::new();
+    let playlist_id = PlaylistId::new();
+    let stored = expected_path;
+    let source = SourceEntry {
+        id: source_id,
+        display_name: "我的最愛".to_owned(),
+        enabled: true,
+        kind: SourceEntryKind::PlaylistFile {
+            playlist_id,
+            path: stored,
+            tree_uri: None,
+        },
+    };
+    state
+        .settings
+        .upsert_source(source.clone())
+        .map_err(|error| error.to_string())?;
+    let root = LibraryRoot {
+        id: source_id,
+        kind: MediaSourceKind::PlaylistFile,
+        display_name: "我的最愛".to_owned(),
+        locator: MediaLocator::FileSystem(path.clone()),
+        enabled: true,
+    };
+    database
+        .save_library_root(&root)
+        .map_err(|error| error.to_string())?;
+    let mut playlist = playlist_exchange::read_playlist_file(&path)?;
+    playlist.id = playlist_id;
+    for entry in &mut playlist.entries {
+        entry.track_id = database
+            .resolve_track_id_for_locator(&entry.locator)
+            .map_err(|error| error.to_string())?;
+    }
+    database
+        .save_playlist(&playlist)
+        .map_err(|error| error.to_string())?;
+    Ok(source)
+}
+
+fn is_my_love_source(source: &SourceEntry) -> bool {
+    source.display_name == "我的最愛" || is_my_love_path(source.path())
+}
+
+fn is_my_love_path(path: &settings::StoredPath) -> bool {
+    path.to_path_buf()
+        .ok()
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().eq_ignore_ascii_case("MyLove.m3u8"))
+        })
+        .unwrap_or(false)
+        || matches!(path, settings::StoredPath::Uri(uri) if uri.to_ascii_lowercase().ends_with("/mylove.m3u8"))
+}
+
+fn favorite_track_locators(
+    state: &AppState,
+    database: &Database,
+    track_id: TrackId,
+) -> Result<Vec<MediaLocator>, String> {
+    #[cfg(target_os = "windows")]
+    if let Some(temporary) = state
+        .playback
+        .as_ref()
+        .and_then(|playback| playback.temporary_database_for_track(track_id))
+    {
+        if temporary
+            .get_track_summary(track_id)
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return temporary
+                .track_locators(track_id)
+                .map_err(|error| error.to_string());
+        }
+    }
+    let _ = state;
+    database
+        .track_locators(track_id)
+        .map_err(|error| error.to_string())
+}
+
+fn same_favorite_locator(left: &MediaLocator, right: &MediaLocator) -> bool {
+    match (left, right) {
+        (MediaLocator::ContentUri(left), MediaLocator::ContentUri(right)) => left == right,
+        (MediaLocator::FileSystem(left), MediaLocator::FileSystem(right)) => {
+            #[cfg(target_os = "windows")]
+            {
+                player_core::windows_locator_key(left) == player_core::windows_locator_key(right)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                left == right
+            }
+        }
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn read_favorite_source(
+    _app: &AppHandle,
+    source: &SourceEntry,
+) -> Result<(Option<std::path::PathBuf>, Vec<u8>), String> {
+    let path = source
+        .path()
+        .to_path_buf()
+        .map_err(|error| error.to_string())?;
+    let bytes = std::fs::read(&path).map_err(|error| format!("無法重新讀取播放清單：{error}"))?;
+    Ok((Some(path), bytes))
+}
+
+#[cfg(target_os = "android")]
+fn read_favorite_source(
+    app: &AppHandle,
+    source: &SourceEntry,
+) -> Result<(Option<std::path::PathBuf>, Vec<u8>), String> {
+    use std::io::Read;
+    let settings::StoredPath::Uri(uri) = source.path() else {
+        return Err("Android 播放清單沒有 SAF 文件 URI。".to_owned());
+    };
+    let lease = app
+        .media_index()
+        .cache_content_uri(
+            uri,
+            android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64,
+        )
+        .map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(lease.path())
+        .map_err(|error| error.to_string())?
+        .take(android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES {
+        return Err("播放清單超過 32 MiB 限制。".to_owned());
+    }
+    Ok((None, bytes))
+}
+
+fn resolve_favorite_entry_ids(
+    app: &AppHandle,
+    database: &Database,
+    source: &SourceEntry,
+    playlist: &mut player_core::Playlist,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (app, source);
+        for entry in &mut playlist.entries {
+            entry.track_id = database
+                .resolve_track_id_for_locator(&entry.locator)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        let SourceEntryKind::PlaylistFile {
+            path: settings::StoredPath::Uri(playlist_uri),
+            tree_uri: Some(tree_uri),
+            ..
+        } = &source.kind
+        else {
+            return Err("SAF 播放清單來源缺少文件樹。".to_owned());
+        };
+        for entry in &mut playlist.entries {
+            let locator = match &entry.locator {
+                MediaLocator::FileSystem(path) if !path.is_absolute() => {
+                    let value = path.to_string_lossy();
+                    let is_windows_absolute = value.as_bytes().get(1) == Some(&b':')
+                        && value
+                            .as_bytes()
+                            .first()
+                            .is_some_and(u8::is_ascii_alphabetic);
+                    (!is_windows_absolute).then(|| value.replace('\\', "/"))
+                }
+                MediaLocator::FileSystem(_) => None,
+                MediaLocator::ContentUri(uri) => {
+                    entry.track_id = database
+                        .resolve_track_id_for_locator(&MediaLocator::ContentUri(uri.clone()))
+                        .map_err(|error| error.to_string())?;
+                    None
+                }
+            };
+            if let Some(locator) = locator {
+                if let Some(resolved) = app
+                    .media_index()
+                    .resolve_saf_playlist_entry(tree_uri, playlist_uri, &locator)
+                    .map_err(|error| error.to_string())?
+                {
+                    entry.track_id = database
+                        .resolve_track_id_for_locator(&MediaLocator::ContentUri(
+                            resolved.content_uri,
+                        ))
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn write_favorite_source(
+    _app: &AppHandle,
+    source: &SourceEntry,
+    path: Option<&std::path::Path>,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let path = path.ok_or_else(|| "播放清單檔案路徑遺失。".to_owned())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "播放清單沒有父目錄。".to_owned())?;
+    let mut temp = path.as_os_str().to_os_string();
+    temp.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
+    let temp = std::path::PathBuf::from(temp);
+    std::fs::write(&temp, bytes).map_err(|error| format!("無法寫入播放清單暫存檔：{error}"))?;
+    if let Err(error) = std::fs::rename(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("無法原子更新播放清單：{error}"));
+    }
+    let _ = (source, parent);
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn write_favorite_source(
+    app: &AppHandle,
+    source: &SourceEntry,
+    _path: Option<&std::path::Path>,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let settings::StoredPath::Uri(uri) = source.path() else {
+        return Err("Android 播放清單沒有 SAF 文件 URI。".to_owned());
+    };
+    let lease = app
+        .media_index()
+        .create_cache_lease()
+        .map_err(|error| error.to_string())?;
+    std::fs::write(lease.path(), bytes)
+        .map_err(|error| format!("無法寫入播放清單暫存檔：{error}"))?;
+    app.media_index()
+        .write_content_cache_lease(&lease, uri)
+        .map_err(|error| format!("無法寫入 SAF 播放清單：{error}"))
+}
+
 #[tauri::command]
 async fn playlist_import_m3u(
     app: AppHandle,
@@ -3164,6 +3816,16 @@ async fn playlist_import_m3u(
                 .map_err(|error| error.to_string())?
             {
                 return Err("Android 未保留此播放清單文件樹的讀取授權。".to_owned());
+            }
+            if !app
+                .media_index()
+                .has_saf_write_permission(&selected.tree_uri)
+                .map_err(|error| error.to_string())?
+            {
+                return Err(
+                    "加入播放清單來源需要讀取與寫入授權，請重新選取資料夾並允許修改播放清單。"
+                        .to_owned(),
+                );
             }
             let playlist_uri = selected.playlist_uri.clone();
             let app_for_read = app.clone();
@@ -7947,6 +8609,9 @@ pub fn run() {
             playlist_get_page,
             playlist_import_m3u,
             playlist_export_m3u,
+            favorites_get_playlists,
+            favorites_set_membership,
+            favorites_create_my_love,
             library_list_sources,
             library_add_windows_folder,
             library_pick_windows_folder,

@@ -23,8 +23,8 @@ use tauri::{
 use crate::adapter::{looks_like_tree_uri, media_store_volume, scan_from_response};
 use crate::models::{
     BooleanResponse, ContentCacheLeaseResponse, ContentUriProbeResponse, LyricsTextResponse,
-    PermissionResponse, ResolvedSafPlaylistEntryResponse, SafPlaylistImportResponse,
-    SafTreeResponse, ScanResponse, UriResponse, VolumesResponse,
+    MyLovePlaylistResponse, PermissionResponse, ResolvedSafPlaylistEntryResponse,
+    SafPlaylistImportResponse, SafTreeResponse, ScanResponse, UriResponse, VolumesResponse,
 };
 use crate::{
     ContentCacheLease, MediaStoreVolume, MediaStoreVolumes, ResolvedSafPlaylistEntry, Result,
@@ -146,6 +146,29 @@ impl<R: Runtime> PlatformMediaIndex<R> {
             .0
             .run_mobile_plugin::<BooleanResponse>("hasSafPermission", json!({"treeUri": uri}))?;
         Ok(response.granted)
+    }
+
+    pub(crate) fn has_saf_write_permission(&self, uri: &str) -> Result<bool> {
+        let response = self.0.run_mobile_plugin::<BooleanResponse>(
+            "hasSafWritePermission",
+            json!({"treeUri": uri}),
+        )?;
+        Ok(response.granted)
+    }
+
+    pub(crate) fn pick_my_love_folder(&self) -> Result<Option<String>> {
+        let response = self
+            .0
+            .run_mobile_plugin::<SafTreeResponse>("pickMyLoveFolder", ())?;
+        Ok(response.uri)
+    }
+
+    pub(crate) fn ensure_my_love_playlist(&self, tree_uri: &str) -> Result<(String, String)> {
+        let response = self.0.run_mobile_plugin::<MyLovePlaylistResponse>(
+            "ensureMyLovePlaylist",
+            json!({"treeUri": tree_uri}),
+        )?;
+        Ok((response.playlist_uri, response.display_name))
     }
 
     pub(crate) fn probe_content_uri(&self, uri: &str) -> Result<Option<crate::ContentUriMetadata>> {

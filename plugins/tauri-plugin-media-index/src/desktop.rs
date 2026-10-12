@@ -62,6 +62,20 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Err(Error::Unsupported("Android document-tree permissions"))
     }
 
+    pub(crate) fn has_saf_write_permission(&self, _uri: &str) -> Result<bool> {
+        Err(Error::Unsupported(
+            "Android document-tree write permissions",
+        ))
+    }
+
+    pub(crate) fn pick_my_love_folder(&self) -> Result<Option<String>> {
+        Err(Error::Unsupported("Android My Love folder picker"))
+    }
+
+    pub(crate) fn ensure_my_love_playlist(&self, _tree_uri: &str) -> Result<(String, String)> {
+        Err(Error::Unsupported("Android My Love playlist creation"))
+    }
+
     pub(crate) fn probe_content_uri(
         &self,
         _uri: &str,

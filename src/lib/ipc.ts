@@ -314,6 +314,19 @@ export interface PlaylistExportResult {
   entryCount: number;
 }
 
+export interface FavoritePlaylist {
+  sourceId: string;
+  displayName: string;
+  selected: boolean;
+  isMyLove: boolean;
+  writable: boolean;
+}
+
+export interface FavoritePlaylists {
+  playlists: FavoritePlaylist[];
+  myLoveSetupRequired: boolean;
+}
+
 export type RepeatMode = 'off' | 'one' | 'all';
 
 export type PlaybackQueueSource =
@@ -614,6 +627,18 @@ interface IpcContract {
   playlist_export_m3u: {
     args: { playlistId: string; format: 'm3u' | 'm3u8'; relativePaths: boolean };
     result: PlaylistExportResult | null;
+  };
+  favorites_get_playlists: {
+    args: { trackId: string };
+    result: FavoritePlaylists;
+  };
+  favorites_set_membership: {
+    args: { sourceId: string; trackId: string; selected: boolean };
+    result: void;
+  };
+  favorites_create_my_love: {
+    args: Record<string, never>;
+    result: void;
   };
   playback_get_snapshot: {
     args: Record<string, never>;

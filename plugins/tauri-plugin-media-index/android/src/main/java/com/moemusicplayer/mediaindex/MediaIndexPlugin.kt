@@ -260,6 +260,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
                     Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
             )
@@ -279,8 +280,13 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.reject("The document provider did not grant playlist-tree read access")
             return
         }
+        val writeGrant = result.data?.flags?.and(Intent.FLAG_GRANT_WRITE_URI_PERMISSION) ?: 0
+        if (writeGrant == 0) {
+            invoke.reject("The document provider did not grant playlist-tree write access")
+            return
+        }
         try {
-            resolver.takePersistableUriPermission(treeUri, readGrant)
+            resolver.takePersistableUriPermission(treeUri, readGrant or writeGrant)
             io.execute {
                 try {
                     val playlists = listPlaylistDocuments(treeUri)
@@ -309,6 +315,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                     }
                 } catch (error: Exception) {
                     activity.runOnUiThread {
+                        releasePersistedTreeReadGrant(treeUri)
                         invoke.reject(error.message ?: "Could not enumerate playlists in the selected folder")
                     }
                 }
@@ -431,6 +438,100 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         val response = JSObject()
         response.put("granted", granted)
         invoke.resolve(response)
+    }
+
+    @Command
+    fun hasSafWritePermission(invoke: Invoke) {
+        val args = invoke.parseArgs(TreeUriArgs::class.java)
+        val uri = args.treeUri?.let(Uri::parse)
+        if (uri == null || !DocumentsContract.isTreeUri(uri)) {
+            invoke.reject("treeUri must be a SAF tree URI")
+            return
+        }
+        invoke.resolve(JSObject().put("granted", hasPersistedTreeWriteGrant(uri)))
+    }
+
+    @Command
+    fun pickMyLoveFolder(invoke: Invoke) {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                putExtra(
+                    DocumentsContract.EXTRA_INITIAL_URI,
+                    DocumentsContract.buildDocumentUri(
+                        "com.android.externalstorage.documents",
+                        "primary:Music",
+                    ),
+                )
+            }
+        }
+        startActivityForResult(invoke, intent, "onMyLoveFolderPicked")
+    }
+
+    @ActivityCallback
+    private fun onMyLoveFolderPicked(invoke: Invoke, result: ActivityResult) {
+        val uri = result.data?.data
+        if (result.resultCode != Activity.RESULT_OK || uri == null) {
+            invoke.resolve(JSObject().put("uri", JSONObject.NULL))
+            return
+        }
+        val readGrant = result.data?.flags?.and(Intent.FLAG_GRANT_READ_URI_PERMISSION) ?: 0
+        val writeGrant = result.data?.flags?.and(Intent.FLAG_GRANT_WRITE_URI_PERMISSION) ?: 0
+        if (readGrant == 0 || writeGrant == 0) {
+            invoke.reject("The document provider must grant read and write access")
+            return
+        }
+        try {
+            resolver.takePersistableUriPermission(uri, readGrant or writeGrant)
+            invoke.resolve(JSObject().put("uri", uri.toString()))
+        } catch (error: SecurityException) {
+            invoke.reject("Could not preserve My Love folder access: ${error.message}")
+        }
+    }
+
+    @Command
+    fun ensureMyLovePlaylist(invoke: Invoke) {
+        val args = invoke.parseArgs(TreeUriArgs::class.java)
+        val rawTree = args.treeUri
+        if (rawTree.isNullOrBlank()) {
+            invoke.reject("treeUri is required")
+            return
+        }
+        async(invoke) {
+            val tree = Uri.parse(rawTree)
+            if (!DocumentsContract.isTreeUri(tree) || !hasPersistedTreeWriteGrant(tree)) {
+                throw SecurityException("My Love folder has no persisted SAF write grant")
+            }
+            val rootId = DocumentsContract.getTreeDocumentId(tree)
+            val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, rootId)
+            val projection = arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            )
+            var existing: Uri? = null
+            resolver.query(children, projection, null, null, null)?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(nameColumn).equals("MyLove.m3u8", ignoreCase = true)) {
+                        existing = DocumentsContract.buildDocumentUriUsingTree(tree, cursor.getString(idColumn))
+                        break
+                    }
+                }
+            } ?: throw IOException("Could not enumerate the selected My Love folder")
+            val playlist = existing ?: DocumentsContract.createDocument(
+                resolver,
+                DocumentsContract.buildDocumentUriUsingTree(tree, rootId),
+                "audio/x-mpegurl",
+                "MyLove.m3u8",
+            ) ?: throw IOException("Could not create MyLove.m3u8 in the selected folder")
+            JSObject().put("playlistUri", playlist.toString()).put("displayName", "我的最愛")
+        }
     }
 
     @Command
@@ -967,9 +1068,16 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         it.isReadPermission && it.uri == uri
     }
 
+    private fun hasPersistedTreeWriteGrant(uri: Uri): Boolean = resolver.persistedUriPermissions.any {
+        it.isWritePermission && it.uri == uri
+    }
+
     private fun releasePersistedTreeReadGrant(uri: Uri) {
         try {
-            resolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            resolver.releasePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
         } catch (_: SecurityException) {
             // A revoked or already-released picker result needs no follow-up.
         }

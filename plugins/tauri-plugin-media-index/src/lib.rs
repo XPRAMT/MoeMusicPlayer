@@ -155,6 +155,21 @@ impl<R: Runtime> MediaIndex<R> {
         self.platform.has_saf_permission(uri)
     }
 
+    /// Check that Android still holds a persisted SAF write grant for this tree URI.
+    pub fn has_saf_write_permission(&self, uri: &str) -> Result<bool> {
+        self.platform.has_saf_write_permission(uri)
+    }
+
+    /// Open the SAF folder picker, initially pointing at the shared Music folder when available.
+    pub fn pick_my_love_folder(&self) -> Result<Option<String>> {
+        self.platform.pick_my_love_folder()
+    }
+
+    /// Create or find the app-owned MyLove.m3u8 document within a granted tree.
+    pub fn ensure_my_love_playlist(&self, tree_uri: &str) -> Result<(String, String)> {
+        self.platform.ensure_my_love_playlist(tree_uri)
+    }
+
     /// Probe an Android content URI and return available size/mtime without copying its contents.
     pub fn probe_content_uri(&self, uri: &str) -> Result<Option<ContentUriMetadata>> {
         self.platform.probe_content_uri(uri)

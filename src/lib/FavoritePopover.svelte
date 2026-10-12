@@ -1,0 +1,265 @@
+<script lang="ts">
+  import { IconHeart } from '@tabler/icons-svelte-runes';
+  import { invokeCommand, type FavoritePlaylist, type FavoritePlaylists } from './ipc';
+
+  interface Props {
+    trackId: string | null;
+    platform: 'windows' | 'android' | 'unsupported';
+    onChange?: () => void | Promise<void>;
+  }
+
+  let { trackId, platform, onChange }: Props = $props();
+  let open = $state(false);
+  let playlists = $state<FavoritePlaylist[]>([]);
+  let setupRequired = $state(false);
+  let loading = $state(false);
+  let busySourceId = $state<string | null>(null);
+  let error = $state<string | null>(null);
+  let requestRevision = 0;
+  let notifiedWindowsSources = false;
+
+  $effect(() => {
+    if (open && trackId) void refresh();
+  });
+
+  async function refresh(): Promise<void> {
+    if (!trackId) return;
+    const revision = ++requestRevision;
+    loading = true;
+    error = null;
+    try {
+      const result: FavoritePlaylists = await invokeCommand('favorites_get_playlists', { trackId });
+      if (revision !== requestRevision) return;
+      playlists = result.playlists;
+      setupRequired = result.myLoveSetupRequired;
+      if (platform === 'windows' && !notifiedWindowsSources && !result.myLoveSetupRequired) {
+        notifiedWindowsSources = true;
+        await onChange?.();
+      }
+    } catch (cause) {
+      if (revision === requestRevision) error = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      if (revision === requestRevision) loading = false;
+    }
+  }
+
+  function toggle(event: MouseEvent): void {
+    event.stopPropagation();
+    if (!trackId || platform === 'unsupported') return;
+    open = !open;
+  }
+
+  async function changeMembership(playlist: FavoritePlaylist, selected: boolean): Promise<void> {
+    if (!trackId || busySourceId) return;
+    busySourceId = playlist.sourceId;
+    error = null;
+    try {
+      await invokeCommand('favorites_set_membership', {
+        sourceId: playlist.sourceId,
+        trackId,
+        selected,
+      });
+      await onChange?.();
+      await refresh();
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
+      await refresh();
+    } finally {
+      busySourceId = null;
+    }
+  }
+
+  async function createMyLove(): Promise<void> {
+    if (loading) return;
+    loading = true;
+    error = null;
+    try {
+      await invokeCommand('favorites_create_my_love', {});
+      await onChange?.();
+      await refresh();
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function onKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && open) {
+      event.stopPropagation();
+      open = false;
+    }
+  }
+</script>
+
+<div class="favorite-control">
+  <button
+    class="dock-favorite control-button"
+    class:has-favorites={playlists.some((playlist) => playlist.selected)}
+    type="button"
+    aria-label="收藏曲目"
+    aria-haspopup="dialog"
+    aria-expanded={open}
+    title="加入或移出播放清單"
+    disabled={!trackId || platform === 'unsupported'}
+    onclick={toggle}
+  >
+    <IconHeart size={21} stroke={1.6} aria-hidden="true" />
+  </button>
+  {#if open}
+    <div
+      class="favorite-popover floating-surface"
+      role="dialog"
+      tabindex="-1"
+      aria-label="收藏到播放清單"
+      data-testid="favorite-popover"
+      onclick={(event) => event.stopPropagation()}
+      onkeydown={onKeydown}
+    >
+      <header class="favorite-popover-heading">
+        <strong>加入播放清單</strong>
+        <button class="favorite-close soft-button icon-button" type="button" aria-label="關閉收藏面板" onclick={() => (open = false)}>×</button>
+      </header>
+      {#if setupRequired}
+        <div class="favorite-setup">
+          <p>建立「我的最愛」播放清單。建議選擇公用 Music 資料夾，也可以在資料夾選擇器中選擇其他位置。</p>
+          <button class="soft-button" type="button" disabled={loading} onclick={() => void createMyLove()}>
+            {loading ? '處理中…' : platform === 'android' ? '選擇資料夾並建立' : '建立我的最愛'}
+          </button>
+        </div>
+      {/if}
+      {#if loading && playlists.length === 0}
+        <p class="favorite-message">正在載入播放清單…</p>
+      {:else if playlists.length === 0 && !setupRequired}
+        <p class="favorite-message">目前沒有可用的播放清單來源。</p>
+      {:else if playlists.length > 0}
+        <ul class="favorite-playlist-list">
+          {#each playlists as playlist (playlist.sourceId)}
+            <li>
+              <label class="favorite-playlist-option">
+                <input
+                  type="checkbox"
+                  checked={playlist.selected}
+                  disabled={!playlist.writable || loading || busySourceId !== null}
+                  aria-label={`加入${playlist.displayName}`}
+                  onchange={(event) => void changeMembership(playlist, event.currentTarget.checked)}
+                />
+                <span>{playlist.displayName}</span>
+                {#if !playlist.writable}
+                  <small>請到「設定 → 音樂來源」重新加入，以授予寫入權限</small>
+                {/if}
+              </label>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      {#if error}
+        <p class="favorite-error" role="alert">{error}</p>
+      {/if}
+    </div>
+  {/if}
+</div>
+
+<style>
+  .favorite-control {
+    position: relative;
+    display: flex;
+    flex: 0 0 auto;
+  }
+
+  .dock-favorite.has-favorites {
+    color: var(--accent);
+  }
+
+  .dock-favorite.has-favorites :global(svg) {
+    fill: color-mix(in srgb, var(--accent) 26%, transparent);
+  }
+
+  .favorite-popover {
+    position: absolute;
+    z-index: 55;
+    left: 50%;
+    bottom: calc(100% + 10px);
+    width: min(310px, calc(100vw - 24px));
+    max-height: min(60vh, 420px);
+    overflow-y: auto;
+    padding: 12px;
+    transform: translateX(-50%);
+  }
+
+  .favorite-popover-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .favorite-popover-heading strong,
+  .favorite-playlist-option span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: var(--font-body);
+  }
+
+  .favorite-close {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    padding: 0;
+    font-size: var(--font-body);
+  }
+
+  .favorite-playlist-list {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .favorite-playlist-option {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
+    min-height: 38px;
+    padding: 5px 4px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .favorite-playlist-option:hover {
+    background: color-mix(in srgb, var(--text) 7%, transparent);
+  }
+
+  .favorite-playlist-option input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+  }
+
+  .favorite-playlist-option small {
+    grid-column: 2;
+    color: var(--text-muted);
+    font-size: var(--font-caption);
+  }
+
+  .favorite-message,
+  .favorite-setup p,
+  .favorite-error {
+    margin: 8px 0;
+    color: var(--text-soft);
+    font-size: var(--font-caption);
+    line-height: 1.5;
+  }
+
+  .favorite-setup .soft-button {
+    width: 100%;
+    margin-top: 4px;
+  }
+
+  .favorite-error {
+    color: var(--danger, #ff8f8f);
+  }
+</style>

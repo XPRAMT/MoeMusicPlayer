@@ -110,6 +110,14 @@ pub(crate) struct SafTreeResponse {
 #[cfg(target_os = "android")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct MyLovePlaylistResponse {
+    pub playlist_uri: String,
+    pub display_name: String,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BooleanResponse {
     pub granted: bool,
 }

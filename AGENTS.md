@@ -33,8 +33,14 @@
 - 檔案總管開啟所建立的佇列一律只在記憶體；啟用期間 `save_playback_session` 及位置 checkpoint 不寫入 SQLite，重啟保留先前保存的曲庫／播放清單 session。未匯入曲目的歌詞讀取、線上候選快取、手動選取／移除標記與播放統計一律經 TrackId 路由至暫存曲庫；正式曲庫曲目仍存取正式 SQLite。新外部佇列建立時先要求舊暫存統計完成 flush，再釋放舊暫存庫；flush 暫時失敗時保留舊暫存庫與待寫統計，避免丟失累計。程式關閉時統計工作完成或報告待寫狀態後，暫存資料隨程序消失。開啟期間曲庫搜尋合併正式與暫存結果，沿用相同篩選／排序並按正規化檔案路徑去重；分頁只讀取目前頁面附近的正式曲庫列與符合條件的暫存列，不掃描完整正式曲庫。播放佇列列資訊取暫存 SQLite 最新統計，外部封面與 SMTC 封面由原始路徑提供。
 - 暫存佇列隨機啟用時，正式曲目播放統計來自正式 DB，未匯入曲目的比值來自暫存 DB，兩者一起提供新 shuffle traversal 權重；既有 traversal 不因統計更新而重排。播放統計工作按 accounting ID 分組寫入各自 DB，ACK 後才清除音訊 worker 的待寫增量。
 - 「播放次數」欄顯示 `累計 played_ms ÷ 歌曲時長` 的比例。前端統計 overlay 保留目前執行期間最近 512 首曲目的最高已知累計時間；換歌時不讓虛擬清單快取退回舊統計，也不以小於 SQLite 查詢結果的即時值覆蓋資料。暫存曲庫測試除直接驗證 `playback_statistics_for` 外，也確認 `get_track_summary` 讀回已保存的 `played_ms`。
-- 本次隔離測試：搜尋合併／自然排序／分頁／重複路徑去重 1 項、暫存 TrackId 歌詞 DB 路由 1 項、播放時長只寫暫存 DB 並讀回曲目摘要 1 項、線上候選及手動歌詞只存暫存 DB 1 項；播放次數列表即時值測試 6/6、`npm run check` 0 errors／warnings。上一輪 `cargo test -p moemusicplayer --locked` 153 passed、0 failed、2 ignored；`cargo test --workspace --lib --tests --locked` 全部套件通過。`cargo clippy --workspace --lib --tests --locked -- -D warnings` 與 `cargo fmt --all -- --check` 通過。一般 `cargo test --workspace --locked` 會編譯工作區 example，受使用者保留的 `crates/player-platform-windows/examples/probe_mp3_all.rs` 編譯錯誤阻擋（`Tag::unknowns()` 不存在）；不得改動該探測檔。固定 Windows 版輸出為 `release/moemusicplayer.exe` 與同層 updater；`npm run release:windows` 會建置並核對 EXE／manifest。不要在長期文件硬編碼會隨每次建置變化的雜湊或 Build ID；需要確認目前產物時以 EXE `--update-build-info` 和打包 manifest 為準。
+- 驗證 Windows／Rust 工作區時，使用 `npm run check`、`cargo test -p moemusicplayer --lib`、`cargo clippy --workspace --lib --bins --tests --locked -- -D warnings` 與 `cargo fmt --all -- --check`。工作區含使用者自行保留的未追蹤探測 examples；修改前先看 git status，勿刪除或改寫這些檔案。完整 Windows 版輸出仍由 `npm run release:windows` 建置到固定 `release/moemusicplayer.exe`。
 - 決策細節見 `docs/adr/0009-windows-shell-open-queue.md`。
+
+## 收藏播放清單
+
+- 播放列愛心開啟與快速設定一致的浮動表面收藏面板，逐一列出啟用的 M3U/M3U8 來源；一首歌可以同時勾選多個清單，既有路徑會預先勾選。勾選只把新歌按完整路徑自然數字順序插到第一個較後項目前，不重排既有項目；取消勾選移除該歌所有重複項，其他項目相對順序不變。操作明確授權寫入使用者所選的那一份外部清單，寫完只更新該清單的 SQLite 投影，不觸發整曲庫掃描。檔案總管暫存曲目的路徑可寫入 M3U，但暫存 TrackId 不寫入正式資料庫。
+- Windows 自動在 EXE 同層 UserData/MyLove.m3u8 建立並登錄「我的最愛」來源。Android 首次建立時以系統 SAF 選擇器優先開啟公用 Music 資料夾，使用者也可選其他資料夾；清單存於外部共享資料夾，檔案不隨解除安裝刪除。Android 加入播放清單來源時必須要求並保存 SAF 讀寫授權；舊來源缺寫入權時收藏勾選停用並提示重新加入來源授權。
+- 收藏功能由 src/lib/FavoritePopover.svelte、src-tauri/src/favorites.rs、src-tauri/src/lib.rs 與 tauri-plugin-media-index Android SAF bridge 實作；決策見 docs/adr/0010-explicit-playlist-favorites-writeback.md。前端檢查、Rust 自然路徑插入測試、Windows 發布建置與 Android ARM64 Debug APK 建置已通過。尚未在 Android 真機操作 SAF 選擇器及實際修改清單。
 
 ## GitHub 與版控
 
