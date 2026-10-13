@@ -21,6 +21,8 @@ const layout = await page.evaluate(() => {
   const section = document.querySelector('[data-testid="artist-section"]');
   const frame = document.querySelector('.paged-virtual-frame');
   const viewport = document.querySelector('.paged-virtual-viewport');
+  const headerRow = document.querySelector('.track-table-head');
+  const dataRow = document.querySelector('.artist-index-row');
   const rect = (element) => {
     const { top, bottom, height } = element.getBoundingClientRect();
     return { top, bottom, height };
@@ -36,6 +38,9 @@ const layout = await page.evaluate(() => {
     searchControlCount: document.querySelectorAll('input[type="search"]').length,
     virtualRowCount: document.querySelectorAll('.paged-virtual-row').length,
     totalRows: Number(document.querySelector('[role="grid"]')?.getAttribute('aria-rowcount')),
+    headerGridColumns: getComputedStyle(headerRow).gridTemplateColumns.split(' ').map(Number.parseFloat),
+    dataGridColumns: getComputedStyle(dataRow).gridTemplateColumns.split(' ').map(Number.parseFloat),
+    dataFontSize: Number.parseFloat(getComputedStyle(dataRow).fontSize),
   };
 });
 
@@ -46,6 +51,16 @@ assert(Math.abs(layout.frame.top - layout.topbar.bottom) <= 1, `frame should sta
 assert(Math.abs(layout.frame.bottom - layout.scroll.bottom) <= 1, `frame should fill the remaining page: ${JSON.stringify(layout)}`);
 assert(layout.viewport.height > 500, `viewport should use the available page height: ${JSON.stringify(layout)}`);
 assert(layout.virtualRowCount < layout.totalRows, 'long artist list should render virtually');
+for (let column = 2; column < 5; column += 1) {
+  assert(
+    Math.abs(layout.headerGridColumns[column] - layout.dataGridColumns[column]) < 0.1,
+    `artist header and data column ${column} should have equal widths: ${JSON.stringify(layout)}`,
+  );
+  assert(
+    Math.abs(layout.dataGridColumns[column] - layout.dataFontSize * 6) < 0.1,
+    `artist summary columns should be six fullwidth characters: ${JSON.stringify(layout)}`,
+  );
+}
 
 const firstRowBefore = await page.locator('.paged-virtual-row').first().innerText();
 await page.getByRole('button', { name: '演出者', exact: true }).click();

@@ -157,7 +157,7 @@
       columnCount={ARTIST_COLUMNS.length + 1}
       gridTemplate={ARTIST_GRID}
       className="track-list-viewport"
-      rowClassName="track-row virtual-track-row configurable-track-grid"
+      rowClassName="track-row virtual-track-row configurable-track-grid artist-index-row"
       listName="演出者"
       onRange={() => {}}
       onPlay={(artist) => onSelect(artist)}

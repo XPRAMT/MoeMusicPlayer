@@ -1654,6 +1654,10 @@ input:focus-visible {
   transition: background 120ms ease;
 }
 
+.paged-virtual-row.artist-index-row {
+  font-size: var(--font-body);
+}
+
 .track-row:last-child {
   border-bottom: 0;
 }
