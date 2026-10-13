@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { getAlbumIndexScrollTop, setAlbumIndexScrollTop } from './album-index-scroll.js';
   import { getErrorText, invokeCommand } from './ipc';
   import type { AlbumIndexFacet } from './ipc';
   import { buildAlbumEntries } from './album-identities.js';
@@ -21,6 +22,8 @@
   let viewportWidth = $state(0);
   let viewportHeight = $state(0);
   let scrollTop = $state(0);
+  let scrollPositionRestored = $state(false);
+  let restoreFrame: number | null = null;
   let requestRevision = 0;
   let seenRefreshKey: number | null = null;
   let initialized = false;
@@ -70,6 +73,11 @@
     scrollTop = viewport.scrollTop;
   }
 
+  function handleScroll(): void {
+    measure();
+    if (scrollPositionRestored && viewport) setAlbumIndexScrollTop(viewport.scrollTop);
+  }
+
   $effect(() => {
     const element = viewport;
     if (!element) return;
@@ -90,7 +98,30 @@
     seenRefreshKey = current;
     void load();
   });
-  onDestroy(() => { requestRevision += 1; });
+  $effect(() => {
+    const element = viewport;
+    if (!active || loading || !element || viewportWidth <= 0 || scrollPositionRestored) return;
+    if (restoreFrame !== null) cancelAnimationFrame(restoreFrame);
+    restoreFrame = requestAnimationFrame(() => {
+      restoreFrame = null;
+      if (!active || !viewport || scrollPositionRestored) return;
+      const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      const restored = Math.min(getAlbumIndexScrollTop(), maxScrollTop);
+      viewport.scrollTop = restored;
+      scrollTop = restored;
+      setAlbumIndexScrollTop(restored);
+      scrollPositionRestored = true;
+    });
+    return () => {
+      if (restoreFrame !== null) cancelAnimationFrame(restoreFrame);
+      restoreFrame = null;
+    };
+  });
+  onDestroy(() => {
+    requestRevision += 1;
+    if (restoreFrame !== null) cancelAnimationFrame(restoreFrame);
+    if (scrollPositionRestored && viewport) setAlbumIndexScrollTop(viewport.scrollTop);
+  });
 </script>
 
 <div class="album-index-shell" aria-label="專輯卡片清單">
@@ -101,7 +132,7 @@
   {:else if albums.length === 0}
     <div class="album-index-message" role="status">目前啟用的曲庫沒有專輯資料。</div>
   {:else}
-    <div class="album-grid-viewport" bind:this={viewport} onscroll={measure}>
+    <div class="album-grid-viewport" bind:this={viewport} onscroll={handleScroll}>
       <div class="album-grid" style={`grid-template-columns:repeat(${columns},${cardWidth}px);gap:${gap}px;--album-card-width:${cardWidth}px`}>
         <div class="album-grid-spacer" style={`height:${topSpacer}px`} aria-hidden="true"></div>
         {#each visibleAlbums as album (`${album.key}:${refreshKey}`)}
