@@ -4,12 +4,11 @@
   import {
     IconAlertCircle,
     IconArrowLeft,
-    IconArrowDown,
-    IconArrowUp,
     IconArrowsRight,
     IconArrowsShuffle,
     IconChevronRight,
     IconFolder,
+    IconGripVertical,
     IconLibrary,
     IconList,
     IconMusic,
@@ -92,6 +91,7 @@
     formatTrackColumnValue,
     isHiResTrack,
     moveTrackColumn,
+    moveTrackColumnTo,
     normalizeLibrarySort,
     normalizeTrackColumnPreferences,
     normalizeTrackRowHeightPx,
@@ -110,6 +110,7 @@
   } from './lib/live-play-count.js';
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
   import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
+  import { QUEUE_REORDER_LONG_PRESS_MS, QUEUE_REORDER_MOVE_CANCEL_PX } from './lib/queue-reorder.js';
   import {
     SHORTCUT_ACTIONS,
     addShortcutBinding,
@@ -226,6 +227,10 @@
   let trackRowHeightPx = $state(DEFAULT_TRACK_ROW_HEIGHT_PX);
   let librarySort = $state<LibraryListSort>({ ...DEFAULT_LIBRARY_SORT });
   let queueSort = $state<LibraryListSort | null>(null);
+  let queueSortBusy = false;
+  let trackColumnOrderDrag = $state<{ pointerId: number; fromIndex: number; toIndex: number } | null>(null);
+  let trackColumnOrderPending: { pointerId: number; fromIndex: number; startX: number; startY: number } | null = null;
+  let trackColumnOrderTimer: ReturnType<typeof setTimeout> | null = null;
   let trackColumnSettingsState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let trackColumnSettingsError = $state<string | null>(null);
   let nowPlayingLayout = $state<NowPlayingLayout>('a');
@@ -863,6 +868,9 @@
   });
 
   onDestroy(() => {
+    clearTrackColumnOrderTimer();
+    trackColumnOrderPending = null;
+    trackColumnOrderDrag = null;
     artworkController.dispose();
     volumeCommandQueue.dispose();
     nowPlayingAppearanceWriter.invalidate();
@@ -1118,6 +1126,96 @@
     updateTrackColumnSettings(moveTrackColumn(trackColumnPreferences, id, direction));
   }
 
+  function clearTrackColumnOrderTimer(): void {
+    if (trackColumnOrderTimer !== null) {
+      clearTimeout(trackColumnOrderTimer);
+      trackColumnOrderTimer = null;
+    }
+  }
+
+  function handleTrackColumnOrderPointerDown(event: PointerEvent, index: number): void {
+    if (event.button !== 0) return;
+    clearTrackColumnOrderTimer();
+    trackColumnOrderPending = {
+      pointerId: event.pointerId,
+      fromIndex: index,
+      startX: event.clientX,
+      startY: event.clientY,
+    };
+    const target = event.currentTarget as HTMLElement;
+    trackColumnOrderTimer = setTimeout(() => {
+      const pending = trackColumnOrderPending;
+      if (!pending || pending.pointerId !== event.pointerId) return;
+      trackColumnOrderPending = null;
+      trackColumnOrderDrag = { pointerId: pending.pointerId, fromIndex: pending.fromIndex, toIndex: pending.fromIndex };
+      try {
+        target.setPointerCapture(pending.pointerId);
+      } catch {
+        // The pointer may have ended while the long-press callback was queued.
+      }
+    }, QUEUE_REORDER_LONG_PRESS_MS);
+  }
+
+  function handleTrackColumnOrderPointerMove(event: PointerEvent): void {
+    const pending = trackColumnOrderPending;
+    if (pending?.pointerId === event.pointerId && !trackColumnOrderDrag) {
+      const dx = event.clientX - pending.startX;
+      const dy = event.clientY - pending.startY;
+      if ((dx * dx) + (dy * dy) > QUEUE_REORDER_MOVE_CANCEL_PX * QUEUE_REORDER_MOVE_CANCEL_PX) {
+        clearTrackColumnOrderTimer();
+        trackColumnOrderPending = null;
+      }
+      return;
+    }
+    const drag = trackColumnOrderDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-track-column-index]');
+    if (!target) return;
+    const targetIndex = Number(target.dataset.trackColumnIndex);
+    if (!Number.isSafeInteger(targetIndex)) return;
+    const rect = target.getBoundingClientRect();
+    let destination = targetIndex + (event.clientY > rect.top + rect.height / 2 ? 1 : 0);
+    if (destination > drag.fromIndex) destination -= 1;
+    destination = Math.max(0, Math.min(trackColumnPreferences.length - 1, destination));
+    if (destination !== drag.toIndex) trackColumnOrderDrag = { ...drag, toIndex: destination };
+  }
+
+  function finishTrackColumnOrderPointer(event: PointerEvent): void {
+    const pending = trackColumnOrderPending;
+    if (pending?.pointerId === event.pointerId) {
+      clearTrackColumnOrderTimer();
+      trackColumnOrderPending = null;
+    }
+    const drag = trackColumnOrderDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    try {
+      (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already have been released.
+    }
+    trackColumnOrderDrag = null;
+    if (drag.fromIndex !== drag.toIndex) {
+      const column = trackColumnPreferences[drag.fromIndex];
+      if (column) updateTrackColumnSettings(moveTrackColumnTo(trackColumnPreferences, column.id, drag.toIndex));
+    }
+  }
+
+  function cancelTrackColumnOrderPointer(event: PointerEvent): void {
+    if (trackColumnOrderPending?.pointerId === event.pointerId || trackColumnOrderDrag?.pointerId === event.pointerId) {
+      clearTrackColumnOrderTimer();
+      trackColumnOrderPending = null;
+      trackColumnOrderDrag = null;
+    }
+  }
+
+  function handleTrackColumnOrderKeydown(event: KeyboardEvent, id: TrackListColumnPreference['id']): void {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    event.stopPropagation();
+    moveConfiguredTrackColumn(id, event.key === 'ArrowUp' ? 'up' : 'down');
+  }
+
   function handleTrackColumnResize(id: TrackListColumnPreference['id'], widthPx: number): void {
     persistTrackColumnSettings({ widths: setTrackColumnWidth(trackColumnWidths, id, widthPx) });
   }
@@ -1134,10 +1232,25 @@
     persistTrackColumnSettings({ librarySort: toggleLibrarySort(librarySort, id) });
   }
 
-  function handleQueueSort(id: TrackListColumnPreference['id']): void {
-    queueSort = queueSort?.field === id
+  async function handleQueueSort(id: TrackListColumnPreference['id']): Promise<void> {
+    if (queueSortBusy) return;
+    const previousSort = queueSort;
+    const nextSort: LibraryListSort = queueSort?.field === id
       ? toggleLibrarySort(queueSort, id)
       : { field: id, direction: 'asc' };
+    queueSort = nextSort;
+    queueSortBusy = true;
+    try {
+      const snapshot = await invokeCommand('playback_sort_queue', { sort: nextSort });
+      applyPlaybackSnapshot(snapshot);
+      playbackQueueResetKey += 1;
+      playbackError = null;
+    } catch (error) {
+      queueSort = previousSort;
+      playbackError = `播放佇列排序失敗：${getErrorText(error)}`;
+    } finally {
+      queueSortBusy = false;
+    }
   }
 
   async function loadNowPlayingLayout(): Promise<void> {
@@ -2462,6 +2575,7 @@
       && previous.positionMs > resolved.positionMs + 50
       && resolved.positionMs < 1500;
     playback = resolved;
+    if (Object.hasOwn(resolved, 'queueSort')) queueSort = resolved.queueSort ?? null;
     confirmedVolume = resolved.volume;
     if (trackChanged || positionReset || forceQueueCursorProbe) playbackQueueCursorChangeKey += 1;
     livePlayCountTracker = applyLivePlayCountSample(livePlayCountTracker, {
@@ -2914,7 +3028,23 @@
                 <ol class="track-column-settings" aria-label="曲目資訊欄位設定">
                   {#each trackColumnPreferences as preference, index (preference.id)}
                     {@const definition = TRACK_COLUMN_DEFINITIONS.find((column) => column.id === preference.id)!}
-                    <li class="track-column-setting-row">
+                    <li
+                      class="track-column-setting-row"
+                      class:column-order-dragging={trackColumnOrderDrag?.fromIndex === index}
+                      class:column-order-target={trackColumnOrderDrag?.toIndex === index && trackColumnOrderDrag.fromIndex !== index}
+                      data-track-column-index={index}
+                    >
+                      <button
+                        type="button"
+                        class="track-column-order-grip"
+                        aria-label={`${definition.label}欄排序把手；長按 300 毫秒後拖曳，鍵盤可用上下方向鍵`}
+                        title="長按 300 毫秒後拖曳排序；鍵盤可用上下方向鍵"
+                        onpointerdown={(event) => handleTrackColumnOrderPointerDown(event, index)}
+                        onpointermove={handleTrackColumnOrderPointerMove}
+                        onpointerup={finishTrackColumnOrderPointer}
+                        onpointercancel={cancelTrackColumnOrderPointer}
+                        onkeydown={(event) => handleTrackColumnOrderKeydown(event, preference.id)}
+                      ><IconGripVertical size={17} stroke={1.8} aria-hidden="true" /></button>
                       <label class="track-column-setting-label">
                         <input
                           type="checkbox"
@@ -2926,8 +3056,6 @@
                       </label>
                       <div class="track-column-order-actions">
                         <span aria-label={`第 ${index + 1} 欄`}>{index + 1}</span>
-                        <button type="button" aria-label={`${definition.label}欄上移`} title="上移欄位" disabled={index === 0} onclick={() => moveConfiguredTrackColumn(preference.id, 'up')}><IconArrowUp size={16} stroke={1.7} aria-hidden="true" /></button>
-                        <button type="button" aria-label={`${definition.label}欄下移`} title="下移欄位" disabled={index === trackColumnPreferences.length - 1} onclick={() => moveConfiguredTrackColumn(preference.id, 'down')}><IconArrowDown size={16} stroke={1.7} aria-hidden="true" /></button>
                       </div>
                     </li>
                   {/each}
@@ -3587,6 +3715,7 @@
                 columnWidths={trackColumnWidths}
                 rowHeightPx={trackRowHeightPx}
                 sort={queueSort}
+                hideSortDirection={playback?.shuffle === true}
                 onSort={handleQueueSort}
                 livePlayCount={livePlayCount}
                 onPlay={playQueueEntry}

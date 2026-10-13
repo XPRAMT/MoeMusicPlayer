@@ -47,8 +47,15 @@ pub struct PlaybackQueueSnapshot {
     pub context: PlaybackQueueContext,
     pub entries: Vec<PlaybackQueueEntry>,
     pub play_order: Vec<usize>,
+    /// Traversal to restore when shuffle is disabled. It is kept separate from
+    /// `play_order` so manual queue dragging while shuffled does not overwrite it.
+    #[serde(default)]
+    pub shuffle_restore_order: Option<Vec<usize>>,
     pub cursor: usize,
     pub shuffle: bool,
+    /// Last queue-header sort indicator, retained while shuffle is active.
+    #[serde(default)]
+    pub queue_sort: Option<TrackListSort>,
     pub repeat: QueueRepeatMode,
     pub random_state: u64,
 }
@@ -60,8 +67,10 @@ pub struct PlaybackQueue {
     context: PlaybackQueueContext,
     entries: Vec<PlaybackQueueEntry>,
     play_order: Vec<usize>,
+    shuffle_restore_order: Option<Vec<usize>>,
     cursor: usize,
     shuffle: bool,
+    queue_sort: Option<TrackListSort>,
     repeat: QueueRepeatMode,
     random_state: u64,
 }
@@ -117,8 +126,10 @@ impl PlaybackQueue {
             context,
             entries,
             play_order: (0..length).collect(),
+            shuffle_restore_order: None,
             cursor: selected_index,
             shuffle: false,
+            queue_sort: None,
             repeat: QueueRepeatMode::Off,
             random_state: random_state.max(1),
         })
@@ -158,6 +169,10 @@ impl PlaybackQueue {
         self.repeat
     }
 
+    pub fn queue_sort(&self) -> Option<TrackListSort> {
+        self.queue_sort
+    }
+
     pub fn can_next(&self) -> bool {
         self.cursor + 1 < self.play_order.len() || self.repeat == QueueRepeatMode::All
     }
@@ -171,19 +186,18 @@ impl PlaybackQueue {
     }
 
     pub fn set_shuffle(&mut self, enabled: bool) {
-        if self.shuffle == enabled || self.entries.len() < 2 {
-            self.shuffle = enabled;
+        if self.shuffle == enabled {
             return;
         }
-
-        let current_source_index = self.play_order[self.cursor];
-        self.play_order = (0..self.entries.len()).collect();
         if enabled {
+            let current_source_index = self.play_order[self.cursor];
+            self.shuffle_restore_order = Some(self.play_order.clone());
+            self.play_order = (0..self.entries.len()).collect();
             self.shuffle_from(current_source_index);
+            self.shuffle = true;
         } else {
-            self.cursor = current_source_index;
+            self.restore_pre_shuffle_order();
         }
-        self.shuffle = enabled;
     }
 
     /// Enable or disable shuffle, using the latest listening statistics when
@@ -194,12 +208,13 @@ impl PlaybackQueue {
         enabled: bool,
         stats_by_track: &HashMap<TrackId, QueueTrackListeningStats>,
     ) {
-        if !enabled || self.shuffle == enabled || self.entries.len() < 2 {
+        if !enabled || self.shuffle == enabled {
             self.set_shuffle(enabled);
             return;
         }
 
         let current_source_index = self.play_order[self.cursor];
+        self.shuffle_restore_order = Some(self.play_order.clone());
         self.play_order = weighted_order(
             &self.entries,
             current_source_index,
@@ -258,8 +273,10 @@ impl PlaybackQueue {
             context: self.context.clone(),
             entries: self.entries.clone(),
             play_order: self.play_order.clone(),
+            shuffle_restore_order: self.shuffle_restore_order.clone(),
             cursor: self.cursor,
             shuffle: self.shuffle,
+            queue_sort: self.queue_sort,
             repeat: self.repeat,
             random_state: self.random_state,
         }
@@ -282,6 +299,11 @@ impl PlaybackQueue {
         }
         if seen.iter().any(|value| !value) || snapshot.random_state == 0 {
             return Err("queue snapshot is incomplete");
+        }
+        if let Some(order) = &snapshot.shuffle_restore_order {
+            if !snapshot.shuffle || !is_permutation(order, length) {
+                return Err("queue shuffle restore traversal is invalid");
+            }
         }
         match &snapshot.context {
             PlaybackQueueContext::Library { .. }
@@ -310,8 +332,10 @@ impl PlaybackQueue {
             context: snapshot.context,
             entries: snapshot.entries,
             play_order: snapshot.play_order,
+            shuffle_restore_order: snapshot.shuffle_restore_order,
             cursor: snapshot.cursor,
             shuffle: snapshot.shuffle,
+            queue_sort: snapshot.queue_sort,
             repeat: snapshot.repeat,
             random_state: snapshot.random_state,
         })
@@ -347,6 +371,57 @@ impl PlaybackQueue {
         Ok(())
     }
 
+    /// Replace the active traversal while keeping the same queue entry selected.
+    /// Entries are identified by their source indices so repeated tracks remain distinct.
+    pub fn set_traversal_order(
+        &mut self,
+        order: Vec<usize>,
+        sort: TrackListSort,
+    ) -> Result<(), &'static str> {
+        let length = self.play_order.len();
+        if order.len() != length {
+            return Err("queue traversal order has the wrong length");
+        }
+        let mut seen = vec![false; length];
+        for index in order.iter().copied() {
+            let Some(seen_index) = seen.get_mut(index) else {
+                return Err("queue traversal order contains an invalid entry");
+            };
+            if *seen_index {
+                return Err("queue traversal order contains a duplicate entry");
+            }
+            *seen_index = true;
+        }
+        let current_entry = self
+            .play_order
+            .get(self.cursor)
+            .copied()
+            .ok_or("queue cursor is invalid")?;
+        self.cursor = order
+            .iter()
+            .position(|index| *index == current_entry)
+            .ok_or("queue traversal order omitted the current entry")?;
+        self.play_order = order;
+        self.shuffle = false;
+        self.shuffle_restore_order = None;
+        self.queue_sort = Some(sort);
+        Ok(())
+    }
+
+    fn restore_pre_shuffle_order(&mut self) {
+        let current_entry = self.play_order[self.cursor];
+        let order = self
+            .shuffle_restore_order
+            .take()
+            .unwrap_or_else(|| (0..self.entries.len()).collect());
+        self.cursor = order
+            .iter()
+            .position(|entry| *entry == current_entry)
+            .unwrap_or(0);
+        self.play_order = order;
+        self.shuffle = false;
+    }
+
     fn shuffle_from(&mut self, current_source_index: usize) {
         self.play_order.swap(0, current_source_index);
         for upper in (2..self.play_order.len()).rev() {
@@ -366,6 +441,23 @@ impl PlaybackQueue {
         self.random_state = value;
         value.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
+}
+
+fn is_permutation(order: &[usize], length: usize) -> bool {
+    if order.len() != length {
+        return false;
+    }
+    let mut seen = vec![false; length];
+    for index in order {
+        let Some(slot) = seen.get_mut(*index) else {
+            return false;
+        };
+        if *slot {
+            return false;
+        }
+        *slot = true;
+    }
+    true
 }
 
 fn weighted_order(
@@ -519,6 +611,30 @@ mod tests {
     }
 
     #[test]
+    fn manual_move_preserves_shuffle_and_disabling_restores_pre_shuffle_order() {
+        let mut queue = PlaybackQueue::with_seed(ids(5), 2, 89).unwrap();
+        queue.set_shuffle(true);
+        assert!(queue.shuffle());
+        let pre_shuffle = queue.snapshot().shuffle_restore_order.clone().unwrap();
+        queue.move_traversal(0, 1).unwrap();
+        assert!(queue.shuffle());
+        let moved_order = queue.snapshot().play_order;
+        assert_eq!(
+            queue.snapshot().shuffle_restore_order.as_ref(),
+            Some(&pre_shuffle)
+        );
+        let current_entry = queue.current_entry_index();
+        queue.set_shuffle(false);
+        assert!(!queue.shuffle());
+        assert_eq!(queue.snapshot().play_order, pre_shuffle);
+        assert_eq!(queue.current_entry_index(), current_entry);
+        assert_eq!(queue.snapshot().shuffle_restore_order, None);
+        queue.set_shuffle_with_stats(true, &HashMap::new());
+        assert!(queue.shuffle());
+        assert_ne!(queue.snapshot().play_order, moved_order);
+    }
+
+    #[test]
     fn move_traversal_shifts_cursor_when_other_items_cross_it() {
         let tracks = ids(5);
         let mut queue = PlaybackQueue::new(tracks.clone(), 2).unwrap();
@@ -533,6 +649,48 @@ mod tests {
     }
 
     #[test]
+    fn set_traversal_order_changes_playback_order_and_keeps_duplicate_current_slot() {
+        let duplicate = TrackId::new();
+        let mut queue = PlaybackQueue::with_entries(
+            vec![
+                PlaybackQueueEntry {
+                    track_id: duplicate,
+                    source_position: Some(0),
+                },
+                PlaybackQueueEntry {
+                    track_id: TrackId::new(),
+                    source_position: Some(1),
+                },
+                PlaybackQueueEntry {
+                    track_id: duplicate,
+                    source_position: Some(2),
+                },
+            ],
+            PlaybackQueueContext::Library {
+                query: None,
+                field_filter: None,
+                sort: TrackListSort::default(),
+            },
+            2,
+        )
+        .unwrap();
+
+        let sort = TrackListSort {
+            field: crate::TrackSortField::Artist,
+            direction: crate::TrackSortDirection::Desc,
+        };
+        queue.set_traversal_order(vec![1, 2, 0], sort).unwrap();
+        assert_eq!(queue.snapshot().play_order, [1, 2, 0]);
+        assert_eq!(queue.snapshot().cursor, 1);
+        assert_eq!(queue.current_entry_index(), 2);
+        assert_eq!(queue.queue_sort(), Some(sort));
+        assert_eq!(queue.next(true), Some(duplicate));
+
+        assert!(queue.set_traversal_order(vec![0, 0, 2], sort).is_err());
+        assert!(queue.set_traversal_order(vec![0, 1], sort).is_err());
+    }
+
+    #[test]
     fn disabling_shuffle_restores_source_order_at_the_current_track() {
         let tracks = ids(10);
         let mut queue = PlaybackQueue::with_seed(tracks.clone(), 5, 88).unwrap();
@@ -544,6 +702,32 @@ mod tests {
         assert_eq!(queue.current(), tracks[5]);
         assert_eq!(queue.next(true), Some(tracks[6]));
         assert_eq!(queue.previous(), Some(tracks[5]));
+    }
+
+    #[test]
+    fn shuffle_restores_sorted_order_and_keeps_sort_indicator() {
+        let tracks = ids(6);
+        let mut queue = PlaybackQueue::with_seed(tracks, 3, 99).unwrap();
+        let sort = TrackListSort {
+            field: crate::TrackSortField::Year,
+            direction: crate::TrackSortDirection::Desc,
+        };
+        queue
+            .set_traversal_order(vec![3, 1, 5, 0, 4, 2], sort)
+            .unwrap();
+        queue.set_shuffle(true);
+        let randomized = queue.snapshot().play_order.clone();
+        assert_eq!(
+            queue.snapshot().shuffle_restore_order,
+            Some(vec![3, 1, 5, 0, 4, 2])
+        );
+        queue.move_traversal(0, 4).unwrap();
+        let current_entry = queue.current_entry_index();
+        queue.set_shuffle(false);
+        assert_eq!(queue.snapshot().play_order, [3, 1, 5, 0, 4, 2]);
+        assert_eq!(queue.current_entry_index(), current_entry);
+        assert_eq!(queue.queue_sort(), Some(sort));
+        assert_ne!(randomized, queue.snapshot().play_order);
     }
 
     #[test]

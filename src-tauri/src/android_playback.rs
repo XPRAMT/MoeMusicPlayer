@@ -20,7 +20,7 @@ use std::{
 
 use player_core::{
     display_track_title, MediaLocator, PlaybackCheckpoint, PlaybackQueue, PlaybackQueueSnapshot,
-    QueueRepeatMode, QueueTrackListeningStats, TrackId, TrackSummary,
+    QueueRepeatMode, QueueTrackListeningStats, TrackId, TrackListSort, TrackSummary,
 };
 use player_db::{Database, PlaybackSessionCheckpoint};
 use serde::{Deserialize, Serialize};
@@ -91,6 +91,11 @@ pub(crate) enum PlaybackAction {
     ReorderQueue {
         from: usize,
         to: usize,
+    },
+    SetQueueOrder {
+        order: Vec<usize>,
+        sort: TrackListSort,
+        expected_revision: u64,
     },
 }
 
@@ -323,6 +328,7 @@ fn empty_snapshot(shuffle: bool, repeat_mode: RepeatMode) -> PlaybackSnapshot {
         last_error: None,
         repeat_mode,
         shuffle,
+        queue_sort: None,
         can_next: false,
         can_previous: false,
         output_format: None,
@@ -513,6 +519,26 @@ impl AndroidActor {
                 queue
                     .move_traversal(from, to)
                     .map_err(|_| "播放佇列位置超出範圍。".to_owned())?;
+                self.publish_queue();
+                self.save_session()?;
+                self.update_capabilities(request_id)?;
+                Ok(self.publish_snapshot())
+            }
+            PlaybackAction::SetQueueOrder {
+                order,
+                sort,
+                expected_revision,
+            } => {
+                if self.shared.queue_revision.load(Ordering::Relaxed) != expected_revision {
+                    return Err("播放佇列已變更，請重新排序。".to_owned());
+                }
+                let Some(queue) = self.queue.as_mut() else {
+                    return Err("目前沒有播放佇列可排序。".to_owned());
+                };
+                queue
+                    .set_traversal_order(order, sort)
+                    .map_err(|error| format!("無法套用播放佇列排序：{error}"))?;
+                self.shuffle = false;
                 self.publish_queue();
                 self.save_session()?;
                 self.update_capabilities(request_id)?;
@@ -1295,6 +1321,7 @@ impl AndroidActor {
                 .or_else(|| self.stats_status.clone()),
             repeat_mode: self.repeat_mode,
             shuffle: self.shuffle,
+            queue_sort: queue.and_then(PlaybackQueue::queue_sort),
             can_next: queue.is_some_and(PlaybackQueue::can_next),
             can_previous: queue.is_some_and(PlaybackQueue::can_previous),
             output_format: None,

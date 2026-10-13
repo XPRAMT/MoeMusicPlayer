@@ -15,11 +15,11 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'title', label: '曲目', min: 'minmax(150px,1.7fr)', minPx: 150 },
   { id: 'artist', label: '演出者', min: 'minmax(110px,1.15fr)', minPx: 110 },
   { id: 'album', label: '專輯', min: 'minmax(120px,1.25fr)', minPx: 120 },
-  { id: 'year', label: '發行時間', min: '108px', minPx: 108 },
-  { id: 'createdAt', label: '新增時間', min: '108px', minPx: 108 },
+  { id: 'year', label: '發行時間', min: '6em', minPx: 78 },
+  { id: 'createdAt', label: '新增時間', min: '6em', minPx: 78 },
   { id: 'audioFormat', label: '音訊格式', min: '172px', minPx: 172 },
-  { id: 'duration', label: '長度', min: '72px', minPx: 72 },
-  { id: 'playCount', label: '播放次數', min: '78px', minPx: 78 },
+  { id: 'duration', label: '長度', min: '4em', minPx: 52 },
+  { id: 'playCount', label: '播放次數', min: '5em', minPx: 65 },
 ]);
 
 /** @type {TrackColumnPreference[]} */
@@ -260,6 +260,19 @@ export function moveTrackColumn(preferences, id, direction) {
   const destination = index + (direction === 'up' ? -1 : 1);
   if (index < 0 || destination < 0 || destination >= current.length) return current;
   [current[index], current[destination]] = [current[destination], current[index]];
+  return current;
+}
+
+/** Move one configured column directly to a zero-based position. */
+/** @param {TrackColumnPreference[]} preferences @param {TrackColumnId} id @param {number} destination */
+export function moveTrackColumnTo(preferences, id, destination) {
+  const current = normalizeTrackColumnPreferences(preferences);
+  const index = current.findIndex((column) => column.id === id);
+  if (!Number.isSafeInteger(destination) || index < 0 || destination < 0 || destination >= current.length || index === destination) {
+    return current;
+  }
+  const [column] = current.splice(index, 1);
+  current.splice(destination, 0, column);
   return current;
 }
 

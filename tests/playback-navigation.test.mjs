@@ -30,6 +30,17 @@ test('previous button seeks to the start after three seconds and navigates befor
   assert.match(handler, /return;[\s\S]*invokeCommand\(command, \{\}\)/);
 });
 
+test('queue heading sort mutates playback traversal and keeps drag reordering enabled', () => {
+  const queueList = readSource('src/lib/PlaybackQueueList.svelte');
+  assert.match(appSource, /invokeCommand\('playback_sort_queue', \{ sort: nextSort \}\)/);
+  assert.match(queueList, /longPressReorder=\{true\}/);
+  assert.match(queueList, /onReorder=\{handleReorder\}/);
+  assert.match(appSource, /hideSortDirection=\{playback\?\.shuffle === true\}/);
+  assert.doesNotMatch(appSource, /queueSort = null/);
+  assert.match(appSource, /if \(Object\.hasOwn\(resolved, 'queueSort'\)\) queueSort = resolved\.queueSort \?\? null/);
+  assert.match(readSource('src/lib/TrackColumnCells.svelte'), /sort\?\.field === column\.id && !hideSortDirection/);
+});
+
 test('resizable list header separators remain visible without hover', () => {
   const baseRule = /\.column-resize-handle::after\s*\{[^}]*background:\s*rgba\(var\(--text-rgb\),\s*0\.3\)/;
   const hoverRule = /\.list-column\.is-resizable:hover \.column-resize-handle::after,[\s\S]*?\.column-resize-handle:hover::after\s*\{[^}]*background:\s*rgba\(var\(--text-rgb\),\s*0\.65\)/;
@@ -203,7 +214,7 @@ test('visible UI icons use Tabler components except the original brand mark', ()
   assert.doesNotMatch(appStyles, /content\s*:\s*['"]\u2713['"]/);
 
   for (const name of [
-    'IconAlertCircle', 'IconArrowDown', 'IconArrowUp', 'IconChevronRight',
+    'IconAlertCircle', 'IconChevronRight', 'IconGripVertical',
     'IconFolder', 'IconHeart', 'IconLibrary', 'IconMusic',
     'IconRefresh', 'IconSearch', 'IconVolume2',
   ]) {
@@ -217,8 +228,8 @@ test('visible UI icons use Tabler components except the original brand mark', ()
   assert.match(appSource, /class="sidebar-search-field"/);
   assert.match(appSource, /aria-label="搜尋曲庫"/);
   assert.doesNotMatch(appSource, /篩選功能尚未接通/);
-  assert.match(appSource, /title="上移欄位"/);
-  assert.match(appSource, /title="下移欄位"/);
+  assert.match(appSource, /title="長按 300 毫秒後拖曳排序/);
+  assert.match(appSource, /title="長按 300 毫秒後拖曳排序/);
   assert.match(appSource, /aria-label="音量"/);
   assert.match(trackListSource, /ariaLabel=\{sortable\s+\?\s+'曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序'/);
   assert.match(trackListSource, /'曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目'/);

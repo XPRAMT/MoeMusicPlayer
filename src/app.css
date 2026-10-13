@@ -2566,13 +2566,48 @@ input:focus-visible {
 .track-column-setting-row {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
   padding: 9px 11px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: rgba(var(--text-rgb), 0.02);
+}
+
+.track-column-setting-row.column-order-dragging {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.1);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.18);
+  opacity: 0.82;
+}
+
+.track-column-setting-row.column-order-target {
+  border-color: var(--accent-text);
+}
+
+.track-column-order-grip {
+  display: grid;
+  width: 30px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text-soft);
+  background: var(--panel-soft);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.track-column-order-grip:active,
+.column-order-dragging .track-column-order-grip {
+  cursor: grabbing;
+}
+
+.track-column-order-grip:hover {
+  border-color: var(--accent-text);
+  color: var(--accent-text);
 }
 
 .track-column-setting-label {

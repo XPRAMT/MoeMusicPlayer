@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 const MAX_PAGE_SIZE: u32 = 500;
 const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
@@ -494,6 +494,12 @@ CREATE INDEX tracks_sort_title
 
 const SCHEMA_V13: &str = r#"
 ALTER TABLE source_mappings ADD COLUMN created_at_utc_ms INTEGER;
+"#;
+
+const SCHEMA_V14: &str = r#"
+ALTER TABLE playback_session ADD COLUMN queue_sort_json TEXT;
+ALTER TABLE playback_session_entries ADD COLUMN shuffle_restore_order INTEGER
+    CHECK (shuffle_restore_order IS NULL OR shuffle_restore_order >= 0);
 "#;
 
 pub fn natural_title_cmp(left: &str, right: &str) -> Ordering {
@@ -965,6 +971,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V13)?;
             tx.pragma_update(None, "user_version", 13)?;
+            tx.commit()?;
+            version = 13;
+        }
+        if version == 13 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V14)?;
+            tx.pragma_update(None, "user_version", 14)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -2619,6 +2632,21 @@ impl Database {
             traversal[source_index] = i64::try_from(rank)
                 .map_err(|_| DatabaseError::InvalidNumber("playback traversal rank"))?;
         }
+        let mut shuffle_restore_order = vec![None; checkpoint.queue.entries.len()];
+        if let Some(order) = &checkpoint.queue.shuffle_restore_order {
+            for (rank, source_index) in order.iter().copied().enumerate() {
+                shuffle_restore_order[source_index] = Some(
+                    i64::try_from(rank)
+                        .map_err(|_| DatabaseError::InvalidNumber("shuffle restore rank"))?,
+                );
+            }
+        }
+        let queue_sort_json = checkpoint
+            .queue
+            .queue_sort
+            .map(|sort| serde_json::to_string(&sort))
+            .transpose()
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
         let (source_kind, source_playlist_id, source_query, source_field_filter_json) =
             match &checkpoint.queue.context {
                 PlaybackQueueContext::Library {
@@ -2646,8 +2674,8 @@ impl Database {
             "INSERT INTO playback_session(
                 singleton_id, source_kind, source_playlist_id, source_query,
                 source_field_filter_json, cursor, position_ms, shuffle, repeat_mode,
-                random_state, entry_count
-             ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                random_state, entry_count, queue_sort_json
+             ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(singleton_id) DO UPDATE SET
                 source_kind=excluded.source_kind,
                 source_playlist_id=excluded.source_playlist_id,
@@ -2658,7 +2686,8 @@ impl Database {
                 shuffle=excluded.shuffle,
                 repeat_mode=excluded.repeat_mode,
                 random_state=excluded.random_state,
-                entry_count=excluded.entry_count",
+                entry_count=excluded.entry_count,
+                queue_sort_json=excluded.queue_sort_json",
             params![
                 source_kind,
                 source_playlist_id,
@@ -2670,12 +2699,14 @@ impl Database {
                 repeat_mode_name(checkpoint.queue.repeat),
                 checkpoint.queue.random_state.to_string(),
                 entry_count,
+                queue_sort_json,
             ],
         )?;
         {
             let mut statement = tx.prepare_cached(
-                "INSERT INTO playback_session_entries(source_index, track_id, source_position, traversal_order)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO playback_session_entries(
+                    source_index, track_id, source_position, traversal_order, shuffle_restore_order
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
             for (source_index, entry) in checkpoint.queue.entries.iter().enumerate() {
                 statement.execute(params![
@@ -2688,6 +2719,7 @@ impl Database {
                         .transpose()
                         .map_err(|_| DatabaseError::InvalidNumber("playlist entry position"))?,
                     traversal[source_index],
+                    shuffle_restore_order[source_index],
                 ])?;
             }
         }
@@ -2703,7 +2735,7 @@ impl Database {
         let header = connection
             .query_row(
                 "SELECT source_kind, source_playlist_id, source_query, source_field_filter_json,
-                        cursor, position_ms,
+                        cursor, position_ms, queue_sort_json,
                         shuffle, repeat_mode, random_state, entry_count
                  FROM playback_session WHERE singleton_id=1",
                 [],
@@ -2715,10 +2747,11 @@ impl Database {
                         row.get::<_, Option<String>>(3)?,
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
-                        row.get::<_, bool>(6)?,
-                        row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, bool>(7)?,
                         row.get::<_, String>(8)?,
-                        row.get::<_, i64>(9)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, i64>(10)?,
                     ))
                 },
             )
@@ -2730,6 +2763,7 @@ impl Database {
             field_filter_json,
             cursor,
             position_ms,
+            queue_sort_json,
             shuffle,
             repeat,
             random,
@@ -2765,6 +2799,10 @@ impl Database {
                 ))
             }
         };
+        let queue_sort = queue_sort_json
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
         let repeat = parse_repeat_mode(&repeat)
             .ok_or_else(|| DatabaseError::CorruptData("playback repeat mode is invalid".into()))?;
         let random_state = random
@@ -2776,9 +2814,11 @@ impl Database {
             .map_err(|_| DatabaseError::InvalidNumber("playback queue length"))?;
         let mut entries = Vec::with_capacity(capacity);
         let mut play_order = vec![usize::MAX; capacity];
+        let mut shuffle_restore_order = vec![usize::MAX; capacity];
+        let mut restore_order_rows = 0_usize;
         {
             let mut statement = connection.prepare_cached(
-                "SELECT source_index, track_id, source_position, traversal_order
+                "SELECT source_index, track_id, source_position, traversal_order, shuffle_restore_order
                  FROM playback_session_entries ORDER BY source_index",
             )?;
             let mut rows = statement.query([])?;
@@ -2811,6 +2851,19 @@ impl Database {
                     ));
                 }
                 play_order[rank] = source_index;
+                if let Some(restore_rank) = row.get::<_, Option<i64>>(4)? {
+                    let restore_rank = usize::try_from(restore_rank).map_err(|_| {
+                        DatabaseError::CorruptData("shuffle restore rank is negative".into())
+                    })?;
+                    if restore_rank >= capacity || shuffle_restore_order[restore_rank] != usize::MAX
+                    {
+                        return Err(DatabaseError::CorruptData(
+                            "shuffle restore traversal is invalid".into(),
+                        ));
+                    }
+                    shuffle_restore_order[restore_rank] = source_index;
+                    restore_order_rows += 1;
+                }
                 entries.push(PlaybackQueueEntry {
                     track_id,
                     source_position,
@@ -2822,13 +2875,26 @@ impl Database {
                 "playback queue entries are incomplete".into(),
             ));
         }
+        let shuffle_restore_order = match restore_order_rows {
+            0 => None,
+            rows if rows == capacity && !shuffle_restore_order.contains(&usize::MAX) => {
+                Some(shuffle_restore_order)
+            }
+            _ => {
+                return Err(DatabaseError::CorruptData(
+                    "shuffle restore traversal is incomplete".into(),
+                ))
+            }
+        };
         let queue = PlaybackQueueSnapshot {
             context,
             entries,
             play_order,
+            shuffle_restore_order,
             cursor: usize::try_from(cursor)
                 .map_err(|_| DatabaseError::CorruptData("playback cursor is negative".into()))?,
             shuffle,
+            queue_sort,
             repeat,
             random_state,
         };
@@ -4867,7 +4933,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 13);
+            assert_eq!(version, 14);
         }
         {
             let db = Database::open_checked(&path).expect("read-only validate migrated database");
@@ -4911,7 +4977,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 13);
+        assert_eq!(current_version, 14);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -4970,7 +5036,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -5010,7 +5076,7 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
     }
 
@@ -5050,7 +5116,7 @@ mod tests {
                     .expect("sync-state table lookup"),
             )
         };
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
         assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
     }
 
@@ -5226,7 +5292,7 @@ mod tests {
                     .expect("lyric candidates table"),
             )
         };
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
         assert_eq!(lyric_table, "track_lyrics");
         assert_eq!(candidate_table, "lyric_candidates");
         assert_eq!(
@@ -5263,7 +5329,7 @@ mod tests {
             [],
             |row| row.get(0),
         ).expect("playback session tables");
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
         assert_eq!(tables, 2);
     }
 
@@ -8543,6 +8609,15 @@ mod tests {
         )
         .expect("queue");
         queue.set_repeat_mode(QueueRepeatMode::All);
+        queue
+            .set_traversal_order(
+                (0..100_000).rev().collect(),
+                TrackListSort {
+                    field: TrackSortField::PlayCount,
+                    direction: TrackSortDirection::Desc,
+                },
+            )
+            .expect("set persisted queue sort");
         queue.set_shuffle(true);
         for _ in 0..173 {
             queue.next(true);
@@ -8792,7 +8867,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v8_migrates_to_v13_without_requiring_track_rows_for_statistics() {
+    fn schema_v8_migrates_to_v14_without_requiring_track_rows_for_statistics() {
         let connection = rusqlite::Connection::open_in_memory().expect("legacy v8 database");
         connection.execute_batch(SCHEMA_V1).expect("schema v1");
         connection.execute_batch(SCHEMA_V2).expect("schema v2");
@@ -8806,13 +8881,13 @@ mod tests {
             .pragma_update(None, "user_version", 8)
             .expect("mark v8");
 
-        let db = Database::from_connection(connection).expect("migrate to v12");
+        let db = Database::from_connection(connection).expect("migrate to v14");
         let version: i64 = db
             .lock()
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
         let table_count: i64 = db
             .lock()
             .expect("connection")
@@ -8836,6 +8911,30 @@ mod tests {
             )
             .expect("release_date column");
         assert_eq!(release_date_column, 1);
+        let queue_restore_columns: Vec<String> = {
+            let connection = db.lock().expect("connection");
+            let mut statement = connection
+                .prepare("PRAGMA table_info(playback_session_entries)")
+                .expect("queue entry columns");
+            statement
+                .query_map([], |row| row.get(1))
+                .expect("queue entry column names")
+                .collect::<Result<_, _>>()
+                .expect("queue entry column list")
+        };
+        assert!(queue_restore_columns
+            .iter()
+            .any(|column| column == "shuffle_restore_order"));
+        let sort_column: i64 = db
+            .lock()
+            .expect("connection")
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('playback_session') WHERE name='queue_sort_json'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("queue sort column");
+        assert_eq!(sort_column, 1);
     }
 
     #[test]

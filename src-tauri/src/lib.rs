@@ -1466,6 +1466,7 @@ impl WindowsPlaybackService {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let can_next = queue.as_ref().is_some_and(PlaybackQueue::can_next);
         let can_previous = queue.as_ref().is_some_and(PlaybackQueue::can_previous);
+        let queue_sort = queue.as_ref().and_then(PlaybackQueue::queue_sort);
         let duration_ms = playback_duration_ms(
             audio.duration,
             current_track.as_ref().and_then(|track| track.duration_ms),
@@ -1495,6 +1496,7 @@ impl WindowsPlaybackService {
                 }),
             repeat_mode,
             shuffle,
+            queue_sort,
             can_next,
             can_previous,
             output_format: audio.resampling.as_ref().map(playback_output_format),
@@ -2263,6 +2265,7 @@ struct PlaybackSnapshot {
     last_error: Option<String>,
     repeat_mode: RepeatMode,
     shuffle: bool,
+    queue_sort: Option<TrackListSort>,
     can_next: bool,
     can_previous: bool,
     /// Windows only: the output's sample-rate path for the playback settings.
@@ -2440,6 +2443,10 @@ mod playback_queue_ipc_tests {
             last_error: None,
             repeat_mode: RepeatMode::One,
             shuffle: true,
+            queue_sort: Some(TrackListSort {
+                field: player_core::TrackSortField::Year,
+                direction: player_core::TrackSortDirection::Desc,
+            }),
             can_next: true,
             can_previous: false,
             output_format: Some(PlaybackOutputFormat {
@@ -2482,6 +2489,10 @@ mod playback_queue_ipc_tests {
             assert!(value.get(key).is_some(), "missing camelCase field {key}");
         }
         assert_eq!(value["repeatMode"], "one");
+        assert_eq!(
+            value["queueSort"],
+            serde_json::json!({ "field": "year", "direction": "desc" })
+        );
         assert!(
             value.get("items").is_none(),
             "queue items stay out of snapshots"
@@ -7151,7 +7162,6 @@ fn playback_get_queue_page(
     state: State<'_, AppState>,
     offset: u64,
     limit: u32,
-    sort: Option<TrackListSort>,
 ) -> Result<PlaybackQueuePage, String> {
     let _database_work = enter_database_work(&state)?;
     #[cfg(target_os = "windows")]
@@ -7163,34 +7173,8 @@ fn playback_get_queue_page(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let external_tracks = service
-            .external_tracks
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .map(|(id, track)| (*id, track.summary.clone()))
-            .collect::<HashMap<_, _>>();
-        let sorted_order = match (sort, queue.as_ref()) {
-            (Some(sort), Some(queue)) => Some(cached_queue_display_order(
-                &state,
-                revision,
-                queue,
-                sort,
-                state.database.as_ref(),
-                temporary_database.as_deref(),
-                Some(&external_tracks),
-            )?),
-            _ => None,
-        };
-        let mut page = build_playback_queue_page_with_sort(
-            state.database.as_ref(),
-            revision,
-            queue,
-            offset,
-            limit,
-            sort,
-            sorted_order,
-        )?;
+        let mut page =
+            build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)?;
         if let Some(temporary_database) = temporary_database.as_ref() {
             let temporary_ids = page
                 .items
@@ -7231,31 +7215,11 @@ fn playback_get_queue_page(
         let (revision, queue) = service
             .queue_snapshot()?
             .map_or((0, None), |(revision, queue)| (revision, Some(queue)));
-        let sorted_order = match (sort, queue.as_ref()) {
-            (Some(sort), Some(queue)) => Some(cached_queue_display_order(
-                &state,
-                revision,
-                queue,
-                sort,
-                state.database.as_ref(),
-                None,
-                None,
-            )?),
-            _ => None,
-        };
-        build_playback_queue_page_with_sort(
-            state.database.as_ref(),
-            revision,
-            queue,
-            offset,
-            limit,
-            sort,
-            sorted_order,
-        )
+        build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)
     }
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
-        let _ = (state, offset, limit, sort);
+        let _ = (state, offset, limit);
         Err("此平台尚未提供本機播放佇列。".to_owned())
     }
 }
@@ -7707,6 +7671,10 @@ async fn playback_reorder_queue(
             let Some(queue) = queue.as_mut() else {
                 return Err("目前沒有播放佇列可調整順序。".to_owned());
             };
+            let length = queue.len();
+            if from_index >= length || to_index >= length {
+                return Err("播放佇列位置超出範圍。".to_owned());
+            }
             let before = queue.snapshot();
             queue
                 .move_traversal(from_index, to_index)
@@ -7723,16 +7691,136 @@ async fn playback_reorder_queue(
     }
     #[cfg(target_os = "android")]
     {
-        android_playback_service(&state)?
+        if let Some((_, queue)) = android_playback_service(&state)?.queue_snapshot()? {
+            if from_index >= queue.play_order.len() || to_index >= queue.play_order.len() {
+                return Err("播放佇列位置超出範圍。".to_owned());
+            }
+        } else {
+            return Err("目前沒有播放佇列可調整順序。".to_owned());
+        }
+        let snapshot = android_playback_service(&state)?
             .execute(android_playback::PlaybackAction::ReorderQueue {
                 from: from_index,
                 to: to_index,
+            })
+            .await?;
+        Ok(snapshot)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = (state, from_index, to_index);
+        Err("此平台尚未提供本機音訊播放服務。".to_owned())
+    }
+}
+
+#[tauri::command]
+async fn playback_sort_queue(
+    state: State<'_, AppState>,
+    sort: TrackListSort,
+) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
+    #[cfg(target_os = "windows")]
+    {
+        let service = windows_playback_service(&state)?;
+        let _gate = service
+            .command_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let revision = service.queue_revision.load(Ordering::Relaxed);
+        let queue_snapshot = service
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(PlaybackQueue::snapshot)
+            .ok_or_else(|| "目前沒有播放佇列可排序。".to_owned())?;
+        let temporary_database = service
+            .temporary_catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let external_tracks = service
+            .external_tracks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(id, track)| (*id, track.summary.clone()))
+            .collect::<HashMap<_, _>>();
+        let order = cached_queue_display_order(
+            &state,
+            revision,
+            &queue_snapshot,
+            sort,
+            state.database.as_ref(),
+            temporary_database.as_deref(),
+            Some(&external_tracks),
+        )?;
+        state
+            .settings
+            .update(|settings| {
+                settings.shuffle = false;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+        {
+            let mut queue = service
+                .queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let queue = queue
+                .as_mut()
+                .ok_or_else(|| "播放佇列已清除，請重新排序。".to_owned())?;
+            let before = queue.snapshot();
+            queue
+                .set_traversal_order(order, sort)
+                .map_err(|error| format!("無法套用播放佇列排序：{error}"))?;
+            let after = queue.snapshot();
+            if before.play_order != after.play_order || before.cursor != after.cursor {
+                bump_queue_revision(service);
+            }
+        }
+        *service
+            .shuffle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+        if let Some(database) = state.database.as_ref() {
+            save_playback_session(database, service)?;
+        }
+        Ok(service.snapshot())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let service = android_playback_service(&state)?;
+        let (revision, queue) = service
+            .queue_snapshot()?
+            .ok_or_else(|| "目前沒有播放佇列可排序。".to_owned())?;
+        let order = cached_queue_display_order(
+            &state,
+            revision,
+            &queue,
+            sort,
+            state.database.as_ref(),
+            None,
+            None,
+        )?;
+        state
+            .settings
+            .update(|settings| {
+                settings.shuffle = false;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+        service
+            .execute(android_playback::PlaybackAction::SetQueueOrder {
+                order,
+                sort,
+                expected_revision: revision,
             })
             .await
     }
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
-        let _ = (state, from_index, to_index);
+        let _ = (state, sort);
         Err("此平台尚未提供本機音訊播放服務。".to_owned())
     }
 }
@@ -7970,33 +8058,12 @@ fn sort_queue_entry_order(
     order
 }
 
-#[cfg(test)]
 fn build_playback_queue_page(
     database: Option<&Database>,
     revision: u64,
     queue: Option<PlaybackQueueSnapshot>,
     offset: u64,
     requested_limit: u32,
-) -> Result<PlaybackQueuePage, String> {
-    build_playback_queue_page_with_sort(
-        database,
-        revision,
-        queue,
-        offset,
-        requested_limit,
-        None,
-        None,
-    )
-}
-
-fn build_playback_queue_page_with_sort(
-    database: Option<&Database>,
-    revision: u64,
-    queue: Option<PlaybackQueueSnapshot>,
-    offset: u64,
-    requested_limit: u32,
-    _sort: Option<TrackListSort>,
-    sorted_order: Option<Vec<usize>>,
 ) -> Result<PlaybackQueuePage, String> {
     let Some(queue) = queue else {
         return Ok(PlaybackQueuePage {
@@ -8020,15 +8087,16 @@ fn build_playback_queue_page_with_sort(
         .map(u64::try_from)
         .transpose()
         .map_err(|_| "播放佇列項目位置超出支援範圍。".to_owned())?;
-    let display_order = sorted_order.unwrap_or_else(|| queue.play_order.clone());
-    let cursor = display_order
+    let cursor = queue
+        .play_order
         .iter()
         .position(|entry_index| Some(*entry_index as u64) == current_entry_position)
         .map(|index| index as u64)
         .unwrap_or(queue_cursor);
     let offset_index = usize::try_from(offset.min(total)).unwrap_or(usize::MAX);
     let limit = requested_limit.clamp(1, PLAYBACK_QUEUE_PAGE_MAX_LIMIT) as usize;
-    let page_entries = display_order
+    let page_entries = queue
+        .play_order
         .iter()
         .skip(offset_index)
         .take(limit)
@@ -9811,6 +9879,7 @@ pub fn run() {
             playback_set_repeat,
             playback_set_shuffle,
             playback_reorder_queue,
+            playback_sort_queue,
             windows_register_audio_associations,
             windows_open_default_apps_settings,
             lyrics_service::lyrics_get_track,
@@ -11123,10 +11192,10 @@ mod windows_library_integration_tests {
     }
 
     #[test]
-    fn queue_column_sort_changes_only_display_order_and_keeps_duplicate_entry_order_stable() {
+    fn queue_column_sort_changes_playback_order_and_keeps_current_duplicate_slot() {
         let first_track = TrackId::new();
         let second_track = TrackId::new();
-        let queue = PlaybackQueue::with_entries(
+        let mut queue = PlaybackQueue::with_entries(
             vec![
                 PlaybackQueueEntry {
                     track_id: first_track,
@@ -11146,13 +11215,10 @@ mod windows_library_integration_tests {
                 field_filter: None,
                 sort: TrackListSort::default(),
             },
-            1,
+            2,
         )
         .expect("create queue with duplicate track");
-        let mut snapshot = queue.snapshot();
-        snapshot.play_order = vec![2, 0, 1];
-        snapshot.cursor = 1;
-        let original = snapshot.clone();
+        let snapshot = queue.snapshot();
         let make_summary =
             |id: TrackId, title: &str, created_at_utc_ms: Option<i64>| TrackSummary {
                 id,
@@ -11186,22 +11252,48 @@ mod windows_library_integration_tests {
                 direction: TrackSortDirection::Asc,
             },
         );
-        assert_eq!(ascending, [1, 2, 0]);
+        assert_eq!(ascending, [1, 0, 2]);
+        queue
+            .set_traversal_order(
+                ascending,
+                TrackListSort {
+                    field: TrackSortField::Title,
+                    direction: TrackSortDirection::Asc,
+                },
+            )
+            .expect("apply sorted queue order");
+        assert_eq!(queue.snapshot().play_order, [1, 0, 2]);
+        assert_eq!(queue.snapshot().cursor, 2);
+        assert_eq!(queue.current_entry_index(), 2);
+        assert!(!queue.shuffle(), "manual sort disables shuffle mode");
+
         let descending = sort_queue_entry_order(
-            &snapshot,
+            &queue.snapshot(),
             &summaries,
             TrackListSort {
                 field: TrackSortField::CreatedAt,
                 direction: TrackSortDirection::Desc,
             },
         );
-        assert_eq!(descending, [2, 0, 1]);
-        assert_eq!(
-            snapshot, original,
-            "sorting the display must not reorder the playback traversal"
+        assert_eq!(descending, [0, 2, 1]);
+        queue
+            .set_traversal_order(
+                descending,
+                TrackListSort {
+                    field: TrackSortField::CreatedAt,
+                    direction: TrackSortDirection::Desc,
+                },
+            )
+            .expect("apply reverse sort");
+        assert_eq!(queue.snapshot().play_order, [0, 2, 1]);
+        assert_eq!(queue.current_entry_index(), 2);
+        assert_eq!(queue.snapshot().entries[0].source_position, Some(4));
+        assert_eq!(queue.snapshot().entries[2].source_position, Some(9));
+        queue.set_shuffle(true);
+        assert!(
+            queue.shuffle(),
+            "the shuffle button may create a fresh traversal afterward"
         );
-        assert_eq!(snapshot.entries[0].source_position, Some(4));
-        assert_eq!(snapshot.entries[2].source_position, Some(9));
     }
 
     #[test]

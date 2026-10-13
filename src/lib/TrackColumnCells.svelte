@@ -29,6 +29,7 @@
     sortable?: boolean;
     sortableIndex?: boolean;
     sort?: SortState | null;
+    hideSortDirection?: boolean;
     onSort?: (columnId: string) => void;
     resizable?: boolean;
     onResize?: (columnId: string, widthPx: number) => void;
@@ -43,6 +44,7 @@
     sortable = false,
     sortableIndex = false,
     sort = null,
+    hideSortDirection = false,
     onSort,
     resizable = false,
     onResize,
@@ -56,6 +58,7 @@
 
   function ariaSortFor(columnId: string): 'ascending' | 'descending' | 'none' | undefined {
     if (columnId === 'position' ? !sortableIndex : !sortable) return undefined;
+    if (hideSortDirection) return 'none';
     if (sort?.field !== columnId) return 'none';
     return sort.direction === 'desc' ? 'descending' : 'ascending';
   }
@@ -102,7 +105,7 @@
     {#if sortableIndex}
       <button type="button" class="column-sort-button index-sort-button" onclick={() => handleSortClick('position')} title="依播放清單中的順序排序" aria-label="依播放清單中的順序排序">
         <span class="column-sort-label">#</span>
-        {#if sort?.field === 'position'}
+        {#if sort?.field === 'position' && !hideSortDirection}
           <span class="column-sort-indicator" aria-hidden="true">{sort.direction === 'asc' ? '▲' : '▼'}</span>
         {/if}
       </button>
@@ -126,7 +129,7 @@
           title={`依${column.label}排序`}
         >
           <span class="column-sort-label">{column.label}</span>
-          {#if sort?.field === column.id}
+          {#if sort?.field === column.id && !hideSortDirection}
             <span class="column-sort-indicator" aria-hidden="true">{sort.direction === 'asc' ? '▲' : '▼'}</span>
           {/if}
         </button>

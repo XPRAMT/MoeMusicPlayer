@@ -36,8 +36,9 @@
     rowHeightPx?: number;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     sort?: LibraryListSort | null;
+    hideSortDirection?: boolean;
     onSort?: (columnId: TrackListColumnPreference['id']) => void;
-    fetchPage?: (request: { offset: number; limit: number; sort?: LibraryListSort | null }) => Promise<PlaybackQueuePage>;
+    fetchPage?: (request: { offset: number; limit: number }) => Promise<PlaybackQueuePage>;
     reorderPage?: (from: number, to: number) => Promise<void>;
     livePlayCount?: { trackId: string; playedMs: number }[];
     onPlay?: (entry: PlaybackQueuePageItem) => void;
@@ -52,6 +53,7 @@
     rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX,
     onColumnResize,
     sort = null,
+    hideSortDirection = false,
     onSort,
     fetchPage,
     reorderPage,
@@ -132,10 +134,9 @@
   });
 
   async function requestPage(request: { offset: number; limit: number }): Promise<PlaybackQueuePage> {
-    const sortedRequest = { ...request, sort: normalizedSort };
     return fetchPage
-      ? fetchPage(sortedRequest)
-      : invokeCommand('playback_get_queue_page', sortedRequest);
+      ? fetchPage(request)
+      : invokeCommand('playback_get_queue_page', request);
   }
 
   function updateCurrentEntry(page: PlaybackQueuePage, requestedScope: string, requestedCursorGeneration: number): void {
@@ -284,13 +285,13 @@
     className="track-list-viewport playback-queue-viewport"
     rowClassName="track-row virtual-track-row configurable-track-grid playback-queue-row"
     listName="播放佇列"
-    longPressReorder={normalizedSort === null}
+    longPressReorder={true}
     {scrollToIndexRequest}
     onRange={handleRange}
     onPlay={(entry) => {
       if (entry) onPlay(entry);
     }}
-    onReorder={normalizedSort === null ? handleReorder : undefined}
+    onReorder={handleReorder}
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
@@ -299,6 +300,7 @@
           columns={visibleColumns}
           sortable={true}
           sort={normalizedSort}
+          hideSortDirection={hideSortDirection}
           onSort={(columnId) => onSort?.(columnId as TrackListColumnPreference['id'])}
           resizable={true}
           onResize={(columnId, widthPx) => onColumnResize?.(columnId as TrackListColumnPreference['id'], widthPx)}

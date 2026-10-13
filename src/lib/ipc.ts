@@ -401,6 +401,7 @@ export interface PlaybackSnapshot {
   lastError: string | null;
   repeatMode: RepeatMode;
   shuffle: boolean;
+  queueSort?: LibraryListSort | null;
   canNext: boolean;
   canPrevious: boolean;
   /** Windows only: the output's sample-rate path. */
@@ -751,7 +752,7 @@ interface IpcContract {
     result: PlaybackSnapshot;
   };
   playback_get_queue_page: {
-    args: { offset: number; limit: number; sort?: LibraryListSort | null };
+    args: { offset: number; limit: number };
     result: PlaybackQueuePage;
   };
   playback_play: {
@@ -788,6 +789,10 @@ interface IpcContract {
   };
   playback_reorder_queue: {
     args: { from: number; to: number };
+    result: PlaybackSnapshot;
+  };
+  playback_sort_queue: {
+    args: { sort: LibraryListSort };
     result: PlaybackSnapshot;
   };
   lyrics_get_track: {

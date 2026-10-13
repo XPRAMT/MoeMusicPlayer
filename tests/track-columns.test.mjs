@@ -18,6 +18,7 @@ import {
   isHiResTrack,
   isLosslessCodec,
   moveTrackColumn,
+  moveTrackColumnTo,
   normalizeLibrarySort,
   normalizePlaylistSort,
   normalizeTrackColumnPreferences,
@@ -78,6 +79,22 @@ test('flexible column widths clamp and feed the shared grid template', () => {
   assert.equal(wide.title, 800);
   assert.deepEqual(normalizeTrackColumnWidths(null), DEFAULT_TRACK_COLUMN_WIDTHS);
   assert.match(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES, wide), /^26px 800px /);
+});
+
+test('date, duration, and play count columns use the requested fixed fullwidth-character widths', () => {
+  assert.deepEqual(
+    TRACK_COLUMN_DEFINITIONS.filter(({ id }) => ['year', 'createdAt', 'duration', 'playCount'].includes(id))
+      .map(({ id, min }) => [id, min]),
+    [['year', '6em'], ['createdAt', '6em'], ['duration', '4em'], ['playCount', '5em']],
+  );
+});
+
+test('settings columns can move directly to the long-press drag destination', () => {
+  const moved = moveTrackColumnTo(DEFAULT_TRACK_COLUMN_PREFERENCES, 'year', 6);
+  assert.deepEqual(moved.map(({ id }) => id), [
+    'title', 'artist', 'album', 'createdAt', 'audioFormat', 'duration', 'year', 'playCount',
+  ]);
+  assert.deepEqual(moveTrackColumnTo(moved, 'year', -1), moved);
 });
 
 test('shared list row height defaults to 50px and clamps to the supported range', () => {
@@ -223,10 +240,20 @@ test('queue and album detail reuse shared sortable track-list headers', async ()
   ]);
   assert.match(queue, /sortable=\{true\}/);
   assert.match(queue, /onSort=\{\(columnId\) => onSort\?\.\(columnId as TrackListColumnPreference\['id'\]\)\}/);
-  assert.match(queue, /longPressReorder=\{normalizedSort === null\}/);
-  assert.match(queue, /onReorder=\{normalizedSort === null \? handleReorder : undefined\}/);
+  assert.match(queue, /longPressReorder=\{true\}/);
+  assert.match(queue, /onReorder=\{handleReorder\}/);
+  assert.match(queue, /invokeCommand\('playback_get_queue_page', request\)/);
+  assert.match(queue, /hideSortDirection=\{hideSortDirection\}/);
   assert.match(album, /sortable=\{true\}/);
   assert.match(album, /sort: request\.sort/);
+});
+
+test('field order settings use the shared 300ms long-press drag delay', async () => {
+  const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /QUEUE_REORDER_LONG_PRESS_MS/);
+  assert.match(app, /setTimeout\([\s\S]*?QUEUE_REORDER_LONG_PRESS_MS/);
+  assert.match(app, /moveTrackColumnTo\(trackColumnPreferences, column\.id, drag\.toIndex\)/);
+  assert.match(app, /長按 300 毫秒後拖曳/);
 });
 
 test('audio format uses only supplied source fields and formats nullable values', () => {
