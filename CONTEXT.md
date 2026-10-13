@@ -16,6 +16,14 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **「演出者」 (artist)**: The user-facing artist value sourced from the embedded `ARTIST` tag. It is distinct from the separate `PERFORMER` tag; `PERFORMER` is not a substitute for `ARTIST`.
 
+**Artist credit**: One track may credit multiple artists; each distinct artist is associated with that track for browsing and per-artist statistics.
+
+**Artist identity**: Artist names are compared after trimming surrounding whitespace and ignoring case and Simplified/Traditional Chinese differences. Names containing Hiragana or Katakana preserve their Han spelling during Simplified/Traditional comparison; the displayed spelling is the most frequent original form, preferring Traditional on ties.
+
+**Artist listening time**: Each artist credited on a track receives the full accumulated listening time of that distinct track; collaborative tracks are not divided among artists.
+
+**Artist catalog metrics**: Artist counts use tracks visible in the enabled library sources. Song count is distinct tracks; album count is distinct non-empty album names under the artist-name comparison rules.
+
 **Year**: The displayed year is derived only from the embedded `YEAR` value. Accepted forms are a four-digit year (`YYYY`) or a valid full date (`YYYY-MM-DD`); other forms do not define a display year.
 
 **App settings**: User-owned preferences stored in a versioned JSON document, including theme colors, shuffle, repeat mode, Now Playing layout/appearance, and the source registry. JSON is the authority for these values; SQLite rows are rebuildable music-data projections.
