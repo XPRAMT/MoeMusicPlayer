@@ -5,6 +5,19 @@ const result = [];
 for (const viewport of [{width:1366,height:768},{width:412,height:915}]) {
   await page.setViewportSize(viewport);
   await page.evaluate(() => window.nowPlayingLayoutHarness.setArtworkVisible(false));
+  const backdrop = await page.locator('[data-testid="now-playing-backdrop"]').evaluate(element => {
+    const image = element.querySelector('img');
+    const style = getComputedStyle(element);
+    return {
+      imageSource: image?.getAttribute('src') ?? null,
+      imageKind: image?.getAttribute('data-backdrop-source') ?? null,
+      backgroundColor: style.backgroundColor,
+      zIndex: Number(style.zIndex),
+    };
+  });
+  if (!backdrop.imageSource || backdrop.imageKind !== 'main' || backdrop.backgroundColor === 'rgba(0, 0, 0, 0)' || backdrop.zIndex <= 0) {
+    throw new Error(JSON.stringify({viewport, backdrop}));
+  }
   for (const layout of ['a','b']) {
     await page.evaluate(value => window.nowPlayingLayoutHarness.setLayout(value),layout);
     const state = await page.evaluate(() => {

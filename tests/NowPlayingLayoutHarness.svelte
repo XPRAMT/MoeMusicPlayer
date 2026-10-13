@@ -11,6 +11,7 @@
   import LyricsView from '../src/lib/LyricsView.svelte';
   import type { LyricsTopbarStatus } from '../src/lib/LyricsView.svelte';
   import NowPlayingArrangement from '../src/lib/NowPlayingArrangement.svelte';
+  import NowPlayingBackdrop from '../src/lib/NowPlayingBackdrop.svelte';
   import NowPlayingLayoutSwitch from '../src/lib/NowPlayingLayoutSwitch.svelte';
   import { calculateArtworkFrame } from '../src/lib/artwork-frame.js';
   import hiResBadgeUrl from '../src/assets/hi-res-badge.svg';
@@ -326,7 +327,10 @@
 </script>
 
 <div class="app-shell" data-active-view="library" data-testid="now-playing-shell">
-  <div class="now-playing-backdrop" data-testid="now-playing-backdrop" aria-hidden="true"></div>
+  <NowPlayingBackdrop
+    coverUrl={artworkVisible ? artworkDataUrl(artworkVariant) : null}
+    mainBackgroundUrl="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='4' fill='%2355d9ff'/%3E%3C/svg%3E"
+  />
   <aside class="sidebar" aria-label="底層主要導覽"><span>側欄</span></aside>
   <main class="workspace">
     <header class="topbar"><strong>MOEMUSIC / LIBRARY</strong></header>

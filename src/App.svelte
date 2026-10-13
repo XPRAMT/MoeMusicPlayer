@@ -134,6 +134,7 @@
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import SyncErrorDetails from './lib/SyncErrorDetails.svelte';
   import NowPlayingArrangement from './lib/NowPlayingArrangement.svelte';
+  import NowPlayingBackdrop from './lib/NowPlayingBackdrop.svelte';
   import PlaybackProgress from './lib/PlaybackProgress.svelte';
   import LyricsView from './lib/LyricsView.svelte';
   import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
@@ -3258,10 +3259,12 @@
       <img src={effectiveMainBackgroundUrl} alt="" />
     </div>
   {/if}
-  {#if isNowPlayingOpen && activeArtwork.status === 'ready' && activeArtwork.objectUrl}
-    <div class="now-playing-backdrop" data-testid="now-playing-backdrop" aria-hidden="true">
-      <img src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
-    </div>
+  {#if isNowPlayingOpen}
+    <NowPlayingBackdrop
+      coverUrl={activeArtwork.status === 'ready' ? activeArtwork.objectUrl : null}
+      mainBackgroundUrl={effectiveMainBackgroundUrl}
+      onCoverError={(url) => artworkController.imageFailed(url)}
+    />
   {/if}
   <aside class="sidebar" aria-label="主要導覽" inert={isNowPlayingOpen}>
     <div class="brand-lockup">

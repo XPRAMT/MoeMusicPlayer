@@ -225,6 +225,14 @@ input:focus-visible {
   filter: blur(var(--np-background-blur, 20px));
 }
 
+.now-playing-backdrop img.now-playing-main-backdrop-image {
+  inset: calc(80px - var(--main-background-bleed, 30px));
+  width: calc(100% - 160px + var(--main-background-bleed, 30px) + var(--main-background-bleed, 30px));
+  height: calc(100% - 160px + var(--main-background-bleed, 30px) + var(--main-background-bleed, 30px));
+  opacity: var(--main-background-opacity, 0.4);
+  filter: blur(var(--main-background-blur, 20px));
+}
+
 .main-backdrop {
   position: fixed;
   z-index: 0;
