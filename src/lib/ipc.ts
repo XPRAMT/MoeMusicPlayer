@@ -446,6 +446,9 @@ export interface LyricsCandidate {
   reasons: string[];
   previewLines: string[];
   hasSyncedLyrics: boolean;
+  hasWordSyncedLyrics: boolean;
+  hasTranslation: boolean;
+  hasRomanization: boolean;
 }
 
 export type LyricsResultStatus = 'ready' | 'empty' | 'cleared' | 'candidates' | 'error';

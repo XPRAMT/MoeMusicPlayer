@@ -14,6 +14,9 @@ function candidate(partial) {
     score: 1,
     confidence: 'high',
     hasSyncedLyrics: true,
+    hasWordSyncedLyrics: false,
+    hasTranslation: false,
+    hasRomanization: false,
     previewLines: ['line one', 'line two'],
     reasons: ['title match'],
     ...partial,
@@ -40,8 +43,42 @@ test('filterLyricsCandidates matches title artist album preview reasons', () => 
   assert.equal(filterLyricsCandidates(list, 'nope').length, 0);
 });
 
-test('getCandidatePresentation still labels synced lyrics', () => {
-  const presentation = getCandidatePresentation(candidate({}));
-  assert.equal(presentation.formatLabel, '同步歌詞');
-  assert.equal(presentation.previewNotice, null);
+test('getCandidatePresentation distinguishes word-timed, line-timed, plain, and undecoded QRC', () => {
+  const wordTimed = getCandidatePresentation(candidate({ hasWordSyncedLyrics: true }));
+  assert.equal(wordTimed.formatLabel, '逐字歌詞');
+  assert.equal(wordTimed.previewNotice, null);
+
+  const lineTimed = getCandidatePresentation(candidate({}));
+  assert.equal(lineTimed.formatLabel, '逐行歌詞');
+  assert.equal(lineTimed.previewNotice, null);
+
+  const plain = getCandidatePresentation(candidate({ hasSyncedLyrics: false, previewLines: [] }));
+  assert.equal(plain.formatLabel, '純歌詞');
+  assert.equal(plain.previewNotice, null);
+
+  const qqPlain = getCandidatePresentation(candidate({
+    provider: 'qqmusic',
+    hasSyncedLyrics: false,
+    previewLines: [],
+  }));
+  assert.equal(qqPlain.formatLabel, '純歌詞');
+  assert.equal(qqPlain.previewNotice, null);
+
+  const auxiliaries = getCandidatePresentation(candidate({ hasTranslation: true, hasRomanization: true }));
+  assert.equal(auxiliaries.formatLabel, '逐行歌詞 · 譯 · 羅');
+
+  const translationOnly = getCandidatePresentation(candidate({ hasTranslation: true }));
+  assert.equal(translationOnly.formatLabel, '逐行歌詞 · 譯');
+
+  const romanizationOnly = getCandidatePresentation(candidate({ hasRomanization: true }));
+  assert.equal(romanizationOnly.formatLabel, '逐行歌詞 · 羅');
+
+  const undecodedQrc = getCandidatePresentation(candidate({
+    provider: 'qqmusic',
+    hasSyncedLyrics: false,
+    hasWordSyncedLyrics: true,
+    previewLines: [],
+  }));
+  assert.equal(undecodedQrc.formatLabel, '逐字歌詞');
+  assert.equal(undecodedQrc.previewNotice, '原始 QRC 尚未解碼，目前無法預覽；仍可使用「選擇」保存。');
 });

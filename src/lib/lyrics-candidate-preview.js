@@ -6,15 +6,20 @@
  */
 export function getCandidatePresentation(candidate) {
   const qrcUnavailable = candidate.provider === 'qqmusic'
-    && !candidate.hasSyncedLyrics
+    && candidate.hasWordSyncedLyrics
     && candidate.previewLines.length === 0;
+  const formatLabel = candidate.hasWordSyncedLyrics
+    ? '逐字歌詞'
+    : candidate.hasSyncedLyrics
+      ? '逐行歌詞'
+      : '純歌詞';
+  const auxiliaryLabels = [
+    candidate.hasTranslation ? '譯' : null,
+    candidate.hasRomanization ? '羅' : null,
+  ].filter(Boolean);
 
   return {
-    formatLabel: qrcUnavailable
-      ? 'QRC 尚未解碼'
-      : candidate.hasSyncedLyrics
-        ? '同步歌詞'
-        : '純歌詞',
+    formatLabel: [formatLabel, ...auxiliaryLabels].join(' · '),
     previewNotice: qrcUnavailable
       ? '原始 QRC 尚未解碼，目前無法預覽；仍可使用「選擇」保存。'
       : null,

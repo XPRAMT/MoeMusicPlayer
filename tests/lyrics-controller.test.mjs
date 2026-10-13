@@ -325,13 +325,13 @@ test('manual candidate selection saves only for the still-active track', async (
     api: {
       getTrack: async () => ({
         lyrics: null,
-        candidates: [{ id: 'candidate-1', provider: 'qqmusic', title: '候選', artist: '歌手', album: null, durationMs: null, score: 0.84, confidence: 'medium', reasons: [], previewLines: [], hasSyncedLyrics: true }],
+        candidates: [{ id: 'candidate-1', provider: 'qqmusic', title: '候選', artist: '歌手', album: null, durationMs: null, score: 0.84, confidence: 'medium', reasons: [], previewLines: [], hasSyncedLyrics: true, hasWordSyncedLyrics: false, hasTranslation: false, hasRomanization: false }],
         status: 'candidates',
         error: null,
       }),
       search: async () => ({
         lyrics: null,
-        candidates: [{ id: 'candidate-1', provider: 'qqmusic', title: '候選', artist: '歌手', album: null, durationMs: null, score: 0.84, confidence: 'medium', reasons: [], previewLines: [], hasSyncedLyrics: true }],
+        candidates: [{ id: 'candidate-1', provider: 'qqmusic', title: '候選', artist: '歌手', album: null, durationMs: null, score: 0.84, confidence: 'medium', reasons: [], previewLines: [], hasSyncedLyrics: true, hasWordSyncedLyrics: false, hasTranslation: false, hasRomanization: false }],
         status: 'candidates',
         error: null,
       }),
@@ -363,9 +363,12 @@ test('QQ QRC-only candidates explain unavailable preview and remain manually sel
     reasons: ['標題相符'],
     previewLines: [],
     hasSyncedLyrics: false,
+    hasWordSyncedLyrics: true,
+    hasTranslation: false,
+    hasRomanization: false,
   };
   assert.deepEqual(getCandidatePresentation(candidate), {
-    formatLabel: 'QRC 尚未解碼',
+    formatLabel: '逐字歌詞',
     previewNotice: '原始 QRC 尚未解碼，目前無法預覽；仍可使用「選擇」保存。',
   });
 
@@ -431,6 +434,9 @@ test('manual searchAgain keeps selection open when lyrics already exist', async 
     reasons: ['標題相符'],
     previewLines: ['預覽'],
     hasSyncedLyrics: true,
+    hasWordSyncedLyrics: false,
+    hasTranslation: false,
+    hasRomanization: false,
   };
   const controller = createLyricsController({
     api: {
@@ -698,6 +704,9 @@ test('load more appends the next lyric page until the source is exhausted', asyn
     reasons: [],
     previewLines: [],
     hasSyncedLyrics: true,
+    hasWordSyncedLyrics: false,
+    hasTranslation: false,
+    hasRomanization: false,
   });
   const controller = createLyricsController({
     api: {

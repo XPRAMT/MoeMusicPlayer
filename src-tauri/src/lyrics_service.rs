@@ -124,6 +124,9 @@ pub struct LyricsCandidateDto {
     pub reasons: Vec<String>,
     pub preview_lines: Vec<String>,
     pub has_synced_lyrics: bool,
+    pub has_word_synced_lyrics: bool,
+    pub has_translation: bool,
+    pub has_romanization: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -869,7 +872,51 @@ fn candidate_dto(metadata: &LyricsTrackMetadata, candidate: &LyricCandidate) -> 
             .map(|line| line.text.clone())
             .collect(),
         has_synced_lyrics: candidate.lyrics.synced,
+        has_word_synced_lyrics: has_word_synced_lyrics(&candidate.lyrics),
+        has_translation: has_translation(&candidate.lyrics),
+        has_romanization: has_romanization(&candidate.lyrics),
     }
+}
+
+fn has_word_synced_lyrics(lyrics: &ParsedLyrics) -> bool {
+    if matches!(lyrics.format, LyricFormat::Yrc | LyricFormat::Qrc) {
+        return true;
+    }
+    preserved_karaoke_has_nonempty_field(lyrics, &["yrc", "qrc_base64", "qrcBase64"])
+}
+
+fn has_translation(lyrics: &ParsedLyrics) -> bool {
+    lyrics.lines.iter().any(|line| {
+        line.translation
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+    }) || preserved_karaoke_has_nonempty_field(lyrics, &["translation_base64", "translationBase64"])
+}
+
+fn has_romanization(lyrics: &ParsedLyrics) -> bool {
+    lyrics.lines.iter().any(|line| {
+        line.romanization
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+    }) || preserved_karaoke_has_nonempty_field(
+        lyrics,
+        &["romanization_base64", "romanizationBase64"],
+    )
+}
+
+fn preserved_karaoke_has_nonempty_field(lyrics: &ParsedLyrics, keys: &[&str]) -> bool {
+    let Some(raw_karaoke) = lyrics.raw_karaoke.as_deref() else {
+        return false;
+    };
+    let Ok(preserved) = serde_json::from_str::<serde_json::Value>(raw_karaoke) else {
+        return false;
+    };
+    keys.iter().any(|key| {
+        preserved
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|payload| !payload.trim().is_empty())
+    })
 }
 
 struct LyricsSearchGuard {
@@ -1317,6 +1364,9 @@ fn local_source_candidate_dto(
             .map(|line| line.text.clone())
             .collect(),
         has_synced_lyrics: lyrics.synced,
+        has_word_synced_lyrics: has_word_synced_lyrics(lyrics),
+        has_translation: has_translation(lyrics),
+        has_romanization: has_romanization(lyrics),
     })
 }
 
@@ -1568,17 +1618,17 @@ fn line_dto(line: &LyricLine) -> LyricLineDto {
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_provider_candidates, raw_to_lyric_candidate, LyricSearchTerms, LyricsService,
-        LyricsSourceDto, LYRIC_BATCH_SIZE,
+        candidate_dto, fetch_provider_candidates, raw_to_lyric_candidate, LyricSearchTerms,
+        LyricsService, LyricsSourceDto, LYRIC_BATCH_SIZE,
     };
     use crate::lyrics_provider::{
         HttpMethod, HttpRequest, HttpResponse, HttpTransport, LyricsProviderClient, ProviderError,
         RawKaraokeData, RawLyricCandidate,
     };
     use player_core::{
-        parse_lrc, FileFingerprint, LibraryRepository, LibraryRoot, LyricProvider,
-        LyricsTrackMetadata, MediaLocator, MediaSourceKind, MediaTrackRecord, SourceId,
-        SourceScanState, TrackId, TrackIdentity, TrackMetadata, TrackSummary,
+        parse_lrc, FileFingerprint, LibraryRepository, LibraryRoot, LyricCandidate, LyricFormat,
+        LyricProvider, LyricsTrackMetadata, MediaLocator, MediaSourceKind, MediaTrackRecord,
+        SourceId, SourceScanState, TrackId, TrackIdentity, TrackMetadata, TrackSummary,
     };
     use player_db::Database;
     use std::{
@@ -1960,6 +2010,9 @@ mod tests {
                 "confidence",
                 "durationMs",
                 "hasSyncedLyrics",
+                "hasWordSyncedLyrics",
+                "hasTranslation",
+                "hasRomanization",
                 "id",
                 "previewLines",
                 "provider",
@@ -2731,5 +2784,98 @@ mod tests {
             dto.lines[0].translation.as_deref(),
             Some("才不稀罕當第二呢")
         );
+    }
+
+    #[test]
+    fn candidate_dto_distinguishes_word_synced_line_synced_and_plain_lyrics() {
+        let metadata = LyricsTrackMetadata {
+            title: Some("Title".to_owned()),
+            artist: Some("Artist".to_owned()),
+            album: None,
+            duration_ms: None,
+        };
+        let make_candidate = |format, synced, raw_karaoke: Option<&str>| {
+            let mut lyrics = parse_lrc("[00:01.00]line").expect("fixture LRC");
+            lyrics.format = format;
+            lyrics.synced = synced;
+            lyrics.raw_karaoke = raw_karaoke.map(str::to_owned);
+            LyricCandidate {
+                candidate_id: "candidate-1".to_owned(),
+                provider: LyricProvider::NetEase,
+                provider_track_id: Some("provider-1".to_owned()),
+                title: Some("Title".to_owned()),
+                artist: Some("Artist".to_owned()),
+                album: None,
+                duration_ms: None,
+                lyrics,
+                score: 1.0,
+            }
+        };
+
+        let yrc = candidate_dto(&metadata, &make_candidate(LyricFormat::Yrc, true, None));
+        assert!(yrc.has_synced_lyrics);
+        assert!(yrc.has_word_synced_lyrics);
+
+        let qrc = candidate_dto(&metadata, &make_candidate(LyricFormat::Qrc, false, None));
+        assert!(!qrc.has_synced_lyrics);
+        assert!(qrc.has_word_synced_lyrics);
+
+        let yrc_preserved = candidate_dto(
+            &metadata,
+            &make_candidate(
+                LyricFormat::Lrc,
+                true,
+                Some(r#"{"yrc":"[1000,500](1000,500,0)word"}"#),
+            ),
+        );
+        assert!(yrc_preserved.has_word_synced_lyrics);
+
+        let qrc_preserved = candidate_dto(
+            &metadata,
+            &make_candidate(
+                LyricFormat::Lrc,
+                true,
+                Some(r#"{"qrc_base64":"cXJj","translation_base64":"dHJhbnNsYXRpb24"}"#),
+            ),
+        );
+        assert!(qrc_preserved.has_word_synced_lyrics);
+        assert!(qrc_preserved.has_translation);
+        assert!(!qrc_preserved.has_romanization);
+
+        let qrc_camel_case = candidate_dto(
+            &metadata,
+            &make_candidate(LyricFormat::Lrc, true, Some(r#"{"qrcBase64":"cXJj"}"#)),
+        );
+        assert!(qrc_camel_case.has_word_synced_lyrics);
+
+        let mut parsed_auxiliary = make_candidate(LyricFormat::Lrc, true, None);
+        parsed_auxiliary.lyrics.lines[0].translation = Some("translated line".to_owned());
+        parsed_auxiliary.lyrics.lines[0].romanization = Some("romanized line".to_owned());
+        let parsed_auxiliary = candidate_dto(&metadata, &parsed_auxiliary);
+        assert!(parsed_auxiliary.has_translation);
+        assert!(parsed_auxiliary.has_romanization);
+
+        let line_only = candidate_dto(&metadata, &make_candidate(LyricFormat::Lrc, true, None));
+        assert!(line_only.has_synced_lyrics);
+        assert!(!line_only.has_word_synced_lyrics);
+
+        let auxiliary_only = candidate_dto(
+            &metadata,
+            &make_candidate(
+                LyricFormat::Plain,
+                false,
+                Some(
+                    r#"{"translation_base64":"dHJhbnNsYXRpb24","romanization_base64":"cm9tYQ=="}"#,
+                ),
+            ),
+        );
+        assert!(!auxiliary_only.has_synced_lyrics);
+        assert!(!auxiliary_only.has_word_synced_lyrics);
+        assert!(auxiliary_only.has_translation);
+        assert!(auxiliary_only.has_romanization);
+        let serialized = serde_json::to_value(auxiliary_only).expect("serialize candidate DTO");
+        assert_eq!(serialized["hasWordSyncedLyrics"], false);
+        assert_eq!(serialized["hasTranslation"], true);
+        assert_eq!(serialized["hasRomanization"], true);
     }
 }

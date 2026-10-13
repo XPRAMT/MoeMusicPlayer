@@ -114,6 +114,9 @@
     reasons: ['標題與演出者相符'],
     previewLines: [],
     hasSyncedLyrics: false,
+    hasWordSyncedLyrics: false,
+    hasTranslation: false,
+    hasRomanization: false,
   };
 
   const api = {
