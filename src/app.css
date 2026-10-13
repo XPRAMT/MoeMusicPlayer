@@ -1055,6 +1055,7 @@ input:focus-visible {
 
 .library-section[hidden],
 .artist-section[hidden],
+.artist-detail-section[hidden],
 .playlist-section[hidden],
 .queue-page[hidden] {
   display: none;
