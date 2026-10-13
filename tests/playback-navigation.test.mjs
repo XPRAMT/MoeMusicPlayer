@@ -37,7 +37,7 @@ test('resizable list header separators remain visible without hover', () => {
 });
 
 test('playing a library or playlist item does not change the current page', () => {
-  const libraryPlay = functionSource('async function playTrack(', 'function openNowPlaying(');
+  const libraryPlay = functionSource('async function playTrack(', 'async function loadArtistIndexRowsForNavigation(');
   const playlistPlay = functionSource('async function playPlaylistEntry(', 'async function pickWindowsFolder(');
 
   assert.match(libraryPlay, /invokeCommand\('playback_play'/);
@@ -102,9 +102,28 @@ test('the sidebar playlist group is the single playlist navigation entry and wor
 test('reopening the selected playlist does not reset its retained virtual list', () => {
   const selectPlaylist = functionSource('async function selectPlaylist(', 'function refreshPlaylistEntries(');
   assert.match(selectPlaylist, /const playlistChanged = selectedPlaylistId !== playlistId/);
-  assert.match(selectPlaylist, /activeView = 'playlists'/);
+  assert.match(selectPlaylist, /openPlaylistPage\(\)/);
   assert.match(selectPlaylist, /if \(playlistChanged\)[\s\S]*?playlistListRevision\s*\+=\s*1/);
   assert.doesNotMatch(selectPlaylist, /playlistListRevision\s*\+=\s*1[\s\S]*activeView\s*=/);
+});
+
+test('playlist page keeps one mounted list instance and refreshes only when its selected data changes', () => {
+  const playlistSection = appSource.slice(
+    appSource.indexOf('{#if visitedListViews.playlists}'),
+    appSource.indexOf('{#if visitedListViews.queue}'),
+  );
+  assert.match(playlistSection, /hidden=\{activeView !== 'playlists'\}/);
+  assert.doesNotMatch(playlistSection, /\{#if activeView\s*===\s*'playlists'\}/);
+  assert.doesNotMatch(playlistSection, /\{#key selectedPlaylist\.id\}/);
+  assert.match(playlistEntrySource, /scrollResetKey=\{playlistId\}/);
+
+  const loadPlaylists = functionSource('async function loadPlaylists(', 'async function selectPlaylist(');
+  assert.match(loadPlaylists, /previousPlaylistId !== nextId \|\| previousEntryCount !== nextEntryCount/);
+  assert.match(loadPlaylists, /playlistListRevision\s*\+=\s*1/);
+  assert.doesNotMatch(loadPlaylists, /selectedPlaylistId = nextId;\s*playlistListRevision\s*\+=\s*1/);
+  const openPlaylistPage = functionSource('function openPlaylistPage(', 'function ');
+  assert.match(openPlaylistPage, /visitedListViews\.playlists = true/);
+  assert.match(openPlaylistPage, /activeView = 'playlists'/);
 });
 
 test('Now Playing overlays the retained route without duplicating sync or native playback details', () => {

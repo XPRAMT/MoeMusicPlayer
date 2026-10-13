@@ -159,6 +159,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     gridTemplate={listGridTemplate}
     minContentWidth={listMinWidth}
     className="track-list-viewport playlist-entry-table"
+    scrollResetKey={playlistId}
     rowClassName="track-row virtual-track-row configurable-track-grid playlist-entry-row"
     listName="播放清單"
     onRange={handleRange}

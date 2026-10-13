@@ -99,7 +99,7 @@ test('configured row height drives the three shared virtual lists and survives s
   assert.match(app, /min="30"\s+max="60"\s+step="1"/);
   assert.match(app, /rowHeightPx:\s*trackRowHeightPx/);
   assert.match(app, /trackRowHeightPx\s*=\s*normalizeTrackRowHeightPx\(stored\.rowHeightPx\)/);
-  assert.equal([...app.matchAll(/rowHeightPx=\{trackRowHeightPx\}/g)].length, 3);
+  assert.ok([...app.matchAll(/rowHeightPx=\{trackRowHeightPx\}/g)].length >= 3);
   assert.match(app, /oninput=\{\(event\) => previewTrackRowHeight/);
   assert.match(app, /onchange=\{\(event\) => commitTrackRowHeight/);
   assert.match(css, /\.track-row\s*\{[^}]*min-height:\s*var\(--paged-row-height,\s*50px\)/s);

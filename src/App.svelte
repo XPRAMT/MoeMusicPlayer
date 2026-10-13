@@ -796,7 +796,7 @@
           handleLibrarySyncFinished(event.payload);
           artistIndexRows = null;
           libraryListRevision += 1;
-          if (libraryReady) void loadPlaylists();
+          if (libraryReady) void loadPlaylists(undefined, true);
           if (sourceSyncReady) void loadSources();
         });
       } catch (error) {
@@ -1770,7 +1770,7 @@
         : `${result.sources.length} 個來源已檢查；${completed} 個掃描完整，${attention} 個需要留意；${errorCount} 個項目錯誤。`;
       await loadSources();
       // Playlist-file orphan cleanup may delete sidebar projections during sync.
-      if (libraryReady) await loadPlaylists();
+      if (libraryReady) await loadPlaylists(undefined, true);
     } catch (error) {
       sourceError = getErrorText(error);
     } finally {
@@ -1796,7 +1796,7 @@
     }
   }
 
-  async function loadPlaylists(preferredId?: string): Promise<void> {
+  async function loadPlaylists(preferredId?: string, refreshSelectedEntries = false): Promise<void> {
     if (!libraryReady) return;
     const requestVersion = ++playlistListRequestVersion;
     isLoadingPlaylists = true;
@@ -1804,13 +1804,19 @@
     try {
       const nextPlaylists = await invokeCommand('playlist_list', {});
       if (requestVersion !== playlistListRequestVersion) return;
+      const previousPlaylistId = selectedPlaylistId;
+      const previousEntryCount = playlists.find((playlist) => playlist.id === previousPlaylistId)?.entryCount ?? null;
       playlists = nextPlaylists;
       const requestedId = preferredId ?? selectedPlaylistId;
       const nextId = playlists.some((playlist) => playlist.id === requestedId)
         ? requestedId
         : playlists[0]?.id ?? null;
       selectedPlaylistId = nextId;
-      playlistListRevision += 1;
+      const nextEntryCount = playlists.find((playlist) => playlist.id === nextId)?.entryCount ?? null;
+      if (refreshSelectedEntries || previousPlaylistId !== nextId || previousEntryCount !== nextEntryCount) {
+        playlistTrackCount = null;
+        playlistListRevision += 1;
+      }
     } catch (error) {
       if (requestVersion === playlistListRequestVersion) playlistError = getErrorText(error);
     } finally {
@@ -1821,7 +1827,7 @@
   async function selectPlaylist(playlistId: string): Promise<void> {
     const playlistChanged = selectedPlaylistId !== playlistId;
     selectedPlaylistId = playlistId;
-    activeView = 'playlists';
+    openPlaylistPage();
     if (playlistChanged) {
       playlistTrackCount = null;
       playlistListRevision += 1;
@@ -1830,6 +1836,11 @@
 
   function refreshPlaylistEntries(): void {
     playlistListRevision += 1;
+  }
+
+  function openPlaylistPage(): void {
+    visitedListViews.playlists = true;
+    activeView = 'playlists';
   }
 
   async function playPlaylistEntry(entry: PlaylistEntrySummary, playlistId: string): Promise<void> {
@@ -3212,7 +3223,7 @@
         {playlists}
         {selectedPlaylistId}
         active={activeView === 'playlists'}
-        onOpen={() => (activeView = 'playlists')}
+        onOpen={openPlaylistPage}
         onSelect={selectPlaylist}
       />
     </div>
@@ -3367,22 +3378,20 @@
             {:else if selectedPlaylist}
               <div class="playlist-browser">
                 <section class="playlist-detail" aria-label={selectedPlaylist.name.trim() || '未命名播放清單'}>
-                  {#key selectedPlaylist.id}
-                    <PlaylistEntryList
-                      playlistId={selectedPlaylist.id}
-                      resetKey={playlistListRevision}
-                      {playbackReady}
-                      {isSendingPlaybackCommand}
-                      columns={trackColumnPreferences}
-                      columnWidths={trackColumnWidths}
-                      rowHeightPx={trackRowHeightPx}
-                      livePlayCount={livePlayCount}
-                      currentTrackId={playback?.currentTrack?.id ?? null}
-                      onPlay={playPlaylistEntry}
-                      onColumnResize={handleTrackColumnResize}
-                      onTotalCount={(count) => (playlistTrackCount = count)}
-                    />
-                  {/key}
+                  <PlaylistEntryList
+                    playlistId={selectedPlaylist.id}
+                    resetKey={playlistListRevision}
+                    {playbackReady}
+                    {isSendingPlaybackCommand}
+                    columns={trackColumnPreferences}
+                    columnWidths={trackColumnWidths}
+                    rowHeightPx={trackRowHeightPx}
+                    livePlayCount={livePlayCount}
+                    currentTrackId={playback?.currentTrack?.id ?? null}
+                    onPlay={playPlaylistEntry}
+                    onColumnResize={handleTrackColumnResize}
+                    onTotalCount={(count) => (playlistTrackCount = count)}
+                  />
                 </section>
               </div>
             {:else}
