@@ -74,6 +74,7 @@
   } from './lib/theme';
   import { getBackdropTargetPercent, resolveBackdropContrast } from './lib/backdrop-contrast.js';
   import { splitArtists } from './lib/artist-names.js';
+  import { buildArtistIdentityMappings, findArtistEntryByName, preferredArtistName } from './lib/artist-identities.js';
   import { hideWrappedTrailingTrackSeparators } from './lib/track-field-separators.js';
   import { formatVolume } from './lib/format';
   import { describeOutputFormat } from './lib/output-format.js';
@@ -178,13 +179,16 @@
 
   let activeView = $state<View>('library');
   type RetainedListView = Exclude<View, 'artist-detail' | 'settings'>;
+  type ArtistEntry = ArtistIndexEntry & { displayName: string };
   let visitedListViews = $state<Record<RetainedListView, boolean>>({
     library: true,
     artists: false,
     playlists: false,
     queue: false,
   });
-  let selectedArtist = $state<(ArtistIndexEntry & { displayName: string }) | null>(null);
+  let selectedArtist = $state<ArtistEntry | null>(null);
+  let artistIndexRows = $state<ArtistEntry[] | null>(null);
+  let artistIndexRowsLoad: Promise<ArtistEntry[]> | null = null;
   let nowPlayingReturnView = $state<View>('library');
   let isNowPlayingMounted = $state(false);
   let isNowPlayingOpen = $state(false);
@@ -788,6 +792,7 @@
         });
         unlistenFinished = await listen<LibrarySyncFinishedEvent>('library-sync-finished', (event) => {
           handleLibrarySyncFinished(event.payload);
+          artistIndexRows = null;
           libraryListRevision += 1;
           if (libraryReady) void loadPlaylists();
           if (sourceSyncReady) void loadSources();
@@ -1892,6 +1897,7 @@
     try {
       sources = await invokeCommand('library_set_source_enabled', { sourceId: source.id, enabled });
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
+      artistIndexRows = null;
       libraryTrackCount = null;
       libraryListRevision += 1;
       await loadPlaylists();
@@ -2074,6 +2080,58 @@
       () => invokeCommand('playback_play', { trackId: track.id, queueSource }),
       { refreshQueueList: true },
     );
+  }
+
+  async function loadArtistIndexRowsForNavigation(): Promise<ArtistEntry[]> {
+    if (artistIndexRows) return artistIndexRows;
+    if (artistIndexRowsLoad) return artistIndexRowsLoad;
+    artistIndexRowsLoad = (async () => {
+      const facets = await invokeCommand('library_get_artist_index_facets', {});
+      const [artistIdentities, albumIdentities] = await Promise.all([
+        buildArtistIdentityMappings(facets.artists),
+        buildArtistIdentityMappings(facets.albums),
+      ]);
+      const result = await invokeCommand('library_get_artist_index', {
+        artistIdentities,
+        albumIdentities,
+      });
+      const traditionalByName = new Map(artistIdentities.map((identity) => [identity.name, identity.traditional]));
+      return result.map((entry) => ({
+        ...entry,
+        displayName: preferredArtistName(entry.names, traditionalByName) || entry.artistNames[0] || '',
+      }));
+    })();
+    try {
+      const rows = await artistIndexRowsLoad;
+      artistIndexRows = rows;
+      return rows;
+    } finally {
+      artistIndexRowsLoad = null;
+    }
+  }
+
+  function openArtistEntry(artist: ArtistEntry): void {
+    if (selectedArtist?.key !== artist.key) artistTrackCount = null;
+    selectedArtist = artist;
+    activeView = 'artist-detail';
+  }
+
+  async function openArtistDetailForName(name: string): Promise<void> {
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+    try {
+      const entries = await loadArtistIndexRowsForNavigation();
+      const artist = await findArtistEntryByName(trimmedName, entries);
+      if (!artist) {
+        if (isNowPlayingOpen) await closeNowPlaying();
+        activeView = 'artists';
+        return;
+      }
+      if (isNowPlayingOpen) await closeNowPlaying();
+      openArtistEntry(artist);
+    } catch (error) {
+      console.error(`無法開啟演出者「${trimmedName}」的明細`, error);
+    }
   }
 
   async function fetchArtistPage(request: TrackPageRequest): Promise<TrackPage> {
@@ -3237,19 +3295,16 @@
                 refreshKey={libraryListRevision}
                 rowHeightPx={trackRowHeightPx}
                 onCountChange={(count) => (artistIndexCount = count)}
-                onSelect={(artist) => {
-                  selectedArtist = artist;
-                  artistTrackCount = null;
-                  activeView = 'artist-detail';
-                }}
+                onRowsChange={(rows) => (artistIndexRows = rows)}
+                onSelect={openArtistEntry}
               />
             {/if}
           </section>
         {/if}
-        {#if activeView === 'artist-detail'}
-          <section class="artist-detail-section" aria-labelledby="page-heading">
-            {#if !libraryReady || !selectedArtist}
-              <div class="artist-detail-empty" role="status">{selectedArtist ? showCapabilityDetail(capabilities?.library) : '請從演出者清單選擇一位演出者。'}</div>
+        {#if selectedArtist}
+          <section class="artist-detail-section" aria-labelledby="page-heading" hidden={activeView !== 'artist-detail'}>
+            {#if !libraryReady}
+              <div class="artist-detail-empty" role="status">{showCapabilityDetail(capabilities?.library)}</div>
             {:else}
               {#key selectedArtist.key}
                 <TrackList
@@ -3385,7 +3440,7 @@
                 {#each nowPlayingArtists as artist, index (artist)}
                   <span class="now-playing-artist-unit">
                     {#if index > 0}<span class="now-playing-artist-sep" aria-hidden="true">/</span>{/if}
-                    <button type="button" data-track-field="artist" title={artist} aria-label={`依演出者「${artist}」篩選曲庫`} onclick={() => void openTrackField('artist', artist)}>{artist}</button>
+                    <button type="button" data-track-field="artist" title={artist} aria-label={`開啟演出者「${artist}」明細`} onclick={() => void openArtistDetailForName(artist)}>{artist}</button>
                   </span>
                 {/each}
               {/if}

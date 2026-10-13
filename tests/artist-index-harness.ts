@@ -20,7 +20,10 @@ Object.assign(window, {
     invoke: async (command: string, args?: Record<string, unknown>) => {
       const storedSort = sessionStorage.getItem('artist-list-sort');
       if (command === 'library_get_artist_index_facets') return { artists: [], albums: [] };
-      if (command === 'library_get_artist_index') return artists;
+      if (command === 'library_get_artist_index') {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return artists;
+      }
       if (command === 'settings_get_artist_list_sort') {
         return storedSort ? JSON.parse(storedSort) : { field: 'title', direction: 'asc' };
       }

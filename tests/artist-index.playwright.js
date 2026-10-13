@@ -1,4 +1,5 @@
 async page => {
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
 page.setDefaultTimeout(6000);
 await page.setViewportSize({ width: 1120, height: 720 });
 await page.goto('http://127.0.0.1:1452/tests/artist-index-harness.html');
@@ -44,7 +45,6 @@ const layout = await page.evaluate(() => {
   };
 });
 
-const assert = (condition, message) => { if (!condition) throw new Error(message); };
 assert(layout.searchControlCount === 0, 'artist page should not add a separate search field');
 assert(layout.pageTopPadding === '0px', 'artist list should start directly under the topbar');
 assert(Math.abs(layout.frame.top - layout.topbar.bottom) <= 1, `frame should start at the topbar edge: ${JSON.stringify(layout)}`);
@@ -92,7 +92,8 @@ const detailCountAfter = await detailCount.boundingBox();
 assert(detailCountBefore.height === detailCountAfter.height && detailCountBefore.y === detailCountAfter.y, 'artist detail subtitle should stay in place when count is filled in');
 assert(await page.getByTestId('artist-section').evaluate(element => element.hidden), 'artist index should stay mounted but hidden while viewing detail');
 await page.getByRole('button', { name: '演出者', exact: true }).click();
-await page.getByTestId('artist-detail').waitFor({ state: 'detached' });
+await page.getByTestId('artist-detail').waitFor({ state: 'attached' });
+assert(await page.getByTestId('artist-detail').evaluate(element => element.hidden), 'artist detail should stay mounted but hidden when returning to the index');
 const restoredScrollTop = await viewport.evaluate(element => element.scrollTop);
 const restoredFirstVisibleRow = await page.locator('.paged-virtual-row').first().innerText();
 assert(restoredScrollTop === preservedScrollTop, `artist list scroll position should survive detail navigation: ${preservedScrollTop} -> ${restoredScrollTop}`);

@@ -15,6 +15,20 @@ export async function buildArtistIdentityMappings(names) {
   }));
 }
 
+/**
+ * Resolve a raw ARTIST name to the merged identity already shown in the artist index.
+ * @template {{key:string, artistNames:string[]}} T
+ * @param {string} name
+ * @param {T[]} entries
+ * @returns {Promise<T | null>}
+ */
+export async function findArtistEntryByName(name, entries) {
+  const [identity] = await buildArtistIdentityMappings([name]);
+  if (!identity) return null;
+  return entries.find((entry) => entry.key === identity.key
+    || entry.artistNames.some((variant) => variant.trim().normalize('NFKC').toLowerCase() === name.trim().normalize('NFKC').toLowerCase())) ?? null;
+}
+
 /** @param {{name:string,count:number}[]} names @param {Map<string,string>} traditionalByName */
 export function preferredArtistName(names, traditionalByName) {
   if (names.length === 0) return '';

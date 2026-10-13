@@ -26,6 +26,7 @@
         <ArtistIndex
           refreshKey={0}
           onCountChange={(count) => (artistCount = count)}
+          onRowsChange={() => {}}
           onSelect={(artist) => {
             selectedArtist = artist.displayName;
             artistTrackCount = null;
@@ -34,8 +35,8 @@
           }}
         />
       </section>
-      {#if activeView === 'artist-detail'}
-        <section class="artist-detail-section" data-testid="artist-detail">
+      {#if selectedArtist !== '尚未選擇'}
+        <section class="artist-detail-section" data-testid="artist-detail" hidden={activeView !== 'artist-detail'}>
           <div>演出者．{selectedArtist}</div>
         </section>
       {/if}

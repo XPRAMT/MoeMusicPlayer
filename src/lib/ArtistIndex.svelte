@@ -26,9 +26,10 @@
     rowHeightPx?: number;
     onSelect: (artist: ArtistRow) => void;
     onCountChange: (count: number | null) => void;
+    onRowsChange: (rows: ArtistRow[]) => void;
   }
 
-  let { refreshKey, rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX, onSelect, onCountChange }: Props = $props();
+  let { refreshKey, rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX, onSelect, onCountChange, onRowsChange }: Props = $props();
   let rows = $state<ArtistRow[]>([]);
   let sortField = $state<SortField>('title');
   let sortDirection = $state<'asc' | 'desc'>('asc');
@@ -63,6 +64,7 @@
         ...entry,
         displayName: preferredArtistName(entry.names, traditionalByName) || entry.artistNames[0] || '',
       }));
+      onRowsChange(rows);
       onCountChange(rows.length);
       listRevision += 1;
     } catch (reason) {
