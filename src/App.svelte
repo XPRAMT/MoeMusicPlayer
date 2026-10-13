@@ -3956,7 +3956,7 @@
             <IconArrowsRight size={23} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
-        <button class="control-button navigation-control" type="button" aria-label="上一首" title={playbackControlTooltips.previous} disabled={!playbackNavigationReady || !playback?.canPrevious || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
+        <button class="control-button navigation-control" type="button" aria-label="上一首" title={playbackControlTooltips.previous} disabled={!playbackNavigationReady || (!playback?.canPrevious && (playback?.positionMs ?? 0) <= 3000) || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
           <IconPlayerTrackPrev size={23} stroke={1.7} aria-hidden="true" />
         </button>
         <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} title={playbackControlTooltips.playPause} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>

@@ -22,6 +22,7 @@ test('playback tooltips describe the control action instead of service diagnosti
 test('previous and next tooltips follow their available action', () => {
   assert.match(controls, /title=\{playbackControlTooltips\.previous\}/);
   assert.match(controls, /title=\{playbackControlTooltips\.next\}/);
+  assert.match(controls, /disabled=\{!playbackNavigationReady \|\| \(!playback\?\.canPrevious && \(playback\?\.positionMs \?\? 0\) <= 3000\) \|\| isSendingPlaybackCommand\}/);
   assert.doesNotMatch(controls, /title=\{playback\?\.canPrevious \? '播放佇列上一首'/);
 });
 
@@ -53,9 +54,10 @@ test('play, shuffle, and repeat tooltips follow current state and next action', 
   assert.equal(getPlaybackControlTooltips(null).playPause, '尚未選擇歌曲');
 });
 
-test('previous tooltip matches the three-second restart rule', () => {
+test('previous tooltip follows the three-second restart action even at the queue start', () => {
   const base = { canPrevious: true };
   assert.equal(getPlaybackControlTooltips({ ...base, positionMs: 3000 }).previous, '播放佇列上一首');
   assert.equal(getPlaybackControlTooltips({ ...base, positionMs: 3001 }).previous, '從頭播放目前歌曲');
-  assert.equal(getPlaybackControlTooltips({ canPrevious: false, positionMs: 8000 }).previous, '沒有可播放的上一首');
+  assert.equal(getPlaybackControlTooltips({ canPrevious: false, positionMs: 3000 }).previous, '沒有可播放的上一首');
+  assert.equal(getPlaybackControlTooltips({ canPrevious: false, positionMs: 3001 }).previous, '從頭播放目前歌曲');
 });

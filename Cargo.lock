@@ -2323,6 +2323,7 @@ dependencies = [
  "player-db",
  "player-platform-windows",
  "reqwest 0.12.28",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

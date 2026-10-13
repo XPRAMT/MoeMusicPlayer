@@ -26,11 +26,11 @@ export function getPlaybackControlTooltips(playback) {
   return {
     playPause: isPlaying ? '暫停' : playback?.currentTrack ? '播放' : '尚未選擇歌曲',
     shuffle: playback?.shuffle ? '關閉隨機播放' : '開啟隨機播放',
-    previous: !playback?.canPrevious
-      ? '沒有可播放的上一首'
-      : positionMs > 3000
-        ? '從頭播放目前歌曲'
-        : '播放佇列上一首',
+    previous: positionMs > 3000
+      ? '從頭播放目前歌曲'
+      : playback?.canPrevious
+        ? '播放佇列上一首'
+        : '沒有可播放的上一首',
     next: playback?.canNext ? '播放佇列下一首' : '沒有可播放的下一首',
     repeat: REPEAT_MODE_LABELS[repeatMode] ?? REPEAT_MODE_LABELS.off,
   };

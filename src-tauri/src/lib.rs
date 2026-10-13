@@ -313,6 +313,7 @@ mod album_artwork_responsiveness_tests {
             jpeg,
         )
         .await;
+        album_artwork_cache::close_for_test(&directory);
         fs::remove_dir_all(&directory).expect("remove isolated thumbnail fixture");
     }
 
@@ -347,6 +348,8 @@ mod album_artwork_responsiveness_tests {
                 .expect("legacy cache remains readable in place"),
             jpeg
         );
+        album_artwork_cache::close_for_test(&old_directory);
+        album_artwork_cache::close_for_test(&current_directory);
         fs::remove_dir_all(root).expect("remove isolated namespace fixture");
     }
 }
