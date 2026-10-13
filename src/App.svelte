@@ -3213,8 +3213,8 @@
               />
             {/if}
           </section>
-        {:else if activeView === 'artists'}
-          <section class="artist-section" aria-labelledby="page-heading">
+        {:else if activeView === 'artists' || activeView === 'artist-detail'}
+          <section class="artist-section" aria-labelledby="page-heading" hidden={activeView !== 'artists'}>
             {#if !libraryReady}
               <div class="not-ready-panel" role="status">
                 <div class="not-ready-icon" aria-hidden="true"><IconUsers size={22} stroke={1.6} /></div>
@@ -3233,7 +3233,7 @@
               />
             {/if}
           </section>
-        {:else if activeView === 'artist-detail'}
+          {#if activeView === 'artist-detail'}
           <section class="artist-detail-section" aria-labelledby="page-heading">
             {#if !libraryReady || !selectedArtist}
               <div class="artist-detail-empty" role="status">{selectedArtist ? showCapabilityDetail(capabilities?.library) : '請從演出者清單選擇一位演出者。'}</div>
@@ -3259,6 +3259,7 @@
               {/key}
             {/if}
           </section>
+          {/if}
         {:else if activeView === 'playlists'}
           <section class="playlist-section" aria-labelledby="page-heading">
             {#if playlistError}

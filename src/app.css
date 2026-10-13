@@ -1053,6 +1053,10 @@ input:focus-visible {
   flex-direction: column;
 }
 
+.artist-section[hidden] {
+  display: none;
+}
+
 .library-section > .section-heading,
 .playlist-section > .section-heading,
 .queue-page > .section-heading {

@@ -44,8 +44,20 @@ await page.getByRole('button', { name: '演出者', exact: true }).click();
 const firstRowAfter = await page.locator('.paged-virtual-row').first().innerText();
 assert(firstRowAfter !== firstRowBefore, 'shared header renderer should sort artist rows');
 
+const viewport = page.locator('.paged-virtual-viewport');
+await viewport.evaluate(element => { element.scrollTop = 1200; element.dispatchEvent(new Event('scroll')); });
+const preservedScrollTop = await viewport.evaluate(element => element.scrollTop);
+const preservedFirstVisibleRow = await page.locator('.paged-virtual-row').first().innerText();
 await page.locator('.paged-virtual-row').first().click();
 assert(await page.getByTestId('selected-artist').innerText() !== '尚未選擇');
+await page.getByTestId('artist-detail').waitFor();
+assert(await page.getByTestId('artist-section').evaluate(element => element.hidden), 'artist index should stay mounted but hidden while viewing detail');
+await page.getByRole('button', { name: '演出者', exact: true }).click();
+await page.getByTestId('artist-detail').waitFor({ state: 'detached' });
+const restoredScrollTop = await viewport.evaluate(element => element.scrollTop);
+const restoredFirstVisibleRow = await page.locator('.paged-virtual-row').first().innerText();
+assert(restoredScrollTop === preservedScrollTop, `artist list scroll position should survive detail navigation: ${preservedScrollTop} -> ${restoredScrollTop}`);
+assert(restoredFirstVisibleRow === preservedFirstVisibleRow, 'artist sort and visible rows should survive detail navigation');
 
-return { ...layout, artistCount: await page.getByTestId('artist-count').innerText(), firstRowBefore, firstRowAfter, selectedArtist: await page.getByTestId('selected-artist').innerText() };
+return { ...layout, artistCount: await page.getByTestId('artist-count').innerText(), firstRowBefore, firstRowAfter, preservedScrollTop, restoredScrollTop, preservedFirstVisibleRow, restoredFirstVisibleRow, selectedArtist: await page.getByTestId('selected-artist').innerText() };
 }
