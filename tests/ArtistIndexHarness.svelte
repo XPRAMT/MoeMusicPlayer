@@ -13,7 +13,7 @@
     {:else}
       <div>演出者</div>
     {/if}
-    {#if artistCount !== null}<p class="page-title-count" data-testid="artist-count">{artistCount.toLocaleString()} 位演出者</p>{/if}
+    <p class="page-title-count" data-testid="artist-count">{artistCount?.toLocaleString() ?? '—'} 位演出者</p>
   </header>
   <div class="page-scroll is-list-page" data-testid="page-scroll">
     <div class="page-content is-list-page wide-list-page" data-testid="page-content">

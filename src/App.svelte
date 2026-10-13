@@ -410,12 +410,10 @@
   );
   const pageTrackCountLabel = $derived.by(() => {
     if (activeView === 'library') {
-      if (libraryTrackCount === null) return null;
-      return `${libraryTrackCount.toLocaleString()} 首曲目`;
+      return `${libraryTrackCount?.toLocaleString() ?? '—'} 首曲目`;
     }
     if (activeView === 'artists') {
-      if (artistIndexCount === null) return null;
-      return `${artistIndexCount.toLocaleString()} 位演出者`;
+      return `${artistIndexCount?.toLocaleString() ?? '—'} 位演出者`;
     }
     if (activeView === 'playlists') {
       const count = playlistTrackCount ?? selectedPlaylist?.entryCount ?? null;

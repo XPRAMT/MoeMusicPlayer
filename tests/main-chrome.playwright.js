@@ -27,9 +27,14 @@ async page => {
   const libraryTitle = await page.locator('#page-heading').innerText();
   assert(libraryTitle === '我的曲庫', 'library top bar title: ' + libraryTitle);
   assert(await page.locator('.track-list-count').count() === 0, 'library still shows the bottom range label');
-  await page.waitForSelector('.page-title-count');
+  await page.waitForFunction(() => document.querySelector('.page-title-count')?.textContent === '— 首曲目');
+  const titleTopWhileCounting = (await page.locator('#page-heading').boundingBox()).y;
+  assert(await page.locator('.page-title-count').innerText() === '— 首曲目', 'library count placeholder should be visible while loading');
+  await page.waitForFunction(() => /^\d[\d,]* 首曲目$/.test(document.querySelector('.page-title-count')?.textContent ?? ''));
   const libraryCount = await page.locator('.page-title-count').innerText();
   assert(/^\d[\d,]* 首曲目$/.test(libraryCount), 'library top-bar track count: ' + libraryCount);
+  const titleTopAfterCount = (await page.locator('#page-heading').boundingBox()).y;
+  assert(Math.abs(titleTopAfterCount - titleTopWhileCounting) <= 0.5, 'library title shifted when the count became available');
   assert(await page.locator('.page-scroll.is-list-page').count() === 1, 'library missing list-page scroll class');
   const listFlush = await page.evaluate(() => {
     const workspace = document.querySelector('.workspace');

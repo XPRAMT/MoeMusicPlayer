@@ -40,6 +40,7 @@
   let nextCallbackId = 0;
   const callbacks = new Map();
   let activeVolumeCommands = 0;
+  let delayFirstLibraryPage = true;
   let storedAppearance = JSON.parse(localStorage.getItem('__appearancePreferences') || 'null') ?? {
   backgroundBlurPx: 20,
   backgroundOpacityPercent: 40,
@@ -229,6 +230,10 @@
         case 'library_sync':
           return { sources: [] };
         case 'library_get_page': {
+          if (delayFirstLibraryPage) {
+            delayFirstLibraryPage = false;
+            await delay(150);
+          }
           volumeHarness.libraryRequests.push(clone(args));
           let matches = libraryTracks;
           if (args.fieldFilter) {

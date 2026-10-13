@@ -4,9 +4,15 @@ await page.setViewportSize({ width: 1120, height: 720 });
 await page.goto('http://127.0.0.1:1452/tests/artist-index-harness.html');
 await page.evaluate(() => sessionStorage.removeItem('artist-list-sort'));
 await page.reload();
+const artistCountLabel = page.getByTestId('artist-count');
+await artistCountLabel.waitFor();
+assert(await artistCountLabel.innerText() === '— 位演出者', 'artist count placeholder should be visible while loading');
+const countLabelBefore = await artistCountLabel.boundingBox();
 await page.getByRole('grid', { name: /演出者統計/ }).waitFor();
 await page.getByText('Artist 001', { exact: true }).first().waitFor();
 await page.getByTestId('artist-count').getByText('80 位演出者', { exact: true }).waitFor();
+const countLabelAfter = await artistCountLabel.boundingBox();
+assert(countLabelBefore.height === countLabelAfter.height && countLabelBefore.y === countLabelAfter.y, 'artist subtitle should stay in place when count is filled in');
 
 const layout = await page.evaluate(() => {
   const topbar = document.querySelector('[data-testid="topbar"]');
