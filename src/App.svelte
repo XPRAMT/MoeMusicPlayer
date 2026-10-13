@@ -74,6 +74,7 @@
   import { getBackdropTargetPercent, resolveBackdropContrast } from './lib/backdrop-contrast.js';
   import { splitArtists } from './lib/artist-names.js';
   import { buildArtistIdentityMappings, findArtistEntryByName, preferredArtistName } from './lib/artist-identities.js';
+  import { readDetailNavigationRoute, withDetailNavigationRoute } from './lib/detail-navigation-history.js';
   import { hideWrappedTrailingTrackSeparators } from './lib/track-field-separators.js';
   import { formatVolume } from './lib/format';
   import { describeOutputFormat } from './lib/output-format.js';
@@ -191,6 +192,7 @@
   let rememberedArtistView = $state<ArtistSectionView>('artists');
   let artistIndexRows = $state<ArtistEntry[] | null>(null);
   let artistIndexRowsLoad: Promise<ArtistEntry[]> | null = null;
+  let detailHistoryRestoreRevision = 0;
   let keepAlbumIndexForDetail = $state(false);
   let selectedAlbum = $state<AlbumEntry | null>(null);
   let rememberedAlbumView = $state<'albums' | 'album-detail'>('albums');
@@ -782,6 +784,7 @@
       applyAndroidInsets((event as CustomEvent<AndroidWindowInsets>).detail);
     };
     window.addEventListener('resize', updateTrackHeaderTextOffset);
+    window.addEventListener('popstate', handleDetailHistoryPopState);
     window.addEventListener('moe:android-insets', handleAndroidInsets);
     window.addEventListener('keydown', handleShortcutKeydown, true);
     window.addEventListener('mousedown', handleShortcutMouseDown, true);
@@ -861,6 +864,7 @@
     return () => {
       disposed = true;
       window.removeEventListener('resize', updateTrackHeaderTextOffset);
+      window.removeEventListener('popstate', handleDetailHistoryPopState);
       window.removeEventListener('moe:android-insets', handleAndroidInsets);
       unlistenSyncProgress?.();
       unlistenSyncFinished?.();
@@ -2266,7 +2270,81 @@
     }
   }
 
+  function currentDetailNavigationRoute(): { view: View; artistKey?: string; albumKey?: string; preserveIndex?: boolean } {
+    if (activeView === 'artist-detail' && selectedArtist) {
+      return { view: activeView, artistKey: selectedArtist.key, preserveIndex: keepArtistIndexForDetail };
+    }
+    if (activeView === 'album-detail' && selectedAlbum) {
+      return { view: activeView, albumKey: selectedAlbum.key, preserveIndex: keepAlbumIndexForDetail };
+    }
+    return { view: activeView };
+  }
+
+  function pushDetailNavigationRoute(route: { view: View; artistKey?: string; albumKey?: string; preserveIndex?: boolean }): void {
+    // Save the route currently visible underneath this detail in the current
+    // entry, then add the detail as a same-document browser history entry.
+    window.history.replaceState(
+      withDetailNavigationRoute(window.history.state, currentDetailNavigationRoute()),
+      '',
+    );
+    window.history.pushState(withDetailNavigationRoute(window.history.state, route), '');
+  }
+
+  async function restoreDetailNavigationRoute(
+    route: { view: View; artistKey?: string; albumKey?: string; preserveIndex?: boolean },
+  ): Promise<void> {
+    const revision = ++detailHistoryRestoreRevision;
+    if (route.view === 'artist-detail' && route.artistKey) {
+      try {
+        const artist = (await loadArtistIndexRowsForNavigation()).find((row) => row.key === route.artistKey);
+        if (revision !== detailHistoryRestoreRevision) return;
+        if (artist) {
+          selectedArtist = artist;
+          keepArtistIndexForDetail = route.preserveIndex ?? false;
+          rememberedArtistView = 'artist-detail';
+          activeView = 'artist-detail';
+          return;
+        }
+      } catch (error) {
+        console.error('無法還原瀏覽歷史中的演出者明細', error);
+      }
+      if (revision !== detailHistoryRestoreRevision) return;
+      rememberedArtistView = 'artists';
+      activeView = 'artists';
+      return;
+    }
+    if (route.view === 'album-detail' && route.albumKey) {
+      try {
+        const album = (await loadAlbumIndexRowsForNavigation()).find((row) => row.key === route.albumKey);
+        if (revision !== detailHistoryRestoreRevision) return;
+        if (album) {
+          selectedAlbum = album;
+          keepAlbumIndexForDetail = route.preserveIndex ?? false;
+          rememberedAlbumView = 'album-detail';
+          activeView = 'album-detail';
+          return;
+        }
+      } catch (error) {
+        console.error('無法還原瀏覽歷史中的專輯明細', error);
+      }
+      if (revision !== detailHistoryRestoreRevision) return;
+      rememberedAlbumView = 'albums';
+      activeView = 'albums';
+      return;
+    }
+
+    if (route.view === 'artists') rememberedArtistView = 'artists';
+    if (route.view === 'albums') rememberedAlbumView = 'albums';
+    activeView = route.view;
+  }
+
+  function handleDetailHistoryPopState(event: PopStateEvent): void {
+    const route = readDetailNavigationRoute(event.state);
+    if (route) void restoreDetailNavigationRoute(route);
+  }
+
   function openArtistEntry(artist: ArtistEntry, preserveIndex = false): void {
+    pushDetailNavigationRoute({ view: 'artist-detail', artistKey: artist.key, preserveIndex });
     if (selectedArtist?.key !== artist.key) artistTrackCount = null;
     selectedArtist = artist;
     keepArtistIndexForDetail = preserveIndex;
@@ -2279,6 +2357,11 @@
   }
 
   function navigateToArtistIndex(): void {
+    const route = readDetailNavigationRoute(window.history.state);
+    if (route?.view === 'artist-detail' && route.artistKey === selectedArtist?.key) {
+      window.history.back();
+      return;
+    }
     rememberedArtistView = 'artists';
     activeView = 'artists';
   }
@@ -2300,6 +2383,7 @@
   }
 
   function openAlbumEntry(album: AlbumEntry, preserveIndex = false): void {
+    pushDetailNavigationRoute({ view: 'album-detail', albumKey: album.key, preserveIndex });
     if (selectedAlbum?.key !== album.key) albumTrackCount = null;
     selectedAlbum = album;
     keepAlbumIndexForDetail = preserveIndex;
@@ -2312,6 +2396,11 @@
   }
 
   function navigateToAlbumIndex(): void {
+    const route = readDetailNavigationRoute(window.history.state);
+    if (route?.view === 'album-detail' && route.albumKey === selectedAlbum?.key) {
+      window.history.back();
+      return;
+    }
     rememberedAlbumView = 'albums';
     activeView = 'albums';
   }
