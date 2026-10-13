@@ -1965,6 +1965,12 @@ input:focus-visible {
   grid-template-rows: minmax(0, 1fr);
 }
 
+.now-playing-card.artwork-hidden {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+}
+
 .now-playing-card.lyrics-hidden .now-playing-lyrics {
   display: none;
 }
@@ -4439,6 +4445,12 @@ input:focus-visible {
 
   .now-playing-view .now-playing-card.lyrics-hidden {
     grid-template-rows: minmax(0, 1fr);
+  }
+
+  .now-playing-view .now-playing-card.artwork-hidden {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
   }
 
   .now-playing-view .now-playing-artwork {

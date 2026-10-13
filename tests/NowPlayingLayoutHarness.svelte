@@ -61,6 +61,7 @@
     setTrackId: (trackId: string) => Promise<void>;
     setTrackInfo: (info: { artists: string[]; album: string; title: string }) => Promise<void>;
     setArtworkVariant: (variant: 'square' | 'portrait' | 'landscape') => Promise<void>;
+    setArtworkVisible: (visible: boolean) => Promise<void>;
     snapshot: () => LayoutSnapshot;
     scrollLyrics: () => Promise<boolean>;
     attemptOuterScroll: () => Promise<number>;
@@ -76,6 +77,7 @@
   let lyricsRemoved = $state(false);
   let lyricsTopbarStatus = $state<LyricsTopbarStatus | null>(null);
   let artworkVariant = $state<'square' | 'portrait' | 'landscape'>('landscape');
+  let artworkVisible = $state(true);
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   let coverStageElement: HTMLDivElement;
 
@@ -116,6 +118,11 @@
     const image = coverStageElement.querySelector('img');
     if (image && !image.complete) await new Promise<void>((resolve) => image.addEventListener('load', () => resolve(), { once: true }));
     updateCoverFrame();
+  }
+
+  async function setArtworkVisible(visible: boolean): Promise<void> {
+    artworkVisible = visible;
+    await tick();
   }
 
   function makeLyrics(trackId: string): TrackLyrics {
@@ -314,7 +321,7 @@
   }
 
   $effect(() => {
-      window.nowPlayingLayoutHarness = { setLayout, setTrackId, setTrackInfo, setArtworkVariant, snapshot, scrollLyrics, attemptOuterScroll };
+      window.nowPlayingLayoutHarness = { setLayout, setTrackId, setTrackInfo, setArtworkVariant, setArtworkVisible, snapshot, scrollLyrics, attemptOuterScroll };
   });
 </script>
 
@@ -365,7 +372,7 @@
       <div class="now-playing-overlay-content">
         <section class="now-playing-view" aria-label="正在播放版面" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}>
           <NowPlayingLayoutSwitch {layout} variant="compact" onChange={setLayout} />
-          <NowPlayingArrangement {layout} lyricsVisible={!lyricsRemoved}>
+          <NowPlayingArrangement {layout} lyricsVisible={!lyricsRemoved} {artworkVisible}>
             {#snippet artwork()}
               <div
                 bind:this={coverStageElement}

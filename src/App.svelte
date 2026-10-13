@@ -496,7 +496,7 @@
     const pageBackgroundHex = themePreferences.colorMode === 'autoBackgroundOpacity'
       ? (themePreferences.backgroundOpacityTextColor === 'white' ? '#000000' : '#FFFFFF')
       : themePreferences.backgroundHex;
-    const contrastBackgroundHex = isNowPlayingOpen
+    const contrastBackgroundHex = isNowPlayingOpen && activeArtwork.status === 'ready'
       ? (nowPlayingContrastBackgroundHex ?? pageBackgroundHex)
       : (mainContrastBackgroundHex ?? pageBackgroundHex);
     applyTheme(document.documentElement, themePreferences, { contrastBackgroundHex, pageBackgroundHex });
@@ -3258,11 +3258,9 @@
       <img src={effectiveMainBackgroundUrl} alt="" />
     </div>
   {/if}
-  {#if isNowPlayingOpen}
+  {#if isNowPlayingOpen && activeArtwork.status === 'ready' && activeArtwork.objectUrl}
     <div class="now-playing-backdrop" data-testid="now-playing-backdrop" aria-hidden="true">
-      {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
-        <img src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
-      {/if}
+      <img src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
     </div>
   {/if}
   <aside class="sidebar" aria-label="主要導覽" inert={isNowPlayingOpen}>
@@ -3687,7 +3685,7 @@
       <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body" inert={isQuickSettingsOpen}>
         <div class="now-playing-overlay-content">
           <section class="now-playing-view" aria-label="正在播放" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}>
-            <NowPlayingArrangement layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved}>
+            <NowPlayingArrangement layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved} artworkVisible={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
               {#snippet artwork()}
                 <div
                   bind:this={coverStageElement}
