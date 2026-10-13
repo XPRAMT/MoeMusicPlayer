@@ -237,14 +237,6 @@
 </div>
 
 <style>
-  .track-list-shell {
-    display: flex;
-    min-width: 0;
-    min-height: 0;
-    flex: 1 1 auto;
-    flex-direction: column;
-  }
-
   :global(.track-list-viewport) {
     position: relative;
     width: 100%;
@@ -269,31 +261,4 @@
     min-height: var(--paged-row-height, 50px);
   }
 
-  .track-list-error,
-  .track-list-empty {
-    color: var(--muted);
-    font-size: var(--font-body);
-  }
-
-  .track-list-error {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin: 0 0 10px;
-    padding: 10px 12px;
-    border: 1px solid color-mix(in srgb, var(--status-danger) 40%, transparent);
-    border-radius: 9px;
-    color: var(--status-danger);
-    background: color-mix(in srgb, var(--status-danger) 12%, transparent);
-  }
-
-  .track-list-error .text-button {
-    flex: 0 0 auto;
-  }
-
-  .track-list-empty {
-    padding: 28px 16px;
-    text-align: center;
-  }
 </style>

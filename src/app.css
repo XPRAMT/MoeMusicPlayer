@@ -1132,8 +1132,9 @@ input:focus-visible {
   padding: clamp(16px, 2.5vh, 28px) 0 0;
 }
 
-/* Library / playlist / queue have no page chrome above the list; flush to the topbar. */
+/* List pages start directly below the topbar. */
 .page-content.wide-list-page:has(> .library-section),
+.page-content.wide-list-page:has(> .artist-section),
 .page-content.wide-list-page:has(> .artist-detail-section),
 .page-content.wide-list-page:has(> .queue-page),
 .page-content.wide-list-page:has(> .playlist-section) {
@@ -1563,6 +1564,40 @@ input:focus-visible {
   border: 1px solid var(--line);
   border-radius: 11px;
   background: rgba(var(--text-rgb), 0.012);
+}
+
+.track-list-shell {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.track-list-error,
+.track-list-empty {
+  color: var(--muted);
+  font-size: var(--font-body);
+}
+
+.track-list-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--status-danger) 40%, transparent);
+  border-radius: 9px;
+  color: var(--status-danger);
+  background: color-mix(in srgb, var(--status-danger) 12%, transparent);
+}
+
+.track-list-error .text-button { flex: 0 0 auto; }
+
+.track-list-empty {
+  padding: 28px 16px;
+  text-align: center;
 }
 
 .track-table-head,
@@ -4156,6 +4191,7 @@ input:focus-visible {
   .track-row { min-height: var(--paged-row-height, 50px); }
   .page-content.wide-list-page { padding: 16px 0 0; }
   .page-content.wide-list-page:has(> .library-section),
+  .page-content.wide-list-page:has(> .artist-section),
   .page-content.wide-list-page:has(> .artist-detail-section),
   .page-content.wide-list-page:has(> .queue-page),
   .page-content.wide-list-page:has(> .playlist-section) { padding-top: 0; }
