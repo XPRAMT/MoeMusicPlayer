@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getErrorText, invokeCommand, type ArtistIndexEntry } from './ipc';
+  import { getErrorText, invokeCommand, type ArtistIndexEntry, type ArtistListSort } from './ipc';
   import { buildArtistIdentityMappings, preferredArtistName } from './artist-identities.js';
   import { DEFAULT_TRACK_ROW_HEIGHT_PX } from './track-columns.js';
   import { formatDuration } from './format';
@@ -35,6 +35,7 @@
   let error = $state<string | null>(null);
   let requestRevision = 0;
   let listRevision = $state(0);
+  let sortSaveQueue: Promise<void> = Promise.resolve();
 
   const traditionalByName = new Map<string, string>();
 
@@ -80,6 +81,28 @@
       sortDirection = field === 'title' ? 'asc' : 'desc';
     }
     listRevision += 1;
+    persistSort({ field: sortField, direction: sortDirection });
+  }
+
+  function persistSort(preference: ArtistListSort): void {
+    sortSaveQueue = sortSaveQueue
+      .catch(() => undefined)
+      .then(() => invokeCommand('settings_set_artist_list_sort', { preference }))
+      .then(() => undefined)
+      .catch((reason: unknown) => {
+        console.error('無法保存演出者清單排序方式', reason);
+      });
+  }
+
+  async function initialize(): Promise<void> {
+    try {
+      const preference = await invokeCommand('settings_get_artist_list_sort', {});
+      sortField = preference.field;
+      sortDirection = preference.direction;
+    } catch (reason) {
+      console.error('無法讀取演出者清單排序方式，使用預設排序', reason);
+    }
+    await load();
   }
 
   function sortValue(row: ArtistRow, field: SortField): string | number {
@@ -97,7 +120,7 @@
     return sortDirection === 'asc' ? compared : -compared;
   }));
 
-  onMount(() => { void load(); });
+  onMount(() => { void initialize(); });
   $effect(() => {
     const current = refreshKey;
     if (current > 0) void load();

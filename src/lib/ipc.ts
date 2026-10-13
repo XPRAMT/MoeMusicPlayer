@@ -269,6 +269,13 @@ export interface ArtistIndexEntry {
   playedMs: number;
 }
 
+export type ArtistListSortField = 'title' | 'trackCount' | 'albumCount' | 'duration';
+export type ArtistListSortDirection = 'asc' | 'desc';
+export interface ArtistListSort {
+  field: ArtistListSortField;
+  direction: ArtistListSortDirection;
+}
+
 export interface TrackFieldFilter {
   field: 'title' | 'artist' | 'album';
   value: string;
@@ -529,6 +536,14 @@ interface IpcContract {
   settings_set_track_list_columns: {
     args: { preferences: TrackListColumnSettings };
     result: TrackListColumnSettings;
+  };
+  settings_get_artist_list_sort: {
+    args: Record<string, never>;
+    result: ArtistListSort;
+  };
+  settings_set_artist_list_sort: {
+    args: { preference: ArtistListSort };
+    result: ArtistListSort;
   };
   settings_get_now_playing_layout: {
     args: Record<string, never>;

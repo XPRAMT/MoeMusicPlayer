@@ -2,6 +2,8 @@ async page => {
 page.setDefaultTimeout(6000);
 await page.setViewportSize({ width: 1120, height: 720 });
 await page.goto('http://127.0.0.1:1452/tests/artist-index-harness.html');
+await page.evaluate(() => sessionStorage.removeItem('artist-list-sort'));
+await page.reload();
 await page.getByRole('grid', { name: /演出者統計/ }).waitFor();
 await page.getByText('Artist 001', { exact: true }).first().waitFor();
 await page.getByTestId('artist-count').getByText('80 位演出者', { exact: true }).waitFor();
@@ -43,12 +45,22 @@ const firstRowBefore = await page.locator('.paged-virtual-row').first().innerTex
 await page.getByRole('button', { name: '演出者', exact: true }).click();
 const firstRowAfter = await page.locator('.paged-virtual-row').first().innerText();
 assert(firstRowAfter !== firstRowBefore, 'shared header renderer should sort artist rows');
+assert(firstRowAfter.includes('Artist 080'), 'clicking the active title sort should reverse its order');
 
 const viewport = page.locator('.paged-virtual-viewport');
 await viewport.evaluate(element => { element.scrollTop = 1200; element.dispatchEvent(new Event('scroll')); });
 const preservedScrollTop = await viewport.evaluate(element => element.scrollTop);
 const preservedFirstVisibleRow = await page.locator('.paged-virtual-row').first().innerText();
-await page.locator('.paged-virtual-row').first().click();
+const visibleRowIndex = await page.locator('.paged-virtual-row').evaluateAll((rows, selector) => {
+  const viewport = document.querySelector(selector);
+  const viewportRect = viewport.getBoundingClientRect();
+  return rows.findIndex(row => {
+    const rect = row.getBoundingClientRect();
+    return rect.top >= viewportRect.top && rect.bottom <= viewportRect.bottom;
+  });
+}, '.paged-virtual-viewport');
+assert(visibleRowIndex >= 0, 'a fully visible artist row should be available to open its detail page');
+await page.locator('.paged-virtual-row').nth(visibleRowIndex).click();
 assert(await page.getByTestId('selected-artist').innerText() !== '尚未選擇');
 await page.getByTestId('artist-detail').waitFor();
 assert(await page.getByTestId('artist-section').evaluate(element => element.hidden), 'artist index should stay mounted but hidden while viewing detail');
@@ -59,5 +71,11 @@ const restoredFirstVisibleRow = await page.locator('.paged-virtual-row').first()
 assert(restoredScrollTop === preservedScrollTop, `artist list scroll position should survive detail navigation: ${preservedScrollTop} -> ${restoredScrollTop}`);
 assert(restoredFirstVisibleRow === preservedFirstVisibleRow, 'artist sort and visible rows should survive detail navigation');
 
-return { ...layout, artistCount: await page.getByTestId('artist-count').innerText(), firstRowBefore, firstRowAfter, preservedScrollTop, restoredScrollTop, preservedFirstVisibleRow, restoredFirstVisibleRow, selectedArtist: await page.getByTestId('selected-artist').innerText() };
+await page.reload();
+await page.getByRole('grid', { name: /演出者統計/ }).waitFor();
+await page.getByText('Artist 080', { exact: true }).first().waitFor();
+const restoredSortAfterRestart = await page.locator('.paged-virtual-row').first().innerText();
+assert(restoredSortAfterRestart.includes('Artist 080'), 'artist sort field and direction should restore after app startup');
+
+return { ...layout, artistCount: await page.getByTestId('artist-count').innerText(), firstRowBefore, firstRowAfter, preservedScrollTop, restoredScrollTop, preservedFirstVisibleRow, restoredFirstVisibleRow, restoredSortAfterRestart, selectedArtist: await page.getByTestId('selected-artist').innerText() };
 }

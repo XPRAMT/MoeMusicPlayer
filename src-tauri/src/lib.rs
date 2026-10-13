@@ -54,7 +54,7 @@ use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 pub mod updater;
 use settings::{
-    clamp_window_geometry_to_monitors, AppSettings, BackgroundOpacityTextColor,
+    clamp_window_geometry_to_monitors, AppSettings, ArtistListSort, BackgroundOpacityTextColor,
     ExcludedFolderEntry, LyricsPreferences, MainBackgroundMode, NowPlayingAppearancePreferences,
     NowPlayingLayout, RepeatMode, ResamplingMode, SettingsStore, SlideshowOrder, SourceEntry,
     SourceEntryKind, ThemeColorMode, ThemeSettings, TrackListColumnSettings, WindowGeometry,
@@ -5019,6 +5019,30 @@ fn settings_set_track_list_columns(
 }
 
 #[tauri::command]
+fn settings_get_artist_list_sort(state: State<'_, AppState>) -> Result<ArtistListSort, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.artist_list_sort)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_set_artist_list_sort(
+    state: State<'_, AppState>,
+    preference: ArtistListSort,
+) -> Result<ArtistListSort, String> {
+    state
+        .settings
+        .update(|settings| {
+            settings.artist_list_sort = preference;
+            Ok(())
+        })
+        .map(|settings| settings.artist_list_sort)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn settings_get_now_playing_layout(state: State<'_, AppState>) -> Result<NowPlayingLayout, String> {
     state
         .settings
@@ -9080,6 +9104,8 @@ pub fn run() {
             settings_set_now_playing_appearance_preferences,
             settings_get_track_list_columns,
             settings_set_track_list_columns,
+            settings_get_artist_list_sort,
+            settings_set_artist_list_sort,
             settings_get_now_playing_layout,
             settings_set_now_playing_layout,
             settings_get_resampling_mode,

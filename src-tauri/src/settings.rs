@@ -398,6 +398,39 @@ pub struct TrackListColumnSettings {
     pub row_height_px: u8,
 }
 
+/// Persisted sort selection for the artist index list.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistListSort {
+    pub field: ArtistListSortField,
+    pub direction: ArtistListSortDirection,
+}
+
+impl Default for ArtistListSort {
+    fn default() -> Self {
+        Self {
+            field: ArtistListSortField::Title,
+            direction: ArtistListSortDirection::Asc,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArtistListSortField {
+    Title,
+    TrackCount,
+    AlbumCount,
+    Duration,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArtistListSortDirection {
+    Asc,
+    Desc,
+}
+
 fn default_track_row_height_px() -> u8 {
     50
 }
@@ -894,6 +927,9 @@ pub struct AppSettings {
     pub shuffle: bool,
     pub repeat_mode: RepeatMode,
     pub track_list_columns: TrackListColumnSettings,
+    /// Sort field and direction for the artist index page.
+    #[serde(default)]
+    pub artist_list_sort: ArtistListSort,
     pub now_playing_layout: NowPlayingLayout,
     pub now_playing_appearance_preferences: NowPlayingAppearancePreferences,
     /// Windows playback sample-rate conversion (schema 7).
@@ -926,6 +962,7 @@ impl Default for AppSettings {
             shuffle: false,
             repeat_mode: RepeatMode::Off,
             track_list_columns: TrackListColumnSettings::default(),
+            artist_list_sort: ArtistListSort::default(),
             now_playing_layout: NowPlayingLayout::A,
             now_playing_appearance_preferences: NowPlayingAppearancePreferences::default(),
             resampling_mode: ResamplingMode::default(),
@@ -1349,6 +1386,7 @@ struct RawSettings {
     shuffle: Option<bool>,
     repeat_mode: Option<RepeatMode>,
     track_list_columns: Option<TrackListColumnSettings>,
+    artist_list_sort: Option<ArtistListSort>,
     now_playing_layout: Option<NowPlayingLayout>,
     now_playing_appearance_preferences: Option<NowPlayingAppearancePreferences>,
     resampling_mode: Option<serde_json::Value>,
@@ -1390,6 +1428,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         shuffle: raw.shuffle.unwrap_or(false),
         repeat_mode: raw.repeat_mode.unwrap_or(RepeatMode::Off),
         track_list_columns: repair_track_list_columns(raw.track_list_columns.unwrap_or_default()),
+        artist_list_sort: raw.artist_list_sort.unwrap_or_default(),
         now_playing_layout: raw.now_playing_layout.unwrap_or(NowPlayingLayout::A),
         now_playing_appearance_preferences: raw
             .now_playing_appearance_preferences
@@ -2005,6 +2044,26 @@ mod tests {
         assert_eq!(json["sources"][0]["kind"]["path"]["encoding"], "utf8");
         let decoded: AppSettings = serde_json::from_value(json).expect("deserialize settings");
         assert_eq!(decoded, settings);
+    }
+
+    #[test]
+    fn artist_list_sort_is_persisted_and_legacy_settings_default_to_title_ascending() {
+        let mut settings = AppSettings::default();
+        settings.artist_list_sort = ArtistListSort {
+            field: ArtistListSortField::Duration,
+            direction: ArtistListSortDirection::Desc,
+        };
+        let mut json = serde_json::to_value(&settings).expect("serialize settings");
+        assert_eq!(json["artistListSort"]["field"], "duration");
+        assert_eq!(json["artistListSort"]["direction"], "desc");
+        let decoded: AppSettings = serde_json::from_value(json.clone()).expect("restore settings");
+        assert_eq!(decoded.artist_list_sort, settings.artist_list_sort);
+
+        json.as_object_mut()
+            .expect("settings object")
+            .remove("artistListSort");
+        let legacy: AppSettings = serde_json::from_value(json).expect("load old settings");
+        assert_eq!(legacy.artist_list_sort, ArtistListSort::default());
     }
 
     #[test]
