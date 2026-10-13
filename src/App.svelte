@@ -3241,8 +3241,10 @@
                 <button type="button" data-track-field="artist" disabled title="沒有演出者分類資料" aria-label="沒有演出者分類資料">—</button>
               {:else}
                 {#each nowPlayingArtists as artist, index (artist)}
-                  {#if index > 0}<span class="now-playing-artist-sep" aria-hidden="true">/</span>{/if}
-                  <button type="button" data-track-field="artist" title={artist} aria-label={`依演出者「${artist}」篩選曲庫`} onclick={() => void openTrackField('artist', artist)}>{artist}</button>
+                  <span class="now-playing-artist-unit">
+                    {#if index > 0}<span class="now-playing-artist-sep" aria-hidden="true">/</span>{/if}
+                    <button type="button" data-track-field="artist" title={artist} aria-label={`依演出者「${artist}」篩選曲庫`} onclick={() => void openTrackField('artist', artist)}>{artist}</button>
+                  </span>
                 {/each}
               {/if}
             </span>

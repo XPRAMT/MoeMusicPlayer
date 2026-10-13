@@ -331,8 +331,10 @@
         <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類">
           <span class="now-playing-track-block now-playing-artist-block" data-track-block="artist">
             {#each trackInfo.artists as artist, index (artist)}
-              {#if index > 0}<span class="now-playing-artist-sep" aria-hidden="true">/</span>{/if}
-              <button data-track-field="artist" type="button">{artist}</button>
+              <span class="now-playing-artist-unit">
+                {#if index > 0}<span class="now-playing-artist-sep" aria-hidden="true">/</span>{/if}
+                <button data-track-field="artist" type="button">{artist}</button>
+              </span>
             {/each}
           </span>
           <span class="now-playing-track-block now-playing-album-block" data-track-block="album">

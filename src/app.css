@@ -330,6 +330,18 @@ input:focus-visible {
   align-items: baseline;
 }
 
+.now-playing-artist-block {
+  flex-wrap: wrap;
+}
+
+.now-playing-artist-unit {
+  display: inline-flex;
+  min-width: max-content;
+  flex: 0 0 auto;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
 .now-playing-track-block:not(:last-child)::after {
   flex: 0 0 auto;
   margin-left: 5px;
@@ -352,6 +364,12 @@ input:focus-visible {
   overflow-wrap: anywhere;
   white-space: normal;
   cursor: pointer;
+}
+
+.now-playing-track-info .now-playing-artist-unit > button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .now-playing-track-info button:not(:disabled):hover,

@@ -5,7 +5,7 @@ async page => {
   });
   await page.locator('.now-playing-track-info').waitFor({ state: 'visible', timeout: 60000 });
   await page.evaluate(() => window.nowPlayingLayoutHarness.setTrackInfo({
-    artists: ['hanser - ultra-long collaborative performer collection', '協力演出者名稱非常長'],
+    artists: ['hanser', 'yousa', '鹿乃', '花譜', '星街すいせい', '風真いろは', '白上フブキ', '博衣こより'],
     album: 'Live at the 2025 International Concert Hall Anniversary Edition',
     title: 'さよならスーヴェニア：窄版完整標題測試あいうえお',
   }));
@@ -29,6 +29,11 @@ async page => {
         field: block.dataset.trackBlock,
         ...bounds(block),
         text: block.textContent.trim(),
+        artistUnits: [...block.querySelectorAll('.now-playing-artist-unit')].map(unit => ({
+          ...bounds(unit),
+          text: unit.textContent.trim(),
+          whiteSpace: getComputedStyle(unit).whiteSpace,
+        })),
         children: [...block.querySelectorAll('[data-track-field]')].map(child => ({
           field: child.dataset.trackField,
           text: child.textContent.trim(),
@@ -49,9 +54,20 @@ async page => {
       throw new Error(`${width}px: a track block exceeds the available width: ${JSON.stringify(result.blocks)}`);
     }
     for (const block of result.blocks) {
+      if (block.field === 'artist') {
+        if (block.artistUnits.length !== 8) throw new Error(`${width}px: each artist should have its own wrapping unit`);
+        if (new Set(block.artistUnits.map(unit => unit.top)).size < 2) throw new Error(`${width}px: artists should wrap between names when the row fills: ${JSON.stringify(block.artistUnits)}`);
+        if (block.artistUnits.some(unit => unit.whiteSpace !== 'nowrap' || unit.height >= 24)) {
+          throw new Error(`${width}px: an individual artist name wrapped internally: ${JSON.stringify(block.artistUnits)}`);
+        }
+      }
       for (const child of block.children) {
-        if (child.overflow === 'hidden' || child.whiteSpace === 'nowrap' || child.textOverflow === 'ellipsis') {
+        const expectedNoWrap = block.field === 'artist';
+        if (child.overflow === 'hidden' || child.whiteSpace === (expectedNoWrap ? 'normal' : 'nowrap') || child.textOverflow === 'ellipsis') {
           throw new Error(`${width}px: ${block.field} text is hidden or truncated: ${JSON.stringify(child)}`);
+        }
+        if (expectedNoWrap && child.scrollWidth > child.clientWidth) {
+          throw new Error(`${width}px: an individual artist name is clipped: ${JSON.stringify(child)}`);
         }
       }
     }
