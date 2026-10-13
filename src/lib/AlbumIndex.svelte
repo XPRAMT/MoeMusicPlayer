@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { getErrorText, invokeCommand } from './ipc';
   import type { AlbumIndexFacet } from './ipc';
   import { buildAlbumEntries } from './album-identities.js';
@@ -25,11 +25,10 @@
   let seenRefreshKey: number | null = null;
   let initialized = false;
   const gap = 18;
-  const minimumCardWidth = 168;
+  const cardWidth = 168;
   const overscanRows = 2;
 
-  const columns = $derived(Math.max(1, Math.floor((viewportWidth + gap) / (minimumCardWidth + gap))));
-  const cardWidth = $derived(viewportWidth > 0 ? (viewportWidth - gap * (columns - 1)) / columns : minimumCardWidth);
+  const columns = $derived(Math.max(1, Math.floor((viewportWidth + gap) / (cardWidth + gap))));
   const rowHeight = $derived(cardWidth + 48 + gap);
   const rowCount = $derived(Math.ceil(albums.length / columns));
   const firstRow = $derived(Math.max(0, Math.floor(scrollTop / rowHeight) - overscanRows));
@@ -65,14 +64,17 @@
 
   function measure(): void {
     if (!viewport) return;
-    viewportWidth = viewport.clientWidth;
-    viewportHeight = viewport.clientHeight;
+    const style = getComputedStyle(viewport);
+    viewportWidth = Math.max(0, viewport.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight));
+    viewportHeight = Math.max(0, viewport.clientHeight - Number.parseFloat(style.paddingTop) - Number.parseFloat(style.paddingBottom));
     scrollTop = viewport.scrollTop;
   }
 
-  onMount(() => {
-    const observer = viewport ? new ResizeObserver(measure) : null;
-    if (viewport) observer?.observe(viewport);
+  $effect(() => {
+    const element = viewport;
+    if (!element) return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
     measure();
     return () => observer?.disconnect();
   });
@@ -100,7 +102,7 @@
     <div class="album-index-message" role="status">目前啟用的曲庫沒有專輯資料。</div>
   {:else}
     <div class="album-grid-viewport" bind:this={viewport} onscroll={measure}>
-      <div class="album-grid" style={`grid-template-columns:repeat(${columns},minmax(0,1fr));gap:${gap}px;--album-card-width:${cardWidth}px`}>
+      <div class="album-grid" style={`grid-template-columns:repeat(${columns},${cardWidth}px);gap:${gap}px;--album-card-width:${cardWidth}px`}>
         <div class="album-grid-spacer" style={`height:${topSpacer}px`} aria-hidden="true"></div>
         {#each visibleAlbums as album (`${album.key}:${refreshKey}`)}
           <AlbumCard {album} {active} {onSelect} />
