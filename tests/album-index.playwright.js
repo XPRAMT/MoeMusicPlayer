@@ -1,7 +1,7 @@
 ﻿async page => {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   await page.setViewportSize({ width: 900, height: 720 });
-  await page.goto(`http://127.0.0.1:1450/tests/album-index-harness.html?run=${Date.now()}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(`http://127.0.0.1:1450/tests/album-index-harness.html?run=${Date.now()}`, { waitUntil: 'commit', timeout: 30000 });
   await page.locator('.album-grid-viewport').waitFor({ state: 'visible' });
   await page.waitForFunction(() => document.querySelector('[data-testid="album-count"]')?.textContent?.includes('80'));
   await page.waitForFunction(() => document.querySelector('.album-grid-viewport')?.getAttribute('data-scroll-restored') === 'true');
@@ -63,6 +63,12 @@
   await page.waitForFunction(() => document.querySelectorAll('.album-card:first-of-type .album-card-art img').length > 0);
   const firstAlbumReads = await page.evaluate(() => [1, 2, 3, 4].reduce((sum, index) => sum + (window.__albumIndexStats.trackCacheReadsByTrack[`track-Album-1-${index}`] ?? 0), 0));
   assert(firstAlbumReads === 1, `the homepage should initially load just the first cover, not four serial thumbnail requests: ${firstAlbumReads}`);
+  const noCoverCard = page.getByRole('button', { name: '開啟專輯「Album 2」，1 首曲目' });
+  const noCoverImage = noCoverCard.locator('.album-card-art img');
+  await noCoverImage.waitFor();
+  const fallbackImage = await noCoverImage.evaluate((image) => ({ source: image.getAttribute('src'), width: image.naturalWidth }));
+  assert(fallbackImage.source?.toLowerCase().includes('defaultcover') && fallbackImage.width > 0,
+    `albums without artwork should display the bundled default cover: ${JSON.stringify(fallbackImage)}`);
   const noFrame = await page.locator('.album-card-art').first().evaluate((element) => getComputedStyle(element).borderWidth);
   assert(noFrame === '0px', `album cover thumbnails should not have a border: ${noFrame}`);
   await page.locator('.album-grid-viewport').evaluate((element) => {

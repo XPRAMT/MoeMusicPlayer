@@ -26,6 +26,7 @@ Object.assign(window, {
       if (command === 'library_get_album_artwork_candidates') {
         stats.albumCandidates += 1;
         const name = String((args?.albumNames as string[] | undefined)?.[0] ?? 'Album 1');
+        if (name === 'Album 2') return [];
         const key = name.replaceAll(' ', '-');
         return Array.from({ length: 4 }, (_, index) => `track-${key}-${index + 1}`);
       }

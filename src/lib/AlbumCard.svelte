@@ -5,6 +5,7 @@
   import type { AlbumEntry } from './album-identities.js';
   import { detectArtworkMimeType } from './active-track-artwork';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
+  import defaultCoverUrl from '../../icon/DefaultCover.jpg';
 
   interface Props { album: AlbumEntry; active: boolean; refreshKey: number; onSelect: (album: AlbumEntry) => void }
   let { album, active, refreshKey, onSelect }: Props = $props();
@@ -19,6 +20,9 @@
   let releaseArtworkCacheLease: (() => void) | null = null;
 
   const memoryCacheKey = $derived(`${refreshKey}:${album.key}:${artworkRevision}`);
+  const displayedImageUrls = $derived(
+    imageUrls.length > 0 ? imageUrls : cacheResolved || album.unmarked ? [defaultCoverUrl] : [],
+  );
 
   async function persistentSelectionKey(): Promise<string> {
     const bytes = new TextEncoder().encode(`${album.key}\0${album.trackCount}`);
@@ -196,7 +200,7 @@
 
 <button class="album-card" type="button" bind:this={card} onclick={() => onSelect(album)} aria-label={`開啟專輯「${album.displayName}」${album.unmarked ? '，未標記' : ''}，${album.trackCount} 首曲目`}>
   <span class="album-card-art" aria-hidden="true">
-    <AlbumArtworkMosaic sources={imageUrls} />
+    <AlbumArtworkMosaic sources={displayedImageUrls} />
   </span>
   <span class="album-card-name">{album.displayName}</span>
   {#if album.unmarked}<span class="album-card-unmarked">未標記</span>{/if}
