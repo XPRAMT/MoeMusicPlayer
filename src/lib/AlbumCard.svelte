@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { getAlbumThumbnailBytes, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytes } from './ipc';
+  import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBytes, putAlbumThumbnailBytesForTrack } from './ipc';
   import { copyToArrayBuffer, createAlbumThumbnail, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import type { AlbumEntry } from './album-identities.js';
   import { detectArtworkMimeType } from './active-track-artwork';
@@ -19,29 +19,48 @@
     const revision = ++requestRevision;
     busy = true;
     try {
-      for (let offset = 0; offset < album.trackCount; offset += 100) {
+      const pageSize = 8;
+      for (let offset = 0; offset < album.trackCount; offset += pageSize) {
         if (!active || destroyed || revision !== requestRevision) return;
-        const page = await invokeCommand('library_get_album_page', { albumNames: album.aliases, offset, limit: 100 });
+        const page = await invokeCommand('library_get_album_page', { albumNames: album.aliases, offset, limit: pageSize });
         for (const track of page.items) {
           if (!active || destroyed || revision !== requestRevision) return;
           let thumbnailUrl: string | null;
           try {
             thumbnailUrl = await withAlbumArtworkSlot(async () => {
               if (!active || destroyed || revision !== requestRevision) return null;
+              // A track fingerprint points directly to its persistent thumbnail, avoiding an
+              // IPC transfer and SHA-256 of the full-resolution cover on every album visit.
+              let indexed = new Uint8Array();
+              try { indexed = new Uint8Array(await getAlbumThumbnailBytesForTrack(track.id)); } catch { /* rebuild a missing or damaged cache entry */ }
+              if (indexed.length === 1 && indexed[0] === 0) return null;
+              if (indexed.length > 3) {
+                return URL.createObjectURL(new Blob([copyToArrayBuffer(indexed)], { type: 'image/jpeg' }));
+              }
+
+              // Legacy caches are content-addressed only. Resolve once, then persist the track
+              // association so future visits take the fast path above.
               const original = await getTrackArtworkBytes(track.id);
-              if (original.byteLength === 0) return null;
+              if (original.byteLength === 0) {
+                void markAlbumArtworkMissing(track.id).catch(() => undefined);
+                return null;
+              }
               const key = await sha256Hex(original);
               let thumbnail: Uint8Array;
               try { thumbnail = new Uint8Array(await getAlbumThumbnailBytes(key)); } catch { thumbnail = new Uint8Array(); }
               if (thumbnail.length === 0) {
                 const mimeType = detectArtworkMimeType(original);
-                if (!mimeType) return null;
+                if (!mimeType) {
+                  void markAlbumArtworkMissing(track.id).catch(() => undefined);
+                  return null;
+                }
                 const blob = await createAlbumThumbnail(original, mimeType);
                 thumbnail = new Uint8Array(await blob.arrayBuffer());
-                await putAlbumThumbnailBytes(key, copyToArrayBuffer(thumbnail)).catch((error) => {
-                  console.warn('無法保存專輯卡片縮圖快取', error);
-                });
               }
+              await putAlbumThumbnailBytesForTrack(track.id, key, copyToArrayBuffer(thumbnail)).catch((error) => {
+                console.warn('無法保存專輯卡片縮圖快取', error);
+                return putAlbumThumbnailBytes(key, copyToArrayBuffer(thumbnail)).catch(() => undefined);
+              });
               return URL.createObjectURL(new Blob([copyToArrayBuffer(thumbnail)], { type: 'image/jpeg' }));
             });
           } catch { thumbnailUrl = null; }
@@ -66,7 +85,7 @@
         observer.disconnect();
         inViewport = true;
       }
-    }, { rootMargin: '240px' });
+    }, { rootMargin: '80px' });
     observer.observe(card);
     return () => observer.disconnect();
   });

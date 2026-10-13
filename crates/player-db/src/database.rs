@@ -2326,6 +2326,38 @@ impl Database {
         .collect()
     }
 
+    /// Stable-enough cache identity for a track's artwork, invalidated by library file updates.
+    /// Only enabled source mappings with a recorded modification time can be cached by track.
+    pub fn album_artwork_cache_identity(
+        &self,
+        track_id: TrackId,
+    ) -> Result<Option<String>, DatabaseError> {
+        let connection = self.lock()?;
+        let identity = connection
+            .query_row(
+                "SELECT m.source_id, m.source_item_id, m.size_bytes, m.modified_at_utc_ms
+                 FROM source_mappings m
+                 JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1
+                 WHERE m.track_id=?1 AND m.modified_at_utc_ms IS NOT NULL
+                 ORDER BY CASE WHEN m.locator_kind='filesystem_path' THEN 0 ELSE 1 END,
+                          r.source_id, m.source_item_id
+                 LIMIT 1",
+                [track_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(identity.map(|(source_id, item_id, size, modified)| {
+            format!("{source_id}\0{item_id}\0{size}\0{modified}")
+        }))
+    }
+
     /// Select an existing regular filesystem file from this track's enabled source mappings.
     /// The returned path remains a native `PathBuf`; a later file open can still fail if the
     /// source changes after this check.
@@ -4091,6 +4123,47 @@ mod tests {
     ) {
         db.apply_source_scan(root, &state, observed, changed, &[], at)
             .expect("apply source scan");
+    }
+
+    #[test]
+    fn album_artwork_cache_identity_changes_with_library_file_fingerprint() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "album-art-cache");
+        let first = record(&root, "one", "one", "One", 100, 1_000);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&first),
+            2,
+        );
+        let track_id = db
+            .resolve_track_id_for_locator(&first.locator)
+            .expect("resolve track")
+            .expect("track exists");
+        let initial = db
+            .album_artwork_cache_identity(track_id)
+            .expect("cache identity")
+            .expect("fingerprinted mapping");
+
+        let updated = record(&root, "one", "one", "One", 101, 2_000);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&updated),
+            std::slice::from_ref(&updated),
+            3,
+        );
+        let changed = db
+            .album_artwork_cache_identity(track_id)
+            .expect("updated cache identity")
+            .expect("fingerprinted mapping");
+        assert_ne!(
+            initial, changed,
+            "a rescanned file must not reuse its stale cover thumbnail"
+        );
     }
 
     #[test]

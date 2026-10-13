@@ -8,7 +8,7 @@
   <header>專輯</header>
   <AlbumIndex
     refreshKey={0}
-    active={false}
+    active={true}
     onCountChange={(value) => (count = value)}
     onRowsChange={() => {}}
     onSelect={() => {}}

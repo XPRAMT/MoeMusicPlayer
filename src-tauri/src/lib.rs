@@ -2729,24 +2729,102 @@ fn album_artwork_cache_directory(
 }
 
 #[tauri::command]
-fn album_artwork_cache_get(
+async fn album_artwork_cache_get(
     app: AppHandle,
     state: State<'_, AppState>,
     sha256: String,
 ) -> Result<Response, String> {
     let directory = album_artwork_cache_directory(&app, &state)?;
-    album_artwork_cache::get(&directory, &sha256).map(Response::new)
+    tauri::async_runtime::spawn_blocking(move || {
+        album_artwork_cache::get(&directory, &sha256).map(Response::new)
+    })
+    .await
+    .map_err(|error| format!("讀取專輯縮圖工作失敗：{error}"))?
 }
 
 #[tauri::command]
-fn album_artwork_cache_put(
+async fn album_artwork_cache_put(
     app: AppHandle,
     state: State<'_, AppState>,
     sha256: String,
     data_base64: String,
 ) -> Result<(), String> {
     let directory = album_artwork_cache_directory(&app, &state)?;
-    album_artwork_cache::put(&directory, &sha256, &data_base64)
+    tauri::async_runtime::spawn_blocking(move || {
+        album_artwork_cache::put(&directory, &sha256, &data_base64)
+    })
+    .await
+    .map_err(|error| format!("保存專輯縮圖工作失敗：{error}"))?
+}
+
+fn album_artwork_track_identity(
+    state: &AppState,
+    track_id: &str,
+) -> Result<Option<String>, String> {
+    let track_id = TrackId::parse(track_id).map_err(|error| format!("曲目 ID 無效：{error}"))?;
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database
+        .album_artwork_cache_identity(track_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn album_artwork_cache_get_for_track(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_id: String,
+) -> Result<Response, String> {
+    let directory = album_artwork_cache_directory(&app, &state)?;
+    let Some(identity) = album_artwork_track_identity(&state, &track_id)? else {
+        return Ok(Response::new(Vec::new()));
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        album_artwork_cache::get_for_track(&directory, &identity).map(Response::new)
+    })
+    .await
+    .map_err(|error| format!("讀取曲目縮圖工作失敗：{error}"))?
+}
+
+#[tauri::command]
+async fn album_artwork_cache_put_for_track(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_id: String,
+    sha256: String,
+    data_base64: String,
+) -> Result<(), String> {
+    let directory = album_artwork_cache_directory(&app, &state)?;
+    let Some(identity) = album_artwork_track_identity(&state, &track_id)? else {
+        return Ok(());
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        album_artwork_cache::put(&directory, &sha256, &data_base64)?;
+        album_artwork_cache::put_track_reference(&directory, &identity, Some(&sha256))
+    })
+    .await
+    .map_err(|error| format!("保存曲目縮圖工作失敗：{error}"))?
+}
+
+#[tauri::command]
+async fn album_artwork_cache_mark_missing_for_track(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_id: String,
+) -> Result<(), String> {
+    let directory = album_artwork_cache_directory(&app, &state)?;
+    let Some(identity) = album_artwork_track_identity(&state, &track_id)? else {
+        return Ok(());
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        album_artwork_cache::put_track_reference(&directory, &identity, None)
+    })
+    .await
+    .map_err(|error| format!("保存曲目封面狀態工作失敗：{error}"))?
 }
 
 #[tauri::command]
@@ -9203,6 +9281,9 @@ pub fn run() {
             library_get_album_page,
             album_artwork_cache_get,
             album_artwork_cache_put,
+            album_artwork_cache_get_for_track,
+            album_artwork_cache_put_for_track,
+            album_artwork_cache_mark_missing_for_track,
             library_get_artist_index,
             library_get_artist_page,
             playlist_list,

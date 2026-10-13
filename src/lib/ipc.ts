@@ -618,6 +618,18 @@ interface IpcContract {
     args: { albumNames: string[]; offset: number; limit: number };
     result: TrackPage;
   };
+  album_artwork_cache_get_for_track: {
+    args: { trackId: string };
+    result: ArrayBuffer;
+  };
+  album_artwork_cache_put_for_track: {
+    args: { trackId: string; sha256: string; dataBase64: string };
+    result: void;
+  };
+  album_artwork_cache_mark_missing_for_track: {
+    args: { trackId: string };
+    result: void;
+  };
   library_get_artist_index: {
     args: { artistIdentities: ArtistIdentityMapping[]; albumIdentities: ArtistIdentityMapping[] };
     result: ArtistIndexEntry[];
@@ -824,6 +836,25 @@ export function putAlbumThumbnailBytes(sha256: string, bytes: ArrayBuffer): Prom
   }
   const data = btoa(binaryText);
   return invoke<void>('album_artwork_cache_put', { sha256, dataBase64: data });
+}
+
+/** Retrieve an album card thumbnail using the current track file fingerprint. */
+export function getAlbumThumbnailBytesForTrack(trackId: string): Promise<ArrayBuffer> {
+  return invokeCommand('album_artwork_cache_get_for_track', { trackId });
+}
+
+/** Save the content-addressed thumbnail and associate it with the track fingerprint. */
+export function putAlbumThumbnailBytesForTrack(trackId: string, sha256: string, bytes: ArrayBuffer): Promise<void> {
+  const binary = new Uint8Array(bytes);
+  let binaryText = '';
+  for (let offset = 0; offset < binary.length; offset += 0x8000) {
+    binaryText += String.fromCharCode(...binary.subarray(offset, offset + 0x8000));
+  }
+  return invokeCommand('album_artwork_cache_put_for_track', { trackId, sha256, dataBase64: btoa(binaryText) });
+}
+
+export function markAlbumArtworkMissing(trackId: string): Promise<void> {
+  return invokeCommand('album_artwork_cache_mark_missing_for_track', { trackId });
 }
 
 export function getMainBackgroundBytes(): Promise<ArrayBuffer> {

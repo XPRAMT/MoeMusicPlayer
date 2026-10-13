@@ -7,6 +7,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use sha2::{Digest, Sha256};
 
 const MAX_THUMBNAIL_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CACHE_BYTES: u64 = 512 * 1024 * 1024;
@@ -18,6 +19,58 @@ fn cache_path(directory: &Path, sha256: &str) -> Result<PathBuf, String> {
         return Err("專輯圖片快取索引無效。".to_owned());
     }
     Ok(directory.join(format!("{}.jpg", sha256.to_ascii_lowercase())))
+}
+
+fn track_reference_path(directory: &Path, identity: &str) -> PathBuf {
+    let digest = Sha256::digest(identity.as_bytes());
+    let key = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    directory.join(format!("track-{key}.ref"))
+}
+
+/// Empty means not indexed yet; `[0]` means this track was checked and has no artwork.
+pub(crate) fn get_for_track(directory: &Path, identity: &str) -> Result<Vec<u8>, String> {
+    let reference = match fs::read_to_string(track_reference_path(directory, identity)) {
+        Ok(reference) => reference,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("讀取曲目縮圖索引失敗：{error}")),
+    };
+    if reference == "none" {
+        return Ok(vec![0]);
+    }
+    get(directory, &reference)
+}
+
+pub(crate) fn put_track_reference(
+    directory: &Path,
+    identity: &str,
+    sha256: Option<&str>,
+) -> Result<(), String> {
+    if let Some(sha256) = sha256 {
+        cache_path(directory, sha256)?;
+    }
+    fs::create_dir_all(directory).map_err(|error| format!("建立專輯圖片快取目錄失敗：{error}"))?;
+    let path = track_reference_path(directory, identity);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_path = directory.join(format!(".album-ref-{nonce}.tmp"));
+    let value = sha256.unwrap_or("none");
+    let result = fs::write(&temp_path, value)
+        .map_err(|error| format!("寫入曲目縮圖索引失敗：{error}"))
+        .and_then(|()| {
+            if path.exists() {
+                fs::remove_file(&path).map_err(|error| format!("更新曲目縮圖索引失敗：{error}"))?;
+            }
+            fs::rename(&temp_path, &path).map_err(|error| format!("完成曲目縮圖索引失敗：{error}"))
+        });
+    if temp_path.exists() {
+        let _ = fs::remove_file(temp_path);
+    }
+    result
 }
 
 pub(crate) fn get(directory: &Path, sha256: &str) -> Result<Vec<u8>, String> {
@@ -177,6 +230,30 @@ mod tests {
         )
         .is_err());
         assert!(!directory.exists());
+    }
+
+    #[test]
+    fn per_track_reference_returns_cached_jpeg_and_remembers_missing_artwork() {
+        let directory = temp_dir();
+        let identity = "source-a\\0song-1\\01024\\0200";
+        let hash = "c".repeat(64);
+        assert!(get_for_track(&directory, identity)
+            .expect("cache miss")
+            .is_empty());
+        put(&directory, &hash, &STANDARD.encode([0xff, 0xd8, 0xff, 1])).expect("save image");
+        put_track_reference(&directory, identity, Some(&hash)).expect("save mapping");
+        assert_eq!(
+            get_for_track(&directory, identity).expect("read cached image"),
+            [0xff, 0xd8, 0xff, 1]
+        );
+
+        let missing_identity = "source-a\\0song-2\\01024\\0200";
+        put_track_reference(&directory, missing_identity, None).expect("save missing marker");
+        assert_eq!(
+            get_for_track(&directory, missing_identity).expect("read missing marker"),
+            [0]
+        );
+        fs::remove_dir_all(directory).expect("remove isolated cache");
     }
 
     #[test]

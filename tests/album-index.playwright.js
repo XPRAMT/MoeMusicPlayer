@@ -3,6 +3,11 @@
   await page.setViewportSize({ width: 900, height: 720 });
   await page.goto('http://127.0.0.1:1450/tests/album-index-harness.html', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.getByText('Album 1', { exact: true }).waitFor();
+  await page.waitForFunction(() => window.__albumIndexStats.trackCacheReads + window.__albumIndexStats.legacyCacheReads > 0);
+  const loadingStats = await page.evaluate(() => ({ ...window.__albumIndexStats }));
+  assert(loadingStats.trackCacheReads > 0, `cached covers should use the per-track fast path: ${JSON.stringify(loadingStats)}`);
+  assert(loadingStats.rawArtworkReads === 0, `a thumbnail cache hit must not transfer original artwork bytes: ${JSON.stringify(loadingStats)}`);
+  assert(loadingStats.legacyCacheReads === 0, `thumbnail file I/O must use the asynchronous cache command: ${JSON.stringify(loadingStats)}`);
 
   const initial = await page.evaluate(() => {
     const viewport = document.querySelector('.album-grid-viewport');
@@ -33,6 +38,7 @@
     element.scrollTop = 300;
     element.dispatchEvent(new Event('scroll'));
   });
+  assert(await page.locator('.album-grid-viewport').evaluate((element) => element.scrollTop) === 300, 'album grid should remain scrollable while thumbnail cache requests are pending');
   await page.waitForTimeout(50);
   const afterScroll = await page.locator('.album-card-art').first().evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -41,5 +47,5 @@
   assert(Math.abs(afterScroll.width - afterScroll.height) <= 1, `card artwork should remain square after scroll: ${JSON.stringify(afterScroll)}`);
   assert(Math.abs(afterResize - afterScroll.width) <= 1, `scrolling must not change card size: ${afterResize} -> ${afterScroll.width}`);
 
-  return { initial, afterResize, afterScroll };
+  return { loadingStats, initial, afterResize, afterScroll };
 }
