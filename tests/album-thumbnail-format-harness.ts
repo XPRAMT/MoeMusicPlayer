@@ -10,8 +10,10 @@ declare global {
       size: number;
       mainDimensions: [number, number];
       workerDimensions: [number, number];
-      mainMatchesQuality100: boolean;
-      workerMatchesQuality100: boolean;
+      mainMatchesQuality090: boolean;
+      workerMatchesQuality090: boolean;
+      mainDiffersFromQuality100: boolean;
+      workerDiffersFromQuality100: boolean;
       mainDiffersFromQuality088: boolean;
       workerDiffersFromQuality088: boolean;
       workerBase64MatchesBytes: boolean;
@@ -75,13 +77,15 @@ async function run(): Promise<void> {
     source.toBlob((blob) => blob ? resolve(blob) : reject(new Error('fixture source encode failed')), 'image/jpeg', 1.0);
   });
   const sourceBytes = new Uint8Array(await sourceBlob.arrayBuffer());
-  const [quality100, quality088] = await Promise.all([
+  const [quality090, quality100, quality088] = await Promise.all([
+    encodeBaseline(sourceBytes, 0.90),
     encodeBaseline(sourceBytes, 1.0),
     encodeBaseline(sourceBytes, 0.88),
   ]);
   const mainBlob = await createAlbumThumbnail(sourceBytes, 'image/jpeg');
   const workerResult = await createAlbumThumbnailInWorker(sourceBytes.slice().buffer, 'image/jpeg');
   const workerBlob = new Blob([workerResult.bytes], { type: 'image/jpeg' });
+  const quality090Bytes = new Uint8Array(await quality090.arrayBuffer());
   const quality100Bytes = new Uint8Array(await quality100.arrayBuffer());
   const quality088Bytes = new Uint8Array(await quality088.arrayBuffer());
   const mainBytes = new Uint8Array(await mainBlob.arrayBuffer());
@@ -92,8 +96,10 @@ async function run(): Promise<void> {
     size: ALBUM_ART_THUMBNAIL_SIZE,
     mainDimensions: await dimensions(mainBlob),
     workerDimensions: await dimensions(workerBlob),
-    mainMatchesQuality100: sameBytes(mainBytes, quality100Bytes),
-    workerMatchesQuality100: sameBytes(workerBytes, quality100Bytes),
+    mainMatchesQuality090: sameBytes(mainBytes, quality090Bytes),
+    workerMatchesQuality090: sameBytes(workerBytes, quality090Bytes),
+    mainDiffersFromQuality100: !sameBytes(mainBytes, quality100Bytes),
+    workerDiffersFromQuality100: !sameBytes(workerBytes, quality100Bytes),
     mainDiffersFromQuality088: !sameBytes(mainBytes, quality088Bytes),
     workerDiffersFromQuality088: !sameBytes(workerBytes, quality088Bytes),
     workerBase64MatchesBytes: sameBytes(decodedWorkerBase64, workerBytes),

@@ -1,4 +1,4 @@
-export const ALBUM_ART_THUMBNAIL_SIZE = 256;
+export const ALBUM_ART_THUMBNAIL_SIZE = 512;
 export const ALBUM_ART_HASH_SIZE = 32;
 export const ALBUM_ART_SIMILARITY_DISTANCE = 6;
 const DCT_LOW_FREQUENCY_COUNT = 8;
@@ -221,7 +221,7 @@ export async function createAlbumThumbnail(bytes, mimeType, size = ALBUM_ART_THU
     context.fillRect(0, 0, edge, edge);
     context.drawImage(bitmap, sx, sy, cropSize, cropSize, 0, 0, edge, edge);
     return await new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('無法編碼專輯封面縮圖。')), 'image/jpeg', 1.0);
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('無法編碼專輯封面縮圖。')), 'image/jpeg', 0.90);
     });
   } finally {
     bitmap.close();
