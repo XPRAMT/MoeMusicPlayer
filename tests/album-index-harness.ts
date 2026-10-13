@@ -11,7 +11,7 @@ const fixtureBlob = await new Promise<Blob>((resolve, reject) => fixtureCanvas.t
 const validJpeg = new Uint8Array(await fixtureBlob.arrayBuffer());
 const artworkReads = validJpeg.slice().buffer;
 const coldArtworkMode = new URLSearchParams(location.search).has('cold');
-const stats = { rawArtworkReads: 0, legacyCacheReads: 0, trackCacheReads: 0, trackCacheReadsByTrack: {} as Record<string, number>, albumPages: 0, thumbnailWrites: 0 };
+const stats = { rawArtworkReads: 0, legacyCacheReads: 0, trackCacheReads: 0, trackCacheReadsByTrack: {} as Record<string, number>, albumCandidates: 0, thumbnailWrites: 0 };
 Object.assign(window, { __albumIndexStats: stats });
 
 Object.assign(window, {
@@ -22,10 +22,10 @@ Object.assign(window, {
         await new Promise((resolve) => setTimeout(resolve, 120));
         return Array.from({ length: 80 }, (_, index) => ({ name: `Album ${index + 1}`, trackCount: 1 }));
       }
-      if (command === 'library_get_album_page') {
-        stats.albumPages += 1;
+      if (command === 'library_get_album_artwork_candidates') {
+        stats.albumCandidates += 1;
         const name = String((args?.albumNames as string[] | undefined)?.[0] ?? 'Album 1');
-        return { items: [{ id: `track-${name.replaceAll(' ', '-')}` }], totalCount: 1 };
+        return [`track-${name.replaceAll(' ', '-')}`];
       }
       if (command === 'library_get_track_artwork') {
         stats.rawArtworkReads += 1;

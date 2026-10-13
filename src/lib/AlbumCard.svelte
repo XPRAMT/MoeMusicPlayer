@@ -33,8 +33,11 @@
       const pageSize = 8;
       for (let offset = 0; offset < album.trackCount; offset += pageSize) {
         if (!active || destroyed || revision !== requestRevision) return;
-        const page = await invokeCommand('library_get_album_page', { albumNames: album.aliases, offset, limit: pageSize });
-        for (const track of page.items) {
+        const candidates = await invokeCommand(
+          'library_get_album_artwork_candidates',
+          { albumNames: album.aliases, offset, limit: pageSize },
+        );
+        for (const trackId of candidates) {
           if (!active || destroyed || revision !== requestRevision) return;
           let thumbnailUrl: { url: string; bytes: number } | null;
           try {
@@ -43,22 +46,25 @@
               // A track fingerprint points directly to its persistent thumbnail, avoiding an
               // IPC transfer and SHA-256 of the full-resolution cover on every album visit.
               let indexed = new Uint8Array();
-              try { indexed = new Uint8Array(await getAlbumThumbnailBytesForTrack(track.id)); } catch { /* rebuild a missing or damaged cache entry */ }
+              try { indexed = new Uint8Array(await getAlbumThumbnailBytesForTrack(trackId)); } catch { /* rebuild a missing or damaged cache entry */ }
               if (indexed.length === 1 && indexed[0] === 0) return null;
               if (indexed.length > 3) {
-              return { url: URL.createObjectURL(new Blob([copyToArrayBuffer(indexed)], { type: 'image/jpeg' })), bytes: indexed.byteLength };
+                return {
+                  url: URL.createObjectURL(new Blob([copyToArrayBuffer(indexed)], { type: 'image/jpeg' })),
+                  bytes: indexed.byteLength,
+                };
               }
 
               // Legacy caches are content-addressed only. Resolve once, then persist the track
               // association so future visits take the fast path above.
-              const original = await getTrackArtworkBytes(track.id);
+              const original = await getTrackArtworkBytes(trackId);
               if (original.byteLength === 0) {
-                void markAlbumArtworkMissing(track.id).catch(() => undefined);
+                void markAlbumArtworkMissing(trackId).catch(() => undefined);
                 return null;
               }
               const mimeType = detectArtworkMimeType(original);
               if (!mimeType) {
-                void markAlbumArtworkMissing(track.id).catch(() => undefined);
+                void markAlbumArtworkMissing(trackId).catch(() => undefined);
                 return null;
               }
               const processed = await createAlbumThumbnailInWorker(original, mimeType);
@@ -68,11 +74,14 @@
               if (thumbnail.length === 0) {
                 thumbnail = processed.bytes;
               }
-              await putAlbumThumbnailBase64ForTrack(track.id, key, processed.dataBase64).catch((error) => {
+              await putAlbumThumbnailBase64ForTrack(trackId, key, processed.dataBase64).catch((error) => {
                 console.warn('無法保存專輯卡片縮圖快取', error);
                 return putAlbumThumbnailBase64(key, processed.dataBase64).catch(() => undefined);
               });
-              return { url: URL.createObjectURL(new Blob([copyToArrayBuffer(thumbnail)], { type: 'image/jpeg' })), bytes: thumbnail.byteLength };
+              return {
+                url: URL.createObjectURL(new Blob([copyToArrayBuffer(thumbnail)], { type: 'image/jpeg' })),
+                bytes: thumbnail.byteLength,
+              };
             });
           } catch { thumbnailUrl = null; }
           if (thumbnailUrl) {
@@ -86,7 +95,7 @@
             }
           }
         }
-        if (page.items.length === 0 || offset + page.items.length >= page.totalCount) break;
+        if (candidates.length < pageSize) break;
       }
       if (active && !destroyed && revision === requestRevision) {
         const cachedArtwork = rememberAlbumCardArtwork(memoryCacheKey, null);

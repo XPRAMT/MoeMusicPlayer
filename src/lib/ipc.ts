@@ -618,6 +618,10 @@ interface IpcContract {
     args: { albumNames: string[]; offset: number; limit: number };
     result: TrackPage;
   };
+  library_get_album_artwork_candidates: {
+    args: { albumNames: string[]; offset: number; limit: number };
+    result: string[];
+  };
   album_artwork_cache_get_for_track: {
     args: { trackId: string };
     result: ArrayBuffer;

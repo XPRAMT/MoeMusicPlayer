@@ -139,10 +139,20 @@ const ALBUM_TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
  FROM tracks t
- WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+ WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
+       IN (SELECT value FROM json_each(?1))
+   AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
-   AND EXISTS (SELECT 1 FROM json_each(?1) album_name
-               WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') = album_name.value COLLATE BINARY)
+ ORDER BY COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647),
+          COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE NATURAL_NOCASE,
+          t.track_id
+ LIMIT ?2 OFFSET ?3";
+const ALBUM_ARTWORK_CANDIDATES_SQL: &str = "SELECT t.track_id
+ FROM tracks t
+ WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
+       IN (SELECT value FROM json_each(?1))
+   AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
  ORDER BY COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647),
           COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE NATURAL_NOCASE,
           t.track_id
@@ -1132,10 +1142,10 @@ impl Database {
         let total_count = connection.query_row(
             "SELECT COUNT(DISTINCT t.track_id)
              FROM tracks t
-             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
-               AND EXISTS (SELECT 1 FROM json_each(?1) album_name
-                           WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') = album_name.value COLLATE BINARY)",
+             WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
+                   IN (SELECT value FROM json_each(?1))
+               AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)",
             [&names_json],
             |row| row.get::<_, i64>(0),
         )?.max(0) as u64;
@@ -1154,6 +1164,36 @@ impl Database {
             limit,
             total_count,
         })
+    }
+
+    /// Return only the IDs needed to find album artwork. Unlike the detail page query, this does
+    /// not count the album or materialize playback statistics and file names for every row.
+    pub fn list_album_artwork_candidates(
+        &self,
+        album_names: &[String],
+        offset: u64,
+        requested_limit: u32,
+    ) -> Result<Vec<TrackId>, DatabaseError> {
+        let unique_names = album_names.iter().cloned().collect::<HashSet<_>>();
+        if unique_names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut names = unique_names.into_iter().collect::<Vec<_>>();
+        names.sort();
+        let names_json = serde_json::to_string(&names)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let limit = query_limit(requested_limit);
+        let database_offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(ALBUM_ARTWORK_CANDIDATES_SQL)?;
+        let rows = statement.query_map(params![names_json, limit, database_offset], |row| {
+            row.get::<_, String>(0)
+        })?;
+        rows.map(|row| {
+            let id = row?;
+            TrackId::parse(&id).map_err(|error| DatabaseError::CorruptData(error.to_string()))
+        })
+        .collect()
     }
 
     /// Aggregate artist statistics on the database side, counting each visible track once per
@@ -4230,6 +4270,105 @@ mod tests {
                 .expect("resized cache identity")
                 .expect("cache identity after size change"),
             "file size still invalidates a cache identity when mtime is absent"
+        );
+    }
+
+    #[test]
+    fn album_artwork_candidates_match_detail_page_order_without_count_or_summaries() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "album-candidates");
+        let records = ["Track 10", "Track 2", "Track 1", "Track 100"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, title)| {
+                record(
+                    &root,
+                    &format!("item-{index}"),
+                    &format!("path:item-{index}"),
+                    title,
+                    100 + index as u64,
+                    1_000 + index as i64,
+                )
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2_000,
+        );
+        let detail_page = db
+            .list_album_tracks_page(&["album".to_owned()], 0, 10)
+            .expect("album detail page");
+        let candidate_ids = db
+            .list_album_artwork_candidates(&["album".to_owned()], 0, 10)
+            .expect("album artwork candidates");
+        assert_eq!(
+            candidate_ids,
+            detail_page
+                .items
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            db.list_album_artwork_candidates(&["album".to_owned()], 1, 2)
+                .expect("paged candidates"),
+            candidate_ids[1..3]
+        );
+    }
+
+    #[test]
+    #[ignore = "manual isolated synthetic benchmark for album card query lock time"]
+    fn benchmark_album_card_query_cost_on_synthetic_library() {
+        use std::time::Instant;
+
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "album-benchmark");
+        let records = (0..5_364)
+            .map(|index| {
+                let mut track = record(
+                    &root,
+                    &format!("item-{index}"),
+                    &format!("path:item-{index}"),
+                    &format!("Track {index}"),
+                    128 + index,
+                    1_000 + index as i64,
+                );
+                track.metadata.as_mut().expect("metadata").album =
+                    Some(format!("Album {:02}", index % 24));
+                track
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2_000,
+        );
+        let album_names = (0..24)
+            .map(|index| format!("Album {index:02}"))
+            .collect::<Vec<_>>();
+
+        let started = Instant::now();
+        for album in &album_names {
+            db.list_album_tracks_page(std::slice::from_ref(album), 0, 8)
+                .expect("full album page");
+        }
+        let full_page_elapsed = started.elapsed();
+
+        let started = Instant::now();
+        for album in &album_names {
+            db.list_album_artwork_candidates(std::slice::from_ref(album), 0, 8)
+                .expect("artwork candidates");
+        }
+        let candidate_elapsed = started.elapsed();
+        eprintln!(
+            "5364 synthetic tracks / 24 albums: full detail pages={full_page_elapsed:?}, ID-only candidate pages={candidate_elapsed:?}"
         );
     }
 

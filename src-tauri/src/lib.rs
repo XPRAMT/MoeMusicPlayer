@@ -134,6 +134,183 @@ struct ThemePreferencesDto {
     auto_text_color_threshold_percent: u8,
 }
 
+#[cfg(test)]
+mod album_artwork_responsiveness_tests {
+    use super::*;
+    use base64::Engine as _;
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::Arc,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cold_and_warm_disk_thumbnail_lookup_keeps_async_caller_responsive() {
+        let mut database = Database::open_in_memory().expect("isolated synthetic database");
+        let root = database
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "isolated-thumbnail-test",
+                MediaLocator::FileSystem(PathBuf::from(r"C:\synthetic\music")),
+            )
+            .expect("synthetic library root");
+        let record = MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: root.id,
+                source_item_id: "thumbnail-track".to_owned(),
+                locator_key: Some("synthetic-thumbnail-track".to_owned()),
+            },
+            locator: MediaLocator::FileSystem(PathBuf::from(r"C:\synthetic\music\track.flac")),
+            fingerprint: FileFingerprint {
+                size_bytes: 128,
+                modified_at_utc_ms: Some(1_000),
+            },
+            metadata: Some(TrackMetadata {
+                title: Some("Synthetic Track".to_owned()),
+                artist: Some("Synthetic Artist".to_owned()),
+                album: Some("Synthetic Album".to_owned()),
+                album_artist: None,
+                track_number: Some(1),
+                disc_number: Some(1),
+                duration_ms: Some(180_000),
+                codec: Some("FLAC".to_owned()),
+                bitrate_bps: Some(900_000),
+                sample_rate_hz: Some(48_000),
+                release_date: None,
+                year: None,
+                bit_depth: Some(24),
+            }),
+        };
+        database
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Complete,
+                std::slice::from_ref(&record),
+                std::slice::from_ref(&record),
+                &[],
+                2_000,
+            )
+            .expect("insert synthetic track");
+        let track_id = database
+            .resolve_track_id_for_locator(&record.locator)
+            .expect("resolve synthetic track")
+            .expect("track exists");
+        let database = Arc::new(database);
+        let identity = database
+            .album_artwork_cache_identity(track_id)
+            .expect("initial cache identity")
+            .expect("enabled synthetic source mapping");
+        let directory = std::env::temp_dir().join(format!(
+            "moemusicplayer-album-artwork-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let gate = database_lifecycle::DatabaseWorkGate::default();
+
+        async fn check_lookup(
+            database: Arc<Database>,
+            gate: database_lifecycle::DatabaseWorkGate,
+            track_id: TrackId,
+            directory: PathBuf,
+            expected: Vec<u8>,
+        ) {
+            let started_work = Arc::new(AtomicBool::new(false));
+            let worker_started = Arc::clone(&started_work);
+            let worker_gate = gate.clone();
+            let work = run_blocking_album_work(move || {
+                run_guarded_album_database_work(&worker_gate, || {
+                    worker_started.store(true, Ordering::Release);
+                    let identity = database
+                        .album_artwork_cache_identity(track_id)
+                        .map_err(|error| error.to_string())?
+                        .ok_or_else(|| "synthetic cache identity missing".to_owned())?;
+                    // Hold an admitted native album job open after doing the real database lookup,
+                    // so executor responsiveness and shutdown draining are deterministic.
+                    std::thread::sleep(Duration::from_millis(120));
+                    let bytes = album_artwork_cache::get_for_track(&directory, &identity)?;
+                    if bytes != expected {
+                        return Err(format!("unexpected thumbnail bytes: {}", bytes.len()));
+                    }
+                    Ok(())
+                })
+            });
+            tokio::pin!(work);
+            let first_poll = tokio::time::timeout(Duration::from_millis(10), &mut work).await;
+            assert!(
+                first_poll.is_err(),
+                "slow album DB work should remain pending after its first poll"
+            );
+            while !started_work.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            let close_gate = gate.clone();
+            let (close_tx, close_rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let closed = close_gate.close_and_wait(Duration::from_secs(2));
+                let _ = close_tx.send(closed);
+            });
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            assert!(
+                close_rx.try_recv().is_err(),
+                "shutdown drain returned while the database and disk operation was still held open"
+            );
+            let mut heartbeats = 0;
+            loop {
+                tokio::select! {
+                    result = &mut work => {
+                        result.expect("album database work");
+                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => heartbeats += 1,
+                }
+            }
+            assert!(
+                heartbeats >= 3,
+                "the calling executor stalled during album artwork DB and disk I/O"
+            );
+            assert!(close_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("shutdown drain result"));
+            assert!(
+                !gate.is_accepting_work(),
+                "shutdown gate should close after the database job drains"
+            );
+        }
+
+        check_lookup(
+            Arc::clone(&database),
+            gate.clone(),
+            track_id,
+            directory.clone(),
+            Vec::new(),
+        )
+        .await;
+
+        let jpeg = vec![0xff, 0xd8, 0xff, 0x00];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+        let digest = "a".repeat(64);
+        album_artwork_cache::put(&directory, &digest, &encoded).expect("seed warm disk thumbnail");
+        album_artwork_cache::put_track_reference(&directory, &identity, Some(&digest))
+            .expect("seed warm track reference");
+        check_lookup(
+            database,
+            database_lifecycle::DatabaseWorkGate::default(),
+            track_id,
+            directory.clone(),
+            jpeg,
+        )
+        .await;
+        fs::remove_dir_all(&directory).expect("remove isolated thumbnail fixture");
+    }
+}
+
 fn default_quick_settings_opacity_percent() -> u8 {
     70
 }
@@ -2668,37 +2845,100 @@ fn library_get_artist_index_facets(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-fn library_get_album_index_facets(
-    state: State<'_, AppState>,
-) -> Result<Vec<player_db::AlbumIndexFacet>, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    database
-        .album_index_facets()
-        .map_err(|error| error.to_string())
+async fn run_blocking_album_work<R, F>(work: F) -> Result<R, String>
+where
+    R: Send + 'static,
+    F: FnOnce() -> Result<R, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("專輯曲庫工作失敗：{error}"))?
+}
+
+fn run_guarded_album_database_work<R, F>(
+    gate: &database_lifecycle::DatabaseWorkGate,
+    operation: F,
+) -> Result<R, String>
+where
+    F: FnOnce() -> Result<R, String>,
+{
+    let _database_work = gate
+        .try_enter()
+        .ok_or_else(|| "應用程式正在關閉，暫時無法開始新的資料庫工作。".to_owned())?;
+    operation()
+}
+
+async fn run_album_database_work<R, F>(app: AppHandle, operation: F) -> Result<R, String>
+where
+    R: Send + 'static,
+    F: FnOnce(&AppState) -> Result<R, String> + Send + 'static,
+{
+    run_blocking_album_work(move || {
+        let state = app.state::<AppState>();
+        run_guarded_album_database_work(&state.database_work, || operation(&state))
+    })
+    .await
 }
 
 #[tauri::command]
-fn library_get_album_page(
-    state: State<'_, AppState>,
+async fn library_get_album_index_facets(
+    app: AppHandle,
+) -> Result<Vec<player_db::AlbumIndexFacet>, String> {
+    run_album_database_work(app, |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .album_index_facets()
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_get_album_page(
+    app: AppHandle,
     album_names: Vec<String>,
     offset: u64,
     limit: u32,
 ) -> Result<Page<TrackSummary>, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    database
-        .list_album_tracks_page(&album_names, offset, limit)
-        .map_err(|error| error.to_string())
+    run_album_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .list_album_tracks_page(&album_names, offset, limit)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_get_album_artwork_candidates(
+    app: AppHandle,
+    album_names: Vec<String>,
+    offset: u64,
+    limit: u32,
+) -> Result<Vec<String>, String> {
+    run_album_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .list_album_artwork_candidates(&album_names, offset, limit)
+            .map(|ids| ids.into_iter().map(|id| id.to_string()).collect())
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 fn album_artwork_cache_directory(
@@ -2729,32 +2969,27 @@ fn album_artwork_cache_directory(
 }
 
 #[tauri::command]
-async fn album_artwork_cache_get(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    sha256: String,
-) -> Result<Response, String> {
-    let directory = album_artwork_cache_directory(&app, &state)?;
-    tauri::async_runtime::spawn_blocking(move || {
+async fn album_artwork_cache_get(app: AppHandle, sha256: String) -> Result<Response, String> {
+    let app_for_directory = app.clone();
+    run_album_database_work(app, move |state| {
+        let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         album_artwork_cache::get(&directory, &sha256).map(Response::new)
     })
     .await
-    .map_err(|error| format!("讀取專輯縮圖工作失敗：{error}"))?
 }
 
 #[tauri::command]
 async fn album_artwork_cache_put(
     app: AppHandle,
-    state: State<'_, AppState>,
     sha256: String,
     data_base64: String,
 ) -> Result<(), String> {
-    let directory = album_artwork_cache_directory(&app, &state)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let app_for_directory = app.clone();
+    run_album_database_work(app, move |state| {
+        let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         album_artwork_cache::put(&directory, &sha256, &data_base64)
     })
     .await
-    .map_err(|error| format!("保存專輯縮圖工作失敗：{error}"))?
 }
 
 fn album_artwork_track_identity(
@@ -2776,55 +3011,52 @@ fn album_artwork_track_identity(
 #[tauri::command]
 async fn album_artwork_cache_get_for_track(
     app: AppHandle,
-    state: State<'_, AppState>,
     track_id: String,
 ) -> Result<Response, String> {
-    let directory = album_artwork_cache_directory(&app, &state)?;
-    let Some(identity) = album_artwork_track_identity(&state, &track_id)? else {
-        return Ok(Response::new(Vec::new()));
-    };
-    tauri::async_runtime::spawn_blocking(move || {
+    let app_for_directory = app.clone();
+    run_album_database_work(app, move |state| {
+        let directory = album_artwork_cache_directory(&app_for_directory, state)?;
+        let Some(identity) = album_artwork_track_identity(state, &track_id)? else {
+            return Ok(Response::new(Vec::new()));
+        };
         album_artwork_cache::get_for_track(&directory, &identity).map(Response::new)
     })
     .await
-    .map_err(|error| format!("讀取曲目縮圖工作失敗：{error}"))?
 }
 
 #[tauri::command]
 async fn album_artwork_cache_put_for_track(
     app: AppHandle,
-    state: State<'_, AppState>,
     track_id: String,
     sha256: String,
     data_base64: String,
 ) -> Result<(), String> {
-    let directory = album_artwork_cache_directory(&app, &state)?;
-    let Some(identity) = album_artwork_track_identity(&state, &track_id)? else {
-        return Ok(());
-    };
-    tauri::async_runtime::spawn_blocking(move || {
+    let app_for_directory = app.clone();
+    run_album_database_work(app, move |state| {
+        let directory = album_artwork_cache_directory(&app_for_directory, state)?;
+        let Some(identity) = album_artwork_track_identity(state, &track_id)? else {
+            return Ok(());
+        };
         album_artwork_cache::put(&directory, &sha256, &data_base64)?;
         album_artwork_cache::put_track_reference(&directory, &identity, Some(&sha256))
     })
     .await
-    .map_err(|error| format!("保存曲目縮圖工作失敗：{error}"))?
 }
 
 #[tauri::command]
 async fn album_artwork_cache_mark_missing_for_track(
     app: AppHandle,
-    state: State<'_, AppState>,
     track_id: String,
 ) -> Result<(), String> {
-    let directory = album_artwork_cache_directory(&app, &state)?;
-    let Some(identity) = album_artwork_track_identity(&state, &track_id)? else {
-        return Ok(());
-    };
-    tauri::async_runtime::spawn_blocking(move || {
+    let app_for_directory = app.clone();
+    run_album_database_work(app, move |state| {
+        let directory = album_artwork_cache_directory(&app_for_directory, state)?;
+        let Some(identity) = album_artwork_track_identity(state, &track_id)? else {
+            return Ok(());
+        };
         album_artwork_cache::put_track_reference(&directory, &identity, None)
     })
     .await
-    .map_err(|error| format!("保存曲目封面狀態工作失敗：{error}"))?
 }
 
 #[tauri::command]
@@ -9279,6 +9511,7 @@ pub fn run() {
             library_get_artist_index_facets,
             library_get_album_index_facets,
             library_get_album_page,
+            library_get_album_artwork_candidates,
             album_artwork_cache_get,
             album_artwork_cache_put,
             album_artwork_cache_get_for_track,
