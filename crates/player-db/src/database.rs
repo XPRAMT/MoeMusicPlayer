@@ -649,6 +649,7 @@ pub struct ArtistIndexEntry {
     pub track_count: u64,
     pub album_count: u64,
     pub played_ms: u64,
+    pub duration_ms: u64,
 }
 
 impl fmt::Debug for Database {
@@ -1306,7 +1307,8 @@ impl Database {
             "SELECT t.track_id,
                 COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
                 COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
-                COALESCE((SELECT played_ms FROM track_playback_statistics WHERE track_id=t.track_id), 0)
+                COALESCE((SELECT played_ms FROM track_playback_statistics WHERE track_id=t.track_id), 0),
+                COALESCE(t.duration_ms, 0)
              FROM tracks t
              WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                            ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)",
@@ -1317,6 +1319,7 @@ impl Database {
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, i64>(3)?.max(0) as u64,
+                row.get::<_, i64>(4)?.max(0) as u64,
             ))
         })?;
         #[derive(Default)]
@@ -1326,10 +1329,11 @@ impl Database {
             albums: HashSet<String>,
             track_count: u64,
             played_ms: u64,
+            duration_ms: u64,
         }
         let mut aggregates: HashMap<String, Aggregate> = HashMap::new();
         for row in rows {
-            let (_track_id, artist, album, played_ms) = row?;
+            let (_track_id, artist, album, played_ms, duration_ms) = row?;
             let mut track_artist_keys = HashSet::new();
             for name in split_artist_names(artist.as_deref()) {
                 let key = artist_keys
@@ -1344,6 +1348,7 @@ impl Database {
                 entry.artist_names.insert(name);
                 entry.track_count += 1;
                 entry.played_ms = entry.played_ms.saturating_add(played_ms);
+                entry.duration_ms = entry.duration_ms.saturating_add(duration_ms);
                 if let Some(album) = album
                     .as_deref()
                     .map(str::trim)
@@ -1372,6 +1377,7 @@ impl Database {
                     track_count: aggregate.track_count,
                     album_count: aggregate.albums.len() as u64,
                     played_ms: aggregate.played_ms,
+                    duration_ms: aggregate.duration_ms,
                 }
             })
             .collect::<Vec<_>>();
@@ -4556,6 +4562,9 @@ mod tests {
         second.metadata.as_mut().unwrap().album = Some("专辑 a".to_owned());
         third.metadata.as_mut().unwrap().artist = Some("HANSer".to_owned());
         third.metadata.as_mut().unwrap().album = Some("   ".to_owned());
+        first.metadata.as_mut().unwrap().duration_ms = Some(10_000);
+        second.metadata.as_mut().unwrap().duration_ms = Some(20_000);
+        third.metadata.as_mut().unwrap().duration_ms = Some(30_000);
         let mut disabled = record(&disabled_root, "hidden", "hidden", "Hidden", 1, 4);
         disabled.metadata.as_mut().unwrap().artist = Some("停用演出者".to_owned());
         let records = vec![first, second, third];
@@ -4657,6 +4666,7 @@ mod tests {
         assert_eq!(hanser.album_count, 1);
         assert_eq!(hanser.names.iter().map(|item| item.count).sum::<u64>(), 3);
         assert_eq!(hanser.played_ms, 6_000);
+        assert_eq!(hanser.duration_ms, 60_000);
         assert!(index.iter().all(|entry| entry.key != "停用演出者"));
         let singer_a = index
             .iter()
@@ -4664,6 +4674,7 @@ mod tests {
             .expect("singer A");
         assert_eq!(singer_a.track_count, 1);
         assert_eq!(singer_a.played_ms, 1_000);
+        assert_eq!(singer_a.duration_ms, 10_000);
 
         let artist_page = db
             .list_tracks_page_for_artists(

@@ -2,7 +2,7 @@ async page => {
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 page.setDefaultTimeout(6000);
 await page.setViewportSize({ width: 1120, height: 720 });
-await page.goto('http://127.0.0.1:1452/tests/artist-index-harness.html', { waitUntil: 'domcontentloaded', timeout: 30000 });
+await page.goto('http://127.0.0.1:1452/tests/artist-index-harness.html', { waitUntil: 'commit', timeout: 30000 });
 await page.evaluate(() => sessionStorage.removeItem('artist-list-sort'));
 await page.reload();
 const artistCountLabel = page.getByTestId('artist-count');
@@ -51,7 +51,7 @@ assert(Math.abs(layout.frame.top - layout.topbar.bottom) <= 1, `frame should sta
 assert(Math.abs(layout.frame.bottom - layout.scroll.bottom) <= 1, `frame should fill the remaining page: ${JSON.stringify(layout)}`);
 assert(layout.viewport.height > 500, `viewport should use the available page height: ${JSON.stringify(layout)}`);
 assert(layout.virtualRowCount < layout.totalRows, 'long artist list should render virtually');
-for (let column = 2; column < 5; column += 1) {
+for (let column = 2; column < 6; column += 1) {
   assert(
     Math.abs(layout.headerGridColumns[column] - layout.dataGridColumns[column]) < 0.1,
     `artist header and data column ${column} should have equal widths: ${JSON.stringify(layout)}`,
@@ -61,7 +61,17 @@ for (let column = 2; column < 5; column += 1) {
     `artist summary columns should be six fullwidth characters: ${JSON.stringify(layout)}`,
   );
 }
+for (const label of ['歌曲數量', '專輯數量', '累積播放', '播放時長']) {
+  await page.getByRole('button', { name: new RegExp(label) }).waitFor();
+}
 
+await page.getByRole('button', { name: /累積播放/ }).click();
+const cumulativeSortedFirstRow = await page.locator('.paged-virtual-row').first().innerText();
+assert(cumulativeSortedFirstRow.includes('Artist 001'), 'the cumulative play column should sort actual listening time independently');
+await page.getByRole('button', { name: /播放時長/ }).click();
+const durationSortedFirstRow = await page.locator('.paged-virtual-row').first().innerText();
+assert(durationSortedFirstRow.includes('Artist 080'), 'the new track duration column should sort by summed song length');
+await page.getByTestId('artist-section').getByRole('button', { name: '演出者', exact: true }).click();
 const firstRowBefore = await page.locator('.paged-virtual-row').first().innerText();
 await page.getByTestId('artist-section').getByRole('button', { name: '演出者', exact: true }).click();
 const firstRowAfter = await page.locator('.paged-virtual-row').first().innerText();

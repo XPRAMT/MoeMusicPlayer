@@ -422,7 +422,9 @@ pub enum ArtistListSortField {
     Title,
     TrackCount,
     AlbumCount,
+    /// Legacy wire name retained: `duration` means actual accumulated play time.
     Duration,
+    TrackDuration,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2096,6 +2098,14 @@ mod tests {
         assert_eq!(json["artistListSort"]["direction"], "desc");
         let decoded: AppSettings = serde_json::from_value(json.clone()).expect("restore settings");
         assert_eq!(decoded.artist_list_sort, settings.artist_list_sort);
+
+        json["artistListSort"]["field"] = serde_json::json!("trackDuration");
+        let track_duration: AppSettings =
+            serde_json::from_value(json.clone()).expect("restore track duration sort");
+        assert_eq!(
+            track_duration.artist_list_sort.field,
+            ArtistListSortField::TrackDuration
+        );
 
         json.as_object_mut()
             .expect("settings object")

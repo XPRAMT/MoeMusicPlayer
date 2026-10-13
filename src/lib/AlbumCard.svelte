@@ -5,7 +5,7 @@
   import type { AlbumEntry } from './album-identities.js';
   import { detectArtworkMimeType } from './active-track-artwork';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
-  import defaultCoverUrl from '../../icon/DefaultCover.jpg';
+  import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
 
   interface Props { album: AlbumEntry; active: boolean; refreshKey: number; onSelect: (album: AlbumEntry) => void }
   let { album, active, refreshKey, onSelect }: Props = $props();

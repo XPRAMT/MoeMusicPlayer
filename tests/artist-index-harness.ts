@@ -10,7 +10,8 @@ const artists = Array.from({ length: 80 }, (_, index) => {
     artistNames: [displayName],
     trackCount: 80 - index,
     albumCount: index % 8,
-    playedMs: (index + 1) * 60_000,
+    playedMs: (80 - index) * 60_000,
+    durationMs: (index + 1) * 120_000,
   };
 });
 

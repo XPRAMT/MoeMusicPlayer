@@ -10,16 +10,17 @@
   import TrackColumnCells from './TrackColumnCells.svelte';
 
   type ArtistRow = ArtistIndexEntry & { displayName: string };
-  type SortField = 'title' | 'trackCount' | 'albumCount' | 'duration';
+  type SortField = 'title' | 'trackCount' | 'albumCount' | 'duration' | 'trackDuration';
 
   const ARTIST_COLUMNS = [
     { id: 'title', label: '演出者' },
     { id: 'trackCount', label: '歌曲數量' },
     { id: 'albumCount', label: '專輯數量' },
-    { id: 'duration', label: '播放時長' },
+    { id: 'duration', label: '累積播放' },
+    { id: 'trackDuration', label: '播放時長' },
   ];
   // All columns share the same font-size as their cells so em widths match between header and rows.
-  const ARTIST_GRID = '36px minmax(150px,1fr) 6em 6em 6em';
+  const ARTIST_GRID = '36px minmax(150px,1fr) 6em 6em 6em 6em';
 
   interface Props {
     refreshKey: number;
@@ -114,6 +115,7 @@
   function sortValue(row: ArtistRow, field: SortField): string | number {
     if (field === 'title') return row.displayName;
     if (field === 'duration') return row.playedMs;
+    if (field === 'trackDuration') return row.durationMs;
     return row[field];
   }
 
@@ -200,6 +202,7 @@
               { id: 'trackCount', text: row.item.trackCount.toLocaleString() },
               { id: 'albumCount', text: row.item.albumCount.toLocaleString() },
               { id: 'duration', text: formatDuration(row.item.playedMs) },
+              { id: 'trackDuration', text: formatDuration(row.item.durationMs) },
             ]}
           />
         {:else}

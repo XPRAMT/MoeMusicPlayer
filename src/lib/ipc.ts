@@ -273,7 +273,10 @@ export interface ArtistIndexEntry {
   artistNames: string[];
   trackCount: number;
   albumCount: number;
+  /** Actual cumulative listening time credited to this artist. */
   playedMs: number;
+  /** Sum of the durations of this artist's distinct visible tracks. */
+  durationMs: number;
 }
 
 export interface AlbumArtworkSelection {
@@ -282,7 +285,7 @@ export interface AlbumArtworkSelection {
   representative: boolean;
 }
 
-export type ArtistListSortField = 'title' | 'trackCount' | 'albumCount' | 'duration';
+export type ArtistListSortField = 'title' | 'trackCount' | 'albumCount' | 'duration' | 'trackDuration';
 export type ArtistListSortDirection = 'asc' | 'desc';
 export interface ArtistListSort {
   field: ArtistListSortField;

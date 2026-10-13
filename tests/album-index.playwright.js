@@ -67,8 +67,8 @@
   const noCoverImage = noCoverCard.locator('.album-card-art img');
   await noCoverImage.waitFor();
   const fallbackImage = await noCoverImage.evaluate((image) => ({ source: image.getAttribute('src'), width: image.naturalWidth }));
-  assert(fallbackImage.source?.toLowerCase().includes('defaultcover') && fallbackImage.width > 0,
-    `albums without artwork should display the bundled default cover: ${JSON.stringify(fallbackImage)}`);
+  assert(fallbackImage.source?.startsWith('data:image/jpeg;base64,') && fallbackImage.width > 0,
+    `albums without artwork should display the EXE-embedded default cover: ${JSON.stringify(fallbackImage)}`);
   const noFrame = await page.locator('.album-card-art').first().evaluate((element) => getComputedStyle(element).borderWidth);
   assert(noFrame === '0px', `album cover thumbnails should not have a border: ${noFrame}`);
   await page.locator('.album-grid-viewport').evaluate((element) => {
