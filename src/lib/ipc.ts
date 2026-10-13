@@ -255,6 +255,11 @@ export interface ArtistIndexFacets {
   albums: string[];
 }
 
+export interface AlbumIndexFacet {
+  name: string | null;
+  trackCount: number;
+}
+
 export interface ArtistNameCount {
   name: string;
   count: number;
@@ -605,6 +610,14 @@ interface IpcContract {
     args: Record<string, never>;
     result: ArtistIndexFacets;
   };
+  library_get_album_index_facets: {
+    args: Record<string, never>;
+    result: AlbumIndexFacet[];
+  };
+  library_get_album_page: {
+    args: { albumNames: string[]; offset: number; limit: number };
+    result: TrackPage;
+  };
   library_get_artist_index: {
     args: { artistIdentities: ArtistIdentityMapping[]; albumIdentities: ArtistIdentityMapping[] };
     result: ArtistIndexEntry[];
@@ -793,6 +806,24 @@ export function getTrackArtworkBytes(trackId: string): Promise<ArrayBuffer> {
     );
   }
   return invoke<ArrayBuffer>('library_get_track_artwork', { trackId });
+}
+
+/** Retrieve a previously generated square album-card thumbnail by source-artwork SHA-256. */
+export function getAlbumThumbnailBytes(sha256: string): Promise<ArrayBuffer> {
+  if (!isTauri()) return Promise.reject(new Error('專輯縮圖快取需要 MoeMusicPlayer 桌面程式。'));
+  return invoke<ArrayBuffer>('album_artwork_cache_get', { sha256 });
+}
+
+/** Save a generated JPEG thumbnail to the rebuildable platform cache. */
+export function putAlbumThumbnailBytes(sha256: string, bytes: ArrayBuffer): Promise<void> {
+  if (!isTauri()) return Promise.reject(new Error('專輯縮圖快取需要 MoeMusicPlayer 桌面程式。'));
+  const binary = new Uint8Array(bytes);
+  let binaryText = '';
+  for (let offset = 0; offset < binary.length; offset += 0x8000) {
+    binaryText += String.fromCharCode(...binary.subarray(offset, offset + 0x8000));
+  }
+  const data = btoa(binaryText);
+  return invoke<void>('album_artwork_cache_put', { sha256, dataBase64: data });
 }
 
 export function getMainBackgroundBytes(): Promise<ArrayBuffer> {

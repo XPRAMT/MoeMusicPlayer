@@ -46,6 +46,8 @@
     isSendingPlaybackCommand: boolean;
     onPlay: (track: TrackSummary) => void | Promise<void>;
     onTotalCount?: (count: number | null) => void;
+    sortable?: boolean;
+    getIndexLabel?: (track: TrackSummary, index: number) => string;
     fetchPage?: (request: TrackPageRequest) => Promise<TrackPage>;
     columns?: TrackListColumnPreference[];
     columnWidths?: TrackColumnWidths;
@@ -66,6 +68,8 @@
     isSendingPlaybackCommand,
     onPlay,
     onTotalCount,
+    sortable = true,
+    getIndexLabel = (_track, index) => formatListOrder(index),
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
@@ -194,7 +198,9 @@
     fillAvailable={true}
     {listId}
     scrollResetKey={listScrollResetKey}
-    ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序"
+    ariaLabel={sortable
+      ? '曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序'
+      : '曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目'}
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
     minContentWidth={listMinWidth}
@@ -209,7 +215,7 @@
         <TrackColumnCells
           variant="header"
           columns={visibleColumns}
-          sortable={true}
+          {sortable}
           sort={normalizedSort}
           onSort={handleSort}
           resizable={true}
@@ -222,7 +228,7 @@
         <TrackColumnCells
           variant="item"
           columns={visibleColumns}
-          indexLabel={formatListOrder(row.index)}
+          indexLabel={getIndexLabel(row.item!, row.index)}
           cells={visibleColumns.map((column) => {
             const item = withLivePlayedMs(row.item!, livePlayCount);
             return {

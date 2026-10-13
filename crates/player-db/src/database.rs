@@ -130,6 +130,23 @@ const ARTIST_TRACKS_PREFIX_SQL: &str = "SELECT t.track_id,
    AND EXISTS (SELECT 1 FROM json_each(?2) artist_name
                WHERE instr(lower(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '')),
                             lower(artist_name.value)) > 0)";
+const ALBUM_TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
+    t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
+    t.year, t.release_date, t.bit_depth,
+    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
+ FROM tracks t
+ WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+   AND EXISTS (SELECT 1 FROM json_each(?1) album_name
+               WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') = album_name.value COLLATE BINARY)
+ ORDER BY COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647),
+          COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE NATURAL_NOCASE,
+          t.track_id
+ LIMIT ?2 OFFSET ?3";
 const PLAYLIST_PAGE_SQL: &str = r#"
 WITH resolved_entries AS (
     SELECT pe.position,
@@ -536,6 +553,14 @@ pub struct ArtistIdentityMapping {
 pub struct ArtistIndexFacets {
     pub artists: Vec<String>,
     pub albums: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumIndexFacet {
+    /// `None` or blank represents an untagged album bucket.
+    pub name: Option<String>,
+    pub track_count: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1059,6 +1084,76 @@ impl Database {
         artists.sort();
         albums.sort();
         Ok(ArtistIndexFacets { artists, albums })
+    }
+
+    /// Return album labels and visible track counts without transferring all track summaries.
+    /// Empty album tags remain present so the renderer can create the separate unmarked bucket.
+    pub fn album_index_facets(&self) -> Result<Vec<AlbumIndexFacet>, DatabaseError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
+                    COUNT(DISTINCT t.track_id)
+             FROM tracks t
+             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+             GROUP BY COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album)",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(AlbumIndexFacet {
+                name: row.get(0)?,
+                track_count: row.get::<_, i64>(1)?.max(0) as u64,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(DatabaseError::from)
+    }
+
+    /// Read a paged album track list ordered by disc, track number, then natural title.
+    pub fn list_album_tracks_page(
+        &self,
+        album_names: &[String],
+        offset: u64,
+        requested_limit: u32,
+    ) -> Result<Page<TrackSummary>, DatabaseError> {
+        let unique_names = album_names.iter().cloned().collect::<HashSet<_>>();
+        if unique_names.is_empty() {
+            return Ok(Page {
+                items: Vec::new(),
+                offset,
+                limit: query_limit(requested_limit),
+                total_count: 0,
+            });
+        }
+        let mut names = unique_names.into_iter().collect::<Vec<_>>();
+        names.sort();
+        let names_json = serde_json::to_string(&names)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let connection = self.lock()?;
+        let total_count = connection.query_row(
+            "SELECT COUNT(DISTINCT t.track_id)
+             FROM tracks t
+             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+               AND EXISTS (SELECT 1 FROM json_each(?1) album_name
+                           WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') = album_name.value COLLATE BINARY)",
+            [&names_json],
+            |row| row.get::<_, i64>(0),
+        )?.max(0) as u64;
+        let limit = query_limit(requested_limit);
+        let database_offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        let mut statement = connection.prepare(ALBUM_TRACKS_PAGE_SQL)?;
+        let rows = statement.query_map(
+            params![names_json, limit, database_offset],
+            row_to_track_summary,
+        )?;
+        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+        attach_file_names(&connection, &mut items)?;
+        Ok(Page {
+            items,
+            offset,
+            limit,
+            total_count,
+        })
     }
 
     /// Aggregate artist statistics on the database side, counting each visible track once per
@@ -4171,6 +4266,76 @@ mod tests {
             )
             .expect("artist collision page");
         assert_eq!(substring_collision.total_count, 0);
+    }
+
+    #[test]
+    fn album_facets_keep_untagged_tracks_separate_and_album_pages_merge_exact_aliases() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "album-index");
+        let mut disc_two = record(&root, "track-10", "track-10", "Song 10", 1, 1);
+        let mut disc_one = record(&root, "track-2", "track-2", "Song 2", 1, 2);
+        let mut unmarked = record(&root, "untagged", "untagged", "Unmarked", 1, 3);
+        let mut titled_other = record(&root, "other", "other", "Tagged Other", 1, 4);
+        let mut padded_name = record(&root, "padded", "padded", "Padded Album", 1, 5);
+        disc_two.metadata.as_mut().unwrap().album = Some("专辑 A".to_owned());
+        disc_two.metadata.as_mut().unwrap().disc_number = Some(2);
+        disc_two.metadata.as_mut().unwrap().track_number = Some(1);
+        disc_one.metadata.as_mut().unwrap().album = Some("專輯 A".to_owned());
+        disc_one.metadata.as_mut().unwrap().disc_number = Some(1);
+        disc_one.metadata.as_mut().unwrap().track_number = Some(10);
+        unmarked.metadata.as_mut().unwrap().album = Some("  ".to_owned());
+        titled_other.metadata.as_mut().unwrap().album = Some("其它".to_owned());
+        padded_name.metadata.as_mut().unwrap().album = Some("\u{3000}專輯 A\u{3000}".to_owned());
+        padded_name.metadata.as_mut().unwrap().disc_number = Some(1);
+        padded_name.metadata.as_mut().unwrap().track_number = Some(11);
+        let records = [disc_two, disc_one, unmarked, titled_other, padded_name];
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            5,
+        );
+
+        let facets = db.album_index_facets().expect("album facets");
+        assert!(facets
+            .iter()
+            .any(|facet| facet.name.as_deref() == Some("專輯 A") && facet.track_count == 1));
+        assert!(facets
+            .iter()
+            .any(|facet| facet.name.as_deref() == Some("专辑 A") && facet.track_count == 1));
+        assert!(facets
+            .iter()
+            .any(|facet| facet.name.as_deref() == Some("  ") && facet.track_count == 1));
+        assert!(facets.iter().any(|facet| {
+            facet.name.as_deref() == Some("\u{3000}專輯 A\u{3000}") && facet.track_count == 1
+        }));
+        assert!(facets
+            .iter()
+            .any(|facet| facet.name.as_deref() == Some("其它") && facet.track_count == 1));
+
+        let page = db
+            .list_album_tracks_page(
+                &[
+                    "專輯 A".into(),
+                    "专辑 A".into(),
+                    "\u{3000}專輯 A\u{3000}".into(),
+                ],
+                0,
+                10,
+            )
+            .expect("album page");
+        assert_eq!(page.total_count, 3);
+        assert_eq!(page.items[0].track_number, Some(10));
+        assert_eq!(page.items[1].track_number, Some(11));
+        assert_eq!(page.items[2].disc_number, Some(2));
+        assert_eq!(
+            db.list_album_tracks_page(&[], 0, 10)
+                .expect("empty aliases")
+                .total_count,
+            0
+        );
     }
 
     #[test]

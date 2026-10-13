@@ -1031,6 +1031,8 @@ input:focus-visible {
 .page-content.is-list-page > .library-section > .not-ready-panel,
 .page-content.is-list-page > .artist-section > .not-ready-panel,
 .page-content.is-list-page > .artist-detail-section > .artist-detail-empty,
+.page-content.is-list-page > .album-section > .not-ready-panel,
+.page-content.is-list-page > .album-detail-section > .artist-detail-empty,
 .page-content.is-list-page > .playlist-section > .inline-message,
 .page-content.is-list-page > .playlist-section > .not-ready-panel,
 .page-content.is-list-page > .playlist-section > .loading-panel,
@@ -1044,6 +1046,8 @@ input:focus-visible {
 .library-section,
 .artist-section,
 .artist-detail-section,
+.album-section,
+.album-detail-section,
 .playlist-section,
 .queue-page {
   display: flex;
@@ -1056,6 +1060,8 @@ input:focus-visible {
 .library-section[hidden],
 .artist-section[hidden],
 .artist-detail-section[hidden],
+.album-section[hidden],
+.album-detail-section[hidden],
 .playlist-section[hidden],
 .queue-page[hidden] {
   display: none;
@@ -1144,6 +1150,8 @@ input:focus-visible {
 .page-content.wide-list-page:has(> .library-section),
 .page-content.wide-list-page:has(> .artist-section),
 .page-content.wide-list-page:has(> .artist-detail-section),
+.page-content.wide-list-page:has(> .album-section),
+.page-content.wide-list-page:has(> .album-detail-section),
 .page-content.wide-list-page:has(> .queue-page),
 .page-content.wide-list-page:has(> .playlist-section) {
   padding-top: 0;
@@ -4205,6 +4213,8 @@ input:focus-visible {
   .page-content.wide-list-page:has(> .library-section),
   .page-content.wide-list-page:has(> .artist-section),
   .page-content.wide-list-page:has(> .artist-detail-section),
+  .page-content.wide-list-page:has(> .album-section),
+  .page-content.wide-list-page:has(> .album-detail-section),
   .page-content.wide-list-page:has(> .queue-page),
   .page-content.wide-list-page:has(> .playlist-section) { padding-top: 0; }
   .page-content.is-list-page { --list-chrome-pad-x: 14px; }

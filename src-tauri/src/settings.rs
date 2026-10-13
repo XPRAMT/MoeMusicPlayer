@@ -2048,10 +2048,12 @@ mod tests {
 
     #[test]
     fn artist_list_sort_is_persisted_and_legacy_settings_default_to_title_ascending() {
-        let mut settings = AppSettings::default();
-        settings.artist_list_sort = ArtistListSort {
-            field: ArtistListSortField::Duration,
-            direction: ArtistListSortDirection::Desc,
+        let settings = AppSettings {
+            artist_list_sort: ArtistListSort {
+                field: ArtistListSortField::Duration,
+                direction: ArtistListSortDirection::Desc,
+            },
+            ..AppSettings::default()
         };
         let mut json = serde_json::to_value(&settings).expect("serialize settings");
         assert_eq!(json["artistListSort"]["field"], "duration");

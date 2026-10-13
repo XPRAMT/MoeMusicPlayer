@@ -59,6 +59,7 @@ use settings::{
     NowPlayingLayout, RepeatMode, ResamplingMode, SettingsStore, SlideshowOrder, SourceEntry,
     SourceEntryKind, ThemeColorMode, ThemeSettings, TrackListColumnSettings, WindowGeometry,
 };
+mod album_artwork_cache;
 #[cfg(any(target_os = "android", test))]
 mod android_artwork;
 #[cfg(any(target_os = "android", test))]
@@ -2665,6 +2666,87 @@ fn library_get_artist_index_facets(
     database
         .artist_index_facets()
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn library_get_album_index_facets(
+    state: State<'_, AppState>,
+) -> Result<Vec<player_db::AlbumIndexFacet>, String> {
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database
+        .album_index_facets()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn library_get_album_page(
+    state: State<'_, AppState>,
+    album_names: Vec<String>,
+    offset: u64,
+    limit: u32,
+) -> Result<Page<TrackSummary>, String> {
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database
+        .list_album_tracks_page(&album_names, offset, limit)
+        .map_err(|error| error.to_string())
+}
+
+fn album_artwork_cache_directory(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<std::path::PathBuf, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        Ok(user_data_directory(state)?.join("album-artwork"))
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = state;
+        app.path()
+            .app_cache_dir()
+            .map(|path| path.join("album-artwork"))
+            .map_err(|error| format!("無法取得 Android 專輯縮圖快取路徑：{error}"))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = state;
+        app.path()
+            .app_cache_dir()
+            .map(|path| path.join("album-artwork"))
+            .map_err(|error| format!("無法取得專輯縮圖快取路徑：{error}"))
+    }
+}
+
+#[tauri::command]
+fn album_artwork_cache_get(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    sha256: String,
+) -> Result<Response, String> {
+    let directory = album_artwork_cache_directory(&app, &state)?;
+    album_artwork_cache::get(&directory, &sha256).map(Response::new)
+}
+
+#[tauri::command]
+fn album_artwork_cache_put(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    sha256: String,
+    data_base64: String,
+) -> Result<(), String> {
+    let directory = album_artwork_cache_directory(&app, &state)?;
+    album_artwork_cache::put(&directory, &sha256, &data_base64)
 }
 
 #[tauri::command]
@@ -9117,6 +9199,10 @@ pub fn run() {
             get_runtime_capabilities,
             library_get_page,
             library_get_artist_index_facets,
+            library_get_album_index_facets,
+            library_get_album_page,
+            album_artwork_cache_get,
+            album_artwork_cache_put,
             library_get_artist_index,
             library_get_artist_page,
             playlist_list,

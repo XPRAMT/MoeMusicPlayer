@@ -124,6 +124,10 @@
   import type { ShortcutAction, ShortcutBinding, ShortcutSettings } from './lib/ipc';
   import TrackList from './lib/TrackList.svelte';
   import ArtistIndex from './lib/ArtistIndex.svelte';
+  import AlbumIndex from './lib/AlbumIndex.svelte';
+  import AlbumDetail from './lib/AlbumDetail.svelte';
+  import { buildAlbumEntries, findAlbumEntryByName } from './lib/album-identities.js';
+  import type { AlbumEntry } from './lib/album-identities.js';
   import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
@@ -165,7 +169,7 @@
     imeBottomPx: number;
   };
 
-  type View = 'library' | 'artists' | 'artist-detail' | 'playlists' | 'queue' | 'settings';
+  type View = 'library' | 'artists' | 'artist-detail' | 'albums' | 'album-detail' | 'playlists' | 'queue' | 'settings';
   type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'playback' | 'shortcuts' | 'sources' | 'about';
   type SyncProgressViewState = {
     runId: string;
@@ -185,6 +189,11 @@
   let rememberedArtistView = $state<ArtistSectionView>('artists');
   let artistIndexRows = $state<ArtistEntry[] | null>(null);
   let artistIndexRowsLoad: Promise<ArtistEntry[]> | null = null;
+  let keepAlbumIndexForDetail = $state(false);
+  let selectedAlbum = $state<AlbumEntry | null>(null);
+  let rememberedAlbumView = $state<'albums' | 'album-detail'>('albums');
+  let albumIndexRows = $state<AlbumEntry[] | null>(null);
+  let albumIndexRowsLoad: Promise<AlbumEntry[]> | null = null;
   let nowPlayingReturnView = $state<View>('library');
   let isNowPlayingMounted = $state(false);
   let isNowPlayingOpen = $state(false);
@@ -274,6 +283,8 @@
   let libraryTrackCount = $state<number | null>(null);
   let artistTrackCount = $state<number | null>(null);
   let artistIndexCount = $state<number | null>(null);
+  let albumIndexCount = $state<number | null>(null);
+  let albumTrackCount = $state<number | null>(null);
   let playlistTrackCount = $state<number | null>(null);
   let queueTrackCount = $state<number | null>(null);
   let libraryListRevision = $state(0);
@@ -404,6 +415,10 @@
         ? '演出者'
         : activeView === 'artist-detail'
           ? `演出者．${selectedArtist?.displayName ?? ''}`
+      : activeView === 'albums'
+        ? '專輯'
+        : activeView === 'album-detail'
+          ? `專輯．${selectedAlbum?.unmarked ? '其它' : selectedAlbum?.displayName ?? ''}`
       : activeView === 'playlists'
         ? selectedPlaylist
           ? `我的播放清單．${selectedPlaylist.name.trim() || '未命名播放清單'}`
@@ -413,7 +428,7 @@
           : '設定',
   );
   const isListPage = $derived(
-    activeView === 'library' || activeView === 'artists' || activeView === 'artist-detail' || activeView === 'playlists' || activeView === 'queue',
+    activeView === 'library' || activeView === 'artists' || activeView === 'artist-detail' || activeView === 'albums' || activeView === 'album-detail' || activeView === 'playlists' || activeView === 'queue',
   );
   const pageTrackCountLabel = $derived.by(() => {
     if (activeView === 'library') {
@@ -421,6 +436,9 @@
     }
     if (activeView === 'artists') {
       return `${artistIndexCount === null ? '' : `${artistIndexCount.toLocaleString()} `}位演出者`;
+    }
+    if (activeView === 'albums') {
+      return `${albumIndexCount === null ? '' : `${albumIndexCount.toLocaleString()} `}張專輯`;
     }
     if (activeView === 'playlists') {
       const count = playlistTrackCount ?? selectedPlaylist?.entryCount ?? null;
@@ -434,11 +452,16 @@
     if (activeView === 'artist-detail') {
       return `${artistTrackCount === null ? '' : `${artistTrackCount.toLocaleString()} `}首曲目`;
     }
+    if (activeView === 'album-detail') {
+      const count = albumTrackCount ?? selectedAlbum?.trackCount ?? null;
+      return `${count === null ? '' : `${count.toLocaleString()} `}首曲目`;
+    }
     return null;
   });
   $effect(() => {
     const view = activeView;
     if (view !== 'artists' && view !== 'artist-detail') keepArtistIndexForDetail = false;
+    if (view !== 'albums' && view !== 'album-detail') keepAlbumIndexForDetail = false;
   });
   const syncProgressSources = $derived.by(() =>
     syncProgress
@@ -789,6 +812,7 @@
         unlistenFinished = await listen<LibrarySyncFinishedEvent>('library-sync-finished', (event) => {
           handleLibrarySyncFinished(event.payload);
           artistIndexRows = null;
+          albumIndexRows = null;
           libraryListRevision += 1;
           if (libraryReady) void loadPlaylists(undefined, true);
           if (sourceSyncReady) void loadSources();
@@ -1904,6 +1928,7 @@
       sources = await invokeCommand('library_set_source_enabled', { sourceId: source.id, enabled });
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
       artistIndexRows = null;
+      albumIndexRows = null;
       libraryTrackCount = null;
       libraryListRevision += 1;
       await loadPlaylists();
@@ -1923,6 +1948,10 @@
     try {
       sources = await invokeCommand('library_remove_source', { sourceId: source.id });
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
+      artistIndexRows = null;
+      albumIndexRows = null;
+      libraryTrackCount = null;
+      libraryListRevision += 1;
       if (source.kind === 'playlist_file') {
         await loadPlaylists();
         sourceSyncSummary = '已移除播放清單來源；側欄清單已刪除，曲庫中的曲目仍會保留。';
@@ -2133,6 +2162,71 @@
     activeView = 'artists';
   }
 
+  async function loadAlbumIndexRowsForNavigation(): Promise<AlbumEntry[]> {
+    if (albumIndexRows) return albumIndexRows;
+    if (albumIndexRowsLoad) return albumIndexRowsLoad;
+    albumIndexRowsLoad = (async () => {
+      const facets = await invokeCommand('library_get_album_index_facets', {});
+      return buildAlbumEntries(facets);
+    })();
+    try {
+      const rows = await albumIndexRowsLoad;
+      albumIndexRows = rows;
+      return rows;
+    } finally {
+      albumIndexRowsLoad = null;
+    }
+  }
+
+  function openAlbumEntry(album: AlbumEntry, preserveIndex = false): void {
+    if (selectedAlbum?.key !== album.key) albumTrackCount = null;
+    selectedAlbum = album;
+    keepAlbumIndexForDetail = preserveIndex;
+    rememberedAlbumView = 'album-detail';
+    activeView = 'album-detail';
+  }
+
+  function navigateToAlbumSection(): void {
+    activeView = selectedAlbum ? rememberedAlbumView : 'albums';
+  }
+
+  function navigateToAlbumIndex(): void {
+    rememberedAlbumView = 'albums';
+    activeView = 'albums';
+  }
+
+  async function openAlbumDetailForName(name: string): Promise<void> {
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+    try {
+      const entries = await loadAlbumIndexRowsForNavigation();
+      const album = await findAlbumEntryByName(trimmedName, entries);
+      if (!album) {
+        if (isNowPlayingOpen) await closeNowPlaying();
+        rememberedAlbumView = 'albums';
+        activeView = 'albums';
+        return;
+      }
+      const preserveIndex = activeView === 'albums' || (activeView === 'album-detail' && keepAlbumIndexForDetail);
+      if (isNowPlayingOpen) await closeNowPlaying();
+      openAlbumEntry(album, preserveIndex);
+    } catch (error) {
+      console.error(`無法開啟專輯「${trimmedName}」的明細`, error);
+    }
+  }
+
+  async function fetchAlbumPage(request: TrackPageRequest): Promise<TrackPage> {
+    const album = selectedAlbum;
+    if (!album) return { items: [], offset: request.offset, limit: request.limit, totalCount: 0 };
+    const page = await invokeCommand('library_get_album_page', {
+      albumNames: album.aliases,
+      offset: request.offset,
+      limit: request.limit,
+    });
+    albumTrackCount = page.totalCount;
+    return page;
+  }
+
   async function openArtistDetailForName(name: string): Promise<void> {
     const trimmedName = name.trim();
     if (!trimmedName) return;
@@ -2177,6 +2271,22 @@
       query: null,
       queryAlternates: [],
       fieldFilter: { field: 'artist', value: selectedArtist.artistNames.join('|') },
+      sort: librarySort,
+    };
+    await sendPlaybackCommand(
+      () => invokeCommand('playback_play', { trackId: track.id, queueSource }),
+      { refreshQueueList: true },
+    );
+  }
+
+  async function playAlbumTrack(track: TrackSummary): Promise<void> {
+    if (!selectedAlbum || !playbackReady || isSendingPlaybackCommand) return;
+    selectedTrackId = track.id;
+    const queueSource: PlaybackQueueSource = {
+      kind: 'library',
+      query: null,
+      queryAlternates: [],
+      fieldFilter: { field: 'album', value: selectedAlbum.aliases.join('|') },
       sort: librarySort,
     };
     await sendPlaybackCommand(
@@ -3202,6 +3312,16 @@
       </button>
       <button
         class="nav-link"
+        class:active={activeView === 'albums' || activeView === 'album-detail'}
+        aria-current={activeView === 'albums' || activeView === 'album-detail' ? 'page' : undefined}
+        onclick={navigateToAlbumSection}
+      >
+        <IconMusic size={20} stroke={1.6} aria-hidden="true" />
+        <span class="nav-label">專輯</span>
+        <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
+      </button>
+      <button
+        class="nav-link"
         class:active={activeView === 'queue'}
         aria-current={activeView === 'queue' ? 'page' : undefined}
         onclick={() => (activeView = 'queue')}
@@ -3241,6 +3361,8 @@
         <h1 id="page-heading" class="page-title">
           {#if activeView === 'artist-detail'}
             <button class="artist-page-back" type="button" aria-label="返回演出者首頁" onclick={navigateToArtistIndex}>演出者</button><span aria-hidden="true">．</span><span>{selectedArtist?.displayName ?? ''}</span>
+          {:else if activeView === 'album-detail'}
+            <button class="artist-page-back" type="button" aria-label="返回專輯首頁" onclick={navigateToAlbumIndex}>專輯</button><span aria-hidden="true">．</span><span>{selectedAlbum?.unmarked ? '其它' : selectedAlbum?.displayName ?? ''}</span>
           {:else}
             {pageTitle}
           {/if}
@@ -3342,6 +3464,50 @@
                   onSort={handleLibrarySort}
                   onColumnResize={handleTrackColumnResize}
                   onTotalCount={(count) => (artistTrackCount = count)}
+                />
+              {/key}
+            {/if}
+          </section>
+        {/if}
+        {#if activeView === 'albums' || (activeView === 'album-detail' && keepAlbumIndexForDetail)}
+          <section class="album-section" aria-labelledby="page-heading" hidden={activeView !== 'albums'}>
+            {#if !libraryReady}
+              <div class="not-ready-panel" role="status">
+                <div class="not-ready-icon" aria-hidden="true"><IconMusic size={22} stroke={1.6} /></div>
+                <div class="not-ready-copy"><span class="state-label">LIBRARY</span><h3>專輯服務尚未就緒</h3><p>{showCapabilityDetail(capabilities?.library)}</p></div>
+              </div>
+            {:else}
+              <AlbumIndex
+                refreshKey={libraryListRevision}
+                active={activeView === 'albums'}
+                onCountChange={(count) => (albumIndexCount = count)}
+                onRowsChange={(rows) => (albumIndexRows = rows)}
+                onSelect={(album) => openAlbumEntry(album, true)}
+              />
+            {/if}
+          </section>
+        {/if}
+        {#if activeView === 'album-detail' && selectedAlbum}
+          <section class="album-detail-section" aria-labelledby="page-heading">
+            {#if !libraryReady}
+              <div class="artist-detail-empty" role="status">{showCapabilityDetail(capabilities?.library)}</div>
+            {:else}
+              {#key selectedAlbum.key}
+                <AlbumDetail
+                  album={selectedAlbum}
+                  selectedTrackId={selectedTrackId}
+                  playbackReady={playbackReady}
+                  isSendingPlaybackCommand={isSendingPlaybackCommand}
+                  columns={trackColumnPreferences}
+                  columnWidths={trackColumnWidths}
+                  rowHeightPx={trackRowHeightPx}
+                  sort={librarySort}
+                  livePlayCount={livePlayCount}
+                  refreshKey={libraryListRevision}
+                  onPlay={playAlbumTrack}
+                  onSort={handleLibrarySort}
+                  onColumnResize={handleTrackColumnResize}
+                  onTotalCount={(count) => (albumTrackCount = count)}
                 />
               {/key}
             {/if}
@@ -3463,7 +3629,7 @@
               {/if}
             </span>
             <span class="now-playing-track-block now-playing-album-block" data-track-block="album">
-              <button type="button" data-track-field="album" disabled={!trackFieldValue(playback?.currentTrack, 'album')} title={trackFieldValue(playback?.currentTrack, 'album') ?? '沒有專輯分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'album') ? `依專輯「${trackFieldValue(playback?.currentTrack, 'album')}」篩選曲庫` : '沒有專輯分類資料'} onclick={() => void openTrackField('album')}>{trackFieldLabel(playback?.currentTrack, 'album')}</button>
+              <button type="button" data-track-field="album" disabled={!trackFieldValue(playback?.currentTrack, 'album')} title={trackFieldValue(playback?.currentTrack, 'album') ?? '沒有專輯分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'album') ? `開啟專輯「${trackFieldValue(playback?.currentTrack, 'album')}」明細` : '沒有專輯分類資料'} onclick={() => { const album = trackFieldValue(playback?.currentTrack, 'album'); if (album) void openAlbumDetailForName(album); }}>{trackFieldLabel(playback?.currentTrack, 'album')}</button>
             </span>
             <span class="now-playing-track-block now-playing-title-block" data-track-block="title">
               <span

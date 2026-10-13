@@ -220,7 +220,8 @@ test('visible UI icons use Tabler components except the original brand mark', ()
   assert.match(appSource, /title="上移欄位"/);
   assert.match(appSource, /title="下移欄位"/);
   assert.match(appSource, /aria-label="音量"/);
-  assert.match(trackListSource, /ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序"/);
+  assert.match(trackListSource, /ariaLabel=\{sortable\s+\?\s+'曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序'/);
+  assert.match(trackListSource, /'曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目'/);
   assert.match(playlistEntrySource, /ariaLabel="播放清單項目；點擊欄位標題排序；使用方向鍵瀏覽，按 Enter 播放目前項目"/);
   assert.match(playlistEntrySource, /sortableIndex=\{true\}/);
   assert.match(playlistEntrySource, /sort: PlaylistListSort/);

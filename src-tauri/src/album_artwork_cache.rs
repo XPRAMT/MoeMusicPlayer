@@ -1,0 +1,209 @@
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+const MAX_THUMBNAIL_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+const PRUNE_EVERY_WRITES: usize = 32;
+static CACHE_WRITES: AtomicUsize = AtomicUsize::new(0);
+
+fn cache_path(directory: &Path, sha256: &str) -> Result<PathBuf, String> {
+    if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("專輯圖片快取索引無效。".to_owned());
+    }
+    Ok(directory.join(format!("{}.jpg", sha256.to_ascii_lowercase())))
+}
+
+pub(crate) fn get(directory: &Path, sha256: &str) -> Result<Vec<u8>, String> {
+    let path = cache_path(directory, sha256)?;
+    match fs::read(path) {
+        Ok(bytes)
+            if bytes.len() <= MAX_THUMBNAIL_BYTES && bytes.starts_with(&[0xff, 0xd8, 0xff]) =>
+        {
+            Ok(bytes)
+        }
+        Ok(_) => Err("專輯圖片縮圖快取內容無效。".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(format!("讀取專輯圖片快取失敗：{error}")),
+    }
+}
+
+fn prune(directory: &Path, max_bytes: u64) -> Result<(), String> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("讀取專輯圖片快取目錄失敗：{error}")),
+    };
+    let mut files = Vec::new();
+    let mut total_bytes = 0_u64;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(stem) = name.strip_suffix(".jpg") else {
+            continue;
+        };
+        if stem.len() != 64 || !stem.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        total_bytes = total_bytes.saturating_add(metadata.len());
+        files.push((
+            metadata.modified().unwrap_or(UNIX_EPOCH),
+            metadata.len(),
+            path,
+        ));
+    }
+    if total_bytes <= max_bytes {
+        return Ok(());
+    }
+    files.sort_by_key(|(modified, _, _)| *modified);
+    for (_, size, path) in files {
+        if total_bytes <= max_bytes {
+            break;
+        }
+        if fs::remove_file(path).is_ok() {
+            total_bytes = total_bytes.saturating_sub(size);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn put(directory: &Path, sha256: &str, data_base64: &str) -> Result<(), String> {
+    let bytes = STANDARD
+        .decode(data_base64)
+        .map_err(|error| format!("專輯縮圖資料無效：{error}"))?;
+    if bytes.is_empty()
+        || bytes.len() > MAX_THUMBNAIL_BYTES
+        || !bytes.starts_with(&[0xff, 0xd8, 0xff])
+    {
+        return Err("專輯縮圖必須是有效且不超過 2 MiB 的 JPEG。".to_owned());
+    }
+    let path = cache_path(directory, sha256)?;
+    fs::create_dir_all(directory).map_err(|error| format!("建立專輯圖片快取目錄失敗：{error}"))?;
+    if let Ok(existing) = fs::read(&path) {
+        if existing.len() <= MAX_THUMBNAIL_BYTES && existing.starts_with(&[0xff, 0xd8, 0xff]) {
+            return Ok(());
+        }
+        fs::remove_file(&path).map_err(|error| format!("移除損壞的專輯縮圖快取失敗：{error}"))?;
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_path = directory.join(format!(".album-art-{nonce}.tmp"));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| format!("建立專輯縮圖暫存檔失敗：{error}"))?;
+        file.write_all(&bytes)
+            .map_err(|error| format!("寫入專輯縮圖快取失敗：{error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("同步專輯縮圖快取失敗：{error}"))?;
+        drop(file);
+        match fs::rename(&temp_path, &path) {
+            Ok(()) => Ok(()),
+            Err(_) if path.is_file() => Ok(()),
+            Err(error) => Err(format!("完成專輯縮圖快取失敗：{error}")),
+        }
+    })();
+    if temp_path.exists() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result?;
+    if CACHE_WRITES
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(PRUNE_EVERY_WRITES)
+    {
+        // Cache pruning is best-effort and amortized; thumbnail writes remain available if
+        // the filesystem temporarily prevents cleanup.
+        let _ = prune(directory, MAX_CACHE_BYTES);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn temp_dir() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "moe-album-cache-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ))
+    }
+
+    #[test]
+    fn cache_is_content_addressed_bounded_and_round_trips_jpeg() {
+        let directory = temp_dir();
+        let hash = "a".repeat(64);
+        assert!(get(&directory, &hash).expect("cache miss").is_empty());
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0x01, 0x02, 0x03];
+        put(&directory, &hash, &STANDARD.encode(&jpeg)).expect("save thumbnail");
+        assert_eq!(get(&directory, &hash).expect("read thumbnail"), jpeg);
+        jpeg[3] = 0x08;
+        put(&directory, &hash, &STANDARD.encode(&jpeg)).expect("existing cache is immutable");
+        assert_eq!(
+            get(&directory, &hash).expect("read existing"),
+            vec![0xff, 0xd8, 0xff, 0x01, 0x02, 0x03]
+        );
+        fs::remove_dir_all(directory).expect("remove isolated cache");
+    }
+
+    #[test]
+    fn cache_rejects_path_injection_and_non_jpeg_payloads() {
+        let directory = temp_dir();
+        assert!(get(&directory, "../outside").is_err());
+        assert!(put(
+            &directory,
+            &"b".repeat(64),
+            &STANDARD.encode(b"not an image")
+        )
+        .is_err());
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn cache_pruning_evicts_oldest_content_addressed_jpegs_to_the_budget() {
+        let directory = temp_dir();
+        let first_hash = "a".repeat(64);
+        let second_hash = "b".repeat(64);
+        let jpeg = [0xff, 0xd8, 0xff, 0x01, 0x02, 0x03];
+        fs::create_dir_all(&directory).expect("create cache directory");
+        fs::write(
+            cache_path(&directory, &first_hash).expect("first path"),
+            jpeg,
+        )
+        .expect("write first cache");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        fs::write(
+            cache_path(&directory, &second_hash).expect("second path"),
+            jpeg,
+        )
+        .expect("write second cache");
+        prune(&directory, jpeg.len() as u64).expect("prune cache");
+        assert!(!cache_path(&directory, &first_hash)
+            .expect("first path")
+            .exists());
+        assert!(cache_path(&directory, &second_hash)
+            .expect("second path")
+            .exists());
+        fs::remove_dir_all(directory).expect("remove isolated cache");
+    }
+}
