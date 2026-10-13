@@ -63,7 +63,7 @@ for (let column = 2; column < 5; column += 1) {
 }
 
 const firstRowBefore = await page.locator('.paged-virtual-row').first().innerText();
-await page.getByRole('button', { name: '演出者', exact: true }).click();
+await page.getByTestId('artist-section').getByRole('button', { name: '演出者', exact: true }).click();
 const firstRowAfter = await page.locator('.paged-virtual-row').first().innerText();
 assert(firstRowAfter !== firstRowBefore, 'shared header renderer should sort artist rows');
 assert(firstRowAfter.includes('Artist 080'), 'clicking the active title sort should reverse its order');
@@ -92,9 +92,16 @@ const detailCountAfter = await detailCount.boundingBox();
 assert(detailCountBefore.height === detailCountAfter.height && detailCountBefore.y === detailCountAfter.y, 'artist detail subtitle should stay in place when count is filled in');
 assert(await page.getByTestId('artist-section').evaluate(element => element.hidden), 'artist index should stay mounted but hidden while viewing detail');
 assert(await page.getByTestId('artist-section').evaluate(element => getComputedStyle(element).display === 'none'), 'artist index should not render while viewing detail');
-await page.getByRole('button', { name: '演出者', exact: true }).click();
-await page.getByTestId('artist-detail').waitFor({ state: 'attached' });
-assert(await page.getByTestId('artist-detail').evaluate(element => element.hidden), 'artist detail should stay mounted but hidden when returning to the index');
+const selectedArtistName = await page.getByTestId('selected-artist').innerText();
+await page.getByTestId('nav-library').click();
+assert(await page.getByTestId('artist-detail').evaluate(element => element.hidden), 'artist detail should hide while viewing the library');
+await page.getByTestId('nav-artists').click();
+assert(!(await page.getByTestId('artist-detail').evaluate(element => element.hidden)), 'artist navigation should restore the last opened artist detail');
+assert((await page.getByTestId('artist-detail').innerText()).includes(selectedArtistName), 'artist navigation should restore the same artist');
+assert(await page.getByTestId('artist-section').evaluate(element => element.hidden), 'artist index should remain hidden when restoring artist detail');
+await page.getByRole('button', { name: '返回演出者首頁' }).click();
+assert(await page.getByTestId('artist-detail').evaluate(element => element.hidden), 'the explicit artist breadcrumb should still return to the index');
+assert(!(await page.getByTestId('artist-section').evaluate(element => element.hidden)), 'the artist index should be visible after using its breadcrumb');
 assert(await page.getByTestId('artist-detail').evaluate(element => getComputedStyle(element).display === 'none'), 'artist detail should not render on other pages');
 const restoredScrollTop = await viewport.evaluate(element => element.scrollTop);
 const restoredFirstVisibleRow = await page.locator('.paged-virtual-row').first().innerText();

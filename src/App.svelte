@@ -179,6 +179,7 @@
 
   let activeView = $state<View>('library');
   type RetainedListView = Exclude<View, 'artist-detail' | 'settings'>;
+  type ArtistSectionView = 'artists' | 'artist-detail';
   type ArtistEntry = ArtistIndexEntry & { displayName: string };
   let visitedListViews = $state<Record<RetainedListView, boolean>>({
     library: true,
@@ -187,6 +188,7 @@
     queue: false,
   });
   let selectedArtist = $state<ArtistEntry | null>(null);
+  let rememberedArtistView = $state<ArtistSectionView>('artists');
   let artistIndexRows = $state<ArtistEntry[] | null>(null);
   let artistIndexRowsLoad: Promise<ArtistEntry[]> | null = null;
   let nowPlayingReturnView = $state<View>('library');
@@ -2113,7 +2115,17 @@
   function openArtistEntry(artist: ArtistEntry): void {
     if (selectedArtist?.key !== artist.key) artistTrackCount = null;
     selectedArtist = artist;
+    rememberedArtistView = 'artist-detail';
     activeView = 'artist-detail';
+  }
+
+  function navigateToArtistSection(): void {
+    activeView = selectedArtist ? rememberedArtistView : 'artists';
+  }
+
+  function navigateToArtistIndex(): void {
+    rememberedArtistView = 'artists';
+    activeView = 'artists';
   }
 
   async function openArtistDetailForName(name: string): Promise<void> {
@@ -2124,6 +2136,7 @@
       const artist = await findArtistEntryByName(trimmedName, entries);
       if (!artist) {
         if (isNowPlayingOpen) await closeNowPlaying();
+        rememberedArtistView = 'artists';
         activeView = 'artists';
         return;
       }
@@ -3176,7 +3189,7 @@
         class="nav-link"
         class:active={activeView === 'artists' || activeView === 'artist-detail'}
         aria-current={activeView === 'artists' || activeView === 'artist-detail' ? 'page' : undefined}
-        onclick={() => (activeView = 'artists')}
+        onclick={navigateToArtistSection}
       >
         <IconUsers size={20} stroke={1.6} aria-hidden="true" />
         <span class="nav-label">演出者</span>
@@ -3222,7 +3235,7 @@
       <div class="topbar-title-block">
         <h1 id="page-heading" class="page-title">
           {#if activeView === 'artist-detail'}
-            <button class="artist-page-back" type="button" aria-label="返回演出者首頁" onclick={() => (activeView = 'artists')}>演出者</button><span aria-hidden="true">．</span><span>{selectedArtist?.displayName ?? ''}</span>
+            <button class="artist-page-back" type="button" aria-label="返回演出者首頁" onclick={navigateToArtistIndex}>演出者</button><span aria-hidden="true">．</span><span>{selectedArtist?.displayName ?? ''}</span>
           {:else}
             {pageTitle}
           {/if}
