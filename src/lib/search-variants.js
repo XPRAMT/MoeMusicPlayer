@@ -50,3 +50,31 @@ export async function getSearchVariants(value) {
     alternate,
   ].filter(Boolean))];
 }
+
+/**
+ * Build an automatic title/artist query in Traditional-first, Simplified-second order.
+ * Convert the fields independently so Japanese titles remain unchanged while a Chinese
+ * artist field can still be searched in both scripts.
+ * @param {string | null | undefined} title
+ * @param {string | null | undefined} artist
+ * @returns {Promise<string[]>}
+ */
+export async function getAutomaticSearchVariants(title, artist) {
+  const fields = [title, artist]
+    .map((value) => typeof value === 'string' ? value.trim() : '')
+    .filter(Boolean);
+  if (fields.length === 0) return [];
+
+  /** @param {string} field */
+  const shouldConvert = (field) => HAN.test(field) && !JAPANESE_KANA.test(field);
+  if (!fields.some(shouldConvert)) return [fields.join(' ')];
+
+  const converters = await loadConverters();
+  const traditional = fields.map((field) => (
+    shouldConvert(field) ? converters.toTraditional(field).trim() : field
+  )).filter(Boolean).join(' ');
+  const simplified = fields.map((field) => (
+    shouldConvert(field) ? converters.toSimplified(field).trim() : field
+  )).filter(Boolean).join(' ');
+  return [...new Set([traditional, simplified].filter(Boolean))];
+}

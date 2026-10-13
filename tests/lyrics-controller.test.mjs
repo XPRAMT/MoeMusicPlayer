@@ -540,6 +540,54 @@ test('searchAgain forwards optional query to lyrics_search', async () => {
   controller.dispose();
 });
 
+test('automatic track-change search sends Traditional then Simplified title and artist queries', async () => {
+  const calls = [];
+  const controller = createLyricsController({
+    api: {
+      getTrack: async () => emptyResult(),
+      search: async (args) => { calls.push(args); return emptyResult(); },
+      selectCandidate: async () => { throw new Error('unused'); },
+      cancelSearch: async () => {},
+    },
+    onChange() {},
+    createRequestId: () => 'request-auto-variants',
+  });
+
+  await controller.setTrack('track-auto', { title: '苹果头发', artist: '演出者' });
+
+  assert.deepEqual(calls, [{
+    trackId: 'track-auto',
+    requestId: 'request-auto-variants',
+    query: '蘋果頭髮 演出者',
+    queryAlternates: ['苹果头发 演出者'],
+  }]);
+  controller.dispose();
+});
+
+test('automatic Japanese title stays intact while Chinese artist is converted both ways', async () => {
+  const calls = [];
+  const controller = createLyricsController({
+    api: {
+      getTrack: async () => emptyResult(),
+      search: async (args) => { calls.push(args); return emptyResult(); },
+      selectCandidate: async () => { throw new Error('unused'); },
+      cancelSearch: async () => {},
+    },
+    onChange() {},
+    createRequestId: () => 'request-auto-japanese',
+  });
+
+  await controller.setTrack('track-auto-ja', { title: 'さよならスーヴェニア', artist: '汉字歌手' });
+
+  assert.deepEqual(calls, [{
+    trackId: 'track-auto-ja',
+    requestId: 'request-auto-japanese',
+    query: 'さよならスーヴェニア 漢字歌手',
+    queryAlternates: ['さよならスーヴェニア 汉字歌手'],
+  }]);
+  controller.dispose();
+});
+
 test('cleared getTrack status skips automatic provider search and keeps the picker closed', async () => {
   const calls = [];
   const controller = createLyricsController({

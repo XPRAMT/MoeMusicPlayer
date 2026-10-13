@@ -75,6 +75,8 @@
 
   interface Props {
     trackId: string | null;
+    trackTitle?: string | null;
+    trackArtist?: string | null;
     positionMs: number;
     isPlaying: boolean;
     playbackState?: PlaybackState;
@@ -96,6 +98,8 @@
 
   let {
     trackId,
+    trackTitle = null,
+    trackArtist = null,
     positionMs = 0,
     isPlaying = false,
     playbackState,
@@ -387,7 +391,7 @@
     timingPanelOpen = false;
     candidateQuery = '';
     timingOffsetSec = loadLyricsTimingOffsetSec(nextTrackId);
-    void controller.setTrack(nextTrackId);
+    void controller.setTrack(nextTrackId, { title: trackTitle, artist: trackArtist });
   });
 
   $effect(() => {

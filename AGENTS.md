@@ -27,7 +27,7 @@
 
 ## Windows 檔案總管開啟音樂
 
-- 曲庫搜尋及手動歌詞搜尋都會依輸入產生繁體／簡體查詢詞，保留原詞並聯集另一種字形；拉丁文及含平假名／片假名的日文查詢不做簡繁轉換。`src/lib/search-variants.js` 以 OpenCC 短語及字元字典產生查詢詞。曲庫將查詢詞帶入正式／暫存 SQLite 的同一個 `json_each` 聯集條件，因此總筆數、分頁與點歌佇列一致且同一曲目只出現一次；歌詞搜尋將查詢詞送往網易雲與 QQ，跨字形及來源以候選 ID 去重並沿用分頁載入。修改搜尋欄位、分頁或佇列查詢時，須同步維持兩種字形結果的聯集與去重。
+- 曲庫搜尋、手動歌詞搜尋及切歌後自動歌詞搜尋均支援繁簡查詢。手動搜尋保留使用者原輸入並追加另一字形；自動歌詞搜尋以曲名／演出者分欄組合查詢，先送繁體、再送簡體，並逐欄轉換，含平假名／片假名的日文欄位原樣保留（另一個中文欄仍可轉換）。拉丁文及日文單獨查詢不做簡繁轉換。`src/lib/search-variants.js` 以 OpenCC 短語及字元字典產生查詢詞。曲庫將查詢詞帶入正式／暫存 SQLite 的同一個 `json_each` 聯集條件，因此總筆數、分頁與點歌佇列一致且同一曲目只出現一次；歌詞搜尋將查詢詞送往網易雲與 QQ，跨字形及來源以候選 ID 去重並沿用分頁載入。修改搜尋欄位、分頁或佇列查詢時，須同步維持兩種字形結果的聯集與去重。
 - Windows 單一執行個體透過 Tauri single-instance 將後續檔案開啟參數轉送給既有播放器；第一個程序直接檢查啟動參數。相對路徑依呼叫工作目錄解析，只接受 `player-platform-windows::supported_audio_extensions` 列出的音訊格式。
 - Windows 曲庫與檔案總管支援的音訊副檔名包含 `.mka`、`.ogg` 與 `.oga`；`.mkv` 影片維持排除，`.mp4` 也不列入曲庫。MKA 由 Rodio/Symphonia 0.5.5 的 Matroska demuxer 解碼，metadata 以 Symphonia 讀 codec／音訊參數，再用 `matroska` crate 的 Info、Track、Tags 元素讀標題與標籤，不載入大型附件；Tags 若含 Matroska `BPS` 統計欄位，按 bits/s 讀取並提供碼率顯示。支援的實際音訊 codec 仍受已啟用 Symphonia decoder features 限制。`.ogg`／`.oga` 的 Ogg Vorbis 標籤和解碼可用；此版本沒有啟用 Opus decoder，不得宣稱 Ogg Opus 可播放。測試 fixture `crates/player-audio-windows/tests/fixtures/metadata-smoke.mka` 與 `.ogg` 驗證標籤、取樣率、時長、解碼和 seek；`BPS` 讀取測試及使用者檔案 `D:\Pictures\遊戲語音\2023 新年.mka` 的 metadata 驗證確認回傳 91,353 bits/s。若日後要引入 FFmpeg，須先評估動態 DLL 發布、精簡 configure 選項及 LGPL/GPL 組件授權，不因增加單一容器而更換整條播放管線。
 - 從檔案總管開啟音樂時以正規化後路徑逐首查正式 SQLite 曲庫；命中就沿用正式曲目、標籤與播放統計，未命中才讀取 Lofty 標籤並匯入本次佇列專屬的 `Database::open_in_memory()` 暫存曲庫。暫存曲庫也使用正式曲庫的 Track／source-mapping／locator／歌詞／候選快取／播放統計 schema，暫存 TrackId 必須以實際匯入後 `resolve_track_id_for_locator` 回傳的 ID 為準，不可保留匯入前臨時產生的 ID。列舉同資料夾的直接子檔案、不進子目錄、不重複 canonical path，並以不分大小寫檔名排序；指定開啟曲目立即播放。

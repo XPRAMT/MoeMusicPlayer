@@ -3348,6 +3348,8 @@
               {#snippet lyrics()}
                 <LyricsView
                   trackId={playback?.currentTrack?.id ?? null}
+                  trackTitle={playback?.currentTrack?.title ?? null}
+                  trackArtist={playback?.currentTrack?.artist ?? null}
                   positionMs={playback?.positionMs ?? 0}
                   isPlaying={playback?.isPlaying ?? false}
                   playbackState={playback?.state ?? 'empty'}
