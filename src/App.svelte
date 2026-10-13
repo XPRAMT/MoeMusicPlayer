@@ -2100,7 +2100,7 @@
       kind: 'library',
       query: null,
       queryAlternates: [],
-      fieldFilter: { field: 'artist', value: selectedArtist.displayName },
+      fieldFilter: { field: 'artist', value: selectedArtist.artistNames.join('|') },
       sort: librarySort,
     };
     await sendPlaybackCommand(

@@ -10081,7 +10081,7 @@ mod windows_library_integration_tests {
         };
         let records = vec![
             fixture("first", "Needle One", "hanser"),
-            fixture("second", "Needle Two", "hanser"),
+            fixture("second", "Needle Two", "HANSER"),
             fixture("excluded", "Needle Three", "other artist"),
         ];
         database
@@ -10096,7 +10096,7 @@ mod windows_library_integration_tests {
             .expect("persist fixture tracks");
         let filter = TrackFieldFilter {
             field: TrackField::Artist,
-            value: "hanser".to_owned(),
+            value: "hanser|HANSER".to_owned(),
         };
         let page = database
             .list_tracks_page(ListTracksQuery {
