@@ -585,50 +585,36 @@ async fn load_search_page<T: crate::lyrics_provider::HttpTransport + 'static>(
     page: u32,
     cancellation: &CancellationToken,
 ) -> Result<(Vec<ProviderCandidate>, bool), ProviderError> {
-    let mut tasks = tokio::task::JoinSet::new();
-    for (variant_index, metadata) in metadata_variants.iter().cloned().enumerate() {
-        let client = Arc::clone(&client);
-        let cancellation = cancellation.clone();
-        tasks.spawn(async move {
-            let (netease, mut qqmusic) = tokio::join!(
-                client.search_page(LyricProvider::NetEase, &metadata, page, &cancellation),
-                client.search_page(LyricProvider::Qq, &metadata, page, &cancellation),
-            );
-            let qq_missing = match &qqmusic {
-                Ok(hits) => hits.is_empty(),
-                Err(ProviderError::Cancelled) => return (variant_index, netease, qqmusic),
-                Err(_) => true,
-            };
-            if page <= 1 && qq_missing && !cancellation.is_cancelled() {
-                tokio::select! {
-                    _ = cancellation.cancelled() => return (variant_index, netease, Err(ProviderError::Cancelled)),
-                    _ = tokio::time::sleep(QQ_MISSING_RETRY_DELAY) => {}
-                }
-                qqmusic = client
-                    .search_page(LyricProvider::Qq, &metadata, page, &cancellation)
-                    .await;
-            }
-            (variant_index, netease, qqmusic)
-        });
-    }
-
-    let mut completed = Vec::with_capacity(metadata_variants.len());
-    while let Some(result) = tasks.join_next().await {
-        let result = result.map_err(|error| {
-            ProviderError::InvalidResponse(format!("provider search task failed: {error}"))
-        })?;
-        completed.push(result);
-    }
-    if cancellation.is_cancelled() {
-        return Err(ProviderError::Cancelled);
-    }
-    completed.sort_by_key(|(variant_index, _, _)| *variant_index);
-
     let mut variant_hits = vec![Vec::new(); metadata_variants.len()];
     let mut might_have_more = false;
     let mut successful_requests = 0usize;
     let mut first_error = None;
-    for (variant_index, netease, qqmusic) in completed {
+
+    // Keep script variants in the supplied order (Traditional before Simplified),
+    // while querying both lyric providers concurrently within each variant.
+    for (variant_index, metadata) in metadata_variants.iter().enumerate() {
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::Cancelled);
+        }
+        let (netease, mut qqmusic) = tokio::join!(
+            client.search_page(LyricProvider::NetEase, metadata, page, cancellation),
+            client.search_page(LyricProvider::Qq, metadata, page, cancellation),
+        );
+        let qq_missing = match &qqmusic {
+            Ok(hits) => hits.is_empty(),
+            Err(ProviderError::Cancelled) => return Err(ProviderError::Cancelled),
+            Err(_) => true,
+        };
+        if page <= 1 && qq_missing && !cancellation.is_cancelled() {
+            tokio::select! {
+                _ = cancellation.cancelled() => return Err(ProviderError::Cancelled),
+                _ = tokio::time::sleep(QQ_MISSING_RETRY_DELAY) => {}
+            }
+            qqmusic = client
+                .search_page(LyricProvider::Qq, metadata, page, cancellation)
+                .await;
+        }
+
         for result in [netease, qqmusic] {
             match result {
                 Ok(mut provider_hits) => {
@@ -650,23 +636,7 @@ async fn load_search_page<T: crate::lyrics_provider::HttpTransport + 'static>(
             "provider search failed".to_owned(),
         )));
     }
-    // Interleave script variants so one prolific query cannot fill the visible
-    // candidate page before the counterpart query contributes its results.
-    let mut hits = Vec::new();
-    let mut offset = 0;
-    loop {
-        let mut added = false;
-        for variant in &mut variant_hits {
-            if offset < variant.len() {
-                hits.push(variant[offset].clone());
-                added = true;
-            }
-        }
-        if !added {
-            break;
-        }
-        offset += 1;
-    }
+    let hits = variant_hits.into_iter().flatten().collect();
     Ok((hits, might_have_more))
 }
 
@@ -2268,7 +2238,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_search_queries_and_merges_simplified_and_traditional_variants() {
+    async fn search_queries_and_merges_variants_in_traditional_first_order() {
         let (database, _directory, track) = seeded_test_database("頭髮", "Artist", "Album");
         let transport = FixtureTransport::default();
         let service = LyricsService::new(LyricsProviderClient::new(transport.clone()));
@@ -2278,7 +2248,7 @@ mod tests {
                 track.id,
                 &track,
                 CancellationToken::new(),
-                false,
+                true,
                 LyricSearchTerms {
                     query_override: Some("頭髮".to_owned()),
                     query_alternates: vec!["头发".to_owned()],
@@ -2307,6 +2277,18 @@ mod tests {
         };
         assert!(qq_queries.iter().any(|query| query == "頭髮"));
         assert!(qq_queries.iter().any(|query| query == "头发"));
+        let traditional_position = qq_queries
+            .iter()
+            .position(|query| query == "頭髮")
+            .expect("Traditional query was sent");
+        let simplified_position = qq_queries
+            .iter()
+            .position(|query| query == "头发")
+            .expect("Simplified query was sent");
+        assert!(
+            traditional_position < simplified_position,
+            "the Traditional search round must run before the Simplified round"
+        );
         let candidate_ids = result
             .candidates
             .iter()
