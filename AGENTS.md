@@ -275,7 +275,7 @@
 
 - 歌詞候選面板只保留搜尋框與右側「搜尋」「關閉」「移除歌詞」。沒有「選擇歌詞」標題，也沒有「再次搜尋」。搜尋框空白時用目前曲目資訊再搜；有文字時該文字覆寫 Provider 關鍵字。每列「選擇」仍在，樣式與「搜尋」「關閉」「移除歌詞」相同，不套用主題色。候選清單曲名為標題階 16px、演出者／預覽／說明為內文 13px。「關閉」只收起面板並保留已套用歌詞（即使面板不是由 selectionMode 打開）。「移除歌詞」呼叫 `lyrics_clear_track` 寫入 cleared sentinel（不刪本機 sidecar／內嵌檔）、關閉面板，之後該曲不再自動載入／搜尋歌詞，需再按頂欄「歌詞」才可選取。手動搜尋會把同資料夾同名 LRC（`local:sidecar`）與音訊檔內嵌歌詞（`local:embedded`）放在線上候選之前；選取會重讀該來源並以手動指定寫入 `track_lyrics`，之後優先於另一份本機來源與自動快取。Windows 播放載入仍維持 sidecar 優先於內嵌。Android 候選清單尚未列出這兩種本機來源。
 
-- 「設定 → 歌詞」與快速設定可開啟簡體轉繁體。播放時以 opencc-js 在記憶體轉換整首歌的原文與譯文（`STCharacters`、`STPhrases`、`TWVariants`），不載入 `TWPhrases`，不改用詞，不把結果寫回歌詞檔或 SQLite。羅馬拼音不轉換。授權全文在 `licenses/opencc-js-MIT.txt` 與 `licenses/opencc-data-Apache-2.0.txt`。
+- 「設定 → 歌詞」與快速設定可開啟簡體轉繁體。播放時以 opencc-js 在記憶體逐行轉換原文與譯文（`STCharacters`、`STPhrases`、`TWVariants`），不載入 `TWPhrases`，不改用詞，不把結果寫回歌詞檔或 SQLite。每行獨立檢查；含平假名或片假名的行視為日文，原文整行保留，避免轉換日文漢字；其他行正常轉換。羅馬拼音不轉換。授權全文在 `licenses/opencc-js-MIT.txt` 與 `licenses/opencc-data-Apache-2.0.txt`。
 
 - 播放頁快速設定與「設定」共用同一組分頁與控件。抽屜只有一層底色（與文字相反的 `--text-inverse`，不再另加內層墊底區塊），透明度 `quickSettingsOpacityPercent`（預設 70，0–100）與模糊 `quickSettingsBlurPx`（預設 12，0–50，`backdrop-filter`）在「設定 → 播放頁」調整。「設定 → 播放頁」與快速設定不再顯示「播放頁工具列／底部播放控制」外觀預覽；封面背景模糊與「封面背景透明度」、主介面「背景透明度」皆以圖片 opacity 疊在主題底色上。「設定 → 快捷鍵」可綁定鍵盤、滾輪、滑鼠側鍵與手柄按鈕、左右搖桿四個方向（預設不綁任何手柄鍵或搖桿）。預設：全螢幕 F11、播放／暫停空白鍵、後退／前進 5 秒為左右方向鍵與滾輪（向上前進、向下後退）、上一首／下一首為 Page Up／Page Down 與滑鼠上頁／下頁。輸入文字、按鈕或可捲動清單上的滾輪不觸發。
 

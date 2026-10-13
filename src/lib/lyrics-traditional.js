@@ -9,6 +9,7 @@
 
 /** @type {Promise<(text: string) => string> | null} */
 let converterPromise = null;
+const JAPANESE_KANA = /[\p{Script=Hiragana}\p{Script=Katakana}]/u;
 
 function loadConverter() {
   if (!converterPromise) {
@@ -26,8 +27,11 @@ function loadConverter() {
 }
 
 /** @param {(text: string) => string} convert @param {string | null | undefined} value */
-function convertField(convert, value) {
+function convertLyricLine(convert, value) {
   if (typeof value !== 'string' || value.length === 0) return value ?? null;
+  // OpenCC's Chinese dictionaries can rewrite kanji that are also used in
+  // Japanese. Keep the whole line intact whenever it contains Japanese kana.
+  if (JAPANESE_KANA.test(value)) return value;
   return convert(value);
 }
 
@@ -43,8 +47,8 @@ export async function convertTrackLyrics(lyrics) {
     ...lyrics,
     lines: lyrics.lines.map((line) => ({
       ...line,
-      text: /** @type {string} */ (convertField(convert, line.text) ?? ''),
-      translation: /** @type {string | null} */ (convertField(convert, line.translation)),
+      text: /** @type {string} */ (convertLyricLine(convert, line.text) ?? ''),
+      translation: /** @type {string | null} */ (convertLyricLine(convert, line.translation)),
     })),
   };
 }
