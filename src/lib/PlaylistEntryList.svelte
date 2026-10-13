@@ -160,6 +160,7 @@ import { withLivePlayedMs } from './live-play-count.js';
     minContentWidth={listMinWidth}
     className="track-list-viewport playlist-entry-table"
     scrollResetKey={playlistId}
+    scrollRestoreReady={snapshot.scope === JSON.stringify({ playlistId, sort }) && snapshot.totalCount !== null && snapshot.pendingPageCount === 0}
     rowClassName="track-row virtual-track-row configurable-track-grid playlist-entry-row"
     listName="播放清單"
     onRange={handleRange}

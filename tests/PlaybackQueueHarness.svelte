@@ -19,6 +19,7 @@
 
   interface HarnessApi {
     setView: (view: 'playlists' | 'queue') => Promise<void>;
+    setPlaylist: (playlistId: string) => void;
     setColumns: (columns: TrackListColumnPreference[]) => Promise<void>;
     setCurrentEntry: (entryPosition: number) => Promise<void>;
     replaceQueue: () => Promise<void>;
@@ -164,6 +165,11 @@
     await settle();
   }
 
+  function setPlaylist(playlistId: string): void {
+    selectedPlaylistId = playlistId;
+    activeView = 'playlists';
+  }
+
   async function setColumns(nextColumns: TrackListColumnPreference[]): Promise<void> {
     columns = normalizeTrackColumnPreferences(nextColumns);
     await settle();
@@ -271,7 +277,7 @@
   });
 
   $effect(() => {
-    window.playbackQueueHarness = { setView, setColumns, setCurrentEntry, replaceQueue, reorderQueue, scrollSweep, snapshot };
+    window.playbackQueueHarness = { setView, setPlaylist, setColumns, setCurrentEntry, replaceQueue, reorderQueue, scrollSweep, snapshot };
   });
 </script>
 
@@ -294,8 +300,8 @@
   </aside>
   <main class="workspace">
     <header class="topbar"><strong>播放清單與播放佇列測試</strong></header>
-    <div class="page-scroll">
-      <main class="page-content wide-list-page">
+    <div class="page-scroll" class:is-list-page={activeView === 'playlists' || activeView === 'queue'}>
+      <main class="page-content wide-list-page" class:is-list-page={activeView === 'playlists' || activeView === 'queue'}>
         {#if activeView === 'playlists'}
           <section class="playlist-section" aria-label="目前播放清單">
             <div class="playlist-browser">
@@ -306,17 +312,15 @@
                     <div><p class="section-kicker">PLAYLIST</p><h3 id="selected-playlist-heading">{playlists.find((item) => item.id === selectedPlaylistId)?.name}</h3><p class="playlist-detail-count">播放清單項目</p></div>
                   </div>
                 </div>
-                {#key selectedPlaylistId}
-                  <PlaylistEntryList
-                    playlistId={selectedPlaylistId}
-                    resetKey={playlistRevision}
-                    playbackReady={true}
-                    isSendingPlaybackCommand={false}
-                    columns={columns}
-                    fetchPage={fetchPlaylistPage}
-                    onPlay={() => {}}
-                  />
-                {/key}
+                <PlaylistEntryList
+                  playlistId={selectedPlaylistId}
+                  resetKey={playlistRevision}
+                  playbackReady={true}
+                  isSendingPlaybackCommand={false}
+                  columns={columns}
+                  fetchPage={fetchPlaylistPage}
+                  onPlay={() => {}}
+                />
               </section>
             </div>
           </section>

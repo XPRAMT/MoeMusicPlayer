@@ -117,6 +117,12 @@ test('playlist page keeps one mounted list instance and refreshes only when its 
   assert.doesNotMatch(playlistSection, /\{#if activeView\s*===\s*'playlists'\}/);
   assert.doesNotMatch(playlistSection, /\{#key selectedPlaylist\.id\}/);
   assert.match(playlistEntrySource, /scrollResetKey=\{playlistId\}/);
+  assert.match(playlistEntrySource, /scrollRestoreReady=\{snapshot\.scope === JSON\.stringify\(\{ playlistId, sort \}\)/);
+  assert.match(pagedVirtualListSource, /SCROLL_POSITION_CACHE_LIMIT = 64/);
+  assert.match(pagedVirtualListSource, /const listChanged = seenListId !== undefined && currentListId !== seenListId/);
+  assert.match(pagedVirtualListSource, /pendingListRestore = \{ listId: currentListId, position \}/);
+  assert.match(pagedVirtualListSource, /pendingListRestore\?\.listId === currentListId && scrollRestoreReady && totalCount !== null && !pending/);
+  assert.match(pagedVirtualListSource, /writeListScrollPosition\(currentListId, restoredScrollTop\)/);
   assert.match(pagedVirtualListSource, /let lastVisibleScrollTop = 0/);
   assert.match(pagedVirtualListSource, /if \(!hadVisibleViewport\)[\s\S]*?viewport\.scrollTop = restoredScrollTop/);
   assert.match(pagedVirtualListSource, /if \(viewport\.clientHeight > 0\)[\s\S]*?lastVisibleScrollTop = viewport\.scrollTop/);

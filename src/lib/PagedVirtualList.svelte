@@ -1,3 +1,25 @@
+<script module lang="ts">
+  const SCROLL_POSITION_CACHE_LIMIT = 64;
+  const scrollPositionsByList = new Map<string, number>();
+
+  function readListScrollPosition(listId: string): number {
+    const position = scrollPositionsByList.get(listId);
+    if (position === undefined) return 0;
+    scrollPositionsByList.delete(listId);
+    scrollPositionsByList.set(listId, position);
+    return position;
+  }
+
+  function writeListScrollPosition(listId: string, position: number): void {
+    scrollPositionsByList.delete(listId);
+    scrollPositionsByList.set(listId, Math.max(0, position));
+    if (scrollPositionsByList.size > SCROLL_POSITION_CACHE_LIMIT) {
+      const oldestListId = scrollPositionsByList.keys().next().value;
+      if (oldestListId !== undefined) scrollPositionsByList.delete(oldestListId);
+    }
+  }
+</script>
+
 <script lang="ts" generics="Item">
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
@@ -30,6 +52,8 @@
     generation: number;
     /** Override which generation changes reset the viewport, e.g. stable across data-only refreshes. */
     scrollResetKey?: unknown;
+    /** Wait until the data belongs to the current list before restoring its saved position. */
+    scrollRestoreReady?: boolean;
     itemAt: (index: number) => Item | null;
     getKey: (item: Item, index: number) => string | number;
     isSelected?: (item: Item, index: number) => boolean;
@@ -66,6 +90,7 @@
     revision,
     generation,
     scrollResetKey,
+    scrollRestoreReady = true,
     itemAt,
     getKey,
     isSelected = () => false,
@@ -109,6 +134,8 @@
   let maxViewportHeight = $state(680);
   let seenScrollResetKey: unknown;
   let hasSeenScrollResetKey = false;
+  let seenListId: string | undefined;
+  let pendingListRestore: { listId: string; position: number } | null = null;
   let dragFromIndex = $state<number | null>(null);
   let dragToIndex = $state<number | null>(null);
   let suppressNextClick = false;
@@ -148,14 +175,42 @@
   ).rows);
   const activeDescendantId = $derived(`${listId}-row-${activeIndex}`);
 
+  function rememberVisibleScrollPosition(position: number): void {
+    if (seenListId === listId) writeListScrollPosition(listId, position);
+  }
+
   $effect(() => {
+    const currentListId = listId;
     const currentScrollResetKey = scrollResetKey === undefined ? generation : scrollResetKey;
-    if (hasSeenScrollResetKey && !Object.is(currentScrollResetKey, seenScrollResetKey)) {
+    const listChanged = seenListId !== undefined && currentListId !== seenListId;
+    const resetChanged = hasSeenScrollResetKey && !Object.is(currentScrollResetKey, seenScrollResetKey);
+    if (listChanged) {
       activeIndex = 0;
+      const position = readListScrollPosition(currentListId);
+      pendingListRestore = { listId: currentListId, position };
       scrollTop = 0;
       lastVisibleScrollTop = 0;
       viewport?.scrollTo({ top: 0 });
+    } else if (resetChanged) {
+      activeIndex = 0;
+      scrollTop = 0;
+      lastVisibleScrollTop = 0;
+      pendingListRestore = null;
+      viewport?.scrollTo({ top: 0 });
     }
+    if (pendingListRestore?.listId === currentListId && scrollRestoreReady && totalCount !== null && !pending) {
+      const maxScrollTop = Math.max(0, totalCount * rowHeight - viewportHeight);
+      const restoredScrollTop = Math.min(pendingListRestore.position, maxScrollTop);
+      scrollTop = restoredScrollTop;
+      lastVisibleScrollTop = restoredScrollTop;
+      writeListScrollPosition(currentListId, restoredScrollTop);
+      if (viewport && viewport.clientHeight > 0) {
+        viewport.scrollTop = restoredScrollTop;
+        hadVisibleViewport = true;
+      }
+      pendingListRestore = null;
+    }
+    seenListId = currentListId;
     seenScrollResetKey = currentScrollResetKey;
     hasSeenScrollResetKey = true;
     const currentRange = range;
@@ -181,10 +236,12 @@
           if (viewport.scrollTop !== restoredScrollTop) viewport.scrollTop = restoredScrollTop;
           scrollTop = restoredScrollTop;
           lastVisibleScrollTop = restoredScrollTop;
+          rememberVisibleScrollPosition(restoredScrollTop);
           hadVisibleViewport = true;
         } else {
           scrollTop = viewport.scrollTop;
           lastVisibleScrollTop = viewport.scrollTop;
+          rememberVisibleScrollPosition(viewport.scrollTop);
         }
       } else if (nextViewportHeight === 0) {
         hadVisibleViewport = false;
@@ -209,6 +266,7 @@
     if (viewport.clientHeight > 0) {
       scrollTop = viewport.scrollTop;
       lastVisibleScrollTop = viewport.scrollTop;
+      rememberVisibleScrollPosition(viewport.scrollTop);
       hadVisibleViewport = true;
     }
     headerShift = viewport.scrollLeft;
@@ -229,6 +287,7 @@
     }
     if (nextScrollTop !== viewport.scrollTop) viewport.scrollTo({ top: nextScrollTop });
     lastVisibleScrollTop = nextScrollTop;
+    rememberVisibleScrollPosition(nextScrollTop);
   }
 
   function scrollIndexIntoView(index: number, align: 'nearest' | 'center' = 'center'): void {
@@ -252,6 +311,7 @@
     viewport.scrollTo({ top: nextScrollTop });
     scrollTop = nextScrollTop;
     lastVisibleScrollTop = nextScrollTop;
+    rememberVisibleScrollPosition(nextScrollTop);
   }
 
   let seenScrollRequestToken = $state<number | null>(null);
@@ -329,6 +389,8 @@
       if (delta !== 0) {
         viewport.scrollTop = Math.max(0, viewport.scrollTop + delta);
         scrollTop = viewport.scrollTop;
+        lastVisibleScrollTop = viewport.scrollTop;
+        rememberVisibleScrollPosition(viewport.scrollTop);
         dragToIndex = dropIndexAtPointer(latestPointerClientY);
         autoScrollFrame = requestAnimationFrame(step);
       } else {
