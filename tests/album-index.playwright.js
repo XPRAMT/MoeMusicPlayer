@@ -47,5 +47,22 @@
   assert(Math.abs(afterScroll.width - afterScroll.height) <= 1, `card artwork should remain square after scroll: ${JSON.stringify(afterScroll)}`);
   assert(Math.abs(afterResize - afterScroll.width) <= 1, `scrolling must not change card size: ${afterResize} -> ${afterScroll.width}`);
 
-  return { loadingStats, initial, afterResize, afterScroll };
+  const firstCard = page.getByRole('button', { name: /Album 1/ });
+  await firstCard.locator('img').waitFor();
+  const firstAlbumReads = await page.evaluate(() => window.__albumIndexStats.trackCacheReadsByTrack['track-Album-1'] ?? 0);
+  assert(firstAlbumReads === 1, `the first card should resolve its thumbnail once: ${firstAlbumReads}`);
+  await page.locator('.album-grid-viewport').evaluate((element) => {
+    element.scrollTop = 3000;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await firstCard.waitFor({ state: 'detached' });
+  await page.locator('.album-grid-viewport').evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await firstCard.locator('img').waitFor();
+  const firstAlbumReadsAfterRemount = await page.evaluate(() => window.__albumIndexStats.trackCacheReadsByTrack['track-Album-1'] ?? 0);
+  assert(firstAlbumReadsAfterRemount === firstAlbumReads, `returning to a virtualized row must reuse the in-memory cover: ${firstAlbumReads} -> ${firstAlbumReadsAfterRemount}`);
+
+  return { loadingStats, initial, afterResize, afterScroll, firstAlbumReadsAfterRemount };
 }

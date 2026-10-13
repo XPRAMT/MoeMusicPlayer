@@ -1,21 +1,32 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBytes, putAlbumThumbnailBytesForTrack } from './ipc';
-  import { copyToArrayBuffer, createAlbumThumbnail, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
+  import { acquireAlbumCardArtwork, copyToArrayBuffer, createAlbumThumbnail, rememberAlbumCardArtwork, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import type { AlbumEntry } from './album-identities.js';
   import { detectArtworkMimeType } from './active-track-artwork';
 
-  interface Props { album: AlbumEntry; active: boolean; onSelect: (album: AlbumEntry) => void }
-  let { album, active, onSelect }: Props = $props();
+  interface Props { album: AlbumEntry; active: boolean; refreshKey: number; onSelect: (album: AlbumEntry) => void }
+  let { album, active, refreshKey, onSelect }: Props = $props();
   let card = $state<HTMLElement | undefined>(undefined);
   let inViewport = $state(false);
   let imageUrl = $state<string | null>(null);
   let busy = false;
   let destroyed = false;
   let requestRevision = 0;
+  let cacheResolved = false;
+  let releaseArtworkCacheLease: (() => void) | null = null;
+
+  const memoryCacheKey = $derived(`${refreshKey}:${album.key}`);
 
   async function loadCover(): Promise<void> {
-    if (!active || busy || imageUrl || album.unmarked) return;
+    if (!active || busy || cacheResolved || album.unmarked) return;
+    const cached = acquireAlbumCardArtwork(memoryCacheKey);
+    if (cached) {
+      releaseArtworkCacheLease = cached.release;
+      imageUrl = cached.value;
+      cacheResolved = true;
+      return;
+    }
     const revision = ++requestRevision;
     busy = true;
     try {
@@ -25,7 +36,7 @@
         const page = await invokeCommand('library_get_album_page', { albumNames: album.aliases, offset, limit: pageSize });
         for (const track of page.items) {
           if (!active || destroyed || revision !== requestRevision) return;
-          let thumbnailUrl: string | null;
+          let thumbnailUrl: { url: string; bytes: number } | null;
           try {
             thumbnailUrl = await withAlbumArtworkSlot(async () => {
               if (!active || destroyed || revision !== requestRevision) return null;
@@ -35,7 +46,7 @@
               try { indexed = new Uint8Array(await getAlbumThumbnailBytesForTrack(track.id)); } catch { /* rebuild a missing or damaged cache entry */ }
               if (indexed.length === 1 && indexed[0] === 0) return null;
               if (indexed.length > 3) {
-                return URL.createObjectURL(new Blob([copyToArrayBuffer(indexed)], { type: 'image/jpeg' }));
+              return { url: URL.createObjectURL(new Blob([copyToArrayBuffer(indexed)], { type: 'image/jpeg' })), bytes: indexed.byteLength };
               }
 
               // Legacy caches are content-addressed only. Resolve once, then persist the track
@@ -61,15 +72,26 @@
                 console.warn('無法保存專輯卡片縮圖快取', error);
                 return putAlbumThumbnailBytes(key, copyToArrayBuffer(thumbnail)).catch(() => undefined);
               });
-              return URL.createObjectURL(new Blob([copyToArrayBuffer(thumbnail)], { type: 'image/jpeg' }));
+              return { url: URL.createObjectURL(new Blob([copyToArrayBuffer(thumbnail)], { type: 'image/jpeg' })), bytes: thumbnail.byteLength };
             });
           } catch { thumbnailUrl = null; }
           if (thumbnailUrl) {
-            if (!active || destroyed || revision !== requestRevision) URL.revokeObjectURL(thumbnailUrl);
-            else { imageUrl = thumbnailUrl; return; }
+            if (!active || destroyed || revision !== requestRevision) URL.revokeObjectURL(thumbnailUrl.url);
+            else {
+              const cachedArtwork = rememberAlbumCardArtwork(memoryCacheKey, thumbnailUrl.url, thumbnailUrl.bytes);
+              releaseArtworkCacheLease = cachedArtwork?.release ?? null;
+              imageUrl = cachedArtwork?.value ?? thumbnailUrl.url;
+              cacheResolved = true;
+              return;
+            }
           }
         }
         if (page.items.length === 0 || offset + page.items.length >= page.totalCount) break;
+      }
+      if (active && !destroyed && revision === requestRevision) {
+        const cachedArtwork = rememberAlbumCardArtwork(memoryCacheKey, null);
+        releaseArtworkCacheLease = cachedArtwork?.release ?? null;
+        cacheResolved = true;
       }
     } catch (error) {
       console.warn(`無法載入專輯「${album.displayName}」封面`, error);
@@ -97,7 +119,7 @@
       busy = false;
     } else if (visible) void loadCover();
   });
-  onDestroy(() => { destroyed = true; requestRevision += 1; if (imageUrl) URL.revokeObjectURL(imageUrl); });
+  onDestroy(() => { destroyed = true; requestRevision += 1; releaseArtworkCacheLease?.(); });
 </script>
 
 <button class="album-card" type="button" bind:this={card} onclick={() => onSelect(album)} aria-label={`開啟專輯「${album.displayName}」${album.unmarked ? '，未標記' : ''}，${album.trackCount} 首曲目`}>

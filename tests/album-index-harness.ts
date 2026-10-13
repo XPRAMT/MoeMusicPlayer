@@ -5,7 +5,7 @@ import '../src/app.css';
 const cacheJpeg = Uint8Array.from(atob('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9k='), (character) => character.charCodeAt(0));
 const artworkReads = new ArrayBuffer(4 * 1024 * 1024);
 new Uint8Array(artworkReads).set([0xff, 0xd8, 0xff]);
-const stats = { rawArtworkReads: 0, legacyCacheReads: 0, trackCacheReads: 0, albumPages: 0 };
+const stats = { rawArtworkReads: 0, legacyCacheReads: 0, trackCacheReads: 0, trackCacheReadsByTrack: {} as Record<string, number>, albumPages: 0 };
 Object.assign(window, { __albumIndexStats: stats });
 
 Object.assign(window, {
@@ -33,6 +33,8 @@ Object.assign(window, {
       }
       if (command === 'album_artwork_cache_get_for_track') {
         stats.trackCacheReads += 1;
+        const trackId = String((args as { trackId?: string } | undefined)?.trackId ?? 'unknown');
+        stats.trackCacheReadsByTrack[trackId] = (stats.trackCacheReadsByTrack[trackId] ?? 0) + 1;
         await new Promise((resolve) => setTimeout(resolve, 120));
         return cacheJpeg.slice().buffer;
       }

@@ -1,14 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  acquireAlbumCardArtwork,
   hashDistance,
   perceptualHash32,
   rankAlbumArtwork,
+  rememberAlbumCardArtwork,
 } from '../src/lib/album-artwork.js';
 
 function gray(fill) {
   return new Uint8Array(32 * 32).fill(fill);
 }
+
+test('virtualized album cards reuse the same in-memory thumbnail after unmount and remount', () => {
+  const key = `virtualized-${crypto.randomUUID()}`;
+  const url = URL.createObjectURL(new Blob(['thumbnail-bytes']));
+  const firstMount = rememberAlbumCardArtwork(key, url, 15);
+  assert.equal(firstMount.value, url);
+  firstMount.release();
+
+  const remounted = acquireAlbumCardArtwork(key);
+  assert.ok(remounted, 'the image remains cached when the virtual card is unmounted');
+  assert.equal(remounted.value, url, 'remount must reuse the same object URL instead of requesting the disk cache again');
+  remounted.release();
+});
+
+test('virtualized album cards remember tracks with no cover for the current list generation', () => {
+  const key = `virtualized-no-cover-${crypto.randomUUID()}`;
+  const firstMount = rememberAlbumCardArtwork(key, null);
+  firstMount.release();
+  const remounted = acquireAlbumCardArtwork(key);
+  assert.ok(remounted, 'a known no-cover result is cached');
+  assert.equal(remounted.value, null);
+  remounted.release();
+});
 
 test('32x32 pHash is stable for flat images and distinguishes structured luminance patterns', () => {
   const dark = perceptualHash32(gray(16));

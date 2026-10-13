@@ -105,7 +105,7 @@
       <div class="album-grid" style={`grid-template-columns:repeat(${columns},${cardWidth}px);gap:${gap}px;--album-card-width:${cardWidth}px`}>
         <div class="album-grid-spacer" style={`height:${topSpacer}px`} aria-hidden="true"></div>
         {#each visibleAlbums as album (`${album.key}:${refreshKey}`)}
-          <AlbumCard {album} {active} {onSelect} />
+          <AlbumCard {album} {active} {refreshKey} {onSelect} />
         {/each}
         <div class="album-grid-spacer" style={`height:${bottomSpacer}px`} aria-hidden="true"></div>
       </div>

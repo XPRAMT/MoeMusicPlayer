@@ -11,6 +11,78 @@ let activeArtworkWorkers = 0;
 /** @type {(() => void)[]} */
 const artworkWorkerQueue = [];
 
+// Album cards are virtualized and are destroyed as the user scrolls. Keep the
+// small JPEGs in memory across those unmounts so returning to a row does not
+// reopen every thumbnail from UserData on C:.
+const ALBUM_CARD_MEMORY_CACHE_MAX_ENTRIES = 1200;
+const ALBUM_CARD_MEMORY_CACHE_MAX_BYTES = 128 * 1024 * 1024;
+/** @type {Map<string, { value: string | null, bytes: number, leases: number }>} */
+const albumCardMemoryCache = new Map();
+let albumCardMemoryCacheBytes = 0;
+
+function trimAlbumCardMemoryCache() {
+  while (albumCardMemoryCache.size > ALBUM_CARD_MEMORY_CACHE_MAX_ENTRIES
+    || albumCardMemoryCacheBytes > ALBUM_CARD_MEMORY_CACHE_MAX_BYTES) {
+    let evictKey;
+    for (const [key, entry] of albumCardMemoryCache) {
+      if (entry.leases === 0) {
+        evictKey = key;
+        break;
+      }
+    }
+    if (evictKey === undefined) return;
+    const entry = albumCardMemoryCache.get(evictKey);
+    if (!entry) return;
+    albumCardMemoryCache.delete(evictKey);
+    albumCardMemoryCacheBytes -= entry.bytes;
+    if (entry.value) URL.revokeObjectURL(entry.value);
+  }
+}
+
+/** Acquire an in-memory card thumbnail. A null value is a cached no-cover result. */
+/** @param {string} key */
+export function acquireAlbumCardArtwork(key) {
+  const entry = albumCardMemoryCache.get(key);
+  if (!entry) return null;
+  albumCardMemoryCache.delete(key);
+  albumCardMemoryCache.set(key, entry);
+  entry.leases += 1;
+  let released = false;
+  return {
+    value: entry.value,
+    release() {
+      if (released) return;
+      released = true;
+      entry.leases = Math.max(0, entry.leases - 1);
+      trimAlbumCardMemoryCache();
+    },
+  };
+}
+
+/** Store a resolved cover (or no-cover result) and return a lease for the card. */
+/** @param {string} key @param {string | null} value @param {number} [bytes] */
+export function rememberAlbumCardArtwork(key, value, bytes = 0) {
+  const existing = albumCardMemoryCache.get(key);
+  if (existing) {
+    if (value && value !== existing.value) URL.revokeObjectURL(value);
+    return acquireAlbumCardArtwork(key);
+  }
+  const entry = { value, bytes: value ? Math.max(0, bytes) : 0, leases: 1 };
+  albumCardMemoryCache.set(key, entry);
+  albumCardMemoryCacheBytes += entry.bytes;
+  trimAlbumCardMemoryCache();
+  let released = false;
+  return {
+    value: entry.value,
+    release() {
+      if (released) return;
+      released = true;
+      entry.leases = Math.max(0, entry.leases - 1);
+      trimAlbumCardMemoryCache();
+    },
+  };
+}
+
 /** @template T @param {() => Promise<T>} task @returns {Promise<T>} */
 export function withAlbumArtworkSlot(task) {
   return new Promise((resolve, reject) => {
