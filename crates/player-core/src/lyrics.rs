@@ -3,8 +3,7 @@ use std::collections::{BTreeMap, VecDeque};
 use unicode_normalization::UnicodeNormalization;
 
 pub const MAX_LYRIC_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
-pub const AUTO_MATCH_MIN_SCORE: f32 = 0.82;
-pub const AUTO_MATCH_MIN_MARGIN: f32 = 0.10;
+pub const AUTO_MATCH_MIN_SCORE: f32 = 0.8;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum LyricProvider {
@@ -345,21 +344,11 @@ pub fn rank_lyric_candidates(
     ranked
 }
 
-/// Return an automatic choice only when the highest score is strong and clearly separated from
-/// the next materially different recording.
+/// Return the highest-ranked timed candidate only when its score is strictly above the threshold.
 pub fn auto_lyric_candidate(ranked: &[LyricCandidate]) -> Option<&LyricCandidate> {
     let best = ranked.first()?;
-    if best.score < AUTO_MATCH_MIN_SCORE || !best.lyrics.synced {
+    if best.score <= AUTO_MATCH_MIN_SCORE || !best.lyrics.synced {
         return None;
-    }
-    if let Some(second) = ranked
-        .iter()
-        .skip(1)
-        .find(|candidate| !same_recording(best, candidate))
-    {
-        if best.score - second.score < AUTO_MATCH_MIN_MARGIN {
-            return None;
-        }
     }
     Some(best)
 }
@@ -370,10 +359,10 @@ pub fn score_lyric_candidate(
 ) -> LyricMatchScore {
     let mut score = 0.0_f32;
     if let (Some(local), Some(remote)) = (&local.title, &candidate.title) {
-        score += 0.45 * text_similarity(local, remote);
+        score += 0.55 * text_similarity(local, remote);
     }
     if let (Some(local), Some(remote)) = (&local.artist, &candidate.artist) {
-        score += 0.35 * text_similarity(local, remote);
+        score += 0.25 * text_similarity(local, remote);
     }
     if let (Some(local), Some(remote)) = (local.duration_ms, candidate.duration_ms) {
         score += 0.15 * duration_similarity(local, remote);
@@ -608,27 +597,6 @@ fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
         std::mem::swap(&mut previous, &mut current);
     }
     previous[right.len()]
-}
-
-fn same_recording(left: &LyricCandidate, right: &LyricCandidate) -> bool {
-    let Some(left_title) = left.title.as_deref() else {
-        return false;
-    };
-    let Some(right_title) = right.title.as_deref() else {
-        return false;
-    };
-    let Some(left_artist) = left.artist.as_deref() else {
-        return false;
-    };
-    let Some(right_artist) = right.artist.as_deref() else {
-        return false;
-    };
-    if normalized_tokens(left_title) != normalized_tokens(right_title)
-        || normalized_tokens(left_artist) != normalized_tokens(right_artist)
-    {
-        return false;
-    }
-    matches!((left.duration_ms, right.duration_ms), (Some(a), Some(b)) if a.abs_diff(b) <= 2_000)
 }
 
 #[cfg(test)]
@@ -959,6 +927,60 @@ mod tests {
     }
 
     #[test]
+    fn candidate_score_weights_are_title_55_artist_25_duration_15_album_5() {
+        let score_for = |metadata, candidate| score_lyric_candidate(&metadata, &candidate).value;
+        let title_only = LyricsTrackMetadata {
+            title: Some("Song".into()),
+            artist: None,
+            album: None,
+            duration_ms: None,
+        };
+        let artist_only = LyricsTrackMetadata {
+            title: None,
+            artist: Some("Artist".into()),
+            album: None,
+            duration_ms: None,
+        };
+        let duration_only = LyricsTrackMetadata {
+            title: None,
+            artist: None,
+            album: None,
+            duration_ms: Some(180_000),
+        };
+        let album_only = LyricsTrackMetadata {
+            title: None,
+            artist: None,
+            album: Some("Album".into()),
+            duration_ms: None,
+        };
+        assert_eq!(
+            score_for(title_only, candidate("title", "Song", "Artist", None, None)),
+            0.55
+        );
+        assert_eq!(
+            score_for(
+                artist_only,
+                candidate("artist", "Song", "Artist", None, None)
+            ),
+            0.25
+        );
+        assert_eq!(
+            score_for(
+                duration_only,
+                candidate("duration", "Song", "Artist", None, Some(180_000))
+            ),
+            0.15
+        );
+        assert_eq!(
+            score_for(
+                album_only,
+                candidate("album", "Song", "Artist", Some("Album"), None)
+            ),
+            0.05
+        );
+    }
+
+    #[test]
     fn match_explanations_name_title_artist_duration_and_weak_album_factors() {
         let local = LyricsTrackMetadata {
             title: Some("Song".into()),
@@ -977,47 +999,39 @@ mod tests {
     }
 
     #[test]
-    fn automatic_selection_requires_high_score_and_a_clear_recording_margin() {
-        let local = LyricsTrackMetadata {
-            title: Some("Song".into()),
-            artist: Some("Artist".into()),
-            album: Some("Album".into()),
-            duration_ms: Some(180_000),
-        };
-        let ranked = rank_lyric_candidates(
-            &local,
-            [
-                candidate("exact", "Song", "Artist", Some("Album"), Some(180_000)),
-                candidate("live", "Song Live", "Artist", Some("Album"), Some(180_000)),
-            ],
-        );
-        assert_eq!(
-            auto_lyric_candidate(&ranked).map(|item| item.candidate_id.as_str()),
-            Some("exact")
-        );
+    fn automatic_selection_requires_score_strictly_above_point_eight() {
+        let mut at_threshold = candidate("threshold", "Song", "Artist", None, None);
+        at_threshold.score = 0.8;
+        assert!(auto_lyric_candidate(&[at_threshold]).is_none());
 
-        let ambiguous = rank_lyric_candidates(
-            &local,
-            [
-                candidate("exact-a", "Song", "Artist", Some("Album"), Some(180_000)),
-                candidate("exact-b", "Song", "Artist", Some("Album"), Some(180_000)),
-            ],
-        );
+        let mut just_above = candidate("just-above", "Song", "Artist", None, None);
+        just_above.score = 0.800_001;
         assert_eq!(
-            auto_lyric_candidate(&ambiguous).map(|item| item.candidate_id.as_str()),
-            Some("exact-a")
+            auto_lyric_candidate(&[just_above]).map(|item| item.candidate_id.as_str()),
+            Some("just-above")
         );
+    }
 
-        let weak = rank_lyric_candidates(
-            &local,
-            [candidate(
-                "weak",
-                "Song",
-                "Different Artist",
-                Some("Album"),
-                Some(180_000),
-            )],
+    #[test]
+    fn automatic_selection_keeps_the_highest_candidate_when_scores_are_close() {
+        let mut highest = candidate("highest", "Song", "Artist", None, None);
+        highest.score = 0.800_1;
+        let mut close_second =
+            candidate("close-second", "Song Live", "Different Artist", None, None);
+        close_second.score = 0.800_09;
+
+        assert_eq!(
+            auto_lyric_candidate(&[highest, close_second]).map(|item| item.candidate_id.as_str()),
+            Some("highest")
         );
-        assert!(auto_lyric_candidate(&weak).is_none());
+    }
+
+    #[test]
+    fn automatic_selection_still_requires_timed_lyrics() {
+        let mut untimed = candidate("untimed", "Song", "Artist", None, None);
+        untimed.score = 0.99;
+        untimed.lyrics = parse_lrc("plain lyrics").expect("fixture plain lyrics");
+        assert!(!untimed.lyrics.synced);
+        assert!(auto_lyric_candidate(&[untimed]).is_none());
     }
 }

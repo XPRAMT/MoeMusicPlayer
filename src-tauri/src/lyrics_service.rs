@@ -331,9 +331,7 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
             .map_err(|error| error.to_string())?;
 
         if allow_auto_apply {
-            if let Some(best) = auto_lyric_candidate(&ranked)
-                .filter(|candidate| candidate.score >= HIGH_CONFIDENCE_SCORE)
-            {
+            if let Some(best) = auto_lyric_candidate(&ranked) {
                 let automatic = TrackLyrics {
                     track_id,
                     provider: best.provider,
@@ -2206,7 +2204,7 @@ mod tests {
         assert!(result
             .candidates
             .iter()
-            .all(|candidate| candidate.score < super::HIGH_CONFIDENCE_SCORE));
+            .all(|candidate| { candidate.score <= player_core::AUTO_MATCH_MIN_SCORE }));
         assert!(database
             .get_track_lyrics(track.id)
             .expect("read selected lyric cache")
@@ -2260,6 +2258,39 @@ mod tests {
         let loaded_lyrics = loaded.lyrics.expect("get returns cached lyrics");
         assert_eq!(loaded_lyrics.source, result_lyrics.source);
         assert_eq!(loaded_lyrics.lines, result_lyrics.lines);
+    }
+
+    #[tokio::test]
+    async fn service_auto_applies_a_timed_match_just_above_core_threshold() {
+        let (database, _directory, mut track) = seeded_test_database("Song", "Artisx", "Album");
+        // The provider fixtures match the title and album exactly and miss the artist by one
+        // character. Removing duration leaves a computed 0.8083 score: above Core's 0.8 gate,
+        // but below the old service-only 0.90 gate.
+        track.duration_ms = None;
+        let score = 0.55 + 0.25 * (5.0_f32 / 6.0) + 0.05;
+        assert!(score > player_core::AUTO_MATCH_MIN_SCORE);
+        assert!(score < super::HIGH_CONFIDENCE_SCORE);
+
+        let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
+        let result = service
+            .search_track(
+                &database,
+                track.id,
+                &track,
+                CancellationToken::new(),
+                true,
+                None,
+            )
+            .await
+            .expect("complete fixture search");
+
+        assert!(matches!(result.status, super::LyricsResultStatusDto::Ready));
+        let stored = database
+            .get_track_lyrics(track.id)
+            .expect("read auto-applied lyrics")
+            .expect("just-above-threshold match persisted");
+        assert!(!stored.manually_selected);
+        assert!(stored.lyrics.synced);
     }
 
     #[tokio::test]

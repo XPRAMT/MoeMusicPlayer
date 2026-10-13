@@ -34,7 +34,7 @@
 ## 歌詞格式與快取
 
 - Core LRC parser 同時接受 `[MM:SS.cc]` 與 `[MM:SS:cc]` 小數時間格式（小數位數 1–3 位）；部分 NetEase 歌詞使用冒號小數格式。讀取 NetEase／QQ 的 LRC 或舊 `Plain` 歌詞快取時，會從保存的 `rawText` 在記憶體重新解析，包含手動選取的歌詞；舊 `Plain` 行內保留的時間戳會從顯示文字剝除並轉為 cue 時間，無需資料庫遷移或讀取時寫入。舊的譯文／羅馬拼音按原 cue 對齊保留，raw karaoke 亦保留。選取既有候選時，會先修復解析行再保存及回傳。回歸測試使用 43 行合成內容覆蓋兩種分隔符：Core 驗證每行皆有時間且文字完整；資料庫測試驗證自動、舊 LRC 與舊 Plain 快取的讀取修復，以及選取候選立即回傳完整行；NetEase Provider 測試驗證其仍識別為同步 LRC。目前 player-core 64/64、player-db 71 通過／2 忽略、moemusicplayer 176 通過／2 忽略；受影響套件嚴格 Clippy 與 workspace rustfmt 檢查通過。測試僅使用隔離／記憶體資料庫，不讀寫使用者曲庫。
-- 歌詞候選摘要依序顯示格式及存在的副行，例如「逐行歌詞 · 譯 · 羅」；格式以「逐字歌詞」優先於「逐行歌詞」，無行級時間者顯示「純歌詞」。`LyricsCandidateDto.hasWordSyncedLyrics` 對 `Yrc`／`Qrc` 格式為真；LRC 等格式只有在保存的 karaoke JSON 含非空 `yrc` 或 `qrc_base64`／`qrcBase64` 才為真，只有譯文或羅馬拼音不算逐字資料。`hasTranslation`／`hasRomanization` 由已解析非空行副文或保存 JSON 相應的非空 `translation_base64`／`romanization_base64` 欄位判定，其他 raw 附件不算；摘要只列存在的「譯」「羅」，缺少時省略。未解碼 QRC 仍標示「逐字歌詞」，並保留無法預覽的說明。前端顯示與 Rust DTO 判定由 Node 與 Rust 單元測試覆蓋。
+- 歌詞候選摘要依序顯示格式及存在的副行，例如「逐行歌詞 · 譯 · 羅」；格式以「逐字歌詞」優先於「逐行歌詞」，無行級時間者顯示「純歌詞」。`LyricsCandidateDto.hasWordSyncedLyrics` 對 `Yrc`／`Qrc` 格式為真；LRC 等格式只有在保存的 karaoke JSON 含非空 `yrc` 或 `qrc_base64`／`qrcBase64` 才為真，只有譯文或羅馬拼音不算逐字資料。`hasTranslation`／`hasRomanization` 由已解析非空行副文或保存 JSON 相應的非空 `translation_base64`／`romanization_base64` 欄位判定，其他 raw 附件不算；摘要只列存在的「譯」「羅」，缺少時省略。未解碼 QRC 仍標示「逐字歌詞」，並保留無法預覽的說明。候選分數權重為曲名 55%、演出者 25%、長度 15%、專輯 5%；自動套用只取最高分的候選，分數必須嚴格大於 0.8 且歌詞有行級時間戳，不檢查與第二名的分差。手動搜尋不自動套用，仍顯示候選選擇器。前端顯示與 Rust DTO／Core 自動採用規則由 Node 與 Rust 單元測試覆蓋。
 
 ## Windows 檔案總管開啟音樂
 
