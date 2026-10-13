@@ -242,7 +242,7 @@
               const raw = item[field];
               if (raw === value) return true;
               if (field === 'artist' && typeof raw === 'string') {
-                return raw.split(/[|\\/;,\s]+/).filter(Boolean).includes(value);
+                return raw.split(/[|\\/;,&\s]+/).filter(Boolean).includes(value);
               }
               return false;
             });

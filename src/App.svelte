@@ -410,10 +410,10 @@
   );
   const pageTrackCountLabel = $derived.by(() => {
     if (activeView === 'library') {
-      return `${libraryTrackCount?.toLocaleString() ?? '—'} 首曲目`;
+      return `${libraryTrackCount === null ? '' : `${libraryTrackCount.toLocaleString()} `}首曲目`;
     }
     if (activeView === 'artists') {
-      return `${artistIndexCount?.toLocaleString() ?? '—'} 位演出者`;
+      return `${artistIndexCount === null ? '' : `${artistIndexCount.toLocaleString()} `}位演出者`;
     }
     if (activeView === 'playlists') {
       const count = playlistTrackCount ?? selectedPlaylist?.entryCount ?? null;
@@ -425,8 +425,7 @@
       return `${queueTrackCount.toLocaleString()} 首曲目`;
     }
     if (activeView === 'artist-detail') {
-      if (artistTrackCount === null) return null;
-      return `${artistTrackCount.toLocaleString()} 首曲目`;
+      return `${artistTrackCount === null ? '' : `${artistTrackCount.toLocaleString()} `}首曲目`;
     }
     return null;
   });

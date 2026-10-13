@@ -2083,7 +2083,7 @@ fn split_artist_names(value: Option<&str>) -> Vec<String> {
     };
     let mut seen = HashSet::new();
     value
-        .split(['|', '\\', '/', ';', ','])
+        .split(['|', '\\', '/', ';', ',', '&'])
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .filter(|name| seen.insert((*name).to_owned()))
@@ -3997,7 +3997,7 @@ mod tests {
         );
         first.metadata.as_mut().unwrap().artist = Some("Hanser / 歌手甲".to_owned());
         first.metadata.as_mut().unwrap().album = Some("專輯 A".to_owned());
-        second.metadata.as_mut().unwrap().artist = Some("hanser|歌手乙".to_owned());
+        second.metadata.as_mut().unwrap().artist = Some("hanser & 歌手乙".to_owned());
         second.metadata.as_mut().unwrap().album = Some("专辑 a".to_owned());
         third.metadata.as_mut().unwrap().artist = Some("HANSer".to_owned());
         third.metadata.as_mut().unwrap().album = Some("   ".to_owned());
@@ -4128,6 +4128,20 @@ mod tests {
             )
             .expect("artist track page");
         assert_eq!(artist_page.total_count, 3);
+        let ampersand_artist_page = db
+            .list_tracks_page_for_artists(
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort::default(),
+                },
+                &[],
+                &["歌手乙".to_owned()],
+            )
+            .expect("ampersand-separated artist track page");
+        assert_eq!(ampersand_artist_page.total_count, 1);
         let substring_collision = db
             .list_tracks_page_for_artists(
                 ListTracksQuery {
