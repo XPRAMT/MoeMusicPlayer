@@ -97,6 +97,11 @@ const LIBRARY_SYNC_FINISHED_EVENT: &str = "library-sync-finished";
 const LIBRARY_SYNC_PROGRESS_EVENT: &str = "library-sync-progress";
 const PLAYBACK_QUEUE_PAGE_MAX_LIMIT: u32 = 100;
 const SOURCE_SYNC_ERROR_DETAILS_LIMIT: usize = 100;
+const ALBUM_ARTWORK_CACHE_DIRECTORY_NAME: &str = "album-cover";
+
+fn album_artwork_cache_namespace(root: &std::path::Path) -> std::path::PathBuf {
+    root.join(ALBUM_ARTWORK_CACHE_DIRECTORY_NAME)
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -308,6 +313,40 @@ mod album_artwork_responsiveness_tests {
         )
         .await;
         fs::remove_dir_all(&directory).expect("remove isolated thumbnail fixture");
+    }
+
+    #[test]
+    fn album_cover_namespace_does_not_hit_or_remove_legacy_artwork_cache() {
+        let root = std::env::temp_dir().join(format!(
+            "moemusicplayer-album-cache-namespace-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let old_directory = root.join("album-artwork");
+        let current_directory = album_artwork_cache_namespace(&root);
+        let identity = "source-a\\0song-1\\01024\\0200";
+        let digest = "d".repeat(64);
+        let jpeg = vec![0xff, 0xd8, 0xff, 0x00];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+
+        album_artwork_cache::put(&old_directory, &digest, &encoded).expect("seed old cache");
+        album_artwork_cache::put_track_reference(&old_directory, identity, Some(&digest))
+            .expect("seed old track reference");
+
+        assert_eq!(current_directory, root.join("album-cover"));
+        assert!(
+            album_artwork_cache::get_for_track(&current_directory, identity)
+                .expect("new namespace cache lookup")
+                .is_empty()
+        );
+        assert_eq!(
+            album_artwork_cache::get_for_track(&old_directory, identity)
+                .expect("legacy cache remains readable in place"),
+            jpeg
+        );
+        fs::remove_dir_all(root).expect("remove isolated namespace fixture");
     }
 }
 
@@ -2948,14 +2987,14 @@ fn album_artwork_cache_directory(
     #[cfg(target_os = "windows")]
     {
         let _ = app;
-        Ok(user_data_directory(state)?.join("album-artwork"))
+        Ok(album_artwork_cache_namespace(&user_data_directory(state)?))
     }
     #[cfg(target_os = "android")]
     {
         let _ = state;
         app.path()
             .app_cache_dir()
-            .map(|path| path.join("album-artwork"))
+            .map(|path| album_artwork_cache_namespace(&path))
             .map_err(|error| format!("無法取得 Android 專輯縮圖快取路徑：{error}"))
     }
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
@@ -2963,7 +3002,7 @@ fn album_artwork_cache_directory(
         let _ = state;
         app.path()
             .app_cache_dir()
-            .map(|path| path.join("album-artwork"))
+            .map(|path| album_artwork_cache_namespace(&path))
             .map_err(|error| format!("無法取得專輯縮圖快取路徑：{error}"))
     }
 }

@@ -26,7 +26,7 @@ scope.addEventListener('message', async (event: MessageEvent<Request>) => {
     context.fillStyle = '#000';
     context.fillRect(0, 0, edge, edge);
     context.drawImage(bitmap, sx, sy, cropSize, cropSize, 0, 0, edge, edge);
-    const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.88 });
+    const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 1.0 });
     const thumbnail = await blob.arrayBuffer();
     const thumbnailBytes = new Uint8Array(thumbnail);
     let binaryText = '';
