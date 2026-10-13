@@ -29,6 +29,7 @@ import {
   setTrackColumnWidth,
   toggleLibrarySort,
   togglePlaylistSort,
+  trackColumnDropIndexFromPointer,
   trackListColumnCount,
   trackListGridTemplate,
   visibleTrackColumns,
@@ -249,11 +250,29 @@ test('queue and album detail reuse shared sortable track-list headers', async ()
 });
 
 test('field order settings use the shared 300ms long-press drag delay', async () => {
-  const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  const [app, appCss] = await Promise.all([
+    readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/app.css', import.meta.url), 'utf8'),
+  ]);
   assert.match(app, /QUEUE_REORDER_LONG_PRESS_MS/);
   assert.match(app, /setTimeout\([\s\S]*?QUEUE_REORDER_LONG_PRESS_MS/);
   assert.match(app, /moveTrackColumnTo\(trackColumnPreferences, column\.id, drag\.toIndex\)/);
-  assert.match(app, /長按 300 毫秒後拖曳/);
+  assert.match(app, /class:column-order-drop-before=/);
+  assert.match(app, /class:column-order-drop-after=/);
+  assert.match(app, /class="track-column-setting-row"[\s\S]*?onpointerdown=\{\(event\) => handleTrackColumnOrderPointerDown\(event, index\)\}/);
+  assert.doesNotMatch(app, /track-column-order-grip|IconGripVertical/);
+  assert.match(appCss, /\.track-column-setting-row\.column-order-drop-before::before/);
+  assert.match(appCss, /\.track-column-setting-row\.column-order-drop-after::after/);
+});
+
+test('column drag pointer maps to final indices after removing the dragged row', () => {
+  const centers = [20, 80, 140, 200];
+  assert.equal(trackColumnDropIndexFromPointer(10, centers, 2), 0);
+  assert.equal(trackColumnDropIndexFromPointer(100, centers, 0), 1);
+  assert.equal(trackColumnDropIndexFromPointer(180, centers, 1), 2);
+  assert.equal(trackColumnDropIndexFromPointer(100, centers, 2), 2);
+  assert.equal(trackColumnDropIndexFromPointer(500, centers, 1), 3);
+  assert.equal(trackColumnDropIndexFromPointer(100, [], 0), 0);
 });
 
 test('audio format uses only supplied source fields and formats nullable values', () => {

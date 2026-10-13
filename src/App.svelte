@@ -9,7 +9,6 @@
     IconChevronRight,
     IconDisc,
     IconFolder,
-    IconGripVertical,
     IconList,
     IconMusic,
     IconPlayerPause,
@@ -100,6 +99,7 @@
     setTrackColumnVisibility,
     setTrackColumnWidth,
     toggleLibrarySort,
+    trackColumnDropIndexFromPointer,
   } from './lib/track-columns.js';
   import {
     applyLivePlayCountSample,
@@ -1174,14 +1174,14 @@
     const drag = trackColumnOrderDrag;
     if (!drag || drag.pointerId !== event.pointerId) return;
     event.preventDefault();
-    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-track-column-index]');
-    if (!target) return;
-    const targetIndex = Number(target.dataset.trackColumnIndex);
-    if (!Number.isSafeInteger(targetIndex)) return;
-    const rect = target.getBoundingClientRect();
-    let destination = targetIndex + (event.clientY > rect.top + rect.height / 2 ? 1 : 0);
-    if (destination > drag.fromIndex) destination -= 1;
-    destination = Math.max(0, Math.min(trackColumnPreferences.length - 1, destination));
+    const list = (event.currentTarget as HTMLElement).closest<HTMLOListElement>('.track-column-settings');
+    const rows = list ? [...list.querySelectorAll<HTMLElement>('[data-track-column-index]')] : [];
+    if (rows.length === 0) return;
+    const rowCenters = rows.map((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.top + rect.height / 2;
+    });
+    const destination = trackColumnDropIndexFromPointer(event.clientY, rowCenters, drag.fromIndex);
     if (destination !== drag.toIndex) trackColumnOrderDrag = { ...drag, toIndex: destination };
   }
 
@@ -1193,6 +1193,7 @@
     }
     const drag = trackColumnOrderDrag;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
     try {
       (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
     } catch {
@@ -1214,6 +1215,7 @@
   }
 
   function handleTrackColumnOrderKeydown(event: KeyboardEvent, id: TrackListColumnPreference['id']): void {
+    if (event.target !== event.currentTarget) return;
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
     event.preventDefault();
     event.stopPropagation();
@@ -3117,29 +3119,27 @@
                 <ol class="track-column-settings" aria-label="曲目資訊欄位設定">
                   {#each trackColumnPreferences as preference, index (preference.id)}
                     {@const definition = TRACK_COLUMN_DEFINITIONS.find((column) => column.id === preference.id)!}
+                    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                     <li
                       class="track-column-setting-row"
                       class:column-order-dragging={trackColumnOrderDrag?.fromIndex === index}
-                      class:column-order-target={trackColumnOrderDrag?.toIndex === index && trackColumnOrderDrag.fromIndex !== index}
+                      class:column-order-drop-before={trackColumnOrderDrag !== null && trackColumnOrderDrag.toIndex === index && trackColumnOrderDrag.fromIndex > index}
+                      class:column-order-drop-after={trackColumnOrderDrag !== null && trackColumnOrderDrag.toIndex === index && trackColumnOrderDrag.fromIndex < index}
                       data-track-column-index={index}
+                      title="長按 300 毫秒後拖曳排序；鍵盤可用上下方向鍵"
+                      onpointerdown={(event) => handleTrackColumnOrderPointerDown(event, index)}
+                      onpointermove={handleTrackColumnOrderPointerMove}
+                      onpointerup={finishTrackColumnOrderPointer}
+                      onpointercancel={cancelTrackColumnOrderPointer}
                     >
-                      <button
-                        type="button"
-                        class="track-column-order-grip"
-                        aria-label={`${definition.label}欄排序把手；長按 300 毫秒後拖曳，鍵盤可用上下方向鍵`}
-                        title="長按 300 毫秒後拖曳排序；鍵盤可用上下方向鍵"
-                        onpointerdown={(event) => handleTrackColumnOrderPointerDown(event, index)}
-                        onpointermove={handleTrackColumnOrderPointerMove}
-                        onpointerup={finishTrackColumnOrderPointer}
-                        onpointercancel={cancelTrackColumnOrderPointer}
-                        onkeydown={(event) => handleTrackColumnOrderKeydown(event, preference.id)}
-                      ><IconGripVertical size={17} stroke={1.8} aria-hidden="true" /></button>
                       <label class="track-column-setting-label">
                         <input
                           type="checkbox"
                           checked={preference.visible}
                           aria-label={`顯示${definition.label}欄`}
+                          title="上下方向鍵可調整欄位順序"
                           onchange={(event) => setTrackColumnVisible(preference.id, event.currentTarget.checked)}
+                          onkeydown={(event) => handleTrackColumnOrderKeydown(event, preference.id)}
                         />
                         <span>{definition.label}</span>
                       </label>

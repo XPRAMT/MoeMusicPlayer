@@ -214,7 +214,7 @@ test('visible UI icons use Tabler components except the original brand mark', ()
   assert.doesNotMatch(appStyles, /content\s*:\s*['"]\u2713['"]/);
 
   for (const name of [
-    'IconAlertCircle', 'IconChevronRight', 'IconDisc', 'IconGripVertical',
+    'IconAlertCircle', 'IconChevronRight', 'IconDisc',
     'IconFolder', 'IconHeart', 'IconMusic',
     'IconRefresh', 'IconSearch', 'IconVolume2',
   ]) {

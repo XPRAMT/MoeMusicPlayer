@@ -277,6 +277,24 @@ export function moveTrackColumnTo(preferences, id, destination) {
 }
 
 /**
+ * Convert a pointer Y coordinate to the final index after removing the dragged column.
+ * Row centers are sorted in the same order as `preferences`.
+ * @param {number} pointerY
+ * @param {number[]} rowCenters
+ * @param {number} fromIndex
+ */
+export function trackColumnDropIndexFromPointer(pointerY, rowCenters, fromIndex) {
+  const length = rowCenters.length;
+  if (length === 0 || !Number.isFinite(pointerY) || !Number.isSafeInteger(fromIndex)) return 0;
+
+  const from = Math.max(0, Math.min(length - 1, fromIndex));
+  const insertionIndex = rowCenters.findIndex((center) => pointerY < center);
+  const insertion = insertionIndex < 0 ? length : insertionIndex;
+  const destination = insertion > from ? insertion - 1 : insertion;
+  return Math.max(0, Math.min(length - 1, destination));
+}
+
+/**
  * @param {TrackColumnPreference[]} preferences
  * @param {TrackColumnId} id
  * @param {boolean} visible
