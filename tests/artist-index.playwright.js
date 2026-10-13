@@ -4,6 +4,7 @@ await page.setViewportSize({ width: 1120, height: 720 });
 await page.goto('http://127.0.0.1:1452/tests/artist-index-harness.html');
 await page.getByRole('grid', { name: /演出者統計/ }).waitFor();
 await page.getByText('Artist 001', { exact: true }).first().waitFor();
+await page.getByTestId('artist-count').getByText('80 位演出者', { exact: true }).waitFor();
 
 const layout = await page.evaluate(() => {
   const topbar = document.querySelector('[data-testid="topbar"]');
@@ -46,5 +47,5 @@ assert(firstRowAfter !== firstRowBefore, 'shared header renderer should sort art
 await page.locator('.paged-virtual-row').first().click();
 assert(await page.getByTestId('selected-artist').innerText() !== '尚未選擇');
 
-return { ...layout, firstRowBefore, firstRowAfter, selectedArtist: await page.getByTestId('selected-artist').innerText() };
+return { ...layout, artistCount: await page.getByTestId('artist-count').innerText(), firstRowBefore, firstRowAfter, selectedArtist: await page.getByTestId('selected-artist').innerText() };
 }

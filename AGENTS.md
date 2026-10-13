@@ -14,6 +14,7 @@
 - Windows WAV 音質欄位的位元深度由 `crates/player-platform-windows/src/windows.rs` 讀取 RIFF/RF64 `fmt ` 區塊；僅 PCM／IEEE float（含 WAVE_FORMAT_EXTENSIBLE）提供位元深度，Extensible 使用有效位元數。有損 WAV 編碼不顯示此欄。前端既有 `formatAudioFormat` 會在收到此值時顯示，例如 `WAV．48 kHz．24 bit`。
 - Hi-Res 標籤由 `src/assets/hi-res-badge.svg` 提供向量圖，金黃色底與黑色 HR 字樣可隨螢幕縮放保持清晰；曲庫／播放清單／佇列顯示為 20.4×12.2 CSS px，並以 `translateY(0.5px)` 向下光學微調。Now Playing 主資訊區為 20.4×12.2 CSS px、緊湊頂列為 17.4×10.4 CSS px，皆不額外垂直位移。SVG 比例依原圖繪製，避免 `object-fit` 留下橫向空隙。
 - 演出者字串自動分割只使用 `|`、反斜線、`/`、`;`、`,` 等明確分隔符；一般空白保留在人名內。曲庫演出者精確欄位篩選也採相同規則，並忽略標點分隔符周圍的空白。
+- 演出者首頁沿用 `ArtistIndex` 聚合結果作為總數，載入完成後在頂欄標題下使用共用 `.page-title-count` 顯示「n 位演出者」；載入或錯誤時隱藏數字，空結果顯示「0 位演出者」。
 
 專案已有可建置的 Tauri 2、Svelte 5、TypeScript 與 Vite 骨架，並包含 Rust Core、SQLite 曲庫、Windows 與 Android 媒體來源 adapter，以及雙語 README。
 

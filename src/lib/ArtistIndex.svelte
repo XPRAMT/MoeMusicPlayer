@@ -24,9 +24,10 @@
     refreshKey: number;
     rowHeightPx?: number;
     onSelect: (artist: ArtistRow) => void;
+    onCountChange: (count: number | null) => void;
   }
 
-  let { refreshKey, rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX, onSelect }: Props = $props();
+  let { refreshKey, rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX, onSelect, onCountChange }: Props = $props();
   let rows = $state<ArtistRow[]>([]);
   let sortField = $state<SortField>('title');
   let sortDirection = $state<'asc' | 'desc'>('asc');
@@ -41,6 +42,7 @@
     const revision = ++requestRevision;
     loading = true;
     error = null;
+    onCountChange(null);
     try {
       const facets = await invokeCommand('library_get_artist_index_facets', {});
       const [artistIdentities, albumIdentities] = await Promise.all([
@@ -59,9 +61,13 @@
         ...entry,
         displayName: preferredArtistName(entry.names, traditionalByName) || entry.artistNames[0] || '',
       }));
+      onCountChange(rows.length);
       listRevision += 1;
     } catch (reason) {
-      if (revision === requestRevision) error = getErrorText(reason);
+      if (revision === requestRevision) {
+        onCountChange(null);
+        error = getErrorText(reason);
+      }
     } finally {
       if (revision === requestRevision) loading = false;
     }

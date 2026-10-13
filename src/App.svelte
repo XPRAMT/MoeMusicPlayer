@@ -266,6 +266,7 @@
   let runtimeError = $state<string | null>(null);
   let libraryTrackCount = $state<number | null>(null);
   let artistTrackCount = $state<number | null>(null);
+  let artistIndexCount = $state<number | null>(null);
   let playlistTrackCount = $state<number | null>(null);
   let queueTrackCount = $state<number | null>(null);
   let libraryListRevision = $state(0);
@@ -411,6 +412,10 @@
     if (activeView === 'library') {
       if (libraryTrackCount === null) return null;
       return `${libraryTrackCount.toLocaleString()} 首曲目`;
+    }
+    if (activeView === 'artists') {
+      if (artistIndexCount === null) return null;
+      return `${artistIndexCount.toLocaleString()} 位演出者`;
     }
     if (activeView === 'playlists') {
       const count = playlistTrackCount ?? selectedPlaylist?.entryCount ?? null;
@@ -3219,6 +3224,7 @@
               <ArtistIndex
                 refreshKey={libraryListRevision}
                 rowHeightPx={trackRowHeightPx}
+                onCountChange={(count) => (artistIndexCount = count)}
                 onSelect={(artist) => {
                   selectedArtist = artist;
                   artistTrackCount = null;
