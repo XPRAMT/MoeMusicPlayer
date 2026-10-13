@@ -78,7 +78,7 @@
     if (!selection || selection.trackCount !== album.trackCount || revision !== requestRevision) return false;
     const urls: string[] = [];
     let bytes = 0;
-    for (const trackId of selection.trackIds) {
+    for (const trackId of selection.trackIds.slice(0, selection.representative ? 4 : 1)) {
       if (!active || destroyed || revision !== requestRevision) return false;
       try {
         const image = await loadTrackThumbnail(trackId);
@@ -112,14 +112,16 @@
     try {
       if (await restorePersistentSelection(revision)) return;
       const pageSize = 8;
-      for (let offset = 0; offset < album.trackCount && urls.length < 4; offset += pageSize) {
+      // Until the detail page has ranked all artwork, show the first usable cover.
+      // This keeps first paint to one async thumbnail lookup per album card.
+      for (let offset = 0; offset < album.trackCount && urls.length < 1; offset += pageSize) {
         if (!active || destroyed || revision !== requestRevision) return;
         const candidates = await invokeCommand(
           'library_get_album_artwork_candidates',
           { albumNames: album.aliases, offset, limit: pageSize },
         );
         for (const trackId of candidates) {
-          if (!active || destroyed || revision !== requestRevision || urls.length >= 4) break;
+          if (!active || destroyed || revision !== requestRevision || urls.length >= 1) break;
           try {
             const image = await loadTrackThumbnail(trackId);
             if (image) {

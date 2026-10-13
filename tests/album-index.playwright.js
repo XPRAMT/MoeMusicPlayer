@@ -8,8 +8,8 @@
     return [count, images.map((image) => { const rect = image.getBoundingClientRect(); return { width: rect.width, height: rect.height }; })];
   })));
   assert(mosaicLayout[1].length === 1 && Math.abs(mosaicLayout[1][0].width - mosaicLayout[1][0].height) < 0.1, `one-cover layout should fill the square: ${JSON.stringify(mosaicLayout[1])}`);
-  assert(mosaicLayout[2].length === 2 && mosaicLayout[2].every((image) => Math.abs(image.width - 168) < 0.1 && Math.abs(image.height - 84) < 0.1), `two covers should use horizontal strips: ${JSON.stringify(mosaicLayout[2])}`);
-  assert(mosaicLayout[3].length === 3 && mosaicLayout[3].every((image) => Math.abs(image.width - 168) < 0.1 && Math.abs(image.height - 56) < 0.1), `three covers should use horizontal strips: ${JSON.stringify(mosaicLayout[3])}`);
+  assert(mosaicLayout[2].length === 2 && mosaicLayout[2].every((image) => Math.abs(image.width - 84) < 0.1 && Math.abs(image.height - 168) < 0.1), `two covers should use vertical strips: ${JSON.stringify(mosaicLayout[2])}`);
+  assert(mosaicLayout[3].length === 3 && mosaicLayout[3].every((image) => Math.abs(image.width - 56) < 0.1 && Math.abs(image.height - 168) < 0.1), `three covers should use vertical strips: ${JSON.stringify(mosaicLayout[3])}`);
   assert(mosaicLayout[4].length === 4 && mosaicLayout[4].every((image) => Math.abs(image.width - 84) < 0.1 && Math.abs(image.height - 84) < 0.1), `four covers should use a two-by-two grid: ${JSON.stringify(mosaicLayout[4])}`);
   await page.waitForFunction(() => window.__albumIndexStats.trackCacheReads + window.__albumIndexStats.legacyCacheReads > 0);
   const loadingStats = await page.evaluate(() => ({ ...window.__albumIndexStats }));
@@ -57,9 +57,9 @@
 
   const firstCard = page.getByRole('button', { name: '開啟專輯「Album 1」，4 首曲目' });
   await firstCard.locator('.album-card-art img').first().waitFor();
-  await page.waitForFunction(() => document.querySelectorAll('.album-card:first-of-type .album-card-art img').length === 4);
+  await page.waitForFunction(() => document.querySelectorAll('.album-card:first-of-type .album-card-art img').length > 0);
   const firstAlbumReads = await page.evaluate(() => [1, 2, 3, 4].reduce((sum, index) => sum + (window.__albumIndexStats.trackCacheReadsByTrack[`track-Album-1-${index}`] ?? 0), 0));
-  assert(firstAlbumReads === 4, `the first card should load a four-cover square collage once: ${firstAlbumReads}`);
+  assert(firstAlbumReads === 1, `the homepage should initially load just the first cover, not four serial thumbnail requests: ${firstAlbumReads}`);
   const noFrame = await page.locator('.album-card-art').first().evaluate((element) => getComputedStyle(element).borderWidth);
   assert(noFrame === '0px', `album cover thumbnails should not have a border: ${noFrame}`);
   await page.locator('.album-grid-viewport').evaluate((element) => {
@@ -88,6 +88,8 @@
   const rawReadsAfterFirstDetail = await page.evaluate(() => window.__albumIndexStats.rawArtworkReads);
   assert(rawReadsAfterFirstDetail === 4, `first album-detail visit should hash each source cover once: ${rawReadsAfterFirstDetail}`);
   await page.getByTestId('album-detail-back').click();
+  await page.waitForFunction(() => document.querySelectorAll('.album-card:first-of-type .album-card-art img').length === 1);
+  assert(await page.locator('.album-card:first-of-type .album-card-art img').count() === 1, 'the homepage must reuse the detail page representative selection; identical covers should remain one tile');
   await firstCard.click();
   await page.getByText('4 首曲目', { exact: true }).waitFor();
   await page.locator('.album-detail-art img').waitFor();
