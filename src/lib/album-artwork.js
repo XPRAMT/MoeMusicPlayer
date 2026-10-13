@@ -11,6 +11,12 @@ let activeArtworkWorkers = 0;
 /** @type {(() => void)[]} */
 const artworkWorkerQueue = [];
 
+/** @typedef {{ worker: Worker, busy: boolean, job: { bytes: ArrayBuffer, mimeType: string, size: number, resolve: (value: { sha256: string, bytes: Uint8Array, dataBase64: string }) => void, reject: (reason: unknown) => void } | null }} ThumbnailWorkerSlot */
+/** @type {ThumbnailWorkerSlot[]} */
+const thumbnailWorkerSlots = [];
+/** @type {{ bytes: ArrayBuffer, mimeType: string, size: number, resolve: (value: { sha256: string, bytes: Uint8Array, dataBase64: string }) => void, reject: (reason: unknown) => void }[]} */
+const thumbnailWorkerQueue = [];
+
 // Album cards are virtualized and are destroyed as the user scrolls. Keep the
 // small JPEGs in memory across those unmounts so returning to a row does not
 // reopen every thumbnail from UserData on C:.
@@ -110,6 +116,85 @@ export function copyToArrayBuffer(bytes) {
 export async function sha256Hex(bytes) {
   const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Hash, decode, crop and JPEG-encode a card thumbnail away from the renderer thread.
+ * The original buffer is transferred to a bounded worker pool so the WebView stays
+ * responsive while cold artwork is read and resized.
+ * @param {ArrayBuffer} bytes
+ * @param {string} mimeType
+ * @param {number} [size]
+ * @returns {Promise<{ sha256: string, bytes: Uint8Array, dataBase64: string }>}
+ */
+export function createAlbumThumbnailInWorker(bytes, mimeType, size = ALBUM_ART_THUMBNAIL_SIZE) {
+  return new Promise((resolve, reject) => {
+    thumbnailWorkerQueue.push({ bytes, mimeType, size, resolve, reject });
+    pumpThumbnailWorkers();
+  });
+}
+
+function pumpThumbnailWorkers() {
+  if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') {
+    while (thumbnailWorkerQueue.length > 0) {
+      thumbnailWorkerQueue.shift()?.reject(new Error('此 WebView 不支援背景封面縮圖處理。'));
+    }
+    return;
+  }
+  while (thumbnailWorkerQueue.length > 0) {
+    let slot = thumbnailWorkerSlots.find((candidate) => !candidate.busy);
+    if (!slot && thumbnailWorkerSlots.length < ARTWORK_WORKER_LIMIT) {
+      try {
+        const worker = new Worker(new URL('./album-thumbnail.worker.ts', import.meta.url), { type: 'module' });
+        /** @type {ThumbnailWorkerSlot} */
+        const createdSlot = { worker, busy: false, job: null };
+        slot = createdSlot;
+        worker.addEventListener('message', (event) => {
+          const current = createdSlot.job;
+          if (!current) return;
+          createdSlot.job = null;
+          createdSlot.busy = false;
+          if (event.data?.ok && event.data.thumbnail instanceof ArrayBuffer) {
+            current.resolve({
+              sha256: event.data.sha256,
+              bytes: new Uint8Array(event.data.thumbnail),
+              dataBase64: event.data.dataBase64,
+            });
+          } else {
+            current.reject(new Error(event.data?.error || '背景封面縮圖處理失敗。'));
+          }
+          pumpThumbnailWorkers();
+        });
+        worker.addEventListener('error', (event) => {
+          const current = createdSlot.job;
+          createdSlot.job = null;
+          createdSlot.busy = false;
+          if (current) current.reject(new Error(event.message || '背景封面縮圖工作者停止運作。'));
+          worker.terminate();
+          const index = thumbnailWorkerSlots.indexOf(createdSlot);
+          if (index >= 0) thumbnailWorkerSlots.splice(index, 1);
+          pumpThumbnailWorkers();
+        });
+        thumbnailWorkerSlots.push(createdSlot);
+      } catch (error) {
+        const current = thumbnailWorkerQueue.shift();
+        current?.reject(error);
+        continue;
+      }
+    }
+    if (!slot) return;
+    const job = thumbnailWorkerQueue.shift();
+    if (!job) return;
+    slot.busy = true;
+    slot.job = job;
+    try {
+      slot.worker.postMessage({ bytes: job.bytes, mimeType: job.mimeType, size: job.size }, [job.bytes]);
+    } catch (error) {
+      slot.job = null;
+      slot.busy = false;
+      job.reject(error);
+    }
+  }
 }
 
 /**

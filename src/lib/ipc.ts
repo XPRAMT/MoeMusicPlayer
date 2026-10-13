@@ -838,6 +838,12 @@ export function putAlbumThumbnailBytes(sha256: string, bytes: ArrayBuffer): Prom
   return invoke<void>('album_artwork_cache_put', { sha256, dataBase64: data });
 }
 
+/** Save thumbnail bytes already base64-encoded by the background artwork worker. */
+export function putAlbumThumbnailBase64(sha256: string, dataBase64: string): Promise<void> {
+  if (!isTauri()) return Promise.reject(new Error('專輯縮圖快取需要 MoeMusicPlayer 桌面程式。'));
+  return invoke<void>('album_artwork_cache_put', { sha256, dataBase64 });
+}
+
 /** Retrieve an album card thumbnail using the current track file fingerprint. */
 export function getAlbumThumbnailBytesForTrack(trackId: string): Promise<ArrayBuffer> {
   return invokeCommand('album_artwork_cache_get_for_track', { trackId });
@@ -851,6 +857,11 @@ export function putAlbumThumbnailBytesForTrack(trackId: string, sha256: string, 
     binaryText += String.fromCharCode(...binary.subarray(offset, offset + 0x8000));
   }
   return invokeCommand('album_artwork_cache_put_for_track', { trackId, sha256, dataBase64: btoa(binaryText) });
+}
+
+/** Save thumbnail bytes already base64-encoded by the background artwork worker. */
+export function putAlbumThumbnailBase64ForTrack(trackId: string, sha256: string, dataBase64: string): Promise<void> {
+  return invokeCommand('album_artwork_cache_put_for_track', { trackId, sha256, dataBase64 });
 }
 
 export function markAlbumArtworkMissing(trackId: string): Promise<void> {

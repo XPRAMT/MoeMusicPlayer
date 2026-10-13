@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBytes, putAlbumThumbnailBytesForTrack } from './ipc';
-  import { acquireAlbumCardArtwork, copyToArrayBuffer, createAlbumThumbnail, rememberAlbumCardArtwork, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
+  import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBase64, putAlbumThumbnailBase64ForTrack } from './ipc';
+  import { acquireAlbumCardArtwork, copyToArrayBuffer, createAlbumThumbnailInWorker, rememberAlbumCardArtwork, withAlbumArtworkSlot } from './album-artwork.js';
   import type { AlbumEntry } from './album-identities.js';
   import { detectArtworkMimeType } from './active-track-artwork';
 
@@ -56,21 +56,21 @@
                 void markAlbumArtworkMissing(track.id).catch(() => undefined);
                 return null;
               }
-              const key = await sha256Hex(original);
+              const mimeType = detectArtworkMimeType(original);
+              if (!mimeType) {
+                void markAlbumArtworkMissing(track.id).catch(() => undefined);
+                return null;
+              }
+              const processed = await createAlbumThumbnailInWorker(original, mimeType);
+              const key = processed.sha256;
               let thumbnail: Uint8Array;
               try { thumbnail = new Uint8Array(await getAlbumThumbnailBytes(key)); } catch { thumbnail = new Uint8Array(); }
               if (thumbnail.length === 0) {
-                const mimeType = detectArtworkMimeType(original);
-                if (!mimeType) {
-                  void markAlbumArtworkMissing(track.id).catch(() => undefined);
-                  return null;
-                }
-                const blob = await createAlbumThumbnail(original, mimeType);
-                thumbnail = new Uint8Array(await blob.arrayBuffer());
+                thumbnail = processed.bytes;
               }
-              await putAlbumThumbnailBytesForTrack(track.id, key, copyToArrayBuffer(thumbnail)).catch((error) => {
+              await putAlbumThumbnailBase64ForTrack(track.id, key, processed.dataBase64).catch((error) => {
                 console.warn('無法保存專輯卡片縮圖快取', error);
-                return putAlbumThumbnailBytes(key, copyToArrayBuffer(thumbnail)).catch(() => undefined);
+                return putAlbumThumbnailBase64(key, processed.dataBase64).catch(() => undefined);
               });
               return { url: URL.createObjectURL(new Blob([copyToArrayBuffer(thumbnail)], { type: 'image/jpeg' })), bytes: thumbnail.byteLength };
             });
