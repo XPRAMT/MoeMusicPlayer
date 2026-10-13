@@ -350,6 +350,10 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.now-playing-track-block.hide-trailing-separator::after {
+  visibility: hidden;
+}
+
 .now-playing-track-info button {
   min-width: 0;
   flex: 0 1 auto;

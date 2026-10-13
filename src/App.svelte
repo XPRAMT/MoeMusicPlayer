@@ -70,6 +70,7 @@
   } from './lib/theme';
   import { getBackdropTargetPercent, resolveBackdropContrast } from './lib/backdrop-contrast.js';
   import { splitArtists } from './lib/artist-names.js';
+  import { hideWrappedTrailingTrackSeparators } from './lib/track-field-separators.js';
   import { formatVolume } from './lib/format';
   import { describeOutputFormat } from './lib/output-format.js';
   import hiResBadgeUrl from './assets/hi-res-badge.svg';
@@ -3235,7 +3236,7 @@
           <IconArrowLeft size={17} stroke={1.8} aria-hidden="true" />
         </button>
         <div class="now-playing-header-track">
-          <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類">
+          <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類" use:hideWrappedTrailingTrackSeparators>
             <span class="now-playing-track-block now-playing-artist-block" data-track-block="artist">
               {#if nowPlayingArtists.length === 0}
                 <button type="button" data-track-field="artist" disabled title="沒有演出者分類資料" aria-label="沒有演出者分類資料">—</button>

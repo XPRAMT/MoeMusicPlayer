@@ -34,6 +34,11 @@ async page => {
           text: unit.textContent.trim(),
           whiteSpace: getComputedStyle(unit).whiteSpace,
         })),
+        trailingSeparator: {
+          content: getComputedStyle(block, '::after').content,
+          visibility: getComputedStyle(block, '::after').visibility,
+          hiddenByLayout: block.classList.contains('hide-trailing-separator'),
+        },
         children: [...block.querySelectorAll('[data-track-field]')].map(child => ({
           field: child.dataset.trackField,
           text: child.textContent.trim(),
@@ -61,6 +66,13 @@ async page => {
           throw new Error(`${width}px: an individual artist name wrapped internally: ${JSON.stringify(block.artistUnits)}`);
         }
       }
+      if (block.field !== 'title') {
+        const next = result.blocks[result.blocks.indexOf(block) + 1];
+        const wrapsBeforeNext = next.top > block.top + 1 || block.height > 30;
+        if (block.trailingSeparator.content !== '"．"' || block.trailingSeparator.hiddenByLayout !== wrapsBeforeNext || (wrapsBeforeNext && block.trailingSeparator.visibility !== 'hidden')) {
+          throw new Error(`${width}px: a line-ending separator must be hidden in place: ${JSON.stringify(block)}`);
+        }
+      }
       for (const child of block.children) {
         const expectedNoWrap = block.field === 'artist';
         if (child.overflow === 'hidden' || child.whiteSpace === (expectedNoWrap ? 'normal' : 'nowrap') || child.textOverflow === 'ellipsis') {
@@ -73,6 +85,17 @@ async page => {
     }
     if (result.nav.bottom > result.topbar.bottom + 1) throw new Error(`${width}px: wrapped track information is clipped by the topbar`);
     cases.push({ width, ...result });
+  }
+  await page.evaluate(() => window.nowPlayingLayoutHarness.setTrackInfo({ artists: ['hanser'], album: '專輯', title: '曲名' }));
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const compact = await page.evaluate(() => [...document.querySelectorAll('.now-playing-track-info > [data-track-block]')].map(block => ({
+    field: block.dataset.trackBlock,
+    top: block.getBoundingClientRect().top,
+    visibility: getComputedStyle(block, '::after').visibility,
+    content: getComputedStyle(block, '::after').content,
+  })));
+  if (compact.length !== 3 || compact.some((block, index) => index < 2 && block.visibility !== 'visible') || compact[2].content !== 'none') {
+    throw new Error(`360px: separators should remain when the next field shares the line: ${JSON.stringify(compact)}`);
   }
   return { result: 'PASS', cases };
 }
