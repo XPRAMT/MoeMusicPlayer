@@ -34,6 +34,29 @@ const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
 const MAX_LYRIC_CANDIDATE_JSON_BYTES: usize = 4 * 1024 * 1024;
 const MAX_LYRIC_CANDIDATE_CACHE_BYTES: i64 = 16 * 1024 * 1024;
+
+fn repair_provider_lrc_cache(provider: LyricProvider, lyrics: &mut player_core::ParsedLyrics) {
+    if !matches!(provider, LyricProvider::NetEase | LyricProvider::Qq)
+        || lyrics.format != player_core::LyricFormat::Lrc
+    {
+        return;
+    }
+    if let Ok(mut reparsed) = player_core::parse_lrc(&lyrics.raw_text) {
+        if reparsed.synced && reparsed.format == player_core::LyricFormat::Lrc {
+            for line in &mut reparsed.lines {
+                if let Some(previous) = lyrics.lines.iter().find(|previous| {
+                    previous.start_ms == line.start_ms && previous.text == line.text
+                }) {
+                    line.translation = previous.translation.clone();
+                    line.romanization = previous.romanization.clone();
+                }
+            }
+            reparsed.raw_karaoke = lyrics.raw_karaoke.clone();
+            *lyrics = reparsed;
+        }
+    }
+}
+
 const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
     JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1";
 const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
@@ -2077,6 +2100,12 @@ impl Database {
             Ok(lyrics)
         })
         .transpose()
+        .map(|lyrics| {
+            lyrics.map(|mut cached| {
+                repair_provider_lrc_cache(cached.provider, &mut cached.lyrics);
+                cached
+            })
+        })
     }
 
     /// Save a network result unless a person has already selected lyrics for this track.
@@ -2293,11 +2322,13 @@ impl Database {
                 "stored candidate ID does not match its database key".to_owned(),
             ));
         }
+        let mut lyrics = candidate.lyrics;
+        repair_provider_lrc_cache(candidate.provider, &mut lyrics);
         let selected = TrackLyrics {
             track_id,
             provider: candidate.provider,
             candidate_id: Some(candidate.candidate_id),
-            lyrics: candidate.lyrics,
+            lyrics,
             manually_selected: true,
             updated_at_utc_ms: selected_at_utc_ms,
         };
@@ -5231,6 +5262,162 @@ mod tests {
         assert!(stored.manually_selected);
         assert_eq!(stored.candidate_id.as_deref(), Some("qq-2"));
         assert_eq!(stored.lyrics.lines[0].text, "manually selected");
+    }
+
+    #[test]
+    fn persisted_provider_lrc_repairs_auto_read_and_manual_candidate_selection() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "colon-lrc-cache");
+        let track = record(&root, "colon-lrc-track", "colon-lrc-path", "Song", 10, 1);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&track),
+            std::slice::from_ref(&track),
+            1,
+        );
+        let track_id = track_id_for_query(&db, "Song");
+        let raw_text = (0..43)
+            .map(|second| {
+                let separator = if second < 3 { '.' } else { ':' };
+                format!("[00:{second:02}{separator}25]synthetic line {second}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut legacy_parse = parse_lrc(&raw_text).expect("current LRC parse");
+        legacy_parse.lines.truncate(3);
+        assert_eq!(
+            legacy_parse.lines.len(),
+            3,
+            "fixture represents the stored bad parse"
+        );
+
+        let automatic = TrackLyrics {
+            track_id,
+            provider: LyricProvider::NetEase,
+            candidate_id: Some("netease:colon-lrc".into()),
+            lyrics: legacy_parse.clone(),
+            manually_selected: false,
+            updated_at_utc_ms: 10,
+        };
+        assert!(db
+            .save_automatic_track_lyrics(&automatic)
+            .expect("save legacy automatic cache"));
+
+        let automatic_read = db
+            .get_track_lyrics(track_id)
+            .expect("read automatic cache")
+            .expect("automatic cache exists");
+        assert_eq!(automatic_read.lyrics.lines.len(), 43);
+        assert!(automatic_read
+            .lyrics
+            .lines
+            .iter()
+            .all(|line| line.start_ms.is_some()));
+        assert_eq!(automatic_read.lyrics.raw_text, raw_text);
+        assert!(!automatic_read.manually_selected);
+        {
+            let connection = db.lock().expect("database lock");
+            let stored_json: String = connection
+                .query_row(
+                    "SELECT lyrics_json FROM track_lyrics WHERE track_id=?1",
+                    [track_id.to_string()],
+                    |row| row.get(0),
+                )
+                .expect("automatic row remains stored");
+            let stored: TrackLyrics = serde_json::from_str(&stored_json).expect("stored JSON");
+            assert_eq!(
+                stored.lyrics.lines.len(),
+                3,
+                "read repair must not rewrite SQLite"
+            );
+        }
+
+        let candidate = LyricCandidate {
+            candidate_id: "netease:manual-colon-lrc".into(),
+            provider: LyricProvider::NetEase,
+            provider_track_id: Some("3340112782".into()),
+            title: Some("Song".into()),
+            artist: Some("artist".into()),
+            album: Some("album".into()),
+            duration_ms: Some(43_000),
+            lyrics: legacy_parse,
+            score: 1.0,
+        };
+        db.cache_lyric_candidates(track_id, std::slice::from_ref(&candidate), 20)
+            .expect("cache manual candidate");
+        let selected = db
+            .select_lyric_candidate(track_id, &candidate.candidate_id, 30)
+            .expect("select manual candidate");
+        assert!(selected.manually_selected);
+        assert_eq!(selected.lyrics.lines.len(), 43);
+        assert!(selected
+            .lyrics
+            .lines
+            .iter()
+            .all(|line| line.start_ms.is_some()));
+
+        let manual_read = db
+            .get_track_lyrics(track_id)
+            .expect("read manual cache")
+            .expect("manual cache exists");
+        assert!(manual_read.manually_selected);
+        assert_eq!(manual_read.lyrics.lines.len(), 43);
+        assert!(manual_read
+            .lyrics
+            .lines
+            .iter()
+            .all(|line| line.start_ms.is_some()));
+        assert_eq!(manual_read.lyrics.raw_text, raw_text);
+        let mut legacy_manual_parse = parse_lrc(&raw_text).expect("parse legacy manual LRC");
+        legacy_manual_parse.lines.truncate(3);
+        let legacy_manual = TrackLyrics {
+            track_id,
+            provider: LyricProvider::NetEase,
+            candidate_id: Some(candidate.candidate_id.clone()),
+            lyrics: legacy_manual_parse,
+            manually_selected: true,
+            updated_at_utc_ms: 30,
+        };
+        {
+            let connection = db.lock().expect("database lock");
+            connection
+                .execute(
+                    "UPDATE track_lyrics SET lyrics_json=?2 WHERE track_id=?1",
+                    params![
+                        track_id.to_string(),
+                        serde_json::to_string(&legacy_manual).expect("legacy manual JSON")
+                    ],
+                )
+                .expect("simulate previously persisted bad manual parse");
+        }
+        let repaired_manual_read = db
+            .get_track_lyrics(track_id)
+            .expect("read legacy manual cache")
+            .expect("legacy manual cache exists");
+        assert!(repaired_manual_read.manually_selected);
+        assert_eq!(repaired_manual_read.lyrics.lines.len(), 43);
+        assert!(repaired_manual_read
+            .lyrics
+            .lines
+            .iter()
+            .all(|line| line.start_ms.is_some()));
+        let connection = db.lock().expect("database lock");
+        let stored_json: String = connection
+            .query_row(
+                "SELECT lyrics_json FROM track_lyrics WHERE track_id=?1",
+                [track_id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("manual row remains stored");
+        let stored: TrackLyrics = serde_json::from_str(&stored_json).expect("stored JSON");
+        assert!(stored.manually_selected);
+        assert_eq!(
+            stored.lyrics.lines.len(),
+            3,
+            "legacy manual cache is repaired only on read"
+        );
     }
 
     #[test]

@@ -970,6 +970,29 @@ mod tests {
             .any(|(name, value)| name == "Referer" && value == "https://music.163.com/")));
     }
 
+    #[test]
+    fn netease_recognizes_colon_centisecond_lrc_as_synced_content() {
+        let lyric = (0..43)
+            .map(|second| {
+                let separator = if second < 3 { '.' } else { ':' };
+                format!("[00:{second:02}{separator}25]synthetic line {second}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let response = json!({"code": 200, "lrc": {"lyric": lyric}});
+
+        let raw = parse_netease_lyrics(&candidate(LyricProvider::NetEase), &response)
+            .expect("NetEase LRC payload");
+        let synced_text = raw.synced_lyrics.expect("recognized as synced LRC");
+        assert!(raw.plain_lyrics.is_none());
+
+        let parsed = player_core::lyrics::parse_lrc(&synced_text).expect("parse provider LRC");
+        assert!(parsed.synced);
+        assert_eq!(parsed.lines.len(), 43);
+        assert!(parsed.lines.iter().all(|line| line.start_ms.is_some()));
+        assert_eq!(parsed.raw_text, synced_text);
+    }
+
     #[tokio::test]
     async fn qq_search_reads_metadata_and_keeps_song_mid_stable_for_fetch() {
         let transport = MockTransport::with_responses([response(

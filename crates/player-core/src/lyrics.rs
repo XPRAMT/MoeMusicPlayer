@@ -462,7 +462,11 @@ fn parse_lrc_timestamp(value: &str) -> Option<u64> {
         return None;
     }
     let minutes = minutes.parse::<u64>().ok()?;
-    let (whole_seconds, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
+    let (whole_seconds, fraction) = seconds
+        .find(['.', ':'])
+        .map(|separator| seconds.split_at(separator))
+        .map(|(whole, fraction)| (whole, &fraction[1..]))
+        .unwrap_or((seconds, ""));
     if whole_seconds.is_empty() || !whole_seconds.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
@@ -683,6 +687,38 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn lrc_accepts_colon_separated_centiseconds_without_losing_lines() {
+        let mut fixture = String::new();
+        for second in 0..43 {
+            let separator = if second < 3 { '.' } else { ':' };
+            fixture.push_str(&format!(
+                "[00:{second:02}{separator}25]synthetic line {second}\n"
+            ));
+        }
+
+        let parsed = parse_lrc(&fixture).expect("synthetic LRC");
+
+        assert_eq!(parsed.format, LyricFormat::Lrc);
+        assert!(parsed.synced);
+        assert_eq!(parsed.raw_text, fixture);
+        assert_eq!(parsed.lines.len(), 43);
+        assert!(parsed.lines.iter().all(|line| line.start_ms.is_some()));
+        let expected_text = (0..43)
+            .map(|second| format!("synthetic line {second}"))
+            .collect::<Vec<_>>();
+        let parsed_text = parsed
+            .lines
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            parsed_text, expected_text,
+            "all lyric text must survive parsing"
+        );
+        assert_eq!(parsed.lines[3].start_ms, Some(3_250));
     }
 
     #[test]
