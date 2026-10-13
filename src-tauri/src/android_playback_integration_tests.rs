@@ -81,6 +81,7 @@ fn seed_library(database: &mut Database) -> FixtureTracks {
         fingerprint: FileFingerprint {
             size_bytes: 128,
             modified_at_utc_ms: Some(1_800_000_000_000),
+            created_at_utc_ms: None,
         },
         metadata: Some(TrackMetadata {
             title: Some(title.to_owned()),

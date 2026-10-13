@@ -71,6 +71,7 @@ fn run_size(size: usize) -> Result<(), Box<dyn std::error::Error>> {
             fingerprint: player_core::FileFingerprint {
                 size_bytes: 3_000_000 + index as u64,
                 modified_at_utc_ms: Some(1_800_000_000_000),
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some(format!("Track {index}")),

@@ -44,6 +44,7 @@ pub(crate) fn scan_from_response(root: &LibraryRoot, response: ScanResponse) -> 
             fingerprint: player_core::FileFingerprint {
                 size_bytes: record.fingerprint.size_bytes,
                 modified_at_utc_ms: record.fingerprint.modified_at_utc_ms,
+                created_at_utc_ms: None,
             },
             metadata: record.metadata.map(into_core_metadata),
         });

@@ -1787,6 +1787,7 @@ mod tests {
             sample_rate_hz: None,
             release_date: None,
             year: None,
+            created_at_utc_ms: None,
             bit_depth: None,
             played_ms: 0,
             file_name: None,
@@ -1844,6 +1845,7 @@ mod tests {
                     .expect("read media metadata")
                     .len(),
                 modified_at_utc_ms: None,
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some(title.to_owned()),
@@ -2640,6 +2642,7 @@ mod tests {
         let fingerprint = FileFingerprint {
             size_bytes: fs::metadata(&audio_path).expect("media metadata").len(),
             modified_at_utc_ms: None,
+            created_at_utc_ms: None,
         };
         let record = MediaTrackRecord {
             identity: TrackIdentity {

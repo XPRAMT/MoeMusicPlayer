@@ -225,6 +225,7 @@
   let trackColumnWidths = $state<TrackColumnWidths>({ ...DEFAULT_TRACK_COLUMN_WIDTHS });
   let trackRowHeightPx = $state(DEFAULT_TRACK_ROW_HEIGHT_PX);
   let librarySort = $state<LibraryListSort>({ ...DEFAULT_LIBRARY_SORT });
+  let queueSort = $state<LibraryListSort | null>(null);
   let trackColumnSettingsState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let trackColumnSettingsError = $state<string | null>(null);
   let nowPlayingLayout = $state<NowPlayingLayout>('a');
@@ -1131,6 +1132,12 @@
 
   function handleLibrarySort(id: TrackListColumnPreference['id']): void {
     persistTrackColumnSettings({ librarySort: toggleLibrarySort(librarySort, id) });
+  }
+
+  function handleQueueSort(id: TrackListColumnPreference['id']): void {
+    queueSort = queueSort?.field === id
+      ? toggleLibrarySort(queueSort, id)
+      : { field: id, direction: 'asc' };
   }
 
   async function loadNowPlayingLayout(): Promise<void> {
@@ -2221,6 +2228,7 @@
     if (!album) return { items: [], offset: request.offset, limit: request.limit, totalCount: 0 };
     const page = await invokeCommand('library_get_album_page', {
       albumNames: album.aliases,
+      sort: request.sort,
       offset: request.offset,
       limit: request.limit,
     });
@@ -3578,6 +3586,8 @@
                 columns={trackColumnPreferences}
                 columnWidths={trackColumnWidths}
                 rowHeightPx={trackRowHeightPx}
+                sort={queueSort}
+                onSort={handleQueueSort}
                 livePlayCount={livePlayCount}
                 onPlay={playQueueEntry}
                 onTotalCount={(count) => (queueTrackCount = count)}

@@ -79,6 +79,7 @@ pub fn sync_playlist_file_source(
     let fingerprint = FileFingerprint {
         size_bytes: metadata.len(),
         modified_at_utc_ms,
+        created_at_utc_ms: None,
     };
     let digest: [u8; 32] = Sha256::digest(&bytes).into();
     let prior_state = database
@@ -383,6 +384,7 @@ mod tests {
             fingerprint: FileFingerprint {
                 size_bytes: video_file_metadata.len(),
                 modified_at_utc_ms: Some(1_800_000_000_000),
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some("legacy video mapping".to_owned()),

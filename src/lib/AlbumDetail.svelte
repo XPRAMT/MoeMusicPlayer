@@ -35,7 +35,7 @@
   const PAGE_SIZE = 100;
 
   async function fetchPage(request: TrackPageRequest): Promise<TrackPage> {
-    return invokeCommand('library_get_album_page', { albumNames: album.aliases, offset: request.offset, limit: request.limit });
+    return invokeCommand('library_get_album_page', { albumNames: album.aliases, sort: request.sort, offset: request.offset, limit: request.limit });
   }
 
   async function selectionKey(): Promise<string> {
@@ -230,7 +230,7 @@
       resetKey={`${album.key}:${refreshKey}`}
       listId={`album-detail-${album.key}`}
       {selectedTrackId} {playbackReady} {isSendingPlaybackCommand} {columns} {columnWidths} {rowHeightPx} {sort} {livePlayCount}
-      fetchPage={fetchPage} {onPlay} {onSort} {onColumnResize} {onTotalCount} sortable={false}
+      fetchPage={fetchPage} {onPlay} {onSort} {onColumnResize} {onTotalCount} sortable={true}
       getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber, track.discNumber)}
     />
   </div>

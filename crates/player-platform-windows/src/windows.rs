@@ -139,6 +139,7 @@ impl WindowsMediaIndex {
                     None
                 }
             };
+            let created_at_utc_ms = metadata.created().ok().and_then(system_time_to_utc_ms);
             let canonical_key = windows_locator_key(&canonical_path);
             scan.tracks.push(MediaTrackRecord {
                 identity: TrackIdentity {
@@ -150,6 +151,7 @@ impl WindowsMediaIndex {
                 fingerprint: FileFingerprint {
                     size_bytes: metadata.len(),
                     modified_at_utc_ms,
+                    created_at_utc_ms,
                 },
                 metadata: None,
             });
@@ -183,6 +185,7 @@ pub fn read_standalone_audio_metadata(path: &Path) -> Result<TrackMetadata, Trac
         fingerprint: FileFingerprint {
             size_bytes: metadata.len(),
             modified_at_utc_ms: None,
+            created_at_utc_ms: metadata.created().ok().and_then(system_time_to_utc_ms),
         },
         metadata: None,
     };
@@ -414,6 +417,7 @@ impl MediaIndex for WindowsMediaIndex {
                         None
                     }
                 };
+                let created_at_utc_ms = metadata.created().ok().and_then(system_time_to_utc_ms);
 
                 let identity_key = windows_locator_key(&entry_path);
                 scan.tracks.push(MediaTrackRecord {
@@ -426,6 +430,7 @@ impl MediaIndex for WindowsMediaIndex {
                     fingerprint: FileFingerprint {
                         size_bytes: metadata.len(),
                         modified_at_utc_ms,
+                        created_at_utc_ms,
                     },
                     metadata: None,
                 });
@@ -1398,6 +1403,7 @@ mod tests {
             fingerprint: FileFingerprint {
                 size_bytes: file_metadata.len(),
                 modified_at_utc_ms: Some(1_800_000_000_000),
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some("legacy video mapping".to_owned()),
@@ -1743,6 +1749,7 @@ mod tests {
             fingerprint: FileFingerprint {
                 size_bytes: 0,
                 modified_at_utc_ms: None,
+                created_at_utc_ms: None,
             },
             metadata: None,
         };
@@ -1792,6 +1799,7 @@ mod tests {
             fingerprint: FileFingerprint {
                 size_bytes: 0,
                 modified_at_utc_ms: None,
+                created_at_utc_ms: None,
             },
             metadata: None,
         };
@@ -1840,6 +1848,7 @@ mod tests {
             fingerprint: FileFingerprint {
                 size_bytes: 0,
                 modified_at_utc_ms: None,
+                created_at_utc_ms: None,
             },
             metadata: None,
         };

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 #[cfg(any(target_os = "windows", test))]
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -5,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
@@ -26,7 +27,6 @@ use player_core::{
     SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
     TrackMetadata, TrackMetadataError, TrackSortDirection, TrackSortField, TrackSummary,
 };
-#[cfg(target_os = "windows")]
 use player_db::natural_title_cmp;
 #[cfg(target_os = "windows")]
 use player_db::PlaybackSessionCheckpoint;
@@ -174,6 +174,7 @@ mod album_artwork_responsiveness_tests {
             fingerprint: FileFingerprint {
                 size_bytes: 128,
                 modified_at_utc_ms: Some(1_000),
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some("Synthetic Track".to_owned()),
@@ -442,6 +443,7 @@ struct AppState {
     database_path: Option<std::path::PathBuf>,
     database_error: Option<String>,
     database_work: database_lifecycle::DatabaseWorkGate,
+    queue_display_sort_cache: std::sync::Mutex<Option<QueueDisplaySortCache>>,
     #[cfg(target_os = "windows")]
     shutdown: database_lifecycle::ShutdownCoordinator,
     settings: SettingsStore,
@@ -461,6 +463,12 @@ struct AppState {
     android_playback: Option<android_playback::AndroidPlaybackService>,
     #[cfg(target_os = "android")]
     android_playback_error: Option<String>,
+}
+
+struct QueueDisplaySortCache {
+    revision: u64,
+    sort: TrackListSort,
+    order: Vec<usize>,
 }
 
 enum LyricsDatabase<'a> {
@@ -956,6 +964,7 @@ mod system_media_artwork_tests {
             fingerprint: FileFingerprint {
                 size_bytes: 1,
                 modified_at_utc_ms: Some(1),
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some(title.to_owned()),
@@ -2941,6 +2950,7 @@ async fn library_get_album_index_facets(
 async fn library_get_album_page(
     app: AppHandle,
     album_names: Vec<String>,
+    sort: Option<TrackListSort>,
     offset: u64,
     limit: u32,
 ) -> Result<Page<TrackSummary>, String> {
@@ -2952,7 +2962,7 @@ async fn library_get_album_page(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .list_album_tracks_page(&album_names, offset, limit)
+            .list_album_tracks_page_sorted(&album_names, sort, offset, limit)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3323,7 +3333,6 @@ fn merged_library_page(
     })
 }
 
-#[cfg(target_os = "windows")]
 fn compare_track_summaries(
     left: &TrackSummary,
     right: &TrackSummary,
@@ -3380,6 +3389,12 @@ fn compare_track_summaries(
                     .then_with(|| compare_direction(left.year.cmp(&right.year))),
             }
         }
+        TrackSortField::CreatedAt => match (left.created_at_utc_ms, right.created_at_utc_ms) {
+            (Some(a), Some(b)) => compare_direction(a.cmp(&b)),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        },
         TrackSortField::AudioFormat => {
             let codec_rank = |codec: Option<&str>| match codec
                 .unwrap_or_default()
@@ -7136,19 +7151,46 @@ fn playback_get_queue_page(
     state: State<'_, AppState>,
     offset: u64,
     limit: u32,
+    sort: Option<TrackListSort>,
 ) -> Result<PlaybackQueuePage, String> {
     let _database_work = enter_database_work(&state)?;
     #[cfg(target_os = "windows")]
     {
         let service = windows_playback_service(&state)?;
         let (revision, queue) = snapshot_playback_queue(service);
-        let mut page =
-            build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)?;
         let temporary_database = service
             .temporary_catalog
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        let external_tracks = service
+            .external_tracks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(id, track)| (*id, track.summary.clone()))
+            .collect::<HashMap<_, _>>();
+        let sorted_order = match (sort, queue.as_ref()) {
+            (Some(sort), Some(queue)) => Some(cached_queue_display_order(
+                &state,
+                revision,
+                queue,
+                sort,
+                state.database.as_ref(),
+                temporary_database.as_deref(),
+                Some(&external_tracks),
+            )?),
+            _ => None,
+        };
+        let mut page = build_playback_queue_page_with_sort(
+            state.database.as_ref(),
+            revision,
+            queue,
+            offset,
+            limit,
+            sort,
+            sorted_order,
+        )?;
         if let Some(temporary_database) = temporary_database.as_ref() {
             let temporary_ids = page
                 .items
@@ -7189,11 +7231,31 @@ fn playback_get_queue_page(
         let (revision, queue) = service
             .queue_snapshot()?
             .map_or((0, None), |(revision, queue)| (revision, Some(queue)));
-        build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)
+        let sorted_order = match (sort, queue.as_ref()) {
+            (Some(sort), Some(queue)) => Some(cached_queue_display_order(
+                &state,
+                revision,
+                queue,
+                sort,
+                state.database.as_ref(),
+                None,
+                None,
+            )?),
+            _ => None,
+        };
+        build_playback_queue_page_with_sort(
+            state.database.as_ref(),
+            revision,
+            queue,
+            offset,
+            limit,
+            sort,
+            sorted_order,
+        )
     }
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
-        let _ = (state, offset, limit);
+        let _ = (state, offset, limit, sort);
         Err("此平台尚未提供本機播放佇列。".to_owned())
     }
 }
@@ -7816,12 +7878,125 @@ fn snapshot_playback_queue(
     (revision, queue.as_ref().map(PlaybackQueue::snapshot))
 }
 
+fn cached_queue_display_order(
+    state: &AppState,
+    revision: u64,
+    queue: &PlaybackQueueSnapshot,
+    sort: TrackListSort,
+    database: Option<&Database>,
+    secondary_database: Option<&Database>,
+    external_tracks: Option<&HashMap<TrackId, TrackSummary>>,
+) -> Result<Vec<usize>, String> {
+    {
+        let cached = state
+            .queue_display_sort_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(cached) = cached.as_ref() {
+            if cached.revision == revision && cached.sort == sort {
+                return Ok(cached.order.clone());
+            }
+        }
+    }
+
+    let track_ids = queue
+        .entries
+        .iter()
+        .map(|entry| entry.track_id)
+        .collect::<Vec<_>>();
+    let mut summaries = HashMap::<TrackId, TrackSummary>::new();
+    if let Some(database) = database {
+        for (id, track) in track_ids.iter().copied().zip(
+            database
+                .get_track_summaries(&track_ids)
+                .map_err(|error| error.to_string())?,
+        ) {
+            if let Some(track) = track {
+                summaries.insert(id, track);
+            }
+        }
+    }
+    if let Some(database) = secondary_database {
+        let unresolved = track_ids
+            .iter()
+            .filter(|id| !summaries.contains_key(id))
+            .copied()
+            .collect::<Vec<_>>();
+        for (id, track) in unresolved.iter().copied().zip(
+            database
+                .get_track_summaries(&unresolved)
+                .map_err(|error| error.to_string())?,
+        ) {
+            if let Some(track) = track {
+                summaries.insert(id, track);
+            }
+        }
+    }
+    if let Some(external_tracks) = external_tracks {
+        for (id, track) in external_tracks {
+            summaries.entry(*id).or_insert_with(|| track.clone());
+        }
+    }
+
+    let order = sort_queue_entry_order(queue, &summaries, sort);
+    let mut cached = state
+        .queue_display_sort_cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *cached = Some(QueueDisplaySortCache {
+        revision,
+        sort,
+        order: order.clone(),
+    });
+    Ok(order)
+}
+
+fn sort_queue_entry_order(
+    queue: &PlaybackQueueSnapshot,
+    summaries: &HashMap<TrackId, TrackSummary>,
+    sort: TrackListSort,
+) -> Vec<usize> {
+    let mut order = queue.play_order.clone();
+    order.sort_by(|left_index, right_index| {
+        let left_id = queue.entries[*left_index].track_id;
+        let right_id = queue.entries[*right_index].track_id;
+        match (summaries.get(&left_id), summaries.get(&right_id)) {
+            (Some(left), Some(right)) => compare_track_summaries(left, right, sort),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+    order
+}
+
+#[cfg(test)]
 fn build_playback_queue_page(
     database: Option<&Database>,
     revision: u64,
     queue: Option<PlaybackQueueSnapshot>,
     offset: u64,
     requested_limit: u32,
+) -> Result<PlaybackQueuePage, String> {
+    build_playback_queue_page_with_sort(
+        database,
+        revision,
+        queue,
+        offset,
+        requested_limit,
+        None,
+        None,
+    )
+}
+
+fn build_playback_queue_page_with_sort(
+    database: Option<&Database>,
+    revision: u64,
+    queue: Option<PlaybackQueueSnapshot>,
+    offset: u64,
+    requested_limit: u32,
+    _sort: Option<TrackListSort>,
+    sorted_order: Option<Vec<usize>>,
 ) -> Result<PlaybackQueuePage, String> {
     let Some(queue) = queue else {
         return Ok(PlaybackQueuePage {
@@ -7836,7 +8011,7 @@ fn build_playback_queue_page(
 
     let total = u64::try_from(queue.play_order.len())
         .map_err(|_| "播放佇列項目數量超出支援範圍。".to_owned())?;
-    let cursor =
+    let queue_cursor =
         u64::try_from(queue.cursor).map_err(|_| "播放佇列游標超出支援範圍。".to_owned())?;
     let current_entry_position = queue
         .play_order
@@ -7845,10 +8020,15 @@ fn build_playback_queue_page(
         .map(u64::try_from)
         .transpose()
         .map_err(|_| "播放佇列項目位置超出支援範圍。".to_owned())?;
+    let display_order = sorted_order.unwrap_or_else(|| queue.play_order.clone());
+    let cursor = display_order
+        .iter()
+        .position(|entry_index| Some(*entry_index as u64) == current_entry_position)
+        .map(|index| index as u64)
+        .unwrap_or(queue_cursor);
     let offset_index = usize::try_from(offset.min(total)).unwrap_or(usize::MAX);
     let limit = requested_limit.clamp(1, PLAYBACK_QUEUE_PAGE_MAX_LIMIT) as usize;
-    let page_entries = queue
-        .play_order
+    let page_entries = display_order
         .iter()
         .skip(offset_index)
         .take(limit)
@@ -7887,7 +8067,7 @@ fn build_playback_queue_page(
                 source_position: entry.source_position,
                 track_id: entry.track_id,
                 track,
-                is_current: traversal_position == cursor,
+                is_current: entry_position == current_entry_position.unwrap_or(u64::MAX),
             },
         )
         .collect();
@@ -8165,6 +8345,11 @@ fn external_track_summary(path: &std::path::Path, id: TrackId) -> TrackSummary {
         sample_rate_hz: metadata.sample_rate_hz,
         release_date: metadata.release_date,
         year: metadata.year,
+        created_at_utc_ms: std::fs::metadata(path)
+            .ok()
+            .and_then(|metadata| metadata.created().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|duration| i64::try_from(duration.as_millis()).ok()),
         bit_depth: metadata.bit_depth,
         played_ms: 0,
         file_name,
@@ -8255,6 +8440,12 @@ fn open_external_audio_path(
                     size_bytes: file_metadata.len(),
                     modified_at_utc_ms: file_metadata.modified().ok().and_then(|modified| {
                         modified
+                            .duration_since(UNIX_EPOCH)
+                            .ok()
+                            .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+                    }),
+                    created_at_utc_ms: file_metadata.created().ok().and_then(|created| {
+                        created
                             .duration_since(UNIX_EPOCH)
                             .ok()
                             .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
@@ -9762,6 +9953,7 @@ pub fn run() {
                 database_path: stored_path.clone(),
                 database_error,
                 database_work: database_lifecycle::DatabaseWorkGate::default(),
+                queue_display_sort_cache: std::sync::Mutex::new(None),
                 #[cfg(target_os = "windows")]
                 shutdown: database_lifecycle::ShutdownCoordinator::default(),
                 settings,
@@ -9851,8 +10043,8 @@ mod windows_library_integration_tests {
         merged_library_page, navigate_queue, pause_playback, play_track_from_database,
         playback_audio_error_message, queue_for_track, restore_playback_session,
         same_folder_audio_files, save_playback_session, set_playback_volume,
-        set_queue_shuffle_with_latest_stats, snapshot_playback_queue, PlaybackQueueSource,
-        PreparedTrackChange, TrackSummary, WindowsPlaybackService,
+        set_queue_shuffle_with_latest_stats, snapshot_playback_queue, sort_queue_entry_order,
+        PlaybackQueueSource, PreparedTrackChange, TrackSummary, WindowsPlaybackService,
     };
     use player_audio_windows::{
         system_media::{SystemMediaController, SystemMediaEvent},
@@ -9862,11 +10054,12 @@ mod windows_library_integration_tests {
         FileFingerprint, LibraryRepository, ListTracksQuery, MediaLocator, MediaSourceKind,
         MediaTrackRecord, PlaybackQueue, PlaybackQueueContext, PlaybackQueueEntry, Playlist,
         PlaylistEntry, QueueRepeatMode, SourceId, SourceScanState, TrackField, TrackFieldFilter,
-        TrackId, TrackIdentity, TrackListSort, TrackMetadata,
+        TrackId, TrackIdentity, TrackListSort, TrackMetadata, TrackSortDirection, TrackSortField,
     };
     use player_db::{Database, PlaybackSessionCheckpoint};
     use std::sync::atomic::Ordering;
     use std::{
+        collections::HashMap,
         fs,
         path::{Path, PathBuf},
         process::Command,
@@ -10539,6 +10732,7 @@ mod windows_library_integration_tests {
             fingerprint: FileFingerprint {
                 size_bytes: 1,
                 modified_at_utc_ms: Some(1),
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some(title.to_owned()),
@@ -10638,6 +10832,7 @@ mod windows_library_integration_tests {
             fingerprint: FileFingerprint {
                 size_bytes: 1,
                 modified_at_utc_ms: Some(1),
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some(title.to_owned()),
@@ -10747,6 +10942,7 @@ mod windows_library_integration_tests {
             fingerprint: FileFingerprint {
                 size_bytes: 1,
                 modified_at_utc_ms: None,
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some("Transient lyrics target".to_owned()),
@@ -10852,6 +11048,7 @@ mod windows_library_integration_tests {
             sample_rate_hz: None,
             release_date: None,
             year: None,
+            created_at_utc_ms: None,
             bit_depth: None,
             played_ms: 0,
             file_name: None,
@@ -10923,6 +11120,88 @@ mod windows_library_integration_tests {
             before_session,
             "a queue page query must not alter the persisted session"
         );
+    }
+
+    #[test]
+    fn queue_column_sort_changes_only_display_order_and_keeps_duplicate_entry_order_stable() {
+        let first_track = TrackId::new();
+        let second_track = TrackId::new();
+        let queue = PlaybackQueue::with_entries(
+            vec![
+                PlaybackQueueEntry {
+                    track_id: first_track,
+                    source_position: Some(4),
+                },
+                PlaybackQueueEntry {
+                    track_id: second_track,
+                    source_position: Some(8),
+                },
+                PlaybackQueueEntry {
+                    track_id: first_track,
+                    source_position: Some(9),
+                },
+            ],
+            PlaybackQueueContext::Library {
+                query: None,
+                field_filter: None,
+                sort: TrackListSort::default(),
+            },
+            1,
+        )
+        .expect("create queue with duplicate track");
+        let mut snapshot = queue.snapshot();
+        snapshot.play_order = vec![2, 0, 1];
+        snapshot.cursor = 1;
+        let original = snapshot.clone();
+        let make_summary =
+            |id: TrackId, title: &str, created_at_utc_ms: Option<i64>| TrackSummary {
+                id,
+                title: Some(title.to_owned()),
+                artist: None,
+                album: None,
+                album_artist: None,
+                track_number: None,
+                disc_number: None,
+                duration_ms: Some(10_000),
+                codec: None,
+                bitrate_bps: None,
+                sample_rate_hz: None,
+                release_date: None,
+                year: None,
+                created_at_utc_ms,
+                bit_depth: None,
+                played_ms: 0,
+                file_name: None,
+            };
+        let summaries = HashMap::from([
+            (first_track, make_summary(first_track, "Zebra", Some(200))),
+            (second_track, make_summary(second_track, "Alpha", Some(100))),
+        ]);
+
+        let ascending = sort_queue_entry_order(
+            &snapshot,
+            &summaries,
+            TrackListSort {
+                field: TrackSortField::Title,
+                direction: TrackSortDirection::Asc,
+            },
+        );
+        assert_eq!(ascending, [1, 2, 0]);
+        let descending = sort_queue_entry_order(
+            &snapshot,
+            &summaries,
+            TrackListSort {
+                field: TrackSortField::CreatedAt,
+                direction: TrackSortDirection::Desc,
+            },
+        );
+        assert_eq!(descending, [2, 0, 1]);
+        assert_eq!(
+            snapshot, original,
+            "sorting the display must not reorder the playback traversal"
+        );
+        assert_eq!(snapshot.entries[0].source_position, Some(4));
+        assert_eq!(snapshot.entries[2].source_position, Some(9));
     }
 
     #[test]
@@ -11039,6 +11318,7 @@ mod windows_library_integration_tests {
             fingerprint: FileFingerprint {
                 size_bytes: 1,
                 modified_at_utc_ms: None,
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some("Transient".to_owned()),

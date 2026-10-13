@@ -1,4 +1,4 @@
-/** @typedef {'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount'} TrackColumnId */
+/** @typedef {'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'audioFormat' | 'duration' | 'playCount'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
 /** @typedef {{ title: number, artist: number, album: number }} TrackColumnWidths */
 /** @typedef {'asc' | 'desc'} LibrarySortDirection */
@@ -16,6 +16,7 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'artist', label: '演出者', min: 'minmax(110px,1.15fr)', minPx: 110 },
   { id: 'album', label: '專輯', min: 'minmax(120px,1.25fr)', minPx: 120 },
   { id: 'year', label: '發行時間', min: '108px', minPx: 108 },
+  { id: 'createdAt', label: '新增時間', min: '108px', minPx: 108 },
   { id: 'audioFormat', label: '音訊格式', min: '172px', minPx: 172 },
   { id: 'duration', label: '長度', min: '72px', minPx: 72 },
   { id: 'playCount', label: '播放次數', min: '78px', minPx: 78 },
@@ -172,22 +173,30 @@ const LOSSLESS_CODECS = new Set([
  * @returns {TrackColumnPreference[]}
  */
 export function normalizeTrackColumnPreferences(value) {
-  if (!Array.isArray(value) || value.length !== TRACK_COLUMN_DEFINITIONS.length) {
+  if (!Array.isArray(value)) {
     return DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column }));
   }
 
   const seen = new Set();
   for (const item of value) {
-    if (!item || typeof item !== 'object' || !COLUMN_IDS.has(item.id) || typeof item.visible !== 'boolean' || seen.has(item.id)) {
+    if (!item || typeof item !== 'object' || (item.id !== 'createdAt' && !COLUMN_IDS.has(item.id)) || typeof item.visible !== 'boolean' || seen.has(item.id)) {
       return DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column }));
     }
     seen.add(item.id);
   }
 
-  return value.map((item) => ({
+  const migrated = value.map((item) => ({
     id: /** @type {TrackColumnId} */ (item.id),
     visible: item.visible,
   }));
+  if (!seen.has('createdAt')) {
+    const audioIndex = migrated.findIndex((column) => column.id === 'audioFormat');
+    migrated.splice(audioIndex < 0 ? migrated.length : audioIndex, 0, { id: 'createdAt', visible: true });
+  }
+  if (migrated.length !== TRACK_COLUMN_DEFINITIONS.length) {
+    return DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column }));
+  }
+  return migrated;
 }
 
 /** @param {TrackColumnPreference[]} preferences */
@@ -393,7 +402,7 @@ export function displayTrackTitle(item, fallback = '') {
 
 /**
  * @param {TrackColumnId} id
- * @param {{ title?: string | null, fileName?: string | null, artist?: string | null, album?: string | null, releaseDate?: string | null, year?: number | string | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null }} item
+ * @param {{ title?: string | null, fileName?: string | null, artist?: string | null, album?: string | null, releaseDate?: string | null, year?: number | string | null, createdAtUtcMs?: number | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null }} item
  * @param {(durationMs: number | null | undefined) => string} formatDuration
  * @param {string} titleFallback
  */
@@ -407,6 +416,8 @@ export function formatTrackColumnValue(id, item, formatDuration, titleFallback =
       return typeof item.album === 'string' && item.album.trim() ? item.album.trim() : '—';
     case 'year':
       return formatReleaseDate(item.releaseDate, item.year);
+    case 'createdAt':
+      return formatCreatedAt(item.createdAtUtcMs);
     case 'audioFormat':
       return formatAudioFormat(item, { omitLosslessBitrate: true });
     case 'duration':
@@ -416,6 +427,18 @@ export function formatTrackColumnValue(id, item, formatDuration, titleFallback =
     case 'playCount':
       return formatPlayCount(item.playedMs, item.durationMs);
   }
+}
+
+/** Render a UTC epoch timestamp as the user's local calendar date, never as a time. */
+/** @param {number | null | undefined} timestamp */
+export function formatCreatedAt(timestamp) {
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return '—';
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return '—';
+  const year = String(date.getFullYear()).padStart(4, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 /** The same helper is used by Now Playing A/B and its narrow stacked layout. */

@@ -318,6 +318,7 @@ pub enum TrackListColumnId {
     Artist,
     Album,
     Year,
+    CreatedAt,
     AudioFormat,
     Duration,
     PlayCount,
@@ -443,6 +444,7 @@ impl Default for TrackListColumnSettings {
                 TrackListColumnId::Artist,
                 TrackListColumnId::Album,
                 TrackListColumnId::Year,
+                TrackListColumnId::CreatedAt,
                 TrackListColumnId::AudioFormat,
                 TrackListColumnId::Duration,
                 TrackListColumnId::PlayCount,
@@ -459,10 +461,20 @@ impl Default for TrackListColumnSettings {
 
 impl TrackListColumnSettings {
     fn validate(&self) -> Result<(), SettingsError> {
-        use TrackListColumnId::{Album, Artist, AudioFormat, Duration, PlayCount, Title, Year};
+        use TrackListColumnId::{
+            Album, Artist, AudioFormat, CreatedAt, Duration, PlayCount, Title, Year,
+        };
 
-        const REQUIRED: [TrackListColumnId; 7] =
-            [Title, Artist, Album, Year, AudioFormat, Duration, PlayCount];
+        const REQUIRED: [TrackListColumnId; 8] = [
+            Title,
+            Artist,
+            Album,
+            Year,
+            CreatedAt,
+            AudioFormat,
+            Duration,
+            PlayCount,
+        ];
         let actual = self
             .columns
             .iter()
@@ -473,7 +485,7 @@ impl TrackListColumnSettings {
             || REQUIRED.iter().any(|id| !actual.contains(id))
         {
             return Err(SettingsError::InvalidData(
-                "track list columns must contain title, artist, album, year, audioFormat, duration, and playCount exactly once".into(),
+                "track list columns must contain title, artist, album, year, createdAt, audioFormat, duration, and playCount exactly once".into(),
             ));
         }
         Ok(())
@@ -486,27 +498,51 @@ impl TrackListColumnSettings {
     }
 }
 
-/// Accept persisted preferences that predate the playCount column.
+/// Accept persisted preferences that predate the createdAt column.
 fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColumnSettings {
-    use TrackListColumnId::{Album, Artist, AudioFormat, Duration, PlayCount, Title, Year};
+    use TrackListColumnId::{
+        Album, Artist, AudioFormat, CreatedAt, Duration, PlayCount, Title, Year,
+    };
 
     if settings.validate().is_ok() {
         return settings.normalize();
     }
 
-    const LEGACY: [TrackListColumnId; 6] = [Title, Artist, Album, Year, AudioFormat, Duration];
+    const LEGACY_WITH_PLAY_COUNT: [TrackListColumnId; 7] =
+        [Title, Artist, Album, Year, AudioFormat, Duration, PlayCount];
+    const LEGACY_WITHOUT_PLAY_COUNT: [TrackListColumnId; 6] =
+        [Title, Artist, Album, Year, AudioFormat, Duration];
     let ids: Vec<_> = settings.columns.iter().map(|column| column.id).collect();
     let unique: std::collections::HashSet<_> = ids.iter().copied().collect();
-    if ids.len() == LEGACY.len()
-        && unique.len() == LEGACY.len()
-        && LEGACY.iter().all(|id| unique.contains(id))
-        && !unique.contains(&PlayCount)
-    {
+    let matches_legacy = (ids.len() == LEGACY_WITH_PLAY_COUNT.len()
+        && unique.len() == LEGACY_WITH_PLAY_COUNT.len()
+        && LEGACY_WITH_PLAY_COUNT.iter().all(|id| unique.contains(id)))
+        || (ids.len() == LEGACY_WITHOUT_PLAY_COUNT.len()
+            && unique.len() == LEGACY_WITHOUT_PLAY_COUNT.len()
+            && LEGACY_WITHOUT_PLAY_COUNT
+                .iter()
+                .all(|id| unique.contains(id)));
+    if matches_legacy && !unique.contains(&CreatedAt) {
         let mut columns = settings.columns;
-        columns.push(TrackListColumnPreference {
-            id: PlayCount,
-            visible: true,
-        });
+        // Preserve the user's existing column order and visibility while introducing
+        // the new field at its documented default position.
+        let insertion = columns
+            .iter()
+            .position(|column| column.id == AudioFormat)
+            .unwrap_or(columns.len());
+        columns.insert(
+            insertion,
+            TrackListColumnPreference {
+                id: CreatedAt,
+                visible: true,
+            },
+        );
+        if !unique.contains(&PlayCount) {
+            columns.push(TrackListColumnPreference {
+                id: PlayCount,
+                visible: true,
+            });
+        }
         return TrackListColumnSettings {
             columns,
             widths: settings.widths.clamp(),
@@ -2084,6 +2120,7 @@ mod tests {
                 TrackListColumnId::Artist,
                 TrackListColumnId::Album,
                 TrackListColumnId::Year,
+                TrackListColumnId::CreatedAt,
                 TrackListColumnId::AudioFormat,
                 TrackListColumnId::Duration,
                 TrackListColumnId::PlayCount,
@@ -2095,8 +2132,9 @@ mod tests {
         assert_eq!(value["schemaVersion"], SETTINGS_SCHEMA_VERSION);
         assert_eq!(value["nowPlayingLayout"], "a");
         assert_eq!(serde_json::to_value(NowPlayingLayout::B).unwrap(), "b");
-        assert_eq!(value["trackListColumns"]["columns"][4]["id"], "audioFormat");
-        assert_eq!(value["trackListColumns"]["columns"][4]["visible"], true);
+        assert_eq!(value["trackListColumns"]["columns"][4]["id"], "createdAt");
+        assert_eq!(value["trackListColumns"]["columns"][5]["id"], "audioFormat");
+        assert_eq!(value["trackListColumns"]["columns"][5]["visible"], true);
         assert_eq!(value["trackListColumns"]["rowHeightPx"], 50);
         assert!(serde_json::from_value::<AppSettings>(value).is_ok());
     }
@@ -2401,11 +2439,13 @@ mod tests {
             store.snapshot().unwrap().track_list_columns.row_height_px,
             50
         );
-        assert_eq!(columns.len(), 7);
+        assert_eq!(columns.len(), 8);
         assert_eq!(columns[1].id, TrackListColumnId::Artist);
         assert!(!columns[1].visible);
-        assert_eq!(columns[6].id, TrackListColumnId::PlayCount);
-        assert!(columns[6].visible);
+        assert_eq!(columns[4].id, TrackListColumnId::CreatedAt);
+        assert!(columns[4].visible);
+        assert_eq!(columns[7].id, TrackListColumnId::PlayCount);
+        assert!(columns[7].visible);
         TrackListColumnSettings {
             columns: columns.clone(),
             ..TrackListColumnSettings::default()

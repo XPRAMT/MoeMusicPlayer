@@ -12,6 +12,7 @@ import {
   formatPlayCount,
   displayTrackTitle,
   formatReleaseDate,
+  formatCreatedAt,
   formatTrackColumnValue,
   formatYear,
   isHiResTrack,
@@ -63,10 +64,10 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
 
 test('default list columns are shared and keep the index as the only fixed column', () => {
   assert.deepEqual(DEFAULT_TRACK_COLUMN_PREFERENCES.map(({ id }) => id), [
-    'title', 'artist', 'album', 'year', 'audioFormat', 'duration', 'playCount',
+    'title', 'artist', 'album', 'year', 'createdAt', 'audioFormat', 'duration', 'playCount',
   ]);
-  assert.equal(trackListColumnCount(DEFAULT_TRACK_COLUMN_PREFERENCES), 8);
-  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ').length, 8);
+  assert.equal(trackListColumnCount(DEFAULT_TRACK_COLUMN_PREFERENCES), 9);
+  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ').length, 9);
   assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES, DEFAULT_TRACK_COLUMN_WIDTHS).split(' ')[1], '220px');
 });
 
@@ -142,11 +143,11 @@ test('playlist sort includes the original entry position and toggles direction',
 test('column order can move the first and last information columns without moving the index', () => {
   const movedFirst = moveTrackColumn(DEFAULT_TRACK_COLUMN_PREFERENCES, 'title', 'down');
   assert.deepEqual(movedFirst.map(({ id }) => id), [
-    'artist', 'title', 'album', 'year', 'audioFormat', 'duration', 'playCount',
+    'artist', 'title', 'album', 'year', 'createdAt', 'audioFormat', 'duration', 'playCount',
   ]);
   const movedLast = moveTrackColumn(movedFirst, 'playCount', 'up');
   assert.deepEqual(movedLast.map(({ id }) => id), [
-    'artist', 'title', 'album', 'year', 'audioFormat', 'playCount', 'duration',
+    'artist', 'title', 'album', 'year', 'createdAt', 'audioFormat', 'playCount', 'duration',
   ]);
   assert.deepEqual(moveTrackColumn(movedLast, 'artist', 'up'), movedLast);
   assert.deepEqual(moveTrackColumn(movedLast, 'duration', 'down'), movedLast);
@@ -156,7 +157,7 @@ test('column order can move the first and last information columns without movin
 
 test('visibility omits any information column from rows, skeletons, header count and grid template', () => {
   let preferences = DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column }));
-  for (const id of ['title', 'artist', 'album', 'year', 'audioFormat', 'duration', 'playCount']) {
+  for (const id of ['title', 'artist', 'album', 'year', 'createdAt', 'audioFormat', 'duration', 'playCount']) {
     preferences = setTrackColumnVisibility(preferences, id, false);
     const visible = visibleTrackColumns(preferences);
     assert.equal(visible.some((column) => column.id === id), false);
@@ -188,6 +189,44 @@ test('release date column keeps available YYYY / YYYY-MM / YYYY-MM-DD precision'
   assert.equal(formatYear(2024), '2024');
   assert.equal(formatTrackColumnValue('year', { releaseDate: '2024-06-01' }, formatDuration), '2024-06-01');
   assert.equal(formatTrackColumnValue('year', { year: 1999 }, formatDuration), '1999');
+});
+
+test('created date shows local YYYY-MM-DD only and legacy column preferences keep their order', () => {
+  const timestamp = new Date(2026, 9, 14, 23, 59, 58).getTime();
+  assert.equal(formatCreatedAt(timestamp), '2026-10-14');
+  assert.equal(formatCreatedAt(null), '—');
+  assert.doesNotMatch(formatCreatedAt(timestamp), /:/);
+  assert.deepEqual(normalizeTrackColumnPreferences([
+    { id: 'title', visible: true },
+    { id: 'artist', visible: false },
+    { id: 'album', visible: true },
+    { id: 'year', visible: true },
+    { id: 'audioFormat', visible: false },
+    { id: 'duration', visible: true },
+    { id: 'playCount', visible: true },
+  ]), [
+    { id: 'title', visible: true },
+    { id: 'artist', visible: false },
+    { id: 'album', visible: true },
+    { id: 'year', visible: true },
+    { id: 'createdAt', visible: true },
+    { id: 'audioFormat', visible: false },
+    { id: 'duration', visible: true },
+    { id: 'playCount', visible: true },
+  ]);
+});
+
+test('queue and album detail reuse shared sortable track-list headers', async () => {
+  const [queue, album] = await Promise.all([
+    readFile(new URL('../src/lib/PlaybackQueueList.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/AlbumDetail.svelte', import.meta.url), 'utf8'),
+  ]);
+  assert.match(queue, /sortable=\{true\}/);
+  assert.match(queue, /onSort=\{\(columnId\) => onSort\?\.\(columnId as TrackListColumnPreference\['id'\]\)\}/);
+  assert.match(queue, /longPressReorder=\{normalizedSort === null\}/);
+  assert.match(queue, /onReorder=\{normalizedSort === null \? handleReorder : undefined\}/);
+  assert.match(album, /sortable=\{true\}/);
+  assert.match(album, /sort: request\.sort/);
 });
 
 test('audio format uses only supplied source fields and formats nullable values', () => {
@@ -231,13 +270,14 @@ test('playlist entries show placeholders for missing metadata without an artist 
     artist: null,
     album: null,
     year: null,
+    createdAtUtcMs: null,
     codec: null,
     sampleRateHz: null,
     bitDepth: null,
     bitrateBps: null,
     durationMs: null,
   };
-  for (const id of ['artist', 'album', 'year', 'audioFormat', 'duration', 'playCount']) {
+  for (const id of ['artist', 'album', 'year', 'createdAt', 'audioFormat', 'duration', 'playCount']) {
     assert.equal(formatTrackColumnValue(id, missing, formatDuration, '未命名項目'), '—');
   }
   assert.equal(formatTrackColumnValue('title', missing, formatDuration, '未命名項目'), '未命名項目');

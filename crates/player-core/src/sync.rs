@@ -381,7 +381,10 @@ impl SyncEngine {
             let existing = repository
                 .track_sync_state(&track.identity)
                 .map_err(SyncError::Repository)?;
-            let unchanged = existing.is_some_and(|state| state.fingerprint == track.fingerprint);
+            let unchanged = existing.is_some_and(|state| {
+                state.fingerprint.size_bytes == track.fingerprint.size_bytes
+                    && state.fingerprint.modified_at_utc_ms == track.fingerprint.modified_at_utc_ms
+            });
             let legacy_metadata = unchanged
                 && existing.is_some_and(|state| {
                     state.metadata_loaded && state.metadata_version < TRACK_METADATA_VERSION
@@ -851,6 +854,7 @@ mod tests {
             fingerprint: FileFingerprint {
                 size_bytes: size,
                 modified_at_utc_ms: Some(1_800_000_000_000),
+                created_at_utc_ms: None,
             },
             metadata,
         }

@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 const MAX_PAGE_SIZE: u32 = 500;
 const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
@@ -111,7 +111,8 @@ const TRACKS_PAGE_SELECT_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
     t.year, t.release_date, t.bit_depth,
-    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
+    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0),
+    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
@@ -135,7 +136,8 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
     t.year, t.release_date, t.bit_depth,
-    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
+    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0),
+    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
@@ -156,7 +158,8 @@ const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
     t.year, t.release_date, t.bit_depth,
-    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
+    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0),
+    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)
  FROM tracks t WHERE t.track_id=?1";
 const ARTIST_TRACKS_PREFIX_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
@@ -165,7 +168,8 @@ const ARTIST_TRACKS_PREFIX_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
     t.year, t.release_date, t.bit_depth,
-    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
+    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0),
+    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
@@ -184,16 +188,13 @@ const ALBUM_TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
     t.year, t.release_date, t.bit_depth,
-    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
+    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0),
+    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)
  FROM tracks t
  WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
        IN (SELECT value FROM json_each(?1))
    AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
- ORDER BY COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647),
-          COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE NATURAL_NOCASE,
-          t.track_id
- LIMIT ?2 OFFSET ?3";
+               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)";
 const ALBUM_ARTWORK_CANDIDATES_SQL: &str = "SELECT t.track_id
  FROM tracks t
  WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
@@ -238,6 +239,7 @@ SELECT e.position, e.track_id,
            WHERE m.track_id=e.track_id AND r.enabled=1
        ),
        COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0),
+       (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1),
        e.locator_kind, e.locator_encoding, e.locator_data
 FROM resolved_entries e
 LEFT JOIN tracks t ON t.track_id=e.track_id
@@ -274,6 +276,7 @@ fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
         PlaylistSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist, '') COLLATE NOCASE",
         PlaylistSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album, '') COLLATE NOCASE",
         PlaylistSortField::Year => "COALESCE(t.release_date, printf('%04d', t.year), '')",
+        PlaylistSortField::CreatedAt => "(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
         PlaylistSortField::AudioFormat => unreachable!("audio format has a compound sort key"),
         PlaylistSortField::Duration => "COALESCE(e.entry_duration_ms, t.duration_ms, -1)",
         PlaylistSortField::PlayCount => "CASE WHEN COALESCE(e.entry_duration_ms, t.duration_ms, 0)>0 THEN COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0)*1.0/COALESCE(e.entry_duration_ms, t.duration_ms) ELSE -1 END",
@@ -487,6 +490,10 @@ const SCHEMA_V12: &str = r#"
 DROP INDEX tracks_sort_title;
 CREATE INDEX tracks_sort_title
     ON tracks(sort_title COLLATE NATURAL_NOCASE, track_id);
+"#;
+
+const SCHEMA_V13: &str = r#"
+ALTER TABLE source_mappings ADD COLUMN created_at_utc_ms INTEGER;
 "#;
 
 pub fn natural_title_cmp(left: &str, right: &str) -> Ordering {
@@ -952,6 +959,13 @@ impl Database {
             tx.execute_batch(SCHEMA_V12)?;
             tx.pragma_update(None, "user_version", 12)?;
             tx.commit()?;
+            version = 12;
+        }
+        if version == 12 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V13)?;
+            tx.pragma_update(None, "user_version", 13)?;
+            tx.commit()?;
         }
         connection.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS sync_seen_items (
@@ -1172,6 +1186,16 @@ impl Database {
         offset: u64,
         requested_limit: u32,
     ) -> Result<Page<TrackSummary>, DatabaseError> {
+        self.list_album_tracks_page_sorted(album_names, None, offset, requested_limit)
+    }
+
+    pub fn list_album_tracks_page_sorted(
+        &self,
+        album_names: &[String],
+        sort: Option<TrackListSort>,
+        offset: u64,
+        requested_limit: u32,
+    ) -> Result<Page<TrackSummary>, DatabaseError> {
         let unique_names = album_names.iter().cloned().collect::<HashSet<_>>();
         if unique_names.is_empty() {
             return Ok(Page {
@@ -1198,7 +1222,12 @@ impl Database {
         )?.max(0) as u64;
         let limit = query_limit(requested_limit);
         let database_offset = i64::try_from(offset).unwrap_or(i64::MAX);
-        let mut statement = connection.prepare(ALBUM_TRACKS_PAGE_SQL)?;
+        let order_by = sort.map(tracks_order_by_sql).unwrap_or_else(|| {
+            "COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647), \
+             COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE NATURAL_NOCASE, t.track_id".to_owned()
+        });
+        let sql = format!("{ALBUM_TRACKS_PAGE_SQL} ORDER BY {order_by} LIMIT ?2 OFFSET ?3");
+        let mut statement = connection.prepare(&sql)?;
         let rows = statement.query_map(
             params![names_json, limit, database_offset],
             row_to_track_summary,
@@ -1380,6 +1409,7 @@ impl Database {
                         fingerprint: FileFingerprint {
                             size_bytes,
                             modified_at_utc_ms,
+                            created_at_utc_ms: None,
                         },
                         content_sha256,
                     })
@@ -1720,9 +1750,10 @@ impl Database {
                     row.get::<_, Option<i64>>(11)?,
                     row.get::<_, bool>(12)?,
                     row.get::<_, i64>(13)?,
-                    row.get::<_, String>(14)?,
+                    row.get::<_, Option<i64>>(14)?,
                     row.get::<_, String>(15)?,
-                    row.get::<_, Vec<u8>>(16)?,
+                    row.get::<_, String>(16)?,
+                    row.get::<_, Vec<u8>>(17)?,
                 ))
             },
         )?;
@@ -1743,6 +1774,7 @@ impl Database {
                     bit_depth,
                     has_enabled_mapping,
                     played_ms,
+                    created_at_utc_ms,
                     locator_kind,
                     locator_encoding,
                     locator_data,
@@ -1789,6 +1821,7 @@ impl Database {
                     sample_rate_hz: sample_rate_hz.map(|value| value.max(0) as u32),
                     release_date,
                     year,
+                    created_at_utc_ms,
                     bit_depth: bit_depth
                         .and_then(|value| u8::try_from(value).ok())
                         .filter(|value| *value > 0),
@@ -3390,6 +3423,12 @@ fn tracks_order_by_sql(sort: TrackListSort) -> String {
         (TrackSortField::Year, false) => {
             "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date DESC, (t.year IS NULL) ASC, t.year DESC, t.track_id DESC"
         }
+        (TrackSortField::CreatedAt, true) => {
+            "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) ASC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) ASC, t.track_id ASC"
+        }
+        (TrackSortField::CreatedAt, false) => {
+            "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) ASC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) DESC, t.track_id DESC"
+        }
         (TrackSortField::AudioFormat, true) => {
             return audio_format_order_by("ASC", "t.track_id");
         }
@@ -3547,6 +3586,7 @@ fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummar
             .map(|value| value.max(0) as u32),
         release_date,
         year,
+        created_at_utc_ms: row.get(15)?,
         bit_depth: row
             .get::<_, Option<i64>>(13)?
             .and_then(|value| u8::try_from(value).ok())
@@ -3755,12 +3795,13 @@ fn persist_mapping(
     tx.prepare_cached(
         "INSERT INTO source_mappings
             (source_id, source_item_id, locator_key, locator_kind, locator_encoding,
-             locator_data, size_bytes, modified_at_utc_ms, track_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             locator_data, size_bytes, modified_at_utc_ms, created_at_utc_ms, track_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(source_id, source_item_id) DO UPDATE SET
             locator_key=excluded.locator_key, locator_kind=excluded.locator_kind,
             locator_encoding=excluded.locator_encoding, locator_data=excluded.locator_data,
             size_bytes=excluded.size_bytes, modified_at_utc_ms=excluded.modified_at_utc_ms,
+            created_at_utc_ms=excluded.created_at_utc_ms,
             track_id=excluded.track_id
          WHERE source_mappings.locator_key IS NOT excluded.locator_key
             OR source_mappings.locator_kind IS NOT excluded.locator_kind
@@ -3768,6 +3809,7 @@ fn persist_mapping(
             OR source_mappings.locator_data IS NOT excluded.locator_data
             OR source_mappings.size_bytes IS NOT excluded.size_bytes
             OR source_mappings.modified_at_utc_ms IS NOT excluded.modified_at_utc_ms
+            OR source_mappings.created_at_utc_ms IS NOT excluded.created_at_utc_ms
             OR source_mappings.track_id IS NOT excluded.track_id",
     )?
     .execute(params![
@@ -3779,6 +3821,7 @@ fn persist_mapping(
         stored.data,
         to_sql_i64(record.fingerprint.size_bytes, "size_bytes")?,
         record.fingerprint.modified_at_utc_ms,
+        record.fingerprint.created_at_utc_ms,
         track_id.to_string(),
     ])?;
     Ok(())
@@ -3789,6 +3832,7 @@ fn row_to_sync_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSyncState
         fingerprint: FileFingerprint {
             size_bytes: row.get::<_, i64>(0)?.max(0) as u64,
             modified_at_utc_ms: row.get(1)?,
+            created_at_utc_ms: None,
         },
         metadata_loaded: row.get(2)?,
         metadata_version: row.get::<_, i64>(3)?.max(0) as u32,
@@ -4192,6 +4236,7 @@ mod tests {
             fingerprint: FileFingerprint {
                 size_bytes,
                 modified_at_utc_ms: Some(modified_at_utc_ms),
+                created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
                 title: Some(title.to_owned()),
@@ -4822,7 +4867,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 12);
+            assert_eq!(version, 13);
         }
         {
             let db = Database::open_checked(&path).expect("read-only validate migrated database");
@@ -4866,7 +4911,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 12);
+        assert_eq!(current_version, 13);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -4925,7 +4970,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -4965,7 +5010,7 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
     }
 
@@ -5005,7 +5050,7 @@ mod tests {
                     .expect("sync-state table lookup"),
             )
         };
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
         assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
     }
 
@@ -5181,7 +5226,7 @@ mod tests {
                     .expect("lyric candidates table"),
             )
         };
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
         assert_eq!(lyric_table, "track_lyrics");
         assert_eq!(candidate_table, "lyric_candidates");
         assert_eq!(
@@ -5218,7 +5263,7 @@ mod tests {
             [],
             |row| row.get(0),
         ).expect("playback session tables");
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
         assert_eq!(tables, 2);
     }
 
@@ -5777,6 +5822,7 @@ mod tests {
             fingerprint: FileFingerprint {
                 size_bytes: 11_487,
                 modified_at_utc_ms: Some(1_800_000_000_001),
+                created_at_utc_ms: None,
             },
             content_sha256: [0x5a; 32],
         };
@@ -7456,6 +7502,79 @@ mod tests {
     }
 
     #[test]
+    fn created_at_is_projected_from_file_fingerprints_and_sorted_by_full_timestamp() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "created-at-source");
+        let mut records = [
+            record(&root, "late", "path:late", "Late", 10, 100),
+            record(&root, "early", "path:early", "Early", 20, 200),
+            record(&root, "date-only", "path:date-only", "Unknown", 30, 300),
+        ];
+        records[0].fingerprint.created_at_utc_ms = Some(1_798_013_925_321);
+        records[1].fingerprint.created_at_utc_ms = Some(1_798_013_925_123);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            1000,
+        );
+
+        let ascending = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort {
+                    field: TrackSortField::CreatedAt,
+                    direction: TrackSortDirection::Asc,
+                },
+            })
+            .expect("ascending creation timestamp sort");
+        assert_eq!(
+            ascending
+                .items
+                .iter()
+                .map(|track| track.title.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("Early"), Some("Late"), Some("Unknown")],
+        );
+        assert_eq!(
+            ascending.items[0].created_at_utc_ms,
+            Some(1_798_013_925_123)
+        );
+        assert_eq!(
+            ascending.items[1].created_at_utc_ms,
+            Some(1_798_013_925_321)
+        );
+        assert_eq!(ascending.items[2].created_at_utc_ms, None);
+
+        let descending = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort {
+                    field: TrackSortField::CreatedAt,
+                    direction: TrackSortDirection::Desc,
+                },
+            })
+            .expect("descending creation timestamp sort");
+        assert_eq!(
+            descending
+                .items
+                .iter()
+                .map(|track| track.title.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("Late"), Some("Early"), Some("Unknown")],
+            "missing creation dates stay last in either sort direction",
+        );
+    }
+
+    #[test]
     fn library_title_sort_uses_natural_numeric_order_in_both_directions() {
         let mut db = Database::open_in_memory().expect("database");
         let root = add_root(
@@ -8673,7 +8792,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v8_migrates_to_v12_without_requiring_track_rows_for_statistics() {
+    fn schema_v8_migrates_to_v13_without_requiring_track_rows_for_statistics() {
         let connection = rusqlite::Connection::open_in_memory().expect("legacy v8 database");
         connection.execute_batch(SCHEMA_V1).expect("schema v1");
         connection.execute_batch(SCHEMA_V2).expect("schema v2");
@@ -8693,7 +8812,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
         let table_count: i64 = db
             .lock()
             .expect("connection")

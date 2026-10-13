@@ -103,6 +103,9 @@ pub struct PlaylistEntrySummary {
     #[serde(default)]
     pub release_date: Option<String>,
     pub year: Option<u16>,
+    /// Creation time of the earliest enabled filesystem mapping, in UTC Unix milliseconds.
+    #[serde(default)]
+    pub created_at_utc_ms: Option<i64>,
     pub bit_depth: Option<u8>,
     /// Cumulative credited listening time; 0 when unmatched or never played.
     pub played_ms: u64,
@@ -131,6 +134,7 @@ pub enum PlaylistSortField {
     Artist,
     Album,
     Year,
+    CreatedAt,
     AudioFormat,
     Duration,
     PlayCount,

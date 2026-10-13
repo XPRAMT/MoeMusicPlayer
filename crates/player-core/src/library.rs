@@ -173,6 +173,9 @@ pub struct FileFingerprint {
     pub size_bytes: u64,
     /// UTC Unix milliseconds. `None` means this source did not provide a reliable timestamp.
     pub modified_at_utc_ms: Option<i64>,
+    /// Filesystem creation time in UTC Unix milliseconds, when the source exposes it.
+    /// It is presentation/sort metadata and does not affect whether audio tags need rereading.
+    pub created_at_utc_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -327,6 +330,7 @@ pub enum TrackSortField {
     Artist,
     Album,
     Year,
+    CreatedAt,
     AudioFormat,
     Duration,
     PlayCount,
@@ -406,6 +410,8 @@ pub struct TrackSummary {
     #[serde(default)]
     pub release_date: Option<String>,
     pub year: Option<u16>,
+    /// Creation time of the earliest enabled filesystem mapping, in UTC Unix milliseconds.
+    pub created_at_utc_ms: Option<i64>,
     pub bit_depth: Option<u8>,
     /// Cumulative credited listening time from `track_playback_statistics`.
     pub played_ms: u64,

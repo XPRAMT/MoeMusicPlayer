@@ -92,7 +92,7 @@ export interface BackdropOpacityCalculation {
   displayText: string;
 }
 
-export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'audioFormat' | 'duration' | 'playCount';
+export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'audioFormat' | 'duration' | 'playCount';
 
 export interface TrackListColumnPreference {
   id: TrackListColumnId;
@@ -221,6 +221,8 @@ export interface TrackSummary {
   /** Normalized YYYY, YYYY-MM, or YYYY-MM-DD when known. */
   releaseDate?: string | null;
   year?: number | null;
+  /** Filesystem creation time as UTC Unix milliseconds; display is local YYYY-MM-DD. */
+  createdAtUtcMs?: number | null;
   bitDepth?: number | null;
   /** Cumulative credited listening time in milliseconds. */
   playedMs?: number | null;
@@ -308,6 +310,7 @@ export interface PlaylistEntrySummary {
   hasEnabledMapping: boolean;
   releaseDate?: string | null;
   year?: number | null;
+  createdAtUtcMs?: number | null;
   codec?: string | null;
   sampleRateHz?: number | null;
   bitDepth?: number | null;
@@ -624,7 +627,7 @@ interface IpcContract {
     result: AlbumIndexFacet[];
   };
   library_get_album_page: {
-    args: { albumNames: string[]; offset: number; limit: number };
+    args: { albumNames: string[]; sort?: LibraryListSort | null; offset: number; limit: number };
     result: TrackPage;
   };
   library_get_album_artwork_candidates: {
@@ -748,7 +751,7 @@ interface IpcContract {
     result: PlaybackSnapshot;
   };
   playback_get_queue_page: {
-    args: { offset: number; limit: number };
+    args: { offset: number; limit: number; sort?: LibraryListSort | null };
     result: PlaybackQueuePage;
   };
   playback_play: {

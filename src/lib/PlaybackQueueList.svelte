@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getErrorText, invokeCommand, type PlaybackQueuePage, type PlaybackQueuePageItem, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
+  import { getErrorText, invokeCommand, type LibraryListSort, type PlaybackQueuePage, type PlaybackQueuePageItem, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
   import { formatDuration } from './format';
   import { formatListOrder } from './list-order.js';
   import {
@@ -11,6 +11,7 @@
     isHiResTrack,
     normalizeTrackColumnPreferences,
     normalizeTrackColumnWidths,
+    normalizeLibrarySort,
     trackListColumnCount,
     trackListGridTemplate,
     trackListMinWidthPx,
@@ -34,7 +35,9 @@
     columnWidths?: TrackColumnWidths;
     rowHeightPx?: number;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
-    fetchPage?: (request: { offset: number; limit: number }) => Promise<PlaybackQueuePage>;
+    sort?: LibraryListSort | null;
+    onSort?: (columnId: TrackListColumnPreference['id']) => void;
+    fetchPage?: (request: { offset: number; limit: number; sort?: LibraryListSort | null }) => Promise<PlaybackQueuePage>;
     reorderPage?: (from: number, to: number) => Promise<void>;
     livePlayCount?: { trackId: string; playedMs: number }[];
     onPlay?: (entry: PlaybackQueuePageItem) => void;
@@ -48,6 +51,8 @@
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
     rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX,
     onColumnResize,
+    sort = null,
+    onSort,
     fetchPage,
     reorderPage,
     livePlayCount = [],
@@ -63,6 +68,8 @@
   let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths));
   let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
+  let normalizedSort = $derived(sort ? normalizeLibrarySort(sort) : null);
+  let queueScope = $derived(JSON.stringify({ resetKey, sort: normalizedSort }));
   let currentEntryPosition = $state<number | null>(null);
   let currentTraversalIndex = $state<number | null>(null);
   let cursorError = $state<string | null>(null);
@@ -75,7 +82,7 @@
   let scrollToIndexRequest = $state<{ index: number; token: number } | null>(null);
   let scrollRequestToken = 0;
 
-  type ListSnapshot = ReturnType<PagedListController<PlaybackQueuePageItem, number>['snapshot']>;
+  type ListSnapshot = ReturnType<PagedListController<PlaybackQueuePageItem, string>['snapshot']>;
   let queueSnapshot = $state<ListSnapshot>({
     scope: null,
     totalCount: null,
@@ -88,7 +95,7 @@
     revision: 0,
   });
 
-  const queue = new PagedListController<PlaybackQueuePageItem, number>(
+  const queue = new PagedListController<PlaybackQueuePageItem, string>(
     async ({ scope, offset, limit }) => {
       const requestCursorGeneration = cursorProbeGeneration;
       const page = await requestPage({ offset, limit });
@@ -104,7 +111,7 @@
   });
 
   $effect(() => {
-    const currentResetKey = resetKey;
+    const currentResetKey = queueScope;
     cursorProbeGeneration += 1;
     currentEntryPosition = null;
     currentTraversalIndex = null;
@@ -125,13 +132,14 @@
   });
 
   async function requestPage(request: { offset: number; limit: number }): Promise<PlaybackQueuePage> {
+    const sortedRequest = { ...request, sort: normalizedSort };
     return fetchPage
-      ? fetchPage(request)
-      : invokeCommand('playback_get_queue_page', request);
+      ? fetchPage(sortedRequest)
+      : invokeCommand('playback_get_queue_page', sortedRequest);
   }
 
-  function updateCurrentEntry(page: PlaybackQueuePage, requestedResetKey: number, requestedCursorGeneration: number): void {
-    if (requestedResetKey !== resetKey || requestedCursorGeneration !== cursorProbeGeneration) return;
+  function updateCurrentEntry(page: PlaybackQueuePage, requestedScope: string, requestedCursorGeneration: number): void {
+    if (requestedScope !== queueScope || requestedCursorGeneration !== cursorProbeGeneration) return;
     currentEntryPosition = playbackQueueCurrentEntryPosition(page);
     const cursor = page.cursor;
     currentTraversalIndex = cursor === null || cursor === undefined
@@ -142,15 +150,15 @@
   }
 
   async function refreshCurrentEntry(): Promise<PlaybackQueuePage | null> {
-    const requestedResetKey = resetKey;
+    const requestedScope = queueScope;
     const requestedCursorGeneration = ++cursorProbeGeneration;
     cursorError = null;
     try {
       const page = await requestPage({ offset: 0, limit: 1 });
-      updateCurrentEntry(page, requestedResetKey, requestedCursorGeneration);
+      updateCurrentEntry(page, requestedScope, requestedCursorGeneration);
       return page;
     } catch (error) {
-      if (requestedResetKey === resetKey && requestedCursorGeneration === cursorProbeGeneration) {
+      if (requestedScope === queueScope && requestedCursorGeneration === cursorProbeGeneration) {
         cursorError = getErrorText(error);
       }
       return null;
@@ -258,7 +266,7 @@
     pending={snapshot.pendingPageCount > 0 || reordering || locating}
     revision={snapshot.revision}
     generation={snapshot.generation}
-    scrollResetKey={resetKey}
+    scrollResetKey={queueScope}
     {itemAt}
     getKey={(entry) => entry.entryPosition}
     isSelected={(entry) => isCurrent(entry)}
@@ -276,19 +284,22 @@
     className="track-list-viewport playback-queue-viewport"
     rowClassName="track-row virtual-track-row configurable-track-grid playback-queue-row"
     listName="播放佇列"
-    longPressReorder={true}
+    longPressReorder={normalizedSort === null}
     {scrollToIndexRequest}
     onRange={handleRange}
     onPlay={(entry) => {
       if (entry) onPlay(entry);
     }}
-    onReorder={handleReorder}
+    onReorder={normalizedSort === null ? handleReorder : undefined}
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
         <TrackColumnCells
           variant="header"
           columns={visibleColumns}
+          sortable={true}
+          sort={normalizedSort}
+          onSort={(columnId) => onSort?.(columnId as TrackListColumnPreference['id'])}
           resizable={true}
           onResize={(columnId, widthPx) => onColumnResize?.(columnId as TrackListColumnPreference['id'], widthPx)}
         />

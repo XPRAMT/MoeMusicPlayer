@@ -87,6 +87,7 @@ where
     let fingerprint = FileFingerprint {
         size_bytes: playlist_bytes.len() as u64,
         modified_at_utc_ms,
+        created_at_utc_ms: None,
     };
     let digest: [u8; 32] = Sha256::digest(playlist_bytes).into();
     let document_locator = MediaLocator::ContentUri(document_uri.clone());
@@ -141,6 +142,7 @@ where
                                         fingerprint: FileFingerprint {
                                             size_bytes: resolved.size_bytes.unwrap_or(0),
                                             modified_at_utc_ms: resolved.modified_at_utc_ms,
+                                            created_at_utc_ms: None,
                                         },
                                         metadata: None,
                                     });
@@ -201,6 +203,7 @@ where
                                 // unavailable size; None remains explicit for timestamp.
                                 size_bytes: resolved.size_bytes.unwrap_or(0),
                                 modified_at_utc_ms: resolved.modified_at_utc_ms,
+                                created_at_utc_ms: None,
                             },
                             metadata: None,
                         });
