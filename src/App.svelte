@@ -177,6 +177,13 @@
 
 
   let activeView = $state<View>('library');
+  type RetainedListView = Exclude<View, 'artist-detail' | 'settings'>;
+  let visitedListViews = $state<Record<RetainedListView, boolean>>({
+    library: true,
+    artists: false,
+    playlists: false,
+    queue: false,
+  });
   let selectedArtist = $state<(ArtistIndexEntry & { displayName: string }) | null>(null);
   let nowPlayingReturnView = $state<View>('library');
   let isNowPlayingMounted = $state(false);
@@ -428,6 +435,10 @@
       return `${artistTrackCount === null ? '' : `${artistTrackCount.toLocaleString()} `}首曲目`;
     }
     return null;
+  });
+  $effect(() => {
+    const view = activeView;
+    if (view !== 'artist-detail' && view !== 'settings') visitedListViews[view] = true;
   });
   const syncProgressSources = $derived.by(() =>
     syncProgress
@@ -3176,8 +3187,8 @@
 
     <div class="page-scroll" class:is-list-page={isListPage}>
       <div class="page-content" class:wide-list-page={isListPage} class:is-list-page={isListPage}>
-        {#if activeView === 'library'}
-          <section class="library-section" aria-labelledby="page-heading">
+        {#if visitedListViews.library}
+          <section class="library-section" aria-labelledby="page-heading" hidden={activeView !== 'library'}>
             {#if !libraryReady}
               <div class="not-ready-panel">
                 <div class="not-ready-icon" aria-hidden="true">
@@ -3210,7 +3221,8 @@
               />
             {/if}
           </section>
-        {:else if activeView === 'artists' || activeView === 'artist-detail'}
+        {/if}
+        {#if visitedListViews.artists}
           <section class="artist-section" aria-labelledby="page-heading" hidden={activeView !== 'artists'}>
             {#if !libraryReady}
               <div class="not-ready-panel" role="status">
@@ -3230,7 +3242,8 @@
               />
             {/if}
           </section>
-          {#if activeView === 'artist-detail'}
+        {/if}
+        {#if activeView === 'artist-detail'}
           <section class="artist-detail-section" aria-labelledby="page-heading">
             {#if !libraryReady || !selectedArtist}
               <div class="artist-detail-empty" role="status">{selectedArtist ? showCapabilityDetail(capabilities?.library) : '請從演出者清單選擇一位演出者。'}</div>
@@ -3256,9 +3269,9 @@
               {/key}
             {/if}
           </section>
-          {/if}
-        {:else if activeView === 'playlists'}
-          <section class="playlist-section" aria-labelledby="page-heading">
+        {/if}
+        {#if visitedListViews.playlists}
+          <section class="playlist-section" aria-labelledby="page-heading" hidden={activeView !== 'playlists'}>
             {#if playlistError}
               <div class="inline-message" role="alert">
                 <span class="message-mark"><IconAlertCircle size={16} stroke={1.8} aria-hidden="true" /></span>
@@ -3308,8 +3321,9 @@
               </div>
             {/if}
           </section>
-        {:else if activeView === 'queue'}
-          <section class="queue-page" aria-labelledby="page-heading">
+        {/if}
+        {#if visitedListViews.queue}
+          <section class="queue-page" aria-labelledby="page-heading" hidden={activeView !== 'queue'}>
             {#if !playbackReady}
               <div class="not-ready-panel" role="status">
                 <div class="not-ready-icon" aria-hidden="true"><IconList size={22} stroke={1.6} /></div>
@@ -3329,7 +3343,8 @@
               />
             {/if}
           </section>
-        {:else}
+        {/if}
+        {#if activeView === 'settings'}
           <section class="settings-page" aria-labelledby="page-heading">
           {@render settingsPanels('')}
           </section>

@@ -1053,7 +1053,10 @@ input:focus-visible {
   flex-direction: column;
 }
 
-.artist-section[hidden] {
+.library-section[hidden],
+.artist-section[hidden],
+.playlist-section[hidden],
+.queue-page[hidden] {
   display: none;
 }
 
