@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn per_track_reference_returns_cached_jpeg_and_remembers_missing_artwork() {
         let directory = temp_dir();
-        let identity = "source-a\0song-1\01024\0200";
+        let identity = concat!("source-a\0song-1\0", "1024\0", "200");
         let hash = "c".repeat(64);
         assert!(get_for_track(&directory, identity)
             .expect("cache miss")
@@ -563,7 +563,7 @@ mod tests {
             [0xff, 0xd8, 0xff, 1]
         );
 
-        let missing_identity = "source-a\0song-2\01024\0200";
+        let missing_identity = concat!("source-a\0song-2\0", "1024\0", "200");
         put_track_reference(&directory, missing_identity, None).expect("save missing marker");
         assert_eq!(
             get_for_track(&directory, missing_identity).expect("read missing marker"),
@@ -605,12 +605,12 @@ mod tests {
     fn legacy_ref_and_json_files_are_imported_once_then_removed() {
         let directory = temp_dir();
         fs::create_dir_all(&directory).expect("create legacy cache");
-        let identity = "legacy-source\0legacy-item\01024\0200";
+        let identity = concat!("legacy-source\0legacy-item\0", "1024\0", "200");
         let ref_key = track_reference_key(identity);
         let image_hash = "e".repeat(64);
         fs::write(directory.join(format!("track-{ref_key}.ref")), &image_hash)
             .expect("write old track reference");
-        let missing_identity = "legacy-source\0missing-item\01024\0200";
+        let missing_identity = concat!("legacy-source\0missing-item\0", "1024\0", "200");
         let missing_ref_key = track_reference_key(missing_identity);
         fs::write(
             directory.join(format!("track-{missing_ref_key}.ref")),
