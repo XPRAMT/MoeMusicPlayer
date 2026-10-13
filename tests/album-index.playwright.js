@@ -1,8 +1,11 @@
 ﻿async page => {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   await page.setViewportSize({ width: 900, height: 720 });
-  await page.goto('http://127.0.0.1:1450/tests/album-index-harness.html', { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.getByText('Album 1', { exact: true }).waitFor();
+  await page.goto(`http://127.0.0.1:1450/tests/album-index-harness.html?run=${Date.now()}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.locator('.album-grid-viewport').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => document.querySelector('[data-testid="album-count"]')?.textContent?.includes('80'));
+  await page.waitForFunction(() => document.querySelector('.album-grid-viewport')?.getAttribute('data-scroll-restored') === 'true');
+  await page.locator('.album-card').first().waitFor();
   const mosaicLayout = await page.evaluate(() => Object.fromEntries([1, 2, 3, 4].map((count) => {
     const images = [...document.querySelectorAll(`[data-testid="mosaic-${['zero', 'one', 'two', 'three', 'four'][count]}"] img`)];
     return [count, images.map((image) => { const rect = image.getBoundingClientRect(); return { width: rect.width, height: rect.height }; })];
@@ -96,5 +99,24 @@
   const rawReadsAfterCachedDetail = await page.evaluate(() => window.__albumIndexStats.rawArtworkReads);
   assert(rawReadsAfterCachedDetail === rawReadsAfterFirstDetail, `saved representative-cover selection should prevent rereading large artwork: ${rawReadsAfterFirstDetail} -> ${rawReadsAfterCachedDetail}`);
 
-  return { loadingStats, mosaicLayout, initial, afterResize, afterScroll, firstAlbumReadsAfterRemount, rawReadsAfterCachedDetail };
+  await page.getByTestId('album-detail-back').click();
+  await page.locator('.album-grid-viewport').waitFor({ state: 'visible' });
+  const restoredTarget = await page.locator('.album-grid-viewport').evaluate((element) => {
+    element.scrollTop = 900;
+    element.dispatchEvent(new Event('scroll'));
+    return element.scrollTop;
+  });
+  assert(restoredTarget > 0, `test must scroll the album homepage before navigation: ${restoredTarget}`);
+  await page.getByTestId('leave-albums').click();
+  await page.locator('.album-grid-viewport').waitFor({ state: 'detached' });
+  await page.getByTestId('enter-albums').click();
+  await page.locator('.album-grid-viewport').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => document.querySelector('.album-grid-viewport')?.getAttribute('data-scroll-restored') === 'true');
+  await page.locator('.album-card').first().waitFor();
+  await page.waitForTimeout(100);
+  const restoredAfterNavigation = await page.locator('.album-grid-viewport').evaluate((element) => element.scrollTop);
+  assert(Math.abs(restoredAfterNavigation - restoredTarget) <= 1,
+    `leaving and reopening the album homepage should restore scrollTop: ${restoredTarget} -> ${restoredAfterNavigation}`);
+
+  return { loadingStats, mosaicLayout, initial, afterResize, afterScroll, firstAlbumReadsAfterRemount, rawReadsAfterCachedDetail, restoredTarget, restoredAfterNavigation };
 }

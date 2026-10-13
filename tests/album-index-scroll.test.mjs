@@ -20,10 +20,12 @@ test('album index scroll position is retained as a bounded in-memory value', () 
   assert.equal(getAlbumIndexScrollTop(), 0);
 });
 
-test('album index restores only after active data and viewport are ready, then saves scroll changes', () => {
+test('album index restores after active data and viewport are ready and saves while scrolling', () => {
   assert.match(indexSource, /if \(!active \|\| loading \|\| !element \|\| viewportWidth <= 0 \|\| scrollPositionRestored\) return/);
   assert.match(indexSource, /requestAnimationFrame\(\(\) =>/);
   assert.match(indexSource, /Math\.min\(getAlbumIndexScrollTop\(\), maxScrollTop\)/);
-  assert.match(indexSource, /if \(scrollPositionRestored && viewport\) setAlbumIndexScrollTop\(viewport\.scrollTop\)/);
+  assert.match(indexSource, /function handleScroll\(\): void \{\s*measure\(\);\s*if \(scrollPositionRestored && viewport\) setAlbumIndexScrollTop\(viewport\.scrollTop\);\s*\}/);
+  assert.doesNotMatch(indexSource, /onDestroy\(\(\) => \{[\s\S]*?setAlbumIndexScrollTop\(viewport\.scrollTop\)/,
+    'teardown can clamp scrollTop after removing grid content, so it must not overwrite the last scroll-event snapshot');
   assert.match(indexSource, /onscroll=\{handleScroll\}/);
 });

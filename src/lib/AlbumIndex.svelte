@@ -120,7 +120,6 @@
   onDestroy(() => {
     requestRevision += 1;
     if (restoreFrame !== null) cancelAnimationFrame(restoreFrame);
-    if (scrollPositionRestored && viewport) setAlbumIndexScrollTop(viewport.scrollTop);
   });
 </script>
 
@@ -132,7 +131,7 @@
   {:else if albums.length === 0}
     <div class="album-index-message" role="status">目前啟用的曲庫沒有專輯資料。</div>
   {:else}
-    <div class="album-grid-viewport" bind:this={viewport} onscroll={handleScroll}>
+    <div class="album-grid-viewport" bind:this={viewport} data-scroll-restored={scrollPositionRestored} onscroll={handleScroll}>
       <div class="album-grid" style={`grid-template-columns:repeat(${columns},${cardWidth}px);gap:${gap}px;--album-card-width:${cardWidth}px`}>
         <div class="album-grid-spacer" style={`height:${topSpacer}px`} aria-hidden="true"></div>
         {#each visibleAlbums as album (`${album.key}:${refreshKey}`)}
