@@ -7,12 +7,101 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const MAX_THUMBNAIL_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 const PRUNE_EVERY_WRITES: usize = 32;
 static CACHE_WRITES: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AlbumArtworkSelection {
+    pub track_count: u64,
+    pub track_ids: Vec<String>,
+    pub representative: bool,
+}
+
+fn selection_path(directory: &Path, key: &str) -> Result<PathBuf, String> {
+    if key.len() != 64 || !key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("專輯封面索引無效。".to_owned());
+    }
+    Ok(directory.join(format!("selection-{}.json", key.to_ascii_lowercase())))
+}
+
+pub(crate) fn get_selection(
+    directory: &Path,
+    key: &str,
+) -> Result<Option<AlbumArtworkSelection>, String> {
+    let path = selection_path(directory, key)?;
+    let json = match fs::read(path) {
+        Ok(bytes) if bytes.len() <= 4096 => bytes,
+        Ok(_) => return Err("專輯封面索引超過大小限制。".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("讀取專輯封面索引失敗：{error}")),
+    };
+    let selection: AlbumArtworkSelection =
+        serde_json::from_slice(&json).map_err(|error| format!("專輯封面索引格式無效：{error}"))?;
+    if selection.track_ids.is_empty()
+        || selection.track_ids.len() > 4
+        || selection
+            .track_ids
+            .iter()
+            .any(|id| id.is_empty() || id.len() > 128)
+    {
+        return Err("專輯封面索引的曲目清單無效。".to_owned());
+    }
+    Ok(Some(selection))
+}
+
+pub(crate) fn put_selection(
+    directory: &Path,
+    key: &str,
+    selection: &AlbumArtworkSelection,
+) -> Result<(), String> {
+    let path = selection_path(directory, key)?;
+    if selection.track_ids.is_empty()
+        || selection.track_ids.len() > 4
+        || selection
+            .track_ids
+            .iter()
+            .any(|id| id.is_empty() || id.len() > 128)
+    {
+        return Err("專輯封面索引的曲目清單無效。".to_owned());
+    }
+    let bytes = serde_json::to_vec(selection)
+        .map_err(|error| format!("序列化專輯封面索引失敗：{error}"))?;
+    if bytes.len() > 4096 {
+        return Err("專輯封面索引超過大小限制。".to_owned());
+    }
+    fs::create_dir_all(directory).map_err(|error| format!("建立專輯圖片快取目錄失敗：{error}"))?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_path = directory.join(format!(".album-selection-{nonce}.tmp"));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| format!("建立專輯封面索引暫存檔失敗：{error}"))?;
+        file.write_all(&bytes)
+            .map_err(|error| format!("寫入專輯封面索引失敗：{error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("同步專輯封面索引失敗：{error}"))?;
+        drop(file);
+        if path.exists() {
+            fs::remove_file(&path).map_err(|error| format!("更新專輯封面索引失敗：{error}"))?;
+        }
+        fs::rename(&temp_path, &path).map_err(|error| format!("完成專輯封面索引失敗：{error}"))
+    })();
+    if temp_path.exists() {
+        let _ = fs::remove_file(temp_path);
+    }
+    result
+}
 
 fn cache_path(directory: &Path, sha256: &str) -> Result<PathBuf, String> {
     if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -253,6 +342,35 @@ mod tests {
             get_for_track(&directory, missing_identity).expect("read missing marker"),
             [0]
         );
+        fs::remove_dir_all(directory).expect("remove isolated cache");
+    }
+
+    #[test]
+    fn album_selection_is_persisted_and_rejects_invalid_keys_or_track_lists() {
+        let directory = temp_dir();
+        let key = "d".repeat(64);
+        let selection = AlbumArtworkSelection {
+            track_count: 12,
+            track_ids: vec!["track-a".to_owned(), "track-b".to_owned()],
+            representative: true,
+        };
+        assert_eq!(get_selection(&directory, &key).expect("cache miss"), None);
+        put_selection(&directory, &key, &selection).expect("save album selection");
+        assert_eq!(
+            get_selection(&directory, &key).expect("restore album selection"),
+            Some(selection)
+        );
+        assert!(get_selection(&directory, "../outside").is_err());
+        assert!(put_selection(
+            &directory,
+            &key,
+            &AlbumArtworkSelection {
+                track_count: 12,
+                track_ids: vec!["track-a".to_owned(); 5],
+                representative: false,
+            }
+        )
+        .is_err());
         fs::remove_dir_all(directory).expect("remove isolated cache");
     }
 

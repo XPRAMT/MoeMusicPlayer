@@ -274,6 +274,12 @@ export interface ArtistIndexEntry {
   playedMs: number;
 }
 
+export interface AlbumArtworkSelection {
+  trackCount: number;
+  trackIds: string[];
+  representative: boolean;
+}
+
 export type ArtistListSortField = 'title' | 'trackCount' | 'albumCount' | 'duration';
 export type ArtistListSortDirection = 'asc' | 'desc';
 export interface ArtistListSort {
@@ -624,6 +630,14 @@ interface IpcContract {
   library_get_album_artwork_candidates: {
     args: { albumNames: string[]; offset: number; limit: number };
     result: string[];
+  };
+  album_artwork_selection_get: {
+    args: { key: string };
+    result: AlbumArtworkSelection | null;
+  };
+  album_artwork_selection_put: {
+    args: { key: string; selection: AlbumArtworkSelection };
+    result: void;
   };
   album_artwork_cache_get_for_track: {
     args: { trackId: string };

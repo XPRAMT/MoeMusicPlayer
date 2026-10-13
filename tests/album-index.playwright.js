@@ -3,6 +3,14 @@
   await page.setViewportSize({ width: 900, height: 720 });
   await page.goto('http://127.0.0.1:1450/tests/album-index-harness.html', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.getByText('Album 1', { exact: true }).waitFor();
+  const mosaicLayout = await page.evaluate(() => Object.fromEntries([1, 2, 3, 4].map((count) => {
+    const images = [...document.querySelectorAll(`[data-testid="mosaic-${['zero', 'one', 'two', 'three', 'four'][count]}"] img`)];
+    return [count, images.map((image) => { const rect = image.getBoundingClientRect(); return { width: rect.width, height: rect.height }; })];
+  })));
+  assert(mosaicLayout[1].length === 1 && Math.abs(mosaicLayout[1][0].width - mosaicLayout[1][0].height) < 0.1, `one-cover layout should fill the square: ${JSON.stringify(mosaicLayout[1])}`);
+  assert(mosaicLayout[2].length === 2 && mosaicLayout[2].every((image) => Math.abs(image.width - 168) < 0.1 && Math.abs(image.height - 84) < 0.1), `two covers should use horizontal strips: ${JSON.stringify(mosaicLayout[2])}`);
+  assert(mosaicLayout[3].length === 3 && mosaicLayout[3].every((image) => Math.abs(image.width - 168) < 0.1 && Math.abs(image.height - 56) < 0.1), `three covers should use horizontal strips: ${JSON.stringify(mosaicLayout[3])}`);
+  assert(mosaicLayout[4].length === 4 && mosaicLayout[4].every((image) => Math.abs(image.width - 84) < 0.1 && Math.abs(image.height - 84) < 0.1), `four covers should use a two-by-two grid: ${JSON.stringify(mosaicLayout[4])}`);
   await page.waitForFunction(() => window.__albumIndexStats.trackCacheReads + window.__albumIndexStats.legacyCacheReads > 0);
   const loadingStats = await page.evaluate(() => ({ ...window.__albumIndexStats }));
   assert(loadingStats.trackCacheReads > 0, `cached covers should use the per-track fast path: ${JSON.stringify(loadingStats)}`);
@@ -47,10 +55,13 @@
   assert(Math.abs(afterScroll.width - afterScroll.height) <= 1, `card artwork should remain square after scroll: ${JSON.stringify(afterScroll)}`);
   assert(Math.abs(afterResize - afterScroll.width) <= 1, `scrolling must not change card size: ${afterResize} -> ${afterScroll.width}`);
 
-  const firstCard = page.getByRole('button', { name: /Album 1/ });
-  await firstCard.locator('img').waitFor();
-  const firstAlbumReads = await page.evaluate(() => window.__albumIndexStats.trackCacheReadsByTrack['track-Album-1'] ?? 0);
-  assert(firstAlbumReads === 1, `the first card should resolve its thumbnail once: ${firstAlbumReads}`);
+  const firstCard = page.getByRole('button', { name: '開啟專輯「Album 1」，4 首曲目' });
+  await firstCard.locator('.album-card-art img').first().waitFor();
+  await page.waitForFunction(() => document.querySelectorAll('.album-card:first-of-type .album-card-art img').length === 4);
+  const firstAlbumReads = await page.evaluate(() => [1, 2, 3, 4].reduce((sum, index) => sum + (window.__albumIndexStats.trackCacheReadsByTrack[`track-Album-1-${index}`] ?? 0), 0));
+  assert(firstAlbumReads === 4, `the first card should load a four-cover square collage once: ${firstAlbumReads}`);
+  const noFrame = await page.locator('.album-card-art').first().evaluate((element) => getComputedStyle(element).borderWidth);
+  assert(noFrame === '0px', `album cover thumbnails should not have a border: ${noFrame}`);
   await page.locator('.album-grid-viewport').evaluate((element) => {
     element.scrollTop = 3000;
     element.dispatchEvent(new Event('scroll'));
@@ -60,9 +71,28 @@
     element.scrollTop = 0;
     element.dispatchEvent(new Event('scroll'));
   });
-  await firstCard.locator('img').waitFor();
-  const firstAlbumReadsAfterRemount = await page.evaluate(() => window.__albumIndexStats.trackCacheReadsByTrack['track-Album-1'] ?? 0);
+  await firstCard.locator('.album-card-art img').first().waitFor();
+  const firstAlbumReadsAfterRemount = await page.evaluate(() => [1, 2, 3, 4].reduce((sum, index) => sum + (window.__albumIndexStats.trackCacheReadsByTrack[`track-Album-1-${index}`] ?? 0), 0));
   assert(firstAlbumReadsAfterRemount === firstAlbumReads, `returning to a virtualized row must reuse the in-memory cover: ${firstAlbumReads} -> ${firstAlbumReadsAfterRemount}`);
 
-  return { loadingStats, initial, afterResize, afterScroll, firstAlbumReadsAfterRemount };
+  await firstCard.click();
+  await page.waitForFunction(() => {
+    const summary = document.querySelector('.album-detail-summary')?.textContent ?? '';
+    return summary.includes('包含的演出者') && summary.includes('hanser') && summary.includes('yousa') && summary.includes('other artist');
+  });
+  await page.getByText('4 首曲目', { exact: true }).waitFor();
+  assert(await page.getByText(/張代表封面/).count() === 0, 'album detail should no longer display representative-cover count text');
+  const detailFrame = await page.locator('.album-detail-art').evaluate((element) => getComputedStyle(element).borderWidth);
+  assert(detailFrame === '0px', `album detail artwork should not have a border: ${detailFrame}`);
+  await page.waitForFunction(() => [...window.__albumArtworkSelections.values()].some((selection) => selection.representative));
+  const rawReadsAfterFirstDetail = await page.evaluate(() => window.__albumIndexStats.rawArtworkReads);
+  assert(rawReadsAfterFirstDetail === 4, `first album-detail visit should hash each source cover once: ${rawReadsAfterFirstDetail}`);
+  await page.getByTestId('album-detail-back').click();
+  await firstCard.click();
+  await page.getByText('4 首曲目', { exact: true }).waitFor();
+  await page.locator('.album-detail-art img').waitFor();
+  const rawReadsAfterCachedDetail = await page.evaluate(() => window.__albumIndexStats.rawArtworkReads);
+  assert(rawReadsAfterCachedDetail === rawReadsAfterFirstDetail, `saved representative-cover selection should prevent rereading large artwork: ${rawReadsAfterFirstDetail} -> ${rawReadsAfterCachedDetail}`);
+
+  return { loadingStats, mosaicLayout, initial, afterResize, afterScroll, firstAlbumReadsAfterRemount, rawReadsAfterCachedDetail };
 }

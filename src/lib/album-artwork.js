@@ -22,7 +22,7 @@ const thumbnailWorkerQueue = [];
 // reopen every thumbnail from UserData on C:.
 const ALBUM_CARD_MEMORY_CACHE_MAX_ENTRIES = 1200;
 const ALBUM_CARD_MEMORY_CACHE_MAX_BYTES = 128 * 1024 * 1024;
-/** @type {Map<string, { value: string | null, bytes: number, leases: number }>} */
+/** @type {Map<string, { value: string | string[] | null, bytes: number, leases: number }>} */
 const albumCardMemoryCache = new Map();
 let albumCardMemoryCacheBytes = 0;
 
@@ -41,7 +41,8 @@ function trimAlbumCardMemoryCache() {
     if (!entry) return;
     albumCardMemoryCache.delete(evictKey);
     albumCardMemoryCacheBytes -= entry.bytes;
-    if (entry.value) URL.revokeObjectURL(entry.value);
+    if (Array.isArray(entry.value)) entry.value.forEach((url) => URL.revokeObjectURL(url));
+    else if (entry.value) URL.revokeObjectURL(entry.value);
   }
 }
 
@@ -65,12 +66,13 @@ export function acquireAlbumCardArtwork(key) {
   };
 }
 
-/** Store a resolved cover (or no-cover result) and return a lease for the card. */
-/** @param {string} key @param {string | null} value @param {number} [bytes] */
+/** Store resolved cover images (or a no-cover result) and return a lease for the card. */
+/** @param {string} key @param {string | string[] | null} value @param {number} [bytes] */
 export function rememberAlbumCardArtwork(key, value, bytes = 0) {
   const existing = albumCardMemoryCache.get(key);
   if (existing) {
-    if (value && value !== existing.value) URL.revokeObjectURL(value);
+    if (Array.isArray(value)) value.forEach((url) => URL.revokeObjectURL(url));
+    else if (value && value !== existing.value) URL.revokeObjectURL(value);
     return acquireAlbumCardArtwork(key);
   }
   const entry = { value, bytes: value ? Math.max(0, bytes) : 0, leases: 1 };

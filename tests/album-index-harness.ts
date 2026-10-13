@@ -12,7 +12,8 @@ const validJpeg = new Uint8Array(await fixtureBlob.arrayBuffer());
 const artworkReads = validJpeg.slice().buffer;
 const coldArtworkMode = new URLSearchParams(location.search).has('cold');
 const stats = { rawArtworkReads: 0, legacyCacheReads: 0, trackCacheReads: 0, trackCacheReadsByTrack: {} as Record<string, number>, albumCandidates: 0, thumbnailWrites: 0 };
-Object.assign(window, { __albumIndexStats: stats });
+const selections = new Map<string, { trackCount: number; trackIds: string[]; representative: boolean }>();
+Object.assign(window, { __albumIndexStats: stats, __albumArtworkSelections: selections });
 
 Object.assign(window, {
   isTauri: true,
@@ -20,12 +21,34 @@ Object.assign(window, {
     invoke: async (command: string, args?: unknown) => {
       if (command === 'library_get_album_index_facets') {
         await new Promise((resolve) => setTimeout(resolve, 120));
-        return Array.from({ length: 80 }, (_, index) => ({ name: `Album ${index + 1}`, trackCount: 1 }));
+        return Array.from({ length: 80 }, (_, index) => ({ name: `Album ${index + 1}`, trackCount: index === 0 ? 4 : 1 }));
       }
       if (command === 'library_get_album_artwork_candidates') {
         stats.albumCandidates += 1;
         const name = String((args?.albumNames as string[] | undefined)?.[0] ?? 'Album 1');
-        return [`track-${name.replaceAll(' ', '-')}`];
+        const key = name.replaceAll(' ', '-');
+        return Array.from({ length: 4 }, (_, index) => `track-${key}-${index + 1}`);
+      }
+      if (command === 'album_artwork_selection_get') {
+        return selections.get(String((args as { key?: string } | undefined)?.key ?? '')) ?? null;
+      }
+      if (command === 'album_artwork_selection_put') {
+        const payload = args as { key: string; selection: { trackCount: number; trackIds: string[]; representative: boolean } };
+        selections.set(payload.key, payload.selection);
+        return undefined;
+      }
+      if (command === 'library_get_album_page') {
+        return {
+          offset: (args as { offset?: number } | undefined)?.offset ?? 0,
+          limit: (args as { limit?: number } | undefined)?.limit ?? 100,
+          totalCount: 4,
+          items: [
+            { id: 'track-Album-1-1', title: 'Song 1', artist: 'hanser/yousa', album: 'Album 1', albumArtist: null, trackNumber: 1, discNumber: null, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
+            { id: 'track-Album-1-2', title: 'Song 2', artist: 'yousa', album: 'Album 1', albumArtist: null, trackNumber: 2, discNumber: null, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
+            { id: 'track-Album-1-3', title: 'Song 3', artist: 'hanser', album: 'Album 1', albumArtist: null, trackNumber: 3, discNumber: null, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
+            { id: 'track-Album-1-4', title: 'Song 4', artist: 'other artist', album: 'Album 1', albumArtist: null, trackNumber: 4, discNumber: null, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
+          ],
+        };
       }
       if (command === 'library_get_track_artwork') {
         stats.rawArtworkReads += 1;

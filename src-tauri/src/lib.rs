@@ -3031,6 +3031,33 @@ async fn album_artwork_cache_put(
     .await
 }
 
+#[tauri::command]
+async fn album_artwork_selection_get(
+    app: AppHandle,
+    key: String,
+) -> Result<Option<album_artwork_cache::AlbumArtworkSelection>, String> {
+    let app_for_directory = app.clone();
+    run_album_database_work(app, move |state| {
+        let directory = album_artwork_cache_directory(&app_for_directory, state)?;
+        album_artwork_cache::get_selection(&directory, &key)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn album_artwork_selection_put(
+    app: AppHandle,
+    key: String,
+    selection: album_artwork_cache::AlbumArtworkSelection,
+) -> Result<(), String> {
+    let app_for_directory = app.clone();
+    run_album_database_work(app, move |state| {
+        let directory = album_artwork_cache_directory(&app_for_directory, state)?;
+        album_artwork_cache::put_selection(&directory, &key, &selection)
+    })
+    .await
+}
+
 fn album_artwork_track_identity(
     state: &AppState,
     track_id: &str,
@@ -9553,6 +9580,8 @@ pub fn run() {
             library_get_album_artwork_candidates,
             album_artwork_cache_get,
             album_artwork_cache_put,
+            album_artwork_selection_get,
+            album_artwork_selection_put,
             album_artwork_cache_get_for_track,
             album_artwork_cache_put_for_track,
             album_artwork_cache_mark_missing_for_track,
