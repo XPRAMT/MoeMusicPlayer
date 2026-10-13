@@ -244,6 +244,31 @@ export interface TrackPageRequest {
   limit: number;
 }
 
+export interface ArtistIdentityMapping {
+  name: string;
+  key: string;
+  traditional: string;
+}
+
+export interface ArtistIndexFacets {
+  artists: string[];
+  albums: string[];
+}
+
+export interface ArtistNameCount {
+  name: string;
+  count: number;
+}
+
+export interface ArtistIndexEntry {
+  key: string;
+  names: ArtistNameCount[];
+  artistNames: string[];
+  trackCount: number;
+  albumCount: number;
+  playedMs: number;
+}
+
 export interface TrackFieldFilter {
   field: 'title' | 'artist' | 'album';
   value: string;
@@ -559,6 +584,18 @@ interface IpcContract {
   };
   library_get_page: {
     args: TrackPageRequest;
+    result: TrackPage;
+  };
+  library_get_artist_index_facets: {
+    args: Record<string, never>;
+    result: ArtistIndexFacets;
+  };
+  library_get_artist_index: {
+    args: { artistIdentities: ArtistIdentityMapping[]; albumIdentities: ArtistIdentityMapping[] };
+    result: ArtistIndexEntry[];
+  };
+  library_get_artist_page: {
+    args: { query: string | null; queryAlternates: string[]; sort: LibraryListSort; offset: number; limit: number; artistNames: string[] };
     result: TrackPage;
   };
   library_list_sources: {

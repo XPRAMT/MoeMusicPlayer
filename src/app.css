@@ -1007,6 +1007,8 @@ input:focus-visible {
 
 /* Keep headings inset; the virtual track list itself is edge-flush. */
 .page-content.is-list-page > .library-section > .not-ready-panel,
+.page-content.is-list-page > .artist-section > .not-ready-panel,
+.page-content.is-list-page > .artist-detail-section > .artist-detail-empty,
 .page-content.is-list-page > .playlist-section > .inline-message,
 .page-content.is-list-page > .playlist-section > .not-ready-panel,
 .page-content.is-list-page > .playlist-section > .loading-panel,
@@ -1018,6 +1020,8 @@ input:focus-visible {
 }
 
 .library-section,
+.artist-section,
+.artist-detail-section,
 .playlist-section,
 .queue-page {
   display: flex;
@@ -1108,6 +1112,7 @@ input:focus-visible {
 
 /* Library / playlist / queue have no page chrome above the list; flush to the topbar. */
 .page-content.wide-list-page:has(> .library-section),
+.page-content.wide-list-page:has(> .artist-detail-section),
 .page-content.wide-list-page:has(> .queue-page),
 .page-content.wide-list-page:has(> .playlist-section) {
   padding-top: 0;
@@ -4129,6 +4134,7 @@ input:focus-visible {
   .track-row { min-height: var(--paged-row-height, 50px); }
   .page-content.wide-list-page { padding: 16px 0 0; }
   .page-content.wide-list-page:has(> .library-section),
+  .page-content.wide-list-page:has(> .artist-detail-section),
   .page-content.wide-list-page:has(> .queue-page),
   .page-content.wide-list-page:has(> .playlist-section) { padding-top: 0; }
   .page-content.is-list-page { --list-chrome-pad-x: 14px; }

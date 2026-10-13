@@ -30,7 +30,7 @@ use player_core::{
 use player_db::natural_title_cmp;
 #[cfg(target_os = "windows")]
 use player_db::PlaybackSessionCheckpoint;
-use player_db::{Database, ThemePreferences};
+use player_db::{ArtistIdentityMapping, Database, ThemePreferences};
 use serde::{Deserialize, Serialize};
 use tauri::{
     ipc::Response, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size,
@@ -2649,6 +2649,69 @@ fn library_get_page(
     }
     database
         .list_tracks_page_with_alternates(request, &query_alternates)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn library_get_artist_index_facets(
+    state: State<'_, AppState>,
+) -> Result<player_db::ArtistIndexFacets, String> {
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database
+        .artist_index_facets()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn library_get_artist_index(
+    state: State<'_, AppState>,
+    artist_identities: Vec<ArtistIdentityMapping>,
+    album_identities: Vec<ArtistIdentityMapping>,
+) -> Result<Vec<player_db::ArtistIndexEntry>, String> {
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database
+        .artist_index(&artist_identities, &album_identities)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn library_get_artist_page(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    query_alternates: Option<Vec<String>>,
+    sort: Option<TrackListSort>,
+    offset: u64,
+    limit: u32,
+    artist_names: Vec<String>,
+) -> Result<Page<TrackSummary>, String> {
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database
+        .list_tracks_page_for_artists(
+            ListTracksQuery {
+                query,
+                field_filter: None,
+                offset,
+                limit,
+                sort: sort.unwrap_or_default(),
+            },
+            &query_alternates.unwrap_or_default(),
+            &artist_names,
+        )
         .map_err(|error| error.to_string())
 }
 
@@ -9027,6 +9090,9 @@ pub fn run() {
             settings_set_shortcuts,
             get_runtime_capabilities,
             library_get_page,
+            library_get_artist_index_facets,
+            library_get_artist_index,
+            library_get_artist_page,
             playlist_list,
             playlist_get_page,
             playlist_import_m3u,

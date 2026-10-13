@@ -52,6 +52,19 @@ export async function getSearchVariants(value) {
 }
 
 /**
+ * Return the Traditional-script spelling used to build an identity key. Japanese names stay
+ * untouched whenever they contain Hiragana or Katakana.
+ * @param {string | null | undefined} value
+ * @returns {Promise<string>}
+ */
+export async function getTraditionalIdentity(value) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text || !HAN.test(text) || JAPANESE_KANA.test(text)) return text;
+  const converters = await loadConverters();
+  return converters.toTraditional(text).trim();
+}
+
+/**
  * Build an automatic title/artist query in Traditional-first, Simplified-second order.
  * Convert the fields independently so Japanese titles remain unchanged while a Chinese
  * artist field can still be searched in both scripts.

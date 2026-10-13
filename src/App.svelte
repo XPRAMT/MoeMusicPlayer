@@ -23,6 +23,7 @@
     IconRepeatOnce,
     IconSearch,
     IconSettings,
+    IconUsers,
     IconVolume2,
     IconX,
   } from '@tabler/icons-svelte-runes';
@@ -61,6 +62,9 @@
     type LibraryListSort,
     type TrackFieldFilter,
     type TrackSummary,
+    type TrackPage,
+    type TrackPageRequest,
+    type ArtistIndexEntry,
   } from './lib/ipc';
   import {
     applyTheme,
@@ -118,6 +122,7 @@
   } from './lib/shortcuts.js';
   import type { ShortcutAction, ShortcutBinding, ShortcutSettings } from './lib/ipc';
   import TrackList from './lib/TrackList.svelte';
+  import ArtistIndex from './lib/ArtistIndex.svelte';
   import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
@@ -159,7 +164,7 @@
     imeBottomPx: number;
   };
 
-  type View = 'library' | 'playlists' | 'queue' | 'settings';
+  type View = 'library' | 'artists' | 'artist-detail' | 'playlists' | 'queue' | 'settings';
   type SettingsSection = 'appearance' | 'track-columns' | 'now-playing' | 'lyrics' | 'playback' | 'shortcuts' | 'sources' | 'about';
   type SyncProgressViewState = {
     runId: string;
@@ -172,6 +177,7 @@
 
 
   let activeView = $state<View>('library');
+  let selectedArtist = $state<(ArtistIndexEntry & { displayName: string }) | null>(null);
   let nowPlayingReturnView = $state<View>('library');
   let isNowPlayingMounted = $state(false);
   let isNowPlayingOpen = $state(false);
@@ -259,6 +265,7 @@
   const showCustomTitlebar = $derived(capabilities?.platform === 'windows');
   let runtimeError = $state<string | null>(null);
   let libraryTrackCount = $state<number | null>(null);
+  let artistTrackCount = $state<number | null>(null);
   let playlistTrackCount = $state<number | null>(null);
   let queueTrackCount = $state<number | null>(null);
   let libraryListRevision = $state(0);
@@ -385,6 +392,10 @@
   const pageTitle = $derived(
     activeView === 'library'
       ? '我的曲庫'
+      : activeView === 'artists'
+        ? '演出者'
+        : activeView === 'artist-detail'
+          ? `演出者．${selectedArtist?.displayName ?? ''}`
       : activeView === 'playlists'
         ? selectedPlaylist
           ? `我的播放清單．${selectedPlaylist.name.trim() || '未命名播放清單'}`
@@ -394,7 +405,7 @@
           : '設定',
   );
   const isListPage = $derived(
-    activeView === 'library' || activeView === 'playlists' || activeView === 'queue',
+    activeView === 'library' || activeView === 'artists' || activeView === 'artist-detail' || activeView === 'playlists' || activeView === 'queue',
   );
   const pageTrackCountLabel = $derived.by(() => {
     if (activeView === 'library') {
@@ -409,6 +420,10 @@
     if (activeView === 'queue') {
       if (queueTrackCount === null) return null;
       return `${queueTrackCount.toLocaleString()} 首曲目`;
+    }
+    if (activeView === 'artist-detail') {
+      if (artistTrackCount === null) return null;
+      return `${artistTrackCount.toLocaleString()} 首曲目`;
     }
     return null;
   });
@@ -2045,6 +2060,39 @@
     );
   }
 
+  async function fetchArtistPage(request: TrackPageRequest): Promise<TrackPage> {
+    const artist = selectedArtist;
+    if (!artist) {
+      return { items: [], offset: request.offset, limit: request.limit, totalCount: 0 };
+    }
+    const page = await invokeCommand('library_get_artist_page', {
+      query: request.query,
+      queryAlternates: request.queryAlternates ?? [],
+      sort: request.sort ?? librarySort,
+      offset: request.offset,
+      limit: request.limit,
+      artistNames: artist.artistNames,
+    });
+    artistTrackCount = page.totalCount;
+    return page;
+  }
+
+  async function playArtistTrack(track: TrackSummary): Promise<void> {
+    if (!selectedArtist || !playbackReady || isSendingPlaybackCommand) return;
+    selectedTrackId = track.id;
+    const queueSource: PlaybackQueueSource = {
+      kind: 'library',
+      query: null,
+      queryAlternates: [],
+      fieldFilter: { field: 'artist', value: selectedArtist.displayName },
+      sort: librarySort,
+    };
+    await sendPlaybackCommand(
+      () => invokeCommand('playback_play', { trackId: track.id, queueSource }),
+      { refreshQueueList: true },
+    );
+  }
+
   async function openNowPlaying(): Promise<void> {
     if (!playback?.currentTrack || isNowPlayingOpen) return;
     nowPlayingReturnView = activeView;
@@ -3052,6 +3100,16 @@
       </button>
       <button
         class="nav-link"
+        class:active={activeView === 'artists' || activeView === 'artist-detail'}
+        aria-current={activeView === 'artists' || activeView === 'artist-detail' ? 'page' : undefined}
+        onclick={() => (activeView = 'artists')}
+      >
+        <IconUsers size={20} stroke={1.6} aria-hidden="true" />
+        <span class="nav-label">演出者</span>
+        <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
+      </button>
+      <button
+        class="nav-link"
         class:active={activeView === 'queue'}
         aria-current={activeView === 'queue' ? 'page' : undefined}
         onclick={() => (activeView = 'queue')}
@@ -3142,6 +3200,51 @@
                 onColumnResize={handleTrackColumnResize}
                 onTotalCount={(count) => (libraryTrackCount = count)}
               />
+            {/if}
+          </section>
+        {:else if activeView === 'artists'}
+          <section class="artist-section" aria-labelledby="page-heading">
+            {#if !libraryReady}
+              <div class="not-ready-panel" role="status">
+                <div class="not-ready-icon" aria-hidden="true"><IconUsers size={22} stroke={1.6} /></div>
+                <div class="not-ready-copy"><span class="state-label">LIBRARY</span><h3>演出者服務尚未就緒</h3><p>{showCapabilityDetail(capabilities?.library)}</p></div>
+              </div>
+            {:else}
+              <ArtistIndex
+                refreshKey={libraryListRevision}
+                rowHeightPx={trackRowHeightPx}
+                onSelect={(artist) => {
+                  selectedArtist = artist;
+                  artistTrackCount = null;
+                  activeView = 'artist-detail';
+                }}
+              />
+            {/if}
+          </section>
+        {:else if activeView === 'artist-detail'}
+          <section class="artist-detail-section" aria-labelledby="page-heading">
+            {#if !libraryReady || !selectedArtist}
+              <div class="artist-detail-empty" role="status">{selectedArtist ? showCapabilityDetail(capabilities?.library) : '請從演出者清單選擇一位演出者。'}</div>
+            {:else}
+              {#key selectedArtist.key}
+                <TrackList
+                  query=""
+                  resetKey={`${selectedArtist.key}:${libraryListRevision}`}
+                  selectedTrackId={selectedTrackId}
+                  playbackReady={playbackReady}
+                  isSendingPlaybackCommand={isSendingPlaybackCommand}
+                  columns={trackColumnPreferences}
+                  columnWidths={trackColumnWidths}
+                  rowHeightPx={trackRowHeightPx}
+                  sort={librarySort}
+                  livePlayCount={livePlayCount}
+                  fetchPage={fetchArtistPage}
+                  onPlay={playArtistTrack}
+                  onSort={handleLibrarySort}
+                  onColumnResize={handleTrackColumnResize}
+                  onTotalCount={(count) => (artistTrackCount = count)}
+                />
+              {/key}
             {/if}
           </section>
         {:else if activeView === 'playlists'}

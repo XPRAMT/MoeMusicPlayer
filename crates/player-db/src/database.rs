@@ -1,12 +1,14 @@
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     error::Error,
     fmt,
     path::Path,
     sync::{Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use serde::{Deserialize, Serialize};
 
 use player_core::{
     FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, LyricCandidate,
@@ -105,6 +107,25 @@ const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
     t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
  FROM tracks t WHERE t.track_id=?1";
+const ARTIST_TRACKS_PREFIX_SQL: &str = "SELECT t.track_id,
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
+    COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist),
+    t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
+    t.year, t.release_date, t.bit_depth,
+    COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0)
+ FROM tracks t
+ WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+   AND (?1 IS NULL OR EXISTS (SELECT 1 FROM json_each(?1) term
+        WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
+           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
+           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || term.value || '%' COLLATE NOCASE
+           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE))
+   AND EXISTS (SELECT 1 FROM json_each(?2) artist_name
+               WHERE instr(lower(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '')),
+                            lower(artist_name.value)) > 0)";
 const PLAYLIST_PAGE_SQL: &str = r#"
 WITH resolved_entries AS (
     SELECT pe.position,
@@ -496,6 +517,39 @@ pub struct PlaybackStatisticsRuntime {
 
 pub struct Database {
     connection: Mutex<Connection>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistIdentityMapping {
+    pub name: String,
+    pub key: String,
+    pub traditional: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistIndexFacets {
+    pub artists: Vec<String>,
+    pub albums: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistNameCount {
+    pub name: String,
+    pub count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistIndexEntry {
+    pub key: String,
+    pub names: Vec<ArtistNameCount>,
+    pub artist_names: Vec<String>,
+    pub track_count: u64,
+    pub album_count: u64,
+    pub played_ms: u64,
 }
 
 impl fmt::Debug for Database {
@@ -961,6 +1015,140 @@ impl Database {
             })
         })
         .collect()
+    }
+
+    /// Return distinct raw artist and album labels from tracks visible through enabled sources.
+    /// The compact facet set lets the UI apply the same OpenCC identity rules used for search
+    /// without transferring every track to the renderer.
+    pub fn artist_index_facets(&self) -> Result<ArtistIndexFacets, DatabaseError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT
+                COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
+                COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album)
+             FROM tracks t
+             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })?;
+        let mut artists = HashSet::new();
+        let mut albums = HashSet::new();
+        for row in rows {
+            let (artist, album) = row?;
+            for artist in split_artist_names(artist.as_deref()) {
+                artists.insert(artist);
+            }
+            if let Some(album) = album
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+            {
+                albums.insert(album);
+            }
+        }
+        let mut artists: Vec<_> = artists.into_iter().collect();
+        let mut albums: Vec<_> = albums.into_iter().collect();
+        artists.sort();
+        albums.sort();
+        Ok(ArtistIndexFacets { artists, albums })
+    }
+
+    /// Aggregate artist statistics on the database side, counting each visible track once per
+    /// normalized artist identity. Collaborative tracks credit their full played duration to
+    /// every artist. The UI supplies canonical identities from the shared OpenCC dictionaries.
+    pub fn artist_index(
+        &self,
+        artist_identities: &[ArtistIdentityMapping],
+        album_identities: &[ArtistIdentityMapping],
+    ) -> Result<Vec<ArtistIndexEntry>, DatabaseError> {
+        let artist_keys: HashMap<&str, &str> = artist_identities
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.key.as_str()))
+            .collect();
+        let album_keys: HashMap<&str, &str> = album_identities
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.key.as_str()))
+            .collect();
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT t.track_id,
+                COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
+                COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
+                COALESCE((SELECT played_ms FROM track_playback_statistics WHERE track_id=t.track_id), 0)
+             FROM tracks t
+             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, i64>(3)?.max(0) as u64,
+            ))
+        })?;
+        #[derive(Default)]
+        struct Aggregate {
+            names: BTreeMap<String, u64>,
+            artist_names: HashSet<String>,
+            albums: HashSet<String>,
+            track_count: u64,
+            played_ms: u64,
+        }
+        let mut aggregates: HashMap<String, Aggregate> = HashMap::new();
+        for row in rows {
+            let (_track_id, artist, album, played_ms) = row?;
+            let mut track_artist_keys = HashSet::new();
+            for name in split_artist_names(artist.as_deref()) {
+                let key = artist_keys
+                    .get(name.as_str())
+                    .map(|key| (*key).to_owned())
+                    .unwrap_or_else(|| name.to_lowercase());
+                if !track_artist_keys.insert(key.clone()) {
+                    continue;
+                }
+                let entry = aggregates.entry(key).or_default();
+                *entry.names.entry(name.clone()).or_default() += 1;
+                entry.artist_names.insert(name);
+                entry.track_count += 1;
+                entry.played_ms = entry.played_ms.saturating_add(played_ms);
+                if let Some(album) = album
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    let album_key = album_keys.get(album).copied().unwrap_or(album).to_owned();
+                    entry.albums.insert(album_key);
+                }
+            }
+        }
+        let mut result = aggregates
+            .into_iter()
+            .map(|(key, aggregate)| {
+                let mut names: Vec<_> = aggregate
+                    .names
+                    .into_iter()
+                    .map(|(name, count)| ArtistNameCount { name, count })
+                    .collect();
+                names.sort_by(|left, right| left.name.cmp(&right.name));
+                let mut artist_names: Vec<_> = aggregate.artist_names.into_iter().collect();
+                artist_names.sort();
+                ArtistIndexEntry {
+                    key,
+                    names,
+                    artist_names,
+                    track_count: aggregate.track_count,
+                    album_count: aggregate.albums.len() as u64,
+                    played_ms: aggregate.played_ms,
+                }
+            })
+            .collect::<Vec<_>>();
+        result.sort_by(|left, right| left.key.cmp(&right.key));
+        Ok(result)
     }
 
     pub fn playlist_file_sync_state(
@@ -1478,6 +1666,68 @@ impl Database {
         })
     }
 
+    /// Read a bounded artist-specific page. The SQL substring filter narrows candidates, then
+    /// Rust verifies whole delimiter-separated artist names so partial-name collisions do not
+    /// enter the result. Candidate rows are sorted by SQLite's shared library ordering first.
+    pub fn list_tracks_page_for_artists(
+        &self,
+        request: ListTracksQuery,
+        query_alternates: &[String],
+        artist_names: &[String],
+    ) -> Result<Page<TrackSummary>, DatabaseError> {
+        let normalized_names: HashSet<String> = artist_names
+            .iter()
+            .map(|name| name.trim().to_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect();
+        if normalized_names.is_empty() {
+            return Ok(Page {
+                items: Vec::new(),
+                offset: request.offset,
+                limit: query_limit(request.limit),
+                total_count: 0,
+            });
+        }
+        let connection = self.lock()?;
+        let search = request.query.filter(|text| !text.trim().is_empty());
+        let query_json = search_terms_json(search.as_deref(), query_alternates)?;
+        let artist_json = serde_json::to_string(artist_names)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let sql = format!(
+            "{} ORDER BY {}",
+            ARTIST_TRACKS_PREFIX_SQL,
+            tracks_order_by_sql(request.sort)
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(params![query_json, artist_json], row_to_track_summary)?;
+        let mut matching = Vec::new();
+        for row in rows {
+            let track = row?;
+            if split_artist_names(track.artist.as_deref())
+                .iter()
+                .any(|name| normalized_names.contains(&name.to_lowercase()))
+            {
+                matching.push(track);
+            }
+        }
+        let total_count = matching.len() as u64;
+        let offset = usize::try_from(request.offset).unwrap_or(usize::MAX);
+        let limit = query_limit(request.limit) as usize;
+        let page = matching
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>();
+        let mut page = page;
+        attach_file_names(&connection, &mut page)?;
+        Ok(Page {
+            items: page,
+            offset: request.offset,
+            limit: limit as u32,
+            total_count,
+        })
+    }
+
     /// Return stable IDs in exactly the same filter and order as library pages.
     /// Playback queue setup keeps these compact IDs inside Rust.
     pub fn list_track_ids(&self, query: Option<&str>) -> Result<Vec<TrackId>, DatabaseError> {
@@ -1825,6 +2075,20 @@ impl Database {
         tx.commit()?;
         Ok(())
     }
+}
+
+fn split_artist_names(value: Option<&str>) -> Vec<String> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let mut seen = HashSet::new();
+    value
+        .split(['|', '\\', '/', ';', ','])
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .filter(|name| seen.insert((*name).to_owned()))
+        .map(str::to_owned)
+        .collect()
 }
 
 fn insert_lyric_candidate_rows(
@@ -3623,10 +3887,10 @@ mod tests {
     use rusqlite::{params, Connection, OptionalExtension};
 
     use super::{
-        natural_title_cmp, Database, DatabaseError, LibraryRepository, Ordering,
-        PlaybackSessionCheckpoint, PlaylistFileSyncState, ThemePreferences, COUNT_LIBRARY_SQL,
-        SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
-        SCHEMA_V9, TRACKS_PAGE_SQL,
+        natural_title_cmp, ArtistIdentityMapping, Database, DatabaseError, LibraryRepository,
+        Ordering, PlaybackSessionCheckpoint, PlaylistFileSyncState, ThemePreferences,
+        COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+        SCHEMA_V7, SCHEMA_V8, SCHEMA_V9, TRACKS_PAGE_SQL,
     };
 
     fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
@@ -3717,6 +3981,167 @@ mod tests {
     ) {
         db.apply_source_scan(root, &state, observed, changed, &[], at)
             .expect("apply source scan");
+    }
+
+    #[test]
+    fn artist_index_uses_enabled_tracks_distinct_artists_albums_and_full_play_time() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "artist-index");
+        let mut first = record(&root, "one", "one", "One", 1, 1);
+        let mut second = record(&root, "two", "two", "Two", 1, 2);
+        let mut third = record(&root, "three", "three", "Three", 1, 3);
+        let disabled_root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "artist-index-disabled",
+        );
+        first.metadata.as_mut().unwrap().artist = Some("Hanser / 歌手甲".to_owned());
+        first.metadata.as_mut().unwrap().album = Some("專輯 A".to_owned());
+        second.metadata.as_mut().unwrap().artist = Some("hanser|歌手乙".to_owned());
+        second.metadata.as_mut().unwrap().album = Some("专辑 a".to_owned());
+        third.metadata.as_mut().unwrap().artist = Some("HANSer".to_owned());
+        third.metadata.as_mut().unwrap().album = Some("   ".to_owned());
+        let mut disabled = record(&disabled_root, "hidden", "hidden", "Hidden", 1, 4);
+        disabled.metadata.as_mut().unwrap().artist = Some("停用演出者".to_owned());
+        let records = vec![first, second, third];
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            4,
+        );
+        apply(
+            &mut db,
+            &disabled_root,
+            SourceScanState::Complete,
+            &[disabled.clone()],
+            &[disabled],
+            5,
+        );
+        let mut disabled_root_state = disabled_root.clone();
+        disabled_root_state.enabled = false;
+        db.save_library_root(&disabled_root_state)
+            .expect("disable source");
+        let track_ids = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort::default(),
+            })
+            .expect("tracks")
+            .items;
+        {
+            let connection = db.lock().expect("database lock");
+            for (track, played_ms) in track_ids.iter().zip([1_000_i64, 2_000, 3_000]) {
+                connection
+                    .execute(
+                        "INSERT INTO track_playback_statistics(track_id, played_ms) VALUES (?1, ?2)",
+                        params![track.id.to_string(), played_ms],
+                    )
+                    .expect("seed play duration");
+            }
+        }
+
+        let facets = db.artist_index_facets().expect("facets");
+        assert!(facets.artists.contains(&"歌手甲".to_owned()));
+        assert!(facets.artists.contains(&"Hanser".to_owned()));
+        assert!(facets.artists.contains(&"歌手乙".to_owned()));
+        assert!(!facets.artists.contains(&"停用演出者".to_owned()));
+
+        let identities = [
+            ArtistIdentityMapping {
+                name: "Hanser".to_owned(),
+                key: "hanser".to_owned(),
+                traditional: "Hanser".to_owned(),
+            },
+            ArtistIdentityMapping {
+                name: "hanser".to_owned(),
+                key: "hanser".to_owned(),
+                traditional: "hanser".to_owned(),
+            },
+            ArtistIdentityMapping {
+                name: "HANSer".to_owned(),
+                key: "hanser".to_owned(),
+                traditional: "HANSer".to_owned(),
+            },
+            ArtistIdentityMapping {
+                name: "歌手甲".to_owned(),
+                key: "歌手甲".to_owned(),
+                traditional: "歌手甲".to_owned(),
+            },
+            ArtistIdentityMapping {
+                name: "歌手乙".to_owned(),
+                key: "歌手乙".to_owned(),
+                traditional: "歌手乙".to_owned(),
+            },
+        ];
+        let album_identities = [
+            ArtistIdentityMapping {
+                name: "專輯 A".to_owned(),
+                key: "專輯 a".to_owned(),
+                traditional: "專輯 A".to_owned(),
+            },
+            ArtistIdentityMapping {
+                name: "专辑 a".to_owned(),
+                key: "專輯 a".to_owned(),
+                traditional: "專輯 a".to_owned(),
+            },
+        ];
+        let index = db
+            .artist_index(&identities, &album_identities)
+            .expect("artist index");
+        let hanser = index
+            .iter()
+            .find(|entry| entry.key == "hanser")
+            .expect("Hanser");
+        assert_eq!(hanser.track_count, 3);
+        assert_eq!(hanser.album_count, 1);
+        assert_eq!(hanser.names.iter().map(|item| item.count).sum::<u64>(), 3);
+        assert_eq!(hanser.played_ms, 6_000);
+        assert!(index.iter().all(|entry| entry.key != "停用演出者"));
+        let singer_a = index
+            .iter()
+            .find(|entry| entry.key == "歌手甲")
+            .expect("singer A");
+        assert_eq!(singer_a.track_count, 1);
+        assert_eq!(singer_a.played_ms, 1_000);
+
+        let artist_page = db
+            .list_tracks_page_for_artists(
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort::default(),
+                },
+                &[],
+                &[
+                    "Hanser".to_owned(),
+                    "hanser".to_owned(),
+                    "HANSer".to_owned(),
+                ],
+            )
+            .expect("artist track page");
+        assert_eq!(artist_page.total_count, 3);
+        let substring_collision = db
+            .list_tracks_page_for_artists(
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort::default(),
+                },
+                &[],
+                &["anser".to_owned()],
+            )
+            .expect("artist collision page");
+        assert_eq!(substring_collision.total_count, 0);
     }
 
     #[test]
