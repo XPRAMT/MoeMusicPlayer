@@ -7,9 +7,9 @@
     IconArrowsRight,
     IconArrowsShuffle,
     IconChevronRight,
+    IconDisc,
     IconFolder,
     IconGripVertical,
-    IconLibrary,
     IconList,
     IconMusic,
     IconPlayerPause,
@@ -3522,7 +3522,7 @@
         aria-current={activeView === 'library' ? 'page' : undefined}
         onclick={() => (activeView = 'library')}
       >
-        <IconLibrary size={20} stroke={1.6} aria-hidden="true" />
+        <IconMusic size={20} stroke={1.6} aria-hidden="true" />
         <span class="nav-label">曲庫</span>
         <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
@@ -3542,7 +3542,7 @@
         aria-current={activeView === 'albums' || activeView === 'album-detail' ? 'page' : undefined}
         onclick={navigateToAlbumSection}
       >
-        <IconMusic size={20} stroke={1.6} aria-hidden="true" />
+        <IconDisc size={20} stroke={1.6} aria-hidden="true" />
         <span class="nav-label">專輯</span>
         <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>

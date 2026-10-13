@@ -214,8 +214,8 @@ test('visible UI icons use Tabler components except the original brand mark', ()
   assert.doesNotMatch(appStyles, /content\s*:\s*['"]\u2713['"]/);
 
   for (const name of [
-    'IconAlertCircle', 'IconChevronRight', 'IconGripVertical',
-    'IconFolder', 'IconHeart', 'IconLibrary', 'IconMusic',
+    'IconAlertCircle', 'IconChevronRight', 'IconDisc', 'IconGripVertical',
+    'IconFolder', 'IconHeart', 'IconMusic',
     'IconRefresh', 'IconSearch', 'IconVolume2',
   ]) {
     const source = name === 'IconHeart' ? favoritePopoverSource : appSource;
@@ -226,6 +226,8 @@ test('visible UI icons use Tabler components except the original brand mark', ()
   assert.doesNotMatch(playlistEntrySource, /<IconPlayerPlayFilled\b/);
 
   assert.match(appSource, /class="sidebar-search-field"/);
+  assert.match(appSource, /<IconMusic size=\{20\} stroke=\{1\.6\} aria-hidden="true" \/>\s*<span class="nav-label">曲庫/);
+  assert.match(appSource, /<IconDisc size=\{20\} stroke=\{1\.6\} aria-hidden="true" \/>\s*<span class="nav-label">專輯/);
   assert.match(appSource, /aria-label="搜尋曲庫"/);
   assert.doesNotMatch(appSource, /篩選功能尚未接通/);
   assert.match(appSource, /title="長按 300 毫秒後拖曳排序/);
