@@ -37,18 +37,42 @@ const MAX_LYRIC_CANDIDATE_CACHE_BYTES: i64 = 16 * 1024 * 1024;
 
 fn repair_provider_lrc_cache(provider: LyricProvider, lyrics: &mut player_core::ParsedLyrics) {
     if !matches!(provider, LyricProvider::NetEase | LyricProvider::Qq)
-        || lyrics.format != player_core::LyricFormat::Lrc
+        || !matches!(
+            lyrics.format,
+            player_core::LyricFormat::Lrc | player_core::LyricFormat::Plain
+        )
     {
         return;
     }
     if let Ok(mut reparsed) = player_core::parse_lrc(&lyrics.raw_text) {
         if reparsed.synced && reparsed.format == player_core::LyricFormat::Lrc {
+            let mut auxiliary_by_cue = HashMap::with_capacity(lyrics.lines.len());
+            for previous in &lyrics.lines {
+                let cue = previous
+                    .start_ms
+                    .map(|start_ms| (start_ms, previous.text.clone()))
+                    .or_else(|| {
+                        let reparsed_line = player_core::parse_lrc(&previous.text).ok()?;
+                        if !reparsed_line.synced || reparsed_line.lines.len() != 1 {
+                            return None;
+                        }
+                        let line = &reparsed_line.lines[0];
+                        Some((line.start_ms?, line.text.clone()))
+                    });
+                if let Some(cue) = cue {
+                    auxiliary_by_cue.insert(
+                        cue,
+                        (previous.translation.clone(), previous.romanization.clone()),
+                    );
+                }
+            }
             for line in &mut reparsed.lines {
-                if let Some(previous) = lyrics.lines.iter().find(|previous| {
-                    previous.start_ms == line.start_ms && previous.text == line.text
-                }) {
-                    line.translation = previous.translation.clone();
-                    line.romanization = previous.romanization.clone();
+                if let Some((translation, romanization)) = line
+                    .start_ms
+                    .and_then(|start_ms| auxiliary_by_cue.remove(&(start_ms, line.text.clone())))
+                {
+                    line.translation = translation;
+                    line.romanization = romanization;
                 }
             }
             reparsed.raw_karaoke = lyrics.raw_karaoke.clone();
@@ -5418,6 +5442,165 @@ mod tests {
             3,
             "legacy manual cache is repaired only on read"
         );
+    }
+
+    #[test]
+    fn legacy_plain_provider_lrc_cache_is_reparsed_into_timed_lines() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "legacy-plain-lrc");
+        let track = record(
+            &root,
+            "legacy-plain-track",
+            "legacy-plain-path",
+            "Song",
+            10,
+            1,
+        );
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&track),
+            std::slice::from_ref(&track),
+            1,
+        );
+        let track_id = track_id_for_query(&db, "Song");
+        let raw_text = (0..43)
+            .map(|second| format!("[02:{second:02}:04]synthetic line {second}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let legacy_lyrics = player_core::ParsedLyrics {
+            format: player_core::LyricFormat::Plain,
+            lines: raw_text
+                .lines()
+                .enumerate()
+                .map(|(index, text)| player_core::LyricLine {
+                    start_ms: None,
+                    text: text.to_owned(),
+                    translation: (index == 18).then(|| "legacy translation".to_owned()),
+                    romanization: (index == 20).then(|| "legacy romanization".to_owned()),
+                })
+                .collect(),
+            raw_text: raw_text.clone(),
+            raw_karaoke: Some("retained raw karaoke".to_owned()),
+            synced: false,
+        };
+
+        for provider in [LyricProvider::NetEase, LyricProvider::Qq] {
+            for manually_selected in [false, true] {
+                let legacy = TrackLyrics {
+                    track_id,
+                    provider,
+                    candidate_id: Some("legacy:plain-lrc".to_owned()),
+                    lyrics: legacy_lyrics.clone(),
+                    manually_selected,
+                    updated_at_utc_ms: 10,
+                };
+                let json = serde_json::to_string(&legacy).expect("legacy plain cache JSON");
+                let connection = db.lock().expect("database lock");
+                connection
+                    .execute(
+                        "INSERT INTO track_lyrics
+                             (track_id, lyrics_json, manually_selected, updated_at_utc_ms, payload_bytes)
+                         VALUES (?1, ?2, ?3, ?4, ?5)
+                         ON CONFLICT(track_id) DO UPDATE SET
+                             lyrics_json=excluded.lyrics_json,
+                             manually_selected=excluded.manually_selected,
+                             updated_at_utc_ms=excluded.updated_at_utc_ms,
+                             payload_bytes=excluded.payload_bytes",
+                        params![
+                            track_id.to_string(),
+                            json,
+                            manually_selected,
+                            10_i64,
+                            json.len() as i64
+                        ],
+                    )
+                    .expect("insert old serialized Plain cache");
+                drop(connection);
+
+                let repaired = db
+                    .get_track_lyrics(track_id)
+                    .expect("read old Plain cache")
+                    .expect("cache exists");
+                assert_eq!(repaired.provider, provider);
+                assert_eq!(repaired.manually_selected, manually_selected);
+                assert_eq!(repaired.lyrics.format, player_core::LyricFormat::Lrc);
+                assert!(repaired.lyrics.synced);
+                assert_eq!(repaired.lyrics.lines.len(), 43);
+                assert!(repaired
+                    .lyrics
+                    .lines
+                    .iter()
+                    .all(|line| line.start_ms.is_some() && !line.text.starts_with('[')));
+                assert_eq!(
+                    repaired
+                        .lyrics
+                        .lines
+                        .iter()
+                        .map(|line| line.text.clone())
+                        .collect::<Vec<_>>(),
+                    (0..43)
+                        .map(|second| format!("synthetic line {second}"))
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(repaired.lyrics.lines[0].start_ms, Some(120_040));
+                assert_eq!(repaired.lyrics.lines[18].start_ms, Some(138_040));
+                assert_eq!(
+                    repaired.lyrics.lines[18].translation.as_deref(),
+                    Some("legacy translation")
+                );
+                assert_eq!(
+                    repaired.lyrics.lines[20].romanization.as_deref(),
+                    Some("legacy romanization")
+                );
+                assert_eq!(
+                    repaired.lyrics.raw_karaoke.as_deref(),
+                    Some("retained raw karaoke")
+                );
+                assert_eq!(repaired.lyrics.raw_text, raw_text);
+                let connection = db.lock().expect("database lock");
+                let stored_json: String = connection
+                    .query_row(
+                        "SELECT lyrics_json FROM track_lyrics WHERE track_id=?1",
+                        [track_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .expect("legacy cache remains stored");
+                let stored: TrackLyrics = serde_json::from_str(&stored_json).expect("stored JSON");
+                assert_eq!(stored.lyrics.format, player_core::LyricFormat::Plain);
+                assert!(
+                    !stored.lyrics.synced,
+                    "read repair must not migrate the row"
+                );
+                assert!(stored.lyrics.lines[0].text.starts_with("[02:00:04]"));
+            }
+        }
+
+        let candidate = LyricCandidate {
+            candidate_id: "legacy:plain-candidate".to_owned(),
+            provider: LyricProvider::NetEase,
+            provider_track_id: Some("3340112782".to_owned()),
+            title: Some("Song".to_owned()),
+            artist: Some("artist".to_owned()),
+            album: Some("album".to_owned()),
+            duration_ms: Some(43_000),
+            lyrics: legacy_lyrics,
+            score: 1.0,
+        };
+        db.cache_lyric_candidates(track_id, std::slice::from_ref(&candidate), 20)
+            .expect("cache legacy Plain candidate");
+        let selected = db
+            .select_lyric_candidate(track_id, &candidate.candidate_id, 30)
+            .expect("select legacy Plain candidate");
+        assert_eq!(selected.lyrics.format, player_core::LyricFormat::Lrc);
+        assert!(selected.lyrics.synced);
+        assert_eq!(selected.lyrics.lines.len(), 43);
+        assert!(selected
+            .lyrics
+            .lines
+            .iter()
+            .all(|line| line.start_ms.is_some()));
     }
 
     #[test]

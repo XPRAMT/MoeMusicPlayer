@@ -33,7 +33,7 @@
 
 ## 歌詞格式與快取
 
-- Core LRC parser 同時接受 `[MM:SS.cc]` 與 `[MM:SS:cc]` 小數時間格式（小數位數 1–3 位）；部分 NetEase 歌詞使用冒號小數格式。讀取 NetEase／QQ 的 LRC 快取時，會從保存的 `rawText` 在記憶體重新解析，包含手動選取的歌詞，因此舊快取中不完整的 `lines` 可恢復，無需資料庫遷移或讀取時寫入。選取既有候選時，會先修復解析行再保存及回傳，並保留同一 cue 原本已合併的譯文與羅馬拼音。回歸測試使用 43 行合成內容覆蓋兩種分隔符：Core 驗證每行皆有時間且文字完整；資料庫測試驗證自動及舊手動快取只在讀取結果中修復、不改寫舊資料，並驗證選取候選立即回傳完整行；NetEase Provider 測試驗證其仍識別為同步 LRC。目前 player-core 64/64、player-db 70 通過／2 忽略、moemusicplayer 176 通過／2 忽略；受影響套件嚴格 Clippy 與 workspace rustfmt 檢查通過。測試僅使用隔離／記憶體資料庫，不讀寫使用者曲庫。
+- Core LRC parser 同時接受 `[MM:SS.cc]` 與 `[MM:SS:cc]` 小數時間格式（小數位數 1–3 位）；部分 NetEase 歌詞使用冒號小數格式。讀取 NetEase／QQ 的 LRC 或舊 `Plain` 歌詞快取時，會從保存的 `rawText` 在記憶體重新解析，包含手動選取的歌詞；舊 `Plain` 行內保留的時間戳會從顯示文字剝除並轉為 cue 時間，無需資料庫遷移或讀取時寫入。舊的譯文／羅馬拼音按原 cue 對齊保留，raw karaoke 亦保留。選取既有候選時，會先修復解析行再保存及回傳。回歸測試使用 43 行合成內容覆蓋兩種分隔符：Core 驗證每行皆有時間且文字完整；資料庫測試驗證自動、舊 LRC 與舊 Plain 快取的讀取修復，以及選取候選立即回傳完整行；NetEase Provider 測試驗證其仍識別為同步 LRC。目前 player-core 64/64、player-db 71 通過／2 忽略、moemusicplayer 176 通過／2 忽略；受影響套件嚴格 Clippy 與 workspace rustfmt 檢查通過。測試僅使用隔離／記憶體資料庫，不讀寫使用者曲庫。
 
 ## Windows 檔案總管開啟音樂
 
