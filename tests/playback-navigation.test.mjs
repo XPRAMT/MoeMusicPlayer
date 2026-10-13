@@ -99,6 +99,14 @@ test('the sidebar playlist group is the single playlist navigation entry and wor
   assert.doesNotMatch(appSource, /\{#if playlists\.length > 0\}\s*<div class="sidebar-playlist-tree-host"/);
 });
 
+test('reopening the selected playlist does not reset its retained virtual list', () => {
+  const selectPlaylist = functionSource('async function selectPlaylist(', 'function refreshPlaylistEntries(');
+  assert.match(selectPlaylist, /const playlistChanged = selectedPlaylistId !== playlistId/);
+  assert.match(selectPlaylist, /activeView = 'playlists'/);
+  assert.match(selectPlaylist, /if \(playlistChanged\)[\s\S]*?playlistListRevision\s*\+=\s*1/);
+  assert.doesNotMatch(selectPlaylist, /playlistListRevision\s*\+=\s*1[\s\S]*activeView\s*=/);
+});
+
 test('Now Playing overlays the retained route without duplicating sync or native playback details', () => {
   const sourcesPanel = appSource.indexOf('id="{scope}sources-panel"');
   const syncBannerStart = appSource.indexOf('class="sync-progress-banner"', sourcesPanel);

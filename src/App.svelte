@@ -1812,10 +1812,13 @@
   }
 
   async function selectPlaylist(playlistId: string): Promise<void> {
+    const playlistChanged = selectedPlaylistId !== playlistId;
     selectedPlaylistId = playlistId;
-    playlistTrackCount = null;
     activeView = 'playlists';
-    playlistListRevision += 1;
+    if (playlistChanged) {
+      playlistTrackCount = null;
+      playlistListRevision += 1;
+    }
   }
 
   function refreshPlaylistEntries(): void {
