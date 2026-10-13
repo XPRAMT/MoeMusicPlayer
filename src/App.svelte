@@ -118,6 +118,7 @@
   } from './lib/shortcuts.js';
   import type { ShortcutAction, ShortcutBinding, ShortcutSettings } from './lib/ipc';
   import TrackList from './lib/TrackList.svelte';
+  import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
@@ -2022,10 +2023,19 @@
 
   async function playTrack(track: TrackSummary): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand) return;
+    const searchQuery = query.trim();
+    let queryAlternates: string[] = [];
+    try {
+      queryAlternates = (await getSearchVariants(searchQuery)).slice(1);
+    } catch {
+      // Search conversion must never prevent playback of an already selected track.
+    }
+    if (!playbackReady || isSendingPlaybackCommand) return;
     selectedTrackId = track.id;
     const queueSource: PlaybackQueueSource = {
       kind: 'library',
-      query: query.trim() || null,
+      query: searchQuery || null,
+      queryAlternates,
       fieldFilter: libraryFieldFilter ?? undefined,
       sort: librarySort,
     };

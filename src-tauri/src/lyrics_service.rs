@@ -145,13 +145,18 @@ struct ActiveLyricsSearch {
 struct LyricBrowseSession {
     track_id: TrackId,
     score_metadata: LyricsTrackMetadata,
-    search_metadata: LyricsTrackMetadata,
+    search_metadata: Vec<LyricsTrackMetadata>,
     pending: VecDeque<ProviderCandidate>,
     seen: HashSet<String>,
     /// Next 1-based provider page to request once `pending` is empty.
     next_page: u32,
     exhausted: bool,
     generation: u64,
+}
+
+pub(super) struct LyricSearchTerms {
+    pub(super) query_override: Option<String>,
+    pub(super) query_alternates: Vec<String>,
 }
 
 pub struct LyricsService<T: crate::lyrics_provider::HttpTransport = ReqwestHttpTransport> {
@@ -223,6 +228,7 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
         }
     }
 
+    #[cfg(test)]
     async fn search_track(
         &self,
         database: &Database,
@@ -232,24 +238,60 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
         allow_auto_apply: bool,
         query_override: Option<String>,
     ) -> Result<LyricsTrackResultDto, String> {
+        self.search_track_with_alternates(
+            database,
+            track_id,
+            track,
+            cancellation,
+            allow_auto_apply,
+            LyricSearchTerms {
+                query_override,
+                query_alternates: Vec::new(),
+            },
+        )
+        .await
+    }
+
+    async fn search_track_with_alternates(
+        &self,
+        database: &Database,
+        track_id: TrackId,
+        track: &TrackSummary,
+        cancellation: CancellationToken,
+        allow_auto_apply: bool,
+        search_terms: LyricSearchTerms,
+    ) -> Result<LyricsTrackResultDto, String> {
         let metadata = LyricsTrackMetadata {
             title: track.title.clone(),
             artist: track.artist.clone(),
             album: track.album.clone(),
             duration_ms: track.duration_ms,
         };
-        let search_metadata = match query_override
+        let search_metadata = match search_terms
+            .query_override
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            Some(query) => LyricsTrackMetadata {
-                title: Some(query.to_owned()),
-                artist: None,
-                album: None,
-                duration_ms: metadata.duration_ms,
-            },
-            None => metadata.clone(),
+            Some(query) => {
+                let mut queries = vec![query.to_owned()];
+                for alternate in search_terms.query_alternates.iter().take(8) {
+                    let alternate = alternate.trim();
+                    if !alternate.is_empty() && !queries.iter().any(|value| value == alternate) {
+                        queries.push(alternate.to_owned());
+                    }
+                }
+                queries
+                    .into_iter()
+                    .map(|title| LyricsTrackMetadata {
+                        title: Some(title),
+                        artist: None,
+                        album: None,
+                        duration_ms: metadata.duration_ms,
+                    })
+                    .collect()
+            }
+            None => vec![metadata.clone()],
         };
         self.open_browse(track_id, metadata.clone(), search_metadata);
         let (candidates, has_more) = match tokio::time::timeout(
@@ -342,7 +384,7 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
         &self,
         track_id: TrackId,
         score_metadata: LyricsTrackMetadata,
-        search_metadata: LyricsTrackMetadata,
+        search_metadata: Vec<LyricsTrackMetadata>,
     ) {
         *self
             .browse
@@ -468,7 +510,7 @@ async fn fetch_provider_candidates<T: crate::lyrics_provider::HttpTransport + 's
     let mut session = LyricBrowseSession {
         track_id: TrackId::new(),
         score_metadata: metadata.clone(),
-        search_metadata: metadata,
+        search_metadata: vec![metadata],
         pending: VecDeque::new(),
         seen: HashSet::new(),
         next_page: 1,
@@ -539,48 +581,92 @@ async fn pull_lyric_batch<T: crate::lyrics_provider::HttpTransport + 'static>(
 
 async fn load_search_page<T: crate::lyrics_provider::HttpTransport + 'static>(
     client: Arc<LyricsProviderClient<T>>,
-    metadata: &LyricsTrackMetadata,
+    metadata_variants: &[LyricsTrackMetadata],
     page: u32,
     cancellation: &CancellationToken,
 ) -> Result<(Vec<ProviderCandidate>, bool), ProviderError> {
-    let (netease, mut qqmusic) = tokio::join!(
-        client.search_page(LyricProvider::NetEase, metadata, page, cancellation),
-        client.search_page(LyricProvider::Qq, metadata, page, cancellation),
-    );
+    let mut tasks = tokio::task::JoinSet::new();
+    for (variant_index, metadata) in metadata_variants.iter().cloned().enumerate() {
+        let client = Arc::clone(&client);
+        let cancellation = cancellation.clone();
+        tasks.spawn(async move {
+            let (netease, mut qqmusic) = tokio::join!(
+                client.search_page(LyricProvider::NetEase, &metadata, page, &cancellation),
+                client.search_page(LyricProvider::Qq, &metadata, page, &cancellation),
+            );
+            let qq_missing = match &qqmusic {
+                Ok(hits) => hits.is_empty(),
+                Err(ProviderError::Cancelled) => return (variant_index, netease, qqmusic),
+                Err(_) => true,
+            };
+            if page <= 1 && qq_missing && !cancellation.is_cancelled() {
+                tokio::select! {
+                    _ = cancellation.cancelled() => return (variant_index, netease, Err(ProviderError::Cancelled)),
+                    _ = tokio::time::sleep(QQ_MISSING_RETRY_DELAY) => {}
+                }
+                qqmusic = client
+                    .search_page(LyricProvider::Qq, &metadata, page, &cancellation)
+                    .await;
+            }
+            (variant_index, netease, qqmusic)
+        });
+    }
+
+    let mut completed = Vec::with_capacity(metadata_variants.len());
+    while let Some(result) = tasks.join_next().await {
+        let result = result.map_err(|error| {
+            ProviderError::InvalidResponse(format!("provider search task failed: {error}"))
+        })?;
+        completed.push(result);
+    }
     if cancellation.is_cancelled() {
         return Err(ProviderError::Cancelled);
     }
-    let qq_missing = match &qqmusic {
-        Ok(hits) => hits.is_empty(),
-        Err(ProviderError::Cancelled) => return Err(ProviderError::Cancelled),
-        Err(_) => true,
-    };
-    if page <= 1 && qq_missing && !cancellation.is_cancelled() {
-        tokio::select! {
-            _ = cancellation.cancelled() => return Err(ProviderError::Cancelled),
-            _ = tokio::time::sleep(QQ_MISSING_RETRY_DELAY) => {}
+    completed.sort_by_key(|(variant_index, _, _)| *variant_index);
+
+    let mut variant_hits = vec![Vec::new(); metadata_variants.len()];
+    let mut might_have_more = false;
+    let mut successful_requests = 0usize;
+    let mut first_error = None;
+    for (variant_index, netease, qqmusic) in completed {
+        for result in [netease, qqmusic] {
+            match result {
+                Ok(mut provider_hits) => {
+                    successful_requests += 1;
+                    might_have_more |= provider_hits.len() >= 10;
+                    variant_hits[variant_index].append(&mut provider_hits);
+                }
+                Err(ProviderError::Cancelled) => return Err(ProviderError::Cancelled),
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
         }
-        qqmusic = client
-            .search_page(LyricProvider::Qq, metadata, page, cancellation)
-            .await;
     }
-    if cancellation.is_cancelled() {
-        return Err(ProviderError::Cancelled);
+    if successful_requests == 0 {
+        return Err(first_error.unwrap_or(ProviderError::InvalidResponse(
+            "provider search failed".to_owned(),
+        )));
     }
-    let failed = usize::from(netease.is_err()) + usize::from(qqmusic.is_err());
-    if failed == 2 {
-        return Err(netease
-            .err()
-            .or(qqmusic.err())
-            .unwrap_or(ProviderError::InvalidResponse(
-                "provider search failed".to_owned(),
-            )));
+    // Interleave script variants so one prolific query cannot fill the visible
+    // candidate page before the counterpart query contributes its results.
+    let mut hits = Vec::new();
+    let mut offset = 0;
+    loop {
+        let mut added = false;
+        for variant in &mut variant_hits {
+            if offset < variant.len() {
+                hits.push(variant[offset].clone());
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+        offset += 1;
     }
-    let netease_hits = netease.unwrap_or_default();
-    let qq_hits = qqmusic.unwrap_or_default();
-    let might_have_more = netease_hits.len() >= 10 || qq_hits.len() >= 10;
-    let mut hits = netease_hits;
-    hits.extend(qq_hits);
     Ok((hits, might_have_more))
 }
 
@@ -921,6 +1007,7 @@ pub async fn lyrics_search(
     request_id: String,
     manual: Option<bool>,
     query: Option<String>,
+    query_alternates: Option<Vec<String>>,
 ) -> Result<LyricsTrackResultDto, String> {
     let _database_work = super::enter_database_work(&state)?;
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
@@ -970,13 +1057,16 @@ pub async fn lyrics_search(
     };
     let searched = state
         .lyrics_service
-        .search_track(
+        .search_track_with_alternates(
             database.as_database(),
             track_id,
             &track,
             cancellation,
             !manual,
-            query,
+            LyricSearchTerms {
+                query_override: query,
+                query_alternates: query_alternates.unwrap_or_default(),
+            },
         )
         .await;
     let mut result = match searched {
@@ -1508,8 +1598,8 @@ fn line_dto(line: &LyricLine) -> LyricLineDto {
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_provider_candidates, raw_to_lyric_candidate, LyricsService, LyricsSourceDto,
-        LYRIC_BATCH_SIZE,
+        fetch_provider_candidates, raw_to_lyric_candidate, LyricSearchTerms, LyricsService,
+        LyricsSourceDto, LYRIC_BATCH_SIZE,
     };
     use crate::lyrics_provider::{
         HttpMethod, HttpRequest, HttpResponse, HttpTransport, LyricsProviderClient, ProviderError,
@@ -1551,12 +1641,29 @@ mod tests {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(request.clone());
+                let script_variant = if request.url.contains("%E5%A4%B4")
+                    || request
+                        .body
+                        .as_deref()
+                        .is_some_and(|body| body.contains("头发"))
+                {
+                    "simplified"
+                } else if request.url.contains("%E9%A0%AD")
+                    || request
+                        .body
+                        .as_deref()
+                        .is_some_and(|body| body.contains("頭髮"))
+                {
+                    "traditional"
+                } else {
+                    "default"
+                };
                 let response = if request.url.contains("/api/search/get/web")
                     || request.url.contains("/api/cloudsearch/pc")
                 {
-                    netease_search_fixture()
+                    netease_search_fixture_for(script_variant)
                 } else if request.method == HttpMethod::Post {
-                    qq_search_fixture()
+                    qq_search_fixture_for(script_variant)
                 } else if request.url.contains("/api/song/lyric") {
                     serde_json::json!({
                         "lrc": {"lyric": "[00:01.00]primary"},
@@ -1604,11 +1711,15 @@ mod tests {
         }
     }
 
-    fn netease_search_fixture() -> serde_json::Value {
+    fn netease_search_fixture_for(script_variant: &str) -> serde_json::Value {
         serde_json::json!({
             "result": {
                 "songs": (0..25).map(|index| serde_json::json!({
-                    "id": index.to_string(),
+                    "id": if script_variant == "default" {
+                        index.to_string()
+                    } else {
+                        format!("{script_variant}-{index}")
+                    },
                     "name": "Song",
                     "artists": [{"name": "Artist"}],
                     "album": {"name": "Album"},
@@ -1618,14 +1729,18 @@ mod tests {
         })
     }
 
-    fn qq_search_fixture() -> serde_json::Value {
+    fn qq_search_fixture_for(script_variant: &str) -> serde_json::Value {
         serde_json::json!({
             "req_1": {
                 "data": {
                     "body": {
                         "song": {
                             "list": (0..25).map(|index| serde_json::json!({
-                                "songmid": format!("qq-{index}"),
+                                "songmid": if script_variant == "default" {
+                                    format!("qq-{index}")
+                                } else {
+                                    format!("qq-{script_variant}-{index}")
+                                },
                                 "songid": index,
                                 "songname": "Song",
                                 "singer": [{"name": "Artist"}],
@@ -2150,6 +2265,78 @@ mod tests {
             .get_track_lyrics(track.id)
             .expect("read lyric cache")
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn manual_search_queries_and_merges_simplified_and_traditional_variants() {
+        let (database, _directory, track) = seeded_test_database("頭髮", "Artist", "Album");
+        let transport = FixtureTransport::default();
+        let service = LyricsService::new(LyricsProviderClient::new(transport.clone()));
+        let result = service
+            .search_track_with_alternates(
+                &database,
+                track.id,
+                &track,
+                CancellationToken::new(),
+                false,
+                LyricSearchTerms {
+                    query_override: Some("頭髮".to_owned()),
+                    query_alternates: vec!["头发".to_owned()],
+                },
+            )
+            .await
+            .expect("search both Chinese script variants");
+
+        let qq_queries = {
+            let requests = transport
+                .requests
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            requests
+                .iter()
+                .filter_map(|request| request.body.as_deref())
+                .filter_map(|body| serde_json::from_str::<serde_json::Value>(body).ok())
+                .filter_map(|body| {
+                    body.get("req_1")?
+                        .get("param")?
+                        .get("query")?
+                        .as_str()
+                        .map(str::to_owned)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(qq_queries.iter().any(|query| query == "頭髮"));
+        assert!(qq_queries.iter().any(|query| query == "头发"));
+        let candidate_ids = result
+            .candidates
+            .iter()
+            .map(|candidate| candidate.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(candidate_ids.len(), result.candidates.len());
+        assert_eq!(
+            result.candidates.len(),
+            LYRIC_BATCH_SIZE,
+            "the visible page remains bounded"
+        );
+        assert!(candidate_ids.iter().any(|id| id.contains("simplified")));
+        let mut saw_traditional = candidate_ids.iter().any(|id| id.contains("traditional"));
+        for _ in 0..8 {
+            if saw_traditional {
+                break;
+            }
+            let next = service
+                .load_more_track(&database, track.id, CancellationToken::new())
+                .await
+                .expect("continue merged script-variant search");
+            saw_traditional = next
+                .candidates
+                .iter()
+                .any(|candidate| candidate.id.contains("traditional"));
+        }
+        assert!(
+            saw_traditional,
+            "pagination should surface the other script's candidates"
+        );
     }
 
     #[tokio::test]

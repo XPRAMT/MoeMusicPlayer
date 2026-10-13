@@ -2004,6 +2004,8 @@ struct LibrarySyncFinishedEvent {
 enum PlaybackQueueSource {
     Library {
         query: Option<String>,
+        #[serde(default, rename = "queryAlternates")]
+        query_alternates: Vec<String>,
         #[serde(default, rename = "fieldFilter")]
         field_filter: Option<TrackFieldFilter>,
         #[serde(default)]
@@ -2156,6 +2158,7 @@ mod playback_queue_ipc_tests {
             source,
             PlaybackQueueSource::Library {
                 query: Some(query),
+                query_alternates: _,
                 field_filter: None,
                 sort: _,
             } if query == "ambient"
@@ -2189,6 +2192,7 @@ mod playback_queue_ipc_tests {
             source,
             PlaybackQueueSource::Library {
                 query: Some("ambient".to_owned()),
+                query_alternates: Vec::new(),
                 field_filter: Some(player_core::TrackFieldFilter {
                     field: player_core::TrackField::Artist,
                     value: "演出者 🎧".to_owned(),
@@ -2606,6 +2610,7 @@ fn system_media_controls_capability(_state: &AppState) -> FeatureCapability {
 fn library_get_page(
     state: State<'_, AppState>,
     query: Option<String>,
+    query_alternates: Option<Vec<String>>,
     field_filter: Option<TrackFieldFilter>,
     sort: Option<TrackListSort>,
     offset: u64,
@@ -2625,6 +2630,7 @@ fn library_get_page(
         limit,
         sort: sort.unwrap_or_default(),
     };
+    let query_alternates = query_alternates.unwrap_or_default();
     #[cfg(target_os = "windows")]
     if let Some(temporary_database) = state
         .playback
@@ -2638,11 +2644,11 @@ fn library_get_page(
                 .clone()
         })
     {
-        return merged_library_page(database, &temporary_database, request)
+        return merged_library_page(database, &temporary_database, request, &query_alternates)
             .map_err(|error| error.to_string());
     }
     database
-        .list_tracks_page(request)
+        .list_tracks_page_with_alternates(request, &query_alternates)
         .map_err(|error| error.to_string())
 }
 
@@ -2665,19 +2671,23 @@ fn merged_library_page(
     database: &Database,
     temporary_database: &Database,
     request: ListTracksQuery,
+    query_alternates: &[String],
 ) -> Result<Page<TrackSummary>, String> {
     const BATCH: u32 = 256;
     let sort = request.sort;
     let mut temporary_items = Vec::new();
     loop {
         let page = temporary_database
-            .list_tracks_page(ListTracksQuery {
-                query: request.query.clone(),
-                field_filter: request.field_filter.clone(),
-                sort,
-                offset: temporary_items.len() as u64,
-                limit: BATCH,
-            })
+            .list_tracks_page_with_alternates(
+                ListTracksQuery {
+                    query: request.query.clone(),
+                    field_filter: request.field_filter.clone(),
+                    sort,
+                    offset: temporary_items.len() as u64,
+                    limit: BATCH,
+                },
+                query_alternates,
+            )
             .map_err(|error| error.to_string())?;
         let count = page.items.len();
         temporary_items.extend(page.items);
@@ -2708,13 +2718,16 @@ fn merged_library_page(
     }
 
     let persistent_total = database
-        .list_tracks_page(ListTracksQuery {
-            query: request.query.clone(),
-            field_filter: request.field_filter.clone(),
-            sort,
-            offset: 0,
-            limit: 1,
-        })
+        .list_tracks_page_with_alternates(
+            ListTracksQuery {
+                query: request.query.clone(),
+                field_filter: request.field_filter.clone(),
+                sort,
+                offset: 0,
+                limit: 1,
+            },
+            query_alternates,
+        )
         .map_err(|error| error.to_string())?
         .total_count;
     let temporary_count = temporary_items.len() as u64;
@@ -2725,13 +2738,16 @@ fn merged_library_page(
     let mut persistent_items = Vec::new();
     while (persistent_items.len() as u64) < needed {
         let page = database
-            .list_tracks_page(ListTracksQuery {
-                query: request.query.clone(),
-                field_filter: request.field_filter.clone(),
-                sort,
-                offset: persistent_start + persistent_items.len() as u64,
-                limit: BATCH,
-            })
+            .list_tracks_page_with_alternates(
+                ListTracksQuery {
+                    query: request.query.clone(),
+                    field_filter: request.field_filter.clone(),
+                    sort,
+                    offset: persistent_start + persistent_items.len() as u64,
+                    limit: BATCH,
+                },
+                query_alternates,
+            )
             .map_err(|error| error.to_string())?;
         let count = page.items.len();
         persistent_items.extend(page.items);
@@ -2769,13 +2785,16 @@ fn merged_library_page(
         total_count: persistent_total
             .saturating_add(
                 temporary_database
-                    .list_tracks_page(ListTracksQuery {
-                        query: request.query,
-                        field_filter: request.field_filter,
-                        sort,
-                        offset: 0,
-                        limit: 1,
-                    })
+                    .list_tracks_page_with_alternates(
+                        ListTracksQuery {
+                            query: request.query,
+                            field_filter: request.field_filter,
+                            sort,
+                            offset: 0,
+                            limit: 1,
+                        },
+                        query_alternates,
+                    )
                     .map_err(|error| error.to_string())?
                     .total_count,
             )
@@ -2933,17 +2952,34 @@ fn compare_track_summaries(
 }
 
 #[cfg(target_os = "windows")]
+struct LibraryQueueSearch {
+    query: Option<String>,
+    query_alternates: Vec<String>,
+    field_filter: Option<TrackFieldFilter>,
+    sort: TrackListSort,
+}
+
+#[cfg(target_os = "windows")]
 fn queue_for_merged_library_search(
     database: &Database,
     temporary_database: Option<&Database>,
     selected_track_id: TrackId,
-    query: Option<String>,
-    field_filter: Option<TrackFieldFilter>,
-    sort: TrackListSort,
+    search: LibraryQueueSearch,
     shuffle: bool,
 ) -> Result<PlaybackQueue, String> {
+    let LibraryQueueSearch {
+        query,
+        query_alternates,
+        field_filter,
+        sort,
+    } = search;
     let mut tracks = database
-        .list_track_ids_filtered(query.as_deref(), field_filter.as_ref(), sort)
+        .list_track_ids_filtered_with_alternates(
+            query.as_deref(),
+            &query_alternates,
+            field_filter.as_ref(),
+            sort,
+        )
         .map_err(|error| error.to_string())?;
     let mut summaries = database
         .get_track_summaries(&tracks)
@@ -2956,13 +2992,16 @@ fn queue_for_merged_library_search(
         let mut offset = 0u64;
         loop {
             let page = temporary_database
-                .list_tracks_page(ListTracksQuery {
-                    query: query.clone(),
-                    field_filter: field_filter.clone(),
-                    sort,
-                    offset,
-                    limit: 256,
-                })
+                .list_tracks_page_with_alternates(
+                    ListTracksQuery {
+                        query: query.clone(),
+                        field_filter: field_filter.clone(),
+                        sort,
+                        offset,
+                        limit: 256,
+                    },
+                    &query_alternates,
+                )
                 .map_err(|error| error.to_string())?;
             offset += page.items.len() as u64;
             let count = page.items.len();
@@ -7464,11 +7503,17 @@ fn queue_for_track(
     let (entries, context, selected_index) = match source {
         Some(PlaybackQueueSource::Library {
             query,
+            query_alternates,
             field_filter,
             sort,
         }) => {
             let track_ids = database
-                .list_track_ids_filtered(query.as_deref(), field_filter.as_ref(), sort)
+                .list_track_ids_filtered_with_alternates(
+                    query.as_deref(),
+                    &query_alternates,
+                    field_filter.as_ref(),
+                    sort,
+                )
                 .map_err(|error| error.to_string())?;
             let selected = track_ids
                 .iter()
@@ -8797,6 +8842,7 @@ fn play_track_from_database(
             (
                 Some(PlaybackQueueSource::Library {
                     query,
+                    query_alternates,
                     field_filter,
                     sort,
                 }),
@@ -8805,18 +8851,24 @@ fn play_track_from_database(
                 database,
                 temporary_database.as_deref(),
                 track_id,
-                query.clone(),
-                field_filter.clone(),
-                *sort,
+                LibraryQueueSearch {
+                    query: query.clone(),
+                    query_alternates: query_alternates.clone(),
+                    field_filter: field_filter.clone(),
+                    sort: *sort,
+                },
                 shuffle,
             )?,
             (None, true) => queue_for_merged_library_search(
                 database,
                 temporary_database.as_deref(),
                 track_id,
-                None,
-                None,
-                TrackListSort::default(),
+                LibraryQueueSearch {
+                    query: None,
+                    query_alternates: Vec::new(),
+                    field_filter: None,
+                    sort: TrackListSort::default(),
+                },
                 shuffle,
             )?,
             _ => queue_for_track(database, track_id, source)?,
@@ -9970,6 +10022,7 @@ mod windows_library_integration_tests {
             selected_track,
             Some(PlaybackQueueSource::Library {
                 query: Some("needle".to_owned()),
+                query_alternates: Vec::new(),
                 field_filter: Some(filter.clone()),
                 sort: Default::default(),
             }),
@@ -10075,6 +10128,7 @@ mod windows_library_integration_tests {
                 sort: TrackListSort::default(),
                 ..Default::default()
             },
+            &[],
         )
         .unwrap();
         assert_eq!(first_page.total_count, 4);
@@ -10095,6 +10149,7 @@ mod windows_library_integration_tests {
                 sort: TrackListSort::default(),
                 ..Default::default()
             },
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -10577,6 +10632,7 @@ mod windows_library_integration_tests {
             &first_id.to_string(),
             Some(PlaybackQueueSource::Library {
                 query: None,
+                query_alternates: Vec::new(),
                 field_filter: None,
                 sort: Default::default(),
             }),
@@ -10654,6 +10710,7 @@ mod windows_library_integration_tests {
             &selected_id.to_string(),
             Some(PlaybackQueueSource::Library {
                 query: None,
+                query_alternates: Vec::new(),
                 field_filter: None,
                 sort: Default::default(),
             }),
@@ -10785,6 +10842,7 @@ mod windows_library_integration_tests {
             &first_id.to_string(),
             Some(PlaybackQueueSource::Library {
                 query: None,
+                query_alternates: Vec::new(),
                 field_filter: None,
                 sort: Default::default(),
             }),
@@ -10827,6 +10885,7 @@ mod windows_library_integration_tests {
             &selected_id.to_string(),
             Some(PlaybackQueueSource::Library {
                 query: None,
+                query_alternates: Vec::new(),
                 field_filter: None,
                 sort: Default::default(),
             }),

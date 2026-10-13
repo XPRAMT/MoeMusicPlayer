@@ -237,6 +237,7 @@ export interface TrackPage {
 
 export interface TrackPageRequest {
   query: string | null;
+  queryAlternates?: string[];
   fieldFilter?: TrackFieldFilter | null;
   sort?: LibraryListSort | null;
   offset: number;
@@ -330,7 +331,7 @@ export interface FavoritePlaylists {
 export type RepeatMode = 'off' | 'one' | 'all';
 
 export type PlaybackQueueSource =
-  | { kind: 'library'; query: string | null; fieldFilter?: TrackFieldFilter | null; sort?: LibraryListSort | null }
+  | { kind: 'library'; query: string | null; queryAlternates?: string[]; fieldFilter?: TrackFieldFilter | null; sort?: LibraryListSort | null }
   | { kind: 'playlist'; playlistId: string; entryPosition: number }
   | { kind: 'queue'; traversalPosition: number };
 export type PlaybackState =
@@ -693,7 +694,7 @@ interface IpcContract {
     result: LyricsTrackResult;
   };
   lyrics_search: {
-    args: { trackId: string; requestId: string; manual?: boolean; query?: string };
+    args: { trackId: string; requestId: string; manual?: boolean; query?: string; queryAlternates?: string[] };
     result: LyricsTrackResult;
   };
   lyrics_load_more: {

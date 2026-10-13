@@ -37,18 +37,19 @@ const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_m
 const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
     JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1
     JOIN tracks t ON t.track_id=m.track_id
-    WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
-       OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
-       OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
-       OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE";
+    WHERE EXISTS (SELECT 1 FROM json_each(?1) term
+       WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
+          OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
+          OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || term.value || '%' COLLATE NOCASE
+          OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE)";
 const COUNT_FIELD_FILTER_SQL: &str = "SELECT COUNT(DISTINCT t.track_id) FROM tracks t
     WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                   ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
-      AND (?1 IS NULL
-           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
-           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
-           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
-           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
+      AND (?1 IS NULL OR EXISTS (SELECT 1 FROM json_each(?1) term
+           WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
+              OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
+              OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || term.value || '%' COLLATE NOCASE
+              OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE))
       AND (?2 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?2 COLLATE BINARY)
       AND (CASE WHEN ?3 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?3 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?3 || '|') > 0 THEN 1 ELSE 0 END) = 1
       AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?4 COLLATE BINARY)";
@@ -63,11 +64,11 @@ const TRACKS_PAGE_SELECT_SQL: &str = "SELECT t.track_id,
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
-   AND (?1 IS NULL
-        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
-        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
-        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
-        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
+   AND (?1 IS NULL OR EXISTS (SELECT 1 FROM json_each(?1) term
+        WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
+           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
+           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || term.value || '%' COLLATE NOCASE
+           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE))
    AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?4 COLLATE BINARY)
    AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
    AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)";
@@ -85,11 +86,11 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
-   AND (?1 IS NULL
-        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
-        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
-        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
-        OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
+   AND (?1 IS NULL OR EXISTS (SELECT 1 FROM json_each(?1) term
+        WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
+           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
+           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || term.value || '%' COLLATE NOCASE
+           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE))
    AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?4 COLLATE BINARY)
    AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
    AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)
@@ -1444,15 +1445,26 @@ impl Database {
         &self,
         request: ListTracksQuery,
     ) -> Result<Page<TrackSummary>, DatabaseError> {
+        self.list_tracks_page_with_alternates(request, &[])
+    }
+
+    /// Search the library page across the original query and its script variants.
+    pub fn list_tracks_page_with_alternates(
+        &self,
+        request: ListTracksQuery,
+        query_alternates: &[String],
+    ) -> Result<Page<TrackSummary>, DatabaseError> {
         let connection = self.lock()?;
         let search = request.query.filter(|text| !text.trim().is_empty());
         let limit = query_limit(request.limit);
         let search_value = search.as_deref();
         let filter = request.field_filter.as_ref();
-        let total_count = count_tracks_filtered_in(&connection, search_value, filter)?;
+        let total_count =
+            count_tracks_filtered_in(&connection, search_value, query_alternates, filter)?;
         let items = fetch_tracks_window_filtered(
             &connection,
             search_value,
+            query_alternates,
             filter,
             request.sort,
             request.offset,
@@ -1479,19 +1491,33 @@ impl Database {
         field_filter: Option<&TrackFieldFilter>,
         sort: TrackListSort,
     ) -> Result<Vec<TrackId>, DatabaseError> {
+        self.list_track_ids_filtered_with_alternates(query, &[], field_filter, sort)
+    }
+
+    /// Return stable IDs using the same union of query terms, field filter, and sort as library pages.
+    pub fn list_track_ids_filtered_with_alternates(
+        &self,
+        query: Option<&str>,
+        query_alternates: &[String],
+        field_filter: Option<&TrackFieldFilter>,
+        sort: TrackListSort,
+    ) -> Result<Vec<TrackId>, DatabaseError> {
         let connection = self.lock()?;
         let query = query.filter(|text| !text.trim().is_empty());
+        let query_json = search_terms_json(query, query_alternates)?;
         let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter);
         let sql = format!(
             "SELECT t.track_id
              FROM tracks t
              WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                            ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
-               AND (?1 IS NULL
-                    OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || ?1 || '%' COLLATE NOCASE
-                    OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || ?1 || '%' COLLATE NOCASE
-                    OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || ?1 || '%' COLLATE NOCASE
-                    OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || ?1 || '%' COLLATE NOCASE)
+               AND (?1 IS NULL OR EXISTS (
+                    SELECT 1 FROM json_each(?1) term
+                    WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
+                       OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
+                       OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || term.value || '%' COLLATE NOCASE
+                       OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE
+               ))
                AND (?2 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?2 COLLATE BINARY)
                AND (CASE WHEN ?3 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?3 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?3 || '|') > 0 THEN 1 ELSE 0 END) = 1
                AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?4 COLLATE BINARY)
@@ -1500,7 +1526,7 @@ impl Database {
         );
         let mut statement = connection.prepare(&sql)?;
         let rows = statement.query_map(
-            params![query, title_filter, artist_filter, album_filter],
+            params![query_json, title_filter, artist_filter, album_filter],
             |row| row.get::<_, String>(0),
         )?;
         let ids = rows
@@ -1571,7 +1597,7 @@ impl Database {
     pub fn count_tracks(&self, query: Option<&str>) -> Result<u64, DatabaseError> {
         let connection = self.lock()?;
         let query = query.filter(|text| !text.trim().is_empty());
-        Ok(count_tracks_in(&connection, query)?.max(0) as u64)
+        Ok(count_tracks_in(&connection, query, &[])?.max(0) as u64)
     }
 
     pub fn list_tracks_window(
@@ -2794,9 +2820,14 @@ fn apply_source_scan_transaction(
     })
 }
 
-fn count_tracks_in(connection: &Connection, query: Option<&str>) -> Result<i64, DatabaseError> {
+fn count_tracks_in(
+    connection: &Connection,
+    query: Option<&str>,
+    query_alternates: &[String],
+) -> Result<i64, DatabaseError> {
     if let Some(query) = query {
-        Ok(connection.query_row(COUNT_SEARCH_SQL, [query], |row| row.get(0))?)
+        let query_json = search_terms_json(Some(query), query_alternates)?;
+        Ok(connection.query_row(COUNT_SEARCH_SQL, [query_json], |row| row.get(0))?)
     } else {
         Ok(connection.query_row(COUNT_LIBRARY_SQL, [], |row| row.get(0))?)
     }
@@ -2805,15 +2836,17 @@ fn count_tracks_in(connection: &Connection, query: Option<&str>) -> Result<i64, 
 fn count_tracks_filtered_in(
     connection: &Connection,
     query: Option<&str>,
+    query_alternates: &[String],
     field_filter: Option<&TrackFieldFilter>,
 ) -> Result<i64, DatabaseError> {
     if field_filter.is_none() {
-        return count_tracks_in(connection, query);
+        return count_tracks_in(connection, query, query_alternates);
     }
+    let query_json = search_terms_json(query, query_alternates)?;
     let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter);
     Ok(connection.query_row(
         COUNT_FIELD_FILTER_SQL,
-        params![query, title_filter, artist_filter, album_filter],
+        params![query_json, title_filter, artist_filter, album_filter],
         |row| row.get(0),
     )?)
 }
@@ -2827,6 +2860,7 @@ fn fetch_tracks_window(
     fetch_tracks_window_filtered(
         connection,
         query,
+        &[],
         None,
         TrackListSort::default(),
         offset,
@@ -2893,11 +2927,13 @@ fn tracks_order_by_sql(sort: TrackListSort) -> String {
 fn fetch_tracks_window_filtered(
     connection: &Connection,
     query: Option<&str>,
+    query_alternates: &[String],
     field_filter: Option<&TrackFieldFilter>,
     sort: TrackListSort,
     offset: u64,
     limit: u32,
 ) -> Result<Vec<TrackSummary>, DatabaseError> {
+    let query_json = search_terms_json(query, query_alternates)?;
     let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter);
     let order_by = tracks_order_by_sql(sort);
     let sql = format!(
@@ -2909,7 +2945,7 @@ fn fetch_tracks_window_filtered(
         let collected = statement
             .query_map(
                 params![
-                    query,
+                    query_json,
                     i64::from(limit),
                     query_limit_i64(offset),
                     title_filter,
@@ -2923,6 +2959,28 @@ fn fetch_tracks_window_filtered(
     };
     attach_file_names(connection, &mut items)?;
     Ok(items)
+}
+
+fn search_terms_json(
+    query: Option<&str>,
+    query_alternates: &[String],
+) -> Result<Option<String>, DatabaseError> {
+    let mut terms = Vec::<String>::new();
+    if let Some(query) = query.map(str::trim).filter(|query| !query.is_empty()) {
+        terms.push(query.to_owned());
+    }
+    for alternate in query_alternates.iter().take(8) {
+        let alternate = alternate.trim();
+        if !alternate.is_empty() && !terms.iter().any(|term| term == alternate) {
+            terms.push(alternate.to_owned());
+        }
+    }
+    if terms.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_string(&terms)
+        .map(Some)
+        .map_err(|error| DatabaseError::CorruptData(error.to_string()))
 }
 
 fn field_filter_values(
@@ -6430,6 +6488,73 @@ mod tests {
                 .expect("filter current user-facing title"),
             vec![third_id]
         );
+    }
+
+    #[test]
+    fn simplified_traditional_query_union_matches_pages_and_queue_without_duplicate_tracks() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "script-search");
+        let records = ["頭髮歌曲", "头发歌曲", "頭髮與头发"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, title)| {
+                record(
+                    &root,
+                    &format!("script-{index}"),
+                    &format!("path:script-{index}"),
+                    title,
+                    10 + index as u64,
+                    100 + index as i64,
+                )
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            1000,
+        );
+
+        let query = Some("頭髮".to_owned());
+        let alternates = vec!["头发".to_owned()];
+        let mut paged_ids = Vec::new();
+        for offset in 0..3 {
+            let page = db
+                .list_tracks_page_with_alternates(
+                    ListTracksQuery {
+                        offset,
+                        limit: 1,
+                        query: query.clone(),
+                        field_filter: None,
+                        sort: Default::default(),
+                    },
+                    &alternates,
+                )
+                .expect("search script variants page");
+            assert_eq!(page.total_count, 3);
+            paged_ids.extend(page.items.into_iter().map(|track| track.id));
+        }
+        assert_eq!(paged_ids.len(), 3);
+        assert_eq!(
+            paged_ids
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3
+        );
+
+        let queue_ids = db
+            .list_track_ids_filtered_with_alternates(
+                query.as_deref(),
+                &alternates,
+                None,
+                Default::default(),
+            )
+            .expect("queue uses both script variants");
+        assert_eq!(queue_ids, paged_ids);
     }
 
     #[test]

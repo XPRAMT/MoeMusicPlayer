@@ -41,7 +41,7 @@
 
   type LyricsApi = {
     getTrack: (args: { trackId: string }) => Promise<LyricsTrackResult>;
-    search: (args: { trackId: string; requestId: string; manual?: boolean; query?: string }) => Promise<LyricsTrackResult>;
+    search: (args: { trackId: string; requestId: string; manual?: boolean; query?: string; queryAlternates?: string[] }) => Promise<LyricsTrackResult>;
     selectCandidate: (args: { trackId: string; candidateId: string }) => Promise<TrackLyrics>;
     cancelSearch: (args: { requestId: string }) => Promise<void>;
     clearTrack: (args: { trackId: string }) => Promise<LyricsTrackResult>;

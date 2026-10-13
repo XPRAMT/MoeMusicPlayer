@@ -1,5 +1,6 @@
 /** @typedef {import('./ipc').LyricsTrackResult} LyricsTrackResult */
 /** @typedef {import('./ipc').TrackLyrics} TrackLyrics */
+import { getSearchVariants } from './search-variants.js';
 
 let requestSequence = 0;
 
@@ -68,7 +69,7 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
  * @param {{
  *   api: {
  *     getTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
- *     search: (args: {trackId:string, requestId:string, manual?:boolean, query?:string}) => Promise<LyricsTrackResult>,
+ *     search: (args: {trackId:string, requestId:string, manual?:boolean, query?:string, queryAlternates?:string[]}) => Promise<LyricsTrackResult>,
  *     selectCandidate: (args: {trackId:string, candidateId:string}) => Promise<TrackLyrics>,
      *     clearTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
      *     loadMore: (args: {trackId:string}) => Promise<LyricsTrackResult>,
@@ -138,10 +139,21 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
     });
 
     try {
-      /** @type {{trackId:string, requestId:string, manual?:boolean, query?:string}} */
+      /** @type {{trackId:string, requestId:string, manual?:boolean, query?:string, queryAlternates?:string[]}} */
       const args = { trackId, requestId };
       if (manual) args.manual = true;
       if (query) args.query = query;
+      if (query) {
+        try {
+          const variants = await getSearchVariants(query);
+          if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
+          const alternates = variants.slice(1);
+          if (alternates.length > 0) args.queryAlternates = alternates;
+        } catch {
+          // Keep the literal query working if the optional script converter cannot load.
+        }
+      }
+      if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
       const result = await api.search(args);
       if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
       activeRequestId = null;

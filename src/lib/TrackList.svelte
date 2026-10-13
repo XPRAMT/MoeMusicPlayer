@@ -35,6 +35,7 @@
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
+  import { getSearchVariants } from './search-variants.js';
 
   interface Props {
     query: string;
@@ -98,7 +99,7 @@
     revision: 0,
   });
   const listData = new PagedListController<TrackSummary, string>(
-    ({ scope, offset, limit }) => {
+    async ({ scope, offset, limit }) => {
       const requestScope = JSON.parse(scope || '{"query":null,"fieldFilter":null,"sort":null}') as {
         query: string | null;
         fieldFilter: TrackPageRequest['fieldFilter'];
@@ -106,6 +107,7 @@
       };
       const request: TrackPageRequest = {
         query: requestScope.query,
+        queryAlternates: (await getSearchVariants(requestScope.query)).slice(1),
         fieldFilter: requestScope.fieldFilter,
         sort: requestScope.sort,
         offset,
