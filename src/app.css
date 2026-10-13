@@ -977,6 +977,28 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.artist-page-back {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.artist-page-back:hover,
+.artist-page-back:focus-visible {
+  color: var(--accent-text);
+}
+
+.artist-page-back:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
 .page-title-count {
   min-width: 0;
   margin: 0;

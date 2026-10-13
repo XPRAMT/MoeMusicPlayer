@@ -3146,7 +3146,13 @@
   <main class="workspace" inert={isNowPlayingOpen}>
     <header class="topbar">
       <div class="topbar-title-block">
-        <h1 id="page-heading" class="page-title">{pageTitle}</h1>
+        <h1 id="page-heading" class="page-title">
+          {#if activeView === 'artist-detail'}
+            <button class="artist-page-back" type="button" aria-label="返回演出者首頁" onclick={() => (activeView = 'artists')}>演出者</button><span aria-hidden="true">．</span><span>{selectedArtist?.displayName ?? ''}</span>
+          {:else}
+            {pageTitle}
+          {/if}
+        </h1>
         {#if pageTrackCountLabel}
           <p class="page-title-count">{pageTrackCountLabel}</p>
         {/if}
