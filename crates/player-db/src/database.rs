@@ -2327,7 +2327,8 @@ impl Database {
     }
 
     /// Stable-enough cache identity for a track's artwork, invalidated by library file updates.
-    /// Only enabled source mappings with a recorded modification time can be cached by track.
+    /// Some providers do not expose a modification time; source ID, item ID, and file size still
+    /// provide a stable cache key and avoid re-reading the original cover on every view.
     pub fn album_artwork_cache_identity(
         &self,
         track_id: TrackId,
@@ -2338,7 +2339,7 @@ impl Database {
                 "SELECT m.source_id, m.source_item_id, m.size_bytes, m.modified_at_utc_ms
                  FROM source_mappings m
                  JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1
-                 WHERE m.track_id=?1 AND m.modified_at_utc_ms IS NOT NULL
+                 WHERE m.track_id=?1
                  ORDER BY CASE WHEN m.locator_kind='filesystem_path' THEN 0 ELSE 1 END,
                           r.source_id, m.source_item_id
                  LIMIT 1",
@@ -2348,12 +2349,14 @@ impl Database {
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, i64>(2)?,
-                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<i64>>(3)?,
                     ))
                 },
             )
             .optional()?;
         Ok(identity.map(|(source_id, item_id, size, modified)| {
+            let modified =
+                modified.map_or_else(|| "mtime-unavailable".to_owned(), |value| value.to_string());
             format!("{source_id}\0{item_id}\0{size}\0{modified}")
         }))
     }
@@ -4163,6 +4166,70 @@ mod tests {
         assert_ne!(
             initial, changed,
             "a rescanned file must not reuse its stale cover thumbnail"
+        );
+    }
+
+    #[test]
+    fn album_artwork_cache_identity_is_stable_when_file_mtime_is_unavailable() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "album-art-cache-no-mtime",
+        );
+        let mut first = record(&root, "one", "one", "One", 100, 1_000);
+        first.fingerprint.modified_at_utc_ms = None;
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&first),
+            2,
+        );
+        let track_id = db
+            .resolve_track_id_for_locator(&first.locator)
+            .expect("resolve track")
+            .expect("track exists");
+        let initial = db
+            .album_artwork_cache_identity(track_id)
+            .expect("cache identity")
+            .expect("source mapping remains cacheable without mtime");
+
+        let mut same_file = first.clone();
+        same_file.fingerprint.modified_at_utc_ms = None;
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&same_file),
+            &[],
+            3,
+        );
+        assert_eq!(
+            db.album_artwork_cache_identity(track_id)
+                .expect("stable cache identity")
+                .as_deref(),
+            Some(initial.as_str()),
+            "missing mtime must not turn every thumbnail lookup into a cache miss"
+        );
+
+        let mut resized_file = same_file;
+        resized_file.fingerprint.size_bytes = 101;
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&resized_file),
+            std::slice::from_ref(&resized_file),
+            4,
+        );
+        assert_ne!(
+            initial,
+            db.album_artwork_cache_identity(track_id)
+                .expect("resized cache identity")
+                .expect("cache identity after size change"),
+            "file size still invalidates a cache identity when mtime is absent"
         );
     }
 
