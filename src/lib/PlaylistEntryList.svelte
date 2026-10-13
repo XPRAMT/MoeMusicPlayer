@@ -1,12 +1,37 @@
+<script module lang="ts">
+  import type { PlaylistListSort as PlaylistSortCacheValue } from './ipc';
+  import { DEFAULT_PLAYLIST_SORT } from './track-columns.js';
+
+  const PLAYLIST_SORT_CACHE_LIMIT = 64;
+  const playlistSortById = new Map<string, PlaylistSortCacheValue>();
+
+  function readPlaylistSort(playlistId: string): PlaylistSortCacheValue {
+    const cached = playlistSortById.get(playlistId);
+    if (!cached) return { ...DEFAULT_PLAYLIST_SORT };
+    playlistSortById.delete(playlistId);
+    playlistSortById.set(playlistId, cached);
+    return { ...cached };
+  }
+
+  function writePlaylistSort(playlistId: string, sort: PlaylistSortCacheValue): void {
+    playlistSortById.delete(playlistId);
+    playlistSortById.set(playlistId, { ...sort });
+    if (playlistSortById.size > PLAYLIST_SORT_CACHE_LIMIT) {
+      const oldestPlaylistId = playlistSortById.keys().next().value;
+      if (oldestPlaylistId !== undefined) playlistSortById.delete(oldestPlaylistId);
+    }
+  }
+</script>
+
 <script lang="ts">
 import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistListSort, type PlaylistPage, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
 import { formatDuration } from './format';
 import { formatListOrder } from './list-order.js';
 import {
+  DEFAULT_PLAYLIST_SORT as INITIAL_PLAYLIST_SORT,
   DEFAULT_TRACK_COLUMN_PREFERENCES,
   DEFAULT_TRACK_ROW_HEIGHT_PX,
   DEFAULT_TRACK_COLUMN_WIDTHS,
-  DEFAULT_PLAYLIST_SORT,
   TRACK_COLUMN_DEFINITIONS,
   formatTrackColumnValue,
   isHiResTrack,
@@ -64,7 +89,8 @@ import { withLivePlayedMs } from './live-play-count.js';
   let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths));
   let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
-  let sort = $state<PlaylistListSort>({ ...DEFAULT_PLAYLIST_SORT });
+  let sort = $state<PlaylistListSort>({ ...INITIAL_PLAYLIST_SORT });
+  let sortPlaylistId = $state<string | null>(null);
 
   type ListSnapshot = ReturnType<PagedListController<PlaylistEntrySummary, string>['snapshot']>;
   let snapshot = $state<ListSnapshot>({
@@ -91,6 +117,10 @@ import { withLivePlayedMs } from './live-play-count.js';
 
   $effect(() => {
     const currentId = playlistId;
+    if (currentId !== sortPlaylistId) {
+      sort = readPlaylistSort(currentId);
+      sortPlaylistId = currentId;
+    }
     const currentRevision = resetKey;
     const currentSort = sort;
     entries.reset(JSON.stringify({ playlistId: currentId, sort: currentSort }), currentRevision);
@@ -120,6 +150,7 @@ import { withLivePlayedMs } from './live-play-count.js';
       : null;
     if (!field) return;
     sort = togglePlaylistSort(sort, field);
+    writePlaylistSort(playlistId, sort);
   }
 
   function playEntry(entry: PlaylistEntrySummary): void {

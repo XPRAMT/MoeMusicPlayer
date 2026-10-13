@@ -108,18 +108,22 @@ test('reopening the selected playlist does not reset its retained virtual list',
   assert.doesNotMatch(selectPlaylist, /playlistListRevision\s*\+=\s*1[\s\S]*activeView\s*=/);
 });
 
-test('playlist page keeps one mounted list instance and refreshes only when its selected data changes', () => {
-  const playlistSection = appSource.slice(
-    appSource.indexOf('{#if visitedListViews.playlists}'),
-    appSource.indexOf('{#if visitedListViews.queue}'),
-  );
-  assert.match(playlistSection, /hidden=\{activeView !== 'playlists'\}/);
-  assert.doesNotMatch(playlistSection, /\{#if activeView\s*===\s*'playlists'\}/);
-  assert.doesNotMatch(playlistSection, /\{#key selectedPlaylist\.id\}/);
+test('sidebar list routes remount for fresh data and restore each virtual list position', () => {
+  assert.match(appSource, /\{#if activeView === 'library'\}[\s\S]*?<section class="library-section"/);
+  assert.match(appSource, /\{#if activeView === 'artists' \|\| \(activeView === 'artist-detail' && keepArtistIndexForDetail\)\}/);
+  assert.match(appSource, /\{#if activeView === 'artist-detail' && selectedArtist\}/);
+  assert.match(appSource, /\{#if activeView === 'playlists'\}[\s\S]*?<section class="playlist-section"/);
+  assert.match(appSource, /\{#if activeView === 'queue'\}[\s\S]*?<section class="queue-page"/);
+  assert.doesNotMatch(appSource, /visitedListViews/);
+  assert.match(appSource, /keepArtistIndexForDetail = preserveIndex/);
+  assert.match(appSource, /onSelect=\{\(artist\) => openArtistEntry\(artist, true\)\}/);
+  assert.match(appSource, /listId=\{`artist-detail-\$\{selectedArtist\.key\}`\}/);
+
   assert.match(playlistEntrySource, /scrollResetKey=\{playlistId\}/);
   assert.match(playlistEntrySource, /scrollRestoreReady=\{snapshot\.scope === JSON\.stringify\(\{ playlistId, sort \}\)/);
   assert.match(pagedVirtualListSource, /SCROLL_POSITION_CACHE_LIMIT = 64/);
   assert.match(pagedVirtualListSource, /const listChanged = seenListId !== undefined && currentListId !== seenListId/);
+  assert.match(pagedVirtualListSource, /if \(seenListId === undefined \|\| listChanged\)/);
   assert.match(pagedVirtualListSource, /pendingListRestore = \{ listId: currentListId, position \}/);
   assert.match(pagedVirtualListSource, /pendingListRestore\?\.listId === currentListId && scrollRestoreReady && totalCount !== null && !pending/);
   assert.match(pagedVirtualListSource, /writeListScrollPosition\(currentListId, restoredScrollTop\)/);
@@ -131,8 +135,7 @@ test('playlist page keeps one mounted list instance and refreshes only when its 
   assert.match(loadPlaylists, /previousPlaylistId !== nextId \|\| previousEntryCount !== nextEntryCount/);
   assert.match(loadPlaylists, /playlistListRevision\s*\+=\s*1/);
   assert.doesNotMatch(loadPlaylists, /selectedPlaylistId = nextId;\s*playlistListRevision\s*\+=\s*1/);
-  const openPlaylistPage = functionSource('function openPlaylistPage(', 'function ');
-  assert.match(openPlaylistPage, /visitedListViews\.playlists = true/);
+  const openPlaylistPage = functionSource('function openPlaylistPage(', 'async function playPlaylistEntry(');
   assert.match(openPlaylistPage, /activeView = 'playlists'/);
 });
 

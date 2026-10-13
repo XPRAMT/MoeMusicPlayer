@@ -38,6 +38,8 @@
   let requestRevision = 0;
   let listRevision = $state(0);
   let sortSaveQueue: Promise<void> = Promise.resolve();
+  let initialized = $state(false);
+  let seenRefreshKey = $state<number | null>(null);
 
   const traditionalByName = new Map<string, string>();
 
@@ -106,6 +108,7 @@
       console.error('無法讀取演出者清單排序方式，使用預設排序', reason);
     }
     await load();
+    initialized = true;
   }
 
   function sortValue(row: ArtistRow, field: SortField): string | number {
@@ -126,7 +129,17 @@
   onMount(() => { void initialize(); });
   $effect(() => {
     const current = refreshKey;
-    if (current > 0) void load();
+    if (!initialized) {
+      if (seenRefreshKey === null) seenRefreshKey = current;
+      return;
+    }
+    if (seenRefreshKey === null) {
+      seenRefreshKey = current;
+      return;
+    }
+    if (current === seenRefreshKey) return;
+    seenRefreshKey = current;
+    void load();
   });
 </script>
 
@@ -155,6 +168,7 @@
       compactHeaderHeight={37}
       fillAvailable={true}
       listId="artist-index"
+      scrollResetKey={JSON.stringify({ field: sortField, direction: sortDirection })}
       ariaLabel="演出者統計；使用方向鍵瀏覽，按 Enter 開啟演出者歌曲"
       columnCount={ARTIST_COLUMNS.length + 1}
       gridTemplate={ARTIST_GRID}

@@ -65,6 +65,7 @@
   let currentEntryPosition = 0;
   let queueRevision = 1;
   let requestCount = 0;
+  let playlistRequestCount = 0;
   let generatedItems = 0;
   /** @type {Uint32Array | null} */
   let playOrder: Uint32Array | null = null;
@@ -145,6 +146,7 @@
   }
 
   async function fetchPlaylistPage(request: { playlistId: string; offset: number; limit: number }): Promise<PlaylistPage> {
+    playlistRequestCount += 1;
     const totalCount = playlists.find((playlist) => playlist.id === request.playlistId)?.entryCount ?? 0;
     return {
       items: Array.from({ length: Math.min(request.limit, Math.max(0, totalCount - request.offset)) }, (_, index) => makePlaylistEntry(request.offset + index)),
@@ -253,6 +255,7 @@
     return {
       activeView,
       selectedPlaylistId,
+      playlistRequestCount,
       queueCurrentRows: [...document.querySelectorAll<HTMLElement>('.playback-queue-row.selected .column-index')]
         .map((element) => element.textContent?.trim() ?? ''),
       queueRequestLog: queueRequestLog.slice(),

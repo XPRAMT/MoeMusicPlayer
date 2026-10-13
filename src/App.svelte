@@ -178,15 +178,9 @@
 
 
   let activeView = $state<View>('library');
-  type RetainedListView = Exclude<View, 'artist-detail' | 'settings'>;
   type ArtistSectionView = 'artists' | 'artist-detail';
   type ArtistEntry = ArtistIndexEntry & { displayName: string };
-  let visitedListViews = $state<Record<RetainedListView, boolean>>({
-    library: true,
-    artists: false,
-    playlists: false,
-    queue: false,
-  });
+  let keepArtistIndexForDetail = $state(false);
   let selectedArtist = $state<ArtistEntry | null>(null);
   let rememberedArtistView = $state<ArtistSectionView>('artists');
   let artistIndexRows = $state<ArtistEntry[] | null>(null);
@@ -444,7 +438,7 @@
   });
   $effect(() => {
     const view = activeView;
-    if (view !== 'artist-detail' && view !== 'settings') visitedListViews[view] = true;
+    if (view !== 'artists' && view !== 'artist-detail') keepArtistIndexForDetail = false;
   });
   const syncProgressSources = $derived.by(() =>
     syncProgress
@@ -1839,7 +1833,6 @@
   }
 
   function openPlaylistPage(): void {
-    visitedListViews.playlists = true;
     activeView = 'playlists';
   }
 
@@ -2123,9 +2116,10 @@
     }
   }
 
-  function openArtistEntry(artist: ArtistEntry): void {
+  function openArtistEntry(artist: ArtistEntry, preserveIndex = false): void {
     if (selectedArtist?.key !== artist.key) artistTrackCount = null;
     selectedArtist = artist;
+    keepArtistIndexForDetail = preserveIndex;
     rememberedArtistView = 'artist-detail';
     activeView = 'artist-detail';
   }
@@ -3272,8 +3266,8 @@
 
     <div class="page-scroll" class:is-list-page={isListPage}>
       <div class="page-content" class:wide-list-page={isListPage} class:is-list-page={isListPage}>
-        {#if visitedListViews.library}
-          <section class="library-section" aria-labelledby="page-heading" hidden={activeView !== 'library'}>
+        {#if activeView === 'library'}
+          <section class="library-section" aria-labelledby="page-heading">
             {#if !libraryReady}
               <div class="not-ready-panel">
                 <div class="not-ready-icon" aria-hidden="true">
@@ -3307,7 +3301,7 @@
             {/if}
           </section>
         {/if}
-        {#if visitedListViews.artists}
+        {#if activeView === 'artists' || (activeView === 'artist-detail' && keepArtistIndexForDetail)}
           <section class="artist-section" aria-labelledby="page-heading" hidden={activeView !== 'artists'}>
             {#if !libraryReady}
               <div class="not-ready-panel" role="status">
@@ -3320,13 +3314,13 @@
                 rowHeightPx={trackRowHeightPx}
                 onCountChange={(count) => (artistIndexCount = count)}
                 onRowsChange={(rows) => (artistIndexRows = rows)}
-                onSelect={openArtistEntry}
+                onSelect={(artist) => openArtistEntry(artist, true)}
               />
             {/if}
           </section>
         {/if}
-        {#if selectedArtist}
-          <section class="artist-detail-section" aria-labelledby="page-heading" hidden={activeView !== 'artist-detail'}>
+        {#if activeView === 'artist-detail' && selectedArtist}
+          <section class="artist-detail-section" aria-labelledby="page-heading">
             {#if !libraryReady}
               <div class="artist-detail-empty" role="status">{showCapabilityDetail(capabilities?.library)}</div>
             {:else}
@@ -3340,6 +3334,7 @@
                   columns={trackColumnPreferences}
                   columnWidths={trackColumnWidths}
                   rowHeightPx={trackRowHeightPx}
+                  listId={`artist-detail-${selectedArtist.key}`}
                   sort={librarySort}
                   livePlayCount={livePlayCount}
                   fetchPage={fetchArtistPage}
@@ -3352,8 +3347,8 @@
             {/if}
           </section>
         {/if}
-        {#if visitedListViews.playlists}
-          <section class="playlist-section" aria-labelledby="page-heading" hidden={activeView !== 'playlists'}>
+        {#if activeView === 'playlists'}
+          <section class="playlist-section" aria-labelledby="page-heading">
             {#if playlistError}
               <div class="inline-message" role="alert">
                 <span class="message-mark"><IconAlertCircle size={16} stroke={1.8} aria-hidden="true" /></span>
@@ -3402,8 +3397,8 @@
             {/if}
           </section>
         {/if}
-        {#if visitedListViews.queue}
-          <section class="queue-page" aria-labelledby="page-heading" hidden={activeView !== 'queue'}>
+        {#if activeView === 'queue'}
+          <section class="queue-page" aria-labelledby="page-heading">
             {#if !playbackReady}
               <div class="not-ready-panel" role="status">
                 <div class="not-ready-icon" aria-hidden="true"><IconList size={22} stroke={1.6} /></div>

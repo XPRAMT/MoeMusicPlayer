@@ -21,7 +21,7 @@
 </script>
 
 <script lang="ts" generics="Item">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import {
     buildVirtualRows,
@@ -184,7 +184,7 @@
     const currentScrollResetKey = scrollResetKey === undefined ? generation : scrollResetKey;
     const listChanged = seenListId !== undefined && currentListId !== seenListId;
     const resetChanged = hasSeenScrollResetKey && !Object.is(currentScrollResetKey, seenScrollResetKey);
-    if (listChanged) {
+    if (seenListId === undefined || listChanged) {
       activeIndex = 0;
       const position = readListScrollPosition(currentListId);
       pendingListRestore = { listId: currentListId, position };
@@ -195,6 +195,7 @@
       activeIndex = 0;
       scrollTop = 0;
       lastVisibleScrollTop = 0;
+      writeListScrollPosition(currentListId, 0);
       pendingListRestore = null;
       viewport?.scrollTo({ top: 0 });
     }
@@ -259,6 +260,11 @@
       observer?.disconnect();
       endDragState();
     };
+  });
+
+  onDestroy(() => {
+    const finalScrollTop = viewport?.clientHeight ? viewport.scrollTop : lastVisibleScrollTop;
+    rememberVisibleScrollPosition(finalScrollTop);
   });
 
   function updateViewport(): void {

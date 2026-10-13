@@ -40,6 +40,7 @@
   interface Props {
     query: string;
     resetKey?: string | number;
+    listId?: string;
     selectedTrackId: string | null;
     playbackReady: boolean;
     isSendingPlaybackCommand: boolean;
@@ -59,6 +60,7 @@
   let {
     query,
     resetKey = '',
+    listId = 'library-track',
     selectedTrackId,
     playbackReady,
     isSendingPlaybackCommand,
@@ -78,6 +80,7 @@
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
   let normalizedWidths = $derived(normalizeTrackColumnWidths(columnWidths));
   let normalizedSort = $derived(normalizeLibrarySort(sort));
+  const listScrollResetKey = $derived(JSON.stringify({ query: query.trim(), fieldFilter, sort: normalizedSort }));
   let visibleColumns = $derived(visibleTrackColumns(normalizedColumns).map(({ id }) =>
     TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
   ));
@@ -189,7 +192,8 @@
     headerHeight={37}
     compactHeaderHeight={37}
     fillAvailable={true}
-    listId="library-track"
+    {listId}
+    scrollResetKey={listScrollResetKey}
     ariaLabel="曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序"
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
