@@ -78,7 +78,7 @@
   await firstCard.click();
   await page.waitForFunction(() => {
     const summary = document.querySelector('.album-detail-summary')?.textContent ?? '';
-    return summary.includes('包含的演出者') && summary.includes('hanser') && summary.includes('yousa') && summary.includes('other artist');
+    return !summary.includes('包含的演出者') && summary.includes('hanser') && summary.includes('yousa') && summary.includes('other artist');
   });
   await page.getByText('4 首曲目', { exact: true }).waitFor();
   assert(await page.getByText(/張代表封面/).count() === 0, 'album detail should no longer display representative-cover count text');

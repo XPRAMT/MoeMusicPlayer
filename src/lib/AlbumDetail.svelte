@@ -218,7 +218,7 @@
     </div>
     <div class="album-detail-summary">
       <strong>{album.unmarked ? '未標記專輯' : album.displayName}</strong>
-      <span>包含的演出者．{artists.length ? artists.join('．') : '—'}</span>
+      <span>{artists.length ? artists.join('．') : '—'}</span>
       <span>{album.trackCount.toLocaleString()} 首曲目</span>
       {#if scanError}<span class="album-detail-error" role="status">封面整理失敗：{scanError}</span>{/if}
       {#if scanning && coverUrls.length === 0}<span class="album-detail-status" role="status">正在整理封面…</span>{/if}
