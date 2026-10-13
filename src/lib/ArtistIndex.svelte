@@ -18,7 +18,7 @@
     { id: 'albumCount', label: '專輯數量' },
     { id: 'duration', label: '播放時長' },
   ];
-  // Summary columns use six fullwidth character widths; artist names take the remaining space.
+  // All columns share the same font-size as their cells so em widths match between header and rows.
   const ARTIST_GRID = '36px minmax(150px,1fr) 6em 6em 6em';
 
   interface Props {

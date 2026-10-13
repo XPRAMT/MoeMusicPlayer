@@ -1668,11 +1668,8 @@ input:focus-visible {
   min-height: var(--paged-row-height, 50px);
   border-bottom: 1px solid rgba(var(--text-rgb), 0.055);
   color: var(--text);
-  transition: background 120ms ease;
-}
-
-.paged-virtual-row.artist-index-row {
   font-size: var(--font-body);
+  transition: background 120ms ease;
 }
 
 .track-row:last-child {
@@ -3750,6 +3747,10 @@ input:focus-visible {
   background-color: transparent;
   box-shadow: none;
   cursor: not-allowed;
+}
+
+.player-dock .navigation-control:disabled {
+  opacity: 0.5;
 }
 
 .play-button:disabled {
