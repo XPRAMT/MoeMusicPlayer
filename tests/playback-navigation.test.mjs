@@ -11,6 +11,7 @@ const appStyles = readSource('src/app.css');
 const trackColumnCellsSource = readSource('src/lib/TrackColumnCells.svelte');
 const trackListSource = readSource('src/lib/TrackList.svelte');
 const playlistEntrySource = readSource('src/lib/PlaylistEntryList.svelte');
+const pagedVirtualListSource = readSource('src/lib/PagedVirtualList.svelte');
 const playlistTreeSource = readSource('src/lib/PlaylistTree.svelte');
 const favoritePopoverSource = readSource('src/lib/FavoritePopover.svelte');
 
@@ -116,6 +117,9 @@ test('playlist page keeps one mounted list instance and refreshes only when its 
   assert.doesNotMatch(playlistSection, /\{#if activeView\s*===\s*'playlists'\}/);
   assert.doesNotMatch(playlistSection, /\{#key selectedPlaylist\.id\}/);
   assert.match(playlistEntrySource, /scrollResetKey=\{playlistId\}/);
+  assert.match(pagedVirtualListSource, /let lastVisibleScrollTop = 0/);
+  assert.match(pagedVirtualListSource, /if \(!hadVisibleViewport\)[\s\S]*?viewport\.scrollTop = restoredScrollTop/);
+  assert.match(pagedVirtualListSource, /if \(viewport\.clientHeight > 0\)[\s\S]*?lastVisibleScrollTop = viewport\.scrollTop/);
 
   const loadPlaylists = functionSource('async function loadPlaylists(', 'async function selectPlaylist(');
   assert.match(loadPlaylists, /previousPlaylistId !== nextId \|\| previousEntryCount !== nextEntryCount/);

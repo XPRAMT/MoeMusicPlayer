@@ -101,6 +101,8 @@
   let headerShift = $state(0);
   let headerGutter = $state(0);
   let viewportHeight = $state(480);
+  let lastVisibleScrollTop = 0;
+  let hadVisibleViewport = false;
   let activeIndex = $state(0);
   let rowHeight = $state(50);
   let headerHeight = $state(37);
@@ -151,6 +153,7 @@
     if (hasSeenScrollResetKey && !Object.is(currentScrollResetKey, seenScrollResetKey)) {
       activeIndex = 0;
       scrollTop = 0;
+      lastVisibleScrollTop = 0;
       viewport?.scrollTo({ top: 0 });
     }
     seenScrollResetKey = currentScrollResetKey;
@@ -168,7 +171,25 @@
       if (!fillAvailable) {
         maxViewportHeight = Math.max(160, Math.min(maxHeight, Math.floor(window.innerHeight * 0.65)));
       }
-      viewportHeight = viewport?.clientHeight ?? viewportHeight;
+      const nextViewportHeight = viewport?.clientHeight ?? viewportHeight;
+      if (viewport && nextViewportHeight > 0) {
+        if (!hadVisibleViewport) {
+          const restoredScrollTop = Math.min(
+            lastVisibleScrollTop,
+            Math.max(0, viewport.scrollHeight - nextViewportHeight),
+          );
+          if (viewport.scrollTop !== restoredScrollTop) viewport.scrollTop = restoredScrollTop;
+          scrollTop = restoredScrollTop;
+          lastVisibleScrollTop = restoredScrollTop;
+          hadVisibleViewport = true;
+        } else {
+          scrollTop = viewport.scrollTop;
+          lastVisibleScrollTop = viewport.scrollTop;
+        }
+      } else if (nextViewportHeight === 0) {
+        hadVisibleViewport = false;
+      }
+      viewportHeight = nextViewportHeight;
       if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     };
     updateMetrics();
@@ -185,7 +206,11 @@
 
   function updateViewport(): void {
     if (!viewport) return;
-    scrollTop = viewport.scrollTop;
+    if (viewport.clientHeight > 0) {
+      scrollTop = viewport.scrollTop;
+      lastVisibleScrollTop = viewport.scrollTop;
+      hadVisibleViewport = true;
+    }
     headerShift = viewport.scrollLeft;
     headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     viewportHeight = viewport.clientHeight;
@@ -203,6 +228,7 @@
       nextScrollTop = rowBottom - viewport.clientHeight;
     }
     if (nextScrollTop !== viewport.scrollTop) viewport.scrollTo({ top: nextScrollTop });
+    lastVisibleScrollTop = nextScrollTop;
   }
 
   function scrollIndexIntoView(index: number, align: 'nearest' | 'center' = 'center'): void {
@@ -225,6 +251,7 @@
     nextScrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
     viewport.scrollTo({ top: nextScrollTop });
     scrollTop = nextScrollTop;
+    lastVisibleScrollTop = nextScrollTop;
   }
 
   let seenScrollRequestToken = $state<number | null>(null);
