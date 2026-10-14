@@ -230,8 +230,8 @@ mod album_artwork_responsiveness_tests {
             let started_work = Arc::new(AtomicBool::new(false));
             let worker_started = Arc::clone(&started_work);
             let worker_gate = gate.clone();
-            let work = run_blocking_album_work(move || {
-                run_guarded_album_database_work(&worker_gate, || {
+            let work = run_blocking_database_work(move || {
+                run_guarded_database_work(&worker_gate, || {
                     worker_started.store(true, Ordering::Release);
                     let identity = database
                         .album_artwork_cache_identity(track_id)
@@ -2916,8 +2916,8 @@ fn system_media_controls_capability(_state: &AppState) -> FeatureCapability {
 }
 
 #[tauri::command]
-fn library_get_page(
-    state: State<'_, AppState>,
+async fn library_get_page(
+    app: AppHandle,
     query: Option<String>,
     query_alternates: Option<Vec<String>>,
     field_filter: Option<TrackFieldFilter>,
@@ -2925,13 +2925,6 @@ fn library_get_page(
     offset: u64,
     limit: u32,
 ) -> Result<Page<TrackSummary>, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-
     let request = ListTracksQuery {
         query,
         field_filter,
@@ -2940,25 +2933,34 @@ fn library_get_page(
         sort: sort.unwrap_or_default(),
     };
     let query_alternates = query_alternates.unwrap_or_default();
-    #[cfg(target_os = "windows")]
-    if let Some(temporary_database) = state
-        .playback
-        .as_ref()
-        .filter(|playback| playback.external_queue_active.load(Ordering::Acquire))
-        .and_then(|playback| {
-            playback
-                .temporary_catalog
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
                 .clone()
-        })
-    {
-        return merged_library_page(database, &temporary_database, request, &query_alternates)
-            .map_err(|error| error.to_string());
-    }
-    database
-        .list_tracks_page_with_alternates(request, &query_alternates)
-        .map_err(|error| error.to_string())
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        #[cfg(target_os = "windows")]
+        if let Some(temporary_database) = state
+            .playback
+            .as_ref()
+            .filter(|playback| playback.external_queue_active.load(Ordering::Acquire))
+            .and_then(|playback| {
+                playback
+                    .temporary_catalog
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
+        {
+            return merged_library_page(database, &temporary_database, request, &query_alternates)
+                .map_err(|error| error.to_string());
+        }
+        database
+            .list_tracks_page_with_alternates(request, &query_alternates)
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2977,17 +2979,20 @@ fn library_get_artist_index_facets(
 }
 
 #[tauri::command]
-fn library_sort_text_indices(
-    state: State<'_, AppState>,
+async fn library_sort_text_indices(
+    app: AppHandle,
     values: Vec<String>,
 ) -> Result<Vec<usize>, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    Ok(database.sort_text_indices(&values))
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        Ok(database.sort_text_indices(&values))
+    })
+    .await
 }
 
 #[derive(serde::Serialize)]
@@ -2998,31 +3003,34 @@ struct QuickIndexGrouping {
 }
 
 #[tauri::command]
-fn library_get_quick_index_groupings(
-    state: State<'_, AppState>,
+async fn library_get_quick_index_groupings(
+    app: AppHandle,
     values: Vec<String>,
 ) -> Result<QuickIndexGrouping, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    let (labels, groups) = database.quick_index_groupings(&values);
-    Ok(QuickIndexGrouping { labels, groups })
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let (labels, groups) = database.quick_index_groupings(&values);
+        Ok(QuickIndexGrouping { labels, groups })
+    })
+    .await
 }
 
-async fn run_blocking_album_work<R, F>(work: F) -> Result<R, String>
+async fn run_blocking_database_work<R, F>(work: F) -> Result<R, String>
 where
     R: Send + 'static,
     F: FnOnce() -> Result<R, String> + Send + 'static,
 {
     tauri::async_runtime::spawn_blocking(work)
         .await
-        .map_err(|error| format!("專輯曲庫工作失敗：{error}"))?
+        .map_err(|error| format!("資料庫背景工作失敗：{error}"))?
 }
 
-fn run_guarded_album_database_work<R, F>(
+fn run_guarded_database_work<R, F>(
     gate: &database_lifecycle::DatabaseWorkGate,
     operation: F,
 ) -> Result<R, String>
@@ -3035,14 +3043,14 @@ where
     operation()
 }
 
-async fn run_album_database_work<R, F>(app: AppHandle, operation: F) -> Result<R, String>
+async fn run_database_work<R, F>(app: AppHandle, operation: F) -> Result<R, String>
 where
     R: Send + 'static,
     F: FnOnce(&AppState) -> Result<R, String> + Send + 'static,
 {
-    run_blocking_album_work(move || {
+    run_blocking_database_work(move || {
         let state = app.state::<AppState>();
-        run_guarded_album_database_work(&state.database_work, || operation(&state))
+        run_guarded_database_work(&state.database_work, || operation(&state))
     })
     .await
 }
@@ -3051,7 +3059,7 @@ where
 async fn library_get_album_index_facets(
     app: AppHandle,
 ) -> Result<Vec<player_db::AlbumIndexFacet>, String> {
-    run_album_database_work(app, |state| {
+    run_database_work(app, |state| {
         let database = state.database.as_ref().ok_or_else(|| {
             state
                 .database_error
@@ -3074,7 +3082,7 @@ async fn library_get_album_page(
     offset: u64,
     limit: u32,
 ) -> Result<Page<TrackSummary>, String> {
-    run_album_database_work(app, move |state| {
+    run_database_work(app, move |state| {
         let database = state.database.as_ref().ok_or_else(|| {
             state
                 .database_error
@@ -3095,7 +3103,7 @@ async fn library_get_album_artwork_candidates(
     offset: u64,
     limit: u32,
 ) -> Result<Vec<String>, String> {
-    run_album_database_work(app, move |state| {
+    run_database_work(app, move |state| {
         let database = state.database.as_ref().ok_or_else(|| {
             state
                 .database_error
@@ -3140,7 +3148,7 @@ fn album_artwork_cache_directory(
 #[tauri::command]
 async fn album_artwork_cache_get(app: AppHandle, sha256: String) -> Result<Response, String> {
     let app_for_directory = app.clone();
-    run_album_database_work(app, move |state| {
+    run_database_work(app, move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         album_artwork_cache::get(&directory, &sha256).map(Response::new)
     })
@@ -3154,7 +3162,7 @@ async fn album_artwork_cache_put(
     data_base64: String,
 ) -> Result<(), String> {
     let app_for_directory = app.clone();
-    run_album_database_work(app, move |state| {
+    run_database_work(app, move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         album_artwork_cache::put(&directory, &sha256, &data_base64)
     })
@@ -3167,7 +3175,7 @@ async fn album_artwork_selection_get(
     key: String,
 ) -> Result<Option<album_artwork_cache::AlbumArtworkSelection>, String> {
     let app_for_directory = app.clone();
-    run_album_database_work(app, move |state| {
+    run_database_work(app, move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         album_artwork_cache::get_selection(&directory, &key)
     })
@@ -3181,7 +3189,7 @@ async fn album_artwork_selection_put(
     selection: album_artwork_cache::AlbumArtworkSelection,
 ) -> Result<(), String> {
     let app_for_directory = app.clone();
-    run_album_database_work(app, move |state| {
+    run_database_work(app, move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         album_artwork_cache::put_selection(&directory, &key, &selection)
     })
@@ -3210,7 +3218,7 @@ async fn album_artwork_cache_get_for_track(
     track_id: String,
 ) -> Result<Response, String> {
     let app_for_directory = app.clone();
-    run_album_database_work(app, move |state| {
+    run_database_work(app, move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         let Some(identity) = album_artwork_track_identity(state, &track_id)? else {
             return Ok(Response::new(Vec::new()));
@@ -3228,7 +3236,7 @@ async fn album_artwork_cache_put_for_track(
     data_base64: String,
 ) -> Result<(), String> {
     let app_for_directory = app.clone();
-    run_album_database_work(app, move |state| {
+    run_database_work(app, move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         let Some(identity) = album_artwork_track_identity(state, &track_id)? else {
             return Ok(());
@@ -3245,7 +3253,7 @@ async fn album_artwork_cache_mark_missing_for_track(
     track_id: String,
 ) -> Result<(), String> {
     let app_for_directory = app.clone();
-    run_album_database_work(app, move |state| {
+    run_database_work(app, move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         let Some(identity) = album_artwork_track_identity(state, &track_id)? else {
             return Ok(());
