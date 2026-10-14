@@ -1275,6 +1275,11 @@ impl Database {
         indices
     }
 
+    /// Compare two display labels using the same locale-aware, numeric collation as library SQL.
+    pub fn compare_music_text(&self, left: &str, right: &str) -> Ordering {
+        compare_music_names(&self.collator, left, right)
+    }
+
     pub fn journal_mode(&self) -> Result<String, DatabaseError> {
         Ok(self
             .lock()?

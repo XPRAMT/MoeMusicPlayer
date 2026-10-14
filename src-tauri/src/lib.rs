@@ -2340,11 +2340,11 @@ struct PlaybackQueuePageItem {
 #[cfg(test)]
 mod playback_queue_ipc_tests {
     use super::{
-        feature, playback_duration_ms, sync_summary, DseeHxActivity, FeatureState, LibraryRoot,
-        LibrarySource, MediaLocator, MediaSourceError, MediaSourceKind, OutputConversion,
-        PlaybackOutputFormat, PlaybackQueuePage, PlaybackQueuePageItem, PlaybackQueueSource,
-        PlaybackSnapshot, RepeatMode, ResamplingMode, RuntimeCapabilities, SourceId,
-        SourceScanState, SyncReport, TrackId, TrackListSort, TrackMetadataError,
+        compare_track_summaries, feature, playback_duration_ms, sync_summary, DseeHxActivity,
+        FeatureState, LibraryRoot, LibrarySource, MediaLocator, MediaSourceError, MediaSourceKind,
+        OutputConversion, PlaybackOutputFormat, PlaybackQueuePage, PlaybackQueuePageItem,
+        PlaybackQueueSource, PlaybackSnapshot, RepeatMode, ResamplingMode, RuntimeCapabilities,
+        SourceId, SourceScanState, SyncReport, TrackId, TrackListSort, TrackMetadataError,
     };
 
     #[test]
@@ -2692,6 +2692,75 @@ mod playback_queue_ipc_tests {
         assert_eq!(value["items"][0]["sourcePosition"], 7);
         assert!(value["items"][0]["isCurrent"].as_bool().unwrap());
         assert!(value["items"][0]["track"].is_null());
+    }
+
+    #[test]
+    fn merged_title_sort_matches_the_library_icu_collation_for_symbols_zhuyin_and_numbers() {
+        let database = player_db::Database::open_in_memory().expect("in-memory database");
+        let titles = [
+            "不", "比", "蘋", "迷", "-", "\"", "[", "「", "八", "ㄅ", "1", "2", "10",
+        ];
+        let canonical_indices = database
+            .sort_text_indices(&titles.map(str::to_owned))
+            .into_iter();
+        let expected = canonical_indices
+            .map(|index| titles[index])
+            .collect::<Vec<_>>();
+        for field in [
+            player_core::TrackSortField::Title,
+            player_core::TrackSortField::Artist,
+            player_core::TrackSortField::Album,
+        ] {
+            let mut summaries = titles
+                .iter()
+                .map(|title| player_core::TrackSummary {
+                    id: TrackId::new(),
+                    title: Some((*title).to_owned()),
+                    artist: Some((*title).to_owned()),
+                    album: Some((*title).to_owned()),
+                    album_artist: None,
+                    track_number: None,
+                    disc_number: None,
+                    duration_ms: None,
+                    codec: None,
+                    bitrate_bps: None,
+                    sample_rate_hz: None,
+                    release_date: None,
+                    year: None,
+                    created_at_utc_ms: None,
+                    bit_depth: None,
+                    played_ms: 0,
+                    file_name: None,
+                })
+                .collect::<Vec<_>>();
+            summaries.sort_by(|left, right| {
+                compare_track_summaries(
+                    left,
+                    right,
+                    TrackListSort {
+                        field,
+                        direction: player_core::TrackSortDirection::Asc,
+                    },
+                    Some(&database),
+                )
+            });
+
+            let actual = summaries
+                .iter()
+                .map(|summary| match field {
+                    player_core::TrackSortField::Title => summary.title.as_deref().expect("title"),
+                    player_core::TrackSortField::Artist => {
+                        summary.artist.as_deref().expect("artist")
+                    }
+                    player_core::TrackSortField::Album => summary.album.as_deref().expect("album"),
+                    _ => unreachable!("only text fields are covered"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual, expected,
+                "text field {field:?} uses the library collation"
+            );
+        }
     }
 }
 
@@ -3329,7 +3398,8 @@ fn merged_library_page(
     let mut persistent_items = deduplicated_persistent;
     let duplicate_count = duplicate_library_ids.len() as u64;
     persistent_items.extend(temporary_items);
-    persistent_items.sort_by(|left, right| compare_track_summaries(left, right, sort));
+    persistent_items
+        .sort_by(|left, right| compare_track_summaries(left, right, sort, Some(database)));
     let offset =
         usize::try_from(request.offset.saturating_sub(persistent_start)).unwrap_or(usize::MAX);
     let limit = request.limit as usize;
@@ -3366,12 +3436,17 @@ fn compare_track_summaries(
     left: &TrackSummary,
     right: &TrackSummary,
     sort: TrackListSort,
+    database: Option<&Database>,
 ) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let reverse = sort.direction == TrackSortDirection::Desc;
     let compare_direction = |order: Ordering| if reverse { order.reverse() } else { order };
+    let compare_text = |left: &str, right: &str| match database {
+        Some(database) => database.compare_music_text(left, right),
+        None => natural_title_cmp(left, right),
+    };
     let order = match sort.field {
-        TrackSortField::Title => compare_direction(natural_title_cmp(
+        TrackSortField::Title => compare_direction(compare_text(
             left.title
                 .as_deref()
                 .or(left.file_name.as_deref())
@@ -3382,32 +3457,14 @@ fn compare_track_summaries(
                 .or(right.file_name.as_deref())
                 .unwrap_or_default(),
         )),
-        TrackSortField::Artist => compare_direction(
-            left.artist
-                .as_deref()
-                .unwrap_or_default()
-                .to_ascii_lowercase()
-                .cmp(
-                    &right
-                        .artist
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_ascii_lowercase(),
-                ),
-        ),
-        TrackSortField::Album => compare_direction(
-            left.album
-                .as_deref()
-                .unwrap_or_default()
-                .to_ascii_lowercase()
-                .cmp(
-                    &right
-                        .album
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_ascii_lowercase(),
-                ),
-        ),
+        TrackSortField::Artist => compare_direction(compare_text(
+            left.artist.as_deref().unwrap_or_default(),
+            right.artist.as_deref().unwrap_or_default(),
+        )),
+        TrackSortField::Album => compare_direction(compare_text(
+            left.album.as_deref().unwrap_or_default(),
+            right.album.as_deref().unwrap_or_default(),
+        )),
         TrackSortField::Year => {
             let left_date = left.release_date.as_deref().unwrap_or_default();
             let right_date = right.release_date.as_deref().unwrap_or_default();
@@ -3597,7 +3654,7 @@ fn queue_for_merged_library_search(
     summaries = retained;
     tracks.extend(temporary_tracks.iter().map(|track| track.id));
     summaries.extend(temporary_tracks);
-    summaries.sort_by(|left, right| compare_track_summaries(left, right, sort));
+    summaries.sort_by(|left, right| compare_track_summaries(left, right, sort, Some(database)));
     tracks = summaries.iter().map(|track| track.id).collect();
     let selected_index = tracks
         .iter()
@@ -8044,7 +8101,7 @@ fn cached_queue_display_order(
         }
     }
 
-    let order = sort_queue_entry_order(queue, &summaries, sort);
+    let order = sort_queue_entry_order(queue, &summaries, sort, database.or(secondary_database));
     let mut cached = state
         .queue_display_sort_cache
         .lock()
@@ -8061,13 +8118,14 @@ fn sort_queue_entry_order(
     queue: &PlaybackQueueSnapshot,
     summaries: &HashMap<TrackId, TrackSummary>,
     sort: TrackListSort,
+    database: Option<&Database>,
 ) -> Vec<usize> {
     let mut order = queue.play_order.clone();
     order.sort_by(|left_index, right_index| {
         let left_id = queue.entries[*left_index].track_id;
         let right_id = queue.entries[*right_index].track_id;
         match (summaries.get(&left_id), summaries.get(&right_id)) {
-            (Some(left), Some(right)) => compare_track_summaries(left, right, sort),
+            (Some(left), Some(right)) => compare_track_summaries(left, right, sort, database),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
             (None, None) => std::cmp::Ordering::Equal,
@@ -11270,6 +11328,7 @@ mod windows_library_integration_tests {
                 field: TrackSortField::Title,
                 direction: TrackSortDirection::Asc,
             },
+            None,
         );
         assert_eq!(ascending, [1, 0, 2]);
         queue
@@ -11293,6 +11352,7 @@ mod windows_library_integration_tests {
                 field: TrackSortField::CreatedAt,
                 direction: TrackSortDirection::Desc,
             },
+            None,
         );
         assert_eq!(descending, [0, 2, 1]);
         queue
