@@ -518,7 +518,7 @@ CREATE TABLE music_collation_metadata (
 );
 "#;
 
-const MUSIC_COLLATION_COMPARATOR_VERSION: u8 = 2;
+const MUSIC_COLLATION_COMPARATOR_VERSION: u8 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MusicCollationSpec {
@@ -669,9 +669,9 @@ fn system_locale_and_collation() -> (String, Option<CollationType>) {
 
 fn compare_music_names(collator: &CollatorBorrowed<'static>, left: &str, right: &str) -> Ordering {
     collator
-        .compare(left, right)
+        .compare(left.trim(), right.trim())
         // ICU numeric comparison correctly handles arbitrary-length runs; this stable tie-break
-        // keeps equivalent numeric spellings such as 2 and 02 deterministic.
+        // keeps equivalent whitespace/numeric spellings such as ` title ` and 2/02 deterministic.
         .then_with(|| natural_title_cmp(left, right))
 }
 
@@ -1143,7 +1143,57 @@ impl Database {
             collation_spec,
         };
         database.migrate()?;
+        database.backfill_missing_title_sort_keys()?;
         Ok(database)
+    }
+
+    fn backfill_missing_title_sort_keys(&self) -> Result<(), DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let candidates = {
+            let mut statement = tx.prepare(
+                "SELECT t.track_id,
+                        (SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'),
+                        t.title
+                 FROM tracks t
+                 WHERE t.sort_title=''",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let track_ids = candidates
+            .iter()
+            .map(|(id, _, _)| parse_track_id(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let file_names = file_names_for_tracks(&tx, &track_ids)?;
+        for (id, override_title, metadata_title) in candidates {
+            let track_id = parse_track_id(&id)?;
+            let file_name = file_names.get(&track_id).map(String::as_str);
+            let sort_title = effective_sort_title(
+                override_title.as_deref(),
+                metadata_title.as_deref(),
+                file_name,
+            );
+            if !sort_title.is_empty() {
+                tx.execute(
+                    "UPDATE tracks SET sort_title=?2 WHERE track_id=?1 AND sort_title=''",
+                    params![id, sort_title],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn migrate(&self) -> Result<(), DatabaseError> {
@@ -2889,15 +2939,15 @@ impl Database {
             )?;
         }
         if field == "title" {
-            let sort_title = if let Some(value) = value {
-                value.to_lowercase()
-            } else {
-                tx.query_row(
-                    "SELECT lower(COALESCE(title, '')) FROM tracks WHERE track_id=?1",
-                    [track_id.to_string()],
-                    |row| row.get::<_, String>(0),
-                )?
-            };
+            let stored_title: Option<String> = tx.query_row(
+                "SELECT title FROM tracks WHERE track_id=?1",
+                [track_id.to_string()],
+                |row| row.get(0),
+            )?;
+            let file_name = file_names_for_tracks(&tx, &[track_id])?
+                .remove(&track_id)
+                .unwrap_or_default();
+            let sort_title = effective_sort_title(value, stored_title.as_deref(), Some(&file_name));
             tx.execute(
                 "UPDATE tracks SET sort_title=?2 WHERE track_id=?1",
                 params![track_id.to_string(), sort_title],
@@ -3583,7 +3633,8 @@ impl LibraryRepository for Database {
             if current_version.is_some_and(|version| version >= i64::from(TRACK_METADATA_VERSION)) {
                 continue;
             }
-            persist_metadata(&tx, track_id, Some(metadata))?;
+            let file_name = player_core::locator_display_file_stem(&record.locator);
+            persist_metadata(&tx, track_id, Some(metadata), file_name.as_deref())?;
         }
         tx.commit()?;
         Ok(())
@@ -3645,7 +3696,13 @@ fn apply_source_scan_transaction(
 
         let track_id = resolve_track_id(&tx, record)?;
         if changed_items.contains(record.identity.source_item_id.as_str()) {
-            persist_metadata(&tx, track_id, record.metadata.as_ref())?;
+            let file_name = player_core::locator_display_file_stem(&record.locator);
+            persist_metadata(
+                &tx,
+                track_id,
+                record.metadata.as_ref(),
+                file_name.as_deref(),
+            )?;
         } else {
             tx.execute(
                 "INSERT OR IGNORE INTO tracks (track_id) VALUES (?1)",
@@ -4085,13 +4142,30 @@ fn persist_metadata(
     tx: &Transaction<'_>,
     track_id: TrackId,
     metadata: Option<&TrackMetadata>,
+    file_name: Option<&str>,
 ) -> Result<(), DatabaseError> {
     let Some(metadata) = metadata else {
+        let user_title: Option<String> = tx
+            .query_row(
+                "SELECT value FROM track_overrides WHERE track_id=?1 AND field='title'",
+                [track_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let stored_title: Option<String> = tx
+            .query_row(
+                "SELECT title FROM tracks WHERE track_id=?1",
+                [track_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let sort_title =
+            effective_sort_title(user_title.as_deref(), stored_title.as_deref(), file_name);
         tx.prepare_cached(
-            "INSERT INTO tracks (track_id, metadata_loaded) VALUES (?1, 0)
-             ON CONFLICT(track_id) DO UPDATE SET metadata_loaded=0",
+            "INSERT INTO tracks (track_id, metadata_loaded, sort_title) VALUES (?1, 0, ?2)
+             ON CONFLICT(track_id) DO UPDATE SET metadata_loaded=0, sort_title=excluded.sort_title",
         )?
-        .execute([track_id.to_string()])?;
+        .execute(params![track_id.to_string(), sort_title])?;
         return Ok(());
     };
 
@@ -4103,10 +4177,8 @@ fn persist_metadata(
             .query_row([track_id.to_string()], |row| row.get(0))
             .optional()?
     };
-    let sort_title = user_title
-        .or_else(|| metadata.title.clone())
-        .unwrap_or_default()
-        .to_lowercase();
+    let sort_title =
+        effective_sort_title(user_title.as_deref(), metadata.title.as_deref(), file_name);
     let release_date = metadata
         .release_date
         .as_deref()
@@ -4167,6 +4239,19 @@ fn persist_metadata(
             i64::from(TRACK_METADATA_VERSION),
         ])?;
     Ok(())
+}
+
+fn effective_sort_title(
+    override_title: Option<&str>,
+    metadata_title: Option<&str>,
+    file_name: Option<&str>,
+) -> String {
+    override_title
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| metadata_title.filter(|value| !value.trim().is_empty()))
+        .or_else(|| file_name.filter(|value| !value.trim().is_empty()))
+        .unwrap_or_default()
+        .to_lowercase()
 }
 
 fn persist_mapping(
@@ -6613,6 +6698,160 @@ mod tests {
     }
 
     #[test]
+    fn music_collation_ignores_padding_spaces_before_zhuyin_ordering() {
+        let db = Database::from_connection_with_collation(
+            Connection::open_in_memory().expect("connection"),
+            MusicCollationSpec::from_locale_parts("zh-TW", Some(CollationType::Zhuyin)),
+        )
+        .expect("Taiwanese Zhuyin database");
+        let names = [
+            "不負韶光",
+            "比浪水更輕的 Lighter Than Tears",
+            " 蘋果糖漿 Apple Syrup",
+            " 迷失鴿哨 Lost Pigeon Whistle",
+            " 道中酣戰 Gruelling Battle",
+            " 對手戲 Duodrama",
+            "八珍玉食",
+            "八重櫻",
+        ];
+        let sorted = db
+            .sort_text_indices(&names.map(str::to_owned))
+            .into_iter()
+            .map(|index| names[index])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sorted,
+            [
+                "八珍玉食",
+                "八重櫻",
+                "比浪水更輕的 Lighter Than Tears",
+                "不負韶光",
+                " 蘋果糖漿 Apple Syrup",
+                " 迷失鴿哨 Lost Pigeon Whistle",
+                " 道中酣戰 Gruelling Battle",
+                " 對手戲 Duodrama",
+            ],
+            "padding spaces must not move later Bopomofo initials ahead of the ㄅ group",
+        );
+    }
+
+    #[test]
+    fn missing_track_title_uses_displayed_file_name_for_title_sorting() {
+        let path = std::env::temp_dir().join(format!(
+            "moemusic-missing-title-sort-{}.sqlite3",
+            TrackId::new()
+        ));
+        let collation = MusicCollationSpec::from_locale_parts("zh-TW", Some(CollationType::Zhuyin));
+        let mut db = Database::open_with_collation(&path, collation.clone())
+            .expect("Taiwanese Zhuyin database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "missing-title-sort",
+        );
+        let mut untagged = record(&root, "untagged", "untagged", "", 100, 1_000);
+        untagged.locator = MediaLocator::FileSystem(PathBuf::from(r"C:\Music\不負韶光 伴奏.wav"));
+        untagged.metadata.as_mut().expect("metadata").title = None;
+        let tagged = record(
+            &root,
+            "tagged",
+            "tagged",
+            "比浪水更輕的 Lighter Than Tears",
+            101,
+            1_001,
+        );
+        let records = [untagged, tagged];
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2_000,
+        );
+
+        let page = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort {
+                    field: TrackSortField::Title,
+                    direction: TrackSortDirection::Asc,
+                },
+            })
+            .expect("sorted page");
+        let displayed_titles = page
+            .items
+            .iter()
+            .map(|track| {
+                player_core::display_track_title(track.title.as_deref(), track.file_name.as_deref())
+                    .expect("visible title")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            displayed_titles,
+            ["比浪水更輕的 Lighter Than Tears", "不負韶光 伴奏",],
+            "a missing title tag must sort by the file name shown in the list",
+        );
+
+        db.lock()
+            .expect("database lock")
+            .execute("UPDATE tracks SET sort_title='' WHERE title IS NULL", [])
+            .expect("simulate a pre-fix database row");
+        drop(db);
+        let repaired = Database::open_with_collation(&path, collation)
+            .expect("reopen database and repair missing title sort keys");
+        let repaired_page = repaired
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort {
+                    field: TrackSortField::Title,
+                    direction: TrackSortDirection::Asc,
+                },
+            })
+            .expect("page after startup repair");
+        let repaired_sort_title: String = repaired
+            .lock()
+            .expect("database lock")
+            .query_row(
+                "SELECT sort_title FROM tracks WHERE title IS NULL LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("repaired title sort key");
+        assert_eq!(repaired_sort_title, "不負韶光 伴奏");
+        assert_eq!(
+            repaired_page
+                .items
+                .iter()
+                .map(|track| {
+                    player_core::display_track_title(
+                        track.title.as_deref(),
+                        track.file_name.as_deref(),
+                    )
+                    .expect("visible title")
+                })
+                .collect::<Vec<_>>(),
+            displayed_titles,
+            "startup repair restores the correct order for existing databases",
+        );
+        drop(repaired);
+        for suffix in ["", "-wal", "-shm"] {
+            let file = if suffix.is_empty() {
+                path.clone()
+            } else {
+                sidecar_path(&path, suffix)
+            };
+            let _ = std::fs::remove_file(file);
+        }
+    }
+
+    #[test]
     fn zhuyin_order_places_bi_before_bu_in_library_sql() {
         let mut db = Database::from_connection_with_collation(
             Connection::open_in_memory().expect("connection"),
@@ -6712,7 +6951,9 @@ mod tests {
         legacy_connection
             .execute(
                 "UPDATE music_collation_metadata SET signature=?1 WHERE singleton=1",
-                [collation.signature().replace("|comparator=2", "")],
+                [collation
+                    .signature()
+                    .replace("|comparator=3", "|comparator=2")],
             )
             .expect("mark the legacy comparator signature");
         drop(legacy_connection);
@@ -6731,12 +6972,21 @@ mod tests {
                 },
             })
             .expect("read sorted page");
+        let titles = [
+            "不負韶光 無駕帶伴奏".to_owned(),
+            "比浪水更輕的 Lighter Than Tears".to_owned(),
+        ];
+        let expected = reopened
+            .sort_text_indices(&titles)
+            .into_iter()
+            .map(|index| titles[index].as_str())
+            .collect::<Vec<_>>();
         assert_eq!(
             page.items
                 .iter()
                 .map(|track| track.title.as_deref().unwrap())
                 .collect::<Vec<_>>(),
-            ["比浪水更輕的 Lighter Than Tears", "不負韶光 無駕帶伴奏"],
+            expected,
             "reopen must rebuild indexes produced by a prior comparator implementation",
         );
 
