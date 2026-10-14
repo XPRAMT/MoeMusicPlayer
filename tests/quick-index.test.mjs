@@ -68,7 +68,7 @@ test('empty artist and album values use the Unknown group while nonempty symboli
     getName: (item) => item.name,
     getGroupings: async (names) => ({
       labels: ['#', 'H'],
-      groups: names.map((name) => name === 'hanser' ? 'H' : '#'),
+      groups: names.map((name) => name.toLowerCase() === 'h' ? 'H' : '#'),
     }),
   });
   assert.deepEqual(result.groups, [
@@ -77,4 +77,38 @@ test('empty artist and album values use the Unknown group while nonempty symboli
     { label: 'H', beforeIndex: 3 },
   ]);
   assert.deepEqual(result.labels, ['#', 'H', '未知']);
+});
+
+test('leading punctuation uses its own locale grouping instead of the following letter', async () => {
+  const items = [
+    { name: '- EARTH DAY -' },
+    { name: '-#000000-' },
+    { name: '-BWW SCREAM-' },
+    { name: '-Ending-' },
+    { name: '-FINAL SIGMA-' },
+    { name: 'Hanser' },
+  ];
+  const requestedNames = [];
+  const result = await buildQuickIndexGroups({
+    totalCount: items.length,
+    fetchPage: async () => ({ items }),
+    getName: (item) => item.name,
+    getGroupings: async (names) => {
+      requestedNames.push(...names);
+      return {
+        labels: ['&', 'B', 'E', 'F', 'H'],
+        // Model the system grouping behavior: full strings ignore a leading hyphen,
+        // while asking about the actual first character yields the punctuation bucket.
+        groups: names.map((name) => name === '-'
+          ? '&'
+          : name.match(/[A-Za-z]/)?.[0]?.toUpperCase() ?? '&'),
+      };
+    },
+  });
+
+  assert.deepEqual(result.groups, [
+    { label: '&', beforeIndex: 0 },
+    { label: 'H', beforeIndex: 5 },
+  ]);
+  assert.deepEqual(requestedNames, ['-', '-', '-', '-', '-', 'H']);
 });

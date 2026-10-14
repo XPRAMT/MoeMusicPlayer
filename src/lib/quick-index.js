@@ -58,7 +58,11 @@ export async function buildQuickIndexGroups({
     const items = Array.isArray(page?.items) ? page.items : [];
     if (items.length === 0) break;
     const names = items.map((item) => String(getName(item) ?? '').trim());
-    const response = await getGroupings(names);
+    // Ask the platform to classify the visible first character only. Some system
+    // grouping APIs collate full strings and skip leading punctuation, so a title
+    // such as "-BWW" is otherwise placed under B instead of its symbol bucket.
+    const groupingNames = names.map((name) => Array.from(name)[0] ?? '');
+    const response = await getGroupings(groupingNames);
     if (!isCurrent()) return null;
     if (!Array.isArray(response.groups) || response.groups.length !== items.length) {
       throw new Error('系統字元索引回傳的群組數量與曲目不一致。');
