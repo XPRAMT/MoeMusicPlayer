@@ -247,10 +247,23 @@ test('queue and album detail reuse shared sortable track-list headers', async ()
   assert.match(queue, /hideSortDirection=\{hideSortDirection\}/);
   assert.match(album, /sortable=\{true\}/);
   assert.match(album, /sortableIndex=\{true\}/);
-  assert.match(album, /let albumIndexSortActive = \$state\(true\)/);
-  assert.match(album, /sort: albumIndexSortActive \? null : request\.sort/);
-  assert.match(album, /indexSort: albumIndexSortActive \? albumIndexSortDirection : null/);
+  assert.match(album, /DEFAULT_ALBUM_DETAIL_SORT/);
+  assert.match(album, /settings_get_album_detail_sort/);
+  assert.match(album, /settings_set_album_detail_sort/);
+  assert.match(album, /sort: detailSort\.field === 'position' \? null/);
+  assert.match(album, /indexSort: albumIndexSortActive \? detailSort\.direction : null/);
   assert.match(album, /handleIndexSort/);
+});
+
+test('album detail artwork header shows artists and both duration statistics without duplicating title/count', async () => {
+  const album = await readFile(new URL('../src/lib/AlbumDetail.svelte', import.meta.url), 'utf8');
+  assert.match(album, /包含的演出者/);
+  assert.match(album, /累積播放/);
+  assert.match(album, /播放時長/);
+  assert.match(album, /formatDurationHours\(album\.playedMs\)/);
+  assert.match(album, /formatDurationHours\(album\.durationMs\)/);
+  assert.doesNotMatch(album, /<strong>\{album\.displayName\}<\/strong>/);
+  assert.doesNotMatch(album, /formatAlbumDetailSummary/);
 });
 
 test('paged list loading rows keep their cells visually blank', async () => {

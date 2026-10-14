@@ -436,6 +436,37 @@ impl Default for AlbumIndexSort {
     }
 }
 
+/// Persisted sort selection for tracks inside an album detail page.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumDetailSort {
+    pub field: AlbumDetailSortField,
+    pub direction: LibrarySortDirection,
+}
+
+impl Default for AlbumDetailSort {
+    fn default() -> Self {
+        Self {
+            field: AlbumDetailSortField::Position,
+            direction: LibrarySortDirection::Asc,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AlbumDetailSortField {
+    Position,
+    Title,
+    Artist,
+    Album,
+    Year,
+    CreatedAt,
+    AudioFormat,
+    Duration,
+    PlayCount,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlbumIndexSortField {
@@ -1006,6 +1037,9 @@ pub struct AppSettings {
     /// Sort field and direction for the album index page.
     #[serde(default)]
     pub album_index_sort: AlbumIndexSort,
+    /// Sort field and direction for tracks inside an album detail page.
+    #[serde(default)]
+    pub album_detail_sort: AlbumDetailSort,
     pub now_playing_layout: NowPlayingLayout,
     pub now_playing_appearance_preferences: NowPlayingAppearancePreferences,
     /// Windows playback sample-rate conversion (schema 7).
@@ -1040,6 +1074,7 @@ impl Default for AppSettings {
             track_list_columns: TrackListColumnSettings::default(),
             artist_list_sort: ArtistListSort::default(),
             album_index_sort: AlbumIndexSort::default(),
+            album_detail_sort: AlbumDetailSort::default(),
             now_playing_layout: NowPlayingLayout::A,
             now_playing_appearance_preferences: NowPlayingAppearancePreferences::default(),
             resampling_mode: ResamplingMode::default(),
@@ -1465,6 +1500,7 @@ struct RawSettings {
     track_list_columns: Option<TrackListColumnSettings>,
     artist_list_sort: Option<ArtistListSort>,
     album_index_sort: Option<AlbumIndexSort>,
+    album_detail_sort: Option<AlbumDetailSort>,
     now_playing_layout: Option<NowPlayingLayout>,
     now_playing_appearance_preferences: Option<NowPlayingAppearancePreferences>,
     resampling_mode: Option<serde_json::Value>,
@@ -1508,6 +1544,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         track_list_columns: repair_track_list_columns(raw.track_list_columns.unwrap_or_default()),
         artist_list_sort: raw.artist_list_sort.unwrap_or_default(),
         album_index_sort: raw.album_index_sort.unwrap_or_default(),
+        album_detail_sort: raw.album_detail_sort.unwrap_or_default(),
         now_playing_layout: raw.now_playing_layout.unwrap_or(NowPlayingLayout::A),
         now_playing_appearance_preferences: raw
             .now_playing_appearance_preferences
@@ -2175,6 +2212,38 @@ mod tests {
             .remove("albumIndexSort");
         let legacy: AppSettings = serde_json::from_value(json).expect("load previous settings");
         assert_eq!(legacy.album_index_sort, AlbumIndexSort::default());
+    }
+
+    #[test]
+    fn album_detail_sort_defaults_to_track_number_and_persists_the_last_choice() {
+        let defaults = AppSettings::default();
+        assert_eq!(
+            defaults.album_detail_sort,
+            AlbumDetailSort {
+                field: AlbumDetailSortField::Position,
+                direction: LibrarySortDirection::Asc,
+            }
+        );
+
+        let settings = AppSettings {
+            album_detail_sort: AlbumDetailSort {
+                field: AlbumDetailSortField::Duration,
+                direction: LibrarySortDirection::Desc,
+            },
+            ..defaults
+        };
+        let mut json = serde_json::to_value(&settings).expect("serialize album detail sort");
+        assert_eq!(json["albumDetailSort"]["field"], "duration");
+        assert_eq!(json["albumDetailSort"]["direction"], "desc");
+        let restored: AppSettings =
+            serde_json::from_value(json.clone()).expect("restore album detail sort");
+        assert_eq!(restored.album_detail_sort, settings.album_detail_sort);
+
+        json.as_object_mut()
+            .expect("settings object")
+            .remove("albumDetailSort");
+        let legacy: AppSettings = serde_json::from_value(json).expect("load previous settings");
+        assert_eq!(legacy.album_detail_sort, AlbumDetailSort::default());
     }
 
     #[test]

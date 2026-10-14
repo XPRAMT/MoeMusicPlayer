@@ -54,11 +54,11 @@ use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 pub mod updater;
 use settings::{
-    clamp_window_geometry_to_monitors, AlbumIndexSort, AppSettings, ArtistListSort,
-    BackgroundOpacityTextColor, ExcludedFolderEntry, LyricsPreferences, MainBackgroundMode,
-    NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode, ResamplingMode, SettingsStore,
-    SlideshowOrder, SourceEntry, SourceEntryKind, ThemeColorMode, ThemeSettings,
-    TrackListColumnSettings, WindowGeometry,
+    clamp_window_geometry_to_monitors, AlbumDetailSort, AlbumIndexSort, AppSettings,
+    ArtistListSort, BackgroundOpacityTextColor, ExcludedFolderEntry, LyricsPreferences,
+    MainBackgroundMode, NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode,
+    ResamplingMode, SettingsStore, SlideshowOrder, SourceEntry, SourceEntryKind, ThemeColorMode,
+    ThemeSettings, TrackListColumnSettings, WindowGeometry,
 };
 mod album_artwork_analysis;
 mod album_artwork_cache;
@@ -6018,6 +6018,30 @@ fn settings_set_album_index_sort(
 }
 
 #[tauri::command]
+fn settings_get_album_detail_sort(state: State<'_, AppState>) -> Result<AlbumDetailSort, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.album_detail_sort)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_set_album_detail_sort(
+    state: State<'_, AppState>,
+    preference: AlbumDetailSort,
+) -> Result<AlbumDetailSort, String> {
+    state
+        .settings
+        .update(|settings| {
+            settings.album_detail_sort = preference;
+            Ok(())
+        })
+        .map(|settings| settings.album_detail_sort)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn settings_get_now_playing_layout(state: State<'_, AppState>) -> Result<NowPlayingLayout, String> {
     state
         .settings
@@ -10463,6 +10487,8 @@ pub fn run() {
             settings_set_artist_list_sort,
             settings_get_album_index_sort,
             settings_set_album_index_sort,
+            settings_get_album_detail_sort,
+            settings_set_album_detail_sort,
             settings_get_now_playing_layout,
             settings_set_now_playing_layout,
             settings_get_resampling_mode,

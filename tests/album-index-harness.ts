@@ -39,6 +39,8 @@ Object.assign(window, {
       }
       if (command === 'settings_get_album_index_sort') return { field: 'title', direction: 'asc' };
       if (command === 'settings_set_album_index_sort') return (args as { preference: unknown }).preference;
+      if (command === 'settings_get_album_detail_sort') return { field: 'position', direction: 'asc' };
+      if (command === 'settings_set_album_detail_sort') return (args as { preference: unknown }).preference;
       if (command === 'album_artwork_selection_ensure') {
         const payload = args as { key: string; albumNames: string[]; trackCount: number; representative: boolean; forceRebuild: boolean };
         const cached = selections.get(payload.key) ?? null;

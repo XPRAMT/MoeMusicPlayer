@@ -325,6 +325,12 @@ export interface AlbumIndexSort {
   direction: ArtistListSortDirection;
 }
 
+export type AlbumDetailSortField = 'position' | TrackListColumnId;
+export interface AlbumDetailSort {
+  field: AlbumDetailSortField;
+  direction: LibrarySortDirection;
+}
+
 export interface TrackFieldFilter {
   field: 'title' | 'artist' | 'album';
   value: string;
@@ -626,6 +632,14 @@ interface IpcContract {
   settings_set_album_index_sort: {
     args: { preference: AlbumIndexSort };
     result: AlbumIndexSort;
+  };
+  settings_get_album_detail_sort: {
+    args: Record<string, never>;
+    result: AlbumDetailSort;
+  };
+  settings_set_album_detail_sort: {
+    args: { preference: AlbumDetailSort };
+    result: AlbumDetailSort;
   };
   settings_get_now_playing_layout: {
     args: Record<string, never>;

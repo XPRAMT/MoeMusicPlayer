@@ -3766,11 +3766,9 @@
                   columnWidths={trackColumnWidths}
                   rowHeightPx={trackRowHeightPx}
                   groupingEnabled={groupingEnabled}
-                  sort={librarySort}
                   livePlayCount={livePlayCount}
                   refreshKey={libraryListRevision}
                   onPlay={playAlbumTrack}
-                  onSort={handleLibrarySort}
                   onColumnResize={handleTrackColumnResize}
                   onTotalCount={(count) => (albumTrackCount = count)}
                 />

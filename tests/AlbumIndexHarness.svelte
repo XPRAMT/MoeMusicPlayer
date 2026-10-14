@@ -3,7 +3,7 @@
   import AlbumDetail from '../src/lib/AlbumDetail.svelte';
   import AlbumArtworkMosaic from '../src/lib/AlbumArtworkMosaic.svelte';
   import type { AlbumIndexEntry as AlbumEntry } from '../src/lib/ipc';
-  import { DEFAULT_LIBRARY_SORT, DEFAULT_TRACK_COLUMN_PREFERENCES, DEFAULT_TRACK_COLUMN_WIDTHS, DEFAULT_TRACK_ROW_HEIGHT_PX } from '../src/lib/track-columns.js';
+  import { DEFAULT_TRACK_COLUMN_PREFERENCES, DEFAULT_TRACK_COLUMN_WIDTHS, DEFAULT_TRACK_ROW_HEIGHT_PX } from '../src/lib/track-columns.js';
 
   let count = $state<number | null>(null);
   let selectedAlbum = $state<AlbumEntry | null>(null);
@@ -33,11 +33,9 @@
         columns={DEFAULT_TRACK_COLUMN_PREFERENCES}
         columnWidths={DEFAULT_TRACK_COLUMN_WIDTHS}
         rowHeightPx={DEFAULT_TRACK_ROW_HEIGHT_PX}
-        sort={DEFAULT_LIBRARY_SORT}
         livePlayCount={[]}
         refreshKey={0}
         onPlay={() => {}}
-        onSort={() => {}}
         onColumnResize={() => {}}
         onTotalCount={() => {}}
       />

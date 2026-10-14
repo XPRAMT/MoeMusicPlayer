@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type QuickIndexSnapshot, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
   import { advanceAlbumArtworkSelectionRevision, copyToArrayBuffer, createAlbumThumbnail, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
@@ -7,7 +7,8 @@
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
   import TrackList from './TrackList.svelte';
-  import { formatAlbumDetailSummary, formatAlbumTrackNumber } from './format';
+  import { formatDurationHours, formatAlbumTrackNumber } from './format';
+  import { DEFAULT_ALBUM_DETAIL_SORT, normalizeAlbumDetailSort, toggleAlbumDetailSort } from './album-detail-sort.js';
 
   interface Props {
     album: AlbumEntry;
@@ -19,33 +20,35 @@
     columnWidths: import('./ipc').TrackColumnWidths;
     rowHeightPx: number;
     groupingEnabled: boolean;
-    sort: import('./ipc').LibraryListSort;
     livePlayCount: { trackId: string; playedMs: number }[];
     refreshKey: number;
     onPlay: (track: TrackSummary) => void | Promise<void>;
-    onSort: (columnId: import('./ipc').TrackListColumnPreference['id']) => void;
     onColumnResize: (columnId: import('./ipc').TrackListColumnPreference['id'], widthPx: number) => void;
     onTotalCount: (count: number | null) => void;
   }
-  let { album, initialCoverSources = [], selectedTrackId, playbackReady, isSendingPlaybackCommand, columns, columnWidths, rowHeightPx, groupingEnabled, sort, livePlayCount, refreshKey, onPlay, onSort, onColumnResize, onTotalCount }: Props = $props();
+  let { album, initialCoverSources = [], selectedTrackId, playbackReady, isSendingPlaybackCommand, columns, columnWidths, rowHeightPx, groupingEnabled, livePlayCount, refreshKey, onPlay, onColumnResize, onTotalCount }: Props = $props();
   let coverUrls = $state<string[]>([]);
   let coverScanResolved = $state(false);
   let ownedCoverUrls: string[] = [];
   let artists = $state<string[]>([]);
   let scanning = $state(true);
   let scanError = $state<string | null>(null);
+  let detailSort = $state<import('./ipc').AlbumDetailSort>({ ...DEFAULT_ALBUM_DETAIL_SORT });
+  let sortReady = $state(false);
+  let sortSaveQueue: Promise<unknown> = Promise.resolve();
   let albumDiscQuickIndices = $state<{
     ascending: QuickIndexSnapshot;
     descending: QuickIndexSnapshot;
   } | null>(null);
-  let albumIndexSortActive = $state(true);
-  let albumIndexSortDirection = $state<'asc' | 'desc'>('asc');
+  const albumIndexSortActive = $derived(detailSort.field === 'position');
   let albumDiscQuickIndex = $derived(albumIndexSortActive
-    ? albumDiscQuickIndices?.[albumIndexSortDirection === 'asc' ? 'ascending' : 'descending']
+    ? albumDiscQuickIndices?.[detailSort.direction === 'asc' ? 'ascending' : 'descending']
     : undefined);
-  const albumSortIndicator = $derived(albumIndexSortActive
-    ? { field: 'position', direction: albumIndexSortDirection }
-    : sort);
+  const albumSortIndicator = $derived({ field: detailSort.field, direction: detailSort.direction });
+  const detailTrackSort = $derived({
+    field: detailSort.field === 'position' ? 'title' : detailSort.field,
+    direction: detailSort.field === 'position' ? 'asc' : detailSort.direction,
+  });
   const coverSourcesToDisplay = $derived(coverScanResolved ? coverUrls : initialCoverSources);
   const displayedCoverUrls = $derived(resolveAlbumArtworkDisplaySources(coverSourcesToDisplay, {
     fallbackUrl: defaultCoverUrl,
@@ -55,26 +58,40 @@
   async function fetchPage(request: TrackPageRequest): Promise<TrackPage> {
     return invokeCommand('library_get_album_page', {
       albumNames: album.aliases,
-      sort: albumIndexSortActive ? null : request.sort,
-      indexSort: albumIndexSortActive ? albumIndexSortDirection : null,
+      sort: detailSort.field === 'position' ? null : { field: detailSort.field, direction: detailSort.direction },
+      indexSort: albumIndexSortActive ? detailSort.direction : null,
       offset: request.offset,
       limit: request.limit,
     });
   }
 
   function handleColumnSort(columnId: import('./ipc').TrackListColumnPreference['id']): void {
-    albumIndexSortActive = false;
-    onSort(columnId);
+    saveDetailSort(toggleAlbumDetailSort(detailSort, columnId));
   }
 
   function handleIndexSort(): void {
-    if (albumIndexSortActive) {
-      albumIndexSortDirection = albumIndexSortDirection === 'asc' ? 'desc' : 'asc';
-    } else {
-      albumIndexSortActive = true;
-      albumIndexSortDirection = 'asc';
-    }
+    saveDetailSort(toggleAlbumDetailSort(detailSort, 'position'));
   }
+
+  function saveDetailSort(preference: import('./ipc').AlbumDetailSort): void {
+    detailSort = preference;
+    sortSaveQueue = sortSaveQueue
+      .catch(() => undefined)
+      .then(() => invokeCommand('settings_set_album_detail_sort', { preference }))
+      .catch((error) => console.warn('無法保存專輯歌曲排序設定', error));
+  }
+
+  onMount(() => {
+    let cancelled = false;
+    void invokeCommand('settings_get_album_detail_sort', {}).then((preference) => {
+      if (!cancelled) detailSort = normalizeAlbumDetailSort(preference);
+    }).catch((error) => {
+      console.warn('無法讀取專輯歌曲排序設定，使用曲目編號排序', error);
+    }).finally(() => {
+      if (!cancelled) sortReady = true;
+    });
+    return () => { cancelled = true; };
+  });
 
   async function selectionKey(): Promise<string> {
     return sha256Hex(copyToArrayBuffer(new TextEncoder().encode(`${album.key}\0${album.trackCount}`)));
@@ -189,26 +206,33 @@
       <AlbumArtworkMosaic sources={displayedCoverUrls} label={`${album.displayName} 封面拼貼`} />
     </div>
     <div class="album-detail-summary">
-      <strong>{album.displayName}</strong>
-      <span>{artists.length ? artists.join('．') : '—'}</span>
-      <span>{formatAlbumDetailSummary(album.trackCount, album.playedMs, album.durationMs)}</span>
+      <div class="album-detail-artists">
+        <span class="album-detail-label">包含的演出者</span>
+        <span class="album-detail-value">{artists.length ? artists.join('．') : '未知'}</span>
+      </div>
+      <div class="album-detail-stats">
+        <span><span class="album-detail-label">累積播放</span><span class="album-detail-value">{formatDurationHours(album.playedMs)}</span></span>
+        <span><span class="album-detail-label">播放時長</span><span class="album-detail-value">{formatDurationHours(album.durationMs)}</span></span>
+      </div>
       {#if scanError}<span class="album-detail-error" role="status">封面整理失敗：{scanError}</span>{/if}
       {#if scanning && coverUrls.length === 0}<span class="album-detail-status" role="status">正在整理封面…</span>{/if}
     </div>
   </div>
   <div class="album-detail-tracks">
-    <TrackList
-      query=""
-      resetKey={`${album.key}:${refreshKey}:${albumIndexSortActive ? `index-${albumIndexSortDirection}` : `column-${sort.field}-${sort.direction}`}`}
-      listId={`album-detail-${album.key}`}
-      {selectedTrackId} {playbackReady} {isSendingPlaybackCommand} {columns} {columnWidths} {rowHeightPx} {sort} {livePlayCount}
-      fetchPage={fetchPage} {onPlay} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
-      sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel="依專輯曲目編號排序" onIndexSort={handleIndexSort}
-      quickIndexOverride={albumDiscQuickIndex}
-      quickIndexAlbumNames={album.aliases}
-      {groupingEnabled}
-      getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber)}
-    />
+    {#if sortReady}
+      <TrackList
+        query=""
+        resetKey={`${album.key}:${refreshKey}:${detailSort.field}-${detailSort.direction}`}
+        listId={`album-detail-${album.key}`}
+        {selectedTrackId} {playbackReady} {isSendingPlaybackCommand} {columns} {columnWidths} {rowHeightPx} sort={detailTrackSort} {livePlayCount}
+        fetchPage={fetchPage} {onPlay} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
+        sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel="依專輯曲目編號排序" onIndexSort={handleIndexSort}
+        quickIndexOverride={albumDiscQuickIndex}
+        quickIndexAlbumNames={album.aliases}
+        {groupingEnabled}
+        getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber)}
+      />
+    {/if}
   </div>
 </div>
 
@@ -216,9 +240,13 @@
   .album-detail-shell { display:flex; min-width:0; min-height:0; flex:1 1 auto; flex-direction:column; }
   .album-detail-heading { display:flex; flex:0 0 auto; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px) 20px; }
   .album-detail-art { width:148px; flex:0 0 148px; aspect-ratio:1; overflow:hidden; border-radius:10px; background:#000; }
-  .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:8px; }
-  .album-detail-summary strong { overflow:hidden; font-size:var(--font-title); font-weight:600; text-overflow:ellipsis; }
-  .album-detail-summary span { color:var(--text-soft); font-size:var(--font-body); }
+  .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:10px; }
+  .album-detail-artists,
+  .album-detail-stats,
+  .album-detail-stats > span { display:flex; min-width:0; flex-wrap:wrap; align-items:baseline; gap:8px; }
+  .album-detail-stats { gap:18px; }
+  .album-detail-summary .album-detail-label { color:var(--muted); font-size:var(--font-caption); }
+  .album-detail-summary .album-detail-value { color:var(--text-soft); font-size:var(--font-body); }
   .album-detail-summary .album-detail-error,
   .album-detail-summary .album-detail-status { color:var(--muted); font-size:var(--font-caption); }
   .album-detail-tracks { display:flex; min-height:0; flex:1 1 auto; flex-direction:column; }
