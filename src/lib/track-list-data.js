@@ -200,8 +200,9 @@ export class PagedListController {
 
   /**
    * Resize the virtual page window without changing its scope, total count, or
-   * scroll range. Cached pages are discarded because their offsets are aligned
-   * to the previous page size.
+   * scroll range. Cached pages remain valid row ranges even when their offsets
+   * no longer align to the new request size; uncovered gaps are fetched on
+   * demand.
    * @param {number} requestedPageSize
    * @returns {boolean}
    */
@@ -214,7 +215,6 @@ export class PagedListController {
 
     this.pageSize = nextPageSize;
     this.generation += 1;
-    this.pages.clear();
     this.errors.clear();
     this.refreshState = null;
     for (const state of this.queue) state.resolve();
@@ -280,14 +280,15 @@ export class PagedListController {
       return null;
     }
 
-    const offset = Math.floor(index / this.pageSize) * this.pageSize;
-    const page = this.pages.get(offset);
-    if (!page) return null;
-    this.pages.delete(offset);
-    this.pages.set(offset, page);
-    /** @type {Item | undefined} */
-    const item = page.items[index - offset];
-    return item ?? null;
+    const pages = [...this.pages.entries()].sort(([left], [right]) => right - left);
+    for (const [offset, page] of pages) {
+      if (index < page.offset || index >= page.offset + page.items.length) continue;
+      this.pages.delete(offset);
+      this.pages.set(offset, page);
+      /** @type {Item | undefined} */
+      return page.items[index - page.offset] ?? null;
+    }
+    return null;
   }
 
   /** Backwards-compatible alias for the library list. */
@@ -308,13 +309,19 @@ export class PagedListController {
     const safeStart = Math.max(0, Math.floor(Number.isFinite(start) ? start : 0));
     const safeEnd = Math.max(safeStart, Math.floor(Number.isFinite(end) ? end : safeStart));
     this.lastRange = { start: safeStart, end: safeEnd };
-    this.scheduleRange();
+    while (true) {
+      this.scheduleRange();
+      const offsets = this.offsetsForRange(safeStart, safeEnd);
+      const promises = offsets
+        .map((offset) => this.loads.get(offset)?.promise)
+        .filter((promise) => promise !== undefined);
+      if (promises.length === 0) return;
 
-    const offsets = this.offsetsForRange(safeStart, safeEnd);
-    const promises = offsets
-      .map((offset) => this.loads.get(offset)?.promise)
-      .filter((promise) => promise !== undefined);
-    await Promise.all(promises);
+      // The first response establishes totalCount and schedules the real pages.
+      // A viewport resize can also invalidate a request generation while this
+      // call is waiting. Recompute until the latest range has no pending work.
+      await Promise.all(promises);
+    }
   }
 
   /** @param {number} offset */
@@ -371,7 +378,15 @@ export class PagedListController {
     for (const offset of wanted) {
       const mustRefresh = this.refreshState?.generation === this.generation
         && this.refreshState.expected.has(offset);
-      if ((!mustRefresh && this.pages.has(offset)) || this.errors.has(offset) || this.loads.has(offset)) continue;
+      const cachedStart = Math.max(start, offset);
+      const cachedEnd = Math.min(
+        end,
+        offset + this.pageSize,
+        this.totalCount ?? Number.POSITIVE_INFINITY,
+      );
+      if ((!mustRefresh && this.totalCount !== null && this.hasCachedRange(cachedStart, cachedEnd))
+        || this.errors.has(offset)
+        || this.loads.has(offset)) continue;
       this.queue.push(this.createLoadState(offset));
     }
 
@@ -474,6 +489,21 @@ export class PagedListController {
       && page.items.length <= this.pageSize
       && page.offset + page.items.length <= page.totalCount
       && !(page.items.length === 0 && page.offset < page.totalCount);
+  }
+
+  /** @param {number} start @param {number} end */
+  hasCachedRange(start, end) {
+    if (end <= start) return true;
+    let coveredUntil = start;
+    const pages = [...this.pages.values()].sort((left, right) => left.offset - right.offset);
+    for (const page of pages) {
+      const pageEnd = page.offset + page.items.length;
+      if (pageEnd <= coveredUntil) continue;
+      if (page.offset > coveredUntil) return false;
+      coveredUntil = pageEnd;
+      if (coveredUntil >= end) return true;
+    }
+    return false;
   }
 
   evictOldPages() {

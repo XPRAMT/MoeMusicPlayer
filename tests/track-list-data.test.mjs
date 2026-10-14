@@ -138,24 +138,34 @@ test('page count changes during scrolling are reported instead of mixing snapsho
   assert.equal(data.trackAt(TRACK_PAGE_SIZE), null);
 });
 
-test('changing the viewport page size realigns pages and retains the visible data range', async () => {
+test('changing viewport page size preserves cached rows and fetches only uncovered ranges', async () => {
   const requests = [];
   const data = new PagedTrackList(async (request) => {
     requests.push({ offset: request.offset, limit: request.limit });
     return makePage(request.offset, request.limit, 100);
   });
   data.reset('', 'resize-page-size');
-  await data.ensureRange(0, 10);
+  await data.ensureRange(0, 26);
   assert.equal(data.snapshot().totalCount, 100);
+  assert.equal(data.itemAt(0)?.id, 'track-0');
+  assert.equal(data.itemAt(25)?.id, 'track-25');
 
   assert.equal(data.setPageSize(24), true);
-  await data.ensureRange(20, 30);
-
-  assert.ok(requests.some((request) => request.offset === 0 && request.limit === 24));
-  assert.ok(requests.some((request) => request.offset === 24 && request.limit === 24));
+  assert.equal(data.itemAt(0)?.id, 'track-0');
   assert.equal(data.itemAt(25)?.id, 'track-25');
+  await data.ensureRange(38, 45);
+  assert.equal(data.itemAt(38)?.id, 'track-38');
+  assert.equal(data.itemAt(44)?.id, 'track-44');
+
+  assert.equal(data.setPageSize(26), true);
+  await data.ensureRange(38, 45);
+  assert.equal(data.itemAt(38)?.id, 'track-38');
+  assert.deepEqual(requests, [
+    { offset: 0, limit: TRACK_PAGE_SIZE },
+    { offset: 24, limit: 24 },
+  ]);
   assert.equal(data.snapshot().totalCount, 100);
-  assert.equal(data.setPageSize(24), false);
+  assert.equal(data.setPageSize(26), false);
 });
 
 test('the first request uses the measured viewport page size', async () => {
@@ -170,6 +180,32 @@ test('the first request uses the measured viewport page size', async () => {
   await data.ensureRange(0, 34);
 
   assert.deepEqual(requests, [{ offset: 0, limit: 34 }]);
+});
+
+test('a viewport resize while the initial page is loading waits for the replacement generation', async () => {
+  const requests = [];
+  let resolveInitial;
+  const data = new PagedTrackList((request) => {
+    requests.push({ offset: request.offset, limit: request.limit });
+    if (requests.length === 1) {
+      return new Promise((resolve) => { resolveInitial = resolve; });
+    }
+    return Promise.resolve(makePage(request.offset, request.limit, 100));
+  });
+  data.reset('', 'resize-during-initial-load');
+
+  const loading = data.ensureRange(0, 26);
+  assert.deepEqual(requests, [{ offset: 0, limit: TRACK_PAGE_SIZE }]);
+  data.setPageSize(26);
+  resolveInitial(makePage(0, TRACK_PAGE_SIZE, 100));
+  await loading;
+
+  assert.deepEqual(requests, [
+    { offset: 0, limit: TRACK_PAGE_SIZE },
+    { offset: 0, limit: 26 },
+  ]);
+  assert.equal(data.itemAt(25)?.id, 'track-25');
+  assert.equal(data.snapshot().pendingPageCount, 0);
 });
 
 test('a visible page load refreshes the same virtual range without scrolling', async () => {
