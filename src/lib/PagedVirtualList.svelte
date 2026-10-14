@@ -44,7 +44,7 @@
     getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
-  import { createQuickIndexRowsScheduler, dataIndexToVisualIndex, getQuickIndexColumnCount, getQuickIndexDisplayLabel, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
+  import { createQuickIndexRowsScheduler, dataIndexToVisualIndex, getQuickIndexColumnCount, getQuickIndexDisplayLabel, quickIndexGroupsMatch, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
@@ -180,6 +180,7 @@
   let displayedGroupRows = $state<QuickIndexGroup[]>([]);
 
   const virtualDataCount = $derived(totalCount ?? 40);
+  const groupRowsSynchronized = $derived(quickIndexGroupsMatch(displayedGroupRows, groupRows));
   const virtualTotalCount = $derived(virtualDataCount + displayedGroupRows.length);
   const rowViewportHeight = $derived(
     fillAvailable
@@ -202,7 +203,7 @@
       | { kind: 'group'; visualIndex: number; label: string; key: string }
       | { kind: 'item'; visualIndex: number; index: number; item: Item | null; key: string | number }
     > = [];
-    if (!groupingReady) return rows;
+    if (!groupingReady || !groupRowsSynchronized) return rows;
     for (let visualIndex = range.start; visualIndex < range.end; visualIndex += 1) {
       let groupRow: QuickIndexGroup | null = null;
       for (let groupIndex = 0; groupIndex < displayedGroupRows.length; groupIndex += 1) {
@@ -247,7 +248,7 @@
   }
 
   $effect(() => {
-    if (!metricsReady) return;
+    if (!metricsReady || !groupingReady || !groupRowsSynchronized) return;
     const currentListId = listId;
     const currentScrollResetKey = scrollResetKey === undefined ? generation : scrollResetKey;
     const listChanged = seenListId !== undefined && currentListId !== seenListId;

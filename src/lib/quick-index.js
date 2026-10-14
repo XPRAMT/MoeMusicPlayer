@@ -72,6 +72,13 @@ export function getQuickIndexDisplayLabel(label) {
   return label === '未知' ? '？' : label;
 }
 
+/** @param {Array<{ label: string, beforeIndex: number }>} displayed @param {Array<{ label: string, beforeIndex: number }>} incoming */
+export function quickIndexGroupsMatch(displayed, incoming) {
+  return displayed.length === incoming.length
+    && displayed.every((group, index) => group.label === incoming[index]?.label
+      && group.beforeIndex === incoming[index]?.beforeIndex);
+}
+
 /** @param {string} key */
 export function getCachedQuickIndex(key) {
   const value = quickIndexCache.get(key);

@@ -6,6 +6,7 @@ import {
   dataIndexToVisualIndex,
   getQuickIndexColumnCount,
   getQuickIndexDisplayLabel,
+  quickIndexGroupsMatch,
   visualIndexToAnchorDataIndex,
   visualIndexToDataIndex,
   visualRangeToDataRange,
@@ -20,6 +21,19 @@ test('quick index columns are the rounded square root of label count', () => {
 test('quick find displays the Unknown category as a full-width question mark', () => {
   assert.equal(getQuickIndexDisplayLabel('未知'), '？');
   assert.equal(getQuickIndexDisplayLabel('ㄅ'), 'ㄅ');
+});
+
+test('the virtual list stays gated until its displayed group rows match the complete result', () => {
+  const completeGroups = [
+    { label: 'A', beforeIndex: 0 },
+    { label: 'B', beforeIndex: 12 },
+  ];
+  assert.equal(quickIndexGroupsMatch([], completeGroups), false);
+  assert.equal(quickIndexGroupsMatch(completeGroups, completeGroups), true);
+  assert.equal(quickIndexGroupsMatch(completeGroups, [completeGroups[0]]), false);
+  assert.equal(quickIndexGroupsMatch(completeGroups, [
+    completeGroups[0], { label: 'C', beforeIndex: 12 },
+  ]), false);
 });
 
 test('paged grouping keeps contiguous groups across page boundaries and trims names', async () => {
