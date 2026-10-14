@@ -32,6 +32,7 @@
 
   let { refreshKey, rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX, onSelect, onCountChange, onRowsChange }: Props = $props();
   let rows = $state<ArtistRow[]>([]);
+  let titleSortRank = $state<Record<string, number>>({});
   let sortField = $state<SortField>('title');
   let sortDirection = $state<'asc' | 'desc'>('asc');
   let loading = $state(false);
@@ -63,10 +64,16 @@
         albumIdentities,
       }) as ArtistIndexEntry[];
       if (revision !== requestRevision) return;
-      rows = result.map((entry) => ({
+      const nextRows = result.map((entry) => ({
         ...entry,
         displayName: preferredArtistName(entry.names, traditionalByName) || entry.artistNames[0] || '',
       }));
+      const sortedIndices = await invokeCommand('library_sort_text_indices', {
+        values: nextRows.map((entry) => entry.displayName),
+      });
+      if (revision !== requestRevision) return;
+      titleSortRank = Object.fromEntries(sortedIndices.map((rowIndex, rank) => [nextRows[rowIndex]?.key, rank]));
+      rows = nextRows;
       onRowsChange(rows);
       onCountChange(rows.length);
       listRevision += 1;
@@ -123,7 +130,7 @@
     const leftValue = sortValue(left, sortField);
     const rightValue = sortValue(right, sortField);
     const compared = typeof leftValue === 'string' && typeof rightValue === 'string'
-      ? leftValue.localeCompare(rightValue, 'zh-Hant', { numeric: true, sensitivity: 'base' })
+      ? (titleSortRank[left.key] ?? 0) - (titleSortRank[right.key] ?? 0)
       : Number(leftValue) - Number(rightValue);
     return sortDirection === 'asc' ? compared : -compared;
   }));

@@ -626,6 +626,10 @@ interface IpcContract {
     args: Record<string, never>;
     result: ArtistIndexFacets;
   };
+  library_sort_text_indices: {
+    args: { values: string[] };
+    result: number[];
+  };
   library_get_album_index_facets: {
     args: Record<string, never>;
     result: AlbumIndexFacet[];

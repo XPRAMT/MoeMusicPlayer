@@ -30,6 +30,8 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **Year**: The displayed year is derived only from the embedded `YEAR` value. Accepted forms are a four-digit year (`YYYY`) or a valid full date (`YYYY-MM-DD`); other forms do not define a display year.
 
+**Music collation（音樂文字排序）**: Track titles, artists, and album names use one ICU4X collator with the operating system's current locale defaults and numeric ordering enabled. Windows supplies the locale through `GetUserDefaultLocaleName`; Android uses `Locale.getDefault()` and forces Zhuyin collation when the country is Taiwan. Artist and album indexes use the same backend comparator as SQLite track and playlist ordering.
+
 **App settings**: User-owned preferences stored in a versioned JSON document, including theme colors, shuffle, repeat mode, Now Playing layout/appearance, and the source registry. JSON is the authority for these values; SQLite rows are rebuildable music-data projections.
 
 **Main-window background source**: A saved choice of solid color, a UserData-copied image, a recursive slideshow folder, the current track's artwork, or the current Windows desktop wallpaper image. Slideshow timing/order and blur/opacity live in the versioned JSON settings; artwork and wallpaper are display resources rather than SQLite data.

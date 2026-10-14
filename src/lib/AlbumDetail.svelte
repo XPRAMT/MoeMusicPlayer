@@ -102,9 +102,10 @@
       group.names.push({ name: identity.name, count: counts.get(identity.name) ?? 0 });
       group.traditionalByName.set(identity.name, identity.traditional);
     }
-    return [...groups]
-      .sort(([left], [right]) => left.localeCompare(right, 'zh-Hant', { numeric: true, sensitivity: 'base' }))
-      .map(([, group]) => preferredArtistName(group.names, group.traditionalByName));
+    const names = [...groups.values()].map((group) =>
+      preferredArtistName(group.names, group.traditionalByName));
+    const sortedIndices = await invokeCommand('library_sort_text_indices', { values: names });
+    return sortedIndices.map((index) => names[index]).filter((name) => name !== undefined);
   }
 
   async function saveSelection(key: string, trackIds: string[], representative: boolean): Promise<void> {

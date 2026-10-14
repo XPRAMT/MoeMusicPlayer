@@ -49,7 +49,11 @@
     onCountChange(null);
     try {
       const facets = await invokeCommand('library_get_album_index_facets', {}) as AlbumIndexFacet[];
-      const rows = await buildAlbumEntries(facets);
+      const groupedRows = await buildAlbumEntries(facets);
+      const sortedIndices = await invokeCommand('library_sort_text_indices', {
+        values: groupedRows.map((album) => album.displayName),
+      });
+      const rows = sortedIndices.map((index) => groupedRows[index]).filter((album) => album !== undefined);
       if (revision !== requestRevision) return;
       albums = rows;
       onRowsChange(rows);

@@ -2907,6 +2907,20 @@ fn library_get_artist_index_facets(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn library_sort_text_indices(
+    state: State<'_, AppState>,
+    values: Vec<String>,
+) -> Result<Vec<usize>, String> {
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    Ok(database.sort_text_indices(&values))
+}
+
 async fn run_blocking_album_work<R, F>(work: F) -> Result<R, String>
 where
     R: Send + 'static,
@@ -9837,6 +9851,7 @@ pub fn run() {
             get_runtime_capabilities,
             library_get_page,
             library_get_artist_index_facets,
+            library_sort_text_indices,
             library_get_album_index_facets,
             library_get_album_page,
             library_get_album_artwork_candidates,

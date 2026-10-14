@@ -4,10 +4,16 @@ use std::{
     error::Error,
     fmt,
     path::Path,
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use icu_collator::{
+    options::CollatorOptions,
+    preferences::{CollationNumericOrdering, CollationType},
+    Collator, CollatorBorrowed, CollatorPreferences,
+};
+use icu_locale::Locale;
 use serde::{Deserialize, Serialize};
 
 use player_core::{
@@ -28,7 +34,9 @@ use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
+const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
+const ICU4X_COLLATION_DATA_VERSION: &str = "icu_collator-2.3.1+icu_collator_data-2.3.0";
 const MAX_PAGE_SIZE: u32 = 500;
 const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
@@ -149,7 +157,7 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
    AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?4 COLLATE BINARY)
    AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
    AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)
- ORDER BY t.sort_title COLLATE NATURAL_NOCASE, t.track_id
+ ORDER BY t.sort_title COLLATE MUSIC_LOCALE_NATURAL, t.track_id
  LIMIT ?2 OFFSET ?3";
 const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
@@ -202,7 +210,7 @@ const ALBUM_ARTWORK_CANDIDATES_SQL: &str = "SELECT t.track_id
    AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
  ORDER BY COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647),
-          COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE NATURAL_NOCASE,
+          COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL,
           t.track_id
  LIMIT ?2 OFFSET ?3";
 const PLAYLIST_PAGE_SQL: &str = r#"
@@ -272,9 +280,9 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
 fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
     match field {
         PlaylistSortField::Position => "e.position",
-        PlaylistSortField::Title => "COALESCE(e.entry_title, (SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='title'), t.title, '') COLLATE NATURAL_NOCASE",
-        PlaylistSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist, '') COLLATE NOCASE",
-        PlaylistSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album, '') COLLATE NOCASE",
+        PlaylistSortField::Title => "COALESCE(e.entry_title, (SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL",
+        PlaylistSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist, '') COLLATE MUSIC_LOCALE_NATURAL",
+        PlaylistSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album, '') COLLATE MUSIC_LOCALE_NATURAL",
         PlaylistSortField::Year => "COALESCE(t.release_date, printf('%04d', t.year), '')",
         PlaylistSortField::CreatedAt => "(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
         PlaylistSortField::AudioFormat => unreachable!("audio format has a compound sort key"),
@@ -502,6 +510,169 @@ ALTER TABLE playback_session_entries ADD COLUMN shuffle_restore_order INTEGER
     CHECK (shuffle_restore_order IS NULL OR shuffle_restore_order >= 0);
 "#;
 
+const SCHEMA_V15: &str = r#"
+DROP INDEX IF EXISTS tracks_sort_title;
+CREATE TABLE music_collation_metadata (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    signature TEXT NOT NULL
+);
+"#;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MusicCollationSpec {
+    locale: String,
+    collation_type: Option<CollationType>,
+}
+
+impl MusicCollationSpec {
+    fn system_default() -> Self {
+        static SPEC: OnceLock<MusicCollationSpec> = OnceLock::new();
+        SPEC.get_or_init(|| {
+            let (locale, collation_type) = system_locale_and_collation();
+            Self::from_locale_parts(&locale, collation_type)
+        })
+        .clone()
+    }
+
+    fn from_locale_parts(locale: &str, collation_type: Option<CollationType>) -> Self {
+        let locale = Locale::try_from_str(locale)
+            .unwrap_or(Locale::UNKNOWN)
+            .to_string();
+        Self {
+            locale,
+            collation_type,
+        }
+    }
+
+    fn signature(&self) -> String {
+        format!(
+            "{ICU4X_COLLATION_DATA_VERSION}|{}|{}|numeric=true|strength=locale-default",
+            self.locale,
+            self.collation_type
+                .map_or("default", |value| value.as_str()),
+        )
+    }
+
+    fn from_signature(signature: &str) -> Option<Self> {
+        let mut parts = signature.split('|');
+        let _data_version = parts.next()?;
+        let locale = parts.next()?;
+        let collation_type = match parts.next()? {
+            "default" => None,
+            "zhuyin" => Some(CollationType::Zhuyin),
+            "stroke" => Some(CollationType::Stroke),
+            "pinyin" => Some(CollationType::Pinyin),
+            "phonebk" => Some(CollationType::Phonebk),
+            "phonetic" => Some(CollationType::Phonetic),
+            "trad" => Some(CollationType::Trad),
+            "eor" => Some(CollationType::Eor),
+            _ => return None,
+        };
+        Some(Self::from_locale_parts(locale, collation_type))
+    }
+
+    fn build_collator(&self) -> Arc<CollatorBorrowed<'static>> {
+        let locale = Locale::try_from_str(&self.locale).unwrap_or(Locale::UNKNOWN);
+        let mut preferences = CollatorPreferences::from(&locale);
+        preferences.numeric_ordering = Some(CollationNumericOrdering::True);
+        preferences.collation_type = self.collation_type;
+        Arc::new(
+            Collator::try_new(preferences, CollatorOptions::default())
+                .expect("compiled ICU4X collation data must be available"),
+        )
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn system_locale_and_collation() -> (String, Option<CollationType>) {
+    use windows::Win32::Globalization::GetUserDefaultLocaleName;
+
+    let mut buffer = [0_u16; 85];
+    // GetUserDefaultLocaleName returns a null-terminated locale name or zero on failure.
+    let length = unsafe { GetUserDefaultLocaleName(&mut buffer) };
+    if length <= 1 {
+        return ("und".to_owned(), None);
+    }
+    let locale = String::from_utf16_lossy(&buffer[..(length - 1) as usize]);
+    let (locale, collation_type) = split_windows_sort_name(&locale);
+    (locale, collation_type)
+}
+
+#[cfg(target_os = "windows")]
+fn split_windows_sort_name(locale: &str) -> (String, Option<CollationType>) {
+    let Some((base, sort_name)) = locale.rsplit_once('_') else {
+        return (locale.replace('_', "-"), None);
+    };
+    let collation_type = match sort_name.to_ascii_lowercase().as_str() {
+        "pronun" => Some(CollationType::Zhuyin),
+        "stroke" => Some(CollationType::Stroke),
+        "phoneb" | "phonebk" => Some(CollationType::Phonebk),
+        "pinyin" => Some(CollationType::Pinyin),
+        "phonetic" => Some(CollationType::Phonetic),
+        "trad" => Some(CollationType::Trad),
+        "eor" => Some(CollationType::Eor),
+        _ => return (locale.replace('_', "-"), None),
+    };
+    (base.replace('_', "-"), collation_type)
+}
+
+#[cfg(target_os = "android")]
+fn system_locale_and_collation() -> (String, Option<CollationType>) {
+    use jni::{objects::JString, JavaVM};
+
+    let detected = (|| -> Option<(String, String)> {
+        let context = ndk_context::android_context();
+        // ndk-context exposes the process-owned JavaVM handle initialized by the Tauri runtime.
+        let vm = unsafe { JavaVM::from_raw(context.vm().cast()) }.ok()?;
+        let mut env = vm.attach_current_thread().ok()?;
+        let locale_class = env.find_class("java/util/Locale").ok()?;
+        let locale = env
+            .call_static_method(locale_class, "getDefault", "()Ljava/util/Locale;", &[])
+            .ok()?
+            .l()
+            .ok()?;
+        let tag_object = env
+            .call_method(&locale, "toLanguageTag", "()Ljava/lang/String;", &[])
+            .ok()?
+            .l()
+            .ok()?;
+        let country_object = env
+            .call_method(&locale, "getCountry", "()Ljava/lang/String;", &[])
+            .ok()?
+            .l()
+            .ok()?;
+        let tag: String = env.get_string(&JString::from(tag_object)).ok()?.into();
+        let country: String = env.get_string(&JString::from(country_object)).ok()?.into();
+        Some((tag, country))
+    })();
+
+    match detected {
+        Some((locale, country)) if country.eq_ignore_ascii_case("TW") => {
+            (locale, Some(CollationType::Zhuyin))
+        }
+        Some((locale, _)) => (locale, None),
+        None => ("und".to_owned(), None),
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+fn system_locale_and_collation() -> (String, Option<CollationType>) {
+    let locale = ["LC_COLLATE", "LC_ALL", "LANG"]
+        .into_iter()
+        .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
+        .unwrap_or_else(|| "und".to_owned());
+    let locale = locale.split('.').next().unwrap_or("und").replace('_', "-");
+    (locale, None)
+}
+
+fn compare_music_names(collator: &CollatorBorrowed<'static>, left: &str, right: &str) -> Ordering {
+    collator
+        .compare(left, right)
+        // ICU numeric comparison correctly handles arbitrary-length runs; this stable tie-break
+        // keeps equivalent numeric spellings such as 2 and 02 deterministic.
+        .then_with(|| natural_title_cmp(left, right))
+}
+
 pub fn natural_title_cmp(left: &str, right: &str) -> Ordering {
     let left = left.as_bytes();
     let right = right.as_bytes();
@@ -567,6 +738,57 @@ fn register_natural_title_collation(connection: &Connection) -> rusqlite::Result
     connection.create_collation("NATURAL_NOCASE", natural_title_cmp)
 }
 
+fn register_music_collation(
+    connection: &Connection,
+    collation_spec: &MusicCollationSpec,
+) -> rusqlite::Result<()> {
+    let collator = collation_spec.build_collator();
+    connection.create_collation(MUSIC_COLLATION_NAME, move |left, right| {
+        compare_music_names(&collator, left, right)
+    })
+}
+
+fn ensure_music_collation_index(
+    connection: &Connection,
+    collation_spec: &MusicCollationSpec,
+) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS music_collation_metadata (
+             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+             signature TEXT NOT NULL
+         );",
+    )?;
+    let stored_signature = connection
+        .query_row(
+            "SELECT signature FROM music_collation_metadata WHERE singleton=1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let index_exists = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='tracks_sort_title')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    let signature = collation_spec.signature();
+    if stored_signature.as_deref() == Some(signature.as_str()) && index_exists {
+        return Ok(());
+    }
+
+    let tx = connection.unchecked_transaction()?;
+    tx.execute_batch(
+        "DROP INDEX IF EXISTS tracks_sort_title;
+         CREATE INDEX tracks_sort_title
+             ON tracks(sort_title COLLATE MUSIC_LOCALE_NATURAL, track_id);",
+    )?;
+    tx.execute(
+        "INSERT INTO music_collation_metadata(singleton, signature) VALUES (1, ?1)
+         ON CONFLICT(singleton) DO UPDATE SET signature=excluded.signature",
+        [signature],
+    )?;
+    tx.commit()
+}
+
 fn repeat_mode_name(mode: QueueRepeatMode) -> &'static str {
     match mode {
         QueueRepeatMode::Off => "off",
@@ -608,6 +830,8 @@ pub struct PlaybackStatisticsRuntime {
 
 pub struct Database {
     connection: Mutex<Connection>,
+    collation_spec: MusicCollationSpec,
+    collator: Arc<CollatorBorrowed<'static>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -793,9 +1017,10 @@ impl Database {
     /// Open an existing database only after a structural check on a genuinely read-only handle.
     /// This method never rebuilds or replaces the database and checks before writable migrations.
     pub fn open_checked(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
+        let collation_spec = MusicCollationSpec::system_default();
         let path = path.as_ref();
         if path == Path::new(":memory:") || !path.exists() {
-            return Self::open(path);
+            return Self::open_with_collation(path, collation_spec);
         }
         let metadata = std::fs::metadata(path)?;
         if metadata.len() == 0 {
@@ -811,6 +1036,27 @@ impl Database {
         let validation_connection =
             Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         register_natural_title_collation(&validation_connection)?;
+        let stored_version: i64 =
+            validation_connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let has_collation_metadata: bool = validation_connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='music_collation_metadata')",
+            [],
+            |row| row.get(0),
+        )?;
+        if stored_version >= 15 && has_collation_metadata {
+            let stored_signature = validation_connection
+                .query_row(
+                    "SELECT signature FROM music_collation_metadata WHERE singleton=1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let validation_spec = stored_signature
+                .as_deref()
+                .and_then(MusicCollationSpec::from_signature)
+                .unwrap_or_else(|| collation_spec.clone());
+            register_music_collation(&validation_connection, &validation_spec)?;
+        }
         validation_connection.busy_timeout(Duration::from_secs(5))?;
         let check: String = validation_connection
             .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
@@ -828,10 +1074,17 @@ impl Database {
         // platforms that enforce SQLite's file-sharing locks.
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         drop(validation_connection);
-        Self::from_connection(connection)
+        Self::from_connection_with_collation(connection, collation_spec)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
+        Self::open_with_collation(path, MusicCollationSpec::system_default())
+    }
+
+    fn open_with_collation(
+        path: impl AsRef<Path>,
+        collation_spec: MusicCollationSpec,
+    ) -> Result<Self, DatabaseError> {
         let path = path.as_ref();
         if path != Path::new(":memory:") {
             if let Some(parent) = path
@@ -842,11 +1095,19 @@ impl Database {
             }
         }
         let connection = Connection::open(path)?;
-        Self::from_connection(connection)
+        Self::from_connection_with_collation(connection, collation_spec)
     }
 
     pub fn open_in_memory() -> Result<Self, DatabaseError> {
-        Self::from_connection(Connection::open_in_memory()?)
+        Self::from_connection_with_collation(
+            Connection::open_in_memory()?,
+            MusicCollationSpec::system_default(),
+        )
+    }
+
+    #[cfg(test)]
+    fn from_connection(connection: Connection) -> Result<Self, DatabaseError> {
+        Self::from_connection_with_collation(connection, MusicCollationSpec::system_default())
     }
 
     /// Checkpoint pending WAL pages after callers have stopped and joined their writers.
@@ -865,13 +1126,19 @@ impl Database {
         Ok(())
     }
 
-    fn from_connection(connection: Connection) -> Result<Self, DatabaseError> {
+    fn from_connection_with_collation(
+        connection: Connection,
+        collation_spec: MusicCollationSpec,
+    ) -> Result<Self, DatabaseError> {
         register_natural_title_collation(&connection)?;
+        register_music_collation(&connection, &collation_spec)?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         let database = Self {
             connection: Mutex::new(connection),
+            collator: collation_spec.build_collator(),
+            collation_spec,
         };
         database.migrate()?;
         Ok(database)
@@ -980,6 +1247,13 @@ impl Database {
             tx.execute_batch(SCHEMA_V14)?;
             tx.pragma_update(None, "user_version", 14)?;
             tx.commit()?;
+            version = 14;
+        }
+        if version == 14 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V15)?;
+            tx.pragma_update(None, "user_version", 15)?;
+            tx.commit()?;
         }
         connection.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS sync_seen_items (
@@ -987,7 +1261,18 @@ impl Database {
                 PRIMARY KEY (source_id, source_item_id)
             );",
         )?;
+        ensure_music_collation_index(&connection, &self.collation_spec)?;
         Ok(())
+    }
+
+    /// Sort display labels with the same ICU4X locale, collation and natural-number rules used by
+    /// SQLite track and playlist ordering. Returned indices refer to the original input slice.
+    pub fn sort_text_indices(&self, values: &[String]) -> Vec<usize> {
+        let mut indices = (0..values.len()).collect::<Vec<_>>();
+        indices.sort_by(|left, right| {
+            compare_music_names(&self.collator, &values[*left], &values[*right])
+        });
+        indices
     }
 
     pub fn journal_mode(&self) -> Result<String, DatabaseError> {
@@ -1238,7 +1523,7 @@ impl Database {
         let database_offset = i64::try_from(offset).unwrap_or(i64::MAX);
         let order_by = sort.map(tracks_order_by_sql).unwrap_or_else(|| {
             "COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647), \
-             COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE NATURAL_NOCASE, t.track_id".to_owned()
+             COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL, t.track_id".to_owned()
         });
         let sql = format!("{ALBUM_TRACKS_PAGE_SQL} ORDER BY {order_by} LIMIT ?2 OFFSET ?3");
         let mut statement = connection.prepare(&sql)?;
@@ -3472,22 +3757,22 @@ fn tracks_order_by_sql(sort: TrackListSort) -> String {
     let asc = matches!(sort.direction, TrackSortDirection::Asc);
     match (sort.field, asc) {
         (TrackSortField::Title, true) => {
-            "t.sort_title COLLATE NATURAL_NOCASE ASC, t.track_id ASC"
+            "t.sort_title COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
         }
         (TrackSortField::Title, false) => {
-            "t.sort_title COLLATE NATURAL_NOCASE DESC, t.track_id DESC"
+            "t.sort_title COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
         }
         (TrackSortField::Artist, true) => {
-            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE NOCASE ASC, t.track_id ASC"
+            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
         }
         (TrackSortField::Artist, false) => {
-            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE NOCASE DESC, t.track_id DESC"
+            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
         }
         (TrackSortField::Album, true) => {
-            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE NOCASE ASC, t.track_id ASC"
+            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
         }
         (TrackSortField::Album, false) => {
-            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE NOCASE DESC, t.track_id DESC"
+            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
         }
         (TrackSortField::Year, true) => {
             "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date ASC, (t.year IS NULL) ASC, t.year ASC, t.track_id ASC"
@@ -4243,10 +4528,11 @@ mod tests {
     use rusqlite::{params, Connection, OptionalExtension};
 
     use super::{
-        natural_title_cmp, ArtistIdentityMapping, Database, DatabaseError, LibraryRepository,
-        Ordering, PlaybackSessionCheckpoint, PlaylistFileSyncState, ThemePreferences,
-        COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
-        SCHEMA_V7, SCHEMA_V8, SCHEMA_V9, TRACKS_PAGE_SQL,
+        natural_title_cmp, ArtistIdentityMapping, CollationType, Database, DatabaseError,
+        LibraryRepository, MusicCollationSpec, Ordering, PlaybackSessionCheckpoint,
+        PlaylistFileSyncState, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2,
+        SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9,
+        TRACKS_PAGE_SQL,
     };
 
     fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
@@ -4944,7 +5230,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 14);
+            assert_eq!(version, 15);
         }
         {
             let db = Database::open_checked(&path).expect("read-only validate migrated database");
@@ -4988,7 +5274,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 14);
+        assert_eq!(current_version, 15);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -5047,7 +5333,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -5087,7 +5373,7 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
     }
 
@@ -5127,7 +5413,7 @@ mod tests {
                     .expect("sync-state table lookup"),
             )
         };
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
         assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
     }
 
@@ -5303,7 +5589,7 @@ mod tests {
                     .expect("lyric candidates table"),
             )
         };
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
         assert_eq!(lyric_table, "track_lyrics");
         assert_eq!(candidate_table, "lyric_candidates");
         assert_eq!(
@@ -5340,7 +5626,7 @@ mod tests {
             [],
             |row| row.get(0),
         ).expect("playback session tables");
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
         assert_eq!(tables, 2);
     }
 
@@ -6243,6 +6529,173 @@ mod tests {
         assert_eq!(actual, ascending);
         assert_eq!(natural_title_cmp("song 3", "Song 12"), Ordering::Less);
         assert_eq!(natural_title_cmp("Song 12", "song 3"), Ordering::Greater);
+    }
+
+    #[test]
+    fn music_collation_uses_explicit_zhuyin_and_natural_numbers() {
+        let db = Database::from_connection_with_collation(
+            Connection::open_in_memory().expect("connection"),
+            MusicCollationSpec::from_locale_parts("zh-TW", Some(CollationType::Zhuyin)),
+        )
+        .expect("Taiwanese Zhuyin database");
+
+        let names = vec![
+            "字 2".to_owned(),
+            "中 10".to_owned(),
+            "中 2".to_owned(),
+            "Track 100000000000000000000000000000000000000000".to_owned(),
+            "Track 10".to_owned(),
+            "Track 2".to_owned(),
+        ];
+        let indices = db.sort_text_indices(&names);
+        let sorted = indices
+            .iter()
+            .map(|index| names[*index].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sorted,
+            [
+                "中 2",
+                "中 10",
+                "字 2",
+                "Track 2",
+                "Track 10",
+                "Track 100000000000000000000000000000000000000000",
+            ],
+            "Taiwanese Zhuyin determines Han ordering while ICU numeric ordering handles long digit runs",
+        );
+    }
+
+    #[test]
+    fn track_title_artist_and_album_sql_sorts_share_icu_collation() {
+        let mut db = Database::from_connection_with_collation(
+            Connection::open_in_memory().expect("connection"),
+            MusicCollationSpec::from_locale_parts("zh-TW", Some(CollationType::Zhuyin)),
+        )
+        .expect("Taiwanese Zhuyin database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "icu-sort-source");
+        let fields = [
+            ("字 2", "字 2", "專輯 10"),
+            ("中 10", "中 10", "專輯 2"),
+            ("中 2", "中 2", "專輯 1"),
+        ];
+        let records = fields
+            .iter()
+            .enumerate()
+            .map(|(index, (title, artist, album))| {
+                let mut item = record(
+                    &root,
+                    &format!("item-{index}"),
+                    &format!("path:item-{index}"),
+                    title,
+                    100 + index as u64,
+                    1_000 + index as i64,
+                );
+                let metadata = item.metadata.as_mut().expect("metadata");
+                metadata.artist = Some((*artist).to_owned());
+                metadata.album = Some((*album).to_owned());
+                item
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2_000,
+        );
+
+        for (field, expected) in [
+            (TrackSortField::Title, vec!["中 2", "中 10", "字 2"]),
+            (TrackSortField::Artist, vec!["中 2", "中 10", "字 2"]),
+            (TrackSortField::Album, vec!["中 2", "中 10", "字 2"]),
+        ] {
+            let page = db
+                .list_tracks_page(ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field,
+                        direction: TrackSortDirection::Asc,
+                    },
+                })
+                .expect("sorted page");
+            assert_eq!(
+                page.items
+                    .iter()
+                    .map(|track| track.title.as_deref().unwrap())
+                    .collect::<Vec<_>>(),
+                expected,
+                "all text sort fields use the same ICU4X collation",
+            );
+        }
+    }
+
+    #[test]
+    fn collation_data_signature_change_rebuilds_the_title_index() {
+        let path =
+            std::env::temp_dir().join(format!("moemusic-collation-{}.sqlite3", TrackId::new()));
+        let db = Database::open_with_collation(
+            &path,
+            MusicCollationSpec::from_locale_parts("zh-TW", Some(CollationType::Zhuyin)),
+        )
+        .expect("create database");
+        let previous_signature = db.collation_spec.signature();
+        drop(db);
+
+        let connection = Connection::open(&path).expect("open fixture");
+        connection
+            .execute(
+                "UPDATE music_collation_metadata SET signature=?1 WHERE singleton=1",
+                [format!("outdated-{previous_signature}")],
+            )
+            .expect("mark stale ICU data signature");
+        drop(connection);
+
+        let reopened = Database::open_with_collation(
+            &path,
+            MusicCollationSpec::from_locale_parts("zh-TW", Some(CollationType::Zhuyin)),
+        )
+        .expect("rebuild collation index");
+        let stored_signature: String = reopened
+            .lock()
+            .expect("database lock")
+            .query_row(
+                "SELECT signature FROM music_collation_metadata WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("updated signature");
+        assert_eq!(stored_signature, previous_signature);
+        drop(reopened);
+        for suffix in ["", "-wal", "-shm"] {
+            let file = if suffix.is_empty() {
+                path.clone()
+            } else {
+                sidecar_path(&path, suffix)
+            };
+            let _ = std::fs::remove_file(file);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_sort_locale_names_map_to_icu_collation_types() {
+        use super::split_windows_sort_name;
+
+        assert_eq!(
+            split_windows_sort_name("zh-TW_pronun"),
+            ("zh-TW".to_owned(), Some(CollationType::Zhuyin)),
+        );
+        assert_eq!(
+            split_windows_sort_name("zh-CN_stroke"),
+            ("zh-CN".to_owned(), Some(CollationType::Stroke)),
+        );
+        assert_eq!(split_windows_sort_name("en-US"), ("en-US".to_owned(), None));
     }
 
     #[test]
@@ -8878,7 +9331,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v8_migrates_to_v14_without_requiring_track_rows_for_statistics() {
+    fn schema_v8_migrates_to_v15_without_requiring_track_rows_for_statistics() {
         let connection = rusqlite::Connection::open_in_memory().expect("legacy v8 database");
         connection.execute_batch(SCHEMA_V1).expect("schema v1");
         connection.execute_batch(SCHEMA_V2).expect("schema v2");
@@ -8898,7 +9351,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
         let table_count: i64 = db
             .lock()
             .expect("connection")

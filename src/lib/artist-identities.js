@@ -37,6 +37,6 @@ export function preferredArtistName(names, traditionalByName) {
     const leftTraditional = (traditionalByName.get(left.name) ?? left.name) === left.name;
     const rightTraditional = (traditionalByName.get(right.name) ?? right.name) === right.name;
     if (leftTraditional !== rightTraditional) return leftTraditional ? -1 : 1;
-    return left.name.localeCompare(right.name, 'zh-Hant');
+    return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
   })[0].name;
 }

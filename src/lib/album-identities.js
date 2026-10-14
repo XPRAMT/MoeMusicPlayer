@@ -47,8 +47,7 @@ export async function buildAlbumEntries(facets) {
       trackCount: group.trackCount,
       unmarked: group.unmarked,
     };
-  }).sort((left, right) => left.displayName.localeCompare(right.displayName, 'zh-Hant', { numeric: true, sensitivity: 'base' })
-    || Number(left.unmarked) - Number(right.unmarked));
+  });
 }
 
 /** @param {string} name @param {AlbumEntry[]} entries @returns {Promise<AlbumEntry | null>} */

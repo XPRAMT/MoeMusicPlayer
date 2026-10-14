@@ -21,6 +21,12 @@ Object.assign(window, {
     invoke: async (command: string, args?: Record<string, unknown>) => {
       const storedSort = sessionStorage.getItem('artist-list-sort');
       if (command === 'library_get_artist_index_facets') return { artists: [], albums: [] };
+      if (command === 'library_sort_text_indices') {
+        const values = (args?.values as string[] | undefined) ?? [];
+        return values.map((_, index) => index).sort((left, right) =>
+          new Intl.Collator('zh-TW', { numeric: true }).compare(values[left] ?? '', values[right] ?? ''),
+        );
+      }
       if (command === 'library_get_artist_index') {
         await new Promise((resolve) => setTimeout(resolve, 50));
         return artists;

@@ -70,6 +70,13 @@
     "purpose": "SQLite 資料存取"
   },
   {
+    "name": "ICU4X",
+    "version": "2.3.1 / collation data 2.3.0",
+    "license": "Unicode-3.0",
+    "repositoryUrl": "https://github.com/unicode-org/icu4x",
+    "purpose": "依系統地區設定進行 Unicode 與自然數字排序"
+  },
+  {
     "name": "serde",
     "version": "1.0.229",
     "license": "MIT OR Apache-2.0",

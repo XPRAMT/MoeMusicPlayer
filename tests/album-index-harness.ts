@@ -23,6 +23,12 @@ Object.assign(window, {
         await new Promise((resolve) => setTimeout(resolve, 120));
         return Array.from({ length: 80 }, (_, index) => ({ name: `Album ${index + 1}`, trackCount: index === 0 ? 4 : 1 }));
       }
+      if (command === 'library_sort_text_indices') {
+        const values = (args as { values?: string[] } | undefined)?.values ?? [];
+        return values.map((_, index) => index).sort((left, right) =>
+          new Intl.Collator('zh-TW', { numeric: true }).compare(values[left] ?? '', values[right] ?? ''),
+        );
+      }
       if (command === 'library_get_album_artwork_candidates') {
         stats.albumCandidates += 1;
         const name = String((args?.albumNames as string[] | undefined)?.[0] ?? 'Album 1');
