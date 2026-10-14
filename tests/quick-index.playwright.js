@@ -40,6 +40,7 @@ async page => {
   assert(await dialog.getByRole('button', { name: 'B', exact: true }).isEnabled(), 'available B label is disabled');
   assert(await dialog.getByRole('button', { name: 'C', exact: true }).count() === 0, 'unused C label should not be present');
   assert(await dialog.getByRole('button', { name: '關閉', exact: true }).count() === 0, 'close button should not be present');
+  assert(await dialog.locator('.quick-index-popover-header').count() === 0, 'quick-index title should not be rendered');
   const popupGeometry = await page.evaluate(() => {
     const popup = document.querySelector('.quick-index-popover');
     const list = document.querySelector('.paged-virtual-viewport');

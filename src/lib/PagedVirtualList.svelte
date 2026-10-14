@@ -720,9 +720,6 @@
   {#if quickIndexOpen}
     <button type="button" class="quick-index-backdrop" aria-label="關閉首字索引" onclick={() => closeQuickIndex()}></button>
     <div bind:this={quickIndexDialog} class="quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label="快速首字查找" tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
-      <header class="quick-index-popover-header">
-        <strong>快速首字查找</strong>
-      </header>
       <div class="quick-index-label-grid">
         {#each quickIndexLabels as label (label)}
           {@const available = availableIndexLabels.has(label)}
@@ -925,22 +922,10 @@
     max-width: min(calc(100vw - 24px), var(--quick-index-max-width));
     max-height: var(--quick-index-max-height);
     flex-direction: column;
-    gap: 10px;
     padding: 12px;
     overflow: auto;
     box-sizing: border-box;
     transform: translate(-50%, -50%);
-  }
-
-  .quick-index-popover-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .quick-index-popover-header strong {
-    font: var(--font-body);
   }
 
   .quick-index-label-grid {
