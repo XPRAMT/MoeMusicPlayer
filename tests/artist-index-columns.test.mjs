@@ -20,9 +20,9 @@ test('fixed em-based columns resolve from the same font size in headers and rows
 
 test('artist-name sorting uses the shared ICU quick-index groups only for that sort', () => {
   assert.match(artistIndexSource, /buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex/);
-  assert.match(artistIndexSource, /const shouldGroup = activeSortField === 'title'/);
-  assert.match(artistIndexSource, /groupRows=\{sortField === 'title' \? quickIndex\?\.groups : \[\]\}/);
-  assert.match(artistIndexSource, /groupingReady=\{sortField !== 'title' \|\| quickIndexReady\}/);
+  assert.match(artistIndexSource, /const shouldGroup = groupingEnabled && activeSortField === 'title'/);
+  assert.match(artistIndexSource, /groupRows=\{groupingEnabled && sortField === 'title' \? quickIndex\?\.groups : \[\]\}/);
+  assert.match(artistIndexSource, /groupingReady=\{!groupingEnabled \|\| sortField !== 'title' \|\| quickIndexReady\}/);
 });
 
 test('artist empty state waits until the initial index load has completed', () => {
