@@ -20,6 +20,42 @@ export function getViewportPageSize(viewportHeight, rowHeight) {
 }
 
 /**
+ * Use the viewport's border-box height for page sizing. A classic horizontal
+ * scrollbar reduces clientHeight while leaving offsetHeight unchanged; using
+ * the larger stable measurement prevents page-size oscillation at overflow
+ * thresholds.
+ * @param {number} clientHeight
+ * @param {number} offsetHeight
+ */
+export function getViewportLoadHeight(clientHeight, offsetHeight) {
+  const client = Number.isFinite(clientHeight) ? Math.max(0, clientHeight) : 0;
+  const outer = Number.isFinite(offsetHeight) ? Math.max(0, offsetHeight) : 0;
+  return Math.max(client, outer);
+}
+
+/**
+ * Avoid recalculating the requested page size for small viewport fluctuations.
+ * One full row-height is the threshold; a row-height preference change always
+ * recalculates immediately.
+ * @param {number | null} previousHeight
+ * @param {number} nextHeight
+ * @param {number | null} previousRowHeight
+ * @param {number} nextRowHeight
+ */
+export function shouldRecalculateViewportPageSize(
+  previousHeight,
+  nextHeight,
+  previousRowHeight,
+  nextRowHeight,
+) {
+  if (!Number.isFinite(nextHeight) || nextHeight <= 0) return false;
+  if (previousHeight === null || previousRowHeight === null) return true;
+  if (previousRowHeight !== nextRowHeight) return true;
+  const threshold = Math.max(1, Number.isFinite(nextRowHeight) ? nextRowHeight : 1);
+  return Math.abs(nextHeight - previousHeight) >= threshold;
+}
+
+/**
  * @typedef {Object} VirtualRange
  * @property {number} start Inclusive first row index.
  * @property {number} end Exclusive row index.

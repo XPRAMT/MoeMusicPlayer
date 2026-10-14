@@ -5,7 +5,9 @@ import {
   buildVirtualRows,
   getVirtualRange,
   PagedTrackList,
+  getViewportLoadHeight,
   getViewportPageSize,
+  shouldRecalculateViewportPageSize,
   TRACK_LIST_MAX_CACHED_PAGES,
   TRACK_PAGE_SIZE,
   TRACK_PAGE_SIZE_MAX,
@@ -18,6 +20,30 @@ test('viewport page size loads two visible screens and respects the IPC limit', 
   assert.equal(getViewportPageSize(600, 50), 24);
   assert.equal(getViewportPageSize(0, 50), 1);
   assert.equal(getViewportPageSize(100_000, 1), TRACK_PAGE_SIZE_MAX);
+});
+
+test('horizontal scrollbar visibility does not change the viewport page-size basis', () => {
+  const stableOuterHeight = 615;
+  const withoutHorizontalBar = getViewportLoadHeight(615, stableOuterHeight);
+  const withHorizontalBar = getViewportLoadHeight(600, stableOuterHeight);
+
+  assert.equal(withoutHorizontalBar, stableOuterHeight);
+  assert.equal(withHorizontalBar, stableOuterHeight);
+  assert.equal(getViewportPageSize(withoutHorizontalBar, 50), 26);
+  assert.equal(getViewportPageSize(withHorizontalBar, 50), 26);
+  assert.equal(getViewportLoadHeight(600, Number.NaN), 600);
+});
+
+test('viewport page size ignores height jitter smaller than one configured row', () => {
+  const rowHeight = 50;
+  const stableHeight = 615;
+
+  assert.equal(shouldRecalculateViewportPageSize(stableHeight, 600, rowHeight, rowHeight), false);
+  assert.equal(shouldRecalculateViewportPageSize(stableHeight, 565, rowHeight, rowHeight), true);
+  assert.equal(shouldRecalculateViewportPageSize(stableHeight, 615, rowHeight, 40), true);
+  assert.equal(shouldRecalculateViewportPageSize(null, 615, null, rowHeight), true);
+  assert.equal(getViewportPageSize(stableHeight, rowHeight), 26);
+  assert.equal(getViewportPageSize(565, rowHeight), 24);
 });
 
 function makeTrack(id) {
