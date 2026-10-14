@@ -107,7 +107,7 @@
   const albumIndexHeader = page.locator('.column-index[role="columnheader"]');
   assert(await albumIndexHeader.getAttribute('aria-sort') === 'ascending', 'album detail should default to ascending # sorting');
   const firstAlbumIndex = (await page.locator('.track-row .column-index').first().textContent())?.trim() ?? '';
-  assert(/^\d+$/.test(firstAlbumIndex), 'a single-disc album should show only the track number, without a disc prefix');
+  assert(firstAlbumIndex === '1', `album track numbers should not be padded with zeroes: ${firstAlbumIndex}`);
   const sortAlbumIndex = page.locator('.album-detail-tracks .index-sort-button');
   assert(await sortAlbumIndex.getAttribute('aria-label') === '依專輯曲目編號排序', 'the album # header should identify its sort action');
   await sortAlbumIndex.click();
