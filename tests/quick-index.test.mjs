@@ -9,10 +9,38 @@ import {
   dataIndexToVisualIndex,
   getQuickIndexColumnCount,
   getQuickIndexDisplayLabel,
+  getQuickIndexBuildKey,
   visualIndexToAnchorDataIndex,
   visualIndexToDataIndex,
   visualRangeToDataRange,
 } from '../src/lib/quick-index.js';
+
+test('page snapshot updates do not change the quick-index build identity', () => {
+  const inputs = {
+    listId: 'library',
+    resetKey: 4,
+    query: null,
+    fieldFilter: null,
+    sort: { field: 'title', direction: 'asc' },
+    count: 5224,
+    activeSort: { field: 'title', direction: 'asc' },
+    groupingEnabled: true,
+    sortable: true,
+  };
+  const initialSnapshot = { ...inputs, revision: 1, cachedPageCount: 1 };
+  const laterSnapshot = { ...inputs, revision: 18, cachedPageCount: 4 };
+
+  assert.equal(
+    getQuickIndexBuildKey(initialSnapshot),
+    getQuickIndexBuildKey(laterSnapshot),
+    'fetching pages must not restart the index scan or blank the list',
+  );
+  assert.notEqual(
+    getQuickIndexBuildKey(inputs),
+    getQuickIndexBuildKey({ ...inputs, count: 5225 }),
+    'a changed library count must rebuild the group index',
+  );
+});
 
 test('quick index columns are the rounded square root of label count', () => {
   assert.equal(getQuickIndexColumnCount(99), 10);

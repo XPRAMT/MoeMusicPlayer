@@ -2,6 +2,26 @@
 const quickIndexCache = new Map();
 
 /**
+ * Return a stable identity for one complete quick-index build. Snapshot objects
+ * may be replaced while pages load even though the list's grouping inputs did
+ * not change; callers use this key to avoid restarting the full-list scan.
+ * @param {{ listId?: string, resetKey?: string | number, query: string | null, fieldFilter: unknown, sort: unknown, count: number | null, activeSort: unknown, groupingEnabled: boolean, sortable: boolean }} input
+ */
+export function getQuickIndexBuildKey(input) {
+  return JSON.stringify({
+    listId: input.listId,
+    resetKey: input.resetKey,
+    query: input.query,
+    fieldFilter: input.fieldFilter,
+    sort: input.sort,
+    count: input.count,
+    activeSort: input.activeSort,
+    groupingEnabled: input.groupingEnabled,
+    sortable: input.sortable,
+  });
+}
+
+/**
  * Build the virtual rows from one complete grouping snapshot. The parent only
  * publishes `ready` after the full scan, so no mirrored group-row state or
  * second synchronization pass is required before tracks can render.

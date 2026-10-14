@@ -37,7 +37,7 @@
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
   import { getSearchVariants } from './search-variants.js';
-  import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
+  import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex, getQuickIndexBuildKey } from './quick-index.js';
 
   interface Props {
     query: string;
@@ -124,6 +124,7 @@
   let quickIndexReady = $state(false);
   let visibleQuickIndex = $derived(!groupingEnabled ? null : quickIndexOverride === undefined ? quickIndex : quickIndexOverride);
   let quickIndexGeneration = 0;
+  let currentQuickIndexBuildKey: string | null = null;
 
   async function requestTrackPage(request: TrackPageRequest): Promise<TrackPage> {
     return fetchPage ? fetchPage(request) : invokeCommand('library_get_page', request);
@@ -168,13 +169,25 @@
     const currentQuery = query.trim() || null;
     const currentFieldFilter = fieldFilter ?? null;
     const activeSort = visibleSortIndicator;
-    const generation = ++quickIndexGeneration;
-    quickIndex = null;
     const shouldGroup = groupingEnabled && sortable && activeSort
       && ['title', 'artist', 'album'].includes(activeSort.field);
+    const cacheKey = getQuickIndexBuildKey({
+      listId,
+      resetKey,
+      query: currentQuery,
+      fieldFilter: currentFieldFilter,
+      sort: currentSort,
+      count,
+      activeSort,
+      groupingEnabled,
+      sortable,
+    });
+    if (cacheKey === currentQuickIndexBuildKey) return;
+    currentQuickIndexBuildKey = cacheKey;
+    const generation = ++quickIndexGeneration;
+    quickIndex = null;
     quickIndexReady = !shouldGroup || count === 0;
     if (!shouldGroup || count === null || count <= 0) return;
-    const cacheKey = JSON.stringify({ listId, resetKey, query: currentQuery, fieldFilter: currentFieldFilter, sort: currentSort, count });
     const cached = getCachedQuickIndex(cacheKey);
     if (cached) {
       quickIndex = cached;
