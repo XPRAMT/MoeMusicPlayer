@@ -18,14 +18,17 @@ test('fixed em-based columns resolve from the same font size in headers and rows
   assert.match(appStyles, /\.track-row\s*\{[^}]*font-size:\s*var\(--font-body\)/);
 });
 
-test('artist-name sorting uses the shared ICU quick-index groups only for that sort', () => {
-  assert.match(artistIndexSource, /buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex/);
-  assert.match(artistIndexSource, /const shouldGroup = groupingEnabled && activeSortField === 'title'/);
+test('artist sorting, snapshot grouping, and 1000-row paging stay in the backend', () => {
+  assert.match(artistIndexSource, /library_create_artist_index_snapshot/);
+  assert.match(artistIndexSource, /library_get_artist_index_snapshot_page/);
+  assert.match(artistIndexSource, /new PagedListController<ArtistRow, string>/);
+  assert.match(artistIndexSource, /groupingEnabled: groupingEnabled && sortField === 'title'/);
+  assert.doesNotMatch(artistIndexSource, /toSorted\(|library_sort_text_indices|buildQuickIndexGroups/);
   assert.match(artistIndexSource, /groupRows=\{groupingEnabled && sortField === 'title' \? quickIndex\?\.groups : \[\]\}/);
   assert.match(artistIndexSource, /groupingReady=\{!groupingEnabled \|\| sortField !== 'title' \|\| quickIndexReady\}/);
 });
 
 test('artist empty state waits until the initial index load has completed', () => {
-  assert.match(artistIndexSource, /\{:else if !initialized \|\| \(loading && rows\.length === 0\)\}/);
+  assert.match(artistIndexSource, /\{:else if !initialized \|\| \(loading && pageSnapshot\.cachedItemCount === 0\)\}/);
   assert.match(artistIndexSource, /await load\(\);\s*initialized = true;/);
 });

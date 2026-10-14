@@ -95,7 +95,7 @@ use player_audio_windows::{
 
 const LIBRARY_SYNC_FINISHED_EVENT: &str = "library-sync-finished";
 const LIBRARY_SYNC_PROGRESS_EVENT: &str = "library-sync-progress";
-const PLAYBACK_QUEUE_PAGE_MAX_LIMIT: u32 = 100;
+const PLAYBACK_QUEUE_PAGE_MAX_LIMIT: u32 = 1000;
 const SOURCE_SYNC_ERROR_DETAILS_LIMIT: usize = 100;
 const ALBUM_ARTWORK_CACHE_DIRECTORY_NAME: &str = "album-cover";
 
@@ -2345,7 +2345,14 @@ mod playback_queue_ipc_tests {
         OutputConversion, PlaybackOutputFormat, PlaybackQueuePage, PlaybackQueuePageItem,
         PlaybackQueueSource, PlaybackSnapshot, RepeatMode, ResamplingMode, RuntimeCapabilities,
         SourceId, SourceScanState, SyncReport, TrackId, TrackListSort, TrackMetadataError,
+        PLAYBACK_QUEUE_PAGE_MAX_LIMIT,
     };
+
+    #[test]
+    fn playback_queue_pages_allow_one_thousand_items() {
+        assert_eq!(PLAYBACK_QUEUE_PAGE_MAX_LIMIT, 1000);
+        assert_eq!(1001_u32.clamp(1, PLAYBACK_QUEUE_PAGE_MAX_LIMIT), 1000);
+    }
 
     #[test]
     fn playback_snapshot_uses_track_metadata_when_audio_duration_is_unknown() {
@@ -2995,18 +3002,22 @@ async fn library_sort_text_indices(
     .await
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct QuickIndexGrouping {
-    labels: Vec<String>,
-    groups: Vec<String>,
-}
-
 #[tauri::command]
-async fn library_get_quick_index_groupings(
+async fn library_get_quick_index_for_tracks(
     app: AppHandle,
-    values: Vec<String>,
-) -> Result<QuickIndexGrouping, String> {
+    query: Option<String>,
+    query_alternates: Option<Vec<String>>,
+    field_filter: Option<TrackFieldFilter>,
+    sort: Option<TrackListSort>,
+) -> Result<player_db::QuickIndexSnapshot, String> {
+    let request = ListTracksQuery {
+        query,
+        field_filter,
+        offset: 0,
+        limit: 1,
+        sort: sort.unwrap_or_default(),
+    };
+    let alternates = query_alternates.unwrap_or_default();
     run_database_work(app, move |state| {
         let database = state.database.as_ref().ok_or_else(|| {
             state
@@ -3014,8 +3025,128 @@ async fn library_get_quick_index_groupings(
                 .clone()
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
-        let (labels, groups) = database.quick_index_groupings(&values);
-        Ok(QuickIndexGrouping { labels, groups })
+        #[cfg(target_os = "windows")]
+        if let Some(temporary_database) = state
+            .playback
+            .as_ref()
+            .filter(|playback| playback.external_queue_active.load(Ordering::Acquire))
+            .and_then(|playback| {
+                playback
+                    .temporary_catalog
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
+        {
+            let mut names = Vec::new();
+            let mut offset = 0_u64;
+            loop {
+                let page = merged_library_page(
+                    database,
+                    &temporary_database,
+                    ListTracksQuery {
+                        offset,
+                        limit: 1000,
+                        ..request.clone()
+                    },
+                    &alternates,
+                )?;
+                let page_len = page.items.len();
+                names.extend(page.items.into_iter().map(|track| {
+                    match request.sort.field {
+                        TrackSortField::Title => player_core::display_track_title(
+                            track.title.as_deref(),
+                            track.file_name.as_deref(),
+                        )
+                        .unwrap_or_default(),
+                        TrackSortField::Artist => track.artist.unwrap_or_default(),
+                        TrackSortField::Album => track.album.unwrap_or_default(),
+                        _ => String::new(),
+                    }
+                }));
+                offset = offset.saturating_add(page_len as u64);
+                if page_len == 0 || offset >= page.total_count {
+                    break;
+                }
+            }
+            return database
+                .quick_index_for_ordered_values(&names)
+                .map_err(|error| error.to_string());
+        }
+        database
+            .quick_index_for_tracks(&request, &alternates)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_get_quick_index_for_artists(
+    app: AppHandle,
+    artist_names: Vec<String>,
+    sort: TrackListSort,
+) -> Result<player_db::QuickIndexSnapshot, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .quick_index_for_artists(None, &[], &artist_names, sort)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_get_quick_index_for_album_tracks(
+    app: AppHandle,
+    album_names: Vec<String>,
+    sort: TrackListSort,
+) -> Result<player_db::QuickIndexSnapshot, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .quick_index_for_album_tracks(&album_names, sort)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn playlist_get_quick_index_groupings(
+    app: AppHandle,
+    playlist_id: String,
+    sort: Option<PlaylistListSort>,
+) -> Result<player_db::QuickIndexSnapshot, String> {
+    let playlist_id = PlaylistId::parse(&playlist_id)
+        .map_err(|_| "播放清單識別碼無效，請重新載入清單。".to_owned())?;
+    let sort = sort.unwrap_or_default();
+    run_database_work(app, move |state| {
+        let settings = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
+        require_enabled_playlist_source(&settings.sources, playlist_id)?;
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .quick_index_for_playlist(playlist_id, sort)
+            .map_err(|error| error.to_string())
+            .and_then(|snapshot| {
+                snapshot.ok_or_else(|| "找不到這份播放清單，請重新載入清單。".to_owned())
+            })
     })
     .await
 }
@@ -3074,6 +3205,72 @@ async fn library_get_album_index_facets(
 }
 
 #[tauri::command]
+async fn library_create_album_index_snapshot(
+    app: AppHandle,
+    identities: Vec<ArtistIdentityMapping>,
+    sort_field: String,
+    direction: String,
+    grouping_enabled: bool,
+) -> Result<player_db::IndexSnapshotInfo, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .create_album_index_snapshot(&identities, &sort_field, &direction, grouping_enabled)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_get_album_index_snapshot_page(
+    app: AppHandle,
+    snapshot_id: String,
+    offset: u64,
+    limit: u32,
+) -> Result<player_core::Page<player_db::AlbumIndexEntry>, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .get_index_snapshot_page(&snapshot_id, offset, limit)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_resolve_album_index_entry(
+    app: AppHandle,
+    identities: Vec<ArtistIdentityMapping>,
+    identity_key: String,
+) -> Result<Option<player_db::AlbumIndexEntry>, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let snapshot = database
+            .create_album_navigation_snapshot(&identities)
+            .map_err(|error| error.to_string())?;
+        database
+            .get_index_snapshot_entry(&snapshot.snapshot_id, &identity_key)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
 async fn library_get_album_page(
     app: AppHandle,
     album_names: Vec<String>,
@@ -3091,6 +3288,45 @@ async fn library_get_album_page(
         })?;
         database
             .list_album_tracks_page_with_index_sort(&album_names, sort, index_sort, offset, limit)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_get_album_detail_facets(
+    app: AppHandle,
+    album_names: Vec<String>,
+) -> Result<player_db::AlbumDetailFacets, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .album_detail_facets(&album_names)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_get_album_detail_artists(
+    app: AppHandle,
+    album_names: Vec<String>,
+    identities: Vec<ArtistIdentityMapping>,
+) -> Result<Vec<String>, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .album_detail_artists(&album_names, &identities)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3281,6 +3517,80 @@ fn library_get_artist_index(
 }
 
 #[tauri::command]
+async fn library_create_artist_index_snapshot(
+    app: AppHandle,
+    artist_identities: Vec<ArtistIdentityMapping>,
+    album_identities: Vec<ArtistIdentityMapping>,
+    sort_field: String,
+    direction: String,
+    grouping_enabled: bool,
+) -> Result<player_db::IndexSnapshotInfo, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .create_artist_index_snapshot(
+                &artist_identities,
+                &album_identities,
+                &sort_field,
+                &direction,
+                grouping_enabled,
+            )
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_get_artist_index_snapshot_page(
+    app: AppHandle,
+    snapshot_id: String,
+    offset: u64,
+    limit: u32,
+) -> Result<player_core::Page<player_db::ArtistIndexEntry>, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        database
+            .get_index_snapshot_page(&snapshot_id, offset, limit)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_resolve_artist_index_entry(
+    app: AppHandle,
+    artist_identities: Vec<ArtistIdentityMapping>,
+    album_identities: Vec<ArtistIdentityMapping>,
+    identity_key: String,
+) -> Result<Option<player_db::ArtistIndexEntry>, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let snapshot = database
+            .create_artist_navigation_snapshot(&artist_identities, &album_identities)
+            .map_err(|error| error.to_string())?;
+        database
+            .get_index_snapshot_entry(&snapshot.snapshot_id, &identity_key)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
 fn library_get_artist_page(
     state: State<'_, AppState>,
     query: Option<String>,
@@ -3428,8 +3738,7 @@ fn merged_library_page(
     let mut persistent_items = deduplicated_persistent;
     let duplicate_count = duplicate_library_ids.len() as u64;
     persistent_items.extend(temporary_items);
-    persistent_items
-        .sort_by(|left, right| compare_track_summaries(left, right, sort, Some(database)));
+    persistent_items = sort_track_summaries_sql(database, persistent_items, sort)?;
     let offset =
         usize::try_from(request.offset.saturating_sub(persistent_start)).unwrap_or(usize::MAX);
     let limit = request.limit as usize;
@@ -3621,6 +3930,28 @@ fn compare_track_summaries(
     }
 }
 
+fn sort_track_summaries_sql(
+    database: &Database,
+    summaries: Vec<TrackSummary>,
+    sort: TrackListSort,
+) -> Result<Vec<TrackSummary>, String> {
+    let candidates = summaries
+        .iter()
+        .enumerate()
+        .map(|(entry_index, summary)| player_db::QueueSortCandidate {
+            entry_index,
+            summary: Some(summary.clone()),
+        })
+        .collect::<Vec<_>>();
+    let order = database
+        .sort_queue_candidates(&candidates, sort)
+        .map_err(|error| error.to_string())?;
+    Ok(order
+        .into_iter()
+        .filter_map(|index| summaries.get(index).cloned())
+        .collect())
+}
+
 #[cfg(target_os = "windows")]
 struct LibraryQueueSearch {
     query: Option<String>,
@@ -3702,7 +4033,7 @@ fn queue_for_merged_library_search(
     summaries = retained;
     tracks.extend(temporary_tracks.iter().map(|track| track.id));
     summaries.extend(temporary_tracks);
-    summaries.sort_by(|left, right| compare_track_summaries(left, right, sort, Some(database)));
+    summaries = sort_track_summaries_sql(database, summaries, sort)?;
     tracks = summaries.iter().map(|track| track.id).collect();
     let selected_index = tracks
         .iter()
@@ -7347,6 +7678,124 @@ fn playback_get_queue_page(
     }
 }
 
+#[tauri::command]
+fn playback_get_queue_quick_index_groupings(
+    state: State<'_, AppState>,
+    field: TrackSortField,
+) -> Result<player_db::QuickIndexSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
+    if !matches!(
+        field,
+        TrackSortField::Title | TrackSortField::Artist | TrackSortField::Album
+    ) {
+        return Ok(player_db::QuickIndexSnapshot::default());
+    }
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    #[cfg(target_os = "windows")]
+    let (_revision, queue) = {
+        let service = windows_playback_service(&state)?;
+        snapshot_playback_queue(service)
+    };
+    #[cfg(target_os = "android")]
+    let (_revision, queue) = {
+        let service = android_playback_service(&state)?;
+        match service.queue_snapshot()? {
+            Some((revision, snapshot)) => (
+                revision,
+                Some(PlaybackQueue::restore(snapshot).map_err(|error| error.to_owned())?),
+            ),
+            None => (0, None),
+        }
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    let (_revision, queue) = (0_u64, None);
+    let Some(queue) = queue else {
+        return Ok(player_db::QuickIndexSnapshot::default());
+    };
+    let track_ids = queue
+        .entries
+        .iter()
+        .map(|entry| entry.track_id)
+        .collect::<Vec<_>>();
+    let mut summaries = HashMap::<TrackId, TrackSummary>::new();
+    for (id, summary) in track_ids.iter().copied().zip(
+        database
+            .get_track_summaries(&track_ids)
+            .map_err(|error| error.to_string())?,
+    ) {
+        if let Some(summary) = summary {
+            summaries.insert(id, summary);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let service = windows_playback_service(&state)?;
+        let temporary_database = service
+            .temporary_catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(temporary_database) = temporary_database {
+            let unresolved = track_ids
+                .iter()
+                .filter(|id| !summaries.contains_key(id))
+                .copied()
+                .collect::<Vec<_>>();
+            for (id, summary) in unresolved.iter().copied().zip(
+                temporary_database
+                    .get_track_summaries(&unresolved)
+                    .map_err(|error| error.to_string())?,
+            ) {
+                if let Some(summary) = summary {
+                    summaries.insert(id, summary);
+                }
+            }
+        }
+        let transient_tracks = service
+            .external_tracks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (id, external) in transient_tracks.iter() {
+            summaries
+                .entry(*id)
+                .or_insert_with(|| external.summary.clone());
+        }
+    }
+    let names = queue
+        .play_order
+        .iter()
+        .filter_map(|entry_index| queue.entries.get(*entry_index))
+        .map(|entry| {
+            let track = summaries.get(&entry.track_id);
+            match field {
+                TrackSortField::Title => track
+                    .and_then(|track| {
+                        player_core::display_track_title(
+                            track.title.as_deref(),
+                            track.file_name.as_deref(),
+                        )
+                    })
+                    .unwrap_or_default(),
+                TrackSortField::Artist => track
+                    .and_then(|track| track.artist.clone())
+                    .unwrap_or_default(),
+                TrackSortField::Album => track
+                    .and_then(|track| track.album.clone())
+                    .unwrap_or_default(),
+                _ => String::new(),
+            }
+        })
+        .collect::<Vec<_>>();
+    database
+        .quick_index_for_ordered_values(&names)
+        .map_err(|error| error.to_string())
+}
+
 /// Read the active track's original encoded cover bytes on a blocking worker.
 /// An empty binary response means that no supported cover is available.
 #[tauri::command]
@@ -8149,7 +8598,11 @@ fn cached_queue_display_order(
         }
     }
 
-    let order = sort_queue_entry_order(queue, &summaries, sort, database.or(secondary_database));
+    let order = if let Some(sort_database) = database.or(secondary_database) {
+        sort_queue_entry_order_sql(queue, &summaries, sort, sort_database)?
+    } else {
+        sort_queue_entry_order(queue, &summaries, sort, None)
+    };
     let mut cached = state
         .queue_display_sort_cache
         .lock()
@@ -8180,6 +8633,30 @@ fn sort_queue_entry_order(
         }
     });
     order
+}
+
+fn sort_queue_entry_order_sql(
+    queue: &PlaybackQueueSnapshot,
+    summaries: &HashMap<TrackId, TrackSummary>,
+    sort: TrackListSort,
+    database: &Database,
+) -> Result<Vec<usize>, String> {
+    let candidates = queue
+        .play_order
+        .iter()
+        .copied()
+        .map(|entry_index| player_db::QueueSortCandidate {
+            entry_index,
+            summary: queue
+                .entries
+                .get(entry_index)
+                .and_then(|entry| summaries.get(&entry.track_id))
+                .cloned(),
+        })
+        .collect::<Vec<_>>();
+    database
+        .sort_queue_candidates(&candidates, sort)
+        .map_err(|error| error.to_string())
 }
 
 fn build_playback_queue_page(
@@ -9958,10 +10435,21 @@ pub fn run() {
             get_runtime_capabilities,
             library_get_page,
             library_get_artist_index_facets,
+            library_create_artist_index_snapshot,
+            library_get_artist_index_snapshot_page,
+            library_resolve_artist_index_entry,
             library_sort_text_indices,
-            library_get_quick_index_groupings,
+            library_get_quick_index_for_tracks,
+            library_get_quick_index_for_artists,
+            library_get_quick_index_for_album_tracks,
+            playlist_get_quick_index_groupings,
             library_get_album_index_facets,
+            library_create_album_index_snapshot,
+            library_get_album_index_snapshot_page,
+            library_resolve_album_index_entry,
             library_get_album_page,
+            library_get_album_detail_facets,
+            library_get_album_detail_artists,
             library_get_album_artwork_candidates,
             album_artwork_cache_get,
             album_artwork_cache_put,
@@ -9995,6 +10483,7 @@ pub fn run() {
             library_sync,
             playback_get_snapshot,
             playback_get_queue_page,
+            playback_get_queue_quick_index_groupings,
             library_get_track_artwork,
             playback_play,
             playback_pause,

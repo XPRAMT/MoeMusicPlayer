@@ -4,8 +4,7 @@
   import type { AlbumEntry } from './album-identities.js';
   import { ALBUM_ART_SIMILARITY_DISTANCE, copyToArrayBuffer, createAlbumThumbnail, perceptualHashArtwork, rankAlbumArtwork, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import { detectArtworkMimeType } from './active-track-artwork';
-  import { splitArtists } from './artist-names.js';
-  import { buildArtistIdentityMappings, preferredArtistName } from './artist-identities.js';
+  import { buildArtistIdentityMappings } from './artist-identities.js';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
   import TrackList from './TrackList.svelte';
@@ -117,30 +116,6 @@
     });
   }
 
-  function countArtists(counts: Map<string, number>, track: TrackSummary): void {
-    for (const name of splitArtists(track.artist)) {
-      counts.set(name, (counts.get(name) ?? 0) + 1);
-    }
-  }
-
-  async function resolveArtists(counts: Map<string, number>): Promise<string[]> {
-    const identities = await buildArtistIdentityMappings([...counts.keys()]);
-    const groups = new Map<string, { names: { name: string; count: number }[]; traditionalByName: Map<string, string> }>();
-    for (const identity of identities) {
-      let group = groups.get(identity.key);
-      if (!group) {
-        group = { names: [], traditionalByName: new Map() };
-        groups.set(identity.key, group);
-      }
-      group.names.push({ name: identity.name, count: counts.get(identity.name) ?? 0 });
-      group.traditionalByName.set(identity.name, identity.traditional);
-    }
-    const names = [...groups.values()].map((group) =>
-      preferredArtistName(group.names, group.traditionalByName));
-    const sortedIndices = await invokeCommand('library_sort_text_indices', { values: names });
-    return sortedIndices.map((index) => names[index]).filter((name) => name !== undefined);
-  }
-
   async function saveSelection(key: string, trackIds: string[], representative: boolean): Promise<void> {
     if (trackIds.length === 0) return;
     await invokeCommand('album_artwork_selection_put', {
@@ -194,31 +169,18 @@
       let stored: import('./ipc').AlbumArtworkSelection | null = null;
       try { stored = await invokeCommand('album_artwork_selection_get', { key }); } catch { /* rebuild cache on older installations */ }
       const usable = stored !== null && stored.trackCount === album.trackCount && stored.representative;
-      const artistCounts = new Map<string, number>();
-      const discCounts = new Map<number, number>();
-      let unknownCount = 0;
-      let total = 0;
-      for (let offset = 0; ; offset += PAGE_SIZE) {
-        const page = await fetchPage({ query: '', offset, limit: PAGE_SIZE });
-        if (current !== revision) return;
-        total = page.totalCount;
-        for (const track of page.items) {
-          countArtists(artistCounts, track);
-          const discNumber = track.discNumber;
-          if (typeof discNumber === 'number' && Number.isInteger(discNumber) && discNumber >= 2) {
-            discCounts.set(discNumber, (discCounts.get(discNumber) ?? 0) + 1);
-          } else {
-            unknownCount += 1;
-          }
-        }
-        if (page.items.length === 0 || offset + page.items.length >= total) break;
-      }
-      const resolvedArtists = await resolveArtists(artistCounts);
+      const facets = await invokeCommand('library_get_album_detail_facets', { albumNames: album.aliases });
+      const artistIdentities = await buildArtistIdentityMappings(facets.artists.map(({ name }) => name));
+      const resolvedArtists = await invokeCommand('library_get_album_detail_artists', {
+        albumNames: album.aliases,
+        identities: artistIdentities,
+      });
       if (current !== revision) return;
       artists = resolvedArtists;
-      albumDiscCounts = [...discCounts].map(([discNumber, count]) => ({ discNumber, count }));
-      unknownDiscTrackCount = unknownCount;
-      hasDiscGroups = discCounts.size > 0;
+      albumDiscCounts = facets.discCounts;
+      unknownDiscTrackCount = facets.unknownDiscTrackCount;
+      hasDiscGroups = facets.discCounts.length > 0;
+      onTotalCount(facets.trackCount);
 
       let selectedIds = usable && stored ? stored.trackIds.slice(0, 4) : [];
       if (selectedIds.length === 0) {
@@ -288,6 +250,7 @@
       fetchPage={fetchPage} {onPlay} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
       sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel="依專輯曲目編號排序" onIndexSort={handleIndexSort}
       quickIndexOverride={albumDiscQuickIndex}
+      quickIndexAlbumNames={album.aliases}
       {groupingEnabled}
       getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber, hasDiscGroups && (track.discNumber ?? 0) >= 2 ? track.discNumber : null)}
     />

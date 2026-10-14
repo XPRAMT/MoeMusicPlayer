@@ -49,13 +49,19 @@ test('resizable list header separators remain visible without hover', () => {
 });
 
 test('playing a library or playlist item does not change the current page', () => {
-  const libraryPlay = functionSource('async function playTrack(', 'async function loadArtistIndexRowsForNavigation(');
+  const libraryPlay = functionSource('async function playTrack(', 'async function loadIndexIdentityMappings(');
   const playlistPlay = functionSource('async function playPlaylistEntry(', 'async function pickWindowsFolder(');
 
   assert.match(libraryPlay, /invokeCommand\('playback_play'/);
   assert.match(playlistPlay, /invokeCommand\('playback_play'/);
   assert.doesNotMatch(libraryPlay, /activeView\s*=/);
   assert.doesNotMatch(playlistPlay, /activeView\s*=/);
+});
+
+test('detail navigation resolves one backend index row instead of loading the full index into App', () => {
+  assert.match(appSource, /library_resolve_artist_index_entry/);
+  assert.match(appSource, /library_resolve_album_index_entry/);
+  assert.doesNotMatch(appSource, /loadArtistIndexRowsForNavigation|loadAlbumIndexRowsForNavigation|library_get_artist_index\s*,|buildAlbumEntries\(/);
 });
 
 test('the footer artwork opens and closes a full-window Now Playing overlay', () => {

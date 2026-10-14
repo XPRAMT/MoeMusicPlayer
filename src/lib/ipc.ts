@@ -265,6 +265,18 @@ export interface AlbumIndexFacet {
   playedMs: number;
 }
 
+export interface AlbumDiscCount {
+  discNumber: number;
+  count: number;
+}
+
+export interface AlbumDetailFacets {
+  artists: ArtistNameCount[];
+  discCounts: AlbumDiscCount[];
+  trackCount: number;
+  unknownDiscTrackCount: number;
+}
+
 export interface ArtistNameCount {
   name: string;
   count: number;
@@ -274,12 +286,41 @@ export interface ArtistIndexEntry {
   key: string;
   names: ArtistNameCount[];
   artistNames: string[];
+  displayName: string;
   trackCount: number;
   albumCount: number;
   /** Actual cumulative listening time credited to this artist. */
   playedMs: number;
   /** Sum of the durations of this artist's distinct visible tracks. */
   durationMs: number;
+}
+
+export interface AlbumIndexEntry {
+  key: string;
+  displayName: string;
+  aliases: string[];
+  trackCount: number;
+  durationMs: number;
+  playedMs: number;
+  unmarked: boolean;
+}
+
+export interface IndexSnapshotInfo {
+  snapshotId: string;
+  quickIndex: QuickIndexSnapshot;
+}
+
+export interface QuickIndexSnapshot {
+  labels: string[];
+  groups: Array<{ label: string; beforeIndex: number }>;
+  totalCount: number;
+}
+
+export interface IndexPage<T> {
+  items: T[];
+  offset: number;
+  limit: number;
+  totalCount: number;
 }
 
 export interface AlbumArtworkSelection {
@@ -505,9 +546,25 @@ export interface NowPlayingAppearancePreferences {
 }
 
 interface IpcContract {
-  library_get_quick_index_groupings: {
-    args: { values: string[] };
-    result: { labels: string[]; groups: string[] };
+  library_get_quick_index_for_tracks: {
+    args: { query: string | null; queryAlternates: string[]; fieldFilter: TrackFieldFilter | null; sort: LibraryListSort };
+    result: { labels: string[]; groups: { label: string; beforeIndex: number }[]; totalCount: number };
+  };
+  library_get_quick_index_for_artists: {
+    args: { artistNames: string[]; sort: LibraryListSort };
+    result: { labels: string[]; groups: { label: string; beforeIndex: number }[]; totalCount: number };
+  };
+  library_get_quick_index_for_album_tracks: {
+    args: { albumNames: string[]; sort: LibraryListSort };
+    result: { labels: string[]; groups: { label: string; beforeIndex: number }[]; totalCount: number };
+  };
+  playlist_get_quick_index_groupings: {
+    args: { playlistId: string; sort: PlaylistListSort };
+    result: { labels: string[]; groups: { label: string; beforeIndex: number }[]; totalCount: number };
+  };
+  playback_get_queue_quick_index_groupings: {
+    args: { field: 'title' | 'artist' | 'album' };
+    result: { labels: string[]; groups: { label: string; beforeIndex: number }[]; totalCount: number };
   };
   about_get_info: { args: Record<string, never>; result: AboutInfo };
   windows_register_audio_associations: { args: Record<string, never>; result: void };
@@ -633,6 +690,18 @@ interface IpcContract {
     args: Record<string, never>;
     result: ArtistIndexFacets;
   };
+  library_create_artist_index_snapshot: {
+    args: { artistIdentities: ArtistIdentityMapping[]; albumIdentities: ArtistIdentityMapping[]; sortField: string; direction: 'asc' | 'desc'; groupingEnabled: boolean };
+    result: IndexSnapshotInfo;
+  };
+  library_get_artist_index_snapshot_page: {
+    args: { snapshotId: string; offset: number; limit: number };
+    result: IndexPage<ArtistIndexEntry>;
+  };
+  library_resolve_artist_index_entry: {
+    args: { artistIdentities: ArtistIdentityMapping[]; albumIdentities: ArtistIdentityMapping[]; identityKey: string };
+    result: ArtistIndexEntry | null;
+  };
   library_sort_text_indices: {
     args: { values: string[] };
     result: number[];
@@ -641,9 +710,29 @@ interface IpcContract {
     args: Record<string, never>;
     result: AlbumIndexFacet[];
   };
+  library_create_album_index_snapshot: {
+    args: { identities: ArtistIdentityMapping[]; sortField: string; direction: 'asc' | 'desc'; groupingEnabled: boolean };
+    result: IndexSnapshotInfo;
+  };
+  library_get_album_index_snapshot_page: {
+    args: { snapshotId: string; offset: number; limit: number };
+    result: IndexPage<AlbumIndexEntry>;
+  };
+  library_resolve_album_index_entry: {
+    args: { identities: ArtistIdentityMapping[]; identityKey: string };
+    result: AlbumIndexEntry | null;
+  };
   library_get_album_page: {
     args: { albumNames: string[]; sort?: LibraryListSort | null; indexSort?: LibrarySortDirection | null; offset: number; limit: number };
     result: TrackPage;
+  };
+  library_get_album_detail_facets: {
+    args: { albumNames: string[] };
+    result: AlbumDetailFacets;
+  };
+  library_get_album_detail_artists: {
+    args: { albumNames: string[]; identities: ArtistIdentityMapping[] };
+    result: string[];
   };
   library_get_album_artwork_candidates: {
     args: { albumNames: string[]; offset: number; limit: number };

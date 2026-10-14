@@ -63,6 +63,8 @@
     type TrackPage,
     type TrackPageRequest,
     type ArtistIndexEntry,
+    type ArtistIdentityMapping,
+    type AlbumIndexEntry,
   } from './lib/ipc';
   import {
     applyTheme,
@@ -73,7 +75,7 @@
   import { getBackdropTargetPercent, resolveBackdropContrast } from './lib/backdrop-contrast.js';
   import { createDecodedImageObjectUrl } from './lib/decoded-image-object-url.js';
   import { splitArtists } from './lib/artist-names.js';
-  import { buildArtistIdentityMappings, findArtistEntryByName, preferredArtistName } from './lib/artist-identities.js';
+  import { buildArtistIdentityMappings } from './lib/artist-identities.js';
   import { readDetailNavigationRoute, withDetailNavigationRoute } from './lib/detail-navigation-history.js';
   import { hideWrappedTrailingTrackSeparators } from './lib/track-field-separators.js';
   import { formatVolume } from './lib/format';
@@ -129,7 +131,7 @@
   import ArtistIndex from './lib/ArtistIndex.svelte';
   import AlbumIndex from './lib/AlbumIndex.svelte';
   import AlbumDetail from './lib/AlbumDetail.svelte';
-  import { buildAlbumEntries, findAlbumEntryByName } from './lib/album-identities.js';
+  import { albumIdentityKey } from './lib/album-identities.js';
   import type { AlbumEntry } from './lib/album-identities.js';
   import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
@@ -191,14 +193,12 @@
   let keepArtistIndexForDetail = $state(false);
   let selectedArtist = $state<ArtistEntry | null>(null);
   let rememberedArtistView = $state<ArtistSectionView>('artists');
-  let artistIndexRows = $state<ArtistEntry[] | null>(null);
-  let artistIndexRowsLoad: Promise<ArtistEntry[]> | null = null;
+  let indexIdentityMappings: { artists: ArtistIdentityMapping[]; albums: ArtistIdentityMapping[] } | null = null;
+  let indexIdentityMappingsLoad: Promise<{ artists: ArtistIdentityMapping[]; albums: ArtistIdentityMapping[] }> | null = null;
   let detailHistoryRestoreRevision = 0;
   let keepAlbumIndexForDetail = $state(false);
   let selectedAlbum = $state<AlbumEntry | null>(null);
   let rememberedAlbumView = $state<'albums' | 'album-detail'>('albums');
-  let albumIndexRows = $state<AlbumEntry[] | null>(null);
-  let albumIndexRowsLoad: Promise<AlbumEntry[]> | null = null;
   let nowPlayingReturnView = $state<View>('library');
   let isNowPlayingMounted = $state(false);
   let isNowPlayingOpen = $state(false);
@@ -823,8 +823,7 @@
         });
         unlistenFinished = await listen<LibrarySyncFinishedEvent>('library-sync-finished', (event) => {
           handleLibrarySyncFinished(event.payload);
-          artistIndexRows = null;
-          albumIndexRows = null;
+          indexIdentityMappings = null;
           libraryListRevision += 1;
           if (libraryReady) void loadPlaylists(undefined, true);
           if (sourceSyncReady) void loadSources();
@@ -2092,8 +2091,7 @@
     try {
       sources = await invokeCommand('library_set_source_enabled', { sourceId: source.id, enabled });
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
-      artistIndexRows = null;
-      albumIndexRows = null;
+      indexIdentityMappings = null;
       libraryTrackCount = null;
       libraryListRevision += 1;
       await loadPlaylists();
@@ -2113,8 +2111,7 @@
     try {
       sources = await invokeCommand('library_remove_source', { sourceId: source.id });
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
-      artistIndexRows = null;
-      albumIndexRows = null;
+      indexIdentityMappings = null;
       libraryTrackCount = null;
       libraryListRevision += 1;
       if (source.kind === 'playlist_file') {
@@ -2282,32 +2279,54 @@
     );
   }
 
-  async function loadArtistIndexRowsForNavigation(): Promise<ArtistEntry[]> {
-    if (artistIndexRows) return artistIndexRows;
-    if (artistIndexRowsLoad) return artistIndexRowsLoad;
-    artistIndexRowsLoad = (async () => {
+  async function loadIndexIdentityMappings(): Promise<{ artists: ArtistIdentityMapping[]; albums: ArtistIdentityMapping[] }> {
+    if (indexIdentityMappings) return indexIdentityMappings;
+    if (indexIdentityMappingsLoad) return indexIdentityMappingsLoad;
+    indexIdentityMappingsLoad = (async () => {
       const facets = await invokeCommand('library_get_artist_index_facets', {});
-      const [artistIdentities, albumIdentities] = await Promise.all([
+      const [artists, albums] = await Promise.all([
         buildArtistIdentityMappings(facets.artists),
         buildArtistIdentityMappings(facets.albums),
       ]);
-      const result = await invokeCommand('library_get_artist_index', {
-        artistIdentities,
-        albumIdentities,
-      });
-      const traditionalByName = new Map(artistIdentities.map((identity) => [identity.name, identity.traditional]));
-      return result.map((entry) => ({
-        ...entry,
-        displayName: preferredArtistName(entry.names, traditionalByName) || entry.artistNames[0] || '',
-      }));
+      return { artists, albums };
     })();
     try {
-      const rows = await artistIndexRowsLoad;
-      artistIndexRows = rows;
-      return rows;
+      indexIdentityMappings = await indexIdentityMappingsLoad;
+      return indexIdentityMappings;
     } finally {
-      artistIndexRowsLoad = null;
+      indexIdentityMappingsLoad = null;
     }
+  }
+
+  async function resolveArtistEntryByKey(key: string): Promise<ArtistEntry | null> {
+    const identities = await loadIndexIdentityMappings();
+    return invokeCommand('library_resolve_artist_index_entry', {
+      artistIdentities: identities.artists,
+      albumIdentities: identities.albums,
+      identityKey: key,
+    });
+  }
+
+  async function resolveArtistEntryByName(name: string): Promise<ArtistEntry | null> {
+    const normalizedName = name.trim();
+    if (!normalizedName) return null;
+    const [identity] = await buildArtistIdentityMappings([normalizedName]);
+    return identity ? resolveArtistEntryByKey(identity.key) : null;
+  }
+
+  async function resolveAlbumEntryByKey(key: string): Promise<AlbumEntry | null> {
+    const identities = await loadIndexIdentityMappings();
+    return invokeCommand('library_resolve_album_index_entry', {
+      identities: identities.albums,
+      identityKey: key,
+    });
+  }
+
+  async function resolveAlbumEntryByName(name: string): Promise<AlbumEntry | null> {
+    const normalizedName = name.trim();
+    if (!normalizedName) return null;
+    const [identity] = await buildArtistIdentityMappings([normalizedName]);
+    return identity ? resolveAlbumEntryByKey(albumIdentityKey(identity.traditional)) : null;
   }
 
   function currentDetailNavigationRoute(): { view: View; artistKey?: string; albumKey?: string; preserveIndex?: boolean } {
@@ -2336,7 +2355,7 @@
     const revision = ++detailHistoryRestoreRevision;
     if (route.view === 'artist-detail' && route.artistKey) {
       try {
-        const artist = (await loadArtistIndexRowsForNavigation()).find((row) => row.key === route.artistKey);
+        const artist = await resolveArtistEntryByKey(route.artistKey);
         if (revision !== detailHistoryRestoreRevision) return;
         if (artist) {
           selectedArtist = artist;
@@ -2355,7 +2374,7 @@
     }
     if (route.view === 'album-detail' && route.albumKey) {
       try {
-        const album = (await loadAlbumIndexRowsForNavigation()).find((row) => row.key === route.albumKey);
+        const album = await resolveAlbumEntryByKey(route.albumKey);
         if (revision !== detailHistoryRestoreRevision) return;
         if (album) {
           selectedAlbum = album;
@@ -2406,22 +2425,6 @@
     activeView = 'artists';
   }
 
-  async function loadAlbumIndexRowsForNavigation(): Promise<AlbumEntry[]> {
-    if (albumIndexRows) return albumIndexRows;
-    if (albumIndexRowsLoad) return albumIndexRowsLoad;
-    albumIndexRowsLoad = (async () => {
-      const facets = await invokeCommand('library_get_album_index_facets', {});
-      return buildAlbumEntries(facets);
-    })();
-    try {
-      const rows = await albumIndexRowsLoad;
-      albumIndexRows = rows;
-      return rows;
-    } finally {
-      albumIndexRowsLoad = null;
-    }
-  }
-
   function openAlbumEntry(album: AlbumEntry, preserveIndex = false): void {
     pushDetailNavigationRoute({ view: 'album-detail', albumKey: album.key, preserveIndex });
     if (selectedAlbum?.key !== album.key) albumTrackCount = null;
@@ -2449,8 +2452,7 @@
     const trimmedName = name.trim();
     if (!trimmedName) return;
     try {
-      const entries = await loadAlbumIndexRowsForNavigation();
-      const album = await findAlbumEntryByName(trimmedName, entries);
+      const album = await resolveAlbumEntryByName(trimmedName);
       if (!album) {
         if (isNowPlayingOpen) await closeNowPlaying();
         rememberedAlbumView = 'albums';
@@ -2482,8 +2484,7 @@
     const trimmedName = name.trim();
     if (!trimmedName) return;
     try {
-      const entries = await loadArtistIndexRowsForNavigation();
-      const artist = await findArtistEntryByName(trimmedName, entries);
+      const artist = await resolveArtistEntryByName(trimmedName);
       if (!artist) {
         if (isNowPlayingOpen) await closeNowPlaying();
         rememberedArtistView = 'artists';
@@ -3705,7 +3706,6 @@
                 rowHeightPx={trackRowHeightPx}
                 groupingEnabled={groupingEnabled}
                 onCountChange={(count) => (artistIndexCount = count)}
-                onRowsChange={(rows) => (artistIndexRows = rows)}
                 onSelect={(artist) => openArtistEntry(artist, true)}
               />
             {/if}
@@ -3731,6 +3731,7 @@
                   sort={librarySort}
                   livePlayCount={livePlayCount}
                   fetchPage={fetchArtistPage}
+                  quickIndexArtistNames={selectedArtist.artistNames}
                   onPlay={playArtistTrack}
                   onSort={handleLibrarySort}
                   onColumnResize={handleTrackColumnResize}
@@ -3752,7 +3753,6 @@
                 refreshKey={libraryListRevision}
                 active={activeView === 'albums'}
                 onCountChange={(count) => (albumIndexCount = count)}
-                onRowsChange={(rows) => (albumIndexRows = rows)}
                 onSelect={(album) => openAlbumEntry(album, true)}
               />
             {/if}

@@ -5,9 +5,6 @@ import {
   buildVirtualRows,
   getVirtualRange,
   PagedTrackList,
-  getViewportLoadHeight,
-  getViewportPageSize,
-  shouldRecalculateViewportPageSize,
   TRACK_LIST_MAX_CACHED_PAGES,
   TRACK_PAGE_SIZE,
   TRACK_PAGE_SIZE_MAX,
@@ -15,35 +12,10 @@ import {
 
 const TOTAL_TRACKS = 100_000;
 
-test('viewport page size loads two visible screens and respects the IPC limit', () => {
-  assert.equal(getViewportPageSize(680, 40), 34);
-  assert.equal(getViewportPageSize(600, 50), 24);
-  assert.equal(getViewportPageSize(0, 50), 1);
-  assert.equal(getViewportPageSize(100_000, 1), TRACK_PAGE_SIZE_MAX);
-});
-
-test('horizontal scrollbar visibility does not change the viewport page-size basis', () => {
-  const stableOuterHeight = 615;
-  const withoutHorizontalBar = getViewportLoadHeight(615, stableOuterHeight);
-  const withHorizontalBar = getViewportLoadHeight(600, stableOuterHeight);
-
-  assert.equal(withoutHorizontalBar, stableOuterHeight);
-  assert.equal(withHorizontalBar, stableOuterHeight);
-  assert.equal(getViewportPageSize(withoutHorizontalBar, 50), 26);
-  assert.equal(getViewportPageSize(withHorizontalBar, 50), 26);
-  assert.equal(getViewportLoadHeight(600, Number.NaN), 600);
-});
-
-test('viewport page size ignores height jitter smaller than one configured row', () => {
-  const rowHeight = 50;
-  const stableHeight = 615;
-
-  assert.equal(shouldRecalculateViewportPageSize(stableHeight, 600, rowHeight, rowHeight), false);
-  assert.equal(shouldRecalculateViewportPageSize(stableHeight, 565, rowHeight, rowHeight), true);
-  assert.equal(shouldRecalculateViewportPageSize(stableHeight, 615, rowHeight, 40), true);
-  assert.equal(shouldRecalculateViewportPageSize(null, 615, null, rowHeight), true);
-  assert.equal(getViewportPageSize(stableHeight, rowHeight), 26);
-  assert.equal(getViewportPageSize(565, rowHeight), 24);
+test('all song pages use a fixed 1000 items and cannot be resized with the viewport', () => {
+  assert.equal(TRACK_PAGE_SIZE, 1000);
+  assert.equal(TRACK_PAGE_SIZE_MAX, 1000);
+  assert.equal(typeof PagedTrackList.prototype.setPageSize, 'undefined');
 });
 
 function makeTrack(id) {
@@ -168,88 +140,34 @@ test('failed page can be retried without losing loaded data', async () => {
 
 test('page count changes during scrolling are reported instead of mixing snapshots', async () => {
   const data = new PagedTrackList(async ({ offset, limit }) =>
-    makePage(offset, limit, offset === 0 ? 80 : 81));
+    makePage(offset, limit, offset === 0 ? 80 : 81), { pageSize: 40 });
   data.reset('', 'changing-count');
   await data.ensureRange(0, 12);
-  await data.ensureRange(TRACK_PAGE_SIZE, TRACK_PAGE_SIZE + 10);
+  await data.ensureRange(40, 50);
 
   assert.equal(data.snapshot().totalCount, 80);
   assert.match(data.snapshot().errors[0]?.message ?? '', /有變更/);
   assert.equal(data.trackAt(0)?.id, 'track-0');
-  assert.equal(data.trackAt(TRACK_PAGE_SIZE), null);
+  assert.equal(data.trackAt(40), null);
 });
 
-test('changing viewport page size preserves cached rows and fetches only uncovered ranges', async () => {
+test('page size is fixed for the lifetime of a list even when the requested viewport range changes', async () => {
   const requests = [];
   const data = new PagedTrackList(async (request) => {
     requests.push({ offset: request.offset, limit: request.limit });
-    return makePage(request.offset, request.limit, 100);
+    return makePage(request.offset, request.limit, 2500);
   });
-  data.reset('', 'resize-page-size');
-  await data.ensureRange(0, 26);
-  assert.equal(data.snapshot().totalCount, 100);
-  assert.equal(data.itemAt(0)?.id, 'track-0');
-  assert.equal(data.itemAt(25)?.id, 'track-25');
-
-  assert.equal(data.setPageSize(24), true);
-  assert.equal(data.itemAt(0)?.id, 'track-0');
-  assert.equal(data.itemAt(25)?.id, 'track-25');
-  await data.ensureRange(38, 45);
-  assert.equal(data.itemAt(38)?.id, 'track-38');
-  assert.equal(data.itemAt(44)?.id, 'track-44');
-
-  assert.equal(data.setPageSize(26), true);
-  await data.ensureRange(38, 45);
-  assert.equal(data.itemAt(38)?.id, 'track-38');
-  assert.deepEqual(requests, [
-    { offset: 0, limit: TRACK_PAGE_SIZE },
-    { offset: 24, limit: 24 },
-  ]);
-  assert.equal(data.snapshot().totalCount, 100);
-  assert.equal(data.setPageSize(26), false);
-});
-
-test('a reset seeds the first page before the measured viewport size takes over', async () => {
-  const requests = [];
-  const data = new PagedTrackList(async (request) => {
-    requests.push({ offset: request.offset, limit: request.limit });
-    return makePage(request.offset, request.limit, 100);
-  });
-  data.reset('', 'initial-viewport-size');
-
-  data.setPageSize(getViewportPageSize(680, 40));
-  await data.ensureRange(0, 34);
+  data.reset('', 'fixed-page-size');
+  await data.ensureRange(0, 20);
+  await data.ensureRange(850, 900);
+  await data.ensureRange(1850, 1900);
 
   assert.deepEqual(requests, [
-    { offset: 0, limit: TRACK_PAGE_SIZE },
-    { offset: 0, limit: 34 },
+    { offset: 0, limit: 1000 },
+    { offset: 1000, limit: 1000 },
   ]);
-});
-
-test('a viewport resize while the initial page is loading waits for the replacement generation', async () => {
-  const requests = [];
-  let resolveInitial;
-  const data = new PagedTrackList((request) => {
-    requests.push({ offset: request.offset, limit: request.limit });
-    if (requests.length === 1) {
-      return new Promise((resolve) => { resolveInitial = resolve; });
-    }
-    return Promise.resolve(makePage(request.offset, request.limit, 100));
-  });
-  data.reset('', 'resize-during-initial-load');
-
-  const loading = data.ensureRange(0, 26);
-  assert.deepEqual(requests, [{ offset: 0, limit: TRACK_PAGE_SIZE }]);
-  data.setPageSize(26);
-  resolveInitial(makePage(0, TRACK_PAGE_SIZE, 100));
-  await loading;
-
-  assert.deepEqual(requests, [
-    { offset: 0, limit: TRACK_PAGE_SIZE },
-    { offset: 0, limit: 26 },
-  ]);
-  assert.equal(data.itemAt(25)?.id, 'track-25');
-  assert.equal(data.snapshot().pendingPageCount, 0);
+  assert.equal(data.snapshot().totalCount, 2500);
+  assert.equal(typeof data.setPageSize, 'undefined');
 });
 
 test('a visible page load refreshes the same virtual range without scrolling', async () => {
@@ -257,7 +175,7 @@ test('a visible page load refreshes the same virtual range without scrolling', a
   const data = new PagedTrackList(({ offset, limit }) => {
     if (offset === 40) return new Promise((resolve) => { resolveNextPage = resolve; });
     return Promise.resolve(makePage(offset, limit, 100));
-  });
+  }, { pageSize: 40 });
   data.reset('', 'same-range-refresh');
   await data.ensureRange(0, 20);
 
@@ -268,7 +186,7 @@ test('a visible page load refreshes the same virtual range without scrolling', a
   assert.equal(beforeSnapshot.totalCount, 100);
 
   const loadingVisiblePage = data.ensureRange(visibleRange.start, visibleRange.end);
-  resolveNextPage(makePage(40, TRACK_PAGE_SIZE, 100));
+  resolveNextPage(makePage(40, 40, 100));
   await loadingVisiblePage;
 
   const afterSnapshot = data.snapshot();

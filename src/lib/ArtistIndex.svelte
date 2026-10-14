@@ -1,16 +1,16 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { getErrorText, invokeCommand, type ArtistIndexEntry, type ArtistListSort } from './ipc';
-  import { buildArtistIdentityMappings, preferredArtistName } from './artist-identities.js';
+  import { getErrorText, invokeCommand, type ArtistIndexEntry, type ArtistIndexFacets, type ArtistIdentityMapping, type ArtistListSort } from './ipc';
+  import { buildArtistIdentityMappings } from './artist-identities.js';
   import { DEFAULT_TRACK_ROW_HEIGHT_PX } from './track-columns.js';
   import { formatDuration } from './format';
   import { formatListOrder } from './list-order.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
-  import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
+  import { PagedListController } from './track-list-data.js';
 
-  type ArtistRow = ArtistIndexEntry & { displayName: string };
+  type ArtistRow = ArtistIndexEntry;
   type SortField = 'title' | 'trackCount' | 'albumCount' | 'duration' | 'trackDuration';
 
   const ARTIST_COLUMNS = [
@@ -29,12 +29,9 @@
     groupingEnabled?: boolean;
     onSelect: (artist: ArtistRow) => void;
     onCountChange: (count: number | null) => void;
-    onRowsChange: (rows: ArtistRow[]) => void;
   }
 
-  let { refreshKey, rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX, groupingEnabled = true, onSelect, onCountChange, onRowsChange }: Props = $props();
-  let rows = $state<ArtistRow[]>([]);
-  let titleSortRank = $state<Record<string, number>>({});
+  let { refreshKey, rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX, groupingEnabled = true, onSelect, onCountChange }: Props = $props();
   let sortField = $state<SortField>('title');
   let sortDirection = $state<'asc' | 'desc'>('asc');
   let loading = $state(false);
@@ -44,11 +41,21 @@
   let sortSaveQueue: Promise<void> = Promise.resolve();
   let initialized = $state(false);
   let seenRefreshKey = $state<number | null>(null);
-  let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[] } | null>(null);
+  let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[]; totalCount: number } | null>(null);
   let quickIndexReady = $state(true);
-  let quickIndexGeneration = 0;
-
-  const traditionalByName = new Map<string, string>();
+  let identities: { artists: ArtistIdentityMapping[]; albums: ArtistIdentityMapping[] } | null = null;
+  type ListSnapshot = ReturnType<PagedListController<ArtistRow, string>['snapshot']>;
+  let pageSnapshot = $state<ListSnapshot>({
+    scope: null, totalCount: null, cachedPageCount: 0, cachedItemCount: 0,
+    pendingPageCount: 0, refreshing: false, errors: [], generation: 0, revision: 0,
+  });
+  const listData = new PagedListController<ArtistRow, string>(
+    async ({ scope, offset, limit }) => {
+      const snapshotId = String(scope ?? '');
+      return invokeCommand('library_get_artist_index_snapshot_page', { snapshotId, offset, limit });
+    },
+    { listName: '演出者', onChange: () => { pageSnapshot = listData.snapshot(); } },
+  );
 
   async function load(): Promise<void> {
     const revision = ++requestRevision;
@@ -56,36 +63,49 @@
     error = null;
     onCountChange(null);
     try {
-      const facets = await invokeCommand('library_get_artist_index_facets', {});
-      const [artistIdentities, albumIdentities] = await Promise.all([
-        buildArtistIdentityMappings(facets.artists),
-        buildArtistIdentityMappings(facets.albums),
-      ]);
-      if (revision !== requestRevision) return;
-      traditionalByName.clear();
-      for (const identity of artistIdentities) traditionalByName.set(identity.name, identity.traditional);
-      const result = await invokeCommand('library_get_artist_index', {
-        artistIdentities,
-        albumIdentities,
-      }) as ArtistIndexEntry[];
-      if (revision !== requestRevision) return;
-      const nextRows = result.map((entry) => ({
-        ...entry,
-        displayName: preferredArtistName(entry.names, traditionalByName) || entry.artistNames[0] || '',
-      }));
-      const sortedIndices = await invokeCommand('library_sort_text_indices', {
-        values: nextRows.map((entry) => entry.displayName),
-      });
-      if (revision !== requestRevision) return;
-      titleSortRank = Object.fromEntries(sortedIndices.map((rowIndex, rank) => [nextRows[rowIndex]?.key, rank]));
-      rows = nextRows;
-      onRowsChange(rows);
-      onCountChange(rows.length);
+      if (!identities) {
+        const facets = await invokeCommand('library_get_artist_index_facets', {}) as ArtistIndexFacets;
+        const [artistIdentities, albumIdentities] = await Promise.all([
+          buildArtistIdentityMappings(facets.artists),
+          buildArtistIdentityMappings(facets.albums),
+        ]);
+        if (revision !== requestRevision) return;
+        identities = { artists: artistIdentities, albums: albumIdentities };
+      }
+      await loadSnapshot(revision);
       listRevision += 1;
     } catch (reason) {
       if (revision === requestRevision) {
         onCountChange(null);
         error = getErrorText(reason);
+      }
+    } finally {
+      if (revision === requestRevision) loading = false;
+    }
+  }
+
+  async function loadSnapshot(revision = ++requestRevision): Promise<void> {
+    if (!identities || revision !== requestRevision) return;
+    loading = true;
+    error = null;
+    try {
+      const info = await invokeCommand('library_create_artist_index_snapshot', {
+        artistIdentities: identities.artists,
+        albumIdentities: identities.albums,
+        sortField,
+        direction: sortDirection,
+        groupingEnabled: groupingEnabled && sortField === 'title',
+      });
+      if (revision !== requestRevision) return;
+      quickIndex = { labels: info.quickIndex.labels, groups: info.quickIndex.groups, totalCount: info.quickIndex.totalCount };
+      quickIndexReady = true;
+      listData.reset(info.snapshotId, info.snapshotId);
+      pageSnapshot = listData.snapshot();
+      onCountChange(info.quickIndex.totalCount);
+    } catch (reason) {
+      if (revision === requestRevision) {
+        error = getErrorText(reason);
+        onCountChange(null);
       }
     } finally {
       if (revision === requestRevision) loading = false;
@@ -100,6 +120,7 @@
     }
     listRevision += 1;
     persistSort({ field: sortField, direction: sortDirection });
+    void loadSnapshot();
   }
 
   function persistSort(preference: ArtistListSort): void {
@@ -124,66 +145,10 @@
     initialized = true;
   }
 
-  function sortValue(row: ArtistRow, field: SortField): string | number {
-    if (field === 'title') return row.displayName;
-    if (field === 'duration') return row.playedMs;
-    if (field === 'trackDuration') return row.durationMs;
-    return row[field];
-  }
-
-  let visibleRows = $derived.by(() => rows.toSorted((left, right) => {
-    const leftValue = sortValue(left, sortField);
-    const rightValue = sortValue(right, sortField);
-    const compared = typeof leftValue === 'string' && typeof rightValue === 'string'
-      ? (titleSortRank[left.key] ?? 0) - (titleSortRank[right.key] ?? 0)
-      : Number(leftValue) - Number(rightValue);
-    return sortDirection === 'asc' ? compared : -compared;
-  }));
-
-  $effect(() => {
-    const sortedRows = visibleRows;
-    const activeSortField = sortField;
-    const generation = ++quickIndexGeneration;
-    quickIndex = null;
-    const shouldGroup = groupingEnabled && activeSortField === 'title' && sortedRows.length > 0;
-    quickIndexReady = !shouldGroup;
-    if (!shouldGroup) return;
-
-    const cacheKey = JSON.stringify({ listId: 'artist-index', refreshKey, direction: sortDirection });
-    const cached = getCachedQuickIndex(cacheKey);
-    if (cached) {
-      quickIndex = cached;
-      quickIndexReady = true;
-      return;
-    }
-
-    quickIndexReady = false;
-    const isCurrent = () => generation === quickIndexGeneration;
-    void buildQuickIndexGroups({
-      totalCount: sortedRows.length,
-      fetchPage: async ({ offset, limit }) => ({ items: sortedRows.slice(offset, offset + limit) }),
-      getName: (artist: ArtistRow) => artist.displayName,
-      getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
-      isCurrent,
-    }).then((result) => {
-      if (isCurrent() && result) {
-        cacheQuickIndex(cacheKey, result);
-        quickIndex = result;
-      }
-      if (isCurrent()) quickIndexReady = true;
-    }).catch((reason: unknown) => {
-      if (isCurrent()) {
-        console.error('無法建立演出者首字索引', reason);
-        quickIndexReady = true;
-      }
-    });
-    return () => {
-      if (generation === quickIndexGeneration) quickIndexGeneration += 1;
-    };
-  });
+  let visibleCount = $derived(pageSnapshot.totalCount ?? quickIndex?.totalCount ?? 0);
 
   onMount(() => { void initialize(); });
-  onDestroy(() => { quickIndexGeneration += 1; });
+  onDestroy(() => { requestRevision += 1; });
   $effect(() => {
     const current = refreshKey;
     if (!initialized) {
@@ -206,17 +171,17 @@
       <span>無法載入演出者清單：{error}</span>
       <button class="text-button" type="button" onclick={() => void load()}>重試</button>
     </div>
-  {:else if !initialized || (loading && rows.length === 0)}
+  {:else if !initialized || (loading && pageSnapshot.cachedItemCount === 0)}
     <div class="track-list-empty" aria-hidden="true"></div>
-  {:else if visibleRows.length === 0}
+  {:else if visibleCount === 0}
     <div class="track-list-empty" role="status">目前啟用的曲庫沒有演出者資料。</div>
   {:else}
     <PagedVirtualList
-      totalCount={visibleRows.length}
-      pending={loading}
-      revision={listRevision}
-      generation={listRevision}
-      itemAt={(index) => visibleRows[index] ?? null}
+      totalCount={visibleCount}
+      pending={loading || pageSnapshot.pendingPageCount > 0}
+      revision={pageSnapshot.revision + listRevision}
+      generation={pageSnapshot.generation}
+      itemAt={(index) => listData.itemAt(index)}
       getKey={(artist) => artist.key}
       rowHeight={rowHeightPx}
       compactRowHeight={rowHeightPx}
@@ -235,7 +200,7 @@
       className="track-list-viewport"
       rowClassName="track-row virtual-track-row configurable-track-grid artist-index-row"
       listName="演出者"
-      onRange={() => {}}
+      onRange={(range) => { void listData.ensureRange(range.start, range.end); }}
       onPlay={(artist) => onSelect(artist)}
     >
       {#snippet header()}

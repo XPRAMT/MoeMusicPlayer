@@ -4,56 +4,10 @@
 /** @template Scope @typedef {{ scope: Scope, offset: number, limit: number }} PagedRequest */
 /** @template Item, Scope @typedef {(request: PagedRequest<Scope>) => Promise<PagedResponse<Item>>} FetchPage */
 
-export const TRACK_PAGE_SIZE = 40;
-export const TRACK_PAGE_SIZE_MAX = 500;
+export const TRACK_PAGE_SIZE = 1000;
+export const TRACK_PAGE_SIZE_MAX = TRACK_PAGE_SIZE;
 export const TRACK_LIST_MAX_CACHED_PAGES = 6;
 export const TRACK_LIST_MAX_CONCURRENT_REQUESTS = 2;
-
-/** Load two screens of rows, rounded up to a whole row and capped by the IPC page limit.
- * @param {number} viewportHeight
- * @param {number} rowHeight
- */
-export function getViewportPageSize(viewportHeight, rowHeight) {
-  const height = Number.isFinite(viewportHeight) ? Math.max(0, viewportHeight) : 0;
-  const row = Number.isFinite(rowHeight) ? Math.max(1, rowHeight) : 1;
-  return Math.max(1, Math.min(TRACK_PAGE_SIZE_MAX, Math.ceil(height / row) * 2));
-}
-
-/**
- * Use the viewport's border-box height for page sizing. A classic horizontal
- * scrollbar reduces clientHeight while leaving offsetHeight unchanged; using
- * the larger stable measurement prevents page-size oscillation at overflow
- * thresholds.
- * @param {number} clientHeight
- * @param {number} offsetHeight
- */
-export function getViewportLoadHeight(clientHeight, offsetHeight) {
-  const client = Number.isFinite(clientHeight) ? Math.max(0, clientHeight) : 0;
-  const outer = Number.isFinite(offsetHeight) ? Math.max(0, offsetHeight) : 0;
-  return Math.max(client, outer);
-}
-
-/**
- * Avoid recalculating the requested page size for small viewport fluctuations.
- * One full row-height is the threshold; a row-height preference change always
- * recalculates immediately.
- * @param {number | null} previousHeight
- * @param {number} nextHeight
- * @param {number | null} previousRowHeight
- * @param {number} nextRowHeight
- */
-export function shouldRecalculateViewportPageSize(
-  previousHeight,
-  nextHeight,
-  previousRowHeight,
-  nextRowHeight,
-) {
-  if (!Number.isFinite(nextHeight) || nextHeight <= 0) return false;
-  if (previousHeight === null || previousRowHeight === null) return true;
-  if (previousRowHeight !== nextRowHeight) return true;
-  const threshold = Math.max(1, Number.isFinite(nextRowHeight) ? nextRowHeight : 1);
-  return Math.abs(nextHeight - previousHeight) >= threshold;
-}
 
 /**
  * @typedef {Object} VirtualRange
@@ -176,7 +130,10 @@ export class PagedListController {
    */
   constructor(fetchPage, options = {}) {
     this.fetchPage = fetchPage;
-    this.pageSize = Math.max(1, Math.floor(options.pageSize ?? TRACK_PAGE_SIZE));
+    this.pageSize = Math.max(1, Math.min(
+      TRACK_PAGE_SIZE_MAX,
+      Math.floor(options.pageSize ?? TRACK_PAGE_SIZE),
+    ));
     this.maxCachedPages = Math.max(1, Math.floor(options.maxCachedPages ?? TRACK_LIST_MAX_CACHED_PAGES));
     this.maxConcurrentRequests = Math.max(
       1,
@@ -235,34 +192,6 @@ export class PagedListController {
     // A missed initial ResizeObserver notification must not leave the list
     // waiting for its first user scroll to start loading.
     void this.ensureRange(0, this.pageSize);
-    return true;
-  }
-
-  /**
-   * Resize the virtual page window without changing its scope, total count, or
-   * scroll range. Cached pages remain valid row ranges even when their offsets
-   * no longer align to the new request size; uncovered gaps are fetched on
-   * demand.
-   * @param {number} requestedPageSize
-   * @returns {boolean}
-   */
-  setPageSize(requestedPageSize) {
-    const nextPageSize = Math.max(1, Math.min(
-      TRACK_PAGE_SIZE_MAX,
-      Math.floor(Number.isFinite(requestedPageSize) ? requestedPageSize : TRACK_PAGE_SIZE),
-    ));
-    if (nextPageSize === this.pageSize) return false;
-
-    this.pageSize = nextPageSize;
-    this.generation += 1;
-    this.errors.clear();
-    this.refreshState = null;
-    for (const state of this.queue) state.resolve();
-    this.queue = [];
-    this.loads.clear();
-    if (!this.lastRange) this.lastRange = { start: 0, end: nextPageSize };
-    this.notify();
-    this.scheduleRange();
     return true;
   }
 
@@ -358,7 +287,7 @@ export class PagedListController {
       if (promises.length === 0) return;
 
       // The first response establishes totalCount and schedules the real pages.
-      // A viewport resize can also invalidate a request generation while this
+      // A scope reset or refresh can invalidate a request generation while this
       // call is waiting. Recompute until the latest range has no pending work.
       await Promise.all(promises);
     }

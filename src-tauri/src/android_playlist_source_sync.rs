@@ -93,7 +93,7 @@ where
     let document_locator = MediaLocator::ContentUri(document_uri.clone());
     let prior_state = database
         .playlist_file_sync_state(source.id)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("read playlist sync state: {error}"))?;
     let changed = prior_state.as_ref().is_none_or(|state| {
         state.playlist_id != *playlist_id
             || state.locator != document_locator
@@ -253,24 +253,24 @@ where
     };
     database
         .save_library_root(&root)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("save playlist library root: {error}"))?;
     let mut index = SafPlaylistMediaIndex {
         scan: Some(scan),
         read_metadata,
     };
     let report = SyncEngine::sync(&root, &mut index, database, synced_at_utc_ms)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("sync playlist media: {error}"))?;
 
     let mut playlist = parsed;
     playlist.id = *playlist_id;
     let prior_playlist = database
         .get_playlist(*playlist_id)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("read playlist projection: {error}"))?;
     for (position, entry) in playlist.entries.iter_mut().enumerate() {
         if let Some(Some(MediaLocator::ContentUri(uri))) = resolved_by_entry.get(position) {
             entry.track_id = database
                 .resolve_track_id_for_locator(&MediaLocator::ContentUri(uri.clone()))
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| format!("resolve playlist track: {error}"))?;
         } else if let Some(old_entry) = prior_playlist
             .as_ref()
             .and_then(|old| old.entries.get(position))
@@ -284,7 +284,7 @@ where
     if playlist_needs_save {
         database
             .save_playlist(&playlist)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("save playlist projection: {error}"))?;
     }
     if changed {
         database
@@ -297,7 +297,7 @@ where
                     content_sha256: digest,
                 },
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("save playlist sync state: {error}"))?;
     }
     Ok(Some(report))
 }

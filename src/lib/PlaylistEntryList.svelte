@@ -33,7 +33,6 @@ import {
   DEFAULT_TRACK_ROW_HEIGHT_PX,
   DEFAULT_TRACK_COLUMN_WIDTHS,
   TRACK_COLUMN_DEFINITIONS,
-  displayTrackTitle,
   formatTrackColumnValue,
   isHiResTrack,
   normalizeTrackColumnPreferences,
@@ -45,8 +44,8 @@ import {
   visibleTrackColumns,
 } from './track-columns.js';
 import { withLivePlayedMs } from './live-play-count.js';
-import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
-import { PagedListController, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
+import { cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
+import { PagedListController } from './track-list-data.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
@@ -154,18 +153,10 @@ import { PagedListController, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
     }
     quickIndexReady = false;
     const isCurrent = () => generation === quickIndexGeneration;
-    void buildQuickIndexGroups({
-      totalCount: count,
-      pageSize: TRACK_PAGE_SIZE_MAX,
-      fetchPage: ({ offset, limit }) => requestPlaylistPage({ playlistId: currentPlaylistId, sort: currentSort, offset, limit }),
-      getName: (entry: PlaylistEntrySummary) => currentSort.field === 'title'
-        ? displayTrackTitle(entry, '未命名項目')
-        : currentSort.field === 'artist'
-          ? entry.artist
-          : entry.album,
-      getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
-      isCurrent,
-    }).then((result) => {
+    void invokeCommand('playlist_get_quick_index_groupings', {
+      playlistId: currentPlaylistId,
+      sort: currentSort,
+    }).then((response) => ({ labels: response.labels, groups: response.groups })).then((result) => {
       if (isCurrent() && result) {
         cacheQuickIndex(cacheKey, result);
         quickIndex = result;
@@ -189,10 +180,6 @@ import { PagedListController, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
 
   function handleRange(range: { start: number; end: number }): void {
     void entries.ensureRange(range.start, range.end);
-  }
-
-  function handleLoadSizeChange(size: number): void {
-    entries.setPageSize(size);
   }
 
   function retryFirstError(): void {
@@ -254,7 +241,6 @@ import { PagedListController, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
     rowClassName="track-row virtual-track-row configurable-track-grid playlist-entry-row"
     listName="播放清單"
     onRange={handleRange}
-    onLoadSizeChange={handleLoadSizeChange}
     onPlay={(entry) => playEntry(entry)}
   >
     {#snippet header()}

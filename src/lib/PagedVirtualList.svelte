@@ -40,9 +40,6 @@
   import type { Snippet } from 'svelte';
   import {
     getNextActiveIndex,
-    getViewportLoadHeight,
-    getViewportPageSize,
-    shouldRecalculateViewportPageSize,
     getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
@@ -82,7 +79,6 @@
     rowClassName?: string;
     listName: string;
     onRange: (range: VirtualRange) => void;
-    onLoadSizeChange?: (size: number) => void;
     onPlay: (item: Item, index: number) => void;
     rowActivates?: boolean;
     longPressReorder?: boolean;
@@ -126,7 +122,6 @@
     rowClassName = '',
     listName,
     onRange,
-    onLoadSizeChange = () => {},
     onPlay,
     rowActivates = true,
     longPressReorder = false,
@@ -152,9 +147,6 @@
   let rowHeight = $state(50);
   let headerHeight = $state(37);
   let maxViewportHeight = $state(680);
-  let lastReportedLoadSize: number | null = null;
-  let lastReportedLoadHeight: number | null = null;
-  let lastReportedLoadRowHeight: number | null = null;
   let recalculateMetrics = () => {};
   let seenScrollResetKey: unknown;
   let hasSeenScrollResetKey = false;
@@ -214,23 +206,6 @@
   }));
   const activeDescendantId = $derived(`${listId}-row-${dataIndexToVisualIndex(activeIndex, renderGroupRows)}`);
   const availableIndexLabels = $derived(new Set(renderGroupRows.map(({ label }) => label)));
-
-  function reportLoadSize(height: number): void {
-    if (height <= 0) return;
-    if (!shouldRecalculateViewportPageSize(
-      lastReportedLoadHeight,
-      height,
-      lastReportedLoadRowHeight,
-      rowHeight,
-    )) return;
-
-    lastReportedLoadHeight = height;
-    lastReportedLoadRowHeight = rowHeight;
-    const nextSize = getViewportPageSize(height, rowHeight);
-    if (nextSize === lastReportedLoadSize) return;
-    lastReportedLoadSize = nextSize;
-    onLoadSizeChange(nextSize);
-  }
 
   $effect(() => {
     baseRowHeight;
@@ -376,10 +351,6 @@
         hadVisibleViewport = false;
       }
       viewportHeight = nextViewportHeight;
-      const loadViewportHeight = viewport
-        ? getViewportLoadHeight(viewport.clientHeight, viewport.offsetHeight)
-        : nextViewportHeight;
-      reportLoadSize(loadViewportHeight);
       if (nextViewportHeight > 0) metricsReady = true;
       if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     };
@@ -413,8 +384,7 @@
     headerShift = viewport.scrollLeft;
     headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     viewportHeight = viewport.clientHeight;
-    reportLoadSize(getViewportLoadHeight(viewport.clientHeight, viewport.offsetHeight));
-      metricsReady = true;
+    metricsReady = true;
   }
 
   function handleViewportScroll(): void {

@@ -114,7 +114,7 @@ test('queue refresh keeps old visible rows until all replacement pages are ready
         items: page.items.map((item) => ({ ...item, title: `Fresh ${item.position}` })),
       }),
     }));
-  });
+  }, { pageSize: 40 });
 
   data.reset('queue');
   await data.ensureRange(8_000, 8_080);

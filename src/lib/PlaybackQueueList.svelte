@@ -7,7 +7,6 @@
     DEFAULT_TRACK_ROW_HEIGHT_PX,
     DEFAULT_TRACK_COLUMN_WIDTHS,
     TRACK_COLUMN_DEFINITIONS,
-    displayTrackTitle,
     formatTrackColumnValue,
     isHiResTrack,
     normalizeTrackColumnPreferences,
@@ -19,8 +18,8 @@
     visibleTrackColumns,
   } from './track-columns.js';
   import { withLivePlayedMs } from './live-play-count.js';
-  import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
-  import { PagedListController, TRACK_PAGE_SIZE, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
+  import { cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
+  import { PagedListController, TRACK_PAGE_SIZE } from './track-list-data.js';
   import {
     adaptPlaybackQueuePage,
     isCurrentPlaybackQueueEntry,
@@ -145,22 +144,9 @@
     }
     quickIndexReady = false;
     const isCurrent = () => generation === quickIndexGeneration;
-    void buildQuickIndexGroups({
-      totalCount: count,
-      pageSize: TRACK_PAGE_SIZE_MAX,
-      fetchPage: async ({ offset, limit }) => {
-        const page = await requestPage({ offset, limit });
-        return { items: page.items, totalCount: page.total };
-      },
-      getName: (entry: PlaybackQueuePageItem) => {
-        const track = entry.track;
-        if (!track) return '';
-        if (currentSort.field === 'title') return displayTrackTitle(track);
-        return currentSort.field === 'artist' ? track.artist : track.album;
-      },
-      getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
-      isCurrent,
-    }).then((result) => {
+    void invokeCommand('playback_get_queue_quick_index_groupings', {
+      field: currentSort.field as 'title' | 'artist' | 'album',
+    }).then((response) => ({ labels: response.labels, groups: response.groups })).then((result) => {
       if (isCurrent() && result) {
         cacheQuickIndex(cacheKey, result);
         quickIndex = result;
@@ -220,10 +206,6 @@
 
   function itemAt(index: number): PlaybackQueuePageItem | null {
     return queue.itemAt(index);
-  }
-
-  function handleLoadSizeChange(size: number): void {
-    queue.setPageSize(size);
   }
 
   function handleRange(range: { start: number; end: number }): void {
@@ -347,7 +329,6 @@
     longPressReorder={true}
     {scrollToIndexRequest}
     onRange={handleRange}
-    onLoadSizeChange={handleLoadSizeChange}
     onPlay={(entry) => {
       if (entry) onPlay(entry);
     }}

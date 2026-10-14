@@ -29,15 +29,12 @@
     visibleTrackColumns,
   } from './track-columns.js';
   import { withLivePlayedMs } from './live-play-count.js';
-  import {
-    PagedListController,
-    TRACK_PAGE_SIZE_MAX,
-  } from './track-list-data.js';
+  import { PagedListController } from './track-list-data.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
   import { getSearchVariants } from './search-variants.js';
-  import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex, getQuickIndexBuildKey } from './quick-index.js';
+  import { cacheQuickIndex, getCachedQuickIndex, getQuickIndexBuildKey } from './quick-index.js';
 
   interface Props {
     query: string;
@@ -56,6 +53,8 @@
     indexSortLabel?: string;
     onIndexSort?: () => void;
     getIndexLabel?: (track: TrackSummary, index: number) => string;
+    quickIndexArtistNames?: string[];
+    quickIndexAlbumNames?: string[];
     fetchPage?: (request: TrackPageRequest) => Promise<TrackPage>;
     columns?: TrackListColumnPreference[];
     columnWidths?: TrackColumnWidths;
@@ -84,6 +83,8 @@
     indexSortLabel,
     onIndexSort,
     getIndexLabel = (_track, index) => formatListOrder(index),
+    quickIndexArtistNames,
+    quickIndexAlbumNames,
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
@@ -196,25 +197,28 @@
     }
     quickIndexReady = false;
     const isCurrent = () => generation === quickIndexGeneration;
-    void buildQuickIndexGroups({
-      totalCount: count,
-      pageSize: TRACK_PAGE_SIZE_MAX,
-      fetchPage: async ({ offset, limit }) => requestTrackPage({
+    void (async () => {
+      const response = fetchPage
+        ? quickIndexArtistNames
+          ? await invokeCommand('library_get_quick_index_for_artists', {
+            artistNames: quickIndexArtistNames,
+            sort: currentSort,
+          })
+          : quickIndexAlbumNames
+            ? await invokeCommand('library_get_quick_index_for_album_tracks', {
+              albumNames: quickIndexAlbumNames,
+              sort: currentSort,
+            })
+            : null
+        : await invokeCommand('library_get_quick_index_for_tracks', {
           query: currentQuery,
           queryAlternates: (await getSearchVariants(currentQuery)).slice(1),
           fieldFilter: currentFieldFilter,
           sort: currentSort,
-          offset,
-          limit,
-        }),
-      getName: (track: TrackSummary) => activeSort.field === 'title'
-        ? displayTrackTitle(track)
-        : activeSort.field === 'artist'
-          ? track.artist
-          : track.album,
-      getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
-      isCurrent,
-    }).then((result) => {
+        });
+      if (!response) return null;
+      return { labels: response.labels, groups: response.groups };
+    })().then((result) => {
       if (isCurrent() && result) {
         cacheQuickIndex(cacheKey, result);
         quickIndex = result;
@@ -243,10 +247,6 @@
 
   function handleRange(range: { start: number; end: number }): void {
     void listData.ensureRange(range.start, range.end);
-  }
-
-  function handleLoadSizeChange(size: number): void {
-    listData.setPageSize(size);
   }
 
   function itemAt(index: number): TrackSummary | null {
@@ -302,7 +302,6 @@
     rowClassName="track-row virtual-track-row configurable-track-grid"
     listName="曲庫"
     onRange={handleRange}
-    onLoadSizeChange={handleLoadSizeChange}
     onPlay={(track) => playRow(track)}
   >
     {#snippet header()}

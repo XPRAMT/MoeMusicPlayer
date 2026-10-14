@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     error::Error,
     fmt,
     path::Path,
@@ -14,7 +14,7 @@ use icu_collator::{
     Collator, CollatorBorrowed, CollatorPreferences,
 };
 use icu_locale::Locale;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use player_core::{
     FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, LyricCandidate,
@@ -28,7 +28,8 @@ use player_core::{
     UserMetadataField, TRACK_METADATA_VERSION,
 };
 use rusqlite::{
-    params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
+    functions::FunctionFlags, params, Connection, OpenFlags, OptionalExtension, Transaction,
+    TransactionBehavior,
 };
 use uuid::Uuid;
 
@@ -36,8 +37,11 @@ use crate::locator;
 
 const SCHEMA_VERSION: i64 = 15;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
+const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
+const MUSIC_SPLIT_ARTISTS_FUNCTION: &str = "music_split_artists_json";
+const MUSIC_TRIM_FUNCTION: &str = "music_trim_whitespace";
 const ICU4X_COLLATION_DATA_VERSION: &str = "icu_collator-2.3.1+icu_collator_data-2.3.0";
-const MAX_PAGE_SIZE: u32 = 500;
+const MAX_PAGE_SIZE: u32 = 1000;
 const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_AUTOMATIC_LYRICS_CACHE_BYTES: i64 = 64 * 1024 * 1024;
 const MAX_LYRIC_CANDIDATE_JSON_BYTES: usize = 4 * 1024 * 1024;
@@ -186,9 +190,11 @@ const ARTIST_TRACKS_PREFIX_SQL: &str = "SELECT t.track_id,
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || term.value || '%' COLLATE NOCASE
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE))
-   AND EXISTS (SELECT 1 FROM json_each(?2) artist_name
-               WHERE instr(lower(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '')),
-                            lower(artist_name.value)) > 0)";
+   AND EXISTS (SELECT 1 FROM json_each(?2) requested_artist
+               JOIN json_each(music_split_artists_json(
+                   COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist)
+               )) artist_name
+                 ON lower(trim(artist_name.value))=lower(trim(requested_artist.value)))";
 const ALBUM_TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
@@ -236,10 +242,10 @@ WITH resolved_entries AS (
 SELECT e.position, e.track_id,
        COALESCE(e.entry_title,
            (SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='title'),
-           t.title),
-       COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist),
-       COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album),
-       COALESCE(e.entry_duration_ms, t.duration_ms),
+           t.title) AS title,
+       COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist) AS artist,
+       COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album) AS album,
+       COALESCE(e.entry_duration_ms, t.duration_ms) AS duration_ms,
        t.codec, t.bitrate_bps, t.sample_rate_hz, t.year, t.release_date, t.bit_depth,
        EXISTS (
            SELECT 1 FROM source_mappings m
@@ -641,6 +647,7 @@ struct HanGroupBoundary {
     exemplar: &'static str,
 }
 
+#[derive(Clone)]
 struct MusicCollators {
     default: Arc<CollatorBorrowed<'static>>,
     han: Arc<CollatorBorrowed<'static>>,
@@ -1011,9 +1018,38 @@ fn register_music_collation(
     collation_spec: &MusicCollationSpec,
 ) -> rusqlite::Result<()> {
     let collators = collation_spec.build_collators();
-    connection.create_collation(MUSIC_COLLATION_NAME, move |left, right| {
-        compare_music_names(&collators, left, right)
-    })
+    connection.create_collation(MUSIC_COLLATION_NAME, {
+        let collators = collators.clone();
+        move |left, right| compare_music_names(&collators, left, right)
+    })?;
+    connection.create_scalar_function(
+        MUSIC_QUICK_INDEX_FUNCTION,
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |context| {
+            let value = context.get::<String>(0)?;
+            Ok(quick_index_label(&collators, &value))
+        },
+    )?;
+    connection.create_scalar_function(
+        MUSIC_SPLIT_ARTISTS_FUNCTION,
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let value = context.get::<Option<String>>(0)?;
+            serde_json::to_string(&split_artist_names(value.as_deref()))
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+        },
+    )?;
+    connection.create_scalar_function(
+        MUSIC_TRIM_FUNCTION,
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let value = context.get::<Option<String>>(0)?;
+            Ok(value.unwrap_or_default().trim().to_owned())
+        },
+    )
 }
 
 fn ensure_music_collation_index(
@@ -1127,23 +1163,80 @@ pub struct AlbumIndexFacet {
     pub played_ms: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumDiscCount {
+    pub disc_number: u32,
+    pub count: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumDetailFacets {
+    pub artists: Vec<ArtistNameCount>,
+    pub disc_counts: Vec<AlbumDiscCount>,
+    pub track_count: u64,
+    pub unknown_disc_track_count: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistNameCount {
     pub name: String,
     pub count: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistIndexEntry {
     pub key: String,
     pub names: Vec<ArtistNameCount>,
     pub artist_names: Vec<String>,
+    pub display_name: String,
     pub track_count: u64,
     pub album_count: u64,
     pub played_ms: u64,
     pub duration_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumIndexEntry {
+    pub key: String,
+    pub display_name: String,
+    pub aliases: Vec<String>,
+    pub track_count: u64,
+    pub duration_ms: u64,
+    pub played_ms: u64,
+    pub unmarked: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexSnapshotInfo {
+    pub snapshot_id: String,
+    pub quick_index: QuickIndexSnapshot,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickIndexGroup {
+    pub label: String,
+    pub before_index: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickIndexSnapshot {
+    pub labels: Vec<String>,
+    pub groups: Vec<QuickIndexGroup>,
+    pub total_count: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct QueueSortCandidate {
+    pub entry_index: usize,
+    pub summary: Option<TrackSummary>,
 }
 
 impl fmt::Debug for Database {
@@ -1579,7 +1672,56 @@ impl Database {
             "CREATE TEMP TABLE IF NOT EXISTS sync_seen_items (
                 source_id TEXT NOT NULL, source_item_id TEXT NOT NULL,
                 PRIMARY KEY (source_id, source_item_id)
-            );",
+            );
+            CREATE TEMP TABLE IF NOT EXISTS index_snapshot_input (
+                snapshot_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                identity_key TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                metric_primary INTEGER NOT NULL,
+                metric_secondary INTEGER NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            CREATE TEMP TABLE IF NOT EXISTS index_snapshot_rows (
+                snapshot_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                group_label TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (snapshot_id, position)
+            );
+            CREATE TEMP TABLE IF NOT EXISTS index_identity_map (
+                kind TEXT NOT NULL,
+                name TEXT NOT NULL,
+                identity_key TEXT NOT NULL,
+                traditional TEXT NOT NULL,
+                PRIMARY KEY (kind, name)
+            );
+            CREATE TEMP TABLE IF NOT EXISTS index_ordered_values (
+                position INTEGER PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TEMP TABLE IF NOT EXISTS queue_sort_values (
+                entry_index INTEGER NOT NULL,
+                stable_order INTEGER NOT NULL,
+                known INTEGER NOT NULL,
+                track_id TEXT NOT NULL,
+                sort_title TEXT NOT NULL,
+                artist TEXT,
+                album TEXT,
+                release_date TEXT,
+                year INTEGER,
+                created_at_utc_ms INTEGER,
+                codec TEXT,
+                bitrate_bps INTEGER,
+                sample_rate_hz INTEGER,
+                bit_depth INTEGER,
+                duration_ms INTEGER,
+                played_ms INTEGER NOT NULL,
+                PRIMARY KEY(entry_index)
+            );
+            CREATE INDEX IF NOT EXISTS temp.index_snapshot_rows_by_id_position
+                ON index_snapshot_rows(snapshot_id, position);",
         )?;
         ensure_music_collation_index(&connection, &self.collation_spec)?;
         Ok(())
@@ -1609,6 +1751,397 @@ impl Database {
             }
         }
         (labels, groups)
+    }
+
+    /// Build group boundaries for an already sorted sequence of labels. This is used for merged
+    /// Windows library results, where part of the sequence comes from the in-memory SQLite catalog.
+    pub fn quick_index_for_ordered_values(
+        &self,
+        values: &[String],
+    ) -> Result<QuickIndexSnapshot, DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction()?;
+        tx.execute("DELETE FROM index_ordered_values", [])?;
+        {
+            let mut insert =
+                tx.prepare("INSERT INTO index_ordered_values(position, value) VALUES (?1, ?2)")?;
+            for (position, value) in values.iter().enumerate() {
+                insert.execute(params![i64::try_from(position).unwrap_or(i64::MAX), value])?;
+            }
+        }
+        let mut statement = tx.prepare(
+            "WITH labels AS (
+                SELECT position, music_quick_index_label(value) AS group_label,
+                       COUNT(*) OVER () AS total_count
+                FROM index_ordered_values
+             ), transitions AS (
+                SELECT position, group_label, total_count,
+                       LAG(group_label) OVER (ORDER BY position) AS previous_label
+                FROM labels
+             )
+             SELECT position, group_label, total_count FROM transitions
+             WHERE previous_label IS NULL OR previous_label <> group_label
+             ORDER BY position",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?.max(0) as u64,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?.max(0) as u64,
+            ))
+        })?;
+        let mut snapshot = QuickIndexSnapshot::default();
+        for row in rows {
+            let (before_index, label, total_count) = row?;
+            snapshot.total_count = total_count;
+            snapshot.labels.push(label.clone());
+            snapshot.groups.push(QuickIndexGroup {
+                label,
+                before_index,
+            });
+        }
+        drop(statement);
+        tx.commit()?;
+        Ok(snapshot)
+    }
+
+    /// Sort an in-memory playback traversal through the database's ICU4X SQLite connection.
+    /// Queue entries stay distinct even when their TrackId is repeated.
+    pub fn sort_queue_candidates(
+        &self,
+        candidates: &[QueueSortCandidate],
+        sort: TrackListSort,
+    ) -> Result<Vec<usize>, DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction()?;
+        tx.execute("DELETE FROM queue_sort_values", [])?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO queue_sort_values (
+                    entry_index, stable_order, known, track_id, sort_title, artist, album,
+                    release_date, year, created_at_utc_ms, codec, bitrate_bps, sample_rate_hz,
+                    bit_depth, duration_ms, played_ms
+                 ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+                 )",
+            )?;
+            for (stable_order, candidate) in candidates.iter().enumerate() {
+                let summary = candidate.summary.as_ref();
+                let sort_title = summary
+                    .and_then(|track| {
+                        player_core::display_track_title(
+                            track.title.as_deref(),
+                            track.file_name.as_deref(),
+                        )
+                    })
+                    .unwrap_or_default();
+                insert.execute(params![
+                    i64::try_from(candidate.entry_index).unwrap_or(i64::MAX),
+                    i64::try_from(stable_order).unwrap_or(i64::MAX),
+                    i64::from(summary.is_some()),
+                    summary.map_or_else(String::new, |track| track.id.to_string()),
+                    sort_title,
+                    summary.and_then(|track| track.artist.clone()),
+                    summary.and_then(|track| track.album.clone()),
+                    summary.and_then(|track| track.release_date.clone()),
+                    summary.and_then(|track| track.year.map(i64::from)),
+                    summary.and_then(|track| track.created_at_utc_ms),
+                    summary.and_then(|track| track.codec.clone()),
+                    summary.and_then(|track| track.bitrate_bps.map(i64::from)),
+                    summary.and_then(|track| track.sample_rate_hz.map(i64::from)),
+                    summary.and_then(|track| track.bit_depth.map(i64::from)),
+                    summary.and_then(|track| track
+                        .duration_ms
+                        .map(|value| i64::try_from(value).unwrap_or(i64::MAX))),
+                    summary.map_or(0, |track| i64::try_from(track.played_ms)
+                        .unwrap_or(i64::MAX)),
+                ])?;
+            }
+        }
+        let order_by = queue_sort_order_by(sort);
+        let query = format!(
+            "SELECT entry_index FROM queue_sort_values t
+             ORDER BY known DESC, {order_by}, stable_order ASC"
+        );
+        let mut statement = tx.prepare(&query)?;
+        let indices = statement
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .map(|row| {
+                usize::try_from(row?).map_err(|_| {
+                    DatabaseError::CorruptData("negative queue entry index".to_owned())
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        tx.commit()?;
+        Ok(indices)
+    }
+
+    fn create_index_snapshot<T: Serialize>(
+        &self,
+        kind: &str,
+        sort_field: &str,
+        direction: &str,
+        reverse_ties: bool,
+        grouping_enabled: bool,
+        items: Vec<(String, String, u64, u64, T)>,
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        let direction_sql = match direction {
+            "asc" => "ASC",
+            "desc" => "DESC",
+            _ => {
+                return Err(DatabaseError::CorruptData(
+                    "invalid index sort direction".to_owned(),
+                ))
+            }
+        };
+        let tie_direction_sql = if reverse_ties { direction_sql } else { "ASC" };
+        let order_by = match (kind, sort_field) {
+            ("artist", "title") | ("album", "title") | ("artist-navigation", "title") | ("album-navigation", "title") => format!(
+                "display_name COLLATE {MUSIC_COLLATION_NAME} {direction_sql}, identity_key {tie_direction_sql}"
+            ),
+            ("artist", "trackCount") => format!(
+                "metric_primary {direction_sql}, display_name COLLATE {MUSIC_COLLATION_NAME} {tie_direction_sql}, identity_key {tie_direction_sql}"
+            ),
+            ("artist", "albumCount") | ("album", "trackCount") => format!(
+                "metric_primary {direction_sql}, display_name COLLATE {MUSIC_COLLATION_NAME} {tie_direction_sql}, identity_key {tie_direction_sql}"
+            ),
+            ("artist", "duration") | ("album", "played") => format!(
+                "metric_primary {direction_sql}, display_name COLLATE {MUSIC_COLLATION_NAME} {tie_direction_sql}, identity_key {tie_direction_sql}"
+            ),
+            ("artist", "trackDuration") | ("album", "duration") => format!(
+                "metric_primary {direction_sql}, display_name COLLATE {MUSIC_COLLATION_NAME} {tie_direction_sql}, identity_key {tie_direction_sql}"
+            ),
+            _ => return Err(DatabaseError::CorruptData("invalid index sort field".to_owned())),
+        };
+        let snapshot_id = Uuid::new_v4().to_string();
+        let mut connection = self.lock()?;
+        let tx = connection.transaction()?;
+        tx.execute("DELETE FROM index_snapshot_rows WHERE kind=?1", [kind])?;
+        tx.execute("DELETE FROM index_snapshot_input WHERE kind=?1", [kind])?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO index_snapshot_input
+                    (snapshot_id, kind, identity_key, display_name, metric_primary, metric_secondary, payload_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for (identity_key, display_name, metric_primary, metric_secondary, item) in items {
+                let payload = serde_json::to_string(&item)
+                    .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+                insert.execute(params![
+                    snapshot_id,
+                    kind,
+                    identity_key,
+                    display_name,
+                    i64::try_from(metric_primary).unwrap_or(i64::MAX),
+                    i64::try_from(metric_secondary).unwrap_or(i64::MAX),
+                    payload,
+                ])?;
+            }
+        }
+        let materialize_sql = format!(
+            "INSERT INTO index_snapshot_rows(snapshot_id, kind, position, group_label, payload_json)
+             SELECT snapshot_id, kind,
+                    ROW_NUMBER() OVER (ORDER BY {order_by}) - 1,
+                    {MUSIC_QUICK_INDEX_FUNCTION}(display_name), payload_json
+             FROM index_snapshot_input WHERE snapshot_id=?1"
+        );
+        tx.execute(&materialize_sql, [&snapshot_id])?;
+        let total_count = tx
+            .query_row(
+                "SELECT COUNT(*) FROM index_snapshot_rows WHERE snapshot_id=?1",
+                [&snapshot_id],
+                |row| row.get::<_, i64>(0),
+            )?
+            .max(0) as u64;
+        let mut quick_index = QuickIndexSnapshot {
+            total_count,
+            ..QuickIndexSnapshot::default()
+        };
+        if grouping_enabled && total_count > 0 {
+            let mut statement = tx.prepare(
+                "WITH transitions AS (
+                    SELECT position, group_label,
+                           LAG(group_label) OVER (ORDER BY position) AS previous_label
+                    FROM index_snapshot_rows WHERE snapshot_id=?1
+                 )
+                 SELECT position, group_label FROM transitions
+                 WHERE previous_label IS NULL OR previous_label <> group_label
+                 ORDER BY position",
+            )?;
+            let rows = statement.query_map([&snapshot_id], |row| {
+                Ok(QuickIndexGroup {
+                    before_index: row.get::<_, i64>(0)?.max(0) as u64,
+                    label: row.get(1)?,
+                })
+            })?;
+            quick_index.groups = rows.collect::<Result<Vec<_>, _>>()?;
+            quick_index.labels = quick_index
+                .groups
+                .iter()
+                .map(|group| group.label.clone())
+                .collect();
+        }
+        tx.commit()?;
+        Ok(IndexSnapshotInfo {
+            snapshot_id,
+            quick_index,
+        })
+    }
+
+    pub fn get_index_snapshot_page<T: DeserializeOwned>(
+        &self,
+        snapshot_id: &str,
+        offset: u64,
+        requested_limit: u32,
+    ) -> Result<Page<T>, DatabaseError> {
+        let limit = query_limit(requested_limit);
+        let connection = self.lock()?;
+        let total_count = connection
+            .query_row(
+                "SELECT COUNT(*) FROM index_snapshot_rows WHERE snapshot_id=?1",
+                [snapshot_id],
+                |row| row.get::<_, i64>(0),
+            )?
+            .max(0) as u64;
+        let mut statement = connection.prepare(
+            "SELECT payload_json FROM index_snapshot_rows
+             WHERE snapshot_id=?1 ORDER BY position LIMIT ?2 OFFSET ?3",
+        )?;
+        let payloads = statement
+            .query_map(
+                params![snapshot_id, i64::from(limit), query_limit_i64(offset)],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let items = payloads
+            .into_iter()
+            .map(|payload| {
+                serde_json::from_str(&payload)
+                    .map_err(|error| DatabaseError::CorruptData(error.to_string()))
+            })
+            .collect::<Result<Vec<T>, _>>()?;
+        Ok(Page {
+            items,
+            offset,
+            limit,
+            total_count,
+        })
+    }
+
+    /// Read a single aggregate row from a prepared snapshot without transferring the complete
+    /// index to the renderer. Navigation lookups use their own snapshot kind so they cannot
+    /// invalidate the visible index page.
+    pub fn get_index_snapshot_entry<T: DeserializeOwned>(
+        &self,
+        snapshot_id: &str,
+        identity_key: &str,
+    ) -> Result<Option<T>, DatabaseError> {
+        let connection = self.lock()?;
+        let payload = connection
+            .query_row(
+                "SELECT payload_json FROM index_snapshot_input
+             WHERE snapshot_id=?1 AND identity_key=?2 LIMIT 1",
+                params![snapshot_id, identity_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        payload
+            .map(|payload| {
+                serde_json::from_str(&payload)
+                    .map_err(|error| DatabaseError::CorruptData(error.to_string()))
+            })
+            .transpose()
+    }
+
+    /// Compute quick-index group boundaries from the complete filtered and sorted library
+    /// result in one SQLite read. The renderer receives only group offsets, never every row's
+    /// grouping key or a series of pages to scan.
+    pub fn quick_index_for_tracks(
+        &self,
+        request: &ListTracksQuery,
+        query_alternates: &[String],
+    ) -> Result<QuickIndexSnapshot, DatabaseError> {
+        if !matches!(
+            request.sort.field,
+            TrackSortField::Title | TrackSortField::Artist | TrackSortField::Album
+        ) {
+            return Ok(QuickIndexSnapshot::default());
+        }
+        let connection = self.lock()?;
+        let query = request
+            .query
+            .as_deref()
+            .filter(|text| !text.trim().is_empty());
+        let query_json = search_terms_json(query, query_alternates)?;
+        let (title_filter, artist_filter, album_filter) =
+            field_filter_values(request.field_filter.as_ref())?;
+        let order_by = tracks_order_by_sql(request.sort);
+        let value_sql = match request.sort.field {
+            // `sort_title` is backfilled from the same displayed file stem when the title tag is
+            // missing, so grouping and sorting share one persisted key without decoding locators
+            // or materializing TrackSummary rows in Rust.
+            TrackSortField::Title => "t.sort_title",
+            TrackSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '')",
+            TrackSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')",
+            _ => unreachable!("non-text sort returned above"),
+        };
+        let sql = format!(
+            "WITH ordered AS (
+                SELECT ROW_NUMBER() OVER (ORDER BY {order_by}) - 1 AS position,
+                       {MUSIC_QUICK_INDEX_FUNCTION}({value_sql}) AS group_label,
+                       COUNT(*) OVER () AS total_count
+                FROM tracks t
+                WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                              ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                  AND (?1 IS NULL OR EXISTS (SELECT 1 FROM json_each(?1) term
+                       WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
+                          OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
+                          OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || term.value || '%' COLLATE NOCASE
+                          OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE))
+                  AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?4 COLLATE BINARY)
+                  AND (?5 IS NULL OR EXISTS (SELECT 1 FROM json_each(?5) requested_artist
+                       WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = requested_artist.value COLLATE BINARY
+                          OR instr('|' || replace(replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), '&', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || requested_artist.value || '|') > 0))
+                  AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)
+             ), transitions AS (
+                SELECT position, group_label, total_count,
+                       LAG(group_label) OVER (ORDER BY position) AS previous_label
+                FROM ordered
+             )
+             SELECT position, group_label, total_count FROM transitions
+             WHERE previous_label IS NULL OR previous_label <> group_label
+             ORDER BY position"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(
+            params![
+                query_json,
+                Option::<i64>::None,
+                Option::<i64>::None,
+                title_filter,
+                artist_filter,
+                album_filter
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?.max(0) as u64,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?.max(0) as u64,
+                ))
+            },
+        )?;
+        let mut snapshot = QuickIndexSnapshot::default();
+        for row in rows {
+            let (before_index, label, total_count) = row?;
+            snapshot.total_count = total_count;
+            snapshot.labels.push(label.clone());
+            snapshot.groups.push(QuickIndexGroup {
+                label,
+                before_index,
+            });
+        }
+        Ok(snapshot)
     }
 
     /// Compare two display labels using the same ICU4X category and numeric collation as SQL.
@@ -1824,6 +2357,325 @@ impl Database {
             .map_err(DatabaseError::from)
     }
 
+    /// Aggregate the artist variants and disc groups needed by one album detail view.
+    /// This scans enabled-source tracks once in SQLite; the renderer never pages through the
+    /// album just to rebuild these summaries.
+    pub fn album_detail_facets(
+        &self,
+        album_names: &[String],
+    ) -> Result<AlbumDetailFacets, DatabaseError> {
+        let names = album_names.iter().cloned().collect::<HashSet<_>>();
+        if names.is_empty() {
+            return Ok(AlbumDetailFacets {
+                artists: Vec::new(),
+                disc_counts: Vec::new(),
+                track_count: 0,
+                unknown_disc_track_count: 0,
+            });
+        }
+        let mut names = names.into_iter().collect::<Vec<_>>();
+        names.sort();
+        let names_json = serde_json::to_string(&names)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let connection = self.lock()?;
+        let (artists_json, discs_json, track_count, unknown_count): (String, String, i64, i64) =
+            connection.query_row(
+                "WITH visible AS MATERIALIZED (
+                    SELECT t.track_id,
+                           COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) AS artist,
+                           t.disc_number
+                    FROM tracks t
+                    WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
+                          IN (SELECT value FROM json_each(?1))
+                      AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                                  ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                ), artist_counts AS (
+                    SELECT a.value AS name, COUNT(DISTINCT v.track_id) AS count
+                    FROM visible v JOIN json_each(music_split_artists_json(v.artist)) a
+                    WHERE trim(a.value)<>''
+                    GROUP BY a.value
+                ), disc_counts AS (
+                    SELECT disc_number, COUNT(*) AS count
+                    FROM visible WHERE disc_number>=2 GROUP BY disc_number
+                )
+                SELECT
+                    COALESCE((SELECT json_group_array(json_object('name', name, 'count', count))
+                              FROM (SELECT name, count FROM artist_counts ORDER BY name COLLATE BINARY)), '[]'),
+                    COALESCE((SELECT json_group_array(json_object('discNumber', disc_number, 'count', count))
+                              FROM (SELECT disc_number, count FROM disc_counts ORDER BY disc_number)), '[]'),
+                    (SELECT COUNT(*) FROM visible),
+                    (SELECT COUNT(*) FROM visible WHERE disc_number IS NULL OR disc_number<2)",
+                [&names_json],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?),),
+            )?;
+        let artists = serde_json::from_str(&artists_json)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let disc_counts = serde_json::from_str(&discs_json)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        Ok(AlbumDetailFacets {
+            artists,
+            disc_counts,
+            track_count: track_count.max(0) as u64,
+            unknown_disc_track_count: unknown_count.max(0) as u64,
+        })
+    }
+
+    /// Merge artist spelling variants and choose the display spelling in SQLite, then sort the
+    /// resulting unique names with the same ICU collation as all other music text lists.
+    pub fn album_detail_artists(
+        &self,
+        album_names: &[String],
+        identities: &[ArtistIdentityMapping],
+    ) -> Result<Vec<String>, DatabaseError> {
+        let names = album_names.iter().cloned().collect::<HashSet<_>>();
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut names = names.into_iter().collect::<Vec<_>>();
+        names.sort();
+        let names_json = serde_json::to_string(&names)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let mut connection = self.lock()?;
+        let tx = connection.transaction()?;
+        tx.execute(
+            "DELETE FROM index_identity_map WHERE kind='album-detail-artist'",
+            [],
+        )?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT OR REPLACE INTO index_identity_map(kind, name, identity_key, traditional)
+                 VALUES ('album-detail-artist', ?1, ?2, ?3)",
+            )?;
+            for identity in identities {
+                insert.execute(params![
+                    identity.name.trim(),
+                    identity.key,
+                    identity.traditional
+                ])?;
+            }
+        }
+        let artists = {
+            let mut statement = tx.prepare(
+                "WITH visible AS MATERIALIZED (
+                    SELECT t.track_id,
+                           COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) AS artist
+                    FROM tracks t
+                    WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
+                          IN (SELECT value FROM json_each(?1))
+                      AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                                  ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                ), variants AS (
+                    SELECT DISTINCT v.track_id, trim(a.value) AS name
+                    FROM visible v JOIN json_each(music_split_artists_json(v.artist)) a
+                    WHERE trim(a.value)<>''
+                ), mapped AS (
+                    SELECT v.name, COUNT(DISTINCT v.track_id) AS count,
+                           COALESCE(i.identity_key, lower(v.name)) AS identity_key,
+                           COALESCE(i.traditional, v.name) AS traditional
+                    FROM variants v
+                    LEFT JOIN index_identity_map i
+                      ON i.kind='album-detail-artist' AND i.name=v.name
+                    GROUP BY v.name, identity_key, traditional
+                ), ranked AS (
+                    SELECT name, identity_key,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY identity_key
+                               ORDER BY count DESC,
+                                        CASE WHEN traditional=name THEN 1 ELSE 0 END DESC,
+                                        name COLLATE BINARY ASC
+                           ) AS display_rank
+                    FROM mapped
+                )
+                SELECT name FROM ranked WHERE display_rank=1
+                ORDER BY name COLLATE MUSIC_LOCALE_NATURAL",
+            )?;
+            let rows = statement.query_map([names_json], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        tx.commit()?;
+        Ok(artists)
+    }
+
+    pub fn create_album_index_snapshot(
+        &self,
+        identities: &[ArtistIdentityMapping],
+        sort_field: &str,
+        direction: &str,
+        grouping_enabled: bool,
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        self.create_album_index_snapshot_for_kind(
+            identities,
+            sort_field,
+            direction,
+            grouping_enabled,
+            "album",
+        )
+    }
+
+    pub fn create_album_navigation_snapshot(
+        &self,
+        identities: &[ArtistIdentityMapping],
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        self.create_album_index_snapshot_for_kind(
+            identities,
+            "title",
+            "asc",
+            false,
+            "album-navigation",
+        )
+    }
+
+    fn create_album_index_snapshot_for_kind(
+        &self,
+        identities: &[ArtistIdentityMapping],
+        sort_field: &str,
+        direction: &str,
+        grouping_enabled: bool,
+        snapshot_kind: &str,
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction()?;
+        tx.execute("DELETE FROM index_identity_map WHERE kind='album'", [])?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT OR REPLACE INTO index_identity_map(kind, name, identity_key, traditional)
+                 VALUES ('album', ?1, ?2, ?3)",
+            )?;
+            for identity in identities {
+                insert.execute(params![
+                    identity.name.trim(),
+                    identity.key,
+                    identity.traditional
+                ])?;
+            }
+        }
+        let mut statement = tx.prepare(
+            "WITH raw_facets AS (
+                SELECT COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') AS original,
+                       music_trim_whitespace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')) AS album_name,
+                       COUNT(DISTINCT t.track_id) AS track_count,
+                       SUM(COALESCE(t.duration_ms, 0)) AS duration_ms,
+                       SUM(COALESCE(s.played_ms, 0)) AS played_ms
+                FROM tracks t
+                LEFT JOIN track_playback_statistics s ON s.track_id=t.track_id
+                WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                              ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                GROUP BY COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')
+             ), mapped AS (
+                SELECT f.original, f.album_name,
+                       CASE WHEN f.album_name='' THEN 'album:unmarked'
+                            ELSE 'album:' || COALESCE(i.identity_key, lower(f.album_name)) END AS identity_key,
+                       f.track_count, f.duration_ms, f.played_ms
+                FROM raw_facets f
+                LEFT JOIN index_identity_map i ON i.kind='album' AND i.name=f.album_name
+             ), name_counts AS (
+                SELECT identity_key, album_name,
+                       SUM(track_count) AS track_count
+                FROM mapped GROUP BY identity_key, album_name
+             ), group_metrics AS (
+                SELECT identity_key, SUM(track_count) AS track_count,
+                       SUM(duration_ms) AS duration_ms, SUM(played_ms) AS played_ms,
+                       MAX(CASE WHEN album_name='' THEN 1 ELSE 0 END) AS unmarked
+                FROM mapped GROUP BY identity_key
+             ), ranked_names AS (
+                SELECT n.identity_key, n.album_name,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY n.identity_key
+                           ORDER BY n.track_count DESC,
+                                    CASE WHEN COALESCE(i.traditional, n.album_name)=n.album_name THEN 1 ELSE 0 END DESC,
+                                    n.album_name COLLATE BINARY ASC
+                       ) AS display_rank
+                FROM name_counts n
+                LEFT JOIN index_identity_map i ON i.kind='album' AND i.name=n.album_name
+             ), aliases_json AS (
+                SELECT identity_key, json_group_array(album_name) AS aliases
+                FROM (SELECT identity_key, album_name FROM name_counts WHERE album_name<>'' ORDER BY identity_key, album_name COLLATE BINARY)
+                GROUP BY identity_key
+             ), query_alias_values AS (
+                SELECT DISTINCT identity_key, alias.value AS alias
+                FROM mapped, json_each(json_array(original, album_name)) alias
+                WHERE alias.value<>''
+             ), query_aliases_json AS (
+                SELECT identity_key, json_group_array(alias) AS query_aliases
+                FROM (SELECT identity_key, alias FROM query_alias_values ORDER BY identity_key, alias COLLATE BINARY)
+                GROUP BY identity_key
+             )
+             SELECT g.identity_key, COALESCE(r.album_name, '未知'),
+                    COALESCE(a.aliases, '[]'), COALESCE(q.query_aliases, '[]'),
+                    g.track_count, g.duration_ms, g.played_ms, g.unmarked
+             FROM group_metrics g
+             LEFT JOIN ranked_names r ON r.identity_key=g.identity_key AND r.display_rank=1
+             LEFT JOIN aliases_json a ON a.identity_key=g.identity_key
+             LEFT JOIN query_aliases_json q ON q.identity_key=g.identity_key
+             ORDER BY g.identity_key COLLATE BINARY",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?.max(0) as u64,
+                row.get::<_, i64>(5)?.max(0) as u64,
+                row.get::<_, i64>(6)?.max(0) as u64,
+                row.get::<_, bool>(7)?,
+            ))
+        })?;
+        let raw_items = rows.collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        tx.commit()?;
+        drop(connection);
+        let items = raw_items
+            .into_iter()
+            .map(
+                |(
+                    key,
+                    display_name,
+                    aliases_json,
+                    query_aliases_json,
+                    track_count,
+                    duration_ms,
+                    played_ms,
+                    unmarked,
+                )| {
+                    let aliases = serde_json::from_str(&query_aliases_json)
+                        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+                    let entry = AlbumIndexEntry {
+                        key: key.clone(),
+                        display_name: if unmarked {
+                            "未知".to_owned()
+                        } else {
+                            display_name.clone()
+                        },
+                        aliases,
+                        track_count,
+                        duration_ms,
+                        played_ms,
+                        unmarked,
+                    };
+                    let metric = match sort_field {
+                        "title" => 0,
+                        "duration" => entry.duration_ms,
+                        "played" => entry.played_ms,
+                        "trackCount" => entry.track_count,
+                        _ => 0,
+                    };
+                    let _: Vec<String> = serde_json::from_str(&aliases_json)
+                        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+                    Ok((key, entry.display_name.clone(), metric, 0, entry))
+                },
+            )
+            .collect::<Result<Vec<_>, DatabaseError>>()?;
+        self.create_index_snapshot(
+            snapshot_kind,
+            sort_field,
+            direction,
+            false,
+            grouping_enabled,
+            items,
+        )
+    }
+
     /// Read a paged album track list ordered by disc, track number, then natural title.
     pub fn list_album_tracks_page(
         &self,
@@ -1848,6 +2700,71 @@ impl Database {
             offset,
             requested_limit,
         )
+    }
+
+    /// Build text quick-index group offsets for an album's current SQLite text ordering. Disc
+    /// index groups are supplied separately by the album detail query when sorting by `#`.
+    pub fn quick_index_for_album_tracks(
+        &self,
+        album_names: &[String],
+        sort: TrackListSort,
+    ) -> Result<QuickIndexSnapshot, DatabaseError> {
+        if !matches!(
+            sort.field,
+            TrackSortField::Title | TrackSortField::Artist | TrackSortField::Album
+        ) {
+            return Ok(QuickIndexSnapshot::default());
+        }
+        let names = album_names.iter().cloned().collect::<HashSet<_>>();
+        if names.is_empty() {
+            return Ok(QuickIndexSnapshot::default());
+        }
+        let mut names = names.into_iter().collect::<Vec<_>>();
+        names.sort();
+        let names_json = serde_json::to_string(&names)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let value_sql = match sort.field {
+            TrackSortField::Title => "t.sort_title",
+            TrackSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '')",
+            TrackSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')",
+            _ => unreachable!("non-text sort returned above"),
+        };
+        let sql = format!(
+            "WITH matching AS ({ALBUM_TRACKS_PAGE_SQL}), ordered AS (
+                SELECT ROW_NUMBER() OVER (ORDER BY {order_by}) - 1 AS position,
+                       {MUSIC_QUICK_INDEX_FUNCTION}({value_sql}) AS group_label,
+                       COUNT(*) OVER () AS total_count
+                FROM tracks t JOIN matching m ON m.track_id=t.track_id
+             ), transitions AS (
+                SELECT position, group_label, total_count,
+                       LAG(group_label) OVER (ORDER BY position) AS previous_label
+                FROM ordered
+             )
+             SELECT position, group_label, total_count FROM transitions
+             WHERE previous_label IS NULL OR previous_label <> group_label
+             ORDER BY position",
+            order_by = tracks_order_by_sql(sort),
+        );
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map([names_json], |row| {
+            Ok((
+                row.get::<_, i64>(0)?.max(0) as u64,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?.max(0) as u64,
+            ))
+        })?;
+        let mut snapshot = QuickIndexSnapshot::default();
+        for row in rows {
+            let (before_index, label, total_count) = row?;
+            snapshot.total_count = total_count;
+            snapshot.labels.push(label.clone());
+            snapshot.groups.push(QuickIndexGroup {
+                label,
+                before_index,
+            });
+        }
+        Ok(snapshot)
     }
 
     pub fn list_album_tracks_page_with_index_sort(
@@ -1973,95 +2890,204 @@ impl Database {
         artist_identities: &[ArtistIdentityMapping],
         album_identities: &[ArtistIdentityMapping],
     ) -> Result<Vec<ArtistIndexEntry>, DatabaseError> {
-        let artist_keys: HashMap<&str, &str> = artist_identities
-            .iter()
-            .map(|entry| (entry.name.as_str(), entry.key.as_str()))
-            .collect();
-        let album_keys: HashMap<&str, &str> = album_identities
-            .iter()
-            .map(|entry| (entry.name.as_str(), entry.key.as_str()))
-            .collect();
-        let connection = self.lock()?;
-        let mut statement = connection.prepare(
-            "SELECT t.track_id,
-                COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
-                COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
-                COALESCE((SELECT played_ms FROM track_playback_statistics WHERE track_id=t.track_id), 0),
-                COALESCE(t.duration_ms, 0)
-             FROM tracks t
-             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)",
+        let mut connection = self.lock()?;
+        let tx = connection.transaction()?;
+        tx.execute("DELETE FROM index_identity_map", [])?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT OR REPLACE INTO index_identity_map(kind, name, identity_key, traditional)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for entry in artist_identities {
+                insert.execute(params![
+                    "artist",
+                    entry.name.trim(),
+                    entry.key,
+                    entry.traditional
+                ])?;
+            }
+            for entry in album_identities {
+                insert.execute(params![
+                    "album",
+                    entry.name.trim(),
+                    entry.key,
+                    entry.traditional
+                ])?;
+            }
+        }
+        let mut statement = tx.prepare(
+            "WITH visible AS (
+                SELECT t.track_id,
+                       COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) AS artist,
+                       COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) AS album,
+                       COALESCE((SELECT played_ms FROM track_playback_statistics WHERE track_id=t.track_id), 0) AS played_ms,
+                       COALESCE(t.duration_ms, 0) AS duration_ms
+                FROM tracks t
+                WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                              ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+             ), expanded AS (
+                SELECT v.track_id, a.value AS artist_name,
+                       COALESCE(ai.identity_key, lower(trim(a.value))) AS artist_key,
+                       CASE WHEN v.album IS NULL OR trim(v.album) = '' THEN NULL
+                            ELSE COALESCE(al.identity_key, 'album:' || lower(trim(v.album))) END AS album_key,
+                       v.played_ms, v.duration_ms
+                FROM visible v
+                JOIN json_each(music_split_artists_json(v.artist)) a
+                LEFT JOIN index_identity_map ai ON ai.kind='artist' AND ai.name=a.value
+                LEFT JOIN index_identity_map al ON al.kind='album' AND al.name=trim(v.album)
+             ), artist_tracks AS (
+                SELECT DISTINCT track_id, artist_key, album_key, played_ms, duration_ms FROM expanded
+             ), artist_metrics AS (
+                SELECT artist_key, COUNT(*) AS track_count,
+                       COUNT(DISTINCT album_key) AS album_count,
+                       SUM(played_ms) AS played_ms, SUM(duration_ms) AS duration_ms
+                FROM artist_tracks GROUP BY artist_key
+             ), artist_name_counts AS (
+                SELECT artist_key, artist_name, COUNT(DISTINCT track_id) AS track_count
+                FROM expanded GROUP BY artist_key, artist_name
+             ), ranked_names AS (
+                SELECT n.artist_key, n.artist_name, n.track_count,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY n.artist_key
+                           ORDER BY n.track_count DESC,
+                                    CASE WHEN COALESCE(i.traditional, n.artist_name)=n.artist_name THEN 1 ELSE 0 END DESC,
+                                    n.artist_name COLLATE BINARY ASC
+                       ) AS display_rank
+                FROM artist_name_counts n
+                LEFT JOIN index_identity_map i ON i.kind='artist' AND i.name=n.artist_name
+             ), names_json AS (
+                SELECT n.artist_key,
+                       json_group_array(json_object('name', n.artist_name, 'count', n.track_count)) AS names,
+                       json_group_array(n.artist_name) AS artist_names
+                FROM (SELECT artist_key, artist_name, track_count
+                      FROM artist_name_counts ORDER BY artist_key, artist_name COLLATE BINARY) n
+                GROUP BY n.artist_key
+             )
+             SELECT m.artist_key, j.names, j.artist_names, r.artist_name,
+                    m.track_count, m.album_count, m.played_ms, m.duration_ms
+             FROM artist_metrics m
+             JOIN names_json j ON j.artist_key=m.artist_key
+             JOIN ranked_names r ON r.artist_key=m.artist_key AND r.display_rank=1
+             ORDER BY m.artist_key COLLATE BINARY",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, i64>(3)?.max(0) as u64,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
                 row.get::<_, i64>(4)?.max(0) as u64,
+                row.get::<_, i64>(5)?.max(0) as u64,
+                row.get::<_, i64>(6)?.max(0) as u64,
+                row.get::<_, i64>(7)?.max(0) as u64,
             ))
         })?;
-        #[derive(Default)]
-        struct Aggregate {
-            names: BTreeMap<String, u64>,
-            artist_names: HashSet<String>,
-            albums: HashSet<String>,
-            track_count: u64,
-            played_ms: u64,
-            duration_ms: u64,
-        }
-        let mut aggregates: HashMap<String, Aggregate> = HashMap::new();
-        for row in rows {
-            let (_track_id, artist, album, played_ms, duration_ms) = row?;
-            let mut track_artist_keys = HashSet::new();
-            for name in split_artist_names(artist.as_deref()) {
-                let key = artist_keys
-                    .get(name.as_str())
-                    .map(|key| (*key).to_owned())
-                    .unwrap_or_else(|| name.to_lowercase());
-                if !track_artist_keys.insert(key.clone()) {
-                    continue;
-                }
-                let entry = aggregates.entry(key).or_default();
-                *entry.names.entry(name.clone()).or_default() += 1;
-                entry.artist_names.insert(name);
-                entry.track_count += 1;
-                entry.played_ms = entry.played_ms.saturating_add(played_ms);
-                entry.duration_ms = entry.duration_ms.saturating_add(duration_ms);
-                if let Some(album) = album
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    let album_key = album_keys.get(album).copied().unwrap_or(album).to_owned();
-                    entry.albums.insert(album_key);
-                }
-            }
-        }
-        let mut result = aggregates
+        let raw_rows = rows.collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        tx.commit()?;
+        raw_rows
             .into_iter()
-            .map(|(key, aggregate)| {
-                let mut names: Vec<_> = aggregate
-                    .names
-                    .into_iter()
-                    .map(|(name, count)| ArtistNameCount { name, count })
-                    .collect();
-                names.sort_by(|left, right| left.name.cmp(&right.name));
-                let mut artist_names: Vec<_> = aggregate.artist_names.into_iter().collect();
-                artist_names.sort();
-                ArtistIndexEntry {
+            .map(
+                |(
                     key,
-                    names,
-                    artist_names,
-                    track_count: aggregate.track_count,
-                    album_count: aggregate.albums.len() as u64,
-                    played_ms: aggregate.played_ms,
-                    duration_ms: aggregate.duration_ms,
-                }
+                    names_json,
+                    artist_names_json,
+                    display_name,
+                    track_count,
+                    album_count,
+                    played_ms,
+                    duration_ms,
+                )| {
+                    let names = serde_json::from_str(&names_json)
+                        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+                    let artist_names = serde_json::from_str(&artist_names_json)
+                        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+                    Ok(ArtistIndexEntry {
+                        key,
+                        names,
+                        artist_names,
+                        display_name,
+                        track_count,
+                        album_count,
+                        played_ms,
+                        duration_ms,
+                    })
+                },
+            )
+            .collect()
+    }
+
+    pub fn create_artist_index_snapshot(
+        &self,
+        artist_identities: &[ArtistIdentityMapping],
+        album_identities: &[ArtistIdentityMapping],
+        sort_field: &str,
+        direction: &str,
+        grouping_enabled: bool,
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        self.create_artist_index_snapshot_for_kind(
+            artist_identities,
+            album_identities,
+            sort_field,
+            direction,
+            grouping_enabled,
+            "artist",
+        )
+    }
+
+    pub fn create_artist_navigation_snapshot(
+        &self,
+        artist_identities: &[ArtistIdentityMapping],
+        album_identities: &[ArtistIdentityMapping],
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        self.create_artist_index_snapshot_for_kind(
+            artist_identities,
+            album_identities,
+            "title",
+            "asc",
+            false,
+            "artist-navigation",
+        )
+    }
+
+    fn create_artist_index_snapshot_for_kind(
+        &self,
+        artist_identities: &[ArtistIdentityMapping],
+        album_identities: &[ArtistIdentityMapping],
+        sort_field: &str,
+        direction: &str,
+        grouping_enabled: bool,
+        snapshot_kind: &str,
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        let entries = self.artist_index(artist_identities, album_identities)?;
+        let items = entries
+            .into_iter()
+            .map(|entry| {
+                let metric = match sort_field {
+                    "title" => 0,
+                    "trackCount" => entry.track_count,
+                    "albumCount" => entry.album_count,
+                    "duration" => entry.played_ms,
+                    "trackDuration" => entry.duration_ms,
+                    _ => 0,
+                };
+                (
+                    entry.key.clone(),
+                    entry.display_name.clone(),
+                    metric,
+                    0,
+                    entry,
+                )
             })
-            .collect::<Vec<_>>();
-        result.sort_by(|left, right| left.key.cmp(&right.key));
-        Ok(result)
+            .collect();
+        self.create_index_snapshot(
+            snapshot_kind,
+            sort_field,
+            direction,
+            true,
+            grouping_enabled,
+            items,
+        )
     }
 
     pub fn playlist_file_sync_state(
@@ -2538,6 +3564,81 @@ impl Database {
         }))
     }
 
+    /// Compute playlist text-group boundaries from its complete SQLite-ordered result in one
+    /// query. This avoids reading the playlist in repeated UI-sized batches just to discover
+    /// where each ICU quick-index group begins.
+    pub fn quick_index_for_playlist(
+        &self,
+        playlist_id: PlaylistId,
+        sort: PlaylistListSort,
+    ) -> Result<Option<QuickIndexSnapshot>, DatabaseError> {
+        if !matches!(
+            sort.field,
+            PlaylistSortField::Title | PlaylistSortField::Artist | PlaylistSortField::Album
+        ) {
+            return Ok(Some(QuickIndexSnapshot::default()));
+        }
+
+        let connection = self.lock()?;
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM playlists WHERE playlist_id=?1)",
+            [playlist_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(None);
+        }
+
+        let field = match sort.field {
+            PlaylistSortField::Title => "title",
+            PlaylistSortField::Artist => "artist",
+            PlaylistSortField::Album => "album",
+            _ => unreachable!("non-text playlist sort returned above"),
+        };
+        let direction = match sort.direction {
+            PlaylistSortDirection::Asc => "ASC",
+            PlaylistSortDirection::Desc => "DESC",
+        };
+        let sql = format!(
+            "WITH playlist_rows AS ({PLAYLIST_PAGE_SQL}), ordered AS (
+                 SELECT ROW_NUMBER() OVER (
+                            ORDER BY (length(music_trim_whitespace(COALESCE({field}, ''))) = 0) {direction},
+                                     COALESCE({field}, '') COLLATE MUSIC_LOCALE_NATURAL {direction},
+                                     position ASC
+                        ) - 1 AS position,
+                        {MUSIC_QUICK_INDEX_FUNCTION}(COALESCE({field}, '')) AS group_label,
+                        COUNT(*) OVER () AS total_count
+                 FROM playlist_rows
+             ), transitions AS (
+                 SELECT position, group_label, total_count,
+                        LAG(group_label) OVER (ORDER BY position) AS previous_label
+                 FROM ordered
+             )
+             SELECT position, group_label, total_count FROM transitions
+             WHERE previous_label IS NULL OR previous_label <> group_label
+             ORDER BY position"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map([playlist_id.to_string()], |row| {
+            Ok((
+                row.get::<_, i64>(0)?.max(0) as u64,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?.max(0) as u64,
+            ))
+        })?;
+        let mut snapshot = QuickIndexSnapshot::default();
+        for row in rows {
+            let (before_index, label, total_count) = row?;
+            snapshot.total_count = total_count;
+            snapshot.labels.push(label.clone());
+            snapshot.groups.push(QuickIndexGroup {
+                label,
+                before_index,
+            });
+        }
+        Ok(Some(snapshot))
+    }
+
     pub fn delete_playlist(&self, playlist_id: PlaylistId) -> Result<bool, DatabaseError> {
         let connection = self.lock()?;
         Ok(connection.execute(
@@ -2583,21 +3684,20 @@ impl Database {
         })
     }
 
-    /// Read a bounded artist-specific page. The SQL substring filter narrows candidates, then
-    /// Rust verifies whole delimiter-separated artist names so partial-name collisions do not
-    /// enter the result. Candidate rows are sorted by SQLite's shared library ordering first.
+    /// Filter, count, sort, and page an artist-specific list in SQLite. Artist membership uses
+    /// the same delimiter parser as the artist index, avoiding a full candidate scan in Rust.
     pub fn list_tracks_page_for_artists(
         &self,
         request: ListTracksQuery,
         query_alternates: &[String],
         artist_names: &[String],
     ) -> Result<Page<TrackSummary>, DatabaseError> {
-        let normalized_names: HashSet<String> = artist_names
+        let artist_names = artist_names
             .iter()
-            .map(|name| name.trim().to_lowercase())
+            .map(|name| name.trim())
             .filter(|name| !name.is_empty())
-            .collect();
-        if normalized_names.is_empty() {
+            .collect::<Vec<_>>();
+        if artist_names.is_empty() {
             return Ok(Page {
                 items: Vec::new(),
                 offset: request.offset,
@@ -2608,41 +3708,109 @@ impl Database {
         let connection = self.lock()?;
         let search = request.query.filter(|text| !text.trim().is_empty());
         let query_json = search_terms_json(search.as_deref(), query_alternates)?;
-        let artist_json = serde_json::to_string(artist_names)
+        let artist_json = serde_json::to_string(&artist_names)
             .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let total_count: i64 = connection.query_row(
+            &format!("SELECT COUNT(*) FROM ({ARTIST_TRACKS_PREFIX_SQL})"),
+            params![query_json, artist_json],
+            |row| row.get(0),
+        )?;
+        let limit = query_limit(request.limit);
         let sql = format!(
-            "{} ORDER BY {}",
+            "{} ORDER BY {} LIMIT ?3 OFFSET ?4",
             ARTIST_TRACKS_PREFIX_SQL,
             tracks_order_by_sql(request.sort)
         );
         let mut statement = connection.prepare(&sql)?;
-        let rows = statement.query_map(params![query_json, artist_json], row_to_track_summary)?;
-        let mut matching = Vec::new();
-        for row in rows {
-            let track = row?;
-            if split_artist_names(track.artist.as_deref())
-                .iter()
-                .any(|name| normalized_names.contains(&name.to_lowercase()))
-            {
-                matching.push(track);
-            }
-        }
-        let total_count = matching.len() as u64;
-        let offset = usize::try_from(request.offset).unwrap_or(usize::MAX);
-        let limit = query_limit(request.limit) as usize;
-        let page = matching
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .collect::<Vec<_>>();
-        let mut page = page;
+        let mut page = statement
+            .query_map(
+                params![
+                    query_json,
+                    artist_json,
+                    i64::from(limit),
+                    query_limit_i64(request.offset)
+                ],
+                row_to_track_summary,
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
         attach_file_names(&connection, &mut page)?;
         Ok(Page {
             items: page,
             offset: request.offset,
-            limit: limit as u32,
-            total_count,
+            limit,
+            total_count: total_count.max(0) as u64,
         })
+    }
+
+    /// Build artist-detail grouping from the same exact artist membership and SQLite order used
+    /// by its page query. The complete scan remains inside the database layer; the UI receives
+    /// only group offsets.
+    pub fn quick_index_for_artists(
+        &self,
+        query: Option<&str>,
+        query_alternates: &[String],
+        artist_names: &[String],
+        sort: TrackListSort,
+    ) -> Result<QuickIndexSnapshot, DatabaseError> {
+        if !matches!(
+            sort.field,
+            TrackSortField::Title | TrackSortField::Artist | TrackSortField::Album
+        ) {
+            return Ok(QuickIndexSnapshot::default());
+        }
+        let artist_names = artist_names
+            .iter()
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .collect::<Vec<_>>();
+        if artist_names.is_empty() {
+            return Ok(QuickIndexSnapshot::default());
+        }
+        let connection = self.lock()?;
+        let query_json = search_terms_json(query, query_alternates)?;
+        let artist_json = serde_json::to_string(&artist_names)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let value_sql = match sort.field {
+            TrackSortField::Title => "t.sort_title",
+            TrackSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '')",
+            TrackSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')",
+            _ => unreachable!("non-text sort returned above"),
+        };
+        let sql = format!(
+            "WITH matching AS ({ARTIST_TRACKS_PREFIX_SQL}), ordered AS (
+                SELECT ROW_NUMBER() OVER (ORDER BY {order_by}) - 1 AS position,
+                       {MUSIC_QUICK_INDEX_FUNCTION}({value_sql}) AS group_label,
+                       COUNT(*) OVER () AS total_count
+                FROM tracks t JOIN matching m ON m.track_id=t.track_id
+             ), transitions AS (
+                SELECT position, group_label, total_count,
+                       LAG(group_label) OVER (ORDER BY position) AS previous_label
+                FROM ordered
+             )
+             SELECT position, group_label, total_count FROM transitions
+             WHERE previous_label IS NULL OR previous_label <> group_label
+             ORDER BY position",
+            order_by = tracks_order_by_sql(sort),
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(params![query_json, artist_json], |row| {
+            Ok((
+                row.get::<_, i64>(0)?.max(0) as u64,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?.max(0) as u64,
+            ))
+        })?;
+        let mut snapshot = QuickIndexSnapshot::default();
+        for row in rows {
+            let (before_index, label, total_count) = row?;
+            snapshot.total_count = total_count;
+            snapshot.labels.push(label.clone());
+            snapshot.groups.push(QuickIndexGroup {
+                label,
+                before_index,
+            });
+        }
+        Ok(snapshot)
     }
 
     /// Return stable IDs in exactly the same filter and order as library pages.
@@ -4222,6 +5390,45 @@ fn tracks_order_by_sql(sort: TrackListSort) -> String {
     .to_owned()
 }
 
+fn queue_sort_order_by(sort: TrackListSort) -> String {
+    let direction = if sort.direction == TrackSortDirection::Asc {
+        "ASC"
+    } else {
+        "DESC"
+    };
+    match sort.field {
+        TrackSortField::Title => format!(
+            "(length(trim(COALESCE(t.sort_title, ''))) = 0) {direction}, \
+             t.sort_title COLLATE MUSIC_LOCALE_NATURAL {direction}, t.track_id {direction}"
+        ),
+        TrackSortField::Artist => format!(
+            "(length(trim(COALESCE(t.artist, ''))) = 0) {direction}, \
+             COALESCE(t.artist, '') COLLATE MUSIC_LOCALE_NATURAL {direction}, t.track_id {direction}"
+        ),
+        TrackSortField::Album => format!(
+            "(length(trim(COALESCE(t.album, ''))) = 0) {direction}, \
+             COALESCE(t.album, '') COLLATE MUSIC_LOCALE_NATURAL {direction}, t.track_id {direction}"
+        ),
+        TrackSortField::Year => format!(
+            "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, \
+             t.release_date {direction}, (t.year IS NULL) ASC, t.year {direction}, t.track_id {direction}"
+        ),
+        TrackSortField::CreatedAt => format!(
+            "(t.created_at_utc_ms IS NULL) ASC, t.created_at_utc_ms {direction}, t.track_id {direction}"
+        ),
+        TrackSortField::AudioFormat => audio_format_order_by(direction, "t.track_id"),
+        TrackSortField::Duration => format!(
+            "(t.duration_ms IS NULL) ASC, t.duration_ms {direction}, t.track_id {direction}"
+        ),
+        TrackSortField::PlayCount => format!(
+            "(t.duration_ms IS NULL OR t.duration_ms <= 0) ASC, \
+             CASE WHEN t.duration_ms IS NULL OR t.duration_ms <= 0 THEN 0 \
+                  ELSE CAST(t.played_ms AS REAL) / t.duration_ms END {direction}, \
+             t.track_id {direction}"
+        ),
+    }
+}
+
 fn fetch_tracks_window_filtered(
     connection: &Connection,
     query: Option<&str>,
@@ -4479,9 +5686,10 @@ fn persist_metadata(
             .query_row(
                 "SELECT title FROM tracks WHERE track_id=?1",
                 [track_id.to_string()],
-                |row| row.get(0),
+                |row| row.get::<_, Option<String>>(0),
             )
-            .optional()?;
+            .optional()?
+            .flatten();
         let sort_title =
             effective_sort_title(user_title.as_deref(), stored_title.as_deref(), file_name);
         tx.prepare_cached(
@@ -4939,6 +6147,9 @@ fn to_sql_i64(value: u64, field: &'static str) -> Result<i64, DatabaseError> {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        AlbumDiscCount, AlbumIndexEntry, ArtistIndexEntry, ArtistNameCount, QuickIndexGroup,
+    };
     use std::{
         fs,
         io::{Seek, SeekFrom, Write},
@@ -4963,10 +6174,10 @@ mod tests {
     use rusqlite::{params, Connection, OptionalExtension};
 
     use super::{
-        natural_title_cmp, ArtistIdentityMapping, CollationType, Database, DatabaseError,
-        LibraryRepository, MusicCollationSpec, Ordering, PlaybackSessionCheckpoint,
-        PlaylistFileSyncState, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2,
-        SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9,
+        natural_title_cmp, query_limit, ArtistIdentityMapping, CollationType, Database,
+        DatabaseError, LibraryRepository, MusicCollationSpec, Ordering, PlaybackSessionCheckpoint,
+        PlaylistFileSyncState, QueueSortCandidate, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1,
+        SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9,
         TRACKS_PAGE_SQL,
     };
 
@@ -4974,6 +6185,14 @@ mod tests {
         let mut value = path.as_os_str().to_os_string();
         value.push(suffix);
         value.into()
+    }
+
+    #[test]
+    fn renderer_page_size_is_capped_at_one_thousand() {
+        assert_eq!(query_limit(0), 1);
+        assert_eq!(query_limit(1000), 1000);
+        assert_eq!(query_limit(1001), 1000);
+        assert_eq!(query_limit(u32::MAX), 1000);
     }
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -5397,6 +6616,59 @@ mod tests {
         assert_eq!(singer_a.played_ms, 1_000);
         assert_eq!(singer_a.duration_ms, 10_000);
 
+        let snapshot = db
+            .create_artist_index_snapshot(&identities, &album_identities, "title", "asc", true)
+            .expect("create SQLite artist snapshot");
+        assert_eq!(snapshot.quick_index.total_count, index.len() as u64);
+        assert!(!snapshot.quick_index.groups.is_empty());
+        assert_eq!(snapshot.quick_index.groups[0].before_index, 0);
+        let first_page = db
+            .get_index_snapshot_page::<ArtistIndexEntry>(&snapshot.snapshot_id, 0, 2)
+            .expect("first artist snapshot page");
+        assert_eq!(first_page.total_count, index.len() as u64);
+        assert_eq!(first_page.items.len(), 2);
+        assert!(first_page.items[0].display_name <= first_page.items[1].display_name);
+        let navigation = db
+            .create_artist_navigation_snapshot(&identities, &album_identities)
+            .expect("create isolated artist navigation snapshot");
+        let resolved_hanser = db
+            .get_index_snapshot_entry::<ArtistIndexEntry>(&navigation.snapshot_id, "hanser")
+            .expect("resolve artist from backend snapshot")
+            .expect("artist exists");
+        assert_eq!(resolved_hanser.key, "hanser");
+        assert!(
+            db.get_index_snapshot_page::<ArtistIndexEntry>(&snapshot.snapshot_id, 0, 2)
+                .expect("navigation leaves visible artist snapshot intact")
+                .total_count
+                > 0
+        );
+        let last_page = db
+            .get_index_snapshot_page::<ArtistIndexEntry>(&snapshot.snapshot_id, 2, 2)
+            .expect("second artist snapshot page");
+        assert_eq!(last_page.items.len(), 1);
+        let ranked = db
+            .create_artist_index_snapshot(
+                &identities,
+                &album_identities,
+                "trackCount",
+                "desc",
+                false,
+            )
+            .expect("replace artist snapshot with metric ordering");
+        let ranked_page = db
+            .get_index_snapshot_page::<ArtistIndexEntry>(&ranked.snapshot_id, 0, 10)
+            .expect("ranked artist page");
+        assert!(ranked_page
+            .items
+            .windows(2)
+            .all(|pair| pair[0].track_count >= pair[1].track_count));
+        assert_eq!(
+            db.get_index_snapshot_page::<ArtistIndexEntry>(&snapshot.snapshot_id, 0, 2)
+                .expect("old artist snapshot was replaced")
+                .total_count,
+            0,
+        );
+
         let artist_page = db
             .list_tracks_page_for_artists(
                 ListTracksQuery {
@@ -5567,6 +6839,141 @@ mod tests {
                 .expect("empty aliases")
                 .total_count,
             0
+        );
+
+        let album_identities = [
+            ArtistIdentityMapping {
+                name: "專輯 A".to_owned(),
+                key: "專輯 a".to_owned(),
+                traditional: "專輯 A".to_owned(),
+            },
+            ArtistIdentityMapping {
+                name: "专辑 A".to_owned(),
+                key: "專輯 a".to_owned(),
+                traditional: "專輯 A".to_owned(),
+            },
+            ArtistIdentityMapping {
+                name: "其它".to_owned(),
+                key: "其它".to_owned(),
+                traditional: "其它".to_owned(),
+            },
+        ];
+        let album_snapshot = db
+            .create_album_index_snapshot(&album_identities, "trackCount", "desc", false)
+            .expect("create SQLite album snapshot");
+        let album_page = db
+            .get_index_snapshot_page::<AlbumIndexEntry>(&album_snapshot.snapshot_id, 0, 2)
+            .expect("first album snapshot page");
+        assert_eq!(album_page.total_count, 3, "two tagged groups plus unmarked");
+        assert_eq!(album_page.items.len(), 2);
+        assert!(album_page.items[0].track_count >= album_page.items[1].track_count);
+        let all_albums = db
+            .get_index_snapshot_page::<AlbumIndexEntry>(&album_snapshot.snapshot_id, 0, 10)
+            .expect("all album index cards");
+        let merged = all_albums
+            .items
+            .iter()
+            .find(|item| item.key == "album:專輯 a")
+            .expect("merged aliases");
+        assert_eq!(merged.track_count, 3);
+        assert_eq!(merged.display_name, "專輯 A");
+        assert!(merged.aliases.contains(&"專輯 A".to_owned()));
+        assert!(merged.aliases.contains(&"专辑 A".to_owned()));
+        assert!(merged
+            .aliases
+            .contains(&"\u{3000}專輯 A\u{3000}".to_owned()));
+        assert!(all_albums
+            .items
+            .iter()
+            .any(|item| item.unmarked && item.display_name == "未知"));
+        let navigation = db
+            .create_album_navigation_snapshot(&album_identities)
+            .expect("create isolated album navigation snapshot");
+        let resolved_album = db
+            .get_index_snapshot_entry::<AlbumIndexEntry>(&navigation.snapshot_id, "album:專輯 a")
+            .expect("resolve album from backend snapshot")
+            .expect("album exists");
+        assert_eq!(resolved_album.track_count, 3);
+        assert!(
+            db.get_index_snapshot_page::<AlbumIndexEntry>(&album_snapshot.snapshot_id, 0, 2)
+                .expect("navigation leaves visible album snapshot intact")
+                .total_count
+                > 0
+        );
+    }
+
+    #[test]
+    fn album_detail_artist_and_disc_facets_are_aggregated_and_grouped_in_sqlite() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "album-detail-facets",
+        );
+        let mut records = Vec::new();
+        for (item, artist, disc) in [
+            ("simple-1", "歌手简", Some(2)),
+            ("simple-2", "歌手简", Some(2)),
+            ("traditional-1", "歌手簡", Some(3)),
+            ("traditional-2", "歌手簡", None),
+        ] {
+            let mut track = record(&root, item, item, item, 1, 1);
+            let metadata = track.metadata.as_mut().expect("metadata");
+            metadata.album = Some("Shared Album".to_owned());
+            metadata.artist = Some(artist.to_owned());
+            metadata.disc_number = disc;
+            records.push(track);
+        }
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2,
+        );
+
+        let facets = db
+            .album_detail_facets(&["Shared Album".to_owned()])
+            .expect("aggregate album detail facets");
+        assert_eq!(facets.track_count, 4);
+        assert_eq!(facets.unknown_disc_track_count, 1);
+        assert_eq!(
+            facets.disc_counts,
+            vec![
+                AlbumDiscCount {
+                    disc_number: 2,
+                    count: 2
+                },
+                AlbumDiscCount {
+                    disc_number: 3,
+                    count: 1
+                },
+            ]
+        );
+        assert_eq!(
+            facets.artists,
+            vec![
+                ArtistNameCount {
+                    name: "歌手简".to_owned(),
+                    count: 2
+                },
+                ArtistNameCount {
+                    name: "歌手簡".to_owned(),
+                    count: 2
+                },
+            ]
+        );
+
+        let identities = ["歌手简", "歌手簡"].map(|name| ArtistIdentityMapping {
+            name: name.to_owned(),
+            key: "merged-singer".to_owned(),
+            traditional: "歌手簡".to_owned(),
+        });
+        assert_eq!(
+            db.album_detail_artists(&["Shared Album".to_owned()], &identities)
+                .expect("merge and sort album artists"),
+            vec!["歌手簡".to_owned()],
         );
     }
 
@@ -7013,6 +8420,26 @@ mod tests {
         );
         assert_eq!(by_title.total_count, 3);
         assert_eq!(by_title.offset, 0);
+
+        let grouped = db
+            .quick_index_for_playlist(
+                playlist.id,
+                PlaylistListSort {
+                    field: PlaylistSortField::Title,
+                    direction: PlaylistSortDirection::Asc,
+                },
+            )
+            .expect("build playlist group boundaries")
+            .expect("playlist exists");
+        assert_eq!(grouped.total_count, 3);
+        assert_eq!(
+            grouped
+                .groups
+                .iter()
+                .map(|group| (group.label.as_str(), group.before_index))
+                .collect::<Vec<_>>(),
+            vec![("A", 0), ("M", 1), ("Z", 2)]
+        );
 
         let by_position = db
             .get_playlist_page_sorted(
@@ -9127,6 +10554,108 @@ mod tests {
             ids,
             page.items.iter().map(|track| track.id).collect::<Vec<_>>()
         );
+
+        let queue_candidates = vec![
+            QueueSortCandidate {
+                entry_index: 0,
+                summary: Some(page.items[0].clone()),
+            },
+            QueueSortCandidate {
+                entry_index: 1,
+                summary: Some(page.items[1].clone()),
+            },
+            QueueSortCandidate {
+                entry_index: 2,
+                summary: Some(page.items[2].clone()),
+            },
+            QueueSortCandidate {
+                entry_index: 3,
+                summary: Some(page.items[0].clone()),
+            },
+            QueueSortCandidate {
+                entry_index: 4,
+                summary: None,
+            },
+        ];
+        assert_eq!(
+            db.sort_queue_candidates(
+                &queue_candidates,
+                TrackListSort {
+                    field: TrackSortField::Title,
+                    direction: TrackSortDirection::Asc,
+                },
+            )
+            .expect("sort duplicate queue entries in SQLite"),
+            [2, 1, 0, 3, 4]
+        );
+    }
+
+    #[test]
+    fn quick_index_for_tracks_uses_the_complete_filtered_sql_order() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "quick-index-source",
+        );
+        let records = [
+            record(&root, "symbol", "path:symbol", "-Opening", 10, 100),
+            record(&root, "number", "path:number", "10 Opening", 20, 200),
+            record(&root, "latin", "path:latin", "Alpha", 30, 300),
+            record(&root, "han-b", "path:han-b", "不負韶光", 40, 400),
+            record(&root, "han-p", "path:han-p", "比翼", 50, 500),
+        ];
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            1000,
+        );
+        let request = ListTracksQuery {
+            offset: 0,
+            limit: 1,
+            query: None,
+            field_filter: None,
+            sort: TrackListSort {
+                field: TrackSortField::Title,
+                direction: TrackSortDirection::Asc,
+            },
+        };
+        let snapshot = db
+            .quick_index_for_tracks(&request, &[])
+            .expect("quick index snapshot");
+        assert_eq!(snapshot.total_count, 5);
+        assert_eq!(
+            snapshot.groups,
+            vec![
+                QuickIndexGroup {
+                    label: "&".to_owned(),
+                    before_index: 0
+                },
+                QuickIndexGroup {
+                    label: "#".to_owned(),
+                    before_index: 1
+                },
+                QuickIndexGroup {
+                    label: "A".to_owned(),
+                    before_index: 2
+                },
+                QuickIndexGroup {
+                    label: "ㄅ".to_owned(),
+                    before_index: 3
+                },
+            ]
+        );
+        let artist_snapshot = db
+            .quick_index_for_artists(None, &[], &["artist".to_owned()], request.sort)
+            .expect("artist detail quick index");
+        let album_snapshot = db
+            .quick_index_for_album_tracks(&["album".to_owned()], request.sort)
+            .expect("album detail quick index");
+        assert_eq!(artist_snapshot, snapshot);
+        assert_eq!(album_snapshot, snapshot);
     }
 
     #[test]
