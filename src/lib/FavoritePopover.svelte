@@ -226,7 +226,7 @@
         </div>
       {/if}
       {#if loading && playlists.length === 0}
-        <p class="favorite-message">正在載入播放清單…</p>
+        <p class="favorite-message" aria-hidden="true"></p>
       {:else if playlists.length === 0 && !setupRequired}
         <p class="favorite-message">目前沒有可用的播放清單來源。</p>
       {:else if playlists.length > 0}

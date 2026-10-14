@@ -159,7 +159,7 @@
       <button class="text-button" type="button" onclick={() => void load()}>重試</button>
     </div>
   {:else if loading && rows.length === 0}
-    <div class="track-list-empty" role="status">正在計算演出者資料…</div>
+    <div class="track-list-empty" aria-hidden="true"></div>
   {:else if visibleRows.length === 0}
     <div class="track-list-empty" role="status">目前啟用的曲庫沒有演出者資料。</div>
   {:else}
@@ -213,7 +213,7 @@
             ]}
           />
         {:else}
-          <TrackColumnCells variant="placeholder" columns={ARTIST_COLUMNS} placeholderTitle="正在載入演出者…" />
+          <TrackColumnCells variant="placeholder" columns={ARTIST_COLUMNS} />
         {/if}
       {/snippet}
     </PagedVirtualList>

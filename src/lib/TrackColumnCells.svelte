@@ -25,7 +25,6 @@
     columns: Column[];
     indexLabel?: string;
     cells?: Cell[];
-    placeholderTitle?: string;
     sortable?: boolean;
     sortableIndex?: boolean;
     sort?: SortState | null;
@@ -42,7 +41,6 @@
     columns,
     indexLabel = '',
     cells = [],
-    placeholderTitle = '正在載入…',
     sortable = false,
     sortableIndex = false,
     sort = null,
@@ -173,11 +171,9 @@
     </span>
   {/each}
 {:else}
-  <span class="track-index column-index" role="gridcell" aria-hidden="true">—</span>
+  <span class="track-index column-index" role="gridcell" aria-hidden="true"></span>
   {#each columns as column (column.id)}
-    <span class={`list-column list-column-${column.id}`} role="gridcell" aria-hidden="true">
-      {column.id === 'title' ? placeholderTitle : '—'}
-    </span>
+    <span class={`list-column list-column-${column.id}`} role="gridcell" aria-hidden="true"></span>
   {/each}
 {/if}
 

@@ -131,7 +131,7 @@
   {#if error}
     <div class="album-index-message" role="alert"><span>無法載入專輯：{error}</span><button class="text-button" type="button" onclick={() => void load()}>重試</button></div>
   {:else if albums.length === 0 && loading}
-    <div class="album-index-message" role="status">正在整理專輯…</div>
+    <div class="album-index-message" aria-hidden="true"></div>
   {:else if albums.length === 0}
     <div class="album-index-message" role="status">目前啟用的曲庫沒有專輯資料。</div>
   {:else}

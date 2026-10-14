@@ -251,7 +251,7 @@
           })}
         />
       {:else}
-        <TrackColumnCells variant="placeholder" columns={visibleColumns} placeholderTitle="正在載入曲目…" />
+        <TrackColumnCells variant="placeholder" columns={visibleColumns} />
       {/if}
     {/snippet}
   </PagedVirtualList>

@@ -253,6 +253,26 @@ test('queue and album detail reuse shared sortable track-list headers', async ()
   assert.match(album, /handleIndexSort/);
 });
 
+test('paged list loading rows keep their cells visually blank', async () => {
+  const paths = [
+    '../src/lib/TrackColumnCells.svelte',
+    '../src/lib/TrackList.svelte',
+    '../src/lib/PlaylistEntryList.svelte',
+    '../src/lib/PlaybackQueueList.svelte',
+    '../src/lib/ArtistIndex.svelte',
+    '../src/lib/AlbumIndex.svelte',
+    '../src/lib/FavoritePopover.svelte',
+  ];
+  const sources = await Promise.all(paths.map((path) => readFile(new URL(path, import.meta.url), 'utf8')));
+  const [cells, ...lists] = sources;
+  assert.doesNotMatch(cells, /placeholderTitle|正在載入|aria-hidden="true">—/);
+  assert.match(cells, /class="track-index column-index" role="gridcell" aria-hidden="true"><\/span>/);
+  assert.ok(lists.every((source) => !source.includes('placeholderTitle')));
+  assert.doesNotMatch(sources[4], /正在計算演出者資料/);
+  assert.doesNotMatch(sources[5], /正在整理專輯/);
+  assert.doesNotMatch(sources[6], /正在載入播放清單/);
+});
+
 test('field order settings use the shared 300ms long-press drag delay', async () => {
   const [app, appCss] = await Promise.all([
     readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
