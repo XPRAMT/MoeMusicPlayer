@@ -54,11 +54,13 @@ use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 pub mod updater;
 use settings::{
-    clamp_window_geometry_to_monitors, AppSettings, ArtistListSort, BackgroundOpacityTextColor,
-    ExcludedFolderEntry, LyricsPreferences, MainBackgroundMode, NowPlayingAppearancePreferences,
-    NowPlayingLayout, RepeatMode, ResamplingMode, SettingsStore, SlideshowOrder, SourceEntry,
-    SourceEntryKind, ThemeColorMode, ThemeSettings, TrackListColumnSettings, WindowGeometry,
+    clamp_window_geometry_to_monitors, AlbumIndexSort, AppSettings, ArtistListSort,
+    BackgroundOpacityTextColor, ExcludedFolderEntry, LyricsPreferences, MainBackgroundMode,
+    NowPlayingAppearancePreferences, NowPlayingLayout, RepeatMode, ResamplingMode, SettingsStore,
+    SlideshowOrder, SourceEntry, SourceEntryKind, ThemeColorMode, ThemeSettings,
+    TrackListColumnSettings, WindowGeometry,
 };
+mod album_artwork_analysis;
 mod album_artwork_cache;
 #[cfg(any(target_os = "android", test))]
 mod android_artwork;
@@ -3326,28 +3328,6 @@ async fn library_get_album_detail_artists(
     .await
 }
 
-#[tauri::command]
-async fn library_get_album_artwork_candidates(
-    app: AppHandle,
-    album_names: Vec<String>,
-    offset: u64,
-    limit: u32,
-) -> Result<Vec<String>, String> {
-    run_database_work(app, move |state| {
-        let database = state.database.as_ref().ok_or_else(|| {
-            state
-                .database_error
-                .clone()
-                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-        })?;
-        database
-            .list_album_artwork_candidates(&album_names, offset, limit)
-            .map(|ids| ids.into_iter().map(|id| id.to_string()).collect())
-            .map_err(|error| error.to_string())
-    })
-    .await
-}
-
 fn album_artwork_cache_directory(
     app: &AppHandle,
     state: &AppState,
@@ -3400,30 +3380,132 @@ async fn album_artwork_cache_put(
 }
 
 #[tauri::command]
-async fn album_artwork_selection_get(
+async fn album_artwork_selection_ensure(
     app: AppHandle,
     key: String,
+    album_names: Vec<String>,
+    track_count: u64,
+    representative: bool,
+    force_rebuild: bool,
 ) -> Result<Option<album_artwork_cache::AlbumArtworkSelection>, String> {
     let app_for_directory = app.clone();
-    run_database_work(app, move |state| {
+    let selection_key = key.clone();
+    let (directory, cached, candidates, tree_uris) = run_database_work(app.clone(), move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
-        album_artwork_cache::get_selection(&directory, &key)
+        let cached = album_artwork_cache::get_selection(&directory, &selection_key)?;
+        if !force_rebuild
+            && cached.as_ref().is_some_and(|selection| {
+                selection.track_count == track_count
+                    && (selection.track_ids.is_empty()
+                        || !representative
+                        || selection.representative)
+            })
+        {
+            return Ok((directory, cached, None, Vec::new()));
+        }
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let candidates = database
+            .album_artwork_candidate_locators(&album_names)
+            .map_err(|error| error.to_string())?;
+        #[cfg(target_os = "android")]
+        let mut tree_uris = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?
+            .sources
+            .iter()
+            .filter(|source| source.enabled)
+            .filter_map(|source| match &source.kind {
+                SourceEntryKind::Folder {
+                    media_kind: MediaSourceKind::AndroidSaf,
+                    path: settings::StoredPath::Uri(tree_uri),
+                } => Some(tree_uri.clone()),
+                SourceEntryKind::PlaylistFile {
+                    tree_uri: Some(tree_uri),
+                    ..
+                } => Some(tree_uri.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        #[cfg(target_os = "android")]
+        {
+            tree_uris.sort();
+            tree_uris.dedup();
+        }
+        #[cfg(not(target_os = "android"))]
+        let tree_uris = Vec::new();
+        Ok((directory, None, Some(candidates), tree_uris))
+    })
+    .await?;
+    if let Some(selection) = cached {
+        return Ok(Some(selection));
+    }
+
+    let candidate_list = candidates.unwrap_or_default();
+    let app_for_scan = app.clone();
+    let selected_ids = tauri::async_runtime::spawn_blocking(move || {
+        let artwork = candidate_list
+            .into_iter()
+            .filter_map(|(track_id, locators)| {
+                read_album_candidate_artwork(&app_for_scan, &locators, &tree_uris)
+                    .map(|bytes| (track_id, bytes))
+            });
+        if representative {
+            album_artwork_analysis::select_representative_artwork(artwork)
+        } else {
+            album_artwork_analysis::first_artwork(artwork)
+                .into_iter()
+                .collect()
+        }
     })
     .await
+    .map_err(|error| format!("專輯封面候選分析工作失敗：{error}"))?;
+    if selected_ids.is_empty() {
+        let selection = album_artwork_cache::AlbumArtworkSelection {
+            track_count,
+            track_ids: Vec::new(),
+            representative,
+        };
+        album_artwork_cache::put_selection(&directory, &key, &selection)?;
+        return Ok(Some(selection));
+    }
+    let selection = album_artwork_cache::AlbumArtworkSelection {
+        track_count,
+        track_ids: selected_ids,
+        representative,
+    };
+    album_artwork_cache::put_selection(&directory, &key, &selection)?;
+    Ok(Some(selection))
 }
 
-#[tauri::command]
-async fn album_artwork_selection_put(
-    app: AppHandle,
-    key: String,
-    selection: album_artwork_cache::AlbumArtworkSelection,
-) -> Result<(), String> {
-    let app_for_directory = app.clone();
-    run_database_work(app, move |state| {
-        let directory = album_artwork_cache_directory(&app_for_directory, state)?;
-        album_artwork_cache::put_selection(&directory, &key, &selection)
-    })
-    .await
+fn read_album_candidate_artwork(
+    _app: &AppHandle,
+    locators: &[MediaLocator],
+    _tree_uris: &[String],
+) -> Option<Vec<u8>> {
+    #[cfg(target_os = "windows")]
+    {
+        match find_artwork(locators) {
+            ArtworkLookup::Found(image) => Some(image.into_bytes()),
+            ArtworkLookup::Missing | ArtworkLookup::Oversized => None,
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        find_android_artwork(_app, locators, _tree_uris)
+            .ok()
+            .map(player_core::ArtworkImage::into_bytes)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = (_app, locators, _tree_uris);
+        None
+    }
 }
 
 fn album_artwork_track_identity(
@@ -5927,6 +6009,30 @@ fn settings_set_artist_list_sort(
             Ok(())
         })
         .map(|settings| settings.artist_list_sort)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_get_album_index_sort(state: State<'_, AppState>) -> Result<AlbumIndexSort, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.album_index_sort)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_set_album_index_sort(
+    state: State<'_, AppState>,
+    preference: AlbumIndexSort,
+) -> Result<AlbumIndexSort, String> {
+    state
+        .settings
+        .update(|settings| {
+            settings.album_index_sort = preference;
+            Ok(())
+        })
+        .map(|settings| settings.album_index_sort)
         .map_err(|error| error.to_string())
 }
 
@@ -10374,6 +10480,8 @@ pub fn run() {
             settings_set_track_list_columns,
             settings_get_artist_list_sort,
             settings_set_artist_list_sort,
+            settings_get_album_index_sort,
+            settings_set_album_index_sort,
             settings_get_now_playing_layout,
             settings_set_now_playing_layout,
             settings_get_resampling_mode,
@@ -10400,11 +10508,9 @@ pub fn run() {
             library_get_album_page,
             library_get_album_detail_facets,
             library_get_album_detail_artists,
-            library_get_album_artwork_candidates,
             album_artwork_cache_get,
             album_artwork_cache_put,
-            album_artwork_selection_get,
-            album_artwork_selection_put,
+            album_artwork_selection_ensure,
             album_artwork_cache_get_for_track,
             album_artwork_cache_put_for_track,
             album_artwork_cache_mark_missing_for_track,

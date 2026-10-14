@@ -40,7 +40,7 @@ fn valid_hash(value: &str) -> bool {
 }
 
 fn validate_selection(selection: &AlbumArtworkSelection) -> Result<(), String> {
-    if selection.track_ids.is_empty()
+    if (selection.track_ids.is_empty() && selection.track_count == 0)
         || selection.track_ids.len() > 4
         || selection
             .track_ids
@@ -586,6 +586,16 @@ mod tests {
         assert_eq!(
             get_selection(&directory, &key).expect("restore album selection"),
             Some(selection)
+        );
+        let no_art = AlbumArtworkSelection {
+            track_count: 3,
+            track_ids: Vec::new(),
+            representative: false,
+        };
+        put_selection(&directory, &key, &no_art).expect("save no-artwork marker");
+        assert_eq!(
+            get_selection(&directory, &key).expect("restore no-artwork marker"),
+            Some(no_art)
         );
         assert!(get_selection(&directory, "../outside").is_err());
         assert!(put_selection(

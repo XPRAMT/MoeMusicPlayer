@@ -11,7 +11,7 @@ const fixtureBlob = await new Promise<Blob>((resolve, reject) => fixtureCanvas.t
 const validJpeg = new Uint8Array(await fixtureBlob.arrayBuffer());
 const artworkReads = validJpeg.slice().buffer;
 const coldArtworkMode = new URLSearchParams(location.search).has('cold');
-const stats = { rawArtworkReads: 0, legacyCacheReads: 0, trackCacheReads: 0, trackCacheReadsByTrack: {} as Record<string, number>, albumCandidates: 0, thumbnailWrites: 0, albumIndexSortRequests: [] as (string | null)[] };
+const stats = { rawArtworkReads: 0, analysisArtworkReads: 0, legacyCacheReads: 0, trackCacheReads: 0, trackCacheReadsByTrack: {} as Record<string, number>, albumCandidates: 0, thumbnailWrites: 0, albumIndexSortRequests: [] as (string | null)[] };
 const selections = new Map<string, { trackCount: number; trackIds: string[]; representative: boolean }>();
 Object.assign(window, { __albumIndexStats: stats, __albumArtworkSelections: selections });
 const albums = Array.from({ length: 80 }, (_, index) => ({
@@ -37,26 +37,32 @@ Object.assign(window, {
         const limit = request?.limit ?? 1000;
         return { offset, limit, totalCount: albums.length, items: albums.slice(offset, offset + limit) };
       }
+      if (command === 'settings_get_album_index_sort') return { field: 'title', direction: 'asc' };
+      if (command === 'settings_set_album_index_sort') return (args as { preference: unknown }).preference;
       if (command === 'library_sort_text_indices') {
         const values = (args as { values?: string[] } | undefined)?.values ?? [];
         return values.map((_, index) => index).sort((left, right) =>
           new Intl.Collator('zh-TW', { numeric: true }).compare(values[left] ?? '', values[right] ?? ''),
         );
       }
-      if (command === 'library_get_album_artwork_candidates') {
+      if (command === 'album_artwork_selection_ensure') {
+        const payload = args as { key: string; albumNames: string[]; trackCount: number; representative: boolean; forceRebuild: boolean };
+        const cached = selections.get(payload.key) ?? null;
+        if (!payload.forceRebuild && cached?.trackCount === payload.trackCount && (!payload.representative || cached.representative)) return cached;
         stats.albumCandidates += 1;
-        const name = String((args?.albumNames as string[] | undefined)?.[0] ?? 'Album 1');
-        if (name === 'Album 2') return [];
+        const name = payload.albumNames[0] ?? 'Album 2';
         const key = name.replaceAll(' ', '-');
-        return Array.from({ length: name === 'Multi Disc' ? 6 : 4 }, (_, index) => `track-${key}-${index + 1}`);
-      }
-      if (command === 'album_artwork_selection_get') {
-        return selections.get(String((args as { key?: string } | undefined)?.key ?? '')) ?? null;
-      }
-      if (command === 'album_artwork_selection_put') {
-        const payload = args as { key: string; selection: { trackCount: number; trackIds: string[]; representative: boolean } };
-        selections.set(payload.key, payload.selection);
-        return undefined;
+        const candidateIds = name === 'Album 2'
+          ? []
+          : Array.from({ length: name === 'Multi Disc' ? 6 : 4 }, (_, index) => `track-${key}-${index + 1}`);
+        stats.analysisArtworkReads += payload.representative ? candidateIds.length : Math.min(1, candidateIds.length);
+        const selection = {
+          trackCount: payload.trackCount,
+          trackIds: payload.representative ? candidateIds.slice(0, 1) : candidateIds.slice(0, 1),
+          representative: payload.representative,
+        };
+        selections.set(payload.key, selection);
+        return selection;
       }
       if (command === 'library_get_album_page') {
         stats.albumIndexSortRequests.push((args as { indexSort?: string | null } | undefined)?.indexSort ?? null);

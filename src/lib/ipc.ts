@@ -319,6 +319,12 @@ export interface ArtistListSort {
   direction: ArtistListSortDirection;
 }
 
+export type AlbumIndexSortField = 'title' | 'duration' | 'played' | 'trackCount';
+export interface AlbumIndexSort {
+  field: AlbumIndexSortField;
+  direction: ArtistListSortDirection;
+}
+
 export interface TrackFieldFilter {
   field: 'title' | 'artist' | 'album';
   value: string;
@@ -613,6 +619,14 @@ interface IpcContract {
     args: { preference: ArtistListSort };
     result: ArtistListSort;
   };
+  settings_get_album_index_sort: {
+    args: Record<string, never>;
+    result: AlbumIndexSort;
+  };
+  settings_set_album_index_sort: {
+    args: { preference: AlbumIndexSort };
+    result: AlbumIndexSort;
+  };
   settings_get_now_playing_layout: {
     args: Record<string, never>;
     result: NowPlayingLayout;
@@ -717,17 +731,9 @@ interface IpcContract {
     args: { albumNames: string[] };
     result: string[];
   };
-  library_get_album_artwork_candidates: {
-    args: { albumNames: string[]; offset: number; limit: number };
-    result: string[];
-  };
-  album_artwork_selection_get: {
-    args: { key: string };
+  album_artwork_selection_ensure: {
+    args: { key: string; albumNames: string[]; trackCount: number; representative: boolean; forceRebuild: boolean };
     result: AlbumArtworkSelection | null;
-  };
-  album_artwork_selection_put: {
-    args: { key: string; selection: AlbumArtworkSelection };
-    result: void;
   };
   album_artwork_cache_get_for_track: {
     args: { trackId: string };

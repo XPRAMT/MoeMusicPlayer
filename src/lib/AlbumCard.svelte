@@ -3,12 +3,14 @@
   import { getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBase64, putAlbumThumbnailBase64ForTrack } from './ipc';
   import { acquireAlbumCardArtwork, copyToArrayBuffer, createAlbumThumbnailInWorker, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
+  import type { AlbumIndexSortField } from './ipc';
+  import { formatDurationHours } from './format';
   import { detectArtworkMimeType } from './active-track-artwork';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
 
-  interface Props { album: AlbumEntry; active: boolean; refreshKey: number; onSelect: (album: AlbumEntry) => void }
-  let { album, active, refreshKey, onSelect }: Props = $props();
+  interface Props { album: AlbumEntry; active: boolean; refreshKey: number; sortField: AlbumIndexSortField; onSelect: (album: AlbumEntry) => void }
+  let { album, active, refreshKey, sortField, onSelect }: Props = $props();
   let card = $state<HTMLElement | undefined>(undefined);
   let inViewport = $state(false);
   let imageUrls = $state<string[]>([]);
@@ -24,6 +26,12 @@
     fallbackUrl: defaultCoverUrl,
     resolved: cacheResolved || album.unmarked,
   }));
+  const summary = $derived.by(() => {
+    const trackCount = `${album.trackCount}首曲目`;
+    if (sortField === 'duration') return `${trackCount}．${formatDurationHours(album.durationMs)}`;
+    if (sortField === 'played') return `${trackCount}．${formatDurationHours(album.playedMs)}`;
+    return trackCount;
+  });
 
   async function persistentSelectionKey(): Promise<string> {
     const bytes = new TextEncoder().encode(`${album.key}\0${album.trackCount}`);
@@ -78,25 +86,37 @@
 
   async function restorePersistentSelection(revision: number): Promise<boolean> {
     const key = await persistentSelectionKey();
-    let selection;
-    try { selection = await invokeCommand('album_artwork_selection_get', { key }); } catch { return false; }
-    if (!selection || selection.trackCount !== album.trackCount || revision !== requestRevision) return false;
-    const urls: string[] = [];
-    let bytes = 0;
-    for (const trackId of selection.trackIds.slice(0, selection.representative ? 4 : 1)) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       if (!active || destroyed || revision !== requestRevision) return false;
+      let selection;
+      try {
+        selection = await invokeCommand('album_artwork_selection_ensure', {
+          key,
+          albumNames: album.aliases,
+          trackCount: album.trackCount,
+          representative: false,
+          forceRebuild: attempt > 0,
+        });
+      } catch { return false; }
+      if (!selection || selection.trackCount !== album.trackCount || revision !== requestRevision) return false;
+      const trackId = selection.trackIds[0];
+      if (!trackId) {
+        // Empty selections are persisted negative-cache entries: this album has no readable cover.
+        remember([], 0);
+        return true;
+      }
       try {
         const image = await loadTrackThumbnail(trackId);
-        if (image) { urls.push(image.url); bytes += image.bytes; }
-      } catch { /* keep other cached artwork if one source track disappeared */ }
+        if (!image) continue;
+        if (!active || destroyed || revision !== requestRevision) {
+          URL.revokeObjectURL(image.url);
+          return false;
+        }
+        remember([image.url], image.bytes);
+        return true;
+      } catch { /* rebuild the first-artwork selection once if its source disappeared */ }
     }
-    if (urls.length === 0) return false;
-    if (!active || destroyed || revision !== requestRevision) {
-      urls.forEach((url) => URL.revokeObjectURL(url));
-      return false;
-    }
-    remember(urls, bytes);
-    return true;
+    return false;
   }
 
   async function loadCover(): Promise<void> {
@@ -111,47 +131,16 @@
     }
     const revision = ++requestRevision;
     busy = true;
-    const selectedIds: string[] = [];
     const urls: string[] = [];
     let bytes = 0;
     try {
-      if (await restorePersistentSelection(revision)) return;
-      const pageSize = 8;
-      // Until the detail page has ranked all artwork, show the first usable cover.
-      // This keeps first paint to one async thumbnail lookup per album card.
-      for (let offset = 0; offset < album.trackCount && urls.length < 1; offset += pageSize) {
-        if (!active || destroyed || revision !== requestRevision) return;
-        const candidates = await invokeCommand(
-          'library_get_album_artwork_candidates',
-          { albumNames: album.aliases, offset, limit: pageSize },
-        );
-        for (const trackId of candidates) {
-          if (!active || destroyed || revision !== requestRevision || urls.length >= 1) break;
-          try {
-            const image = await loadTrackThumbnail(trackId);
-            if (image) {
-              selectedIds.push(trackId);
-              urls.push(image.url);
-              bytes += image.bytes;
-            }
-          } catch { /* try the next indexed track with artwork */ }
-        }
-        if (candidates.length < pageSize) break;
-      }
+      await restorePersistentSelection(revision);
+      if (cacheResolved) return;
       if (!active || destroyed || revision !== requestRevision) {
         urls.forEach((url) => URL.revokeObjectURL(url));
         return;
       }
-      if (selectedIds.length > 0) {
-        try {
-          const key = await persistentSelectionKey();
-          await invokeCommand('album_artwork_selection_put', {
-            key,
-            selection: { trackCount: album.trackCount, trackIds: selectedIds, representative: false },
-          });
-        } catch (error) { console.warn('無法保存專輯封面索引', error); }
-      }
-      remember(urls, bytes);
+      if (!cacheResolved) remember(urls, bytes);
     } catch (error) {
       urls.forEach((url) => URL.revokeObjectURL(url));
       console.warn(`無法載入專輯「${album.displayName}」封面`, error);
@@ -204,11 +193,13 @@
     <AlbumArtworkMosaic sources={displayedImageUrls} />
   </span>
   <span class="album-card-name">{album.displayName}</span>
+  <span class="album-card-summary">{summary}</span>
 </button>
 
 <style>
-  .album-card { display:flex; width:var(--album-card-width); height:calc(var(--album-card-width) + 48px); min-width:var(--album-card-width); flex:0 0 var(--album-card-width); flex-direction:column; gap:8px; padding:0; border:0; color:var(--text); background:transparent; text-align:left; cursor:pointer; }
+  .album-card { display:flex; width:var(--album-card-width); height:calc(var(--album-card-width) + 52px); min-width:var(--album-card-width); flex:0 0 var(--album-card-width); flex-direction:column; gap:4px; padding:0; border:0; color:var(--text); background:transparent; text-align:left; cursor:pointer; }
   .album-card-art { display:block; width:var(--album-card-width); height:var(--album-card-width); flex:0 0 var(--album-card-width); box-sizing:border-box; overflow:hidden; border-radius:10px; background:#000; }
   .album-card-name { overflow:hidden; font-size:var(--font-body); line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
+  .album-card-summary { overflow:hidden; color:var(--text-muted); font-size:var(--font-caption); line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
   .album-card:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:10px; }
 </style>

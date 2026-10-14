@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type QuickIndexSnapshot, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
-  import { ALBUM_ART_SIMILARITY_DISTANCE, copyToArrayBuffer, createAlbumThumbnail, perceptualHashArtwork, rankAlbumArtwork, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
+  import { copyToArrayBuffer, createAlbumThumbnail, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import { detectArtworkMimeType } from './active-track-artwork';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
@@ -78,17 +78,6 @@
     return sha256Hex(copyToArrayBuffer(new TextEncoder().encode(`${album.key}\0${album.trackCount}`)));
   }
 
-  async function readHash(trackId: string): Promise<bigint | null> {
-    return withAlbumArtworkSlot(async () => {
-      let bytes: ArrayBuffer;
-      try { bytes = await getTrackArtworkBytes(trackId); } catch { return null; }
-      if (bytes.byteLength === 0) return null;
-      const mime = detectArtworkMimeType(bytes);
-      if (!mime) return null;
-      try { return await perceptualHashArtwork(bytes, mime); } catch { return null; }
-    });
-  }
-
   async function makeThumbnail(trackId: string): Promise<string | null> {
     return withAlbumArtworkSlot(async () => {
       let indexed = new Uint8Array();
@@ -115,17 +104,6 @@
     });
   }
 
-  async function saveSelection(key: string, trackIds: string[], representative: boolean): Promise<void> {
-    if (trackIds.length === 0) return;
-    await invokeCommand('album_artwork_selection_put', {
-      key,
-      selection: { trackCount: album.trackCount, trackIds, representative },
-    });
-    if (representative) {
-      window.dispatchEvent(new CustomEvent('album-artwork-selection-updated', { detail: { albumKey: album.key } }));
-    }
-  }
-
   async function loadThumbnails(trackIds: string[], current: number): Promise<string[]> {
     const urls: string[] = [];
     for (const trackId of trackIds.slice(0, 4)) {
@@ -138,23 +116,6 @@
     return urls;
   }
 
-  async function scanHashes(current: number): Promise<{ trackId: string; hash: bigint }[]> {
-    const candidates: { trackId: string; hash: bigint }[] = [];
-    let total = 0;
-    for (let offset = 0; ; offset += PAGE_SIZE) {
-      const page = await fetchPage({ query: '', offset, limit: PAGE_SIZE });
-      if (current !== revision) return [];
-      total = page.totalCount;
-      for (const track of page.items) {
-        const hash = await readHash(track.id);
-        if (hash !== null) candidates.push({ trackId: track.id, hash });
-        if (current !== revision) return [];
-      }
-      if (page.items.length === 0 || offset + page.items.length >= total) break;
-    }
-    return candidates;
-  }
-
   async function scanCovers(): Promise<void> {
     const current = ++revision;
     scanning = true;
@@ -163,9 +124,6 @@
     albumDiscQuickIndices = null;
     try {
       const key = await selectionKey();
-      let stored: import('./ipc').AlbumArtworkSelection | null = null;
-      try { stored = await invokeCommand('album_artwork_selection_get', { key }); } catch { /* rebuild cache on older installations */ }
-      const usable = stored !== null && stored.trackCount === album.trackCount && stored.representative;
       const facets = await invokeCommand('library_get_album_detail_facets', { albumNames: album.aliases });
       const resolvedArtists = await invokeCommand('library_get_album_detail_artists', {
         albumNames: album.aliases,
@@ -178,32 +136,30 @@
       };
       onTotalCount(facets.trackCount);
 
-      let selectedIds = usable && stored ? stored.trackIds.slice(0, 4) : [];
-      if (selectedIds.length === 0) {
-        const candidates = await scanHashes(current);
-        if (current !== revision) return;
-        selectedIds = rankAlbumArtwork(candidates, ALBUM_ART_SIMILARITY_DISTANCE)
-          .slice(0, 4).map((item) => item.trackId);
-        if (selectedIds.length) await saveSelection(key, selectedIds, true).catch((error) => {
-          console.warn('無法保存專輯代表封面索引', error);
-        });
-      }
+      let selection = await invokeCommand('album_artwork_selection_ensure', {
+        key, albumNames: album.aliases, trackCount: album.trackCount,
+        representative: true, forceRebuild: false,
+      });
+      if (current !== revision) return;
+      let selectedIds = selection?.trackIds.slice(0, 4) ?? [];
       let urls = await loadThumbnails(selectedIds, current);
       if (current !== revision) { urls.forEach((url) => URL.revokeObjectURL(url)); return; }
-      if (usable && urls.length === 0) {
-        // A stale selection can outlive a removed or replaced track; rebuild it once.
-        const candidates = await scanHashes(current);
-        if (current !== revision) return;
-        selectedIds = rankAlbumArtwork(candidates, ALBUM_ART_SIMILARITY_DISTANCE)
-          .slice(0, 4).map((item) => item.trackId);
-        urls = await loadThumbnails(selectedIds, current);
-        if (selectedIds.length) await saveSelection(key, selectedIds, true).catch((error) => {
-          console.warn('無法更新專輯代表封面索引', error);
+      if (selectedIds.length > 0 && urls.length === 0) {
+        // A stale selection can outlive removed/replaced source art; ask the backend to rebuild it.
+        selection = await invokeCommand('album_artwork_selection_ensure', {
+          key, albumNames: album.aliases, trackCount: album.trackCount,
+          representative: true, forceRebuild: true,
         });
+        if (current !== revision) return;
+        selectedIds = selection?.trackIds.slice(0, 4) ?? [];
+        urls = await loadThumbnails(selectedIds, current);
       }
       if (current === revision) {
         for (const url of coverUrls) URL.revokeObjectURL(url);
         coverUrls = urls;
+        if (selectedIds.length > 0) {
+          window.dispatchEvent(new CustomEvent('album-artwork-selection-updated', { detail: { albumKey: album.key } }));
+        }
       } else {
         urls.forEach((url) => URL.revokeObjectURL(url));
       }

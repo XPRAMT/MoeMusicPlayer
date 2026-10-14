@@ -97,7 +97,7 @@
   const firstAlbumReadsAfterRemount = await page.evaluate(() => [1, 2, 3, 4].reduce((sum, index) => sum + (window.__albumIndexStats.trackCacheReadsByTrack[`track-Album-1-${index}`] ?? 0), 0));
   assert(firstAlbumReadsAfterRemount === firstAlbumReads, `returning to a virtualized row must reuse the in-memory cover: ${firstAlbumReads} -> ${firstAlbumReadsAfterRemount}`);
 
-  const rawReadsBeforeFirstDetail = await page.evaluate(() => window.__albumIndexStats.rawArtworkReads);
+  const rawReadsBeforeFirstDetail = await page.evaluate(() => window.__albumIndexStats.analysisArtworkReads);
   await firstCard.click();
   await page.waitForFunction(() => {
     const summary = document.querySelector('.album-detail-summary')?.textContent ?? '';
@@ -118,7 +118,7 @@
   const detailFrame = await page.locator('.album-detail-art').evaluate((element) => getComputedStyle(element).borderWidth);
   assert(detailFrame === '0px', `album detail artwork should not have a border: ${detailFrame}`);
   await page.waitForFunction(() => [...window.__albumArtworkSelections.values()].some((selection) => selection.representative));
-  const rawReadsAfterFirstDetail = await page.evaluate(() => window.__albumIndexStats.rawArtworkReads);
+  const rawReadsAfterFirstDetail = await page.evaluate(() => window.__albumIndexStats.analysisArtworkReads);
   assert(rawReadsAfterFirstDetail - rawReadsBeforeFirstDetail === 4, `first album-detail visit should hash each source cover once: ${rawReadsBeforeFirstDetail} -> ${rawReadsAfterFirstDetail}`);
   await page.getByTestId('album-detail-back').click();
   await page.waitForFunction(() => document.querySelectorAll('.album-card:first-of-type .album-card-art img').length === 1);
@@ -126,7 +126,7 @@
   await firstCard.click();
   await page.getByText('4 首曲目', { exact: true }).waitFor();
   await page.locator('.album-detail-art img').waitFor();
-  const rawReadsAfterCachedDetail = await page.evaluate(() => window.__albumIndexStats.rawArtworkReads);
+  const rawReadsAfterCachedDetail = await page.evaluate(() => window.__albumIndexStats.analysisArtworkReads);
   assert(rawReadsAfterCachedDetail === rawReadsAfterFirstDetail, `saved representative-cover selection should prevent rereading large artwork: ${rawReadsAfterFirstDetail} -> ${rawReadsAfterCachedDetail}`);
 
   await page.getByTestId('album-detail-back').click();

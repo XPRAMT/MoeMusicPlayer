@@ -2842,6 +2842,56 @@ impl Database {
         .collect()
     }
 
+    /// Return artwork candidates and their enabled native locators in album display order.
+    /// This is a backend-only scan input: callers must not page it through the UI.
+    pub fn album_artwork_candidate_locators(
+        &self,
+        album_names: &[String],
+    ) -> Result<Vec<(TrackId, Vec<MediaLocator>)>, DatabaseError> {
+        let unique_names = album_names.iter().cloned().collect::<HashSet<_>>();
+        if unique_names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut names = unique_names.into_iter().collect::<Vec<_>>();
+        names.sort();
+        let names_json = serde_json::to_string(&names)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT t.track_id, m.locator_kind, m.locator_encoding, m.locator_data
+             FROM tracks t
+             JOIN source_mappings m ON m.track_id=t.track_id
+             JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1
+             WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
+                   IN (SELECT value FROM json_each(?1))
+             ORDER BY COALESCE(t.disc_number, 2147483647),
+                      COALESCE(t.track_number, 2147483647),
+                      COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL,
+                      t.track_id,
+                      CASE WHEN m.locator_kind='filesystem_path' THEN 0 ELSE 1 END,
+                      r.source_id, m.source_item_id",
+        )?;
+        let mut rows = statement.query([names_json])?;
+        let mut candidates: Vec<(TrackId, Vec<MediaLocator>)> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let raw_id: String = row.get(0)?;
+            let track_id = TrackId::parse(&raw_id)
+                .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+            let kind: String = row.get(1)?;
+            let encoding: String = row.get(2)?;
+            let data: Vec<u8> = row.get(3)?;
+            let locator = locator::decode(&kind, &encoding, &data)?;
+            if let Some((last_id, locators)) = candidates.last_mut() {
+                if *last_id == track_id {
+                    locators.push(locator);
+                    continue;
+                }
+            }
+            candidates.push((track_id, vec![locator]));
+        }
+        Ok(candidates)
+    }
+
     pub fn create_artist_index_snapshot(
         &self,
         sort_field: &str,
@@ -6519,6 +6569,19 @@ mod tests {
                 .map(|track| track.id)
                 .collect::<Vec<_>>()
         );
+        let candidate_locators = db
+            .album_artwork_candidate_locators(&["album".to_owned()])
+            .expect("album artwork candidates with locators");
+        assert_eq!(
+            candidate_locators
+                .iter()
+                .map(|(track_id, _)| *track_id)
+                .collect::<Vec<_>>(),
+            candidate_ids
+        );
+        assert!(candidate_locators
+            .iter()
+            .all(|(_, locators)| !locators.is_empty()));
         assert_eq!(
             db.list_album_artwork_candidates(&["album".to_owned()], 1, 2)
                 .expect("paged candidates"),
@@ -6569,7 +6632,7 @@ mod tests {
 
         let started = Instant::now();
         for album in &album_names {
-            db.list_album_artwork_candidates(std::slice::from_ref(album), 0, 8)
+            db.album_artwork_candidate_locators(std::slice::from_ref(album))
                 .expect("artwork candidates");
         }
         let candidate_elapsed = started.elapsed();

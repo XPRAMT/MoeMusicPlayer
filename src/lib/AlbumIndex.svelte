@@ -2,12 +2,11 @@
   import { onDestroy } from 'svelte';
   import { getAlbumIndexScrollTop, setAlbumIndexScrollTop } from './album-index-scroll.js';
   import { getErrorText, invokeCommand } from './ipc';
-  import type { AlbumIndexEntry } from './ipc';
+  import type { AlbumIndexEntry, AlbumIndexSort, AlbumIndexSortField } from './ipc';
   import TrackColumnCells from './TrackColumnCells.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import { PagedListController } from './track-list-data.js';
 
-  type AlbumIndexSortField = 'title' | 'duration' | 'played' | 'trackCount';
   type AlbumIndexSortDirection = 'asc' | 'desc';
 
   interface Props {
@@ -30,6 +29,7 @@
   let requestRevision = 0;
   let seenRefreshKey: number | null = null;
   let initialized = false;
+  let sortLoaded = false;
   let quickIndexTotal = $state(0);
   type ListSnapshot = ReturnType<PagedListController<AlbumIndexEntry, string>['snapshot']>;
   let pageSnapshot = $state<ListSnapshot>({
@@ -53,7 +53,7 @@
   ];
 
   const columns = $derived(Math.max(1, Math.floor((viewportWidth + gap) / (cardWidth + gap))));
-  const rowHeight = $derived(cardWidth + 48 + gap);
+  const rowHeight = $derived(cardWidth + 52 + gap);
   const totalCount = $derived(pageSnapshot.totalCount ?? quickIndexTotal);
   const rowCount = $derived(Math.ceil(totalCount / columns));
   const firstRow = $derived(Math.max(0, Math.floor(scrollTop / rowHeight) - overscanRows));
@@ -76,6 +76,17 @@
     error = null;
     onCountChange(null);
     try {
+      if (!sortLoaded) {
+        try {
+          const saved: AlbumIndexSort = await invokeCommand('settings_get_album_index_sort', {});
+          if (revision !== requestRevision) return;
+          sortField = saved.field;
+          sortDirection = saved.direction;
+        } catch (reason) {
+          console.warn('無法讀取專輯列表排序設定，使用預設排序', reason);
+        }
+        sortLoaded = true;
+      }
       if (revision !== requestRevision) return;
       await loadSnapshot(revision);
       if (viewport) scrollTop = viewport.scrollTop;
@@ -121,6 +132,10 @@
       sortField = field;
       sortDirection = field === 'title' ? 'asc' : 'desc';
     }
+    const preference: AlbumIndexSort = { field, direction: sortDirection };
+    void invokeCommand('settings_set_album_index_sort', { preference }).catch((reason) => {
+      console.warn('無法保存專輯列表排序設定', reason);
+    });
     if (viewport) {
       viewport.scrollTop = 0;
       scrollTop = 0;
@@ -222,7 +237,7 @@
         <div class="album-grid-spacer" style={`height:${topSpacer}px`} aria-hidden="true"></div>
         {#each visibleAlbums as slot (`${slot.album?.key ?? slot.index}:${refreshKey}`)}
           {#if slot.album}
-            <AlbumCard album={slot.album} {active} {refreshKey} {onSelect} />
+            <AlbumCard album={slot.album} {active} {refreshKey} {sortField} {onSelect} />
           {:else}
             <div class="album-card-placeholder" aria-hidden="true"></div>
           {/if}

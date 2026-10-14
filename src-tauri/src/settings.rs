@@ -419,6 +419,32 @@ impl Default for ArtistListSort {
     }
 }
 
+/// Persisted sort selection for the album index page.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumIndexSort {
+    pub field: AlbumIndexSortField,
+    pub direction: ArtistListSortDirection,
+}
+
+impl Default for AlbumIndexSort {
+    fn default() -> Self {
+        Self {
+            field: AlbumIndexSortField::Title,
+            direction: ArtistListSortDirection::Asc,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AlbumIndexSortField {
+    Title,
+    Duration,
+    Played,
+    TrackCount,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ArtistListSortField {
@@ -977,6 +1003,9 @@ pub struct AppSettings {
     /// Sort field and direction for the artist index page.
     #[serde(default)]
     pub artist_list_sort: ArtistListSort,
+    /// Sort field and direction for the album index page.
+    #[serde(default)]
+    pub album_index_sort: AlbumIndexSort,
     pub now_playing_layout: NowPlayingLayout,
     pub now_playing_appearance_preferences: NowPlayingAppearancePreferences,
     /// Windows playback sample-rate conversion (schema 7).
@@ -1010,6 +1039,7 @@ impl Default for AppSettings {
             repeat_mode: RepeatMode::Off,
             track_list_columns: TrackListColumnSettings::default(),
             artist_list_sort: ArtistListSort::default(),
+            album_index_sort: AlbumIndexSort::default(),
             now_playing_layout: NowPlayingLayout::A,
             now_playing_appearance_preferences: NowPlayingAppearancePreferences::default(),
             resampling_mode: ResamplingMode::default(),
@@ -1434,6 +1464,7 @@ struct RawSettings {
     repeat_mode: Option<RepeatMode>,
     track_list_columns: Option<TrackListColumnSettings>,
     artist_list_sort: Option<ArtistListSort>,
+    album_index_sort: Option<AlbumIndexSort>,
     now_playing_layout: Option<NowPlayingLayout>,
     now_playing_appearance_preferences: Option<NowPlayingAppearancePreferences>,
     resampling_mode: Option<serde_json::Value>,
@@ -1476,6 +1507,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         repeat_mode: raw.repeat_mode.unwrap_or(RepeatMode::Off),
         track_list_columns: repair_track_list_columns(raw.track_list_columns.unwrap_or_default()),
         artist_list_sort: raw.artist_list_sort.unwrap_or_default(),
+        album_index_sort: raw.album_index_sort.unwrap_or_default(),
         now_playing_layout: raw.now_playing_layout.unwrap_or(NowPlayingLayout::A),
         now_playing_appearance_preferences: raw
             .now_playing_appearance_preferences
@@ -2121,6 +2153,28 @@ mod tests {
             .remove("artistListSort");
         let legacy: AppSettings = serde_json::from_value(json).expect("load old settings");
         assert_eq!(legacy.artist_list_sort, ArtistListSort::default());
+    }
+
+    #[test]
+    fn album_index_sort_is_persisted_and_legacy_settings_default_to_title_ascending() {
+        let settings = AppSettings {
+            album_index_sort: AlbumIndexSort {
+                field: AlbumIndexSortField::Played,
+                direction: ArtistListSortDirection::Desc,
+            },
+            ..AppSettings::default()
+        };
+        let mut json = serde_json::to_value(&settings).expect("serialize settings");
+        assert_eq!(json["albumIndexSort"]["field"], "played");
+        assert_eq!(json["albumIndexSort"]["direction"], "desc");
+        let restored: AppSettings = serde_json::from_value(json.clone()).expect("restore sort");
+        assert_eq!(restored.album_index_sort, settings.album_index_sort);
+
+        json.as_object_mut()
+            .expect("settings object")
+            .remove("albumIndexSort");
+        let legacy: AppSettings = serde_json::from_value(json).expect("load previous settings");
+        assert_eq!(legacy.album_index_sort, AlbumIndexSort::default());
     }
 
     #[test]
