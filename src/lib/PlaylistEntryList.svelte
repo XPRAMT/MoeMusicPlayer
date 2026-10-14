@@ -151,6 +151,7 @@ import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './q
     const isCurrent = () => generation === quickIndexGeneration;
     void buildQuickIndexGroups({
       totalCount: count,
+      pageSize: TRACK_PAGE_SIZE,
       fetchPage: ({ offset, limit }) => requestPlaylistPage({ playlistId: currentPlaylistId, sort: currentSort, offset, limit }),
       getName: (entry: PlaylistEntrySummary) => currentSort.field === 'title'
         ? displayTrackTitle(entry, '未命名項目')
@@ -159,6 +160,9 @@ import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './q
           : entry.album,
       getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
       isCurrent,
+      onProgress: (partial) => {
+        if (isCurrent()) quickIndex = partial;
+      },
     }).then((result) => {
       if (isCurrent() && result) {
         cacheQuickIndex(cacheKey, result);

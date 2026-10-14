@@ -142,6 +142,7 @@
     const isCurrent = () => generation === quickIndexGeneration;
     void buildQuickIndexGroups({
       totalCount: count,
+      pageSize: TRACK_PAGE_SIZE,
       fetchPage: async ({ offset, limit }) => {
         const page = await requestPage({ offset, limit });
         return { items: page.items, totalCount: page.total };
@@ -154,6 +155,9 @@
       },
       getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
       isCurrent,
+      onProgress: (partial) => {
+        if (isCurrent()) quickIndex = partial;
+      },
     }).then((result) => {
       if (isCurrent() && result) {
         cacheQuickIndex(cacheKey, result);

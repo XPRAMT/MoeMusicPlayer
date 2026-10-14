@@ -44,6 +44,34 @@ test('paged grouping keeps contiguous groups across page boundaries and trims na
   assert.deepEqual(result.labels, ['A', 'ㄅ', 'Z'], 'unused categories are omitted');
 });
 
+test('group rows publish as each page is classified without waiting for the remaining scan', async () => {
+  const published = [];
+  let releaseSecondPage;
+  let secondPageStarted;
+  const secondPageReady = new Promise((resolve) => { secondPageStarted = resolve; });
+  const secondPage = new Promise((resolve) => { releaseSecondPage = resolve; });
+  const scan = buildQuickIndexGroups({
+    totalCount: 2,
+    pageSize: 1,
+    fetchPage: async ({ offset }) => {
+      if (offset === 0) return { items: [{ name: 'Apple' }] };
+      secondPageStarted();
+      return secondPage;
+    },
+    getName: (item) => item.name,
+    getGroupings: async (names) => ({ labels: ['A', 'B'], groups: names.map((name) => name[0]) }),
+    onProgress: (partial) => published.push(partial),
+  });
+
+  await secondPageReady;
+  assert.deepEqual(published, [{ labels: ['A'], groups: [{ label: 'A', beforeIndex: 0 }] }]);
+  releaseSecondPage({ items: [{ name: 'Banana' }] });
+  assert.deepEqual(await scan, {
+    labels: ['A', 'B'],
+    groups: [{ label: 'A', beforeIndex: 0 }, { label: 'B', beforeIndex: 1 }],
+  });
+});
+
 test('visual rows map to data rows without changing queue item indexes', () => {
   const groups = [
     { label: 'A', beforeIndex: 0 },

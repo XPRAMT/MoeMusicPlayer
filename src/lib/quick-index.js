@@ -44,6 +44,7 @@ export function cacheQuickIndex(key, value) {
  *   getGroupings: (names: string[]) => Promise<{ labels: string[], groups: string[] }>,
  *   pageSize?: number,
  *   isCurrent?: () => boolean,
+ *   onProgress?: (partial: { labels: string[], groups: Array<{ label: string, beforeIndex: number }> }) => void,
  * }} options
  */
 export async function buildQuickIndexGroups({
@@ -53,6 +54,7 @@ export async function buildQuickIndexGroups({
   getGroupings,
   pageSize = 500,
   isCurrent = () => true,
+  onProgress,
 }) {
   const count = Number.isSafeInteger(totalCount) ? Math.max(0, totalCount) : 0;
   const safePageSize = Math.max(1, Math.min(500, Math.floor(pageSize)));
@@ -85,6 +87,12 @@ export async function buildQuickIndexGroups({
         currentLabel = group;
       }
     });
+    if (isCurrent()) {
+      onProgress?.({
+        labels: [...new Set(groups.map(({ label }) => label))],
+        groups: [...groups],
+      });
+    }
     if (items.length < safePageSize) break;
   }
 
