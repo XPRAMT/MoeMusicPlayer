@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildQuickIndexGroups,
+  createQuickIndexRowsScheduler,
   dataIndexToVisualIndex,
   getQuickIndexColumnCount,
   getQuickIndexDisplayLabel,
@@ -70,6 +71,36 @@ test('group rows publish as each page is classified without waiting for the rema
     labels: ['A', 'B'],
     groups: [{ label: 'A', beforeIndex: 0 }, { label: 'B', beforeIndex: 1 }],
   });
+});
+
+test('group rows arriving during scroll are coalesced and committed after the last scroll', () => {
+  const commits = [];
+  const timers = new Map();
+  let nextTimer = 0;
+  const scheduler = createQuickIndexRowsScheduler((rows) => commits.push(rows), {
+    delayMs: 180,
+    schedule(callback) {
+      const id = ++nextTimer;
+      timers.set(id, callback);
+      return id;
+    },
+    cancel(id) {
+      timers.delete(id);
+    },
+  });
+  const firstPage = [{ label: 'A', beforeIndex: 0 }];
+  const secondPage = [...firstPage, { label: 'B', beforeIndex: 100 }];
+
+  scheduler.noteScroll(1000);
+  scheduler.update(firstPage, 1050);
+  scheduler.update(secondPage, 1100);
+  assert.deepEqual(commits, [], 'group rows must not remap the visible list during a scroll gesture');
+
+  const [timerId, callback] = [...timers.entries()][0];
+  timers.delete(timerId);
+  callback();
+  assert.deepEqual(commits, [secondPage], 'only the newest complete row set is committed after scrolling settles');
+  scheduler.dispose();
 });
 
 test('visual rows map to data rows without changing queue item indexes', () => {

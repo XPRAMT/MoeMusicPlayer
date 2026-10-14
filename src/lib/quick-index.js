@@ -1,6 +1,63 @@
 ﻿const QUICK_INDEX_CACHE_LIMIT = 32;
 const quickIndexCache = new Map();
 
+/**
+ * Coalesce virtual group-row changes until scrolling has settled.
+ * @template Row
+ * @param {(rows: Row[]) => void} onCommit
+ * @param {{ delayMs?: number, schedule?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>, cancel?: (timer: ReturnType<typeof setTimeout>) => void }} [options]
+ */
+export function createQuickIndexRowsScheduler(onCommit, {
+  delayMs = 180,
+  schedule = setTimeout,
+  cancel = clearTimeout,
+} = {}) {
+  let lastScrollAt = Number.NEGATIVE_INFINITY;
+  let pendingRows = /** @type {Row[] | null} */ (null);
+  let timer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+  let disposed = false;
+
+  const commitPending = () => {
+    timer = null;
+    if (disposed || pendingRows === null) return;
+    const rows = pendingRows;
+    pendingRows = null;
+    onCommit(rows);
+  };
+
+  const scheduleCommit = () => {
+    if (timer !== null) cancel(timer);
+    timer = schedule(commitPending, delayMs);
+  };
+
+  return {
+    /** @param {Row[]} rows @param {number} [now] */
+    update(rows, now = Date.now()) {
+      if (disposed) return;
+      if (rows.length === 0 || now - lastScrollAt >= delayMs) {
+        if (timer !== null) cancel(timer);
+        timer = null;
+        pendingRows = null;
+        onCommit(rows);
+        return;
+      }
+      pendingRows = rows;
+      scheduleCommit();
+    },
+    noteScroll(now = Date.now()) {
+      if (disposed) return;
+      lastScrollAt = now;
+      if (pendingRows !== null) scheduleCommit();
+    },
+    dispose() {
+      disposed = true;
+      if (timer !== null) cancel(timer);
+      timer = null;
+      pendingRows = null;
+    },
+  };
+}
+
 /** Choose a near-square index grid based on the number of available labels.
  * @param {number} labelCount
  */

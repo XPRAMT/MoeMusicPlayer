@@ -43,7 +43,7 @@
     getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
-  import { dataIndexToVisualIndex, getQuickIndexColumnCount, getQuickIndexDisplayLabel, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
+  import { createQuickIndexRowsScheduler, dataIndexToVisualIndex, getQuickIndexColumnCount, getQuickIndexDisplayLabel, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
@@ -168,9 +168,10 @@
   let quickIndexDialog: HTMLDivElement | undefined = $state();
   let quickIndexTrigger: HTMLButtonElement | null = null;
   let previousGroupRows: QuickIndexGroup[] = [];
+  let displayedGroupRows = $state<QuickIndexGroup[]>([]);
 
   const virtualDataCount = $derived(totalCount ?? 40);
-  const virtualTotalCount = $derived(virtualDataCount + groupRows.length);
+  const virtualTotalCount = $derived(virtualDataCount + displayedGroupRows.length);
   const rowViewportHeight = $derived(
     fillAvailable
       ? Math.max(rowHeight, viewportHeight)
@@ -194,16 +195,16 @@
     > = [];
     for (let visualIndex = range.start; visualIndex < range.end; visualIndex += 1) {
       let groupRow: QuickIndexGroup | null = null;
-      for (let groupIndex = 0; groupIndex < groupRows.length; groupIndex += 1) {
-        if (groupRows[groupIndex].beforeIndex + groupIndex === visualIndex) {
-          groupRow = groupRows[groupIndex];
+      for (let groupIndex = 0; groupIndex < displayedGroupRows.length; groupIndex += 1) {
+        if (displayedGroupRows[groupIndex].beforeIndex + groupIndex === visualIndex) {
+          groupRow = displayedGroupRows[groupIndex];
           break;
         }
       }
       if (groupRow) {
         rows.push({ kind: 'group', visualIndex, label: groupRow.label, key: `quick-index:${visualIndex}:${groupRow.label}` });
       } else {
-        const index = visualIndexToDataIndex(visualIndex, groupRows);
+        const index = visualIndexToDataIndex(visualIndex, displayedGroupRows);
         if (index === null || index < 0 || index >= virtualDataCount) continue;
         const item = itemAt(index);
         rows.push({ kind: 'item', visualIndex, index, item, key: item === null ? `loading:${index}` : getKey(item, index) });
@@ -211,8 +212,8 @@
     }
     return rows;
   });
-  const activeDescendantId = $derived(`${listId}-row-${dataIndexToVisualIndex(activeIndex, groupRows)}`);
-  const availableIndexLabels = $derived(new Set(groupRows.map(({ label }) => label)));
+  const activeDescendantId = $derived(`${listId}-row-${dataIndexToVisualIndex(activeIndex, displayedGroupRows)}`);
+  const availableIndexLabels = $derived(new Set(displayedGroupRows.map(({ label }) => label)));
 
   function rememberVisibleScrollPosition(position: number): void {
     if (seenListId === listId) writeListScrollPosition(listId, position);
@@ -256,18 +257,17 @@
         overscan,
         0,
       );
-      onRange(visualRangeToDataRange(restoredRange.start, restoredRange.end, groupRows, virtualDataCount));
+      onRange(visualRangeToDataRange(restoredRange.start, restoredRange.end, displayedGroupRows, virtualDataCount));
       pendingListRestore = null;
     }
     seenListId = currentListId;
     seenScrollResetKey = currentScrollResetKey;
     hasSeenScrollResetKey = true;
-    const currentRange = visualRangeToDataRange(range.start, range.end, groupRows, virtualDataCount);
+    const currentRange = visualRangeToDataRange(range.start, range.end, displayedGroupRows, virtualDataCount);
     onRange(currentRange);
   });
 
-  $effect(() => {
-    const nextGroupRows = groupRows;
+  function commitGroupRows(nextGroupRows: QuickIndexGroup[]): void {
     const previous = previousGroupRows;
     const groupsChanged = previous.length !== nextGroupRows.length
       || previous.some((group, index) => group.label !== nextGroupRows[index]?.label
@@ -285,6 +285,13 @@
       }
     }
     previousGroupRows = nextGroupRows;
+    displayedGroupRows = nextGroupRows;
+  }
+
+  const groupRowsScheduler = createQuickIndexRowsScheduler(commitGroupRows);
+
+  $effect(() => {
+    groupRowsScheduler.update(groupRows);
   });
 
   onMount(() => {
@@ -332,6 +339,7 @@
   });
 
   onDestroy(() => {
+    groupRowsScheduler.dispose();
     const finalScrollTop = viewport?.clientHeight ? viewport.scrollTop : lastVisibleScrollTop;
     rememberVisibleScrollPosition(finalScrollTop);
   });
@@ -349,11 +357,16 @@
     viewportHeight = viewport.clientHeight;
   }
 
+  function handleViewportScroll(): void {
+    groupRowsScheduler.noteScroll();
+    updateViewport();
+  }
+
   function setActiveIndex(index: number): void {
     const maxIndex = Math.max(0, virtualDataCount - 1);
     activeIndex = Math.max(0, Math.min(maxIndex, index));
     if (!viewport) return;
-    const rowTop = dataIndexToVisualIndex(activeIndex, groupRows) * rowHeight;
+    const rowTop = dataIndexToVisualIndex(activeIndex, displayedGroupRows) * rowHeight;
     const rowBottom = rowTop + rowHeight;
     let nextScrollTop = viewport.scrollTop;
     if (rowTop < nextScrollTop) nextScrollTop = rowTop;
@@ -370,7 +383,7 @@
     const target = Math.max(0, Math.min(maxIndex, index));
     activeIndex = target;
     if (!viewport) return;
-    const rowTop = dataIndexToVisualIndex(target, groupRows) * rowHeight;
+    const rowTop = dataIndexToVisualIndex(target, displayedGroupRows) * rowHeight;
     let nextScrollTop = viewport.scrollTop;
     if (align === 'center') {
       nextScrollTop = rowTop - Math.max(0, (viewport.clientHeight - rowHeight) / 2);
@@ -437,10 +450,10 @@
       rowHeight,
       totalCount: virtualTotalCount,
     });
-    const dataIndex = visualIndexToDataIndex(visualIndex, groupRows);
+    const dataIndex = visualIndexToDataIndex(visualIndex, displayedGroupRows);
     if (dataIndex !== null) return dataIndex;
-    const groupIndex = groupRows.findIndex((group, index) => group.beforeIndex + index === visualIndex);
-    return groupIndex < 0 ? 0 : groupRows[groupIndex].beforeIndex;
+    const groupIndex = displayedGroupRows.findIndex((group, index) => group.beforeIndex + index === visualIndex);
+    return groupIndex < 0 ? 0 : displayedGroupRows[groupIndex].beforeIndex;
   }
 
   function openQuickIndex(event: MouseEvent): void {
@@ -456,7 +469,7 @@
 
   function chooseQuickIndexLabel(label: string): void {
     quickIndexOpen = false;
-    const group = groupRows.find((candidate) => candidate.label === label);
+    const group = displayedGroupRows.find((candidate) => candidate.label === label);
     if (group) {
       scrollIndexIntoView(group.beforeIndex, 'center');
       viewport?.focus();
@@ -640,7 +653,7 @@
     tabindex="0"
     style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
     class:is-reordering={dragFromIndex !== null}
-    onscroll={updateViewport}
+    onscroll={handleViewportScroll}
     onkeydown={handleKeydown}
   >
     <div
@@ -654,7 +667,7 @@
         class="paged-virtual-drop-line"
         role="presentation"
         aria-hidden="true"
-        style={`transform:translateY(${dataIndexToVisualIndex(dragToIndex, groupRows) * rowHeight + (dragToIndex > dragFromIndex ? rowHeight - 2 : 0)}px)`}
+        style={`transform:translateY(${dataIndexToVisualIndex(dragToIndex, displayedGroupRows) * rowHeight + (dragToIndex > dragFromIndex ? rowHeight - 2 : 0)}px)`}
       ></div>
     {/if}
     {#each virtualRows as virtualRow (virtualRow.key)}
@@ -857,18 +870,8 @@
   .paged-virtual-group-row {
     display: flex;
     align-items: center;
+    border-bottom: 1px solid rgba(var(--text-rgb), 0.055);
     background: transparent;
-  }
-
-  .paged-virtual-group-row::after {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    height: 1px;
-    content: '';
-    pointer-events: none;
-    background: rgba(var(--text-rgb), 0.055);
   }
 
   .paged-virtual-group-cell {
