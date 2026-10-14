@@ -2709,6 +2709,7 @@ mod playback_queue_ipc_tests {
         ];
         let canonical_indices = database
             .sort_text_indices(&titles.map(str::to_owned))
+            .expect("sort names through SQLite")
             .into_iter();
         let expected = canonical_indices
             .map(|index| titles[index])
@@ -2982,7 +2983,9 @@ async fn library_sort_text_indices(
                 .clone()
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
-        Ok(database.sort_text_indices(&values))
+        database
+            .sort_text_indices(&values)
+            .map_err(|error| error.to_string())
     })
     .await
 }

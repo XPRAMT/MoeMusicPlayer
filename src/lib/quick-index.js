@@ -4,7 +4,7 @@ const quickIndexCache = new Map();
 /**
  * Return a stable identity for one complete quick-index build. Snapshot objects
  * may be replaced while pages load even though the list's grouping inputs did
- * not change; callers use this key to avoid restarting the full-list scan.
+ * not change; callers use this key to avoid restarting the backend snapshot request.
  * @param {{ listId?: string, resetKey?: string | number, query: string | null, fieldFilter: unknown, sort: unknown, count: number | null, activeSort: unknown, groupingEnabled: boolean, sortable: boolean }} input
  */
 export function getQuickIndexBuildKey(input) {
@@ -22,7 +22,7 @@ export function getQuickIndexBuildKey(input) {
 }
 
 /**
- * Build the virtual rows from one complete grouping snapshot. The parent only
+ * Build the virtual rows from one complete backend grouping snapshot. The parent only
  * publishes `ready` after the full scan, so no mirrored group-row state or
  * second synchronization pass is required before tracks can render.
  * @template Item
@@ -55,7 +55,7 @@ export function buildPagedVirtualRows({ ready, groups, start, end, totalCount, r
 /**
  * Report the visible data range as soon as viewport measurements are ready.
  * Grouping controls row visibility, not the initial data request needed to
- * discover the total count and start the grouping scan.
+ * discover the total count and request the backend grouping snapshot.
  * @param {{ metricsReady: boolean, start: number, end: number, groups: Array<{ label: string, beforeIndex: number }>, totalCount: number, onRange: (range: { start: number, end: number }) => void }} options
  */
 export function reportPagedRange({ metricsReady, start, end, groups, totalCount, onRange }) {

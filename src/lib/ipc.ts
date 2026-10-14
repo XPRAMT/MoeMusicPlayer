@@ -256,6 +256,8 @@ export interface AlbumDetailFacets {
   discCounts: AlbumDiscCount[];
   trackCount: number;
   unknownDiscTrackCount: number;
+  quickIndexAscending: QuickIndexSnapshot;
+  quickIndexDescending: QuickIndexSnapshot;
 }
 
 export interface ArtistNameCount {

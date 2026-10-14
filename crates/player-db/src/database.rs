@@ -1221,6 +1221,8 @@ pub struct AlbumDetailFacets {
     pub disc_counts: Vec<AlbumDiscCount>,
     pub track_count: u64,
     pub unknown_disc_track_count: u64,
+    pub quick_index_ascending: QuickIndexSnapshot,
+    pub quick_index_descending: QuickIndexSnapshot,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1262,14 +1264,14 @@ pub struct IndexSnapshotInfo {
     pub quick_index: QuickIndexSnapshot,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuickIndexGroup {
     pub label: String,
     pub before_index: u64,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuickIndexSnapshot {
     pub labels: Vec<String>,
@@ -1771,14 +1773,35 @@ impl Database {
         Ok(())
     }
 
-    /// Sort display labels with the same ICU4X locale, collation and natural-number rules used by
-    /// SQLite track and playlist ordering. Returned indices refer to the original input slice.
-    pub fn sort_text_indices(&self, values: &[String]) -> Vec<usize> {
-        let mut indices = (0..values.len()).collect::<Vec<_>>();
-        indices.sort_by(|left, right| {
-            compare_music_names(&self.collators, &values[*left], &values[*right])
-        });
-        indices
+    /// Sort display labels with the same SQLite ICU4X collation and natural-number rules used by
+    /// track and playlist ordering. Returned indices refer to the original input slice.
+    pub fn sort_text_indices(&self, values: &[String]) -> Result<Vec<usize>, DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction()?;
+        tx.execute("DELETE FROM index_ordered_values", [])?;
+        {
+            let mut insert =
+                tx.prepare("INSERT INTO index_ordered_values(position, value) VALUES (?1, ?2)")?;
+            for (position, value) in values.iter().enumerate() {
+                insert.execute(params![i64::try_from(position).unwrap_or(i64::MAX), value])?;
+            }
+        }
+        let mut statement = tx.prepare(
+            "SELECT position FROM index_ordered_values
+             ORDER BY value COLLATE MUSIC_LOCALE_NATURAL, position",
+        )?;
+        let indices = statement
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .map(|row| {
+                let index = row?;
+                usize::try_from(index).map_err(|_| {
+                    DatabaseError::CorruptData("text sort returned a negative row index".into())
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        tx.commit()?;
+        Ok(indices)
     }
 
     /// Classify first-character index groups using the same ICU4X data and ordering as library SQL.
@@ -2334,6 +2357,8 @@ impl Database {
                 disc_counts: Vec::new(),
                 track_count: 0,
                 unknown_disc_track_count: 0,
+                quick_index_ascending: QuickIndexSnapshot::default(),
+                quick_index_descending: QuickIndexSnapshot::default(),
             });
         }
         let mut names = names.into_iter().collect::<Vec<_>>();
@@ -2341,7 +2366,13 @@ impl Database {
         let names_json = serde_json::to_string(&names)
             .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
         let connection = self.lock()?;
-        let (discs_json, track_count, unknown_count): (String, i64, i64) =
+        let (discs_json, track_count, unknown_count, ascending_json, descending_json): (
+            String,
+            i64,
+            i64,
+            String,
+            String,
+        ) =
             connection.query_row(
                 "WITH visible AS MATERIALIZED (
                     SELECT t.track_id,
@@ -2353,22 +2384,68 @@ impl Database {
                                   ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
                 ), disc_counts AS (
                     SELECT disc_number, COUNT(*) AS count
-                    FROM visible WHERE disc_number>=2 GROUP BY disc_number
+                    FROM visible WHERE disc_number IS NOT NULL GROUP BY disc_number
+                ), unknown_count AS (
+                    SELECT COUNT(*) AS count
+                    FROM visible WHERE disc_number IS NULL
+                ), ascending_groups AS (
+                    SELECT 'DISC ' || current.disc_number AS label,
+                           (SELECT COALESCE(SUM(previous.count), 0) FROM disc_counts previous
+                            WHERE previous.disc_number < current.disc_number) AS before_index,
+                           0 AS group_order,
+                           current.disc_number AS disc_order
+                    FROM disc_counts current
+                    WHERE EXISTS (SELECT 1 FROM disc_counts WHERE disc_number>=2)
+                    UNION ALL
+                    SELECT '未知', (SELECT COALESCE(SUM(count), 0) FROM disc_counts), 1, 0
+                    WHERE EXISTS (SELECT 1 FROM disc_counts WHERE disc_number>=2)
+                      AND (SELECT count FROM unknown_count) > 0
+                ), descending_groups(label, before_index, group_order, disc_order) AS (
+                    SELECT '未知', 0, -1, 0
+                    WHERE EXISTS (SELECT 1 FROM disc_counts WHERE disc_number>=2)
+                      AND (SELECT count FROM unknown_count) > 0
+                    UNION ALL
+                    SELECT 'DISC ' || current.disc_number AS label,
+                           (SELECT COALESCE(SUM(previous.count), 0) +
+                                   (SELECT count FROM unknown_count) FROM disc_counts previous
+                            WHERE previous.disc_number > current.disc_number) AS before_index,
+                           0 AS group_order,
+                           current.disc_number AS disc_order
+                    FROM disc_counts current
+                    WHERE EXISTS (SELECT 1 FROM disc_counts WHERE disc_number>=2)
                 )
                 SELECT
                     COALESCE((SELECT json_group_array(json_object('discNumber', disc_number, 'count', count))
                               FROM (SELECT disc_number, count FROM disc_counts ORDER BY disc_number)), '[]'),
                     (SELECT COUNT(*) FROM visible),
-                    (SELECT COUNT(*) FROM visible WHERE disc_number IS NULL OR disc_number<2)",
+                    (SELECT count FROM unknown_count),
+                    COALESCE((SELECT json_group_array(json_object('label', label, 'beforeIndex', before_index))
+                              FROM (SELECT label, before_index FROM ascending_groups ORDER BY group_order, disc_order)), '[]'),
+                    COALESCE((SELECT json_group_array(json_object('label', label, 'beforeIndex', before_index))
+                              FROM (SELECT label, before_index FROM descending_groups ORDER BY group_order, disc_order DESC)), '[]')",
                 [&names_json],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )?;
         let disc_counts = serde_json::from_str(&discs_json)
             .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let track_count = track_count.max(0) as u64;
+        let quick_index_ascending = album_disc_quick_index_from_json(&ascending_json, track_count)?;
+        let quick_index_descending =
+            album_disc_quick_index_from_json(&descending_json, track_count)?;
         Ok(AlbumDetailFacets {
             disc_counts,
-            track_count: track_count.max(0) as u64,
+            track_count,
             unknown_disc_track_count: unknown_count.max(0) as u64,
+            quick_index_ascending,
+            quick_index_descending,
         })
     }
 
@@ -2691,9 +2768,9 @@ impl Database {
                 let disc_direction = if direction == TrackSortDirection::Desc { "DESC" } else { "ASC" };
                 let track_direction = disc_direction;
                 let title_direction = disc_direction;
+                let unknown_direction = if direction == TrackSortDirection::Desc { "DESC" } else { "ASC" };
                 format!(
-                    "(CASE WHEN t.disc_number >= 2 THEN 0 ELSE 1 END), \
-                     (CASE WHEN t.disc_number >= 2 THEN t.disc_number END) {disc_direction}, \
+                    "(t.disc_number IS NULL) {unknown_direction}, t.disc_number {disc_direction}, \
                      (t.track_number IS NULL) ASC, t.track_number {track_direction}, \
                      COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL {title_direction}, \
                      t.track_id {title_direction}"
@@ -6089,6 +6166,20 @@ fn query_limit_i64(value: u64) -> i64 {
     value.min(i64::MAX as u64) as i64
 }
 
+fn album_disc_quick_index_from_json(
+    groups_json: &str,
+    total_count: u64,
+) -> Result<QuickIndexSnapshot, DatabaseError> {
+    let groups: Vec<QuickIndexGroup> = serde_json::from_str(groups_json)
+        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+    let labels = groups.iter().map(|group| group.label.clone()).collect();
+    Ok(QuickIndexSnapshot {
+        labels,
+        groups,
+        total_count,
+    })
+}
+
 fn to_sql_i64(value: u64, field: &'static str) -> Result<i64, DatabaseError> {
     i64::try_from(value).map_err(|_| DatabaseError::InvalidNumber(field))
 }
@@ -6881,7 +6972,7 @@ mod tests {
     }
 
     #[test]
-    fn album_disc_index_sorts_numbered_discs_first_and_unknown_disc_tracks_last() {
+    fn album_disc_index_groups_each_number_and_places_unknown_by_sort_direction() {
         let mut db = Database::open_in_memory().expect("database");
         let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "album-disc-index");
         let fixtures = [
@@ -6921,6 +7012,41 @@ mod tests {
         );
 
         let aliases = ["Multi-disc".to_owned()];
+        let facets = db
+            .album_detail_facets(&aliases)
+            .expect("album detail facets and SQLite disc group snapshots");
+        let ascending_groups = facets
+            .quick_index_ascending
+            .groups
+            .iter()
+            .map(|group| (group.label.as_str(), group.before_index))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ascending_groups,
+            [
+                ("DISC 0", 0),
+                ("DISC 1", 1),
+                ("DISC 2", 2),
+                ("DISC 3", 4),
+                ("未知", 5)
+            ]
+        );
+        let descending_groups = facets
+            .quick_index_descending
+            .groups
+            .iter()
+            .map(|group| (group.label.as_str(), group.before_index))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            descending_groups,
+            [
+                ("未知", 0),
+                ("DISC 3", 1),
+                ("DISC 2", 2),
+                ("DISC 1", 4),
+                ("DISC 0", 5)
+            ]
+        );
         let ascending = db
             .list_album_tracks_page_with_index_sort(
                 &aliases,
@@ -6937,12 +7063,12 @@ mod tests {
                 .map(|item| item.title.as_deref().unwrap_or_default())
                 .collect::<Vec<_>>(),
             [
+                "disc0-track2",
+                "disc1-track9",
                 "disc2-track1",
                 "disc2-track2",
                 "disc3-track1",
-                "unknown-track1",
-                "disc0-track2",
-                "disc1-track9"
+                "unknown-track1"
             ]
         );
 
@@ -6962,14 +7088,52 @@ mod tests {
                 .map(|item| item.title.as_deref().unwrap_or_default())
                 .collect::<Vec<_>>(),
             [
+                "unknown-track1",
                 "disc3-track1",
                 "disc2-track2",
                 "disc2-track1",
                 "disc1-track9",
-                "disc0-track2",
-                "unknown-track1"
+                "disc0-track2"
             ]
         );
+
+        let mut unclassified_db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &unclassified_db,
+            MediaSourceKind::WindowsFilesystem,
+            "album-disc-without-multiple-discs",
+        );
+        let records = [("only-disc0", Some(0)), ("only-disc1", Some(1))]
+            .iter()
+            .enumerate()
+            .map(|(index, (title, disc_number))| {
+                let mut item = record(
+                    &root,
+                    &format!("{title}.flac"),
+                    &format!("{title}.flac"),
+                    title,
+                    1,
+                    1_800_000_000_300 + index as i64,
+                );
+                let metadata = item.metadata.as_mut().expect("metadata");
+                metadata.album = Some("Only low disc numbers".to_owned());
+                metadata.disc_number = *disc_number;
+                item
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut unclassified_db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            1_800_000_000_400,
+        );
+        let facets = unclassified_db
+            .album_detail_facets(&["Only low disc numbers".to_owned()])
+            .expect("album without disc classification");
+        assert!(facets.quick_index_ascending.groups.is_empty());
+        assert!(facets.quick_index_descending.groups.is_empty());
     }
 
     #[test]
@@ -8459,7 +8623,9 @@ mod tests {
             "Track 10".to_owned(),
             "Track 2".to_owned(),
         ];
-        let indices = db.sort_text_indices(&names);
+        let indices = db
+            .sort_text_indices(&names)
+            .expect("sort names through SQLite");
         let sorted = indices
             .iter()
             .map(|index| names[*index].as_str())
@@ -8515,6 +8681,7 @@ mod tests {
                 .collect::<Vec<_>>();
             let sorted = db
                 .sort_text_indices(&values)
+                .expect("sort values through SQLite")
                 .into_iter()
                 .map(|index| values[index].as_str().to_owned())
                 .collect::<Vec<_>>();
@@ -8567,6 +8734,7 @@ mod tests {
         ];
         let sorted = db
             .sort_text_indices(&names.map(str::to_owned))
+            .expect("sort names through SQLite")
             .into_iter()
             .map(|index| names[index])
             .collect::<Vec<_>>();
@@ -8829,6 +8997,7 @@ mod tests {
         ];
         let expected = reopened
             .sort_text_indices(&titles)
+            .expect("sort titles through SQLite")
             .into_iter()
             .map(|index| titles[index].as_str())
             .collect::<Vec<_>>();

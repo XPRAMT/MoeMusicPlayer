@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
+  import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type QuickIndexSnapshot, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
   import { ALBUM_ART_SIMILARITY_DISTANCE, copyToArrayBuffer, createAlbumThumbnail, perceptualHashArtwork, rankAlbumArtwork, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import { detectArtworkMimeType } from './active-track-artwork';
@@ -8,7 +8,6 @@
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
   import TrackList from './TrackList.svelte';
   import { formatAlbumTrackNumber } from './format';
-  import { buildAlbumDiscQuickIndex } from './album-disc-index.js';
 
   interface Props {
     album: AlbumEntry;
@@ -33,12 +32,14 @@
   let scanning = $state(true);
   let scanError = $state<string | null>(null);
   let hasDiscGroups = $state(false);
-  let albumDiscCounts = $state<{ discNumber: number; count: number }[]>([]);
-  let unknownDiscTrackCount = $state(0);
+  let albumDiscQuickIndices = $state<{
+    ascending: QuickIndexSnapshot;
+    descending: QuickIndexSnapshot;
+  } | null>(null);
   let albumIndexSortActive = $state(true);
   let albumIndexSortDirection = $state<'asc' | 'desc'>('asc');
   let albumDiscQuickIndex = $derived(albumIndexSortActive
-    ? buildAlbumDiscQuickIndex(albumDiscCounts, unknownDiscTrackCount, albumIndexSortDirection)
+    ? albumDiscQuickIndices?.[albumIndexSortDirection === 'asc' ? 'ascending' : 'descending']
     : undefined);
   const albumSortIndicator = $derived(albumIndexSortActive
     ? { field: 'position', direction: albumIndexSortDirection }
@@ -161,8 +162,7 @@
     scanError = null;
     artists = [];
     hasDiscGroups = false;
-    albumDiscCounts = [];
-    unknownDiscTrackCount = 0;
+    albumDiscQuickIndices = null;
     try {
       const key = await selectionKey();
       let stored: import('./ipc').AlbumArtworkSelection | null = null;
@@ -174,9 +174,11 @@
       });
       if (current !== revision) return;
       artists = resolvedArtists;
-      albumDiscCounts = facets.discCounts;
-      unknownDiscTrackCount = facets.unknownDiscTrackCount;
-      hasDiscGroups = facets.discCounts.length > 0;
+      albumDiscQuickIndices = {
+        ascending: facets.quickIndexAscending,
+        descending: facets.quickIndexDescending,
+      };
+      hasDiscGroups = facets.quickIndexAscending.groups.length > 0;
       onTotalCount(facets.trackCount);
 
       let selectedIds = usable && stored ? stored.trackIds.slice(0, 4) : [];
