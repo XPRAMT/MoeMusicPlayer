@@ -94,7 +94,23 @@ try {
 
     if (Test-Path -LiteralPath $outputExe -PathType Leaf) {
         $backupExe = Join-Path $outputDirectory ('.moemusicplayer.previous.' + [Guid]::NewGuid().ToString('N') + '.bak')
-        [System.IO.File]::Replace($stagingExe, $outputExe, $backupExe)
+        try {
+            [System.IO.File]::Replace($stagingExe, $outputExe, $backupExe)
+        }
+        catch [System.IO.IOException] {
+            # A running Windows process can keep the image mapped. Rename the old path first so
+            # the new build can be published without stopping that process; restore on failure.
+            [System.IO.File]::Move($outputExe, $backupExe)
+            try {
+                [System.IO.File]::Move($stagingExe, $outputExe)
+            }
+            catch {
+                if (-not (Test-Path -LiteralPath $outputExe -PathType Leaf) -and (Test-Path -LiteralPath $backupExe -PathType Leaf)) {
+                    [System.IO.File]::Move($backupExe, $outputExe)
+                }
+                throw
+            }
+        }
     }
     else {
         [System.IO.File]::Move($stagingExe, $outputExe)

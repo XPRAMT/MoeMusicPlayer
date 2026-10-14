@@ -50,7 +50,7 @@
 - 檔案總管開啟所建立的佇列一律只在記憶體；啟用期間 `save_playback_session` 及位置 checkpoint 不寫入 SQLite，重啟保留先前保存的曲庫／播放清單 session。未匯入曲目的歌詞讀取、線上候選快取、手動選取／移除標記與播放統計一律經 TrackId 路由至暫存曲庫；正式曲庫曲目仍存取正式 SQLite。新外部佇列建立時先要求舊暫存統計完成 flush，再釋放舊暫存庫；flush 暫時失敗時保留舊暫存庫與待寫統計，避免丟失累計。程式關閉時統計工作完成或報告待寫狀態後，暫存資料隨程序消失。開啟期間曲庫搜尋合併正式與暫存結果，沿用相同篩選／排序並按正規化檔案路徑去重；分頁只讀取目前頁面附近的正式曲庫列與符合條件的暫存列，不掃描完整正式曲庫。播放佇列列資訊取暫存 SQLite 最新統計，外部封面與 SMTC 封面由原始路徑提供。
 - 暫存佇列隨機啟用時，正式曲目播放統計來自正式 DB，未匯入曲目的比值來自暫存 DB，兩者一起提供新 shuffle traversal 權重；既有 traversal 不因統計更新而重排。播放統計工作按 accounting ID 分組寫入各自 DB，ACK 後才清除音訊 worker 的待寫增量。
 - 「播放次數」欄顯示 `累計 played_ms ÷ 歌曲時長` 的比例。前端統計 overlay 保留目前執行期間最近 512 首曲目的最高已知累計時間；換歌時不讓虛擬清單快取退回舊統計，也不以小於 SQLite 查詢結果的即時值覆蓋資料。暫存曲庫測試除直接驗證 `playback_statistics_for` 外，也確認 `get_track_summary` 讀回已保存的 `played_ms`。
-- 驗證 Windows／Rust 工作區時，使用 `npm run check`、`cargo test -p moemusicplayer --lib`、`cargo clippy --workspace --lib --bins --tests --locked -- -D warnings` 與 `cargo fmt --all -- --check`。工作區含使用者自行保留的未追蹤探測 examples；修改前先看 git status，勿刪除或改寫這些檔案。完整 Windows 版輸出仍由 `npm run release:windows` 建置到固定 `release/moemusicplayer.exe`。
+- 驗證 Windows／Rust 工作區時，使用 `npm run check`、`cargo test -p moemusicplayer --lib`、`cargo clippy --workspace --lib --bins --tests --locked -- -D warnings` 與 `cargo fmt --all -- --check`。工作區含使用者自行保留的未追蹤探測 examples；修改前先看 git status，勿刪除或改寫這些檔案。完整 Windows 版輸出由 `npm run release:windows` 建置到固定 `release/moemusicplayer.exe`；若執行中的播放器鎖住 EXE，先將舊 EXE 改名備份再發布新版，發布失敗時還原舊路徑，不要求結束播放器。
 - 決策細節見 `docs/adr/0009-windows-shell-open-queue.md`。
 
 ## 收藏播放清單
