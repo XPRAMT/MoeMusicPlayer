@@ -3467,13 +3467,24 @@ fn compare_track_summaries(
         Some(database) => database.compare_music_text(left, right),
         None => natural_title_cmp(left, right),
     };
-    let compare_directional_text = |left: &str, right: &str| {
-        match (left.trim().is_empty(), right.trim().is_empty()) {
-            (false, true) => if reverse { Ordering::Greater } else { Ordering::Less },
-            (true, false) => if reverse { Ordering::Less } else { Ordering::Greater },
+    let compare_directional_text =
+        |left: &str, right: &str| match (left.trim().is_empty(), right.trim().is_empty()) {
+            (false, true) => {
+                if reverse {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            }
+            (true, false) => {
+                if reverse {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
+            }
             _ => compare_direction(compare_text(left, right)),
-        }
-    };
+        };
     let order = match sort.field {
         TrackSortField::Title => compare_directional_text(
             left.title
