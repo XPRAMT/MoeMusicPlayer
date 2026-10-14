@@ -1,5 +1,6 @@
 <script lang="ts">
   import MiddleEllipsis from './MiddleEllipsis.svelte';
+  import { appTooltip } from './app-tooltip.js';
   import hiResBadgeUrl from '../assets/hi-res-badge.svg';
   import { RESIZABLE_TRACK_COLUMN_IDS } from './track-columns.js';
 
@@ -108,7 +109,7 @@
   {#if includeIndexColumn}
     <span class="column-index" class:is-sortable={sortableIndex} role="columnheader" aria-sort={sortableIndex ? ariaSortFor('position') : undefined}>
       {#if sortableIndex}
-        <button type="button" class="column-sort-button index-sort-button" onclick={() => onIndexSort ? onIndexSort() : handleSortClick('position')} title={indexSortLabel} aria-label={indexSortLabel}>
+        <button type="button" class="column-sort-button index-sort-button" onclick={() => onIndexSort ? onIndexSort() : handleSortClick('position')} use:appTooltip={indexSortLabel} aria-label={indexSortLabel}>
           <span class="column-sort-label">#</span>
           {#if sort?.field === 'position' && !hideSortDirection}
             <span class="column-sort-indicator" aria-hidden="true">{sort.direction === 'asc' ? '▲' : '▼'}</span>
@@ -132,7 +133,7 @@
           type="button"
           class="column-sort-button"
           onclick={() => handleSortClick(column.id)}
-          title={`依${column.label}排序`}
+          use:appTooltip={`依${column.label}排序`}
         >
           <span class="column-sort-label">{column.label}</span>
           {#if sort?.field === column.id && !hideSortDirection}
@@ -159,12 +160,12 @@
 {:else if variant === 'item'}
   <span class="track-index column-index" role="gridcell">{indexLabel}</span>
   {#each cells as cell (cell.id)}
-    <span class={`list-column list-column-${cell.id}`} role="gridcell" title={cell.title || cell.text || undefined}>
+    <span class={`list-column list-column-${cell.id}`} role="gridcell" use:appTooltip={cell.title || cell.text || undefined}>
       {#if cell.id === 'audioFormat'}
         <span class="list-audio-format">
           <MiddleEllipsis text={cell.text} />
           {#if cell.hiRes}
-            <img class="list-hi-res-badge" src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />
+            <img class="list-hi-res-badge" src={hiResBadgeUrl} alt="Hi-Res" use:appTooltip={'Hi-Res'} />
           {/if}
         </span>
       {:else if cell.id === 'title' || cell.id === 'artist' || cell.id === 'album'}

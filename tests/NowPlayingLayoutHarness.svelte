@@ -1,5 +1,6 @@
 ﻿<script lang="ts">
   import { tick } from 'svelte';
+  import { appTooltip } from '../src/lib/app-tooltip.js';
   import { hideWrappedTrailingTrackSeparators } from '../src/lib/track-field-separators.js';
   import {
     IconArrowsShuffle,
@@ -338,7 +339,7 @@
   </main>
   <section class="now-playing-overlay is-open" data-testid="now-playing-overlay" aria-label="正在播放">
     <header class="topbar now-playing-overlay-topbar" data-testid="layout-topbar">
-      <button class="soft-button icon-button now-playing-overlay-return" type="button" aria-label="返回播放前頁面" title="返回播放前頁面">返回</button>
+      <button class="soft-button icon-button now-playing-overlay-return" type="button" aria-label="返回播放前頁面" use:appTooltip={'返回播放前頁面'}>返回</button>
       <div class="now-playing-header-track">
         <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類" use:hideWrappedTrailingTrackSeparators>
           <span class="now-playing-track-block now-playing-artist-block" data-track-block="artist">

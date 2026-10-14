@@ -3,6 +3,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import { APP_WINDOW_TITLE } from './app-version';
+  import { appTooltip } from './app-tooltip.js';
 
   type Props = {
     transparent?: boolean;
@@ -135,7 +136,7 @@
   <div
     class="window-titlebar-drag"
     data-tauri-drag-region
-    title={APP_WINDOW_TITLE}
+    use:appTooltip={APP_WINDOW_TITLE}
     ondblclick={() => void toggleMaximize()}
   >
     <span class="window-titlebar-label" data-tauri-drag-region>{APP_WINDOW_TITLE}</span>
@@ -146,7 +147,7 @@
       class="window-titlebar-button"
       class:is-active={fullscreen}
       aria-label={fullscreen ? LABEL_EXIT_FULLSCREEN : LABEL_ENTER_FULLSCREEN}
-      title={fullscreen ? LABEL_EXIT_FULLSCREEN : LABEL_ENTER_FULLSCREEN}
+      use:appTooltip={fullscreen ? LABEL_EXIT_FULLSCREEN : LABEL_ENTER_FULLSCREEN}
       aria-pressed={fullscreen}
       onclick={() => void toggleFullscreen()}
       data-testid="window-titlebar-fullscreen"
@@ -179,7 +180,7 @@
       type="button"
       class="window-titlebar-button"
       aria-label={LABEL_MINIMIZE}
-      title={LABEL_MINIMIZE}
+      use:appTooltip={LABEL_MINIMIZE}
       onclick={() => void minimize()}
     >
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
@@ -190,7 +191,7 @@
       type="button"
       class="window-titlebar-button"
       aria-label={maximized ? LABEL_RESTORE : LABEL_MAXIMIZE}
-      title={maximized ? LABEL_RESTORE : LABEL_MAXIMIZE}
+      use:appTooltip={maximized ? LABEL_RESTORE : LABEL_MAXIMIZE}
       onclick={() => void toggleMaximize()}
     >
       {#if maximized}
@@ -212,7 +213,7 @@
       type="button"
       class="window-titlebar-button is-close"
       aria-label={LABEL_CLOSE}
-      title={LABEL_CLOSE}
+      use:appTooltip={LABEL_CLOSE}
       onclick={() => void close()}
     >
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">

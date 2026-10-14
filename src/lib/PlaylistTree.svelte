@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { IconChevronRight, IconPlaylist } from '@tabler/icons-svelte-runes';
   import type { PlaylistSummary } from './ipc';
+  import { appTooltip } from './app-tooltip.js';
 
   interface Props {
     playlists: PlaylistSummary[];
@@ -58,7 +59,7 @@
             class:selected={active && selectedPlaylistId === playlist.id}
             type="button"
             aria-current={active && selectedPlaylistId === playlist.id ? 'page' : undefined}
-            title={playlist.name.trim() || '未命名播放清單'}
+            use:appTooltip={playlist.name.trim() || '未命名播放清單'}
             onclick={() => choosePlaylist(playlist.id)}
           >
             <IconPlaylist size={17} stroke={1.6} aria-hidden="true" />

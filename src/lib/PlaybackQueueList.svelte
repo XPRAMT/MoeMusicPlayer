@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { appTooltip } from './app-tooltip.js';
   import { getErrorText, invokeCommand, type LibraryListSort, type PlaybackQueuePage, type PlaybackQueuePageItem, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
   import { formatDuration } from './format';
   import { formatListOrder } from './list-order.js';
@@ -370,7 +371,7 @@
     type="button"
     class="queue-locate-fab"
     aria-label="定位到目前播放曲目"
-    title="定位到目前播放曲目"
+    use:appTooltip={'定位到目前播放曲目'}
     disabled={!canLocateCurrent || locating}
     onclick={() => void locateCurrentTrack()}
   ><span class="queue-locate-fab-dot" aria-hidden="true"></span></button>

@@ -559,6 +559,35 @@ input:focus-visible {
   border-radius: var(--floating-surface-radius);
 }
 
+.app-tooltip {
+  position: fixed;
+  z-index: 10000;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 16px));
+  box-sizing: border-box;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: var(--font-caption);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+}
+
+.app-tooltip.is-visible {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-tooltip { transition: none; }
+}
+
 .now-playing-quick-settings-drawer.floating-surface {
   border: 0;
   border-left: 1px solid var(--line-strong);

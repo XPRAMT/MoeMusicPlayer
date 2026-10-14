@@ -13,17 +13,17 @@ assert.ok(controlsStart >= 0 && controlsEnd > controlsStart, 'footer playback co
 const controls = appSource.slice(controlsStart, controlsEnd);
 
 test('playback tooltips describe the control action instead of service diagnostics', () => {
-  assert.match(controls, /title=\{playbackControlTooltips\.playPause\}/);
-  assert.match(controls, /title=\{playbackControlTooltips\.shuffle\}/);
-  assert.match(controls, /title=\{playbackControlTooltips\.repeat\}/);
-  assert.doesNotMatch(controls, /title=\{showCapabilityDetail\(capabilities\?\.playback(?:Modes)?\)\}/);
+  assert.match(controls, /use:appTooltip=\{playbackControlTooltips\.playPause\}/);
+  assert.match(controls, /use:appTooltip=\{playbackControlTooltips\.shuffle\}/);
+  assert.match(controls, /use:appTooltip=\{playbackControlTooltips\.repeat\}/);
+  assert.doesNotMatch(controls, /use:appTooltip=\{showCapabilityDetail\(capabilities\?\.playback(?:Modes)?\)\}/);
 });
 
 test('previous and next tooltips follow their available action', () => {
-  assert.match(controls, /title=\{playbackControlTooltips\.previous\}/);
-  assert.match(controls, /title=\{playbackControlTooltips\.next\}/);
+  assert.match(controls, /use:appTooltip=\{playbackControlTooltips\.previous\}/);
+  assert.match(controls, /use:appTooltip=\{playbackControlTooltips\.next\}/);
   assert.match(controls, /disabled=\{!playbackNavigationReady \|\| \(!playback\?\.canPrevious && \(playback\?\.positionMs \?\? 0\) <= 3000\) \|\| isSendingPlaybackCommand\}/);
-  assert.doesNotMatch(controls, /title=\{playback\?\.canPrevious \? '播放佇列上一首'/);
+  assert.doesNotMatch(controls, /use:appTooltip=\{playback\?\.canPrevious \? '播放佇列上一首'/);
 });
 
 test('play, shuffle, and repeat tooltips follow current state and next action', () => {

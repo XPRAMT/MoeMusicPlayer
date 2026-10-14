@@ -3,6 +3,7 @@
   import { IconHeart, IconHeartCheck, IconPlus } from '@tabler/icons-svelte-runes';
   import { invokeCommand, type FavoritePlaylist, type FavoritePlaylists } from './ipc';
   import { getPopoverHorizontalShiftPx } from './volume-popover-position.js';
+  import { appTooltip } from './app-tooltip.js';
 
   interface Props {
     trackId: string | null;
@@ -186,7 +187,7 @@
     aria-haspopup="dialog"
     aria-expanded={open}
     aria-pressed={isFavorited}
-    title="加入或移出播放清單"
+    use:appTooltip={'加入或移出播放清單'}
     disabled={!trackId || platform === 'unsupported'}
     onclick={toggle}
   >
@@ -212,7 +213,7 @@
           class="favorite-close soft-button icon-button"
           type="button"
           aria-label="建立播放清單"
-          title="建立播放清單"
+          use:appTooltip={'建立播放清單'}
           disabled={loading || busySourceId !== null}
           onclick={() => void createPlaylist()}
         ><IconPlus size={18} stroke={1.8} aria-hidden="true" /></button>

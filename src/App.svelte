@@ -112,6 +112,7 @@
   } from './lib/live-play-count.js';
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
   import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
+  import { appTooltip } from './lib/app-tooltip.js';
   import { QUEUE_REORDER_LONG_PRESS_MS, QUEUE_REORDER_MOVE_CANCEL_PX } from './lib/queue-reorder.js';
   import {
     SHORTCUT_ACTIONS,
@@ -3058,7 +3059,7 @@
                       type="button"
                       aria-pressed={themePreferences.mainBackgroundMode === option.mode}
                       disabled={capabilities?.platform === 'android' && (option.mode === 'singleImage' || option.mode === 'slideshow' || option.mode === 'systemWallpaper')}
-                      title={capabilities?.platform === 'android' && option.mode === 'systemWallpaper' ? 'Android 系統桌布背景尚未支援' : undefined}
+                      use:appTooltip={capabilities?.platform === 'android' && option.mode === 'systemWallpaper' ? 'Android 系統桌布背景尚未支援' : undefined}
                       onclick={() => void selectMainBackgroundMode(option.mode as ThemePreferences['mainBackgroundMode'])}
                     >{option.label}</button>
                   {/each}
@@ -3160,7 +3161,7 @@
                       class:column-order-drop-before={trackColumnOrderDrag !== null && trackColumnOrderDrag.toIndex === index && trackColumnOrderDrag.fromIndex > index}
                       class:column-order-drop-after={trackColumnOrderDrag !== null && trackColumnOrderDrag.toIndex === index && trackColumnOrderDrag.fromIndex < index}
                       data-track-column-index={index}
-                      title="長按 300 毫秒後拖曳排序；鍵盤可用上下方向鍵"
+                      use:appTooltip={'長按 300 毫秒後拖曳排序；鍵盤可用上下方向鍵'}
                       onpointerdown={(event) => handleTrackColumnOrderPointerDown(event, index)}
                       onpointermove={handleTrackColumnOrderPointerMove}
                       onpointerup={finishTrackColumnOrderPointer}
@@ -3171,7 +3172,7 @@
                           type="checkbox"
                           checked={preference.visible}
                           aria-label={`顯示${definition.label}欄`}
-                          title="上下方向鍵可調整欄位順序"
+                          use:appTooltip={'上下方向鍵可調整欄位順序'}
                           onchange={(event) => setTrackColumnVisible(preference.id, event.currentTarget.checked)}
                           onkeydown={(event) => handleTrackColumnOrderKeydown(event, preference.id)}
                         />
@@ -3191,7 +3192,7 @@
                   <span>目前輸出</span>
                   <strong>{outputStatus.text}</strong>
                   {#if outputStatus.notice}
-                    <p title={playback?.outputFormat?.fallbackReason ?? undefined}>{outputStatus.notice}</p>
+                    <p use:appTooltip={playback?.outputFormat?.fallbackReason ?? undefined}>{outputStatus.notice}</p>
                   {/if}
                 </div>
                 <div class="settings-panel-header">
@@ -3397,7 +3398,7 @@
                   type="button"
                   onclick={() => void pickWindowsPlaylistSource()}
                   disabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation}
-                  title={showCapabilityDetail(capabilities?.playlistExchange)}
+                  use:appTooltip={showCapabilityDetail(capabilities?.playlistExchange)}
                 >
                   {isUpdatingSource ? '處理中' : '選擇播放清單'}
                 </button>
@@ -3458,7 +3459,7 @@
               {:else}
                 {#each sources as source (source.id)}
                   <div class="configured-source">
-                    <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{sourceKindLabel(source.kind)}</small><small class="configured-source-location" title={source.location}>{source.location}</small></div>
+                    <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{sourceKindLabel(source.kind)}</small><small class="configured-source-location" use:appTooltip={source.location}>{source.location}</small></div>
                     <div class="configured-source-actions">
                       <label><input type="checkbox" checked={source.enabled} disabled={isUpdatingSource} onchange={(event) => void setSourceEnabled(source, event.currentTarget.checked)} />啟用</label>
                       <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeSource(source)}>移除</button>
@@ -3488,7 +3489,7 @@
                 {:else}
                   {#each excludedFolders as excluded (excluded.id)}
                     <div class="configured-source">
-                      <div class="configured-source-copy"><strong>{excluded.displayName}</strong><small class="configured-source-location" title={excluded.location}>{excluded.location}</small></div>
+                      <div class="configured-source-copy"><strong>{excluded.displayName}</strong><small class="configured-source-location" use:appTooltip={excluded.location}>{excluded.location}</small></div>
                       <div class="configured-source-actions">
                         <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeExcludedFolder(excluded)}>移除</button>
                       </div>
@@ -3636,7 +3637,7 @@
           class="soft-button topbar-refresh-button"
           type="button"
           aria-label="重新整理音樂來源"
-          title={sourceSyncReady ? '重新同步本機來源' : showCapabilityDetail(capabilities?.sourceSync)}
+          use:appTooltip={sourceSyncReady ? '重新同步本機來源' : showCapabilityDetail(capabilities?.sourceSync)}
           onclick={() => void syncLibrary()}
           disabled={!sourceSyncReady || isSyncing}
         >
@@ -3878,7 +3879,7 @@
           class="soft-button icon-button now-playing-overlay-return"
           type="button"
           aria-label="返回播放前頁面"
-          title="返回播放前頁面"
+           use:appTooltip={'返回播放前頁面'}
           onclick={() => void closeNowPlaying()}
         >
           <IconArrowLeft size={17} stroke={1.8} aria-hidden="true" />
@@ -3887,31 +3888,31 @@
           <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類" use:hideWrappedTrailingTrackSeparators>
             <span class="now-playing-track-block now-playing-artist-block" data-track-block="artist">
               {#if nowPlayingArtists.length === 0}
-                <button type="button" data-track-field="artist" disabled title="沒有演出者分類資料" aria-label="沒有演出者分類資料">—</button>
+                <button type="button" data-track-field="artist" disabled use:appTooltip={'沒有演出者分類資料'} aria-label="沒有演出者分類資料">—</button>
               {:else}
                 {#each nowPlayingArtists as artist, index (artist)}
                   <span class="now-playing-artist-unit">
                     {#if index > 0}<span class="now-playing-artist-sep" aria-hidden="true">/</span>{/if}
-                    <button type="button" data-track-field="artist" title={artist} aria-label={`開啟演出者「${artist}」明細`} onclick={() => void openArtistDetailForName(artist)}>{artist}</button>
+                     <button type="button" data-track-field="artist" use:appTooltip={artist} aria-label={`開啟演出者「${artist}」明細`} onclick={() => void openArtistDetailForName(artist)}>{artist}</button>
                   </span>
                 {/each}
               {/if}
             </span>
             <span class="now-playing-track-block now-playing-album-block" data-track-block="album">
-              <button type="button" data-track-field="album" disabled={!trackFieldValue(playback?.currentTrack, 'album')} title={trackFieldValue(playback?.currentTrack, 'album') ?? '沒有專輯分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'album') ? `開啟專輯「${trackFieldValue(playback?.currentTrack, 'album')}」明細` : '沒有專輯分類資料'} onclick={() => { const album = trackFieldValue(playback?.currentTrack, 'album'); if (album) void openAlbumDetailForName(album); }}>{trackFieldLabel(playback?.currentTrack, 'album')}</button>
+               <button type="button" data-track-field="album" disabled={!trackFieldValue(playback?.currentTrack, 'album')} use:appTooltip={trackFieldValue(playback?.currentTrack, 'album') ?? '沒有專輯分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'album') ? `開啟專輯「${trackFieldValue(playback?.currentTrack, 'album')}」明細` : '沒有專輯分類資料'} onclick={() => { const album = trackFieldValue(playback?.currentTrack, 'album'); if (album) void openAlbumDetailForName(album); }}>{trackFieldLabel(playback?.currentTrack, 'album')}</button>
             </span>
             <span class="now-playing-track-block now-playing-title-block" data-track-block="title">
               <span
                 class="now-playing-track-title"
                 data-track-field="title"
-                title={displayTrackTitle(playback?.currentTrack, '') || '沒有曲名'}
+                 use:appTooltip={displayTrackTitle(playback?.currentTrack, '') || '沒有曲名'}
               >{trackFieldLabel(playback?.currentTrack, 'title')}</span>
             </span>
           </nav>
           <p class="now-playing-format" aria-label="音質格式、發行日期與播放次數">
             <span class="now-playing-audio-quality">
               <span>{formatAudioFormat(playback?.currentTrack ?? {})}</span>
-              {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" title="Hi-Res" />{/if}
+              {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" use:appTooltip={'Hi-Res'} />{/if}
             </span>
             <span class="now-playing-release-date-block now-playing-release-date" aria-label="發行日期">
               {formatTrackColumnValue('year', playback?.currentTrack ?? {}, () => '—')}
@@ -3927,7 +3928,7 @@
               <button
                 type="button"
                 class="soft-button lyrics-topbar-action"
-                title={`目前來源：${lyricsTopbarStatus.source}（開啟候選以手動指定）`}
+                use:appTooltip={`目前來源：${lyricsTopbarStatus.source}（開啟候選以手動指定）`}
                 aria-label="手動指定歌詞"
                 disabled={!playback?.currentTrack}
                 onclick={() => lyricsTopbarStatus?.openManualSelection()}
@@ -3936,7 +3937,7 @@
                 type="button"
                 class="soft-button lyrics-topbar-action"
                 class:is-active={lyricsTopbarStatus.timingPanelOpen}
-                title={lyricsTopbarStatus.canAdjustTiming ? `目前：${lyricsTopbarStatus.sync}（調整延遲 ±10 秒）` : '目前不是同步歌詞，無法調整延遲'}
+                use:appTooltip={lyricsTopbarStatus.canAdjustTiming ? `目前：${lyricsTopbarStatus.sync}（調整延遲 ±10 秒）` : '目前不是同步歌詞，無法調整延遲'}
                 aria-label="同步歌詞延遲調整"
                 aria-pressed={lyricsTopbarStatus.timingPanelOpen}
                 disabled={!lyricsTopbarStatus.canAdjustTiming}
@@ -3948,7 +3949,7 @@
             <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label="切換譯文顯示" onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>譯</button>
             <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label="切換羅馬拼音顯示" onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>羅</button>
           </div>
-          <button bind:this={quickSettingsTrigger} class="soft-button icon-button now-playing-quick-settings-trigger" type="button" aria-label="開啟快速設定" title="快速設定" aria-haspopup="dialog" aria-expanded={isQuickSettingsOpen} onclick={() => void openQuickSettings()}>
+          <button bind:this={quickSettingsTrigger} class="soft-button icon-button now-playing-quick-settings-trigger" type="button" aria-label="開啟快速設定" use:appTooltip={'快速設定'} aria-haspopup="dialog" aria-expanded={isQuickSettingsOpen} onclick={() => void openQuickSettings()}>
             <IconSettings size={18} stroke={1.7} aria-hidden="true" />
           </button>
         </div>
@@ -4045,7 +4046,7 @@
           class="dock-now-playing-dismiss"
           type="button"
           aria-label="返回播放前頁面"
-          title="返回播放前頁面"
+           use:appTooltip={'返回播放前頁面'}
           onclick={() => void closeNowPlaying()}
         ></button>
       {:else}
@@ -4054,7 +4055,7 @@
           type="button"
           bind:this={dockArtworkButton}
           aria-label={playback?.currentTrack ? `開啟正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
-          title={playback?.currentTrack ? `查看正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
+           use:appTooltip={playback?.currentTrack ? `查看正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
           disabled={!playback?.currentTrack}
           onclick={() => void openNowPlaying()}
         >
@@ -4078,27 +4079,27 @@
           platform={capabilities?.platform ?? 'unsupported'}
           onChange={async () => { await loadPlaylists(); await loadSources(); }}
         />
-        <button class="control-button secondary-control" type="button" aria-label="隨機播放" title={playbackControlTooltips.shuffle} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} aria-pressed={playback?.shuffle === true} onclick={toggleShuffle}>
+        <button class="control-button secondary-control" type="button" aria-label="隨機播放" use:appTooltip={playbackControlTooltips.shuffle} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} aria-pressed={playback?.shuffle === true} onclick={toggleShuffle}>
           {#if playback?.shuffle}
             <IconArrowsShuffle size={23} stroke={1.7} aria-hidden="true" />
           {:else}
             <IconArrowsRight size={23} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
-        <button class="control-button navigation-control" type="button" aria-label="上一首" title={playbackControlTooltips.previous} disabled={!playbackNavigationReady || (!playback?.canPrevious && (playback?.positionMs ?? 0) <= 3000) || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
+        <button class="control-button navigation-control" type="button" aria-label="上一首" use:appTooltip={playbackControlTooltips.previous} disabled={!playbackNavigationReady || (!playback?.canPrevious && (playback?.positionMs ?? 0) <= 3000) || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
           <IconPlayerTrackPrev size={23} stroke={1.7} aria-hidden="true" />
         </button>
-        <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} title={playbackControlTooltips.playPause} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
+        <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} use:appTooltip={playbackControlTooltips.playPause} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
           {#if playback?.isPlaying}
             <IconPlayerPause size={26} stroke={1.7} aria-hidden="true" />
           {:else}
             <IconPlayerPlay size={26} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
-        <button class="control-button navigation-control" type="button" aria-label="下一首" title={playbackControlTooltips.next} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
+        <button class="control-button navigation-control" type="button" aria-label="下一首" use:appTooltip={playbackControlTooltips.next} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
           <IconPlayerTrackNext size={23} stroke={1.7} aria-hidden="true" />
         </button>
-        <button class="control-button secondary-control" type="button" aria-label="循環播放" title={playbackControlTooltips.repeat} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
+        <button class="control-button secondary-control" type="button" aria-label="循環播放" use:appTooltip={playbackControlTooltips.repeat} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
           {#if playback?.repeatMode === 'one'}
             <IconRepeatOnce size={23} stroke={1.7} aria-hidden="true" />
           {:else if playback?.repeatMode === 'all'}
@@ -4118,7 +4119,7 @@
             aria-label="音量"
             aria-expanded={volumeExpanded}
             aria-haspopup="dialog"
-            title={volumeExpanded ? '收合音量' : '展開音量'}
+            use:appTooltip={volumeExpanded ? '收合音量' : '展開音量'}
             disabled={!playbackReady}
             onclick={toggleVolumeExpanded}
           >
