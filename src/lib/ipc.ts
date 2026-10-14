@@ -502,6 +502,10 @@ export interface NowPlayingAppearancePreferences {
 }
 
 interface IpcContract {
+  library_get_quick_index_groupings: {
+    args: { values: string[] };
+    result: { labels: string[]; groups: string[] };
+  };
   about_get_info: { args: Record<string, never>; result: AboutInfo };
   windows_register_audio_associations: { args: Record<string, never>; result: void };
   windows_open_default_apps_settings: { args: Record<string, never>; result: void };

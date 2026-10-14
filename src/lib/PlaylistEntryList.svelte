@@ -33,6 +33,7 @@ import {
   DEFAULT_TRACK_ROW_HEIGHT_PX,
   DEFAULT_TRACK_COLUMN_WIDTHS,
   TRACK_COLUMN_DEFINITIONS,
+  displayTrackTitle,
   formatTrackColumnValue,
   isHiResTrack,
   normalizeTrackColumnPreferences,
@@ -44,6 +45,7 @@ import {
   visibleTrackColumns,
 } from './track-columns.js';
 import { withLivePlayedMs } from './live-play-count.js';
+import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
   import { PagedListController, TRACK_PAGE_SIZE } from './track-list-data.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
@@ -104,13 +106,18 @@ import { withLivePlayedMs } from './live-play-count.js';
     generation: 0,
     revision: 0,
   });
+  let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[] } | null>(null);
+  let quickIndexGeneration = 0;
+
+  async function requestPlaylistPage(request: { playlistId: string; sort: PlaylistListSort; offset: number; limit: number }): Promise<PlaylistPage> {
+    return fetchPage ? fetchPage(request) : invokeCommand('playlist_get_page', request);
+  }
+
   const entries = new PagedListController<PlaylistEntrySummary, string>(
     ({ scope, offset, limit }) => {
       const requestScope = JSON.parse(scope) as { playlistId: string; sort: PlaylistListSort };
       const request = { ...requestScope, offset, limit };
-      return fetchPage
-        ? fetchPage(request)
-        : invokeCommand('playlist_get_page', request);
+      return requestPlaylistPage(request);
     },
     { listName: '播放清單', onChange: () => { snapshot = entries.snapshot(); } },
   );
@@ -125,6 +132,41 @@ import { withLivePlayedMs } from './live-play-count.js';
     const currentSort = sort;
     entries.reset(JSON.stringify({ playlistId: currentId, sort: currentSort }), currentRevision);
     void entries.ensureRange(0, TRACK_PAGE_SIZE);
+  });
+
+  $effect(() => {
+    const count = snapshot.totalCount;
+    const currentPlaylistId = playlistId;
+    const currentSort = sort;
+    const enabled = ['title', 'artist', 'album'].includes(currentSort.field);
+    const generation = ++quickIndexGeneration;
+    quickIndex = null;
+    if (!enabled || count === null || count <= 0) return;
+    const cacheKey = JSON.stringify({ playlistId: currentPlaylistId, resetKey, sort: currentSort, count });
+    const cached = getCachedQuickIndex(cacheKey);
+    if (cached) {
+      quickIndex = cached;
+      return;
+    }
+    const isCurrent = () => generation === quickIndexGeneration;
+    void buildQuickIndexGroups({
+      totalCount: count,
+      fetchPage: ({ offset, limit }) => requestPlaylistPage({ playlistId: currentPlaylistId, sort: currentSort, offset, limit }),
+      getName: (entry: PlaylistEntrySummary) => currentSort.field === 'title'
+        ? displayTrackTitle(entry, '未命名項目')
+        : currentSort.field === 'artist'
+          ? entry.artist
+          : entry.album,
+      getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
+      isCurrent,
+    }).then((result) => {
+      if (isCurrent() && result) {
+        cacheQuickIndex(cacheKey, result);
+        quickIndex = result;
+      }
+    }).catch((reason: unknown) => {
+      if (isCurrent()) console.error('無法建立播放清單首字索引', reason);
+    });
   });
 
   $effect(() => {
@@ -191,6 +233,8 @@ import { withLivePlayedMs } from './live-play-count.js';
     minContentWidth={listMinWidth}
     className="track-list-viewport playlist-entry-table"
     scrollResetKey={playlistId}
+    groupRows={quickIndex?.groups}
+    quickIndexLabels={quickIndex?.labels}
     scrollRestoreReady={snapshot.scope === JSON.stringify({ playlistId, sort }) && snapshot.totalCount !== null && snapshot.pendingPageCount === 0}
     rowClassName="track-row virtual-track-row configurable-track-grid playlist-entry-row"
     listName="播放清單"

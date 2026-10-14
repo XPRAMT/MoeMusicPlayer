@@ -32,6 +32,13 @@ use crate::{
     SafPlaylistCreate, SafPlaylistImport,
 };
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlphabeticIndexResponse {
+    labels: Vec<String>,
+    groups: Vec<String>,
+}
+
 #[derive(Clone)]
 pub(crate) struct PlatformMediaIndex<R: Runtime>(Arc<PluginHandle<R>>);
 
@@ -43,6 +50,26 @@ struct PlaylistCreateResponse {
 }
 
 impl<R: Runtime> PlatformMediaIndex<R> {
+    pub(crate) fn alphabetic_index_groupings(
+        &self,
+        names: &[String],
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        if names.len() > 500 {
+            return Err(crate::Error::Response(
+                "alphabetic-index batch exceeds 500 names".into(),
+            ));
+        }
+        let response = self.0.run_mobile_plugin::<AlphabeticIndexResponse>(
+            "alphabeticIndexGroupings",
+            json!({ "names": names }),
+        )?;
+        if response.groups.len() != names.len() {
+            return Err(crate::Error::Response(
+                "Android alphabetic-index response length mismatch".into(),
+            ));
+        }
+        Ok((response.labels, response.groups))
+    }
     pub(crate) fn open_official_url(&self, url: &str) -> Result<()> {
         self.0
             .run_mobile_plugin::<serde_json::Value>("openOfficialUrl", json!({ "url": url }))?;

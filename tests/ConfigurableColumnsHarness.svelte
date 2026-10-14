@@ -288,6 +288,7 @@
           <div id="track-list-test">
             <TrackList
               query=""
+              quickIndexEnabled={false}
               resetKey="configurable-columns-test"
               selectedTrackId={null}
               playbackReady={true}

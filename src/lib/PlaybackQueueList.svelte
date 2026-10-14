@@ -7,6 +7,7 @@
     DEFAULT_TRACK_ROW_HEIGHT_PX,
     DEFAULT_TRACK_COLUMN_WIDTHS,
     TRACK_COLUMN_DEFINITIONS,
+    displayTrackTitle,
     formatTrackColumnValue,
     isHiResTrack,
     normalizeTrackColumnPreferences,
@@ -18,6 +19,7 @@
     visibleTrackColumns,
   } from './track-columns.js';
   import { withLivePlayedMs } from './live-play-count.js';
+  import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
   import { PagedListController, TRACK_PAGE_SIZE } from './track-list-data.js';
   import {
     adaptPlaybackQueuePage,
@@ -96,6 +98,8 @@
     generation: 0,
     revision: 0,
   });
+  let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[] } | null>(null);
+  let quickIndexGeneration = 0;
 
   const queue = new PagedListController<PlaybackQueuePageItem, string>(
     async ({ scope, offset, limit }) => {
@@ -120,6 +124,44 @@
     cursorError = null;
     queue.reset(currentResetKey, currentResetKey);
     void queue.ensureRange(0, TRACK_PAGE_SIZE);
+  });
+
+  $effect(() => {
+    const count = snapshot.totalCount;
+    const currentSort = normalizedSort;
+    const enabled = currentSort !== null && ['title', 'artist', 'album'].includes(currentSort.field);
+    const generation = ++quickIndexGeneration;
+    quickIndex = null;
+    if (!enabled || count === null || count <= 0 || !currentSort) return;
+    const cacheKey = JSON.stringify({ queueScope, sort: currentSort, count });
+    const cached = getCachedQuickIndex(cacheKey);
+    if (cached) {
+      quickIndex = cached;
+      return;
+    }
+    const isCurrent = () => generation === quickIndexGeneration;
+    void buildQuickIndexGroups({
+      totalCount: count,
+      fetchPage: async ({ offset, limit }) => {
+        const page = await requestPage({ offset, limit });
+        return { items: page.items, totalCount: page.total };
+      },
+      getName: (entry: PlaybackQueuePageItem) => {
+        const track = entry.track;
+        if (!track) return '';
+        if (currentSort.field === 'title') return displayTrackTitle(track);
+        return currentSort.field === 'artist' ? track.artist : track.album;
+      },
+      getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
+      isCurrent,
+    }).then((result) => {
+      if (isCurrent() && result) {
+        cacheQuickIndex(cacheKey, result);
+        quickIndex = result;
+      }
+    }).catch((reason: unknown) => {
+      if (isCurrent()) console.error('無法建立播放佇列首字索引', reason);
+    });
   });
 
   $effect(() => {
@@ -268,6 +310,8 @@
     revision={snapshot.revision}
     generation={snapshot.generation}
     scrollResetKey={queueScope}
+    groupRows={quickIndex?.groups}
+    quickIndexLabels={quickIndex?.labels}
     {itemAt}
     getKey={(entry) => entry.entryPosition}
     isSelected={(entry) => isCurrent(entry)}

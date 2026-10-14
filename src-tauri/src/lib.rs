@@ -2990,6 +2990,36 @@ fn library_sort_text_indices(
     Ok(database.sort_text_indices(&values))
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuickIndexGrouping {
+    labels: Vec<String>,
+    groups: Vec<String>,
+}
+
+#[tauri::command]
+fn library_get_quick_index_groupings(
+    _app: AppHandle,
+    values: Vec<String>,
+) -> Result<QuickIndexGrouping, String> {
+    if values.len() > 500 {
+        return Err("快速索引每次最多處理 500 個名稱。".to_owned());
+    }
+    #[cfg(target_os = "windows")]
+    let (labels, groups) = player_platform_windows::alphabetic_index_groupings(&values)?;
+    #[cfg(target_os = "android")]
+    let (labels, groups) = _app
+        .media_index()
+        .alphabetic_index_groupings(&values)
+        .map_err(|error| error.to_string())?;
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    let (labels, groups) = {
+        let _ = _app;
+        return Err("此平台尚未提供系統字元索引。".to_owned());
+    };
+    Ok(QuickIndexGrouping { labels, groups })
+}
+
 async fn run_blocking_album_work<R, F>(work: F) -> Result<R, String>
 where
     R: Send + 'static,
@@ -9911,6 +9941,7 @@ pub fn run() {
             library_get_page,
             library_get_artist_index_facets,
             library_sort_text_indices,
+            library_get_quick_index_groupings,
             library_get_album_index_facets,
             library_get_album_page,
             library_get_album_artwork_candidates,

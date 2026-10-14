@@ -12,6 +12,7 @@ import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.icu.text.AlphabeticIndex
 import androidx.activity.result.ActivityResult
 import app.tauri.PermissionState
 import app.tauri.annotation.ActivityCallback
@@ -26,6 +27,7 @@ import app.tauri.plugin.Plugin
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.ArrayDeque
+import java.util.Locale
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -35,6 +37,11 @@ import java.util.concurrent.Executors
 @InvokeArg
 class OfficialUrlArgs {
     var url: String? = null
+}
+
+@InvokeArg
+class AlphabeticIndexArgs {
+    var names: ArrayList<String>? = null
 }
 
 @InvokeArg
@@ -133,6 +140,31 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             } catch (error: Exception) {
                 invoke.reject("Could not open browser: ${error.message}")
             }
+        }
+    }
+
+    @Command
+    fun alphabeticIndexGroupings(invoke: Invoke) {
+        val names = invoke.parseArgs(AlphabeticIndexArgs::class.java).names.orEmpty()
+        if (names.size > MAX_ALPHABETIC_INDEX_BATCH) {
+            invoke.reject("Too many names for one alphabetic-index request")
+            return
+        }
+        async(invoke) {
+            val index = AlphabeticIndex<Any>(Locale.getDefault()).buildImmutableIndex()
+            val labels = JSONArray()
+            if (names.isEmpty()) {
+                for (bucketIndex in 0 until index.bucketCount) {
+                    val label = index.getBucket(bucketIndex)?.label.orEmpty()
+                    if (label.isNotEmpty()) labels.put(label)
+                }
+            }
+            val groups = JSONArray()
+            names.forEach { name ->
+                val bucketIndex = index.getBucketIndex(name)
+                groups.put(index.getBucket(bucketIndex)?.label.orEmpty())
+            }
+            JSObject().put("labels", labels).put("groups", groups)
         }
     }
 
@@ -1494,6 +1526,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         private const val LEASE_TTL_MS = 15 * 60 * 1000L
         private const val COPY_BUFFER_SIZE = 64 * 1024
         private const val MAX_PLAYLIST_CANDIDATES = 256
+        private const val MAX_ALPHABETIC_INDEX_BATCH = 500
         private val TOKEN_PATTERN = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
     }
 }

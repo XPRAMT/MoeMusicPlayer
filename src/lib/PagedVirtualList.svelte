@@ -2,6 +2,21 @@
   const SCROLL_POSITION_CACHE_LIMIT = 64;
   const scrollPositionsByList = new Map<string, number>();
 
+  export interface VirtualListRow<Item> {
+    item: Item | null;
+    index: number;
+    key: string | number;
+    id: string;
+    active: boolean;
+    selected: boolean;
+    play: () => void;
+  }
+
+  export interface QuickIndexGroup {
+    label: string;
+    beforeIndex: number;
+  }
+
   function readListScrollPosition(listId: string): number {
     const position = scrollPositionsByList.get(listId);
     if (position === undefined) return 0;
@@ -24,26 +39,16 @@
   import { onDestroy, onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import {
-    buildVirtualRows,
     getNextActiveIndex,
     getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
+  import { dataIndexToVisualIndex, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
     queueDropIndexFromPointer,
   } from './queue-reorder.js';
-
-  export interface VirtualListRow<Item> {
-    item: Item | null;
-    index: number;
-    key: string | number;
-    id: string;
-    active: boolean;
-    selected: boolean;
-    play: () => void;
-  }
 
   interface Props<Item> {
     totalCount: number | null;
@@ -80,6 +85,10 @@
     onReorder?: (from: number, to: number) => void | Promise<void>;
     /** Bump `token` to scroll `index` into view (centered when possible). */
     scrollToIndexRequest?: { index: number; token: number } | null;
+    /** Locale-aware group headings, inserted as virtual rows before their first data item. */
+    groupRows?: QuickIndexGroup[];
+    /** All locale index labels, including labels without data in this list. */
+    quickIndexLabels?: string[];
     header?: Snippet;
     row: Snippet<[VirtualListRow<Item>]>;
   }
@@ -116,6 +125,8 @@
     longPressReorder = false,
     onReorder = () => {},
     scrollToIndexRequest = null,
+    groupRows = [],
+    quickIndexLabels = [],
     header,
     row,
   }: Props<Item> = $props();
@@ -149,8 +160,15 @@
   let activePointerId: number | null = null;
   let autoScrollFrame = 0;
   let latestPointerClientY = 0;
+  let quickIndexOpen = $state(false);
+  let quickIndexLeft = $state(0);
+  let quickIndexTop = $state(0);
+  let quickIndexDialog: HTMLDivElement | undefined = $state();
+  let quickIndexTrigger: HTMLButtonElement | null = null;
+  let previousGroupRows: QuickIndexGroup[] = [];
 
-  const virtualTotalCount = $derived(totalCount ?? 40);
+  const virtualDataCount = $derived(totalCount ?? 40);
+  const virtualTotalCount = $derived(virtualDataCount + groupRows.length);
   const rowViewportHeight = $derived(
     fillAvailable
       ? Math.max(rowHeight, viewportHeight)
@@ -167,13 +185,32 @@
     overscan,
     0,
   ));
-  const virtualRows = $derived.by(() => buildVirtualRows(
-    { itemAt },
-    range,
-    revision,
-    getKey,
-  ).rows);
-  const activeDescendantId = $derived(`${listId}-row-${activeIndex}`);
+  const virtualRows = $derived.by(() => {
+    const rows: Array<
+      | { kind: 'group'; visualIndex: number; label: string; key: string }
+      | { kind: 'item'; visualIndex: number; index: number; item: Item | null; key: string | number }
+    > = [];
+    for (let visualIndex = range.start; visualIndex < range.end; visualIndex += 1) {
+      let groupRow: QuickIndexGroup | null = null;
+      for (let groupIndex = 0; groupIndex < groupRows.length; groupIndex += 1) {
+        if (groupRows[groupIndex].beforeIndex + groupIndex === visualIndex) {
+          groupRow = groupRows[groupIndex];
+          break;
+        }
+      }
+      if (groupRow) {
+        rows.push({ kind: 'group', visualIndex, label: groupRow.label, key: `quick-index:${visualIndex}:${groupRow.label}` });
+      } else {
+        const index = visualIndexToDataIndex(visualIndex, groupRows);
+        if (index === null || index < 0 || index >= virtualDataCount) continue;
+        const item = itemAt(index);
+        rows.push({ kind: 'item', visualIndex, index, item, key: item === null ? `loading:${index}` : getKey(item, index) });
+      }
+    }
+    return rows;
+  });
+  const activeDescendantId = $derived(`${listId}-row-${dataIndexToVisualIndex(activeIndex, groupRows)}`);
+  const availableIndexLabels = $derived(new Set(groupRows.map(({ label }) => label)));
 
   function rememberVisibleScrollPosition(position: number): void {
     if (seenListId === listId) writeListScrollPosition(listId, position);
@@ -200,7 +237,7 @@
       viewport?.scrollTo({ top: 0 });
     }
     if (pendingListRestore?.listId === currentListId && scrollRestoreReady && totalCount !== null && !pending) {
-      const maxScrollTop = Math.max(0, totalCount * rowHeight - viewportHeight);
+      const maxScrollTop = Math.max(0, virtualTotalCount * rowHeight - viewportHeight);
       const restoredScrollTop = Math.min(pendingListRestore.position, maxScrollTop);
       scrollTop = restoredScrollTop;
       lastVisibleScrollTop = restoredScrollTop;
@@ -214,8 +251,29 @@
     seenListId = currentListId;
     seenScrollResetKey = currentScrollResetKey;
     hasSeenScrollResetKey = true;
-    const currentRange = range;
+    const currentRange = visualRangeToDataRange(range.start, range.end, groupRows, virtualDataCount);
     onRange(currentRange);
+  });
+
+  $effect(() => {
+    const nextGroupRows = groupRows;
+    const previous = previousGroupRows;
+    const groupsChanged = previous.length !== nextGroupRows.length
+      || previous.some((group, index) => group.label !== nextGroupRows[index]?.label
+        || group.beforeIndex !== nextGroupRows[index]?.beforeIndex);
+    if (groupsChanged && viewport && viewport.clientHeight > 0) {
+      const oldVisualIndex = Math.floor(viewport.scrollTop / rowHeight);
+      const anchorDataIndex = visualIndexToAnchorDataIndex(oldVisualIndex, previous, virtualDataCount);
+      if (anchorDataIndex !== null && anchorDataIndex >= 0 && anchorDataIndex < virtualDataCount) {
+        const withinRowOffset = viewport.scrollTop - oldVisualIndex * rowHeight;
+        const nextScrollTop = dataIndexToVisualIndex(anchorDataIndex, nextGroupRows) * rowHeight + withinRowOffset;
+        viewport.scrollTop = nextScrollTop;
+        scrollTop = nextScrollTop;
+        lastVisibleScrollTop = nextScrollTop;
+        rememberVisibleScrollPosition(nextScrollTop);
+      }
+    }
+    previousGroupRows = nextGroupRows;
   });
 
   onMount(() => {
@@ -281,10 +339,10 @@
   }
 
   function setActiveIndex(index: number): void {
-    const maxIndex = Math.max(0, virtualTotalCount - 1);
+    const maxIndex = Math.max(0, virtualDataCount - 1);
     activeIndex = Math.max(0, Math.min(maxIndex, index));
     if (!viewport) return;
-    const rowTop = activeIndex * rowHeight;
+    const rowTop = dataIndexToVisualIndex(activeIndex, groupRows) * rowHeight;
     const rowBottom = rowTop + rowHeight;
     let nextScrollTop = viewport.scrollTop;
     if (rowTop < nextScrollTop) nextScrollTop = rowTop;
@@ -297,11 +355,11 @@
   }
 
   function scrollIndexIntoView(index: number, align: 'nearest' | 'center' = 'center'): void {
-    const maxIndex = Math.max(0, virtualTotalCount - 1);
+    const maxIndex = Math.max(0, virtualDataCount - 1);
     const target = Math.max(0, Math.min(maxIndex, index));
     activeIndex = target;
     if (!viewport) return;
-    const rowTop = target * rowHeight;
+    const rowTop = dataIndexToVisualIndex(target, groupRows) * rowHeight;
     let nextScrollTop = viewport.scrollTop;
     if (align === 'center') {
       nextScrollTop = rowTop - Math.max(0, (viewport.clientHeight - rowHeight) / 2);
@@ -361,14 +419,69 @@
 
   function dropIndexAtPointer(clientY: number): number {
     if (!viewport) return 0;
-    return queueDropIndexFromPointer({
+    const visualIndex = queueDropIndexFromPointer({
       scrollTop: viewport.scrollTop,
       pointerClientY: clientY,
       viewportTop: viewport.getBoundingClientRect().top,
       rowHeight,
       totalCount: virtualTotalCount,
     });
+    const dataIndex = visualIndexToDataIndex(visualIndex, groupRows);
+    if (dataIndex !== null) return dataIndex;
+    const groupIndex = groupRows.findIndex((group, index) => group.beforeIndex + index === visualIndex);
+    return groupIndex < 0 ? 0 : groupRows[groupIndex].beforeIndex;
   }
+
+  function openQuickIndex(event: MouseEvent): void {
+    const button = event.currentTarget as HTMLButtonElement;
+    const rect = button.getBoundingClientRect();
+    const width = Math.min(360, window.innerWidth - 24);
+    quickIndexLeft = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left));
+    quickIndexTop = Math.max(12, Math.min(window.innerHeight - 280, rect.bottom + 6));
+    quickIndexTrigger = button;
+    quickIndexOpen = true;
+  }
+
+  function chooseQuickIndexLabel(label: string): void {
+    quickIndexOpen = false;
+    const group = groupRows.find((candidate) => candidate.label === label);
+    if (group) {
+      scrollIndexIntoView(group.beforeIndex, 'center');
+      viewport?.focus();
+    }
+  }
+
+  function closeQuickIndex(restoreFocus = true): void {
+    quickIndexOpen = false;
+    if (restoreFocus) queueMicrotask(() => quickIndexTrigger?.focus());
+  }
+
+  function handleQuickIndexDialogKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Tab' || !quickIndexDialog) return;
+    const focusable = [...quickIndexDialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (quickIndexOpen && event.key === 'Escape') {
+      event.preventDefault();
+      closeQuickIndex();
+    }
+  }
+
+  $effect(() => {
+    if (!quickIndexOpen) return;
+    quickIndexDialog?.querySelector<HTMLButtonElement>('.quick-index-label:not(:disabled)')?.focus();
+  });
 
   function updateDragTarget(clientY: number): void {
     latestPointerClientY = clientY;
@@ -482,7 +595,7 @@
     const nextIndex = getNextActiveIndex(
       event.key,
       activeIndex,
-      totalCount ?? 40,
+      virtualDataCount,
       viewportHeight,
       rowHeight,
     );
@@ -508,7 +621,7 @@
     bind:this={viewport}
     role="grid"
     aria-label={ariaLabel}
-    aria-rowcount={totalCount === null ? -1 : totalCount + 1}
+    aria-rowcount={totalCount === null ? -1 : virtualTotalCount + 1}
     aria-colcount={columnCount}
     aria-activedescendant={activeDescendantId}
     aria-busy={pending || totalCount === null}
@@ -529,11 +642,24 @@
         class="paged-virtual-drop-line"
         role="presentation"
         aria-hidden="true"
-        style={`transform:translateY(${dragToIndex * rowHeight + (dragToIndex > dragFromIndex ? rowHeight - 2 : 0)}px)`}
+        style={`transform:translateY(${dataIndexToVisualIndex(dragToIndex, groupRows) * rowHeight + (dragToIndex > dragFromIndex ? rowHeight - 2 : 0)}px)`}
       ></div>
     {/if}
     {#each virtualRows as virtualRow (virtualRow.key)}
-      {@const id = `${listId}-row-${virtualRow.index}`}
+      {@const id = `${listId}-row-${virtualRow.visualIndex}`}
+      {#if virtualRow.kind === 'group'}
+        <div
+          {id}
+          class="paged-virtual-row paged-virtual-group-row"
+          role="row"
+          aria-rowindex={virtualRow.visualIndex + 2}
+          style={`height:${rowHeight}px;transform:translateY(${virtualRow.visualIndex * rowHeight}px)`}
+        >
+          <div class="paged-virtual-group-cell" role="gridcell" aria-colspan={columnCount}>
+            <button type="button" class="paged-virtual-group-button" aria-label={`開啟「${virtualRow.label}」字首索引`} onclick={openQuickIndex}>{virtualRow.label}</button>
+          </div>
+        </div>
+      {:else}
       {@const selected = virtualRow.item !== null && isSelected(virtualRow.item, virtualRow.index)}
       <div
         id={id}
@@ -542,11 +668,11 @@
         class:active={activeIndex === virtualRow.index}
         class:is-dragging={dragFromIndex === virtualRow.index}
         role="row"
-        aria-rowindex={virtualRow.index + 2}
+        aria-rowindex={virtualRow.visualIndex + 2}
         aria-selected={selected}
         tabindex={rowActivates && virtualRow.item !== null ? -1 : undefined}
         aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
-        style={`height:${rowHeight}px;transform:translateY(${virtualRow.index * rowHeight}px)`}
+        style={`height:${rowHeight}px;transform:translateY(${virtualRow.visualIndex * rowHeight}px)`}
         class:activates={rowActivates && virtualRow.item !== null}
         class:reorderable={longPressReorder && virtualRow.item !== null}
         onpointerdown={longPressReorder ? (event) => handleRowPointerDown(event, virtualRow.index, virtualRow.item) : undefined}
@@ -576,9 +702,27 @@
           play: () => playRow(virtualRow.item, virtualRow.index),
         })}
       </div>
+      {/if}
     {/each}
   </div>
+  {#if quickIndexOpen}
+    <button type="button" class="quick-index-backdrop" aria-label="關閉首字索引" onclick={() => closeQuickIndex()}></button>
+    <div bind:this={quickIndexDialog} class="quick-index-popover floating-surface" style={`left:${quickIndexLeft}px;top:${quickIndexTop}px`} role="dialog" aria-modal="true" aria-label="快速首字查找" tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
+      <header class="quick-index-popover-header">
+        <strong>快速首字查找</strong>
+        <button type="button" class="soft-button" onclick={() => closeQuickIndex()}>關閉</button>
+      </header>
+      <div class="quick-index-label-grid">
+        {#each quickIndexLabels as label (label)}
+          {@const available = availableIndexLabels.has(label)}
+          <button type="button" class="quick-index-label" class:unavailable={!available} disabled={!available} onclick={() => chooseQuickIndexLabel(label)}>{label}</button>
+        {/each}
+      </div>
+    </div>
+  {/if}
 </div>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <style>
   .paged-virtual-frame {
@@ -700,5 +844,102 @@
   .paged-virtual-row.configurable-track-grid {
     right: auto;
     width: max(100%, var(--track-list-min-width, 0px));
+  }
+
+  .paged-virtual-group-row {
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(var(--text-rgb), 0.035);
+  }
+
+  .paged-virtual-group-cell {
+    display: flex;
+    width: 100%;
+    align-items: center;
+  }
+
+  .paged-virtual-group-button {
+    display: inline-flex;
+    min-width: 36px;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    background: rgba(var(--text-rgb), 0.07);
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .paged-virtual-group-button:hover {
+    background: rgba(var(--text-rgb), 0.12);
+  }
+
+  .quick-index-backdrop {
+    position: fixed;
+    z-index: 220;
+    inset: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .quick-index-popover {
+    position: fixed;
+    z-index: 221;
+    display: flex;
+    width: min(360px, calc(100vw - 24px));
+    max-height: min(70vh, 520px);
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    overflow: auto;
+    box-sizing: border-box;
+  }
+
+  .quick-index-popover-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .quick-index-popover-header strong {
+    font: var(--font-body);
+  }
+
+  .quick-index-label-grid {
+    display: grid;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .quick-index-label {
+    display: grid;
+    min-width: 0;
+    min-height: 34px;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: var(--text);
+    background: transparent;
+    cursor: pointer;
+    font: var(--font-body);
+  }
+
+  .quick-index-label:hover:not(:disabled) {
+    border-color: var(--line);
+    background: rgba(var(--text-rgb), 0.09);
+  }
+
+  .quick-index-label:disabled,
+  .quick-index-label.unavailable {
+    color: var(--muted-text);
+    opacity: 0.42;
+    cursor: default;
   }
 </style>

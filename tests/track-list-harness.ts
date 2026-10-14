@@ -68,6 +68,7 @@ mount(TrackList, {
     selectedTrackId: null,
     playbackReady: true,
     isSendingPlaybackCommand: false,
+    quickIndexEnabled: false,
     fetchPage,
     onPlay: (track: TrackSummary) => { state.playedTrackId = track.id; },
     onTotalCount: (count: number | null) => { state.totalCount = count; },

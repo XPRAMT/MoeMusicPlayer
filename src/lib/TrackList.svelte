@@ -17,6 +17,7 @@
     DEFAULT_TRACK_ROW_HEIGHT_PX,
     DEFAULT_TRACK_COLUMN_WIDTHS,
     TRACK_COLUMN_DEFINITIONS,
+    displayTrackTitle,
     formatTrackColumnValue,
     isHiResTrack,
     normalizeLibrarySort,
@@ -36,6 +37,7 @@
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
   import { getSearchVariants } from './search-variants.js';
+  import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
 
   interface Props {
     query: string;
@@ -47,6 +49,7 @@
     onPlay: (track: TrackSummary) => void | Promise<void>;
     onTotalCount?: (count: number | null) => void;
     sortable?: boolean;
+    quickIndexEnabled?: boolean;
     sortableIndex?: boolean;
     sortIndicator?: { field: string; direction: 'asc' | 'desc' } | null;
     indexSortLabel?: string;
@@ -73,6 +76,7 @@
     onPlay,
     onTotalCount,
     sortable = true,
+    quickIndexEnabled = true,
     sortableIndex = false,
     sortIndicator,
     indexSortLabel,
@@ -114,6 +118,13 @@
     generation: 0,
     revision: 0,
   });
+  let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[] } | null>(null);
+  let quickIndexGeneration = 0;
+
+  async function requestTrackPage(request: TrackPageRequest): Promise<TrackPage> {
+    return fetchPage ? fetchPage(request) : invokeCommand('library_get_page', request);
+  }
+
   const listData = new PagedListController<TrackSummary, string>(
     async ({ scope, offset, limit }) => {
       const requestScope = JSON.parse(scope || '{"query":null,"fieldFilter":null,"sort":null}') as {
@@ -129,9 +140,7 @@
         offset,
         limit,
       };
-      return fetchPage
-        ? fetchPage(request)
-        : invokeCommand('library_get_page', request);
+      return requestTrackPage(request);
     },
     { listName: '曲庫', onChange: () => { snapshot = listData.snapshot(); } },
   );
@@ -148,6 +157,49 @@
     });
     listData.reset(scope, currentResetKey);
     void listData.ensureRange(0, TRACK_PAGE_SIZE);
+  });
+
+  $effect(() => {
+    const count = snapshot.totalCount;
+    const currentSort = normalizedSort;
+    const currentQuery = query.trim() || null;
+    const currentFieldFilter = fieldFilter ?? null;
+    const activeSort = visibleSortIndicator;
+    const generation = ++quickIndexGeneration;
+    quickIndex = null;
+    if (!quickIndexEnabled || !sortable || !activeSort || !['title', 'artist', 'album'].includes(activeSort.field) || count === null || count <= 0) return;
+    const cacheKey = JSON.stringify({ listId, resetKey, query: currentQuery, fieldFilter: currentFieldFilter, sort: currentSort, count });
+    const cached = getCachedQuickIndex(cacheKey);
+    if (cached) {
+      quickIndex = cached;
+      return;
+    }
+    const isCurrent = () => generation === quickIndexGeneration;
+    void buildQuickIndexGroups({
+      totalCount: count,
+      fetchPage: async ({ offset, limit }) => requestTrackPage({
+          query: currentQuery,
+          queryAlternates: (await getSearchVariants(currentQuery)).slice(1),
+          fieldFilter: currentFieldFilter,
+          sort: currentSort,
+          offset,
+          limit,
+        }),
+      getName: (track: TrackSummary) => activeSort.field === 'title'
+        ? displayTrackTitle(track)
+        : activeSort.field === 'artist'
+          ? track.artist
+          : track.album,
+      getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
+      isCurrent,
+    }).then((result) => {
+      if (isCurrent() && result) {
+        cacheQuickIndex(cacheKey, result);
+        quickIndex = result;
+      }
+    }).catch((reason: unknown) => {
+      if (isCurrent()) console.error('無法建立曲目首字索引', reason);
+    });
   });
 
   $effect(() => {
@@ -207,6 +259,8 @@
     fillAvailable={true}
     {listId}
     scrollResetKey={listScrollResetKey}
+    groupRows={quickIndex?.groups}
+    quickIndexLabels={quickIndex?.labels}
     ariaLabel={sortable
       ? '曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序'
       : '曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目'}

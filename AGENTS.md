@@ -23,6 +23,8 @@
 - 從演出者首頁開啟演出者明細時，保留 `ArtistIndex` 首頁元件並隱藏，讓明細頂欄返回可立即恢復首頁的排序、捲動位置與虛擬列表狀態；開啟另一位演出者時只保留最新一位明細。離開演出者區域時卸載首頁與明細；重新進入時重新查詢資料並以各自穩定的 `listId` 還原列表位置。排序欄位與方向透過 `settings_get_artist_list_sort`／`settings_set_artist_list_sort` 保存於 `settings.json`，並在載入索引前還原；舊設定缺少此欄位時預設演出者名稱正序。`tests/artist-index.playwright.js` 驗證排序、捲動還原、首頁保留／卸載與排序重啟還原。
 - 曲庫、演出者索引、播放清單與播放佇列透過左側導覽切換時，離開即卸載頁面列表；再次進入建立新列表元件與分頁控制器，重新向 IPC 查詢資料，避免隱藏頁面顯示過期結果。`PagedVirtualList` 以穩定 `listId` 保存捲動位置，最多保留 64 份；列表銷毀時記錄最後位置，重建後等待新列表筆數、目前範圍資料與可見視窗就緒，再恢復並按新列表長度限制位置。曲庫搜尋、欄位篩選或排序範圍改變時回到頂端，純資料重載保持位置。播放清單依 `playlistId` 個別恢復捲動位置及執行期間的排序設定；切換清單與離開後返回都重新查詢。從演出者索引開啟明細時保留索引元件並隱藏，返回立即恢復；離開演出者區後卸載索引與明細，重新進入時查詢新資料並依索引／演出者各自的 `listId` 恢復位置。演出者索引排序仍保存於 `settings.json`。`tests/playback-navigation.test.mjs`、`tests/artist-index.playwright.js` 與 `tests/playlist-switch-scroll.playwright.js` 覆蓋路由卸載、明細返回、資料重新查詢、各播放清單排序與捲動位置恢復。
 
+- 所有可排序歌曲清單在文字欄位（曲名、演出者、專輯）排序時提供 Windows 風格首字索引；`#`、音訊格式、日期、長度、播放次數等非文字排序不顯示。Windows 以 `CharacterGroupings` 依使用者地區分組，Android 以 `AlphabeticIndex(Locale.getDefault())` 分組；IPC `library_get_quick_index_groupings` 每批最多 500 個名稱。曲庫、演出者明細、專輯明細使用 `TrackList`，播放清單使用 `PlaylistEntryList`，播放佇列使用 `PlaybackQueueList`；三者透過 `quick-index.js` 在背景分頁掃描目前排序結果並快取最多 32 份分組。`PagedVirtualList` 以獨立虛擬標題列呈現每組首字，並將標題列索引映射回資料列索引，維持鍵盤導覽、捲動位置、佇列拖曳及點歌索引。標題列開啟共用浮動表面字元表；目前清單有資料的字元可用、無資料字元停用，選取後依目前排序方向跳至該群第一首並關閉。彈窗支援焦點循環、Escape 關閉及返回觸發按鈕。`tests/quick-index.test.mjs` 覆蓋跨分頁群組與虛擬索引映射，`tests/quick-index.playwright.js` 驗證彈窗、無資料字元、焦點、跳轉及資料列索引。
+
 - 側欄「演出者」入口記住最近的演出者子頁：若離開前在「演出者．名稱」明細，從其他頁返回演出者時恢復同一明細；若曾使用明細標題的「演出者」按鈕返回首頁，則恢復演出者首頁。明細最多保留一位；離開演出者區域時卸載，側欄返回時重建該明細並依 `listId` 還原位置。
 
 專案已有可建置的 Tauri 2、Svelte 5、TypeScript 與 Vite 骨架，並包含 Rust Core、SQLite 曲庫、Windows 與 Android 媒體來源 adapter，以及雙語 README。
