@@ -32,6 +32,18 @@ export function buildPagedVirtualRows({ ready, groups, start, end, totalCount, i
   return rows;
 }
 
+/**
+ * Report the visible data range as soon as viewport measurements are ready.
+ * Grouping controls row visibility, not the initial data request needed to
+ * discover the total count and start the grouping scan.
+ * @param {{ metricsReady: boolean, start: number, end: number, groups: Array<{ label: string, beforeIndex: number }>, totalCount: number, onRange: (range: { start: number, end: number }) => void }} options
+ */
+export function reportPagedRange({ metricsReady, start, end, groups, totalCount, onRange }) {
+  if (!metricsReady) return false;
+  onRange(visualRangeToDataRange(start, end, groups, totalCount));
+  return true;
+}
+
 /** Choose a near-square index grid based on the number of available labels.
  * @param {number} labelCount
  */

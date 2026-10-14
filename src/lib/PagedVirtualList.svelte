@@ -44,7 +44,7 @@
     getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
-  import { buildPagedVirtualRows, dataIndexToVisualIndex, getQuickIndexColumnCount, getQuickIndexDisplayLabel, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
+  import { buildPagedVirtualRows, dataIndexToVisualIndex, getQuickIndexColumnCount, getQuickIndexDisplayLabel, reportPagedRange, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
@@ -231,7 +231,7 @@
   }
 
   $effect(() => {
-    if (!metricsReady || !groupingReady) return;
+    if (!metricsReady) return;
     const currentListId = listId;
     const currentScrollResetKey = scrollResetKey === undefined ? generation : scrollResetKey;
     const listChanged = seenListId !== undefined && currentListId !== seenListId;
@@ -275,8 +275,17 @@
     seenListId = currentListId;
     seenScrollResetKey = currentScrollResetKey;
     hasSeenScrollResetKey = true;
-    const currentRange = visualRangeToDataRange(range.start, range.end, renderGroupRows, virtualDataCount);
-    onRange(currentRange);
+  });
+
+  $effect(() => {
+    reportPagedRange({
+      metricsReady,
+      start: range.start,
+      end: range.end,
+      groups: renderGroupRows,
+      totalCount: virtualDataCount,
+      onRange,
+    });
   });
 
   function commitGroupRows(nextGroupRows: QuickIndexGroup[]): void {

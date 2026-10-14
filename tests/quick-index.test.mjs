@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildQuickIndexGroups,
   buildPagedVirtualRows,
+  reportPagedRange,
   dataIndexToVisualIndex,
   getQuickIndexColumnCount,
   getQuickIndexDisplayLabel,
@@ -44,6 +45,30 @@ test('complete grouping renders its group and track rows without waiting for a s
     { kind: 'group', visualIndex: 0, label: 'A', key: 'quick-index:0:A' },
     { kind: 'item', visualIndex: 1, index: 0, item: items[0], key: 'track-a' },
   ]);
+});
+
+test('the initial viewport range is requested while grouping is still pending', () => {
+  const requested = [];
+  const didRequest = reportPagedRange({
+    metricsReady: true,
+    start: 0,
+    end: 40,
+    groups: [],
+    totalCount: 40,
+    onRange: (range) => requested.push(range),
+  });
+
+  assert.equal(didRequest, true);
+  assert.deepEqual(requested, [{ start: 0, end: 40 }]);
+  assert.equal(reportPagedRange({
+    metricsReady: false,
+    start: 0,
+    end: 40,
+    groups: [],
+    totalCount: 40,
+    onRange: (range) => requested.push(range),
+  }), false);
+  assert.equal(requested.length, 1, 'range is not requested before viewport measurements are ready');
 });
 
 test('paged grouping keeps contiguous groups across page boundaries and trims names', async () => {
