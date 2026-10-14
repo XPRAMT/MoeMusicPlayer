@@ -2,11 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildQuickIndexGroups,
-  createQuickIndexRowsScheduler,
+  buildPagedVirtualRows,
   dataIndexToVisualIndex,
   getQuickIndexColumnCount,
   getQuickIndexDisplayLabel,
-  quickIndexGroupsMatch,
   visualIndexToAnchorDataIndex,
   visualIndexToDataIndex,
   visualRangeToDataRange,
@@ -23,17 +22,28 @@ test('quick find displays the Unknown category as a full-width question mark', (
   assert.equal(getQuickIndexDisplayLabel('ㄅ'), 'ㄅ');
 });
 
-test('the virtual list stays gated until its displayed group rows match the complete result', () => {
-  const completeGroups = [
-    { label: 'A', beforeIndex: 0 },
-    { label: 'B', beforeIndex: 12 },
-  ];
-  assert.equal(quickIndexGroupsMatch([], completeGroups), false);
-  assert.equal(quickIndexGroupsMatch(completeGroups, completeGroups), true);
-  assert.equal(quickIndexGroupsMatch(completeGroups, [completeGroups[0]]), false);
-  assert.equal(quickIndexGroupsMatch(completeGroups, [
-    completeGroups[0], { label: 'C', beforeIndex: 12 },
-  ]), false);
+test('complete grouping renders its group and track rows without waiting for a second state echo', () => {
+  const groups = [{ label: 'A', beforeIndex: 0 }];
+  const items = [{ id: 'track-a' }];
+  const input = {
+    groups,
+    start: 0,
+    end: 2,
+    totalCount: 1,
+    itemAt: (index) => items[index] ?? null,
+    getKey: (item) => item.id,
+  };
+  assert.deepEqual(buildPagedVirtualRows({ ...input, ready: false }), [], 'partial grouping must remain hidden');
+
+  const rendered = buildPagedVirtualRows({
+    ...input,
+    ready: true,
+  });
+
+  assert.deepEqual(rendered, [
+    { kind: 'group', visualIndex: 0, label: 'A', key: 'quick-index:0:A' },
+    { kind: 'item', visualIndex: 1, index: 0, item: items[0], key: 'track-a' },
+  ]);
 });
 
 test('paged grouping keeps contiguous groups across page boundaries and trims names', async () => {
@@ -87,36 +97,6 @@ test('group boundaries are returned only after the complete scan finishes', asyn
     labels: ['A', 'B'],
     groups: [{ label: 'A', beforeIndex: 0 }, { label: 'B', beforeIndex: 1 }],
   });
-});
-
-test('group rows arriving during scroll are coalesced and committed after the last scroll', () => {
-  const commits = [];
-  const timers = new Map();
-  let nextTimer = 0;
-  const scheduler = createQuickIndexRowsScheduler((rows) => commits.push(rows), {
-    delayMs: 180,
-    schedule(callback) {
-      const id = ++nextTimer;
-      timers.set(id, callback);
-      return id;
-    },
-    cancel(id) {
-      timers.delete(id);
-    },
-  });
-  const firstPage = [{ label: 'A', beforeIndex: 0 }];
-  const secondPage = [...firstPage, { label: 'B', beforeIndex: 100 }];
-
-  scheduler.noteScroll(1000);
-  scheduler.update(firstPage, 1050);
-  scheduler.update(secondPage, 1100);
-  assert.deepEqual(commits, [], 'group rows must not remap the visible list during a scroll gesture');
-
-  const [timerId, callback] = [...timers.entries()][0];
-  timers.delete(timerId);
-  callback();
-  assert.deepEqual(commits, [secondPage], 'only the newest complete row set is committed after scrolling settles');
-  scheduler.dispose();
 });
 
 test('visual rows map to data rows without changing queue item indexes', () => {

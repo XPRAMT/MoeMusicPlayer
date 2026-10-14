@@ -2,60 +2,34 @@
 const quickIndexCache = new Map();
 
 /**
- * Coalesce virtual group-row changes until scrolling has settled.
- * @template Row
- * @param {(rows: Row[]) => void} onCommit
- * @param {{ delayMs?: number, schedule?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>, cancel?: (timer: ReturnType<typeof setTimeout>) => void }} [options]
+ * Build the virtual rows from one complete grouping snapshot. The parent only
+ * publishes `ready` after the full scan, so no mirrored group-row state or
+ * second synchronization pass is required before tracks can render.
+ * @template Item
+ * @param {{ ready: boolean, groups: Array<{ label: string, beforeIndex: number }>, start: number, end: number, totalCount: number, itemAt: (index: number) => Item | null, getKey: (item: Item, index: number) => string | number }} options
  */
-export function createQuickIndexRowsScheduler(onCommit, {
-  delayMs = 180,
-  schedule = setTimeout,
-  cancel = clearTimeout,
-} = {}) {
-  let lastScrollAt = Number.NEGATIVE_INFINITY;
-  let pendingRows = /** @type {Row[] | null} */ (null);
-  let timer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
-  let disposed = false;
-
-  const commitPending = () => {
-    timer = null;
-    if (disposed || pendingRows === null) return;
-    const rows = pendingRows;
-    pendingRows = null;
-    onCommit(rows);
-  };
-
-  const scheduleCommit = () => {
-    if (timer !== null) cancel(timer);
-    timer = schedule(commitPending, delayMs);
-  };
-
-  return {
-    /** @param {Row[]} rows @param {number} [now] */
-    update(rows, now = Date.now()) {
-      if (disposed) return;
-      if (rows.length === 0 || now - lastScrollAt >= delayMs) {
-        if (timer !== null) cancel(timer);
-        timer = null;
-        pendingRows = null;
-        onCommit(rows);
-        return;
+export function buildPagedVirtualRows({ ready, groups, start, end, totalCount, itemAt, getKey }) {
+  /** @type {Array<{ kind: 'group', visualIndex: number, label: string, key: string } | { kind: 'item', visualIndex: number, index: number, item: Item | null, key: string | number }>} */
+  const rows = [];
+  if (!ready) return rows;
+  for (let visualIndex = start; visualIndex < end; visualIndex += 1) {
+    let groupRow = null;
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+      if (groups[groupIndex].beforeIndex + groupIndex === visualIndex) {
+        groupRow = groups[groupIndex];
+        break;
       }
-      pendingRows = rows;
-      scheduleCommit();
-    },
-    noteScroll(now = Date.now()) {
-      if (disposed) return;
-      lastScrollAt = now;
-      if (pendingRows !== null) scheduleCommit();
-    },
-    dispose() {
-      disposed = true;
-      if (timer !== null) cancel(timer);
-      timer = null;
-      pendingRows = null;
-    },
-  };
+    }
+    if (groupRow) {
+      rows.push({ kind: 'group', visualIndex, label: groupRow.label, key: `quick-index:${visualIndex}:${groupRow.label}` });
+      continue;
+    }
+    const index = visualIndexToDataIndex(visualIndex, groups);
+    if (index === null || index < 0 || index >= totalCount) continue;
+    const item = itemAt(index);
+    rows.push({ kind: 'item', visualIndex, index, item, key: item === null ? `loading:${index}` : getKey(item, index) });
+  }
+  return rows;
 }
 
 /** Choose a near-square index grid based on the number of available labels.
@@ -70,13 +44,6 @@ export function getQuickIndexColumnCount(labelCount) {
 /** @param {string} label */
 export function getQuickIndexDisplayLabel(label) {
   return label === '未知' ? '？' : label;
-}
-
-/** @param {Array<{ label: string, beforeIndex: number }>} displayed @param {Array<{ label: string, beforeIndex: number }>} incoming */
-export function quickIndexGroupsMatch(displayed, incoming) {
-  return displayed.length === incoming.length
-    && displayed.every((group, index) => group.label === incoming[index]?.label
-      && group.beforeIndex === incoming[index]?.beforeIndex);
 }
 
 /** @param {string} key */
