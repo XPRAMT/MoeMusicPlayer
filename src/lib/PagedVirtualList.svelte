@@ -872,34 +872,52 @@
   .paged-virtual-group-row {
     display: flex;
     align-items: center;
-    padding: 0 12px;
-    border-bottom: 1px solid var(--line);
-    background: rgba(var(--text-rgb), 0.035);
+    background: transparent;
+  }
+
+  .paged-virtual-group-row::after {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 1px;
+    content: '';
+    pointer-events: none;
+    background: var(--line);
   }
 
   .paged-virtual-group-cell {
     display: flex;
     width: 100%;
+    height: 100%;
+    min-width: 0;
     align-items: center;
   }
 
   .paged-virtual-group-button {
-    display: inline-flex;
-    min-width: 36px;
-    height: 30px;
+    display: flex;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
     align-items: center;
     justify-content: center;
-    padding: 0 10px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
+    box-sizing: border-box;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
     color: var(--text);
-    background: rgba(var(--text-rgb), 0.07);
+    background: transparent;
     cursor: pointer;
     font: inherit;
   }
 
   .paged-virtual-group-button:hover {
-    background: rgba(var(--text-rgb), 0.12);
+    background: transparent;
+  }
+
+  .paged-virtual-group-button:focus-visible {
+    outline: 2px solid var(--line);
+    outline-offset: -2px;
   }
 
   .quick-index-backdrop {

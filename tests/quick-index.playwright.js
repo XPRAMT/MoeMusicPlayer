@@ -8,7 +8,31 @@ async page => {
   assert(await groupRows.count() >= 1, 'group heading rows are not rendered');
   assert((await groupRows.first().innerText()).trim() === 'A', 'first group heading is not A');
   const firstHeading = groupRows.first().locator('button');
-  await firstHeading.click();
+  const headingGeometry = await page.evaluate(() => {
+    const row = document.querySelector('.paged-virtual-group-row');
+    const button = row?.querySelector('button');
+    if (!row || !button) return null;
+    const rowRect = row.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    const textRange = document.createRange();
+    textRange.selectNodeContents(button);
+    const textRect = textRange.getBoundingClientRect();
+    return {
+      row: { x: rowRect.x, y: rowRect.y, width: rowRect.width, height: rowRect.height },
+      button: { x: buttonRect.x, y: buttonRect.y, width: buttonRect.width, height: buttonRect.height },
+      textCenterX: textRect.left + textRect.width / 2,
+      buttonCenterX: buttonRect.left + buttonRect.width / 2,
+      rowBackground: getComputedStyle(row).backgroundColor,
+      buttonBackground: getComputedStyle(button).backgroundColor,
+      configuredRowHeight: Number.parseFloat(getComputedStyle(document.querySelector('.paged-virtual-frame')).getPropertyValue('--paged-row-height')),
+    };
+  });
+  assert(headingGeometry, 'group row geometry could not be read');
+  assert(Math.abs(headingGeometry.button.x - headingGeometry.row.x) < 0.5 && Math.abs(headingGeometry.button.width - headingGeometry.row.width) < 0.5, `quick-index button does not fill the row width: ${JSON.stringify(headingGeometry)}`);
+  assert(Math.abs(headingGeometry.button.height - headingGeometry.configuredRowHeight) < 0.5, `quick-index button does not follow configured row height: ${JSON.stringify(headingGeometry)}`);
+  assert(Math.abs(headingGeometry.textCenterX - headingGeometry.buttonCenterX) < 0.5, `group label is not centered across the row: ${JSON.stringify(headingGeometry)}`);
+  assert(headingGeometry.rowBackground === 'rgba(0, 0, 0, 0)' && headingGeometry.buttonBackground === 'rgba(0, 0, 0, 0)', `group row is not transparent: ${JSON.stringify(headingGeometry)}`);
+  await firstHeading.click({ position: { x: headingGeometry.button.width - 4, y: headingGeometry.button.height / 2 } });
   await page.waitForSelector('[role="dialog"][aria-label="快速首字查找"]');
   const dialog = page.getByRole('dialog', { name: '快速首字查找' });
   assert(await dialog.getByRole('button', { name: 'A', exact: true }).evaluate(button => button === document.activeElement), 'dialog did not focus its first available label');
