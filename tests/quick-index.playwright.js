@@ -70,7 +70,7 @@ async page => {
   assert(popupGeometry.popupScrollHeight === popupGeometry.popupClientHeight, 'popup should not scroll when all labels fit');
   assert(popupGeometry.columnCount === 10, `index must keep exactly 10 columns: ${JSON.stringify(popupGeometry)}`);
   assert(popupGeometry.buttonGeometry.every(({ width, height }) => Math.abs(width - popupGeometry.characterFontSize * 2) < 1 && Math.abs(height - popupGeometry.characterFontSize * 2) < 1), `index character blocks are not square at two character widths: ${JSON.stringify(popupGeometry)}`);
-  assert(Math.abs(popupGeometry.characterFontSize - 13) < 0.1, `index character font size does not use --font-body: ${JSON.stringify(popupGeometry)}`);
+  assert(Math.abs(popupGeometry.characterFontSize - 16) < 0.1, `index character font size does not use --font-title: ${JSON.stringify(popupGeometry)}`);
   assert(Math.abs(popupGeometry.characterFontSize * 2 - popupGeometry.rowHeight) > 1, `index character block still follows configured list row height: ${JSON.stringify(popupGeometry)}`);
   assert(!popupGeometry.hasCloseButton, 'popup contains a visible close button');
   await dialog.getByRole('button', { name: 'B', exact: true }).focus();

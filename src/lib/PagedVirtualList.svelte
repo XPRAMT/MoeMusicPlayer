@@ -947,7 +947,7 @@
     display: grid;
     grid-template-columns: repeat(10, 2em);
     gap: 4px;
-    font-size: var(--font-body);
+    font-size: var(--font-title);
   }
 
   .quick-index-label {
