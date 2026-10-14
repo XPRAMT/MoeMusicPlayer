@@ -47,3 +47,13 @@ test('artist and album detail transitions are represented in browser history and
   assert.match(appSource, /route\.view === 'artist-detail' && route\.artistKey/);
   assert.match(appSource, /route\.view === 'album-detail' && route\.albumKey/);
 });
+
+test('clicking the active artist or album sidebar entry from its detail returns to the index', () => {
+  const artistSection = appSource.slice(appSource.indexOf('function navigateToArtistSection('), appSource.indexOf('function navigateToArtistIndex('));
+  const albumSection = appSource.slice(appSource.indexOf('function navigateToAlbumSection('), appSource.indexOf('function navigateToAlbumIndex('));
+
+  assert.match(artistSection, /activeView === 'artist-detail'[\s\S]*?rememberedArtistView = 'artists'[\s\S]*?activeView = 'artists'/);
+  assert.match(artistSection, /replaceState\(withDetailNavigationRoute\(window\.history\.state, \{ view: 'artists' \}\)/);
+  assert.match(albumSection, /activeView === 'album-detail'[\s\S]*?rememberedAlbumView = 'albums'[\s\S]*?activeView = 'albums'/);
+  assert.match(albumSection, /replaceState\(withDetailNavigationRoute\(window\.history\.state, \{ view: 'albums' \}\)/);
+});

@@ -2380,6 +2380,15 @@
   }
 
   function navigateToArtistSection(): void {
+    if (activeView === 'artist-detail') {
+      rememberedArtistView = 'artists';
+      activeView = 'artists';
+      const route = readDetailNavigationRoute(window.history.state);
+      if (route?.view === 'artist-detail' && route.artistKey === selectedArtist?.key) {
+        window.history.replaceState(withDetailNavigationRoute(window.history.state, { view: 'artists' }), '');
+      }
+      return;
+    }
     activeView = selectedArtist ? rememberedArtistView : 'artists';
   }
 
@@ -2408,6 +2417,15 @@
   }
 
   function navigateToAlbumSection(): void {
+    if (activeView === 'album-detail') {
+      rememberedAlbumView = 'albums';
+      activeView = 'albums';
+      const route = readDetailNavigationRoute(window.history.state);
+      if (route?.view === 'album-detail' && route.albumKey === selectedAlbum?.key) {
+        window.history.replaceState(withDetailNavigationRoute(window.history.state, { view: 'albums' }), '');
+      }
+      return;
+    }
     activeView = selectedAlbum ? rememberedAlbumView : 'albums';
   }
 
