@@ -69,7 +69,8 @@ async page => {
   assert(Math.abs(popupGeometry.centerY - popupGeometry.listCenterY) < 1, 'popup is not centered vertically in the list viewport');
   assert(popupGeometry.maxHeight <= popupGeometry.listHeight - 24 + 1, 'popup max-height is not bounded by list viewport');
   assert(popupGeometry.popupScrollHeight === popupGeometry.popupClientHeight, 'popup should not scroll when all labels fit');
-  assert(popupGeometry.columnCount === 10, `index must keep exactly 10 columns: ${JSON.stringify(popupGeometry)}`);
+  const expectedColumnCount = Math.max(1, Math.round(Math.sqrt(popupGeometry.buttonGeometry.length)));
+  assert(popupGeometry.columnCount === expectedColumnCount, `index columns do not follow rounded square root of label count: ${JSON.stringify(popupGeometry)}`);
   assert(popupGeometry.buttonGeometry.every(({ width, height }) => Math.abs(width - popupGeometry.characterFontSize * 2) < 1 && Math.abs(height - popupGeometry.characterFontSize * 2) < 1), `index character blocks are not square at two character widths: ${JSON.stringify(popupGeometry)}`);
   assert(Math.abs(popupGeometry.characterFontSize - 16) < 0.1, `index character font size does not use --font-title: ${JSON.stringify(popupGeometry)}`);
   assert(Math.abs(popupGeometry.characterFontSize * 2 - popupGeometry.rowHeight) > 1, `index character block still follows configured list row height: ${JSON.stringify(popupGeometry)}`);

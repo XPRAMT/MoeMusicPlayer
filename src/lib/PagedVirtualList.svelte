@@ -43,7 +43,7 @@
     getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
-  import { dataIndexToVisualIndex, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
+  import { dataIndexToVisualIndex, getQuickIndexColumnCount, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
@@ -719,7 +719,7 @@
   </div>
   {#if quickIndexOpen}
     <button type="button" class="quick-index-backdrop" aria-label="關閉首字索引" onclick={() => closeQuickIndex()}></button>
-    <div bind:this={quickIndexDialog} class="quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label="快速首字查找" tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
+    <div bind:this={quickIndexDialog} class="quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${getQuickIndexColumnCount(quickIndexLabels.length)};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label="快速首字查找" tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
       <div class="quick-index-label-grid">
         {#each quickIndexLabels as label (label)}
           {@const available = availableIndexLabels.has(label)}
@@ -930,7 +930,7 @@
 
   .quick-index-label-grid {
     display: grid;
-    grid-template-columns: repeat(10, 2em);
+    grid-template-columns: repeat(var(--quick-index-columns), 2em);
     gap: 4px;
     font-size: var(--font-title);
   }

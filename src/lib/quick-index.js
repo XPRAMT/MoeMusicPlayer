@@ -1,6 +1,14 @@
 ﻿const QUICK_INDEX_CACHE_LIMIT = 32;
 const quickIndexCache = new Map();
 
+/** Choose a near-square index grid based on the number of available labels.
+ * @param {number} labelCount
+ */
+export function getQuickIndexColumnCount(labelCount) {
+  const count = Number.isSafeInteger(labelCount) ? Math.max(0, labelCount) : 0;
+  return Math.max(1, Math.round(Math.sqrt(count)));
+}
+
 /** @param {string} key */
 export function getCachedQuickIndex(key) {
   const value = quickIndexCache.get(key);
