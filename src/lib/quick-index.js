@@ -9,6 +9,12 @@ export function getQuickIndexColumnCount(labelCount) {
   return Math.max(1, Math.round(Math.sqrt(count)));
 }
 
+/** The quick-find panel uses a compact marker for the Unknown group. */
+/** @param {string} label */
+export function getQuickIndexDisplayLabel(label) {
+  return label === '未知' ? '？' : label;
+}
+
 /** @param {string} key */
 export function getCachedQuickIndex(key) {
   const value = quickIndexCache.get(key);

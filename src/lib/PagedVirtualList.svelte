@@ -43,7 +43,7 @@
     getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
-  import { dataIndexToVisualIndex, getQuickIndexColumnCount, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
+  import { dataIndexToVisualIndex, getQuickIndexColumnCount, getQuickIndexDisplayLabel, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
@@ -723,7 +723,7 @@
       <div class="quick-index-label-grid">
         {#each quickIndexLabels as label (label)}
           {@const available = availableIndexLabels.has(label)}
-          <button type="button" class="quick-index-label" class:wide-label={label === '漢字'} class:unavailable={!available} disabled={!available} onclick={() => chooseQuickIndexLabel(label)}>{label}</button>
+          <button type="button" class="quick-index-label" class:wide-label={label === '漢字'} class:unavailable={!available} disabled={!available} onclick={() => chooseQuickIndexLabel(label)}>{getQuickIndexDisplayLabel(label)}</button>
         {/each}
       </div>
     </div>

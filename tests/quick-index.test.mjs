@@ -4,6 +4,7 @@ import {
   buildQuickIndexGroups,
   dataIndexToVisualIndex,
   getQuickIndexColumnCount,
+  getQuickIndexDisplayLabel,
   visualIndexToAnchorDataIndex,
   visualIndexToDataIndex,
   visualRangeToDataRange,
@@ -13,6 +14,11 @@ test('quick index columns are the rounded square root of label count', () => {
   assert.equal(getQuickIndexColumnCount(99), 10);
   assert.equal(getQuickIndexColumnCount(129), 11);
   assert.equal(getQuickIndexColumnCount(0), 1);
+});
+
+test('quick find displays the Unknown category as a full-width question mark', () => {
+  assert.equal(getQuickIndexDisplayLabel('未知'), '？');
+  assert.equal(getQuickIndexDisplayLabel('ㄅ'), 'ㄅ');
 });
 
 test('paged grouping keeps contiguous groups across page boundaries and trims names', async () => {
