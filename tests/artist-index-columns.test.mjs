@@ -24,3 +24,8 @@ test('artist-name sorting uses the shared ICU quick-index groups only for that s
   assert.match(artistIndexSource, /groupRows=\{sortField === 'title' \? quickIndex\?\.groups : \[\]\}/);
   assert.match(artistIndexSource, /groupingReady=\{sortField !== 'title' \|\| quickIndexReady\}/);
 });
+
+test('artist empty state waits until the initial index load has completed', () => {
+  assert.match(artistIndexSource, /\{:else if !initialized \|\| \(loading && rows\.length === 0\)\}/);
+  assert.match(artistIndexSource, /await load\(\);\s*initialized = true;/);
+});

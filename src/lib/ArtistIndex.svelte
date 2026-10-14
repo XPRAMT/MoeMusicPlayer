@@ -205,7 +205,7 @@
       <span>無法載入演出者清單：{error}</span>
       <button class="text-button" type="button" onclick={() => void load()}>重試</button>
     </div>
-  {:else if loading && rows.length === 0}
+  {:else if !initialized || (loading && rows.length === 0)}
     <div class="track-list-empty" aria-hidden="true"></div>
   {:else if visibleRows.length === 0}
     <div class="track-list-empty" role="status">目前啟用的曲庫沒有演出者資料。</div>
