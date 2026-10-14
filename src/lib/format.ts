@@ -9,11 +9,9 @@ export function formatDuration(durationMs: number | null | undefined): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-/** Format the track/disc number stored in the audio file for an album view. */
-export function formatAlbumTrackNumber(trackNumber: number | null, discNumber: number | null): string {
-  const track = trackNumber?.toString() ?? '—';
-  if (discNumber === null) return track;
-  return `${discNumber}-${track}`;
+/** Show only the track number; album Disc groups already identify the disc. */
+export function formatAlbumTrackNumber(trackNumber: number | null): string {
+  return trackNumber?.toString() ?? '—';
 }
 
 export function formatVolume(volume: number): string {

@@ -177,10 +177,10 @@
 ### 列表「#」欄位語意
 
 - 曲庫與演出者頁面的「#」表示目前列表順序，從 1 開始；排序或篩選後依畫面中的新順序重新編號。曲庫目前由 `TrackList` 以虛擬列表的全域 `row.index` 顯示。
-- 專輯明細的「#」表示音檔標籤記錄的曲序（多碟時以碟序－曲序呈現），由 `TrackList.getIndexLabel` 使用 `formatAlbumTrackNumber` 顯示，不按頁面列表重新編號。
+- 專輯明細的「#」只顯示音檔標籤記錄的曲目編號；Disc 由獨立快速索引分組列表示，不重複拼接成「Disc－曲序」。缺少曲目編號時顯示「—」。
 - 播放佇列的「#」表示目前佇列 traversal 順序，隨機播放時也依目前實際順序編號；`PlaybackQueueList` 使用 `traversalPosition`。
 - 播放清單的「#」表示該播放清單內儲存的實際位置；重複曲目仍各自保留位置與序號；`PlaylistEntryList` 使用穩定的 `position`。
-- 曲庫、演出者索引與專輯明細依各自語意呈現 `#`；曲庫與演出者索引使用 `formatListOrder` 將 0 基底位置轉為 1 基底顯示值，專輯明細顯示音檔標籤曲序。
+- 曲庫、演出者索引與專輯明細依各自語意呈現 `#`；曲庫與演出者索引使用 `formatListOrder` 將 0 基底位置轉為 1 基底顯示值，專輯明細顯示音檔標籤曲目編號，Disc 已由分組列表示。
 
 ### 演出者索引與專屬頁
 
@@ -359,3 +359,7 @@
 自動驗證：`npm run check`、`node --test`、player-db 與 moemusicplayer Rust 單元測試、workspace Clippy 與 rustfmt。使用者要求不執行瀏覽器、Chrome 或 Playwright 測試；自動測試不代表 Windows 實際視覺／操作驗收。
 
 專輯明細 Disc 分組只在存在 Disc 2 以上時啟用；啟用後 Disc 0、1、2…各自成組，沒有 Disc 值的歌曲歸「未知」。正序依數字遞增後接「未知」；倒序先「未知」，再依數字遞減。只有 Disc 0／1 或無資料時不顯示分組。SQLite facet 快照、索引列位置及歌曲頁排序必須遵循同一順序。
+
+演出者或專輯標籤缺失、空白，或演出者字串只有分隔符時，首頁都建立獨立的 `artist:unmarked`／`album:unmarked` 索引項，顯示為「未知」；與真實標籤名稱「未知」保持不同身份。首頁排序將這些未標記項目放在最後，快速索引分組標籤使用「未知」。演出者未知項以包含空字串的 `artistNames` 查詢未標記曲目；專輯未知項的 `aliases` 必須保留空字串及原始空白別名，讓明細 SQL 取回該組曲目。回歸測試位於 `player-db` 的 artist／album snapshot 測試。
+
+專輯明細的 `#` 只顯示曲目編號，不重複顯示 Disc 編號；Disc 欄位已由 SQLite 快速索引分組列表示。

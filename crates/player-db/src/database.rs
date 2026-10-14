@@ -194,11 +194,19 @@ const ARTIST_TRACKS_PREFIX_SQL: &str = "SELECT t.track_id,
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || term.value || '%' COLLATE NOCASE
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE))
-   AND EXISTS (SELECT 1 FROM json_each(?2) requested_artist
-               JOIN json_each(music_split_artists_json(
-                   COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist)
-               )) artist_name
-                 ON lower(trim(artist_name.value))=lower(trim(requested_artist.value)))";
+   AND (
+       EXISTS (SELECT 1 FROM json_each(?2) requested_artist
+               WHERE trim(requested_artist.value)=''
+                 AND NOT EXISTS (SELECT 1 FROM json_each(music_split_artists_json(
+                     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist)
+                 )) parsed_artist WHERE trim(parsed_artist.value)<>''))
+       OR EXISTS (SELECT 1 FROM json_each(?2) requested_artist
+                  JOIN json_each(music_split_artists_json(
+                      COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist)
+                  )) artist_name
+                    ON lower(trim(artist_name.value))=lower(trim(requested_artist.value))
+                  WHERE trim(requested_artist.value)<>'')
+   )";
 const ALBUM_TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
@@ -1981,16 +1989,23 @@ impl Database {
             ),
             _ => return Err(DatabaseError::CorruptData("invalid index sort field".to_owned())),
         };
-        if kind == "album" {
+        if matches!(kind, "album" | "artist") {
+            let unmarked_key = if kind == "album" {
+                "album:unmarked"
+            } else {
+                "artist:unmarked"
+            };
             order_by = format!(
-                "CASE WHEN identity_key='album:unmarked' THEN 1 ELSE 0 END ASC, {order_by}"
+                "CASE WHEN identity_key='{unmarked_key}' THEN 1 ELSE 0 END ASC, {order_by}"
             );
         }
         let materialize_sql = format!(
             "INSERT INTO index_snapshot_rows(snapshot_id, kind, position, group_label, payload_json)
              SELECT snapshot_id, kind,
                     ROW_NUMBER() OVER (ORDER BY {order_by}) - 1,
-                    {MUSIC_QUICK_INDEX_FUNCTION}(display_name), payload_json
+                    CASE WHEN identity_key IN ('album:unmarked', 'artist:unmarked') THEN '未知'
+                         ELSE {MUSIC_QUICK_INDEX_FUNCTION}(display_name) END,
+                    payload_json
              FROM index_snapshot_input WHERE snapshot_id=?1"
         );
         tx.execute(&materialize_sql, [snapshot_id])?;
@@ -2584,7 +2599,6 @@ impl Database {
              ), query_alias_values AS (
                 SELECT DISTINCT identity_key, alias.value AS alias
                 FROM mapped, json_each(json_array(original, album_name)) alias
-                WHERE alias.value<>''
              ), query_aliases_json AS (
                 SELECT identity_key, json_group_array(alias) AS query_aliases
                 FROM (SELECT identity_key, alias FROM query_alias_values ORDER BY identity_key, alias COLLATE BINARY)
@@ -2887,13 +2901,14 @@ impl Database {
                 WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
              ), expanded AS (
-                SELECT v.track_id, a.value AS artist_name,
-                       music_identity_key(a.value) AS artist_key,
+                SELECT v.track_id, COALESCE(a.value, '') AS artist_name,
+                       CASE WHEN a.value IS NULL THEN 'artist:unmarked'
+                            ELSE music_identity_key(a.value) END AS artist_key,
                        CASE WHEN v.album IS NULL OR trim(v.album) = '' THEN NULL
                             ELSE 'album:' || music_identity_key(v.album) END AS album_key,
                        v.played_ms, v.duration_ms
                 FROM visible v
-                JOIN json_each(music_split_artists_json(v.artist)) a
+                LEFT JOIN json_each(music_split_artists_json(v.artist)) a ON trim(a.value)<>''
              ), artist_tracks AS (
                 SELECT DISTINCT track_id, artist_key, album_key, played_ms, duration_ms FROM expanded
              ), artist_metrics AS (
@@ -2923,12 +2938,14 @@ impl Database {
              )
              INSERT INTO index_snapshot_input
                 (snapshot_id, kind, identity_key, display_name, metric_primary, metric_secondary, payload_json)
-             SELECT ?1, ?2, m.artist_key, r.artist_name, {metric_sql}, 0,
+             SELECT ?1, ?2, m.artist_key,
+                    CASE WHEN r.artist_name='' THEN '未知' ELSE r.artist_name END,
+                    {metric_sql}, 0,
                     json_object(
                         'key', m.artist_key,
                         'names', json(j.names),
                         'artistNames', json(j.artist_names),
-                        'displayName', r.artist_name,
+                        'displayName', CASE WHEN r.artist_name='' THEN '未知' ELSE r.artist_name END,
                         'trackCount', m.track_count,
                         'albumCount', m.album_count,
                         'playedMs', m.played_ms,
@@ -3656,7 +3673,6 @@ impl Database {
         let artist_names = artist_names
             .iter()
             .map(|name| name.trim())
-            .filter(|name| !name.is_empty())
             .collect::<Vec<_>>();
         if artist_names.is_empty() {
             return Ok(Page {
@@ -6767,6 +6783,178 @@ mod tests {
             )
             .expect("artist collision page");
         assert_eq!(substring_collision.total_count, 0);
+    }
+
+    #[test]
+    fn artist_index_includes_navigable_unknown_entry_for_tracks_without_artist() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "artist-unknown-index",
+        );
+        let mut missing = record(&root, "missing-artist", "missing-artist", "No Artist", 1, 1);
+        missing.metadata.as_mut().unwrap().artist = None;
+        let mut blank = record(&root, "blank-artist", "blank-artist", "Blank Artist", 1, 2);
+        blank.metadata.as_mut().unwrap().artist = Some(" / & ".to_owned());
+        let mut real_unknown = record(
+            &root,
+            "real-unknown",
+            "real-unknown",
+            "Artist Named Unknown",
+            1,
+            3,
+        );
+        real_unknown.metadata.as_mut().unwrap().artist = Some("未知".to_owned());
+        let records = [missing, blank, real_unknown];
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            3,
+        );
+
+        let snapshot = db
+            .create_artist_index_snapshot("title", "asc", true)
+            .expect("create artist snapshot");
+        let page = db
+            .get_index_snapshot_page::<ArtistIndexEntry>(&snapshot.snapshot_id, 0, 10)
+            .expect("read artist snapshot");
+        let unknown = page
+            .items
+            .iter()
+            .find(|entry| entry.key == "artist:unmarked")
+            .expect("unmarked artist entry");
+        assert_eq!(unknown.display_name, "未知");
+        assert_eq!(unknown.artist_names, vec![String::new()]);
+        assert_eq!(unknown.track_count, 2);
+        assert!(page.items.iter().any(|entry| entry.key == "未知"));
+        assert_eq!(
+            page.items.last().map(|entry| entry.key.as_str()),
+            Some("artist:unmarked")
+        );
+        assert_eq!(
+            snapshot
+                .quick_index
+                .groups
+                .last()
+                .map(|group| group.label.as_str()),
+            Some("未知")
+        );
+        assert_eq!(
+            snapshot
+                .quick_index
+                .groups
+                .last()
+                .map(|group| group.before_index),
+            Some(1)
+        );
+
+        let tracks = db
+            .list_tracks_page_for_artists(
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort::default(),
+                },
+                &[],
+                &unknown.artist_names,
+            )
+            .expect("query unmarked artist detail");
+        assert_eq!(tracks.total_count, 2);
+        assert_eq!(
+            tracks
+                .items
+                .iter()
+                .map(|track| track.title.as_deref().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["Blank Artist", "No Artist"]
+        );
+    }
+
+    #[test]
+    fn unmarked_album_entry_aliases_load_their_tracks() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "album-unknown-index",
+        );
+        let mut missing = record(&root, "missing-album", "missing-album", "No Album", 1, 1);
+        missing.metadata.as_mut().unwrap().album = None;
+        let mut blank = record(&root, "blank-album", "blank-album", "Blank Album", 1, 2);
+        blank.metadata.as_mut().unwrap().album = Some("  ".to_owned());
+        let mut real_unknown = record(
+            &root,
+            "real-unknown-album",
+            "real-unknown-album",
+            "Named Unknown",
+            1,
+            3,
+        );
+        real_unknown.metadata.as_mut().unwrap().album = Some("未知".to_owned());
+        let records = [missing, blank, real_unknown];
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            3,
+        );
+
+        let snapshot = db
+            .create_album_index_snapshot("title", "asc", true)
+            .expect("create album snapshot");
+        let page = db
+            .get_index_snapshot_page::<AlbumIndexEntry>(&snapshot.snapshot_id, 0, 10)
+            .expect("read album snapshot");
+        let unknown = page
+            .items
+            .iter()
+            .find(|entry| entry.key == "album:unmarked")
+            .expect("unmarked album entry");
+        assert_eq!(unknown.display_name, "未知");
+        assert_eq!(unknown.aliases, vec![String::new(), "  ".to_owned()]);
+        assert_eq!(unknown.track_count, 2);
+        assert_eq!(
+            page.items.last().map(|entry| entry.key.as_str()),
+            Some("album:unmarked")
+        );
+        assert_eq!(
+            snapshot
+                .quick_index
+                .groups
+                .last()
+                .map(|group| group.label.as_str()),
+            Some("未知")
+        );
+        assert_eq!(
+            snapshot
+                .quick_index
+                .groups
+                .last()
+                .map(|group| group.before_index),
+            Some(1)
+        );
+
+        let tracks = db
+            .list_album_tracks_page(&unknown.aliases, 0, 10)
+            .expect("query unmarked album detail");
+        assert_eq!(tracks.total_count, 2);
+        assert_eq!(
+            tracks
+                .items
+                .iter()
+                .map(|track| track.title.as_deref().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["Blank Album", "No Album"]
+        );
+        assert!(page.items.iter().any(|entry| entry.key == "album:未知"));
     }
 
     #[test]

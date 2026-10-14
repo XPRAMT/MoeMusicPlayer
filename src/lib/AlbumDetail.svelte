@@ -31,7 +31,6 @@
   let artists = $state<string[]>([]);
   let scanning = $state(true);
   let scanError = $state<string | null>(null);
-  let hasDiscGroups = $state(false);
   let albumDiscQuickIndices = $state<{
     ascending: QuickIndexSnapshot;
     descending: QuickIndexSnapshot;
@@ -161,7 +160,6 @@
     scanning = true;
     scanError = null;
     artists = [];
-    hasDiscGroups = false;
     albumDiscQuickIndices = null;
     try {
       const key = await selectionKey();
@@ -178,7 +176,6 @@
         ascending: facets.quickIndexAscending,
         descending: facets.quickIndexDescending,
       };
-      hasDiscGroups = facets.quickIndexAscending.groups.length > 0;
       onTotalCount(facets.trackCount);
 
       let selectedIds = usable && stored ? stored.trackIds.slice(0, 4) : [];
@@ -251,7 +248,7 @@
       quickIndexOverride={albumDiscQuickIndex}
       quickIndexAlbumNames={album.aliases}
       {groupingEnabled}
-      getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber, hasDiscGroups && (track.discNumber ?? 0) >= 2 ? track.discNumber : null)}
+      getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber)}
     />
   </div>
 </div>
