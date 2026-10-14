@@ -4,8 +4,8 @@ import { preferredArtistName } from './artist-identities.js';
 const UNMARKED_ALBUM_KEY = 'album:unmarked';
 
 /**
- * @typedef {{ name: string | null, trackCount: number }} AlbumIndexFacet
- * @typedef {{ key: string, displayName: string, aliases: string[], trackCount: number, unmarked: boolean }} AlbumEntry
+ * @typedef {{ name: string | null, trackCount: number, durationMs: number, playedMs: number }} AlbumIndexFacet
+ * @typedef {{ key: string, displayName: string, aliases: string[], trackCount: number, durationMs: number, playedMs: number, unmarked: boolean }} AlbumEntry
  */
 
 /** @param {string | null | undefined} value */
@@ -20,7 +20,7 @@ export async function buildAlbumEntries(facets) {
   const traditionalNames = new Map(await Promise.all(names.map(async (name) => (
     /** @type {[string, string]} */ ([name, await getTraditionalIdentity(name)])
   ))));
-  /** @type {Map<string, { aliases: Map<string, number>, queryAliases: Set<string>, trackCount: number, unmarked: boolean }>} */
+  /** @type {Map<string, { aliases: Map<string, number>, queryAliases: Set<string>, trackCount: number, durationMs: number, playedMs: number, unmarked: boolean }>} */
   const groups = new Map();
   for (const facet of facets) {
     const original = typeof facet.name === 'string' ? facet.name : '';
@@ -28,10 +28,12 @@ export async function buildAlbumEntries(facets) {
     const key = raw ? albumIdentityKey(traditionalNames.get(raw) ?? raw) : UNMARKED_ALBUM_KEY;
     let group = groups.get(key);
     if (!group) {
-      group = { aliases: new Map(), queryAliases: new Set(), trackCount: 0, unmarked: !raw };
+      group = { aliases: new Map(), queryAliases: new Set(), trackCount: 0, durationMs: 0, playedMs: 0, unmarked: !raw };
       groups.set(key, group);
     }
     group.trackCount += Math.max(0, Number(facet.trackCount) || 0);
+    group.durationMs += Math.max(0, Number(facet.durationMs) || 0);
+    group.playedMs += Math.max(0, Number(facet.playedMs) || 0);
     group.queryAliases.add(original);
     group.queryAliases.add(raw);
     if (raw) group.aliases.set(raw, (group.aliases.get(raw) ?? 0) + Math.max(0, Number(facet.trackCount) || 0));
@@ -45,8 +47,36 @@ export async function buildAlbumEntries(facets) {
       displayName: group.unmarked ? '未知' : preferredArtistName(aliases, traditionalByName),
       aliases: [...group.queryAliases],
       trackCount: group.trackCount,
+      durationMs: group.durationMs,
+      playedMs: group.playedMs,
       unmarked: group.unmarked,
     };
+  });
+}
+
+/** @typedef {'title' | 'duration' | 'played' | 'trackCount'} AlbumIndexSortField */
+/** @typedef {'asc' | 'desc'} AlbumIndexSortDirection */
+
+/**
+ * Sort album cards by one of the visible index columns. Equal metric values
+ * retain the ICU4X album-name order, independent of the selected direction.
+ * @param {AlbumEntry[]} albums
+ * @param {AlbumIndexSortField} field
+ * @param {AlbumIndexSortDirection} direction
+ * @param {Map<string, number>} titleRanks
+ * @returns {AlbumEntry[]}
+ */
+export function sortAlbumEntries(albums, field, direction, titleRanks) {
+  const sign = direction === 'asc' ? 1 : -1;
+  return albums.toSorted((left, right) => {
+    if (field === 'title') {
+      return sign * ((titleRanks.get(left.key) ?? 0) - (titleRanks.get(right.key) ?? 0));
+    }
+    const valueField = field === 'duration' ? 'durationMs' : field === 'played' ? 'playedMs' : 'trackCount';
+    const compared = Number(left[valueField]) - Number(right[valueField]);
+    return compared === 0
+      ? (titleRanks.get(left.key) ?? 0) - (titleRanks.get(right.key) ?? 0)
+      : sign * compared;
   });
 }
 

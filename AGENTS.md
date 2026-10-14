@@ -193,6 +193,7 @@
 - 演出者聚合回歸測試驗證啟用來源範圍、合作曲完整播放時間、每軌去重、簡繁／大小寫映射、空專輯排除與演出者子字串碰撞；`tests/artist-identities.test.mjs` 驗證 OpenCC 身份鍵、日文假名保留及最常見／平手繁體顯示規則。`tests/artist-index.playwright.js` 以 80 筆模擬列驗證共用虛擬列表、零頂部間距、填滿頁面可用高度、欄位排序與列選取，且使用模擬設定往返驗證排序方向在重載後還原；Rust settings 測試涵蓋 JSON 保存及舊設定預設。真實 Tauri 視窗外觀與同步後刷新仍待人工驗收。
 
 ### 專輯索引與專輯明細
+- 專輯首頁頂端使用歌曲清單共用的 `TrackColumnCells` 標題列樣式，提供四個等寬、可排序欄：「專輯」（名稱，ICU4X 順序）、「播放時長」（專輯內歌曲時長總和）、「累積時長」（專輯內曲目實際累計播放時間總和）與「歌曲數量」。數值欄首次點選採由大到小，重點擊反向；數值相同時維持專輯名稱 ICU4X 順序。`library_get_album_index_facets` 一次聚合啟用來源的歌曲數、時長與播放統計；簡繁／大小寫合併的別名需在 renderer 加總三種統計。
 - 專輯卡片效能驗收需區分 renderer 與 native 路徑：`tests/album-thumbnail-background.playwright.js` 注入 `Canvas.drawImage` 延遲，只檢查 renderer 畫布處理，不能證明 Tauri IPC、SQLite mutex 或磁碟 I/O 不阻塞。專輯索引 facets、明細頁、候選 TrackId 與 artwork cache 命令都在 Tauri blocking worker 執行；AppState 查找、database work gate admission、SQLite 操作及快取檔案 I/O 留在工作執行緒，gate 持有至工作完成。卡片使用依碟序／曲序／自然曲名排序的 ID-only 候選分頁，不逐卡 COUNT 或生成完整 TrackSummary；專輯名稱 JSON 聯集先篩選，再查啟用來源。Artwork identity、track reference 與縮圖檔案讀寫亦在 blocking worker。current-thread 原生 seam regression 使用合成 SQLite 與真實冷／暖磁碟 `get_for_track` 路徑，檢查首 poll Pending、executor heartbeat 與 gate drain；自動測試不等同真實 Tauri WebView 流暢度驗收。
 
 - 左側「專輯」入口位於「演出者」下方。專輯依專輯名稱分組，不使用 album artist；名稱去除首尾空白、忽略大小寫與簡繁差異，含日文假名時保留原字形。顯示別名中出現最多的原始寫法，平手選繁體。無專輯標籤集中為獨立「其它／未標記」卡，不與實際名稱為「其它」的專輯合併。統計依目前啟用來源中的可見曲目，標題持續顯示 `n 張專輯`。

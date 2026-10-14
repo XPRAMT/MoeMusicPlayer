@@ -1123,6 +1123,8 @@ pub struct AlbumIndexFacet {
     /// `None` or blank represents an untagged album bucket.
     pub name: Option<String>,
     pub track_count: u64,
+    pub duration_ms: u64,
+    pub played_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1795,14 +1797,17 @@ impl Database {
         Ok(ArtistIndexFacets { artists, albums })
     }
 
-    /// Return album labels and visible track counts without transferring all track summaries.
+    /// Return album labels and visible track statistics without transferring all track summaries.
     /// Empty album tags remain present so the renderer can create the separate unmarked bucket.
     pub fn album_index_facets(&self) -> Result<Vec<AlbumIndexFacet>, DatabaseError> {
         let connection = self.lock()?;
         let mut statement = connection.prepare(
             "SELECT COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
-                    COUNT(DISTINCT t.track_id)
+                    COUNT(DISTINCT t.track_id),
+                    COALESCE(SUM(COALESCE(t.duration_ms, 0)), 0),
+                    COALESCE(SUM(COALESCE(s.played_ms, 0)), 0)
              FROM tracks t
+             LEFT JOIN track_playback_statistics s ON s.track_id=t.track_id
              WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                            ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
              GROUP BY COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album)",
@@ -1811,6 +1816,8 @@ impl Database {
             Ok(AlbumIndexFacet {
                 name: row.get(0)?,
                 track_count: row.get::<_, i64>(1)?.max(0) as u64,
+                duration_ms: row.get::<_, i64>(2)?.max(0) as u64,
+                played_ms: row.get::<_, i64>(3)?.max(0) as u64,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -5448,9 +5455,11 @@ mod tests {
         let mut titled_other = record(&root, "other", "other", "Tagged Other", 1, 4);
         let mut padded_name = record(&root, "padded", "padded", "Padded Album", 1, 5);
         disc_two.metadata.as_mut().unwrap().album = Some("专辑 A".to_owned());
+        disc_two.metadata.as_mut().unwrap().duration_ms = Some(20_000);
         disc_two.metadata.as_mut().unwrap().disc_number = Some(2);
         disc_two.metadata.as_mut().unwrap().track_number = Some(1);
         disc_one.metadata.as_mut().unwrap().album = Some("專輯 A".to_owned());
+        disc_one.metadata.as_mut().unwrap().duration_ms = Some(10_000);
         disc_one.metadata.as_mut().unwrap().disc_number = Some(1);
         disc_one.metadata.as_mut().unwrap().track_number = Some(10);
         unmarked.metadata.as_mut().unwrap().album = Some("  ".to_owned());
@@ -5458,6 +5467,10 @@ mod tests {
         padded_name.metadata.as_mut().unwrap().album = Some("\u{3000}專輯 A\u{3000}".to_owned());
         padded_name.metadata.as_mut().unwrap().disc_number = Some(1);
         padded_name.metadata.as_mut().unwrap().track_number = Some(11);
+        padded_name.metadata.as_mut().unwrap().duration_ms = Some(5_000);
+        let disc_two_locator = disc_two.locator.clone();
+        let disc_one_locator = disc_one.locator.clone();
+        let padded_locator = padded_name.locator.clone();
         let records = [disc_two, disc_one, unmarked, titled_other, padded_name];
         apply(
             &mut db,
@@ -5468,18 +5481,49 @@ mod tests {
             5,
         );
 
+        let disc_two_id = db
+            .resolve_track_id_for_locator(&disc_two_locator)
+            .expect("resolve disc two")
+            .expect("disc two exists");
+        let disc_one_id = db
+            .resolve_track_id_for_locator(&disc_one_locator)
+            .expect("resolve disc one")
+            .expect("disc one exists");
+        let padded_id = db
+            .resolve_track_id_for_locator(&padded_locator)
+            .expect("resolve padded album")
+            .expect("padded album exists");
+        {
+            let connection = db.lock().expect("database connection");
+            connection
+                .execute(
+                    "INSERT INTO track_playback_statistics (track_id, played_ms) VALUES (?1, ?2), (?3, ?4), (?5, ?6)",
+                    params![disc_two_id.to_string(), 900, disc_one_id.to_string(), 300, padded_id.to_string(), 100],
+                )
+                .expect("insert playback statistics");
+        }
+
         let facets = db.album_index_facets().expect("album facets");
         assert!(facets
             .iter()
-            .any(|facet| facet.name.as_deref() == Some("專輯 A") && facet.track_count == 1));
+            .any(|facet| facet.name.as_deref() == Some("專輯 A")
+                && facet.track_count == 1
+                && facet.duration_ms == 10_000
+                && facet.played_ms == 300));
         assert!(facets
             .iter()
-            .any(|facet| facet.name.as_deref() == Some("专辑 A") && facet.track_count == 1));
+            .any(|facet| facet.name.as_deref() == Some("专辑 A")
+                && facet.track_count == 1
+                && facet.duration_ms == 20_000
+                && facet.played_ms == 900));
         assert!(facets
             .iter()
             .any(|facet| facet.name.as_deref() == Some("  ") && facet.track_count == 1));
         assert!(facets.iter().any(|facet| {
-            facet.name.as_deref() == Some("\u{3000}專輯 A\u{3000}") && facet.track_count == 1
+            facet.name.as_deref() == Some("\u{3000}專輯 A\u{3000}")
+                && facet.track_count == 1
+                && facet.duration_ms == 5_000
+                && facet.played_ms == 100
         }));
         assert!(facets
             .iter()

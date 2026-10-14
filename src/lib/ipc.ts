@@ -261,6 +261,8 @@ export interface ArtistIndexFacets {
 export interface AlbumIndexFacet {
   name: string | null;
   trackCount: number;
+  durationMs: number;
+  playedMs: number;
 }
 
 export interface ArtistNameCount {
