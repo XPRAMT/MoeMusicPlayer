@@ -246,7 +246,11 @@ test('queue and album detail reuse shared sortable track-list headers', async ()
   assert.match(queue, /invokeCommand\('playback_get_queue_page', request\)/);
   assert.match(queue, /hideSortDirection=\{hideSortDirection\}/);
   assert.match(album, /sortable=\{true\}/);
-  assert.match(album, /sort: request\.sort/);
+  assert.match(album, /sortableIndex=\{true\}/);
+  assert.match(album, /let albumIndexSortActive = \$state\(true\)/);
+  assert.match(album, /sort: albumIndexSortActive \? null : request\.sort/);
+  assert.match(album, /indexSort: albumIndexSortActive \? albumIndexSortDirection : null/);
+  assert.match(album, /handleIndexSort/);
 });
 
 test('field order settings use the shared 300ms long-press drag delay', async () => {

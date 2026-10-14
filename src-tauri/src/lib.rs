@@ -2979,6 +2979,7 @@ async fn library_get_album_page(
     app: AppHandle,
     album_names: Vec<String>,
     sort: Option<TrackListSort>,
+    index_sort: Option<TrackSortDirection>,
     offset: u64,
     limit: u32,
 ) -> Result<Page<TrackSummary>, String> {
@@ -2990,7 +2991,7 @@ async fn library_get_album_page(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .list_album_tracks_page_sorted(&album_names, sort, offset, limit)
+            .list_album_tracks_page_with_index_sort(&album_names, sort, index_sort, offset, limit)
             .map_err(|error| error.to_string())
     })
     .await

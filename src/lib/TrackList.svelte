@@ -47,6 +47,10 @@
     onPlay: (track: TrackSummary) => void | Promise<void>;
     onTotalCount?: (count: number | null) => void;
     sortable?: boolean;
+    sortableIndex?: boolean;
+    sortIndicator?: { field: string; direction: 'asc' | 'desc' } | null;
+    indexSortLabel?: string;
+    onIndexSort?: () => void;
     getIndexLabel?: (track: TrackSummary, index: number) => string;
     fetchPage?: (request: TrackPageRequest) => Promise<TrackPage>;
     columns?: TrackListColumnPreference[];
@@ -69,6 +73,10 @@
     onPlay,
     onTotalCount,
     sortable = true,
+    sortableIndex = false,
+    sortIndicator,
+    indexSortLabel,
+    onIndexSort,
     getIndexLabel = (_track, index) => formatListOrder(index),
     fetchPage,
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
@@ -84,6 +92,7 @@
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
   let normalizedWidths = $derived(normalizeTrackColumnWidths(columnWidths));
   let normalizedSort = $derived(normalizeLibrarySort(sort));
+  let visibleSortIndicator = $derived(sortIndicator === undefined ? normalizedSort : sortIndicator);
   const listScrollResetKey = $derived(JSON.stringify({ query: query.trim(), fieldFilter, sort: normalizedSort }));
   let visibleColumns = $derived(visibleTrackColumns(normalizedColumns).map(({ id }) =>
     TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
@@ -216,8 +225,11 @@
           variant="header"
           columns={visibleColumns}
           {sortable}
-          sort={normalizedSort}
+          sortableIndex={sortableIndex}
+          sort={visibleSortIndicator}
+          {indexSortLabel}
           onSort={handleSort}
+          {onIndexSort}
           resizable={true}
           onResize={handleResize}
         />

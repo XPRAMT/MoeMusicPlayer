@@ -1495,6 +1495,23 @@ impl Database {
         offset: u64,
         requested_limit: u32,
     ) -> Result<Page<TrackSummary>, DatabaseError> {
+        self.list_album_tracks_page_with_index_sort(
+            album_names,
+            sort,
+            None,
+            offset,
+            requested_limit,
+        )
+    }
+
+    pub fn list_album_tracks_page_with_index_sort(
+        &self,
+        album_names: &[String],
+        sort: Option<TrackListSort>,
+        index_sort: Option<TrackSortDirection>,
+        offset: u64,
+        requested_limit: u32,
+    ) -> Result<Page<TrackSummary>, DatabaseError> {
         let unique_names = album_names.iter().cloned().collect::<HashSet<_>>();
         if unique_names.is_empty() {
             return Ok(Page {
@@ -1521,9 +1538,12 @@ impl Database {
         )?.max(0) as u64;
         let limit = query_limit(requested_limit);
         let database_offset = i64::try_from(offset).unwrap_or(i64::MAX);
-        let order_by = sort.map(tracks_order_by_sql).unwrap_or_else(|| {
-            "COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647), \
-             COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL, t.track_id".to_owned()
+        let order_by = sort.map(tracks_order_by_sql).unwrap_or_else(|| match index_sort {
+            Some(TrackSortDirection::Desc) => "(t.disc_number IS NULL) ASC, t.disc_number DESC, \
+                (t.track_number IS NULL) ASC, t.track_number DESC, \
+                COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC".to_owned(),
+            Some(TrackSortDirection::Asc) | None => "COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647), \
+                COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL, t.track_id".to_owned(),
         });
         let sql = format!("{ALBUM_TRACKS_PAGE_SQL} ORDER BY {order_by} LIMIT ?2 OFFSET ?3");
         let mut statement = connection.prepare(&sql)?;
@@ -5072,6 +5092,24 @@ mod tests {
         assert_eq!(page.items[0].track_number, Some(10));
         assert_eq!(page.items[1].track_number, Some(11));
         assert_eq!(page.items[2].disc_number, Some(2));
+        let descending = db
+            .list_album_tracks_page_with_index_sort(
+                &[
+                    "專輯 A".into(),
+                    "专辑 A".into(),
+                    "\u{3000}專輯 A\u{3000}".into(),
+                ],
+                None,
+                Some(TrackSortDirection::Desc),
+                0,
+                10,
+            )
+            .expect("descending album track-number page");
+        assert_eq!(descending.items[0].disc_number, Some(2));
+        assert_eq!(descending.items[0].track_number, Some(1));
+        assert_eq!(descending.items[1].disc_number, Some(1));
+        assert_eq!(descending.items[1].track_number, Some(11));
+        assert_eq!(descending.items[2].track_number, Some(10));
         assert_eq!(
             db.list_album_tracks_page(&[], 0, 10)
                 .expect("empty aliases")

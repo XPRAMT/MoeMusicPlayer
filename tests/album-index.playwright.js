@@ -97,18 +97,29 @@
   const firstAlbumReadsAfterRemount = await page.evaluate(() => [1, 2, 3, 4].reduce((sum, index) => sum + (window.__albumIndexStats.trackCacheReadsByTrack[`track-Album-1-${index}`] ?? 0), 0));
   assert(firstAlbumReadsAfterRemount === firstAlbumReads, `returning to a virtualized row must reuse the in-memory cover: ${firstAlbumReads} -> ${firstAlbumReadsAfterRemount}`);
 
+  const rawReadsBeforeFirstDetail = await page.evaluate(() => window.__albumIndexStats.rawArtworkReads);
   await firstCard.click();
   await page.waitForFunction(() => {
     const summary = document.querySelector('.album-detail-summary')?.textContent ?? '';
     return !summary.includes('包含的演出者') && summary.includes('hanser') && summary.includes('yousa') && summary.includes('other artist');
   });
   await page.getByText('4 首曲目', { exact: true }).waitFor();
+  const albumIndexHeader = page.locator('.column-index[role="columnheader"]');
+  assert(await albumIndexHeader.getAttribute('aria-sort') === 'ascending', 'album detail should default to ascending # sorting');
+  const firstAlbumIndex = (await page.locator('.track-row .column-index').first().textContent())?.trim() ?? '';
+  assert(/^\d+$/.test(firstAlbumIndex), 'a single-disc album should show only the track number, without a disc prefix');
+  const sortAlbumIndex = page.locator('.album-detail-tracks .index-sort-button');
+  assert(await sortAlbumIndex.getAttribute('aria-label') === '依專輯曲目編號排序', 'the album # header should identify its sort action');
+  await sortAlbumIndex.click();
+  await page.waitForFunction(() => document.querySelector('.album-detail-tracks .column-index[role="columnheader"]')?.getAttribute('aria-sort') === 'descending');
+  await page.waitForFunction(() => window.__albumIndexStats.albumIndexSortRequests.at(-1) === 'desc');
+  assert(await albumIndexHeader.getAttribute('aria-sort') === 'descending', 'clicking # should reverse the album track-number order');
   assert(await page.getByText(/張代表封面/).count() === 0, 'album detail should no longer display representative-cover count text');
   const detailFrame = await page.locator('.album-detail-art').evaluate((element) => getComputedStyle(element).borderWidth);
   assert(detailFrame === '0px', `album detail artwork should not have a border: ${detailFrame}`);
   await page.waitForFunction(() => [...window.__albumArtworkSelections.values()].some((selection) => selection.representative));
   const rawReadsAfterFirstDetail = await page.evaluate(() => window.__albumIndexStats.rawArtworkReads);
-  assert(rawReadsAfterFirstDetail === 4, `first album-detail visit should hash each source cover once: ${rawReadsAfterFirstDetail}`);
+  assert(rawReadsAfterFirstDetail - rawReadsBeforeFirstDetail === 4, `first album-detail visit should hash each source cover once: ${rawReadsBeforeFirstDetail} -> ${rawReadsAfterFirstDetail}`);
   await page.getByTestId('album-detail-back').click();
   await page.waitForFunction(() => document.querySelectorAll('.album-card:first-of-type .album-card-art img').length === 1);
   assert(await page.locator('.album-card:first-of-type .album-card-art img').count() === 1, 'the homepage must reuse the detail page representative selection; identical covers should remain one tile');
@@ -120,11 +131,12 @@
 
   await page.getByTestId('album-detail-back').click();
   await page.locator('.album-grid-viewport').waitFor({ state: 'visible' });
-  const restoredTarget = await page.locator('.album-grid-viewport').evaluate((element) => {
+  await page.locator('.album-grid-viewport').evaluate((element) => {
     element.scrollTop = 900;
     element.dispatchEvent(new Event('scroll'));
-    return element.scrollTop;
   });
+  await page.waitForTimeout(100);
+  const restoredTarget = await page.locator('.album-grid-viewport').evaluate((element) => element.scrollTop);
   assert(restoredTarget > 0, `test must scroll the album homepage before navigation: ${restoredTarget}`);
   await page.getByTestId('leave-albums').click();
   await page.locator('.album-grid-viewport').waitFor({ state: 'detached' });

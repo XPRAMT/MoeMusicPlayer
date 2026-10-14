@@ -32,6 +32,12 @@
   let artists = $state<string[]>([]);
   let scanning = $state(true);
   let scanError = $state<string | null>(null);
+  let hasMultipleDiscs = $state(false);
+  let albumIndexSortActive = $state(true);
+  let albumIndexSortDirection = $state<'asc' | 'desc'>('asc');
+  const albumSortIndicator = $derived(albumIndexSortActive
+    ? { field: 'position', direction: albumIndexSortDirection }
+    : sort);
   const displayedCoverUrls = $derived(resolveAlbumArtworkDisplaySources(coverUrls, {
     fallbackUrl: defaultCoverUrl,
     resolved: !scanning && !scanError,
@@ -40,7 +46,27 @@
   const PAGE_SIZE = 100;
 
   async function fetchPage(request: TrackPageRequest): Promise<TrackPage> {
-    return invokeCommand('library_get_album_page', { albumNames: album.aliases, sort: request.sort, offset: request.offset, limit: request.limit });
+    return invokeCommand('library_get_album_page', {
+      albumNames: album.aliases,
+      sort: albumIndexSortActive ? null : request.sort,
+      indexSort: albumIndexSortActive ? albumIndexSortDirection : null,
+      offset: request.offset,
+      limit: request.limit,
+    });
+  }
+
+  function handleColumnSort(columnId: import('./ipc').TrackListColumnPreference['id']): void {
+    albumIndexSortActive = false;
+    onSort(columnId);
+  }
+
+  function handleIndexSort(): void {
+    if (albumIndexSortActive) {
+      albumIndexSortDirection = albumIndexSortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+      albumIndexSortActive = true;
+      albumIndexSortDirection = 'asc';
+    }
   }
 
   async function selectionKey(): Promise<string> {
@@ -153,23 +179,29 @@
     scanning = true;
     scanError = null;
     artists = [];
+    hasMultipleDiscs = false;
     try {
       const key = await selectionKey();
       let stored: import('./ipc').AlbumArtworkSelection | null = null;
       try { stored = await invokeCommand('album_artwork_selection_get', { key }); } catch { /* rebuild cache on older installations */ }
       const usable = stored !== null && stored.trackCount === album.trackCount && stored.representative;
       const artistCounts = new Map<string, number>();
+      const discNumbers = new Set<number>();
       let total = 0;
       for (let offset = 0; ; offset += PAGE_SIZE) {
         const page = await fetchPage({ query: '', offset, limit: PAGE_SIZE });
         if (current !== revision) return;
         total = page.totalCount;
-        for (const track of page.items) countArtists(artistCounts, track);
+        for (const track of page.items) {
+          countArtists(artistCounts, track);
+          if (track.discNumber !== null && track.discNumber !== undefined) discNumbers.add(track.discNumber);
+        }
         if (page.items.length === 0 || offset + page.items.length >= total) break;
       }
       const resolvedArtists = await resolveArtists(artistCounts);
       if (current !== revision) return;
       artists = resolvedArtists;
+      hasMultipleDiscs = discNumbers.size > 1;
 
       let selectedIds = usable && stored ? stored.trackIds.slice(0, 4) : [];
       if (selectedIds.length === 0) {
@@ -233,11 +265,12 @@
   <div class="album-detail-tracks">
     <TrackList
       query=""
-      resetKey={`${album.key}:${refreshKey}`}
+      resetKey={`${album.key}:${refreshKey}:${albumIndexSortActive ? `index-${albumIndexSortDirection}` : `column-${sort.field}-${sort.direction}`}`}
       listId={`album-detail-${album.key}`}
       {selectedTrackId} {playbackReady} {isSendingPlaybackCommand} {columns} {columnWidths} {rowHeightPx} {sort} {livePlayCount}
-      fetchPage={fetchPage} {onPlay} {onSort} {onColumnResize} {onTotalCount} sortable={true}
-      getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber, track.discNumber)}
+      fetchPage={fetchPage} {onPlay} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
+      sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel="依專輯曲目編號排序" onIndexSort={handleIndexSort}
+      getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber, hasMultipleDiscs ? track.discNumber : null)}
     />
   </div>
 </div>

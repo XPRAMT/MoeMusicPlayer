@@ -11,7 +11,7 @@ const fixtureBlob = await new Promise<Blob>((resolve, reject) => fixtureCanvas.t
 const validJpeg = new Uint8Array(await fixtureBlob.arrayBuffer());
 const artworkReads = validJpeg.slice().buffer;
 const coldArtworkMode = new URLSearchParams(location.search).has('cold');
-const stats = { rawArtworkReads: 0, legacyCacheReads: 0, trackCacheReads: 0, trackCacheReadsByTrack: {} as Record<string, number>, albumCandidates: 0, thumbnailWrites: 0 };
+const stats = { rawArtworkReads: 0, legacyCacheReads: 0, trackCacheReads: 0, trackCacheReadsByTrack: {} as Record<string, number>, albumCandidates: 0, thumbnailWrites: 0, albumIndexSortRequests: [] as (string | null)[] };
 const selections = new Map<string, { trackCount: number; trackIds: string[]; representative: boolean }>();
 Object.assign(window, { __albumIndexStats: stats, __albumArtworkSelections: selections });
 
@@ -45,20 +45,27 @@ Object.assign(window, {
         return undefined;
       }
       if (command === 'library_get_album_page') {
+        stats.albumIndexSortRequests.push((args as { indexSort?: string | null } | undefined)?.indexSort ?? null);
+        const albumNames = (args as { albumNames?: string[] } | undefined)?.albumNames ?? [];
+        const unmarkedAlbum = albumNames.includes('Album 2');
         return {
           offset: (args as { offset?: number } | undefined)?.offset ?? 0,
           limit: (args as { limit?: number } | undefined)?.limit ?? 100,
-          totalCount: 4,
-          items: [
-            { id: 'track-Album-1-1', title: 'Song 1', artist: 'hanser/yousa', album: 'Album 1', albumArtist: null, trackNumber: 1, discNumber: null, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
-            { id: 'track-Album-1-2', title: 'Song 2', artist: 'yousa', album: 'Album 1', albumArtist: null, trackNumber: 2, discNumber: null, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
-            { id: 'track-Album-1-3', title: 'Song 3', artist: 'hanser', album: 'Album 1', albumArtist: null, trackNumber: 3, discNumber: null, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
-            { id: 'track-Album-1-4', title: 'Song 4', artist: 'other artist', album: 'Album 1', albumArtist: null, trackNumber: 4, discNumber: null, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
-          ],
+          totalCount: unmarkedAlbum ? 1 : 4,
+          items: unmarkedAlbum
+            ? [{ id: 'track-Album-2-1', title: 'Song 1', artist: null, album: null, albumArtist: null, trackNumber: 1, discNumber: 1, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null }]
+            : [
+              { id: 'track-Album-1-1', title: 'Song 1', artist: 'hanser/yousa', album: 'Album 1', albumArtist: null, trackNumber: 1, discNumber: 1, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
+              { id: 'track-Album-1-2', title: 'Song 2', artist: 'yousa', album: 'Album 1', albumArtist: null, trackNumber: 2, discNumber: 1, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
+              { id: 'track-Album-1-3', title: 'Song 3', artist: 'hanser', album: 'Album 1', albumArtist: null, trackNumber: 3, discNumber: 1, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
+              { id: 'track-Album-1-4', title: 'Song 4', artist: 'other artist', album: 'Album 1', albumArtist: null, trackNumber: 4, discNumber: 1, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null },
+            ],
         };
       }
       if (command === 'library_get_track_artwork') {
         stats.rawArtworkReads += 1;
+        const trackId = String((args as { trackId?: string } | undefined)?.trackId ?? '');
+        if (trackId === 'track-Album-2-1') return new ArrayBuffer(0);
         return artworkReads.slice(0);
       }
       if (command === 'album_artwork_cache_get') {

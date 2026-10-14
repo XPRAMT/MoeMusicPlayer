@@ -635,7 +635,7 @@ interface IpcContract {
     result: AlbumIndexFacet[];
   };
   library_get_album_page: {
-    args: { albumNames: string[]; sort?: LibraryListSort | null; offset: number; limit: number };
+    args: { albumNames: string[]; sort?: LibraryListSort | null; indexSort?: LibrarySortDirection | null; offset: number; limit: number };
     result: TrackPage;
   };
   library_get_album_artwork_candidates: {
