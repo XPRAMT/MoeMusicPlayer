@@ -343,7 +343,7 @@
 
 - 固定便攜版位於 `release/moemusicplayer.exe` 與同層 `moemusicplayer-updater.exe`，使用者資料固定在同層 `UserData/`。建置身份可由主 EXE 的 `--update-build-info` 讀取，不要把舊版本或雜湊當成最新值。
 - 正式播放器仍在執行時，直接背景替換新版，不要要求使用者關閉播放器，也不要強制終止程序。先在 `release/` 準備並核對新檔，再把目前主 EXE 改名為唯一的舊版備份，將新版放回 `moemusicplayer.exe`；更新同層 helper。替換失敗時恢復原檔。保留所有仍可能被執行中 PID 使用的舊 EXE 備份，直到該 PID 結束；不觸碰 `UserData/`。
-- queue reorder 長按啟動拖曳的門檻為 300 ms；列表 refresh 保留原列，在背景載入目前可見分頁後一次替換，避免 placeholder 閃爍，並維持捲動位置。門檻回歸測試 3/3 通過。Playwright harness 曾遇到本機 Vite GET 逾時，真實 Tauri 視窗拖曳與閃爍效果仍待人工驗收。
+- 播放佇列長按 300 ms 啟動拖曳；列表 refresh 保留舊列直到可見頁載入完成，再一次替換並恢復位置。本輪 SQLite 查詢改造的 Windows release 已成功輸出至固定 `release/`，包含主程式、更新 helper 與更新包；建置版本、UTC 時間與來源 commit 應以目前 EXE 的 `--update-build-info` 輸出為準。
 
 ## 工作方式與下一步
 
@@ -358,4 +358,4 @@
 
 本次驗證：`npm run check` 0 errors／warnings；`node --test` 234/234；`cargo test -p player-db --lib --locked` 86 passed、2 ignored；`cargo test -p moemusicplayer --lib --locked` 186 passed、2 ignored；`cargo clippy --workspace --lib --bins --tests --locked -- -D warnings` 與 `cargo fmt --all -- --check` 通過。依使用者要求，本次未執行瀏覽器、Chrome 或 Playwright 測試，也未宣稱人工視覺驗收。
 
-下一步：提交此批實作與 ADR，建置固定 Windows release EXE，核對輸出檔身份、大小與 SHA-256。外部雙資料庫合併仍在後端 Rust 執行；若之後量測顯示其內部批次查詢是瓶頸，再以基準資料調整，不把全量資料搬到 renderer。
+下一步：由 Windows 大曲庫人工操作確認查詢結果、排序、分組、翻頁及返回位置；本輪按使用者要求沒有執行瀏覽器測試。外部雙資料庫合併仍在後端 Rust 執行；若之後量測顯示其內部批次查詢是瓶頸，再用基準資料調整，不把全量資料搬到 renderer。
