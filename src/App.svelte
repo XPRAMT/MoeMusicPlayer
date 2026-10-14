@@ -193,6 +193,7 @@
   let detailHistoryRestoreRevision = 0;
   let keepAlbumIndexForDetail = $state(false);
   let selectedAlbum = $state<AlbumEntry | null>(null);
+  let selectedAlbumInitialCoverSources = $state<string[]>([]);
   let rememberedAlbumView = $state<'albums' | 'album-detail'>('albums');
   let nowPlayingReturnView = $state<View>('library');
   let isNowPlayingMounted = $state(false);
@@ -2343,6 +2344,7 @@
         const album = await resolveAlbumEntryByKey(route.albumKey);
         if (revision !== detailHistoryRestoreRevision) return;
         if (album) {
+          if (selectedAlbum?.key !== album.key) selectedAlbumInitialCoverSources = [];
           selectedAlbum = album;
           keepAlbumIndexForDetail = route.preserveIndex ?? false;
           rememberedAlbumView = 'album-detail';
@@ -2391,9 +2393,14 @@
     activeView = 'artists';
   }
 
-  function openAlbumEntry(album: AlbumEntry, preserveIndex = false): void {
+  function openAlbumEntry(album: AlbumEntry, preserveIndex = false, initialCoverSources: string[] = []): void {
     pushDetailNavigationRoute({ view: 'album-detail', albumKey: album.key, preserveIndex });
-    if (selectedAlbum?.key !== album.key) albumTrackCount = null;
+    if (selectedAlbum?.key !== album.key) {
+      albumTrackCount = null;
+      selectedAlbumInitialCoverSources = [...initialCoverSources];
+    } else if (initialCoverSources.length > 0) {
+      selectedAlbumInitialCoverSources = [...initialCoverSources];
+    }
     selectedAlbum = album;
     keepAlbumIndexForDetail = preserveIndex;
     rememberedAlbumView = 'album-detail';
@@ -3719,7 +3726,7 @@
                 refreshKey={libraryListRevision}
                 active={activeView === 'albums'}
                 onCountChange={(count) => (albumIndexCount = count)}
-                onSelect={(album) => openAlbumEntry(album, true)}
+                onSelect={(album, coverSources) => openAlbumEntry(album, true, coverSources)}
               />
             {/if}
           </section>
@@ -3732,6 +3739,7 @@
               {#key selectedAlbum.key}
                 <AlbumDetail
                   album={selectedAlbum}
+                  initialCoverSources={selectedAlbumInitialCoverSources}
                   selectedTrackId={selectedTrackId}
                   playbackReady={playbackReady}
                   isSendingPlaybackCommand={isSendingPlaybackCommand}

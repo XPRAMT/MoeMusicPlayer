@@ -20,6 +20,10 @@ export function formatDurationHours(durationMs: number | null | undefined): stri
   return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
+export function formatAlbumDetailSummary(trackCount: number, playedMs: number, durationMs: number): string {
+  return `${trackCount.toLocaleString()}首曲目．累積播放 ${formatDurationHours(playedMs)}．播放時長 ${formatDurationHours(durationMs)}`;
+}
+
 /** Show only the track number; album Disc groups already identify the disc. */
 export function formatAlbumTrackNumber(trackNumber: number | null): string {
   return trackNumber?.toString() ?? '—';

@@ -9,7 +9,7 @@
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
 
-  interface Props { album: AlbumEntry; active: boolean; refreshKey: number; sortField: AlbumIndexSortField; onSelect: (album: AlbumEntry) => void }
+  interface Props { album: AlbumEntry; active: boolean; refreshKey: number; sortField: AlbumIndexSortField; onSelect: (album: AlbumEntry, coverSources: string[]) => void }
   let { album, active, refreshKey, sortField, onSelect }: Props = $props();
   let card = $state<HTMLElement | undefined>(undefined);
   let inViewport = $state(false);
@@ -188,7 +188,7 @@
   onDestroy(() => { destroyed = true; requestRevision += 1; releaseArtworkCacheLease?.(); });
 </script>
 
-<button class="album-card" type="button" bind:this={card} onclick={() => onSelect(album)} aria-label={`開啟專輯「${album.displayName}」，${album.trackCount} 首曲目`}>
+<button class="album-card" type="button" bind:this={card} onclick={() => onSelect(album, displayedImageUrls)} aria-label={`開啟專輯「${album.displayName}」，${album.trackCount} 首曲目`}>
   <span class="album-card-art" aria-hidden="true">
     <AlbumArtworkMosaic sources={displayedImageUrls} />
   </span>

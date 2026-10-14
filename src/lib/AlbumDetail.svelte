@@ -7,10 +7,11 @@
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
   import TrackList from './TrackList.svelte';
-  import { formatAlbumTrackNumber } from './format';
+  import { formatAlbumDetailSummary, formatAlbumTrackNumber } from './format';
 
   interface Props {
     album: AlbumEntry;
+    initialCoverSources?: string[];
     selectedTrackId: string | null;
     playbackReady: boolean;
     isSendingPlaybackCommand: boolean;
@@ -26,8 +27,10 @@
     onColumnResize: (columnId: import('./ipc').TrackListColumnPreference['id'], widthPx: number) => void;
     onTotalCount: (count: number | null) => void;
   }
-  let { album, selectedTrackId, playbackReady, isSendingPlaybackCommand, columns, columnWidths, rowHeightPx, groupingEnabled, sort, livePlayCount, refreshKey, onPlay, onSort, onColumnResize, onTotalCount }: Props = $props();
+  let { album, initialCoverSources = [], selectedTrackId, playbackReady, isSendingPlaybackCommand, columns, columnWidths, rowHeightPx, groupingEnabled, sort, livePlayCount, refreshKey, onPlay, onSort, onColumnResize, onTotalCount }: Props = $props();
   let coverUrls = $state<string[]>([]);
+  let coverScanResolved = $state(false);
+  let ownedCoverUrls: string[] = [];
   let artists = $state<string[]>([]);
   let scanning = $state(true);
   let scanError = $state<string | null>(null);
@@ -43,7 +46,8 @@
   const albumSortIndicator = $derived(albumIndexSortActive
     ? { field: 'position', direction: albumIndexSortDirection }
     : sort);
-  const displayedCoverUrls = $derived(resolveAlbumArtworkDisplaySources(coverUrls, {
+  const coverSourcesToDisplay = $derived(coverScanResolved ? coverUrls : initialCoverSources);
+  const displayedCoverUrls = $derived(resolveAlbumArtworkDisplaySources(coverSourcesToDisplay, {
     fallbackUrl: defaultCoverUrl,
     resolved: !scanning && !scanError,
   }));
@@ -153,8 +157,10 @@
         urls = await loadThumbnails(selectedIds, current);
       }
       if (current === revision) {
-        for (const url of coverUrls) URL.revokeObjectURL(url);
+        for (const url of ownedCoverUrls) URL.revokeObjectURL(url);
+        ownedCoverUrls = urls;
         coverUrls = urls;
+        coverScanResolved = true;
         if (selectedIds.length > 0) {
           window.dispatchEvent(new CustomEvent('album-artwork-selection-updated', { detail: { albumKey: album.key } }));
         }
@@ -175,7 +181,7 @@
     void albumKey;
     void scanCovers();
   });
-  onDestroy(() => { revision += 1; for (const url of coverUrls) URL.revokeObjectURL(url); });
+  onDestroy(() => { revision += 1; for (const url of ownedCoverUrls) URL.revokeObjectURL(url); });
 </script>
 
 <div class="album-detail-shell">
@@ -186,7 +192,7 @@
     <div class="album-detail-summary">
       <strong>{album.displayName}</strong>
       <span>{artists.length ? artists.join('．') : '—'}</span>
-      <span>{album.trackCount.toLocaleString()} 首曲目</span>
+      <span>{formatAlbumDetailSummary(album.trackCount, album.playedMs, album.durationMs)}</span>
       {#if scanError}<span class="album-detail-error" role="status">封面整理失敗：{scanError}</span>{/if}
       {#if scanning && coverUrls.length === 0}<span class="album-detail-status" role="status">正在整理封面…</span>{/if}
     </div>

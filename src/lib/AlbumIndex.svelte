@@ -13,7 +13,7 @@
     refreshKey: number;
     active: boolean;
     onCountChange: (count: number | null) => void;
-    onSelect: (album: AlbumIndexEntry) => void;
+    onSelect: (album: AlbumIndexEntry, coverSources: string[]) => void;
   }
   let { refreshKey, active, onCountChange, onSelect }: Props = $props();
   let sortField = $state<AlbumIndexSortField>('title');
