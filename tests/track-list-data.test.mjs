@@ -89,6 +89,21 @@ test('virtual range remains bounded near the beginning, middle, and end of 100k 
   assert.ok(maxRows <= 36, `expected at most 36 rendered rows, got ${maxRows}`);
 });
 
+test('reset loads the first page without waiting for a viewport scroll event', async () => {
+  const requests = [];
+  const data = new PagedTrackList(async (request) => {
+    requests.push({ offset: request.offset, limit: request.limit });
+    return makePage(request.offset, request.limit, 23);
+  });
+
+  data.reset('', 'initial-list');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(requests, [{ offset: 0, limit: TRACK_PAGE_SIZE }]);
+  assert.equal(data.snapshot().totalCount, 23);
+  assert.equal(data.itemAt(0)?.id, 'track-0');
+});
+
 test('concurrent requests for the same page are deduplicated', async () => {
   let resolvePage;
   let requestCount = 0;
@@ -194,7 +209,7 @@ test('changing viewport page size preserves cached rows and fetches only uncover
   assert.equal(data.setPageSize(26), false);
 });
 
-test('the first request uses the measured viewport page size', async () => {
+test('a reset seeds the first page before the measured viewport size takes over', async () => {
   const requests = [];
   const data = new PagedTrackList(async (request) => {
     requests.push({ offset: request.offset, limit: request.limit });
@@ -205,7 +220,10 @@ test('the first request uses the measured viewport page size', async () => {
   data.setPageSize(getViewportPageSize(680, 40));
   await data.ensureRange(0, 34);
 
-  assert.deepEqual(requests, [{ offset: 0, limit: 34 }]);
+  assert.deepEqual(requests, [
+    { offset: 0, limit: TRACK_PAGE_SIZE },
+    { offset: 0, limit: 34 },
+  ]);
 });
 
 test('a viewport resize while the initial page is loading waits for the replacement generation', async () => {

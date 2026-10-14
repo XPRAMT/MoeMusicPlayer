@@ -231,6 +231,10 @@ export class PagedListController {
     this.queue = [];
     this.loads.clear();
     this.notify();
+    // Seed totalCount and the first visible rows before viewport measurement.
+    // A missed initial ResizeObserver notification must not leave the list
+    // waiting for its first user scroll to start loading.
+    void this.ensureRange(0, this.pageSize);
     return true;
   }
 

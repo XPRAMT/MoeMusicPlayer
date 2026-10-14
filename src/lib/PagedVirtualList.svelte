@@ -307,6 +307,7 @@
 
   $effect(() => {
     reportPagedRange({
+      metricsReady,
       start: range.start,
       end: range.end,
       groups: renderGroupRows,
