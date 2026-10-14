@@ -868,7 +868,7 @@
     height: 1px;
     content: '';
     pointer-events: none;
-    background: var(--line);
+    background: rgba(var(--text-rgb), 0.055);
   }
 
   .paged-virtual-group-cell {
@@ -897,7 +897,7 @@
   }
 
   .paged-virtual-group-button:hover {
-    background: transparent;
+    background: rgba(var(--text-rgb), 0.05);
   }
 
   .paged-virtual-group-button:focus-visible {
