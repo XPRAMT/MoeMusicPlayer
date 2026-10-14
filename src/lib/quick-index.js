@@ -53,13 +53,16 @@ export function buildPagedVirtualRows({ ready, groups, start, end, totalCount, r
 }
 
 /**
- * Report the visible data range as soon as viewport measurements are ready.
+ * Report the visible data range using the current viewport estimate. The
+ * initial estimate must load immediately; waiting for ResizeObserver or a
+ * scroll event can leave the list empty when its first measurement is missed.
+ * Later measured ranges replace the estimate as the viewport updates.
  * Grouping controls row visibility, not the initial data request needed to
  * discover the total count and start the grouping scan.
- * @param {{ metricsReady: boolean, start: number, end: number, groups: Array<{ label: string, beforeIndex: number }>, totalCount: number, onRange: (range: { start: number, end: number }) => void }} options
+ * @param {{ start: number, end: number, groups: Array<{ label: string, beforeIndex: number }>, totalCount: number, onRange: (range: { start: number, end: number }) => void }} options
  */
-export function reportPagedRange({ metricsReady, start, end, groups, totalCount, onRange }) {
-  if (!metricsReady) return false;
+export function reportPagedRange({ start, end, groups, totalCount, onRange }) {
+  if (end <= start) return false;
   onRange(visualRangeToDataRange(start, end, groups, totalCount));
   return true;
 }

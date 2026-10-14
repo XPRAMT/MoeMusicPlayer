@@ -108,28 +108,26 @@ test('a page revision rebuilds a stable non-grouped visible range', () => {
   assert.deepEqual(afterPageLoad.rows.map(({ item }) => item), [cachedTrack]);
 });
 
-test('the initial viewport range is requested while grouping is still pending', () => {
+test('the initial estimated viewport range loads before measurement and refreshes after measurement', () => {
   const requested = [];
-  const didRequest = reportPagedRange({
-    metricsReady: true,
+  const initialRequest = reportPagedRange({
     start: 0,
-    end: 40,
+    end: 10,
     groups: [],
     totalCount: 40,
     onRange: (range) => requested.push(range),
   });
 
-  assert.equal(didRequest, true);
-  assert.deepEqual(requested, [{ start: 0, end: 40 }]);
+  assert.equal(initialRequest, true);
+  assert.deepEqual(requested, [{ start: 0, end: 10 }]);
   assert.equal(reportPagedRange({
-    metricsReady: false,
     start: 0,
-    end: 40,
+    end: 13,
     groups: [],
     totalCount: 40,
     onRange: (range) => requested.push(range),
-  }), false);
-  assert.equal(requested.length, 1, 'range is not requested before viewport measurements are ready');
+  }), true);
+  assert.deepEqual(requested, [{ start: 0, end: 10 }, { start: 0, end: 13 }]);
 });
 
 test('saved visual scroll position waits for complete group rows and is restored only once', () => {
