@@ -59,3 +59,22 @@ test('stale grouping scan returns without publishing partial index data', async 
   });
   assert.equal(result, null);
 });
+
+test('empty artist and album values use the Unknown group while nonempty symbolic names keep locale grouping', async () => {
+  const items = [{ name: '   ' }, { name: null }, { name: '—' }, { name: 'hanser' }];
+  const result = await buildQuickIndexGroups({
+    totalCount: items.length,
+    fetchPage: async () => ({ items }),
+    getName: (item) => item.name,
+    getGroupings: async (names) => ({
+      labels: ['#', 'H'],
+      groups: names.map((name) => name === 'hanser' ? 'H' : '#'),
+    }),
+  });
+  assert.deepEqual(result.groups, [
+    { label: '未知', beforeIndex: 0 },
+    { label: '#', beforeIndex: 2 },
+    { label: 'H', beforeIndex: 3 },
+  ]);
+  assert.deepEqual(result.labels, ['#', 'H', '未知']);
+});

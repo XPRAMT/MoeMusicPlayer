@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildAlbumEntries, findAlbumEntryByName } from '../src/lib/album-identities.js';
 
-test('album labels merge simplified and traditional aliases but keep unmarked separate from literal 其它', async () => {
+test('album labels merge simplified and traditional aliases but keep Unknown separate from literal 其它', async () => {
   const albums = await buildAlbumEntries([
     { name: '专辑 A', trackCount: 2 },
     { name: '專輯 A', trackCount: 3 },
@@ -17,7 +17,7 @@ test('album labels merge simplified and traditional aliases but keep unmarked se
   assert.equal(merged?.aliases.includes('專輯 A'), true);
   assert.equal(merged?.trackCount, 6);
   const unmarked = albums.find((album) => album.unmarked);
-  assert.equal(unmarked?.displayName, '其它');
+  assert.equal(unmarked?.displayName, '未知');
   assert.ok(unmarked?.aliases.includes(''));
   assert.ok(unmarked?.aliases.includes('  '));
   assert.equal(unmarked?.trackCount, 6);

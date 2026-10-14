@@ -64,7 +64,9 @@ export async function buildQuickIndexGroups({
       throw new Error('系統字元索引回傳的群組數量與曲目不一致。');
     }
     response.groups.forEach((label, localIndex) => {
-      const group = typeof label === 'string' && label.length > 0 ? label : '#';
+      const group = names[localIndex].length === 0
+        ? '未知'
+        : typeof label === 'string' && label.length > 0 ? label : '#';
       if (group !== currentLabel) {
         groups.push({ label: group, beforeIndex: offset + localIndex });
         currentLabel = group;

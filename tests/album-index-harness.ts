@@ -21,7 +21,10 @@ Object.assign(window, {
     invoke: async (command: string, args?: unknown) => {
       if (command === 'library_get_album_index_facets') {
         await new Promise((resolve) => setTimeout(resolve, 120));
-        return Array.from({ length: 80 }, (_, index) => ({ name: `Album ${index + 1}`, trackCount: index === 0 ? 4 : 1 }));
+        return Array.from({ length: 80 }, (_, index) => ({
+          name: index === 79 ? 'Multi Disc' : `Album ${index + 1}`,
+          trackCount: index === 0 ? 4 : index === 79 ? 6 : 1,
+        }));
       }
       if (command === 'library_sort_text_indices') {
         const values = (args as { values?: string[] } | undefined)?.values ?? [];
@@ -34,7 +37,7 @@ Object.assign(window, {
         const name = String((args?.albumNames as string[] | undefined)?.[0] ?? 'Album 1');
         if (name === 'Album 2') return [];
         const key = name.replaceAll(' ', '-');
-        return Array.from({ length: 4 }, (_, index) => `track-${key}-${index + 1}`);
+        return Array.from({ length: name === 'Multi Disc' ? 6 : 4 }, (_, index) => `track-${key}-${index + 1}`);
       }
       if (command === 'album_artwork_selection_get') {
         return selections.get(String((args as { key?: string } | undefined)?.key ?? '')) ?? null;
@@ -48,9 +51,43 @@ Object.assign(window, {
         stats.albumIndexSortRequests.push((args as { indexSort?: string | null } | undefined)?.indexSort ?? null);
         const albumNames = (args as { albumNames?: string[] } | undefined)?.albumNames ?? [];
         const unmarkedAlbum = albumNames.includes('Album 2');
+        const offset = (args as { offset?: number } | undefined)?.offset ?? 0;
+        const limit = (args as { limit?: number } | undefined)?.limit ?? 100;
+        if (albumNames.includes('Multi Disc')) {
+          const items = [
+            { id: 'track-Multi-Disc-1', title: 'Disc 2 Track 1', discNumber: 2, trackNumber: 1 },
+            { id: 'track-Multi-Disc-2', title: 'Disc 2 Track 2', discNumber: 2, trackNumber: 2 },
+            { id: 'track-Multi-Disc-3', title: 'Disc 4 Track 1', discNumber: 4, trackNumber: 1 },
+            { id: 'track-Multi-Disc-4', title: 'Unknown Disc 1 Track 9', discNumber: 1, trackNumber: 9 },
+            { id: 'track-Multi-Disc-5', title: 'Unknown Disc 0 Track 2', discNumber: 0, trackNumber: 2 },
+            { id: 'track-Multi-Disc-6', title: 'Unknown Disc Track 1', discNumber: null, trackNumber: 1 },
+          ].map((track) => ({
+            ...track, artist: null, album: 'Multi Disc', albumArtist: null, durationMs: 180000,
+            codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null,
+            bitDepth: 24, playedMs: 0, fileName: null,
+          }));
+          if ((args as { indexSort?: string | null } | undefined)?.indexSort === 'desc') {
+            items.sort((left, right) => {
+              const leftClass = (left.discNumber ?? 0) >= 2;
+              const rightClass = (right.discNumber ?? 0) >= 2;
+              if (leftClass !== rightClass) return leftClass ? -1 : 1;
+              if (leftClass && left.discNumber !== right.discNumber) return (right.discNumber ?? 0) - (left.discNumber ?? 0);
+              return (right.trackNumber ?? 0) - (left.trackNumber ?? 0);
+            });
+          } else {
+            items.sort((left, right) => {
+              const leftClass = (left.discNumber ?? 0) >= 2;
+              const rightClass = (right.discNumber ?? 0) >= 2;
+              if (leftClass !== rightClass) return leftClass ? -1 : 1;
+              if (leftClass && left.discNumber !== right.discNumber) return (left.discNumber ?? 0) - (right.discNumber ?? 0);
+              return (left.trackNumber ?? 0) - (right.trackNumber ?? 0);
+            });
+          }
+          return { offset, limit, totalCount: items.length, items: items.slice(offset, offset + limit) };
+        }
         return {
-          offset: (args as { offset?: number } | undefined)?.offset ?? 0,
-          limit: (args as { limit?: number } | undefined)?.limit ?? 100,
+          offset,
+          limit,
           totalCount: unmarkedAlbum ? 1 : 4,
           items: unmarkedAlbum
             ? [{ id: 'track-Album-2-1', title: 'Song 1', artist: null, album: null, albumArtist: null, trackNumber: 1, discNumber: 1, durationMs: 180000, codec: 'flac', bitrateBps: null, sampleRateHz: 48000, releaseDate: null, year: null, bitDepth: 24, playedMs: 0, fileName: null }]

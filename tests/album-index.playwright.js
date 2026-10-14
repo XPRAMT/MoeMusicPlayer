@@ -149,5 +149,26 @@
   assert(Math.abs(restoredAfterNavigation - restoredTarget) <= 1,
     `leaving and reopening the album homepage should restore scrollTop: ${restoredTarget} -> ${restoredAfterNavigation}`);
 
-  return { loadingStats, mosaicLayout, initial, afterResize, afterScroll, firstAlbumReadsAfterRemount, rawReadsAfterCachedDetail, restoredTarget, restoredAfterNavigation };
+  await page.locator('.album-grid-viewport').evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  const multiDiscCard = page.getByRole('button', { name: '開啟專輯「Multi Disc」，6 首曲目' });
+  await multiDiscCard.waitFor({ state: 'visible' });
+  await multiDiscCard.click();
+  await page.getByText('6 首曲目', { exact: true }).waitFor();
+  await page.waitForFunction(() => [...document.querySelectorAll('.paged-virtual-group-button')].map((button) => button.textContent?.trim()).join('|') === 'DISC 2|DISC 4|未知');
+  await page.getByRole('button', { name: '開啟「DISC 4」字首索引' }).click();
+  const discIndexChoices = page.locator('.quick-index-label-grid button');
+  assert((await discIndexChoices.allTextContents()).map((label) => label.trim()).join('|') === 'DISC 2|DISC 4|未知',
+    'disc quick index should list numbered discs followed by Unknown');
+  await page.locator('.quick-index-label').filter({ hasText: /^DISC 4$/ }).click();
+  await page.getByText('Disc 4 Track 1', { exact: true }).waitFor({ state: 'visible' });
+  await page.locator('.album-detail-tracks .index-sort-button').click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.paged-virtual-group-button')].map((button) => button.textContent?.trim()).join('|') === 'DISC 4|DISC 2|未知');
+  await page.getByRole('button', { name: '開啟「未知」字首索引' }).click();
+  await page.locator('.quick-index-label').filter({ hasText: /^未知$/ }).click();
+  await page.getByText('Unknown Disc 1 Track 9', { exact: true }).waitFor({ state: 'visible' });
+
+  return { loadingStats, mosaicLayout, initial, afterResize, afterScroll, firstAlbumReadsAfterRemount, rawReadsAfterCachedDetail, restoredTarget, restoredAfterNavigation, albumDiscQuickIndex: ['DISC 2', 'DISC 4', '未知'] };
 }

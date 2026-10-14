@@ -1595,7 +1595,35 @@ impl Database {
         )?.max(0) as u64;
         let limit = query_limit(requested_limit);
         let database_offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        let has_numbered_discs = if sort.is_none() && index_sort.is_some() {
+            connection.query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM tracks t
+                     WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
+                           IN (SELECT value FROM json_each(?1))
+                       AND t.disc_number >= 2
+                       AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                                   ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                 )",
+                [&names_json],
+                |row| row.get::<_, bool>(0),
+            )?
+        } else {
+            false
+        };
         let order_by = sort.map(tracks_order_by_sql).unwrap_or_else(|| match index_sort {
+            Some(direction) if has_numbered_discs => {
+                let disc_direction = if direction == TrackSortDirection::Desc { "DESC" } else { "ASC" };
+                let track_direction = disc_direction;
+                let title_direction = disc_direction;
+                format!(
+                    "(CASE WHEN t.disc_number >= 2 THEN 0 ELSE 1 END), \
+                     (CASE WHEN t.disc_number >= 2 THEN t.disc_number END) {disc_direction}, \
+                     (t.track_number IS NULL) ASC, t.track_number {track_direction}, \
+                     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL {title_direction}, \
+                     t.track_id {title_direction}"
+                )
+            }
             Some(TrackSortDirection::Desc) => "(t.disc_number IS NULL) ASC, t.disc_number DESC, \
                 (t.track_number IS NULL) ASC, t.track_number DESC, \
                 COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC".to_owned(),
@@ -5207,6 +5235,98 @@ mod tests {
                 .expect("empty aliases")
                 .total_count,
             0
+        );
+    }
+
+    #[test]
+    fn album_disc_index_sorts_numbered_discs_first_and_unknown_disc_tracks_last() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "album-disc-index");
+        let fixtures = [
+            ("disc2-track1", Some(2), 1),
+            ("disc2-track2", Some(2), 2),
+            ("disc3-track1", Some(3), 1),
+            ("disc1-track9", Some(1), 9),
+            ("disc0-track2", Some(0), 2),
+            ("unknown-track1", None, 1),
+        ];
+        let records = fixtures
+            .iter()
+            .enumerate()
+            .map(|(index, (title, disc_number, track_number))| {
+                let mut item = record(
+                    &root,
+                    &format!("{title}.flac"),
+                    &format!("{title}.flac"),
+                    title,
+                    1,
+                    1_800_000_000_100 + index as i64,
+                );
+                let metadata = item.metadata.as_mut().expect("metadata");
+                metadata.album = Some("Multi-disc".to_owned());
+                metadata.disc_number = *disc_number;
+                metadata.track_number = Some(*track_number);
+                item
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            1_800_000_000_200,
+        );
+
+        let aliases = ["Multi-disc".to_owned()];
+        let ascending = db
+            .list_album_tracks_page_with_index_sort(
+                &aliases,
+                None,
+                Some(TrackSortDirection::Asc),
+                0,
+                20,
+            )
+            .expect("ascending disc index");
+        assert_eq!(
+            ascending
+                .items
+                .iter()
+                .map(|item| item.title.as_deref().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            [
+                "disc2-track1",
+                "disc2-track2",
+                "disc3-track1",
+                "unknown-track1",
+                "disc0-track2",
+                "disc1-track9"
+            ]
+        );
+
+        let descending = db
+            .list_album_tracks_page_with_index_sort(
+                &aliases,
+                None,
+                Some(TrackSortDirection::Desc),
+                0,
+                20,
+            )
+            .expect("descending disc index");
+        assert_eq!(
+            descending
+                .items
+                .iter()
+                .map(|item| item.title.as_deref().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            [
+                "disc3-track1",
+                "disc2-track2",
+                "disc2-track1",
+                "disc1-track9",
+                "disc0-track2",
+                "unknown-track1"
+            ]
         );
     }
 

@@ -50,6 +50,7 @@
     onTotalCount?: (count: number | null) => void;
     sortable?: boolean;
     quickIndexEnabled?: boolean;
+    quickIndexOverride?: { labels: string[]; groups: { label: string; beforeIndex: number }[] } | null;
     sortableIndex?: boolean;
     sortIndicator?: { field: string; direction: 'asc' | 'desc' } | null;
     indexSortLabel?: string;
@@ -77,6 +78,7 @@
     onTotalCount,
     sortable = true,
     quickIndexEnabled = true,
+    quickIndexOverride,
     sortableIndex = false,
     sortIndicator,
     indexSortLabel,
@@ -119,6 +121,7 @@
     revision: 0,
   });
   let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[] } | null>(null);
+  let visibleQuickIndex = $derived(quickIndexOverride === undefined ? quickIndex : quickIndexOverride);
   let quickIndexGeneration = 0;
 
   async function requestTrackPage(request: TrackPageRequest): Promise<TrackPage> {
@@ -259,8 +262,8 @@
     fillAvailable={true}
     {listId}
     scrollResetKey={listScrollResetKey}
-    groupRows={quickIndex?.groups}
-    quickIndexLabels={quickIndex?.labels}
+    groupRows={visibleQuickIndex?.groups}
+    quickIndexLabels={visibleQuickIndex?.labels}
     ariaLabel={sortable
       ? '曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序'
       : '曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目'}

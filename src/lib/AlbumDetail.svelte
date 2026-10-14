@@ -10,6 +10,7 @@
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
   import TrackList from './TrackList.svelte';
   import { formatAlbumTrackNumber } from './format';
+  import { buildAlbumDiscQuickIndex } from './album-disc-index.js';
 
   interface Props {
     album: AlbumEntry;
@@ -32,9 +33,14 @@
   let artists = $state<string[]>([]);
   let scanning = $state(true);
   let scanError = $state<string | null>(null);
-  let hasMultipleDiscs = $state(false);
+  let hasDiscGroups = $state(false);
+  let albumDiscCounts = $state<{ discNumber: number; count: number }[]>([]);
+  let unknownDiscTrackCount = $state(0);
   let albumIndexSortActive = $state(true);
   let albumIndexSortDirection = $state<'asc' | 'desc'>('asc');
+  let albumDiscQuickIndex = $derived(albumIndexSortActive
+    ? buildAlbumDiscQuickIndex(albumDiscCounts, unknownDiscTrackCount, albumIndexSortDirection)
+    : undefined);
   const albumSortIndicator = $derived(albumIndexSortActive
     ? { field: 'position', direction: albumIndexSortDirection }
     : sort);
@@ -179,14 +185,17 @@
     scanning = true;
     scanError = null;
     artists = [];
-    hasMultipleDiscs = false;
+    hasDiscGroups = false;
+    albumDiscCounts = [];
+    unknownDiscTrackCount = 0;
     try {
       const key = await selectionKey();
       let stored: import('./ipc').AlbumArtworkSelection | null = null;
       try { stored = await invokeCommand('album_artwork_selection_get', { key }); } catch { /* rebuild cache on older installations */ }
       const usable = stored !== null && stored.trackCount === album.trackCount && stored.representative;
       const artistCounts = new Map<string, number>();
-      const discNumbers = new Set<number>();
+      const discCounts = new Map<number, number>();
+      let unknownCount = 0;
       let total = 0;
       for (let offset = 0; ; offset += PAGE_SIZE) {
         const page = await fetchPage({ query: '', offset, limit: PAGE_SIZE });
@@ -194,14 +203,21 @@
         total = page.totalCount;
         for (const track of page.items) {
           countArtists(artistCounts, track);
-          if (track.discNumber !== null && track.discNumber !== undefined) discNumbers.add(track.discNumber);
+          const discNumber = track.discNumber;
+          if (typeof discNumber === 'number' && Number.isInteger(discNumber) && discNumber >= 2) {
+            discCounts.set(discNumber, (discCounts.get(discNumber) ?? 0) + 1);
+          } else {
+            unknownCount += 1;
+          }
         }
         if (page.items.length === 0 || offset + page.items.length >= total) break;
       }
       const resolvedArtists = await resolveArtists(artistCounts);
       if (current !== revision) return;
       artists = resolvedArtists;
-      hasMultipleDiscs = discNumbers.size > 1;
+      albumDiscCounts = [...discCounts].map(([discNumber, count]) => ({ discNumber, count }));
+      unknownDiscTrackCount = unknownCount;
+      hasDiscGroups = discCounts.size > 0;
 
       let selectedIds = usable && stored ? stored.trackIds.slice(0, 4) : [];
       if (selectedIds.length === 0) {
@@ -255,7 +271,7 @@
       <AlbumArtworkMosaic sources={displayedCoverUrls} label={`${album.displayName} 封面拼貼`} />
     </div>
     <div class="album-detail-summary">
-      <strong>{album.unmarked ? '未標記專輯' : album.displayName}</strong>
+      <strong>{album.displayName}</strong>
       <span>{artists.length ? artists.join('．') : '—'}</span>
       <span>{album.trackCount.toLocaleString()} 首曲目</span>
       {#if scanError}<span class="album-detail-error" role="status">封面整理失敗：{scanError}</span>{/if}
@@ -270,7 +286,8 @@
       {selectedTrackId} {playbackReady} {isSendingPlaybackCommand} {columns} {columnWidths} {rowHeightPx} {sort} {livePlayCount}
       fetchPage={fetchPage} {onPlay} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
       sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel="依專輯曲目編號排序" onIndexSort={handleIndexSort}
-      getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber, hasMultipleDiscs ? track.discNumber : null)}
+      quickIndexOverride={albumDiscQuickIndex}
+      getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber, hasDiscGroups && (track.discNumber ?? 0) >= 2 ? track.discNumber : null)}
     />
   </div>
 </div>

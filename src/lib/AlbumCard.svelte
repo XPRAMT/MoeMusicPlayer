@@ -199,18 +199,16 @@
   onDestroy(() => { destroyed = true; requestRevision += 1; releaseArtworkCacheLease?.(); });
 </script>
 
-<button class="album-card" type="button" bind:this={card} onclick={() => onSelect(album)} aria-label={`開啟專輯「${album.displayName}」${album.unmarked ? '，未標記' : ''}，${album.trackCount} 首曲目`}>
+<button class="album-card" type="button" bind:this={card} onclick={() => onSelect(album)} aria-label={`開啟專輯「${album.displayName}」，${album.trackCount} 首曲目`}>
   <span class="album-card-art" aria-hidden="true">
     <AlbumArtworkMosaic sources={displayedImageUrls} />
   </span>
   <span class="album-card-name">{album.displayName}</span>
-  {#if album.unmarked}<span class="album-card-unmarked">未標記</span>{/if}
 </button>
 
 <style>
   .album-card { display:flex; width:var(--album-card-width); height:calc(var(--album-card-width) + 48px); min-width:var(--album-card-width); flex:0 0 var(--album-card-width); flex-direction:column; gap:8px; padding:0; border:0; color:var(--text); background:transparent; text-align:left; cursor:pointer; }
   .album-card-art { display:block; width:var(--album-card-width); height:var(--album-card-width); flex:0 0 var(--album-card-width); box-sizing:border-box; overflow:hidden; border-radius:10px; background:#000; }
   .album-card-name { overflow:hidden; font-size:var(--font-body); line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
-  .album-card-unmarked { margin-top:-7px; color:var(--muted); font-size:var(--font-caption); }
   .album-card:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:10px; }
 </style>

@@ -42,7 +42,7 @@ export async function buildAlbumEntries(facets) {
     const traditionalByName = new Map(aliases.map(({ name }) => [name, traditionalNames.get(name) ?? name]));
     return {
       key,
-      displayName: group.unmarked ? '其它' : preferredArtistName(aliases, traditionalByName),
+      displayName: group.unmarked ? '未知' : preferredArtistName(aliases, traditionalByName),
       aliases: [...group.queryAliases],
       trackCount: group.trackCount,
       unmarked: group.unmarked,
