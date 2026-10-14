@@ -204,6 +204,7 @@
     start: range.start,
     end: range.end,
     totalCount: virtualDataCount,
+    revision,
     itemAt,
     getKey,
   }));
@@ -712,7 +713,7 @@
         style={`transform:translateY(${dataIndexToVisualIndex(dragToIndex, renderGroupRows) * rowHeight + (dragToIndex > dragFromIndex ? rowHeight - 2 : 0)}px)`}
       ></div>
     {/if}
-    {#each virtualRows as virtualRow (virtualRow.key)}
+    {#each virtualRows.rows as virtualRow (virtualRow.key)}
       {@const id = `${listId}-row-${virtualRow.visualIndex}`}
       {#if virtualRow.kind === 'group'}
         <div

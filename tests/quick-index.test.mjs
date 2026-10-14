@@ -33,20 +33,51 @@ test('complete grouping renders its group and track rows without waiting for a s
     start: 0,
     end: 2,
     totalCount: 1,
+    revision: 1,
     itemAt: (index) => items[index] ?? null,
     getKey: (item) => item.id,
   };
-  assert.deepEqual(buildPagedVirtualRows({ ...input, ready: false }), [], 'partial grouping must remain hidden');
+  assert.deepEqual(buildPagedVirtualRows({ ...input, ready: false }).rows, [], 'partial grouping must remain hidden');
 
   const rendered = buildPagedVirtualRows({
     ...input,
     ready: true,
+    revision: 7,
   });
 
-  assert.deepEqual(rendered, [
+  assert.equal(rendered.revision, 7, 'page revisions must flow into the derived virtual rows');
+  assert.deepEqual(rendered.rows, [
     { kind: 'group', visualIndex: 0, label: 'A', key: 'quick-index:0:A' },
     { kind: 'item', visualIndex: 1, index: 0, item: items[0], key: 'track-a' },
   ]);
+});
+
+test('a page revision rebuilds a stable non-grouped visible range', () => {
+  const cachedTrack = { id: 'track-a' };
+  const first = buildPagedVirtualRows({
+    ready: true,
+    groups: [],
+    start: 0,
+    end: 1,
+    totalCount: 1,
+    revision: 1,
+    itemAt: () => null,
+    getKey: (item) => item.id,
+  });
+  const afterPageLoad = buildPagedVirtualRows({
+    ready: true,
+    groups: [],
+    start: 0,
+    end: 1,
+    totalCount: 1,
+    revision: 2,
+    itemAt: () => cachedTrack,
+    getKey: (item) => item.id,
+  });
+
+  assert.deepEqual(first.rows.map(({ item }) => item), [null]);
+  assert.equal(afterPageLoad.revision, 2);
+  assert.deepEqual(afterPageLoad.rows.map(({ item }) => item), [cachedTrack]);
 });
 
 test('the initial viewport range is requested while grouping is still pending', () => {

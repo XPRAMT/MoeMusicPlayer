@@ -6,12 +6,12 @@ const quickIndexCache = new Map();
  * publishes `ready` after the full scan, so no mirrored group-row state or
  * second synchronization pass is required before tracks can render.
  * @template Item
- * @param {{ ready: boolean, groups: Array<{ label: string, beforeIndex: number }>, start: number, end: number, totalCount: number, itemAt: (index: number) => Item | null, getKey: (item: Item, index: number) => string | number }} options
+ * @param {{ ready: boolean, groups: Array<{ label: string, beforeIndex: number }>, start: number, end: number, totalCount: number, revision: number, itemAt: (index: number) => Item | null, getKey: (item: Item, index: number) => string | number }} options
  */
-export function buildPagedVirtualRows({ ready, groups, start, end, totalCount, itemAt, getKey }) {
+export function buildPagedVirtualRows({ ready, groups, start, end, totalCount, revision, itemAt, getKey }) {
   /** @type {Array<{ kind: 'group', visualIndex: number, label: string, key: string } | { kind: 'item', visualIndex: number, index: number, item: Item | null, key: string | number }>} */
   const rows = [];
-  if (!ready) return rows;
+  if (!ready) return { revision, rows };
   for (let visualIndex = start; visualIndex < end; visualIndex += 1) {
     let groupRow = null;
     for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
@@ -29,7 +29,7 @@ export function buildPagedVirtualRows({ ready, groups, start, end, totalCount, i
     const item = itemAt(index);
     rows.push({ kind: 'item', visualIndex, index, item, key: item === null ? `loading:${index}` : getKey(item, index) });
   }
-  return rows;
+  return { revision, rows };
 }
 
 /**

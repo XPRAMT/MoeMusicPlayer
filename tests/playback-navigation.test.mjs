@@ -154,6 +154,13 @@ test('sidebar list routes remount for fresh data and restore each virtual list p
   assert.match(openPlaylistPage, /activeView = 'playlists'/);
 });
 
+test('visible virtual rows depend on the page revision even when the range is unchanged', () => {
+  const virtualRows = /const virtualRows = \$derived\(buildPagedVirtualRows\(\{([\s\S]*?)\}\)\);/.exec(pagedVirtualListSource);
+  assert.ok(virtualRows, 'visible rows should be derived through the shared paged-row builder');
+  assert.match(virtualRows[1], /\brevision\s*,/, 'page cache changes must invalidate visible rows');
+  assert.match(pagedVirtualListSource, /#each virtualRows\.rows as virtualRow/);
+});
+
 test('Now Playing overlays the retained route without duplicating sync or native playback details', () => {
   const sourcesPanel = appSource.indexOf('id="{scope}sources-panel"');
   const syncBannerStart = appSource.indexOf('class="sync-progress-banner"', sourcesPanel);
