@@ -945,14 +945,15 @@
 
   .quick-index-label-grid {
     display: grid;
-    grid-template-columns: repeat(10, var(--paged-row-height));
+    grid-template-columns: repeat(10, 2em);
     gap: 4px;
+    font-size: var(--font-body);
   }
 
   .quick-index-label {
     display: grid;
-    width: var(--paged-row-height);
-    height: var(--paged-row-height);
+    width: 2em;
+    height: 2em;
     box-sizing: border-box;
     min-height: 0;
     place-items: center;
@@ -961,7 +962,7 @@
     color: var(--text);
     background: transparent;
     cursor: pointer;
-    font: var(--font-body);
+    font: inherit;
   }
 
   .quick-index-label:hover:not(:disabled) {
