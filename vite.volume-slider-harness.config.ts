@@ -9,7 +9,10 @@ export default defineConfig({
     outDir: 'target/volume-slider-dom',
     emptyOutDir: true,
     rollupOptions: {
-      input: 'tests/volume-slider-harness.html',
+      input: {
+        volumeSlider: 'tests/volume-slider-harness.html',
+        quickIndex: 'tests/quick-index-harness.html',
+      },
     },
   },
 });

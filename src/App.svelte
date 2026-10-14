@@ -71,6 +71,7 @@
     normalizeThemePreferences,
   } from './lib/theme';
   import { getBackdropTargetPercent, resolveBackdropContrast } from './lib/backdrop-contrast.js';
+  import { createDecodedImageObjectUrl } from './lib/decoded-image-object-url.js';
   import { splitArtists } from './lib/artist-names.js';
   import { buildArtistIdentityMappings, findArtistEntryByName, preferredArtistName } from './lib/artist-identities.js';
   import { readDetailNavigationRoute, withDetailNavigationRoute } from './lib/detail-navigation-history.js';
@@ -893,6 +894,7 @@
     window.removeEventListener('keydown', handleShortcutKeydown, true);
     window.removeEventListener('mousedown', handleShortcutMouseDown, true);
     window.removeEventListener('wheel', handleShortcutWheel, true);
+    mainBackgroundReadRevision += 1;
     if (mainBackgroundObjectUrl) URL.revokeObjectURL(mainBackgroundObjectUrl);
   });
 
@@ -902,7 +904,8 @@
     try {
       const bytes = await getMainBackgroundBytes();
       if (revision !== mainBackgroundReadRevision) return;
-      setMainBackgroundBytes(bytes);
+      await setMainBackgroundBytes(bytes, revision);
+      if (revision !== mainBackgroundReadRevision) return;
       mainBackgroundError = null;
     } catch (error) {
       if (revision !== mainBackgroundReadRevision) return;
@@ -915,7 +918,9 @@
     try {
       const bytes = await nextSlideshowBackgroundBytes();
       if (revision !== mainBackgroundReadRevision || themePreferences.mainBackgroundMode !== 'slideshow') return;
-      setMainBackgroundBytes(bytes);
+      if (bytes.byteLength === 0) return;
+      await setMainBackgroundBytes(bytes, revision);
+      if (revision !== mainBackgroundReadRevision || themePreferences.mainBackgroundMode !== 'slideshow') return;
       mainBackgroundError = null;
     } catch (error) {
       if (revision !== mainBackgroundReadRevision) return;
@@ -923,7 +928,7 @@
     }
   }
 
-  function setMainBackgroundBytes(bytes: ArrayBuffer): void {
+  async function setMainBackgroundBytes(bytes: ArrayBuffer, revision: number): Promise<void> {
     const data = new Uint8Array(bytes);
     let hash = 2166136261;
     for (const byte of data) {
@@ -932,16 +937,37 @@
     }
     const nextHash = `${data.byteLength}:${hash >>> 0}`;
     if (nextHash === mainBackgroundBytesHash) return;
-    mainBackgroundBytesHash = nextHash;
-    if (mainBackgroundObjectUrl) URL.revokeObjectURL(mainBackgroundObjectUrl);
+
     const mimeType = bytes.byteLength > 0 ? detectArtworkMimeType(bytes) : null;
     if (!mimeType) {
-      mainBackgroundObjectUrl = null;
-      mainBackgroundUrl = null;
+      if (revision !== mainBackgroundReadRevision) return;
+      clearMainBackgroundImage();
       return;
     }
-    mainBackgroundObjectUrl = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
-    mainBackgroundUrl = mainBackgroundObjectUrl;
+    const nextObjectUrl = await createDecodedImageObjectUrl(bytes, mimeType);
+    if (revision !== mainBackgroundReadRevision) {
+      URL.revokeObjectURL(nextObjectUrl);
+      return;
+    }
+
+    const previousObjectUrl = mainBackgroundObjectUrl;
+    mainBackgroundObjectUrl = nextObjectUrl;
+    mainBackgroundUrl = nextObjectUrl;
+    mainBackgroundBytesHash = nextHash;
+    await tick();
+    if (previousObjectUrl && previousObjectUrl !== nextObjectUrl) {
+      URL.revokeObjectURL(previousObjectUrl);
+    }
+  }
+
+  function clearMainBackgroundImage(): void {
+    const previousObjectUrl = mainBackgroundObjectUrl;
+    mainBackgroundObjectUrl = null;
+    mainBackgroundBytesHash = '';
+    mainBackgroundUrl = null;
+    if (previousObjectUrl) {
+      void tick().then(() => URL.revokeObjectURL(previousObjectUrl));
+    }
   }
 
   function updateMainBackgroundLook(patch: Partial<ThemePreferences>): void {
@@ -1013,7 +1039,7 @@
     mainBackgroundReadRevision += 1;
     try {
       await invokeCommand('appearance_clear_main_background', {});
-      setMainBackgroundBytes(new ArrayBuffer(0));
+      clearMainBackgroundImage();
     } catch (error) {
       mainBackgroundError = getErrorText(error);
     } finally {
@@ -1026,7 +1052,7 @@
     if (mode === 'systemWallpaper' && capabilities?.platform !== 'windows') return;
     mainBackgroundReadRevision += 1;
     updateMainBackgroundLook({ mainBackgroundMode: mode });
-    setMainBackgroundBytes(new ArrayBuffer(0));
+    clearMainBackgroundImage();
     saveThemePreferencesNow();
     await themeSaveQueue;
     await loadMainBackground();

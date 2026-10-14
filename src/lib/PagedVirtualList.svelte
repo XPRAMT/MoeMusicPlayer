@@ -161,8 +161,11 @@
   let autoScrollFrame = 0;
   let latestPointerClientY = 0;
   let quickIndexOpen = $state(false);
-  let quickIndexLeft = $state(0);
-  let quickIndexTop = $state(0);
+  let quickIndexCenterX = $state(0);
+  let quickIndexCenterY = $state(0);
+  let quickIndexColumns = $state(1);
+  let quickIndexMaxWidth = $state(0);
+  let quickIndexMaxHeight = $state(0);
   let quickIndexDialog: HTMLDivElement | undefined = $state();
   let quickIndexTrigger: HTMLButtonElement | null = null;
   let previousGroupRows: QuickIndexGroup[] = [];
@@ -246,6 +249,15 @@
         viewport.scrollTop = restoredScrollTop;
         hadVisibleViewport = true;
       }
+      const restoredRange = getVirtualRange(
+        restoredScrollTop,
+        viewportHeight,
+        virtualTotalCount,
+        rowHeight,
+        overscan,
+        0,
+      );
+      onRange(visualRangeToDataRange(restoredRange.start, restoredRange.end, groupRows, virtualDataCount));
       pendingListRestore = null;
     }
     seenListId = currentListId;
@@ -433,12 +445,24 @@
   }
 
   function openQuickIndex(event: MouseEvent): void {
-    const button = event.currentTarget as HTMLButtonElement;
-    const rect = button.getBoundingClientRect();
-    const width = Math.min(360, window.innerWidth - 24);
-    quickIndexLeft = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left));
-    quickIndexTop = Math.max(12, Math.min(window.innerHeight - 280, rect.bottom + 6));
-    quickIndexTrigger = button;
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    const probe = document.createElement('span');
+    probe.style.position = 'fixed';
+    probe.style.display = 'block';
+    probe.style.visibility = 'hidden';
+    probe.style.font = getComputedStyle(viewport).font;
+    probe.style.width = '10ch';
+    probe.style.boxSizing = 'border-box';
+    document.body.append(probe);
+    const columnWidth = probe.getBoundingClientRect().width;
+    probe.remove();
+    quickIndexCenterX = rect.left + rect.width / 2;
+    quickIndexCenterY = rect.top + rect.height / 2;
+    quickIndexMaxWidth = Math.max(0, rect.width - 24);
+    quickIndexMaxHeight = Math.max(0, rect.height - 24);
+    quickIndexColumns = Math.max(1, Math.floor((quickIndexMaxWidth - 24 + 4) / (columnWidth + 4)));
+    quickIndexTrigger = event.currentTarget as HTMLButtonElement;
     quickIndexOpen = true;
   }
 
@@ -707,10 +731,9 @@
   </div>
   {#if quickIndexOpen}
     <button type="button" class="quick-index-backdrop" aria-label="關閉首字索引" onclick={() => closeQuickIndex()}></button>
-    <div bind:this={quickIndexDialog} class="quick-index-popover floating-surface" style={`left:${quickIndexLeft}px;top:${quickIndexTop}px`} role="dialog" aria-modal="true" aria-label="快速首字查找" tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
+    <div bind:this={quickIndexDialog} class="quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${quickIndexColumns};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label="快速首字查找" tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
       <header class="quick-index-popover-header">
         <strong>快速首字查找</strong>
-        <button type="button" class="soft-button" onclick={() => closeQuickIndex()}>關閉</button>
       </header>
       <div class="quick-index-label-grid">
         {#each quickIndexLabels as label (label)}
@@ -892,13 +915,16 @@
     position: fixed;
     z-index: 221;
     display: flex;
-    width: min(360px, calc(100vw - 24px));
-    max-height: min(70vh, 520px);
+    width: max-content;
+    max-width: min(calc(100vw - 24px), var(--quick-index-max-width));
+    max-height: var(--quick-index-max-height);
     flex-direction: column;
     gap: 10px;
     padding: 12px;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     box-sizing: border-box;
+    transform: translate(-50%, -50%);
   }
 
   .quick-index-popover-header {
@@ -914,13 +940,14 @@
 
   .quick-index-label-grid {
     display: grid;
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--quick-index-columns), 10ch);
     gap: 4px;
   }
 
   .quick-index-label {
     display: grid;
-    min-width: 0;
+    width: 10ch;
+    box-sizing: border-box;
     min-height: 34px;
     place-items: center;
     border: 1px solid transparent;

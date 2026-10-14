@@ -73,16 +73,46 @@
     lineGapPx: 24,
   };
   let artworkPromise;
+  const nativeImageDecode = HTMLImageElement.prototype.decode;
   const appearanceHarness = {
     requests: [],
     holdAcks: false,
     pendingAcks: [],
     failNext: false,
     slideshowRequests: 0,
+    provideSlideshowImages: false,
+    holdImageDecode: false,
+    imageDecodeRequests: 0,
+    pendingImageDecodes: [],
+    releaseImageDecode() {
+      appearanceHarness.pendingImageDecodes.shift()?.();
+    },
     releaseAck() {
       appearanceHarness.pendingAcks.shift()?.();
     },
   };
+  HTMLImageElement.prototype.decode = function () {
+    if (!appearanceHarness.holdImageDecode || !this.src.startsWith('blob:')) {
+      return nativeImageDecode.call(this);
+    }
+    appearanceHarness.imageDecodeRequests += 1;
+    return new Promise((resolve, reject) => {
+      appearanceHarness.pendingImageDecodes.push(() => {
+        nativeImageDecode.call(this).then(resolve, reject);
+      });
+    });
+  };
+  async function slideshowArtworkBytes(color) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 16;
+    canvas.height = 16;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas is unavailable');
+    context.fillStyle = color;
+    context.fillRect(0, 0, 16, 16);
+    const blob = await new Promise((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error('PNG encoding failed')), 'image/png'));
+    return blob.arrayBuffer();
+  }
   async function brightArtworkBytes() {
     if (!artworkPromise) {
       artworkPromise = new Promise((resolve, reject) => {
@@ -173,11 +203,14 @@
           storedTheme = clone(args.preferences);
           localStorage.setItem('__themePreferences', JSON.stringify(storedTheme));
           return clone(storedTheme);
+        case 'library_get_quick_index_groupings':
+          return { labels: ['A', 'B', '#'], groups: args.values.map((value) => value.trim()[0]?.toUpperCase() || '#') };
         case 'appearance_get_main_background':
           return new ArrayBuffer(0);
         case 'appearance_next_slideshow_background':
           appearanceHarness.slideshowRequests += 1;
-          return new ArrayBuffer(0);
+          if (!appearanceHarness.provideSlideshowImages) return new ArrayBuffer(0);
+          return slideshowArtworkBytes(appearanceHarness.slideshowRequests % 2 ? '#e03050' : '#3050e0');
         case 'appearance_pick_main_background':
         case 'appearance_pick_slideshow_folder':
           return null;

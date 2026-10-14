@@ -182,6 +182,7 @@ async page => {
   }, 20);
   await page.evaluate(() => { window.__slideshowTestClock.offsetMs += 10 * 60_000; });
   const previousSlideRequests = await page.evaluate(() => window.__appearanceHarness.slideshowRequests);
+  await page.evaluate(() => { window.__appearanceHarness.provideSlideshowImages = true; });
   await intervalSlider.evaluate((input, value) => {
     input.value = String(value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -191,6 +192,29 @@ async page => {
     const value = document.querySelector('.slideshow-countdown')?.textContent?.trim();
     return value === '下一張 10:00' || value === '下一張 09:59';
   }, null, { timeout: 2500 });
+  await page.waitForSelector('.main-backdrop img');
+  await page.waitForFunction(() => document.querySelector('.main-backdrop img')?.complete
+    && document.querySelector('.main-backdrop img')?.naturalWidth === 16);
+  const displayedSlideBeforeDecode = await page.locator('.main-backdrop img').getAttribute('src');
+  await page.evaluate(() => {
+    window.__appearanceHarness.holdImageDecode = true;
+    window.__slideshowTestClock.offsetMs += 10 * 60_000;
+  });
+  const requestsBeforeHeldDecode = await page.evaluate(() => window.__appearanceHarness.slideshowRequests);
+  await intervalSlider.evaluate((input) => {
+    input.value = '1';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForFunction((previous) => window.__appearanceHarness.slideshowRequests === previous + 1, requestsBeforeHeldDecode, { timeout: 2500 });
+  await page.waitForFunction(() => window.__appearanceHarness.pendingImageDecodes.length === 1, null, { timeout: 2500 });
+  assert(await page.locator('.main-backdrop img').getAttribute('src') === displayedSlideBeforeDecode, 'previous slideshow image must remain displayed until replacement decode completes');
+  await page.evaluate(() => {
+    window.__appearanceHarness.holdImageDecode = false;
+    window.__appearanceHarness.releaseImageDecode();
+  });
+  await page.waitForFunction((previous) => document.querySelector('.main-backdrop img')?.getAttribute('src') !== previous, displayedSlideBeforeDecode, { timeout: 2500 });
+  await page.waitForFunction(() => document.querySelector('.main-backdrop img')?.complete
+    && document.querySelector('.main-backdrop img')?.naturalWidth === 16);
   await page.evaluate(() => { Date.now = window.__slideshowTestClock.realNow; });
   assert(await page.getByRole('slider', { name: '主介面背景縮放' }).count() === 0, 'slideshow mode must not show background zoom');
   await page.getByRole('button', { name: '專輯封面', exact: true }).click();
