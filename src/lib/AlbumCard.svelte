@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
   import { getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBase64, putAlbumThumbnailBase64ForTrack } from './ipc';
-  import { acquireAlbumCardArtwork, copyToArrayBuffer, createAlbumThumbnailInWorker, loadAlbumCardThumbnails, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
+  import { acquireAlbumCardArtwork, albumCardArtworkMemoryKey, copyToArrayBuffer, createAlbumThumbnailInWorker, getAlbumArtworkSelectionRevision, getAlbumCardSelectionTrackIds, loadAlbumCardThumbnails, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
   import type { AlbumIndexSortField } from './ipc';
   import { formatDurationHours } from './format';
@@ -14,14 +14,16 @@
   let card = $state<HTMLElement | undefined>(undefined);
   let inViewport = $state(false);
   let imageUrls = $state<string[]>([]);
-  let artworkRevision = $state(0);
+  // Read the album-wide revision before the first cache lookup so a remounted
+  // virtual card cannot briefly acquire a stale selection under revision 0.
+  let artworkRevision = $state(untrack(() => getAlbumArtworkSelectionRevision(album.key)));
   let busy = false;
   let destroyed = false;
   let requestRevision = 0;
   let cacheResolved = false;
   let releaseArtworkCacheLease: (() => void) | null = null;
 
-  const memoryCacheKey = $derived(`${refreshKey}:${album.key}:${artworkRevision}`);
+  const memoryCacheKey = $derived(albumCardArtworkMemoryKey(refreshKey, album.key, artworkRevision));
   const displayedImageUrls = $derived(resolveAlbumArtworkDisplaySources(imageUrls, {
     fallbackUrl: defaultCoverUrl,
     resolved: cacheResolved || album.unmarked,
@@ -101,12 +103,13 @@
         });
       } catch { return false; }
       if (!selection || selection.trackCount !== album.trackCount || revision !== requestRevision) return false;
-      if (selection.trackIds.length === 0) {
+      const selectedTrackIds = getAlbumCardSelectionTrackIds(selection);
+      if (selectedTrackIds.length === 0) {
         // Empty selections are persisted negative-cache entries: this album has no readable cover.
         remember([], 0);
         return true;
       }
-      const loaded = await loadAlbumCardThumbnails(selection.trackIds, loadTrackThumbnail);
+      const loaded = await loadAlbumCardThumbnails(selectedTrackIds, loadTrackThumbnail);
       if (!active || destroyed || revision !== requestRevision) {
         loaded.urls.forEach((url) => URL.revokeObjectURL(url));
         return false;
@@ -172,7 +175,7 @@
       requestRevision += 1;
       busy = false;
       cacheResolved = false;
-      artworkRevision += 1;
+      artworkRevision = getAlbumArtworkSelectionRevision(album.key);
       if (active && inViewport) void loadCover();
     };
     window.addEventListener('album-artwork-selection-updated', refreshSelection);

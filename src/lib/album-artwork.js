@@ -25,6 +25,31 @@ const ALBUM_CARD_MEMORY_CACHE_MAX_BYTES = 128 * 1024 * 1024;
 /** @type {Map<string, { value: string | string[] | null, bytes: number, leases: number }>} */
 const albumCardMemoryCache = new Map();
 let albumCardMemoryCacheBytes = 0;
+const albumArtworkSelectionRevisions = new Map();
+
+/** @param {string} albumKey */
+export function getAlbumArtworkSelectionRevision(albumKey) {
+  return albumArtworkSelectionRevisions.get(albumKey) ?? 0;
+}
+
+/** @param {string} albumKey */
+export function advanceAlbumArtworkSelectionRevision(albumKey) {
+  const revision = getAlbumArtworkSelectionRevision(albumKey) + 1;
+  albumArtworkSelectionRevisions.set(albumKey, revision);
+  return revision;
+}
+
+/** @param {number} refreshKey @param {string} albumKey @param {number} selectionRevision */
+export function albumCardArtworkMemoryKey(refreshKey, albumKey, selectionRevision) {
+  return `${refreshKey}:${albumKey}:${selectionRevision}`;
+}
+
+/** @param {{ representative: boolean, trackIds: string[] } | null | undefined} selection */
+export function getAlbumCardSelectionTrackIds(selection) {
+  if (!selection || !Array.isArray(selection.trackIds)) return [];
+  const uniqueTrackIds = [...new Set(selection.trackIds)];
+  return uniqueTrackIds.slice(0, selection.representative === true ? 4 : 1);
+}
 
 /** Keep album cards and detail headers on the same confirmed no-cover fallback. */
 /** @param {string[]} sources @param {{ fallbackUrl: string, resolved: boolean }} options */

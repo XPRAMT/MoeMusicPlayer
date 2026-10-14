@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type QuickIndexSnapshot, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
-  import { copyToArrayBuffer, createAlbumThumbnail, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
+  import { advanceAlbumArtworkSelectionRevision, copyToArrayBuffer, createAlbumThumbnail, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import { detectArtworkMimeType } from './active-track-artwork';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
@@ -161,6 +161,7 @@
         ownedCoverUrls = urls;
         coverUrls = urls;
         coverScanResolved = true;
+        advanceAlbumArtworkSelectionRevision(album.key);
         window.dispatchEvent(new CustomEvent('album-artwork-selection-updated', { detail: { albumKey: album.key } }));
       } else {
         urls.forEach((url) => URL.revokeObjectURL(url));

@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   acquireAlbumCardArtwork,
+  advanceAlbumArtworkSelectionRevision,
+  albumCardArtworkMemoryKey,
+  getAlbumArtworkSelectionRevision,
+  getAlbumCardSelectionTrackIds,
   hashDistance,
   loadAlbumCardThumbnails,
   perceptualHash32,
@@ -55,6 +59,24 @@ test('album home cards load the complete representative-cover mosaic before retu
   assert.deepEqual(loaded, ['most-used', 'second', 'third', 'fourth']);
   assert.deepEqual(result.urls, ['blob:most-used', 'blob:second', 'blob:third', 'blob:fourth']);
   assert.equal(result.bytes, 'most-used'.length + 'second'.length + 'third'.length + 'fourth'.length);
+});
+
+test('album home uses one initial cover until detail analysis marks a selection representative', () => {
+  assert.deepEqual(getAlbumCardSelectionTrackIds({ representative: false, trackIds: ['first', 'second', 'third', 'fourth'] }), ['first']);
+  assert.deepEqual(getAlbumCardSelectionTrackIds({ representative: true, trackIds: ['first', 'first', 'second', 'third', 'fourth', 'fifth'] }), ['first', 'second', 'third', 'fourth']);
+});
+
+test('detail artwork updates invalidate stale in-memory card selections across unmounts', () => {
+  const albumKey = `detail-refresh-${crypto.randomUUID()}`;
+  const revision = getAlbumArtworkSelectionRevision(albumKey);
+  const oldKey = albumCardArtworkMemoryKey(3, albumKey, revision);
+  const oldUrl = URL.createObjectURL(new Blob(['old cover']));
+  rememberAlbumCardArtwork(oldKey, [oldUrl], 9).release();
+
+  assert.equal(advanceAlbumArtworkSelectionRevision(albumKey), revision + 1);
+  const currentKey = albumCardArtworkMemoryKey(3, albumKey, getAlbumArtworkSelectionRevision(albumKey));
+  assert.notEqual(currentKey, oldKey);
+  assert.equal(acquireAlbumCardArtwork(currentKey), null, 'a remounted card must not reuse the old one-cover cache');
 });
 
 test('album home artwork result waits for selected thumbnails and skips unavailable covers', async () => {
