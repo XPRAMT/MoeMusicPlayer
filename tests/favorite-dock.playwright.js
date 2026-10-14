@@ -14,13 +14,14 @@ const firstTrack = await page.evaluate(() => {
   return {
     favoriteColor: getComputedStyle(heartButton).color,
     shuffleColor: getComputedStyle(shuffleButton).color,
-    heartFill: getComputedStyle(heartSvg).fill,
+    heartIcon: heartSvg.classList.contains('tabler-icon-heart-check') ? 'heart-check' : heartSvg.classList.contains('tabler-icon-heart') ? 'heart' : 'unknown',
+    heartPaths: heartSvg.querySelectorAll('path').length,
     heartPressed: heartButton.getAttribute('aria-pressed'),
     calls: [...window.__favoriteDockHarness.calls],
   };
 });
-if (firstTrack.heartPressed !== 'true' || firstTrack.heartFill === 'none') {
-  throw new Error(`Favorited track did not show a solid heart: ${JSON.stringify(firstTrack)}`);
+if (firstTrack.heartPressed !== 'true' || firstTrack.heartIcon !== 'heart-check' || firstTrack.heartPaths !== 2) {
+  throw new Error(`Favorited track did not show the checked outline heart: ${JSON.stringify(firstTrack)}`);
 }
 if (firstTrack.favoriteColor !== 'rgb(230, 230, 230)' || firstTrack.shuffleColor !== 'rgb(230, 230, 230)') {
   throw new Error(`Dock active controls used a non-neutral color: ${JSON.stringify(firstTrack)}`);
@@ -50,10 +51,10 @@ await page.waitForTimeout(350);
 const afterStaleReply = await page.evaluate(() => ({
   currentTrack: document.querySelector('[data-testid="current-track"]').textContent,
   favoritePressed: document.querySelector('.dock-favorite').getAttribute('aria-pressed'),
-  heartFill: getComputedStyle(document.querySelector('.dock-favorite svg')).fill,
+  heartIcon: document.querySelector('.dock-favorite svg').classList.contains('tabler-icon-heart') ? 'heart' : 'other',
   calls: [...window.__favoriteDockHarness.calls],
 }));
-if (afterStaleReply.currentTrack !== 'track-three' || afterStaleReply.favoritePressed !== 'false' || afterStaleReply.heartFill !== 'none') {
+if (afterStaleReply.currentTrack !== 'track-three' || afterStaleReply.favoritePressed !== 'false' || afterStaleReply.heartIcon !== 'heart') {
   throw new Error(`A stale playlist response replaced the current track state: ${JSON.stringify(afterStaleReply)}`);
 }
 if (!afterStaleReply.calls.includes('track-two') || !afterStaleReply.calls.includes('track-three')) {

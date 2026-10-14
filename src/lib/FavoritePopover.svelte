@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { IconHeart, IconPlus } from '@tabler/icons-svelte-runes';
+  import { IconHeart, IconHeartCheck, IconPlus } from '@tabler/icons-svelte-runes';
   import { invokeCommand, type FavoritePlaylist, type FavoritePlaylists } from './ipc';
   import { getPopoverHorizontalShiftPx } from './volume-popover-position.js';
 
@@ -190,7 +190,11 @@
     disabled={!trackId || platform === 'unsupported'}
     onclick={toggle}
   >
-    <IconHeart size={21} stroke={1.6} fill={isFavorited ? 'currentColor' : 'none'} aria-hidden="true" />
+    {#if isFavorited}
+      <IconHeartCheck size={21} stroke={1.6} aria-hidden="true" />
+    {:else}
+      <IconHeart size={21} stroke={1.6} aria-hidden="true" />
+    {/if}
   </button>
   {#if open}
     <div
