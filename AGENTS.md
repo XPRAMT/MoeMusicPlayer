@@ -358,7 +358,7 @@
 
 自動驗證：`npm run check`、`node --test`、player-db 與 moemusicplayer Rust 單元測試、workspace Clippy 與 rustfmt。使用者要求不執行瀏覽器、Chrome 或 Playwright 測試；自動測試不代表 Windows 實際視覺／操作驗收。
 
-專輯明細 Disc 分組只在存在 Disc 2 以上時啟用；啟用後 Disc 0、1、2…各自成組，沒有 Disc 值的歌曲歸「未知」。正序依數字遞增後接「未知」；倒序先「未知」，再依數字遞減。只有 Disc 0／1 或無資料時不顯示分組。SQLite facet 快照、索引列位置及歌曲頁排序必須遵循同一順序。
+專輯明細 Disc 分組只在存在 Disc 2 以上時啟用；啟用後 Disc 0、1、2…各自成組，沒有 Disc 值的歌曲歸「未知」。正序依數字遞增後接「未知」；倒序先「未知」，再依數字遞減。只有 Disc 0／1 或無資料時不顯示分組。SQLite facet 快照、索引列位置及歌曲頁排序必須遵循同一順序；快速查找面板將 `DISC 1` 等選項簡化顯示為 `1`，列表中的 Disc 分組列仍顯示完整標籤。
 
 演出者或專輯標籤缺失、空白，或演出者字串只有分隔符時，首頁都建立獨立的 `artist:unmarked`／`album:unmarked` 索引項，顯示為「未知」；與真實標籤名稱「未知」保持不同身份。首頁排序將這些未標記項目放在最後，快速索引分組標籤使用「未知」。演出者未知項以包含空字串的 `artistNames` 查詢未標記曲目；專輯未知項的 `aliases` 必須保留空字串及原始空白別名，讓明細 SQL 取回該組曲目。回歸測試位於 `player-db` 的 artist／album snapshot 測試。
 

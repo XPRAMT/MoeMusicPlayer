@@ -52,6 +52,12 @@ test('quick find displays the Unknown category as a full-width question mark', (
   assert.equal(getQuickIndexDisplayLabel('ㄅ'), 'ㄅ');
 });
 
+test('quick find displays Disc groups as track-free numeric labels', () => {
+  assert.equal(getQuickIndexDisplayLabel('DISC 1'), '1');
+  assert.equal(getQuickIndexDisplayLabel('DISC 12'), '12');
+  assert.equal(getQuickIndexDisplayLabel('DISC 0'), '0');
+});
+
 test('complete grouping renders its group and track rows without waiting for a second state echo', () => {
   const groups = [{ label: 'A', beforeIndex: 0 }];
   const items = [{ id: 'track-a' }];

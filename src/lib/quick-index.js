@@ -87,7 +87,9 @@ export function getQuickIndexColumnCount(labelCount) {
 /** The quick-find panel uses a compact marker for the Unknown group. */
 /** @param {string} label */
 export function getQuickIndexDisplayLabel(label) {
-  return label === '未知' ? '？' : label;
+  if (label === '未知') return '？';
+  const discNumber = /^DISC\s+(\d+)$/i.exec(label)?.[1];
+  return discNumber ?? label;
 }
 
 /** @param {string} key */
