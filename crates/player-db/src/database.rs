@@ -2994,6 +2994,58 @@ impl Database {
         resolve_track_id_by_locator_connection(&connection, &stored)
     }
 
+    /// Resolve many Windows paths through the indexed canonical locator key in one SQLite
+    /// statement. This is used when combining the persistent and transient catalogs.
+    #[cfg(windows)]
+    pub fn resolve_track_ids_for_windows_paths(
+        &self,
+        paths: &[std::path::PathBuf],
+    ) -> Result<Vec<Option<TrackId>>, DatabaseError> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys = paths
+            .iter()
+            .map(|path| player_core::windows_locator_key(path.as_path()))
+            .collect::<Vec<_>>();
+        let keys_json = serde_json::to_string(&keys)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "WITH requested AS (
+                 SELECT CAST(key AS INTEGER) AS ordinal, value AS locator_key
+                 FROM json_each(?1)
+             ), matches AS (
+                 SELECT requested.ordinal, mappings.track_id
+                 FROM requested
+                 JOIN source_mappings AS mappings
+                   ON mappings.locator_key=requested.locator_key
+                 GROUP BY requested.ordinal, mappings.track_id
+             )
+             SELECT requested.ordinal,
+                    CASE WHEN COUNT(matches.track_id)=1 THEN MIN(matches.track_id) END
+             FROM requested
+             LEFT JOIN matches USING (ordinal)
+             GROUP BY requested.ordinal
+             ORDER BY requested.ordinal",
+        )?;
+        let rows = statement.query_map([keys_json], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        let mut resolved = vec![None; paths.len()];
+        for row in rows {
+            let (ordinal, value) = row?;
+            let ordinal = usize::try_from(ordinal).map_err(|_| {
+                DatabaseError::CorruptData("bulk locator query returned a negative index".into())
+            })?;
+            let slot = resolved.get_mut(ordinal).ok_or_else(|| {
+                DatabaseError::CorruptData("bulk locator query returned an invalid index".into())
+            })?;
+            *slot = value.map(|value| parse_track_id(&value)).transpose()?;
+        }
+        Ok(resolved)
+    }
+
     /// Save a playlist and replace its ordered entries atomically. Entries without an explicit
     /// TrackId are matched only when their exact stored locator maps to one internal TrackId.
     pub fn save_playlist(&self, playlist: &Playlist) -> Result<(), DatabaseError> {
@@ -3467,6 +3519,53 @@ impl Database {
             limit,
             total_count: total_count.max(0) as u64,
         })
+    }
+
+    /// Read the complete filtered and sorted result with one SQLite statement. This is reserved
+    /// for backend snapshot construction (for example, merging the transient Explorer catalog);
+    /// renderer-facing pages must continue to use `list_tracks_page_with_alternates`.
+    pub fn list_tracks_all_with_alternates(
+        &self,
+        request: &ListTracksQuery,
+        query_alternates: &[String],
+    ) -> Result<Vec<TrackSummary>, DatabaseError> {
+        let connection = self.lock()?;
+        fetch_tracks_window_filtered_unbounded(
+            &connection,
+            request
+                .query
+                .as_deref()
+                .filter(|text| !text.trim().is_empty()),
+            query_alternates,
+            request.field_filter.as_ref(),
+            request.sort,
+            0,
+            i64::MAX,
+        )
+    }
+
+    /// Read a backend-selected range without the renderer page-size cap. The caller still gets
+    /// one SQLite query with filtering and ordering applied before LIMIT/OFFSET.
+    pub fn list_tracks_window_with_alternates(
+        &self,
+        request: &ListTracksQuery,
+        query_alternates: &[String],
+        offset: u64,
+        limit: u64,
+    ) -> Result<Vec<TrackSummary>, DatabaseError> {
+        let connection = self.lock()?;
+        fetch_tracks_window_filtered_unbounded(
+            &connection,
+            request
+                .query
+                .as_deref()
+                .filter(|text| !text.trim().is_empty()),
+            query_alternates,
+            request.field_filter.as_ref(),
+            request.sort,
+            offset,
+            i64::try_from(limit).unwrap_or(i64::MAX),
+        )
     }
 
     /// Filter, count, sort, and page an artist-specific list in SQLite. Artist membership uses
@@ -4101,6 +4200,52 @@ impl Database {
         rows.map(|row| {
             let (kind, encoding, data) = row?;
             locator::decode(&kind, &encoding, &data)
+        })
+        .collect()
+    }
+
+    /// Read enabled filesystem locators for many tracks in one SQLite query. Used by catalog
+    /// union/deduplication paths so they do not turn a full-list merge into N+1 locator reads.
+    pub fn filesystem_locators_for_tracks(
+        &self,
+        track_ids: &[TrackId],
+    ) -> Result<Vec<(TrackId, std::path::PathBuf)>, DatabaseError> {
+        if track_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = track_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let ids_json = serde_json::to_string(&ids)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT m.track_id, m.locator_kind, m.locator_encoding, m.locator_data
+             FROM source_mappings m
+             JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1
+             WHERE m.locator_kind='filesystem_path'
+               AND m.track_id IN (SELECT value FROM json_each(?1))
+             ORDER BY m.track_id, r.source_id, m.source_item_id",
+        )?;
+        let rows = statement.query_map([ids_json], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (raw_id, kind, encoding, data) = row?;
+            let track_id = TrackId::parse(&raw_id)
+                .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+            match locator::decode(&kind, &encoding, &data)? {
+                MediaLocator::FileSystem(path) => Ok((track_id, path)),
+                MediaLocator::ContentUri(_) => Err(DatabaseError::CorruptData(
+                    "filesystem locator row decoded as content URI".to_owned(),
+                )),
+            }
         })
         .collect()
     }
@@ -5223,6 +5368,26 @@ fn fetch_tracks_window_filtered(
     offset: u64,
     limit: u32,
 ) -> Result<Vec<TrackSummary>, DatabaseError> {
+    fetch_tracks_window_filtered_unbounded(
+        connection,
+        query,
+        query_alternates,
+        field_filter,
+        sort,
+        offset,
+        i64::from(limit),
+    )
+}
+
+fn fetch_tracks_window_filtered_unbounded(
+    connection: &Connection,
+    query: Option<&str>,
+    query_alternates: &[String],
+    field_filter: Option<&TrackFieldFilter>,
+    sort: TrackListSort,
+    offset: u64,
+    limit: i64,
+) -> Result<Vec<TrackSummary>, DatabaseError> {
     let query_json = search_terms_json(query, query_alternates)?;
     let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter)?;
     let order_by = tracks_order_by_sql(sort);
@@ -5236,7 +5401,7 @@ fn fetch_tracks_window_filtered(
             .query_map(
                 params![
                     query_json,
-                    i64::from(limit),
+                    limit.max(0),
                     query_limit_i64(offset),
                     title_filter,
                     artist_filter,
@@ -5375,41 +5540,39 @@ fn file_names_for_tracks(
     connection: &Connection,
     track_ids: &[TrackId],
 ) -> Result<HashMap<TrackId, String>, DatabaseError> {
+    if track_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let ids = track_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let ids_json = serde_json::to_string(&ids)
+        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
     let mut names = HashMap::new();
-    for chunk in track_ids.chunks(200) {
-        if chunk.is_empty() {
+    let mut statement = connection.prepare(
+        "SELECT m.track_id, m.locator_kind, m.locator_encoding, m.locator_data
+         FROM source_mappings m
+         JOIN library_roots r ON r.source_id = m.source_id
+         WHERE m.track_id IN (SELECT value FROM json_each(?1))
+         ORDER BY r.enabled DESC,
+                  CASE m.locator_kind WHEN 'filesystem_path' THEN 0 ELSE 1 END,
+                  m.source_id",
+    )?;
+    let mut rows = statement.query([ids_json])?;
+    while let Some(row) = rows.next()? {
+        let id = parse_track_id(&row.get::<_, String>(0)?)?;
+        if names.contains_key(&id) {
             continue;
         }
-        let placeholders = std::iter::repeat_n("?", chunk.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT m.track_id, m.locator_kind, m.locator_encoding, m.locator_data
-             FROM source_mappings m
-             JOIN library_roots r ON r.source_id = m.source_id
-             WHERE m.track_id IN ({placeholders})
-             ORDER BY r.enabled DESC,
-                      CASE m.locator_kind WHEN 'filesystem_path' THEN 0 ELSE 1 END,
-                      m.source_id"
-        );
-        let mut statement = connection.prepare(&sql)?;
-        let mut rows = statement.query(rusqlite::params_from_iter(
-            chunk.iter().map(ToString::to_string),
-        ))?;
-        while let Some(row) = rows.next()? {
-            let id = parse_track_id(&row.get::<_, String>(0)?)?;
-            if names.contains_key(&id) {
-                continue;
-            }
-            let kind: String = row.get(1)?;
-            let encoding: String = row.get(2)?;
-            let data: Vec<u8> = row.get(3)?;
-            let Ok(locator) = locator::decode(&kind, &encoding, &data) else {
-                continue;
-            };
-            if let Some(stem) = player_core::locator_display_file_stem(&locator) {
-                names.insert(id, stem);
-            }
+        let kind: String = row.get(1)?;
+        let encoding: String = row.get(2)?;
+        let data: Vec<u8> = row.get(3)?;
+        let Ok(locator) = locator::decode(&kind, &encoding, &data) else {
+            continue;
+        };
+        if let Some(stem) = player_core::locator_display_file_stem(&locator) {
+            names.insert(id, stem);
         }
     }
     Ok(names)
@@ -5975,6 +6138,48 @@ mod tests {
         assert_eq!(query_limit(1000), 1000);
         assert_eq!(query_limit(1001), 1000);
         assert_eq!(query_limit(u32::MAX), 1000);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bulk_windows_locator_resolution_returns_ordered_unique_matches_in_one_query() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "bulk locator source",
+        );
+        let path = PathBuf::from(r"C:\Music\same.flac");
+        let mut item = record(
+            &root,
+            "same",
+            &player_core::windows_locator_key(&path),
+            "same",
+            10,
+            100,
+        );
+        item.locator = MediaLocator::FileSystem(path.clone());
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&item),
+            std::slice::from_ref(&item),
+            1000,
+        );
+        let expected = db
+            .resolve_track_id_for_locator(&MediaLocator::FileSystem(path.clone()))
+            .expect("resolve path")
+            .expect("track exists");
+
+        let result = db
+            .resolve_track_ids_for_windows_paths(&[
+                path.clone(),
+                PathBuf::from(r"C:\Music\missing.flac"),
+                path,
+            ])
+            .expect("resolve paths in one query");
+        assert_eq!(result, vec![Some(expected), None, Some(expected)]);
     }
 
     fn add_root(db: &Database, kind: MediaSourceKind, name: &str) -> LibraryRoot {
@@ -10615,6 +10820,75 @@ mod tests {
             .expect("text filter");
         assert_eq!(filtered.total_count, 1);
         assert_eq!(filtered.items[0].title.as_deref(), Some("Alpha"));
+    }
+
+    #[test]
+    fn backend_snapshot_reads_filtered_sorted_results_without_renderer_page_cap() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "snapshot-source");
+        let records = (0..1_205)
+            .map(|index| {
+                record(
+                    &root,
+                    &format!("item-{index}"),
+                    &format!("path:{index}"),
+                    &format!("Snapshot {index:04}"),
+                    index as u64,
+                    100,
+                )
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            1_000,
+        );
+        let query = ListTracksQuery {
+            query: Some("snapshot".to_owned()),
+            sort: TrackListSort {
+                field: TrackSortField::Title,
+                direction: TrackSortDirection::Desc,
+            },
+            ..ListTracksQuery::default()
+        };
+
+        let all = db
+            .list_tracks_all_with_alternates(&query, &[])
+            .expect("one unbounded SQLite result");
+        assert_eq!(all.len(), 1_205);
+        assert_eq!(all[0].title.as_deref(), Some("Snapshot 1204"));
+        assert_eq!(
+            all.last().and_then(|track| track.title.as_deref()),
+            Some("Snapshot 0000")
+        );
+
+        let backend_range = db
+            .list_tracks_window_with_alternates(&query, &[], 1_100, 105)
+            .expect("backend range beyond renderer cap");
+        assert_eq!(backend_range.len(), 105);
+        assert_eq!(
+            backend_range.first().map(|track| track.id),
+            Some(all[1_100].id)
+        );
+        assert_eq!(
+            backend_range.last().map(|track| track.id),
+            Some(all[1_204].id)
+        );
+
+        let renderer_page = db
+            .list_tracks_page_with_alternates(
+                ListTracksQuery {
+                    limit: 5_000,
+                    ..query
+                },
+                &[],
+            )
+            .expect("renderer page retains its cap");
+        assert_eq!(renderer_page.items.len(), 1_000);
+        assert_eq!(renderer_page.total_count, 1_205);
     }
 
     #[test]

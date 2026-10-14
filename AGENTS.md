@@ -32,7 +32,7 @@
 
 - `設定 → 曲目欄位` 的「啟用分組模式」保存在 `trackListColumns.groupingEnabled`，預設啟用以維持舊版行為。停用時，歌曲清單、演出者首頁與專輯 Disc 分組都不執行分組掃描、不顯示分組列或快速索引；欄位排序與播放順序不變。設定說明為「啟用後可能增加載入時間」。
 - 文字排序群組跟隨目前排序方向整體反轉：正序為符號、數字、英文字母、地區文字群組、未知；倒序完全反轉，未知在最前、符號在最後。空白或缺失的文字欄位都屬於未知；不得固定將未知放在兩種方向的最後。資料庫列表、播放清單與播放佇列都遵守此規則，快速索引列依已排序資料流產生。
-- 演出者首頁首次讀取排序偏好與索引期間維持空白佔位；只有首次查詢完成且確認沒有資料時才顯示無演出者資料，載入失敗則顯示錯誤。`library_create_artist_index_snapshot` 在 SQLite 建立排序後的聚合快照及快速索引；`library_get_artist_index_snapshot_page` 以 offset/limit 讀取快照頁面。其他欄位排序時隱藏分組列與快速索引。播放佇列標題排序使用 `Database::sort_queue_candidates` 將 traversal 摘要寫入 SQLite 暫存表，透過既有欄位排序式與 ICU4X 排序，回傳原 traversal entry index；重複項與相同鍵的 traversal 順序保留。Windows 暫存曲庫合併清單的可見頁及快速索引仍需從兩個 SQLite 資料庫取資料後合併；排序／分組由 SQLite 執行，但資料蒐集仍有後端內部分頁，後續可改為一次性雙資料庫合併快照以減少批次查詢。
+- 演出者首頁首次讀取排序偏好與索引期間維持空白佔位；只有首次查詢完成且確認沒有資料時才顯示無演出者資料，載入失敗則顯示錯誤。`library_create_artist_index_snapshot` 在 SQLite 建立排序後的聚合快照及快速索引；`library_get_artist_index_snapshot_page` 以 offset/limit 讀取快照頁面。其他欄位排序時隱藏分組列與快速索引。播放佇列標題排序使用 `Database::sort_queue_candidates` 將 traversal 摘要寫入 SQLite 暫存表，透過既有欄位排序式與 ICU4X 排序，回傳原 traversal entry index；重複項與相同鍵的 traversal 順序保留。Windows 檔案總管暫存曲庫與正式曲庫分屬兩個 SQLite 時，各庫以 SQL 執行搜尋／欄位過濾；列表頁在暫存庫一次取得完整匹配列、在正式庫一次讀取含暫存筆數餘裕的排序前綴，locator 以批次 SQL 讀取後去重，跨庫排序交由 SQLite 暫存表。快速索引才一次讀取兩庫完整匹配列，再由 SQLite 對完整排序結果分組。不得用 256／1,000 筆迴圈掃描建立索引；前端仍只讀固定 1,000 筆可視資料頁。
 
 - 背景亮度取樣先把圖片縮至 32×32。一般自動文字顏色模式排除 alpha=0 像素，對 alpha>0 像素依 alpha 加權平均 RGB，R/G/B 等權且不線性化。自動背景透明度模式則先在 Canvas 將縮圖疊於固定底色（白字黑底、黑字白底），轉成不透明像素；再分別取最亮或最暗的前 50%（含原透明像素合成出的底色）做等權平均，不再另做 alpha 加權。`rgbAverageBrightness` 將所得平均 RGB 的通道算術平均除以 255，再用此 Y 反解整體圖片圖層透明度。改變白／黑字模式時不得重用另一模式的取樣快取。
 
@@ -246,7 +246,7 @@
 - **Android 現況：**`MainActivity` 讓 WebView 背景繪製至全視窗；原生 content 不加安全區 padding。`WindowInsetsCompat` 將 physical-pixel 安全邊界經預先註冊的 JS bridge 傳給前端，前端只除以 `devicePixelRatio` 後一次套用於互動內容。上方使用 system bars、display cutout、tappable element 的最大值；下方只採可見 tappable element inset，不把 mandatory system gestures 當作留白。IME 使用 `adjustResize` 讓 viewport 縮放，不另加鍵盤高度。原生 policy 四項測試、Android Kotlin 編譯、Svelte 檢查／建置及 headless Now Playing 幾何測試通過，涵蓋隱藏手勢列、三鍵導覽列與狀態列／挖孔。最新版 ARM64 APK 已安裝至 NX809J；新版裝置視覺仍待使用者手動開啟驗收，旋轉、IME 與其他頁面亦待人工確認。
 - 系統索引失效或回退掃描時，不能要求使用者重建整個 App SQLite；平台 adapter 需將 SystemIndex/MediaStore/SAF 結果正規化為共同的曲目模型，再由同步層與 App 資料合併。
 - **App SQLite**保存內部 ID、啟動/離線顯示所需的曲目投影、來源映射、使用者覆寫、播放清單、歌詞/封面快取與同步狀態；播放 session（精確佇列 traversal、目前 entry 與位置）及以 TrackId 為鍵的聆聽統計由 App SQLite 持久保存；theme、shuffle/repeat 偏好與媒體來源 registry 仍以版本化 `settings.json` 為權威。系統媒體索引用於確認來源現況，但不得覆蓋使用者資料。使用 migration、批次交易、索引與必要的 FTS；不得逐曲提交交易。快取有上限、可清除、可觀察。
-- **列表查詢管線：**資料排序、搜尋／欄位過濾、快速首字分組與總數由 SQLite 一次計算；文字比較共用 `MUSIC_LOCALE_NATURAL` ICU4X collation。曲庫、播放清單、演出者／專輯明細及索引都提供後端分頁結果；演出者與專輯在快照建立時由 SQLite 完成身份正規化、聚合、排序、分組及 payload 產生，之後只以 offset/limit 讀頁，不能逐頁重做聚合或先傳全量曲目摘要／原始 facet 給 renderer。前端頁大小固定 1,000，只有可視 DOM 使用虛擬化。快速索引列位置來自同一 SQL 排序結果，不由前端掃頁重建。佇列保留 queue entry 次序／重複項語意，由 SQLite 對候選排序值排序；後端依結果調整 traversal 並保持目前 entry、時間與播放狀態。Windows 外部曲庫與暫存曲庫分屬兩個 SQLite 時，合併仍在後端完成；不可把全量曲庫資料送至 renderer。
+- **列表查詢管線：**資料排序、搜尋／欄位過濾、快速首字分組與總數由 SQLite 一次計算；文字比較共用 `MUSIC_LOCALE_NATURAL` ICU4X collation。曲庫、播放清單、演出者／專輯明細及索引都提供後端分頁結果；演出者與專輯在快照建立時由 SQLite 完成身份正規化、聚合、排序、分組及 payload 產生，之後只以 offset/limit 讀頁，不能逐頁重做聚合或先傳全量曲目摘要／原始 facet 給 renderer。前端頁大小固定 1,000，只有可視 DOM 使用虛擬化。快速索引列位置來自同一 SQL 排序結果，不由前端掃頁重建。佇列保留 queue entry 次序／重複項語意，由 SQLite 對候選排序值排序；後端依結果調整 traversal 並保持目前 entry、時間與播放狀態。Windows 外部曲庫與暫存曲庫分屬兩個 SQLite 時，兩庫各以 SQL 篩選；一般頁面從正式庫取排序前綴並加上暫存結果數的餘裕，locator 用批次 SQL 查詢去重，SQLite 暫存排序表完成聯集排序。快速索引一次讀取兩庫完整匹配結果，再由 SQLite 分組；不再分頁掃描。全量候選只在後端處理，不送至 renderer。
 - SQLite 建議 WAL、prepared statements 與分頁查詢；啟動投影要足夠顯示上次曲庫，但不無條件複製系統資料庫所有欄位。實際播放事件次數、最後播放時間、收藏、歷史及人工匹配若實作，均屬 App 資料，不得被系統 metadata 更新清掉。
 - **身份與同步：**全平台以穩定 internal track ID 關聯播放清單與使用者資料；來源類型、來源 ID 與 locator 分開保存，不能單用路徑當全平台身份。系統索引切換到 fallback 或來源暫離線時，須保留對同一曲目的映射與人工資料。
 - **來源啟用與曲庫投影：**曲庫列表、總數、搜尋及佇列篩選只納入至少有一個啟用來源映射的曲目。停用資料夾來源後立即刷新列表；只屬於該來源的歌曲隱藏，仍由其他啟用來源提供的重複曲目保持可見。停用不刪除曲目、映射或播放歷史，重新啟用即可恢復。資料庫測試確認停用後查詢隱藏、保存資料仍在且重新啟用可恢復；本機 UI 尚待使用者驗收。
@@ -354,8 +354,6 @@
 
 ## 列表查詢管線現況
 
-排序、文字搜尋／欄位過濾、快速索引分組、計數及演出者／專輯聚合快照現由 SQLite／後端完成；前端以固定 1,000 筆資料頁取得結果，虛擬列表只限制 DOM。曲庫、播放清單、播放佇列、演出者／專輯索引及明細都已接入該模式。佇列保留 traversal 重複項與目前項目語意；Windows 外部曲庫仍由後端合併獨立 SQLite 結果。專輯明細逐頁讀取圖片候選只用於感知封面去重，不負責清單排序或分組。
+排序、搜尋／欄位過濾、計數、文字索引分組與演出者／專輯聚合快照由 SQLite 完成；前端固定以 1,000 筆頁面讀取並由虛擬列表限制 DOM。播放佇列維持 traversal 重複項與目前項語意，SQLite 排序候選後由後端更新 traversal。Windows 外部曲庫與暫存曲庫各自以單次 SQL 篩選；路徑去重以 JSON1 批次解析 locator，避免每首暫存曲目各自鎖定資料庫查詢。跨庫最終排序及索引分組使用 SQLite；禁止後端以小頁迴圈掃描全量索引。專輯明細逐頁讀取圖片候選只用於感知封面去重，不負責清單排序或分組。
 
-本次驗證：`npm run check` 0 errors／warnings；`node --test` 234/234；`cargo test -p player-db --lib --locked` 86 passed、2 ignored；`cargo test -p moemusicplayer --lib --locked` 186 passed、2 ignored；`cargo clippy --workspace --lib --bins --tests --locked -- -D warnings` 與 `cargo fmt --all -- --check` 通過。依使用者要求，本次未執行瀏覽器、Chrome 或 Playwright 測試，也未宣稱人工視覺驗收。
-
-下一步：由 Windows 大曲庫人工操作確認查詢結果、排序、分組、翻頁及返回位置；本輪按使用者要求沒有執行瀏覽器測試。外部雙資料庫合併仍在後端 Rust 執行；若之後量測顯示其內部批次查詢是瓶頸，再用基準資料調整，不把全量資料搬到 renderer。
+自動驗證：`npm run check`、`node --test`、player-db 與 moemusicplayer Rust 單元測試、workspace Clippy 與 rustfmt。使用者要求不執行瀏覽器、Chrome 或 Playwright 測試；自動測試不代表 Windows 實際視覺／操作驗收。

@@ -3023,37 +3023,32 @@ async fn library_get_quick_index_for_tracks(
                     .clone()
             })
         {
-            let mut names = Vec::new();
-            let mut offset = 0_u64;
-            loop {
-                let page = merged_library_page(
-                    database,
-                    &temporary_database,
-                    ListTracksQuery {
-                        offset,
-                        limit: 1000,
-                        ..request.clone()
-                    },
-                    &alternates,
-                )?;
-                let page_len = page.items.len();
-                names.extend(page.items.into_iter().map(|track| {
-                    match request.sort.field {
-                        TrackSortField::Title => player_core::display_track_title(
-                            track.title.as_deref(),
-                            track.file_name.as_deref(),
-                        )
-                        .unwrap_or_default(),
-                        TrackSortField::Artist => track.artist.unwrap_or_default(),
-                        TrackSortField::Album => track.album.unwrap_or_default(),
-                        _ => String::new(),
-                    }
-                }));
-                offset = offset.saturating_add(page_len as u64);
-                if page_len == 0 || offset >= page.total_count {
-                    break;
-                }
-            }
+            // Quick-index construction belongs to the backend and needs the complete sorted
+            // result. Ask SQLite for that result once instead of scanning it through 1,000-row
+            // IPC-shaped pages.
+            let page = merged_library_page(
+                database,
+                &temporary_database,
+                ListTracksQuery {
+                    limit: u32::MAX,
+                    ..request.clone()
+                },
+                &alternates,
+            )?;
+            let names = page
+                .items
+                .into_iter()
+                .map(|track| match request.sort.field {
+                    TrackSortField::Title => player_core::display_track_title(
+                        track.title.as_deref(),
+                        track.file_name.as_deref(),
+                    )
+                    .unwrap_or_default(),
+                    TrackSortField::Artist => track.artist.unwrap_or_default(),
+                    TrackSortField::Album => track.album.unwrap_or_default(),
+                    _ => String::new(),
+                })
+                .collect::<Vec<_>>();
             return database
                 .quick_index_for_ordered_values(&names)
                 .map_err(|error| error.to_string());
@@ -3616,153 +3611,128 @@ fn library_get_artist_page(
 }
 
 #[cfg(target_os = "windows")]
-fn file_locator_key(database: &Database, track_id: TrackId) -> Result<Option<String>, String> {
-    for locator in database
-        .track_locators(track_id)
-        .map_err(|error| error.to_string())?
-    {
-        if let MediaLocator::FileSystem(path) = locator {
-            let normalized = std::fs::canonicalize(&path).unwrap_or(path);
-            return Ok(Some(normalized.to_string_lossy().to_lowercase()));
-        }
-    }
-    Ok(None)
-}
-
-#[cfg(target_os = "windows")]
 fn merged_library_page(
     database: &Database,
     temporary_database: &Database,
     request: ListTracksQuery,
     query_alternates: &[String],
 ) -> Result<Page<TrackSummary>, String> {
-    const BATCH: u32 = 256;
     let sort = request.sort;
-    let mut temporary_items = Vec::new();
-    loop {
-        let page = temporary_database
-            .list_tracks_page_with_alternates(
-                ListTracksQuery {
-                    query: request.query.clone(),
-                    field_filter: request.field_filter.clone(),
-                    sort,
-                    offset: temporary_items.len() as u64,
-                    limit: BATCH,
-                },
-                query_alternates,
-            )
-            .map_err(|error| error.to_string())?;
-        let count = page.items.len();
-        temporary_items.extend(page.items);
-        if count < BATCH as usize || temporary_items.len() as u64 >= page.total_count {
-            break;
-        }
-    }
+    let temporary_query = ListTracksQuery {
+        query: request.query.clone(),
+        field_filter: request.field_filter.clone(),
+        sort,
+        ..ListTracksQuery::default()
+    };
+    // The transient catalog is already a SQLite database. Read its complete filtered result in
+    // one SQLite statement instead of repeatedly issuing small internal pages.
+    let temporary_items = temporary_database
+        .list_tracks_all_with_alternates(&temporary_query, query_alternates)
+        .map_err(|error| error.to_string())?;
 
     let mut temporary_paths = HashSet::new();
     let mut duplicate_library_ids = HashSet::new();
-    for track in &temporary_items {
-        if let Some(path) = file_locator_key(temporary_database, track.id)? {
-            temporary_paths.insert(path);
-        }
-        if let Some(MediaLocator::FileSystem(path)) = temporary_database
-            .track_locators(track.id)
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .find(|locator| matches!(locator, MediaLocator::FileSystem(_)))
-        {
-            if let Some(id) = database
-                .resolve_track_id_for_locator(&MediaLocator::FileSystem(path))
-                .map_err(|error| error.to_string())?
-            {
-                duplicate_library_ids.insert(id);
-            }
-        }
+    let temporary_ids = temporary_items
+        .iter()
+        .map(|track| track.id)
+        .collect::<Vec<_>>();
+    let temporary_locators = temporary_database
+        .filesystem_locators_for_tracks(&temporary_ids)
+        .map_err(|error| error.to_string())?;
+    let paths = temporary_locators
+        .iter()
+        .map(|(_, path)| path.clone())
+        .collect::<Vec<_>>();
+    for path in &paths {
+        temporary_paths.insert(normalized_filesystem_path_key(path));
+    }
+    for track_id in database
+        .resolve_track_ids_for_windows_paths(&paths)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .flatten()
+    {
+        duplicate_library_ids.insert(track_id);
     }
 
+    let persistent_query = ListTracksQuery {
+        query: request.query.clone(),
+        field_filter: request.field_filter.clone(),
+        sort,
+        ..ListTracksQuery::default()
+    };
     let persistent_total = database
         .list_tracks_page_with_alternates(
             ListTracksQuery {
-                query: request.query.clone(),
-                field_filter: request.field_filter.clone(),
-                sort,
-                offset: 0,
                 limit: 1,
+                ..persistent_query.clone()
             },
             query_alternates,
         )
-        .map_err(|error| error.to_string())?
-        .total_count;
+        .map_err(|error| error.to_string())?;
     let temporary_count = temporary_items.len() as u64;
-    let persistent_start = request.offset.saturating_sub(temporary_count);
-    let needed = u64::from(request.limit)
+    // A transient item can displace at most one persistent result. Fetch the first K+T
+    // persistent rows in one SQLite query, where K is the requested page end and T is the
+    // transient result count. This guarantees enough candidates even after duplicate removal,
+    // without reading the full persistent library for every visible page.
+    let persistent_candidate_limit = request
+        .offset
+        .saturating_add(u64::from(request.limit))
         .saturating_add(temporary_count)
-        .min(persistent_total.saturating_sub(persistent_start));
-    let mut persistent_items = Vec::new();
-    while (persistent_items.len() as u64) < needed {
-        let page = database
-            .list_tracks_page_with_alternates(
-                ListTracksQuery {
-                    query: request.query.clone(),
-                    field_filter: request.field_filter.clone(),
-                    sort,
-                    offset: persistent_start + persistent_items.len() as u64,
-                    limit: BATCH,
-                },
-                query_alternates,
-            )
-            .map_err(|error| error.to_string())?;
-        let count = page.items.len();
-        persistent_items.extend(page.items);
-        if count < BATCH as usize {
-            break;
-        }
-    }
-    let mut deduplicated_persistent = Vec::with_capacity(persistent_items.len());
-    for track in persistent_items {
-        if duplicate_library_ids.contains(&track.id) {
-            continue;
-        }
-        let duplicate_path = file_locator_key(database, track.id)?
-            .is_some_and(|path| temporary_paths.contains(&path));
-        if !duplicate_path {
-            deduplicated_persistent.push(track);
-        }
-    }
-    let mut persistent_items = deduplicated_persistent;
-    let duplicate_count = duplicate_library_ids.len() as u64;
-    persistent_items.extend(temporary_items);
-    persistent_items = sort_track_summaries_sql(database, persistent_items, sort)?;
-    let offset =
-        usize::try_from(request.offset.saturating_sub(persistent_start)).unwrap_or(usize::MAX);
-    let limit = request.limit as usize;
-    let items = persistent_items
+        .min(persistent_total.total_count);
+    let mut persistent_items = database
+        .list_tracks_window_with_alternates(
+            &persistent_query,
+            query_alternates,
+            0,
+            persistent_candidate_limit,
+        )
+        .map_err(|error| error.to_string())?;
+    let mut duplicate_path_ids = database
+        .filesystem_locators_for_tracks(
+            &persistent_items
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| error.to_string())?
         .into_iter()
-        .skip(offset)
-        .take(limit)
+        .filter_map(|(track_id, path)| {
+            temporary_paths
+                .contains(&normalized_filesystem_path_key(&path))
+                .then_some(track_id)
+        })
+        .collect::<HashSet<_>>();
+    duplicate_path_ids.extend(duplicate_library_ids);
+    persistent_items.retain(|track| !duplicate_path_ids.contains(&track.id));
+    let total_count = persistent_total
+        .total_count
+        .saturating_add(temporary_count)
+        .saturating_sub(duplicate_path_ids.len() as u64);
+    let mut merged_items = persistent_items;
+    merged_items.extend(temporary_items);
+    // Sorting the union is still performed by SQLite using the same registered ICU4X collation
+    // and composite sort expressions as the persistent library.
+    merged_items = sort_track_summaries_sql(database, merged_items, sort)?;
+    let items = merged_items
+        .into_iter()
+        .skip(usize::try_from(request.offset).unwrap_or(usize::MAX))
+        .take(request.limit as usize)
         .collect();
     Ok(Page {
         items,
         offset: request.offset,
         limit: request.limit,
-        total_count: persistent_total
-            .saturating_add(
-                temporary_database
-                    .list_tracks_page_with_alternates(
-                        ListTracksQuery {
-                            query: request.query,
-                            field_filter: request.field_filter,
-                            sort,
-                            offset: 0,
-                            limit: 1,
-                        },
-                        query_alternates,
-                    )
-                    .map_err(|error| error.to_string())?
-                    .total_count,
-            )
-            .saturating_sub(duplicate_count),
+        total_count,
     })
+}
+
+#[cfg(target_os = "windows")]
+fn normalized_filesystem_path_key(path: &std::path::Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_lowercase()
 }
 
 fn compare_track_summaries(
@@ -3968,67 +3938,50 @@ fn queue_for_merged_library_search(
         field_filter,
         sort,
     } = search;
-    let mut tracks = database
-        .list_track_ids_filtered_with_alternates(
-            query.as_deref(),
-            &query_alternates,
-            field_filter.as_ref(),
-            sort,
-        )
-        .map_err(|error| error.to_string())?;
+    let query_request = ListTracksQuery {
+        query: query.clone(),
+        field_filter: field_filter.clone(),
+        sort,
+        ..ListTracksQuery::default()
+    };
     let mut summaries = database
-        .get_track_summaries(&tracks)
+        .list_tracks_all_with_alternates(&query_request, &query_alternates)
+        .map_err(|error| error.to_string())?;
+    let temporary_tracks = if let Some(temporary_database) = temporary_database {
+        temporary_database
+            .list_tracks_all_with_alternates(&query_request, &query_alternates)
+            .map_err(|error| error.to_string())?
+    } else {
+        Vec::new()
+    };
+    let mut temporary_paths = HashSet::new();
+    if let Some(temporary_database) = temporary_database {
+        for (_, path) in temporary_database
+            .filesystem_locators_for_tracks(
+                &temporary_tracks
+                    .iter()
+                    .map(|track| track.id)
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|error| error.to_string())?
+        {
+            temporary_paths.insert(normalized_filesystem_path_key(&path));
+        }
+    }
+    let duplicate_ids = database
+        .filesystem_locators_for_tracks(&summaries.iter().map(|track| track.id).collect::<Vec<_>>())
         .map_err(|error| error.to_string())?
         .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    let mut temporary_tracks = Vec::new();
-    if let Some(temporary_database) = temporary_database {
-        let mut offset = 0u64;
-        loop {
-            let page = temporary_database
-                .list_tracks_page_with_alternates(
-                    ListTracksQuery {
-                        query: query.clone(),
-                        field_filter: field_filter.clone(),
-                        sort,
-                        offset,
-                        limit: 256,
-                    },
-                    &query_alternates,
-                )
-                .map_err(|error| error.to_string())?;
-            offset += page.items.len() as u64;
-            let count = page.items.len();
-            temporary_tracks.extend(page.items);
-            if count < 256 {
-                break;
-            }
-        }
-    }
-    let mut temporary_paths = HashSet::new();
-    for track in &temporary_tracks {
-        if let Some(temporary_database) = temporary_database {
-            if let Some(path) = file_locator_key(temporary_database, track.id)? {
-                temporary_paths.insert(path);
-            }
-        }
-    }
-    let mut retained = Vec::with_capacity(summaries.len());
-    let mut retained_ids = Vec::with_capacity(tracks.len());
-    for (track_id, summary) in tracks.drain(..).zip(summaries.drain(..)) {
-        if file_locator_key(database, track_id)?.is_none_or(|path| !temporary_paths.contains(&path))
-        {
-            retained_ids.push(track_id);
-            retained.push(summary);
-        }
-    }
-    tracks = retained_ids;
-    summaries = retained;
-    tracks.extend(temporary_tracks.iter().map(|track| track.id));
+        .filter_map(|(track_id, path)| {
+            temporary_paths
+                .contains(&normalized_filesystem_path_key(&path))
+                .then_some(track_id)
+        })
+        .collect::<HashSet<_>>();
+    summaries.retain(|track| !duplicate_ids.contains(&track.id));
     summaries.extend(temporary_tracks);
     summaries = sort_track_summaries_sql(database, summaries, sort)?;
-    tracks = summaries.iter().map(|track| track.id).collect();
+    let tracks = summaries.iter().map(|track| track.id).collect::<Vec<_>>();
     let selected_index = tracks
         .iter()
         .position(|track_id| *track_id == selected_track_id)
