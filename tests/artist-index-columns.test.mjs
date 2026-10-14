@@ -17,3 +17,10 @@ test('fixed em-based columns resolve from the same font size in headers and rows
   assert.match(appStyles, /\.track-table-head\s*\{[^}]*font-size:\s*var\(--font-body\)/);
   assert.match(appStyles, /\.track-row\s*\{[^}]*font-size:\s*var\(--font-body\)/);
 });
+
+test('artist-name sorting uses the shared ICU quick-index groups only for that sort', () => {
+  assert.match(artistIndexSource, /buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex/);
+  assert.match(artistIndexSource, /const shouldGroup = activeSortField === 'title'/);
+  assert.match(artistIndexSource, /groupRows=\{sortField === 'title' \? quickIndex\?\.groups : \[\]\}/);
+  assert.match(artistIndexSource, /groupingReady=\{sortField !== 'title' \|\| quickIndexReady\}/);
+});

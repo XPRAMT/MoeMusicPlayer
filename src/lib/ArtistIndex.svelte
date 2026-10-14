@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { getErrorText, invokeCommand, type ArtistIndexEntry, type ArtistListSort } from './ipc';
   import { buildArtistIdentityMappings, preferredArtistName } from './artist-identities.js';
   import { DEFAULT_TRACK_ROW_HEIGHT_PX } from './track-columns.js';
@@ -8,6 +8,7 @@
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
+  import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
 
   type ArtistRow = ArtistIndexEntry & { displayName: string };
   type SortField = 'title' | 'trackCount' | 'albumCount' | 'duration' | 'trackDuration';
@@ -42,6 +43,9 @@
   let sortSaveQueue: Promise<void> = Promise.resolve();
   let initialized = $state(false);
   let seenRefreshKey = $state<number | null>(null);
+  let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[] } | null>(null);
+  let quickIndexReady = $state(true);
+  let quickIndexGeneration = 0;
 
   const traditionalByName = new Map<string, string>();
 
@@ -135,7 +139,50 @@
     return sortDirection === 'asc' ? compared : -compared;
   }));
 
+  $effect(() => {
+    const sortedRows = visibleRows;
+    const activeSortField = sortField;
+    const generation = ++quickIndexGeneration;
+    quickIndex = null;
+    const shouldGroup = activeSortField === 'title' && sortedRows.length > 0;
+    quickIndexReady = !shouldGroup;
+    if (!shouldGroup) return;
+
+    const cacheKey = JSON.stringify({ listId: 'artist-index', refreshKey, direction: sortDirection });
+    const cached = getCachedQuickIndex(cacheKey);
+    if (cached) {
+      quickIndex = cached;
+      quickIndexReady = true;
+      return;
+    }
+
+    quickIndexReady = false;
+    const isCurrent = () => generation === quickIndexGeneration;
+    void buildQuickIndexGroups({
+      totalCount: sortedRows.length,
+      fetchPage: async ({ offset, limit }) => ({ items: sortedRows.slice(offset, offset + limit) }),
+      getName: (artist: ArtistRow) => artist.displayName,
+      getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
+      isCurrent,
+    }).then((result) => {
+      if (isCurrent() && result) {
+        cacheQuickIndex(cacheKey, result);
+        quickIndex = result;
+      }
+      if (isCurrent()) quickIndexReady = true;
+    }).catch((reason: unknown) => {
+      if (isCurrent()) {
+        console.error('無法建立演出者首字索引', reason);
+        quickIndexReady = true;
+      }
+    });
+    return () => {
+      if (generation === quickIndexGeneration) quickIndexGeneration += 1;
+    };
+  });
+
   onMount(() => { void initialize(); });
+  onDestroy(() => { quickIndexGeneration += 1; });
   $effect(() => {
     const current = refreshKey;
     if (!initialized) {
@@ -178,6 +225,9 @@
       fillAvailable={true}
       listId="artist-index"
       scrollResetKey={JSON.stringify({ field: sortField, direction: sortDirection })}
+      groupRows={sortField === 'title' ? quickIndex?.groups : []}
+      groupingReady={sortField !== 'title' || quickIndexReady}
+      quickIndexLabels={sortField === 'title' ? quickIndex?.labels : []}
       ariaLabel="演出者統計；使用方向鍵瀏覽，按 Enter 開啟演出者歌曲"
       columnCount={ARTIST_COLUMNS.length + 1}
       gridTemplate={ARTIST_GRID}
