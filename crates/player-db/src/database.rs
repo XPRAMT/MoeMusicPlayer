@@ -518,6 +518,8 @@ CREATE TABLE music_collation_metadata (
 );
 "#;
 
+const MUSIC_COLLATION_COMPARATOR_VERSION: u8 = 2;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MusicCollationSpec {
     locale: String,
@@ -546,7 +548,7 @@ impl MusicCollationSpec {
 
     fn signature(&self) -> String {
         format!(
-            "{ICU4X_COLLATION_DATA_VERSION}|{}|{}|numeric=true|strength=locale-default",
+            "{ICU4X_COLLATION_DATA_VERSION}|{}|{}|numeric=true|strength=locale-default|comparator={MUSIC_COLLATION_COMPARATOR_VERSION}",
             self.locale,
             self.collation_type
                 .map_or("default", |value| value.as_str()),
@@ -6608,6 +6610,145 @@ mod tests {
             ],
             "Taiwanese Zhuyin determines Han ordering while ICU numeric ordering handles long digit runs",
         );
+    }
+
+    #[test]
+    fn zhuyin_order_places_bi_before_bu_in_library_sql() {
+        let mut db = Database::from_connection_with_collation(
+            Connection::open_in_memory().expect("connection"),
+            MusicCollationSpec::from_locale_parts("zh-TW", Some(CollationType::Zhuyin)),
+        )
+        .expect("Taiwanese Zhuyin database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "zhuyin-bi-bu");
+        let records = ["不負韶光 無駕帶伴奏", "比浪水更輕的 Lighter Than Tears"]
+            .iter()
+            .enumerate()
+            .map(|(index, title)| {
+                record(
+                    &root,
+                    &format!("item-{index}"),
+                    &format!("path:item-{index}"),
+                    title,
+                    100 + index as u64,
+                    1_000 + index as i64,
+                )
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2_000,
+        );
+        let page = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort {
+                    field: TrackSortField::Title,
+                    direction: TrackSortDirection::Asc,
+                },
+            })
+            .expect("sorted page");
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|track| track.title.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            ["比浪水更輕的 Lighter Than Tears", "不負韶光 無駕帶伴奏"],
+            "Taiwan Zhuyin order puts ㄅㄧ before ㄅㄨ",
+        );
+    }
+
+    #[test]
+    fn reopening_rebuilds_music_index_when_collation_callback_changed() {
+        let path = std::env::temp_dir().join(format!(
+            "moemusic-stale-collation-{}.sqlite3",
+            TrackId::new()
+        ));
+        let collation = MusicCollationSpec::from_locale_parts("zh-TW", Some(CollationType::Zhuyin));
+        let mut db = Database::open_with_collation(&path, collation.clone())
+            .expect("create isolated database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "stale-collation");
+        let records = ["不負韶光 無駕帶伴奏", "比浪水更輕的 Lighter Than Tears"]
+            .iter()
+            .enumerate()
+            .map(|(index, title)| {
+                record(
+                    &root,
+                    &format!("item-{index}"),
+                    &format!("path:item-{index}"),
+                    title,
+                    100 + index as u64,
+                    1_000 + index as i64,
+                )
+            })
+            .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2_000,
+        );
+        drop(db);
+
+        let legacy_connection = Connection::open(&path).expect("open legacy fixture");
+        legacy_connection
+            .create_collation(super::MUSIC_COLLATION_NAME, |left, right| left.cmp(right))
+            .expect("register legacy binary-like comparator");
+        legacy_connection
+            .execute_batch(
+                "DROP INDEX tracks_sort_title;
+                 CREATE INDEX tracks_sort_title
+                     ON tracks(sort_title COLLATE MUSIC_LOCALE_NATURAL, track_id);",
+            )
+            .expect("build index with old comparator");
+        legacy_connection
+            .execute(
+                "UPDATE music_collation_metadata SET signature=?1 WHERE singleton=1",
+                [collation.signature().replace("|comparator=2", "")],
+            )
+            .expect("mark the legacy comparator signature");
+        drop(legacy_connection);
+
+        let reopened = Database::open_checked(&path)
+            .expect("startup checks and reopen using the current ICU comparator");
+        let page = reopened
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort {
+                    field: TrackSortField::Title,
+                    direction: TrackSortDirection::Asc,
+                },
+            })
+            .expect("read sorted page");
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|track| track.title.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            ["比浪水更輕的 Lighter Than Tears", "不負韶光 無駕帶伴奏"],
+            "reopen must rebuild indexes produced by a prior comparator implementation",
+        );
+
+        drop(reopened);
+        for suffix in ["", "-wal", "-shm"] {
+            let file = if suffix.is_empty() {
+                path.clone()
+            } else {
+                sidecar_path(&path, suffix)
+            };
+            let _ = std::fs::remove_file(file);
+        }
     }
 
     #[test]
