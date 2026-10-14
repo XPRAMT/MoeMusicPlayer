@@ -24,6 +24,7 @@
     variant: 'header' | 'item' | 'placeholder';
     columns: Column[];
     indexLabel?: string;
+    includeIndexColumn?: boolean;
     cells?: Cell[];
     sortable?: boolean;
     sortableIndex?: boolean;
@@ -40,6 +41,7 @@
     variant,
     columns,
     indexLabel = '',
+    includeIndexColumn = true,
     cells = [],
     sortable = false,
     sortableIndex = false,
@@ -103,18 +105,20 @@
 </script>
 
 {#if variant === 'header'}
-  <span class="column-index" class:is-sortable={sortableIndex} role="columnheader" aria-sort={sortableIndex ? ariaSortFor('position') : undefined}>
-    {#if sortableIndex}
-      <button type="button" class="column-sort-button index-sort-button" onclick={() => onIndexSort ? onIndexSort() : handleSortClick('position')} title={indexSortLabel} aria-label={indexSortLabel}>
-        <span class="column-sort-label">#</span>
-        {#if sort?.field === 'position' && !hideSortDirection}
-          <span class="column-sort-indicator" aria-hidden="true">{sort.direction === 'asc' ? '▲' : '▼'}</span>
-        {/if}
-      </button>
-    {:else}
-      #
-    {/if}
-  </span>
+  {#if includeIndexColumn}
+    <span class="column-index" class:is-sortable={sortableIndex} role="columnheader" aria-sort={sortableIndex ? ariaSortFor('position') : undefined}>
+      {#if sortableIndex}
+        <button type="button" class="column-sort-button index-sort-button" onclick={() => onIndexSort ? onIndexSort() : handleSortClick('position')} title={indexSortLabel} aria-label={indexSortLabel}>
+          <span class="column-sort-label">#</span>
+          {#if sort?.field === 'position' && !hideSortDirection}
+            <span class="column-sort-indicator" aria-hidden="true">{sort.direction === 'asc' ? '▲' : '▼'}</span>
+          {/if}
+        </button>
+      {:else}
+        #
+      {/if}
+    </span>
+  {/if}
   {#each columns as column (column.id)}
     <span
       class={`list-column list-column-${column.id}`}

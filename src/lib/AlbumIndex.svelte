@@ -165,6 +165,7 @@
           <TrackColumnCells
             variant="header"
             columns={albumColumns}
+            includeIndexColumn={false}
             sortable={true}
             sort={{ field: sortField, direction: sortDirection }}
             onSort={(field) => changeSort(field as AlbumIndexSortField)}
@@ -195,7 +196,8 @@
 <style>
   .album-index-shell { display:flex; min-width:0; min-height:0; flex:1 1 auto; flex-direction:column; }
   .album-index-sort-header { flex:0 0 auto; padding:0 clamp(18px,2vw,34px); }
-  .album-index-sort-row { --track-list-min-width:0px; --paged-grid-template:repeat(4,minmax(0,1fr)); min-width:0; }
+  .album-index-sort-row { box-sizing:border-box; width:100%; min-width:0; --track-list-min-width:0px; --paged-grid-template:repeat(4,minmax(0,1fr)); }
+  :global(.album-index-sort-row.track-list-header) { box-sizing:border-box; height:var(--paged-header-height,37px); min-height:var(--paged-header-height,37px); }
   .album-grid-viewport { min-width:0; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; padding:16px clamp(18px,2vw,34px) 28px; scrollbar-color:rgba(var(--text-rgb),0.2) transparent; scrollbar-width:thin; }
   .album-grid { display:grid; align-items:start; }
   .album-grid-spacer { grid-column:1 / -1; pointer-events:none; }
