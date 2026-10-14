@@ -261,7 +261,16 @@ fn playlist_order_by(sort: PlaylistListSort, direction: &str) -> String {
     }
 
     let expression = playlist_sort_expression(sort.field);
-    format!("{expression} {direction}, e.position ASC")
+    if matches!(
+        sort.field,
+        PlaylistSortField::Title | PlaylistSortField::Artist | PlaylistSortField::Album
+    ) {
+        // Keep blank values in the same directional order as the ICU text groups:
+        // last in ascending order and first when descending reverses the groups.
+        format!("(length(trim({expression}, char(9)||char(10)||char(11)||char(12)||char(13)||' ')) = 0) {direction}, {expression} {direction}, e.position ASC")
+    } else {
+        format!("{expression} {direction}, e.position ASC")
+    }
 }
 
 fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
@@ -4142,22 +4151,28 @@ fn tracks_order_by_sql(sort: TrackListSort) -> String {
     let asc = matches!(sort.direction, TrackSortDirection::Asc);
     match (sort.field, asc) {
         (TrackSortField::Title, true) => {
-            "t.sort_title COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
+            "(length(trim(COALESCE(t.sort_title, ''), char(9)||char(10)||char(11)||char(12)||char(13)||' ')) = 0) ASC, \
+             t.sort_title COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
         }
         (TrackSortField::Title, false) => {
-            "t.sort_title COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
+            "(length(trim(COALESCE(t.sort_title, ''), char(9)||char(10)||char(11)||char(12)||char(13)||' ')) = 0) DESC, \
+             t.sort_title COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
         }
         (TrackSortField::Artist, true) => {
-            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
+            "(length(trim(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(9)||char(10)||char(11)||char(12)||char(13)||' ')) = 0) ASC, \
+             COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
         }
         (TrackSortField::Artist, false) => {
-            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
+            "(length(trim(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(9)||char(10)||char(11)||char(12)||char(13)||' ')) = 0) DESC, \
+             COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
         }
         (TrackSortField::Album, true) => {
-            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
+            "(length(trim(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, ''), char(9)||char(10)||char(11)||char(12)||char(13)||' ')) = 0) ASC, \
+             COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
         }
         (TrackSortField::Album, false) => {
-            "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
+            "(length(trim(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, ''), char(9)||char(10)||char(11)||char(12)||char(13)||' ')) = 0) DESC, \
+             COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
         }
         (TrackSortField::Year, true) => {
             "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date ASC, (t.year IS NULL) ASC, t.year ASC, t.track_id ASC"
@@ -7528,6 +7543,149 @@ mod tests {
                 expected,
                 "all text sort fields use the same ICU4X collation",
             );
+        }
+    }
+
+    #[test]
+    fn unknown_text_values_reverse_with_text_sort_direction() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "unknown-sort-source",
+        );
+        let records = [
+            ("Alpha", Some("Alpha"), Some("Alpha album")),
+            ("Zulu", Some("Zulu"), Some("Zulu album")),
+            ("Missing", None, None),
+            ("Blank", Some("  \t"), Some("  \t")),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (title, artist, album))| {
+            let mut item = record(
+                &root,
+                &format!("unknown-{index}"),
+                &format!("unknown-path-{index}"),
+                title,
+                100 + index as u64,
+                1_000 + index as i64,
+            );
+            let metadata = item.metadata.as_mut().expect("metadata");
+            metadata.artist = artist.map(str::to_owned);
+            metadata.album = album.map(str::to_owned);
+            item
+        })
+        .collect::<Vec<_>>();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2_000,
+        );
+
+        let tracks = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort {
+                    field: TrackSortField::Title,
+                    direction: TrackSortDirection::Asc,
+                },
+            })
+            .expect("read tracks")
+            .items;
+        let expected_named = [
+            (TrackSortField::Artist, ["Alpha", "Zulu"]),
+            (TrackSortField::Album, ["Alpha", "Zulu"]),
+        ];
+
+        for (field, asc_named) in expected_named {
+            for (direction, named, unknown_first) in [
+                (TrackSortDirection::Asc, asc_named, false),
+                (TrackSortDirection::Desc, [asc_named[1], asc_named[0]], true),
+            ] {
+                let sort = TrackListSort { field, direction };
+                let page = db
+                    .list_tracks_page(ListTracksQuery {
+                        offset: 0,
+                        limit: 10,
+                        query: None,
+                        field_filter: None,
+                        sort,
+                    })
+                    .expect("sort library page");
+                let titles = page
+                    .items
+                    .iter()
+                    .map(|track| track.title.as_deref().unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(titles.len(), 4);
+                if unknown_first {
+                    assert!(titles[..2]
+                        .iter()
+                        .all(|title| matches!(*title, "Missing" | "Blank")));
+                    assert_eq!(&titles[2..], &named);
+                } else {
+                    assert_eq!(&titles[..2], &named);
+                    assert!(titles[2..]
+                        .iter()
+                        .all(|title| matches!(*title, "Missing" | "Blank")));
+                }
+            }
+        }
+
+        let mut playlist = Playlist::new("unknown values");
+        playlist.entries = tracks
+            .iter()
+            .map(|track| PlaylistEntry {
+                track_id: Some(track.id),
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(
+                    r"C:\Music\{}.flac",
+                    track.title.as_deref().unwrap()
+                ))),
+                title: track.title.clone(),
+                duration_ms: track.duration_ms,
+            })
+            .collect();
+        db.save_playlist(&playlist).expect("save playlist");
+
+        for field in [PlaylistSortField::Artist, PlaylistSortField::Album] {
+            for (direction, named, unknown_first) in [
+                (PlaylistSortDirection::Asc, ["Alpha", "Zulu"], false),
+                (PlaylistSortDirection::Desc, ["Zulu", "Alpha"], true),
+            ] {
+                let page = db
+                    .get_playlist_page_sorted(
+                        playlist.id,
+                        0,
+                        10,
+                        PlaylistListSort { field, direction },
+                    )
+                    .expect("read sorted playlist")
+                    .expect("playlist exists");
+                let titles = page
+                    .items
+                    .iter()
+                    .map(|item| item.title.as_deref().unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(titles.len(), 4);
+                if unknown_first {
+                    assert!(titles[..2]
+                        .iter()
+                        .all(|title| matches!(*title, "Missing" | "Blank")));
+                    assert_eq!(&titles[2..], &named);
+                } else {
+                    assert_eq!(&titles[..2], &named);
+                    assert!(titles[2..]
+                        .iter()
+                        .all(|title| matches!(*title, "Missing" | "Blank")));
+                }
+            }
         }
     }
 

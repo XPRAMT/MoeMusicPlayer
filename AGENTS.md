@@ -31,6 +31,8 @@
 
 專案已有可建置的 Tauri 2、Svelte 5、TypeScript 與 Vite 骨架，並包含 Rust Core、SQLite 曲庫、Windows 與 Android 媒體來源 adapter，以及雙語 README。
 
+- 文字排序群組跟隨目前排序方向整體反轉：正序為符號、數字、英文字母、地區文字群組、未知；倒序完全反轉，未知在最前、符號在最後。空白或缺失的文字欄位都屬於未知；不得固定將未知放在兩種方向的最後。資料庫列表、播放清單與播放佇列都遵守此規則，快速索引列依已排序資料流產生。
+
 - 背景亮度取樣先把圖片縮至 32×32。一般自動文字顏色模式排除 alpha=0 像素，對 alpha>0 像素依 alpha 加權平均 RGB，R/G/B 等權且不線性化。自動背景透明度模式則先在 Canvas 將縮圖疊於固定底色（白字黑底、黑字白底），轉成不透明像素；再分別取最亮或最暗的前 50%（含原透明像素合成出的底色）做等權平均，不再另做 alpha 加權。`rgbAverageBrightness` 將所得平均 RGB 的通道算術平均除以 255，再用此 Y 反解整體圖片圖層透明度。改變白／黑字模式時不得重用另一模式的取樣快取。
 
 - 「設定 → 顏色」的 `colorMode`（`autoTextColor` 預設或 `autoBackgroundOpacity`）及 `backgroundOpacityTextColor`（white／black）保存在 settings.json theme，為新增的 serde-default 欄位，不升 schema；舊設定沿用自動文字顏色。自動文字顏色模式保留可自訂背景色與相對亮度閥值。自動背景透明度模式依白／黑文字固定純黑／純白主題背景；`mainBackgroundClarityPercent` 與 `coverBackgroundClarityPercent` 分別保存主介面與 Now Playing 封面的清晰度（0–100，預設 0），各自線性控制該圖片的目標 Y：白字 `1−清晰度`，黑字 `清晰度`。白字清晰度 0／50／100% 對應 Y=1／Y<0.5／Y=0；黑字對應 Y=0／Y>0.5／Y=1。舊 `backgroundClarityPercent` 設定會遷移到兩個新欄位，之後彼此獨立。嚴格不等式在內部門檻加入微小餘量，端點 Y=0／1 保持可達；對應背景圖片的設定即時顯示依各自清晰度計算的目標百分比。透過 `src/lib/backdrop-contrast.js` 取樣影像平均色，依簡單 RGB 平均亮度 Y 直接套用亮度比例反解透明度，不逐級搜尋，介面顯示四捨五入的整數百分比。主色控制位於顏色模式按鈕上方。此模式同時覆蓋主介面圖片（含主介面專輯封面）與 Now Playing 封面，兩處手動透明度設定不生效，介面改顯示各自計算結果；純色／圖片缺失時回到固定底色，透明度為 0。測試涵蓋兩種文字色比例公式、清晰度 0／50／100%、嚴格邊界、主題色、舊設定預設與設定保存往返。

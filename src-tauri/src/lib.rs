@@ -3467,8 +3467,15 @@ fn compare_track_summaries(
         Some(database) => database.compare_music_text(left, right),
         None => natural_title_cmp(left, right),
     };
+    let compare_directional_text = |left: &str, right: &str| {
+        match (left.trim().is_empty(), right.trim().is_empty()) {
+            (false, true) => if reverse { Ordering::Greater } else { Ordering::Less },
+            (true, false) => if reverse { Ordering::Less } else { Ordering::Greater },
+            _ => compare_direction(compare_text(left, right)),
+        }
+    };
     let order = match sort.field {
-        TrackSortField::Title => compare_direction(compare_text(
+        TrackSortField::Title => compare_directional_text(
             left.title
                 .as_deref()
                 .or(left.file_name.as_deref())
@@ -3478,15 +3485,15 @@ fn compare_track_summaries(
                 .as_deref()
                 .or(right.file_name.as_deref())
                 .unwrap_or_default(),
-        )),
-        TrackSortField::Artist => compare_direction(compare_text(
+        ),
+        TrackSortField::Artist => compare_directional_text(
             left.artist.as_deref().unwrap_or_default(),
             right.artist.as_deref().unwrap_or_default(),
-        )),
-        TrackSortField::Album => compare_direction(compare_text(
+        ),
+        TrackSortField::Album => compare_directional_text(
             left.album.as_deref().unwrap_or_default(),
             right.album.as_deref().unwrap_or_default(),
-        )),
+        ),
         TrackSortField::Year => {
             let left_date = left.release_date.as_deref().unwrap_or_default();
             let right_date = right.release_date.as_deref().unwrap_or_default();
@@ -11396,6 +11403,80 @@ mod windows_library_integration_tests {
             queue.shuffle(),
             "the shuffle button may create a fresh traversal afterward"
         );
+    }
+
+    #[test]
+    fn queue_unknown_text_values_reverse_with_text_sort_direction() {
+        let ids = [
+            TrackId::new(),
+            TrackId::new(),
+            TrackId::new(),
+            TrackId::new(),
+        ];
+        let queue = PlaybackQueue::with_entries(
+            ids.iter()
+                .copied()
+                .map(|track_id| PlaybackQueueEntry {
+                    track_id,
+                    source_position: None,
+                })
+                .collect(),
+            PlaybackQueueContext::Library {
+                query: None,
+                field_filter: None,
+                sort: TrackListSort::default(),
+            },
+            0,
+        )
+        .expect("create queue");
+        let make_summary = |id: TrackId, artist: Option<&str>| TrackSummary {
+            id,
+            title: Some("Track".to_owned()),
+            artist: artist.map(str::to_owned),
+            album: None,
+            album_artist: None,
+            track_number: None,
+            disc_number: None,
+            duration_ms: Some(10_000),
+            codec: None,
+            bitrate_bps: None,
+            sample_rate_hz: None,
+            release_date: None,
+            year: None,
+            created_at_utc_ms: None,
+            bit_depth: None,
+            played_ms: 0,
+            file_name: None,
+        };
+        let summaries = HashMap::from([
+            (ids[0], make_summary(ids[0], None)),
+            (ids[1], make_summary(ids[1], Some("Alpha"))),
+            (ids[2], make_summary(ids[2], Some("Zulu"))),
+            (ids[3], make_summary(ids[3], Some("  \t"))),
+        ]);
+
+        for (direction, named, unknown_first) in [
+            (TrackSortDirection::Asc, [1, 2], false),
+            (TrackSortDirection::Desc, [2, 1], true),
+        ] {
+            let sorted = sort_queue_entry_order(
+                &queue.snapshot(),
+                &summaries,
+                TrackListSort {
+                    field: TrackSortField::Artist,
+                    direction,
+                },
+                None,
+            );
+            assert_eq!(sorted.len(), 4);
+            if unknown_first {
+                assert!(sorted[..2].iter().all(|index| matches!(*index, 0 | 3)));
+                assert_eq!([sorted[2], sorted[3]], named);
+            } else {
+                assert_eq!([sorted[0], sorted[1]], named);
+                assert!(sorted[2..].iter().all(|index| matches!(*index, 0 | 3)));
+            }
+        }
     }
 
     #[test]
