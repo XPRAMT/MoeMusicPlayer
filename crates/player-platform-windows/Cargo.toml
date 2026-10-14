@@ -13,7 +13,6 @@ symphonia = { version = "=0.5.5", default-features = false, features = ["mkv"] }
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
-    "Globalization_Collation",
     "Win32_System_Com",
     "Win32_System_Search",
     "Win32_System_Services",

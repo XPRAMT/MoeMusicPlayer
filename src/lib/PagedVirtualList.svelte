@@ -87,7 +87,7 @@
     scrollToIndexRequest?: { index: number; token: number } | null;
     /** Locale-aware group headings, inserted as virtual rows before their first data item. */
     groupRows?: QuickIndexGroup[];
-    /** All locale index labels, including labels without data in this list. */
+    /** Only locale index labels that have rows in this list. */
     quickIndexLabels?: string[];
     header?: Snippet;
     row: Snippet<[VirtualListRow<Item>]>;

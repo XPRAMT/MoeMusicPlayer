@@ -16,7 +16,7 @@
     { label: 'A', beforeIndex: 0 },
     { label: 'B', beforeIndex: 40 },
   ];
-  const labels = ['#', 'A', 'B', 'C', 'ㄅ', ...Array.from({ length: 30 }, (_, index) => `測${index + 1}`)];
+  const labels = ['A', 'B'];
   const played: Array<{ id: string; index: number }> = [];
   const requestedRanges: Array<{ start: number; end: number }> = [];
   let showList = $state(true);

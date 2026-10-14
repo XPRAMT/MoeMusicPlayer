@@ -28,6 +28,7 @@ test('paged grouping keeps contiguous groups across page boundaries and trims na
     { label: 'ㄅ', beforeIndex: 2 },
     { label: 'Z', beforeIndex: 4 },
   ]);
+  assert.deepEqual(result.labels, ['A', 'ㄅ', 'Z'], 'unused categories are omitted');
 });
 
 test('visual rows map to data rows without changing queue item indexes', () => {
@@ -76,7 +77,7 @@ test('empty artist and album values use the Unknown group while nonempty symboli
     { label: '#', beforeIndex: 2 },
     { label: 'H', beforeIndex: 3 },
   ]);
-  assert.deepEqual(result.labels, ['#', 'H', '未知']);
+  assert.deepEqual(result.labels, ['未知', '#', 'H']);
 });
 
 test('leading punctuation uses its own locale grouping instead of the following letter', async () => {
@@ -97,8 +98,7 @@ test('leading punctuation uses its own locale grouping instead of the following 
       requestedNames.push(...names);
       return {
         labels: ['&', 'B', 'E', 'F', 'H'],
-        // Model the system grouping behavior: full strings ignore a leading hyphen,
-        // while asking about the actual first character yields the punctuation bucket.
+        // The backend classifies the actual first character, so punctuation stays grouped.
         groups: names.map((name) => name === '-'
           ? '&'
           : name.match(/[A-Za-z]/)?.[0]?.toUpperCase() ?? '&'),

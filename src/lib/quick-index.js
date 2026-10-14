@@ -20,9 +20,8 @@ export function cacheQuickIndex(key, value) {
 }
 
 /**
- * Scan a sorted paged list and build locale-aware, contiguous index groups.
- * The caller supplies the platform grouping API so the scan stays independent
- * from a particular list or native runtime.
+ * Scan a sorted paged list and build groups from the same ICU4X rules used by
+ * the backend list comparator. Only groups present in this list are returned.
  * @template Item
  * @param {{
  *   totalCount: number,
@@ -43,8 +42,6 @@ export async function buildQuickIndexGroups({
 }) {
   const count = Number.isSafeInteger(totalCount) ? Math.max(0, totalCount) : 0;
   const safePageSize = Math.max(1, Math.min(500, Math.floor(pageSize)));
-  const initial = await getGroupings([]);
-  const labels = [...new Set((initial.labels ?? []).filter((label) => typeof label === 'string' && label.length > 0))];
   /** @type {Array<{ label: string, beforeIndex: number }>} */
   const groups = [];
   /** @type {string | null} */
@@ -58,14 +55,12 @@ export async function buildQuickIndexGroups({
     const items = Array.isArray(page?.items) ? page.items : [];
     if (items.length === 0) break;
     const names = items.map((item) => String(getName(item) ?? '').trim());
-    // Ask the platform to classify the visible first character only. Some system
-    // grouping APIs collate full strings and skip leading punctuation, so a title
-    // such as "-BWW" is otherwise placed under B instead of its symbol bucket.
+    // Classify the actual first character. Leading punctuation stays in the symbol group.
     const groupingNames = names.map((name) => Array.from(name)[0] ?? '');
     const response = await getGroupings(groupingNames);
     if (!isCurrent()) return null;
     if (!Array.isArray(response.groups) || response.groups.length !== items.length) {
-      throw new Error('系統字元索引回傳的群組數量與曲目不一致。');
+      throw new Error('ICU4X 首字索引回傳的群組數量與曲目不一致。');
     }
     response.groups.forEach((label, localIndex) => {
       const group = names[localIndex].length === 0
@@ -79,11 +74,7 @@ export async function buildQuickIndexGroups({
     if (items.length < safePageSize) break;
   }
 
-  const availableLabels = [...new Set(groups.map(({ label }) => label))];
-  for (const label of availableLabels) {
-    if (!labels.includes(label)) labels.push(label);
-  }
-  return { labels, groups };
+  return { labels: [...new Set(groups.map(({ label }) => label))], groups };
 }
 
 /**

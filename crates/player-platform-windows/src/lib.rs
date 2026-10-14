@@ -26,9 +26,6 @@ pub use windows::{
 };
 
 #[cfg(windows)]
-pub use windows::alphabetic_index_groupings;
-
-#[cfg(windows)]
 pub use artwork::{find_artwork, ArtworkLookup};
 
 #[cfg(windows)]

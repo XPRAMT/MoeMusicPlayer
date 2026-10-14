@@ -122,14 +122,6 @@ impl<R: Runtime, T: Manager<R>> MediaIndexExt<R> for T {
 }
 
 impl<R: Runtime> MediaIndex<R> {
-    /// Return locale-specific alphabetical labels and group names for display strings.
-    #[cfg(target_os = "android")]
-    pub fn alphabetic_index_groupings(
-        &self,
-        names: &[String],
-    ) -> Result<(Vec<String>, Vec<String>)> {
-        self.platform.alphabetic_index_groupings(names)
-    }
     /// Open a Rust-validated official HTTPS link in Android's browser.
     #[cfg(target_os = "android")]
     pub fn open_official_url(&self, url: &str) -> Result<()> {

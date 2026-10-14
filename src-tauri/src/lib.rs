@@ -2999,24 +2999,19 @@ struct QuickIndexGrouping {
 
 #[tauri::command]
 fn library_get_quick_index_groupings(
-    _app: AppHandle,
+    state: State<'_, AppState>,
     values: Vec<String>,
 ) -> Result<QuickIndexGrouping, String> {
     if values.len() > 500 {
         return Err("快速索引每次最多處理 500 個名稱。".to_owned());
     }
-    #[cfg(target_os = "windows")]
-    let (labels, groups) = player_platform_windows::alphabetic_index_groupings(&values)?;
-    #[cfg(target_os = "android")]
-    let (labels, groups) = _app
-        .media_index()
-        .alphabetic_index_groupings(&values)
-        .map_err(|error| error.to_string())?;
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
-    let (labels, groups) = {
-        let _ = _app;
-        return Err("此平台尚未提供系統字元索引。".to_owned());
-    };
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    let (labels, groups) = database.quick_index_groupings(&values);
     Ok(QuickIndexGrouping { labels, groups })
 }
 

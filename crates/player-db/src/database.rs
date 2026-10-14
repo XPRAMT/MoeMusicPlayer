@@ -518,7 +518,7 @@ CREATE TABLE music_collation_metadata (
 );
 "#;
 
-const MUSIC_COLLATION_COMPARATOR_VERSION: u8 = 3;
+const MUSIC_COLLATION_COMPARATOR_VERSION: u8 = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MusicCollationSpec {
@@ -573,16 +573,157 @@ impl MusicCollationSpec {
         Some(Self::from_locale_parts(locale, collation_type))
     }
 
-    fn build_collator(&self) -> Arc<CollatorBorrowed<'static>> {
-        let locale = Locale::try_from_str(&self.locale).unwrap_or(Locale::UNKNOWN);
+    fn build_collator(
+        locale: &str,
+        collation_type: Option<CollationType>,
+    ) -> Arc<CollatorBorrowed<'static>> {
+        let locale = Locale::try_from_str(locale).unwrap_or(Locale::UNKNOWN);
         let mut preferences = CollatorPreferences::from(&locale);
         preferences.numeric_ordering = Some(CollationNumericOrdering::True);
-        preferences.collation_type = self.collation_type;
+        preferences.collation_type = collation_type;
         Arc::new(
             Collator::try_new(preferences, CollatorOptions::default())
                 .expect("compiled ICU4X collation data must be available"),
         )
     }
+
+    fn uses_zhuyin(&self) -> bool {
+        self.locale.split('-').take(2).eq(["zh", "TW"])
+            || self.collation_type == Some(CollationType::Zhuyin)
+    }
+
+    fn uses_japanese_order(&self) -> bool {
+        self.locale
+            .split('-')
+            .next()
+            .is_some_and(|language| language.eq_ignore_ascii_case("ja"))
+    }
+
+    fn build_collators(&self) -> MusicCollators {
+        let default = Self::build_collator(&self.locale, self.collation_type);
+        let han = Self::build_collator(
+            &self.locale,
+            Some(if self.uses_zhuyin() {
+                CollationType::Zhuyin
+            } else {
+                CollationType::Pinyin
+            }),
+        );
+        let kana = Self::build_collator("ja", None);
+        let mut boundaries = if self.uses_zhuyin() {
+            zhuyin_group_boundaries()
+        } else {
+            pinyin_group_boundaries()
+        };
+        boundaries.sort_by(|left, right| han.compare(left.exemplar, right.exemplar));
+        MusicCollators {
+            default,
+            han,
+            kana,
+            han_boundaries: boundaries,
+            japanese_order: self.uses_japanese_order(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct HanGroupBoundary {
+    label: &'static str,
+    exemplar: &'static str,
+}
+
+struct MusicCollators {
+    default: Arc<CollatorBorrowed<'static>>,
+    han: Arc<CollatorBorrowed<'static>>,
+    kana: Arc<CollatorBorrowed<'static>>,
+    han_boundaries: Vec<HanGroupBoundary>,
+    japanese_order: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LeadingKind {
+    Symbol,
+    Number,
+    Latin,
+    Han,
+    Kana,
+    Other,
+    Unknown,
+}
+
+fn pinyin_group_boundaries() -> Vec<HanGroupBoundary> {
+    [
+        ("A", "阿"),
+        ("B", "八"),
+        ("C", "擦"),
+        ("D", "大"),
+        ("E", "饿"),
+        ("F", "发"),
+        ("G", "嘎"),
+        ("H", "哈"),
+        ("J", "家"),
+        ("K", "卡"),
+        ("L", "拉"),
+        ("M", "妈"),
+        ("N", "拿"),
+        ("O", "哦"),
+        ("P", "趴"),
+        ("Q", "七"),
+        ("R", "日"),
+        ("S", "撒"),
+        ("T", "他"),
+        ("W", "挖"),
+        ("X", "西"),
+        ("Y", "呀"),
+        ("Z", "咋"),
+    ]
+    .into_iter()
+    .map(|(label, exemplar)| HanGroupBoundary { label, exemplar })
+    .collect()
+}
+
+fn zhuyin_group_boundaries() -> Vec<HanGroupBoundary> {
+    [
+        ("ㄅ", "八"),
+        ("ㄆ", "趴"),
+        ("ㄇ", "媽"),
+        ("ㄈ", "發"),
+        ("ㄉ", "大"),
+        ("ㄊ", "他"),
+        ("ㄋ", "拿"),
+        ("ㄌ", "拉"),
+        ("ㄍ", "嘎"),
+        ("ㄎ", "卡"),
+        ("ㄏ", "哈"),
+        ("ㄐ", "家"),
+        ("ㄑ", "七"),
+        ("ㄒ", "西"),
+        ("ㄓ", "知"),
+        ("ㄔ", "吃"),
+        ("ㄕ", "詩"),
+        ("ㄖ", "日"),
+        ("ㄗ", "咋"),
+        ("ㄘ", "擦"),
+        ("ㄙ", "撒"),
+        ("ㄚ", "阿"),
+        ("ㄛ", "哦"),
+        ("ㄜ", "餓"),
+        ("ㄞ", "哀"),
+        ("ㄟ", "欸"),
+        ("ㄠ", "熬"),
+        ("ㄡ", "歐"),
+        ("ㄢ", "安"),
+        ("ㄣ", "恩"),
+        ("ㄤ", "昂"),
+        ("ㄥ", "鞥"),
+        ("ㄦ", "兒"),
+        ("ㄧ", "一"),
+        ("ㄨ", "烏"),
+        ("ㄩ", "迂"),
+    ]
+    .into_iter()
+    .map(|(label, exemplar)| HanGroupBoundary { label, exemplar })
+    .collect()
 }
 
 #[cfg(target_os = "windows")]
@@ -667,11 +808,127 @@ fn system_locale_and_collation() -> (String, Option<CollationType>) {
     (locale, None)
 }
 
-fn compare_music_names(collator: &CollatorBorrowed<'static>, left: &str, right: &str) -> Ordering {
+fn leading_char(value: &str) -> Option<char> {
+    value.trim().chars().next()
+}
+
+fn is_han(value: char) -> bool {
+    matches!(value as u32,
+        0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF |
+        0x20000..=0x2A6DF | 0x2A700..=0x2B73F | 0x2B740..=0x2B81F |
+        0x2B820..=0x2CEAF | 0x2CEB0..=0x2EBEF | 0x30000..=0x3134F |
+        0x31350..=0x323AF)
+}
+
+fn is_kana(value: char) -> bool {
+    matches!(value as u32, 0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9D)
+}
+
+fn classify_leading(value: Option<char>) -> LeadingKind {
+    match value {
+        None => LeadingKind::Unknown,
+        Some(character) if character.is_numeric() => LeadingKind::Number,
+        Some(character) if character.is_ascii_alphabetic() => LeadingKind::Latin,
+        Some(character) if is_han(character) => LeadingKind::Han,
+        Some(character) if is_kana(character) => LeadingKind::Kana,
+        Some(character) if character.is_alphabetic() => LeadingKind::Other,
+        Some(_) => LeadingKind::Symbol,
+    }
+}
+
+fn kana_group_char(character: char) -> char {
+    match character as u32 {
+        0x30A1..=0x30F6 => char::from_u32(character as u32 - 0x60).unwrap_or(character),
+        _ => character,
+    }
+}
+
+fn han_group_index(collators: &MusicCollators, character: char) -> usize {
+    // Japanese first-letter navigation groups all Han characters under one entry.
+    // Their actual order within that group still comes from the ja-JP collator.
+    if collators.japanese_order {
+        return 0;
+    }
+    let value = character.to_string();
+    let index = collators.han_boundaries.partition_point(|boundary| {
+        collators.han.compare(&value, boundary.exemplar) != Ordering::Less
+    });
+    index.saturating_sub(1)
+}
+
+fn localized_rank(kind: LeadingKind, collators: &MusicCollators) -> u8 {
+    match kind {
+        LeadingKind::Symbol => 0,
+        LeadingKind::Number => 1,
+        LeadingKind::Latin => 2,
+        LeadingKind::Kana if collators.japanese_order => 3,
+        LeadingKind::Han if collators.japanese_order => 4,
+        LeadingKind::Han => 3,
+        LeadingKind::Kana => 4,
+        LeadingKind::Other => 5,
+        LeadingKind::Unknown => 6,
+    }
+}
+
+fn quick_index_label(collators: &MusicCollators, value: &str) -> String {
+    let Some(character) = leading_char(value) else {
+        return "未知".to_owned();
+    };
+    match classify_leading(Some(character)) {
+        LeadingKind::Symbol => "&".to_owned(),
+        LeadingKind::Number => "#".to_owned(),
+        LeadingKind::Latin => character.to_ascii_uppercase().to_string(),
+        LeadingKind::Han if collators.japanese_order => "漢字".to_owned(),
+        LeadingKind::Han => collators.han_boundaries[han_group_index(collators, character)]
+            .label
+            .to_owned(),
+        LeadingKind::Kana => kana_group_char(character).to_string(),
+        LeadingKind::Other => character.to_string(),
+        LeadingKind::Unknown => "未知".to_owned(),
+    }
+}
+
+fn compare_music_names(collators: &MusicCollators, left: &str, right: &str) -> Ordering {
+    let left_char = leading_char(left);
+    let right_char = leading_char(right);
+    let left_kind = classify_leading(left_char);
+    let right_kind = classify_leading(right_char);
+    let category = localized_rank(left_kind, collators).cmp(&localized_rank(right_kind, collators));
+    if category != Ordering::Equal {
+        return category;
+    }
+
+    let leading_group = match (left_kind, left_char, right_kind, right_char) {
+        (LeadingKind::Latin, Some(left), LeadingKind::Latin, Some(right)) => {
+            left.to_ascii_uppercase().cmp(&right.to_ascii_uppercase())
+        }
+        (LeadingKind::Han, Some(left), LeadingKind::Han, Some(right)) => {
+            han_group_index(collators, left).cmp(&han_group_index(collators, right))
+        }
+        (LeadingKind::Kana, Some(left), LeadingKind::Kana, Some(right)) => {
+            let left = kana_group_char(left).to_string();
+            let right = kana_group_char(right).to_string();
+            collators.kana.compare(&left, &right)
+        }
+        (LeadingKind::Other, Some(left), LeadingKind::Other, Some(right)) => collators
+            .default
+            .compare(&left.to_string(), &right.to_string()),
+        _ => Ordering::Equal,
+    };
+    if leading_group != Ordering::Equal {
+        return leading_group;
+    }
+
+    let collator = match left_kind {
+        LeadingKind::Han if collators.japanese_order => &collators.default,
+        LeadingKind::Han => &collators.han,
+        LeadingKind::Kana => &collators.kana,
+        _ => &collators.default,
+    };
     collator
         .compare(left.trim(), right.trim())
-        // ICU numeric comparison correctly handles arbitrary-length runs; this stable tie-break
-        // keeps equivalent whitespace/numeric spellings such as ` title ` and 2/02 deterministic.
+        // ICU numeric comparison handles arbitrary-length runs; this stable tie-break keeps
+        // equivalent whitespace and numeric spellings deterministic.
         .then_with(|| natural_title_cmp(left, right))
 }
 
@@ -744,9 +1001,9 @@ fn register_music_collation(
     connection: &Connection,
     collation_spec: &MusicCollationSpec,
 ) -> rusqlite::Result<()> {
-    let collator = collation_spec.build_collator();
+    let collators = collation_spec.build_collators();
     connection.create_collation(MUSIC_COLLATION_NAME, move |left, right| {
-        compare_music_names(&collator, left, right)
+        compare_music_names(&collators, left, right)
     })
 }
 
@@ -833,7 +1090,7 @@ pub struct PlaybackStatisticsRuntime {
 pub struct Database {
     connection: Mutex<Connection>,
     collation_spec: MusicCollationSpec,
-    collator: Arc<CollatorBorrowed<'static>>,
+    collators: MusicCollators,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1139,7 +1396,7 @@ impl Database {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         let database = Self {
             connection: Mutex::new(connection),
-            collator: collation_spec.build_collator(),
+            collators: collation_spec.build_collators(),
             collation_spec,
         };
         database.migrate()?;
@@ -1322,14 +1579,29 @@ impl Database {
     pub fn sort_text_indices(&self, values: &[String]) -> Vec<usize> {
         let mut indices = (0..values.len()).collect::<Vec<_>>();
         indices.sort_by(|left, right| {
-            compare_music_names(&self.collator, &values[*left], &values[*right])
+            compare_music_names(&self.collators, &values[*left], &values[*right])
         });
         indices
     }
 
-    /// Compare two display labels using the same locale-aware, numeric collation as library SQL.
+    /// Classify first-character index groups using the same ICU4X data and ordering as library SQL.
+    pub fn quick_index_groupings(&self, values: &[String]) -> (Vec<String>, Vec<String>) {
+        let groups = values
+            .iter()
+            .map(|value| quick_index_label(&self.collators, value))
+            .collect::<Vec<_>>();
+        let mut labels = Vec::new();
+        for label in &groups {
+            if !labels.contains(label) {
+                labels.push(label.clone());
+            }
+        }
+        (labels, groups)
+    }
+
+    /// Compare two display labels using the same ICU4X category and numeric collation as SQL.
     pub fn compare_music_text(&self, left: &str, right: &str) -> Ordering {
-        compare_music_names(&self.collator, left, right)
+        compare_music_names(&self.collators, left, right)
     }
 
     pub fn journal_mode(&self) -> Result<String, DatabaseError> {
@@ -6806,15 +7078,84 @@ mod tests {
         assert_eq!(
             sorted,
             [
-                "中 2",
-                "中 10",
-                "字 2",
                 "Track 2",
                 "Track 10",
                 "Track 100000000000000000000000000000000000000000",
+                "中 2",
+                "中 10",
+                "字 2",
             ],
-            "Taiwanese Zhuyin determines Han ordering while ICU numeric ordering handles long digit runs",
+            "symbols, numbers and Latin precede Taiwanese Zhuyin groups while numeric runs stay natural",
         );
+    }
+
+    #[test]
+    fn locale_sort_categories_and_quick_index_share_the_same_icu_groups() {
+        for (locale, collation_type, names, expected_order, expected_groups) in [
+            (
+                "zh-TW",
+                Some(CollationType::Zhuyin),
+                vec!["漢", "A", "10", "-", "1", "B", "不", "比", "爬", "迷"],
+                vec!["-", "1", "10", "A", "B", "比", "不", "爬", "迷", "漢"],
+                vec!["ㄅ", "ㄅ", "ㄆ", "ㄇ"],
+            ),
+            (
+                "zh-CN",
+                Some(CollationType::Pinyin),
+                vec!["漢", "B", "10", "-", "1", "A", "不", "趴", "迷"],
+                vec!["-", "1", "10", "A", "B", "不", "漢", "迷", "趴"],
+                vec!["B", "P", "M"],
+            ),
+            (
+                "ja-JP",
+                None,
+                vec!["東京", "カナ", "10", "-", "1", "かな", "A", "B", "漢"],
+                vec!["-", "1", "10", "A", "B", "かな", "カナ", "漢", "東京"],
+                vec!["か", "か", "漢字", "漢字"],
+            ),
+        ] {
+            let db = Database::from_connection_with_collation(
+                Connection::open_in_memory().expect("connection"),
+                MusicCollationSpec::from_locale_parts(locale, collation_type),
+            )
+            .expect("locale database");
+            let values = names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>();
+            let sorted = db
+                .sort_text_indices(&values)
+                .into_iter()
+                .map(|index| values[index].as_str().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(sorted, expected_order, "sort category order for {locale}");
+
+            let index_names = if locale == "zh-TW" {
+                vec!["不", "比", "爬", "迷"]
+            } else if locale == "zh-CN" {
+                vec!["不", "趴", "迷"]
+            } else {
+                vec!["かな", "カナ", "漢", "東京"]
+            };
+            let (labels, groups) = db.quick_index_groupings(
+                &index_names
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(groups, expected_groups, "index groups for {locale}");
+            let expected_labels =
+                expected_groups
+                    .iter()
+                    .fold(Vec::<String>::new(), |mut labels, label| {
+                        let label = (*label).to_owned();
+                        if !labels.contains(&label) {
+                            labels.push(label);
+                        }
+                        labels
+                    });
+            assert_eq!(labels, expected_labels);
+        }
     }
 
     #[test]
@@ -7073,7 +7414,7 @@ mod tests {
                 "UPDATE music_collation_metadata SET signature=?1 WHERE singleton=1",
                 [collation
                     .signature()
-                    .replace("|comparator=3", "|comparator=2")],
+                    .replace("|comparator=4", "|comparator=3")],
             )
             .expect("mark the legacy comparator signature");
         drop(legacy_connection);

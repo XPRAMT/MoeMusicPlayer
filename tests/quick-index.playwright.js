@@ -38,7 +38,7 @@ async page => {
   assert(await dialog.getByRole('button', { name: 'A', exact: true }).evaluate(button => button === document.activeElement), 'dialog did not focus its first available label');
   assert(await dialog.getByRole('button', { name: 'A', exact: true }).isEnabled(), 'available A label is disabled');
   assert(await dialog.getByRole('button', { name: 'B', exact: true }).isEnabled(), 'available B label is disabled');
-  assert(await dialog.getByRole('button', { name: 'C', exact: true }).isDisabled(), 'missing C label is not disabled');
+  assert(await dialog.getByRole('button', { name: 'C', exact: true }).count() === 0, 'unused C label should not be present');
   assert(await dialog.getByRole('button', { name: '關閉', exact: true }).count() === 0, 'close button should not be present');
   const popupGeometry = await page.evaluate(() => {
     const popup = document.querySelector('.quick-index-popover');
@@ -139,7 +139,7 @@ async page => {
     result: 'PASS',
     groupHeadings: headingCount,
     availableLabelsEnabled: true,
-    unavailableLabelsDisabled: true,
+    unusedLabelsOmitted: true,
     chosenGroupScrollTop: scrollTop,
     playedDataIndex: played.at(-1).index,
     overflowScrollHeight: overflowGeometry.scrollHeight,

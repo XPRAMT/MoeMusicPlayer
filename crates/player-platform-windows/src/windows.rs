@@ -27,48 +27,6 @@ use symphonia::{
     default::get_probe,
 };
 
-/// Return Windows' locale-aware index labels and the corresponding group for each name.
-/// This uses the same user-default grouping service as Windows lists, including Zhuyin labels
-/// for Taiwanese Chinese, rather than guessing from the first Unicode scalar.
-pub fn alphabetic_index_groupings(names: &[String]) -> Result<(Vec<String>, Vec<String>), String> {
-    use windows::{core::HSTRING, Globalization::Collation::CharacterGroupings};
-
-    let index =
-        CharacterGroupings::new().map_err(|error| format!("無法建立 Windows 字元索引：{error}"))?;
-    let mut labels = Vec::new();
-    if names.is_empty() {
-        let bucket_count = index
-            .Size()
-            .map_err(|error| format!("無法讀取 Windows 字元索引：{error}"))?;
-        labels.reserve(bucket_count as usize);
-        for bucket_index in 0..bucket_count {
-            let bucket = index
-                .GetAt(bucket_index)
-                .map_err(|error| format!("無法讀取 Windows 字元索引項目：{error}"))?;
-            let label = bucket
-                .Label()
-                .map_err(|error| format!("無法讀取 Windows 字元索引標籤：{error}"))?;
-            let label = label.to_string();
-            if !label.is_empty() && !labels.contains(&label) {
-                labels.push(label);
-            }
-        }
-    }
-    let groups = names
-        .iter()
-        .map(|name| {
-            if name.trim().is_empty() {
-                return Ok("#".to_owned());
-            }
-            index
-                .Lookup(&HSTRING::from(name.as_str()))
-                .map(|label| label.to_string())
-                .map_err(|error| format!("無法分類字元索引項目：{error}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok((labels, groups))
-}
-
 /// Windows media index provider. Until SystemIndex can prove full root coverage and freshness,
 /// this provider uses a complete filesystem walk. A zero-result Windows Search query is never
 /// treated as a complete empty library.
@@ -1080,9 +1038,9 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        alphabetic_index_groupings, is_supported_audio_file, mpeg_codec_name,
-        read_lossless_wav_bit_depth, reliable_source_bit_depth, supported_audio_extensions,
-        to_extended_path, windows_locator_key, WindowsMediaIndex,
+        is_supported_audio_file, mpeg_codec_name, read_lossless_wav_bit_depth,
+        reliable_source_bit_depth, supported_audio_extensions, to_extended_path,
+        windows_locator_key, WindowsMediaIndex,
     };
     use lofty::file::FileType;
     use lofty::mpeg::Layer;
@@ -1821,37 +1779,6 @@ mod tests {
         assert!(!extensions
             .iter()
             .any(|item| item.eq_ignore_ascii_case(".mp4")));
-    }
-
-    #[test]
-    fn alphabetic_index_groupings_follow_windows_user_locale() {
-        let names = vec![
-            "Apple 2".to_owned(),
-            "Apple 10".to_owned(),
-            "迷失的名字".to_owned(),
-            "".to_owned(),
-        ];
-        let (labels, empty_groups) = alphabetic_index_groupings(&[]).expect("Windows labels");
-        assert!(empty_groups.is_empty());
-        assert!(
-            !labels.is_empty(),
-            "Windows locale index labels are missing"
-        );
-        let (_, groups) = alphabetic_index_groupings(&names).expect("Windows group lookup");
-        assert_eq!(groups.len(), names.len());
-        assert_eq!(groups[0], groups[1], "same leading text split into groups");
-        assert!(
-            !groups[0].is_empty(),
-            "Latin title did not resolve to a group"
-        );
-        assert_eq!(
-            groups[3], "#",
-            "empty text did not use the miscellaneous group"
-        );
-
-        let (_, repeated_groups) =
-            alphabetic_index_groupings(&names).expect("repeat Windows index");
-        assert_eq!(groups, repeated_groups, "group lookup is not deterministic");
     }
 
     #[test]
