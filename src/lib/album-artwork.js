@@ -33,6 +33,24 @@ export function resolveAlbumArtworkDisplaySources(sources, { fallbackUrl, resolv
   return resolved ? [fallbackUrl] : [];
 }
 
+/** Load up to four persisted representative covers in order; callers can swap them atomically. */
+/** @param {string[]} trackIds @param {(trackId: string) => Promise<{ url: string, bytes: number } | null>} loadThumbnail @returns {Promise<{ urls: string[], bytes: number }>} */
+export async function loadAlbumCardThumbnails(trackIds, loadThumbnail) {
+  const images = [];
+  for (const trackId of trackIds.slice(0, 4)) {
+    try {
+      const image = await loadThumbnail(trackId);
+      if (image) images.push(image);
+    } catch {
+      // A stale thumbnail should not prevent the other representatives from being shown.
+    }
+  }
+  return {
+    urls: images.map(({ url }) => url),
+    bytes: images.reduce((total, { bytes }) => total + bytes, 0),
+  };
+}
+
 function trimAlbumCardMemoryCache() {
   while (albumCardMemoryCache.size > ALBUM_CARD_MEMORY_CACHE_MAX_ENTRIES
     || albumCardMemoryCacheBytes > ALBUM_CARD_MEMORY_CACHE_MAX_BYTES) {

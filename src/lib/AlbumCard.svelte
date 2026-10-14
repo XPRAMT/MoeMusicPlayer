@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBase64, putAlbumThumbnailBase64ForTrack } from './ipc';
-  import { acquireAlbumCardArtwork, copyToArrayBuffer, createAlbumThumbnailInWorker, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
+  import { acquireAlbumCardArtwork, copyToArrayBuffer, createAlbumThumbnailInWorker, loadAlbumCardThumbnails, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
   import type { AlbumIndexSortField } from './ipc';
   import { formatDurationHours } from './format';
@@ -77,11 +77,13 @@
   }
 
   function remember(urls: string[], bytes: number): void {
+    const previousLease = releaseArtworkCacheLease;
     const cachedArtwork = rememberAlbumCardArtwork(memoryCacheKey, urls.length ? urls : null, bytes);
     releaseArtworkCacheLease = cachedArtwork?.release ?? null;
     const value = cachedArtwork?.value;
     imageUrls = Array.isArray(value) ? value : value ? [value] : [];
     cacheResolved = true;
+    previousLease?.();
   }
 
   async function restorePersistentSelection(revision: number): Promise<boolean> {
@@ -99,22 +101,22 @@
         });
       } catch { return false; }
       if (!selection || selection.trackCount !== album.trackCount || revision !== requestRevision) return false;
-      const trackId = selection.trackIds[0];
-      if (!trackId) {
+      if (selection.trackIds.length === 0) {
         // Empty selections are persisted negative-cache entries: this album has no readable cover.
         remember([], 0);
         return true;
       }
-      try {
-        const image = await loadTrackThumbnail(trackId);
-        if (!image) continue;
-        if (!active || destroyed || revision !== requestRevision) {
-          URL.revokeObjectURL(image.url);
-          return false;
-        }
-        remember([image.url], image.bytes);
+      const loaded = await loadAlbumCardThumbnails(selection.trackIds, loadTrackThumbnail);
+      if (!active || destroyed || revision !== requestRevision) {
+        loaded.urls.forEach((url) => URL.revokeObjectURL(url));
+        return false;
+      }
+      if (loaded.urls.length > 0) {
+        // Do not replace the current mosaic until every selected thumbnail has been read.
+        remember(loaded.urls, loaded.bytes);
         return true;
-      } catch { /* rebuild the first-artwork selection once if its source disappeared */ }
+      }
+      // Rebuild the selection once if every representative thumbnail has gone stale.
     }
     return false;
   }
@@ -123,10 +125,12 @@
     if (!active || busy || cacheResolved || album.unmarked) return;
     const cached = acquireAlbumCardArtwork(memoryCacheKey);
     if (cached) {
+      const previousLease = releaseArtworkCacheLease;
       releaseArtworkCacheLease = cached.release;
       const value = cached.value;
       imageUrls = Array.isArray(value) ? value : value ? [value] : [];
       cacheResolved = true;
+      previousLease?.();
       return;
     }
     const revision = ++requestRevision;
@@ -164,9 +168,9 @@
     const refreshSelection = (event: Event) => {
       const detail = (event as CustomEvent<{ albumKey?: string }>).detail;
       if (detail?.albumKey !== album.key) return;
-      releaseArtworkCacheLease?.();
-      releaseArtworkCacheLease = null;
-      imageUrls = [];
+      // Keep the old, visible mosaic leased until the refreshed selection is fully loaded.
+      requestRevision += 1;
+      busy = false;
       cacheResolved = false;
       artworkRevision += 1;
       if (active && inViewport) void loadCover();

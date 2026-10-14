@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   acquireAlbumCardArtwork,
   hashDistance,
+  loadAlbumCardThumbnails,
   perceptualHash32,
   rankAlbumArtwork,
   rememberAlbumCardArtwork,
@@ -42,6 +43,38 @@ test('virtualized album cards remember tracks with no cover for the current list
   assert.ok(remounted, 'a known no-cover result is cached');
   assert.equal(remounted.value, null);
   remounted.release();
+});
+
+test('album home cards load the complete representative-cover mosaic before returning it', async () => {
+  const loaded = [];
+  const result = await loadAlbumCardThumbnails(['most-used', 'second', 'third', 'fourth', 'fifth'], async (trackId) => {
+    loaded.push(trackId);
+    return { url: `blob:${trackId}`, bytes: trackId.length };
+  });
+
+  assert.deepEqual(loaded, ['most-used', 'second', 'third', 'fourth']);
+  assert.deepEqual(result.urls, ['blob:most-used', 'blob:second', 'blob:third', 'blob:fourth']);
+  assert.equal(result.bytes, 'most-used'.length + 'second'.length + 'third'.length + 'fourth'.length);
+});
+
+test('album home artwork result waits for selected thumbnails and skips unavailable covers', async () => {
+  let finishSecond;
+  let completed = false;
+  const loading = loadAlbumCardThumbnails(['first', 'second', 'missing'], async (trackId) => {
+    if (trackId === 'second') return new Promise((resolve) => { finishSecond = resolve; });
+    if (trackId === 'missing') return null;
+    return { url: 'blob:first', bytes: 10 };
+  }).then((result) => {
+    completed = true;
+    return result;
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completed, false, 'do not publish a partial mosaic while another selected image is loading');
+  finishSecond({ url: 'blob:second', bytes: 20 });
+  const result = await loading;
+  assert.deepEqual(result.urls, ['blob:first', 'blob:second']);
+  assert.equal(result.bytes, 30);
 });
 
 test('32x32 pHash is stable for flat images and distinguishes structured luminance patterns', () => {

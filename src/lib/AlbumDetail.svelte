@@ -161,9 +161,7 @@
         ownedCoverUrls = urls;
         coverUrls = urls;
         coverScanResolved = true;
-        if (selectedIds.length > 0) {
-          window.dispatchEvent(new CustomEvent('album-artwork-selection-updated', { detail: { albumKey: album.key } }));
-        }
+        window.dispatchEvent(new CustomEvent('album-artwork-selection-updated', { detail: { albumKey: album.key } }));
       } else {
         urls.forEach((url) => URL.revokeObjectURL(url));
       }
