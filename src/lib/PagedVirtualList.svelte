@@ -723,7 +723,7 @@
       <div class="quick-index-label-grid">
         {#each quickIndexLabels as label (label)}
           {@const available = availableIndexLabels.has(label)}
-          <button type="button" class="quick-index-label" class:unavailable={!available} disabled={!available} onclick={() => chooseQuickIndexLabel(label)}>{label}</button>
+          <button type="button" class="quick-index-label" class:wide-label={label === '漢字'} class:unavailable={!available} disabled={!available} onclick={() => chooseQuickIndexLabel(label)}>{label}</button>
         {/each}
       </div>
     </div>
@@ -953,6 +953,12 @@
   .quick-index-label:hover:not(:disabled) {
     border-color: var(--line);
     background: rgba(var(--text-rgb), 0.09);
+  }
+
+  .quick-index-label.wide-label {
+    grid-column: span 2;
+    width: auto;
+    white-space: nowrap;
   }
 
   .quick-index-label:disabled,

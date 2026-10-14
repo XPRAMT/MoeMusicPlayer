@@ -60,7 +60,7 @@ async page => {
       characterFontSize: Number.parseFloat(getComputedStyle(document.querySelector('.quick-index-label-grid')).fontSize),
       buttonGeometry: [...document.querySelectorAll('.quick-index-label')].map(button => {
         const rect = button.getBoundingClientRect();
-        return { width: rect.width, height: rect.height };
+        return { label: button.textContent?.trim(), width: rect.width, height: rect.height, wide: button.classList.contains('wide-label') };
       }),
       hasCloseButton: Boolean(popup.querySelector('button[aria-label="關閉首字索引"]')),
     };
@@ -73,6 +73,12 @@ async page => {
   assert(popupGeometry.buttonGeometry.every(({ width, height }) => Math.abs(width - popupGeometry.characterFontSize * 2) < 1 && Math.abs(height - popupGeometry.characterFontSize * 2) < 1), `index character blocks are not square at two character widths: ${JSON.stringify(popupGeometry)}`);
   assert(Math.abs(popupGeometry.characterFontSize - 16) < 0.1, `index character font size does not use --font-title: ${JSON.stringify(popupGeometry)}`);
   assert(Math.abs(popupGeometry.characterFontSize * 2 - popupGeometry.rowHeight) > 1, `index character block still follows configured list row height: ${JSON.stringify(popupGeometry)}`);
+  const kanjiTile = popupGeometry.buttonGeometry.find(({ label }) => label === '漢字');
+  if (kanjiTile) {
+    assert(kanjiTile.wide, 'Japanese Kanji group should span two index cells');
+    assert(Math.abs(kanjiTile.width - (popupGeometry.characterFontSize * 4 + 4)) < 1, `Japanese Kanji group does not span two index cells: ${JSON.stringify(kanjiTile)}`);
+    assert(Math.abs(kanjiTile.height - popupGeometry.characterFontSize * 2) < 1, `Japanese Kanji group height changed: ${JSON.stringify(kanjiTile)}`);
+  }
   assert(!popupGeometry.hasCloseButton, 'popup contains a visible close button');
   await dialog.getByRole('button', { name: 'B', exact: true }).focus();
   await page.keyboard.press('Tab');
