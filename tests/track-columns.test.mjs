@@ -289,6 +289,27 @@ test('field order settings use the shared 300ms long-press drag delay', async ()
   assert.match(appCss, /\.track-column-setting-row\.column-order-drop-after::after/);
 });
 
+test('grouping mode setting persists and reaches all sortable list views', async () => {
+  const [app, trackList, playlist, queue, artist, album] = await Promise.all([
+    readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/TrackList.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/PlaylistEntryList.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/PlaybackQueueList.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/ArtistIndex.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/AlbumDetail.svelte', import.meta.url), 'utf8'),
+  ]);
+  assert.match(app, /啟用分組模式/);
+  assert.match(app, /啟用後可能增加載入時間/);
+  assert.match(app, /groupingEnabled,/);
+  assert.equal([...app.matchAll(/groupingEnabled=\{groupingEnabled\}/g)].length, 6);
+  for (const source of [trackList, playlist, queue, artist, album]) {
+    assert.match(source, /groupingEnabled/);
+  }
+  assert.match(trackList, /groupingEnabled\s*&&\s*sortable/);
+  assert.match(playlist, /groupingEnabled\s*&&\s*\['title', 'artist', 'album'\]/);
+  assert.match(queue, /groupingEnabled\s*&&\s*currentSort/);
+});
+
 test('column drag pointer maps to final indices after removing the dragged row', () => {
   const centers = [20, 80, 140, 200];
   assert.equal(trackColumnDropIndexFromPointer(10, centers, 2), 0);

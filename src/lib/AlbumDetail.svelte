@@ -20,6 +20,7 @@
     columns: import('./ipc').TrackListColumnPreference[];
     columnWidths: import('./ipc').TrackColumnWidths;
     rowHeightPx: number;
+    groupingEnabled: boolean;
     sort: import('./ipc').LibraryListSort;
     livePlayCount: { trackId: string; playedMs: number }[];
     refreshKey: number;
@@ -28,7 +29,7 @@
     onColumnResize: (columnId: import('./ipc').TrackListColumnPreference['id'], widthPx: number) => void;
     onTotalCount: (count: number | null) => void;
   }
-  let { album, selectedTrackId, playbackReady, isSendingPlaybackCommand, columns, columnWidths, rowHeightPx, sort, livePlayCount, refreshKey, onPlay, onSort, onColumnResize, onTotalCount }: Props = $props();
+  let { album, selectedTrackId, playbackReady, isSendingPlaybackCommand, columns, columnWidths, rowHeightPx, groupingEnabled, sort, livePlayCount, refreshKey, onPlay, onSort, onColumnResize, onTotalCount }: Props = $props();
   let coverUrls = $state<string[]>([]);
   let artists = $state<string[]>([]);
   let scanning = $state(true);
@@ -287,6 +288,7 @@
       fetchPage={fetchPage} {onPlay} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
       sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel="依專輯曲目編號排序" onIndexSort={handleIndexSort}
       quickIndexOverride={albumDiscQuickIndex}
+      {groupingEnabled}
       getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber, hasDiscGroups && (track.discNumber ?? 0) >= 2 ? track.discNumber : null)}
     />
   </div>

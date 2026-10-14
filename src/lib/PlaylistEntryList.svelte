@@ -62,6 +62,7 @@ import { PagedListController, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
     columns?: TrackListColumnPreference[];
     columnWidths?: TrackColumnWidths;
     rowHeightPx?: number;
+    groupingEnabled?: boolean;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     livePlayCount?: { trackId: string; playedMs: number }[];
     currentTrackId?: string | null;
@@ -78,6 +79,7 @@ import { PagedListController, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
     rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX,
+    groupingEnabled = true,
     onColumnResize,
     livePlayCount = [],
     currentTrackId = null,
@@ -138,7 +140,7 @@ import { PagedListController, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
     const count = snapshot.totalCount;
     const currentPlaylistId = playlistId;
     const currentSort = sort;
-    const enabled = ['title', 'artist', 'album'].includes(currentSort.field);
+    const enabled = groupingEnabled && ['title', 'artist', 'album'].includes(currentSort.field);
     const generation = ++quickIndexGeneration;
     quickIndex = null;
     quickIndexReady = !enabled || count === 0;
@@ -245,9 +247,9 @@ import { PagedListController, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
     minContentWidth={listMinWidth}
     className="track-list-viewport playlist-entry-table"
     scrollResetKey={playlistId}
-    groupRows={quickIndex?.groups}
-    groupingReady={quickIndexReady}
-    quickIndexLabels={quickIndex?.labels}
+    groupRows={groupingEnabled ? quickIndex?.groups : []}
+    groupingReady={!groupingEnabled || quickIndexReady}
+    quickIndexLabels={groupingEnabled ? quickIndex?.labels : []}
     scrollRestoreReady={snapshot.scope === JSON.stringify({ playlistId, sort }) && snapshot.totalCount !== null && snapshot.pendingPageCount === 0}
     rowClassName="track-row virtual-track-row configurable-track-grid playlist-entry-row"
     listName="播放清單"

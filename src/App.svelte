@@ -228,6 +228,7 @@
   );
   let trackColumnWidths = $state<TrackColumnWidths>({ ...DEFAULT_TRACK_COLUMN_WIDTHS });
   let trackRowHeightPx = $state(DEFAULT_TRACK_ROW_HEIGHT_PX);
+  let groupingEnabled = $state(true);
   let librarySort = $state<LibraryListSort>({ ...DEFAULT_LIBRARY_SORT });
   let queueSort = $state<LibraryListSort | null>(null);
   let queueSortBusy = false;
@@ -1081,6 +1082,7 @@
       trackColumnPreferences = normalizeTrackColumnPreferences(stored.columns);
       trackColumnWidths = normalizeTrackColumnWidths(stored.widths);
       trackRowHeightPx = normalizeTrackRowHeightPx(stored.rowHeightPx);
+      groupingEnabled = stored.groupingEnabled !== false;
       librarySort = normalizeLibrarySort(stored.librarySort);
       trackColumnSettingsState = 'saved';
       trackColumnSettingsError = null;
@@ -1096,6 +1098,7 @@
     widths?: TrackColumnWidths;
     librarySort?: LibraryListSort;
     rowHeightPx?: number;
+    groupingEnabled?: boolean;
   }): void {
     if (options?.columns) {
       trackColumnPreferences = normalizeTrackColumnPreferences(options.columns);
@@ -1105,6 +1108,9 @@
     }
     if (options?.rowHeightPx !== undefined) {
       trackRowHeightPx = normalizeTrackRowHeightPx(options.rowHeightPx);
+    }
+    if (options?.groupingEnabled !== undefined) {
+      groupingEnabled = options.groupingEnabled;
     }
     if (options?.librarySort) {
       librarySort = normalizeLibrarySort(options.librarySort);
@@ -1127,12 +1133,14 @@
             widths: { ...trackColumnWidths },
             librarySort: { ...librarySort },
             rowHeightPx: trackRowHeightPx,
+            groupingEnabled,
           },
         });
         if (revision !== trackColumnSettingsRevision) return;
         trackColumnPreferences = normalizeTrackColumnPreferences(saved.columns);
         trackColumnWidths = normalizeTrackColumnWidths(saved.widths);
         trackRowHeightPx = normalizeTrackRowHeightPx(saved.rowHeightPx);
+        groupingEnabled = saved.groupingEnabled !== false;
         librarySort = normalizeLibrarySort(saved.librarySort);
         trackColumnSettingsState = 'saved';
         trackColumnSettingsError = null;
@@ -1258,6 +1266,10 @@
 
   function commitTrackRowHeight(value: number): void {
     persistTrackColumnSettings({ rowHeightPx: value });
+  }
+
+  function setGroupingEnabled(value: boolean): void {
+    persistTrackColumnSettings({ groupingEnabled: value });
   }
 
   function handleLibrarySort(id: TrackListColumnPreference['id']): void {
@@ -3126,7 +3138,7 @@
                 <div class="settings-panel-header">
                   <div>
                     <h3>曲目欄位與列表高度</h3>
-                    <p>曲庫、播放清單與播放佇列共用欄位順序、顯示及高度設定；序號與播放操作固定在兩側。</p>
+                    <p>曲庫、播放清單與播放佇列共用欄位順序、顯示、高度及分組設定；序號與播放操作固定在兩側。</p>
                   </div>
                 </div>
                 <label class="lyrics-preference-range track-row-height-setting">
@@ -3141,6 +3153,10 @@
                     oninput={(event) => previewTrackRowHeight(Number(event.currentTarget.value))}
                     onchange={(event) => commitTrackRowHeight(Number(event.currentTarget.value))}
                   />
+                </label>
+                <label class="lyrics-preference-toggle track-grouping-setting">
+                  <input type="checkbox" checked={groupingEnabled} aria-label="啟用分組模式" onchange={(event) => setGroupingEnabled(event.currentTarget.checked)} />
+                  <span><strong>啟用分組模式</strong><small>啟用後可能增加載入時間</small></span>
                 </label>
                 <ol class="track-column-settings" aria-label="曲目資訊欄位設定">
                   {#each trackColumnPreferences as preference, index (preference.id)}
@@ -3665,6 +3681,7 @@
                 columns={trackColumnPreferences}
                 columnWidths={trackColumnWidths}
                 rowHeightPx={trackRowHeightPx}
+                groupingEnabled={groupingEnabled}
                 sort={librarySort}
                 livePlayCount={livePlayCount}
                 onPlay={playTrack}
@@ -3686,6 +3703,7 @@
               <ArtistIndex
                 refreshKey={libraryListRevision}
                 rowHeightPx={trackRowHeightPx}
+                groupingEnabled={groupingEnabled}
                 onCountChange={(count) => (artistIndexCount = count)}
                 onRowsChange={(rows) => (artistIndexRows = rows)}
                 onSelect={(artist) => openArtistEntry(artist, true)}
@@ -3708,6 +3726,7 @@
                   columns={trackColumnPreferences}
                   columnWidths={trackColumnWidths}
                   rowHeightPx={trackRowHeightPx}
+                  groupingEnabled={groupingEnabled}
                   listId={`artist-detail-${selectedArtist.key}`}
                   sort={librarySort}
                   livePlayCount={livePlayCount}
@@ -3753,6 +3772,7 @@
                   columns={trackColumnPreferences}
                   columnWidths={trackColumnWidths}
                   rowHeightPx={trackRowHeightPx}
+                  groupingEnabled={groupingEnabled}
                   sort={librarySort}
                   livePlayCount={livePlayCount}
                   refreshKey={libraryListRevision}
@@ -3799,6 +3819,7 @@
                     columns={trackColumnPreferences}
                     columnWidths={trackColumnWidths}
                     rowHeightPx={trackRowHeightPx}
+                    groupingEnabled={groupingEnabled}
                     livePlayCount={livePlayCount}
                     currentTrackId={playback?.currentTrack?.id ?? null}
                     onPlay={playPlaylistEntry}
@@ -3829,6 +3850,7 @@
                 columns={trackColumnPreferences}
                 columnWidths={trackColumnWidths}
                 rowHeightPx={trackRowHeightPx}
+                groupingEnabled={groupingEnabled}
                 sort={queueSort}
                 hideSortDirection={playback?.shuffle === true}
                 onSort={handleQueueSort}

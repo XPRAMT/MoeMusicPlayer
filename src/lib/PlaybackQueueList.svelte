@@ -36,6 +36,7 @@
     columns?: TrackListColumnPreference[];
     columnWidths?: TrackColumnWidths;
     rowHeightPx?: number;
+    groupingEnabled?: boolean;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     sort?: LibraryListSort | null;
     hideSortDirection?: boolean;
@@ -53,6 +54,7 @@
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
     rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX,
+    groupingEnabled = true,
     onColumnResize,
     sort = null,
     hideSortDirection = false,
@@ -129,7 +131,7 @@
   $effect(() => {
     const count = snapshot.totalCount;
     const currentSort = normalizedSort;
-    const enabled = currentSort !== null && ['title', 'artist', 'album'].includes(currentSort.field);
+    const enabled = groupingEnabled && currentSort !== null && ['title', 'artist', 'album'].includes(currentSort.field);
     const generation = ++quickIndexGeneration;
     quickIndex = null;
     quickIndexReady = !enabled || count === 0;
@@ -322,9 +324,9 @@
     revision={snapshot.revision}
     generation={snapshot.generation}
     scrollResetKey={queueScope}
-    groupRows={quickIndex?.groups}
-    groupingReady={quickIndexReady}
-    quickIndexLabels={quickIndex?.labels}
+    groupRows={groupingEnabled ? quickIndex?.groups : []}
+    groupingReady={!groupingEnabled || quickIndexReady}
+    quickIndexLabels={groupingEnabled ? quickIndex?.labels : []}
     {itemAt}
     getKey={(entry) => entry.entryPosition}
     isSelected={(entry) => isCurrent(entry)}

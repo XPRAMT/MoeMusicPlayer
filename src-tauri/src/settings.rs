@@ -397,6 +397,9 @@ pub struct TrackListColumnSettings {
     pub library_sort: LibraryListSort,
     #[serde(default = "default_track_row_height_px")]
     pub row_height_px: u8,
+    /// Group headings and quick-index grouping across sortable lists.
+    #[serde(default = "default_grouping_enabled")]
+    pub grouping_enabled: bool,
 }
 
 /// Persisted sort selection for the artist index list.
@@ -438,6 +441,10 @@ fn default_track_row_height_px() -> u8 {
     50
 }
 
+fn default_grouping_enabled() -> bool {
+    true
+}
+
 impl Default for TrackListColumnSettings {
     fn default() -> Self {
         Self {
@@ -457,6 +464,7 @@ impl Default for TrackListColumnSettings {
             widths: TrackListFlexibleWidths::default(),
             library_sort: LibraryListSort::default(),
             row_height_px: default_track_row_height_px(),
+            grouping_enabled: default_grouping_enabled(),
         }
     }
 }
@@ -550,6 +558,7 @@ fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColu
             widths: settings.widths.clamp(),
             library_sort: settings.library_sort,
             row_height_px: settings.row_height_px.clamp(30, 60),
+            grouping_enabled: settings.grouping_enabled,
         };
     }
 
@@ -2146,6 +2155,7 @@ mod tests {
         assert_eq!(value["trackListColumns"]["columns"][5]["id"], "audioFormat");
         assert_eq!(value["trackListColumns"]["columns"][5]["visible"], true);
         assert_eq!(value["trackListColumns"]["rowHeightPx"], 50);
+        assert_eq!(value["trackListColumns"]["groupingEnabled"], true);
         assert!(serde_json::from_value::<AppSettings>(value).is_ok());
     }
 
@@ -2495,6 +2505,17 @@ mod tests {
         }))
         .expect("old track list settings remain readable");
         assert_eq!(old.row_height_px, 50);
+        assert!(old.grouping_enabled);
+
+        let grouping_disabled: TrackListColumnSettings =
+            serde_json::from_value(serde_json::json!({
+                "columns": TrackListColumnSettings::default().columns,
+                "groupingEnabled": false,
+            }))
+            .expect("grouping preference should persist");
+        assert!(!grouping_disabled.grouping_enabled);
+        let encoded = serde_json::to_value(grouping_disabled).unwrap();
+        assert_eq!(encoded["groupingEnabled"], false);
 
         let too_short = TrackListColumnSettings {
             row_height_px: 0,

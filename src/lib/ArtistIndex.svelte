@@ -26,12 +26,13 @@
   interface Props {
     refreshKey: number;
     rowHeightPx?: number;
+    groupingEnabled?: boolean;
     onSelect: (artist: ArtistRow) => void;
     onCountChange: (count: number | null) => void;
     onRowsChange: (rows: ArtistRow[]) => void;
   }
 
-  let { refreshKey, rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX, onSelect, onCountChange, onRowsChange }: Props = $props();
+  let { refreshKey, rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX, groupingEnabled = true, onSelect, onCountChange, onRowsChange }: Props = $props();
   let rows = $state<ArtistRow[]>([]);
   let titleSortRank = $state<Record<string, number>>({});
   let sortField = $state<SortField>('title');
@@ -144,7 +145,7 @@
     const activeSortField = sortField;
     const generation = ++quickIndexGeneration;
     quickIndex = null;
-    const shouldGroup = activeSortField === 'title' && sortedRows.length > 0;
+    const shouldGroup = groupingEnabled && activeSortField === 'title' && sortedRows.length > 0;
     quickIndexReady = !shouldGroup;
     if (!shouldGroup) return;
 
@@ -225,9 +226,9 @@
       fillAvailable={true}
       listId="artist-index"
       scrollResetKey={JSON.stringify({ field: sortField, direction: sortDirection })}
-      groupRows={sortField === 'title' ? quickIndex?.groups : []}
-      groupingReady={sortField !== 'title' || quickIndexReady}
-      quickIndexLabels={sortField === 'title' ? quickIndex?.labels : []}
+      groupRows={groupingEnabled && sortField === 'title' ? quickIndex?.groups : []}
+      groupingReady={!groupingEnabled || sortField !== 'title' || quickIndexReady}
+      quickIndexLabels={groupingEnabled && sortField === 'title' ? quickIndex?.labels : []}
       ariaLabel="演出者統計；使用方向鍵瀏覽，按 Enter 開啟演出者歌曲"
       columnCount={ARTIST_COLUMNS.length + 1}
       gridTemplate={ARTIST_GRID}

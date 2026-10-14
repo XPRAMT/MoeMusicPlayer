@@ -225,7 +225,7 @@
             { id: 'audioFormat', visible: true },
             { id: 'duration', visible: true },
             { id: 'playCount', visible: true },
-          ], rowHeightPx: 50 };
+          ], rowHeightPx: 50, groupingEnabled: true };
         case 'settings_set_track_list_columns':
           return clone(args.preferences);
         case 'settings_get_now_playing_layout':

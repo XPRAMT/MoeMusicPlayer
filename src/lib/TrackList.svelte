@@ -49,7 +49,7 @@
     onPlay: (track: TrackSummary) => void | Promise<void>;
     onTotalCount?: (count: number | null) => void;
     sortable?: boolean;
-    quickIndexEnabled?: boolean;
+    groupingEnabled?: boolean;
     quickIndexOverride?: { labels: string[]; groups: { label: string; beforeIndex: number }[] } | null;
     sortableIndex?: boolean;
     sortIndicator?: { field: string; direction: 'asc' | 'desc' } | null;
@@ -77,7 +77,7 @@
     onPlay,
     onTotalCount,
     sortable = true,
-    quickIndexEnabled = true,
+    groupingEnabled = true,
     quickIndexOverride,
     sortableIndex = false,
     sortIndicator,
@@ -122,7 +122,7 @@
   });
   let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[] } | null>(null);
   let quickIndexReady = $state(false);
-  let visibleQuickIndex = $derived(quickIndexOverride === undefined ? quickIndex : quickIndexOverride);
+  let visibleQuickIndex = $derived(!groupingEnabled ? null : quickIndexOverride === undefined ? quickIndex : quickIndexOverride);
   let quickIndexGeneration = 0;
 
   async function requestTrackPage(request: TrackPageRequest): Promise<TrackPage> {
@@ -170,7 +170,7 @@
     const activeSort = visibleSortIndicator;
     const generation = ++quickIndexGeneration;
     quickIndex = null;
-    const shouldGroup = quickIndexEnabled && sortable && activeSort
+    const shouldGroup = groupingEnabled && sortable && activeSort
       && ['title', 'artist', 'album'].includes(activeSort.field);
     quickIndexReady = !shouldGroup || count === 0;
     if (!shouldGroup || count === null || count <= 0) return;
@@ -277,7 +277,7 @@
     {listId}
     scrollResetKey={listScrollResetKey}
     groupRows={visibleQuickIndex?.groups}
-    groupingReady={quickIndexOverride === undefined ? quickIndexReady : quickIndexOverride !== null}
+    groupingReady={!groupingEnabled || (quickIndexOverride === undefined ? quickIndexReady : quickIndexOverride !== null)}
     quickIndexLabels={visibleQuickIndex?.labels}
     ariaLabel={sortable
       ? '曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序'

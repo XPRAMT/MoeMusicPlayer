@@ -551,6 +551,10 @@
     quickIndexDialog?.querySelector<HTMLButtonElement>('.quick-index-label:not(:disabled)')?.focus();
   });
 
+  $effect(() => {
+    if (quickIndexOpen && quickIndexLabels.length === 0) closeQuickIndex(false);
+  });
+
   function updateDragTarget(clientY: number): void {
     latestPointerClientY = clientY;
     if (dragFromIndex === null || !viewport) return;
