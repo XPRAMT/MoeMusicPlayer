@@ -5,11 +5,20 @@ import {
   buildVirtualRows,
   getVirtualRange,
   PagedTrackList,
+  getViewportPageSize,
   TRACK_LIST_MAX_CACHED_PAGES,
   TRACK_PAGE_SIZE,
+  TRACK_PAGE_SIZE_MAX,
 } from '../src/lib/track-list-data.js';
 
 const TOTAL_TRACKS = 100_000;
+
+test('viewport page size loads two visible screens and respects the IPC limit', () => {
+  assert.equal(getViewportPageSize(680, 40), 34);
+  assert.equal(getViewportPageSize(600, 50), 24);
+  assert.equal(getViewportPageSize(0, 50), 1);
+  assert.equal(getViewportPageSize(100_000, 1), TRACK_PAGE_SIZE_MAX);
+});
 
 function makeTrack(id) {
   return {
@@ -127,6 +136,40 @@ test('page count changes during scrolling are reported instead of mixing snapsho
   assert.match(data.snapshot().errors[0]?.message ?? '', /有變更/);
   assert.equal(data.trackAt(0)?.id, 'track-0');
   assert.equal(data.trackAt(TRACK_PAGE_SIZE), null);
+});
+
+test('changing the viewport page size realigns pages and retains the visible data range', async () => {
+  const requests = [];
+  const data = new PagedTrackList(async (request) => {
+    requests.push({ offset: request.offset, limit: request.limit });
+    return makePage(request.offset, request.limit, 100);
+  });
+  data.reset('', 'resize-page-size');
+  await data.ensureRange(0, 10);
+  assert.equal(data.snapshot().totalCount, 100);
+
+  assert.equal(data.setPageSize(24), true);
+  await data.ensureRange(20, 30);
+
+  assert.ok(requests.some((request) => request.offset === 0 && request.limit === 24));
+  assert.ok(requests.some((request) => request.offset === 24 && request.limit === 24));
+  assert.equal(data.itemAt(25)?.id, 'track-25');
+  assert.equal(data.snapshot().totalCount, 100);
+  assert.equal(data.setPageSize(24), false);
+});
+
+test('the first request uses the measured viewport page size', async () => {
+  const requests = [];
+  const data = new PagedTrackList(async (request) => {
+    requests.push({ offset: request.offset, limit: request.limit });
+    return makePage(request.offset, request.limit, 100);
+  });
+  data.reset('', 'initial-viewport-size');
+
+  data.setPageSize(getViewportPageSize(680, 40));
+  await data.ensureRange(0, 34);
+
+  assert.deepEqual(requests, [{ offset: 0, limit: 34 }]);
 });
 
 test('a visible page load refreshes the same virtual range without scrolling', async () => {

@@ -101,7 +101,6 @@ export function cacheQuickIndex(key, value) {
  *   getGroupings: (names: string[]) => Promise<{ labels: string[], groups: string[] }>,
  *   pageSize?: number,
  *   isCurrent?: () => boolean,
- *   onProgress?: (partial: { labels: string[], groups: Array<{ label: string, beforeIndex: number }> }) => void,
  * }} options
  */
 export async function buildQuickIndexGroups({
@@ -111,14 +110,12 @@ export async function buildQuickIndexGroups({
   getGroupings,
   pageSize = 500,
   isCurrent = () => true,
-  onProgress,
 }) {
   const count = Number.isSafeInteger(totalCount) ? Math.max(0, totalCount) : 0;
   const safePageSize = Math.max(1, Math.min(500, Math.floor(pageSize)));
-  /** @type {Array<{ label: string, beforeIndex: number }>} */
-  const groups = [];
-  /** @type {string | null} */
-  let currentLabel = null;
+  /** Keep only first characters while scanning; full TrackSummary pages are released per batch. */
+  const initials = [];
+  const uniqueInitials = new Set();
 
   for (let offset = 0; offset < count; offset += safePageSize) {
     if (!isCurrent()) return null;
@@ -127,31 +124,41 @@ export async function buildQuickIndexGroups({
     /** @type {Item[]} */
     const items = Array.isArray(page?.items) ? page.items : [];
     if (items.length === 0) break;
-    const names = items.map((item) => String(getName(item) ?? '').trim());
-    // Classify the actual first character. Leading punctuation stays in the symbol group.
-    const groupingNames = names.map((name) => Array.from(name)[0] ?? '');
-    const response = await getGroupings(groupingNames);
-    if (!isCurrent()) return null;
-    if (!Array.isArray(response.groups) || response.groups.length !== items.length) {
-      throw new Error('ICU4X 首字索引回傳的群組數量與曲目不一致。');
-    }
-    response.groups.forEach((label, localIndex) => {
-      const group = names[localIndex].length === 0
-        ? '未知'
-        : typeof label === 'string' && label.length > 0 ? label : '#';
-      if (group !== currentLabel) {
-        groups.push({ label: group, beforeIndex: offset + localIndex });
-        currentLabel = group;
-      }
-    });
-    if (isCurrent()) {
-      onProgress?.({
-        labels: [...new Set(groups.map(({ label }) => label))],
-        groups: [...groups],
-      });
+    for (const item of items) {
+      // Classify the actual first character. Leading punctuation stays in the symbol group.
+      const initial = Array.from(String(getName(item) ?? '').trim())[0] ?? '';
+      initials.push(initial);
+      uniqueInitials.add(initial);
     }
     if (items.length < safePageSize) break;
   }
+
+  if (!isCurrent()) return null;
+  const requestedInitials = [...uniqueInitials];
+  const response = await getGroupings(requestedInitials);
+  if (!isCurrent()) return null;
+  if (!Array.isArray(response.groups) || response.groups.length !== requestedInitials.length) {
+    throw new Error('ICU4X 首字索引回傳的群組數量與字元數不一致。');
+  }
+  const groupByInitial = new Map(requestedInitials.map((initial, index) => [
+    initial,
+    initial.length === 0
+      ? '未知'
+      : typeof response.groups[index] === 'string' && response.groups[index].length > 0
+        ? response.groups[index]
+        : '#',
+  ]));
+  /** @type {Array<{ label: string, beforeIndex: number }>} */
+  const groups = [];
+  /** @type {string | null} */
+  let currentLabel = null;
+  initials.forEach((initial, index) => {
+    const label = groupByInitial.get(initial) ?? '#';
+    if (label !== currentLabel) {
+      groups.push({ label, beforeIndex: index });
+      currentLabel = label;
+    }
+  });
 
   return { labels: [...new Set(groups.map(({ label }) => label))], groups };
 }

@@ -31,7 +31,7 @@
   import { withLivePlayedMs } from './live-play-count.js';
   import {
     PagedListController,
-    TRACK_PAGE_SIZE,
+    TRACK_PAGE_SIZE_MAX,
   } from './track-list-data.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
@@ -121,6 +121,7 @@
     revision: 0,
   });
   let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[] } | null>(null);
+  let quickIndexReady = $state(false);
   let visibleQuickIndex = $derived(quickIndexOverride === undefined ? quickIndex : quickIndexOverride);
   let quickIndexGeneration = 0;
 
@@ -159,7 +160,6 @@
       sort: currentSort,
     });
     listData.reset(scope, currentResetKey);
-    void listData.ensureRange(0, TRACK_PAGE_SIZE);
   });
 
   $effect(() => {
@@ -170,17 +170,22 @@
     const activeSort = visibleSortIndicator;
     const generation = ++quickIndexGeneration;
     quickIndex = null;
-    if (!quickIndexEnabled || !sortable || !activeSort || !['title', 'artist', 'album'].includes(activeSort.field) || count === null || count <= 0) return;
+    const shouldGroup = quickIndexEnabled && sortable && activeSort
+      && ['title', 'artist', 'album'].includes(activeSort.field);
+    quickIndexReady = !shouldGroup || count === 0;
+    if (!shouldGroup || count === null || count <= 0) return;
     const cacheKey = JSON.stringify({ listId, resetKey, query: currentQuery, fieldFilter: currentFieldFilter, sort: currentSort, count });
     const cached = getCachedQuickIndex(cacheKey);
     if (cached) {
       quickIndex = cached;
+      quickIndexReady = true;
       return;
     }
+    quickIndexReady = false;
     const isCurrent = () => generation === quickIndexGeneration;
     void buildQuickIndexGroups({
       totalCount: count,
-      pageSize: TRACK_PAGE_SIZE,
+      pageSize: TRACK_PAGE_SIZE_MAX,
       fetchPage: async ({ offset, limit }) => requestTrackPage({
           query: currentQuery,
           queryAlternates: (await getSearchVariants(currentQuery)).slice(1),
@@ -196,16 +201,17 @@
           : track.album,
       getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
       isCurrent,
-      onProgress: (partial) => {
-        if (isCurrent()) quickIndex = partial;
-      },
     }).then((result) => {
       if (isCurrent() && result) {
         cacheQuickIndex(cacheKey, result);
         quickIndex = result;
       }
+      if (isCurrent()) quickIndexReady = true;
     }).catch((reason: unknown) => {
-      if (isCurrent()) console.error('無法建立曲目首字索引', reason);
+      if (isCurrent()) {
+        console.error('無法建立曲目首字索引', reason);
+        quickIndexReady = true;
+      }
     });
   });
 
@@ -224,6 +230,10 @@
 
   function handleRange(range: { start: number; end: number }): void {
     void listData.ensureRange(range.start, range.end);
+  }
+
+  function handleLoadSizeChange(size: number): void {
+    listData.setPageSize(size);
   }
 
   function itemAt(index: number): TrackSummary | null {
@@ -267,6 +277,7 @@
     {listId}
     scrollResetKey={listScrollResetKey}
     groupRows={visibleQuickIndex?.groups}
+    groupingReady={quickIndexOverride === undefined ? quickIndexReady : quickIndexOverride !== null}
     quickIndexLabels={visibleQuickIndex?.labels}
     ariaLabel={sortable
       ? '曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序'
@@ -278,6 +289,7 @@
     rowClassName="track-row virtual-track-row configurable-track-grid"
     listName="曲庫"
     onRange={handleRange}
+    onLoadSizeChange={handleLoadSizeChange}
     onPlay={(track) => playRow(track)}
   >
     {#snippet header()}

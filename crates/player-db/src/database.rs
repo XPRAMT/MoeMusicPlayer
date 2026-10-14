@@ -1591,8 +1591,9 @@ impl Database {
             .map(|value| quick_index_label(&self.collators, value))
             .collect::<Vec<_>>();
         let mut labels = Vec::new();
+        let mut seen = HashSet::new();
         for label in &groups {
-            if !labels.contains(label) {
+            if seen.insert(label.as_str()) {
                 labels.push(label.clone());
             }
         }

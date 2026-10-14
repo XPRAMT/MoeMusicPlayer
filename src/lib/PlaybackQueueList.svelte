@@ -20,7 +20,7 @@
   } from './track-columns.js';
   import { withLivePlayedMs } from './live-play-count.js';
   import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
-  import { PagedListController, TRACK_PAGE_SIZE } from './track-list-data.js';
+  import { PagedListController, TRACK_PAGE_SIZE, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
   import {
     adaptPlaybackQueuePage,
     isCurrentPlaybackQueueEntry,
@@ -99,6 +99,7 @@
     revision: 0,
   });
   let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[] } | null>(null);
+  let quickIndexReady = $state(false);
   let quickIndexGeneration = 0;
 
   const queue = new PagedListController<PlaybackQueuePageItem, string>(
@@ -123,7 +124,6 @@
     currentTraversalIndex = null;
     cursorError = null;
     queue.reset(currentResetKey, currentResetKey);
-    void queue.ensureRange(0, TRACK_PAGE_SIZE);
   });
 
   $effect(() => {
@@ -132,17 +132,20 @@
     const enabled = currentSort !== null && ['title', 'artist', 'album'].includes(currentSort.field);
     const generation = ++quickIndexGeneration;
     quickIndex = null;
+    quickIndexReady = !enabled || count === 0;
     if (!enabled || count === null || count <= 0 || !currentSort) return;
     const cacheKey = JSON.stringify({ queueScope, sort: currentSort, count });
     const cached = getCachedQuickIndex(cacheKey);
     if (cached) {
       quickIndex = cached;
+      quickIndexReady = true;
       return;
     }
+    quickIndexReady = false;
     const isCurrent = () => generation === quickIndexGeneration;
     void buildQuickIndexGroups({
       totalCount: count,
-      pageSize: TRACK_PAGE_SIZE,
+      pageSize: TRACK_PAGE_SIZE_MAX,
       fetchPage: async ({ offset, limit }) => {
         const page = await requestPage({ offset, limit });
         return { items: page.items, totalCount: page.total };
@@ -155,16 +158,17 @@
       },
       getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
       isCurrent,
-      onProgress: (partial) => {
-        if (isCurrent()) quickIndex = partial;
-      },
     }).then((result) => {
       if (isCurrent() && result) {
         cacheQuickIndex(cacheKey, result);
         quickIndex = result;
       }
+      if (isCurrent()) quickIndexReady = true;
     }).catch((reason: unknown) => {
-      if (isCurrent()) console.error('無法建立播放佇列首字索引', reason);
+      if (isCurrent()) {
+        console.error('無法建立播放佇列首字索引', reason);
+        quickIndexReady = true;
+      }
     });
   });
 
@@ -214,6 +218,10 @@
 
   function itemAt(index: number): PlaybackQueuePageItem | null {
     return queue.itemAt(index);
+  }
+
+  function handleLoadSizeChange(size: number): void {
+    queue.setPageSize(size);
   }
 
   function handleRange(range: { start: number; end: number }): void {
@@ -315,6 +323,7 @@
     generation={snapshot.generation}
     scrollResetKey={queueScope}
     groupRows={quickIndex?.groups}
+    groupingReady={quickIndexReady}
     quickIndexLabels={quickIndex?.labels}
     {itemAt}
     getKey={(entry) => entry.entryPosition}
@@ -336,6 +345,7 @@
     longPressReorder={true}
     {scrollToIndexRequest}
     onRange={handleRange}
+    onLoadSizeChange={handleLoadSizeChange}
     onPlay={(entry) => {
       if (entry) onPlay(entry);
     }}

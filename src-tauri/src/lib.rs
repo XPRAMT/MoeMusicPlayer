@@ -3002,9 +3002,6 @@ fn library_get_quick_index_groupings(
     state: State<'_, AppState>,
     values: Vec<String>,
 ) -> Result<QuickIndexGrouping, String> {
-    if values.len() > 500 {
-        return Err("快速索引每次最多處理 500 個名稱。".to_owned());
-    }
     let database = state.database.as_ref().ok_or_else(|| {
         state
             .database_error

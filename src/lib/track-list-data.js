@@ -5,8 +5,19 @@
 /** @template Item, Scope @typedef {(request: PagedRequest<Scope>) => Promise<PagedResponse<Item>>} FetchPage */
 
 export const TRACK_PAGE_SIZE = 40;
+export const TRACK_PAGE_SIZE_MAX = 500;
 export const TRACK_LIST_MAX_CACHED_PAGES = 6;
 export const TRACK_LIST_MAX_CONCURRENT_REQUESTS = 2;
+
+/** Load two screens of rows, rounded up to a whole row and capped by the IPC page limit.
+ * @param {number} viewportHeight
+ * @param {number} rowHeight
+ */
+export function getViewportPageSize(viewportHeight, rowHeight) {
+  const height = Number.isFinite(viewportHeight) ? Math.max(0, viewportHeight) : 0;
+  const row = Number.isFinite(rowHeight) ? Math.max(1, rowHeight) : 1;
+  return Math.max(1, Math.min(TRACK_PAGE_SIZE_MAX, Math.ceil(height / row) * 2));
+}
 
 /**
  * @typedef {Object} VirtualRange
@@ -188,6 +199,34 @@ export class PagedListController {
   }
 
   /**
+   * Resize the virtual page window without changing its scope, total count, or
+   * scroll range. Cached pages are discarded because their offsets are aligned
+   * to the previous page size.
+   * @param {number} requestedPageSize
+   * @returns {boolean}
+   */
+  setPageSize(requestedPageSize) {
+    const nextPageSize = Math.max(1, Math.min(
+      TRACK_PAGE_SIZE_MAX,
+      Math.floor(Number.isFinite(requestedPageSize) ? requestedPageSize : TRACK_PAGE_SIZE),
+    ));
+    if (nextPageSize === this.pageSize) return false;
+
+    this.pageSize = nextPageSize;
+    this.generation += 1;
+    this.pages.clear();
+    this.errors.clear();
+    this.refreshState = null;
+    for (const state of this.queue) state.resolve();
+    this.queue = [];
+    this.loads.clear();
+    if (!this.lastRange) this.lastRange = { start: 0, end: nextPageSize };
+    this.notify();
+    this.scheduleRange();
+    return true;
+  }
+
+  /**
    * Invalidate cached rows without changing the list scope, item count, or the
    * last requested viewport range. Useful when an in-place reorder changes
    * item contents but should not move the user's scroll position.
@@ -258,7 +297,7 @@ export class PagedListController {
   }
 
   /**
-   * Load the pages intersecting `[start, end)`, with one page of look-ahead.
+   * Load only the pages intersecting `[start, end)`.
    * Repeated calls are deduplicated, including while requests are in flight.
    *
    * @param {number} start
@@ -315,12 +354,7 @@ export class PagedListController {
       if (required.length === 0) this.commitRefresh();
     }
 
-    /** @type {number[]} */
     const wanted = [...required];
-    if (this.totalCount !== null && required.length > 0) {
-      const prefetchOffset = required[required.length - 1] + this.pageSize;
-      if (prefetchOffset < this.totalCount) wanted.push(prefetchOffset);
-    }
 
     const wantedSet = new Set(wanted);
     const retainedQueue = [];

@@ -40,6 +40,7 @@
   import type { Snippet } from 'svelte';
   import {
     getNextActiveIndex,
+    getViewportPageSize,
     getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
@@ -79,6 +80,7 @@
     rowClassName?: string;
     listName: string;
     onRange: (range: VirtualRange) => void;
+    onLoadSizeChange?: (size: number) => void;
     onPlay: (item: Item, index: number) => void;
     rowActivates?: boolean;
     longPressReorder?: boolean;
@@ -87,6 +89,8 @@
     scrollToIndexRequest?: { index: number; token: number } | null;
     /** Locale-aware group headings, inserted as virtual rows before their first data item. */
     groupRows?: QuickIndexGroup[];
+    /** Keep rows blank until all group boundaries for this list are ready. */
+    groupingReady?: boolean;
     /** Only locale index labels that have rows in this list. */
     quickIndexLabels?: string[];
     header?: Snippet;
@@ -120,12 +124,14 @@
     rowClassName = '',
     listName,
     onRange,
+    onLoadSizeChange = () => {},
     onPlay,
     rowActivates = true,
     longPressReorder = false,
     onReorder = () => {},
     scrollToIndexRequest = null,
     groupRows = [],
+    groupingReady = true,
     quickIndexLabels = [],
     header,
     row,
@@ -137,12 +143,15 @@
   let headerShift = $state(0);
   let headerGutter = $state(0);
   let viewportHeight = $state(480);
+  let metricsReady = $state(false);
   let lastVisibleScrollTop = 0;
   let hadVisibleViewport = false;
   let activeIndex = $state(0);
   let rowHeight = $state(50);
   let headerHeight = $state(37);
   let maxViewportHeight = $state(680);
+  let lastReportedLoadSize: number | null = null;
+  let recalculateMetrics = () => {};
   let seenScrollResetKey: unknown;
   let hasSeenScrollResetKey = false;
   let seenListId: string | undefined;
@@ -193,6 +202,7 @@
       | { kind: 'group'; visualIndex: number; label: string; key: string }
       | { kind: 'item'; visualIndex: number; index: number; item: Item | null; key: string | number }
     > = [];
+    if (!groupingReady) return rows;
     for (let visualIndex = range.start; visualIndex < range.end; visualIndex += 1) {
       let groupRow: QuickIndexGroup | null = null;
       for (let groupIndex = 0; groupIndex < displayedGroupRows.length; groupIndex += 1) {
@@ -215,11 +225,29 @@
   const activeDescendantId = $derived(`${listId}-row-${dataIndexToVisualIndex(activeIndex, displayedGroupRows)}`);
   const availableIndexLabels = $derived(new Set(displayedGroupRows.map(({ label }) => label)));
 
+  function reportLoadSize(height: number): void {
+    if (height <= 0) return;
+    const nextSize = getViewportPageSize(height, rowHeight);
+    if (nextSize === lastReportedLoadSize) return;
+    lastReportedLoadSize = nextSize;
+    onLoadSizeChange(nextSize);
+  }
+
+  $effect(() => {
+    baseRowHeight;
+    compactRowHeight;
+    shortDesktopRowHeight;
+    baseHeaderHeight;
+    compactHeaderHeight;
+    recalculateMetrics();
+  });
+
   function rememberVisibleScrollPosition(position: number): void {
     if (seenListId === listId) writeListScrollPosition(listId, position);
   }
 
   $effect(() => {
+    if (!metricsReady) return;
     const currentListId = listId;
     const currentScrollResetKey = scrollResetKey === undefined ? generation : scrollResetKey;
     const listChanged = seenListId !== undefined && currentListId !== seenListId;
@@ -324,8 +352,11 @@
         hadVisibleViewport = false;
       }
       viewportHeight = nextViewportHeight;
+      reportLoadSize(nextViewportHeight);
+      if (nextViewportHeight > 0) metricsReady = true;
       if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     };
+    recalculateMetrics = updateMetrics;
     updateMetrics();
     window.addEventListener('resize', updateMetrics);
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateMetrics);
@@ -335,6 +366,7 @@
       window.removeEventListener('resize', updateMetrics);
       observer?.disconnect();
       endDragState();
+      recalculateMetrics = () => {};
     };
   });
 
@@ -355,6 +387,8 @@
     headerShift = viewport.scrollLeft;
     headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     viewportHeight = viewport.clientHeight;
+    reportLoadSize(viewport.clientHeight);
+      metricsReady = true;
   }
 
   function handleViewportScroll(): void {

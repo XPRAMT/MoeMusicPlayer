@@ -46,7 +46,7 @@ import {
 } from './track-columns.js';
 import { withLivePlayedMs } from './live-play-count.js';
 import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './quick-index.js';
-  import { PagedListController, TRACK_PAGE_SIZE } from './track-list-data.js';
+import { PagedListController, TRACK_PAGE_SIZE_MAX } from './track-list-data.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
@@ -107,6 +107,7 @@ import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './q
     revision: 0,
   });
   let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[] } | null>(null);
+  let quickIndexReady = $state(false);
   let quickIndexGeneration = 0;
 
   async function requestPlaylistPage(request: { playlistId: string; sort: PlaylistListSort; offset: number; limit: number }): Promise<PlaylistPage> {
@@ -131,7 +132,6 @@ import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './q
     const currentRevision = resetKey;
     const currentSort = sort;
     entries.reset(JSON.stringify({ playlistId: currentId, sort: currentSort }), currentRevision);
-    void entries.ensureRange(0, TRACK_PAGE_SIZE);
   });
 
   $effect(() => {
@@ -141,17 +141,20 @@ import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './q
     const enabled = ['title', 'artist', 'album'].includes(currentSort.field);
     const generation = ++quickIndexGeneration;
     quickIndex = null;
+    quickIndexReady = !enabled || count === 0;
     if (!enabled || count === null || count <= 0) return;
     const cacheKey = JSON.stringify({ playlistId: currentPlaylistId, resetKey, sort: currentSort, count });
     const cached = getCachedQuickIndex(cacheKey);
     if (cached) {
       quickIndex = cached;
+      quickIndexReady = true;
       return;
     }
+    quickIndexReady = false;
     const isCurrent = () => generation === quickIndexGeneration;
     void buildQuickIndexGroups({
       totalCount: count,
-      pageSize: TRACK_PAGE_SIZE,
+      pageSize: TRACK_PAGE_SIZE_MAX,
       fetchPage: ({ offset, limit }) => requestPlaylistPage({ playlistId: currentPlaylistId, sort: currentSort, offset, limit }),
       getName: (entry: PlaylistEntrySummary) => currentSort.field === 'title'
         ? displayTrackTitle(entry, '未命名項目')
@@ -160,16 +163,17 @@ import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './q
           : entry.album,
       getGroupings: (values) => invokeCommand('library_get_quick_index_groupings', { values }),
       isCurrent,
-      onProgress: (partial) => {
-        if (isCurrent()) quickIndex = partial;
-      },
     }).then((result) => {
       if (isCurrent() && result) {
         cacheQuickIndex(cacheKey, result);
         quickIndex = result;
       }
+      if (isCurrent()) quickIndexReady = true;
     }).catch((reason: unknown) => {
-      if (isCurrent()) console.error('無法建立播放清單首字索引', reason);
+      if (isCurrent()) {
+        console.error('無法建立播放清單首字索引', reason);
+        quickIndexReady = true;
+      }
     });
   });
 
@@ -183,6 +187,10 @@ import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './q
 
   function handleRange(range: { start: number; end: number }): void {
     void entries.ensureRange(range.start, range.end);
+  }
+
+  function handleLoadSizeChange(size: number): void {
+    entries.setPageSize(size);
   }
 
   function retryFirstError(): void {
@@ -238,11 +246,13 @@ import { buildQuickIndexGroups, cacheQuickIndex, getCachedQuickIndex } from './q
     className="track-list-viewport playlist-entry-table"
     scrollResetKey={playlistId}
     groupRows={quickIndex?.groups}
+    groupingReady={quickIndexReady}
     quickIndexLabels={quickIndex?.labels}
     scrollRestoreReady={snapshot.scope === JSON.stringify({ playlistId, sort }) && snapshot.totalCount !== null && snapshot.pendingPageCount === 0}
     rowClassName="track-row virtual-track-row configurable-track-grid playlist-entry-row"
     listName="播放清單"
     onRange={handleRange}
+    onLoadSizeChange={handleLoadSizeChange}
     onPlay={(entry) => playEntry(entry)}
   >
     {#snippet header()}

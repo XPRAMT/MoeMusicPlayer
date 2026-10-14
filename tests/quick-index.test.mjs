@@ -45,8 +45,8 @@ test('paged grouping keeps contiguous groups across page boundaries and trims na
   assert.deepEqual(result.labels, ['A', 'ㄅ', 'Z'], 'unused categories are omitted');
 });
 
-test('group rows publish as each page is classified without waiting for the remaining scan', async () => {
-  const published = [];
+test('group boundaries are returned only after the complete scan finishes', async () => {
+  let resolved = false;
   let releaseSecondPage;
   let secondPageStarted;
   const secondPageReady = new Promise((resolve) => { secondPageStarted = resolve; });
@@ -61,11 +61,13 @@ test('group rows publish as each page is classified without waiting for the rema
     },
     getName: (item) => item.name,
     getGroupings: async (names) => ({ labels: ['A', 'B'], groups: names.map((name) => name[0]) }),
-    onProgress: (partial) => published.push(partial),
+  }).then((value) => {
+    resolved = true;
+    return value;
   });
 
   await secondPageReady;
-  assert.deepEqual(published, [{ labels: ['A'], groups: [{ label: 'A', beforeIndex: 0 }] }]);
+  assert.equal(resolved, false, 'a partial group map must not be published');
   releaseSecondPage({ items: [{ name: 'Banana' }] });
   assert.deepEqual(await scan, {
     labels: ['A', 'B'],
@@ -152,7 +154,7 @@ test('empty artist and album values use the Unknown group while nonempty symboli
   assert.deepEqual(result.labels, ['未知', '#', 'H']);
 });
 
-test('leading punctuation uses its own locale grouping instead of the following letter', async () => {
+test('leading punctuation uses its own locale grouping and sends each distinct initial once', async () => {
   const items = [
     { name: '- EARTH DAY -' },
     { name: '-#000000-' },
@@ -182,5 +184,31 @@ test('leading punctuation uses its own locale grouping instead of the following 
     { label: '&', beforeIndex: 0 },
     { label: 'H', beforeIndex: 5 },
   ]);
-  assert.deepEqual(requestedNames, ['-', '-', '-', '-', '-', 'H']);
+  assert.deepEqual(requestedNames, ['-', 'H']);
+});
+
+test('all page initials are classified in one backend call after every page is scanned', async () => {
+  const items = [{ name: 'Apple' }, { name: 'Apricot' }, { name: 'Banana' }];
+  const requested = [];
+  let scanned = 0;
+  const result = await buildQuickIndexGroups({
+    totalCount: items.length,
+    pageSize: 2,
+    fetchPage: async ({ offset, limit }) => {
+      scanned += 1;
+      return { items: items.slice(offset, offset + limit) };
+    },
+    getName: (item) => item.name,
+    getGroupings: async (initials) => {
+      assert.equal(scanned, 2, 'grouping starts only after the complete list scan');
+      requested.push(...initials);
+      return { labels: ['A', 'B'], groups: initials.map((initial) => initial.toUpperCase()) };
+    },
+  });
+
+  assert.deepEqual(requested, ['A', 'B'], 'repeat initials are sent once');
+  assert.deepEqual(result.groups, [
+    { label: 'A', beforeIndex: 0 },
+    { label: 'B', beforeIndex: 2 },
+  ]);
 });
