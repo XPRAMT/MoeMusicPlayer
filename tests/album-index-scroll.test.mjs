@@ -33,7 +33,7 @@ test('album index restores after active data and viewport are ready and saves wh
 test('album card index loads sorted SQLite snapshot pages instead of merging and sorting all facets in the renderer', () => {
   assert.match(indexSource, /library_create_album_index_snapshot/);
   assert.match(indexSource, /library_get_album_index_snapshot_page/);
-  assert.match(indexSource, /new PagedListController<AlbumEntry, string>/);
+  assert.match(indexSource, /new PagedListController<AlbumIndexEntry, string>/);
   assert.match(indexSource, /pageSnapshot\.revision/);
   assert.doesNotMatch(indexSource, /buildAlbumEntries|sortAlbumEntries|library_sort_text_indices/);
 });

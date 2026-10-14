@@ -1,10 +1,9 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
-  import type { AlbumEntry } from './album-identities.js';
+  import type { AlbumIndexEntry as AlbumEntry } from './ipc';
   import { ALBUM_ART_SIMILARITY_DISTANCE, copyToArrayBuffer, createAlbumThumbnail, perceptualHashArtwork, rankAlbumArtwork, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import { detectArtworkMimeType } from './active-track-artwork';
-  import { buildArtistIdentityMappings } from './artist-identities.js';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
   import TrackList from './TrackList.svelte';
@@ -170,10 +169,8 @@
       try { stored = await invokeCommand('album_artwork_selection_get', { key }); } catch { /* rebuild cache on older installations */ }
       const usable = stored !== null && stored.trackCount === album.trackCount && stored.representative;
       const facets = await invokeCommand('library_get_album_detail_facets', { albumNames: album.aliases });
-      const artistIdentities = await buildArtistIdentityMappings(facets.artists.map(({ name }) => name));
       const resolvedArtists = await invokeCommand('library_get_album_detail_artists', {
         albumNames: album.aliases,
-        identities: artistIdentities,
       });
       if (current !== revision) return;
       artists = resolvedArtists;

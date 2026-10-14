@@ -49,13 +49,23 @@ test('resizable list header separators remain visible without hover', () => {
 });
 
 test('playing a library or playlist item does not change the current page', () => {
-  const libraryPlay = functionSource('async function playTrack(', 'async function loadIndexIdentityMappings(');
-  const playlistPlay = functionSource('async function playPlaylistEntry(', 'async function pickWindowsFolder(');
+  const libraryPlay = functionSource('async function playTrack(', 'async function resolveArtistEntryByKey(');
+  const playlistPlay = functionSource('async function playPlaylistEntry(', 'async function playQueueEntry(');
 
   assert.match(libraryPlay, /invokeCommand\('playback_play'/);
   assert.match(playlistPlay, /invokeCommand\('playback_play'/);
   assert.doesNotMatch(libraryPlay, /activeView\s*=/);
   assert.doesNotMatch(playlistPlay, /activeView\s*=/);
+});
+
+test('artist and album indexes use SQLite snapshots without renderer-side identity facets', () => {
+  const artistIndex = readSource('src/lib/ArtistIndex.svelte');
+  const albumIndex = readSource('src/lib/AlbumIndex.svelte');
+  assert.match(artistIndex, /library_create_artist_index_snapshot/);
+  assert.match(albumIndex, /library_create_album_index_snapshot/);
+  assert.match(artistIndex, /library_get_artist_index_snapshot_page/);
+  assert.match(albumIndex, /library_get_album_index_snapshot_page/);
+  assert.doesNotMatch(appSource + artistIndex + albumIndex, /loadIndexIdentityMappings|library_get_artist_index_facets|library_get_album_index_facets|artist-identities\.js|album-identities\.js/);
 });
 
 test('detail navigation resolves one backend index row instead of loading the full index into App', () => {

@@ -21,6 +21,13 @@
     "purpose": "介面圖示"
   },
   {
+    "name": "ferrous-opencc",
+    "version": "0.4.0",
+    "license": "Apache-2.0",
+    "repositoryUrl": "https://github.com/apoint123/ferrous-opencc",
+    "purpose": "SQLite 演出者與專輯簡繁身份正規化"
+  },
+  {
     "name": "opencc-js",
     "version": "1.4.2",
     "license": "MIT AND Apache-2.0",

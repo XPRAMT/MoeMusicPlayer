@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { getErrorText, invokeCommand, type ArtistIndexEntry, type ArtistIndexFacets, type ArtistIdentityMapping, type ArtistListSort } from './ipc';
-  import { buildArtistIdentityMappings } from './artist-identities.js';
+  import { getErrorText, invokeCommand, type ArtistIndexEntry, type ArtistListSort } from './ipc';
   import { DEFAULT_TRACK_ROW_HEIGHT_PX } from './track-columns.js';
   import { formatDuration } from './format';
   import { formatListOrder } from './list-order.js';
@@ -43,7 +42,6 @@
   let seenRefreshKey = $state<number | null>(null);
   let quickIndex = $state<{ labels: string[]; groups: { label: string; beforeIndex: number }[]; totalCount: number } | null>(null);
   let quickIndexReady = $state(true);
-  let identities: { artists: ArtistIdentityMapping[]; albums: ArtistIdentityMapping[] } | null = null;
   type ListSnapshot = ReturnType<PagedListController<ArtistRow, string>['snapshot']>;
   let pageSnapshot = $state<ListSnapshot>({
     scope: null, totalCount: null, cachedPageCount: 0, cachedItemCount: 0,
@@ -63,15 +61,6 @@
     error = null;
     onCountChange(null);
     try {
-      if (!identities) {
-        const facets = await invokeCommand('library_get_artist_index_facets', {}) as ArtistIndexFacets;
-        const [artistIdentities, albumIdentities] = await Promise.all([
-          buildArtistIdentityMappings(facets.artists),
-          buildArtistIdentityMappings(facets.albums),
-        ]);
-        if (revision !== requestRevision) return;
-        identities = { artists: artistIdentities, albums: albumIdentities };
-      }
       await loadSnapshot(revision);
       listRevision += 1;
     } catch (reason) {
@@ -85,13 +74,11 @@
   }
 
   async function loadSnapshot(revision = ++requestRevision): Promise<void> {
-    if (!identities || revision !== requestRevision) return;
+    if (revision !== requestRevision) return;
     loading = true;
     error = null;
     try {
       const info = await invokeCommand('library_create_artist_index_snapshot', {
-        artistIdentities: identities.artists,
-        albumIdentities: identities.albums,
         sortField,
         direction: sortDirection,
         groupingEnabled: groupingEnabled && sortField === 'title',

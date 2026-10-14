@@ -2,9 +2,7 @@
   import { onDestroy } from 'svelte';
   import { getAlbumIndexScrollTop, setAlbumIndexScrollTop } from './album-index-scroll.js';
   import { getErrorText, invokeCommand } from './ipc';
-  import type { AlbumIndexFacet, ArtistIdentityMapping } from './ipc';
-  import { buildArtistIdentityMappings } from './artist-identities.js';
-  import type { AlbumEntry } from './album-identities.js';
+  import type { AlbumIndexEntry } from './ipc';
   import TrackColumnCells from './TrackColumnCells.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import { PagedListController } from './track-list-data.js';
@@ -16,7 +14,7 @@
     refreshKey: number;
     active: boolean;
     onCountChange: (count: number | null) => void;
-    onSelect: (album: AlbumEntry) => void;
+    onSelect: (album: AlbumIndexEntry) => void;
   }
   let { refreshKey, active, onCountChange, onSelect }: Props = $props();
   let sortField = $state<AlbumIndexSortField>('title');
@@ -32,14 +30,13 @@
   let requestRevision = 0;
   let seenRefreshKey: number | null = null;
   let initialized = false;
-  let albumIdentities: ArtistIdentityMapping[] | null = null;
   let quickIndexTotal = $state(0);
-  type ListSnapshot = ReturnType<PagedListController<AlbumEntry, string>['snapshot']>;
+  type ListSnapshot = ReturnType<PagedListController<AlbumIndexEntry, string>['snapshot']>;
   let pageSnapshot = $state<ListSnapshot>({
     scope: null, totalCount: null, cachedPageCount: 0, cachedItemCount: 0,
     pendingPageCount: 0, refreshing: false, errors: [], generation: 0, revision: 0,
   });
-  const listData = new PagedListController<AlbumEntry, string>(
+  const listData = new PagedListController<AlbumIndexEntry, string>(
     async ({ scope, offset, limit }) => invokeCommand('library_get_album_index_snapshot_page', {
       snapshotId: String(scope ?? ''), offset, limit,
     }),
@@ -79,12 +76,6 @@
     error = null;
     onCountChange(null);
     try {
-      if (!albumIdentities) {
-        const facets = await invokeCommand('library_get_album_index_facets', {}) as AlbumIndexFacet[];
-        albumIdentities = await buildArtistIdentityMappings(facets
-          .map((facet) => facet.name?.trim() ?? '')
-          .filter(Boolean));
-      }
       if (revision !== requestRevision) return;
       await loadSnapshot(revision);
       if (viewport) scrollTop = viewport.scrollTop;
@@ -99,12 +90,11 @@
   }
 
   async function loadSnapshot(revision = ++requestRevision): Promise<void> {
-    if (!albumIdentities || revision !== requestRevision) return;
+    if (revision !== requestRevision) return;
     loading = true;
     error = null;
     try {
       const info = await invokeCommand('library_create_album_index_snapshot', {
-        identities: albumIdentities,
         sortField,
         direction: sortDirection,
         groupingEnabled: false,

@@ -63,7 +63,6 @@
     type TrackPage,
     type TrackPageRequest,
     type ArtistIndexEntry,
-    type ArtistIdentityMapping,
     type AlbumIndexEntry,
   } from './lib/ipc';
   import {
@@ -75,7 +74,6 @@
   import { getBackdropTargetPercent, resolveBackdropContrast } from './lib/backdrop-contrast.js';
   import { createDecodedImageObjectUrl } from './lib/decoded-image-object-url.js';
   import { splitArtists } from './lib/artist-names.js';
-  import { buildArtistIdentityMappings } from './lib/artist-identities.js';
   import { readDetailNavigationRoute, withDetailNavigationRoute } from './lib/detail-navigation-history.js';
   import { hideWrappedTrailingTrackSeparators } from './lib/track-field-separators.js';
   import { formatVolume } from './lib/format';
@@ -131,8 +129,6 @@
   import ArtistIndex from './lib/ArtistIndex.svelte';
   import AlbumIndex from './lib/AlbumIndex.svelte';
   import AlbumDetail from './lib/AlbumDetail.svelte';
-  import { albumIdentityKey } from './lib/album-identities.js';
-  import type { AlbumEntry } from './lib/album-identities.js';
   import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
@@ -189,12 +185,11 @@
 
   let activeView = $state<View>('library');
   type ArtistSectionView = 'artists' | 'artist-detail';
-  type ArtistEntry = ArtistIndexEntry & { displayName: string };
+  type ArtistEntry = ArtistIndexEntry;
+  type AlbumEntry = AlbumIndexEntry;
   let keepArtistIndexForDetail = $state(false);
   let selectedArtist = $state<ArtistEntry | null>(null);
   let rememberedArtistView = $state<ArtistSectionView>('artists');
-  let indexIdentityMappings: { artists: ArtistIdentityMapping[]; albums: ArtistIdentityMapping[] } | null = null;
-  let indexIdentityMappingsLoad: Promise<{ artists: ArtistIdentityMapping[]; albums: ArtistIdentityMapping[] }> | null = null;
   let detailHistoryRestoreRevision = 0;
   let keepAlbumIndexForDetail = $state(false);
   let selectedAlbum = $state<AlbumEntry | null>(null);
@@ -823,7 +818,6 @@
         });
         unlistenFinished = await listen<LibrarySyncFinishedEvent>('library-sync-finished', (event) => {
           handleLibrarySyncFinished(event.payload);
-          indexIdentityMappings = null;
           libraryListRevision += 1;
           if (libraryReady) void loadPlaylists(undefined, true);
           if (sourceSyncReady) void loadSources();
@@ -2091,7 +2085,6 @@
     try {
       sources = await invokeCommand('library_set_source_enabled', { sourceId: source.id, enabled });
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
-      indexIdentityMappings = null;
       libraryTrackCount = null;
       libraryListRevision += 1;
       await loadPlaylists();
@@ -2111,7 +2104,6 @@
     try {
       sources = await invokeCommand('library_remove_source', { sourceId: source.id });
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
-      indexIdentityMappings = null;
       libraryTrackCount = null;
       libraryListRevision += 1;
       if (source.kind === 'playlist_file') {
@@ -2279,30 +2271,8 @@
     );
   }
 
-  async function loadIndexIdentityMappings(): Promise<{ artists: ArtistIdentityMapping[]; albums: ArtistIdentityMapping[] }> {
-    if (indexIdentityMappings) return indexIdentityMappings;
-    if (indexIdentityMappingsLoad) return indexIdentityMappingsLoad;
-    indexIdentityMappingsLoad = (async () => {
-      const facets = await invokeCommand('library_get_artist_index_facets', {});
-      const [artists, albums] = await Promise.all([
-        buildArtistIdentityMappings(facets.artists),
-        buildArtistIdentityMappings(facets.albums),
-      ]);
-      return { artists, albums };
-    })();
-    try {
-      indexIdentityMappings = await indexIdentityMappingsLoad;
-      return indexIdentityMappings;
-    } finally {
-      indexIdentityMappingsLoad = null;
-    }
-  }
-
   async function resolveArtistEntryByKey(key: string): Promise<ArtistEntry | null> {
-    const identities = await loadIndexIdentityMappings();
     return invokeCommand('library_resolve_artist_index_entry', {
-      artistIdentities: identities.artists,
-      albumIdentities: identities.albums,
       identityKey: key,
     });
   }
@@ -2310,14 +2280,11 @@
   async function resolveArtistEntryByName(name: string): Promise<ArtistEntry | null> {
     const normalizedName = name.trim();
     if (!normalizedName) return null;
-    const [identity] = await buildArtistIdentityMappings([normalizedName]);
-    return identity ? resolveArtistEntryByKey(identity.key) : null;
+    return invokeCommand('library_resolve_artist_index_entry_by_name', { name: normalizedName });
   }
 
   async function resolveAlbumEntryByKey(key: string): Promise<AlbumEntry | null> {
-    const identities = await loadIndexIdentityMappings();
     return invokeCommand('library_resolve_album_index_entry', {
-      identities: identities.albums,
       identityKey: key,
     });
   }
@@ -2325,8 +2292,7 @@
   async function resolveAlbumEntryByName(name: string): Promise<AlbumEntry | null> {
     const normalizedName = name.trim();
     if (!normalizedName) return null;
-    const [identity] = await buildArtistIdentityMappings([normalizedName]);
-    return identity ? resolveAlbumEntryByKey(albumIdentityKey(identity.traditional)) : null;
+    return invokeCommand('library_resolve_album_index_entry_by_name', { name: normalizedName });
   }
 
   function currentDetailNavigationRoute(): { view: View; artistKey?: string; albumKey?: string; preserveIndex?: boolean } {

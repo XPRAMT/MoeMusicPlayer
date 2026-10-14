@@ -30,7 +30,7 @@ use player_core::{
 use player_db::natural_title_cmp;
 #[cfg(target_os = "windows")]
 use player_db::PlaybackSessionCheckpoint;
-use player_db::{ArtistIdentityMapping, Database, ThemePreferences};
+use player_db::{Database, ThemePreferences};
 use serde::{Deserialize, Serialize};
 use tauri::{
     ipc::Response, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size,
@@ -2971,21 +2971,6 @@ async fn library_get_page(
 }
 
 #[tauri::command]
-fn library_get_artist_index_facets(
-    state: State<'_, AppState>,
-) -> Result<player_db::ArtistIndexFacets, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    database
-        .artist_index_facets()
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 async fn library_sort_text_indices(
     app: AppHandle,
     values: Vec<String>,
@@ -3187,27 +3172,8 @@ where
 }
 
 #[tauri::command]
-async fn library_get_album_index_facets(
-    app: AppHandle,
-) -> Result<Vec<player_db::AlbumIndexFacet>, String> {
-    run_database_work(app, |state| {
-        let database = state.database.as_ref().ok_or_else(|| {
-            state
-                .database_error
-                .clone()
-                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-        })?;
-        database
-            .album_index_facets()
-            .map_err(|error| error.to_string())
-    })
-    .await
-}
-
-#[tauri::command]
 async fn library_create_album_index_snapshot(
     app: AppHandle,
-    identities: Vec<ArtistIdentityMapping>,
     sort_field: String,
     direction: String,
     grouping_enabled: bool,
@@ -3220,7 +3186,7 @@ async fn library_create_album_index_snapshot(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .create_album_index_snapshot(&identities, &sort_field, &direction, grouping_enabled)
+            .create_album_index_snapshot(&sort_field, &direction, grouping_enabled)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3250,7 +3216,6 @@ async fn library_get_album_index_snapshot_page(
 #[tauri::command]
 async fn library_resolve_album_index_entry(
     app: AppHandle,
-    identities: Vec<ArtistIdentityMapping>,
     identity_key: String,
 ) -> Result<Option<player_db::AlbumIndexEntry>, String> {
     run_database_work(app, move |state| {
@@ -3261,10 +3226,42 @@ async fn library_resolve_album_index_entry(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         let snapshot = database
-            .create_album_navigation_snapshot(&identities)
+            .create_album_navigation_snapshot()
             .map_err(|error| error.to_string())?;
         database
             .get_index_snapshot_entry(&snapshot.snapshot_id, &identity_key)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_resolve_album_index_entry_by_name(
+    app: AppHandle,
+    name: String,
+) -> Result<Option<player_db::AlbumIndexEntry>, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let key = if name.trim().is_empty() {
+            "album:unmarked".to_owned()
+        } else {
+            format!(
+                "album:{}",
+                database
+                    .music_identity_key(&name)
+                    .map_err(|error| error.to_string())?
+            )
+        };
+        let snapshot = database
+            .create_album_navigation_snapshot()
+            .map_err(|error| error.to_string())?;
+        database
+            .get_index_snapshot_entry(&snapshot.snapshot_id, &key)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3316,7 +3313,6 @@ async fn library_get_album_detail_facets(
 async fn library_get_album_detail_artists(
     app: AppHandle,
     album_names: Vec<String>,
-    identities: Vec<ArtistIdentityMapping>,
 ) -> Result<Vec<String>, String> {
     run_database_work(app, move |state| {
         let database = state.database.as_ref().ok_or_else(|| {
@@ -3326,7 +3322,7 @@ async fn library_get_album_detail_artists(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .album_detail_artists(&album_names, &identities)
+            .album_detail_artists(&album_names)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3500,27 +3496,8 @@ async fn album_artwork_cache_mark_missing_for_track(
 }
 
 #[tauri::command]
-fn library_get_artist_index(
-    state: State<'_, AppState>,
-    artist_identities: Vec<ArtistIdentityMapping>,
-    album_identities: Vec<ArtistIdentityMapping>,
-) -> Result<Vec<player_db::ArtistIndexEntry>, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    database
-        .artist_index(&artist_identities, &album_identities)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 async fn library_create_artist_index_snapshot(
     app: AppHandle,
-    artist_identities: Vec<ArtistIdentityMapping>,
-    album_identities: Vec<ArtistIdentityMapping>,
     sort_field: String,
     direction: String,
     grouping_enabled: bool,
@@ -3533,13 +3510,7 @@ async fn library_create_artist_index_snapshot(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .create_artist_index_snapshot(
-                &artist_identities,
-                &album_identities,
-                &sort_field,
-                &direction,
-                grouping_enabled,
-            )
+            .create_artist_index_snapshot(&sort_field, &direction, grouping_enabled)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3569,8 +3540,6 @@ async fn library_get_artist_index_snapshot_page(
 #[tauri::command]
 async fn library_resolve_artist_index_entry(
     app: AppHandle,
-    artist_identities: Vec<ArtistIdentityMapping>,
-    album_identities: Vec<ArtistIdentityMapping>,
     identity_key: String,
 ) -> Result<Option<player_db::ArtistIndexEntry>, String> {
     run_database_work(app, move |state| {
@@ -3581,7 +3550,32 @@ async fn library_resolve_artist_index_entry(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         let snapshot = database
-            .create_artist_navigation_snapshot(&artist_identities, &album_identities)
+            .create_artist_navigation_snapshot()
+            .map_err(|error| error.to_string())?;
+        database
+            .get_index_snapshot_entry(&snapshot.snapshot_id, &identity_key)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_resolve_artist_index_entry_by_name(
+    app: AppHandle,
+    name: String,
+) -> Result<Option<player_db::ArtistIndexEntry>, String> {
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let identity_key = database
+            .music_identity_key(&name)
+            .map_err(|error| error.to_string())?;
+        let snapshot = database
+            .create_artist_navigation_snapshot()
             .map_err(|error| error.to_string())?;
         database
             .get_index_snapshot_entry(&snapshot.snapshot_id, &identity_key)
@@ -10434,19 +10428,19 @@ pub fn run() {
             settings_set_shortcuts,
             get_runtime_capabilities,
             library_get_page,
-            library_get_artist_index_facets,
             library_create_artist_index_snapshot,
             library_get_artist_index_snapshot_page,
             library_resolve_artist_index_entry,
+            library_resolve_artist_index_entry_by_name,
             library_sort_text_indices,
             library_get_quick_index_for_tracks,
             library_get_quick_index_for_artists,
             library_get_quick_index_for_album_tracks,
             playlist_get_quick_index_groupings,
-            library_get_album_index_facets,
             library_create_album_index_snapshot,
             library_get_album_index_snapshot_page,
             library_resolve_album_index_entry,
+            library_resolve_album_index_entry_by_name,
             library_get_album_page,
             library_get_album_detail_facets,
             library_get_album_detail_artists,
@@ -10458,7 +10452,6 @@ pub fn run() {
             album_artwork_cache_get_for_track,
             album_artwork_cache_put_for_track,
             album_artwork_cache_mark_missing_for_track,
-            library_get_artist_index,
             library_get_artist_page,
             playlist_list,
             playlist_get_page,

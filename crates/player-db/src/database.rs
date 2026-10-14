@@ -8,6 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use icu_collator::{
     options::CollatorOptions,
     preferences::{CollationNumericOrdering, CollationType},
@@ -15,6 +16,7 @@ use icu_collator::{
 };
 use icu_locale::Locale;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use unicode_normalization::UnicodeNormalization;
 
 use player_core::{
     FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, LyricCandidate,
@@ -40,6 +42,8 @@ const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_SPLIT_ARTISTS_FUNCTION: &str = "music_split_artists_json";
 const MUSIC_TRIM_FUNCTION: &str = "music_trim_whitespace";
+const MUSIC_IDENTITY_KEY_FUNCTION: &str = "music_identity_key";
+const MUSIC_IDENTITY_TRADITIONAL_FUNCTION: &str = "music_identity_traditional";
 const ICU4X_COLLATION_DATA_VERSION: &str = "icu_collator-2.3.1+icu_collator_data-2.3.0";
 const MAX_PAGE_SIZE: u32 = 1000;
 const MAX_TRACK_LYRICS_JSON_BYTES: usize = 6 * 1024 * 1024;
@@ -1018,6 +1022,10 @@ fn register_music_collation(
     collation_spec: &MusicCollationSpec,
 ) -> rusqlite::Result<()> {
     let collators = collation_spec.build_collators();
+    let opencc = Arc::new(
+        OpenCC::from_config(BuiltinConfig::S2t)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
+    );
     connection.create_collation(MUSIC_COLLATION_NAME, {
         let collators = collators.clone();
         move |left, right| compare_music_names(&collators, left, right)
@@ -1042,6 +1050,27 @@ fn register_music_collation(
         },
     )?;
     connection.create_scalar_function(
+        MUSIC_IDENTITY_KEY_FUNCTION,
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        {
+            let opencc = Arc::clone(&opencc);
+            move |context| {
+                let value = context.get::<Option<String>>(0)?.unwrap_or_default();
+                Ok(music_identity_key(&value, &opencc))
+            }
+        },
+    )?;
+    connection.create_scalar_function(
+        MUSIC_IDENTITY_TRADITIONAL_FUNCTION,
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |context| {
+            let value = context.get::<Option<String>>(0)?.unwrap_or_default();
+            Ok(music_identity_traditional(&value, &opencc))
+        },
+    )?;
+    connection.create_scalar_function(
         MUSIC_TRIM_FUNCTION,
         1,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
@@ -1049,6 +1078,47 @@ fn register_music_collation(
             let value = context.get::<Option<String>>(0)?;
             Ok(value.unwrap_or_default().trim().to_owned())
         },
+    )
+}
+
+fn music_identity_traditional(value: &str, opencc: &OpenCC) -> String {
+    let value = value.trim();
+    if !value.chars().any(is_han_character) || value.chars().any(is_japanese_kana) {
+        value.to_owned()
+    } else {
+        opencc.convert(value).trim().to_owned()
+    }
+}
+
+fn music_identity_key(value: &str, opencc: &OpenCC) -> String {
+    music_identity_traditional(value, opencc)
+        .nfkc()
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn is_han_character(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2FA1F
+            | 0x30000..=0x323AF
+    )
+}
+
+fn is_japanese_kana(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3040..=0x309F
+            | 0x30A0..=0x30FF
+            | 0x31F0..=0x31FF
+            | 0x32D0..=0x32FE
+            | 0x3300..=0x3357
+            | 0xFF66..=0xFF9F
+            | 0x1B000..=0x1B16F
+            | 0x1AFF0..=0x1AFFF
     )
 }
 
@@ -1140,31 +1210,6 @@ pub struct Database {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ArtistIdentityMapping {
-    pub name: String,
-    pub key: String,
-    pub traditional: String,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ArtistIndexFacets {
-    pub artists: Vec<String>,
-    pub albums: Vec<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AlbumIndexFacet {
-    /// `None` or blank represents an untagged album bucket.
-    pub name: Option<String>,
-    pub track_count: u64,
-    pub duration_ms: u64,
-    pub played_ms: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AlbumDiscCount {
     pub disc_number: u32,
     pub count: u64,
@@ -1173,7 +1218,6 @@ pub struct AlbumDiscCount {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumDetailFacets {
-    pub artists: Vec<ArtistNameCount>,
     pub disc_counts: Vec<AlbumDiscCount>,
     pub track_count: u64,
     pub unknown_disc_track_count: u64,
@@ -1877,14 +1921,14 @@ impl Database {
         Ok(indices)
     }
 
-    fn create_index_snapshot<T: Serialize>(
-        &self,
+    fn materialize_index_snapshot(
+        tx: &Transaction<'_>,
         kind: &str,
         sort_field: &str,
         direction: &str,
         reverse_ties: bool,
         grouping_enabled: bool,
-        items: Vec<(String, String, u64, u64, T)>,
+        snapshot_id: &str,
     ) -> Result<IndexSnapshotInfo, DatabaseError> {
         let direction_sql = match direction {
             "asc" => "ASC",
@@ -1896,7 +1940,7 @@ impl Database {
             }
         };
         let tie_direction_sql = if reverse_ties { direction_sql } else { "ASC" };
-        let order_by = match (kind, sort_field) {
+        let mut order_by = match (kind, sort_field) {
             ("artist", "title") | ("album", "title") | ("artist-navigation", "title") | ("album-navigation", "title") => format!(
                 "display_name COLLATE {MUSIC_COLLATION_NAME} {direction_sql}, identity_key {tie_direction_sql}"
             ),
@@ -1914,30 +1958,10 @@ impl Database {
             ),
             _ => return Err(DatabaseError::CorruptData("invalid index sort field".to_owned())),
         };
-        let snapshot_id = Uuid::new_v4().to_string();
-        let mut connection = self.lock()?;
-        let tx = connection.transaction()?;
-        tx.execute("DELETE FROM index_snapshot_rows WHERE kind=?1", [kind])?;
-        tx.execute("DELETE FROM index_snapshot_input WHERE kind=?1", [kind])?;
-        {
-            let mut insert = tx.prepare(
-                "INSERT INTO index_snapshot_input
-                    (snapshot_id, kind, identity_key, display_name, metric_primary, metric_secondary, payload_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            )?;
-            for (identity_key, display_name, metric_primary, metric_secondary, item) in items {
-                let payload = serde_json::to_string(&item)
-                    .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
-                insert.execute(params![
-                    snapshot_id,
-                    kind,
-                    identity_key,
-                    display_name,
-                    i64::try_from(metric_primary).unwrap_or(i64::MAX),
-                    i64::try_from(metric_secondary).unwrap_or(i64::MAX),
-                    payload,
-                ])?;
-            }
+        if kind == "album" {
+            order_by = format!(
+                "CASE WHEN identity_key='album:unmarked' THEN 1 ELSE 0 END ASC, {order_by}"
+            );
         }
         let materialize_sql = format!(
             "INSERT INTO index_snapshot_rows(snapshot_id, kind, position, group_label, payload_json)
@@ -1946,11 +1970,11 @@ impl Database {
                     {MUSIC_QUICK_INDEX_FUNCTION}(display_name), payload_json
              FROM index_snapshot_input WHERE snapshot_id=?1"
         );
-        tx.execute(&materialize_sql, [&snapshot_id])?;
+        tx.execute(&materialize_sql, [snapshot_id])?;
         let total_count = tx
             .query_row(
                 "SELECT COUNT(*) FROM index_snapshot_rows WHERE snapshot_id=?1",
-                [&snapshot_id],
+                [snapshot_id],
                 |row| row.get::<_, i64>(0),
             )?
             .max(0) as u64;
@@ -1969,7 +1993,7 @@ impl Database {
                  WHERE previous_label IS NULL OR previous_label <> group_label
                  ORDER BY position",
             )?;
-            let rows = statement.query_map([&snapshot_id], |row| {
+            let rows = statement.query_map([snapshot_id], |row| {
                 Ok(QuickIndexGroup {
                     before_index: row.get::<_, i64>(0)?.max(0) as u64,
                     label: row.get(1)?,
@@ -1982,9 +2006,8 @@ impl Database {
                 .map(|group| group.label.clone())
                 .collect();
         }
-        tx.commit()?;
         Ok(IndexSnapshotInfo {
-            snapshot_id,
+            snapshot_id: snapshot_id.to_owned(),
             quick_index,
         })
     }
@@ -2149,6 +2172,14 @@ impl Database {
         compare_music_names(&self.collators, left, right)
     }
 
+    /// Normalize one display label with the same SQLite UDF used by index aggregation.
+    /// This is for resolving a single navigation target; bulk identities stay in SQL.
+    pub fn music_identity_key(&self, value: &str) -> Result<String, DatabaseError> {
+        self.lock()?
+            .query_row("SELECT music_identity_key(?1)", [value], |row| row.get(0))
+            .map_err(DatabaseError::from)
+    }
+
     pub fn journal_mode(&self) -> Result<String, DatabaseError> {
         Ok(self
             .lock()?
@@ -2290,73 +2321,6 @@ impl Database {
         .collect()
     }
 
-    /// Return distinct raw artist and album labels from tracks visible through enabled sources.
-    /// The compact facet set lets the UI apply the same OpenCC identity rules used for search
-    /// without transferring every track to the renderer.
-    pub fn artist_index_facets(&self) -> Result<ArtistIndexFacets, DatabaseError> {
-        let connection = self.lock()?;
-        let mut statement = connection.prepare(
-            "SELECT DISTINCT
-                COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
-                COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album)
-             FROM tracks t
-             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)",
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, Option<String>>(0)?,
-                row.get::<_, Option<String>>(1)?,
-            ))
-        })?;
-        let mut artists = HashSet::new();
-        let mut albums = HashSet::new();
-        for row in rows {
-            let (artist, album) = row?;
-            for artist in split_artist_names(artist.as_deref()) {
-                artists.insert(artist);
-            }
-            if let Some(album) = album
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-            {
-                albums.insert(album);
-            }
-        }
-        let mut artists: Vec<_> = artists.into_iter().collect();
-        let mut albums: Vec<_> = albums.into_iter().collect();
-        artists.sort();
-        albums.sort();
-        Ok(ArtistIndexFacets { artists, albums })
-    }
-
-    /// Return album labels and visible track statistics without transferring all track summaries.
-    /// Empty album tags remain present so the renderer can create the separate unmarked bucket.
-    pub fn album_index_facets(&self) -> Result<Vec<AlbumIndexFacet>, DatabaseError> {
-        let connection = self.lock()?;
-        let mut statement = connection.prepare(
-            "SELECT COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album),
-                    COUNT(DISTINCT t.track_id),
-                    COALESCE(SUM(COALESCE(t.duration_ms, 0)), 0),
-                    COALESCE(SUM(COALESCE(s.played_ms, 0)), 0)
-             FROM tracks t
-             LEFT JOIN track_playback_statistics s ON s.track_id=t.track_id
-             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
-             GROUP BY COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album)",
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok(AlbumIndexFacet {
-                name: row.get(0)?,
-                track_count: row.get::<_, i64>(1)?.max(0) as u64,
-                duration_ms: row.get::<_, i64>(2)?.max(0) as u64,
-                played_ms: row.get::<_, i64>(3)?.max(0) as u64,
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(DatabaseError::from)
-    }
-
     /// Aggregate the artist variants and disc groups needed by one album detail view.
     /// This scans enabled-source tracks once in SQLite; the renderer never pages through the
     /// album just to rebuild these summaries.
@@ -2367,7 +2331,6 @@ impl Database {
         let names = album_names.iter().cloned().collect::<HashSet<_>>();
         if names.is_empty() {
             return Ok(AlbumDetailFacets {
-                artists: Vec::new(),
                 disc_counts: Vec::new(),
                 track_count: 0,
                 unknown_disc_track_count: 0,
@@ -2378,42 +2341,31 @@ impl Database {
         let names_json = serde_json::to_string(&names)
             .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
         let connection = self.lock()?;
-        let (artists_json, discs_json, track_count, unknown_count): (String, String, i64, i64) =
+        let (discs_json, track_count, unknown_count): (String, i64, i64) =
             connection.query_row(
                 "WITH visible AS MATERIALIZED (
                     SELECT t.track_id,
-                           COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) AS artist,
                            t.disc_number
                     FROM tracks t
                     WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
                           IN (SELECT value FROM json_each(?1))
                       AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                                   ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
-                ), artist_counts AS (
-                    SELECT a.value AS name, COUNT(DISTINCT v.track_id) AS count
-                    FROM visible v JOIN json_each(music_split_artists_json(v.artist)) a
-                    WHERE trim(a.value)<>''
-                    GROUP BY a.value
                 ), disc_counts AS (
                     SELECT disc_number, COUNT(*) AS count
                     FROM visible WHERE disc_number>=2 GROUP BY disc_number
                 )
                 SELECT
-                    COALESCE((SELECT json_group_array(json_object('name', name, 'count', count))
-                              FROM (SELECT name, count FROM artist_counts ORDER BY name COLLATE BINARY)), '[]'),
                     COALESCE((SELECT json_group_array(json_object('discNumber', disc_number, 'count', count))
                               FROM (SELECT disc_number, count FROM disc_counts ORDER BY disc_number)), '[]'),
                     (SELECT COUNT(*) FROM visible),
                     (SELECT COUNT(*) FROM visible WHERE disc_number IS NULL OR disc_number<2)",
                 [&names_json],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?),),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
-        let artists = serde_json::from_str(&artists_json)
-            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
         let disc_counts = serde_json::from_str(&discs_json)
             .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
         Ok(AlbumDetailFacets {
-            artists,
             disc_counts,
             track_count: track_count.max(0) as u64,
             unknown_disc_track_count: unknown_count.max(0) as u64,
@@ -2425,7 +2377,6 @@ impl Database {
     pub fn album_detail_artists(
         &self,
         album_names: &[String],
-        identities: &[ArtistIdentityMapping],
     ) -> Result<Vec<String>, DatabaseError> {
         let names = album_names.iter().cloned().collect::<HashSet<_>>();
         if names.is_empty() {
@@ -2435,27 +2386,9 @@ impl Database {
         names.sort();
         let names_json = serde_json::to_string(&names)
             .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
-        let mut connection = self.lock()?;
-        let tx = connection.transaction()?;
-        tx.execute(
-            "DELETE FROM index_identity_map WHERE kind='album-detail-artist'",
-            [],
-        )?;
-        {
-            let mut insert = tx.prepare(
-                "INSERT OR REPLACE INTO index_identity_map(kind, name, identity_key, traditional)
-                 VALUES ('album-detail-artist', ?1, ?2, ?3)",
-            )?;
-            for identity in identities {
-                insert.execute(params![
-                    identity.name.trim(),
-                    identity.key,
-                    identity.traditional
-                ])?;
-            }
-        }
+        let connection = self.lock()?;
         let artists = {
-            let mut statement = tx.prepare(
+            let mut statement = connection.prepare(
                 "WITH visible AS MATERIALIZED (
                     SELECT t.track_id,
                            COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) AS artist
@@ -2470,11 +2403,9 @@ impl Database {
                     WHERE trim(a.value)<>''
                 ), mapped AS (
                     SELECT v.name, COUNT(DISTINCT v.track_id) AS count,
-                           COALESCE(i.identity_key, lower(v.name)) AS identity_key,
-                           COALESCE(i.traditional, v.name) AS traditional
+                            music_identity_key(v.name) AS identity_key,
+                            music_identity_traditional(v.name) AS traditional
                     FROM variants v
-                    LEFT JOIN index_identity_map i
-                      ON i.kind='album-detail-artist' AND i.name=v.name
                     GROUP BY v.name, identity_key, traditional
                 ), ranked AS (
                     SELECT name, identity_key,
@@ -2492,64 +2423,52 @@ impl Database {
             let rows = statement.query_map([names_json], |row| row.get::<_, String>(0))?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
-        tx.commit()?;
         Ok(artists)
     }
 
     pub fn create_album_index_snapshot(
         &self,
-        identities: &[ArtistIdentityMapping],
         sort_field: &str,
         direction: &str,
         grouping_enabled: bool,
     ) -> Result<IndexSnapshotInfo, DatabaseError> {
-        self.create_album_index_snapshot_for_kind(
-            identities,
-            sort_field,
-            direction,
-            grouping_enabled,
-            "album",
-        )
+        self.create_album_index_snapshot_for_kind(sort_field, direction, grouping_enabled, "album")
     }
 
-    pub fn create_album_navigation_snapshot(
-        &self,
-        identities: &[ArtistIdentityMapping],
-    ) -> Result<IndexSnapshotInfo, DatabaseError> {
-        self.create_album_index_snapshot_for_kind(
-            identities,
-            "title",
-            "asc",
-            false,
-            "album-navigation",
-        )
+    pub fn create_album_navigation_snapshot(&self) -> Result<IndexSnapshotInfo, DatabaseError> {
+        self.create_album_index_snapshot_for_kind("title", "asc", false, "album-navigation")
     }
 
     fn create_album_index_snapshot_for_kind(
         &self,
-        identities: &[ArtistIdentityMapping],
         sort_field: &str,
         direction: &str,
         grouping_enabled: bool,
         snapshot_kind: &str,
     ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        let metric_sql = match sort_field {
+            "title" => "0",
+            "duration" => "g.duration_ms",
+            "played" => "g.played_ms",
+            "trackCount" => "g.track_count",
+            _ => {
+                return Err(DatabaseError::CorruptData(
+                    "invalid index sort field".to_owned(),
+                ))
+            }
+        };
+        let snapshot_id = Uuid::new_v4().to_string();
         let mut connection = self.lock()?;
         let tx = connection.transaction()?;
-        tx.execute("DELETE FROM index_identity_map WHERE kind='album'", [])?;
-        {
-            let mut insert = tx.prepare(
-                "INSERT OR REPLACE INTO index_identity_map(kind, name, identity_key, traditional)
-                 VALUES ('album', ?1, ?2, ?3)",
-            )?;
-            for identity in identities {
-                insert.execute(params![
-                    identity.name.trim(),
-                    identity.key,
-                    identity.traditional
-                ])?;
-            }
-        }
-        let mut statement = tx.prepare(
+        tx.execute(
+            "DELETE FROM index_snapshot_rows WHERE kind=?1",
+            [snapshot_kind],
+        )?;
+        tx.execute(
+            "DELETE FROM index_snapshot_input WHERE kind=?1",
+            [snapshot_kind],
+        )?;
+        let insert_sql = format!(
             "WITH raw_facets AS (
                 SELECT COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') AS original,
                        music_trim_whitespace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')) AS album_name,
@@ -2564,10 +2483,9 @@ impl Database {
              ), mapped AS (
                 SELECT f.original, f.album_name,
                        CASE WHEN f.album_name='' THEN 'album:unmarked'
-                            ELSE 'album:' || COALESCE(i.identity_key, lower(f.album_name)) END AS identity_key,
+                             ELSE 'album:' || music_identity_key(f.album_name) END AS identity_key,
                        f.track_count, f.duration_ms, f.played_ms
                 FROM raw_facets f
-                LEFT JOIN index_identity_map i ON i.kind='album' AND i.name=f.album_name
              ), name_counts AS (
                 SELECT identity_key, album_name,
                        SUM(track_count) AS track_count
@@ -2582,15 +2500,10 @@ impl Database {
                        ROW_NUMBER() OVER (
                            PARTITION BY n.identity_key
                            ORDER BY n.track_count DESC,
-                                    CASE WHEN COALESCE(i.traditional, n.album_name)=n.album_name THEN 1 ELSE 0 END DESC,
+                                     CASE WHEN music_identity_traditional(n.album_name)=n.album_name THEN 1 ELSE 0 END DESC,
                                     n.album_name COLLATE BINARY ASC
                        ) AS display_rank
                 FROM name_counts n
-                LEFT JOIN index_identity_map i ON i.kind='album' AND i.name=n.album_name
-             ), aliases_json AS (
-                SELECT identity_key, json_group_array(album_name) AS aliases
-                FROM (SELECT identity_key, album_name FROM name_counts WHERE album_name<>'' ORDER BY identity_key, album_name COLLATE BINARY)
-                GROUP BY identity_key
              ), query_alias_values AS (
                 SELECT DISTINCT identity_key, alias.value AS alias
                 FROM mapped, json_each(json_array(original, album_name)) alias
@@ -2600,80 +2513,36 @@ impl Database {
                 FROM (SELECT identity_key, alias FROM query_alias_values ORDER BY identity_key, alias COLLATE BINARY)
                 GROUP BY identity_key
              )
-             SELECT g.identity_key, COALESCE(r.album_name, '未知'),
-                    COALESCE(a.aliases, '[]'), COALESCE(q.query_aliases, '[]'),
-                    g.track_count, g.duration_ms, g.played_ms, g.unmarked
+             INSERT INTO index_snapshot_input
+                (snapshot_id, kind, identity_key, display_name, metric_primary, metric_secondary, payload_json)
+             SELECT ?1, ?2, g.identity_key,
+                    CASE WHEN g.unmarked<>0 THEN '未知' ELSE COALESCE(r.album_name, '未知') END,
+                    {metric_sql}, 0,
+                    json_object(
+                        'key', g.identity_key,
+                        'displayName', CASE WHEN g.unmarked<>0 THEN '未知' ELSE COALESCE(r.album_name, '未知') END,
+                        'aliases', json(COALESCE(q.query_aliases, '[]')),
+                        'trackCount', g.track_count,
+                        'durationMs', g.duration_ms,
+                        'playedMs', g.played_ms,
+                        'unmarked', json(CASE WHEN g.unmarked<>0 THEN 'true' ELSE 'false' END)
+                    )
              FROM group_metrics g
              LEFT JOIN ranked_names r ON r.identity_key=g.identity_key AND r.display_rank=1
-             LEFT JOIN aliases_json a ON a.identity_key=g.identity_key
-             LEFT JOIN query_aliases_json q ON q.identity_key=g.identity_key
-             ORDER BY g.identity_key COLLATE BINARY",
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?.max(0) as u64,
-                row.get::<_, i64>(5)?.max(0) as u64,
-                row.get::<_, i64>(6)?.max(0) as u64,
-                row.get::<_, bool>(7)?,
-            ))
-        })?;
-        let raw_items = rows.collect::<Result<Vec<_>, _>>()?;
-        drop(statement);
-        tx.commit()?;
-        drop(connection);
-        let items = raw_items
-            .into_iter()
-            .map(
-                |(
-                    key,
-                    display_name,
-                    aliases_json,
-                    query_aliases_json,
-                    track_count,
-                    duration_ms,
-                    played_ms,
-                    unmarked,
-                )| {
-                    let aliases = serde_json::from_str(&query_aliases_json)
-                        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
-                    let entry = AlbumIndexEntry {
-                        key: key.clone(),
-                        display_name: if unmarked {
-                            "未知".to_owned()
-                        } else {
-                            display_name.clone()
-                        },
-                        aliases,
-                        track_count,
-                        duration_ms,
-                        played_ms,
-                        unmarked,
-                    };
-                    let metric = match sort_field {
-                        "title" => 0,
-                        "duration" => entry.duration_ms,
-                        "played" => entry.played_ms,
-                        "trackCount" => entry.track_count,
-                        _ => 0,
-                    };
-                    let _: Vec<String> = serde_json::from_str(&aliases_json)
-                        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
-                    Ok((key, entry.display_name.clone(), metric, 0, entry))
-                },
-            )
-            .collect::<Result<Vec<_>, DatabaseError>>()?;
-        self.create_index_snapshot(
+             LEFT JOIN query_aliases_json q ON q.identity_key=g.identity_key",
+        );
+        tx.execute(&insert_sql, params![snapshot_id, snapshot_kind])?;
+        let info = Self::materialize_index_snapshot(
+            &tx,
             snapshot_kind,
             sort_field,
             direction,
             false,
             grouping_enabled,
-            items,
-        )
+            &snapshot_id,
+        )?;
+        tx.commit()?;
+        Ok(info)
     }
 
     /// Read a paged album track list ordered by disc, track number, then natural title.
@@ -2882,40 +2751,55 @@ impl Database {
         .collect()
     }
 
-    /// Aggregate artist statistics on the database side, counting each visible track once per
-    /// normalized artist identity. Collaborative tracks credit their full played duration to
-    /// every artist. The UI supplies canonical identities from the shared OpenCC dictionaries.
-    pub fn artist_index(
+    pub fn create_artist_index_snapshot(
         &self,
-        artist_identities: &[ArtistIdentityMapping],
-        album_identities: &[ArtistIdentityMapping],
-    ) -> Result<Vec<ArtistIndexEntry>, DatabaseError> {
+        sort_field: &str,
+        direction: &str,
+        grouping_enabled: bool,
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        self.create_artist_index_snapshot_for_kind(
+            sort_field,
+            direction,
+            grouping_enabled,
+            "artist",
+        )
+    }
+
+    pub fn create_artist_navigation_snapshot(&self) -> Result<IndexSnapshotInfo, DatabaseError> {
+        self.create_artist_index_snapshot_for_kind("title", "asc", false, "artist-navigation")
+    }
+
+    fn create_artist_index_snapshot_for_kind(
+        &self,
+        sort_field: &str,
+        direction: &str,
+        grouping_enabled: bool,
+        snapshot_kind: &str,
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        let metric_sql = match sort_field {
+            "title" => "0",
+            "trackCount" => "m.track_count",
+            "albumCount" => "m.album_count",
+            "duration" => "m.played_ms",
+            "trackDuration" => "m.duration_ms",
+            _ => {
+                return Err(DatabaseError::CorruptData(
+                    "invalid index sort field".to_owned(),
+                ))
+            }
+        };
+        let snapshot_id = Uuid::new_v4().to_string();
         let mut connection = self.lock()?;
         let tx = connection.transaction()?;
-        tx.execute("DELETE FROM index_identity_map", [])?;
-        {
-            let mut insert = tx.prepare(
-                "INSERT OR REPLACE INTO index_identity_map(kind, name, identity_key, traditional)
-                 VALUES (?1, ?2, ?3, ?4)",
-            )?;
-            for entry in artist_identities {
-                insert.execute(params![
-                    "artist",
-                    entry.name.trim(),
-                    entry.key,
-                    entry.traditional
-                ])?;
-            }
-            for entry in album_identities {
-                insert.execute(params![
-                    "album",
-                    entry.name.trim(),
-                    entry.key,
-                    entry.traditional
-                ])?;
-            }
-        }
-        let mut statement = tx.prepare(
+        tx.execute(
+            "DELETE FROM index_snapshot_rows WHERE kind=?1",
+            [snapshot_kind],
+        )?;
+        tx.execute(
+            "DELETE FROM index_snapshot_input WHERE kind=?1",
+            [snapshot_kind],
+        )?;
+        let insert_sql = format!(
             "WITH visible AS (
                 SELECT t.track_id,
                        COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) AS artist,
@@ -2927,14 +2811,12 @@ impl Database {
                               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
              ), expanded AS (
                 SELECT v.track_id, a.value AS artist_name,
-                       COALESCE(ai.identity_key, lower(trim(a.value))) AS artist_key,
+                       music_identity_key(a.value) AS artist_key,
                        CASE WHEN v.album IS NULL OR trim(v.album) = '' THEN NULL
-                            ELSE COALESCE(al.identity_key, 'album:' || lower(trim(v.album))) END AS album_key,
+                            ELSE 'album:' || music_identity_key(v.album) END AS album_key,
                        v.played_ms, v.duration_ms
                 FROM visible v
                 JOIN json_each(music_split_artists_json(v.artist)) a
-                LEFT JOIN index_identity_map ai ON ai.kind='artist' AND ai.name=a.value
-                LEFT JOIN index_identity_map al ON al.kind='album' AND al.name=trim(v.album)
              ), artist_tracks AS (
                 SELECT DISTINCT track_id, artist_key, album_key, played_ms, duration_ms FROM expanded
              ), artist_metrics AS (
@@ -2950,11 +2832,10 @@ impl Database {
                        ROW_NUMBER() OVER (
                            PARTITION BY n.artist_key
                            ORDER BY n.track_count DESC,
-                                    CASE WHEN COALESCE(i.traditional, n.artist_name)=n.artist_name THEN 1 ELSE 0 END DESC,
+                                     CASE WHEN music_identity_traditional(n.artist_name)=n.artist_name THEN 1 ELSE 0 END DESC,
                                     n.artist_name COLLATE BINARY ASC
                        ) AS display_rank
                 FROM artist_name_counts n
-                LEFT JOIN index_identity_map i ON i.kind='artist' AND i.name=n.artist_name
              ), names_json AS (
                 SELECT n.artist_key,
                        json_group_array(json_object('name', n.artist_name, 'count', n.track_count)) AS names,
@@ -2963,131 +2844,35 @@ impl Database {
                       FROM artist_name_counts ORDER BY artist_key, artist_name COLLATE BINARY) n
                 GROUP BY n.artist_key
              )
-             SELECT m.artist_key, j.names, j.artist_names, r.artist_name,
-                    m.track_count, m.album_count, m.played_ms, m.duration_ms
+             INSERT INTO index_snapshot_input
+                (snapshot_id, kind, identity_key, display_name, metric_primary, metric_secondary, payload_json)
+             SELECT ?1, ?2, m.artist_key, r.artist_name, {metric_sql}, 0,
+                    json_object(
+                        'key', m.artist_key,
+                        'names', json(j.names),
+                        'artistNames', json(j.artist_names),
+                        'displayName', r.artist_name,
+                        'trackCount', m.track_count,
+                        'albumCount', m.album_count,
+                        'playedMs', m.played_ms,
+                        'durationMs', m.duration_ms
+                    )
              FROM artist_metrics m
              JOIN names_json j ON j.artist_key=m.artist_key
-             JOIN ranked_names r ON r.artist_key=m.artist_key AND r.display_rank=1
-             ORDER BY m.artist_key COLLATE BINARY",
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?.max(0) as u64,
-                row.get::<_, i64>(5)?.max(0) as u64,
-                row.get::<_, i64>(6)?.max(0) as u64,
-                row.get::<_, i64>(7)?.max(0) as u64,
-            ))
-        })?;
-        let raw_rows = rows.collect::<Result<Vec<_>, _>>()?;
-        drop(statement);
-        tx.commit()?;
-        raw_rows
-            .into_iter()
-            .map(
-                |(
-                    key,
-                    names_json,
-                    artist_names_json,
-                    display_name,
-                    track_count,
-                    album_count,
-                    played_ms,
-                    duration_ms,
-                )| {
-                    let names = serde_json::from_str(&names_json)
-                        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
-                    let artist_names = serde_json::from_str(&artist_names_json)
-                        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
-                    Ok(ArtistIndexEntry {
-                        key,
-                        names,
-                        artist_names,
-                        display_name,
-                        track_count,
-                        album_count,
-                        played_ms,
-                        duration_ms,
-                    })
-                },
-            )
-            .collect()
-    }
-
-    pub fn create_artist_index_snapshot(
-        &self,
-        artist_identities: &[ArtistIdentityMapping],
-        album_identities: &[ArtistIdentityMapping],
-        sort_field: &str,
-        direction: &str,
-        grouping_enabled: bool,
-    ) -> Result<IndexSnapshotInfo, DatabaseError> {
-        self.create_artist_index_snapshot_for_kind(
-            artist_identities,
-            album_identities,
-            sort_field,
-            direction,
-            grouping_enabled,
-            "artist",
-        )
-    }
-
-    pub fn create_artist_navigation_snapshot(
-        &self,
-        artist_identities: &[ArtistIdentityMapping],
-        album_identities: &[ArtistIdentityMapping],
-    ) -> Result<IndexSnapshotInfo, DatabaseError> {
-        self.create_artist_index_snapshot_for_kind(
-            artist_identities,
-            album_identities,
-            "title",
-            "asc",
-            false,
-            "artist-navigation",
-        )
-    }
-
-    fn create_artist_index_snapshot_for_kind(
-        &self,
-        artist_identities: &[ArtistIdentityMapping],
-        album_identities: &[ArtistIdentityMapping],
-        sort_field: &str,
-        direction: &str,
-        grouping_enabled: bool,
-        snapshot_kind: &str,
-    ) -> Result<IndexSnapshotInfo, DatabaseError> {
-        let entries = self.artist_index(artist_identities, album_identities)?;
-        let items = entries
-            .into_iter()
-            .map(|entry| {
-                let metric = match sort_field {
-                    "title" => 0,
-                    "trackCount" => entry.track_count,
-                    "albumCount" => entry.album_count,
-                    "duration" => entry.played_ms,
-                    "trackDuration" => entry.duration_ms,
-                    _ => 0,
-                };
-                (
-                    entry.key.clone(),
-                    entry.display_name.clone(),
-                    metric,
-                    0,
-                    entry,
-                )
-            })
-            .collect();
-        self.create_index_snapshot(
+             JOIN ranked_names r ON r.artist_key=m.artist_key AND r.display_rank=1"
+        );
+        tx.execute(&insert_sql, params![snapshot_id, snapshot_kind])?;
+        let info = Self::materialize_index_snapshot(
+            &tx,
             snapshot_kind,
             sort_field,
             direction,
             true,
             grouping_enabled,
-            items,
-        )
+            &snapshot_id,
+        )?;
+        tx.commit()?;
+        Ok(info)
     }
 
     pub fn playlist_file_sync_state(
@@ -6147,9 +5932,7 @@ fn to_sql_i64(value: u64, field: &'static str) -> Result<i64, DatabaseError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AlbumDiscCount, AlbumIndexEntry, ArtistIndexEntry, ArtistNameCount, QuickIndexGroup,
-    };
+    use super::{AlbumDiscCount, AlbumIndexEntry, ArtistIndexEntry, QuickIndexGroup};
     use std::{
         fs,
         io::{Seek, SeekFrom, Write},
@@ -6174,11 +5957,10 @@ mod tests {
     use rusqlite::{params, Connection, OptionalExtension};
 
     use super::{
-        natural_title_cmp, query_limit, ArtistIdentityMapping, CollationType, Database,
-        DatabaseError, LibraryRepository, MusicCollationSpec, Ordering, PlaybackSessionCheckpoint,
-        PlaylistFileSyncState, QueueSortCandidate, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1,
-        SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9,
-        TRACKS_PAGE_SQL,
+        natural_title_cmp, query_limit, CollationType, Database, DatabaseError, LibraryRepository,
+        MusicCollationSpec, Ordering, PlaybackSessionCheckpoint, PlaylistFileSyncState,
+        QueueSortCandidate, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3,
+        SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9, TRACKS_PAGE_SQL,
     };
 
     fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
@@ -6550,55 +6332,35 @@ mod tests {
             }
         }
 
-        let facets = db.artist_index_facets().expect("facets");
-        assert!(facets.artists.contains(&"歌手甲".to_owned()));
-        assert!(facets.artists.contains(&"Hanser".to_owned()));
-        assert!(facets.artists.contains(&"歌手乙".to_owned()));
-        assert!(!facets.artists.contains(&"停用演出者".to_owned()));
+        assert_eq!(
+            db.music_identity_key("hanser").expect("identity key"),
+            "hanser"
+        );
+        assert_eq!(
+            db.music_identity_key("歌手简")
+                .expect("simplified identity"),
+            "歌手簡"
+        );
+        assert_eq!(
+            db.music_identity_key("歌手简かな")
+                .expect("Japanese kana identity"),
+            "歌手简かな",
+            "Japanese kana keeps the original Han spelling"
+        );
+        assert_eq!(
+            db.music_identity_key(" ＨＡＮＳＥＲ ")
+                .expect("compatibility and case identity"),
+            "hanser"
+        );
 
-        let identities = [
-            ArtistIdentityMapping {
-                name: "Hanser".to_owned(),
-                key: "hanser".to_owned(),
-                traditional: "Hanser".to_owned(),
-            },
-            ArtistIdentityMapping {
-                name: "hanser".to_owned(),
-                key: "hanser".to_owned(),
-                traditional: "hanser".to_owned(),
-            },
-            ArtistIdentityMapping {
-                name: "HANSer".to_owned(),
-                key: "hanser".to_owned(),
-                traditional: "HANSer".to_owned(),
-            },
-            ArtistIdentityMapping {
-                name: "歌手甲".to_owned(),
-                key: "歌手甲".to_owned(),
-                traditional: "歌手甲".to_owned(),
-            },
-            ArtistIdentityMapping {
-                name: "歌手乙".to_owned(),
-                key: "歌手乙".to_owned(),
-                traditional: "歌手乙".to_owned(),
-            },
-        ];
-        let album_identities = [
-            ArtistIdentityMapping {
-                name: "專輯 A".to_owned(),
-                key: "專輯 a".to_owned(),
-                traditional: "專輯 A".to_owned(),
-            },
-            ArtistIdentityMapping {
-                name: "专辑 a".to_owned(),
-                key: "專輯 a".to_owned(),
-                traditional: "專輯 a".to_owned(),
-            },
-        ];
-        let index = db
-            .artist_index(&identities, &album_identities)
-            .expect("artist index");
-        let hanser = index
+        let snapshot = db
+            .create_artist_index_snapshot("title", "asc", true)
+            .expect("create SQLite artist snapshot");
+        let all_artists = db
+            .get_index_snapshot_page::<ArtistIndexEntry>(&snapshot.snapshot_id, 0, 100)
+            .expect("read artist snapshot");
+        let hanser = all_artists
+            .items
             .iter()
             .find(|entry| entry.key == "hanser")
             .expect("Hanser");
@@ -6607,29 +6369,29 @@ mod tests {
         assert_eq!(hanser.names.iter().map(|item| item.count).sum::<u64>(), 3);
         assert_eq!(hanser.played_ms, 6_000);
         assert_eq!(hanser.duration_ms, 60_000);
-        assert!(index.iter().all(|entry| entry.key != "停用演出者"));
-        let singer_a = index
+        assert!(all_artists
+            .items
+            .iter()
+            .all(|entry| entry.key != "停用演出者"));
+        let singer_a = all_artists
+            .items
             .iter()
             .find(|entry| entry.key == "歌手甲")
             .expect("singer A");
         assert_eq!(singer_a.track_count, 1);
         assert_eq!(singer_a.played_ms, 1_000);
         assert_eq!(singer_a.duration_ms, 10_000);
-
-        let snapshot = db
-            .create_artist_index_snapshot(&identities, &album_identities, "title", "asc", true)
-            .expect("create SQLite artist snapshot");
-        assert_eq!(snapshot.quick_index.total_count, index.len() as u64);
+        assert_eq!(snapshot.quick_index.total_count, all_artists.total_count);
         assert!(!snapshot.quick_index.groups.is_empty());
         assert_eq!(snapshot.quick_index.groups[0].before_index, 0);
         let first_page = db
             .get_index_snapshot_page::<ArtistIndexEntry>(&snapshot.snapshot_id, 0, 2)
             .expect("first artist snapshot page");
-        assert_eq!(first_page.total_count, index.len() as u64);
+        assert_eq!(first_page.total_count, all_artists.total_count);
         assert_eq!(first_page.items.len(), 2);
         assert!(first_page.items[0].display_name <= first_page.items[1].display_name);
         let navigation = db
-            .create_artist_navigation_snapshot(&identities, &album_identities)
+            .create_artist_navigation_snapshot()
             .expect("create isolated artist navigation snapshot");
         let resolved_hanser = db
             .get_index_snapshot_entry::<ArtistIndexEntry>(&navigation.snapshot_id, "hanser")
@@ -6647,13 +6409,7 @@ mod tests {
             .expect("second artist snapshot page");
         assert_eq!(last_page.items.len(), 1);
         let ranked = db
-            .create_artist_index_snapshot(
-                &identities,
-                &album_identities,
-                "trackCount",
-                "desc",
-                false,
-            )
+            .create_artist_index_snapshot("trackCount", "desc", false)
             .expect("replace artist snapshot with metric ordering");
         let ranked_page = db
             .get_index_snapshot_page::<ArtistIndexEntry>(&ranked.snapshot_id, 0, 10)
@@ -6775,32 +6531,6 @@ mod tests {
                 .expect("insert playback statistics");
         }
 
-        let facets = db.album_index_facets().expect("album facets");
-        assert!(facets
-            .iter()
-            .any(|facet| facet.name.as_deref() == Some("專輯 A")
-                && facet.track_count == 1
-                && facet.duration_ms == 10_000
-                && facet.played_ms == 300));
-        assert!(facets
-            .iter()
-            .any(|facet| facet.name.as_deref() == Some("专辑 A")
-                && facet.track_count == 1
-                && facet.duration_ms == 20_000
-                && facet.played_ms == 900));
-        assert!(facets
-            .iter()
-            .any(|facet| facet.name.as_deref() == Some("  ") && facet.track_count == 1));
-        assert!(facets.iter().any(|facet| {
-            facet.name.as_deref() == Some("\u{3000}專輯 A\u{3000}")
-                && facet.track_count == 1
-                && facet.duration_ms == 5_000
-                && facet.played_ms == 100
-        }));
-        assert!(facets
-            .iter()
-            .any(|facet| facet.name.as_deref() == Some("其它") && facet.track_count == 1));
-
         let page = db
             .list_album_tracks_page(
                 &[
@@ -6841,25 +6571,8 @@ mod tests {
             0
         );
 
-        let album_identities = [
-            ArtistIdentityMapping {
-                name: "專輯 A".to_owned(),
-                key: "專輯 a".to_owned(),
-                traditional: "專輯 A".to_owned(),
-            },
-            ArtistIdentityMapping {
-                name: "专辑 A".to_owned(),
-                key: "專輯 a".to_owned(),
-                traditional: "專輯 A".to_owned(),
-            },
-            ArtistIdentityMapping {
-                name: "其它".to_owned(),
-                key: "其它".to_owned(),
-                traditional: "其它".to_owned(),
-            },
-        ];
         let album_snapshot = db
-            .create_album_index_snapshot(&album_identities, "trackCount", "desc", false)
+            .create_album_index_snapshot("trackCount", "desc", false)
             .expect("create SQLite album snapshot");
         let album_page = db
             .get_index_snapshot_page::<AlbumIndexEntry>(&album_snapshot.snapshot_id, 0, 2)
@@ -6886,8 +6599,12 @@ mod tests {
             .items
             .iter()
             .any(|item| item.unmarked && item.display_name == "未知"));
+        assert!(
+            all_albums.items.last().is_some_and(|item| item.unmarked),
+            "the unknown album group remains last even in descending metric order"
+        );
         let navigation = db
-            .create_album_navigation_snapshot(&album_identities)
+            .create_album_navigation_snapshot()
             .expect("create isolated album navigation snapshot");
         let resolved_album = db
             .get_index_snapshot_entry::<AlbumIndexEntry>(&navigation.snapshot_id, "album:專輯 a")
@@ -6952,26 +6669,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            facets.artists,
-            vec![
-                ArtistNameCount {
-                    name: "歌手简".to_owned(),
-                    count: 2
-                },
-                ArtistNameCount {
-                    name: "歌手簡".to_owned(),
-                    count: 2
-                },
-            ]
-        );
-
-        let identities = ["歌手简", "歌手簡"].map(|name| ArtistIdentityMapping {
-            name: name.to_owned(),
-            key: "merged-singer".to_owned(),
-            traditional: "歌手簡".to_owned(),
-        });
-        assert_eq!(
-            db.album_detail_artists(&["Shared Album".to_owned()], &identities)
+            db.album_detail_artists(&["Shared Album".to_owned()])
                 .expect("merge and sort album artists"),
             vec!["歌手簡".to_owned()],
         );
@@ -12227,7 +11925,7 @@ mod tests {
                     ),
                 ]
                 .into_iter()
-                .collect()
+                .collect::<std::collections::HashMap<_, _>>()
             );
             assert_eq!(
                 db.list_playback_statistics_runtimes()
@@ -12320,7 +12018,7 @@ mod tests {
                     ),
                 ]
                 .into_iter()
-                .collect()
+                .collect::<std::collections::HashMap<_, _>>()
             );
             db.finish_playback_statistics_runtime(second_runtime, &[])
                 .expect("finish parallel runtime");

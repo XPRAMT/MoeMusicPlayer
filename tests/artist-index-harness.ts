@@ -20,16 +20,14 @@ Object.assign(window, {
   __TAURI_INTERNALS__: {
     invoke: async (command: string, args?: Record<string, unknown>) => {
       const storedSort = sessionStorage.getItem('artist-list-sort');
-      if (command === 'library_get_artist_index_facets') return { artists: [], albums: [] };
-      if (command === 'library_sort_text_indices') {
-        const values = (args?.values as string[] | undefined) ?? [];
-        return values.map((_, index) => index).sort((left, right) =>
-          new Intl.Collator('zh-TW', { numeric: true }).compare(values[left] ?? '', values[right] ?? ''),
-        );
+      if (command === 'library_create_artist_index_snapshot') {
+        return { snapshotId: 'artist-snapshot', quickIndex: { labels: [], groups: [], totalCount: artists.length } };
       }
-      if (command === 'library_get_artist_index') {
+      if (command === 'library_get_artist_index_snapshot_page') {
         await new Promise((resolve) => setTimeout(resolve, 50));
-        return artists;
+        const offset = Number(args?.offset ?? 0);
+        const limit = Number(args?.limit ?? 1000);
+        return { offset, limit, totalCount: artists.length, items: artists.slice(offset, offset + limit) };
       }
       if (command === 'settings_get_artist_list_sort') {
         return storedSort ? JSON.parse(storedSort) : { field: 'title', direction: 'asc' };

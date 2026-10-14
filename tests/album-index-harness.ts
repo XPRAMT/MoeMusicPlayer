@@ -14,17 +14,28 @@ const coldArtworkMode = new URLSearchParams(location.search).has('cold');
 const stats = { rawArtworkReads: 0, legacyCacheReads: 0, trackCacheReads: 0, trackCacheReadsByTrack: {} as Record<string, number>, albumCandidates: 0, thumbnailWrites: 0, albumIndexSortRequests: [] as (string | null)[] };
 const selections = new Map<string, { trackCount: number; trackIds: string[]; representative: boolean }>();
 Object.assign(window, { __albumIndexStats: stats, __albumArtworkSelections: selections });
+const albums = Array.from({ length: 80 }, (_, index) => ({
+  key: `album:${index + 1}`,
+  displayName: index === 1 ? '未知' : `Album ${index + 1}`,
+  aliases: index === 1 ? [] : [index === 79 ? 'Multi Disc' : `Album ${index + 1}`],
+  trackCount: index === 0 ? 4 : index === 79 ? 6 : 1,
+  durationMs: 180_000,
+  playedMs: 0,
+  unmarked: index === 1,
+}));
 
 Object.assign(window, {
   isTauri: true,
   __TAURI_INTERNALS__: {
     invoke: async (command: string, args?: unknown) => {
-      if (command === 'library_get_album_index_facets') {
-        await new Promise((resolve) => setTimeout(resolve, 120));
-        return Array.from({ length: 80 }, (_, index) => ({
-          name: index === 79 ? 'Multi Disc' : `Album ${index + 1}`,
-          trackCount: index === 0 ? 4 : index === 79 ? 6 : 1,
-        }));
+      if (command === 'library_create_album_index_snapshot') {
+        return { snapshotId: 'album-snapshot', quickIndex: { labels: [], groups: [], totalCount: albums.length } };
+      }
+      if (command === 'library_get_album_index_snapshot_page') {
+        const request = args as { offset?: number; limit?: number } | undefined;
+        const offset = request?.offset ?? 0;
+        const limit = request?.limit ?? 1000;
+        return { offset, limit, totalCount: albums.length, items: albums.slice(offset, offset + limit) };
       }
       if (command === 'library_sort_text_indices') {
         const values = (args as { values?: string[] } | undefined)?.values ?? [];
