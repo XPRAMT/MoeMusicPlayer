@@ -44,6 +44,18 @@ export function reportPagedRange({ metricsReady, start, end, groups, totalCount,
   return true;
 }
 
+/** @param {{ position: number, groupingReady: boolean, totalCount: number | null, pending: boolean, virtualTotalCount: number, rowHeight: number, viewportHeight: number }} options */
+export function getRestoredListScrollTop({ position, groupingReady, totalCount, pending, virtualTotalCount, rowHeight, viewportHeight }) {
+  if (!groupingReady || totalCount === null || pending) return null;
+  const maxScrollTop = Math.max(0, virtualTotalCount * rowHeight - viewportHeight);
+  return Math.min(Math.max(0, position), maxScrollTop);
+}
+
+/** @param {{ groupsChanged: boolean, hasPreviousSnapshot: boolean, scrollTop: number }} options */
+export function shouldAdjustGroupAnchor({ groupsChanged, hasPreviousSnapshot, scrollTop }) {
+  return groupsChanged && hasPreviousSnapshot && scrollTop > 0;
+}
+
 /** Choose a near-square index grid based on the number of available labels.
  * @param {number} labelCount
  */

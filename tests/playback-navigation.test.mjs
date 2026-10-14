@@ -136,7 +136,11 @@ test('sidebar list routes remount for fresh data and restore each virtual list p
   assert.match(pagedVirtualListSource, /const listChanged = seenListId !== undefined && currentListId !== seenListId/);
   assert.match(pagedVirtualListSource, /if \(seenListId === undefined \|\| listChanged\)/);
   assert.match(pagedVirtualListSource, /pendingListRestore = \{ listId: currentListId, position \}/);
-  assert.match(pagedVirtualListSource, /pendingListRestore\?\.listId === currentListId && scrollRestoreReady && totalCount !== null && !pending/);
+  assert.match(pagedVirtualListSource, /getRestoredListScrollTop\(\{[\s\S]*?groupingReady,[\s\S]*?virtualTotalCount,[\s\S]*?\}\)/);
+  assert.match(pagedVirtualListSource, /if \(restoredScrollTop !== null && scrollRestoreReady\)/);
+  assert.match(pagedVirtualListSource, /hasPreviousGroupSnapshot = false/);
+  assert.match(pagedVirtualListSource, /shouldAdjustGroupAnchor\(\{[\s\S]*?hasPreviousSnapshot: hasPreviousGroupSnapshot/);
+  assert.match(pagedVirtualListSource, /hasPreviousGroupSnapshot = true/);
   assert.match(pagedVirtualListSource, /writeListScrollPosition\(currentListId, restoredScrollTop\)/);
   assert.match(pagedVirtualListSource, /let lastVisibleScrollTop = 0/);
   assert.match(pagedVirtualListSource, /if \(!hadVisibleViewport\)[\s\S]*?viewport\.scrollTop = restoredScrollTop/);

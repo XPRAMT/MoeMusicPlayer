@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   buildQuickIndexGroups,
   buildPagedVirtualRows,
+  getRestoredListScrollTop,
   reportPagedRange,
+  shouldAdjustGroupAnchor,
   dataIndexToVisualIndex,
   getQuickIndexColumnCount,
   getQuickIndexDisplayLabel,
@@ -69,6 +71,65 @@ test('the initial viewport range is requested while grouping is still pending', 
     onRange: (range) => requested.push(range),
   }), false);
   assert.equal(requested.length, 1, 'range is not requested before viewport measurements are ready');
+});
+
+test('saved visual scroll position waits for complete group rows and is restored only once', () => {
+  const savedPosition = 1840;
+  const base = {
+    position: savedPosition,
+    totalCount: 100,
+    pending: false,
+    rowHeight: 50,
+    viewportHeight: 600,
+  };
+
+  assert.equal(getRestoredListScrollTop({ ...base, groupingReady: false, virtualTotalCount: 100 }), null);
+  assert.equal(getRestoredListScrollTop({ ...base, groupingReady: true, virtualTotalCount: 114 }), savedPosition);
+  assert.equal(getRestoredListScrollTop({ ...base, groupingReady: true, virtualTotalCount: 114, pending: true }), null);
+  assert.equal(getRestoredListScrollTop({ ...base, groupingReady: true, virtualTotalCount: 20 }), 400);
+});
+
+test('group anchor adjustment is skipped for the first complete snapshot and at the list top', () => {
+  assert.equal(shouldAdjustGroupAnchor({ groupsChanged: true, hasPreviousSnapshot: false, scrollTop: 1840 }), false);
+  assert.equal(shouldAdjustGroupAnchor({ groupsChanged: true, hasPreviousSnapshot: true, scrollTop: 0 }), false);
+  assert.equal(shouldAdjustGroupAnchor({ groupsChanged: true, hasPreviousSnapshot: true, scrollTop: 1840 }), true);
+  assert.equal(shouldAdjustGroupAnchor({ groupsChanged: false, hasPreviousSnapshot: true, scrollTop: 1840 }), false);
+});
+
+test('re-entering a grouped list repeatedly does not accumulate heading-height offsets', () => {
+  const savedVisualPosition = 1840;
+  const groups = Array.from({ length: 18 }, (_, index) => ({ label: `group-${index}`, beforeIndex: index * 5 }));
+  let savedPosition = savedVisualPosition;
+
+  for (let entry = 0; entry < 32; entry += 1) {
+    const beforeGrouping = getRestoredListScrollTop({
+      position: savedPosition,
+      groupingReady: false,
+      totalCount: 100,
+      pending: false,
+      virtualTotalCount: 100,
+      rowHeight: 50,
+      viewportHeight: 600,
+    });
+    assert.equal(beforeGrouping, null, `entry ${entry + 1} must not restore in data-row coordinates`);
+
+    const restored = getRestoredListScrollTop({
+      position: savedPosition,
+      groupingReady: true,
+      totalCount: 100,
+      pending: false,
+      virtualTotalCount: 100 + groups.length,
+      rowHeight: 50,
+      viewportHeight: 600,
+    });
+    assert.equal(restored, savedVisualPosition, `entry ${entry + 1} must restore the same visual position`);
+    assert.equal(shouldAdjustGroupAnchor({
+      groupsChanged: true,
+      hasPreviousSnapshot: false,
+      scrollTop: restored,
+    }), false, `entry ${entry + 1} must not re-anchor the first complete group snapshot`);
+    savedPosition = restored;
+  }
 });
 
 test('paged grouping keeps contiguous groups across page boundaries and trims names', async () => {

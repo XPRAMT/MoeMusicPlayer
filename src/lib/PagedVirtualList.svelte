@@ -44,7 +44,7 @@
     getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
-  import { buildPagedVirtualRows, dataIndexToVisualIndex, getQuickIndexColumnCount, getQuickIndexDisplayLabel, reportPagedRange, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
+  import { buildPagedVirtualRows, dataIndexToVisualIndex, getQuickIndexColumnCount, getQuickIndexDisplayLabel, getRestoredListScrollTop, reportPagedRange, shouldAdjustGroupAnchor, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
@@ -177,6 +177,7 @@
   let quickIndexDialog: HTMLDivElement | undefined = $state();
   let quickIndexTrigger: HTMLButtonElement | null = null;
   let previousGroupRows: QuickIndexGroup[] = [];
+  let hasPreviousGroupSnapshot = false;
 
   const virtualDataCount = $derived(totalCount ?? 40);
   const renderGroupRows = $derived(groupingReady ? groupRows : []);
@@ -238,6 +239,10 @@
     const resetChanged = hasSeenScrollResetKey && !Object.is(currentScrollResetKey, seenScrollResetKey);
     if (seenListId === undefined || listChanged) {
       activeIndex = 0;
+      if (listChanged) {
+        previousGroupRows = [];
+        hasPreviousGroupSnapshot = false;
+      }
       const position = readListScrollPosition(currentListId);
       pendingListRestore = { listId: currentListId, position };
       scrollTop = 0;
@@ -251,9 +256,18 @@
       pendingListRestore = null;
       viewport?.scrollTo({ top: 0 });
     }
-    if (pendingListRestore?.listId === currentListId && scrollRestoreReady && totalCount !== null && !pending) {
-      const maxScrollTop = Math.max(0, virtualTotalCount * rowHeight - viewportHeight);
-      const restoredScrollTop = Math.min(pendingListRestore.position, maxScrollTop);
+    const restoredScrollTop = pendingListRestore?.listId === currentListId
+      ? getRestoredListScrollTop({
+        position: pendingListRestore.position,
+        groupingReady,
+        totalCount,
+        pending,
+        virtualTotalCount,
+        rowHeight,
+        viewportHeight,
+      })
+      : null;
+    if (restoredScrollTop !== null && scrollRestoreReady) {
       scrollTop = restoredScrollTop;
       lastVisibleScrollTop = restoredScrollTop;
       writeListScrollPosition(currentListId, restoredScrollTop);
@@ -293,7 +307,11 @@
     const groupsChanged = previous.length !== nextGroupRows.length
       || previous.some((group, index) => group.label !== nextGroupRows[index]?.label
         || group.beforeIndex !== nextGroupRows[index]?.beforeIndex);
-    if (groupsChanged && viewport && viewport.clientHeight > 0) {
+    if (shouldAdjustGroupAnchor({
+      groupsChanged,
+      hasPreviousSnapshot: hasPreviousGroupSnapshot,
+      scrollTop: viewport?.scrollTop ?? 0,
+    }) && viewport && viewport.clientHeight > 0) {
       const oldVisualIndex = Math.floor(viewport.scrollTop / rowHeight);
       const anchorDataIndex = visualIndexToAnchorDataIndex(oldVisualIndex, previous, virtualDataCount);
       if (anchorDataIndex !== null && anchorDataIndex >= 0 && anchorDataIndex < virtualDataCount) {
@@ -306,6 +324,7 @@
       }
     }
     previousGroupRows = nextGroupRows;
+    hasPreviousGroupSnapshot = true;
   }
 
   $effect(() => {
