@@ -265,7 +265,7 @@
   }
 
   .dock-favorite.has-favorites :global(svg) {
-    fill: currentColor;
+    fill: none;
   }
 
   .favorite-popover {

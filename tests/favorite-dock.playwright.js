@@ -16,11 +16,12 @@ const firstTrack = await page.evaluate(() => {
     shuffleColor: getComputedStyle(shuffleButton).color,
     heartIcon: heartSvg.classList.contains('tabler-icon-heart-check') ? 'heart-check' : heartSvg.classList.contains('tabler-icon-heart') ? 'heart' : 'unknown',
     heartPaths: heartSvg.querySelectorAll('path').length,
+    heartFill: getComputedStyle(heartSvg).fill,
     heartPressed: heartButton.getAttribute('aria-pressed'),
     calls: [...window.__favoriteDockHarness.calls],
   };
 });
-if (firstTrack.heartPressed !== 'true' || firstTrack.heartIcon !== 'heart-check' || firstTrack.heartPaths !== 2) {
+if (firstTrack.heartPressed !== 'true' || firstTrack.heartIcon !== 'heart-check' || firstTrack.heartPaths !== 2 || firstTrack.heartFill !== 'none') {
   throw new Error(`Favorited track did not show the checked outline heart: ${JSON.stringify(firstTrack)}`);
 }
 if (firstTrack.favoriteColor !== 'rgb(230, 230, 230)' || firstTrack.shuffleColor !== 'rgb(230, 230, 230)') {
