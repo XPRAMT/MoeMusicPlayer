@@ -69,6 +69,19 @@
   const fallbackImage = await noCoverImage.evaluate((image) => ({ source: image.getAttribute('src'), width: image.naturalWidth }));
   assert(fallbackImage.source?.startsWith('data:image/jpeg;base64,') && fallbackImage.width > 0,
     `albums without artwork should display the EXE-embedded default cover: ${JSON.stringify(fallbackImage)}`);
+  await noCoverCard.click();
+  await page.waitForFunction(() => !document.querySelector('.album-detail-status') && document.querySelector('.album-detail-summary')?.textContent?.includes('Album 2'));
+  const detailFallbackImage = page.locator('.album-detail-art img');
+  await detailFallbackImage.waitFor();
+  await page.waitForFunction(() => {
+    const image = document.querySelector('.album-detail-art img');
+    return image instanceof HTMLImageElement && image.naturalWidth > 0;
+  });
+  const detailFallback = await detailFallbackImage.evaluate((image) => ({ source: image.getAttribute('src'), width: image.naturalWidth }));
+  assert(detailFallback.source === fallbackImage.source && detailFallback.width > 0,
+    `the no-cover album detail must display the exact same embedded default cover as its home card: ${JSON.stringify({ card: fallbackImage, detail: detailFallback })}`);
+  await page.getByTestId('album-detail-back').click();
+  await noCoverCard.waitFor();
   const noFrame = await page.locator('.album-card-art').first().evaluate((element) => getComputedStyle(element).borderWidth);
   assert(noFrame === '0px', `album cover thumbnails should not have a border: ${noFrame}`);
   await page.locator('.album-grid-viewport').evaluate((element) => {

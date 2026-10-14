@@ -26,6 +26,13 @@ const ALBUM_CARD_MEMORY_CACHE_MAX_BYTES = 128 * 1024 * 1024;
 const albumCardMemoryCache = new Map();
 let albumCardMemoryCacheBytes = 0;
 
+/** Keep album cards and detail headers on the same confirmed no-cover fallback. */
+/** @param {string[]} sources @param {{ fallbackUrl: string, resolved: boolean }} options */
+export function resolveAlbumArtworkDisplaySources(sources, { fallbackUrl, resolved }) {
+  if (sources.length > 0) return sources;
+  return resolved ? [fallbackUrl] : [];
+}
+
 function trimAlbumCardMemoryCache() {
   while (albumCardMemoryCache.size > ALBUM_CARD_MEMORY_CACHE_MAX_ENTRIES
     || albumCardMemoryCacheBytes > ALBUM_CARD_MEMORY_CACHE_MAX_BYTES) {

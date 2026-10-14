@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBase64, putAlbumThumbnailBase64ForTrack } from './ipc';
-  import { acquireAlbumCardArtwork, copyToArrayBuffer, createAlbumThumbnailInWorker, rememberAlbumCardArtwork, withAlbumArtworkSlot } from './album-artwork.js';
+  import { acquireAlbumCardArtwork, copyToArrayBuffer, createAlbumThumbnailInWorker, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
   import type { AlbumEntry } from './album-identities.js';
   import { detectArtworkMimeType } from './active-track-artwork';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
@@ -20,9 +20,10 @@
   let releaseArtworkCacheLease: (() => void) | null = null;
 
   const memoryCacheKey = $derived(`${refreshKey}:${album.key}:${artworkRevision}`);
-  const displayedImageUrls = $derived(
-    imageUrls.length > 0 ? imageUrls : cacheResolved || album.unmarked ? [defaultCoverUrl] : [],
-  );
+  const displayedImageUrls = $derived(resolveAlbumArtworkDisplaySources(imageUrls, {
+    fallbackUrl: defaultCoverUrl,
+    resolved: cacheResolved || album.unmarked,
+  }));
 
   async function persistentSelectionKey(): Promise<string> {
     const bytes = new TextEncoder().encode(`${album.key}\0${album.trackCount}`);

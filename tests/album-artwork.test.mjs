@@ -6,11 +6,20 @@ import {
   perceptualHash32,
   rankAlbumArtwork,
   rememberAlbumCardArtwork,
+  resolveAlbumArtworkDisplaySources,
 } from '../src/lib/album-artwork.js';
 
 function gray(fill) {
   return new Uint8Array(32 * 32).fill(fill);
 }
+
+test('album home and detail use one shared confirmed no-cover fallback rule', () => {
+  const fallback = 'data:image/jpeg;base64,default';
+  assert.deepEqual(resolveAlbumArtworkDisplaySources([], { fallbackUrl: fallback, resolved: false }), []);
+  assert.deepEqual(resolveAlbumArtworkDisplaySources([], { fallbackUrl: fallback, resolved: true }), [fallback]);
+  const selected = ['blob:cover-1', 'blob:cover-2'];
+  assert.equal(resolveAlbumArtworkDisplaySources(selected, { fallbackUrl: fallback, resolved: true }), selected);
+});
 
 test('virtualized album cards reuse the same in-memory thumbnail after unmount and remount', () => {
   const key = `virtualized-${crypto.randomUUID()}`;

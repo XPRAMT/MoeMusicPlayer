@@ -2,11 +2,12 @@
   import { onDestroy } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
   import type { AlbumEntry } from './album-identities.js';
-  import { ALBUM_ART_SIMILARITY_DISTANCE, copyToArrayBuffer, createAlbumThumbnail, perceptualHashArtwork, rankAlbumArtwork, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
+  import { ALBUM_ART_SIMILARITY_DISTANCE, copyToArrayBuffer, createAlbumThumbnail, perceptualHashArtwork, rankAlbumArtwork, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import { detectArtworkMimeType } from './active-track-artwork';
   import { splitArtists } from './artist-names.js';
   import { buildArtistIdentityMappings, preferredArtistName } from './artist-identities.js';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
+  import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
   import TrackList from './TrackList.svelte';
   import { formatAlbumTrackNumber } from './format';
 
@@ -31,6 +32,10 @@
   let artists = $state<string[]>([]);
   let scanning = $state(true);
   let scanError = $state<string | null>(null);
+  const displayedCoverUrls = $derived(resolveAlbumArtworkDisplaySources(coverUrls, {
+    fallbackUrl: defaultCoverUrl,
+    resolved: !scanning && !scanError,
+  }));
   let revision = 0;
   const PAGE_SIZE = 100;
 
@@ -214,7 +219,7 @@
 <div class="album-detail-shell">
   <div class="album-detail-heading">
     <div class="album-detail-art">
-      <AlbumArtworkMosaic sources={coverUrls} label={`${album.displayName} 封面拼貼`} />
+      <AlbumArtworkMosaic sources={displayedCoverUrls} label={`${album.displayName} 封面拼貼`} />
     </div>
     <div class="album-detail-summary">
       <strong>{album.unmarked ? '未標記專輯' : album.displayName}</strong>
