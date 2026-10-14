@@ -121,7 +121,6 @@ export class PagedListController {
   /**
    * @param {FetchPage<Item, Scope>} fetchPage
    * @param {{
-   *   pageSize?: number,
    *   maxCachedPages?: number,
    *   maxConcurrentRequests?: number,
    *   listName?: string,
@@ -130,10 +129,7 @@ export class PagedListController {
    */
   constructor(fetchPage, options = {}) {
     this.fetchPage = fetchPage;
-    this.pageSize = Math.max(1, Math.min(
-      TRACK_PAGE_SIZE_MAX,
-      Math.floor(options.pageSize ?? TRACK_PAGE_SIZE),
-    ));
+    this.pageSize = TRACK_PAGE_SIZE;
     this.maxCachedPages = Math.max(1, Math.floor(options.maxCachedPages ?? TRACK_LIST_MAX_CACHED_PAGES));
     this.maxConcurrentRequests = Math.max(
       1,

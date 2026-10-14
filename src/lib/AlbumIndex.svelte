@@ -47,9 +47,9 @@
   const overscanRows = 2;
   const albumColumns = [
     { id: 'title', label: '專輯' },
-    { id: 'duration', label: '播放時長' },
-    { id: 'played', label: '累積時長' },
     { id: 'trackCount', label: '歌曲數量' },
+    { id: 'played', label: '累積播放' },
+    { id: 'duration', label: '播放時長' },
   ];
 
   const columns = $derived(Math.max(1, Math.floor((viewportWidth + gap) / (cardWidth + gap))));
@@ -250,9 +250,10 @@
 
 <style>
   .album-index-shell { display:flex; min-width:0; min-height:0; flex:1 1 auto; flex-direction:column; }
-  .album-index-sort-header { flex:0 0 auto; padding:0 clamp(18px,2vw,34px); }
+  .album-index-sort-header { position:relative; flex:0 0 auto; padding:0 clamp(18px,2vw,34px); }
   .album-index-sort-row { box-sizing:border-box; width:100%; min-width:0; --track-list-min-width:0px; --paged-grid-template:repeat(4,minmax(0,1fr)); }
   :global(.album-index-sort-row.track-list-header) { box-sizing:border-box; height:var(--paged-header-height,37px); min-height:var(--paged-header-height,37px); }
+  :global(.album-index-sort-row .column-sort-button) { justify-content:center; text-align:center; }
   .album-grid-viewport { min-width:0; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; padding:16px clamp(18px,2vw,34px) 28px; scrollbar-color:rgba(var(--text-rgb),0.2) transparent; scrollbar-width:thin; }
   .album-grid { display:grid; align-items:start; }
   .album-card-placeholder { width:var(--album-card-width); aspect-ratio:1; }

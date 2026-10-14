@@ -2974,25 +2974,6 @@ async fn library_get_page(
 }
 
 #[tauri::command]
-async fn library_sort_text_indices(
-    app: AppHandle,
-    values: Vec<String>,
-) -> Result<Vec<usize>, String> {
-    run_database_work(app, move |state| {
-        let database = state.database.as_ref().ok_or_else(|| {
-            state
-                .database_error
-                .clone()
-                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-        })?;
-        database
-            .sort_text_indices(&values)
-            .map_err(|error| error.to_string())
-    })
-    .await
-}
-
-#[tauri::command]
 async fn library_get_quick_index_for_tracks(
     app: AppHandle,
     query: Option<String>,
@@ -10496,7 +10477,6 @@ pub fn run() {
             library_get_artist_index_snapshot_page,
             library_resolve_artist_index_entry,
             library_resolve_artist_index_entry_by_name,
-            library_sort_text_indices,
             library_get_quick_index_for_tracks,
             library_get_quick_index_for_artists,
             library_get_quick_index_for_album_tracks,

@@ -114,28 +114,28 @@ test('queue refresh keeps old visible rows until all replacement pages are ready
         items: page.items.map((item) => ({ ...item, title: `Fresh ${item.position}` })),
       }),
     }));
-  }, { pageSize: 40 });
+  });
 
   data.reset('queue');
-  await data.ensureRange(8_000, 8_080);
+  await data.ensureRange(980, 1_020);
   await new Promise((resolve) => setTimeout(resolve, 0));
   refreshing = true;
   data.refresh();
 
   assert.equal(data.snapshot().refreshing, true);
-  assert.equal(data.itemAt(8_000).title, 'Entry 8000');
-  assert.deepEqual(pendingRefreshPages.map(({ offset }) => offset).sort((a, b) => a - b), [8_000, 8_040]);
+  assert.equal(data.itemAt(980).title, 'Entry 980');
+  assert.deepEqual(pendingRefreshPages.map(({ offset }) => offset).sort((a, b) => a - b), [0, 1_000]);
 
   pendingRefreshPages[0].resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(data.itemAt(8_000).title, 'Entry 8000');
-  assert.equal(data.itemAt(8_040).title, 'Entry 8040');
+  assert.equal(data.itemAt(980).title, 'Entry 980');
+  assert.equal(data.itemAt(1_000).title, 'Entry 1000');
   assert.equal(data.snapshot().refreshing, true);
 
   pendingRefreshPages[1].resolve();
   while (data.snapshot().refreshing) await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(data.itemAt(8_000).title, 'Fresh 8000');
-  assert.equal(data.itemAt(8_040).title, 'Fresh 8040');
+  assert.equal(data.itemAt(980).title, 'Fresh 980');
+  assert.equal(data.itemAt(1_000).title, 'Fresh 1000');
 });
 
 test('100k playlist paging shares the bounded page and viewport budgets', async () => {

@@ -13,7 +13,7 @@ Track title, artist, and album ordering had diverged across SQLite, the artist a
 - Use ICU4X `Collator` in `player-db` for track, playlist, artist-index, and album-index text ordering. Preserve ICU's locale defaults for case and accent sensitivity; always set numeric ordering.
 - On Windows, call `GetUserDefaultLocaleName`. Translate a Windows sorting suffix such as `_pronun` into the corresponding ICU collation type when present.
 - On Android, read `Locale.getDefault()` through the Android JVM. When its country is `TW`, explicitly select ICU Zhuyin collation.
-- Use the same registered SQLite collation for title, artist, and album. Use a typed IPC command backed by that collator for frontend-generated artist and album index rows and artist names displayed in album details.
+- Use the same registered SQLite collation for title, artist, and album. Track, playlist, artist-index, album-index, detail-index, and quick-index ordering is computed in SQLite; the renderer receives only paged rows and the small grouping snapshot. Artist/album aggregate identity and display-name selection are performed in SQLite as described by `0011-sqlite-owned-list-query-pipeline.md`.
 - Persist the locale, collation type, ICU collator crate version, and compiled collation-data version in SQLite. Rebuild the title index when this signature changes. Checked startup validates with the database's stored collation before writable migration.
 - Keep the existing natural filename sort for the Windows File Explorer sibling queue; this request covers metadata text ordering, not path traversal order.
 
@@ -25,4 +25,4 @@ Track title, artist, and album ordering had diverged across SQLite, the artist a
 
 ## Consequences
 
-ICU4X compiled data adds a small dependency/data footprint but provides a single cross-platform comparator. Locale or ICU data changes cause an indexed title rebuild. Artist and album index results now require one backend sort-index request after their rows are assembled. Existing natural filename ordering for the external-file queue is unchanged.
+ICU4X compiled data adds a small dependency/data footprint but provides a single cross-platform comparator. Locale or ICU data changes cause an indexed title rebuild. Artist and album index identity, aggregation, sorting, grouping, and paging are performed in SQLite snapshots; renderer IPC does not accept a full array of labels for sorting. Existing natural filename ordering for the external-file queue is unchanged.

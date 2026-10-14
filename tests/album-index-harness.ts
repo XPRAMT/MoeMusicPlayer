@@ -39,12 +39,6 @@ Object.assign(window, {
       }
       if (command === 'settings_get_album_index_sort') return { field: 'title', direction: 'asc' };
       if (command === 'settings_set_album_index_sort') return (args as { preference: unknown }).preference;
-      if (command === 'library_sort_text_indices') {
-        const values = (args as { values?: string[] } | undefined)?.values ?? [];
-        return values.map((_, index) => index).sort((left, right) =>
-          new Intl.Collator('zh-TW', { numeric: true }).compare(values[left] ?? '', values[right] ?? ''),
-        );
-      }
       if (command === 'album_artwork_selection_ensure') {
         const payload = args as { key: string; albumNames: string[]; trackCount: number; representative: boolean; forceRebuild: boolean };
         const cached = selections.get(payload.key) ?? null;

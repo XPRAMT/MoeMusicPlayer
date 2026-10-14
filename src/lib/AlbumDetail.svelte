@@ -48,8 +48,6 @@
     resolved: !scanning && !scanError,
   }));
   let revision = 0;
-  const PAGE_SIZE = 100;
-
   async function fetchPage(request: TrackPageRequest): Promise<TrackPage> {
     return invokeCommand('library_get_album_page', {
       albumNames: album.aliases,

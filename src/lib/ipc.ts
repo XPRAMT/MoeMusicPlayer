@@ -699,10 +699,6 @@ interface IpcContract {
     args: { name: string };
     result: ArtistIndexEntry | null;
   };
-  library_sort_text_indices: {
-    args: { values: string[] };
-    result: number[];
-  };
   library_create_album_index_snapshot: {
     args: { sortField: string; direction: 'asc' | 'desc'; groupingEnabled: boolean };
     result: IndexSnapshotInfo;

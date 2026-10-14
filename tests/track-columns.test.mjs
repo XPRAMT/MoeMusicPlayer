@@ -48,7 +48,7 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
   const tableHeader = appCss.match(/\.track-table-head\s*\{([^}]+)\}/)?.[1] ?? '';
   const listHeader = trackList.match(/:global\(\.track-list-header\)\s*\{([^}]+)\}/)?.[1] ?? '';
   const sortButton = columnCells.match(/\.column-sort-button\s*\{([^}]+)\}/)?.[1] ?? '';
-  const virtualHeaderLine = virtualList.match(/\.paged-virtual-header::after\s*\{([^}]+)\}/)?.[1] ?? '';
+  const virtualHeaderLine = appCss.match(/\.paged-virtual-header::after\s*\{([^}]+)\}/)?.[1] ?? '';
   const headerTextOffset = appCss.match(/\.track-table-head > \.column-index,[\s\S]*?\{([^}]+)\}/)?.[1] ?? '';
 
   assert.doesNotMatch(tableHeader, /background\s*:/);

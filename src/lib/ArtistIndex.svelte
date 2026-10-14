@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { getErrorText, invokeCommand, type ArtistIndexEntry, type ArtistListSort } from './ipc';
   import { DEFAULT_TRACK_ROW_HEIGHT_PX } from './track-columns.js';
-  import { formatDuration } from './format';
+  import { formatDurationHours } from './format';
   import { formatListOrder } from './list-order.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
@@ -211,8 +211,8 @@
               { id: 'title', text: row.item.displayName },
               { id: 'trackCount', text: row.item.trackCount.toLocaleString() },
               { id: 'albumCount', text: row.item.albumCount.toLocaleString() },
-              { id: 'duration', text: formatDuration(row.item.playedMs) },
-              { id: 'trackDuration', text: formatDuration(row.item.durationMs) },
+              { id: 'duration', text: formatDurationHours(row.item.playedMs) },
+              { id: 'trackDuration', text: formatDurationHours(row.item.durationMs) },
             ]}
           />
         {:else}

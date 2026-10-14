@@ -10,6 +10,10 @@ const artistIndexSource = readFileSync(path.join(root, 'src/lib/ArtistIndex.svel
 test('artist count and duration columns use six fullwidth character widths', () => {
   assert.match(artistIndexSource, /const ARTIST_GRID = '36px minmax\(150px,1fr\) 6em 6em 6em 6em';/);
   assert.match(artistIndexSource, /rowClassName="track-row virtual-track-row configurable-track-grid artist-index-row"/);
+  assert.match(artistIndexSource, /import \{ formatDurationHours \} from '\.\/format';/);
+  assert.match(artistIndexSource, /formatDurationHours\(row\.item\.playedMs\)/);
+  assert.match(artistIndexSource, /formatDurationHours\(row\.item\.durationMs\)/);
+  assert.doesNotMatch(artistIndexSource, /formatDuration\(row\.item\.(?:playedMs|durationMs)\)/);
 });
 
 test('fixed em-based columns resolve from the same font size in headers and rows', () => {

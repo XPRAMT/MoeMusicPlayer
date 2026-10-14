@@ -140,15 +140,15 @@ test('failed page can be retried without losing loaded data', async () => {
 
 test('page count changes during scrolling are reported instead of mixing snapshots', async () => {
   const data = new PagedTrackList(async ({ offset, limit }) =>
-    makePage(offset, limit, offset === 0 ? 80 : 81), { pageSize: 40 });
+    makePage(offset, limit, offset === 0 ? 1001 : 1000));
   data.reset('', 'changing-count');
   await data.ensureRange(0, 12);
-  await data.ensureRange(40, 50);
+  await data.ensureRange(1000, 1020);
 
-  assert.equal(data.snapshot().totalCount, 80);
+  assert.equal(data.snapshot().totalCount, 1001);
   assert.match(data.snapshot().errors[0]?.message ?? '', /有變更/);
   assert.equal(data.trackAt(0)?.id, 'track-0');
-  assert.equal(data.trackAt(40), null);
+  assert.equal(data.trackAt(1000), null);
 });
 
 test('page size is fixed for the lifetime of a list even when the requested viewport range changes', async () => {
@@ -173,27 +173,27 @@ test('page size is fixed for the lifetime of a list even when the requested view
 test('a visible page load refreshes the same virtual range without scrolling', async () => {
   let resolveNextPage;
   const data = new PagedTrackList(({ offset, limit }) => {
-    if (offset === 40) return new Promise((resolve) => { resolveNextPage = resolve; });
-    return Promise.resolve(makePage(offset, limit, 100));
-  }, { pageSize: 40 });
+    if (offset === 1000) return new Promise((resolve) => { resolveNextPage = resolve; });
+    return Promise.resolve(makePage(offset, limit, 2000));
+  });
   data.reset('', 'same-range-refresh');
   await data.ensureRange(0, 20);
 
-  const visibleRange = { start: 40, end: 50 };
+  const visibleRange = { start: 1000, end: 1020 };
   const beforeSnapshot = data.snapshot();
   const before = buildVirtualRows(data, visibleRange, beforeSnapshot.revision);
   assert.ok(before.rows.every((row) => row.track === null));
-  assert.equal(beforeSnapshot.totalCount, 100);
+  assert.equal(beforeSnapshot.totalCount, 2000);
 
   const loadingVisiblePage = data.ensureRange(visibleRange.start, visibleRange.end);
-  resolveNextPage(makePage(40, 40, 100));
+  resolveNextPage(makePage(1000, 1000, 2000));
   await loadingVisiblePage;
 
   const afterSnapshot = data.snapshot();
   const after = buildVirtualRows(data, visibleRange, afterSnapshot.revision);
-  assert.deepEqual(visibleRange, { start: 40, end: 50 });
+  assert.deepEqual(visibleRange, { start: 1000, end: 1020 });
   assert.ok(after.revision > before.revision);
-  assert.ok(after.rows.every((row, index) => row.track?.id === `track-${40 + index}`));
+  assert.ok(after.rows.every((row, index) => row.track?.id === `track-${1000 + index}`));
 });
 
 test('synthetic 100k scrolling keeps fetched cache and rendered rows bounded', async (t) => {
