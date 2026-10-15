@@ -6,7 +6,7 @@
   import TrackColumnCells from './TrackColumnCells.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import { PagedListController } from './track-list-data.js';
-  import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, shouldGroupAlbumIndex } from './album-index-layout.js';
+  import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from './album-index-layout.js';
   import { getQuickIndexColumnCount, getQuickIndexDisplayLabel } from './quick-index.js';
 
   type AlbumIndexSortDirection = 'asc' | 'desc';
@@ -14,11 +14,12 @@
   interface Props {
     refreshKey: number;
     active: boolean;
+    rowHeightPx?: number;
     groupingEnabled?: boolean;
     onCountChange: (count: number | null) => void;
     onSelect: (album: AlbumIndexEntry, coverSources: string[]) => void;
   }
-  let { refreshKey, active, groupingEnabled = true, onCountChange, onSelect }: Props = $props();
+  let { refreshKey, active, rowHeightPx = 50, groupingEnabled = true, onCountChange, onSelect }: Props = $props();
   let sortField = $state<AlbumIndexSortField>('title');
   let sortDirection = $state<AlbumIndexSortDirection>('asc');
   let loading = $state(false);
@@ -26,6 +27,7 @@
   let viewport = $state<HTMLElement | undefined>(undefined);
   let viewportWidth = $state(0);
   let viewportHeight = $state(0);
+  let devicePixelRatio = $state(1);
   let scrollTop = $state(0);
   let scrollPositionRestored = $state(false);
   let restoreFrame: number | null = null;
@@ -55,8 +57,9 @@
     { listName: '專輯', onChange: () => { pageSnapshot = listData.snapshot(); } },
   );
   const gap = 18;
-  const rowGap = 12;
   const cardWidth = 168;
+  const verticalGap = $derived(physicalPixelsToCssPixels(40, devicePixelRatio));
+  const groupHeadingHeight = $derived(Math.max(30, rowHeightPx * 0.7));
   const overscanRows = 2;
   const albumColumns = [
     { id: 'title', label: '專輯' },
@@ -66,7 +69,7 @@
   ];
 
   const columns = $derived(Math.max(1, Math.floor((viewportWidth + gap) / (cardWidth + gap))));
-  const rowHeight = $derived(cardWidth + 52 + rowGap);
+  const rowHeight = $derived(cardWidth + 52 + verticalGap);
   const totalCount = $derived(pageSnapshot.totalCount ?? quickIndexTotal);
   const shouldGroup = $derived(shouldGroupAlbumIndex({ sortField, groupingEnabled }));
   const groups = $derived(shouldGroup ? quickIndex?.groups ?? [] : []);
@@ -74,7 +77,8 @@
     totalCount,
     columns,
     cardRowHeight: rowHeight,
-    groupCardGap: rowGap,
+    groupHeadingHeight,
+    groupCardGap: verticalGap,
     groups,
   }));
   const visibleRows = $derived.by(() => {
@@ -249,6 +253,7 @@
 
   function measure(): void {
     if (!viewport) return;
+    devicePixelRatio = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
     const style = getComputedStyle(viewport);
     viewportWidth = Math.max(0, viewport.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight));
     viewportHeight = Math.max(0, viewport.clientHeight - Number.parseFloat(style.paddingTop) - Number.parseFloat(style.paddingBottom));
@@ -396,7 +401,7 @@
   .album-grid-viewport { min-width:0; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; padding:16px clamp(18px,2vw,34px) 28px; scrollbar-color:rgba(var(--text-rgb),0.2) transparent; scrollbar-width:thin; }
   .album-grid-canvas { position:relative; min-width:0; }
   .album-index-group-row, .album-index-card-row { position:absolute; top:0; right:0; left:0; box-sizing:border-box; }
-  .album-index-group-row { display:flex; align-items:center; border-bottom:1px solid rgba(var(--text-rgb),0.055); background:var(--list-group-row-background); }
+  .album-index-group-row { display:flex; align-items:center; border-top:1px solid rgba(var(--text-rgb),0.055); border-bottom:1px solid rgba(var(--text-rgb),0.055); background:var(--list-group-row-background); }
   .album-index-group-row:hover { background:var(--list-group-row-hover-background); }
   .album-index-group-button { display:flex; width:100%; height:100%; min-width:0; align-items:center; justify-content:center; box-sizing:border-box; padding:0; border:0; border-radius:0; color:var(--text); background:transparent; cursor:pointer; font:inherit; }
   .album-index-group-button:focus-visible { outline:2px solid var(--line); outline-offset:-2px; }

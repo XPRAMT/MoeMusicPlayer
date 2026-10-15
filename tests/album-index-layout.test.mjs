@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, shouldGroupAlbumIndex } from '../src/lib/album-index-layout.js';
+import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from '../src/lib/album-index-layout.js';
 
 const albumIndexSource = readFileSync(new URL('../src/lib/AlbumIndex.svelte', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
@@ -11,6 +11,12 @@ test('only title ordering uses album first-character grouping when the setting i
   assert.equal(shouldGroupAlbumIndex({ sortField: 'duration', groupingEnabled: true }), false);
   assert.equal(shouldGroupAlbumIndex({ sortField: 'played', groupingEnabled: true }), false);
   assert.equal(shouldGroupAlbumIndex({ sortField: 'trackCount', groupingEnabled: true }), false);
+});
+
+test('physical album spacing converts to CSS pixels at the active display scale', () => {
+  assert.equal(physicalPixelsToCssPixels(40, 1), 40);
+  assert.equal(physicalPixelsToCssPixels(40, 1.25), 32);
+  assert.equal(physicalPixelsToCssPixels(40, 2.5), 16);
 });
 
 test('album title groups become full-width virtual rows and restart the card grid', () => {
@@ -93,8 +99,12 @@ test('album card rows rematerialize cached page items when revision changes with
 });
 
 test('album group and card rows share compact vertical spacing and global group colors', () => {
-  assert.match(albumIndexSource, /const rowGap = 12/);
-  assert.match(albumIndexSource, /groupCardGap: rowGap/);
+  assert.match(albumIndexSource, /physicalPixelsToCssPixels\(40, devicePixelRatio\)/);
+  assert.match(albumIndexSource, /groupHeadingHeight = \$derived\(Math\.max\(30, rowHeightPx \* 0\.7\)\)/);
+  assert.match(albumIndexSource, /border-top:1px solid rgba\(var\(--text-rgb\),0\.055\)/);
+  assert.match(albumIndexSource, /groupCardGap: verticalGap/);
+  assert.match(albumIndexSource, /cardWidth \+ 52 \+ verticalGap/);
+  assert.match(albumIndexSource, /devicePixelRatio = window\.devicePixelRatio > 0 \? window\.devicePixelRatio : 1/);
   assert.match(albumIndexSource, /background:var\(--list-group-row-background\)/);
   assert.match(albumIndexSource, /\.album-index-group-row:hover \{ background:var\(--list-group-row-hover-background\); \}/);
   assert.match(albumIndexSource, /column-gap:\$\{gap\}px/);

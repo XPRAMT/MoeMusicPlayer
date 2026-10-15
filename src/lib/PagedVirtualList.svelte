@@ -40,14 +40,12 @@
   import type { Snippet } from 'svelte';
   import {
     getNextActiveIndex,
-    getVirtualRange,
     type VirtualRange,
   } from './track-list-data.js';
-  import { buildPagedVirtualRows, dataIndexToVisualIndex, getQuickIndexColumnCount, getQuickIndexDisplayLabel, getRestoredListScrollTop, reportPagedRange, shouldAdjustGroupAnchor, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
+  import { buildPagedVirtualRows, dataIndexToVisualIndex, getGroupedVirtualRange, getQuickIndexColumnCount, getQuickIndexDisplayLabel, getRestoredListScrollTop, getVirtualRowTop, getVirtualRowsHeight, getVisualIndexAtOffset, reportPagedRange, shouldAdjustGroupAnchor, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
-    queueDropIndexFromPointer,
   } from './queue-reorder.js';
 
   interface Props<Item> {
@@ -178,21 +176,26 @@
   const virtualDataCount = $derived(totalCount ?? 40);
   const renderGroupRows = $derived(groupingReady ? groupRows : []);
   const virtualTotalCount = $derived(virtualDataCount + renderGroupRows.length);
+  const groupRowHeight = $derived(Math.max(30, rowHeight * 0.7));
+  const virtualContentHeight = $derived(
+    getVirtualRowsHeight(virtualDataCount, renderGroupRows, rowHeight, groupRowHeight),
+  );
   const rowViewportHeight = $derived(
     fillAvailable
       ? Math.max(rowHeight, viewportHeight)
       : Math.max(
         rowHeight,
-        Math.min(Math.max(rowHeight, maxViewportHeight - headerHeight), virtualTotalCount * rowHeight),
+        Math.min(Math.max(rowHeight, maxViewportHeight - headerHeight), virtualContentHeight),
       ),
   );
-  const range = $derived(getVirtualRange(
+  const range = $derived(getGroupedVirtualRange(
     scrollTop,
     viewportHeight,
-    virtualTotalCount,
+    virtualDataCount,
+    renderGroupRows,
     rowHeight,
+    groupRowHeight,
     overscan,
-    0,
   ));
   const virtualRows = $derived(buildPagedVirtualRows({
     ready: groupingReady,
@@ -253,6 +256,8 @@
         pending,
         virtualTotalCount,
         rowHeight,
+        groupRowHeight,
+        groups: renderGroupRows,
         viewportHeight,
       })
       : null;
@@ -264,13 +269,14 @@
         viewport.scrollTop = restoredScrollTop;
         hadVisibleViewport = true;
       }
-      const restoredRange = getVirtualRange(
+      const restoredRange = getGroupedVirtualRange(
         restoredScrollTop,
         viewportHeight,
-        virtualTotalCount,
+        virtualDataCount,
+        renderGroupRows,
         rowHeight,
+        groupRowHeight,
         overscan,
-        0,
       );
       onRange(visualRangeToDataRange(restoredRange.start, restoredRange.end, renderGroupRows, virtualDataCount));
       pendingListRestore = null;
@@ -301,11 +307,20 @@
       hasPreviousSnapshot: hasPreviousGroupSnapshot,
       scrollTop: viewport?.scrollTop ?? 0,
     }) && viewport && viewport.clientHeight > 0) {
-      const oldVisualIndex = Math.floor(viewport.scrollTop / rowHeight);
+      const oldVisualIndex = getVisualIndexAtOffset(
+        viewport.scrollTop,
+        virtualDataCount,
+        previous,
+        rowHeight,
+        groupRowHeight,
+      );
       const anchorDataIndex = visualIndexToAnchorDataIndex(oldVisualIndex, previous, virtualDataCount);
       if (anchorDataIndex !== null && anchorDataIndex >= 0 && anchorDataIndex < virtualDataCount) {
-        const withinRowOffset = viewport.scrollTop - oldVisualIndex * rowHeight;
-        const nextScrollTop = dataIndexToVisualIndex(anchorDataIndex, nextGroupRows) * rowHeight + withinRowOffset;
+        const oldTop = getVirtualRowTop(oldVisualIndex, previous, rowHeight, groupRowHeight);
+        const withinRowOffset = Math.max(0, viewport.scrollTop - oldTop);
+        const nextVisualIndex = dataIndexToVisualIndex(anchorDataIndex, nextGroupRows);
+        const nextScrollTop = getVirtualRowTop(nextVisualIndex, nextGroupRows, rowHeight, groupRowHeight)
+          + Math.min(withinRowOffset, rowHeight - 1);
         viewport.scrollTop = nextScrollTop;
         scrollTop = nextScrollTop;
         lastVisibleScrollTop = nextScrollTop;
@@ -395,7 +410,7 @@
     const maxIndex = Math.max(0, virtualDataCount - 1);
     activeIndex = Math.max(0, Math.min(maxIndex, index));
     if (!viewport) return;
-    const rowTop = dataIndexToVisualIndex(activeIndex, renderGroupRows) * rowHeight;
+    const rowTop = getVirtualRowTop(dataIndexToVisualIndex(activeIndex, renderGroupRows), renderGroupRows, rowHeight, groupRowHeight);
     const rowBottom = rowTop + rowHeight;
     let nextScrollTop = viewport.scrollTop;
     if (rowTop < nextScrollTop) nextScrollTop = rowTop;
@@ -412,7 +427,7 @@
     const target = Math.max(0, Math.min(maxIndex, index));
     activeIndex = target;
     if (!viewport) return;
-    const rowTop = dataIndexToVisualIndex(target, renderGroupRows) * rowHeight;
+    const rowTop = getVirtualRowTop(dataIndexToVisualIndex(target, renderGroupRows), renderGroupRows, rowHeight, groupRowHeight);
     let nextScrollTop = viewport.scrollTop;
     if (align === 'center') {
       nextScrollTop = rowTop - Math.max(0, (viewport.clientHeight - rowHeight) / 2);
@@ -472,13 +487,13 @@
 
   function dropIndexAtPointer(clientY: number): number {
     if (!viewport) return 0;
-    const visualIndex = queueDropIndexFromPointer({
-      scrollTop: viewport.scrollTop,
-      pointerClientY: clientY,
-      viewportTop: viewport.getBoundingClientRect().top,
+    const visualIndex = getVisualIndexAtOffset(
+      viewport.scrollTop + clientY - viewport.getBoundingClientRect().top,
+      virtualDataCount,
+      renderGroupRows,
       rowHeight,
-      totalCount: virtualTotalCount,
-    });
+      groupRowHeight,
+    );
     const dataIndex = visualIndexToDataIndex(visualIndex, renderGroupRows);
     if (dataIndex !== null) return dataIndex;
     const groupIndex = renderGroupRows.findIndex((group, index) => group.beforeIndex + index === visualIndex);
@@ -693,14 +708,14 @@
       class="paged-virtual-spacer"
       role="presentation"
       aria-hidden="true"
-      style={`height:${virtualTotalCount * rowHeight}px`}
+      style={`height:${virtualContentHeight}px`}
     ></div>
     {#if dragFromIndex !== null && dragToIndex !== null && dragToIndex !== dragFromIndex}
       <div
         class="paged-virtual-drop-line"
         role="presentation"
         aria-hidden="true"
-        style={`transform:translateY(${dataIndexToVisualIndex(dragToIndex, renderGroupRows) * rowHeight + (dragToIndex > dragFromIndex ? rowHeight - 2 : 0)}px)`}
+        style={`transform:translateY(${getVirtualRowTop(dataIndexToVisualIndex(dragToIndex, renderGroupRows), renderGroupRows, rowHeight, groupRowHeight) + (dragToIndex > dragFromIndex ? rowHeight - 2 : 0)}px)`}
       ></div>
     {/if}
     {#each virtualRows.rows as virtualRow (virtualRow.key)}
@@ -711,7 +726,7 @@
           class="paged-virtual-row paged-virtual-group-row"
           role="row"
           aria-rowindex={virtualRow.visualIndex + 2}
-          style={`height:${rowHeight}px;transform:translateY(${virtualRow.visualIndex * rowHeight}px)`}
+          style={`height:${groupRowHeight}px;transform:translateY(${getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px)`}
         >
           <div class="paged-virtual-group-cell" role="gridcell" aria-colspan={columnCount}>
             <button type="button" class="paged-virtual-group-button" aria-label={`開啟「${virtualRow.label}」字首索引`} onclick={openQuickIndex}>{virtualRow.label}</button>
@@ -730,7 +745,7 @@
         aria-selected={selected}
         tabindex={rowActivates && virtualRow.item !== null ? -1 : undefined}
         aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
-        style={`height:${rowHeight}px;transform:translateY(${virtualRow.visualIndex * rowHeight}px)`}
+        style={`height:${rowHeight}px;transform:translateY(${getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px)`}
         class:activates={rowActivates && virtualRow.item !== null}
         class:reorderable={longPressReorder && virtualRow.item !== null}
         onpointerdown={longPressReorder ? (event) => handleRowPointerDown(event, virtualRow.index, virtualRow.item) : undefined}
@@ -891,6 +906,7 @@
   .paged-virtual-group-row {
     display: flex;
     align-items: center;
+    border-top: 1px solid rgba(var(--text-rgb), 0.055);
     border-bottom: 1px solid rgba(var(--text-rgb), 0.055);
     background: var(--list-group-row-background);
   }

@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import {
   buildPagedVirtualRows,
   getRestoredListScrollTop,
+  getGroupedVirtualRange,
+  getVirtualRowTop,
+  getVirtualRowsHeight,
+  getVisualIndexAtOffset,
   reportPagedRange,
   shouldAdjustGroupAnchor,
   dataIndexToVisualIndex,
@@ -208,4 +212,27 @@ test('visual rows map to data rows without changing queue item indexes', () => {
   assert.deepEqual(visualRangeToDataRange(0, 1, groups, 5), { start: 0, end: 0 });
   assert.equal(visualIndexToAnchorDataIndex(3, groups, 5), 2);
   assert.equal(visualIndexToAnchorDataIndex(5, groups, 5), 3);
+});
+
+test('compact group rows use configured height throughout virtual scroll geometry', () => {
+  const groups = [{ label: 'A', beforeIndex: 0 }, { label: 'B', beforeIndex: 2 }];
+  const rowHeight = 50;
+  const groupHeight = Math.max(30, rowHeight * 0.7);
+
+  assert.equal(groupHeight, 35);
+  assert.equal(getVirtualRowsHeight(4, groups, rowHeight, groupHeight), 270);
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map(index => getVirtualRowTop(index, groups, rowHeight, groupHeight)), [0, 35, 85, 135, 170, 220]);
+  assert.deepEqual([0, 34, 35, 84, 85, 134, 135, 169, 170, 269].map(offset => getVisualIndexAtOffset(offset, 4, groups, rowHeight, groupHeight)), [0, 0, 1, 1, 2, 2, 3, 3, 4, 5]);
+  assert.deepEqual(getGroupedVirtualRange(85, 100, 4, groups, rowHeight, groupHeight, 0), { start: 2, end: 5 });
+  assert.equal(getRestoredListScrollTop({
+    position: 999,
+    groupingReady: true,
+    totalCount: 4,
+    pending: false,
+    virtualTotalCount: 6,
+    rowHeight,
+    groupRowHeight: groupHeight,
+    groups,
+    viewportHeight: 100,
+  }), 170);
 });

@@ -1671,7 +1671,7 @@ input:focus-visible {
   right: 0;
   bottom: 0;
   left: 0;
-  height: 1px;
+  height: var(--track-header-line-height, 2px);
   pointer-events: none;
   background: var(--line);
 }

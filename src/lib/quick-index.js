@@ -64,11 +64,71 @@ export function reportPagedRange({ metricsReady, start, end, groups, totalCount,
   return true;
 }
 
-/** @param {{ position: number, groupingReady: boolean, totalCount: number | null, pending: boolean, virtualTotalCount: number, rowHeight: number, viewportHeight: number }} options */
-export function getRestoredListScrollTop({ position, groupingReady, totalCount, pending, virtualTotalCount, rowHeight, viewportHeight }) {
+/** @param {{ position: number, groupingReady: boolean, totalCount: number | null, pending: boolean, virtualTotalCount: number, rowHeight: number, groupRowHeight?: number, groups?: Array<{ label: string, beforeIndex: number }>, viewportHeight: number }} options */
+export function getRestoredListScrollTop({ position, groupingReady, totalCount, pending, virtualTotalCount, rowHeight, groupRowHeight = rowHeight, groups = [], viewportHeight }) {
   if (!groupingReady || totalCount === null || pending) return null;
-  const maxScrollTop = Math.max(0, virtualTotalCount * rowHeight - viewportHeight);
+  const totalHeight = groups.length > 0
+    ? getVirtualRowsHeight(totalCount, groups, rowHeight, groupRowHeight)
+    : virtualTotalCount * rowHeight;
+  const maxScrollTop = Math.max(0, totalHeight - viewportHeight);
   return Math.min(Math.max(0, position), maxScrollTop);
+}
+
+/** Height of a virtual list whose inserted group rows are shorter than data rows. */
+/** @param {number} totalCount @param {Array<{ label: string, beforeIndex: number }>} groups @param {number} rowHeight @param {number} [groupRowHeight] */
+export function getVirtualRowsHeight(totalCount, groups = [], rowHeight, groupRowHeight = rowHeight) {
+  const safeRowHeight = Number.isFinite(rowHeight) && rowHeight > 0 ? rowHeight : 1;
+  const safeGroupHeight = Number.isFinite(groupRowHeight) && groupRowHeight > 0 ? groupRowHeight : safeRowHeight;
+  const count = Number.isSafeInteger(totalCount) ? Math.max(0, totalCount) : 0;
+  return count * safeRowHeight + groups.length * safeGroupHeight;
+}
+
+/** Pixel offset for a virtual row index with compact inserted group rows. */
+/** @param {number} visualIndex @param {Array<{ label: string, beforeIndex: number }>} groups @param {number} rowHeight @param {number} [groupRowHeight] */
+export function getVirtualRowTop(visualIndex, groups = [], rowHeight, groupRowHeight = rowHeight) {
+  const safeRowHeight = Number.isFinite(rowHeight) && rowHeight > 0 ? rowHeight : 1;
+  const safeGroupHeight = Number.isFinite(groupRowHeight) && groupRowHeight > 0 ? groupRowHeight : safeRowHeight;
+  let compactRowsBefore = 0;
+  for (let index = 0; index < groups.length; index += 1) {
+    if (groups[index].beforeIndex + index < visualIndex) compactRowsBefore += 1;
+    else break;
+  }
+  return visualIndex * safeRowHeight - compactRowsBefore * (safeRowHeight - safeGroupHeight);
+}
+
+/** Return the virtual row containing a scroll offset. */
+/** @param {number} offset @param {number} totalCount @param {Array<{ label: string, beforeIndex: number }>} groups @param {number} rowHeight @param {number} [groupRowHeight] */
+export function getVisualIndexAtOffset(offset, totalCount, groups = [], rowHeight, groupRowHeight = rowHeight) {
+  const visualCount = Math.max(0, totalCount) + groups.length;
+  if (visualCount === 0) return 0;
+  const safeOffset = Number.isFinite(offset) ? Math.max(0, offset) : 0;
+  let low = 0;
+  let high = visualCount;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const top = getVirtualRowTop(middle, groups, rowHeight, groupRowHeight);
+    const isGroup = visualIndexToDataIndex(middle, groups) === null;
+    const height = isGroup ? groupRowHeight : rowHeight;
+    if (top + height <= safeOffset) low = middle + 1;
+    else high = middle;
+  }
+  return Math.min(visualCount - 1, low);
+}
+
+/** Visible virtual row range for a list with compact inserted group rows. */
+/** @param {number} scrollTop @param {number} viewportHeight @param {number} totalCount @param {Array<{ label: string, beforeIndex: number }>} groups @param {number} rowHeight @param {number} groupRowHeight @param {number} [overscan] */
+export function getGroupedVirtualRange(scrollTop, viewportHeight, totalCount, groups = [], rowHeight, groupRowHeight, overscan = 8) {
+  const visualCount = Math.max(0, totalCount) + groups.length;
+  if (visualCount === 0) return { start: 0, end: 0 };
+  const safeTop = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0;
+  const safeViewport = Number.isFinite(viewportHeight) ? Math.max(0, viewportHeight) : 0;
+  const safeOverscan = Number.isFinite(overscan) ? Math.max(0, Math.floor(overscan)) : 0;
+  const start = getVisualIndexAtOffset(safeTop, totalCount, groups, rowHeight, groupRowHeight);
+  const end = getVisualIndexAtOffset(safeTop + safeViewport, totalCount, groups, rowHeight, groupRowHeight);
+  return {
+    start: Math.max(0, start - safeOverscan),
+    end: Math.min(visualCount, end + safeOverscan + 1),
+  };
 }
 
 /** @param {{ groupsChanged: boolean, hasPreviousSnapshot: boolean, scrollTop: number }} options */

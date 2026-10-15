@@ -3,6 +3,14 @@ export function shouldGroupAlbumIndex({ sortField, groupingEnabled }) {
   return groupingEnabled && sortField === 'title';
 }
 
+/** Convert a screen-physical-pixel distance to CSS pixels. */
+/** @param {number} physicalPixels @param {number} devicePixelRatio */
+export function physicalPixelsToCssPixels(physicalPixels, devicePixelRatio) {
+  const pixels = Number.isFinite(physicalPixels) ? Math.max(0, physicalPixels) : 0;
+  const ratio = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+  return pixels / ratio;
+}
+
 /**
  * Build the virtual row geometry for the responsive album-card grid.
  * Group headings are full-width rows; cards remain in fixed-size grid rows.
