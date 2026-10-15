@@ -207,7 +207,6 @@
     </div>
     <div class="album-detail-summary">
       <div class="album-detail-artists">
-        <span class="album-detail-label">包含的演出者</span>
         <span class="album-detail-value">{artists.length ? artists.join('．') : '未知'}</span>
       </div>
       <div class="album-detail-stats">

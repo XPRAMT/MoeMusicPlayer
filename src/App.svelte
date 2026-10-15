@@ -3744,6 +3744,7 @@
               <AlbumIndex
                 refreshKey={libraryListRevision}
                 active={activeView === 'albums'}
+                {groupingEnabled}
                 onCountChange={(count) => (albumIndexCount = count)}
                 onSelect={(album, coverSources) => openAlbumEntry(album, true, coverSources)}
               />

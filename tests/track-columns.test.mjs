@@ -257,7 +257,8 @@ test('queue and album detail reuse shared sortable track-list headers', async ()
 
 test('album detail artwork header shows artists and both duration statistics without duplicating title/count', async () => {
   const album = await readFile(new URL('../src/lib/AlbumDetail.svelte', import.meta.url), 'utf8');
-  assert.match(album, /包含的演出者/);
+  assert.doesNotMatch(album, /包含的演出者/);
+  assert.match(album, /artists\.length \? artists\.join\('．'\) : '未知'/);
   assert.match(album, /累積播放/);
   assert.match(album, /播放時長/);
   assert.match(album, /formatDurationHours\(album\.playedMs\)/);
@@ -303,13 +304,14 @@ test('field order settings use the shared 300ms long-press drag delay', async ()
 });
 
 test('grouping mode setting persists and reaches all sortable list views', async () => {
-  const [app, trackList, playlist, queue, artist, album] = await Promise.all([
+  const [app, trackList, playlist, queue, artist, album, albumIndex] = await Promise.all([
     readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/TrackList.svelte', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/PlaylistEntryList.svelte', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/PlaybackQueueList.svelte', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/ArtistIndex.svelte', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/AlbumDetail.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/AlbumIndex.svelte', import.meta.url), 'utf8'),
   ]);
   assert.match(app, /啟用分組模式/);
   assert.match(app, /啟用後可能增加載入時間/);
@@ -321,6 +323,8 @@ test('grouping mode setting persists and reaches all sortable list views', async
   assert.match(trackList, /groupingEnabled\s*&&\s*sortable/);
   assert.match(playlist, /groupingEnabled\s*&&\s*\['title', 'artist', 'album'\]/);
   assert.match(queue, /groupingEnabled\s*&&\s*currentSort/);
+  assert.match(app, /<AlbumIndex[\s\S]*?\{groupingEnabled\}/);
+  assert.match(albumIndex, /groupingEnabled: shouldGroupAlbumIndex\(\{ sortField, groupingEnabled \}\)/);
 });
 
 test('column drag pointer maps to final indices after removing the dragged row', () => {
