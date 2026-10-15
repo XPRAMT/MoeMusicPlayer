@@ -1989,14 +1989,9 @@ impl Database {
             ),
             _ => return Err(DatabaseError::CorruptData("invalid index sort field".to_owned())),
         };
-        if matches!(kind, "album" | "artist") {
-            let unmarked_key = if kind == "album" {
-                "album:unmarked"
-            } else {
-                "artist:unmarked"
-            };
+        if kind == "artist" {
             order_by = format!(
-                "CASE WHEN identity_key='{unmarked_key}' THEN 1 ELSE 0 END ASC, {order_by}"
+                "CASE WHEN identity_key='artist:unmarked' THEN 1 ELSE 0 END ASC, {order_by}"
             );
         }
         let materialize_sql = format!(
@@ -6985,25 +6980,15 @@ mod tests {
         assert_eq!(unknown.aliases, vec![String::new(), "  ".to_owned()]);
         assert_eq!(unknown.track_count, 2);
         assert_eq!(
-            page.items.last().map(|entry| entry.key.as_str()),
-            Some("album:unmarked")
+            page.items
+                .iter()
+                .map(|entry| entry.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["album:unmarked", "album:未知"],
+            "equal displayed titles use the stable identity tie-breaker, not a fixed-last rule"
         );
-        assert_eq!(
-            snapshot
-                .quick_index
-                .groups
-                .last()
-                .map(|group| group.label.as_str()),
-            Some("未知")
-        );
-        assert_eq!(
-            snapshot
-                .quick_index
-                .groups
-                .last()
-                .map(|group| group.before_index),
-            Some(1)
-        );
+        assert_eq!(snapshot.quick_index.groups[0].label, "未知");
+        assert_eq!(snapshot.quick_index.groups[0].before_index, 0);
 
         let tracks = db
             .list_album_tracks_page(&unknown.aliases, 0, 10)
@@ -7018,6 +7003,104 @@ mod tests {
             vec!["Blank Album", "No Album"]
         );
         assert!(page.items.iter().any(|entry| entry.key == "album:未知"));
+    }
+
+    #[test]
+    fn unmarked_album_participates_in_selected_album_index_sort() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "album-sort-unknown",
+        );
+        let mut unknown_a = record(&root, "unknown-a", "unknown-a", "Unknown A", 1, 1);
+        unknown_a.metadata.as_mut().unwrap().album = None;
+        unknown_a.metadata.as_mut().unwrap().duration_ms = Some(20_000);
+        let mut unknown_b = record(&root, "unknown-b", "unknown-b", "Unknown B", 1, 2);
+        unknown_b.metadata.as_mut().unwrap().album = Some("   ".to_owned());
+        unknown_b.metadata.as_mut().unwrap().duration_ms = Some(20_000);
+        let mut album_a = record(&root, "album-a", "album-a", "Album A", 1, 3);
+        album_a.metadata.as_mut().unwrap().album = Some("Alpha".to_owned());
+        album_a.metadata.as_mut().unwrap().duration_ms = Some(100_000);
+        let mut album_b_a = record(&root, "album-b-a", "album-b-a", "Album B 1", 1, 4);
+        album_b_a.metadata.as_mut().unwrap().album = Some("Beta".to_owned());
+        album_b_a.metadata.as_mut().unwrap().duration_ms = Some(30_000);
+        let mut album_b_b = record(&root, "album-b-b", "album-b-b", "Album B 2", 1, 5);
+        album_b_b.metadata.as_mut().unwrap().album = Some("Beta".to_owned());
+        album_b_b.metadata.as_mut().unwrap().duration_ms = Some(30_000);
+        let mut album_b_c = record(&root, "album-b-c", "album-b-c", "Album B 3", 1, 6);
+        album_b_c.metadata.as_mut().unwrap().album = Some("Beta".to_owned());
+        album_b_c.metadata.as_mut().unwrap().duration_ms = Some(30_000);
+        let records = [
+            unknown_a, unknown_b, album_a, album_b_a, album_b_b, album_b_c,
+        ];
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            records.len() as i64,
+        );
+
+        let track_ids = records
+            .iter()
+            .map(|item| {
+                db.resolve_track_id_for_locator(&item.locator)
+                    .expect("resolve track")
+                    .expect("track exists")
+            })
+            .collect::<Vec<_>>();
+        {
+            let connection = db.lock().expect("database connection");
+            connection
+                .execute(
+                    "INSERT INTO track_playback_statistics(track_id, played_ms) VALUES (?1, 80000), (?2, 80000), (?3, 300000), (?4, 10000), (?5, 10000), (?6, 10000)",
+                    params![
+                        track_ids[0].to_string(), track_ids[1].to_string(),
+                        track_ids[2].to_string(), track_ids[3].to_string(),
+                        track_ids[4].to_string(), track_ids[5].to_string(),
+                    ],
+                )
+                .expect("insert playback statistics");
+        }
+
+        let sorted_keys = |field: &str, direction: &str| {
+            let snapshot = db
+                .create_album_index_snapshot(field, direction, false)
+                .expect("create album snapshot");
+            db.get_index_snapshot_page::<AlbumIndexEntry>(&snapshot.snapshot_id, 0, 10)
+                .expect("read album snapshot")
+                .items
+                .into_iter()
+                .map(|entry| entry.key)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            sorted_keys("trackCount", "asc"),
+            vec!["album:alpha", "album:unmarked", "album:beta"]
+        );
+        assert_eq!(
+            sorted_keys("trackCount", "desc"),
+            vec!["album:beta", "album:unmarked", "album:alpha"]
+        );
+        assert_eq!(
+            sorted_keys("duration", "asc"),
+            vec!["album:unmarked", "album:beta", "album:alpha"]
+        );
+        assert_eq!(
+            sorted_keys("duration", "desc"),
+            vec!["album:alpha", "album:beta", "album:unmarked"]
+        );
+        assert_eq!(
+            sorted_keys("played", "asc"),
+            vec!["album:beta", "album:unmarked", "album:alpha"]
+        );
+        assert_eq!(
+            sorted_keys("played", "desc"),
+            vec!["album:alpha", "album:unmarked", "album:beta"]
+        );
     }
 
     #[test]
@@ -7146,10 +7229,8 @@ mod tests {
             .items
             .iter()
             .any(|item| item.unmarked && item.display_name == "未知"));
-        assert!(
-            all_albums.items.last().is_some_and(|item| item.unmarked),
-            "the unknown album group remains last even in descending metric order"
-        );
+        assert_eq!(all_albums.items[0].track_count, 3);
+        assert!(all_albums.items[0].key != "album:unmarked");
         let navigation = db
             .create_album_navigation_snapshot()
             .expect("create isolated album navigation snapshot");
