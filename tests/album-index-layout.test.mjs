@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from '../src/lib/album-index-layout.js';
+import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, getAlbumCardTextHeight, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from '../src/lib/album-index-layout.js';
 
 const albumIndexSource = readFileSync(new URL('../src/lib/AlbumIndex.svelte', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
@@ -17,6 +17,16 @@ test('physical album spacing converts to CSS pixels at the active display scale'
   assert.equal(physicalPixelsToCssPixels(40, 1), 40);
   assert.equal(physicalPixelsToCssPixels(40, 1.25), 32);
   assert.equal(physicalPixelsToCssPixels(40, 2.5), 16);
+});
+
+test('album card content ends at its measured height so following card gap is exactly 40 physical pixels', () => {
+  const textHeight = getAlbumCardTextHeight(13, 12);
+  assert.equal(textHeight, 43);
+  const cardHeight = 168 + textHeight;
+  const rowHeight = cardHeight + physicalPixelsToCssPixels(40, 2.5);
+  const textContentHeight = 8 + 13 * 1.4 + 12 * 1.4;
+  assert.equal(cardHeight, 168 + textContentHeight);
+  assert.equal((rowHeight - cardHeight) * 2.5, 40);
 });
 
 test('album title groups become full-width virtual rows and restart the card grid', () => {
@@ -103,7 +113,9 @@ test('album group and card rows share compact vertical spacing and global group 
   assert.match(albumIndexSource, /groupHeadingHeight = \$derived\(Math\.max\(30, rowHeightPx \* 0\.7\)\)/);
   assert.match(albumIndexSource, /background:linear-gradient\(to bottom,transparent 0,transparent var\(--divider-width\),var\(--list-group-row-background\) var\(--divider-width\)\)/);
   assert.match(albumIndexSource, /groupCardGap: verticalGap/);
-  assert.match(albumIndexSource, /cardWidth \+ 52 \+ verticalGap/);
+  assert.match(albumIndexSource, /cardHeight = \$derived\(cardWidth \+ cardTextHeight\)/);
+  assert.match(albumIndexSource, /rowHeight = \$derived\(cardHeight \+ verticalGap\)/);
+  assert.match(albumIndexSource, /getAlbumCardTextHeight\([\s\S]*?--font-body[\s\S]*?--font-caption/);
   assert.match(albumIndexSource, /--album-vertical-gap:\$\{verticalGap\}px/);
   assert.match(albumIndexSource, /padding:16px clamp\(18px,2vw,34px\) var\(--album-vertical-gap\)/);
   assert.match(albumIndexSource, /devicePixelRatio = window\.devicePixelRatio > 0 \? window\.devicePixelRatio : 1/);

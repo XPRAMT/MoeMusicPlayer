@@ -11,6 +11,14 @@ export function physicalPixelsToCssPixels(physicalPixels, devicePixelRatio) {
   return pixels / ratio;
 }
 
+/** Card text follows the shared body/caption tokens; include the two CSS flex gaps. */
+/** @param {number} bodyFontSize @param {number} captionFontSize */
+export function getAlbumCardTextHeight(bodyFontSize, captionFontSize) {
+  const body = Number.isFinite(bodyFontSize) && bodyFontSize > 0 ? bodyFontSize : 13;
+  const caption = Number.isFinite(captionFontSize) && captionFontSize > 0 ? captionFontSize : 12;
+  return 8 + body * 1.4 + caption * 1.4;
+}
+
 /**
  * Build the virtual row geometry for the responsive album-card grid.
  * Group headings are full-width rows; cards remain in fixed-size grid rows.

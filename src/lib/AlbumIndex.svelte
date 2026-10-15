@@ -6,7 +6,7 @@
   import TrackColumnCells from './TrackColumnCells.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import { PagedListController } from './track-list-data.js';
-  import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from './album-index-layout.js';
+  import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, getAlbumCardTextHeight, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from './album-index-layout.js';
   import { getQuickIndexColumnCount, getQuickIndexDisplayLabel } from './quick-index.js';
 
   type AlbumIndexSortDirection = 'asc' | 'desc';
@@ -28,6 +28,7 @@
   let viewportWidth = $state(0);
   let viewportHeight = $state(0);
   let devicePixelRatio = $state(1);
+  let cardTextHeight = $state(getAlbumCardTextHeight(13, 12));
   let scrollTop = $state(0);
   let scrollPositionRestored = $state(false);
   let restoreFrame: number | null = null;
@@ -69,7 +70,8 @@
   ];
 
   const columns = $derived(Math.max(1, Math.floor((viewportWidth + gap) / (cardWidth + gap))));
-  const rowHeight = $derived(cardWidth + 52 + verticalGap);
+  const cardHeight = $derived(cardWidth + cardTextHeight);
+  const rowHeight = $derived(cardHeight + verticalGap);
   const totalCount = $derived(pageSnapshot.totalCount ?? quickIndexTotal);
   const shouldGroup = $derived(shouldGroupAlbumIndex({ sortField, groupingEnabled }));
   const groups = $derived(shouldGroup ? quickIndex?.groups ?? [] : []);
@@ -254,6 +256,11 @@
   function measure(): void {
     if (!viewport) return;
     devicePixelRatio = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+    const rootStyle = getComputedStyle(document.documentElement);
+    cardTextHeight = getAlbumCardTextHeight(
+      Number.parseFloat(rootStyle.getPropertyValue('--font-body')),
+      Number.parseFloat(rootStyle.getPropertyValue('--font-caption')),
+    );
     const style = getComputedStyle(viewport);
     viewportWidth = Math.max(0, viewport.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight));
     viewportHeight = Math.max(0, viewport.clientHeight - Number.parseFloat(style.paddingTop) - Number.parseFloat(style.paddingBottom));
@@ -358,7 +365,7 @@
     <div class="album-index-message" role="status">目前啟用的曲庫沒有專輯資料。</div>
   {:else}
     <div class="album-grid-viewport" style={`--album-vertical-gap:${verticalGap}px`} bind:this={viewport} data-scroll-restored={scrollPositionRestored} onscroll={handleScroll}>
-      <div class="album-grid-canvas" style={`height:${rowLayout.totalHeight}px;--album-card-width:${cardWidth}px`}>
+      <div class="album-grid-canvas" style={`height:${rowLayout.totalHeight}px;--album-card-width:${cardWidth}px;--album-card-text-height:${cardTextHeight}px`}>
         {#each visibleRenderRows as row (row.kind === 'group' ? `group:${row.beforeIndex}:${row.label}` : `cards:${row.start}`)}
           {#if row.kind === 'group'}
             <div class="album-index-group-row" style={`height:${row.height}px;transform:translateY(${row.top}px)`}>
