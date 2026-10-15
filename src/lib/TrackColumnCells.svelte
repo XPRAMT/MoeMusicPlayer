@@ -2,7 +2,7 @@
   import MiddleEllipsis from './MiddleEllipsis.svelte';
   import { appTooltip } from './app-tooltip.js';
   import hiResBadgeUrl from '../assets/hi-res-badge.svg';
-  import { RESIZABLE_TRACK_COLUMN_IDS } from './track-columns.js';
+  import { isNumericListColumn, RESIZABLE_TRACK_COLUMN_IDS } from './track-columns.js';
 
   interface Column {
     id: string;
@@ -123,6 +123,7 @@
   {#each columns as column (column.id)}
     <span
       class={`list-column list-column-${column.id}`}
+      class:is-numeric={isNumericListColumn(column.id)}
       class:is-sortable={sortable}
       class:is-resizable={resizable && RESIZABLE_TRACK_COLUMN_IDS.has(column.id as never)}
       role="columnheader"
@@ -160,7 +161,7 @@
 {:else if variant === 'item'}
   <span class="track-index column-index" role="gridcell">{indexLabel}</span>
   {#each cells as cell (cell.id)}
-    <span class={`list-column list-column-${cell.id}`} role="gridcell" use:appTooltip={cell.title || cell.text || undefined}>
+    <span class={`list-column list-column-${cell.id}`} class:is-numeric={isNumericListColumn(cell.id)} role="gridcell" use:appTooltip={cell.title || cell.text || undefined}>
       {#if cell.id === 'audioFormat'}
         <span class="list-audio-format">
           <MiddleEllipsis text={cell.text} />
@@ -178,7 +179,7 @@
 {:else}
   <span class="track-index column-index" role="gridcell" aria-hidden="true"></span>
   {#each columns as column (column.id)}
-    <span class={`list-column list-column-${column.id}`} role="gridcell" aria-hidden="true"></span>
+    <span class={`list-column list-column-${column.id}`} class:is-numeric={isNumericListColumn(column.id)} role="gridcell" aria-hidden="true"></span>
   {/each}
 {/if}
 
@@ -208,6 +209,16 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
+  }
+
+  .list-column.is-numeric .column-sort-button {
+    justify-content: center;
+    text-align: center;
+  }
+
+  .column-index.is-sortable .column-sort-button {
+    justify-content: center;
+    text-align: center;
   }
 
   .column-sort-button:hover .column-sort-label,

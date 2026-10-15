@@ -1760,6 +1760,7 @@ input:focus-visible {
   color: var(--text-soft);
   font-family: 'DM Mono', monospace;
   font-size: var(--font-body);
+  text-align: center;
 }
 
 .track-main {
@@ -1804,6 +1805,10 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.list-column.is-numeric {
+  text-align: center;
+}
+
 .track-table-head .list-column,
 .playlist-entry-head .list-column {
   color: inherit;
@@ -1817,7 +1822,6 @@ input:focus-visible {
 }
 
 .list-column-year {
-  text-align: left;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1827,13 +1831,11 @@ input:focus-visible {
 
 .list-column-duration {
   font-family: 'DM Mono', monospace;
-  text-align: left;
   font-variant-numeric: tabular-nums;
 }
 
 .list-column-playCount {
   font-family: 'DM Mono', monospace;
-  text-align: left;
   font-variant-numeric: tabular-nums;
 }
 

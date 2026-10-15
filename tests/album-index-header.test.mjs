@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { isNumericListColumn } from '../src/lib/track-columns.js';
 
 const albumIndex = readFileSync(new URL('../src/lib/AlbumIndex.svelte', import.meta.url), 'utf8');
 const columnCells = readFileSync(new URL('../src/lib/TrackColumnCells.svelte', import.meta.url), 'utf8');
@@ -15,11 +16,14 @@ test('album cumulative playback column uses the requested label', () => {
   assert.doesNotMatch(albumIndex, /id: 'played', label: '累積時長'/);
 });
 
-test('album index sort columns are ordered and centered', () => {
+test('album index keeps text labels left and centers numeric sort columns', () => {
   const columnBlock = albumIndex.match(/const albumColumns = \[([\s\S]*?)\];/)?.[1] ?? '';
-  const orderedLabels = [...columnBlock.matchAll(/label: '([^']+)'/g)].map((match) => match[1]);
+  const columns = [...columnBlock.matchAll(/\{ id: '([^']+)', label: '([^']+)' \}/g)]
+    .map(([, id, label]) => ({ id, label }));
+  const orderedLabels = columns.map(({ label }) => label);
   assert.deepEqual(orderedLabels, ['專輯', '歌曲數量', '累積播放', '播放時長']);
-  assert.match(albumIndex, /album-index-sort-row \.column-sort-button\) \{ justify-content:center; text-align:center; \}/);
+  assert.doesNotMatch(albumIndex, /album-index-sort-row \.column-sort-button\)/);
+  assert.deepEqual(columns.map(({ id }) => isNumericListColumn(id)), [false, true, true, true]);
 });
 
 test('album index sort header uses the shared visible bottom boundary', () => {

@@ -404,7 +404,6 @@
   .album-index-sort-header { position:relative; flex:0 0 auto; padding:0 clamp(18px,2vw,34px); }
   .album-index-sort-row { box-sizing:border-box; width:100%; min-width:0; --track-list-min-width:0px; --paged-grid-template:repeat(4,minmax(0,1fr)); }
   :global(.album-index-sort-row.track-list-header) { box-sizing:border-box; height:var(--paged-header-height,37px); min-height:var(--paged-header-height,37px); }
-  :global(.album-index-sort-row .column-sort-button) { justify-content:center; text-align:center; }
   .album-grid-viewport { min-width:0; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; padding:16px clamp(18px,2vw,34px) var(--album-vertical-gap); scrollbar-color:rgba(var(--text-rgb),0.2) transparent; scrollbar-width:thin; }
   .album-grid-canvas { position:relative; min-width:0; }
   .album-index-group-row, .album-index-card-row { position:absolute; top:0; right:0; left:0; box-sizing:border-box; }

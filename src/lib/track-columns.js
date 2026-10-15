@@ -22,6 +22,17 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'playCount', label: '播放次數', min: '5em', minPx: 65 },
 ]);
 
+/** Column values rendered as dates, counts, or durations use centered alignment. */
+const NUMERIC_LIST_COLUMN_IDS = new Set([
+  'year', 'createdAt', 'duration', 'playCount',
+  'trackCount', 'albumCount', 'trackDuration', 'played',
+]);
+
+/** @param {string} id */
+export function isNumericListColumn(id) {
+  return NUMERIC_LIST_COLUMN_IDS.has(id);
+}
+
 /** @type {TrackColumnPreference[]} */
 export const DEFAULT_TRACK_COLUMN_PREFERENCES = TRACK_COLUMN_DEFINITIONS.map(({ id }) => ({ id, visible: true }));
 

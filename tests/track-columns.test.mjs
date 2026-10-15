@@ -14,6 +14,7 @@ import {
   formatReleaseDate,
   formatCreatedAt,
   formatTrackColumnValue,
+  isNumericListColumn,
   formatYear,
   isHiResTrack,
   isLosslessCodec,
@@ -36,6 +37,28 @@ import {
 } from '../src/lib/track-columns.js';
 
 const formatDuration = (value) => `${Math.floor(value / 60_000)}:${String(Math.floor(value / 1000) % 60).padStart(2, '0')}`;
+
+test('numeric list columns are centered while text columns keep their left alignment', async () => {
+  assert.deepEqual(
+    ['year', 'createdAt', 'duration', 'playCount', 'trackCount', 'albumCount', 'trackDuration', 'played']
+      .filter(isNumericListColumn),
+    ['year', 'createdAt', 'duration', 'playCount', 'trackCount', 'albumCount', 'trackDuration', 'played'],
+  );
+  assert.deepEqual(['title', 'artist', 'album', 'audioFormat'].filter(isNumericListColumn), []);
+
+  const cells = await readFile(new URL('../src/lib/TrackColumnCells.svelte', import.meta.url), 'utf8');
+  const appCss = await readFile(new URL('../src/app.css', import.meta.url), 'utf8');
+  assert.match(cells, /class:is-numeric=\{isNumericListColumn\(column\.id\)\}/);
+  assert.match(cells, /class:is-numeric=\{isNumericListColumn\(cell\.id\)\}/);
+  assert.match(cells, /\.list-column\.is-numeric \.column-sort-button\s*\{\s*justify-content:\s*center;/);
+  assert.match(cells, /\.column-index\.is-sortable \.column-sort-button\s*\{\s*justify-content:\s*center;/);
+  assert.match(appCss, /\.list-column\.is-numeric\s*\{\s*text-align:\s*center;/);
+  assert.match(appCss, /\.column-index,[\s\S]*?text-align:\s*center;/);
+  for (const selector of ['list-column-year', 'list-column-duration', 'list-column-playCount']) {
+    const rule = appCss.match(new RegExp(`\\.${selector}\\s*\\{([^}]+)\\}`))?.[1] ?? '';
+    assert.doesNotMatch(rule, /text-align:\s*(?:left|right)/);
+  }
+});
 
 test('list headers use only the shared bottom boundary and sort buttons fill their cells', async () => {
   const [appCss, trackList, columnCells, virtualList, albumIndex, playlistTree, app] = await Promise.all([
