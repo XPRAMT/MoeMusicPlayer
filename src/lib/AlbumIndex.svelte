@@ -97,9 +97,23 @@
     };
   });
   const availableQuickIndexLabels = $derived(new Set(groups.map(({ label }) => label)));
-  const cardLoadDiagnostic = $derived.by(() => {
-    if (totalCount <= 0 || pageSnapshot.cachedItemCount > 0 || pageSnapshot.errors.length > 0) return null;
-    return `總數 ${totalCount}；scope ${String(pageSnapshot.scope ?? 'null').slice(0, 8)}；頁面總數 ${pageSnapshot.totalCount ?? 'null'}；已載入 ${pageSnapshot.cachedItemCount}；載入中 ${pageSnapshot.pendingPageCount}；範圍 ${visibleDataRange ? `${visibleDataRange.start}-${visibleDataRange.end}` : 'null'}`;
+  const visiblePageDiagnostic = $derived.by(() => {
+    pageSnapshot.revision;
+    const cardRows = visibleRows.filter((row) => row.kind === 'cards');
+    if (totalCount <= 0 || cardRows.length === 0 || pageSnapshot.errors.length > 0) return null;
+    let visibleItemCount = 0;
+    let firstItem: string | null = null;
+    for (const row of cardRows) {
+      for (let index = row.start; index < row.end; index += 1) {
+        const item = listData.itemAt(index);
+        if (item) {
+          visibleItemCount += 1;
+          firstItem ??= `${index}:${item.displayName}`;
+        }
+      }
+    }
+    if (visibleItemCount === cardRows.reduce((sum, row) => sum + row.end - row.start, 0)) return null;
+    return `總數 ${totalCount}；scope ${String(pageSnapshot.scope ?? 'null').slice(0, 8)}；頁面總數 ${pageSnapshot.totalCount ?? 'null'}；快取 ${pageSnapshot.cachedItemCount}；等待 ${pageSnapshot.pendingPageCount}；可視範圍 ${visibleDataRange ? `${visibleDataRange.start}-${visibleDataRange.end}` : 'null'}；可視資料 ${visibleItemCount}/${cardRows.reduce((sum, row) => sum + row.end - row.start, 0)}；首筆 ${firstItem ?? '無'}`;
   });
 
   async function load(): Promise<void> {
@@ -185,8 +199,9 @@
     void listData.retry(offset);
   }
 
-  function requestFirstCardPage(): void {
-    void listData.ensureRange(0, Math.min(totalCount, listData.pageSize));
+  function requestVisibleCardPages(): void {
+    const range = visibleDataRange;
+    if (range) void listData.ensureRange(range.start, range.end);
   }
 
   $effect(() => {
@@ -342,10 +357,10 @@
       {/if}
     </div>
   {/if}
-  {#if cardLoadDiagnostic}
+  {#if visiblePageDiagnostic}
     <div class="album-index-page-error" role="status" data-album-page-diagnostic>
-      <span>專輯卡片尚未載入：{cardLoadDiagnostic}</span>
-      <button class="text-button" type="button" onclick={requestFirstCardPage}>重新請求</button>
+      <span>專輯可視分頁不完整：{visiblePageDiagnostic}</span>
+      <button class="text-button" type="button" onclick={requestVisibleCardPages}>重送可視範圍</button>
     </div>
   {/if}
   {#if error}
