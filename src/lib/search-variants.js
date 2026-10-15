@@ -2,6 +2,8 @@
  * Build deduplicated Simplified/Traditional variants for text search.
  * Japanese queries are returned unchanged so the Chinese dictionaries cannot rewrite kanji.
  */
+import { buildKeepZhiOverrides } from './opencc-keep-zhi.js';
+
 /** @type {Promise<{toTraditional:(text:string)=>string,toSimplified:(text:string)=>string}> | null} */
 let convertersPromise = null;
 
@@ -14,8 +16,9 @@ function loadConverters() {
       import('opencc-js/dict/TSPhrases'),
       import('opencc-js/dict/TSCharacters'),
     ]).then(([core, stPhrases, stCharacters, tsPhrases, tsCharacters]) => ({
+      // Keep-只 overrides first: opencc-js loads a group in reverse, so earlier dictionaries win.
       toTraditional: core.ConverterFactory(
-        [stPhrases.default, stCharacters.default],
+        [buildKeepZhiOverrides(stPhrases.default), stPhrases.default, stCharacters.default],
         [],
       ),
       toSimplified: core.ConverterFactory(

@@ -37,3 +37,18 @@ test('automatic non-Chinese or Japanese-only queries are searched once', async (
   assert.deepEqual(await getAutomaticSearchVariants('M87 Black Hole', 'hanser'), ['M87 Black Hole hanser']);
   assert.deepEqual(await getAutomaticSearchVariants('東京と猫', ''), ['東京と猫']);
 });
+
+test('search variants never turn Simplified 只 into 隻 (keep-只 rule)', async () => {
+  for (const query of ['只有', '这只有你', '一只猫', '船只']) {
+    const variants = await getSearchVariants(query);
+    assert.ok(variants.every((variant) => !variant.includes('隻')), `${query}: ${variants.join(',')}`);
+  }
+  assert.ok((await getSearchVariants('一只猫')).includes('一只貓'));
+});
+
+test('other search conversions still produce their Traditional variants', async () => {
+  assert.ok((await getSearchVariants('头发')).includes('頭髮'));
+  assert.ok((await getSearchVariants('后面的时间')).includes('後面的時間'));
+  // Traditional 隻 typed by the user still yields its Simplified variant.
+  assert.ok((await getSearchVariants('一隻貓')).includes('一只猫'));
+});
