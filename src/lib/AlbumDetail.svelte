@@ -39,6 +39,11 @@
   let sortSaveQueue: Promise<unknown> = Promise.resolve();
   let albumCoverBaseSize = $state(148);
   let albumHeadingBaseHeight = $state(184);
+  const supportsScrollDrivenAlbumOverlay = typeof CSS !== 'undefined'
+    && CSS.supports('animation-timeline', 'scroll()')
+    && CSS.supports('animation-range', '0px 1px')
+    && CSS.supports('timeline-scope', '--album-detail-scroll')
+    && CSS.supports('scroll-timeline-name', '--album-detail-scroll');
   let albumCoverScrollPeak = $state(0);
   let albumCoverSize = $derived(getAlbumDetailCoverSize(albumCoverBaseSize, albumCoverScrollPeak));
   let albumCollapseRange = $derived(Math.max(0, albumCoverBaseSize - 64));
@@ -221,7 +226,11 @@
   onDestroy(() => { revision += 1; for (const url of ownedCoverUrls) URL.revokeObjectURL(url); });
 </script>
 
-<div class="album-detail-shell" style={`--album-detail-heading-height:${albumHeadingBaseHeight - albumCollapseOffset}px`}>
+<div
+  class="album-detail-shell"
+  class:scroll-driven-collapse={supportsScrollDrivenAlbumOverlay}
+  style={`--album-detail-heading-base-height:${albumHeadingBaseHeight}px;--album-detail-heading-height:${albumHeadingBaseHeight - albumCollapseOffset}px;--album-detail-cover-base-size:${albumCoverBaseSize}px;--album-detail-collapse-range:${albumCollapseRange}px`}
+>
   <div class="album-detail-tracks">
     {#if sortReady}
       <TrackList
@@ -266,6 +275,31 @@
 <style>
   .album-detail-shell { position:relative; min-width:0; min-height:0; flex:1 1 auto; overflow:hidden; }
   .album-detail-heading { position:absolute; z-index:4; top:0; right:0; left:0; display:flex; height:var(--album-detail-heading-height); box-sizing:border-box; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); pointer-events:none; }
+  @supports (animation-timeline: scroll()) and (timeline-scope: --album-detail-scroll) {
+    .album-detail-shell.scroll-driven-collapse { timeline-scope: --album-detail-scroll; }
+
+    .album-detail-shell.scroll-driven-collapse .album-detail-heading {
+      animation: album-detail-heading-collapse auto linear both;
+      animation-timeline: --album-detail-scroll;
+      animation-range: 0px var(--album-detail-collapse-range);
+    }
+
+    .album-detail-shell.scroll-driven-collapse .album-detail-art {
+      animation: album-detail-cover-collapse auto linear both;
+      animation-timeline: --album-detail-scroll;
+      animation-range: 0px var(--album-detail-collapse-range);
+    }
+
+    @keyframes album-detail-heading-collapse {
+      from { height: var(--album-detail-heading-base-height); }
+      to { height: calc(var(--album-detail-heading-base-height) - var(--album-detail-collapse-range)); }
+    }
+
+    @keyframes album-detail-cover-collapse {
+      from { width: var(--album-detail-cover-base-size); height: var(--album-detail-cover-base-size); flex-basis: var(--album-detail-cover-base-size); }
+      to { width: 64px; height: 64px; flex-basis: 64px; }
+    }
+  }
   .album-detail-heading > * { pointer-events:auto; }
   .album-detail-art { width:var(--album-detail-cover-size,148px); height:var(--album-detail-cover-size,148px); flex:0 0 var(--album-detail-cover-size,148px); aspect-ratio:1; overflow:hidden; border-radius:10px; background:#000; }
   .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:10px; }

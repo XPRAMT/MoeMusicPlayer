@@ -47,7 +47,7 @@
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
   } from './queue-reorder.js';
-  import { advanceAlbumDetailWheelScroll, getAlbumDetailRowClipTop, mapAlbumDetailNativeScroll, mapAlbumDetailWheelDelta } from './album-detail-collapse.js';
+  import { advanceAlbumDetailWheelScroll, getAlbumDetailRowClipAnimationRange, getAlbumDetailRowClipTop, mapAlbumDetailNativeScroll, mapAlbumDetailWheelDelta } from './album-detail-collapse.js';
 
   interface Props<Item> {
     totalCount: number | null;
@@ -196,6 +196,11 @@
     getVirtualRowsHeight(virtualDataCount, renderGroupRows, rowHeight, groupRowHeight),
   );
   const hasLeadingOverlay = $derived(leadingOverlayHeight > 0);
+  const supportsScrollDrivenAlbumOverlay = typeof CSS !== 'undefined'
+    && CSS.supports('animation-timeline', 'scroll()')
+    && CSS.supports('animation-range', '0px 1px')
+    && CSS.supports('timeline-scope', '--album-detail-scroll')
+    && CSS.supports('scroll-timeline-name', '--album-detail-scroll');
   const contentLeadingHeight = $derived(hasLeadingOverlay ? leadingOverlayHeight + headerHeight : 0);
   const effectiveViewportHeight = $derived(hasLeadingOverlay
     ? Math.max(rowHeight, viewportHeight - leadingOverlayHeight + leadingCollapseOffset - headerHeight)
@@ -256,7 +261,7 @@
   }
 
   function syncLeadingOverlayRowClips(collapseOffset = leadingCollapseOffset): void {
-    if (!hasLeadingOverlay || !viewport || !frame) return;
+    if (supportsScrollDrivenAlbumOverlay || !hasLeadingOverlay || !viewport || !frame) return;
     const viewportTop = viewport.getBoundingClientRect().top;
     const listBoundary = viewportTop + Math.max(0, leadingOverlayHeight - collapseOffset) + headerHeight;
     const rowClips = [...frame.querySelectorAll<HTMLElement>('.paged-virtual-row[role="row"]')].map((row) => {
@@ -889,7 +894,7 @@
   class:fill-available={fillAvailable}
   class:leading-overlay={hasLeadingOverlay}
   bind:this={frame}
-  style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px;--paged-leading-height:${leadingOverlayHeight}px;--paged-collapse-offset:${leadingCollapseOffset}px`}
+  style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px;--paged-leading-height:${leadingOverlayHeight}px;--paged-collapse-offset:${leadingCollapseOffset}px;--paged-collapse-range:${leadingCollapseRange}px`}
 >
   <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;${hasLeadingOverlay ? `top:${Math.max(0, leadingOverlayHeight - leadingCollapseOffset)}px;right:${headerGutter}px;` : `padding-right:${headerGutter}px;`}`}>
     <div class="paged-virtual-header-shift" style={`transform:translateX(${-headerShift}px)`}>
@@ -907,6 +912,7 @@
     aria-busy={pending || totalCount === null}
     tabindex="0"
     style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
+    class:album-detail-scroll-timeline={hasLeadingOverlay && supportsScrollDrivenAlbumOverlay}
     class:is-reordering={dragFromIndex !== null}
     onscroll={handleViewportScroll}
     onwheel={hasLeadingOverlay ? handleViewportWheel : undefined}
@@ -928,13 +934,16 @@
     {/if}
     {#each virtualRows.rows as virtualRow (virtualRow.key)}
       {@const id = `${listId}-row-${virtualRow.visualIndex}`}
+      {@const rowTop = getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}
+      {@const rowHeightForClip = virtualRow.kind === 'group' ? groupRowHeight : rowHeight}
+      {@const clipRange = getAlbumDetailRowClipAnimationRange(leadingCollapseRange, rowTop, rowHeightForClip)}
       {#if virtualRow.kind === 'group'}
         <div
           {id}
           class="paged-virtual-row paged-virtual-group-row list-group-row-surface"
           role="row"
           aria-rowindex={virtualRow.visualIndex + 2}
-          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px);${hasLeadingOverlay ? `clip-path:inset(${getAlbumDetailRowClipTop(scrollTop, getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight), groupRowHeight)}px 0 0)` : ''}`}
+          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px);--paged-row-clip-start:${clipRange.start}px;--paged-row-clip-end:${clipRange.end}px;${hasLeadingOverlay && !supportsScrollDrivenAlbumOverlay ? `clip-path:inset(${getAlbumDetailRowClipTop(scrollTop, rowTop, groupRowHeight)}px 0 0)` : ''}`}
         >
           <div class="paged-virtual-group-cell" role="gridcell" aria-colspan={columnCount}>
             <button type="button" class="paged-virtual-group-button" aria-label={`開啟「${virtualRow.label}」字首索引`} onclick={openQuickIndex}>{virtualRow.label}</button>
@@ -953,7 +962,7 @@
         aria-selected={selected}
         tabindex={rowActivates && virtualRow.item !== null ? -1 : undefined}
         aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
-        style={`height:${rowHeight}px;transform:translateY(${contentLeadingHeight + getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px);${hasLeadingOverlay ? `clip-path:inset(${getAlbumDetailRowClipTop(scrollTop, getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight), rowHeight)}px 0 0)` : ''}`}
+        style={`height:${rowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px);--paged-row-clip-start:${clipRange.start}px;--paged-row-clip-end:${clipRange.end}px;${hasLeadingOverlay && !supportsScrollDrivenAlbumOverlay ? `clip-path:inset(${getAlbumDetailRowClipTop(scrollTop, rowTop, rowHeight)}px 0 0)` : ''}`}
         class:activates={rowActivates && virtualRow.item !== null}
         class:reorderable={longPressReorder && virtualRow.item !== null}
         onpointerdown={longPressReorder ? (event) => handleRowPointerDown(event, virtualRow.index, virtualRow.item) : undefined}
@@ -1063,6 +1072,34 @@
     max-height: none;
     overflow: auto;
     flex: none;
+  }
+
+  @supports (animation-timeline: scroll()) and (timeline-scope: --album-detail-scroll) {
+    .paged-virtual-viewport.album-detail-scroll-timeline {
+      scroll-timeline: --album-detail-scroll block;
+    }
+
+    .paged-virtual-frame.leading-overlay .paged-virtual-header {
+      animation: album-detail-grid-header-collapse auto linear both;
+      animation-timeline: --album-detail-scroll;
+      animation-range: 0px var(--paged-collapse-range);
+    }
+
+    .paged-virtual-frame.leading-overlay .paged-virtual-row[role="row"] {
+      animation: album-detail-row-clip auto linear both;
+      animation-timeline: --album-detail-scroll;
+      animation-range: var(--paged-row-clip-start) var(--paged-row-clip-end);
+    }
+
+    @keyframes album-detail-grid-header-collapse {
+      from { top: var(--paged-leading-height); }
+      to { top: calc(var(--paged-leading-height) - var(--paged-collapse-range)); }
+    }
+
+    @keyframes album-detail-row-clip {
+      from { clip-path: inset(0 0 0 0); }
+      to { clip-path: inset(100% 0 0 0); }
+    }
   }
 
   .paged-virtual-frame.leading-overlay .paged-virtual-header {

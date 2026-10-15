@@ -12,6 +12,8 @@ The album-detail cover shrinks while the track list scrolls. When the heading an
 
 - Keep one fixed-size native scrollport covering the album-detail viewport. Its scrollable extent remains the full heading reserve, sortable track header, and virtual track content.
 - Draw the album heading and sortable track header as overlays above the virtual rows. As the cover collapses, the overlays expose more of the same scrollport; neither its `clientHeight` nor its `scrollHeight` is changed by the collapse.
+- Drive the cover size, heading size, sortable-header position, and virtual-row clipping from the same named CSS scroll timeline. Row clipping starts at `collapseRange + rowTop` and completes one row height later, so the mask follows compositor scrolling without waiting for a main-thread `scroll` callback.
+- Keep the established JavaScript row-clip calculation as a fallback for WebView runtimes without scroll timelines. The timeline animates by scroll offset, not by elapsed time, and preserves the one-CSS-pixel-per-scroll-pixel mapping.
 - Preserve a logical track-list scroll offset separately from the native scroll offset. While the cover is collapsing, one logical pixel advances the native scroll position by two pixels; after the cover reaches 64 CSS px, native and logical movement match. Upward movement keeps the cover size until the logical list returns to its top.
 - Keep saved list positions, database paging, grouping, sorting, and quick-index offsets in logical track-list coordinates. Convert logical positions when restoring or programmatically navigating.
 - Scope the overlay behavior to album detail. Other virtual lists retain their existing independent scrollports.
@@ -19,6 +21,7 @@ The album-detail cover shrinks while the track list scrolls. When the heading an
 ## Alternatives considered
 
 - Letting the flex header change the list viewport height changes the native thumb ratio and scroll range while the user is scrolling.
+- Recomputing every virtual row's `clip-path` in a main-thread scroll handler can trail native compositor scrolling during rapid scrollbar-thumb drags.
 - Growing the scrollable content to compensate for the larger viewport would create artificial trailing scroll space and a blank tail after the last track.
 - Replacing the native scrollbar with a custom scrollbar would duplicate browser behavior and would not resolve the underlying changing viewport geometry.
 

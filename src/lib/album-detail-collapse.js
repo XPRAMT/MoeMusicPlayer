@@ -28,7 +28,17 @@ export function getAlbumDetailCoverSize(baseSize, scrollPeak) {
   return Math.max(MIN_ALBUM_DETAIL_COVER_SIZE_PX, base - peak);
 }
 
-/** Clip only a row's part that scrolled above the list, leaving the scrollport untouched. */
+/** Return the native scroll-timeline offsets at which a row crosses the collapsed header. */
+/** @param {number} collapseRange @param {number} rowTop @param {number} rowHeight @returns {{start:number,end:number}} */
+export function getAlbumDetailRowClipAnimationRange(collapseRange, rowTop, rowHeight) {
+  const collapse = Number.isFinite(collapseRange) ? Math.max(0, collapseRange) : 0;
+  const top = Number.isFinite(rowTop) ? Math.max(0, rowTop) : 0;
+  const height = Number.isFinite(rowHeight) ? Math.max(0, rowHeight) : 0;
+  const start = collapse + top;
+  return { start, end: start + height };
+}
+
+/** Main-thread fallback clip for runtimes without scroll-driven animations. */
 /** @param {number} scrollTop @param {number} rowTop @param {number} rowHeight @returns {number} */
 export function getAlbumDetailRowClipTop(scrollTop, rowTop, rowHeight) {
   const scroll = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0;

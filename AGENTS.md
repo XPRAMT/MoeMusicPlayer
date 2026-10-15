@@ -12,9 +12,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 ## 目前工作狀態
 
-專輯詳情使用固定範圍的原生捲動視窗；封面桌面尺寸 148 CSS px、窄版 116 CSS px，最小 64 CSS px。向下先逐像素收合封面，再捲曲目；清單回頂後多出的向上捲動才展開封面。`clientHeight`、`scrollHeight`、捲軸比例及捲動範圍不因收合改變。列項只裁切越過清單標題邊界的部分，裁切值在原生 scroll event 及滾輪動畫影格中依實際畫面座標同步；不裁切 viewport。專輯詳情的標題外框寬度扣除原生捲動槽，標題格線與列項同寬；標題上方疊層的空白區不攔截捲動槽事件。固定 Release WebView2 實測：15 CSS px 捲動槽在標題區的點擊將 `scrollTop` 從 0 移至 820.8 px；拖曳使其由 2753.2 移至 3403.6 px。標題外框與 viewport `clientWidth` 同為 1269 px，欄位格線與列項逐欄對齊。快速連續捲動抽樣 1,793 次列項幾何，裁切與標題邊界最大差異 0.00011 CSS px，文字未越界。`npm run check` 0 errors／warnings、`node --test` 274/274 通過。固定 Release build `2026-10-15T17:14:03.545Z@58e586d64fe82cc33ee3570ed7cf2c7ab4c228f6`，SHA-256 `E9F3D2EE6EBAE62B03E38770FFCEAC2CDA947BE72115C71982E8651FF6FFB5EF`；架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
-
-使用者回報專輯詳情頁快速拖曳原生捲軸時裁切位置仍會錯誤，快速滾輪則正常。已用固定 Release 的 WebView2 CDP 快速拖曳實測，但列項裁切、標題下緣及封面收合狀態均一致，尚未重現其視覺錯誤；目前未修改程式，待取得錯誤瞬間的 5–10 秒錄影或截圖後再精確定位。
+專輯詳情使用固定範圍的原生捲動視窗；封面桌面尺寸 148 CSS px、窄版 116 CSS px，最小 64 CSS px。向下先逐像素收合封面，再捲曲目；清單回頂後多出的向上捲動才展開封面。`clientHeight`、`scrollHeight`、捲軸比例及捲動範圍不因收合改變。封面、標題、欄標題位置與虛擬列裁切共用原生 CSS scroll timeline，依像素範圍同步，避免主執行緒 scroll handler 晚於合成器捲動；不支援該功能的 WebView 使用既有 JS 裁切 fallback。此 timeline 只綁定捲動位置，不使用時間補間。標題外框寬度扣除原生捲動槽，格線與列項同寬，疊層不攔截捲軸。架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
 
 ## 重要資料與架構邊界
 

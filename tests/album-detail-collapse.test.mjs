@@ -3,13 +3,21 @@ import assert from 'node:assert/strict';
 import {
   getAlbumDetailNativeScrollTop,
   getAlbumDetailCoverSize,
+  getAlbumDetailRowClipAnimationRange,
   getAlbumDetailRowClipTop,
   advanceAlbumDetailWheelScroll,
   mapAlbumDetailNativeScroll,
   mapAlbumDetailWheelDelta,
 } from '../src/lib/album-detail-collapse.js';
 
-test('album detail clips only row content that crossed above the list boundary', () => {
+test('album rows clip on the native scroll timeline only after the cover collapses', () => {
+  assert.deepEqual(getAlbumDetailRowClipAnimationRange(84, 0, 50), { start: 84, end: 134 });
+  assert.deepEqual(getAlbumDetailRowClipAnimationRange(52, 75.5, 35), { start: 127.5, end: 162.5 });
+  assert.deepEqual(getAlbumDetailRowClipAnimationRange(0, 120, 50), { start: 120, end: 170 });
+  assert.deepEqual(getAlbumDetailRowClipAnimationRange(Number.NaN, -2, -1), { start: 0, end: 0 });
+});
+
+test('legacy scroll runtimes retain the main-thread clip fallback', () => {
   assert.equal(getAlbumDetailRowClipTop(0, 0, 50), 0);
   assert.equal(getAlbumDetailRowClipTop(10, 0, 50), 10);
   assert.equal(getAlbumDetailRowClipTop(60, 50, 50), 10);
