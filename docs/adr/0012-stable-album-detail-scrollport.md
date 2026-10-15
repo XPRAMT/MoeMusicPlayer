@@ -28,9 +28,9 @@ The album detail uses a stable scroll viewport and translates between native and
 
 ## Validation
 
-Validated 2026-10-16T00:02:36+08:00 using the fixed `release/moemusicplayer.exe` built from commit `724881bfc6f2eeba0cbf18f2d1c4ea85bd9b4c2e`, with the existing Windows library and WebView2 CDP:
+Validated 2026-10-16T01:19:40+08:00 using the fixed `release/moemusicplayer.exe` built from commit `58e586d64fe82cc33ee3570ed7cf2c7ab4c228f6`, with the existing Windows library and WebView2 CDP:
 
-- Album detail for `hanser Cover` (103 tracks) kept `clientHeight=652px`, `scrollHeight=5371px`, and scrollbar ratio `12.1393%` while the cover changed through 148, 138, 108, and 64 CSS px.
-- The cover remained collapsed while scrolling upward and returned to 148px only after the logical list reached its top.
-- At the bottom, the final row ended at the viewport bottom (757.8px vs. 758px); no artificial blank tail was added.
-- `node --test`: 270 passed, 0 failed. `npm run check`: 0 errors and 0 warnings.
+- Album detail for `hanser Cover` (103 tracks) kept `clientHeight=652px` and `scrollHeight=5371px` while the cover collapsed. The title overlay and sortable grid width matched the viewport's 1269px client width after subtracting the 15px native scrollbar gutter.
+- CDP hit testing at the scrollbar gutter over the sortable header returned the scroll viewport. Clicking there moved `scrollTop` from 0 to 820.8px; dragging the thumb moved it from 2753.2px to 3403.6px.
+- Rapid wheel scrolling sampled 1,793 rendered-row geometry states; the maximum difference between the row clip and the header boundary was 0.00011 CSS px.
+- `node --test`: 274 passed, 0 failed. `npm run check`: 0 errors and 0 warnings.

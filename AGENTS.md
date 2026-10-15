@@ -12,7 +12,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 ## 目前工作狀態
 
-專輯詳情使用固定範圍的原生捲動視窗；封面桌面尺寸 148 CSS px、窄版 116 CSS px，最小 64 CSS px。向下先逐像素收合封面，再捲曲目；清單回頂後多出的向上捲動才展開封面。`clientHeight`、`scrollHeight`、捲軸比例及捲動範圍不因收合改變。列項只裁切越過清單標題邊界的部分，裁切值在原生 scroll event 及滾輪動畫影格中依實際畫面座標同步；不裁切 viewport。頂部標題疊層的空白區不攔截指標事件，捲動條保留點擊／拖曳命中區，實際封面與摘要子元件仍可接收事件。固定 Release WebView2 實測：右側 15 CSS px 捲動條在標題區上方的點擊命中 viewport 並改變清單位置；快速連續捲動時抽樣 1,885 次列項幾何，裁切與標題邊界最大差異 0.00011 CSS px，文字未越過標題。`npm run check` 0 errors／warnings、`node --test` 274/274 通過。固定 Release build `2026-10-15T17:05:21.667Z@a828df994536631786c7b70c9e0baf56d78616c4`，SHA-256 `801C5E02114EEF7BCDAF275364CD251E23EC6224DB402685BD8C94903654677B`；架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
+專輯詳情使用固定範圍的原生捲動視窗；封面桌面尺寸 148 CSS px、窄版 116 CSS px，最小 64 CSS px。向下先逐像素收合封面，再捲曲目；清單回頂後多出的向上捲動才展開封面。`clientHeight`、`scrollHeight`、捲軸比例及捲動範圍不因收合改變。列項只裁切越過清單標題邊界的部分，裁切值在原生 scroll event 及滾輪動畫影格中依實際畫面座標同步；不裁切 viewport。專輯詳情的標題外框寬度扣除原生捲動槽，標題格線與列項同寬；標題上方疊層的空白區不攔截捲動槽事件。固定 Release WebView2 實測：15 CSS px 捲動槽在標題區的點擊將 `scrollTop` 從 0 移至 820.8 px；拖曳使其由 2753.2 移至 3403.6 px。標題外框與 viewport `clientWidth` 同為 1269 px，欄位格線與列項逐欄對齊。快速連續捲動抽樣 1,793 次列項幾何，裁切與標題邊界最大差異 0.00011 CSS px，文字未越界。`npm run check` 0 errors／warnings、`node --test` 274/274 通過。固定 Release build `2026-10-15T17:14:03.545Z@58e586d64fe82cc33ee3570ed7cf2c7ab4c228f6`，SHA-256 `E9F3D2EE6EBAE62B03E38770FFCEAC2CDA947BE72115C71982E8651FF6FFB5EF`；架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
 
 ## 重要資料與架構邊界
 
