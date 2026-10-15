@@ -83,7 +83,7 @@ export function findVisibleAlbumIndexRows(rows, scrollTop, viewportHeight, overs
  * Every snapshot revision creates fresh card-row item arrays, even when row
  * geometry and index ranges are unchanged, so newly fetched pages replace their
  * loading placeholders without requiring a scroll event.
- * @template Item
+ * @template {{ key: string }} Item
  * @param {Array<ReturnType<typeof buildAlbumIndexRows>['rows'][number]>} rows
  * @param {(index: number) => Item | null} itemAt
  * @param {number} revision
