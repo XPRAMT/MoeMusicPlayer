@@ -544,7 +544,10 @@
     }
     headerShift = viewport.scrollLeft;
     headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
-    viewportHeight = getVisibleRowsHeight();
+    // viewportHeight is the measured viewport's clientHeight. The visible row
+    // area for a collapsing album heading is derived from it separately; do
+    // not overwrite the measured value during scrolling, or the heading and
+    // header deductions are applied again on every scroll event.
     metricsReady = true;
     onViewportScrollTopChange?.(scrollTop, collapseOffset);
   }
