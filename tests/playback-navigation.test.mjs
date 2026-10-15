@@ -93,7 +93,9 @@ test('the footer artwork opens and closes a full-window Now Playing overlay', ()
   const artworkButton = appSource.slice(buttonStart, buttonEnd + '</button>'.length);
   assert.match(artworkButton, /`開啟正在播放/);
   assert.doesNotMatch(artworkButton, /isNowPlayingOpen\s*\?\s*'返回播放前頁面'/);
-  assert.match(artworkButton, /onclick=\{\(\)\s*=>\s*void\s*openNowPlaying\(\)\}/);
+  assert.doesNotMatch(artworkButton, /onclick=/, 'artwork should use the shared dock click handler');
+  assert.match(appSource, /<footer class="player-dock"[^>]*onclick=\{toggleNowPlayingFromDock\}/);
+  assert.match(appSource, /target\.closest\('button:not\(\.dock-art\), a, input, textarea, select, \.progress-slider, \.dock-controls, \.volume-popover'\)/);
   assert.match(appSource, /class="dock-now-playing-dismiss"/);
   assert.match(appSource, /class:dock-track-dismiss=\{isNowPlayingOpen\}/);
   assert.match(artworkButton, /disabled=\{!playback\?\.currentTrack\}/);
@@ -161,10 +163,11 @@ test('sidebar list routes remount for fresh data and restore each virtual list p
   assert.match(pagedVirtualListSource, /hasPreviousGroupSnapshot = false/);
   assert.match(pagedVirtualListSource, /shouldAdjustGroupAnchor\(\{[\s\S]*?hasPreviousSnapshot: hasPreviousGroupSnapshot/);
   assert.match(pagedVirtualListSource, /hasPreviousGroupSnapshot = true/);
-  assert.match(pagedVirtualListSource, /writeListScrollPosition\(currentListId, restoredScrollTop\)/);
+  assert.match(pagedVirtualListSource, /const safeRestoredScrollTop = Math\.min\(restoredScrollTop, maximum\.listScrollTop\)/);
+  assert.match(pagedVirtualListSource, /writeListScrollPosition\(currentListId, safeRestoredScrollTop\)/);
   assert.match(pagedVirtualListSource, /let lastVisibleScrollTop = 0/);
-  assert.match(pagedVirtualListSource, /if \(!hadVisibleViewport\)[\s\S]*?viewport\.scrollTop = restoredScrollTop/);
-  assert.match(pagedVirtualListSource, /if \(viewport\.clientHeight > 0\)[\s\S]*?lastVisibleScrollTop = viewport\.scrollTop/);
+  assert.match(pagedVirtualListSource, /if \(viewport && viewport\.clientHeight > 0\)\s*\{\s*viewport\.scrollTop = nativeScrollTopFor\(safeRestoredScrollTop, restoredCollapseOffset\)/);
+  assert.match(pagedVirtualListSource, /if \(viewport && nextViewportHeight > 0\)[\s\S]*?lastVisibleScrollTop = scrollTop/);
 
   const loadPlaylists = functionSource('async function loadPlaylists(', 'async function selectPlaylist(');
   assert.match(loadPlaylists, /previousPlaylistId !== nextId \|\| previousEntryCount !== nextEntryCount/);
