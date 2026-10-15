@@ -100,20 +100,15 @@
   const visiblePageDiagnostic = $derived.by(() => {
     pageSnapshot.revision;
     const cardRows = visibleRows.filter((row) => row.kind === 'cards');
-    if (totalCount <= 0 || cardRows.length === 0 || pageSnapshot.errors.length > 0) return null;
-    let visibleItemCount = 0;
-    let firstItem: string | null = null;
-    for (const row of cardRows) {
-      for (let index = row.start; index < row.end; index += 1) {
-        const item = listData.itemAt(index);
-        if (item) {
-          visibleItemCount += 1;
-          firstItem ??= `${index}:${item.displayName}`;
-        }
-      }
-    }
-    if (visibleItemCount === cardRows.reduce((sum, row) => sum + row.end - row.start, 0)) return null;
-    return `總數 ${totalCount}；scope ${String(pageSnapshot.scope ?? 'null').slice(0, 8)}；頁面總數 ${pageSnapshot.totalCount ?? 'null'}；快取 ${pageSnapshot.cachedItemCount}；等待 ${pageSnapshot.pendingPageCount}；可視範圍 ${visibleDataRange ? `${visibleDataRange.start}-${visibleDataRange.end}` : 'null'}；可視資料 ${visibleItemCount}/${cardRows.reduce((sum, row) => sum + row.end - row.start, 0)}；首筆 ${firstItem ?? '無'}`;
+    if (totalCount <= 0 || pageSnapshot.errors.length > 0) return null;
+    const rows = visibleRows.map((row) => row.kind === 'group'
+      ? `G(${row.label}@${row.beforeIndex})`
+      : `C(${row.start}-${row.end}@${row.top})`).join(' ');
+    const sample = cardRows.slice(0, 4).map((row) => {
+      const item = listData.itemAt(row.start);
+      return `${row.start}:${item ? `${item.displayName}/${item.trackCount}` : 'null'}`;
+    }).join(' ');
+    return `sort=${sortField}/${sortDirection}; total=${totalCount}/${pageSnapshot.totalCount ?? 'null'}; cache=${pageSnapshot.cachedItemCount}; pending=${pageSnapshot.pendingPageCount}; range=${visibleDataRange ? `${visibleDataRange.start}-${visibleDataRange.end}` : 'null'}; rows=${rows}; sample=${sample}`;
   });
 
   async function load(): Promise<void> {
@@ -359,8 +354,8 @@
   {/if}
   {#if visiblePageDiagnostic}
     <div class="album-index-page-error" role="status" data-album-page-diagnostic>
-      <span>專輯可視分頁不完整：{visiblePageDiagnostic}</span>
-      <button class="text-button" type="button" onclick={requestVisibleCardPages}>重送可視範圍</button>
+      <span>Album diagnostics: {visiblePageDiagnostic}</span>
+      <button class="text-button" type="button" onclick={requestVisibleCardPages}>Fetch visible range</button>
     </div>
   {/if}
   {#if error}
