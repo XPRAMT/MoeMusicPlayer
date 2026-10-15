@@ -6,7 +6,7 @@ export function shouldGroupAlbumIndex({ sortField, groupingEnabled }) {
 /**
  * Build the virtual row geometry for the responsive album-card grid.
  * Group headings are full-width rows; cards remain in fixed-size grid rows.
- * @param {{ totalCount: number, columns: number, cardRowHeight: number, groups?: Array<{ label: string, beforeIndex: number }>, groupHeadingHeight?: number }} options
+ * @param {{ totalCount: number, columns: number, cardRowHeight: number, groups?: Array<{ label: string, beforeIndex: number }>, groupHeadingHeight?: number, groupCardGap?: number }} options
  */
 export function buildAlbumIndexRows({
   totalCount,
@@ -14,11 +14,13 @@ export function buildAlbumIndexRows({
   cardRowHeight,
   groups = [],
   groupHeadingHeight = 37,
+  groupCardGap = 0,
 }) {
   const count = Number.isSafeInteger(totalCount) ? Math.max(0, totalCount) : 0;
   const columnCount = Number.isSafeInteger(columns) ? Math.max(1, columns) : 1;
   const cardHeight = Number.isFinite(cardRowHeight) ? Math.max(1, cardRowHeight) : 1;
   const headingHeight = Number.isFinite(groupHeadingHeight) ? Math.max(1, groupHeadingHeight) : 1;
+  const headingCardGap = Number.isFinite(groupCardGap) ? Math.max(0, groupCardGap) : 0;
   const normalizedGroups = groups
     .filter((group) => Number.isSafeInteger(group.beforeIndex) && group.beforeIndex >= 0 && group.beforeIndex < count)
     .slice()
@@ -47,7 +49,7 @@ export function buildAlbumIndexRows({
       if (group.beforeIndex > cursor) appendCards(cursor, group.beforeIndex);
       const end = normalizedGroups[index + 1]?.beforeIndex ?? count;
       rows.push({ kind: 'group', label: group.label, beforeIndex: group.beforeIndex, top, height: headingHeight });
-      top += headingHeight;
+      top += headingHeight + headingCardGap;
       appendCards(group.beforeIndex, end);
       cursor = end;
     }

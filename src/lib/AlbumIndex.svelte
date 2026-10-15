@@ -55,6 +55,7 @@
     { listName: '專輯', onChange: () => { pageSnapshot = listData.snapshot(); } },
   );
   const gap = 18;
+  const rowGap = 12;
   const cardWidth = 168;
   const overscanRows = 2;
   const albumColumns = [
@@ -65,7 +66,7 @@
   ];
 
   const columns = $derived(Math.max(1, Math.floor((viewportWidth + gap) / (cardWidth + gap))));
-  const rowHeight = $derived(cardWidth + 52 + gap);
+  const rowHeight = $derived(cardWidth + 52 + rowGap);
   const totalCount = $derived(pageSnapshot.totalCount ?? quickIndexTotal);
   const shouldGroup = $derived(shouldGroupAlbumIndex({ sortField, groupingEnabled }));
   const groups = $derived(shouldGroup ? quickIndex?.groups ?? [] : []);
@@ -73,6 +74,7 @@
     totalCount,
     columns,
     cardRowHeight: rowHeight,
+    groupCardGap: rowGap,
     groups,
   }));
   const visibleRows = $derived.by(() => {
@@ -358,7 +360,7 @@
               <button type="button" class="album-index-group-button" aria-label={`開啟「${row.label}」字首索引`} onclick={openQuickIndex}>{row.label}</button>
             </div>
           {:else}
-            <div class="album-index-card-row" style={`height:${row.height}px;transform:translateY(${row.top}px);grid-template-columns:repeat(${columns},${cardWidth}px);gap:${gap}px`}>
+            <div class="album-index-card-row" style={`height:${row.height}px;transform:translateY(${row.top}px);grid-template-columns:repeat(${columns},${cardWidth}px);column-gap:${gap}px`}>
               {#each row.items ?? [] as item (item.key)}
                 {#if item.album}
                   <AlbumCard album={item.album} {active} {refreshKey} {sortField} {onSelect} />
@@ -394,9 +396,9 @@
   .album-grid-viewport { min-width:0; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; padding:16px clamp(18px,2vw,34px) 28px; scrollbar-color:rgba(var(--text-rgb),0.2) transparent; scrollbar-width:thin; }
   .album-grid-canvas { position:relative; min-width:0; }
   .album-index-group-row, .album-index-card-row { position:absolute; top:0; right:0; left:0; box-sizing:border-box; }
-  .album-index-group-row { display:flex; align-items:center; border-bottom:1px solid rgba(var(--text-rgb),0.055); background:transparent; }
+  .album-index-group-row { display:flex; align-items:center; border-bottom:1px solid rgba(var(--text-rgb),0.055); background:var(--list-group-row-background); }
+  .album-index-group-row:hover { background:var(--list-group-row-hover-background); }
   .album-index-group-button { display:flex; width:100%; height:100%; min-width:0; align-items:center; justify-content:center; box-sizing:border-box; padding:0; border:0; border-radius:0; color:var(--text); background:transparent; cursor:pointer; font:inherit; }
-  .album-index-group-button:hover { background:rgba(var(--text-rgb),0.05); }
   .album-index-group-button:focus-visible { outline:2px solid var(--line); outline-offset:-2px; }
   .album-index-card-row { display:grid; align-content:start; }
   .album-card-placeholder { width:var(--album-card-width); aspect-ratio:1; }

@@ -892,7 +892,11 @@
     display: flex;
     align-items: center;
     border-bottom: 1px solid rgba(var(--text-rgb), 0.055);
-    background: transparent;
+    background: var(--list-group-row-background);
+  }
+
+  .paged-virtual-group-row:hover {
+    background: var(--list-group-row-hover-background);
   }
 
   .paged-virtual-group-cell {
@@ -918,10 +922,6 @@
     background: transparent;
     cursor: pointer;
     font: inherit;
-  }
-
-  .paged-virtual-group-button:hover {
-    background: rgba(var(--text-rgb), 0.05);
   }
 
   .paged-virtual-group-button:focus-visible {

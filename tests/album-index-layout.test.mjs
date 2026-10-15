@@ -19,6 +19,7 @@ test('album title groups become full-width virtual rows and restart the card gri
     columns: 3,
     cardRowHeight: 220,
     groupHeadingHeight: 37,
+    groupCardGap: 12,
     groups: [
       { label: 'A', beforeIndex: 0 },
       { label: 'B', beforeIndex: 4 },
@@ -30,15 +31,15 @@ test('album title groups become full-width virtual rows and restart the card gri
     ? ['group', row.label, row.beforeIndex, row.top]
     : ['cards', row.start, row.end, row.top]), [
     ['group', 'A', 0, 0],
-    ['cards', 0, 3, 37],
-    ['cards', 3, 4, 257],
-    ['group', 'B', 4, 477],
-    ['cards', 4, 7, 514],
-    ['cards', 7, 8, 734],
-    ['group', '未知', 8, 954],
-    ['cards', 8, 10, 991],
+    ['cards', 0, 3, 49],
+    ['cards', 3, 4, 269],
+    ['group', 'B', 4, 489],
+    ['cards', 4, 7, 538],
+    ['cards', 7, 8, 758],
+    ['group', '未知', 8, 978],
+    ['cards', 8, 10, 1027],
   ]);
-  assert.equal(layout.totalHeight, 1211);
+  assert.equal(layout.totalHeight, 1247);
 });
 
 test('album index rows remain a normal responsive card grid when grouping is disabled', () => {
@@ -55,9 +56,10 @@ test('album virtual rows select by pixel viewport and overscan', () => {
     columns: 2,
     cardRowHeight: 200,
     groupHeadingHeight: 40,
+    groupCardGap: 12,
     groups: [{ label: 'A', beforeIndex: 0 }, { label: 'B', beforeIndex: 4 }],
   });
-  assert.deepEqual(findVisibleAlbumIndexRows(layout.rows, 240, 220, 40).map((row) => row.kind === 'group'
+  assert.deepEqual(findVisibleAlbumIndexRows(layout.rows, 240, 250, 40).map((row) => row.kind === 'group'
     ? `group:${row.label}`
     : `cards:${row.start}-${row.end}`), ['cards:0-2', 'cards:2-4', 'group:B', 'cards:4-6']);
 });
@@ -88,4 +90,12 @@ test('album card rows rematerialize cached page items when revision changes with
   assert.notEqual(after[0].items, before[0].items);
   assert.match(albumIndexSource, /const visibleRenderRows = \$derived\.by\(\(\) => \{[\s\S]*?pageSnapshot\.revision[\s\S]*?buildAlbumIndexRenderRows\(/);
   assert.match(albumIndexSource, /\{#each row\.items \?\? \[\] as item \(item\.key\)\}/);
+});
+
+test('album group and card rows share compact vertical spacing and global group colors', () => {
+  assert.match(albumIndexSource, /const rowGap = 12/);
+  assert.match(albumIndexSource, /groupCardGap: rowGap/);
+  assert.match(albumIndexSource, /background:var\(--list-group-row-background\)/);
+  assert.match(albumIndexSource, /\.album-index-group-row:hover \{ background:var\(--list-group-row-hover-background\); \}/);
+  assert.match(albumIndexSource, /column-gap:\$\{gap\}px/);
 });

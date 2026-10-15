@@ -16,6 +16,8 @@
   --sidebar-bg: #090909;
   --line: rgba(245, 251, 255, 0.11);
   --line-strong: rgba(245, 251, 255, 0.19);
+  --list-group-row-background: rgba(var(--text-rgb), 0.05);
+  --list-group-row-hover-background: rgba(var(--text-rgb), 0.10);
   --text: #f5fbff;
   --text-rgb: 245, 251, 255;
   --text-inverse: #000000;
