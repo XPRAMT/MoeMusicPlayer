@@ -245,7 +245,6 @@
         {groupingEnabled}
         getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber)}
         leadingOverlayHeight={albumHeadingBaseHeight}
-        leadingCollapseOffset={albumCollapseOffset}
         leadingCollapseRange={albumCollapseRange}
         onViewportScrollTopChange={handleListScrollTopChange}
       />

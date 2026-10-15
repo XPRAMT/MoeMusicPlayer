@@ -47,7 +47,7 @@
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
   } from './queue-reorder.js';
-  import { advanceAlbumDetailWheelScroll, getAlbumDetailRowClipAnimationRange, getAlbumDetailRowClipTop, mapAlbumDetailNativeScroll, mapAlbumDetailWheelDelta } from './album-detail-collapse.js';
+  import { getAlbumDetailNativeScrollTop, getAlbumDetailScrollerTop, getAlbumDetailScrollState } from './album-detail-collapse.js';
 
   interface Props<Item> {
     totalCount: number | null;
@@ -70,7 +70,6 @@
     fillAvailable?: boolean;
     /** Keep the scroll viewport fixed while a leading album heading overlays its content. */
     leadingOverlayHeight?: number;
-    leadingCollapseOffset?: number;
     leadingCollapseRange?: number;
     overscan?: number;
     listId: string;
@@ -117,7 +116,6 @@
     maxViewportHeight: maxHeight = 680,
     fillAvailable = false,
     leadingOverlayHeight = 0,
-    leadingCollapseOffset = 0,
     leadingCollapseRange = 0,
     overscan = 8,
     listId,
@@ -182,11 +180,7 @@
   let quickIndexTrigger: HTMLButtonElement | null = null;
   let previousGroupRows: QuickIndexGroup[] = [];
   let hasPreviousGroupSnapshot = false;
-  let lastNativeScrollTop = 0;
-  let handlingMappedScroll = false;
-  let wheelAnimationFrame: number | null = null;
-  let wheelTargetNativeScrollTop: number | null = null;
-  let lastWheelAnimationTime = 0;
+  let collapseOffset = $state(0);
 
   const virtualDataCount = $derived(totalCount ?? 40);
   const renderGroupRows = $derived(groupingReady ? groupRows : []);
@@ -201,9 +195,14 @@
     && CSS.supports('animation-range', '0px 1px')
     && CSS.supports('timeline-scope', '--album-detail-scroll')
     && CSS.supports('scroll-timeline-name', '--album-detail-scroll');
-  const contentLeadingHeight = $derived(hasLeadingOverlay ? leadingOverlayHeight + headerHeight : 0);
+  /** Album detail: the scroller starts below the fully collapsed heading and table header; it never moves or resizes. */
+  const viewportTopOffset = $derived(hasLeadingOverlay
+    ? getAlbumDetailScrollerTop(leadingOverlayHeight, leadingCollapseRange, headerHeight)
+    : 0);
+  /** Album detail: a top spacer equal to the collapse travel; rows begin below it. */
+  const contentLeadingHeight = $derived(hasLeadingOverlay ? leadingCollapseRange : 0);
   const effectiveViewportHeight = $derived(hasLeadingOverlay
-    ? Math.max(rowHeight, viewportHeight - leadingOverlayHeight + leadingCollapseOffset - headerHeight)
+    ? Math.max(rowHeight, viewportHeight - Math.max(0, leadingCollapseRange - collapseOffset))
     : viewportHeight);
   const rowViewportHeight = $derived(
     fillAvailable
@@ -235,158 +234,53 @@
   const activeDescendantId = $derived(`${listId}-row-${dataIndexToVisualIndex(activeIndex, renderGroupRows)}`);
   const availableIndexLabels = $derived(new Set(renderGroupRows.map(({ label }) => label)));
 
-  function nativeScrollTopFor(logicalTop: number, collapseOffset = leadingCollapseOffset): number {
-    return hasLeadingOverlay ? Math.max(0, logicalTop) + Math.max(0, collapseOffset) : Math.max(0, logicalTop);
+  function nativeScrollTopFor(logicalTop: number, collapse = collapseOffset): number {
+    return hasLeadingOverlay
+      ? getAlbumDetailNativeScrollTop(logicalTop, leadingCollapseRange, collapse)
+      : Math.max(0, logicalTop);
+  }
+
+  function readNativeScrollState(nativeTop: number): { listScrollTop: number; collapseOffset: number } {
+    return hasLeadingOverlay
+      ? getAlbumDetailScrollState(nativeTop, leadingCollapseRange)
+      : { listScrollTop: Math.max(0, nativeTop), collapseOffset: 0 };
   }
 
   function logicalScrollTopFromNative(nativeTop: number): number {
-    return hasLeadingOverlay ? Math.max(0, nativeTop - leadingCollapseOffset) : Math.max(0, nativeTop);
+    return readNativeScrollState(nativeTop).listScrollTop;
   }
 
-  function setLogicalScrollTop(logicalTop: number, collapseOffset = leadingCollapseOffset): void {
+  function setLogicalScrollTop(logicalTop: number): void {
     if (!viewport) return;
-    cancelWheelScrollAnimation();
-    const nativeMaximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-    const next = Math.max(0, Math.min(nativeMaximum - (hasLeadingOverlay ? collapseOffset : 0), logicalTop));
-    const nativeTop = nativeScrollTopFor(next, collapseOffset);
-    handlingMappedScroll = true;
-    viewport.scrollTop = nativeTop;
-    handlingMappedScroll = false;
-    scrollTop = next;
-    lastVisibleScrollTop = next;
-    lastNativeScrollTop = nativeTop;
-    syncLeadingOverlayRowClips(collapseOffset);
-    rememberVisibleScrollPosition(next);
-    onViewportScrollTopChange?.(next, collapseOffset);
-  }
-
-  function syncLeadingOverlayRowClips(collapseOffset = leadingCollapseOffset): void {
-    if (supportsScrollDrivenAlbumOverlay || !hasLeadingOverlay || !viewport || !frame) return;
-    const viewportTop = viewport.getBoundingClientRect().top;
-    const listBoundary = viewportTop + Math.max(0, leadingOverlayHeight - collapseOffset) + headerHeight;
-    const rowClips = [...frame.querySelectorAll<HTMLElement>('.paged-virtual-row[role="row"]')].map((row) => {
-      const rect = row.getBoundingClientRect();
-      return { row, clippedTop: Math.min(rect.height, Math.max(0, listBoundary - rect.top)) };
-    });
-    for (const { row, clippedTop } of rowClips) {
-      row.style.clipPath = clippedTop > 0 ? `inset(${clippedTop}px 0px 0px)` : '';
-    }
+    const next = Math.max(0, Math.min(getMaximumLogicalScrollTop(), logicalTop));
+    viewport.scrollTop = nativeScrollTopFor(next);
+    updateViewport();
   }
 
   function getVisibleRowsHeight(): number {
     if (!viewport) return viewportHeight;
     return hasLeadingOverlay
-      ? Math.max(rowHeight, viewport.clientHeight - leadingOverlayHeight + leadingCollapseOffset - headerHeight)
+      ? Math.max(rowHeight, viewport.clientHeight - Math.max(0, leadingCollapseRange - collapseOffset))
       : viewport.clientHeight;
   }
 
-  function getMaximumLogicalScrollTop(): { listScrollTop: number; collapseOffset: number } {
-    if (!viewport) return { listScrollTop: 0, collapseOffset: 0 };
-    const maximumNativeTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-    if (!hasLeadingOverlay) return { listScrollTop: maximumNativeTop, collapseOffset: 0 };
-    const mapped = mapAlbumDetailNativeScroll({
-      rawScrollTop: maximumNativeTop,
-      previousRawScrollTop: 0,
-      previousListScrollTop: 0,
-      previousCollapseOffset: 0,
-      baseCoverSize: 64 + leadingCollapseRange,
-    });
-    return { listScrollTop: mapped.listScrollTop, collapseOffset: mapped.collapseOffset };
+  function getMaximumLogicalScrollTop(): number {
+    if (!viewport) return 0;
+    return readNativeScrollState(Math.max(0, viewport.scrollHeight - viewport.clientHeight)).listScrollTop;
   }
 
-  function moveLogicalBy(delta: number): void {
+  function moveNativeBy(delta: number): void {
     if (!viewport) return;
-    const mappedWheel = hasLeadingOverlay
-      ? mapAlbumDetailWheelDelta({
-        delta,
-        listScrollTop: scrollTop,
-        collapseOffset: leadingCollapseOffset,
-        baseCoverSize: 64 + leadingCollapseRange,
-      })
-      : { listScrollTop: Math.max(0, scrollTop + delta), collapseOffset: 0 };
-    let nextLogical = mappedWheel.listScrollTop;
-    let nextCollapse = mappedWheel.collapseOffset;
-    let nextNative = nativeScrollTopFor(nextLogical, nextCollapse);
-    const maximumNative = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-    if (nextNative > maximumNative && hasLeadingOverlay) {
-      const mapped = mapAlbumDetailNativeScroll({
-        rawScrollTop: maximumNative,
-        previousRawScrollTop: lastNativeScrollTop,
-        previousListScrollTop: scrollTop,
-        previousCollapseOffset: leadingCollapseOffset,
-        baseCoverSize: 64 + leadingCollapseRange,
-      });
-      nextLogical = mapped.listScrollTop;
-      nextCollapse = mapped.collapseOffset;
-      nextNative = mapped.rawScrollTop;
-    }
-    setLogicalScrollTop(nextLogical, nextCollapse);
-  }
-
-  function cancelWheelScrollAnimation(): void {
-    if (wheelAnimationFrame !== null) cancelAnimationFrame(wheelAnimationFrame);
-    wheelAnimationFrame = null;
-    wheelTargetNativeScrollTop = null;
-    lastWheelAnimationTime = 0;
-  }
-
-  function animateWheelScroll(now: number): void {
-    wheelAnimationFrame = null;
-    if (!viewport || wheelTargetNativeScrollTop === null) return;
-    const maximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-    const target = Math.max(0, Math.min(maximum, wheelTargetNativeScrollTop));
-    wheelTargetNativeScrollTop = target;
-    const current = viewport.scrollTop;
-    const elapsed = lastWheelAnimationTime === 0 ? 16 : now - lastWheelAnimationTime;
-    lastWheelAnimationTime = now;
-    const next = advanceAlbumDetailWheelScroll(current, target, elapsed);
-    if (next === target || Math.abs(target - next) <= 0.25) {
-      viewport.scrollTop = target;
-      updateViewport();
-      cancelWheelScrollAnimation();
-      return;
-    }
-    viewport.scrollTop = next;
+    viewport.scrollTop = Math.max(0, viewport.scrollTop + delta);
     updateViewport();
-    wheelAnimationFrame = requestAnimationFrame(animateWheelScroll);
   }
 
   function getVisibleRowsRect(): DOMRect | null {
     if (!viewport) return null;
     const rect = viewport.getBoundingClientRect();
-    const top = rect.top + (hasLeadingOverlay ? leadingOverlayHeight - leadingCollapseOffset + headerHeight : 0);
+    const top = rect.top + (hasLeadingOverlay ? Math.max(0, leadingCollapseRange - collapseOffset) : 0);
     return new DOMRect(rect.left, top, rect.width, Math.max(0, rect.bottom - top));
   }
-
-  function handleViewportWheel(event: WheelEvent): void {
-    if (!hasLeadingOverlay || !viewport || event.ctrlKey || event.deltaY === 0) return;
-    event.preventDefault();
-    const delta = event.deltaMode === WheelEvent.DOM_DELTA_LINE
-      ? event.deltaY * rowHeight
-      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-        ? event.deltaY * getVisibleRowsHeight()
-        : event.deltaY;
-    const maximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-    const currentTarget = wheelTargetNativeScrollTop ?? viewport.scrollTop;
-    wheelTargetNativeScrollTop = Math.max(0, Math.min(maximum, currentTarget + delta));
-    if (wheelAnimationFrame === null) {
-      lastWheelAnimationTime = 0;
-      wheelAnimationFrame = requestAnimationFrame(animateWheelScroll);
-    }
-  }
-
-  $effect(() => {
-    const active = hasLeadingOverlay;
-    const collapse = leadingCollapseOffset;
-    leadingOverlayHeight;
-    if (!active || !metricsReady || !viewport) return;
-    const expectedNativeTop = nativeScrollTopFor(scrollTop, collapse);
-    if (Math.abs(viewport.scrollTop - expectedNativeTop) > 0.5) {
-      viewport.scrollTop = expectedNativeTop;
-      lastNativeScrollTop = expectedNativeTop;
-    }
-    viewportHeight = viewport.clientHeight;
-  });
 
   $effect(() => {
     baseRowHeight;
@@ -416,17 +310,17 @@
       const position = readListScrollPosition(currentListId);
       pendingListRestore = { listId: currentListId, position };
       scrollTop = 0;
+      collapseOffset = 0;
       lastVisibleScrollTop = 0;
       viewport?.scrollTo({ top: 0 });
-      lastNativeScrollTop = 0;
     } else if (resetChanged) {
       activeIndex = 0;
       scrollTop = 0;
       lastVisibleScrollTop = 0;
       writeListScrollPosition(currentListId, 0);
       pendingListRestore = null;
+      collapseOffset = 0;
       viewport?.scrollTo({ top: 0 });
-      lastNativeScrollTop = 0;
     }
     const restoredScrollTop = pendingListRestore?.listId === currentListId
       ? getRestoredListScrollTop({
@@ -443,16 +337,14 @@
       : null;
     if (restoredScrollTop !== null && scrollRestoreReady) {
       const maximum = getMaximumLogicalScrollTop();
-      const safeRestoredScrollTop = Math.min(restoredScrollTop, maximum.listScrollTop);
-      const restoredCollapseOffset = hasLeadingOverlay
-        ? Math.min(leadingCollapseRange, safeRestoredScrollTop)
-        : 0;
+      const safeRestoredScrollTop = Math.min(restoredScrollTop, maximum);
+      const restoredCollapseOffset = hasLeadingOverlay && safeRestoredScrollTop > 0 ? leadingCollapseRange : 0;
       scrollTop = safeRestoredScrollTop;
       lastVisibleScrollTop = safeRestoredScrollTop;
       writeListScrollPosition(currentListId, safeRestoredScrollTop);
       if (viewport && viewport.clientHeight > 0) {
         viewport.scrollTop = nativeScrollTopFor(safeRestoredScrollTop, restoredCollapseOffset);
-        lastNativeScrollTop = viewport.scrollTop;
+        collapseOffset = restoredCollapseOffset;
         hadVisibleViewport = true;
       }
       const restoredRange = getGroupedVirtualRange(
@@ -465,7 +357,7 @@
         overscan,
       );
       onRange(visualRangeToDataRange(restoredRange.start, restoredRange.end, renderGroupRows, virtualDataCount));
-      onViewportScrollTopChange?.(safeRestoredScrollTop, leadingCollapseOffset);
+      onViewportScrollTopChange?.(safeRestoredScrollTop, restoredCollapseOffset);
       pendingListRestore = null;
     }
     seenListId = currentListId;
@@ -521,7 +413,6 @@
   });
 
   onMount(() => {
-    const stopWheelAnimation = () => cancelWheelScrollAnimation();
     const updateMetrics = () => {
       const narrow = window.matchMedia('(max-width: 620px)').matches;
       const shortDesktop = window.matchMedia('(max-height: 680px) and (min-width: 621px)').matches;
@@ -534,15 +425,16 @@
       if (viewport && nextViewportHeight > 0) {
         if (!hadVisibleViewport) {
           const restoredScrollTop = lastVisibleScrollTop;
-          const restoredNativeTop = nativeScrollTopFor(restoredScrollTop, Math.min(leadingCollapseRange, restoredScrollTop));
+          const restoredNativeTop = nativeScrollTopFor(restoredScrollTop, restoredScrollTop > 0 ? leadingCollapseRange : collapseOffset);
           if (viewport.scrollTop !== restoredNativeTop) viewport.scrollTop = restoredNativeTop;
           scrollTop = restoredScrollTop;
-          lastNativeScrollTop = restoredNativeTop;
+          collapseOffset = readNativeScrollState(restoredNativeTop).collapseOffset;
           rememberVisibleScrollPosition(restoredScrollTop);
           hadVisibleViewport = true;
         } else {
-          scrollTop = logicalScrollTopFromNative(viewport.scrollTop);
-          lastNativeScrollTop = viewport.scrollTop;
+          const state = readNativeScrollState(viewport.scrollTop);
+          scrollTop = state.listScrollTop;
+          collapseOffset = state.collapseOffset;
           lastVisibleScrollTop = scrollTop;
           rememberVisibleScrollPosition(scrollTop);
         }
@@ -552,7 +444,7 @@
       viewportHeight = nextViewportHeight;
       if (effectiveViewportHeight > 0) metricsReady = true;
       if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
-      if (viewport) onViewportScrollTopChange?.(scrollTop, leadingCollapseOffset);
+      if (viewport) onViewportScrollTopChange?.(scrollTop, collapseOffset);
     };
     recalculateMetrics = updateMetrics;
     updateMetrics();
@@ -560,61 +452,37 @@
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateMetrics);
     if (observer && frame) observer.observe(frame);
     if (observer && viewport) observer.observe(viewport);
-    viewport?.addEventListener('pointerdown', stopWheelAnimation);
-    viewport?.addEventListener('keydown', stopWheelAnimation);
     return () => {
       window.removeEventListener('resize', updateMetrics);
       observer?.disconnect();
-      viewport?.removeEventListener('pointerdown', stopWheelAnimation);
-      viewport?.removeEventListener('keydown', stopWheelAnimation);
-      cancelWheelScrollAnimation();
       endDragState();
       recalculateMetrics = () => {};
     };
   });
 
   onDestroy(() => {
-    cancelWheelScrollAnimation();
     const finalScrollTop = viewport?.clientHeight ? logicalScrollTopFromNative(viewport.scrollTop) : lastVisibleScrollTop;
     rememberVisibleScrollPosition(finalScrollTop);
   });
 
   function updateViewport(): void {
     if (!viewport) return;
-    if (handlingMappedScroll) return;
-    let collapseOffset = leadingCollapseOffset;
+    let nextCollapseOffset = collapseOffset;
     if (viewport.clientHeight > 0) {
-      const nativeTop = viewport.scrollTop;
-      if (hasLeadingOverlay) {
-        const mapped = mapAlbumDetailNativeScroll({
-          rawScrollTop: nativeTop,
-          previousRawScrollTop: lastNativeScrollTop,
-          previousListScrollTop: scrollTop,
-          previousCollapseOffset: leadingCollapseOffset,
-          baseCoverSize: 64 + leadingCollapseRange,
-        });
-        if (mapped.rawScrollTop !== nativeTop) viewport.scrollTop = mapped.rawScrollTop;
-        lastNativeScrollTop = mapped.rawScrollTop;
-        scrollTop = mapped.listScrollTop;
-        collapseOffset = mapped.collapseOffset;
-      } else {
-        lastNativeScrollTop = nativeTop;
-        scrollTop = nativeTop;
-        collapseOffset = 0;
-      }
+      const state = readNativeScrollState(viewport.scrollTop);
+      scrollTop = state.listScrollTop;
+      nextCollapseOffset = state.collapseOffset;
+      collapseOffset = nextCollapseOffset;
       lastVisibleScrollTop = scrollTop;
       rememberVisibleScrollPosition(scrollTop);
       hadVisibleViewport = true;
     }
     headerShift = viewport.scrollLeft;
     headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
-    // viewportHeight is the measured viewport's clientHeight. The visible row
-    // area for a collapsing album heading is derived from it separately; do
-    // not overwrite the measured value during scrolling, or the heading and
-    // header deductions are applied again on every scroll event.
+    // viewportHeight is the measured viewport's clientHeight; the album-detail
+    // scroller has a fixed size, so scrolling never changes it.
     metricsReady = true;
-    syncLeadingOverlayRowClips(collapseOffset);
-    onViewportScrollTopChange?.(scrollTop, collapseOffset);
+    onViewportScrollTopChange?.(scrollTop, nextCollapseOffset);
   }
 
   function handleViewportScroll(): void {
@@ -653,7 +521,7 @@
         nextScrollTop = rowBottom - rowsHeight;
       }
     }
-    const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight - leadingCollapseOffset);
+    const maxScrollTop = getMaximumLogicalScrollTop();
     nextScrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
     setLogicalScrollTop(nextScrollTop);
   }
@@ -793,7 +661,7 @@
       if (latestPointerClientY - bounds.top < edge) delta = -14;
       else if (bounds.bottom - latestPointerClientY < edge) delta = 14;
       if (delta !== 0) {
-        moveLogicalBy(delta);
+        moveNativeBy(delta);
         dragToIndex = dropIndexAtPointer(latestPointerClientY);
         autoScrollFrame = requestAnimationFrame(step);
       } else {
@@ -894,9 +762,9 @@
   class:fill-available={fillAvailable}
   class:leading-overlay={hasLeadingOverlay}
   bind:this={frame}
-  style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px;--paged-leading-height:${leadingOverlayHeight}px;--paged-collapse-offset:${leadingCollapseOffset}px;--paged-collapse-range:${leadingCollapseRange}px`}
+  style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px;--paged-leading-height:${leadingOverlayHeight}px;--paged-collapse-range:${leadingCollapseRange}px;--paged-viewport-top:${viewportTopOffset}px`}
 >
-  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;${hasLeadingOverlay ? `top:${Math.max(0, leadingOverlayHeight - leadingCollapseOffset)}px;right:${headerGutter}px;` : `padding-right:${headerGutter}px;`}`}>
+  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;${hasLeadingOverlay ? `top:${Math.max(0, leadingOverlayHeight - collapseOffset)}px;right:${headerGutter}px;` : `padding-right:${headerGutter}px;`}`}>
     <div class="paged-virtual-header-shift" style={`transform:translateX(${-headerShift}px)`}>
       {#if header}{@render header()}{/if}
     </div>
@@ -915,7 +783,6 @@
     class:album-detail-scroll-timeline={hasLeadingOverlay && supportsScrollDrivenAlbumOverlay}
     class:is-reordering={dragFromIndex !== null}
     onscroll={handleViewportScroll}
-    onwheel={hasLeadingOverlay ? handleViewportWheel : undefined}
     onkeydown={handleKeydown}
   >
     <div
@@ -935,15 +802,13 @@
     {#each virtualRows.rows as virtualRow (virtualRow.key)}
       {@const id = `${listId}-row-${virtualRow.visualIndex}`}
       {@const rowTop = getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}
-      {@const rowHeightForClip = virtualRow.kind === 'group' ? groupRowHeight : rowHeight}
-      {@const clipRange = getAlbumDetailRowClipAnimationRange(leadingCollapseRange, rowTop, rowHeightForClip)}
       {#if virtualRow.kind === 'group'}
         <div
           {id}
           class="paged-virtual-row paged-virtual-group-row list-group-row-surface"
           role="row"
           aria-rowindex={virtualRow.visualIndex + 2}
-          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px);--paged-row-clip-start:${clipRange.start}px;--paged-row-clip-end:${clipRange.end}px;${hasLeadingOverlay && !supportsScrollDrivenAlbumOverlay ? `clip-path:inset(${getAlbumDetailRowClipTop(scrollTop, rowTop, groupRowHeight)}px 0 0)` : ''}`}
+          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px)`}
         >
           <div class="paged-virtual-group-cell" role="gridcell" aria-colspan={columnCount}>
             <button type="button" class="paged-virtual-group-button" aria-label={`開啟「${virtualRow.label}」字首索引`} onclick={openQuickIndex}>{virtualRow.label}</button>
@@ -962,7 +827,7 @@
         aria-selected={selected}
         tabindex={rowActivates && virtualRow.item !== null ? -1 : undefined}
         aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
-        style={`height:${rowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px);--paged-row-clip-start:${clipRange.start}px;--paged-row-clip-end:${clipRange.end}px;${hasLeadingOverlay && !supportsScrollDrivenAlbumOverlay ? `clip-path:inset(${getAlbumDetailRowClipTop(scrollTop, rowTop, rowHeight)}px 0 0)` : ''}`}
+        style={`height:${rowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px)`}
         class:activates={rowActivates && virtualRow.item !== null}
         class:reorderable={longPressReorder && virtualRow.item !== null}
         onpointerdown={longPressReorder ? (event) => handleRowPointerDown(event, virtualRow.index, virtualRow.item) : undefined}
@@ -1066,9 +931,12 @@
   .paged-virtual-frame.leading-overlay .paged-virtual-viewport {
     position: absolute;
     z-index: 1;
-    inset: 0;
+    top: var(--paged-viewport-top, 0px);
+    right: 0;
+    bottom: 0;
+    left: 0;
     width: 100%;
-    height: 100%;
+    height: auto;
     max-height: none;
     overflow: auto;
     flex: none;
@@ -1085,20 +953,9 @@
       animation-range: 0px var(--paged-collapse-range);
     }
 
-    .paged-virtual-frame.leading-overlay .paged-virtual-row[role="row"] {
-      animation: album-detail-row-clip auto linear both;
-      animation-timeline: --album-detail-scroll;
-      animation-range: var(--paged-row-clip-start) var(--paged-row-clip-end);
-    }
-
     @keyframes album-detail-grid-header-collapse {
       from { top: var(--paged-leading-height); }
       to { top: calc(var(--paged-leading-height) - var(--paged-collapse-range)); }
-    }
-
-    @keyframes album-detail-row-clip {
-      from { clip-path: inset(0 0 0 0); }
-      to { clip-path: inset(100% 0 0 0); }
     }
   }
 

@@ -1,17 +1,4 @@
 export const MIN_ALBUM_DETAIL_COVER_SIZE_PX = 64;
-const WHEEL_SCROLL_TIME_CONSTANT_MS = 40;
-
-/** Ease wheel input toward its target without changing the scroll-distance mapping. */
-/** @param {number} current @param {number} target @param {number} elapsedMs @returns {number} */
-export function advanceAlbumDetailWheelScroll(current, target, elapsedMs) {
-  const position = Number.isFinite(current) ? current : 0;
-  const destination = Number.isFinite(target) ? target : position;
-  const remaining = destination - position;
-  if (Math.abs(remaining) <= 0.25) return destination;
-  const elapsed = Number.isFinite(elapsedMs) ? Math.max(0, Math.min(64, elapsedMs)) : 0;
-  const progress = 1 - Math.exp(-elapsed / WHEEL_SCROLL_TIME_CONSTANT_MS);
-  return position + remaining * progress;
-}
 
 /** The maximum amount of the fixed album heading that can be uncovered. */
 /** @param {number} baseSize @returns {number} */
@@ -28,101 +15,49 @@ export function getAlbumDetailCoverSize(baseSize, scrollPeak) {
   return Math.max(MIN_ALBUM_DETAIL_COVER_SIZE_PX, base - peak);
 }
 
-/** Return the native scroll-timeline offsets at which a row crosses the collapsed header. */
-/** @param {number} collapseRange @param {number} rowTop @param {number} rowHeight @returns {{start:number,end:number}} */
-export function getAlbumDetailRowClipAnimationRange(collapseRange, rowTop, rowHeight) {
-  const collapse = Number.isFinite(collapseRange) ? Math.max(0, collapseRange) : 0;
-  const top = Number.isFinite(rowTop) ? Math.max(0, rowTop) : 0;
-  const height = Number.isFinite(rowHeight) ? Math.max(0, rowHeight) : 0;
-  const start = collapse + top;
-  return { start, end: start + height };
-}
-
-/** Main-thread fallback clip for runtimes without scroll-driven animations. */
-/** @param {number} scrollTop @param {number} rowTop @param {number} rowHeight @returns {number} */
-export function getAlbumDetailRowClipTop(scrollTop, rowTop, rowHeight) {
-  const scroll = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0;
-  const top = Number.isFinite(rowTop) ? Math.max(0, rowTop) : 0;
-  const height = Number.isFinite(rowHeight) ? Math.max(0, rowHeight) : 0;
-  return Math.min(height, Math.max(0, scroll - top));
+/**
+ * Viewport top of the album-detail track scroller: the fully collapsed heading
+ * plus the sortable header. The scroller never moves or resizes while scrolling.
+ *
+ * @param {number} headingHeight @param {number} collapseRange @param {number} tableHeaderHeight
+ * @returns {number}
+ */
+export function getAlbumDetailScrollerTop(headingHeight, collapseRange, tableHeaderHeight) {
+  const heading = Number.isFinite(headingHeight) ? Math.max(0, headingHeight) : 0;
+  const range = Number.isFinite(collapseRange) ? Math.max(0, collapseRange) : 0;
+  const header = Number.isFinite(tableHeaderHeight) ? Math.max(0, tableHeaderHeight) : 0;
+  return Math.max(0, heading - range) + header;
 }
 
 /**
- * Convert a native scroll offset in the stable, full-page scrollport into the
- * logical track-list offset and the cover collapse offset. Downward movement
- * first collapses the cover one pixel per pixel, then advances the track list.
- * Upward movement returns the list to its top before restoring the cover one
- * pixel per excess pixel.
+ * Split a native scroll offset into cover collapse and track-list offset. The
+ * scroller content starts with a spacer of `collapseRange` px, so the first
+ * pixels collapse the cover and later pixels scroll the tracks. The mapping is
+ * a pure function of the native offset in both directions.
  *
- * @param {{rawScrollTop:number,previousRawScrollTop:number,previousListScrollTop:number,previousCollapseOffset:number,baseCoverSize:number}} input
+ * @param {number} nativeScrollTop @param {number} collapseRange
+ * @returns {{collapseOffset:number,listScrollTop:number}}
  */
-export function mapAlbumDetailNativeScroll(input) {
-  const raw = Number.isFinite(input.rawScrollTop) ? Math.max(0, input.rawScrollTop) : 0;
-  const previousRaw = Number.isFinite(input.previousRawScrollTop) ? Math.max(0, input.previousRawScrollTop) : 0;
-  const previousList = Number.isFinite(input.previousListScrollTop) ? Math.max(0, input.previousListScrollTop) : 0;
-  const range = getAlbumDetailCollapseRange(input.baseCoverSize);
-  const previousCollapse = Number.isFinite(input.previousCollapseOffset)
-    ? Math.min(range, Math.max(0, input.previousCollapseOffset))
-    : 0;
-
-  if (raw >= previousRaw) {
-    let remaining = raw - previousRaw;
-    const collapseStep = Math.min(range - previousCollapse, remaining);
-    const collapseOffset = previousCollapse + collapseStep;
-    remaining -= collapseStep;
-    return {
-      listScrollTop: previousList + remaining,
-      collapseOffset,
-      rawScrollTop: raw,
-    };
-  }
-
-  let remaining = previousRaw - raw;
-  const listReduction = Math.min(previousList, remaining);
-  const listScrollTop = previousList - listReduction;
-  remaining -= listReduction;
-  const collapseOffset = Math.max(0, previousCollapse - remaining);
+export function getAlbumDetailScrollState(nativeScrollTop, collapseRange) {
+  const native = Number.isFinite(nativeScrollTop) ? Math.max(0, nativeScrollTop) : 0;
+  const range = Number.isFinite(collapseRange) ? Math.max(0, collapseRange) : 0;
   return {
-    listScrollTop,
-    collapseOffset,
-    rawScrollTop: listScrollTop + collapseOffset,
+    collapseOffset: Math.min(range, native),
+    listScrollTop: Math.max(0, native - range),
   };
 }
 
-/** Apply a wheel delta by collapsing the cover first, then moving the list; reverse that order upward. */
-/** @param {{delta:number,listScrollTop:number,collapseOffset:number,baseCoverSize:number}} input */
-export function mapAlbumDetailWheelDelta(input) {
-  const delta = Number.isFinite(input.delta) ? input.delta : 0;
-  const list = Number.isFinite(input.listScrollTop) ? Math.max(0, input.listScrollTop) : 0;
-  const range = getAlbumDetailCollapseRange(input.baseCoverSize);
-  const collapse = Number.isFinite(input.collapseOffset)
-    ? Math.min(range, Math.max(0, input.collapseOffset))
-    : 0;
-
-  if (delta >= 0) {
-    const collapseStep = Math.min(range - collapse, delta);
-    const collapseOffset = collapse + collapseStep;
-    const listScrollTop = list + delta - collapseStep;
-    return {
-      listScrollTop,
-      collapseOffset,
-    };
-  }
-
-  let remaining = -delta;
-  const listReduction = Math.min(list, remaining);
-  const listScrollTop = list - listReduction;
-  remaining -= listReduction;
-  return {
-    listScrollTop,
-    collapseOffset: Math.max(0, collapse - remaining),
-  };
-}
-
-/** Physical scroll position for restoring a saved logical list position. */
-/** @param {number} listScrollTop @param {number} collapseOffset @returns {number} */
-export function getAlbumDetailNativeScrollTop(listScrollTop, collapseOffset) {
+/**
+ * Native scroll offset for a logical track-list position. A positive list
+ * offset implies a fully collapsed cover; at the list top the requested
+ * collapse is kept.
+ *
+ * @param {number} listScrollTop @param {number} collapseRange @param {number} [collapseOffset]
+ * @returns {number}
+ */
+export function getAlbumDetailNativeScrollTop(listScrollTop, collapseRange, collapseOffset = 0) {
   const list = Number.isFinite(listScrollTop) ? Math.max(0, listScrollTop) : 0;
-  const collapse = Number.isFinite(collapseOffset) ? Math.max(0, collapseOffset) : 0;
-  return list + collapse;
+  const range = Number.isFinite(collapseRange) ? Math.max(0, collapseRange) : 0;
+  const collapse = Number.isFinite(collapseOffset) ? Math.min(range, Math.max(0, collapseOffset)) : 0;
+  return list > 0 ? list + range : collapse;
 }

@@ -163,7 +163,7 @@ test('sidebar list routes remount for fresh data and restore each virtual list p
   assert.match(pagedVirtualListSource, /hasPreviousGroupSnapshot = false/);
   assert.match(pagedVirtualListSource, /shouldAdjustGroupAnchor\(\{[\s\S]*?hasPreviousSnapshot: hasPreviousGroupSnapshot/);
   assert.match(pagedVirtualListSource, /hasPreviousGroupSnapshot = true/);
-  assert.match(pagedVirtualListSource, /const safeRestoredScrollTop = Math\.min\(restoredScrollTop, maximum\.listScrollTop\)/);
+  assert.match(pagedVirtualListSource, /const safeRestoredScrollTop = Math\.min\(restoredScrollTop, maximum\)/);
   assert.match(pagedVirtualListSource, /writeListScrollPosition\(currentListId, safeRestoredScrollTop\)/);
   assert.match(pagedVirtualListSource, /let lastVisibleScrollTop = 0/);
   assert.match(pagedVirtualListSource, /if \(viewport && viewport\.clientHeight > 0\)\s*\{\s*viewport\.scrollTop = nativeScrollTopFor\(safeRestoredScrollTop, restoredCollapseOffset\)/);

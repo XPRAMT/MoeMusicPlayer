@@ -61,7 +61,6 @@
     columnWidths?: TrackColumnWidths;
     rowHeightPx?: number;
     leadingOverlayHeight?: number;
-    leadingCollapseOffset?: number;
     leadingCollapseRange?: number;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     sort?: LibraryListSort;
@@ -95,7 +94,6 @@
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
     rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX,
     leadingOverlayHeight = 0,
-    leadingCollapseOffset = 0,
     leadingCollapseRange = 0,
     onColumnResize,
     sort = DEFAULT_LIBRARY_SORT,
@@ -295,7 +293,7 @@
     headerHeight={37}
     compactHeaderHeight={37}
     fillAvailable={true}
-    {leadingOverlayHeight} {leadingCollapseOffset} {leadingCollapseRange}
+    {leadingOverlayHeight} {leadingCollapseRange}
     {listId}
     scrollResetKey={listScrollResetKey}
     groupRows={visibleQuickIndex?.groups}

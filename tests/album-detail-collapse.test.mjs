@@ -1,51 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  getAlbumDetailNativeScrollTop,
+  getAlbumDetailCollapseRange,
   getAlbumDetailCoverSize,
-  getAlbumDetailRowClipAnimationRange,
-  getAlbumDetailRowClipTop,
-  advanceAlbumDetailWheelScroll,
-  mapAlbumDetailNativeScroll,
-  mapAlbumDetailWheelDelta,
+  getAlbumDetailNativeScrollTop,
+  getAlbumDetailScrollerTop,
+  getAlbumDetailScrollState,
 } from '../src/lib/album-detail-collapse.js';
-
-test('album rows clip on the native scroll timeline only after the cover collapses', () => {
-  assert.deepEqual(getAlbumDetailRowClipAnimationRange(84, 0, 50), { start: 84, end: 134 });
-  assert.deepEqual(getAlbumDetailRowClipAnimationRange(52, 75.5, 35), { start: 127.5, end: 162.5 });
-  assert.deepEqual(getAlbumDetailRowClipAnimationRange(0, 120, 50), { start: 120, end: 170 });
-  assert.deepEqual(getAlbumDetailRowClipAnimationRange(Number.NaN, -2, -1), { start: 0, end: 0 });
-});
-
-test('legacy scroll runtimes retain the main-thread clip fallback', () => {
-  assert.equal(getAlbumDetailRowClipTop(0, 0, 50), 0);
-  assert.equal(getAlbumDetailRowClipTop(10, 0, 50), 10);
-  assert.equal(getAlbumDetailRowClipTop(60, 50, 50), 10);
-  assert.equal(getAlbumDetailRowClipTop(100, 0, 50), 50);
-  assert.equal(getAlbumDetailRowClipTop(30, 50, 50), 0);
-});
-
-test('album detail wheel input animates smoothly toward the accumulated target', () => {
-  const target = 80;
-  const firstFrame = advanceAlbumDetailWheelScroll(0, target, 16);
-  assert.ok(firstFrame > 0 && firstFrame < target);
-  let position = firstFrame;
-  for (let frame = 1; frame < 12; frame += 1) {
-    const next = advanceAlbumDetailWheelScroll(position, target, 16);
-    assert.ok(next > position && next < target);
-    position = next;
-  }
-  assert.ok(target - position < 1);
-  assert.equal(advanceAlbumDetailWheelScroll(position, target, 0), position);
-});
-
-test('album detail wheel animation follows target reversals without overshooting', () => {
-  const current = advanceAlbumDetailWheelScroll(20, 100, 16);
-  const reversed = advanceAlbumDetailWheelScroll(current, 0, 16);
-  assert.ok(reversed < current);
-  assert.ok(reversed > 0);
-  assert.equal(advanceAlbumDetailWheelScroll(0, Number.NaN, 16), 0);
-});
 
 test('album detail cover shrinks one CSS pixel per downward scroll pixel', () => {
   assert.equal(getAlbumDetailCoverSize(148, 0), 148);
@@ -57,92 +18,51 @@ test('cover stops at 64px for desktop and narrow starting sizes', () => {
   assert.equal(getAlbumDetailCoverSize(148, 84), 64);
   assert.equal(getAlbumDetailCoverSize(116, 52), 64);
   assert.equal(getAlbumDetailCoverSize(148, 400), 64);
+  assert.equal(getAlbumDetailCollapseRange(148), 84);
+  assert.equal(getAlbumDetailCollapseRange(116), 52);
 });
 
-test('wheel scrolling collapses one pixel per pixel before scrolling list rows', () => {
-  let state = { listScrollTop: 0, collapseOffset: 0, baseCoverSize: 148 };
-  state = mapAlbumDetailWheelDelta({ ...state, delta: 10 });
-  assert.deepEqual(state, { listScrollTop: 0, collapseOffset: 10 });
-  assert.equal(getAlbumDetailCoverSize(148, state.collapseOffset), 138);
-  state = mapAlbumDetailWheelDelta({ ...state, delta: 74 });
-  assert.deepEqual(state, { listScrollTop: 0, collapseOffset: 84 });
-  state = mapAlbumDetailWheelDelta({ ...state, delta: 10 });
-  assert.deepEqual(state, { listScrollTop: 10, collapseOffset: 84 });
+test('track scroller starts at the fully collapsed heading plus table header', () => {
+  assert.equal(getAlbumDetailScrollerTop(184, 84, 37), 137);
+  assert.equal(getAlbumDetailScrollerTop(144, 52, 32), 124);
+  assert.equal(getAlbumDetailScrollerTop(Number.NaN, -1, Number.NaN), 0);
 });
 
-test('wheel scrolling returns the list to its top before restoring the cover continuously', () => {
-  let state = { listScrollTop: 100, collapseOffset: 84, baseCoverSize: 148 };
-  state = mapAlbumDetailWheelDelta({ ...state, delta: -60 });
-  assert.deepEqual(state, { listScrollTop: 40, collapseOffset: 84 });
-  state = mapAlbumDetailWheelDelta({ ...state, delta: -40 });
-  assert.deepEqual(state, { listScrollTop: 0, collapseOffset: 84 });
-  state = mapAlbumDetailWheelDelta({ ...state, delta: -10 });
-  assert.deepEqual(state, { listScrollTop: 0, collapseOffset: 74 });
-  assert.equal(getAlbumDetailCoverSize(148, state.collapseOffset), 74);
-  state = mapAlbumDetailWheelDelta({ ...state, delta: -74 });
-  assert.equal(getAlbumDetailCoverSize(148, state.collapseOffset), 148);
+test('native scroll collapses the cover first, then scrolls tracks, identically in both directions', () => {
+  assert.deepEqual(getAlbumDetailScrollState(0, 84), { collapseOffset: 0, listScrollTop: 0 });
+  assert.deepEqual(getAlbumDetailScrollState(40, 84), { collapseOffset: 40, listScrollTop: 0 });
+  assert.deepEqual(getAlbumDetailScrollState(84, 84), { collapseOffset: 84, listScrollTop: 0 });
+  assert.deepEqual(getAlbumDetailScrollState(1_084, 84), { collapseOffset: 84, listScrollTop: 1_000 });
+  // Moving back up restores tracks to their top before the cover expands.
+  assert.deepEqual(getAlbumDetailScrollState(90, 84), { collapseOffset: 84, listScrollTop: 6 });
+  assert.deepEqual(getAlbumDetailScrollState(30, 84), { collapseOffset: 30, listScrollTop: 0 });
+  assert.deepEqual(getAlbumDetailScrollState(Number.NaN, 84), { collapseOffset: 0, listScrollTop: 0 });
 });
 
-test('wheel movement crossing the list top spends only the excess restoring the cover', () => {
-  const state = mapAlbumDetailWheelDelta({
-    delta: -10,
-    listScrollTop: 3,
-    collapseOffset: 84,
-    baseCoverSize: 148,
-  });
-  assert.deepEqual(state, { listScrollTop: 0, collapseOffset: 77 });
-  assert.equal(getAlbumDetailCoverSize(148, state.collapseOffset), 71);
+test('logical list positions round-trip through the native scroll offset', () => {
+  for (const list of [0, 1, 50, 2_400]) {
+    const native = getAlbumDetailNativeScrollTop(list, 84, 84);
+    assert.equal(getAlbumDetailScrollState(native, 84).listScrollTop, list);
+  }
+  assert.equal(getAlbumDetailNativeScrollTop(0, 84, 20), 20);
+  assert.equal(getAlbumDetailNativeScrollTop(0, 84), 0);
+  assert.equal(getAlbumDetailNativeScrollTop(10, 84, 0), 94);
 });
 
-test('native scroll maps one pixel to cover collapse before list movement', () => {
-  let state = { rawScrollTop: 0, previousRawScrollTop: 0, previousListScrollTop: 0, previousCollapseOffset: 0, baseCoverSize: 148 };
-  state = { ...state, rawScrollTop: 40 };
-  let mapped = mapAlbumDetailNativeScroll(state);
-  assert.deepEqual(mapped, { listScrollTop: 0, collapseOffset: 40, rawScrollTop: 40 });
-  state = { ...state, rawScrollTop: 100, previousRawScrollTop: 40, previousListScrollTop: mapped.listScrollTop, previousCollapseOffset: mapped.collapseOffset };
-  mapped = mapAlbumDetailNativeScroll(state);
-  assert.deepEqual(mapped, { listScrollTop: 16, collapseOffset: 84, rawScrollTop: 100 });
-  assert.equal(getAlbumDetailCoverSize(148, mapped.collapseOffset), 64);
-});
-
-test('upward native scroll preserves collapse until list top and maps excess to cover restoration', () => {
-  const mapped = mapAlbumDetailNativeScroll({
-    rawScrollTop: 70,
-    previousRawScrollTop: 100,
-    previousListScrollTop: 50,
-    previousCollapseOffset: 50,
-    baseCoverSize: 148,
-  });
-  assert.deepEqual(mapped, { listScrollTop: 20, collapseOffset: 50, rawScrollTop: 70 });
-  const top = mapAlbumDetailNativeScroll({
-    rawScrollTop: 20,
-    previousRawScrollTop: 70,
-    previousListScrollTop: 20,
-    previousCollapseOffset: 50,
-    baseCoverSize: 148,
-  });
-  assert.deepEqual(top, { listScrollTop: 0, collapseOffset: 20, rawScrollTop: 20 });
-  const restore = mapAlbumDetailNativeScroll({
-    rawScrollTop: 0,
-    previousRawScrollTop: 20,
-    previousListScrollTop: 0,
-    previousCollapseOffset: 20,
-    baseCoverSize: 148,
-  });
-  assert.deepEqual(restore, { listScrollTop: 0, collapseOffset: 0, rawScrollTop: 0 });
-});
-
-test('native scrollbar extent stays constant across cover sizes and restores logical positions', () => {
-  const viewportHeight = 600;
-  const headingHeight = 184;
-  const tableHeaderHeight = 37;
-  const contentRowsHeight = 100_000;
-  const scrollHeight = headingHeight + tableHeaderHeight + contentRowsHeight;
-  const thumbRatioAtFullSize = viewportHeight / scrollHeight;
-  for (const collapsedBy of [0, 20, 84]) {
-    const visibleListHeight = viewportHeight - headingHeight + collapsedBy - tableHeaderHeight;
-    assert.ok(visibleListHeight > 0);
-    assert.equal(viewportHeight / scrollHeight, thumbRatioAtFullSize);
-    assert.equal(getAlbumDetailNativeScrollTop(2_400, collapsedBy), 2_400 + collapsedBy);
+test('scroller geometry and thumb ratio do not depend on cover collapse', () => {
+  const shellHeight = 760;
+  const top = getAlbumDetailScrollerTop(184, 84, 37);
+  const clientHeight = shellHeight - top;
+  const scrollHeight = 84 + 103 * 50;
+  const ratios = new Set([0, 20, 84, 3_000].map(() => clientHeight / scrollHeight));
+  assert.equal(ratios.size, 1);
+  // Rows start exactly at the scroller's top edge once fully collapsed, and
+  // below it (behind only the collapsing heading) before that.
+  for (const native of [0, 30, 84, 500]) {
+    const { collapseOffset } = getAlbumDetailScrollState(native, 84);
+    const firstRowViewportTop = top + 84 - native;
+    const listBoundary = 184 - collapseOffset + 37;
+    if (native <= 84) assert.equal(firstRowViewportTop, listBoundary);
+    assert.ok(listBoundary >= top);
   }
 });
