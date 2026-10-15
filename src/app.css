@@ -4324,12 +4324,17 @@ input:focus-visible {
     --sidebar-pad-x: 14px;
     position: fixed;
     z-index: 45;
-    top: calc(var(--window-titlebar-height) + var(--android-safe-top, 0px) + 8px);
-    bottom: calc(var(--dock-height) + var(--android-safe-bottom, 0px) + 8px);
-    left: calc(var(--android-safe-left, 0px) + 8px);
-    width: min(300px, calc(100vw - var(--android-safe-left, 0px) - var(--android-safe-right, 0px) - 16px));
+    /* Flush under the title bar, against the left edge, and on top of the dock (which stays visible). */
+    top: calc(var(--window-titlebar-height) + var(--android-safe-top, 0px));
+    bottom: calc(var(--dock-height) + var(--android-safe-bottom, 0px));
+    left: 0;
+    width: min(calc(300px + var(--android-safe-left, 0px)), calc(100vw - var(--android-safe-right, 0px) - 16px));
+    padding-left: calc(var(--sidebar-pad-x) + var(--android-safe-left, 0px));
     padding-bottom: 12px;
-    border-radius: var(--floating-surface-radius);
+    border-top: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 0 var(--floating-surface-radius) var(--floating-surface-radius) 0;
     visibility: hidden;
     opacity: 0;
     pointer-events: none;

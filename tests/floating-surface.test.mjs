@@ -18,7 +18,7 @@ test('floating panels share Quick Settings surface tokens', async () => {
   assert.match(css, /box-shadow: var\(--floating-surface-shadow\)/);
   // Narrow-layout navigation panel reuses the shared floating surface.
   assert.match(app, /class:floating-surface=\{isNarrowNav\}/);
-  assert.match(css, /\.app-shell \.sidebar\.floating-surface \{[^}]*position: fixed;[^}]*border-radius: var\(--floating-surface-radius\)/s);
+  assert.match(css, /\.app-shell \.sidebar\.floating-surface \{[^}]*position: fixed;[^}]*top: calc\(var\(--window-titlebar-height\) \+ var\(--android-safe-top, 0px\)\);[^}]*bottom: calc\(var\(--dock-height\) \+ var\(--android-safe-bottom, 0px\)\);[^}]*left: 0;[^}]*border-radius: 0 var\(--floating-surface-radius\) var\(--floating-surface-radius\) 0;/s);
 
   assert.match(app, /class="now-playing-quick-settings-drawer floating-surface"/);
   assert.match(app, /class="volume-popover floating-surface"/);
