@@ -907,11 +907,11 @@
     display: flex;
     align-items: center;
     border-bottom: var(--divider-width) solid rgba(var(--text-rgb), 0.055);
-    background: var(--list-group-row-background);
+    background: linear-gradient(to bottom, transparent 0, transparent var(--divider-width), var(--list-group-row-background) var(--divider-width));
   }
 
   .paged-virtual-group-row:hover {
-    background: var(--list-group-row-hover-background);
+    background: linear-gradient(to bottom, transparent 0, transparent var(--divider-width), var(--list-group-row-hover-background) var(--divider-width));
   }
 
   .paged-virtual-group-cell {
