@@ -2797,7 +2797,7 @@ input:focus-visible {
 
 .shortcut-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
   margin: 0;
 }
 
