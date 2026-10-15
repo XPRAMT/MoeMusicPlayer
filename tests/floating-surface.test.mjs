@@ -13,10 +13,12 @@ test('floating panels share Quick Settings surface tokens', async () => {
     read('../src/lib/FavoritePopover.svelte'),
   ]);
 
-  assert.match(css, /\.floating-surface,[\s\S]*?background: color-mix\(in srgb, var\(--text-inverse\) var\(--quick-settings-opacity, 70%\), transparent\)/);
+  assert.match(css, /\.floating-surface\s*\{[\s\S]*?background: color-mix\(in srgb, var\(--text-inverse\) var\(--quick-settings-opacity, 70%\), transparent\)/);
   assert.match(css, /backdrop-filter: blur\(var\(--quick-settings-blur, 12px\)\)/);
   assert.match(css, /box-shadow: var\(--floating-surface-shadow\)/);
-  assert.match(css, /\.app-shell\[data-active-view="playlists"\] \.sidebar-playlist-tree-host \.playlist-tree/);
+  // Narrow-layout navigation panel reuses the shared floating surface.
+  assert.match(app, /class:floating-surface=\{isNarrowNav\}/);
+  assert.match(css, /\.app-shell \.sidebar\.floating-surface \{[^}]*position: fixed;[^}]*border-radius: var\(--floating-surface-radius\)/s);
 
   assert.match(app, /class="now-playing-quick-settings-drawer floating-surface"/);
   assert.match(app, /class="volume-popover floating-surface"/);

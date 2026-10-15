@@ -137,6 +137,7 @@
   import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
+  import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import SyncErrorDetails from './lib/SyncErrorDetails.svelte';
   import NowPlayingArrangement from './lib/NowPlayingArrangement.svelte';
@@ -207,6 +208,48 @@
   let isNowPlayingMounted = $state(false);
   let isNowPlayingOpen = $state(false);
   let isQuickSettingsOpen = $state(false);
+  let isNarrowNav = $state(false);
+  let isNavPanelOpen = $state(false);
+  let navPanelToggle = $state<HTMLButtonElement | null>(null);
+
+  $effect(() => {
+    const narrowQuery = window.matchMedia(NAV_PANEL_MEDIA_QUERY);
+    const sync = () => {
+      isNarrowNav = narrowQuery.matches;
+      if (!narrowQuery.matches) isNavPanelOpen = reduceNavPanelOpen(isNavPanelOpen, 'widen', false);
+    };
+    sync();
+    narrowQuery.addEventListener('change', sync);
+    return () => narrowQuery.removeEventListener('change', sync);
+  });
+
+  $effect(() => {
+    if (isNowPlayingOpen) isNavPanelOpen = false;
+  });
+
+  function toggleNavPanel(): void {
+    isNavPanelOpen = reduceNavPanelOpen(isNavPanelOpen, 'toggle', isNarrowNav);
+  }
+
+  function closeNavPanel(event: 'escape' | 'outside' | 'navigate', restoreFocus: boolean): void {
+    if (!isNavPanelOpen) return;
+    isNavPanelOpen = reduceNavPanelOpen(isNavPanelOpen, event, isNarrowNav);
+    if (restoreFocus) navPanelToggle?.focus();
+  }
+
+  function handleSidebarClick(event: MouseEvent): void {
+    if (!isNavPanelOpen) return;
+    if ((event.target as Element | null)?.closest(NAV_PANEL_NAVIGATION_SELECTOR)) closeNavPanel('navigate', false);
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (isNavPanelOpen && event.key === 'Escape') {
+      event.preventDefault();
+      closeNavPanel('escape', true);
+      return;
+    }
+    handleQuickSettingsKeydown(event);
+  }
   let quickSettingsTrigger = $state<HTMLButtonElement | undefined>(undefined);
   let quickSettingsCloseButton = $state<HTMLButtonElement | undefined>(undefined);
   let quickSettingsDialog = $state<HTMLElement | undefined>(undefined);
@@ -2923,7 +2966,7 @@
 
 </script>
 
-<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleDockPointerDown} onkeydown={handleQuickSettingsKeydown} onresize={updateVolumePopoverAlignment} />
+<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleDockPointerDown} onkeydown={handleWindowKeydown} onresize={updateVolumePopoverAlignment} />
 
 {#snippet settingsTabs(scope: string)}
             <div class="settings-tabs" role="tablist" aria-label="設定分類">
@@ -3620,7 +3663,19 @@
       onCoverError={(url) => artworkController.imageFailed(url)}
     />
   {/if}
-  <aside class="sidebar" aria-label="主要導覽" inert={isNowPlayingOpen}>
+  {#if isNavPanelOpen}
+    <button class="nav-panel-scrim" type="button" tabindex="-1" aria-label="關閉導覽" onclick={() => closeNavPanel('outside', false)}></button>
+  {/if}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+  <aside
+    id="app-sidebar"
+    class="sidebar"
+    class:floating-surface={isNarrowNav}
+    class:nav-panel-open={isNavPanelOpen}
+    aria-label="主要導覽"
+    inert={isNowPlayingOpen || (isNarrowNav && !isNavPanelOpen)}
+    onclick={handleSidebarClick}
+  >
     <div class="brand-lockup">
       <div class="brand-mark">
         <img src={brandIcon} alt="MOE" />
@@ -3644,6 +3699,7 @@
       />
     </label>
 
+    <div class="sidebar-scroll">
     <nav class="primary-nav">
       <button
         class="nav-link"
@@ -3696,6 +3752,7 @@
         onSelect={selectPlaylist}
       />
     </div>
+    </div>
     <nav class="sidebar-settings" aria-label="設定">
       <button
         class="nav-link"
@@ -3712,6 +3769,17 @@
 
   <main class="workspace" inert={isNowPlayingOpen}>
     <header class="topbar">
+      <button
+        bind:this={navPanelToggle}
+        class="nav-panel-toggle"
+        type="button"
+        aria-label={isNavPanelOpen ? '關閉導覽' : '開啟導覽'}
+        aria-expanded={isNavPanelOpen}
+        aria-controls="app-sidebar"
+        onclick={toggleNavPanel}
+      >
+        <img src={brandIcon} alt="" />
+      </button>
       <div class="topbar-title-block">
         <h1 id="page-heading" class="page-title">
           {#if activeView === 'artist-detail'}

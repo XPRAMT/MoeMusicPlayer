@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { IconChevronRight, IconPlaylist } from '@tabler/icons-svelte-runes';
+  import { IconPlaylist } from '@tabler/icons-svelte-runes';
   import type { PlaylistSummary } from './ipc';
   import { appTooltip } from './app-tooltip.js';
 
@@ -13,21 +12,8 @@
   }
 
   let { playlists, selectedPlaylistId, active, onOpen, onSelect }: Props = $props();
-  let expanded = $state(true);
-
-  onMount(() => {
-    const compactLayout = window.matchMedia('(max-width: 820px)');
-    if (compactLayout.matches) expanded = false;
-    const collapseWhenCompact = (event: MediaQueryListEvent) => {
-      if (event.matches) expanded = false;
-    };
-    compactLayout.addEventListener('change', collapseWhenCompact);
-    return () => compactLayout.removeEventListener('change', collapseWhenCompact);
-  });
-
   function choosePlaylist(playlistId: string): void {
     onSelect(playlistId);
-    if (window.matchMedia('(max-width: 820px)').matches) expanded = false;
   }
 </script>
 
@@ -38,40 +24,28 @@
       <span class="playlist-tree-open-label">播放清單</span>
       <span class="playlist-tree-count" aria-label={`${playlists.length} 份播放清單`}>{playlists.length.toLocaleString()}</span>
     </button>
-    <button
-      class="playlist-tree-toggle"
-      type="button"
-      aria-label={expanded ? '收合播放清單' : '展開播放清單'}
-      aria-expanded={expanded}
-      aria-controls="sidebar-playlist-items"
-      onclick={() => { expanded = !expanded; }}
-    >
-      <IconChevronRight class={expanded ? 'playlist-tree-chevron expanded' : 'playlist-tree-chevron'} size={15} stroke={1.8} aria-hidden="true" />
-    </button>
   </div>
 
-  {#if expanded}
-    <ul id="sidebar-playlist-items" class="playlist-tree-items">
-      {#each playlists as playlist (playlist.id)}
-        <li>
-          <button
-            class="playlist-tree-item"
-            class:selected={active && selectedPlaylistId === playlist.id}
-            type="button"
-            aria-current={active && selectedPlaylistId === playlist.id ? 'page' : undefined}
-            use:appTooltip={playlist.name.trim() || '未命名播放清單'}
-            onclick={() => choosePlaylist(playlist.id)}
-          >
-            <IconPlaylist size={17} stroke={1.6} aria-hidden="true" />
-            <span class="playlist-tree-copy">
-              <strong>{playlist.name.trim() || '未命名播放清單'}</strong>
-              <small>{playlist.entryCount.toLocaleString()} 個項目</small>
-            </span>
-          </button>
-        </li>
-      {/each}
-    </ul>
-  {/if}
+  <ul id="sidebar-playlist-items" class="playlist-tree-items">
+    {#each playlists as playlist (playlist.id)}
+      <li>
+        <button
+          class="playlist-tree-item"
+          class:selected={active && selectedPlaylistId === playlist.id}
+          type="button"
+          aria-current={active && selectedPlaylistId === playlist.id ? 'page' : undefined}
+          use:appTooltip={playlist.name.trim() || '未命名播放清單'}
+          onclick={() => choosePlaylist(playlist.id)}
+        >
+          <IconPlaylist size={17} stroke={1.6} aria-hidden="true" />
+          <span class="playlist-tree-copy">
+            <strong>{playlist.name.trim() || '未命名播放清單'}</strong>
+            <small>{playlist.entryCount.toLocaleString()} 個項目</small>
+          </span>
+        </button>
+      </li>
+    {/each}
+  </ul>
 </nav>
 
 <style>
@@ -79,9 +53,7 @@
     display: flex;
     width: 100%;
     min-width: 0;
-    max-height: min(380px, 48vh, calc(100dvh - 230px));
     flex-direction: column;
-    overflow: auto;
     padding: 6px;
     border: 1px solid var(--line);
     border-radius: 12px;
@@ -93,21 +65,16 @@
     width: 100%;
     min-height: 39px;
     flex: 0 0 auto;
-    grid-template-columns: minmax(0, 1fr) 29px;
+    grid-template-columns: minmax(0, 1fr);
     align-items: center;
     border-radius: 8px;
   }
-
   .playlist-tree-heading.active .playlist-tree-open,
   .playlist-tree-heading.active .playlist-tree-open:hover,
-  .playlist-tree-heading.active .playlist-tree-open:focus-visible,
-  .playlist-tree-heading.active .playlist-tree-toggle:hover,
-  .playlist-tree-heading.active .playlist-tree-toggle:focus-visible {
+  .playlist-tree-heading.active .playlist-tree-open:focus-visible {
     background: transparent;
   }
-
-  .playlist-tree-open,
-  .playlist-tree-toggle {
+  .playlist-tree-open {
     display: flex;
     min-width: 0;
     min-height: 35px;
@@ -145,32 +112,13 @@
   .playlist-tree-open.active {
     color: var(--accent-text);
   }
-
-  .playlist-tree-toggle {
-    width: 29px;
-    padding: 0;
-  }
-
   .playlist-tree-open:hover,
-  .playlist-tree-open:focus-visible,
-  .playlist-tree-toggle:hover,
-  .playlist-tree-toggle:focus-visible {
+  .playlist-tree-open:focus-visible {
     background: rgba(var(--text-rgb), 0.05);
   }
-
-  .playlist-tree-open:focus-visible,
-  .playlist-tree-toggle:focus-visible {
+  .playlist-tree-open:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
-  }
-
-  :global(.playlist-tree-chevron) {
-    color: var(--text-soft);
-    transition: transform 120ms ease;
-  }
-
-  :global(.playlist-tree-chevron.expanded) {
-    transform: rotate(90deg);
   }
 
   .playlist-tree-count {
@@ -179,10 +127,6 @@
     font-family: 'DM Mono', monospace;
     font-size: var(--font-caption);
     font-weight: 500;
-  }
-
-  .playlist-tree-toggle :global(svg) {
-    color: var(--text-soft);
   }
 
   .playlist-tree-items {
@@ -279,39 +223,5 @@
   .playlist-tree-copy small {
     color: var(--text-soft);
     font-size: var(--font-caption);
-  }
-
-  @media (max-width: 820px) {
-    .playlist-tree-heading {
-      grid-template-columns: minmax(0, 1fr) 22px;
-    }
-
-    .playlist-tree-open-label,
-    .playlist-tree-count {
-      display: none;
-    }
-
-    .playlist-tree-open {
-      min-height: 38px;
-      justify-content: center;
-      padding: 0;
-    }
-
-    .playlist-tree-toggle {
-      width: 22px;
-      min-height: 38px;
-    }
-  }
-
-  @media (max-width: 620px) {
-    .playlist-tree-heading {
-      grid-template-columns: 38px 18px;
-    }
-  }
-
-  @media (max-width: 620px) {
-    .playlist-tree {
-      max-height: min(200px, 28vh);
-    }
   }
 </style>

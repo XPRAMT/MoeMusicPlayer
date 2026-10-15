@@ -112,7 +112,7 @@ test('the footer artwork opens and closes a full-window Now Playing overlay', ()
   assert.match(closeHandler, /activeView\s*=\s*nowPlayingReturnView/);
   assert.match(closeHandler, /isNowPlayingOpen\s*=\s*false/);
 
-  assert.match(appSource, /class="sidebar"[^>]*inert=\{isNowPlayingOpen\}/);
+  assert.match(appSource, /class="sidebar"[\s\S]*?inert=\{isNowPlayingOpen \|\| \(isNarrowNav && !isNavPanelOpen\)\}/);
   assert.match(appSource, /class="workspace"[^>]*inert=\{isNowPlayingOpen\}/);
   assert.match(appSource, /class="now-playing-overlay"[\s\S]*?aria-hidden=\{!isNowPlayingOpen\}[\s\S]*?inert=\{!isNowPlayingOpen\}/);
   assert.match(appSource, /class="[^"]*\bnow-playing-overlay-return\b[^"]*"[\s\S]*?aria-label="返回播放前頁面"[\s\S]*?onclick=\{\(\)\s*=>\s*void closeNowPlaying\(\)\}/);
@@ -127,7 +127,9 @@ test('the sidebar playlist group is the single playlist navigation entry and wor
   const treeHost = /<div class="sidebar-playlist-tree-host">\s*<PlaylistTree([\s\S]*?)\/>\s*<\/div>/.exec(appSource);
   assert.ok(treeHost, 'playlist tree must always render in the sidebar');
   assert.match(treeHost[1], /onOpen=/, 'playlist group heading must open the playlist page');
-  assert.match(playlistTreeSource, /aria-label=\{expanded \? '收合播放清單' : '展開播放清單'\}/);
+  // Playlists are always expanded: no collapse toggle or state.
+  assert.doesNotMatch(playlistTreeSource, /playlist-tree-toggle|expanded|matchMedia/);
+  assert.match(playlistTreeSource, /<\/div>\s*<ul id="sidebar-playlist-items"/);
   assert.match(appSource, /我的播放清單．\$\{selectedPlaylist\.name/, 'playlist top bar must include the selected playlist name');
   assert.doesNotMatch(appSource, /playlist-import-button|匯入 M3U\/M3U8|exportPlaylist|importPlaylist/, 'playlist page must not show M3U import/export UI');
   assert.doesNotMatch(appSource, /\{#if playlists\.length > 0\}\s*<div class="sidebar-playlist-tree-host"/);
@@ -272,4 +274,18 @@ test('visible UI icons use Tabler components except the original brand mark', ()
   assert.match(playlistEntrySource, /ariaLabel="播放清單項目；點擊欄位標題排序；使用方向鍵瀏覽，按 Enter 播放目前項目"/);
   assert.match(playlistEntrySource, /sortableIndex=\{true\}/);
   assert.match(playlistEntrySource, /sort: PlaylistListSort/);
+});
+
+test('sidebar nav items scroll while 設定 stays pinned, and narrow widths use the MOE logo panel', async () => {
+  const css = await (await import('node:fs/promises')).readFile(new URL('../src/app.css', import.meta.url), 'utf8');
+  const scrollStart = appSource.indexOf('<div class="sidebar-scroll">');
+  const settingsStart = appSource.indexOf('<nav class="sidebar-settings"');
+  assert.ok(scrollStart >= 0 && settingsStart > scrollStart);
+  const scrollBlock = appSource.slice(scrollStart, settingsStart);
+  assert.match(scrollBlock, /<nav class="primary-nav">[\s\S]*<PlaylistTree/);
+  assert.match(css, /\.sidebar-scroll \{[^}]*overflow-y: auto;/s);
+  assert.match(appSource, /class="nav-panel-toggle"[\s\S]*?aria-expanded=\{isNavPanelOpen\}[\s\S]*?<img src=\{brandIcon\}/);
+  assert.match(appSource, /class="nav-panel-scrim"[^>]*onclick=\{\(\) => closeNavPanel\('outside', false\)\}/);
+  assert.doesNotMatch(css, /grid-template-rows: 58px/, 'narrow widths must not move navigation into a top bar');
+  assert.doesNotMatch(css, /--sidebar-width: 72px/, 'the icon rail layout is gone');
 });
