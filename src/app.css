@@ -3133,18 +3133,17 @@ input:focus-visible {
 
 .main-background-mode-picker {
   box-sizing: border-box;
-  display: grid;
+  display: flex;
   min-width: 0;
-  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  flex-wrap: wrap;
   gap: var(--settings-item-gap);
   overflow: visible;
 }
 
 .main-background-mode-picker > .soft-button {
-  min-width: 0;
-  width: 100%;
+  min-width: max-content;
+  flex: 1 1 auto;
   justify-content: center;
-  white-space: normal;
 }
 
 .source-action-row input {
