@@ -54,11 +54,11 @@
 
 .list-group-row-surface {
   border-bottom: var(--divider-width) solid var(--divider-color);
-  background: linear-gradient(to bottom, transparent 0, transparent var(--divider-width), var(--list-group-row-background) var(--divider-width));
+  background: var(--list-group-row-background);
 }
 
 .list-group-row-surface:hover {
-  background: linear-gradient(to bottom, transparent 0, transparent var(--divider-width), var(--list-group-row-hover-background) var(--divider-width));
+  background: var(--list-group-row-hover-background);
 }
 
 * {

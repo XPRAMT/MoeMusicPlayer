@@ -115,8 +115,9 @@ test('album group and card rows share compact vertical spacing and global group 
   assert.match(albumIndexSource, /groupHeadingHeight = \$derived\(Math\.max\(30, rowHeightPx \* 0\.7\)\)/);
   assert.match(albumIndexSource, /class="album-index-group-row list-group-row-surface"/);
   assert.match(pagedVirtualListSource, /class="paged-virtual-row paged-virtual-group-row list-group-row-surface"/);
-  assert.match(appCssSource, /\.list-group-row-surface \{[\s\S]*?border-bottom: var\(--divider-width\)[\s\S]*?var\(--list-group-row-background\)/);
-  assert.match(appCssSource, /\.list-group-row-surface:hover \{[\s\S]*?var\(--list-group-row-hover-background\)/);
+  assert.match(appCssSource, /\.list-group-row-surface \{[\s\S]*?border-bottom: var\(--divider-width\)[^}]*background: var\(--list-group-row-background\)/);
+  assert.match(appCssSource, /\.list-group-row-surface:hover \{[^}]*background: var\(--list-group-row-hover-background\)/);
+  assert.doesNotMatch(appCssSource, /\.list-group-row-surface(?::hover)?\s*\{[^}]*transparent\s+0[^}]*--divider-width/);
   assert.match(albumIndexSource, /groupCardGap: verticalGap/);
   assert.match(albumIndexSource, /cardHeight = \$derived\(cardWidth \+ cardTextHeight\)/);
   assert.match(albumIndexSource, /rowHeight = \$derived\(cardHeight \+ verticalGap\)/);
