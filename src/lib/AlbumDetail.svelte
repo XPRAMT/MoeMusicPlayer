@@ -38,9 +38,12 @@
   let sortReady = $state(false);
   let sortSaveQueue: Promise<unknown> = Promise.resolve();
   let albumCoverBaseSize = $state(148);
+  let albumHeadingBaseHeight = $state(184);
   let albumCoverScrollPeak = $state(0);
   let albumListAtTop = $state(true);
   let albumCoverSize = $derived(getAlbumDetailCoverSize(albumCoverBaseSize, albumCoverScrollPeak));
+  let albumCollapseRange = $derived(Math.max(0, albumCoverBaseSize - 64));
+  let albumCollapseOffset = $derived(Math.min(albumCollapseRange, albumCoverScrollPeak));
   let albumDiscQuickIndices = $state<{
     ascending: QuickIndexSnapshot;
     descending: QuickIndexSnapshot;
@@ -99,7 +102,9 @@
   onMount(() => {
     let cancelled = false;
     const updateCoverBaseSize = () => {
-      albumCoverBaseSize = window.matchMedia('(max-width: 620px)').matches ? 116 : 148;
+      const narrow = window.matchMedia('(max-width: 620px)').matches;
+      albumCoverBaseSize = narrow ? 116 : 148;
+      albumHeadingBaseHeight = narrow ? 144 : 184;
     };
     updateCoverBaseSize();
     window.addEventListener('resize', updateCoverBaseSize);
@@ -223,13 +228,33 @@
   onDestroy(() => { revision += 1; for (const url of ownedCoverUrls) URL.revokeObjectURL(url); });
 </script>
 
-<div class="album-detail-shell">
-  <div class="album-detail-heading">
-    <div
-      class="album-detail-art"
-      class:album-detail-art-restoring={albumListAtTop}
-      style={`--album-detail-cover-size:${albumCoverSize}px`}
-    >
+<div class="album-detail-shell" style={`--album-detail-heading-height:${albumHeadingBaseHeight - albumCollapseOffset}px`}>
+  <div class="album-detail-tracks">
+    {#if sortReady}
+      <TrackList
+        query=""
+        resetKey={`${album.key}:${refreshKey}:${detailSort.field}-${detailSort.direction}`}
+        listId={`album-detail-${album.key}`}
+        {selectedTrackId} {playbackReady} {isSendingPlaybackCommand} {columns} {columnWidths} {rowHeightPx} sort={detailTrackSort} {livePlayCount}
+        fetchPage={fetchPage} {onPlay} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
+        sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel="依專輯曲目編號排序" onIndexSort={handleIndexSort}
+        quickIndexOverride={albumDiscQuickIndex}
+        quickIndexAlbumNames={album.aliases}
+        {groupingEnabled}
+        getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber)}
+        leadingOverlayHeight={albumHeadingBaseHeight}
+        leadingCollapseOffset={albumCollapseOffset}
+        leadingCollapseRange={albumCollapseRange}
+        onViewportScrollTopChange={handleListScrollTopChange}
+      />
+    {/if}
+  </div>
+  <div
+    class="album-detail-heading"
+    class:album-detail-art-restoring={albumListAtTop}
+    style={`--album-detail-cover-size:${albumCoverSize}px`}
+  >
+    <div class="album-detail-art">
       <AlbumArtworkMosaic sources={displayedCoverUrls} label={`${album.displayName} 封面拼貼`} />
     </div>
     <div class="album-detail-summary">
@@ -244,30 +269,13 @@
       {#if scanning && coverUrls.length === 0}<span class="album-detail-status" role="status">正在整理封面…</span>{/if}
     </div>
   </div>
-  <div class="album-detail-tracks">
-    {#if sortReady}
-      <TrackList
-        query=""
-        resetKey={`${album.key}:${refreshKey}:${detailSort.field}-${detailSort.direction}`}
-        listId={`album-detail-${album.key}`}
-        {selectedTrackId} {playbackReady} {isSendingPlaybackCommand} {columns} {columnWidths} {rowHeightPx} sort={detailTrackSort} {livePlayCount}
-        fetchPage={fetchPage} {onPlay} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
-        sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel="依專輯曲目編號排序" onIndexSort={handleIndexSort}
-        quickIndexOverride={albumDiscQuickIndex}
-        quickIndexAlbumNames={album.aliases}
-        {groupingEnabled}
-        getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber)}
-        onViewportScrollTopChange={handleListScrollTopChange}
-      />
-    {/if}
-  </div>
 </div>
 
 <style>
-  .album-detail-shell { display:flex; min-width:0; min-height:0; flex:1 1 auto; flex-direction:column; }
-  .album-detail-heading { display:flex; flex:0 0 auto; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); }
+  .album-detail-shell { position:relative; min-width:0; min-height:0; flex:1 1 auto; overflow:hidden; }
+  .album-detail-heading { position:absolute; z-index:4; top:0; right:0; left:0; display:flex; height:var(--album-detail-heading-height); box-sizing:border-box; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); }
   .album-detail-art { width:var(--album-detail-cover-size,148px); height:var(--album-detail-cover-size,148px); flex:0 0 var(--album-detail-cover-size,148px); aspect-ratio:1; overflow:hidden; border-radius:10px; background:#000; }
-  .album-detail-art.album-detail-art-restoring { transition:width 180ms ease-out,height 180ms ease-out,flex-basis 180ms ease-out; }
+  .album-detail-heading.album-detail-art-restoring .album-detail-art { transition:width 180ms ease-out,height 180ms ease-out,flex-basis 180ms ease-out; }
   .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:10px; }
   .album-detail-artists,
   .album-detail-stats,
@@ -277,6 +285,6 @@
   .album-detail-summary .album-detail-value { color:var(--text-soft); font-size:var(--font-body); }
   .album-detail-summary .album-detail-error,
   .album-detail-summary .album-detail-status { color:var(--muted); font-size:var(--font-caption); }
-  .album-detail-tracks { display:flex; min-height:0; flex:1 1 auto; flex-direction:column; }
+  .album-detail-tracks { position:absolute; inset:0; min-height:0; }
   @media (max-width:620px) { .album-detail-heading { gap:14px; padding:14px; } }
 </style>

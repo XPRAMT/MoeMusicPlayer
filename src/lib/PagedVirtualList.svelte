@@ -47,6 +47,7 @@
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
   } from './queue-reorder.js';
+  import { mapAlbumDetailNativeScroll } from './album-detail-collapse.js';
 
   interface Props<Item> {
     totalCount: number | null;
@@ -67,6 +68,10 @@
     compactHeaderHeight?: number;
     maxViewportHeight?: number;
     fillAvailable?: boolean;
+    /** Keep the scroll viewport fixed while a leading album heading overlays its content. */
+    leadingOverlayHeight?: number;
+    leadingCollapseOffset?: number;
+    leadingCollapseRange?: number;
     overscan?: number;
     listId: string;
     ariaLabel: string;
@@ -111,6 +116,9 @@
     compactHeaderHeight = baseHeaderHeight,
     maxViewportHeight: maxHeight = 680,
     fillAvailable = false,
+    leadingOverlayHeight = 0,
+    leadingCollapseOffset = 0,
+    leadingCollapseRange = 0,
     overscan = 8,
     listId,
     ariaLabel,
@@ -174,6 +182,8 @@
   let quickIndexTrigger: HTMLButtonElement | null = null;
   let previousGroupRows: QuickIndexGroup[] = [];
   let hasPreviousGroupSnapshot = false;
+  let lastNativeScrollTop = 0;
+  let handlingMappedScroll = false;
 
   const virtualDataCount = $derived(totalCount ?? 40);
   const renderGroupRows = $derived(groupingReady ? groupRows : []);
@@ -182,9 +192,14 @@
   const virtualContentHeight = $derived(
     getVirtualRowsHeight(virtualDataCount, renderGroupRows, rowHeight, groupRowHeight),
   );
+  const hasLeadingOverlay = $derived(leadingOverlayHeight > 0);
+  const contentLeadingHeight = $derived(hasLeadingOverlay ? leadingOverlayHeight + headerHeight : 0);
+  const effectiveViewportHeight = $derived(hasLeadingOverlay
+    ? Math.max(rowHeight, viewportHeight - leadingOverlayHeight + leadingCollapseOffset - headerHeight)
+    : viewportHeight);
   const rowViewportHeight = $derived(
     fillAvailable
-      ? Math.max(rowHeight, viewportHeight)
+      ? Math.max(rowHeight, effectiveViewportHeight)
       : Math.max(
         rowHeight,
         Math.min(Math.max(rowHeight, maxViewportHeight - headerHeight), virtualContentHeight),
@@ -192,7 +207,7 @@
   );
   const range = $derived(getGroupedVirtualRange(
     scrollTop,
-    viewportHeight,
+    effectiveViewportHeight,
     virtualDataCount,
     renderGroupRows,
     rowHeight,
@@ -211,6 +226,102 @@
   }));
   const activeDescendantId = $derived(`${listId}-row-${dataIndexToVisualIndex(activeIndex, renderGroupRows)}`);
   const availableIndexLabels = $derived(new Set(renderGroupRows.map(({ label }) => label)));
+
+  function nativeScrollTopFor(logicalTop: number, collapseOffset = leadingCollapseOffset): number {
+    return hasLeadingOverlay ? Math.max(0, logicalTop) + Math.max(0, collapseOffset) : Math.max(0, logicalTop);
+  }
+
+  function logicalScrollTopFromNative(nativeTop: number): number {
+    return hasLeadingOverlay ? Math.max(0, nativeTop - leadingCollapseOffset) : Math.max(0, nativeTop);
+  }
+
+  function setLogicalScrollTop(logicalTop: number, collapseOffset = leadingCollapseOffset): void {
+    if (!viewport) return;
+    const nativeMaximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    const next = Math.max(0, Math.min(nativeMaximum - (hasLeadingOverlay ? collapseOffset : 0), logicalTop));
+    const nativeTop = nativeScrollTopFor(next, collapseOffset);
+    handlingMappedScroll = true;
+    viewport.scrollTop = nativeTop;
+    handlingMappedScroll = false;
+    scrollTop = next;
+    lastVisibleScrollTop = next;
+    lastNativeScrollTop = nativeTop;
+    rememberVisibleScrollPosition(next);
+  }
+
+  function getVisibleRowsHeight(): number {
+    if (!viewport) return viewportHeight;
+    return hasLeadingOverlay
+      ? Math.max(rowHeight, viewport.clientHeight - leadingOverlayHeight + leadingCollapseOffset - headerHeight)
+      : viewport.clientHeight;
+  }
+
+  function getMaximumLogicalScrollTop(): { listScrollTop: number; collapseOffset: number } {
+    if (!viewport) return { listScrollTop: 0, collapseOffset: 0 };
+    const maximumNativeTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    if (!hasLeadingOverlay) return { listScrollTop: maximumNativeTop, collapseOffset: 0 };
+    const mapped = mapAlbumDetailNativeScroll({
+      rawScrollTop: maximumNativeTop,
+      previousRawScrollTop: 0,
+      previousListScrollTop: 0,
+      previousCollapseOffset: 0,
+      baseCoverSize: 64 + leadingCollapseRange,
+    });
+    return { listScrollTop: mapped.listScrollTop, collapseOffset: mapped.collapseOffset };
+  }
+
+  function moveLogicalBy(delta: number): void {
+    if (!viewport) return;
+    let nextLogical = Math.max(0, scrollTop + delta);
+    let nextCollapse = nextLogical === 0 ? 0 : Math.min(leadingCollapseRange, Math.max(leadingCollapseOffset, nextLogical));
+    let nextNative = nativeScrollTopFor(nextLogical, nextCollapse);
+    const maximumNative = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    if (nextNative > maximumNative && hasLeadingOverlay) {
+      const mapped = mapAlbumDetailNativeScroll({
+        rawScrollTop: maximumNative,
+        previousRawScrollTop: lastNativeScrollTop,
+        previousListScrollTop: scrollTop,
+        previousCollapseOffset: leadingCollapseOffset,
+        baseCoverSize: 64 + leadingCollapseRange,
+      });
+      nextLogical = mapped.listScrollTop;
+      nextCollapse = mapped.collapseOffset;
+      nextNative = mapped.rawScrollTop;
+    }
+    setLogicalScrollTop(nextLogical, nextCollapse);
+    onViewportScrollTopChange?.(scrollTop);
+  }
+
+  function getVisibleRowsRect(): DOMRect | null {
+    if (!viewport) return null;
+    const rect = viewport.getBoundingClientRect();
+    const top = rect.top + (hasLeadingOverlay ? leadingOverlayHeight - leadingCollapseOffset + headerHeight : 0);
+    return new DOMRect(rect.left, top, rect.width, Math.max(0, rect.bottom - top));
+  }
+
+  function handleViewportWheel(event: WheelEvent): void {
+    if (!hasLeadingOverlay || !viewport || event.ctrlKey || event.deltaY === 0) return;
+    event.preventDefault();
+    const delta = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? event.deltaY * rowHeight
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? event.deltaY * getVisibleRowsHeight()
+        : event.deltaY;
+    moveLogicalBy(delta);
+  }
+
+  $effect(() => {
+    const active = hasLeadingOverlay;
+    const collapse = leadingCollapseOffset;
+    leadingOverlayHeight;
+    if (!active || !metricsReady || !viewport) return;
+    const expectedNativeTop = nativeScrollTopFor(scrollTop, collapse);
+    if (Math.abs(viewport.scrollTop - expectedNativeTop) > 0.5) {
+      viewport.scrollTop = expectedNativeTop;
+      lastNativeScrollTop = expectedNativeTop;
+    }
+    viewportHeight = viewport.clientHeight;
+  });
 
   $effect(() => {
     baseRowHeight;
@@ -242,6 +353,7 @@
       scrollTop = 0;
       lastVisibleScrollTop = 0;
       viewport?.scrollTo({ top: 0 });
+      lastNativeScrollTop = 0;
     } else if (resetChanged) {
       activeIndex = 0;
       scrollTop = 0;
@@ -249,6 +361,7 @@
       writeListScrollPosition(currentListId, 0);
       pendingListRestore = null;
       viewport?.scrollTo({ top: 0 });
+      lastNativeScrollTop = 0;
     }
     const restoredScrollTop = pendingListRestore?.listId === currentListId
       ? getRestoredListScrollTop({
@@ -260,20 +373,26 @@
         rowHeight,
         groupRowHeight,
         groups: renderGroupRows,
-        viewportHeight,
+        viewportHeight: effectiveViewportHeight,
       })
       : null;
     if (restoredScrollTop !== null && scrollRestoreReady) {
-      scrollTop = restoredScrollTop;
-      lastVisibleScrollTop = restoredScrollTop;
-      writeListScrollPosition(currentListId, restoredScrollTop);
+      const maximum = getMaximumLogicalScrollTop();
+      const safeRestoredScrollTop = Math.min(restoredScrollTop, maximum.listScrollTop);
+      const restoredCollapseOffset = hasLeadingOverlay
+        ? Math.min(leadingCollapseRange, safeRestoredScrollTop)
+        : 0;
+      scrollTop = safeRestoredScrollTop;
+      lastVisibleScrollTop = safeRestoredScrollTop;
+      writeListScrollPosition(currentListId, safeRestoredScrollTop);
       if (viewport && viewport.clientHeight > 0) {
-        viewport.scrollTop = restoredScrollTop;
+        viewport.scrollTop = nativeScrollTopFor(safeRestoredScrollTop, restoredCollapseOffset);
+        lastNativeScrollTop = viewport.scrollTop;
         hadVisibleViewport = true;
       }
       const restoredRange = getGroupedVirtualRange(
-        restoredScrollTop,
-        viewportHeight,
+        safeRestoredScrollTop,
+        effectiveViewportHeight,
         virtualDataCount,
         renderGroupRows,
         rowHeight,
@@ -281,6 +400,7 @@
         overscan,
       );
       onRange(visualRangeToDataRange(restoredRange.start, restoredRange.end, renderGroupRows, virtualDataCount));
+      onViewportScrollTopChange?.(safeRestoredScrollTop);
       pendingListRestore = null;
     }
     seenListId = currentListId;
@@ -307,10 +427,10 @@
     if (shouldAdjustGroupAnchor({
       groupsChanged,
       hasPreviousSnapshot: hasPreviousGroupSnapshot,
-      scrollTop: viewport?.scrollTop ?? 0,
+      scrollTop,
     }) && viewport && viewport.clientHeight > 0) {
       const oldVisualIndex = getVisualIndexAtOffset(
-        viewport.scrollTop,
+        scrollTop,
         virtualDataCount,
         previous,
         rowHeight,
@@ -319,14 +439,11 @@
       const anchorDataIndex = visualIndexToAnchorDataIndex(oldVisualIndex, previous, virtualDataCount);
       if (anchorDataIndex !== null && anchorDataIndex >= 0 && anchorDataIndex < virtualDataCount) {
         const oldTop = getVirtualRowTop(oldVisualIndex, previous, rowHeight, groupRowHeight);
-        const withinRowOffset = Math.max(0, viewport.scrollTop - oldTop);
+        const withinRowOffset = Math.max(0, scrollTop - oldTop);
         const nextVisualIndex = dataIndexToVisualIndex(anchorDataIndex, nextGroupRows);
         const nextScrollTop = getVirtualRowTop(nextVisualIndex, nextGroupRows, rowHeight, groupRowHeight)
           + Math.min(withinRowOffset, rowHeight - 1);
-        viewport.scrollTop = nextScrollTop;
-        scrollTop = nextScrollTop;
-        lastVisibleScrollTop = nextScrollTop;
-        rememberVisibleScrollPosition(nextScrollTop);
+        setLogicalScrollTop(nextScrollTop);
       }
     }
     previousGroupRows = nextGroupRows;
@@ -350,27 +467,26 @@
       const nextViewportHeight = viewport?.clientHeight ?? viewportHeight;
       if (viewport && nextViewportHeight > 0) {
         if (!hadVisibleViewport) {
-          const restoredScrollTop = Math.min(
-            lastVisibleScrollTop,
-            Math.max(0, viewport.scrollHeight - nextViewportHeight),
-          );
-          if (viewport.scrollTop !== restoredScrollTop) viewport.scrollTop = restoredScrollTop;
+          const restoredScrollTop = lastVisibleScrollTop;
+          const restoredNativeTop = nativeScrollTopFor(restoredScrollTop, Math.min(leadingCollapseRange, restoredScrollTop));
+          if (viewport.scrollTop !== restoredNativeTop) viewport.scrollTop = restoredNativeTop;
           scrollTop = restoredScrollTop;
-          lastVisibleScrollTop = restoredScrollTop;
+          lastNativeScrollTop = restoredNativeTop;
           rememberVisibleScrollPosition(restoredScrollTop);
           hadVisibleViewport = true;
         } else {
-          scrollTop = viewport.scrollTop;
-          lastVisibleScrollTop = viewport.scrollTop;
-          rememberVisibleScrollPosition(viewport.scrollTop);
+          scrollTop = logicalScrollTopFromNative(viewport.scrollTop);
+          lastNativeScrollTop = viewport.scrollTop;
+          lastVisibleScrollTop = scrollTop;
+          rememberVisibleScrollPosition(scrollTop);
         }
       } else if (nextViewportHeight === 0) {
         hadVisibleViewport = false;
       }
       viewportHeight = nextViewportHeight;
-      if (nextViewportHeight > 0) metricsReady = true;
+      if (effectiveViewportHeight > 0) metricsReady = true;
       if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
-      if (viewport) onViewportScrollTopChange?.(viewport.scrollTop);
+      if (viewport) onViewportScrollTopChange?.(scrollTop);
     };
     recalculateMetrics = updateMetrics;
     updateMetrics();
@@ -387,23 +503,39 @@
   });
 
   onDestroy(() => {
-    const finalScrollTop = viewport?.clientHeight ? viewport.scrollTop : lastVisibleScrollTop;
+    const finalScrollTop = viewport?.clientHeight ? logicalScrollTopFromNative(viewport.scrollTop) : lastVisibleScrollTop;
     rememberVisibleScrollPosition(finalScrollTop);
   });
 
   function updateViewport(): void {
     if (!viewport) return;
+    if (handlingMappedScroll) return;
     if (viewport.clientHeight > 0) {
-      scrollTop = viewport.scrollTop;
-      lastVisibleScrollTop = viewport.scrollTop;
-      rememberVisibleScrollPosition(viewport.scrollTop);
+      const nativeTop = viewport.scrollTop;
+      if (hasLeadingOverlay) {
+        const mapped = mapAlbumDetailNativeScroll({
+          rawScrollTop: nativeTop,
+          previousRawScrollTop: lastNativeScrollTop,
+          previousListScrollTop: scrollTop,
+          previousCollapseOffset: leadingCollapseOffset,
+          baseCoverSize: 64 + leadingCollapseRange,
+        });
+        if (mapped.rawScrollTop !== nativeTop) viewport.scrollTop = mapped.rawScrollTop;
+        lastNativeScrollTop = mapped.rawScrollTop;
+        scrollTop = mapped.listScrollTop;
+      } else {
+        lastNativeScrollTop = nativeTop;
+        scrollTop = nativeTop;
+      }
+      lastVisibleScrollTop = scrollTop;
+      rememberVisibleScrollPosition(scrollTop);
       hadVisibleViewport = true;
     }
     headerShift = viewport.scrollLeft;
     headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
-    viewportHeight = viewport.clientHeight;
+    viewportHeight = getVisibleRowsHeight();
     metricsReady = true;
-    onViewportScrollTopChange?.(viewport.scrollTop);
+    onViewportScrollTopChange?.(scrollTop);
   }
 
   function handleViewportScroll(): void {
@@ -416,14 +548,13 @@
     if (!viewport) return;
     const rowTop = getVirtualRowTop(dataIndexToVisualIndex(activeIndex, renderGroupRows), renderGroupRows, rowHeight, groupRowHeight);
     const rowBottom = rowTop + rowHeight;
-    let nextScrollTop = viewport.scrollTop;
+    let nextScrollTop = scrollTop;
+    const rowsHeight = getVisibleRowsHeight();
     if (rowTop < nextScrollTop) nextScrollTop = rowTop;
-    else if (rowBottom > nextScrollTop + viewport.clientHeight) {
-      nextScrollTop = rowBottom - viewport.clientHeight;
+    else if (rowBottom > nextScrollTop + rowsHeight) {
+      nextScrollTop = rowBottom - rowsHeight;
     }
-    if (nextScrollTop !== viewport.scrollTop) viewport.scrollTo({ top: nextScrollTop });
-    lastVisibleScrollTop = nextScrollTop;
-    rememberVisibleScrollPosition(nextScrollTop);
+    if (nextScrollTop !== scrollTop) setLogicalScrollTop(nextScrollTop);
   }
 
   function scrollIndexIntoView(index: number, align: 'nearest' | 'center' = 'center'): void {
@@ -432,22 +563,20 @@
     activeIndex = target;
     if (!viewport) return;
     const rowTop = getVirtualRowTop(dataIndexToVisualIndex(target, renderGroupRows), renderGroupRows, rowHeight, groupRowHeight);
-    let nextScrollTop = viewport.scrollTop;
+    let nextScrollTop = scrollTop;
+    const rowsHeight = getVisibleRowsHeight();
     if (align === 'center') {
-      nextScrollTop = rowTop - Math.max(0, (viewport.clientHeight - rowHeight) / 2);
+      nextScrollTop = rowTop - Math.max(0, (rowsHeight - rowHeight) / 2);
     } else {
       const rowBottom = rowTop + rowHeight;
       if (rowTop < nextScrollTop) nextScrollTop = rowTop;
-      else if (rowBottom > nextScrollTop + viewport.clientHeight) {
-        nextScrollTop = rowBottom - viewport.clientHeight;
+      else if (rowBottom > nextScrollTop + rowsHeight) {
+        nextScrollTop = rowBottom - rowsHeight;
       }
     }
-    const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight - leadingCollapseOffset);
     nextScrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
-    viewport.scrollTo({ top: nextScrollTop });
-    scrollTop = nextScrollTop;
-    lastVisibleScrollTop = nextScrollTop;
-    rememberVisibleScrollPosition(nextScrollTop);
+    setLogicalScrollTop(nextScrollTop);
   }
 
   let seenScrollRequestToken = $state<number | null>(null);
@@ -491,8 +620,10 @@
 
   function dropIndexAtPointer(clientY: number): number {
     if (!viewport) return 0;
+    const visibleRowsRect = getVisibleRowsRect();
+    if (!visibleRowsRect) return 0;
     const visualIndex = getVisualIndexAtOffset(
-      viewport.scrollTop + clientY - viewport.getBoundingClientRect().top,
+      scrollTop + clientY - visibleRowsRect.top,
       virtualDataCount,
       renderGroupRows,
       rowHeight,
@@ -506,7 +637,7 @@
 
   function openQuickIndex(event: MouseEvent): void {
     if (!viewport) return;
-    const rect = viewport.getBoundingClientRect();
+    const rect = getVisibleRowsRect() ?? viewport.getBoundingClientRect();
     quickIndexCenterX = rect.left + rect.width / 2;
     quickIndexCenterY = rect.top + rect.height / 2;
     quickIndexMaxWidth = Math.max(0, rect.width - 24);
@@ -583,10 +714,7 @@
       if (latestPointerClientY - bounds.top < edge) delta = -14;
       else if (bounds.bottom - latestPointerClientY < edge) delta = 14;
       if (delta !== 0) {
-        viewport.scrollTop = Math.max(0, viewport.scrollTop + delta);
-        scrollTop = viewport.scrollTop;
-        lastVisibleScrollTop = viewport.scrollTop;
-        rememberVisibleScrollPosition(viewport.scrollTop);
+        moveLogicalBy(delta);
         dragToIndex = dropIndexAtPointer(latestPointerClientY);
         autoScrollFrame = requestAnimationFrame(step);
       } else {
@@ -685,10 +813,11 @@
 <div
   class="paged-virtual-frame"
   class:fill-available={fillAvailable}
+  class:leading-overlay={hasLeadingOverlay}
   bind:this={frame}
-  style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
+  style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px;--paged-leading-height:${leadingOverlayHeight}px;--paged-collapse-offset:${leadingCollapseOffset}px`}
 >
-  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;padding-right:${headerGutter}px`}>
+  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;padding-right:${headerGutter}px;${hasLeadingOverlay ? `top:${Math.max(0, leadingOverlayHeight - leadingCollapseOffset)}px;` : ''}`}>
     <div class="paged-virtual-header-shift" style={`transform:translateX(${-headerShift}px)`}>
       {#if header}{@render header()}{/if}
     </div>
@@ -706,20 +835,21 @@
     style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
     class:is-reordering={dragFromIndex !== null}
     onscroll={handleViewportScroll}
+    onwheel={hasLeadingOverlay ? handleViewportWheel : undefined}
     onkeydown={handleKeydown}
   >
     <div
       class="paged-virtual-spacer"
       role="presentation"
       aria-hidden="true"
-      style={`height:${virtualContentHeight}px`}
+      style={`height:${contentLeadingHeight + virtualContentHeight}px`}
     ></div>
     {#if dragFromIndex !== null && dragToIndex !== null && dragToIndex !== dragFromIndex}
       <div
         class="paged-virtual-drop-line"
         role="presentation"
         aria-hidden="true"
-        style={`transform:translateY(${getVirtualRowTop(dataIndexToVisualIndex(dragToIndex, renderGroupRows), renderGroupRows, rowHeight, groupRowHeight) + (dragToIndex > dragFromIndex ? rowHeight - 2 : 0)}px)`}
+        style={`transform:translateY(${contentLeadingHeight + getVirtualRowTop(dataIndexToVisualIndex(dragToIndex, renderGroupRows), renderGroupRows, rowHeight, groupRowHeight) + (dragToIndex > dragFromIndex ? rowHeight - 2 : 0)}px)`}
       ></div>
     {/if}
     {#each virtualRows.rows as virtualRow (virtualRow.key)}
@@ -730,7 +860,7 @@
           class="paged-virtual-row paged-virtual-group-row list-group-row-surface"
           role="row"
           aria-rowindex={virtualRow.visualIndex + 2}
-          style={`height:${groupRowHeight}px;transform:translateY(${getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px)`}
+          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px)`}
         >
           <div class="paged-virtual-group-cell" role="gridcell" aria-colspan={columnCount}>
             <button type="button" class="paged-virtual-group-button" aria-label={`開啟「${virtualRow.label}」字首索引`} onclick={openQuickIndex}>{virtualRow.label}</button>
@@ -749,7 +879,7 @@
         aria-selected={selected}
         tabindex={rowActivates && virtualRow.item !== null ? -1 : undefined}
         aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
-        style={`height:${rowHeight}px;transform:translateY(${getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px)`}
+        style={`height:${rowHeight}px;transform:translateY(${contentLeadingHeight + getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px)`}
         class:activates={rowActivates && virtualRow.item !== null}
         class:reorderable={longPressReorder && virtualRow.item !== null}
         onpointerdown={longPressReorder ? (event) => handleRowPointerDown(event, virtualRow.index, virtualRow.item) : undefined}
@@ -799,6 +929,7 @@
 
 <style>
   .paged-virtual-frame {
+    position: relative;
     display: flex;
     min-width: 0;
     flex-direction: column;
@@ -812,6 +943,18 @@
     flex: 1 1 auto;
     min-height: 0;
     height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .paged-virtual-frame.leading-overlay {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    display: block;
+    height: 100%;
+    overflow: visible;
     border: 0;
     border-radius: 0;
     background: transparent;
@@ -835,6 +978,26 @@
     flex: 1 1 auto;
     min-height: 0;
     max-height: none;
+  }
+
+  .paged-virtual-frame.leading-overlay .paged-virtual-viewport {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    overflow: auto;
+    flex: none;
+  }
+
+  .paged-virtual-frame.leading-overlay .paged-virtual-header {
+    position: absolute;
+    z-index: 3;
+    right: 0;
+    left: 0;
+    width: max(100%, var(--track-list-min-width, 0px));
+    pointer-events: auto;
   }
 
   .paged-virtual-viewport.is-reordering {

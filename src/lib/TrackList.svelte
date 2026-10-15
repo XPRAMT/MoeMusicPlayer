@@ -60,6 +60,9 @@
     columns?: TrackListColumnPreference[];
     columnWidths?: TrackColumnWidths;
     rowHeightPx?: number;
+    leadingOverlayHeight?: number;
+    leadingCollapseOffset?: number;
+    leadingCollapseRange?: number;
     onColumnResize?: (columnId: TrackListColumnPreference['id'], widthPx: number) => void;
     sort?: LibraryListSort;
     onSort?: (columnId: TrackListColumnPreference['id']) => void;
@@ -91,6 +94,9 @@
     columns = DEFAULT_TRACK_COLUMN_PREFERENCES,
     columnWidths = DEFAULT_TRACK_COLUMN_WIDTHS,
     rowHeightPx = DEFAULT_TRACK_ROW_HEIGHT_PX,
+    leadingOverlayHeight = 0,
+    leadingCollapseOffset = 0,
+    leadingCollapseRange = 0,
     onColumnResize,
     sort = DEFAULT_LIBRARY_SORT,
     onSort,
@@ -264,7 +270,7 @@
   }
 </script>
 
-<div class="track-list-shell">
+<div class="track-list-shell" class:album-detail-overlay={leadingOverlayHeight > 0}>
 {#if snapshot.errors.length > 0}
   <div class="track-list-error" role="alert">
     <span>{getErrorText(snapshot.errors[0]?.message)}</span>
@@ -289,6 +295,7 @@
     headerHeight={37}
     compactHeaderHeight={37}
     fillAvailable={true}
+    {leadingOverlayHeight} {leadingCollapseOffset} {leadingCollapseRange}
     {listId}
     scrollResetKey={listScrollResetKey}
     groupRows={visibleQuickIndex?.groups}
@@ -359,6 +366,12 @@
   :global(.track-list-viewport:focus-visible) {
     outline: 2px solid var(--accent-text);
     outline-offset: 2px;
+  }
+
+  .track-list-shell.album-detail-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
   }
 
   :global(.track-list-header) {
