@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, getAlbumCardTextHeight, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from '../src/lib/album-index-layout.js';
 
 const albumIndexSource = readFileSync(new URL('../src/lib/AlbumIndex.svelte', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const pagedVirtualListSource = readFileSync(new URL('../src/lib/PagedVirtualList.svelte', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const appCssSource = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('only title ordering uses album first-character grouping when the setting is enabled', () => {
   assert.equal(shouldGroupAlbumIndex({ sortField: 'title', groupingEnabled: true }), true);
@@ -111,7 +113,10 @@ test('album card rows rematerialize cached page items when revision changes with
 test('album group and card rows share compact vertical spacing and global group colors', () => {
   assert.match(albumIndexSource, /physicalPixelsToCssPixels\(40, devicePixelRatio\)/);
   assert.match(albumIndexSource, /groupHeadingHeight = \$derived\(Math\.max\(30, rowHeightPx \* 0\.7\)\)/);
-  assert.match(albumIndexSource, /background:linear-gradient\(to bottom,transparent 0,transparent var\(--divider-width\),var\(--list-group-row-background\) var\(--divider-width\)\)/);
+  assert.match(albumIndexSource, /class="album-index-group-row list-group-row-surface"/);
+  assert.match(pagedVirtualListSource, /class="paged-virtual-row paged-virtual-group-row list-group-row-surface"/);
+  assert.match(appCssSource, /\.list-group-row-surface \{[\s\S]*?border-bottom: var\(--divider-width\)[\s\S]*?var\(--list-group-row-background\)/);
+  assert.match(appCssSource, /\.list-group-row-surface:hover \{[\s\S]*?var\(--list-group-row-hover-background\)/);
   assert.match(albumIndexSource, /groupCardGap: verticalGap/);
   assert.match(albumIndexSource, /cardHeight = \$derived\(cardWidth \+ cardTextHeight\)/);
   assert.match(albumIndexSource, /rowHeight = \$derived\(cardHeight \+ verticalGap\)/);
@@ -119,7 +124,5 @@ test('album group and card rows share compact vertical spacing and global group 
   assert.match(albumIndexSource, /--album-vertical-gap:\$\{verticalGap\}px/);
   assert.match(albumIndexSource, /padding:16px clamp\(18px,2vw,34px\) var\(--album-vertical-gap\)/);
   assert.match(albumIndexSource, /devicePixelRatio = window\.devicePixelRatio > 0 \? window\.devicePixelRatio : 1/);
-  assert.match(albumIndexSource, /var\(--list-group-row-background\) var\(--divider-width\)\)/);
-  assert.match(albumIndexSource, /\.album-index-group-row:hover \{ background:linear-gradient\(to bottom,transparent 0,transparent var\(--divider-width\),var\(--list-group-row-hover-background\) var\(--divider-width\)\); \}/);
   assert.match(albumIndexSource, /column-gap:\$\{gap\}px/);
 });

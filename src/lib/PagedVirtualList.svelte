@@ -723,7 +723,7 @@
       {#if virtualRow.kind === 'group'}
         <div
           {id}
-          class="paged-virtual-row paged-virtual-group-row"
+          class="paged-virtual-row paged-virtual-group-row list-group-row-surface"
           role="row"
           aria-rowindex={virtualRow.visualIndex + 2}
           style={`height:${groupRowHeight}px;transform:translateY(${getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px)`}
@@ -906,12 +906,6 @@
   .paged-virtual-group-row {
     display: flex;
     align-items: center;
-    border-bottom: var(--divider-width) solid rgba(var(--text-rgb), 0.055);
-    background: linear-gradient(to bottom, transparent 0, transparent var(--divider-width), var(--list-group-row-background) var(--divider-width));
-  }
-
-  .paged-virtual-group-row:hover {
-    background: linear-gradient(to bottom, transparent 0, transparent var(--divider-width), var(--list-group-row-hover-background) var(--divider-width));
   }
 
   .paged-virtual-group-cell {

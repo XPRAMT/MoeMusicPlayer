@@ -50,6 +50,15 @@
   font-optical-sizing: auto;
 }
 
+.list-group-row-surface {
+  border-bottom: var(--divider-width) solid rgba(var(--text-rgb), 0.055);
+  background: linear-gradient(to bottom, transparent 0, transparent var(--divider-width), var(--list-group-row-background) var(--divider-width));
+}
+
+.list-group-row-surface:hover {
+  background: linear-gradient(to bottom, transparent 0, transparent var(--divider-width), var(--list-group-row-hover-background) var(--divider-width));
+}
+
 * {
   box-sizing: border-box;
 }

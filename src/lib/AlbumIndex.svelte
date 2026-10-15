@@ -368,7 +368,7 @@
       <div class="album-grid-canvas" style={`height:${rowLayout.totalHeight}px;--album-card-width:${cardWidth}px;--album-card-text-height:${cardTextHeight}px`}>
         {#each visibleRenderRows as row (row.kind === 'group' ? `group:${row.beforeIndex}:${row.label}` : `cards:${row.start}`)}
           {#if row.kind === 'group'}
-            <div class="album-index-group-row" style={`height:${row.height}px;transform:translateY(${row.top}px)`}>
+            <div class="album-index-group-row list-group-row-surface" style={`height:${row.height}px;transform:translateY(${row.top}px)`}>
               <button type="button" class="album-index-group-button" aria-label={`開啟「${row.label}」字首索引`} onclick={openQuickIndex}>{row.label}</button>
             </div>
           {:else}
@@ -408,8 +408,7 @@
   .album-grid-viewport { min-width:0; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; padding:16px clamp(18px,2vw,34px) var(--album-vertical-gap); scrollbar-color:rgba(var(--text-rgb),0.2) transparent; scrollbar-width:thin; }
   .album-grid-canvas { position:relative; min-width:0; }
   .album-index-group-row, .album-index-card-row { position:absolute; top:0; right:0; left:0; box-sizing:border-box; }
-  .album-index-group-row { display:flex; align-items:center; border-bottom:var(--divider-width) solid rgba(var(--text-rgb),0.055); background:linear-gradient(to bottom,transparent 0,transparent var(--divider-width),var(--list-group-row-background) var(--divider-width)); }
-  .album-index-group-row:hover { background:linear-gradient(to bottom,transparent 0,transparent var(--divider-width),var(--list-group-row-hover-background) var(--divider-width)); }
+  .album-index-group-row { display:flex; align-items:center; }
   .album-index-group-button { display:flex; width:100%; height:100%; min-width:0; align-items:center; justify-content:center; box-sizing:border-box; padding:0; border:0; border-radius:0; color:var(--text); background:transparent; cursor:pointer; font:inherit; }
   .album-index-group-button:focus-visible { outline:2px solid var(--line); outline-offset:-2px; }
   .album-index-card-row { display:grid; align-content:start; }
