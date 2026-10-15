@@ -52,6 +52,7 @@ use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImpo
 #[cfg(target_os = "windows")]
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
+mod sleep_timer;
 pub mod updater;
 use settings::{
     clamp_window_geometry_to_monitors, AlbumDetailSort, AlbumIndexSort, AppSettings,
@@ -10578,6 +10579,8 @@ pub fn run() {
             library_get_track_artwork,
             playback_play,
             playback_pause,
+            sleep_timer::sleep_timer_get,
+            sleep_timer::sleep_timer_set,
             playback_next,
             playback_previous,
             playback_seek,
@@ -10723,6 +10726,7 @@ pub fn run() {
                 playback_error.clone(),
             );
             app.manage(updater::UpdateService::default());
+            app.manage(sleep_timer::SleepTimer::default());
             app.manage(AppState {
                 database,
                 database_path: stored_path.clone(),

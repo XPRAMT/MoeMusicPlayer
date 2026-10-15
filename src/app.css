@@ -4713,3 +4713,36 @@ input:focus-visible {
   .app-shell.has-now-playing-backdrop .dock-volume { gap: 4px; }
   .app-shell.has-now-playing-backdrop .volume-popover .volume-slider { width: 110px; }
 }
+
+/* Sleep timer (睡眠定時): Now Playing top bar popover; shares the floating-surface tokens. */
+.sleep-timer-anchor { position: relative; display: flex; flex: 0 0 auto; }
+.sleep-timer-toggle.is-active { color: var(--accent-text); border-color: rgba(var(--accent-rgb), 0.38); }
+.sleep-timer-popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  width: max-content;
+  max-width: min(260px, calc(100vw - 24px));
+  justify-items: center;
+  gap: 8px;
+  padding: 14px 16px 12px;
+  box-sizing: border-box;
+}
+.sleep-timer-value {
+  padding: 4px 12px;
+  border-radius: 10px;
+  color: var(--text-soft);
+  font-family: 'DM Mono', Consolas, monospace;
+  font-size: calc(var(--font-display, 28px) * 1.15);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+.sleep-timer-value.is-active { color: var(--accent-text); }
+.sleep-timer-value:hover,
+.sleep-timer-value:focus-visible { background: rgba(var(--text-rgb), 0.06); }
+.sleep-timer-hint { max-width: 220px; margin: 0; color: var(--text-soft); font-size: var(--font-caption); text-align: center; }

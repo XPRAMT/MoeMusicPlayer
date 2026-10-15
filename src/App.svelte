@@ -22,6 +22,7 @@
     IconRepeatOnce,
     IconSearch,
     IconSettings,
+  IconAlarm,
     IconUsers,
     IconVolume2,
     IconX,
@@ -137,6 +138,8 @@
   import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
+  import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerMinutes, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
+  import type { SleepTimerSnapshot } from './lib/ipc';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import SyncErrorDetails from './lib/SyncErrorDetails.svelte';
@@ -212,6 +215,122 @@
   let isNavPanelOpen = $state(false);
   let navPanelToggle = $state<HTMLButtonElement | null>(null);
 
+  // Sleep timer: the Rust core owns the wall-clock deadline and pauses playback on expiry,
+  // so it fires even if this WebView is throttled. The UI only mirrors and adjusts it.
+  let sleepTimerEndsAt = $state<number | null>(null);
+  let sleepTimerNow = $state(Date.now());
+  let isSleepTimerOpen = $state(false);
+  let sleepTimerAnchor = $state<HTMLDivElement | null>(null);
+  let sleepTimerToggle = $state<HTMLButtonElement | null>(null);
+  let sleepTimerDrag: { pointerId: number; lastY: number; carry: number } | null = null;
+  let sleepTimerWheelCarry = 0;
+  const sleepTimerActive = $derived(sleepTimerEndsAt !== null);
+  const sleepTimerMinutes = $derived(getSleepTimerDisplayMinutes(getSleepTimerRemainingMs(sleepTimerEndsAt, sleepTimerNow)));
+  const sleepTimerLabel = $derived(formatSleepTimer(sleepTimerMinutes));
+
+  function applySleepTimerSnapshot(snapshot: SleepTimerSnapshot): void {
+    sleepTimerEndsAt = snapshot.endsAtMs ?? null;
+    sleepTimerNow = Date.now();
+  }
+
+  $effect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void invokeCommand('sleep_timer_get', {}).then((snapshot) => { if (!disposed) applySleepTimerSnapshot(snapshot); }).catch(() => {});
+    void listen<SleepTimerSnapshot>('sleep-timer-changed', (event) => applySleepTimerSnapshot(event.payload))
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
+  });
+
+  $effect(() => {
+    if (sleepTimerEndsAt === null) return;
+    const tick = () => {
+      sleepTimerNow = Date.now();
+      // Rust pauses playback and emits the reset; this only keeps the label honest meanwhile.
+      if (sleepTimerEndsAt !== null && sleepTimerNow >= sleepTimerEndsAt) sleepTimerEndsAt = null;
+    };
+    const timer = window.setInterval(tick, 1000);
+    document.addEventListener('visibilitychange', tick);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
+  });
+
+  $effect(() => {
+    if (!isNowPlayingOpen) isSleepTimerOpen = false;
+  });
+
+  async function setSleepTimerMinutes(minutes: number): Promise<void> {
+    const durationMs = Math.max(0, minutes) * 60_000;
+    sleepTimerEndsAt = durationMs > 0 ? Date.now() + durationMs : null;
+    sleepTimerNow = Date.now();
+    try {
+      applySleepTimerSnapshot(await invokeCommand('sleep_timer_set', { durationMs }));
+    } catch (error) {
+      playbackError = getErrorText(error);
+    }
+  }
+
+  function stepSleepTimer(steps: number): void {
+    if (steps === 0) return;
+    const next = adjustSleepTimerMinutes(sleepTimerMinutes, steps);
+    if (next === sleepTimerMinutes && sleepTimerActive === next > 0) return;
+    void setSleepTimerMinutes(next);
+  }
+
+  function toggleSleepTimerPopover(): void {
+    isSleepTimerOpen = !isSleepTimerOpen;
+  }
+
+  function closeSleepTimerPopover(restoreFocus: boolean): void {
+    if (!isSleepTimerOpen) return;
+    isSleepTimerOpen = false;
+    if (restoreFocus) sleepTimerToggle?.focus();
+  }
+
+  /** Non-passive wheel listener so the page does not scroll while adjusting. */
+  function sleepTimerWheel(node: HTMLElement): { destroy: () => void } {
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const delta = event.deltaMode === 0 ? event.deltaY : Math.sign(event.deltaY) * SLEEP_TIMER_WHEEL_STEP_PX;
+      const result = accumulateSleepTimerSteps(sleepTimerWheelCarry, delta, SLEEP_TIMER_WHEEL_STEP_PX);
+      sleepTimerWheelCarry = result.carry;
+      stepSleepTimer(result.steps);
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return { destroy: () => node.removeEventListener('wheel', onWheel) };
+  }
+
+  function startSleepTimerDrag(event: PointerEvent): void {
+    if (event.button !== 0) return;
+    sleepTimerDrag = { pointerId: event.pointerId, lastY: event.clientY, carry: 0 };
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    event.preventDefault();
+  }
+
+  function moveSleepTimerDrag(event: PointerEvent): void {
+    if (!sleepTimerDrag || sleepTimerDrag.pointerId !== event.pointerId) return;
+    const result = accumulateSleepTimerSteps(sleepTimerDrag.carry, event.clientY - sleepTimerDrag.lastY, SLEEP_TIMER_DRAG_STEP_PX);
+    sleepTimerDrag = { ...sleepTimerDrag, lastY: event.clientY, carry: result.carry };
+    stepSleepTimer(result.steps);
+  }
+
+  function endSleepTimerDrag(event: PointerEvent): void {
+    if (!sleepTimerDrag || sleepTimerDrag.pointerId !== event.pointerId) return;
+    sleepTimerDrag = null;
+  }
+
+  function handleSleepTimerKeydown(event: KeyboardEvent): void {
+    const steps = event.key === 'ArrowUp' ? 1 : event.key === 'ArrowDown' ? -1 : event.key === 'PageUp' ? 6 : event.key === 'PageDown' ? -6 : 0;
+    if (steps === 0) return;
+    event.preventDefault();
+    stepSleepTimer(steps);
+  }
+
+  function handleWindowPointerDown(event: PointerEvent): void {
+    if (isSleepTimerOpen && sleepTimerAnchor && event.target instanceof Node && !sleepTimerAnchor.contains(event.target)) closeSleepTimerPopover(false);
+    handleDockPointerDown(event);
+  }
+
   $effect(() => {
     const narrowQuery = window.matchMedia(NAV_PANEL_MEDIA_QUERY);
     const sync = () => {
@@ -243,6 +362,11 @@
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
+    if (isSleepTimerOpen && event.key === 'Escape') {
+      event.preventDefault();
+      closeSleepTimerPopover(true);
+      return;
+    }
     if (isNavPanelOpen && event.key === 'Escape') {
       event.preventDefault();
       closeNavPanel('escape', true);
@@ -2966,7 +3090,7 @@
 
 </script>
 
-<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleDockPointerDown} onkeydown={handleWindowKeydown} onresize={updateVolumePopoverAlignment} />
+<svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleWindowPointerDown} onkeydown={handleWindowKeydown} onresize={updateVolumePopoverAlignment} />
 
 {#snippet settingsTabs(scope: string)}
             <div class="settings-tabs" role="tablist" aria-label="設定分類">
@@ -4089,6 +4213,47 @@
           </p>
         </div>
         <div class="now-playing-topbar-tools">
+          <div class="sleep-timer-anchor" bind:this={sleepTimerAnchor}>
+            <button
+              bind:this={sleepTimerToggle}
+              class="soft-button icon-button sleep-timer-toggle"
+              class:is-active={sleepTimerActive}
+              type="button"
+              aria-label="睡眠定時"
+              aria-haspopup="dialog"
+              aria-expanded={isSleepTimerOpen}
+              aria-pressed={sleepTimerActive}
+              use:appTooltip={sleepTimerActive ? `睡眠定時（剩餘 ${sleepTimerLabel}）` : '睡眠定時'}
+              onclick={toggleSleepTimerPopover}
+            >
+              <IconAlarm size={18} stroke={1.7} aria-hidden="true" />
+            </button>
+            {#if isSleepTimerOpen}
+              <div class="sleep-timer-popover floating-surface" role="dialog" aria-label="睡眠定時">
+                <div
+                  class="sleep-timer-value"
+                  class:is-active={sleepTimerActive}
+                  role="slider"
+                  tabindex="0"
+                  aria-label="睡眠定時剩餘時間"
+                  aria-valuemin={0}
+                  aria-valuemax={SLEEP_TIMER_MAX_MINUTES}
+                  aria-valuenow={sleepTimerMinutes}
+                  aria-valuetext={sleepTimerActive ? `剩餘 ${sleepTimerLabel}` : '未啟用'}
+                  use:sleepTimerWheel
+                  onpointerdown={startSleepTimerDrag}
+                  onpointermove={moveSleepTimerDrag}
+                  onpointerup={endSleepTimerDrag}
+                  onpointercancel={endSleepTimerDrag}
+                  onkeydown={handleSleepTimerKeydown}
+                >{sleepTimerLabel}</div>
+                <p class="sleep-timer-hint">上下拖曳或滾動調整，每格 5 分鐘；到 00:00 時暫停播放</p>
+                {#if sleepTimerActive}
+                  <button class="text-button sleep-timer-cancel" type="button" onclick={() => void setSleepTimerMinutes(0)}>取消定時</button>
+                {/if}
+              </div>
+            {/if}
+          </div>
           {#if lyricsTopbarStatus}
             <div class="lyrics-topbar-status" role="group" aria-label="歌詞來源與同步操作">
               <button

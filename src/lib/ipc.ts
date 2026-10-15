@@ -439,6 +439,11 @@ export type PlaybackState =
   | 'ended'
   | 'error';
 
+/** Sleep timer owned by the Rust core; `endsAtMs` is a Unix epoch millisecond deadline. */
+export interface SleepTimerSnapshot {
+  endsAtMs: number | null;
+}
+
 export interface PlaybackSnapshot {
   currentTrack: TrackSummary | null;
   state: PlaybackState;
@@ -866,6 +871,14 @@ interface IpcContract {
   playback_pause: {
     args: Record<string, never>;
     result: PlaybackSnapshot;
+  };
+  sleep_timer_get: {
+    args: Record<string, never>;
+    result: SleepTimerSnapshot;
+  };
+  sleep_timer_set: {
+    args: { durationMs: number };
+    result: SleepTimerSnapshot;
   };
   playback_next: {
     args: Record<string, never>;
