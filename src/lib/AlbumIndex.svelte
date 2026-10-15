@@ -97,6 +97,10 @@
     };
   });
   const availableQuickIndexLabels = $derived(new Set(groups.map(({ label }) => label)));
+  const cardLoadDiagnostic = $derived.by(() => {
+    if (totalCount <= 0 || pageSnapshot.cachedItemCount > 0 || pageSnapshot.errors.length > 0) return null;
+    return `總數 ${totalCount}；scope ${String(pageSnapshot.scope ?? 'null').slice(0, 8)}；頁面總數 ${pageSnapshot.totalCount ?? 'null'}；已載入 ${pageSnapshot.cachedItemCount}；載入中 ${pageSnapshot.pendingPageCount}；範圍 ${visibleDataRange ? `${visibleDataRange.start}-${visibleDataRange.end}` : 'null'}`;
+  });
 
   async function load(): Promise<void> {
     const revision = ++requestRevision;
@@ -179,6 +183,10 @@
 
   function retryPage(offset: number): void {
     void listData.retry(offset);
+  }
+
+  function requestFirstCardPage(): void {
+    void listData.ensureRange(0, Math.min(totalCount, listData.pageSize));
   }
 
   $effect(() => {
@@ -332,6 +340,12 @@
       {#if pageError}
         <button class="text-button" type="button" onclick={() => retryPage(pageError.offset)}>重試</button>
       {/if}
+    </div>
+  {/if}
+  {#if cardLoadDiagnostic}
+    <div class="album-index-page-error" role="status" data-album-page-diagnostic>
+      <span>專輯卡片尚未載入：{cardLoadDiagnostic}</span>
+      <button class="text-button" type="button" onclick={requestFirstCardPage}>重新請求</button>
     </div>
   {/if}
   {#if error}
