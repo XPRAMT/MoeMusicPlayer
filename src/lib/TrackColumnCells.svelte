@@ -265,12 +265,13 @@
     left: 4px;
     width: 2px;
     border-radius: 1px;
-    background: rgba(var(--text-rgb), 0.3);
+    background: var(--divider-color);
+    opacity: 0.3;
   }
 
   .list-column.is-resizable:hover .column-resize-handle::after,
   .column-resize-handle:hover::after {
-    background: rgba(var(--text-rgb), 0.65);
+    opacity: 0.65;
   }
 
   .list-audio-format {
