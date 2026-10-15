@@ -2597,6 +2597,18 @@
 
   const nowPlayingArtists = $derived(splitArtists(trackFieldValue(playback?.currentTrack, 'artist')));
 
+  async function searchNowPlayingTitle(): Promise<void> {
+    const title = displayTrackTitle(playback?.currentTrack, '').trim();
+    if (!title) return;
+    nowPlayingReturnView = 'library';
+    query = title;
+    libraryFieldFilter = null;
+    libraryListRevision += 1;
+    await closeNowPlaying();
+    await tick();
+    librarySearchInput?.focus();
+  }
+
   async function openTrackField(field: TrackFieldFilter['field'], value?: string): Promise<void> {
     const resolved = (value ?? trackFieldValue(playback?.currentTrack, field))?.trim();
     if (!resolved) return;
@@ -3954,11 +3966,15 @@
                <button type="button" data-track-field="album" disabled={!trackFieldValue(playback?.currentTrack, 'album')} use:appTooltip={trackFieldValue(playback?.currentTrack, 'album') ?? '沒有專輯分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'album') ? `開啟專輯「${trackFieldValue(playback?.currentTrack, 'album')}」明細` : '沒有專輯分類資料'} onclick={() => { const album = trackFieldValue(playback?.currentTrack, 'album'); if (album) void openAlbumDetailForName(album); }}>{trackFieldLabel(playback?.currentTrack, 'album')}</button>
             </span>
             <span class="now-playing-track-block now-playing-title-block" data-track-block="title">
-              <span
+              <button
+                type="button"
                 class="now-playing-track-title"
                 data-track-field="title"
-                 use:appTooltip={displayTrackTitle(playback?.currentTrack, '') || '沒有曲名'}
-              >{trackFieldLabel(playback?.currentTrack, 'title')}</span>
+                aria-label={`在曲庫搜尋「${trackFieldLabel(playback?.currentTrack, 'title')}」`}
+                disabled={!playback?.currentTrack}
+                use:appTooltip={displayTrackTitle(playback?.currentTrack, '') || '沒有曲名'}
+                onclick={() => void searchNowPlayingTitle()}
+              >{trackFieldLabel(playback?.currentTrack, 'title')}</button>
             </span>
           </nav>
           <p class="now-playing-format" aria-label="音質格式、發行日期與播放次數">

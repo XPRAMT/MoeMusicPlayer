@@ -423,7 +423,7 @@ input:focus-visible {
   text-overflow: clip;
   overflow-wrap: anywhere;
   white-space: normal;
-  cursor: default;
+  cursor: pointer;
 }
 
 .now-playing-header-track .now-playing-format {
