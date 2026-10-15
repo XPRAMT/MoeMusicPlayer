@@ -289,3 +289,10 @@ test('sidebar nav items scroll while 設定 stays pinned, and narrow widths use 
   assert.doesNotMatch(css, /grid-template-rows: 58px/, 'narrow widths must not move navigation into a top bar');
   assert.doesNotMatch(css, /--sidebar-width: 72px/, 'the icon rail layout is gone');
 });
+
+test('top-bar refresh collapses to an icon at the narrow breakpoint but keeps its accessible name', async () => {
+  const css = await (await import('node:fs/promises')).readFile(new URL('../src/app.css', import.meta.url), 'utf8');
+  const narrow = css.slice(css.indexOf('@media (max-width: 820px) {'));
+  assert.match(narrow.slice(0, narrow.indexOf('\n}')), /\.soft-button\.topbar-refresh-button > span \{ display: none; \}/);
+  assert.match(appSource, /class="soft-button topbar-refresh-button"[\s\S]*?aria-label="重新整理音樂來源"[\s\S]*?use:appTooltip=/);
+});

@@ -4315,6 +4315,9 @@ input:focus-visible {
   .topbar { justify-content: flex-start; }
   .topbar-actions { margin-left: auto; }
   .nav-panel-toggle { display: grid; margin-left: -8px; }
+  /* Icon-only refresh; aria-label and tooltip keep it accessible. */
+  .soft-button.topbar-refresh-button { width: 36px; min-width: 36px; justify-content: center; padding: 0; }
+  .soft-button.topbar-refresh-button > span { display: none; }
   .app-shell .sidebar.floating-surface {
     --sidebar-brand-size: 48px;
     --sidebar-brand-inset: 16px;
