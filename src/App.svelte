@@ -2571,7 +2571,7 @@
   function toggleNowPlayingFromDock(event: MouseEvent): void {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    if (target.closest('button, a, input, textarea, select, .progress-slider, .dock-controls, .volume-popover')) return;
+    if (target.closest('button:not(.dock-art), a, input, textarea, select, .progress-slider, .dock-controls, .volume-popover')) return;
     if (isNowPlayingOpen) void closeNowPlaying();
     else void openNowPlaying();
   }
@@ -4108,7 +4108,6 @@
           bind:this={dockArtworkButton}
           aria-label={playback?.currentTrack ? `開啟正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
           disabled={!playback?.currentTrack}
-          onclick={() => void openNowPlaying()}
         >
           {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
             <img class="dock-art-image" src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
