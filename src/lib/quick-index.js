@@ -136,12 +136,53 @@ export function shouldAdjustGroupAnchor({ groupsChanged, hasPreviousSnapshot, sc
   return groupsChanged && hasPreviousSnapshot && scrollTop > 0;
 }
 
-/** Choose a near-square index grid based on the number of available labels.
+export const QUICK_INDEX_PANEL_PADDING_PX = 12;
+export const QUICK_INDEX_LABEL_GAP_PX = 4;
+export const QUICK_INDEX_LABEL_SIZE_EM = 2;
+
+/**
+ * Choose a near-square index grid (round(sqrt(labelCount)) columns), then cap the
+ * column count so the panel (columns * cell + gaps + padding) fits the available
+ * width. Width wins over squareness: the grid grows taller instead of scrolling sideways.
+ * Without an available width the near-square count is returned unchanged.
  * @param {number} labelCount
+ * @param {{ availableWidthPx?: number, cellSizePx?: number, gapPx?: number, paddingPx?: number }} [layout]
  */
-export function getQuickIndexColumnCount(labelCount) {
+export function getQuickIndexColumnCount(labelCount, layout = {}) {
   const count = Number.isSafeInteger(labelCount) ? Math.max(0, labelCount) : 0;
-  return Math.max(1, Math.round(Math.sqrt(count)));
+  const preferred = Math.max(1, Math.round(Math.sqrt(count)));
+  const fitting = getQuickIndexMaxFittingColumns(layout);
+  return fitting === null ? preferred : Math.max(1, Math.min(preferred, fitting));
+}
+
+/**
+ * Largest column count whose panel width fits the available width, or null when unknown.
+ * @param {{ availableWidthPx?: number, cellSizePx?: number, gapPx?: number, paddingPx?: number }} layout
+ */
+export function getQuickIndexMaxFittingColumns({ availableWidthPx, cellSizePx = 32, gapPx = QUICK_INDEX_LABEL_GAP_PX, paddingPx = QUICK_INDEX_PANEL_PADDING_PX } = {}) {
+  if (!Number.isFinite(availableWidthPx) || availableWidthPx === undefined || availableWidthPx <= 0) return null;
+  const cell = Number.isFinite(cellSizePx) && cellSizePx > 0 ? cellSizePx : 32;
+  const gap = Number.isFinite(gapPx) && gapPx >= 0 ? gapPx : QUICK_INDEX_LABEL_GAP_PX;
+  const padding = Number.isFinite(paddingPx) && paddingPx >= 0 ? paddingPx : QUICK_INDEX_PANEL_PADDING_PX;
+  const inner = availableWidthPx - padding * 2;
+  return Math.max(1, Math.floor((inner + gap) / (cell + gap)));
+}
+
+/**
+ * Available panel width: the list area minus margins, never wider than the window.
+ * @param {number} areaWidthPx @param {number} windowWidthPx @param {number} [marginPx]
+ */
+export function getQuickIndexAvailableWidth(areaWidthPx, windowWidthPx, marginPx = 24) {
+  const area = Number.isFinite(areaWidthPx) ? areaWidthPx - marginPx : Infinity;
+  const win = Number.isFinite(windowWidthPx) ? windowWidthPx - marginPx : Infinity;
+  const width = Math.min(area, win);
+  return Number.isFinite(width) ? Math.max(0, width) : 0;
+}
+
+/** Cell size in px for a label grid whose font size is `fontSizePx`. @param {number} fontSizePx */
+export function getQuickIndexCellSizePx(fontSizePx) {
+  const font = Number.isFinite(fontSizePx) && fontSizePx > 0 ? fontSizePx : 16;
+  return font * QUICK_INDEX_LABEL_SIZE_EM;
 }
 
 /** The quick-find panel uses a compact marker for the Unknown group. */

@@ -16,6 +16,8 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 專輯首頁卡片依「曲目欄位」分頁的「專輯卡片最大寬度」（`trackListColumns.albumCardMaxWidthPx`，預設 180 CSS px，範圍 100–500）填滿整列：欄數 = ceil((可用寬度 + 間距) / (最大寬度 + 間距))、至少 1，卡片平分剩餘寬度，不留右側空隙且不超過最大寬度；封面與文字隨卡片寬度縮放，虛擬列高由同一寬度計算。純函式為 `album-index-layout.js` 的 `getAlbumCardGrid`。Release CDP 多視窗寬度驗收尚未完成（建置時使用者的播放器正在執行，未強制關閉）。
 
+快速查找面板（`PagedVirtualList` 與 `AlbumIndex`）每列項目數先取近正方形 round(√標籤數)，再以可用寬度上限 floor((可用寬度 − 2×12 內距 + 4 間距) / (2em 格寬 + 4 間距)) 截斷、至少 1；可用寬度 = min(清單區寬, 視窗寬) − 24 px，格寬以 `--font-title` × 2 計算。寬度優先：放不下時改為更多列而非橫向捲動。純函式在 `quick-index.js`（`getQuickIndexColumnCount`／`getQuickIndexMaxFittingColumns`／`getQuickIndexAvailableWidth`），Release CDP 驗收尚待使用者播放器關閉後補做。
+
 下一步（未來最佳化，非目前缺陷）：快速拖曳捲軸時虛擬列表可能短暫出現空白列，原因是合成器先捲動、主執行緒重繪與資料頁載入較晚。可考慮的緩解：overscan 改為約一個視窗高度、尚未載入的列一律繪製輕量佔位列、捲動時只在可見範圍改變才通知上層、列加上 `contain: content`。
 
 ## 重要資料與架構邊界

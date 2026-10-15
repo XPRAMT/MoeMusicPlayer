@@ -7,7 +7,7 @@
   import AlbumCard from './AlbumCard.svelte';
   import { PagedListController } from './track-list-data.js';
   import { buildAlbumIndexRenderRows, buildAlbumIndexRows, DEFAULT_ALBUM_CARD_MAX_WIDTH_PX, findVisibleAlbumIndexRows, getAlbumCardGrid, getAlbumCardTextHeight, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from './album-index-layout.js';
-  import { getQuickIndexColumnCount, getQuickIndexDisplayLabel } from './quick-index.js';
+  import { getQuickIndexAvailableWidth, getQuickIndexCellSizePx, getQuickIndexColumnCount, getQuickIndexDisplayLabel } from './quick-index.js';
 
   type AlbumIndexSortDirection = 'asc' | 'desc';
 
@@ -45,6 +45,7 @@
   let quickIndexCenterY = $state(0);
   let quickIndexMaxWidth = $state(0);
   let quickIndexMaxHeight = $state(0);
+  let quickIndexCellSizePx = $state(32);
   let quickIndexTrigger: HTMLButtonElement | null = null;
   let seenGroupingEnabled: boolean | null = null;
   type ListSnapshot = ReturnType<PagedListController<AlbumIndexEntry, string>['snapshot']>;
@@ -212,7 +213,8 @@
     const rect = viewport.getBoundingClientRect();
     quickIndexCenterX = rect.left + rect.width / 2;
     quickIndexCenterY = rect.top + rect.height / 2;
-    quickIndexMaxWidth = Math.max(0, rect.width - 24);
+    quickIndexMaxWidth = getQuickIndexAvailableWidth(rect.width, window.innerWidth);
+    quickIndexCellSizePx = getQuickIndexCellSizePx(Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--font-title')));
     quickIndexMaxHeight = Math.max(0, rect.height - 24);
     quickIndexTrigger = event.currentTarget as HTMLButtonElement;
     quickIndexOpen = true;
@@ -391,7 +393,7 @@
 </div>
 {#if quickIndexOpen}
   <button type="button" class="album-quick-index-backdrop" aria-label="關閉首字索引" onclick={() => closeQuickIndex()}></button>
-  <div bind:this={quickIndexDialog} class="album-quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${getQuickIndexColumnCount(quickIndex?.labels.length ?? 0)};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label="快速首字查找" tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
+  <div bind:this={quickIndexDialog} class="album-quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${getQuickIndexColumnCount(quickIndex?.labels.length ?? 0, { availableWidthPx: quickIndexMaxWidth, cellSizePx: quickIndexCellSizePx })};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label="快速首字查找" tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
     <div class="album-quick-index-label-grid">
       {#each quickIndex?.labels ?? [] as label (label)}
         {@const available = availableQuickIndexLabels.has(label)}

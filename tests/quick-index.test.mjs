@@ -10,7 +10,10 @@ import {
   reportPagedRange,
   shouldAdjustGroupAnchor,
   dataIndexToVisualIndex,
+  getQuickIndexAvailableWidth,
+  getQuickIndexCellSizePx,
   getQuickIndexColumnCount,
+  getQuickIndexMaxFittingColumns,
   getQuickIndexDisplayLabel,
   getQuickIndexBuildKey,
   visualIndexToAnchorDataIndex,
@@ -235,4 +238,39 @@ test('compact group rows use configured height throughout virtual scroll geometr
     groups,
     viewportHeight: 100,
   }), 170);
+});
+
+test('quick-find columns stay near-square when the panel fits the window', () => {
+  // 99 labels -> 10 columns: 10*32 + 9*4 + 2*12 = 380px <= 800px.
+  assert.equal(getQuickIndexColumnCount(99, { availableWidthPx: 800, cellSizePx: 32 }), 10);
+  assert.equal(getQuickIndexColumnCount(99), 10);
+});
+
+test('quick-find columns shrink so the panel never exceeds the available width', () => {
+  // 300px: floor((300 - 24 + 4) / 36) = 7 columns -> 7*32 + 6*4 + 24 = 272px.
+  assert.equal(getQuickIndexMaxFittingColumns({ availableWidthPx: 300, cellSizePx: 32 }), 7);
+  assert.equal(getQuickIndexColumnCount(129, { availableWidthPx: 300, cellSizePx: 32 }), 7);
+  for (const width of [60, 120, 200, 300, 380, 379, 1000]) {
+    const columns = getQuickIndexColumnCount(400, { availableWidthPx: width, cellSizePx: 32 });
+    const panel = columns * 32 + (columns - 1) * 4 + 24;
+    assert.ok(columns === 1 || panel <= width, `${width}px -> ${columns} cols (${panel}px)`);
+  }
+  // Exact fit boundary: 380px holds 10 columns, 379px only 9.
+  assert.equal(getQuickIndexColumnCount(99, { availableWidthPx: 380, cellSizePx: 32 }), 10);
+  assert.equal(getQuickIndexColumnCount(99, { availableWidthPx: 379, cellSizePx: 32 }), 9);
+  // Larger fonts mean larger cells and fewer columns.
+  assert.equal(getQuickIndexColumnCount(99, { availableWidthPx: 380, cellSizePx: 40 }), 8);
+  // Always at least one column, even in a tiny window.
+  assert.equal(getQuickIndexColumnCount(99, { availableWidthPx: 10, cellSizePx: 32 }), 1);
+});
+
+test('quick-find available width is capped by the window and cell size follows the title font', () => {
+  assert.equal(getQuickIndexAvailableWidth(1200, 900), 876);
+  assert.equal(getQuickIndexAvailableWidth(500, 900), 476);
+  assert.equal(getQuickIndexAvailableWidth(Number.NaN, 400), 376);
+  assert.equal(getQuickIndexAvailableWidth(10, 10), 0);
+  assert.equal(getQuickIndexCellSizePx(16), 32);
+  assert.equal(getQuickIndexCellSizePx(20), 40);
+  assert.equal(getQuickIndexCellSizePx(Number.NaN), 32);
+  assert.equal(getQuickIndexMaxFittingColumns({}), null);
 });
