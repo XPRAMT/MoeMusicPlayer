@@ -638,7 +638,10 @@
     const pageHex = themePreferences.colorMode === 'autoBackgroundOpacity'
       ? (themePreferences.backgroundOpacityTextColor === 'white' ? '#000000' : '#FFFFFF')
       : themePreferences.backgroundHex;
-    const imageUrl = activeArtwork.status === 'ready' ? activeArtwork.objectUrl : null;
+    // Keep contrast/opacity tied to the image that is still rendered while a
+    // new track's artwork is loading. The artwork controller deliberately
+    // retains the previous URL until the replacement has decoded.
+    const imageUrl = activeArtwork.objectUrl;
     const opacityPercent = nowPlayingAppearancePreferences.backgroundOpacityPercent;
     const automaticTextColor = themePreferences.colorMode === 'autoBackgroundOpacity'
       ? themePreferences.backgroundOpacityTextColor
