@@ -9,6 +9,7 @@
   import TrackList from './TrackList.svelte';
   import { formatDurationHours, formatAlbumTrackNumber } from './format';
   import { DEFAULT_ALBUM_DETAIL_SORT, normalizeAlbumDetailSort, toggleAlbumDetailSort } from './album-detail-sort.js';
+  import { getAlbumDetailCoverSize, updateAlbumDetailScrollPeak } from './album-detail-collapse.js';
 
   interface Props {
     album: AlbumEntry;
@@ -36,6 +37,10 @@
   let detailSort = $state<import('./ipc').AlbumDetailSort>({ ...DEFAULT_ALBUM_DETAIL_SORT });
   let sortReady = $state(false);
   let sortSaveQueue: Promise<unknown> = Promise.resolve();
+  let albumCoverBaseSize = $state(148);
+  let albumCoverScrollPeak = $state(0);
+  let albumListAtTop = $state(true);
+  let albumCoverSize = $derived(getAlbumDetailCoverSize(albumCoverBaseSize, albumCoverScrollPeak));
   let albumDiscQuickIndices = $state<{
     ascending: QuickIndexSnapshot;
     descending: QuickIndexSnapshot;
@@ -73,6 +78,16 @@
     saveDetailSort(toggleAlbumDetailSort(detailSort, 'position'));
   }
 
+  function handleListScrollTopChange(scrollTop: number): void {
+    if (scrollTop <= 0) {
+      albumCoverScrollPeak = 0;
+      albumListAtTop = true;
+      return;
+    }
+    albumCoverScrollPeak = updateAlbumDetailScrollPeak(albumCoverScrollPeak, scrollTop);
+    albumListAtTop = false;
+  }
+
   function saveDetailSort(preference: import('./ipc').AlbumDetailSort): void {
     detailSort = preference;
     sortSaveQueue = sortSaveQueue
@@ -83,6 +98,11 @@
 
   onMount(() => {
     let cancelled = false;
+    const updateCoverBaseSize = () => {
+      albumCoverBaseSize = window.matchMedia('(max-width: 620px)').matches ? 116 : 148;
+    };
+    updateCoverBaseSize();
+    window.addEventListener('resize', updateCoverBaseSize);
     void invokeCommand('settings_get_album_detail_sort', {}).then((preference) => {
       if (!cancelled) detailSort = normalizeAlbumDetailSort(preference);
     }).catch((error) => {
@@ -90,7 +110,10 @@
     }).finally(() => {
       if (!cancelled) sortReady = true;
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      window.removeEventListener('resize', updateCoverBaseSize);
+    };
   });
 
   async function selectionKey(): Promise<string> {
@@ -202,7 +225,11 @@
 
 <div class="album-detail-shell">
   <div class="album-detail-heading">
-    <div class="album-detail-art">
+    <div
+      class="album-detail-art"
+      class:album-detail-art-restoring={albumListAtTop}
+      style={`--album-detail-cover-size:${albumCoverSize}px`}
+    >
       <AlbumArtworkMosaic sources={displayedCoverUrls} label={`${album.displayName} 封面拼貼`} />
     </div>
     <div class="album-detail-summary">
@@ -230,6 +257,7 @@
         quickIndexAlbumNames={album.aliases}
         {groupingEnabled}
         getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber)}
+        onViewportScrollTopChange={handleListScrollTopChange}
       />
     {/if}
   </div>
@@ -238,7 +266,8 @@
 <style>
   .album-detail-shell { display:flex; min-width:0; min-height:0; flex:1 1 auto; flex-direction:column; }
   .album-detail-heading { display:flex; flex:0 0 auto; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); }
-  .album-detail-art { width:148px; flex:0 0 148px; aspect-ratio:1; overflow:hidden; border-radius:10px; background:#000; }
+  .album-detail-art { width:var(--album-detail-cover-size,148px); height:var(--album-detail-cover-size,148px); flex:0 0 var(--album-detail-cover-size,148px); aspect-ratio:1; overflow:hidden; border-radius:10px; background:#000; }
+  .album-detail-art.album-detail-art-restoring { transition:width 180ms ease-out,height 180ms ease-out,flex-basis 180ms ease-out; }
   .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:10px; }
   .album-detail-artists,
   .album-detail-stats,
@@ -249,5 +278,5 @@
   .album-detail-summary .album-detail-error,
   .album-detail-summary .album-detail-status { color:var(--muted); font-size:var(--font-caption); }
   .album-detail-tracks { display:flex; min-height:0; flex:1 1 auto; flex-direction:column; }
-  @media (max-width:620px) { .album-detail-heading { gap:14px; padding:14px; } .album-detail-art { width:116px; flex-basis:116px; } }
+  @media (max-width:620px) { .album-detail-heading { gap:14px; padding:14px; } }
 </style>

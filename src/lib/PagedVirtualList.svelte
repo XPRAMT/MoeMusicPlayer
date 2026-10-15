@@ -78,6 +78,7 @@
     listName: string;
     onRange: (range: VirtualRange) => void;
     onPlay: (item: Item, index: number) => void;
+    onViewportScrollTopChange?: (scrollTop: number) => void;
     rowActivates?: boolean;
     longPressReorder?: boolean;
     onReorder?: (from: number, to: number) => void | Promise<void>;
@@ -121,6 +122,7 @@
     listName,
     onRange,
     onPlay,
+    onViewportScrollTopChange,
     rowActivates = true,
     longPressReorder = false,
     onReorder = () => {},
@@ -368,6 +370,7 @@
       viewportHeight = nextViewportHeight;
       if (nextViewportHeight > 0) metricsReady = true;
       if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
+      if (viewport) onViewportScrollTopChange?.(viewport.scrollTop);
     };
     recalculateMetrics = updateMetrics;
     updateMetrics();
@@ -400,6 +403,7 @@
     headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     viewportHeight = viewport.clientHeight;
     metricsReady = true;
+    onViewportScrollTopChange?.(viewport.scrollTop);
   }
 
   function handleViewportScroll(): void {

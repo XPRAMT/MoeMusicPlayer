@@ -44,6 +44,7 @@
     playbackReady: boolean;
     isSendingPlaybackCommand: boolean;
     onPlay: (track: TrackSummary) => void | Promise<void>;
+    onViewportScrollTopChange?: (scrollTop: number) => void;
     onTotalCount?: (count: number | null) => void;
     sortable?: boolean;
     groupingEnabled?: boolean;
@@ -74,6 +75,7 @@
     playbackReady,
     isSendingPlaybackCommand,
     onPlay,
+    onViewportScrollTopChange,
     onTotalCount,
     sortable = true,
     groupingEnabled = true,
@@ -303,6 +305,7 @@
     listName="曲庫"
     onRange={handleRange}
     onPlay={(track) => playRow(track)}
+    {onViewportScrollTopChange}
   >
     {#snippet header()}
       <div class="track-table-head track-list-header configurable-track-grid" role="row" aria-rowindex="1">
