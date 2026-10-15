@@ -4327,8 +4327,8 @@ input:focus-visible {
     --sidebar-pad-x: 14px;
     position: fixed;
     z-index: 45;
-    /* Flush under the title bar and against the left edge; ends above the dock and above the
-       timeline's painted track and hit area (the edge timeline overhangs the dock top). */
+    /* Flush under the title bar and against the left edge; ends above the dock and exactly at the
+       top of the visible edge-timeline line (which overhangs the dock top). */
     --nav-panel-dock-overhang: 0px;
     top: calc(var(--window-titlebar-height) + var(--android-safe-top, 0px));
     bottom: calc(var(--dock-height) + var(--android-safe-bottom, 0px) + var(--nav-panel-dock-overhang));
@@ -4344,9 +4344,11 @@ input:focus-visible {
     opacity: 0;
     pointer-events: none;
   }
-  /* Edge timeline: hit band top sits hit/2 + track/2 above the dock top (see .progress-row margin-top). */
+  /* Edge timeline: the row starts hit/2 + track/2 above the dock top and the painted line is centered
+     in the hit band, so the visible line spans [-track, 0] — its bottom lands on the dock top. The panel
+     ends at the line's top; the invisible hit area may sit under the panel edge. */
   .app-shell:has(.player-dock[data-timeline-style="edge"]) .sidebar.floating-surface {
-    --nav-panel-dock-overhang: calc(0.5 * var(--dock-edge-progress-hit) + 0.5 * var(--dock-edge-progress-track));
+    --nav-panel-dock-overhang: var(--dock-edge-progress-track);
   }
   .app-shell .sidebar.floating-surface.nav-panel-open {
     visibility: visible;
