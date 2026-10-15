@@ -69,6 +69,7 @@
 - 收藏面板標題列右側使用「＋」建立播放清單，不設關閉叉號；點「＋」呼叫原生檔案建立器，預設檔名「新播放清單.m3u8」且輸出固定 `.m3u8`。Windows 使用由主視窗擁有的原生 Save 對話框；Android 先由 SAF 系統資料夾選擇器授予讀寫樹狀權限，再開啟 ACTION_CREATE_DOCUMENT 命名文件，初始位置為已授權資料夾，將文件 URI 限定並保存於該樹。建立空清單後登記 settings.json 音樂來源與 SQLite 播放清單，完成來源同步並刷新收藏面板；使用者取消不新增來源。另存時若選既有 Windows 清單，保留檔案內容並將它登記為來源。
 - Windows 自動在 EXE 同層 UserData/MyLove.m3u8 建立並登錄「我的最愛」來源。Android 首次建立時以系統 SAF 選擇器優先開啟公用 Music 資料夾，使用者也可選其他資料夾；清單存於外部共享資料夾，檔案不隨解除安裝刪除。Android 加入播放清單來源時必須要求並保存 SAF 讀寫授權；舊來源缺寫入權時收藏勾選停用並提示重新加入來源授權。
 - 底欄播放控制（收藏、隨機、循環、播放與前後首）的普通、啟用與滑鼠懸停狀態一律使用中性色，不使用主題主色。播放列愛心需在每次目前曲目變更時查詢該曲目是否存在於任一啟用播放清單；存在時顯示實心愛心，切歌查詢期間保留既有顯示狀態以免連續收藏歌曲間閃爍，並隔離過期非同步回應。`tests/favorite-dock-harness.html` 與 `tests/favorite-dock.playwright.js` 驗證逐曲查詢、快速切歌過期回應、實心愛心與啟用／懸停色彩。
+- 底欄專輯縮圖按鈕保留描述用途的 `aria-label`，但不顯示「查看正在播放」tooltip；底欄其它控件提示維持各自設定。
 - 收藏功能由 src/lib/FavoritePopover.svelte、src-tauri/src/favorites.rs、src-tauri/src/lib.rs 與 tauri-plugin-media-index Android SAF bridge 實作；決策見 docs/adr/0010-explicit-playlist-favorites-writeback.md。收藏排序測試涵蓋一般自然排序、混用 `\\?\` 與一般磁碟路徑、未排序來源清單中依最近較前路徑選擇插入點、新歌曲插入而不移動既有項目、UNC 長路徑等價與冪等行為。M3U/M3U8 輸出回歸測試確認 Windows extended drive／UNC 前綴會轉回一般路徑，內部 locator 保留原值。建立播放清單流程已通過 `favorite-dock.playwright.js`，Android `:app:compileArm64DebugKotlin` 與 `cargo check -p moemusicplayer --target aarch64-linux-android --locked` 通過；Windows 固定 release EXE 每次程式碼修改提交後重建。NX809J（Android 16）最新來源掃描已驗證 2 個來源完成且 0 項錯誤；系統 SAF 建立文件及實際清單寫入尚未在裝置人工驗收。
 
 ## GitHub 與版控

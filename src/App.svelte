@@ -4054,7 +4054,6 @@
           type="button"
           bind:this={dockArtworkButton}
           aria-label={playback?.currentTrack ? `開啟正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
-           use:appTooltip={playback?.currentTrack ? `查看正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
           disabled={!playback?.currentTrack}
           onclick={() => void openNowPlaying()}
         >

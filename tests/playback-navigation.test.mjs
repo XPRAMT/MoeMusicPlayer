@@ -96,6 +96,8 @@ test('the footer artwork opens and closes a full-window Now Playing overlay', ()
   assert.match(appSource, /class:dock-track-dismiss=\{isNowPlayingOpen\}/);
   assert.match(artworkButton, /disabled=\{!playback\?\.currentTrack\}/);
   assert.match(artworkButton, /aria-label=/);
+  assert.doesNotMatch(artworkButton, /use:appTooltip/);
+  assert.doesNotMatch(artworkButton, /查看正在播放/);
 
   const openHandler = functionSource('async function openNowPlaying(', 'async function closeNowPlaying(');
   const closeHandler = functionSource('async function closeNowPlaying(', 'async function togglePlayback(');
