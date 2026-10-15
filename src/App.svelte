@@ -138,7 +138,7 @@
   import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
-  import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
+  import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, beginSleepTimerEdit, getSleepTimerEditMinutes, stepSleepTimerEdit, SLEEP_TIMER_EDIT_IDLE_MS, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
   import type { SleepTimerSnapshot } from './lib/ipc';
   import { swipeDismiss } from './lib/swipe-dismiss.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
@@ -227,8 +227,14 @@
   let sleepTimerToggle = $state<HTMLButtonElement | null>(null);
   let sleepTimerDrag: { pointerId: number; lastY: number; carry: number; field: SleepTimerField } | null = null;
   let sleepTimerWheelCarry = 0;
+  // Active adjustment gesture (field locked, frozen hh:mm base); null when idle.
+  let sleepTimerEdit = $state<ReturnType<typeof beginSleepTimerEdit> | null>(null);
+  let sleepTimerEditIdle: number | undefined;
+  let sleepTimerRequestSeq = 0;
   const sleepTimerActive = $derived(sleepTimerEndsAt !== null);
-  const sleepTimerMinutes = $derived(getSleepTimerDisplayMinutes(getSleepTimerRemainingMs(sleepTimerEndsAt, sleepTimerNow)));
+  const sleepTimerLiveMinutes = $derived(getSleepTimerDisplayMinutes(getSleepTimerRemainingMs(sleepTimerEndsAt, sleepTimerNow)));
+  // While adjusting, show the gesture's own value so the live tick cannot change the other field.
+  const sleepTimerMinutes = $derived(sleepTimerEdit ? getSleepTimerEditMinutes(sleepTimerEdit) : sleepTimerLiveMinutes);
   const sleepTimerLabel = $derived(formatSleepTimer(sleepTimerMinutes));
   const sleepTimerParts = $derived(splitSleepTimer(sleepTimerMinutes));
 
@@ -263,22 +269,48 @@
     if (!isNowPlayingOpen) isSleepTimerOpen = false;
   });
 
+  /** Remaining time becomes exactly hh:mm:00. Responses from superseded requests are ignored. */
   async function setSleepTimerMinutes(minutes: number): Promise<void> {
     const durationMs = Math.max(0, minutes) * 60_000;
-    sleepTimerEndsAt = durationMs > 0 ? Date.now() + durationMs : null;
-    sleepTimerNow = Date.now();
+    const seq = ++sleepTimerRequestSeq;
+    const now = Date.now();
+    sleepTimerEndsAt = durationMs > 0 ? now + durationMs : null;
+    sleepTimerNow = now;
     try {
-      applySleepTimerSnapshot(await invokeCommand('sleep_timer_set', { durationMs }));
+      const snapshot = await invokeCommand('sleep_timer_set', { durationMs });
+      if (seq === sleepTimerRequestSeq) applySleepTimerSnapshot(snapshot);
     } catch (error) {
       playbackError = getErrorText(error);
     }
   }
 
+  /** Start (or keep) a gesture on `field`; switching fields starts a new one from the shown value. */
+  function ensureSleepTimerEdit(field: SleepTimerField): void {
+    if (!sleepTimerEdit || sleepTimerEdit.field !== field) sleepTimerEdit = beginSleepTimerEdit(sleepTimerMinutes, field);
+  }
+
+  function endSleepTimerEdit(): void {
+    window.clearTimeout(sleepTimerEditIdle);
+    sleepTimerEditIdle = undefined;
+    sleepTimerEdit = null;
+  }
+
+  /** Wheel and keys have no release event: end their gesture after a short idle. */
+  function touchSleepTimerEditIdle(): void {
+    window.clearTimeout(sleepTimerEditIdle);
+    sleepTimerEditIdle = window.setTimeout(() => { if (!sleepTimerDrag) endSleepTimerEdit(); }, SLEEP_TIMER_EDIT_IDLE_MS);
+  }
+
   function stepSleepTimer(field: SleepTimerField, steps: number): void {
     if (steps === 0) return;
+    ensureSleepTimerEdit(field);
+    const edit = sleepTimerEdit!;
+    const previous = getSleepTimerEditMinutes(edit);
+    const nextEdit = stepSleepTimerEdit(edit, steps);
+    sleepTimerEdit = nextEdit;
+    const next = getSleepTimerEditMinutes(nextEdit);
     // While running, the adjusted value becomes the new remaining time (Rust resets the deadline).
-    const next = adjustSleepTimerField(sleepTimerMinutes, field, steps);
-    if (next === sleepTimerMinutes && sleepTimerActive === next > 0) return;
+    if (next === previous && sleepTimerActive === next > 0) return;
     void setSleepTimerMinutes(next);
   }
 
@@ -310,6 +342,7 @@
   function closeSleepTimerPopover(restoreFocus: boolean): void {
     if (!isSleepTimerOpen) return;
     isSleepTimerOpen = false;
+    endSleepTimerEdit();
     if (restoreFocus) sleepTimerToggle?.focus();
   }
 
@@ -322,6 +355,7 @@
       const delta = event.deltaMode === 0 ? event.deltaY : Math.sign(event.deltaY) * SLEEP_TIMER_WHEEL_STEP_PX;
       const result = accumulateSleepTimerSteps(sleepTimerWheelCarry, delta, SLEEP_TIMER_WHEEL_STEP_PX);
       sleepTimerWheelCarry = result.carry;
+      if (!sleepTimerDrag) touchSleepTimerEditIdle();
       stepSleepTimer(field, result.steps);
     };
     node.addEventListener('wheel', onWheel, { passive: false });
@@ -331,6 +365,8 @@
   function startSleepTimerDrag(event: PointerEvent, field: SleepTimerField): void {
     if (event.button !== 0) return;
     sleepTimerDrag = { pointerId: event.pointerId, lastY: event.clientY, carry: 0, field };
+    window.clearTimeout(sleepTimerEditIdle);
+    sleepTimerEdit = beginSleepTimerEdit(sleepTimerMinutes, field);
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     event.preventDefault();
   }
@@ -345,12 +381,14 @@
   function endSleepTimerDrag(event: PointerEvent): void {
     if (!sleepTimerDrag || sleepTimerDrag.pointerId !== event.pointerId) return;
     sleepTimerDrag = null;
+    endSleepTimerEdit();
   }
 
   function handleSleepTimerKeydown(event: KeyboardEvent, field: SleepTimerField): void {
     const steps = event.key === 'ArrowUp' ? 1 : event.key === 'ArrowDown' ? -1 : 0;
     if (steps === 0) return;
     event.preventDefault();
+    touchSleepTimerEditIdle();
     stepSleepTimer(field, steps);
   }
 

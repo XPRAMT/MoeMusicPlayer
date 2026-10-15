@@ -5,6 +5,9 @@ import {
   accumulateSleepTimerSteps,
   adjustSleepTimerField,
   splitSleepTimer,
+  beginSleepTimerEdit,
+  getSleepTimerEditMinutes,
+  stepSleepTimerEdit,
   formatSleepTimer,
   getSleepTimerDisplayMinutes,
   getSleepTimerRemainingMs,
@@ -73,4 +76,40 @@ test('sleep timer popover reuses the shared centered/clamped popover positioning
   assert.match(rule, /left: 50%;/);
   assert.match(rule, /translateX\(calc\(-50% \+ var\(--sleep-timer-popover-shift-x, 0px\)\)\)/);
   assert.doesNotMatch(rule, /right: 0/);
+});
+
+test('interference: live rounding/decay cannot leak into the other field during a gesture', () => {
+  // 00:59:30 left is shown as 01:00 (ceil). Adjusting hours uses the shown 01:00, minutes stay 00.
+  const shown = getSleepTimerDisplayMinutes(59 * 60_000 + 30_000);
+  assert.equal(shown, 60);
+  let edit = beginSleepTimerEdit(shown, 'hours');
+  edit = stepSleepTimerEdit(edit, 1);
+  assert.equal(getSleepTimerEditMinutes(edit), 120);
+  // Old behaviour recomputed from the live value each step: after a minute rolls over (01:00 -> 00:59)
+  // the next hour step produced 01:59. The frozen snapshot keeps minutes at exactly 00.
+  edit = stepSleepTimerEdit(edit, 1);
+  assert.equal(getSleepTimerEditMinutes(edit), 180);
+  assert.equal(adjustSleepTimerField(59, 'hours', 2), 179, 'live-based stepping would have changed minutes');
+});
+
+test('minute gestures never carry into hours and hour gestures keep minutes exactly', () => {
+  let m = beginSleepTimerEdit(2 * 60 + 58, 'minutes');
+  for (let i = 0; i < 5; i += 1) m = stepSleepTimerEdit(m, 1);
+  assert.equal(getSleepTimerEditMinutes(m), 2 * 60 + 59);
+  let h = beginSleepTimerEdit(22 * 60 + 37, 'hours');
+  h = stepSleepTimerEdit(h, 4);
+  assert.equal(getSleepTimerEditMinutes(h), 23 * 60 + 37);
+  h = stepSleepTimerEdit(h, -1);
+  assert.equal(getSleepTimerEditMinutes(h), 22 * 60 + 37, 'overshoot is not stored, reversing responds at once');
+  h = stepSleepTimerEdit(h, -30);
+  assert.equal(getSleepTimerEditMinutes(h), 37);
+});
+
+test('gesture locks the field at pointerdown and ignores stale responses', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  assert.match(app, /carry: 0, field };[\s\S]{0,120}sleepTimerEdit = beginSleepTimerEdit\(sleepTimerMinutes, field\)/);
+  assert.match(app, /setPointerCapture\(event\.pointerId\)/);
+  assert.match(app, /stepSleepTimer\(sleepTimerDrag\.field, result\.steps\)/);
+  assert.match(app, /if \(seq === sleepTimerRequestSeq\) applySleepTimerSnapshot\(snapshot\)/);
 });

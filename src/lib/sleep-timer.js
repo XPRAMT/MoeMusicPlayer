@@ -66,3 +66,37 @@ export function accumulateSleepTimerSteps(carry, delta, stepPx) {
   const raw = Math.trunc(total / size);
   return { steps: raw === 0 ? 0 : -raw, carry: total - raw * size };
 }
+
+/** Idle time after the last wheel notch / key press that ends an adjustment gesture. */
+export const SLEEP_TIMER_EDIT_IDLE_MS = 800;
+
+/**
+ * Start an adjustment gesture from the hh:mm currently shown. The field is locked for the whole
+ * gesture and every step is applied to this frozen snapshot, never to the live countdown, so
+ * seconds decaying or rounding (00:59:30 shown as 01:00) cannot leak into the other field.
+ * @param {number} displayedMinutes @param {'hours' | 'minutes'} field
+ */
+export function beginSleepTimerEdit(displayedMinutes, field) {
+  const base = Number.isFinite(displayedMinutes) ? Math.max(0, Math.min(SLEEP_TIMER_MAX_MINUTES, Math.round(displayedMinutes))) : 0;
+  return { base, field, steps: 0 };
+}
+
+/** @typedef {{ base: number, field: 'hours' | 'minutes', steps: number }} SleepTimerEdit */
+
+/** @param {SleepTimerEdit} edit */
+export function getSleepTimerEditMinutes(edit) {
+  return adjustSleepTimerField(edit.base, edit.field, edit.steps);
+}
+
+/**
+ * Add notches to a gesture. Accumulated steps are clamped to what the field can actually reach,
+ * so overshooting 23 h then reversing responds immediately.
+ * @param {SleepTimerEdit} edit @param {number} steps
+ * @returns {SleepTimerEdit}
+ */
+export function stepSleepTimerEdit(edit, steps) {
+  const whole = Number.isFinite(steps) ? Math.trunc(steps) : 0;
+  const fieldOf = (/** @type {number} */ m) => (edit.field === 'hours' ? Math.floor(m / 60) : m % 60);
+  const reached = adjustSleepTimerField(edit.base, edit.field, edit.steps + whole);
+  return { ...edit, steps: fieldOf(reached) - fieldOf(edit.base) };
+}
