@@ -2202,7 +2202,7 @@ input:focus-visible {
 .cover-corner-setting {
   display: grid;
   gap: 8px;
-  margin: 4px 0 10px;
+  margin: 0;
 }
 
 .cover-corner-setting-label {
