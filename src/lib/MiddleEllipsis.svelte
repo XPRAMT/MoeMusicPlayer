@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fitMiddleEllipsis } from './middle-ellipsis.js';
+  import { fitEndEllipsis, fitMiddleEllipsis } from './middle-ellipsis.js';
+  import type { TrackTextOverflowMode } from './track-text-overflow-context';
 
   interface Props {
     text: string;
+    mode?: TrackTextOverflowMode;
   }
 
-  let { text }: Props = $props();
+  let { text, mode = 'middle' }: Props = $props();
   let host = $state<HTMLElement | null>(null);
   let shown = $state('');
 
@@ -22,11 +24,13 @@
   function layout(): void {
     if (!host) return;
     const font = getComputedStyle(host).font;
-    shown = fitMiddleEllipsis(text, host.clientWidth, (value) => measure(value, font));
+    const fit = mode === 'end' ? fitEndEllipsis : fitMiddleEllipsis;
+    shown = fit(text, host.clientWidth, (value) => measure(value, font));
   }
 
   $effect(() => {
     text;
+    mode;
     layout();
   });
 

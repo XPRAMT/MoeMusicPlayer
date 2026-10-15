@@ -122,6 +122,7 @@ export interface TrackListColumnSettings {
   librarySort?: LibraryListSort;
   rowHeightPx?: number;
   groupingEnabled: boolean;
+  textOverflowMode: 'middle' | 'end';
 }
 
 export type NowPlayingLayout = 'a' | 'b';

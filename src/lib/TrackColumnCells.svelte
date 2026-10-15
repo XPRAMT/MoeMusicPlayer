@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
+  import { readable } from 'svelte/store';
+  import type { TrackTextOverflowMode, TrackTextOverflowStore } from './track-text-overflow-context';
+  import { TRACK_TEXT_OVERFLOW_CONTEXT } from './track-text-overflow-context';
   import MiddleEllipsis from './MiddleEllipsis.svelte';
   import { appTooltip } from './app-tooltip.js';
   import hiResBadgeUrl from '../assets/hi-res-badge.svg';
@@ -54,6 +58,9 @@
     resizable = false,
     onResize,
   }: Props = $props();
+
+  const textOverflowStore = getContext<TrackTextOverflowStore | undefined>(TRACK_TEXT_OVERFLOW_CONTEXT)
+    ?? readable<TrackTextOverflowMode>('middle');
 
   let resizeSession: {
     id: string;
@@ -165,13 +172,13 @@
     <span class={`list-column list-column-${cell.id}`} class:is-numeric={isNumericListColumn(cell.id)} class:is-audio-format-cell={cell.id === 'audioFormat'} role="gridcell" use:appTooltip={cell.title || cell.text || undefined}>
       {#if cell.id === 'audioFormat'}
         <span class="list-audio-format">
-          <MiddleEllipsis text={cell.text} />
+          <MiddleEllipsis text={cell.text} mode={$textOverflowStore} />
           {#if cell.hiRes}
             <img class="list-hi-res-badge" src={hiResBadgeUrl} alt="Hi-Res" use:appTooltip={'Hi-Res'} />
           {/if}
         </span>
       {:else if cell.id === 'title' || cell.id === 'artist' || cell.id === 'album'}
-        <MiddleEllipsis text={cell.text} />
+        <MiddleEllipsis text={cell.text} mode={$textOverflowStore} />
       {:else}
         {cell.text}
       {/if}

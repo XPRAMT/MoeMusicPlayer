@@ -416,6 +416,9 @@ pub struct TrackListColumnSettings {
     /// Group headings and quick-index grouping across sortable lists.
     #[serde(default = "default_grouping_enabled")]
     pub grouping_enabled: bool,
+    /// How text is elided when a shared list cell is narrower than its content.
+    #[serde(default = "default_track_text_overflow_mode")]
+    pub text_overflow_mode: TrackTextOverflowMode,
 }
 
 /// Persisted sort selection for the artist index list.
@@ -518,6 +521,18 @@ fn default_grouping_enabled() -> bool {
     true
 }
 
+fn default_track_text_overflow_mode() -> TrackTextOverflowMode {
+    TrackTextOverflowMode::Middle
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrackTextOverflowMode {
+    #[default]
+    Middle,
+    End,
+}
+
 impl Default for TrackListColumnSettings {
     fn default() -> Self {
         Self {
@@ -538,6 +553,7 @@ impl Default for TrackListColumnSettings {
             library_sort: LibraryListSort::default(),
             row_height_px: default_track_row_height_px(),
             grouping_enabled: default_grouping_enabled(),
+            text_overflow_mode: default_track_text_overflow_mode(),
         }
     }
 }
@@ -632,6 +648,7 @@ fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColu
             library_sort: settings.library_sort,
             row_height_px: settings.row_height_px.clamp(30, 60),
             grouping_enabled: settings.grouping_enabled,
+            text_overflow_mode: settings.text_overflow_mode,
         };
     }
 
@@ -2655,6 +2672,16 @@ mod tests {
         .expect("old track list settings remain readable");
         assert_eq!(old.row_height_px, 50);
         assert!(old.grouping_enabled);
+        assert_eq!(old.text_overflow_mode, TrackTextOverflowMode::Middle);
+
+        let end_elision: TrackListColumnSettings = serde_json::from_value(serde_json::json!({
+            "columns": TrackListColumnSettings::default().columns,
+            "textOverflowMode": "end",
+        }))
+        .expect("tail elision preference should deserialize");
+        assert_eq!(end_elision.text_overflow_mode, TrackTextOverflowMode::End);
+        let encoded = serde_json::to_value(end_elision).unwrap();
+        assert_eq!(encoded["textOverflowMode"], "end");
 
         let grouping_disabled: TrackListColumnSettings =
             serde_json::from_value(serde_json::json!({

@@ -47,3 +47,32 @@ export function fitMiddleEllipsis(text, maxWidth, measure) {
   if (head === 0 && tail === 0) return ELLIPSIS;
   return `${text.slice(0, head)}${ELLIPSIS}${text.slice(text.length - tail)}`;
 }
+
+/**
+ * Keep the start of text that does not fit, hiding the end.
+ * @param {string} text
+ * @param {number} maxWidth
+ * @param {(value: string) => number} measure
+ * @returns {string}
+ */
+export function fitEndEllipsis(text, maxWidth, measure) {
+  if (!text) return '';
+  if (!(maxWidth > 0) || measure(text) <= maxWidth) return text;
+  const ellipsisWidth = measure(ELLIPSIS);
+  if (ellipsisWidth >= maxWidth) return ELLIPSIS;
+
+  const characters = Array.from(text);
+  let low = 0;
+  let high = characters.length;
+  let fittingLength = 0;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (measure(characters.slice(0, mid).join('') + ELLIPSIS) <= maxWidth) {
+      fittingLength = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return `${characters.slice(0, fittingLength).join('')}${ELLIPSIS}`;
+}

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick, untrack } from 'svelte';
+  import { onDestroy, onMount, setContext, tick, untrack } from 'svelte';
+  import { writable } from 'svelte/store';
   import { getVolumePopoverLeftShiftPx } from './lib/volume-popover-position.js';
   import {
     IconAlertCircle,
@@ -113,7 +114,9 @@
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
   import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
   import { appTooltip } from './lib/app-tooltip.js';
+  import { TRACK_TEXT_OVERFLOW_CONTEXT, type TrackTextOverflowMode } from './lib/track-text-overflow-context';
   import { QUEUE_REORDER_LONG_PRESS_MS, QUEUE_REORDER_MOVE_CANCEL_PX } from './lib/queue-reorder.js';
+
   import {
     SHORTCUT_ACTIONS,
     addShortcutBinding,
@@ -163,6 +166,9 @@
     DEFAULT_LYRICS_PREFERENCES,
     normalizeLyricsPreferences,
   } from './lib/lyrics-preferences.js';
+
+  const trackTextOverflowStore = writable<TrackTextOverflowMode>('middle');
+  setContext(TRACK_TEXT_OVERFLOW_CONTEXT, trackTextOverflowStore);
 
   type AndroidWindowInsets = {
     safeLeftPx: number;
@@ -226,6 +232,7 @@
   let trackColumnWidths = $state<TrackColumnWidths>({ ...DEFAULT_TRACK_COLUMN_WIDTHS });
   let trackRowHeightPx = $state(DEFAULT_TRACK_ROW_HEIGHT_PX);
   let groupingEnabled = $state(true);
+  let trackTextOverflowMode = $state<TrackTextOverflowMode>('middle');
   let librarySort = $state<LibraryListSort>({ ...DEFAULT_LIBRARY_SORT });
   let queueSort = $state<LibraryListSort | null>(null);
   let queueSortBusy = false;
@@ -1081,6 +1088,8 @@
       trackColumnWidths = normalizeTrackColumnWidths(stored.widths);
       trackRowHeightPx = normalizeTrackRowHeightPx(stored.rowHeightPx);
       groupingEnabled = stored.groupingEnabled !== false;
+      trackTextOverflowMode = stored.textOverflowMode === 'end' ? 'end' : 'middle';
+      trackTextOverflowStore.set(trackTextOverflowMode);
       librarySort = normalizeLibrarySort(stored.librarySort);
       trackColumnSettingsState = 'saved';
       trackColumnSettingsError = null;
@@ -1097,6 +1106,7 @@
     librarySort?: LibraryListSort;
     rowHeightPx?: number;
     groupingEnabled?: boolean;
+    textOverflowMode?: TrackTextOverflowMode;
   }): void {
     if (options?.columns) {
       trackColumnPreferences = normalizeTrackColumnPreferences(options.columns);
@@ -1109,6 +1119,10 @@
     }
     if (options?.groupingEnabled !== undefined) {
       groupingEnabled = options.groupingEnabled;
+    }
+    if (options?.textOverflowMode !== undefined) {
+      trackTextOverflowMode = options.textOverflowMode;
+      trackTextOverflowStore.set(trackTextOverflowMode);
     }
     if (options?.librarySort) {
       librarySort = normalizeLibrarySort(options.librarySort);
@@ -1132,6 +1146,7 @@
             librarySort: { ...librarySort },
             rowHeightPx: trackRowHeightPx,
             groupingEnabled,
+            textOverflowMode: trackTextOverflowMode,
           },
         });
         if (revision !== trackColumnSettingsRevision) return;
@@ -1139,6 +1154,8 @@
         trackColumnWidths = normalizeTrackColumnWidths(saved.widths);
         trackRowHeightPx = normalizeTrackRowHeightPx(saved.rowHeightPx);
         groupingEnabled = saved.groupingEnabled !== false;
+        trackTextOverflowMode = saved.textOverflowMode === 'end' ? 'end' : 'middle';
+        trackTextOverflowStore.set(trackTextOverflowMode);
         librarySort = normalizeLibrarySort(saved.librarySort);
         trackColumnSettingsState = 'saved';
         trackColumnSettingsError = null;
@@ -3180,6 +3197,10 @@
                   <input type="checkbox" checked={groupingEnabled} aria-label="啟用分組模式" onchange={(event) => setGroupingEnabled(event.currentTarget.checked)} />
                   <span><strong>啟用分組模式</strong><small>啟用後可能增加載入時間</small></span>
                 </label>
+                <div class="track-text-overflow-setting" role="group" aria-label="欄位文字不足時的隱藏方式">
+                  <button class="soft-button" class:is-active={trackTextOverflowMode === 'middle'} type="button" aria-pressed={trackTextOverflowMode === 'middle'} onclick={() => persistTrackColumnSettings({ textOverflowMode: 'middle' })}>隱藏中段</button>
+                  <button class="soft-button" class:is-active={trackTextOverflowMode === 'end'} type="button" aria-pressed={trackTextOverflowMode === 'end'} onclick={() => persistTrackColumnSettings({ textOverflowMode: 'end' })}>隱藏後段</button>
+                </div>
                 <ol class="track-column-settings" aria-label="曲目資訊欄位設定">
                   {#each trackColumnPreferences as preference, index (preference.id)}
                     {@const definition = TRACK_COLUMN_DEFINITIONS.find((column) => column.id === preference.id)!}

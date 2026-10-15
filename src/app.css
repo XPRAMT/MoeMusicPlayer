@@ -2616,6 +2616,13 @@ input:focus-visible {
   margin: 0 0 8px;
 }
 
+.track-text-overflow-setting {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
 .track-column-setting-row {
   position: relative;
   display: grid;
@@ -3083,8 +3090,11 @@ input:focus-visible {
 }
 
 .main-background-mode-picker {
+  box-sizing: border-box;
   display: flex;
   min-width: 0;
+  min-height: 71px;
+  align-items: center;
   gap: 6px;
   overflow-x: auto;
   scrollbar-width: thin;

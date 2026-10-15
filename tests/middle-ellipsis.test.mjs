@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fitMiddleEllipsis } from '../src/lib/middle-ellipsis.js';
+import { fitEndEllipsis, fitMiddleEllipsis } from '../src/lib/middle-ellipsis.js';
 
 const sample = '崩壞星穹鐵道-行於命途6 Experience the Paths Vol.6';
 
@@ -20,4 +20,19 @@ test('long mixed text keeps the head and the tail', () => {
   assert.match(fitted, /^崩壞星.+···.+Vol\.6$/);
   assert.ok(!fitted.includes('行於命途'));
   assert.ok(widthOf(fitted) <= 24);
+});
+
+test('end elision keeps the beginning and appends an ellipsis', () => {
+  const fitted = fitEndEllipsis(sample, 24, widthOf);
+  assert.ok(fitted.startsWith('崩壞星穹鐵道'));
+  assert.ok(fitted.endsWith('···'));
+  assert.ok(widthOf(fitted) <= 24);
+});
+
+test('end elision preserves complete Unicode code points', () => {
+  const codePointWidth = (value) => value.endsWith('···')
+    ? Array.from(value.slice(0, -3)).length + 1
+    : Array.from(value).length;
+  const fitted = fitEndEllipsis('A😀BC', 3, codePointWidth);
+  assert.equal(fitted, 'A😀···');
 });
