@@ -12,7 +12,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 ## 目前工作狀態
 
-專輯詳情封面使用固定尺寸的原生捲動視窗；封面縮小時清單可視區增加，但 `clientHeight`、完整 `scrollHeight`、捲軸比例與捲動範圍固定。封面桌面尺寸 148 px、窄版 116 px，最小 64 px；向下捲動時先依 1 CSS px 對 1 CSS px 收合封面，再捲動曲目；回到列表頂端後，額外向上捲動才逐像素展開，不使用自動補間動畫。視窗幾何快照會忽略最小化時的 Windows 哨兵位置／尺寸，關閉時沿用最後正常尺寸；重啟後以固定 Release 與真實 UserData 驗證，視窗已恢復正常桌面尺寸。正式 WebView2 在專輯詳情連續捲動時曾量到 62–199 ms 長任務；根因是捲動事件把封面下方可視列高覆寫回原始 viewport 高度狀態，導致標題／封面高度重複扣除並多次重算虛擬列。目前已移除此覆寫，需重新建置固定 Release 並用同一真實頁面重測捲動影格、封面比例及欄位裁切。架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
+專輯詳情封面使用固定尺寸的原生捲動視窗；封面縮小時清單可視區增加，但 `clientHeight`、完整 `scrollHeight`、捲軸比例與捲動範圍固定。封面桌面尺寸 148 px、窄版 116 px，最小 64 px；向下捲動時先依 1 CSS px 對 1 CSS px 收合封面，再捲動曲目；清單到頂後多出的向上捲動才逐像素展開，不使用自動補間動畫。WebView2 正式版實測捲動 10 px 會將 148 px 封面縮至 138 px；列表回到頂端後再向上 70 px，封面由 64 px 展開至 134 px，再多 14 px 恢復 148 px。根因為捲動事件把扣除封面與標題後的可視列高覆寫回 viewport 高度狀態，使可視範圍重複扣除並反覆重算虛擬列；已移除覆寫。真實專輯詳情以 70 次 10 px 捲動量測 2.58 秒，309 個影格的 p95 為 11.7 ms、最大間隔 14.7 ms，未觀察到長任務；`clientHeight` 588 px、`scrollHeight` 5,371 px 維持固定。實際欄位將 120 字長標題裁切於 237 px 欄寬內（`overflow:hidden; white-space:nowrap`）。Windows 最小化時寫入的哨兵位置／尺寸會被忽略，重啟沿用最後正常視窗幾何；正式版啟動量得 2,488×1,975 實體像素（WebView 983×783 CSS px、DPR 2.5），CDP 驗收後已正常重啟且確認偵錯埠關閉。來源提交 `60f899f`；本次改動通過 `npm run check`（0 errors／warnings）及 `node --test`（271/271）。架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
 
 ## 重要資料與架構邊界
 
