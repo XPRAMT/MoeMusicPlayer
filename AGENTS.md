@@ -12,7 +12,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 ## 目前工作狀態
 
-專輯詳情封面使用固定尺寸的原生捲動視窗；封面縮小時清單可視區增加，但 `clientHeight`、完整 `scrollHeight`、捲軸比例與捲動範圍固定。封面桌面尺寸 148 px、窄版 116 px，最小 64 px；向下捲動時先依 1 CSS px 對 1 CSS px 收合封面，再捲動曲目；清單到頂後多出的向上捲動才逐像素展開，不使用自動補間動畫。WebView2 正式版實測捲動 10 px 會將 148 px 封面縮至 138 px；列表回到頂端後再向上 70 px，封面由 64 px 展開至 134 px，再多 14 px 恢復 148 px。根因為捲動事件把扣除封面與標題後的可視列高覆寫回 viewport 高度狀態，使可視範圍重複扣除並反覆重算虛擬列；已移除覆寫。真實專輯詳情以 70 次 10 px 捲動量測 2.58 秒，309 個影格的 p95 為 11.7 ms、最大間隔 14.7 ms，未觀察到長任務；`clientHeight` 588 px、`scrollHeight` 5,371 px 維持固定。實際欄位將 120 字長標題裁切於 237 px 欄寬內（`overflow:hidden; white-space:nowrap`）。Windows 最小化時寫入的哨兵位置／尺寸會被忽略，重啟沿用最後正常視窗幾何；正式版啟動量得 2,488×1,975 實體像素（WebView 983×783 CSS px、DPR 2.5），CDP 驗收後已正常重啟且確認偵錯埠關閉。來源提交 `60f899f`；本次改動通過 `npm run check`（0 errors／warnings）及 `node --test`（271/271）。架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
+專輯詳情使用固定範圍的原生捲動視窗；封面桌面尺寸 148 CSS px、窄版 116 CSS px，最小 64 CSS px。向下先逐像素收合封面，再捲曲目；清單回頂後多出的向上捲動才展開封面。`clientHeight`、`scrollHeight`、捲軸比例及捲動範圍不因收合改變。列項只裁切越過清單標題邊界的部分，裁切值在原生 scroll event 及滾輪動畫影格中依實際畫面座標同步；不裁切 viewport。頂部標題疊層的空白區不攔截指標事件，捲動條保留點擊／拖曳命中區，實際封面與摘要子元件仍可接收事件。固定 Release WebView2 實測：右側 15 CSS px 捲動條在標題區上方的點擊命中 viewport 並改變清單位置；快速連續捲動時抽樣 1,885 次列項幾何，裁切與標題邊界最大差異 0.00011 CSS px，文字未越過標題。`npm run check` 0 errors／warnings、`node --test` 274/274 通過。固定 Release build `2026-10-15T17:05:21.667Z@a828df994536631786c7b70c9e0baf56d78616c4`，SHA-256 `801C5E02114EEF7BCDAF275364CD251E23EC6224DB402685BD8C94903654677B`；架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
 
 ## 重要資料與架構邊界
 
