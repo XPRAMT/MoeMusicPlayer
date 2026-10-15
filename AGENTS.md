@@ -4,7 +4,7 @@
 
 - 側欄曲庫入口使用 Tabler `IconMusic` 音符圖示；專輯入口使用 Tabler `IconDisc` 光碟圖示，兩者同為 20px、stroke 1.6。播放清單等其它入口維持各自既有圖示。
 - 所有浮出控件與彈出視窗共用快速設定面板的浮動表面樣式：同一組背景透明度、背景模糊、邊框對比與陰影 token／`.floating-surface`，避免各元件複製不同顏色或模糊值。適用音量面板、同步歌詞延遲面板、更新對話框及播放清單浮出樹等；形狀與尺寸可依用途不同，模態遮罩、焦點圈限、捲動和關閉行為仍由各元件保有。
-- App 內所有使用者可見的 HTML `title` 提示（包括自繪視窗標題列控制鈕）使用 `src/lib/app-tooltip.js` 的 `appTooltip` action 與 `.app-tooltip.floating-surface` 樣式，維持 hover／focus 觸發並套用快速設定面板的透明度、模糊、邊框及陰影；不可直接新增原生 `title` 提示。提示內容以 ARIA 描述同步提供，定位需避開視窗邊界；作業系統原生繪製且非 App DOM 管理的介面不在 WebView 樣式控制範圍內。
+- App 內所有使用者可見的 HTML `title` 提示（包括自繪視窗標題列控制鈕）使用 `src/lib/app-tooltip.js` 的 `appTooltip` action 與 `.app-tooltip.floating-surface` 樣式，維持 hover／focus 觸發並套用快速設定面板的透明度、模糊、邊框及陰影；不可直接新增原生 `title` 提示。滑鼠點擊後，焦點不得讓提示在游標離開後繼續顯示；鍵盤焦點仍可觸發提示至焦點移走，重新移入游標可再次顯示。提示文字隨元件更新時不得重新顯示已解除的提示。提示內容以 ARIA 描述同步提供，定位需避開視窗邊界；作業系統原生繪製且非 App DOM 管理的介面不在 WebView 樣式控制範圍內。
 - 播放列控制提示由 `src/lib/playback-control-tooltips.js` 根據目前播放快照產生，不顯示服務能力診斷文字。播放／暫停與隨機提示說明可執行的動作；循環提示列出目前模式及下一次切換；上一首播放超過 3000 ms 時可用並提示「從頭播放目前歌曲」，無論佇列是否有前一首；不超過 3000 ms 才依佇列可用狀態提示上一首／無上一首。相關規則由 `tests/playback-control-tooltips.test.mjs` 覆蓋。
 - 曲目清單標題欄與資料列必須使用相同 grid template；若欄寬以 `em` 定義，兩者容器都固定使用 `--font-body`，避免相同 `em` 因字級不同而換算為不同實體寬度。底部上一首／下一首不可用時以 50% 透明度呈現。
 - 全部列表分組列套用 `src/app.css` 的共用 `.list-group-row-surface`（底色使用 `--list-group-row-background` 與 `--list-group-row-hover-background`）：一般狀態以文字色 5% 顯示底色，游標懸停以 10% 顯示；按鈕保持透明，避免底色疊加。分組列頂端保留一個 `--divider-width` 高度的透明帶，避免底色遮住前一項目的底線；分組列只在下方繪製與清單一致的分隔線。各清單僅自行定義分組列定位、排列與高度；高度為設定曲目列高的 0.7 倍，最少 30 CSS px；虛擬列表所有捲動、還原、拖放與分頁座標都必須使用分組列實際高度。專輯首頁分組列同樣遵循這些樣式與高度規則。

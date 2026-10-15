@@ -104,6 +104,11 @@ export function appTooltip(node, value) {
   let timer = 0;
   let pointerInside = false;
   let focused = false;
+  let pointerDismissedFocus = false;
+
+  function hasActiveTrigger() {
+    return pointerInside || (focused && !pointerDismissedFocus);
+  }
 
   function cancelTimer() {
     if (timer) window.clearTimeout(timer);
@@ -112,13 +117,13 @@ export function appTooltip(node, value) {
 
   function schedule() {
     cancelTimer();
-    if (!text || (!pointerInside && !focused)) {
+    if (!text || !hasActiveTrigger()) {
       if (activeTarget === node) hideTooltip();
       return;
     }
     timer = window.setTimeout(() => {
       timer = 0;
-      if (pointerInside || focused) showTooltip(node, text);
+      if (hasActiveTrigger()) showTooltip(node, text);
     }, APP_TOOLTIP_DELAY_MS);
   }
 
@@ -126,6 +131,7 @@ export function appTooltip(node, value) {
   function onPointerEnter(event) {
     if (event.pointerType === 'touch') return;
     pointerInside = true;
+    pointerDismissedFocus = false;
     schedule();
   }
   function onPointerLeave() {
@@ -134,6 +140,7 @@ export function appTooltip(node, value) {
   }
   function onFocusIn() {
     focused = true;
+    pointerDismissedFocus = false;
     schedule();
   }
   /** @param {FocusEvent} event */
@@ -141,19 +148,32 @@ export function appTooltip(node, value) {
     const next = event.relatedTarget;
     if (next instanceof Node && node.contains(next)) return;
     focused = false;
+    pointerDismissedFocus = false;
     schedule();
+  }
+  /** @param {MouseEvent} event */
+  function onClick(event) {
+    // A pointer click can leave a button focused after the pointer moves away.
+    // Keep keyboard-focus tooltips, but don't let that mouse focus pin a tooltip
+    // open; pointerenter or a new focus transition can activate it again.
+    if (event.detail > 0) {
+      pointerDismissedFocus = true;
+      schedule();
+    }
   }
 
   node.addEventListener('pointerenter', onPointerEnter);
   node.addEventListener('pointerleave', onPointerLeave);
   node.addEventListener('focusin', onFocusIn);
   node.addEventListener('focusout', onFocusOut);
+  node.addEventListener('click', onClick);
 
   return {
     /** @param {string | null | undefined} nextValue */
     update(nextValue) {
       text = normalizeText(nextValue);
-      if (activeTarget === node && text) showTooltip(node, text);
+      if (activeTarget === node && text && hasActiveTrigger()) showTooltip(node, text);
+      else if (activeTarget === node) hideTooltip();
       else if (!text) schedule();
     },
     destroy() {
@@ -163,6 +183,7 @@ export function appTooltip(node, value) {
       node.removeEventListener('pointerleave', onPointerLeave);
       node.removeEventListener('focusin', onFocusIn);
       node.removeEventListener('focusout', onFocusOut);
+      node.removeEventListener('click', onClick);
     },
   };
 }
