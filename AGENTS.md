@@ -12,7 +12,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 ## 目前工作狀態
 
-專輯詳情封面收合改用固定尺寸的原生捲動視窗；封面縮小時，清單可視區增加，但視窗 `clientHeight` 與完整內容 `scrollHeight` 保持固定，因此捲軸比例與捲動範圍不變。虛擬清單仍以邏輯曲目位置分頁、分組與恢復捲動位置。新架構已通過 35 項相關 Node 測試及 `npm run check`（0 errors／warnings）；目前等待依固定 `release/moemusicplayer.exe` 進行 WebView2 CDP 實機驗收，驗收前不可視為完成。架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
+專輯詳情封面收合使用固定尺寸的原生捲動視窗；封面縮小時清單可視區增加，但 `clientHeight`、完整 `scrollHeight`、捲軸比例與捲動範圍固定。封面桌面尺寸 148 px、窄版 116 px，最小 64 px；向上捲時保持縮小，回到列表頂端才展開。已以固定 `release/moemusicplayer.exe`（提交 `724881b`）和真實曲庫透過 WebView2 CDP 驗收：5,225 首曲庫、103 首專輯明細，捲動期間視窗 652 px、內容 5,371 px、比例 12.1393% 均固定；最後一列捲到底時貼齊視窗底部。完整 Node 測試 270/270 通過，`npm run check` 0 errors／warnings。架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
 
 ## 重要資料與架構邊界
 

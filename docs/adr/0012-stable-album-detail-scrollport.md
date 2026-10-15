@@ -28,4 +28,9 @@ The album detail uses a stable scroll viewport and translates between native and
 
 ## Validation
 
-Pending fixed-path Windows Release WebView2 acceptance. Node tests cover native/logical offset mapping, collapse and restore behavior, and constant scrollport extent.
+Validated 2026-10-16T00:02:36+08:00 using the fixed `release/moemusicplayer.exe` built from commit `724881bfc6f2eeba0cbf18f2d1c4ea85bd9b4c2e`, with the existing Windows library and WebView2 CDP:
+
+- Album detail for `hanser Cover` (103 tracks) kept `clientHeight=652px`, `scrollHeight=5371px`, and scrollbar ratio `12.1393%` while the cover changed through 148, 138, 108, and 64 CSS px.
+- The cover remained collapsed while scrolling upward and returned to 148px only after the logical list reached its top.
+- At the bottom, the final row ended at the viewport bottom (757.8px vs. 758px); no artificial blank tail was added.
+- `node --test`: 270 passed, 0 failed. `npm run check`: 0 errors and 0 warnings.
