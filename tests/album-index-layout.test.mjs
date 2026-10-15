@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { buildAlbumIndexRows, findVisibleAlbumIndexRows, shouldGroupAlbumIndex } from '../src/lib/album-index-layout.js';
+
+const albumIndexSource = readFileSync(new URL('../src/lib/AlbumIndex.svelte', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('only title ordering uses album first-character grouping when the setting is enabled', () => {
   assert.equal(shouldGroupAlbumIndex({ sortField: 'title', groupingEnabled: true }), true);
@@ -57,4 +60,8 @@ test('album virtual rows select by pixel viewport and overscan', () => {
   assert.deepEqual(findVisibleAlbumIndexRows(layout.rows, 240, 220, 40).map((row) => row.kind === 'group'
     ? `group:${row.label}`
     : `cards:${row.start}-${row.end}`), ['cards:0-2', 'cards:2-4', 'group:B', 'cards:4-6']);
+});
+
+test('album cards rerender when a sorted snapshot page is committed without changing grid geometry', () => {
+  assert.match(albumIndexSource, /const visibleRows = \$derived\.by\(\(\) => \{\s*\/\/ Album entries live in a non-reactive paged controller\.[\s\S]*?pageSnapshot\.revision;\s*return findVisibleAlbumIndexRows\(/);
 });

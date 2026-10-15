@@ -75,12 +75,18 @@
     cardRowHeight: rowHeight,
     groups,
   }));
-  const visibleRows = $derived(findVisibleAlbumIndexRows(
-    rowLayout.rows,
-    scrollTop,
-    viewportHeight,
-    rowHeight * overscanRows,
-  ));
+  const visibleRows = $derived.by(() => {
+    // Album entries live in a non-reactive paged controller. Rebuild the
+    // virtual row collection whenever a page is committed so itemAt() is
+    // evaluated again even when sorting leaves the grid geometry unchanged.
+    pageSnapshot.revision;
+    return findVisibleAlbumIndexRows(
+      rowLayout.rows,
+      scrollTop,
+      viewportHeight,
+      rowHeight * overscanRows,
+    );
+  });
   const visibleDataRange = $derived.by(() => {
     pageSnapshot.revision;
     const cardRows = visibleRows.filter((row) => row.kind === 'cards');
