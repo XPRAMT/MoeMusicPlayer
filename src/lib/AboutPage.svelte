@@ -76,12 +76,10 @@
     </section>
   {/if}
   <section class="about-updates" aria-labelledby="{idPrefix}about-updates-heading">
-    <div class="settings-panel-header">
-      <h3 id="{idPrefix}about-updates-heading">軟體更新</h3>
-      {#if platform === 'windows'}<button class="soft-button" type="button" disabled={updateBusy} onclick={checkUpdate}><IconRefresh size={16} aria-hidden="true" />檢查更新</button>{/if}
-    </div>
+    <div class="settings-panel-header"><h3 id="{idPrefix}about-updates-heading">軟體更新</h3></div>
     {#if platform === 'windows'}
       <p role="status" aria-live="polite">{updateStatusText(updateState)}</p>
+      <button class="soft-button" type="button" disabled={updateBusy} onclick={checkUpdate}><IconRefresh size={16} aria-hidden="true" />檢查更新</button>
       {#if updateState.status === 'downloading'}
         <progress aria-label="更新下載進度" max="100" value={progress ?? undefined}></progress>
         <p>{progress == null ? '正在下載' : `${progress}%`} · {(updateState.downloadedBytes / 1048576).toFixed(1)} MiB{updateState.totalBytes ? ` / ${(updateState.totalBytes / 1048576).toFixed(1)} MiB` : ''}</p>
