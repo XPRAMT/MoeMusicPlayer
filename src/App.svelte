@@ -3943,7 +3943,6 @@
           class="soft-button icon-button now-playing-overlay-return"
           type="button"
           aria-label="返回播放前頁面"
-           use:appTooltip={'返回播放前頁面'}
           onclick={() => void closeNowPlaying()}
         >
           <IconArrowLeft size={17} stroke={1.8} aria-hidden="true" />
