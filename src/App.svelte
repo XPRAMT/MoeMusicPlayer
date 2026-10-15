@@ -103,6 +103,7 @@
     toggleLibrarySort,
     trackColumnDropIndexFromPointer,
   } from './lib/track-columns.js';
+  import { DEFAULT_ALBUM_CARD_MAX_WIDTH_PX, MAX_ALBUM_CARD_MAX_WIDTH_PX, MIN_ALBUM_CARD_MAX_WIDTH_PX, normalizeAlbumCardMaxWidthPx } from './lib/album-index-layout.js';
   import {
     applyLivePlayCountSample,
     createLivePlayCountState,
@@ -231,6 +232,7 @@
   );
   let trackColumnWidths = $state<TrackColumnWidths>({ ...DEFAULT_TRACK_COLUMN_WIDTHS });
   let trackRowHeightPx = $state(DEFAULT_TRACK_ROW_HEIGHT_PX);
+  let albumCardMaxWidthPx = $state(DEFAULT_ALBUM_CARD_MAX_WIDTH_PX);
   let groupingEnabled = $state(true);
   let trackTextOverflowMode = $state<TrackTextOverflowMode>('middle');
   let librarySort = $state<LibraryListSort>({ ...DEFAULT_LIBRARY_SORT });
@@ -1087,6 +1089,7 @@
       trackColumnPreferences = normalizeTrackColumnPreferences(stored.columns);
       trackColumnWidths = normalizeTrackColumnWidths(stored.widths);
       trackRowHeightPx = normalizeTrackRowHeightPx(stored.rowHeightPx);
+      albumCardMaxWidthPx = normalizeAlbumCardMaxWidthPx(stored.albumCardMaxWidthPx);
       groupingEnabled = stored.groupingEnabled !== false;
       trackTextOverflowMode = stored.textOverflowMode === 'end' ? 'end' : 'middle';
       trackTextOverflowStore.set(trackTextOverflowMode);
@@ -1105,6 +1108,7 @@
     widths?: TrackColumnWidths;
     librarySort?: LibraryListSort;
     rowHeightPx?: number;
+    albumCardMaxWidthPx?: number;
     groupingEnabled?: boolean;
     textOverflowMode?: TrackTextOverflowMode;
   }): void {
@@ -1116,6 +1120,9 @@
     }
     if (options?.rowHeightPx !== undefined) {
       trackRowHeightPx = normalizeTrackRowHeightPx(options.rowHeightPx);
+    }
+    if (options?.albumCardMaxWidthPx !== undefined) {
+      albumCardMaxWidthPx = normalizeAlbumCardMaxWidthPx(options.albumCardMaxWidthPx);
     }
     if (options?.groupingEnabled !== undefined) {
       groupingEnabled = options.groupingEnabled;
@@ -1145,6 +1152,7 @@
             widths: { ...trackColumnWidths },
             librarySort: { ...librarySort },
             rowHeightPx: trackRowHeightPx,
+            albumCardMaxWidthPx,
             groupingEnabled,
             textOverflowMode: trackTextOverflowMode,
           },
@@ -1153,6 +1161,7 @@
         trackColumnPreferences = normalizeTrackColumnPreferences(saved.columns);
         trackColumnWidths = normalizeTrackColumnWidths(saved.widths);
         trackRowHeightPx = normalizeTrackRowHeightPx(saved.rowHeightPx);
+        albumCardMaxWidthPx = normalizeAlbumCardMaxWidthPx(saved.albumCardMaxWidthPx);
         groupingEnabled = saved.groupingEnabled !== false;
         trackTextOverflowMode = saved.textOverflowMode === 'end' ? 'end' : 'middle';
         trackTextOverflowStore.set(trackTextOverflowMode);
@@ -1281,6 +1290,14 @@
 
   function commitTrackRowHeight(value: number): void {
     persistTrackColumnSettings({ rowHeightPx: value });
+  }
+
+  function previewAlbumCardMaxWidth(value: number): void {
+    albumCardMaxWidthPx = normalizeAlbumCardMaxWidthPx(value);
+  }
+
+  function commitAlbumCardMaxWidth(value: number): void {
+    persistTrackColumnSettings({ albumCardMaxWidthPx: value });
   }
 
   function setGroupingEnabled(value: boolean): void {
@@ -3207,6 +3224,19 @@
                     onchange={(event) => commitTrackRowHeight(Number(event.currentTarget.value))}
                   />
                 </label>
+                <label class="lyrics-preference-range track-row-height-setting">
+                  <span><strong>專輯卡片最大寬度</strong><output>{albumCardMaxWidthPx}px</output></span>
+                  <input
+                    type="range"
+                    min={MIN_ALBUM_CARD_MAX_WIDTH_PX}
+                    max={MAX_ALBUM_CARD_MAX_WIDTH_PX}
+                    step="1"
+                    value={albumCardMaxWidthPx}
+                    aria-label="專輯卡片最大寬度"
+                    oninput={(event) => previewAlbumCardMaxWidth(Number(event.currentTarget.value))}
+                    onchange={(event) => commitAlbumCardMaxWidth(Number(event.currentTarget.value))}
+                  />
+                </label>
                 <label class="lyrics-preference-toggle track-grouping-setting">
                   <input type="checkbox" checked={groupingEnabled} aria-label="啟用分組模式" onchange={(event) => setGroupingEnabled(event.currentTarget.checked)} />
                   <span><strong>啟用分組模式</strong><small>啟用後可能增加載入時間</small></span>
@@ -3809,6 +3839,7 @@
                 refreshKey={libraryListRevision}
                 active={activeView === 'albums'}
                 rowHeightPx={trackRowHeightPx}
+                {albumCardMaxWidthPx}
                 {groupingEnabled}
                 onCountChange={(count) => (albumIndexCount = count)}
                 onSelect={(album, coverSources) => openAlbumEntry(album, true, coverSources)}

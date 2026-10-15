@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, getAlbumCardTextHeight, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from '../src/lib/album-index-layout.js';
+import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, getAlbumCardGrid, getAlbumCardTextHeight, normalizeAlbumCardMaxWidthPx, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from '../src/lib/album-index-layout.js';
 
 const albumIndexSource = readFileSync(new URL('../src/lib/AlbumIndex.svelte', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const pagedVirtualListSource = readFileSync(new URL('../src/lib/PagedVirtualList.svelte', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -125,4 +125,38 @@ test('album group and card rows share compact vertical spacing and global group 
   assert.match(albumIndexSource, /padding:16px clamp\(18px,2vw,34px\) var\(--album-vertical-gap\)/);
   assert.match(albumIndexSource, /devicePixelRatio = window\.devicePixelRatio > 0 \? window\.devicePixelRatio : 1/);
   assert.match(albumIndexSource, /column-gap:\$\{gap\}px/);
+});
+
+test('album card grid fills the row with cards no wider than the maximum', () => {
+  const gap = 18;
+  for (const available of [1, 150, 179, 180, 197, 198, 377, 1000, 1269, 1500, 2560]) {
+    for (const max of [120, 168, 180, 320]) {
+      const { columns, cardWidth } = getAlbumCardGrid(available, max, gap);
+      assert.ok(columns >= 1);
+      assert.ok(cardWidth <= max + 1e-9, `card ${cardWidth} > ${max} at ${available}`);
+      if (cardWidth < max) {
+        const used = columns * cardWidth + (columns - 1) * gap;
+        assert.ok(Math.abs(used - available) < 1e-6, `row leaves a gap at ${available}/${max}`);
+      }
+      assert.equal(columns, Math.max(1, Math.ceil((available + gap) / (max + gap))));
+    }
+  }
+});
+
+test('album card grid adds a narrower column instead of leaving a trailing gap', () => {
+  // Five 180px cards plus gaps need 972px; a 1000px row gets six narrower cards.
+  const grid = getAlbumCardGrid(1000, 180, 18);
+  assert.equal(grid.columns, 6);
+  assert.ok(Math.abs(grid.cardWidth - (1000 - 18 * 5) / 6) < 1e-9);
+  // Exactly five full-width cards fit without extra columns.
+  assert.deepEqual(getAlbumCardGrid(5 * 180 + 4 * 18, 180, 18), { columns: 5, cardWidth: 180 });
+  assert.deepEqual(getAlbumCardGrid(0, 180, 18), { columns: 1, cardWidth: 180 });
+  assert.deepEqual(getAlbumCardGrid(Number.NaN, Number.NaN, Number.NaN), { columns: 1, cardWidth: 180 });
+});
+
+test('album card maximum width normalizes persisted values', () => {
+  assert.equal(normalizeAlbumCardMaxWidthPx(undefined), 180);
+  assert.equal(normalizeAlbumCardMaxWidthPx(10), 120);
+  assert.equal(normalizeAlbumCardMaxWidthPx(999), 320);
+  assert.equal(normalizeAlbumCardMaxWidthPx(200.4), 200);
 });

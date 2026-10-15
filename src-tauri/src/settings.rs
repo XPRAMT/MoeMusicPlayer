@@ -413,6 +413,9 @@ pub struct TrackListColumnSettings {
     pub library_sort: LibraryListSort,
     #[serde(default = "default_track_row_height_px")]
     pub row_height_px: u8,
+    /// Album home cards fill the row; each card is at most this many CSS px wide.
+    #[serde(default = "default_album_card_max_width_px")]
+    pub album_card_max_width_px: u16,
     /// Group headings and quick-index grouping across sortable lists.
     #[serde(default = "default_grouping_enabled")]
     pub grouping_enabled: bool,
@@ -517,6 +520,17 @@ fn default_track_row_height_px() -> u8 {
     50
 }
 
+pub(crate) const MIN_ALBUM_CARD_MAX_WIDTH_PX: u16 = 120;
+pub(crate) const MAX_ALBUM_CARD_MAX_WIDTH_PX: u16 = 320;
+
+fn default_album_card_max_width_px() -> u16 {
+    180
+}
+
+pub(crate) fn clamp_album_card_max_width_px(value: u16) -> u16 {
+    value.clamp(MIN_ALBUM_CARD_MAX_WIDTH_PX, MAX_ALBUM_CARD_MAX_WIDTH_PX)
+}
+
 fn default_grouping_enabled() -> bool {
     true
 }
@@ -552,6 +566,7 @@ impl Default for TrackListColumnSettings {
             widths: TrackListFlexibleWidths::default(),
             library_sort: LibraryListSort::default(),
             row_height_px: default_track_row_height_px(),
+            album_card_max_width_px: default_album_card_max_width_px(),
             grouping_enabled: default_grouping_enabled(),
             text_overflow_mode: default_track_text_overflow_mode(),
         }
@@ -593,6 +608,7 @@ impl TrackListColumnSettings {
     fn normalize(mut self) -> Self {
         self.widths = self.widths.clamp();
         self.row_height_px = self.row_height_px.clamp(30, 60);
+        self.album_card_max_width_px = clamp_album_card_max_width_px(self.album_card_max_width_px);
         self
     }
 }
@@ -647,6 +663,9 @@ fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColu
             widths: settings.widths.clamp(),
             library_sort: settings.library_sort,
             row_height_px: settings.row_height_px.clamp(30, 60),
+            album_card_max_width_px: clamp_album_card_max_width_px(
+                settings.album_card_max_width_px,
+            ),
             grouping_enabled: settings.grouping_enabled,
             text_overflow_mode: settings.text_overflow_mode,
         };
@@ -2712,6 +2731,31 @@ mod tests {
             ..TrackListColumnSettings::default()
         };
         assert_eq!(repair_track_list_columns(too_tall).row_height_px, 60);
+    }
+
+    #[test]
+    fn album_card_max_width_defaults_for_old_settings_and_clamps() {
+        let old: TrackListColumnSettings = serde_json::from_value(serde_json::json!({
+            "columns": TrackListColumnSettings::default().columns,
+        }))
+        .expect("old track list settings remain readable");
+        assert_eq!(old.album_card_max_width_px, 180);
+        let encoded = serde_json::to_value(&old).unwrap();
+        assert_eq!(encoded["albumCardMaxWidthPx"], 180);
+
+        let narrow = TrackListColumnSettings {
+            album_card_max_width_px: 10,
+            ..TrackListColumnSettings::default()
+        };
+        assert_eq!(
+            repair_track_list_columns(narrow).album_card_max_width_px,
+            120
+        );
+        let wide = TrackListColumnSettings {
+            album_card_max_width_px: u16::MAX,
+            ..TrackListColumnSettings::default()
+        };
+        assert_eq!(repair_track_list_columns(wide).album_card_max_width_px, 320);
     }
 
     #[test]

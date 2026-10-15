@@ -5980,6 +5980,8 @@ fn settings_set_track_list_columns(
             let mut next = preferences.clone();
             next.widths = next.widths.clamp();
             next.row_height_px = next.row_height_px.clamp(30, 60);
+            next.album_card_max_width_px =
+                settings::clamp_album_card_max_width_px(next.album_card_max_width_px);
             settings.track_list_columns = next;
             Ok(())
         })

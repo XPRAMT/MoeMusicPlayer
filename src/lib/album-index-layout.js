@@ -123,3 +123,30 @@ export function buildAlbumIndexRenderRows(rows, itemAt, revision, refreshKey = 0
     return { ...row, revision, items };
   });
 }
+
+export const DEFAULT_ALBUM_CARD_MAX_WIDTH_PX = 180;
+export const MIN_ALBUM_CARD_MAX_WIDTH_PX = 120;
+export const MAX_ALBUM_CARD_MAX_WIDTH_PX = 320;
+
+/** @param {unknown} value @returns {number} */
+export function normalizeAlbumCardMaxWidthPx(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_ALBUM_CARD_MAX_WIDTH_PX;
+  return Math.min(MAX_ALBUM_CARD_MAX_WIDTH_PX, Math.max(MIN_ALBUM_CARD_MAX_WIDTH_PX, Math.round(value)));
+}
+
+/**
+ * Fill the available row width with album cards no wider than `maxCardWidth`.
+ * Columns = ceil((available + gap) / (max + gap)), at least 1; the cards then
+ * share the remaining width equally, so there is no trailing gap and each card
+ * is at most `maxCardWidth` (narrower only when one card exceeds the row).
+ * @param {number} availableWidth @param {number} maxCardWidth @param {number} gap
+ * @returns {{ columns: number, cardWidth: number }}
+ */
+export function getAlbumCardGrid(availableWidth, maxCardWidth, gap) {
+  const available = Number.isFinite(availableWidth) ? Math.max(0, availableWidth) : 0;
+  const max = Number.isFinite(maxCardWidth) && maxCardWidth > 0 ? maxCardWidth : DEFAULT_ALBUM_CARD_MAX_WIDTH_PX;
+  const spacing = Number.isFinite(gap) ? Math.max(0, gap) : 0;
+  const columns = Math.max(1, Math.ceil((available + spacing) / (max + spacing) - 1e-9));
+  const cardWidth = available > 0 ? Math.min(max, (available - spacing * (columns - 1)) / columns) : max;
+  return { columns, cardWidth: Math.max(1, cardWidth) };
+}

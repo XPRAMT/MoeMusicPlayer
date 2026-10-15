@@ -6,7 +6,7 @@
   import TrackColumnCells from './TrackColumnCells.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import { PagedListController } from './track-list-data.js';
-  import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, getAlbumCardTextHeight, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from './album-index-layout.js';
+  import { buildAlbumIndexRenderRows, buildAlbumIndexRows, DEFAULT_ALBUM_CARD_MAX_WIDTH_PX, findVisibleAlbumIndexRows, getAlbumCardGrid, getAlbumCardTextHeight, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from './album-index-layout.js';
   import { getQuickIndexColumnCount, getQuickIndexDisplayLabel } from './quick-index.js';
 
   type AlbumIndexSortDirection = 'asc' | 'desc';
@@ -15,11 +15,12 @@
     refreshKey: number;
     active: boolean;
     rowHeightPx?: number;
+    albumCardMaxWidthPx?: number;
     groupingEnabled?: boolean;
     onCountChange: (count: number | null) => void;
     onSelect: (album: AlbumIndexEntry, coverSources: string[]) => void;
   }
-  let { refreshKey, active, rowHeightPx = 50, groupingEnabled = true, onCountChange, onSelect }: Props = $props();
+  let { refreshKey, active, rowHeightPx = 50, albumCardMaxWidthPx = DEFAULT_ALBUM_CARD_MAX_WIDTH_PX, groupingEnabled = true, onCountChange, onSelect }: Props = $props();
   let sortField = $state<AlbumIndexSortField>('title');
   let sortDirection = $state<AlbumIndexSortDirection>('asc');
   let loading = $state(false);
@@ -58,7 +59,6 @@
     { listName: '專輯', onChange: () => { pageSnapshot = listData.snapshot(); } },
   );
   const gap = 18;
-  const cardWidth = 168;
   const verticalGap = $derived(physicalPixelsToCssPixels(40, devicePixelRatio));
   const groupHeadingHeight = $derived(Math.max(30, rowHeightPx * 0.7));
   const overscanRows = 2;
@@ -69,7 +69,9 @@
     { id: 'duration', label: '播放時長' },
   ];
 
-  const columns = $derived(Math.max(1, Math.floor((viewportWidth + gap) / (cardWidth + gap))));
+  const cardGrid = $derived(getAlbumCardGrid(viewportWidth, albumCardMaxWidthPx, gap));
+  const columns = $derived(cardGrid.columns);
+  const cardWidth = $derived(cardGrid.cardWidth);
   const cardHeight = $derived(cardWidth + cardTextHeight);
   const rowHeight = $derived(cardHeight + verticalGap);
   const totalCount = $derived(pageSnapshot.totalCount ?? quickIndexTotal);
@@ -372,7 +374,7 @@
               <button type="button" class="album-index-group-button" aria-label={`開啟「${row.label}」字首索引`} onclick={openQuickIndex}>{row.label}</button>
             </div>
           {:else}
-            <div class="album-index-card-row" style={`height:${row.height}px;transform:translateY(${row.top}px);grid-template-columns:repeat(${columns},${cardWidth}px);column-gap:${gap}px`}>
+            <div class="album-index-card-row" style={`height:${row.height}px;transform:translateY(${row.top}px);grid-template-columns:repeat(${columns},minmax(0,1fr));column-gap:${gap}px`}>
               {#each row.items ?? [] as item (item.key)}
                 {#if item.album}
                   <AlbumCard album={item.album} {active} {refreshKey} {sortField} {onSelect} />

@@ -121,6 +121,7 @@ export interface TrackListColumnSettings {
   widths?: TrackColumnWidths;
   librarySort?: LibraryListSort;
   rowHeightPx?: number;
+  albumCardMaxWidthPx?: number;
   groupingEnabled: boolean;
   textOverflowMode: 'middle' | 'end';
 }
