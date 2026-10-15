@@ -254,9 +254,8 @@ export function createThemeCssVariables(value, options = {}) {
   const textInverseChannels = channels(textInverse);
   const panel = readableSurfaceBlend(contrastBackground, textColor, 0.075);
   const panelSoft = readableSurfaceBlend(contrastBackground, textColor, 0.13);
-  const sidebar = readableSurfaceBlend(contrastBackground, textColor, 0.035);
   const dock = readableSurfaceBlend(contrastBackground, textColor, 0.08);
-  const textSurfaces = [contrastBackground, panel, panelSoft, sidebar, dock];
+  const textSurfaces = [contrastBackground, panel, panelSoft, dock];
   /** @param {string} foreground */
   const readableOnSurfaces = (foreground) => textSurfaces.every(
     (surface) => contrastRatio(foreground, surface) >= 4.5,
@@ -272,7 +271,6 @@ export function createThemeCssVariables(value, options = {}) {
     '--page-rgb': channels(pageBackground),
     '--panel': panel,
     '--panel-soft': panelSoft,
-    '--sidebar-bg': sidebar,
     '--dock-bg': dock,
     '--text': textColor,
     '--text-rgb': textChannels,

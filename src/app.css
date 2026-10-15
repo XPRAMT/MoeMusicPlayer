@@ -14,7 +14,6 @@
   --settings-item-gap: 8px;
   --panel: #131313;
   --panel-soft: #212121;
-  --sidebar-bg: #090909;
   --divider-width: 1px;
   --line: var(--text);
   --divider-color: var(--text);
@@ -286,11 +285,6 @@ input:focus-visible {
   position: relative;
   z-index: 1;
 }
-
-.app-shell.has-main-backdrop .sidebar {
-  background: transparent;
-}
-
 
 .now-playing-overlay {
   position: relative;
@@ -678,7 +672,7 @@ input:focus-visible {
   flex-direction: column;
   padding: var(--sidebar-brand-inset) 19px 21px;
   border-right: var(--divider-width) solid var(--divider-color);
-  background: var(--sidebar-bg);
+  background: transparent;
 }
 
 .brand-lockup {
