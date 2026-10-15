@@ -6,7 +6,10 @@ use std::{
     path::Path,
 };
 
-use lofty::{config::ParseOptions, picture::PictureType, prelude::TaggedFileExt, probe::Probe};
+use lofty::{
+    config::ParseOptions, file::FileType, picture::PictureType, prelude::TaggedFileExt,
+    probe::Probe,
+};
 use player_core::{ArtworkImage, MediaLocator, MAX_ARTWORK_BYTES};
 
 use crate::windows::to_extended_path;
@@ -74,12 +77,12 @@ fn embedded_artwork(path: &Path, oversized: &mut bool) -> Option<ArtworkImage> {
     let native_path = to_extended_path(path).ok()?;
     let file = open_regular_file_without_following_reparse_points(&native_path)?;
     let options = ParseOptions::new().read_properties(false);
-    let tagged_file = Probe::new(std::io::BufReader::new(file))
-        .options(options)
-        .guess_file_type()
-        .ok()?
-        .read()
-        .ok()?;
+    let reader = std::io::BufReader::new(file);
+    let probe = match FileType::from_path(path) {
+        Some(file_type) => Probe::with_file_type(reader, file_type),
+        None => Probe::new(reader).guess_file_type().ok()?,
+    };
+    let tagged_file = probe.options(options).read().ok()?;
     let tags = tagged_file.tags();
 
     for picture in tags
@@ -433,6 +436,10 @@ mod tests {
     }
 
     fn write_tagged_mp3(path: &Path, embedded: &[u8]) {
+        write_tagged_mp3_with_padding(path, embedded, 0);
+    }
+
+    fn write_tagged_mp3_with_padding(path: &Path, embedded: &[u8], padding_bytes: usize) {
         let mut apic = vec![0]; // ISO-8859-1 text encoding
         apic.extend_from_slice(b"image/png\0");
         apic.push(3); // front cover
@@ -459,6 +466,8 @@ mod tests {
             (tag_len & 0x7f) as u8,
         ]);
         bytes.extend_from_slice(&tag);
+        bytes.resize(bytes.len() + padding_bytes, 0);
+        bytes.extend_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
         fs::write(path, bytes).expect("write synthetic ID3v2 picture");
     }
 
@@ -485,6 +494,18 @@ mod tests {
         assert_eq!(artwork.mime_type(), "image/png");
         assert_eq!(artwork.bytes(), embedded);
         assert_eq!(artwork.dimensions(), (1, 1));
+    }
+
+    #[test]
+    fn embedded_cover_is_found_when_mpeg_frames_follow_id3_padding() {
+        let dir = TestDirectory::new("embedded-id3-padding");
+        let audio = dir.path().join("track.mp3");
+        let embedded = tiny_png();
+        write_tagged_mp3_with_padding(&audio, &embedded, 8 * 1024);
+
+        let artwork = expect_found(&only_locator(audio));
+        assert_eq!(artwork.mime_type(), "image/png");
+        assert_eq!(artwork.bytes(), embedded);
     }
 
     #[test]
