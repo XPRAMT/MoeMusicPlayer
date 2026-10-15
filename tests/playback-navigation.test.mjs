@@ -41,11 +41,13 @@ test('queue heading sort mutates playback traversal and keeps drag reordering en
   assert.match(readSource('src/lib/TrackColumnCells.svelte'), /sort\?\.field === column\.id && !hideSortDirection/);
 });
 
-test('resizable list header separators remain visible without hover', () => {
-  const baseRule = /\.column-resize-handle::after\s*\{[^}]*background:\s*var\(--divider-color\);[^}]*opacity:\s*0\.3/;
-  const hoverRule = /\.list-column\.is-resizable:hover \.column-resize-handle::after,[\s\S]*?\.column-resize-handle:hover::after\s*\{[^}]*opacity:\s*0\.65/;
-  assert.match(trackColumnCellsSource, baseRule);
-  assert.match(trackColumnCellsSource, hoverRule);
+test('column resize handle follows divider alpha without a second opacity multiplier', () => {
+  const handleRule = trackColumnCellsSource.match(/\.column-resize-handle::after\s*\{([^}]+)\}/)?.[1] ?? '';
+  const hoverRule = trackColumnCellsSource.match(/\.list-column\.is-resizable:hover \.column-resize-handle::after,[\s\S]*?\.column-resize-handle:hover::after\s*\{([^}]+)\}/)?.[1] ?? '';
+  assert.match(handleRule, /width:\s*1px/);
+  assert.match(handleRule, /background:\s*var\(--divider-color\)/);
+  assert.doesNotMatch(handleRule, /opacity\s*:/);
+  assert.equal(hoverRule, '');
 });
 
 test('playing a library or playlist item does not change the current page', () => {

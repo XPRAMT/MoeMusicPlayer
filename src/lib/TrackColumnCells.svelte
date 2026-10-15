@@ -274,15 +274,9 @@
     top: 20%;
     bottom: 20%;
     left: 4px;
-    width: 2px;
+    width: 1px;
     border-radius: 1px;
     background: var(--divider-color);
-    opacity: 0.3;
-  }
-
-  .list-column.is-resizable:hover .column-resize-handle::after,
-  .column-resize-handle:hover::after {
-    opacity: 0.65;
   }
 
   .list-audio-format {
