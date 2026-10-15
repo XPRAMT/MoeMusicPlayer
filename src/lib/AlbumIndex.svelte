@@ -6,7 +6,7 @@
   import TrackColumnCells from './TrackColumnCells.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import { PagedListController } from './track-list-data.js';
-  import { buildAlbumIndexRows, findVisibleAlbumIndexRows, shouldGroupAlbumIndex } from './album-index-layout.js';
+  import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, shouldGroupAlbumIndex } from './album-index-layout.js';
   import { getQuickIndexColumnCount, getQuickIndexDisplayLabel } from './quick-index.js';
 
   type AlbumIndexSortDirection = 'asc' | 'desc';
@@ -27,7 +27,6 @@
   let viewportWidth = $state(0);
   let viewportHeight = $state(0);
   let scrollTop = $state(0);
-  let visibleCardDomDiagnostic = $state('pending');
   let scrollPositionRestored = $state(false);
   let restoreFrame: number | null = null;
   let requestRevision = 0;
@@ -88,6 +87,15 @@
       rowHeight * overscanRows,
     );
   });
+  const visibleRenderRows = $derived.by(() => {
+    const revision = pageSnapshot.revision;
+    return buildAlbumIndexRenderRows(
+      visibleRows,
+      (index) => listData.itemAt(index),
+      revision,
+      refreshKey,
+    );
+  });
   const visibleDataRange = $derived.by(() => {
     pageSnapshot.revision;
     const cardRows = visibleRows.filter((row) => row.kind === 'cards');
@@ -98,19 +106,6 @@
     };
   });
   const availableQuickIndexLabels = $derived(new Set(groups.map(({ label }) => label)));
-  const visiblePageDiagnostic = $derived.by(() => {
-    pageSnapshot.revision;
-    const cardRows = visibleRows.filter((row) => row.kind === 'cards');
-    if (totalCount <= 0 || pageSnapshot.errors.length > 0) return null;
-    const rows = visibleRows.map((row) => row.kind === 'group'
-      ? `G(${row.label}@${row.beforeIndex})`
-      : `C(${row.start}-${row.end}@${row.top})`).join(' ');
-    const sample = cardRows.slice(0, 4).map((row) => {
-      const item = listData.itemAt(row.start);
-      return `${row.start}:${item ? `${item.displayName}/${item.trackCount}` : 'null'}`;
-    }).join(' ');
-    return `sort=${sortField}/${sortDirection}; total=${totalCount}/${pageSnapshot.totalCount ?? 'null'}; cache=${pageSnapshot.cachedItemCount}; pending=${pageSnapshot.pendingPageCount}; range=${visibleDataRange ? `${visibleDataRange.start}-${visibleDataRange.end}` : 'null'}; rows=${rows}; sample=${sample}; DOM=${visibleCardDomDiagnostic}`;
-  });
 
   async function load(): Promise<void> {
     const revision = ++requestRevision;
@@ -195,35 +190,11 @@
     void listData.retry(offset);
   }
 
-  function requestVisibleCardPages(): void {
-    const range = visibleDataRange;
-    if (range) void listData.ensureRange(range.start, range.end);
-  }
-
   $effect(() => {
     const range = visibleDataRange;
     if (pageSnapshot.scope !== null && range && range.end > range.start) {
       void listData.ensureRange(range.start, range.end);
     }
-  });
-
-  $effect(() => {
-    pageSnapshot.revision;
-    visibleRows;
-    const element = viewport;
-    if (!element) return;
-    void tick().then(() => {
-      if (viewport !== element) return;
-      const cards = [...element.querySelectorAll<HTMLElement>('.album-card')];
-      const first = cards[0];
-      if (!first) {
-        visibleCardDomDiagnostic = `0/${element.querySelectorAll('.album-index-card-row').length} rows`;
-        return;
-      }
-      const rect = first.getBoundingClientRect();
-      const style = getComputedStyle(first);
-      visibleCardDomDiagnostic = `${cards.length} cards; first=${Math.round(rect.left)},${Math.round(rect.top)} ${Math.round(rect.width)}x${Math.round(rect.height)} ${style.display}/${style.visibility}/${style.opacity}`;
-    });
   });
 
   function openQuickIndex(event: MouseEvent): void {
@@ -372,12 +343,6 @@
       {/if}
     </div>
   {/if}
-  {#if visiblePageDiagnostic}
-    <div class="album-index-page-error" role="status" data-album-page-diagnostic>
-      <span>Album diagnostics: {visiblePageDiagnostic}</span>
-      <button class="text-button" type="button" onclick={requestVisibleCardPages}>Fetch visible range</button>
-    </div>
-  {/if}
   {#if error}
     <div class="album-index-message" role="alert"><span>無法載入專輯：{error}</span><button class="text-button" type="button" onclick={() => void load()}>重試</button></div>
   {:else if totalCount === 0 && loading}
@@ -387,17 +352,16 @@
   {:else}
     <div class="album-grid-viewport" bind:this={viewport} data-scroll-restored={scrollPositionRestored} onscroll={handleScroll}>
       <div class="album-grid-canvas" style={`height:${rowLayout.totalHeight}px;--album-card-width:${cardWidth}px`}>
-        {#each visibleRows as row (row.kind === 'group' ? `group:${row.beforeIndex}:${row.label}` : `cards:${row.start}`)}
+        {#each visibleRenderRows as row (row.kind === 'group' ? `group:${row.beforeIndex}:${row.label}` : `cards:${row.start}`)}
           {#if row.kind === 'group'}
             <div class="album-index-group-row" style={`height:${row.height}px;transform:translateY(${row.top}px)`}>
               <button type="button" class="album-index-group-button" aria-label={`開啟「${row.label}」字首索引`} onclick={openQuickIndex}>{row.label}</button>
             </div>
           {:else}
             <div class="album-index-card-row" style={`height:${row.height}px;transform:translateY(${row.top}px);grid-template-columns:repeat(${columns},${cardWidth}px);gap:${gap}px`}>
-              {#each Array.from({ length: row.end - row.start }, (_, offset) => row.start + offset) as index (listData.itemAt(index)?.key ?? `loading:${index}:${refreshKey}`)}
-                {@const album = listData.itemAt(index)}
-                {#if album}
-                  <AlbumCard {album} {active} {refreshKey} {sortField} {onSelect} />
+              {#each row.items ?? [] as item (item.key)}
+                {#if item.album}
+                  <AlbumCard album={item.album} {active} {refreshKey} {sortField} {onSelect} />
                 {:else}
                   <div class="album-card-placeholder" aria-hidden="true"></div>
                 {/if}

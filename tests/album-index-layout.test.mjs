@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildAlbumIndexRows, findVisibleAlbumIndexRows, shouldGroupAlbumIndex } from '../src/lib/album-index-layout.js';
+import { buildAlbumIndexRenderRows, buildAlbumIndexRows, findVisibleAlbumIndexRows, shouldGroupAlbumIndex } from '../src/lib/album-index-layout.js';
 
 const albumIndexSource = readFileSync(new URL('../src/lib/AlbumIndex.svelte', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
@@ -62,6 +62,30 @@ test('album virtual rows select by pixel viewport and overscan', () => {
     : `cards:${row.start}-${row.end}`), ['cards:0-2', 'cards:2-4', 'group:B', 'cards:4-6']);
 });
 
-test('album cards rerender when a sorted snapshot page is committed without changing grid geometry', () => {
-  assert.match(albumIndexSource, /const visibleRows = \$derived\.by\(\(\) => \{\s*\/\/ Album entries live in a non-reactive paged controller\.[\s\S]*?pageSnapshot\.revision;\s*return findVisibleAlbumIndexRows\(/);
+test('album card rows rematerialize cached page items when revision changes without geometry changes', () => {
+  const layout = buildAlbumIndexRows({ totalCount: 4, columns: 2, cardRowHeight: 220 });
+  const visible = findVisibleAlbumIndexRows(layout.rows, 0, 300, 0);
+  let cached = new Map();
+  const itemAt = (index) => cached.get(index) ?? null;
+
+  const before = buildAlbumIndexRenderRows(visible, itemAt, 1, 0);
+  assert.deepEqual(before.filter((row) => row.kind === 'cards').flatMap((row) => row.items), [
+    { index: 0, album: null, key: 'loading:0:0' },
+    { index: 1, album: null, key: 'loading:1:0' },
+    { index: 2, album: null, key: 'loading:2:0' },
+    { index: 3, album: null, key: 'loading:3:0' },
+  ]);
+
+  cached = new Map([[0, { key: 'album:a', displayName: 'A' }], [1, { key: 'album:b', displayName: 'B' }]]);
+  const after = buildAlbumIndexRenderRows(visible, itemAt, 2, 0);
+  assert.deepEqual(after.filter((row) => row.kind === 'cards').flatMap((row) => row.items), [
+    { index: 0, album: { key: 'album:a', displayName: 'A' }, key: 'album:a' },
+    { index: 1, album: { key: 'album:b', displayName: 'B' }, key: 'album:b' },
+    { index: 2, album: null, key: 'loading:2:0' },
+    { index: 3, album: null, key: 'loading:3:0' },
+  ]);
+  assert.notEqual(after[0], before[0]);
+  assert.notEqual(after[0].items, before[0].items);
+  assert.match(albumIndexSource, /const visibleRenderRows = \$derived\.by\(\(\) => \{[\s\S]*?pageSnapshot\.revision[\s\S]*?buildAlbumIndexRenderRows\(/);
+  assert.match(albumIndexSource, /\{#each row\.items \?\? \[\] as item \(item\.key\)\}/);
 });

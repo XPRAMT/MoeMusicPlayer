@@ -77,3 +77,31 @@ export function findVisibleAlbumIndexRows(rows, scrollTop, viewportHeight, overs
   for (let index = low; index < rows.length && rows[index].top < end; index += 1) visible.push(rows[index]);
   return visible;
 }
+
+/**
+ * Materialize the non-reactive page-cache items used by the virtual Svelte grid.
+ * Every snapshot revision creates fresh card-row item arrays, even when row
+ * geometry and index ranges are unchanged, so newly fetched pages replace their
+ * loading placeholders without requiring a scroll event.
+ * @template Item
+ * @param {Array<ReturnType<typeof buildAlbumIndexRows>['rows'][number]>} rows
+ * @param {(index: number) => Item | null} itemAt
+ * @param {number} revision
+ * @param {number} refreshKey
+ * @returns {Array<(ReturnType<typeof buildAlbumIndexRows>['rows'][number] & { revision:number, items?: Array<{index:number,album:Item|null,key:string|number}> })>}
+ */
+export function buildAlbumIndexRenderRows(rows, itemAt, revision, refreshKey = 0) {
+  return rows.map((row) => {
+    if (row.kind !== 'cards') return { ...row, revision };
+    const items = Array.from({ length: row.end - row.start }, (_, offset) => {
+      const index = row.start + offset;
+      const album = itemAt(index);
+      return {
+        index,
+        album,
+        key: album?.key ?? `loading:${index}:${refreshKey}`,
+      };
+    });
+    return { ...row, revision, items };
+  });
+}
