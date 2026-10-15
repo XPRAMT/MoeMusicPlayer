@@ -3402,6 +3402,8 @@ input:focus-visible {
   font: inherit;
   cursor: inherit;
   overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
   background:
     radial-gradient(circle at 70% 24%, rgba(136, 201, 180, 0.1), transparent 40%),
     linear-gradient(145deg, #272a2b, #1c2026);
@@ -3436,6 +3438,8 @@ input:focus-visible {
   flex: 1;
   flex-direction: column;
   gap: 4px;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .dock-track-copy strong,
