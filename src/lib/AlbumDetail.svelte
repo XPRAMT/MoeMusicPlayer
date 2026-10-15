@@ -265,7 +265,8 @@
 
 <style>
   .album-detail-shell { position:relative; min-width:0; min-height:0; flex:1 1 auto; overflow:hidden; }
-  .album-detail-heading { position:absolute; z-index:4; top:0; right:0; left:0; display:flex; height:var(--album-detail-heading-height); box-sizing:border-box; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); }
+  .album-detail-heading { position:absolute; z-index:4; top:0; right:0; left:0; display:flex; height:var(--album-detail-heading-height); box-sizing:border-box; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); pointer-events:none; }
+  .album-detail-heading > * { pointer-events:auto; }
   .album-detail-art { width:var(--album-detail-cover-size,148px); height:var(--album-detail-cover-size,148px); flex:0 0 var(--album-detail-cover-size,148px); aspect-ratio:1; overflow:hidden; border-radius:10px; background:#000; }
   .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:10px; }
   .album-detail-artists,

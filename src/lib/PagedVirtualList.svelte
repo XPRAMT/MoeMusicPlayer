@@ -250,8 +250,22 @@
     scrollTop = next;
     lastVisibleScrollTop = next;
     lastNativeScrollTop = nativeTop;
+    syncLeadingOverlayRowClips(collapseOffset);
     rememberVisibleScrollPosition(next);
     onViewportScrollTopChange?.(next, collapseOffset);
+  }
+
+  function syncLeadingOverlayRowClips(collapseOffset = leadingCollapseOffset): void {
+    if (!hasLeadingOverlay || !viewport || !frame) return;
+    const viewportTop = viewport.getBoundingClientRect().top;
+    const listBoundary = viewportTop + Math.max(0, leadingOverlayHeight - collapseOffset) + headerHeight;
+    const rowClips = [...frame.querySelectorAll<HTMLElement>('.paged-virtual-row[role="row"]')].map((row) => {
+      const rect = row.getBoundingClientRect();
+      return { row, clippedTop: Math.min(rect.height, Math.max(0, listBoundary - rect.top)) };
+    });
+    for (const { row, clippedTop } of rowClips) {
+      row.style.clipPath = clippedTop > 0 ? `inset(${clippedTop}px 0px 0px)` : '';
+    }
   }
 
   function getVisibleRowsHeight(): number {
@@ -323,10 +337,12 @@
     const next = advanceAlbumDetailWheelScroll(current, target, elapsed);
     if (next === target || Math.abs(target - next) <= 0.25) {
       viewport.scrollTop = target;
+      updateViewport();
       cancelWheelScrollAnimation();
       return;
     }
     viewport.scrollTop = next;
+    updateViewport();
     wheelAnimationFrame = requestAnimationFrame(animateWheelScroll);
   }
 
@@ -592,6 +608,7 @@
     // not overwrite the measured value during scrolling, or the heading and
     // header deductions are applied again on every scroll event.
     metricsReady = true;
+    syncLeadingOverlayRowClips(collapseOffset);
     onViewportScrollTopChange?.(scrollTop, collapseOffset);
   }
 
