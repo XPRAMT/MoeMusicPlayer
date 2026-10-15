@@ -3094,8 +3094,6 @@ input:focus-visible {
   box-sizing: border-box;
   display: flex;
   min-width: 0;
-  min-height: 71px;
-  align-items: center;
   gap: var(--settings-item-gap);
   overflow-x: auto;
   scrollbar-width: thin;
