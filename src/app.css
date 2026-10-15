@@ -14,10 +14,8 @@
   --panel: #131313;
   --panel-soft: #212121;
   --sidebar-bg: #090909;
-  --line: rgba(245, 251, 255, 0.11);
-  --line-strong: rgba(245, 251, 255, 0.19);
   --divider-width: 1px;
-  /* Temporary diagnostic: render content separators at full text-color strength. */
+  --line: var(--text);
   --divider-color: var(--text);
   --list-group-row-background: rgba(var(--text-rgb), 0.05);
   --list-group-row-hover-background: rgba(var(--text-rgb), 0.10);
@@ -561,7 +559,7 @@ input:focus-visible {
 .floating-surface,
 .app-shell[data-active-view="playlists"] .sidebar-playlist-tree-host .playlist-tree {
   color: var(--text);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line);
   background: color-mix(in srgb, var(--text-inverse) var(--quick-settings-opacity, 70%), transparent);
   -webkit-backdrop-filter: blur(var(--quick-settings-blur, 12px));
   backdrop-filter: blur(var(--quick-settings-blur, 12px));
@@ -1351,7 +1349,7 @@ input:focus-visible {
   justify-content: center;
   gap: 7px;
   padding: 0 12px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
   background: rgba(var(--text-rgb), 0.02);
@@ -1859,7 +1857,7 @@ input:focus-visible {
   width: 30px;
   height: 29px;
   place-items: center;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line);
   border-radius: 7px;
   color: var(--text);
   background: rgba(var(--text-rgb), 0.02);
@@ -2934,7 +2932,7 @@ input:focus-visible {
   height: 42px;
   flex: 0 0 auto;
   padding: 3px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
   cursor: pointer;
@@ -3101,7 +3099,7 @@ input:focus-visible {
   min-height: 38px;
   flex: 1;
   padding: 0 11px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line);
   border-radius: 9px;
   outline: 0;
   background: rgba(var(--text-rgb), 0.12);
@@ -4256,7 +4254,7 @@ input:focus-visible {
     max-height: min(60vh, calc(100dvh - 130px));
     overflow: auto;
     padding: 6px;
-    border-color: var(--line-strong);
+    border-color: var(--line);
     border-radius: var(--floating-surface-radius);
   }
   .page-content { padding-top: 26px; }

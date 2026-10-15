@@ -25,7 +25,7 @@ test('album index sort columns are ordered and centered', () => {
 test('album index sort header uses the shared visible bottom boundary', () => {
   const appStyles = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8');
   assert.match(albumIndex, /\.album-index-sort-header \{ position:relative;/);
-  assert.match(appStyles, /\.paged-virtual-header::after\s*\{[^}]*height:\s*var\(--track-header-line-height,\s*2px\);[^}]*background:\s*var\(--line\)/);
+  assert.match(appStyles, /\.paged-virtual-header::after\s*\{[^}]*height:\s*0;[^}]*border-bottom:\s*var\(--divider-width\) solid var\(--divider-color\)/);
   const pagedList = readFileSync(new URL('../src/lib/PagedVirtualList.svelte', import.meta.url), 'utf8');
   assert.doesNotMatch(pagedList, /\.paged-virtual-header::after/);
 });

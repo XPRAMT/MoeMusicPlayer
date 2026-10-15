@@ -2997,6 +2997,32 @@
                     </span>
                   </label>
                 </div>
+                <label class="lyrics-preference-range">
+                  <span><strong>框線透明度</strong><output>{themePreferences.borderOpacityPercent}%</output></span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={themePreferences.borderOpacityPercent}
+                    aria-label="框線透明度"
+                    oninput={(event) => updateMainBackgroundLook({ borderOpacityPercent: Number(event.currentTarget.value) })}
+                    onchange={saveThemePreferencesNow}
+                  />
+                </label>
+                <label class="lyrics-preference-range">
+                  <span><strong>分隔線透明度</strong><output>{themePreferences.dividerOpacityPercent}%</output></span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={themePreferences.dividerOpacityPercent}
+                    aria-label="分隔線透明度"
+                    oninput={(event) => updateMainBackgroundLook({ dividerOpacityPercent: Number(event.currentTarget.value) })}
+                    onchange={saveThemePreferencesNow}
+                  />
+                </label>
                 <div class="main-background-mode-picker" role="group" aria-label="顏色模式">
                   <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoTextColor'} type="button" aria-pressed={themePreferences.colorMode === 'autoTextColor'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoTextColor' }); saveThemePreferencesNow(); }}>自動文字顏色</button>
                   <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoBackgroundOpacity'} type="button" aria-pressed={themePreferences.colorMode === 'autoBackgroundOpacity'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoBackgroundOpacity' }); saveThemePreferencesNow(); }}>自動背景透明度</button>

@@ -934,7 +934,7 @@
   }
 
   .paged-virtual-group-button:focus-visible {
-    outline: 2px solid var(--line);
+    outline: 2px solid var(--accent);
     outline-offset: -2px;
   }
 

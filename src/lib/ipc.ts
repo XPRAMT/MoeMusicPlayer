@@ -60,6 +60,10 @@ export type UpdateInstallMode = 'restartNow' | 'nextLaunch';
 export interface ThemePreferences {
   backgroundHex: string;
   accentHex: string;
+  /** Opacity multiplier for shared control and surface borders (0–100). */
+  borderOpacityPercent: number;
+  /** Opacity multiplier for shared content separators (0–100). */
+  dividerOpacityPercent: number;
   colorMode: 'autoTextColor' | 'autoBackgroundOpacity';
   backgroundOpacityTextColor: 'white' | 'black';
   /** Main-window background target clarity (0–100), used by autoBackgroundOpacity. */

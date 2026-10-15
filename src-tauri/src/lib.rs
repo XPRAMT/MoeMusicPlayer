@@ -110,6 +110,10 @@ fn album_artwork_cache_namespace(root: &std::path::Path) -> std::path::PathBuf {
 struct ThemePreferencesDto {
     background_hex: String,
     accent_hex: String,
+    #[serde(default = "default_border_opacity_percent")]
+    border_opacity_percent: u8,
+    #[serde(default = "default_divider_opacity_percent")]
+    divider_opacity_percent: u8,
     #[serde(default)]
     color_mode: ThemeColorMode,
     #[serde(default)]
@@ -380,11 +384,21 @@ fn default_auto_text_color_threshold_percent() -> u8 {
     50
 }
 
+fn default_border_opacity_percent() -> u8 {
+    100
+}
+
+fn default_divider_opacity_percent() -> u8 {
+    100
+}
+
 impl From<ThemePreferences> for ThemePreferencesDto {
     fn from(preferences: ThemePreferences) -> Self {
         Self {
             background_hex: preferences.background_hex,
             accent_hex: preferences.accent_hex,
+            border_opacity_percent: default_border_opacity_percent(),
+            divider_opacity_percent: default_divider_opacity_percent(),
             color_mode: ThemeColorMode::default(),
             background_opacity_text_color: BackgroundOpacityTextColor::default(),
             main_background_clarity_percent: 0,
@@ -416,6 +430,8 @@ impl From<ThemeSettings> for ThemePreferencesDto {
         Self {
             background_hex: preferences.background_hex,
             accent_hex: preferences.accent_hex,
+            border_opacity_percent: preferences.border_opacity_percent,
+            divider_opacity_percent: preferences.divider_opacity_percent,
             color_mode: preferences.color_mode,
             background_opacity_text_color: preferences.background_opacity_text_color,
             main_background_clarity_percent: preferences.main_background_clarity_percent,
@@ -5576,6 +5592,8 @@ fn theme_set_preferences(
     let preferences = ThemeSettings {
         background_hex: preferences.background_hex,
         accent_hex: preferences.accent_hex,
+        border_opacity_percent: preferences.border_opacity_percent,
+        divider_opacity_percent: preferences.divider_opacity_percent,
         color_mode: preferences.color_mode,
         background_opacity_text_color: preferences.background_opacity_text_color,
         main_background_clarity_percent: preferences.main_background_clarity_percent,

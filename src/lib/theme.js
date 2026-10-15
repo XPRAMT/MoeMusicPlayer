@@ -4,6 +4,8 @@
 export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   backgroundHex: '#000000',
   accentHex: '#55D9FF',
+  borderOpacityPercent: 100,
+  dividerOpacityPercent: 100,
   colorMode: 'autoTextColor',
   backgroundOpacityTextColor: 'white',
   mainBackgroundClarityPercent: 0,
@@ -48,6 +50,18 @@ export function normalizeThemePreferences(value) {
     accentHex: isHexColor(candidate.accentHex)
       ? candidate.accentHex.toUpperCase()
       : DEFAULT_THEME_PREFERENCES.accentHex,
+    borderOpacityPercent: normalizeRange(
+      candidate.borderOpacityPercent,
+      0,
+      100,
+      DEFAULT_THEME_PREFERENCES.borderOpacityPercent,
+    ),
+    dividerOpacityPercent: normalizeRange(
+      candidate.dividerOpacityPercent,
+      0,
+      100,
+      DEFAULT_THEME_PREFERENCES.dividerOpacityPercent,
+    ),
     colorMode: candidate.colorMode === 'autoBackgroundOpacity'
       ? 'autoBackgroundOpacity'
       : DEFAULT_THEME_PREFERENCES.colorMode,
@@ -267,8 +281,8 @@ export function createThemeCssVariables(value, options = {}) {
     '--text-soft': textColor,
     '--muted': textColor,
     '--quiet': textColor,
-    '--line': `rgba(${textChannels}, 0.11)`,
-    '--line-strong': `rgba(${textChannels}, 0.19)`,
+    '--line': `rgba(${textChannels}, ${preferences.borderOpacityPercent / 100})`,
+    '--divider-color': `rgba(${textChannels}, ${preferences.dividerOpacityPercent / 100})`,
     '--accent': preferences.accentHex,
     '--accent-rgb': channels(preferences.accentHex),
     '--accent-bright': blend(preferences.accentHex, textColor, 0.18),

@@ -51,6 +51,7 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
   const listHeader = trackList.match(/:global\(\.track-list-header\)\s*\{([^}]+)\}/)?.[1] ?? '';
   const sortButton = columnCells.match(/\.column-sort-button\s*\{([^}]+)\}/)?.[1] ?? '';
   const virtualHeaderLine = appCss.match(/\.paged-virtual-header::after\s*\{([^}]+)\}/)?.[1] ?? '';
+  const virtualFrame = virtualList.match(/\.paged-virtual-frame\s*\{([^}]+)\}/)?.[1] ?? '';
   const headerTextOffset = appCss.match(/\.track-table-head > \.column-index,[\s\S]*?\{([^}]+)\}/)?.[1] ?? '';
 
   assert.doesNotMatch(tableHeader, /background\s*:/);
@@ -60,12 +61,10 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
   assert.match(appCss, /--divider-width:\s*1px/);
   assert.match(virtualHeaderLine, /height:\s*0/);
   assert.match(virtualHeaderLine, /box-sizing:\s*content-box/);
-  assert.match(virtualHeaderLine, /border-bottom:\s*var\(--divider-width\) solid var\(--line\)/);
+  assert.match(virtualHeaderLine, /border-bottom:\s*var\(--divider-width\) solid var\(--divider-color\)/);
   assert.match(virtualHeaderLine, /background:\s*none/);
-  assert.match(virtualList, /border-top:\s*var\(--divider-width\)/);
-  assert.match(virtualList, /border-bottom:\s*var\(--divider-width\)/);
-  assert.match(albumIndex, /border-top:\s*var\(--divider-width\)/);
-  assert.match(albumIndex, /border-bottom:\s*var\(--divider-width\)/);
+  assert.match(virtualFrame, /border:\s*1px solid var\(--line\)/);
+  assert.doesNotMatch(albumIndex, /border-(?:top|bottom):\s*var\(--divider-width\)/);
   assert.match(playlistTree, /border-top:\s*var\(--divider-width\)/);
   assert.match(headerTextOffset, /top:\s*var\(--track-header-text-optical-offset,\s*-3\.25px\)/);
   assert.match(app, /-3\.25\s*\/\s*devicePixelRatio/);

@@ -28,6 +28,12 @@ pub enum RepeatMode {
 pub struct ThemeSettings {
     pub background_hex: String,
     pub accent_hex: String,
+    /// Opacity multiplier for shared control and surface borders (0–100).
+    #[serde(default = "default_border_opacity_percent")]
+    pub border_opacity_percent: u8,
+    /// Opacity multiplier for shared content separators (0–100).
+    #[serde(default = "default_divider_opacity_percent")]
+    pub divider_opacity_percent: u8,
     #[serde(default)]
     pub color_mode: ThemeColorMode,
     #[serde(default)]
@@ -132,11 +138,21 @@ fn default_auto_text_color_threshold_percent() -> u8 {
     50
 }
 
+fn default_border_opacity_percent() -> u8 {
+    100
+}
+
+fn default_divider_opacity_percent() -> u8 {
+    100
+}
+
 impl Default for ThemeSettings {
     fn default() -> Self {
         Self {
             background_hex: "#000000".to_owned(),
             accent_hex: "#55D9FF".to_owned(),
+            border_opacity_percent: default_border_opacity_percent(),
+            divider_opacity_percent: default_divider_opacity_percent(),
             color_mode: ThemeColorMode::default(),
             background_opacity_text_color: BackgroundOpacityTextColor::default(),
             main_background_clarity_percent: 0,
@@ -1143,6 +1159,16 @@ impl AppSettings {
         if self.theme.auto_text_color_threshold_percent > 100 {
             return Err(SettingsError::InvalidData(
                 "autoTextColorThresholdPercent must be between 0 and 100".into(),
+            ));
+        }
+        if self.theme.border_opacity_percent > 100 {
+            return Err(SettingsError::InvalidData(
+                "borderOpacityPercent must be between 0 and 100".into(),
+            ));
+        }
+        if self.theme.divider_opacity_percent > 100 {
+            return Err(SettingsError::InvalidData(
+                "dividerOpacityPercent must be between 0 and 100".into(),
             ));
         }
         if self.theme.main_background_clarity_percent > 100 {
@@ -3161,8 +3187,12 @@ mod tests {
         );
         assert_eq!(old.main_background_clarity_percent, 0);
         assert_eq!(old.cover_background_clarity_percent, 0);
+        assert_eq!(old.border_opacity_percent, 100);
+        assert_eq!(old.divider_opacity_percent, 100);
 
         let selected = ThemeSettings {
+            border_opacity_percent: 63,
+            divider_opacity_percent: 42,
             color_mode: ThemeColorMode::AutoBackgroundOpacity,
             background_opacity_text_color: BackgroundOpacityTextColor::Black,
             main_background_clarity_percent: 35,
@@ -3178,6 +3208,8 @@ mod tests {
         );
         assert_eq!(restored.main_background_clarity_percent, 35);
         assert_eq!(restored.cover_background_clarity_percent, 72);
+        assert_eq!(restored.border_opacity_percent, 63);
+        assert_eq!(restored.divider_opacity_percent, 42);
     }
 
     #[test]

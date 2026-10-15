@@ -410,7 +410,7 @@
   .album-index-group-row, .album-index-card-row { position:absolute; top:0; right:0; left:0; box-sizing:border-box; }
   .album-index-group-row { display:flex; align-items:center; }
   .album-index-group-button { display:flex; width:100%; height:100%; min-width:0; align-items:center; justify-content:center; box-sizing:border-box; padding:0; border:0; border-radius:0; color:var(--text); background:transparent; cursor:pointer; font:inherit; }
-  .album-index-group-button:focus-visible { outline:2px solid var(--line); outline-offset:-2px; }
+  .album-index-group-button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
   .album-index-card-row { display:grid; align-content:start; }
   .album-card-placeholder { width:var(--album-card-width); aspect-ratio:1; }
   .album-quick-index-backdrop { position:fixed; z-index:220; inset:0; padding:0; border:0; background:transparent; }
@@ -418,7 +418,7 @@
   .album-quick-index-label-grid { display:grid; grid-template-columns:repeat(var(--quick-index-columns),2em); gap:4px; font-size:var(--font-title); }
   .album-quick-index-label { display:grid; width:2em; height:2em; box-sizing:border-box; min-height:0; place-items:center; border:1px solid transparent; border-radius:7px; color:var(--text); background:transparent; cursor:pointer; font:inherit; }
   .album-quick-index-label:hover:not(:disabled) { border-color:var(--line); background:rgba(var(--text-rgb),0.09); }
-  .album-quick-index-label:focus-visible { outline:2px solid var(--line); outline-offset:0; }
+  .album-quick-index-label:focus-visible { outline:2px solid var(--accent); outline-offset:0; }
   .album-quick-index-label.unavailable { color:var(--muted); opacity:0.45; cursor:default; }
   .album-index-message { display:flex; min-height:160px; flex:1; align-items:center; justify-content:center; gap:12px; color:var(--muted); font-size:var(--font-body); }
   .album-index-page-error { display:flex; flex:0 0 auto; align-items:center; justify-content:center; gap:12px; padding:8px 16px; color:var(--danger,var(--text)); font-size:var(--font-caption); }

@@ -15,6 +15,8 @@ test('default appearance uses pure black and a water-blue accent', () => {
   assert.deepEqual(DEFAULT_THEME_PREFERENCES, {
     backgroundHex: '#000000',
     accentHex: '#55D9FF',
+    borderOpacityPercent: 100,
+    dividerOpacityPercent: 100,
     colorMode: 'autoTextColor',
     backgroundOpacityTextColor: 'white',
     mainBackgroundClarityPercent: 0,
@@ -50,11 +52,33 @@ test('theme variables follow both selected colors and derive coordinated surface
   assert.equal(variables['--page'], '#18283A');
   assert.equal(variables['--accent'], '#D84A9A');
   assert.equal(variables['--text'], '#FFFFFF');
+  assert.equal(variables['--line'], 'rgba(255, 255, 255, 1)');
+  assert.equal(variables['--divider-color'], 'rgba(255, 255, 255, 1)');
   assert.notEqual(variables['--panel'], variables['--page']);
   assert.equal(
     variables['--accent-foreground'],
     contrastingTextColor('#D84A9A', DEFAULT_THEME_PREFERENCES.autoTextColorThresholdPercent),
   );
+});
+
+test('border and divider opacity are separate while both follow selected text color', () => {
+  const full = createThemeCssVariables({ ...DEFAULT_THEME_PREFERENCES, borderOpacityPercent: 100 });
+  const half = createThemeCssVariables({ ...DEFAULT_THEME_PREFERENCES, borderOpacityPercent: 50 });
+  const hidden = createThemeCssVariables({ ...DEFAULT_THEME_PREFERENCES, borderOpacityPercent: 0 });
+  assert.equal(full['--line'], 'rgba(255, 255, 255, 1)');
+  assert.equal(half['--line'], 'rgba(255, 255, 255, 0.5)');
+  assert.equal(hidden['--line'], 'rgba(255, 255, 255, 0)');
+  assert.equal('--line-strong' in full, false);
+  assert.equal(full['--divider-color'], 'rgba(255, 255, 255, 1)');
+
+  const independent = createThemeCssVariables({
+    ...DEFAULT_THEME_PREFERENCES,
+    backgroundHex: '#FFFFFF',
+    borderOpacityPercent: 25,
+    dividerOpacityPercent: 75,
+  });
+  assert.equal(independent['--line'], 'rgba(0, 0, 0, 0.25)');
+  assert.equal(independent['--divider-color'], 'rgba(0, 0, 0, 0.75)');
 });
 
 test('automatic background opacity fixes page and text colors without overwriting the saved custom background', () => {
@@ -75,6 +99,8 @@ test('automatic background opacity fixes page and text colors without overwritin
   );
   assert.equal(whiteTextVariables['--page'], '#000000');
   assert.equal(whiteTextVariables['--text'], '#FFFFFF');
+  assert.equal(whiteTextVariables['--line'], 'rgba(255, 255, 255, 1)');
+  assert.equal(whiteTextVariables['--divider-color'], 'rgba(255, 255, 255, 1)');
 });
 
 test('composite background mixes page color with image average by opacity', () => {
@@ -162,6 +188,8 @@ test('invalid persisted values fall back to safe defaults', () => {
   assert.deepEqual(normalizeThemePreferences({ backgroundHex: 'red', accentHex: '#fff' }), {
     backgroundHex: '#000000',
     accentHex: '#55D9FF',
+    borderOpacityPercent: 100,
+    dividerOpacityPercent: 100,
     colorMode: 'autoTextColor',
     backgroundOpacityTextColor: 'white',
     mainBackgroundClarityPercent: 0,
@@ -176,6 +204,12 @@ test('invalid persisted values fall back to safe defaults', () => {
     slideshowOrder: 'sequential',
     autoTextColorThresholdPercent: 50,
   });
+  assert.equal(normalizeThemePreferences({ borderOpacityPercent: 140 }).borderOpacityPercent, 100);
+  assert.equal(normalizeThemePreferences({ borderOpacityPercent: -4 }).borderOpacityPercent, 0);
+  assert.equal(normalizeThemePreferences({ borderOpacityPercent: 40 }).borderOpacityPercent, 40);
+  assert.equal(normalizeThemePreferences({ dividerOpacityPercent: 140 }).dividerOpacityPercent, 100);
+  assert.equal(normalizeThemePreferences({ dividerOpacityPercent: -4 }).dividerOpacityPercent, 0);
+  assert.equal(normalizeThemePreferences({ dividerOpacityPercent: 40 }).dividerOpacityPercent, 40);
   assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: 140 }).quickSettingsOpacityPercent, 100);
   assert.equal(normalizeThemePreferences({ quickSettingsOpacityPercent: -4 }).quickSettingsOpacityPercent, 0);
   assert.equal(normalizeThemePreferences({ quickSettingsBlurPx: 80 }).quickSettingsBlurPx, 50);
