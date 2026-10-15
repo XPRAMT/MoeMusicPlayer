@@ -47,7 +47,7 @@
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
   } from './queue-reorder.js';
-  import { mapAlbumDetailNativeScroll } from './album-detail-collapse.js';
+  import { mapAlbumDetailNativeScroll, mapAlbumDetailWheelDelta } from './album-detail-collapse.js';
 
   interface Props<Item> {
     totalCount: number | null;
@@ -83,7 +83,7 @@
     listName: string;
     onRange: (range: VirtualRange) => void;
     onPlay: (item: Item, index: number) => void;
-    onViewportScrollTopChange?: (scrollTop: number) => void;
+    onViewportScrollTopChange?: (scrollTop: number, collapseOffset: number) => void;
     rowActivates?: boolean;
     longPressReorder?: boolean;
     onReorder?: (from: number, to: number) => void | Promise<void>;
@@ -247,6 +247,7 @@
     lastVisibleScrollTop = next;
     lastNativeScrollTop = nativeTop;
     rememberVisibleScrollPosition(next);
+    onViewportScrollTopChange?.(next, collapseOffset);
   }
 
   function getVisibleRowsHeight(): number {
@@ -272,8 +273,16 @@
 
   function moveLogicalBy(delta: number): void {
     if (!viewport) return;
-    let nextLogical = Math.max(0, scrollTop + delta);
-    let nextCollapse = nextLogical === 0 ? 0 : Math.min(leadingCollapseRange, Math.max(leadingCollapseOffset, nextLogical));
+    const mappedWheel = hasLeadingOverlay
+      ? mapAlbumDetailWheelDelta({
+        delta,
+        listScrollTop: scrollTop,
+        collapseOffset: leadingCollapseOffset,
+        baseCoverSize: 64 + leadingCollapseRange,
+      })
+      : { listScrollTop: Math.max(0, scrollTop + delta), collapseOffset: 0 };
+    let nextLogical = mappedWheel.listScrollTop;
+    let nextCollapse = mappedWheel.collapseOffset;
     let nextNative = nativeScrollTopFor(nextLogical, nextCollapse);
     const maximumNative = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
     if (nextNative > maximumNative && hasLeadingOverlay) {
@@ -289,7 +298,6 @@
       nextNative = mapped.rawScrollTop;
     }
     setLogicalScrollTop(nextLogical, nextCollapse);
-    onViewportScrollTopChange?.(scrollTop);
   }
 
   function getVisibleRowsRect(): DOMRect | null {
@@ -400,7 +408,7 @@
         overscan,
       );
       onRange(visualRangeToDataRange(restoredRange.start, restoredRange.end, renderGroupRows, virtualDataCount));
-      onViewportScrollTopChange?.(safeRestoredScrollTop);
+      onViewportScrollTopChange?.(safeRestoredScrollTop, leadingCollapseOffset);
       pendingListRestore = null;
     }
     seenListId = currentListId;
@@ -486,7 +494,7 @@
       viewportHeight = nextViewportHeight;
       if (effectiveViewportHeight > 0) metricsReady = true;
       if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
-      if (viewport) onViewportScrollTopChange?.(scrollTop);
+      if (viewport) onViewportScrollTopChange?.(scrollTop, leadingCollapseOffset);
     };
     recalculateMetrics = updateMetrics;
     updateMetrics();
@@ -510,6 +518,7 @@
   function updateViewport(): void {
     if (!viewport) return;
     if (handlingMappedScroll) return;
+    let collapseOffset = leadingCollapseOffset;
     if (viewport.clientHeight > 0) {
       const nativeTop = viewport.scrollTop;
       if (hasLeadingOverlay) {
@@ -523,9 +532,11 @@
         if (mapped.rawScrollTop !== nativeTop) viewport.scrollTop = mapped.rawScrollTop;
         lastNativeScrollTop = mapped.rawScrollTop;
         scrollTop = mapped.listScrollTop;
+        collapseOffset = mapped.collapseOffset;
       } else {
         lastNativeScrollTop = nativeTop;
         scrollTop = nativeTop;
+        collapseOffset = 0;
       }
       lastVisibleScrollTop = scrollTop;
       rememberVisibleScrollPosition(scrollTop);
@@ -535,7 +546,7 @@
     headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
     viewportHeight = getVisibleRowsHeight();
     metricsReady = true;
-    onViewportScrollTopChange?.(scrollTop);
+    onViewportScrollTopChange?.(scrollTop, collapseOffset);
   }
 
   function handleViewportScroll(): void {

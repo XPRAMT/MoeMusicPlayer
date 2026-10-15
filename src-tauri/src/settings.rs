@@ -855,6 +855,14 @@ impl WindowGeometry {
     pub const MIN_WIDTH: u32 = 360;
     pub const MIN_HEIGHT: u32 = 540;
 
+    /// Minimized Windows snapshots use a sentinel position and tiny dimensions.
+    /// They must not be treated as the user's normal launch size.
+    pub fn is_valid_restore_snapshot(&self) -> bool {
+        self.width >= Self::MIN_WIDTH
+            && self.height >= Self::MIN_HEIGHT
+            && !(self.x <= -30_000 && self.y <= -30_000)
+    }
+
     pub fn clamped_size(self) -> Self {
         Self {
             width: self.width.max(Self::MIN_WIDTH),
@@ -3367,5 +3375,33 @@ mod tests {
         assert_eq!(geo.x, 120);
         assert_eq!(geo.width, 1100);
         assert!(geo.maximized);
+    }
+
+    #[test]
+    fn minimized_window_geometry_is_not_a_valid_restore_snapshot() {
+        let minimized = WindowGeometry {
+            x: -32_000,
+            y: -32_000,
+            width: 359,
+            height: 42,
+            maximized: false,
+        };
+        assert!(!minimized.is_valid_restore_snapshot());
+
+        let valid_negative_monitor_position = WindowGeometry {
+            x: -1_920,
+            y: 0,
+            width: 1_360,
+            height: 900,
+            maximized: false,
+        };
+        assert!(valid_negative_monitor_position.is_valid_restore_snapshot());
+
+        let too_small = WindowGeometry {
+            width: WindowGeometry::MIN_WIDTH,
+            height: WindowGeometry::MIN_HEIGHT - 1,
+            ..valid_negative_monitor_position
+        };
+        assert!(!too_small.is_valid_restore_snapshot());
     }
 }

@@ -9832,16 +9832,20 @@ fn checkpoint_playback_position(
 
 #[cfg(target_os = "windows")]
 fn capture_window_geometry(window: &tauri::Window) -> Option<WindowGeometry> {
+    if window.is_minimized().unwrap_or(false) {
+        return None;
+    }
     let position = window.outer_position().ok()?;
     let size = window.inner_size().ok()?;
     let maximized = window.is_maximized().unwrap_or(false);
-    Some(WindowGeometry {
+    let geometry = WindowGeometry {
         x: position.x,
         y: position.y,
         width: size.width.max(1),
         height: size.height.max(1),
         maximized,
-    })
+    };
+    geometry.is_valid_restore_snapshot().then_some(geometry)
 }
 
 #[cfg(target_os = "windows")]
@@ -9866,15 +9870,17 @@ fn remember_main_window_normal_frame(window: &tauri::Window) {
 fn persist_main_window_geometry(window: &tauri::Window) {
     let maximized = window.is_maximized().unwrap_or(false);
     let state = window.app_handle().state::<AppState>();
-    let geometry = if maximized {
+    let saved_normal = || {
         state
             .window_frame
             .lock()
             .ok()
             .and_then(|frame| frame.normal.clone())
-            .or_else(|| capture_window_geometry(window))
+    };
+    let geometry = if maximized {
+        saved_normal().or_else(|| capture_window_geometry(window))
     } else {
-        capture_window_geometry(window)
+        capture_window_geometry(window).or_else(saved_normal)
     };
     let Some(mut geometry) = geometry else {
         return;
@@ -9898,6 +9904,10 @@ fn persist_main_window_geometry(window: &tauri::Window) {
 
 #[cfg(target_os = "windows")]
 fn apply_saved_window_geometry(window: &WebviewWindow, geometry: WindowGeometry) {
+    if !geometry.is_valid_restore_snapshot() {
+        eprintln!("忽略最小化或無效的視窗快照，使用預設視窗大小。");
+        return;
+    }
     let monitors: Vec<(i32, i32, u32, u32)> = window
         .available_monitors()
         .unwrap_or_default()
@@ -10723,12 +10733,14 @@ pub fn run() {
                 main_background: main_background::MainBackgroundRuntime::default(),
                 #[cfg(target_os = "windows")]
                 window_frame: std::sync::Mutex::new(WindowFrameMemory {
-                    normal: initial_settings.window_geometry.as_ref().map(|geometry| {
-                        WindowGeometry {
+                    normal: initial_settings
+                        .window_geometry
+                        .as_ref()
+                        .filter(|geometry| geometry.is_valid_restore_snapshot())
+                        .map(|geometry| WindowGeometry {
                             maximized: false,
                             ..geometry.clone()
-                        }
-                    }),
+                        }),
                 }),
                 lyrics_service: lyrics_service::LyricsService::default(),
                 #[cfg(target_os = "windows")]

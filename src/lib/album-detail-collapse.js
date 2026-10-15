@@ -7,15 +7,6 @@ export function getAlbumDetailCollapseRange(baseSize) {
   return Math.max(0, base - MIN_ALBUM_DETAIL_COVER_SIZE_PX);
 }
 
-/** Keep the furthest downward scroll distance until the list returns to its top. */
-/** @param {number} previousPeak @param {number} scrollTop @returns {number} */
-export function updateAlbumDetailScrollPeak(previousPeak, scrollTop) {
-  const current = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0;
-  if (current === 0) return 0;
-  const previous = Number.isFinite(previousPeak) ? Math.max(0, previousPeak) : 0;
-  return Math.max(previous, current);
-}
-
 /** Shrink one CSS pixel per scroll pixel, without going below the compact cover size. */
 /** @param {number} baseSize @param {number} scrollPeak @returns {number} */
 export function getAlbumDetailCoverSize(baseSize, scrollPeak) {
@@ -27,9 +18,9 @@ export function getAlbumDetailCoverSize(baseSize, scrollPeak) {
 /**
  * Convert a native scroll offset in the stable, full-page scrollport into the
  * logical track-list offset and the cover collapse offset. Downward movement
- * first advances both by one pixel; after the cover is fully collapsed it
- * advances only the track list. Upward movement keeps the cover collapsed
- * until the logical list reaches its top.
+ * first collapses the cover one pixel per pixel, then advances the track list.
+ * Upward movement returns the list to its top before restoring the cover one
+ * pixel per excess pixel.
  *
  * @param {{rawScrollTop:number,previousRawScrollTop:number,previousListScrollTop:number,previousCollapseOffset:number,baseCoverSize:number}} input
  */
@@ -44,24 +35,55 @@ export function mapAlbumDetailNativeScroll(input) {
 
   if (raw >= previousRaw) {
     let remaining = raw - previousRaw;
-    const collapseStep = Math.min(range - previousCollapse, remaining / 2);
+    const collapseStep = Math.min(range - previousCollapse, remaining);
     const collapseOffset = previousCollapse + collapseStep;
-    remaining -= collapseStep * 2;
+    remaining -= collapseStep;
     return {
-      listScrollTop: previousList + collapseStep + remaining,
+      listScrollTop: previousList + remaining,
       collapseOffset,
       rawScrollTop: raw,
     };
   }
 
-  const listScrollTop = Math.max(0, previousList - (previousRaw - raw));
-  if (listScrollTop === 0) {
-    return { listScrollTop: 0, collapseOffset: 0, rawScrollTop: 0 };
-  }
+  let remaining = previousRaw - raw;
+  const listReduction = Math.min(previousList, remaining);
+  const listScrollTop = previousList - listReduction;
+  remaining -= listReduction;
+  const collapseOffset = Math.max(0, previousCollapse - remaining);
   return {
     listScrollTop,
-    collapseOffset: previousCollapse,
-    rawScrollTop: listScrollTop + previousCollapse,
+    collapseOffset,
+    rawScrollTop: listScrollTop + collapseOffset,
+  };
+}
+
+/** Apply a wheel delta by collapsing the cover first, then moving the list; reverse that order upward. */
+/** @param {{delta:number,listScrollTop:number,collapseOffset:number,baseCoverSize:number}} input */
+export function mapAlbumDetailWheelDelta(input) {
+  const delta = Number.isFinite(input.delta) ? input.delta : 0;
+  const list = Number.isFinite(input.listScrollTop) ? Math.max(0, input.listScrollTop) : 0;
+  const range = getAlbumDetailCollapseRange(input.baseCoverSize);
+  const collapse = Number.isFinite(input.collapseOffset)
+    ? Math.min(range, Math.max(0, input.collapseOffset))
+    : 0;
+
+  if (delta >= 0) {
+    const collapseStep = Math.min(range - collapse, delta);
+    const collapseOffset = collapse + collapseStep;
+    const listScrollTop = list + delta - collapseStep;
+    return {
+      listScrollTop,
+      collapseOffset,
+    };
+  }
+
+  let remaining = -delta;
+  const listReduction = Math.min(list, remaining);
+  const listScrollTop = list - listReduction;
+  remaining -= listReduction;
+  return {
+    listScrollTop,
+    collapseOffset: Math.max(0, collapse - remaining),
   };
 }
 

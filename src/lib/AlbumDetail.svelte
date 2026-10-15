@@ -9,7 +9,7 @@
   import TrackList from './TrackList.svelte';
   import { formatDurationHours, formatAlbumTrackNumber } from './format';
   import { DEFAULT_ALBUM_DETAIL_SORT, normalizeAlbumDetailSort, toggleAlbumDetailSort } from './album-detail-sort.js';
-  import { getAlbumDetailCoverSize, updateAlbumDetailScrollPeak } from './album-detail-collapse.js';
+  import { getAlbumDetailCoverSize } from './album-detail-collapse.js';
 
   interface Props {
     album: AlbumEntry;
@@ -40,7 +40,6 @@
   let albumCoverBaseSize = $state(148);
   let albumHeadingBaseHeight = $state(184);
   let albumCoverScrollPeak = $state(0);
-  let albumListAtTop = $state(true);
   let albumCoverSize = $derived(getAlbumDetailCoverSize(albumCoverBaseSize, albumCoverScrollPeak));
   let albumCollapseRange = $derived(Math.max(0, albumCoverBaseSize - 64));
   let albumCollapseOffset = $derived(Math.min(albumCollapseRange, albumCoverScrollPeak));
@@ -81,14 +80,8 @@
     saveDetailSort(toggleAlbumDetailSort(detailSort, 'position'));
   }
 
-  function handleListScrollTopChange(scrollTop: number): void {
-    if (scrollTop <= 0) {
-      albumCoverScrollPeak = 0;
-      albumListAtTop = true;
-      return;
-    }
-    albumCoverScrollPeak = updateAlbumDetailScrollPeak(albumCoverScrollPeak, scrollTop);
-    albumListAtTop = false;
+  function handleListScrollTopChange(_scrollTop: number, collapseOffset: number): void {
+    albumCoverScrollPeak = Math.min(albumCollapseRange, Math.max(0, collapseOffset));
   }
 
   function saveDetailSort(preference: import('./ipc').AlbumDetailSort): void {
@@ -251,7 +244,6 @@
   </div>
   <div
     class="album-detail-heading"
-    class:album-detail-art-restoring={albumListAtTop}
     style={`--album-detail-cover-size:${albumCoverSize}px`}
   >
     <div class="album-detail-art">
@@ -275,7 +267,6 @@
   .album-detail-shell { position:relative; min-width:0; min-height:0; flex:1 1 auto; overflow:hidden; }
   .album-detail-heading { position:absolute; z-index:4; top:0; right:0; left:0; display:flex; height:var(--album-detail-heading-height); box-sizing:border-box; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); }
   .album-detail-art { width:var(--album-detail-cover-size,148px); height:var(--album-detail-cover-size,148px); flex:0 0 var(--album-detail-cover-size,148px); aspect-ratio:1; overflow:hidden; border-radius:10px; background:#000; }
-  .album-detail-heading.album-detail-art-restoring .album-detail-art { transition:width 180ms ease-out,height 180ms ease-out,flex-basis 180ms ease-out; }
   .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:10px; }
   .album-detail-artists,
   .album-detail-stats,
