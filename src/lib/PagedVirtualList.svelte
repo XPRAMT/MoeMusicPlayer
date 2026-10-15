@@ -891,7 +891,7 @@
   bind:this={frame}
   style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px;--paged-leading-height:${leadingOverlayHeight}px;--paged-collapse-offset:${leadingCollapseOffset}px`}
 >
-  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;padding-right:${headerGutter}px;${hasLeadingOverlay ? `top:${Math.max(0, leadingOverlayHeight - leadingCollapseOffset)}px;` : ''}`}>
+  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;${hasLeadingOverlay ? `top:${Math.max(0, leadingOverlayHeight - leadingCollapseOffset)}px;right:${headerGutter}px;` : `padding-right:${headerGutter}px;`}`}>
     <div class="paged-virtual-header-shift" style={`transform:translateX(${-headerShift}px)`}>
       {#if header}{@render header()}{/if}
     </div>
@@ -1070,7 +1070,8 @@
     z-index: 3;
     right: 0;
     left: 0;
-    width: max(100%, var(--track-list-min-width, 0px));
+    width: auto;
+    min-width: 0;
     pointer-events: auto;
   }
 
