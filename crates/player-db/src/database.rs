@@ -1287,6 +1287,15 @@ pub struct QuickIndexSnapshot {
     pub total_count: u64,
 }
 
+impl QuickIndexSnapshot {
+    fn push_group(&mut self, group: QuickIndexGroup) {
+        if !self.labels.iter().any(|label| label == &group.label) {
+            self.labels.push(group.label.clone());
+        }
+        self.groups.push(group);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct QueueSortCandidate {
     pub entry_index: usize,
@@ -1869,8 +1878,7 @@ impl Database {
         for row in rows {
             let (before_index, label, total_count) = row?;
             snapshot.total_count = total_count;
-            snapshot.labels.push(label.clone());
-            snapshot.groups.push(QuickIndexGroup {
+            snapshot.push_group(QuickIndexGroup {
                 label,
                 before_index,
             });
@@ -2032,12 +2040,9 @@ impl Database {
                     label: row.get(1)?,
                 })
             })?;
-            quick_index.groups = rows.collect::<Result<Vec<_>, _>>()?;
-            quick_index.labels = quick_index
-                .groups
-                .iter()
-                .map(|group| group.label.clone())
-                .collect();
+            for row in rows {
+                quick_index.push_group(row?);
+            }
         }
         Ok(IndexSnapshotInfo {
             snapshot_id: snapshot_id.to_owned(),
@@ -2191,8 +2196,7 @@ impl Database {
         for row in rows {
             let (before_index, label, total_count) = row?;
             snapshot.total_count = total_count;
-            snapshot.labels.push(label.clone());
-            snapshot.groups.push(QuickIndexGroup {
+            snapshot.push_group(QuickIndexGroup {
                 label,
                 before_index,
             });
@@ -2713,8 +2717,7 @@ impl Database {
         for row in rows {
             let (before_index, label, total_count) = row?;
             snapshot.total_count = total_count;
-            snapshot.labels.push(label.clone());
-            snapshot.groups.push(QuickIndexGroup {
+            snapshot.push_group(QuickIndexGroup {
                 label,
                 before_index,
             });
@@ -3606,8 +3609,7 @@ impl Database {
         for row in rows {
             let (before_index, label, total_count) = row?;
             snapshot.total_count = total_count;
-            snapshot.labels.push(label.clone());
-            snapshot.groups.push(QuickIndexGroup {
+            snapshot.push_group(QuickIndexGroup {
                 label,
                 before_index,
             });
@@ -3826,8 +3828,7 @@ impl Database {
         for row in rows {
             let (before_index, label, total_count) = row?;
             snapshot.total_count = total_count;
-            snapshot.labels.push(label.clone());
-            snapshot.groups.push(QuickIndexGroup {
+            snapshot.push_group(QuickIndexGroup {
                 label,
                 before_index,
             });
@@ -6233,12 +6234,14 @@ fn album_disc_quick_index_from_json(
 ) -> Result<QuickIndexSnapshot, DatabaseError> {
     let groups: Vec<QuickIndexGroup> = serde_json::from_str(groups_json)
         .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
-    let labels = groups.iter().map(|group| group.label.clone()).collect();
-    Ok(QuickIndexSnapshot {
-        labels,
-        groups,
+    let mut snapshot = QuickIndexSnapshot {
         total_count,
-    })
+        ..QuickIndexSnapshot::default()
+    };
+    for group in groups {
+        snapshot.push_group(group);
+    }
+    Ok(snapshot)
 }
 
 fn to_sql_i64(value: u64, field: &'static str) -> Result<i64, DatabaseError> {
@@ -9045,6 +9048,38 @@ mod tests {
                     });
             assert_eq!(labels, expected_labels);
         }
+    }
+
+    #[test]
+    fn quick_index_snapshot_labels_are_unique_when_a_group_reappears() {
+        let db = Database::from_connection_with_collation(
+            Connection::open_in_memory().expect("connection"),
+            MusicCollationSpec::from_locale_parts("zh-TW", Some(CollationType::Zhuyin)),
+        )
+        .expect("Taiwanese locale database");
+        let values = ["無謬の花", "", "文明EP"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+
+        let snapshot = db
+            .quick_index_for_ordered_values(&values)
+            .expect("quick-index snapshot");
+
+        assert_eq!(
+            snapshot
+                .groups
+                .iter()
+                .map(|group| (group.label.as_str(), group.before_index))
+                .collect::<Vec<_>>(),
+            [("ㄨ", 0), ("未知", 1), ("ㄨ", 2)],
+            "group rows preserve each real transition in the sorted list"
+        );
+        assert_eq!(
+            snapshot.labels,
+            ["ㄨ", "未知"],
+            "the quick-index picker exposes each category once even when the list is interrupted by an unknown row"
+        );
     }
 
     #[test]
