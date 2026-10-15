@@ -53,11 +53,23 @@
 
 .list-group-row-surface {
   border-bottom: var(--divider-width) solid var(--divider-color);
-  background: var(--list-group-row-background);
+  background: linear-gradient(
+    to bottom,
+    var(--list-group-row-background) 0,
+    var(--list-group-row-background) calc(100% - var(--divider-width)),
+    transparent calc(100% - var(--divider-width)),
+    transparent 100%
+  );
 }
 
 .list-group-row-surface:hover {
-  background: var(--list-group-row-hover-background);
+  background: linear-gradient(
+    to bottom,
+    var(--list-group-row-hover-background) 0,
+    var(--list-group-row-hover-background) calc(100% - var(--divider-width)),
+    transparent calc(100% - var(--divider-width)),
+    transparent 100%
+  );
 }
 
 * {
