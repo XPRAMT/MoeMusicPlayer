@@ -63,14 +63,15 @@ test('one active track requests once and exposes the original JPEG bytes as a Bl
   assert.deepEqual(fixture.revoked, []);
 });
 
-test('track changes release the current URL and only load the newest pending track', async () => {
+test('track changes keep the current image until the latest replacement is decoded and applied', async () => {
   const first = deferred();
   const second = deferred();
+  const third = deferred();
   const requests = [];
   const fixture = controllerWith({
     fetchBytes: (trackId) => {
       requests.push(trackId);
-      return trackId === 'track-a' ? first.promise : second.promise;
+      return trackId === 'track-a' ? first.promise : trackId === 'track-b' ? second.promise : third.promise;
     },
   });
 
@@ -89,7 +90,58 @@ test('track changes release the current URL and only load the newest pending tra
   assert.equal(fixture.created.length, 1);
 
   fixture.controller.setTrack('track-c');
-  assert.deepEqual(fixture.revoked, ['blob:artwork-1'], 'the previously displayed image is released at track switch');
+  assert.equal(fixture.controller.snapshot().status, 'loading');
+  assert.equal(fixture.controller.snapshot().objectUrl, 'blob:artwork-1');
+  assert.deepEqual(fixture.revoked, [], 'the displayed image remains alive while its replacement is loading');
+  fixture.controller.imageFailed('blob:artwork-1');
+  assert.equal(fixture.controller.snapshot().trackId, 'track-c', 'an old image error does not cancel the pending track request');
+
+  third.resolve(bytes(0xff, 0xd8, 0xff, 0xc));
+  await nextTurn();
+  await nextTurn();
+  assert.equal(fixture.controller.snapshot().trackId, 'track-c');
+  assert.equal(fixture.controller.snapshot().status, 'ready');
+  assert.equal(fixture.controller.snapshot().objectUrl, 'blob:artwork-2');
+  assert.deepEqual(fixture.revoked, ['blob:artwork-1'], 'the old image is released after the decoded replacement is published');
+});
+
+test('artwork replacement waits for image decoding and DOM application before releasing the old URL', async () => {
+  const decode = deferred();
+  const applied = deferred();
+  let sequence = 0;
+  const revoked = [];
+  const controller = createActiveTrackArtworkController({
+    fetchBytes: async () => bytes(0xff, 0xd8, 0xff, 0x01),
+    createObjectUrl: async () => {
+      const url = `blob:decoded-${++sequence}`;
+      if (sequence === 2) await decode.promise;
+      return url;
+    },
+    revokeObjectUrl: (url) => revoked.push(url),
+    onChange: () => {},
+    afterChange: () => applied.promise,
+  });
+
+  controller.setTrack('track-a');
+  await nextTurn();
+  assert.equal(controller.snapshot().objectUrl, 'blob:decoded-1');
+
+  controller.setTrack('track-b');
+  assert.equal(controller.snapshot().status, 'loading');
+  assert.equal(controller.snapshot().objectUrl, 'blob:decoded-1');
+  await nextTurn();
+  assert.deepEqual(revoked, [], 'the old URL remains valid during the decode');
+
+  decode.resolve();
+  await nextTurn();
+  await nextTurn();
+  assert.equal(controller.snapshot().objectUrl, 'blob:decoded-2');
+  assert.deepEqual(revoked, [], 'the old URL remains valid until the subscriber applies the new state');
+
+  applied.resolve();
+  await nextTurn();
+  assert.deepEqual(revoked, ['blob:decoded-1']);
+  controller.dispose();
 });
 
 test('stopping or disposing invalidates in-flight results and releases the active URL', async () => {
@@ -149,6 +201,7 @@ test('a stale image error cannot revoke or clear the newer track', async () => {
   await nextTurn();
   const oldUrl = fixture.controller.snapshot().objectUrl;
   fixture.controller.setTrack('track-b');
+  await nextTurn();
   await nextTurn();
   const currentUrl = fixture.controller.snapshot().objectUrl;
 

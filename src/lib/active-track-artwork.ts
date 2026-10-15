@@ -17,9 +17,11 @@ export interface ActiveTrackArtworkController {
 
 interface ActiveTrackArtworkOptions {
   fetchBytes(trackId: string): Promise<ArrayBuffer>;
-  createObjectUrl(bytes: ArrayBuffer, mimeType: string): string;
+  createObjectUrl(bytes: ArrayBuffer, mimeType: string): string | Promise<string>;
   revokeObjectUrl(objectUrl: string): void;
   onChange(state: ActiveArtworkState): void;
+  /** Wait until subscribers have applied the published state to their DOM. */
+  afterChange?(): Promise<void>;
   maxBytes?: number;
 }
 
@@ -75,20 +77,30 @@ export function createActiveTrackArtworkController(
   let requestInFlight = false;
   let disposed = false;
   let state: ActiveArtworkState = { trackId: null, status: 'empty', objectUrl: null };
+  const ownedUrls = new Set<string>();
 
   function publish(next: ActiveArtworkState): void {
     state = next;
     if (!disposed) options.onChange({ ...next });
   }
 
-  function releaseUrl(): void {
-    const objectUrl = state.objectUrl;
-    if (!objectUrl) return;
+  function releaseUrl(objectUrl: string | null): void {
+    if (!objectUrl || !ownedUrls.delete(objectUrl)) return;
     try {
       options.revokeObjectUrl(objectUrl);
     } catch {
       // A failed cleanup must not prevent the active track from changing.
     }
+  }
+
+  async function releaseAfterChange(objectUrl: string | null): Promise<void> {
+    if (!objectUrl) return;
+    try {
+      await options.afterChange?.();
+    } catch {
+      // Cleanup still proceeds if a subscriber's DOM synchronization fails.
+    }
+    if (state.objectUrl !== objectUrl) releaseUrl(objectUrl);
   }
 
   function startRequest(): void {
@@ -101,28 +113,40 @@ export function createActiveTrackArtworkController(
       try {
         const bytes = await options.fetchBytes(requestTrackId);
         if (disposed || requestGeneration !== generation || requestTrackId !== currentTrackId) return;
+        const previousObjectUrl = state.objectUrl;
         if (bytes.byteLength === 0) {
           publish({ trackId: requestTrackId, status: 'missing', objectUrl: null });
+          await releaseAfterChange(previousObjectUrl);
           return;
         }
         if (bytes.byteLength > maxBytes) {
           publish({ trackId: requestTrackId, status: 'too-large', objectUrl: null });
+          await releaseAfterChange(previousObjectUrl);
           return;
         }
         const mimeType = detectArtworkMimeType(bytes);
         if (!mimeType) {
           publish({ trackId: requestTrackId, status: 'error', objectUrl: null });
+          await releaseAfterChange(previousObjectUrl);
           return;
         }
-        const objectUrl = options.createObjectUrl(bytes, mimeType);
+        const objectUrl = await options.createObjectUrl(bytes, mimeType);
+        ownedUrls.add(objectUrl);
+        if (disposed || requestGeneration !== generation || requestTrackId !== currentTrackId) {
+          releaseUrl(objectUrl);
+          return;
+        }
         publish({ trackId: requestTrackId, status: 'ready', objectUrl });
+        await releaseAfterChange(previousObjectUrl);
       } catch (error) {
         if (!disposed && requestGeneration === generation && requestTrackId === currentTrackId) {
+          const previousObjectUrl = state.objectUrl;
           publish({
             trackId: requestTrackId,
             status: isArtworkTooLargeError(error) ? 'too-large' : 'error',
             objectUrl: null,
           });
+          await releaseAfterChange(previousObjectUrl);
         }
       } finally {
         requestInFlight = false;
@@ -138,21 +162,22 @@ export function createActiveTrackArtworkController(
 
       generation += 1;
       currentTrackId = nextTrackId;
-      releaseUrl();
       if (!nextTrackId) {
+        const previousObjectUrl = state.objectUrl;
         publish({ trackId: null, status: 'empty', objectUrl: null });
+        void releaseAfterChange(previousObjectUrl);
         return;
       }
 
-      publish({ trackId: nextTrackId, status: 'loading', objectUrl: null });
+      publish({ trackId: nextTrackId, status: 'loading', objectUrl: state.objectUrl });
       startRequest();
     },
 
     imageFailed(objectUrl) {
-      if (disposed || state.objectUrl !== objectUrl) return;
+      if (disposed || state.status !== 'ready' || state.objectUrl !== objectUrl) return;
       generation += 1;
-      releaseUrl();
       publish({ trackId: currentTrackId, status: 'error', objectUrl: null });
+      void releaseAfterChange(objectUrl);
     },
 
     snapshot() {
@@ -163,7 +188,7 @@ export function createActiveTrackArtworkController(
       if (disposed) return;
       generation += 1;
       currentTrackId = null;
-      releaseUrl();
+      for (const objectUrl of [...ownedUrls]) releaseUrl(objectUrl);
       disposed = true;
       state = { trackId: null, status: 'empty', objectUrl: null };
     },

@@ -366,7 +366,7 @@
   const artworkController = createActiveTrackArtworkController({
     fetchBytes: getTrackArtworkBytes,
     createObjectUrl(bytes, mimeType) {
-      return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+      return createDecodedImageObjectUrl(bytes, mimeType);
     },
     revokeObjectUrl(objectUrl) {
       URL.revokeObjectURL(objectUrl);
@@ -374,6 +374,7 @@
     onChange(state) {
       activeArtwork = state;
     },
+    afterChange: () => tick(),
   });
 
   const volumeCommandQueue = createVolumeCommandQueue({
@@ -483,7 +484,7 @@
     themePreferences.mainBackgroundMode === 'solid'
       ? null
       : themePreferences.mainBackgroundMode === 'albumCover'
-        ? activeArtwork.status === 'ready' ? activeArtwork.objectUrl : null
+        ? activeArtwork.objectUrl ?? (activeArtwork.status === 'loading' ? mainBackgroundUrl : null)
         : mainBackgroundUrl,
   );
   const mainBackgroundMode = $derived(themePreferences.mainBackgroundMode);
@@ -504,7 +505,7 @@
     const pageBackgroundHex = themePreferences.colorMode === 'autoBackgroundOpacity'
       ? (themePreferences.backgroundOpacityTextColor === 'white' ? '#000000' : '#FFFFFF')
       : themePreferences.backgroundHex;
-    const contrastBackgroundHex = isNowPlayingOpen && activeArtwork.status === 'ready'
+    const contrastBackgroundHex = isNowPlayingOpen && activeArtwork.objectUrl !== null
       ? (nowPlayingContrastBackgroundHex ?? pageBackgroundHex)
       : (mainContrastBackgroundHex ?? pageBackgroundHex);
     applyTheme(document.documentElement, themePreferences, { contrastBackgroundHex, pageBackgroundHex });
@@ -937,7 +938,6 @@
     const mimeType = bytes.byteLength > 0 ? detectArtworkMimeType(bytes) : null;
     if (!mimeType) {
       if (revision !== mainBackgroundReadRevision) return;
-      clearMainBackgroundImage();
       return;
     }
     const nextObjectUrl = await createDecodedImageObjectUrl(bytes, mimeType);
@@ -1048,7 +1048,7 @@
     if (mode === 'systemWallpaper' && capabilities?.platform !== 'windows') return;
     mainBackgroundReadRevision += 1;
     updateMainBackgroundLook({ mainBackgroundMode: mode });
-    clearMainBackgroundImage();
+    if (mode === 'solid') clearMainBackgroundImage();
     saveThemePreferencesNow();
     await themeSaveQueue;
     await loadMainBackground();
@@ -3521,7 +3521,7 @@
   {/if}
   {#if isNowPlayingOpen}
     <NowPlayingBackdrop
-      coverUrl={activeArtwork.status === 'ready' ? activeArtwork.objectUrl : null}
+      coverUrl={activeArtwork.objectUrl}
       mainBackgroundUrl={effectiveMainBackgroundUrl}
       onCoverError={(url) => artworkController.imageFailed(url)}
     />
