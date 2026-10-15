@@ -296,3 +296,12 @@ test('top-bar refresh collapses to an icon at the narrow breakpoint but keeps it
   assert.match(narrow.slice(0, narrow.indexOf('\n}')), /\.soft-button\.topbar-refresh-button > span \{ display: none; \}/);
   assert.match(appSource, /class="soft-button topbar-refresh-button"[\s\S]*?aria-label="重新整理音樂來源"[\s\S]*?use:appTooltip=/);
 });
+
+test('narrow MOE toggle uses one shared gap for window edge → logo and logo → title', async () => {
+  const css = await (await import('node:fs/promises')).readFile(new URL('../src/app.css', import.meta.url), 'utf8');
+  assert.match(css, /--nav-toggle-gap: 14px;/);
+  assert.match(css, /--nav-toggle-inset-left: calc\(var\(--nav-toggle-icon-size\) \* 73 \/ 1254\);/);
+  assert.match(css, /margin-left: calc\(var\(--nav-toggle-gap\) - var\(--nav-toggle-inset-left\)\);/);
+  assert.match(css, /margin-right: calc\(var\(--nav-toggle-gap\) - var\(--nav-toggle-inset-right\) - var\(--topbar-gap\)\);/);
+  assert.match(css, /\.app-shell \.workspace > \.topbar \{ padding-left: 0; \}/);
+});

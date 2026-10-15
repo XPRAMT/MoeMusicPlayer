@@ -825,9 +825,16 @@ input:focus-visible {
 
 /* Narrow-layout navigation: MOE logo toggle in the top bar (hidden on wide layouts). */
 .nav-panel-toggle {
+  /* One gap on both sides of the visible logo: window edge → logo, logo → page title.
+     The PNG (1254×1254) has transparent margins of 73px left and 21px right; scale them to the
+     rendered icon size so the gaps are measured from the painted pixels. */
+  --nav-toggle-gap: 14px;
+  --nav-toggle-icon-size: 34px;
+  --nav-toggle-inset-left: calc(var(--nav-toggle-icon-size) * 73 / 1254);
+  --nav-toggle-inset-right: calc(var(--nav-toggle-icon-size) * 21 / 1254);
   display: none;
-  width: 40px;
-  height: 40px;
+  width: var(--nav-toggle-icon-size);
+  height: var(--nav-toggle-icon-size);
   flex: 0 0 auto;
   place-items: center;
   padding: 0;
@@ -838,7 +845,7 @@ input:focus-visible {
   transition: background 150ms ease, border-color 150ms ease;
 }
 
-.nav-panel-toggle img { width: 34px; height: 34px; object-fit: contain; }
+.nav-panel-toggle img { display: block; width: var(--nav-toggle-icon-size); height: var(--nav-toggle-icon-size); object-fit: contain; }
 .nav-panel-toggle:hover,
 .nav-panel-toggle[aria-expanded='true'] { border-color: var(--line); background: rgba(var(--text-rgb), 0.06); }
 
@@ -1051,12 +1058,13 @@ input:focus-visible {
 }
 
 .topbar {
+  --topbar-gap: 16px;
   display: flex;
   min-height: var(--chrome-bar-height);
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--topbar-gap);
   padding: 0 clamp(22px, 4vw, 59px);
   border-bottom: var(--divider-width) solid var(--divider-color);
 }
@@ -4317,7 +4325,13 @@ input:focus-visible {
   .workspace { grid-column: 1; }
   .topbar { justify-content: flex-start; }
   .topbar-actions { margin-left: auto; }
-  .nav-panel-toggle { display: grid; margin-left: -8px; }
+  .nav-panel-toggle {
+    display: grid;
+    margin-left: calc(var(--nav-toggle-gap) - var(--nav-toggle-inset-left));
+    margin-right: calc(var(--nav-toggle-gap) - var(--nav-toggle-inset-right) - var(--topbar-gap));
+  }
+  /* Main top bar only (not the Now Playing header): the toggle owns the left gap. */
+  .app-shell .workspace > .topbar { padding-left: 0; }
   /* Icon-only refresh; aria-label and tooltip keep it accessible. */
   .soft-button.topbar-refresh-button { width: 36px; min-width: 36px; justify-content: center; padding: 0; }
   .soft-button.topbar-refresh-button > span { display: none; }
