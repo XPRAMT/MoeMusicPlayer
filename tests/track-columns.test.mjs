@@ -64,10 +64,10 @@ test('numeric list columns are centered while text columns keep their left align
   }
 });
 
-test('audio format column is eleven body-font ems wide', () => {
+test('audio format column is fixed at 163 CSS pixels', () => {
   const column = TRACK_COLUMN_DEFINITIONS.find(({ id }) => id === 'audioFormat');
-  assert.deepEqual({ min: column?.min, minPx: column?.minPx }, { min: '11em', minPx: 143 });
-  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ')[6], '11em');
+  assert.deepEqual({ min: column?.min, minPx: column?.minPx }, { min: '163px', minPx: 163 });
+  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ')[6], '163px');
 });
 
 test('list headers use only the shared bottom boundary and sort buttons fill their cells', async () => {
