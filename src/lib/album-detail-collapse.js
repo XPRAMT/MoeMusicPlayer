@@ -1,16 +1,18 @@
-export const MIN_ALBUM_DETAIL_COVER_SIZE_PX = 64;
+export const MIN_ALBUM_DETAIL_COVER_SIZE_PX = 80;
+export const DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX = 200;
+export const NARROW_ALBUM_DETAIL_COVER_SIZE_PX = 160;
 
 /** The maximum amount of the fixed album heading that can be uncovered. */
 /** @param {number} baseSize @returns {number} */
 export function getAlbumDetailCollapseRange(baseSize) {
-  const base = Number.isFinite(baseSize) ? Math.max(MIN_ALBUM_DETAIL_COVER_SIZE_PX, baseSize) : 148;
+  const base = Number.isFinite(baseSize) ? Math.max(MIN_ALBUM_DETAIL_COVER_SIZE_PX, baseSize) : DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX;
   return Math.max(0, base - MIN_ALBUM_DETAIL_COVER_SIZE_PX);
 }
 
 /** Shrink one CSS pixel per scroll pixel, without going below the compact cover size. */
 /** @param {number} baseSize @param {number} scrollPeak @returns {number} */
 export function getAlbumDetailCoverSize(baseSize, scrollPeak) {
-  const base = Number.isFinite(baseSize) ? Math.max(MIN_ALBUM_DETAIL_COVER_SIZE_PX, baseSize) : 148;
+  const base = Number.isFinite(baseSize) ? Math.max(MIN_ALBUM_DETAIL_COVER_SIZE_PX, baseSize) : DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX;
   const peak = Number.isFinite(scrollPeak) ? Math.max(0, scrollPeak) : 0;
   return Math.max(MIN_ALBUM_DETAIL_COVER_SIZE_PX, base - peak);
 }

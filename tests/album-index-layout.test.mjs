@@ -130,7 +130,7 @@ test('album group and card rows share compact vertical spacing and global group 
 test('album card grid fills the row with cards no wider than the maximum', () => {
   const gap = 18;
   for (const available of [1, 150, 179, 180, 197, 198, 377, 1000, 1269, 1500, 2560]) {
-    for (const max of [120, 168, 180, 320]) {
+    for (const max of [100, 168, 180, 320, 500]) {
       const { columns, cardWidth } = getAlbumCardGrid(available, max, gap);
       assert.ok(columns >= 1);
       assert.ok(cardWidth <= max + 1e-9, `card ${cardWidth} > ${max} at ${available}`);
@@ -156,7 +156,7 @@ test('album card grid adds a narrower column instead of leaving a trailing gap',
 
 test('album card maximum width normalizes persisted values', () => {
   assert.equal(normalizeAlbumCardMaxWidthPx(undefined), 180);
-  assert.equal(normalizeAlbumCardMaxWidthPx(10), 120);
-  assert.equal(normalizeAlbumCardMaxWidthPx(999), 320);
+  assert.equal(normalizeAlbumCardMaxWidthPx(10), 100);
+  assert.equal(normalizeAlbumCardMaxWidthPx(999), 500);
   assert.equal(normalizeAlbumCardMaxWidthPx(200.4), 200);
 });

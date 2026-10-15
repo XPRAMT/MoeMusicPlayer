@@ -13,7 +13,7 @@ The first fix kept one full-height scrollport and drew the transparent heading a
 ## Decision
 
 - The track scroller starts at the fixed line `Y0 = headingHeight − collapseRange + tableHeaderHeight`, i.e. below the fully collapsed heading and the sortable header, and extends to the bottom of the album detail. Its position, `clientHeight`, `scrollHeight` and thumb ratio never change while scrolling.
-- The scroll content begins with a spacer equal to `collapseRange` (desktop 84 CSS px, narrow 52 CSS px), followed by the virtual rows. The expanded heading and the sortable header overlay only that spacer, so no row is ever covered and no row clipping is needed.
+- The scroll content begins with a spacer equal to `collapseRange` (desktop 120 CSS px: 200→80 cover; narrow 80 CSS px: 160→80 cover), followed by the virtual rows. The expanded heading and the sortable header overlay only that spacer, so no row is ever covered and no row clipping is needed.
 - The collapse offset is a pure function of the native offset: `collapse = min(scrollTop, collapseRange)` and `listScrollTop = max(0, scrollTop − collapseRange)`. Scrolling down collapses the cover first; scrolling up returns the list to its top before the cover expands.
 - The heading, cover and sortable-header position follow the same native scroll timeline; runtimes without scroll timelines use the collapse offset computed in the scroll event.
 - Wheel, keyboard and scrollbar input all use native browser scrolling. There is no wheel interception, native/logical remapping or per-row clip.
@@ -36,5 +36,5 @@ The scrollbar track begins at `Y0` instead of the top of the heading. Virtual ro
 Validated 2026-10-16T05:10:00+08:00 using `release/moemusicplayer.exe` built from commit `a1e3d41`, through WebView2 CDP on port 9222, on `hanser Cover` (103 tracks):
 
 - Fast scrollbar-thumb drag (three full passes, 1,565 animation-frame samples): no visible row pixel above the sortable header's bottom edge; `clientHeight=515px`, `scrollHeight=5234px` and the scroller top stayed constant; `scrollTop` covered 0–4718.8 px.
-- While collapsing, the first row's top equaled the header's bottom edge in every sample; wheel input collapsed the cover 148→64 px before moving rows and restored it only after the list returned to its top.
+- While collapsing, the first row's top equaled the header's bottom edge in every sample; wheel input (verified at the earlier 148→64 px sizing) collapsed the cover before moving rows and restored it only after the list returned to its top.
 - `node --test` on `tests/`: all passed. `npm run check`: 0 errors and 0 warnings.

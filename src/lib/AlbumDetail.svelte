@@ -9,7 +9,7 @@
   import TrackList from './TrackList.svelte';
   import { formatDurationHours, formatAlbumTrackNumber } from './format';
   import { DEFAULT_ALBUM_DETAIL_SORT, normalizeAlbumDetailSort, toggleAlbumDetailSort } from './album-detail-sort.js';
-  import { getAlbumDetailCoverSize } from './album-detail-collapse.js';
+  import { DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX, MIN_ALBUM_DETAIL_COVER_SIZE_PX, NARROW_ALBUM_DETAIL_COVER_SIZE_PX, getAlbumDetailCollapseRange, getAlbumDetailCoverSize } from './album-detail-collapse.js';
 
   interface Props {
     album: AlbumEntry;
@@ -37,8 +37,8 @@
   let detailSort = $state<import('./ipc').AlbumDetailSort>({ ...DEFAULT_ALBUM_DETAIL_SORT });
   let sortReady = $state(false);
   let sortSaveQueue: Promise<unknown> = Promise.resolve();
-  let albumCoverBaseSize = $state(148);
-  let albumHeadingBaseHeight = $state(184);
+  let albumCoverBaseSize = $state(DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX);
+  let albumHeadingBaseHeight = $state(DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX + 36);
   const supportsScrollDrivenAlbumOverlay = typeof CSS !== 'undefined'
     && CSS.supports('animation-timeline', 'scroll()')
     && CSS.supports('animation-range', '0px 1px')
@@ -46,7 +46,7 @@
     && CSS.supports('scroll-timeline-name', '--album-detail-scroll');
   let albumCoverScrollPeak = $state(0);
   let albumCoverSize = $derived(getAlbumDetailCoverSize(albumCoverBaseSize, albumCoverScrollPeak));
-  let albumCollapseRange = $derived(Math.max(0, albumCoverBaseSize - 64));
+  let albumCollapseRange = $derived(getAlbumDetailCollapseRange(albumCoverBaseSize));
   let albumCollapseOffset = $derived(Math.min(albumCollapseRange, albumCoverScrollPeak));
   let albumDiscQuickIndices = $state<{
     ascending: QuickIndexSnapshot;
@@ -101,8 +101,9 @@
     let cancelled = false;
     const updateCoverBaseSize = () => {
       const narrow = window.matchMedia('(max-width: 620px)').matches;
-      albumCoverBaseSize = narrow ? 116 : 148;
-      albumHeadingBaseHeight = narrow ? 144 : 184;
+      albumCoverBaseSize = narrow ? NARROW_ALBUM_DETAIL_COVER_SIZE_PX : DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX;
+      // Heading = cover + vertical padding (14px narrow, 18px desktop on each side).
+      albumHeadingBaseHeight = albumCoverBaseSize + (narrow ? 28 : 36);
     };
     updateCoverBaseSize();
     window.addEventListener('resize', updateCoverBaseSize);
@@ -229,7 +230,7 @@
 <div
   class="album-detail-shell"
   class:scroll-driven-collapse={supportsScrollDrivenAlbumOverlay}
-  style={`--album-detail-heading-base-height:${albumHeadingBaseHeight}px;--album-detail-heading-height:${albumHeadingBaseHeight - albumCollapseOffset}px;--album-detail-cover-base-size:${albumCoverBaseSize}px;--album-detail-collapse-range:${albumCollapseRange}px`}
+  style={`--album-detail-heading-base-height:${albumHeadingBaseHeight}px;--album-detail-heading-height:${albumHeadingBaseHeight - albumCollapseOffset}px;--album-detail-cover-base-size:${albumCoverBaseSize}px;--album-detail-collapse-range:${albumCollapseRange}px;--album-detail-cover-min-size:${MIN_ALBUM_DETAIL_COVER_SIZE_PX}px`}
 >
   <div class="album-detail-tracks">
     {#if sortReady}
@@ -296,11 +297,11 @@
 
     @keyframes album-detail-cover-collapse {
       from { width: var(--album-detail-cover-base-size); height: var(--album-detail-cover-base-size); flex-basis: var(--album-detail-cover-base-size); }
-      to { width: 64px; height: 64px; flex-basis: 64px; }
+      to { width: var(--album-detail-cover-min-size); height: var(--album-detail-cover-min-size); flex-basis: var(--album-detail-cover-min-size); }
     }
   }
   .album-detail-heading > * { pointer-events:auto; }
-  .album-detail-art { width:var(--album-detail-cover-size,148px); height:var(--album-detail-cover-size,148px); flex:0 0 var(--album-detail-cover-size,148px); aspect-ratio:1; overflow:hidden; border-radius:10px; background:#000; }
+  .album-detail-art { width:var(--album-detail-cover-size,200px); height:var(--album-detail-cover-size,200px); flex:0 0 var(--album-detail-cover-size,200px); aspect-ratio:1; overflow:hidden; border-radius:10px; background:#000; }
   .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:10px; }
   .album-detail-artists,
   .album-detail-stats,

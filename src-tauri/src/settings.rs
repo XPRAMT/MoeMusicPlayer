@@ -520,8 +520,8 @@ fn default_track_row_height_px() -> u8 {
     50
 }
 
-pub(crate) const MIN_ALBUM_CARD_MAX_WIDTH_PX: u16 = 120;
-pub(crate) const MAX_ALBUM_CARD_MAX_WIDTH_PX: u16 = 320;
+pub(crate) const MIN_ALBUM_CARD_MAX_WIDTH_PX: u16 = 100;
+pub(crate) const MAX_ALBUM_CARD_MAX_WIDTH_PX: u16 = 500;
 
 fn default_album_card_max_width_px() -> u16 {
     180
@@ -2749,13 +2749,13 @@ mod tests {
         };
         assert_eq!(
             repair_track_list_columns(narrow).album_card_max_width_px,
-            120
+            100
         );
         let wide = TrackListColumnSettings {
             album_card_max_width_px: u16::MAX,
             ..TrackListColumnSettings::default()
         };
-        assert_eq!(repair_track_list_columns(wide).album_card_max_width_px, 320);
+        assert_eq!(repair_track_list_columns(wide).album_card_max_width_px, 500);
     }
 
     #[test]

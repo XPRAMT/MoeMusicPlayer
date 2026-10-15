@@ -9,60 +9,62 @@ import {
 } from '../src/lib/album-detail-collapse.js';
 
 test('album detail cover shrinks one CSS pixel per downward scroll pixel', () => {
-  assert.equal(getAlbumDetailCoverSize(148, 0), 148);
-  assert.equal(getAlbumDetailCoverSize(148, 20), 128);
-  assert.equal(getAlbumDetailCoverSize(116, 20), 96);
+  assert.equal(getAlbumDetailCoverSize(200, 0), 200);
+  assert.equal(getAlbumDetailCoverSize(200, 20), 180);
+  assert.equal(getAlbumDetailCoverSize(160, 20), 140);
 });
 
-test('cover stops at 64px for desktop and narrow starting sizes', () => {
-  assert.equal(getAlbumDetailCoverSize(148, 84), 64);
-  assert.equal(getAlbumDetailCoverSize(116, 52), 64);
-  assert.equal(getAlbumDetailCoverSize(148, 400), 64);
-  assert.equal(getAlbumDetailCollapseRange(148), 84);
-  assert.equal(getAlbumDetailCollapseRange(116), 52);
+test('cover stops at 80px for desktop and narrow starting sizes', () => {
+  assert.equal(getAlbumDetailCoverSize(200, 120), 80);
+  assert.equal(getAlbumDetailCoverSize(160, 80), 80);
+  assert.equal(getAlbumDetailCoverSize(200, 400), 80);
+  assert.equal(getAlbumDetailCollapseRange(200), 120);
+  assert.equal(getAlbumDetailCollapseRange(160), 80);
+  assert.equal(getAlbumDetailCollapseRange(64), 0);
 });
 
 test('track scroller starts at the fully collapsed heading plus table header', () => {
-  assert.equal(getAlbumDetailScrollerTop(184, 84, 37), 137);
-  assert.equal(getAlbumDetailScrollerTop(144, 52, 32), 124);
+  assert.equal(getAlbumDetailScrollerTop(236, 120, 37), 153);
+  assert.equal(getAlbumDetailScrollerTop(188, 80, 32), 140);
   assert.equal(getAlbumDetailScrollerTop(Number.NaN, -1, Number.NaN), 0);
 });
 
 test('native scroll collapses the cover first, then scrolls tracks, identically in both directions', () => {
-  assert.deepEqual(getAlbumDetailScrollState(0, 84), { collapseOffset: 0, listScrollTop: 0 });
-  assert.deepEqual(getAlbumDetailScrollState(40, 84), { collapseOffset: 40, listScrollTop: 0 });
-  assert.deepEqual(getAlbumDetailScrollState(84, 84), { collapseOffset: 84, listScrollTop: 0 });
-  assert.deepEqual(getAlbumDetailScrollState(1_084, 84), { collapseOffset: 84, listScrollTop: 1_000 });
+  assert.deepEqual(getAlbumDetailScrollState(0, 120), { collapseOffset: 0, listScrollTop: 0 });
+  assert.deepEqual(getAlbumDetailScrollState(40, 120), { collapseOffset: 40, listScrollTop: 0 });
+  assert.deepEqual(getAlbumDetailScrollState(120, 120), { collapseOffset: 120, listScrollTop: 0 });
+  assert.deepEqual(getAlbumDetailScrollState(1_120, 120), { collapseOffset: 120, listScrollTop: 1_000 });
   // Moving back up restores tracks to their top before the cover expands.
-  assert.deepEqual(getAlbumDetailScrollState(90, 84), { collapseOffset: 84, listScrollTop: 6 });
-  assert.deepEqual(getAlbumDetailScrollState(30, 84), { collapseOffset: 30, listScrollTop: 0 });
-  assert.deepEqual(getAlbumDetailScrollState(Number.NaN, 84), { collapseOffset: 0, listScrollTop: 0 });
+  assert.deepEqual(getAlbumDetailScrollState(126, 120), { collapseOffset: 120, listScrollTop: 6 });
+  assert.deepEqual(getAlbumDetailScrollState(30, 120), { collapseOffset: 30, listScrollTop: 0 });
+  assert.deepEqual(getAlbumDetailScrollState(Number.NaN, 120), { collapseOffset: 0, listScrollTop: 0 });
 });
 
 test('logical list positions round-trip through the native scroll offset', () => {
   for (const list of [0, 1, 50, 2_400]) {
-    const native = getAlbumDetailNativeScrollTop(list, 84, 84);
-    assert.equal(getAlbumDetailScrollState(native, 84).listScrollTop, list);
+    const native = getAlbumDetailNativeScrollTop(list, 120, 120);
+    assert.equal(getAlbumDetailScrollState(native, 120).listScrollTop, list);
   }
-  assert.equal(getAlbumDetailNativeScrollTop(0, 84, 20), 20);
-  assert.equal(getAlbumDetailNativeScrollTop(0, 84), 0);
-  assert.equal(getAlbumDetailNativeScrollTop(10, 84, 0), 94);
+  assert.equal(getAlbumDetailNativeScrollTop(0, 120, 20), 20);
+  assert.equal(getAlbumDetailNativeScrollTop(0, 120), 0);
+  assert.equal(getAlbumDetailNativeScrollTop(10, 120, 0), 130);
 });
 
 test('scroller geometry and thumb ratio do not depend on cover collapse', () => {
-  const shellHeight = 760;
-  const top = getAlbumDetailScrollerTop(184, 84, 37);
-  const clientHeight = shellHeight - top;
-  const scrollHeight = 84 + 103 * 50;
-  const ratios = new Set([0, 20, 84, 3_000].map(() => clientHeight / scrollHeight));
-  assert.equal(ratios.size, 1);
-  // Rows start exactly at the scroller's top edge once fully collapsed, and
-  // below it (behind only the collapsing heading) before that.
-  for (const native of [0, 30, 84, 500]) {
-    const { collapseOffset } = getAlbumDetailScrollState(native, 84);
-    const firstRowViewportTop = top + 84 - native;
-    const listBoundary = 184 - collapseOffset + 37;
-    if (native <= 84) assert.equal(firstRowViewportTop, listBoundary);
-    assert.ok(listBoundary >= top);
+  for (const [heading, range, header] of [[236, 120, 37], [188, 80, 32]]) {
+    const shellHeight = 760;
+    const top = getAlbumDetailScrollerTop(heading, range, header);
+    const clientHeight = shellHeight - top;
+    const scrollHeight = range + 103 * 50;
+    const ratios = new Set([0, 20, range, 3_000].map(() => clientHeight / scrollHeight));
+    assert.equal(ratios.size, 1);
+    // Rows start exactly at the list boundary while collapsing and never above the scroller top.
+    for (const native of [0, 30, range, 500]) {
+      const { collapseOffset } = getAlbumDetailScrollState(native, range);
+      const firstRowViewportTop = top + range - native;
+      const listBoundary = heading - collapseOffset + header;
+      if (native <= range) assert.equal(firstRowViewportTop, listBoundary);
+      assert.ok(listBoundary >= top);
+    }
   }
 });
