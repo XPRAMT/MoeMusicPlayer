@@ -4745,13 +4745,15 @@ input:focus-visible {
   font-size: calc(var(--font-display, 28px) * 1.15);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
-  cursor: ns-resize;
-  touch-action: none;
+  display: flex;
+  align-items: baseline;
   user-select: none;
 }
 .sleep-timer-value.is-active { color: var(--accent-text); }
-.sleep-timer-value:hover,
-.sleep-timer-value:focus-visible { background: rgba(var(--text-rgb), 0.06); }
+.sleep-timer-field { padding: 0 4px; border-radius: 8px; outline: none; cursor: ns-resize; touch-action: none; }
+.sleep-timer-field:hover,
+.sleep-timer-field:focus-visible { background: rgba(var(--text-rgb), 0.08); }
+.sleep-timer-colon { opacity: 0.6; }
 .sleep-timer-hint { max-width: 220px; margin: 0; color: var(--text-soft); font-size: var(--font-caption); text-align: center; }
 
 /* Touch swipe-to-dismiss (src/lib/swipe-dismiss.js): let the browser keep the cross axis

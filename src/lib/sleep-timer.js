@@ -4,10 +4,10 @@
  * wall-clock end timestamp, so a throttled WebView only delays the label, never expiry.
  */
 
-/** Minutes per wheel notch / drag step / arrow key. */
-export const SLEEP_TIMER_STEP_MINUTES = 5;
-/** 23:55 — the largest multiple of 5 minutes below 24 hours. */
-export const SLEEP_TIMER_MAX_MINUTES = 23 * 60 + 55;
+/** 23:59: hours 0..23 and minutes 0..59 are adjusted independently. */
+export const SLEEP_TIMER_MAX_HOURS = 23;
+export const SLEEP_TIMER_MAX_MINUTE_FIELD = 59;
+export const SLEEP_TIMER_MAX_MINUTES = SLEEP_TIMER_MAX_HOURS * 60 + SLEEP_TIMER_MAX_MINUTE_FIELD;
 /** Vertical drag distance (CSS px) per step; touch and mouse share it. */
 export const SLEEP_TIMER_DRAG_STEP_PX = 14;
 /** Pixel-mode wheel distance per step (one mouse notch is ~100 px, trackpads send small deltas). */
@@ -34,17 +34,25 @@ export function formatSleepTimer(minutes) {
 }
 
 /**
- * Move by whole steps, snapping to the 5-minute grid first: from 00:13, +1 → 00:15 and −1 → 00:10.
- * Result is clamped to 0..23:55; 0 means "cancel".
- * @param {number} currentMinutes @param {number} steps positive = longer
+ * Change one field by whole notches (1 hour or 1 minute each). Fields are independent and clamp
+ * at their ends: minutes never wrap or carry into hours (00:59 +1 min stays 00:59), hours stay 0..23.
+ * The result is total minutes; 0 means "cancel".
+ * @param {number} currentMinutes @param {'hours' | 'minutes'} field @param {number} steps positive = longer
  */
-export function adjustSleepTimerMinutes(currentMinutes, steps) {
-  const step = SLEEP_TIMER_STEP_MINUTES;
+export function adjustSleepTimerField(currentMinutes, field, steps) {
   const current = Number.isFinite(currentMinutes) ? Math.max(0, Math.min(SLEEP_TIMER_MAX_MINUTES, Math.round(currentMinutes))) : 0;
   const whole = Number.isFinite(steps) ? Math.trunc(steps) : 0;
-  if (whole === 0) return current;
-  const base = whole > 0 ? Math.floor(current / step) * step : Math.ceil(current / step) * step;
-  return Math.max(0, Math.min(SLEEP_TIMER_MAX_MINUTES, base + whole * step));
+  let hours = Math.floor(current / 60);
+  let minutes = current % 60;
+  if (field === 'hours') hours = Math.max(0, Math.min(SLEEP_TIMER_MAX_HOURS, hours + whole));
+  else minutes = Math.max(0, Math.min(SLEEP_TIMER_MAX_MINUTE_FIELD, minutes + whole));
+  return hours * 60 + minutes;
+}
+
+/** @param {number} minutes */
+export function splitSleepTimer(minutes) {
+  const [hours, mins] = formatSleepTimer(minutes).split(':');
+  return { hours, minutes: mins };
 }
 
 /**

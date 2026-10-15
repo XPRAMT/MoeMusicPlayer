@@ -138,7 +138,7 @@
   import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
-  import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerMinutes, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
+  import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
   import type { SleepTimerSnapshot } from './lib/ipc';
   import { swipeDismiss } from './lib/swipe-dismiss.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
@@ -225,11 +225,12 @@
   let sleepTimerPopover = $state<HTMLDivElement | null>(null);
   let sleepTimerPopoverShiftX = $state(0);
   let sleepTimerToggle = $state<HTMLButtonElement | null>(null);
-  let sleepTimerDrag: { pointerId: number; lastY: number; carry: number } | null = null;
+  let sleepTimerDrag: { pointerId: number; lastY: number; carry: number; field: SleepTimerField } | null = null;
   let sleepTimerWheelCarry = 0;
   const sleepTimerActive = $derived(sleepTimerEndsAt !== null);
   const sleepTimerMinutes = $derived(getSleepTimerDisplayMinutes(getSleepTimerRemainingMs(sleepTimerEndsAt, sleepTimerNow)));
   const sleepTimerLabel = $derived(formatSleepTimer(sleepTimerMinutes));
+  const sleepTimerParts = $derived(splitSleepTimer(sleepTimerMinutes));
 
   function applySleepTimerSnapshot(snapshot: SleepTimerSnapshot): void {
     sleepTimerEndsAt = snapshot.endsAtMs ?? null;
@@ -273,9 +274,10 @@
     }
   }
 
-  function stepSleepTimer(steps: number): void {
+  function stepSleepTimer(field: SleepTimerField, steps: number): void {
     if (steps === 0) return;
-    const next = adjustSleepTimerMinutes(sleepTimerMinutes, steps);
+    // While running, the adjusted value becomes the new remaining time (Rust resets the deadline).
+    const next = adjustSleepTimerField(sleepTimerMinutes, field, steps);
     if (next === sleepTimerMinutes && sleepTimerActive === next > 0) return;
     void setSleepTimerMinutes(next);
   }
@@ -311,22 +313,24 @@
     if (restoreFocus) sleepTimerToggle?.focus();
   }
 
+  type SleepTimerField = 'hours' | 'minutes';
+
   /** Non-passive wheel listener so the page does not scroll while adjusting. */
-  function sleepTimerWheel(node: HTMLElement): { destroy: () => void } {
+  function sleepTimerWheel(node: HTMLElement, field: SleepTimerField): { destroy: () => void } {
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const delta = event.deltaMode === 0 ? event.deltaY : Math.sign(event.deltaY) * SLEEP_TIMER_WHEEL_STEP_PX;
       const result = accumulateSleepTimerSteps(sleepTimerWheelCarry, delta, SLEEP_TIMER_WHEEL_STEP_PX);
       sleepTimerWheelCarry = result.carry;
-      stepSleepTimer(result.steps);
+      stepSleepTimer(field, result.steps);
     };
     node.addEventListener('wheel', onWheel, { passive: false });
     return { destroy: () => node.removeEventListener('wheel', onWheel) };
   }
 
-  function startSleepTimerDrag(event: PointerEvent): void {
+  function startSleepTimerDrag(event: PointerEvent, field: SleepTimerField): void {
     if (event.button !== 0) return;
-    sleepTimerDrag = { pointerId: event.pointerId, lastY: event.clientY, carry: 0 };
+    sleepTimerDrag = { pointerId: event.pointerId, lastY: event.clientY, carry: 0, field };
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     event.preventDefault();
   }
@@ -335,7 +339,7 @@
     if (!sleepTimerDrag || sleepTimerDrag.pointerId !== event.pointerId) return;
     const result = accumulateSleepTimerSteps(sleepTimerDrag.carry, event.clientY - sleepTimerDrag.lastY, SLEEP_TIMER_DRAG_STEP_PX);
     sleepTimerDrag = { ...sleepTimerDrag, lastY: event.clientY, carry: result.carry };
-    stepSleepTimer(result.steps);
+    stepSleepTimer(sleepTimerDrag.field, result.steps);
   }
 
   function endSleepTimerDrag(event: PointerEvent): void {
@@ -343,11 +347,11 @@
     sleepTimerDrag = null;
   }
 
-  function handleSleepTimerKeydown(event: KeyboardEvent): void {
-    const steps = event.key === 'ArrowUp' ? 1 : event.key === 'ArrowDown' ? -1 : event.key === 'PageUp' ? 6 : event.key === 'PageDown' ? -6 : 0;
+  function handleSleepTimerKeydown(event: KeyboardEvent, field: SleepTimerField): void {
+    const steps = event.key === 'ArrowUp' ? 1 : event.key === 'ArrowDown' ? -1 : 0;
     if (steps === 0) return;
     event.preventDefault();
-    stepSleepTimer(steps);
+    stepSleepTimer(field, steps);
   }
 
   function handleWindowPointerDown(event: PointerEvent): void {
@@ -4255,24 +4259,40 @@
             </button>
             {#if isSleepTimerOpen}
               <div bind:this={sleepTimerPopover} class="sleep-timer-popover floating-surface" style:--sleep-timer-popover-shift-x={`${sleepTimerPopoverShiftX}px`} role="dialog" aria-label="睡眠定時">
-                <div
-                  class="sleep-timer-value"
-                  class:is-active={sleepTimerActive}
-                  role="slider"
-                  tabindex="0"
-                  aria-label="睡眠定時剩餘時間"
-                  aria-valuemin={0}
-                  aria-valuemax={SLEEP_TIMER_MAX_MINUTES}
-                  aria-valuenow={sleepTimerMinutes}
-                  aria-valuetext={sleepTimerActive ? `剩餘 ${sleepTimerLabel}` : '未啟用'}
-                  use:sleepTimerWheel
-                  onpointerdown={startSleepTimerDrag}
-                  onpointermove={moveSleepTimerDrag}
-                  onpointerup={endSleepTimerDrag}
-                  onpointercancel={endSleepTimerDrag}
-                  onkeydown={handleSleepTimerKeydown}
-                >{sleepTimerLabel}</div>
-                <p class="sleep-timer-hint">上下拖曳或滾動調整，每格 5 分鐘；到 00:00 時暫停播放</p>
+                <div class="sleep-timer-value" class:is-active={sleepTimerActive}>
+                  <span
+                    class="sleep-timer-field"
+                    role="slider"
+                    tabindex="0"
+                    aria-label="睡眠定時小時"
+                    aria-valuemin={0}
+                    aria-valuemax={SLEEP_TIMER_MAX_HOURS}
+                    aria-valuenow={Number(sleepTimerParts.hours)}
+                    aria-valuetext={sleepTimerActive ? `剩餘 ${sleepTimerLabel}` : '未啟用'}
+                    use:sleepTimerWheel={'hours'}
+                    onpointerdown={(event) => startSleepTimerDrag(event, 'hours')}
+                    onpointermove={moveSleepTimerDrag}
+                    onpointerup={endSleepTimerDrag}
+                    onpointercancel={endSleepTimerDrag}
+                    onkeydown={(event) => handleSleepTimerKeydown(event, 'hours')}
+                  >{sleepTimerParts.hours}</span><span class="sleep-timer-colon" aria-hidden="true">:</span><span
+                    class="sleep-timer-field"
+                    role="slider"
+                    tabindex="0"
+                    aria-label="睡眠定時分鐘"
+                    aria-valuemin={0}
+                    aria-valuemax={SLEEP_TIMER_MAX_MINUTE_FIELD}
+                    aria-valuenow={Number(sleepTimerParts.minutes)}
+                    aria-valuetext={sleepTimerActive ? `剩餘 ${sleepTimerLabel}` : '未啟用'}
+                    use:sleepTimerWheel={'minutes'}
+                    onpointerdown={(event) => startSleepTimerDrag(event, 'minutes')}
+                    onpointermove={moveSleepTimerDrag}
+                    onpointerup={endSleepTimerDrag}
+                    onpointercancel={endSleepTimerDrag}
+                    onkeydown={(event) => handleSleepTimerKeydown(event, 'minutes')}
+                  >{sleepTimerParts.minutes}</span>
+                </div>
+                <p class="sleep-timer-hint">在小時或分鐘上拖曳、滑動或滾動，每格 1；到 00:00 時暫停播放</p>
                 {#if sleepTimerActive}
                   <button class="text-button sleep-timer-cancel" type="button" onclick={() => void setSleepTimerMinutes(0)}>取消定時</button>
                 {/if}

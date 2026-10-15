@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   SLEEP_TIMER_MAX_MINUTES,
   accumulateSleepTimerSteps,
-  adjustSleepTimerMinutes,
+  adjustSleepTimerField,
+  splitSleepTimer,
   formatSleepTimer,
   getSleepTimerDisplayMinutes,
   getSleepTimerRemainingMs,
@@ -22,19 +23,22 @@ test('display rounds up to whole minutes and formats as hh:mm', () => {
   assert.equal(getSleepTimerDisplayMinutes(0), 0);
   assert.equal(formatSleepTimer(0), '00:00');
   assert.equal(formatSleepTimer(95), '01:35');
-  assert.equal(formatSleepTimer(SLEEP_TIMER_MAX_MINUTES), '23:55');
+  assert.equal(formatSleepTimer(SLEEP_TIMER_MAX_MINUTES), '23:59');
 });
 
-test('adjustment snaps to the 5-minute grid and clamps to 00:00..23:55', () => {
-  assert.equal(adjustSleepTimerMinutes(0, 1), 5);
-  assert.equal(adjustSleepTimerMinutes(13, 1), 15);
-  assert.equal(adjustSleepTimerMinutes(13, -1), 10);
-  assert.equal(adjustSleepTimerMinutes(15, 2), 25);
-  assert.equal(adjustSleepTimerMinutes(5, -1), 0);
-  assert.equal(adjustSleepTimerMinutes(3, -1), 0);
-  assert.equal(adjustSleepTimerMinutes(0, -3), 0);
-  assert.equal(adjustSleepTimerMinutes(23 * 60 + 50, 5), SLEEP_TIMER_MAX_MINUTES);
-  assert.equal(adjustSleepTimerMinutes(42, 0), 42);
+test('hours and minutes adjust independently by 1 and clamp without carrying', () => {
+  assert.equal(adjustSleepTimerField(0, 'hours', 1), 60);
+  assert.equal(adjustSleepTimerField(0, 'minutes', 1), 1);
+  assert.equal(adjustSleepTimerField(13, 'minutes', -1), 12);
+  assert.equal(adjustSleepTimerField(75, 'hours', -1), 15);
+  assert.equal(adjustSleepTimerField(59, 'minutes', 1), 59);
+  assert.equal(adjustSleepTimerField(60, 'minutes', -1), 60);
+  assert.equal(adjustSleepTimerField(23 * 60 + 10, 'hours', 3), 23 * 60 + 10);
+  assert.equal(adjustSleepTimerField(30, 'hours', -1), 30);
+  assert.equal(adjustSleepTimerField(1, 'minutes', -5), 0);
+  assert.equal(adjustSleepTimerField(42, 'minutes', 0), 42);
+  assert.equal(adjustSleepTimerField(SLEEP_TIMER_MAX_MINUTES, 'minutes', 1), SLEEP_TIMER_MAX_MINUTES);
+  assert.deepEqual(splitSleepTimer(125), { hours: '02', minutes: '05' });
 });
 
 test('wheel and drag deltas accumulate into whole steps; up lengthens', () => {

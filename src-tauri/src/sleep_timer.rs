@@ -10,8 +10,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub const SLEEP_TIMER_CHANGED_EVENT: &str = "sleep-timer-changed";
-/// 23:55, the largest value reachable with 5-minute steps below 24 h.
-pub const MAX_SLEEP_TIMER_MS: u64 = (23 * 60 + 55) * 60_000;
+/// 23:59: the UI adjusts hours (0..23) and minutes (0..59) independently.
+pub const MAX_SLEEP_TIMER_MS: u64 = (23 * 60 + 59) * 60_000;
 const POLL_MS: u64 = 1_000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -163,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn duration_is_clamped_to_23_55() {
+    fn duration_is_clamped_to_23_59() {
         let timer = SleepTimer::default();
         let (snapshot, _) = timer.set(u64::MAX, 0);
         assert_eq!(snapshot.ends_at_ms, Some(MAX_SLEEP_TIMER_MS));
