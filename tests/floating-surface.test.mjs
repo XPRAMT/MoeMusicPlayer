@@ -18,6 +18,14 @@ test('floating panels share Quick Settings surface tokens', async () => {
   assert.match(css, /box-shadow: var\(--floating-surface-shadow\)/);
   // Narrow-layout navigation panel reuses the shared floating surface.
   assert.match(app, /class:floating-surface=\{isNarrowNav\}/);
+  // No sidebar rule may override the shared settings-driven surface background.
+  assert.match(css, /\.sidebar:not\(\.floating-surface\) \{\s*background: transparent;/);
+  for (const rule of css.matchAll(/(^|\n)([^{}\n]*\.sidebar[^{}\n]*)\{([^}]*)\}/g)) {
+    if (/\.sidebar(?![-\w])(?![^,]*\s)/.test(rule[2]) && /background\s*:|backdrop-filter\s*:/.test(rule[3])) assert.match(rule[2], /:not\(\.floating-surface\)/, `sidebar rule overrides floating surface: ${rule[2].trim()}`);
+  }
+  // The sleep timer popover uses the same surface and never sets its own background.
+  assert.match(app, /class="sleep-timer-popover floating-surface"/);
+  assert.doesNotMatch(css.match(/\.sleep-timer-popover \{[^}]*\}/)?.[0] ?? '', /background|backdrop-filter/);
   assert.match(css, /\.app-shell \.sidebar\.floating-surface \{[^}]*position: fixed;[^}]*top: calc\(var\(--window-titlebar-height\) \+ var\(--android-safe-top, 0px\)\);[^}]*bottom: calc\(var\(--dock-height\) \+ var\(--android-safe-bottom, 0px\) \+ var\(--nav-panel-dock-overhang\)\);[^}]*left: 0;[^}]*border-radius: 0;/s);
   // Edge timeline overhang is derived from the shared progress tokens, not a literal.
   assert.match(css, /\.app-shell:has\(\.player-dock\[data-timeline-style="edge"\]\) \.sidebar\.floating-surface \{\s*--nav-panel-dock-overhang: var\(--dock-edge-progress-track\);/);

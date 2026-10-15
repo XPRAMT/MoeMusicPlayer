@@ -676,6 +676,12 @@ input:focus-visible {
   flex-direction: column;
   padding: var(--sidebar-brand-inset) var(--sidebar-pad-x) 21px;
   border-right: var(--divider-width) solid var(--divider-color);
+}
+
+/* Only the docked sidebar is transparent. The narrow overlay panel keeps the shared
+   .floating-surface background (quick-settings opacity, blur and theme color); a plain
+   `.sidebar { background }` declared after .floating-surface used to override it. */
+.sidebar:not(.floating-surface) {
   background: transparent;
 }
 
