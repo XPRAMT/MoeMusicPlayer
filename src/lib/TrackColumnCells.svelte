@@ -162,7 +162,7 @@
 {:else if variant === 'item'}
   <span class="track-index column-index" role="gridcell">{indexLabel}</span>
   {#each cells as cell (cell.id)}
-    <span class={`list-column list-column-${cell.id}`} class:is-numeric={isNumericListColumn(cell.id)} role="gridcell" use:appTooltip={cell.title || cell.text || undefined}>
+    <span class={`list-column list-column-${cell.id}`} class:is-numeric={isNumericListColumn(cell.id)} class:is-audio-format-cell={cell.id === 'audioFormat'} role="gridcell" use:appTooltip={cell.title || cell.text || undefined}>
       {#if cell.id === 'audioFormat'}
         <span class="list-audio-format">
           <MiddleEllipsis text={cell.text} />
@@ -219,6 +219,10 @@
 
   .list-column.is-audio-format-header {
     justify-content: center;
+    text-align: center;
+  }
+
+  .list-column.is-audio-format-cell {
     text-align: center;
   }
 

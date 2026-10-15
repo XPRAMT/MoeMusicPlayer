@@ -17,7 +17,7 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'album', label: '專輯', min: 'minmax(120px,1.25fr)', minPx: 120 },
   { id: 'year', label: '發行時間', min: '6em', minPx: 78 },
   { id: 'createdAt', label: '新增時間', min: '6em', minPx: 78 },
-  { id: 'audioFormat', label: '音訊格式', min: '172px', minPx: 172 },
+  { id: 'audioFormat', label: '音訊格式', min: '11em', minPx: 143 },
   { id: 'duration', label: '長度', min: '4em', minPx: 52 },
   { id: 'playCount', label: '播放次數', min: '5em', minPx: 65 },
 ]);

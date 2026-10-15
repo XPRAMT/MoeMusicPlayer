@@ -51,8 +51,10 @@ test('numeric list columns are centered while text columns keep their left align
   assert.match(cells, /class:is-numeric=\{isNumericListColumn\(column\.id\)\}/);
   assert.match(cells, /class:is-audio-format-header=\{column\.id === 'audioFormat'\}/);
   assert.match(cells, /class:is-numeric=\{isNumericListColumn\(cell\.id\)\}/);
+  assert.match(cells, /class:is-audio-format-cell=\{cell\.id === 'audioFormat'\}/);
   assert.match(cells, /\.list-column\.is-numeric \.column-sort-button\s*\{\s*justify-content:\s*center;/);
   assert.match(cells, /\.list-column\.is-audio-format-header \.column-sort-button\s*\{\s*justify-content:\s*center;/);
+  assert.match(cells, /\.list-column\.is-audio-format-cell\s*\{\s*text-align:\s*center;/);
   assert.match(cells, /\.column-index\.is-sortable \.column-sort-button\s*\{\s*justify-content:\s*center;/);
   assert.match(appCss, /\.list-column\.is-numeric\s*\{\s*text-align:\s*center;/);
   assert.match(appCss, /\.column-index,[\s\S]*?text-align:\s*center;/);
@@ -60,6 +62,12 @@ test('numeric list columns are centered while text columns keep their left align
     const rule = appCss.match(new RegExp(`\\.${selector}\\s*\\{([^}]+)\\}`))?.[1] ?? '';
     assert.doesNotMatch(rule, /text-align:\s*(?:left|right)/);
   }
+});
+
+test('audio format column is eleven body-font ems wide', () => {
+  const column = TRACK_COLUMN_DEFINITIONS.find(({ id }) => id === 'audioFormat');
+  assert.deepEqual({ min: column?.min, minPx: column?.minPx }, { min: '11em', minPx: 143 });
+  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ')[6], '11em');
 });
 
 test('list headers use only the shared bottom boundary and sort buttons fill their cells', async () => {
