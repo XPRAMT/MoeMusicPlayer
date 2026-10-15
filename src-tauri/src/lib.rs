@@ -7789,7 +7789,11 @@ fn playback_get_queue_quick_index_groupings(
         match service.queue_snapshot()? {
             Some((revision, snapshot)) => (
                 revision,
-                Some(PlaybackQueue::restore(snapshot).map_err(|error| error.to_owned())?),
+                {
+                    // Validate like playback does, but read the snapshot's public fields (same shape as Windows).
+                    PlaybackQueue::restore(snapshot.clone()).map_err(|error| error.to_owned())?;
+                    Some(snapshot)
+                },
             ),
             None => (0, None),
         }
