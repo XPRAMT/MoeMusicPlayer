@@ -2916,6 +2916,47 @@ input:focus-visible {
   grid-column: 1 / -1;
 }
 
+.color-mode-settings {
+  display: grid;
+  min-width: 0;
+  gap: var(--settings-item-gap);
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(var(--text-rgb), 0.025);
+}
+
+.color-mode-picker {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--settings-item-gap);
+}
+
+.color-mode-picker > .soft-button {
+  min-width: 0;
+  width: 100%;
+  justify-content: center;
+  white-space: normal;
+}
+
+.color-mode-settings .theme-color-control,
+.color-mode-settings .lyrics-preference-range {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.color-mode-settings .appearance-color-grid > .theme-color-control {
+  grid-column: 1 / -1;
+}
+
+.color-mode-settings .cover-corner-setting {
+  margin: 0;
+}
+
 .text-color-choice-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

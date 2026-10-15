@@ -3040,51 +3040,53 @@
                     onchange={saveThemePreferencesNow}
                   />
                 </label>
-                <div class="main-background-mode-picker" role="group" aria-label="顏色模式">
-                  <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoTextColor'} type="button" aria-pressed={themePreferences.colorMode === 'autoTextColor'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoTextColor' }); saveThemePreferencesNow(); }}>自動文字顏色</button>
-                  <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoBackgroundOpacity'} type="button" aria-pressed={themePreferences.colorMode === 'autoBackgroundOpacity'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoBackgroundOpacity' }); saveThemePreferencesNow(); }}>自動背景透明度</button>
-                </div>
-                <div class="appearance-color-grid">
+                <div class="color-mode-settings">
+                  <div class="color-mode-picker" role="group" aria-label="顏色模式">
+                    <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoTextColor'} type="button" aria-pressed={themePreferences.colorMode === 'autoTextColor'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoTextColor' }); saveThemePreferencesNow(); }}>自動文字顏色</button>
+                    <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoBackgroundOpacity'} type="button" aria-pressed={themePreferences.colorMode === 'autoBackgroundOpacity'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoBackgroundOpacity' }); saveThemePreferencesNow(); }}>自動背景透明度</button>
+                  </div>
+                  <div class="appearance-color-grid">
+                    {#if themePreferences.colorMode === 'autoTextColor'}
+                      <label class="theme-color-control">
+                        <input
+                          type="color"
+                          aria-label="背景色"
+                          value={themePreferences.backgroundHex}
+                          oninput={(event) => updateThemeColor('backgroundHex', event.currentTarget.value)}
+                          onchange={saveThemePreferencesNow}
+                        />
+                        <span class="theme-color-copy">
+                          <strong>背景色</strong>
+                          <code>{themePreferences.backgroundHex}</code>
+                        </span>
+                      </label>
+                    {:else}
+                      <div class="cover-corner-setting" role="group" aria-label="文字顏色">
+                        <span class="cover-corner-setting-label"><strong>文字顏色</strong></span>
+                        <div class="text-color-choice-row">
+                          <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'white'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'white'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'white' }); saveThemePreferencesNow(); }}>白色字</button>
+                          <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'black'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'black'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'black' }); saveThemePreferencesNow(); }}>黑色字</button>
+                        </div>
+                        <p class="source-muted-note">背景色固定為{themePreferences.backgroundOpacityTextColor === 'white' ? '純黑' : '純白'}；主介面與播放頁各自依照清晰度設定調整背景圖片透明度。</p>
+                      </div>
+                    {/if}
+                  </div>
                   {#if themePreferences.colorMode === 'autoTextColor'}
-                    <label class="theme-color-control">
+                    <label class="lyrics-preference-range">
+                      <span><strong>自動切換文字顏色閥值</strong><output>{themePreferences.autoTextColorThresholdPercent}%</output></span>
                       <input
-                        type="color"
-                        aria-label="背景色"
-                        value={themePreferences.backgroundHex}
-                        oninput={(event) => updateThemeColor('backgroundHex', event.currentTarget.value)}
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={themePreferences.autoTextColorThresholdPercent}
+                        aria-label="自動切換文字顏色閥值"
+                        oninput={(event) => updateMainBackgroundLook({ autoTextColorThresholdPercent: Number(event.currentTarget.value) })}
                         onchange={saveThemePreferencesNow}
                       />
-                      <span class="theme-color-copy">
-                        <strong>背景色</strong>
-                        <code>{themePreferences.backgroundHex}</code>
-                      </span>
                     </label>
-                  {:else}
-                    <div class="cover-corner-setting" role="group" aria-label="文字顏色">
-                      <span class="cover-corner-setting-label"><strong>文字顏色</strong></span>
-                      <div class="text-color-choice-row">
-                        <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'white'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'white'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'white' }); saveThemePreferencesNow(); }}>白色字</button>
-                        <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'black'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'black'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'black' }); saveThemePreferencesNow(); }}>黑色字</button>
-                      </div>
-                      <p class="source-muted-note">背景色固定為{themePreferences.backgroundOpacityTextColor === 'white' ? '純黑' : '純白'}；主介面與播放頁各自依照清晰度設定調整背景圖片透明度。</p>
-                    </div>
                   {/if}
                 </div>
-                {#if themePreferences.colorMode === 'autoTextColor'}
-                  <label class="lyrics-preference-range">
-                    <span><strong>自動切換文字顏色閥值</strong><output>{themePreferences.autoTextColorThresholdPercent}%</output></span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="1"
-                      value={themePreferences.autoTextColorThresholdPercent}
-                      aria-label="自動切換文字顏色閥值"
-                      oninput={(event) => updateMainBackgroundLook({ autoTextColorThresholdPercent: Number(event.currentTarget.value) })}
-                      onchange={saveThemePreferencesNow}
-                    />
-                  </label>
-                {/if}
                 <div class="settings-panel-header">
                   <div>
                     <h3>主介面背景</h3>
