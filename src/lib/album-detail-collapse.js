@@ -28,13 +28,13 @@ export function getAlbumDetailCoverSize(baseSize, scrollPeak) {
   return Math.max(MIN_ALBUM_DETAIL_COVER_SIZE_PX, base - peak);
 }
 
-/** Keep list rows clipped below the moving album heading and column header. */
-/** @param {number} headingHeight @param {number} collapseOffset @param {number} headerHeight @returns {number} */
-export function getAlbumDetailListClipTop(headingHeight, collapseOffset, headerHeight) {
-  const heading = Number.isFinite(headingHeight) ? Math.max(0, headingHeight) : 0;
-  const collapse = Number.isFinite(collapseOffset) ? Math.max(0, collapseOffset) : 0;
-  const header = Number.isFinite(headerHeight) ? Math.max(0, headerHeight) : 0;
-  return Math.max(0, heading - collapse) + header;
+/** Clip only a row's part that scrolled above the list, leaving the scrollport untouched. */
+/** @param {number} scrollTop @param {number} rowTop @param {number} rowHeight @returns {number} */
+export function getAlbumDetailRowClipTop(scrollTop, rowTop, rowHeight) {
+  const scroll = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0;
+  const top = Number.isFinite(rowTop) ? Math.max(0, rowTop) : 0;
+  const height = Number.isFinite(rowHeight) ? Math.max(0, rowHeight) : 0;
+  return Math.min(height, Math.max(0, scroll - top));
 }
 
 /**

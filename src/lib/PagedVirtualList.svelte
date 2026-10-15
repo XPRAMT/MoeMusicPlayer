@@ -47,7 +47,7 @@
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
   } from './queue-reorder.js';
-  import { advanceAlbumDetailWheelScroll, getAlbumDetailListClipTop, mapAlbumDetailNativeScroll, mapAlbumDetailWheelDelta } from './album-detail-collapse.js';
+  import { advanceAlbumDetailWheelScroll, getAlbumDetailRowClipTop, mapAlbumDetailNativeScroll, mapAlbumDetailWheelDelta } from './album-detail-collapse.js';
 
   interface Props<Item> {
     totalCount: number | null;
@@ -889,7 +889,7 @@
     aria-activedescendant={activeDescendantId}
     aria-busy={pending || totalCount === null}
     tabindex="0"
-    style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px;--paged-list-clip-top:${getAlbumDetailListClipTop(leadingOverlayHeight, leadingCollapseOffset, headerHeight)}px`}
+    style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
     class:is-reordering={dragFromIndex !== null}
     onscroll={handleViewportScroll}
     onwheel={hasLeadingOverlay ? handleViewportWheel : undefined}
@@ -917,7 +917,7 @@
           class="paged-virtual-row paged-virtual-group-row list-group-row-surface"
           role="row"
           aria-rowindex={virtualRow.visualIndex + 2}
-          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px)`}
+          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px);${hasLeadingOverlay ? `clip-path:inset(${getAlbumDetailRowClipTop(scrollTop, getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight), groupRowHeight)}px 0 0)` : ''}`}
         >
           <div class="paged-virtual-group-cell" role="gridcell" aria-colspan={columnCount}>
             <button type="button" class="paged-virtual-group-button" aria-label={`開啟「${virtualRow.label}」字首索引`} onclick={openQuickIndex}>{virtualRow.label}</button>
@@ -936,7 +936,7 @@
         aria-selected={selected}
         tabindex={rowActivates && virtualRow.item !== null ? -1 : undefined}
         aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
-        style={`height:${rowHeight}px;transform:translateY(${contentLeadingHeight + getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px)`}
+        style={`height:${rowHeight}px;transform:translateY(${contentLeadingHeight + getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight)}px);${hasLeadingOverlay ? `clip-path:inset(${getAlbumDetailRowClipTop(scrollTop, getVirtualRowTop(virtualRow.visualIndex, renderGroupRows, rowHeight, groupRowHeight), rowHeight)}px 0 0)` : ''}`}
         class:activates={rowActivates && virtualRow.item !== null}
         class:reorderable={longPressReorder && virtualRow.item !== null}
         onpointerdown={longPressReorder ? (event) => handleRowPointerDown(event, virtualRow.index, virtualRow.item) : undefined}
@@ -1046,7 +1046,6 @@
     max-height: none;
     overflow: auto;
     flex: none;
-    clip-path: inset(var(--paged-list-clip-top, 0px) 0 0);
   }
 
   .paged-virtual-frame.leading-overlay .paged-virtual-header {

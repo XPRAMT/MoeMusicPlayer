@@ -3,17 +3,18 @@ import assert from 'node:assert/strict';
 import {
   getAlbumDetailNativeScrollTop,
   getAlbumDetailCoverSize,
-  getAlbumDetailListClipTop,
+  getAlbumDetailRowClipTop,
   advanceAlbumDetailWheelScroll,
   mapAlbumDetailNativeScroll,
   mapAlbumDetailWheelDelta,
 } from '../src/lib/album-detail-collapse.js';
 
-test('album detail list clip follows the column header below the collapsing heading', () => {
-  assert.equal(getAlbumDetailListClipTop(184, 0, 37), 221);
-  assert.equal(getAlbumDetailListClipTop(184, 40, 37), 181);
-  assert.equal(getAlbumDetailListClipTop(184, 84, 37), 137);
-  assert.equal(getAlbumDetailListClipTop(20, 50, 37), 37);
+test('album detail clips only row content that crossed above the list boundary', () => {
+  assert.equal(getAlbumDetailRowClipTop(0, 0, 50), 0);
+  assert.equal(getAlbumDetailRowClipTop(10, 0, 50), 10);
+  assert.equal(getAlbumDetailRowClipTop(60, 50, 50), 10);
+  assert.equal(getAlbumDetailRowClipTop(100, 0, 50), 50);
+  assert.equal(getAlbumDetailRowClipTop(30, 50, 50), 0);
 });
 
 test('album detail wheel input animates smoothly toward the accumulated target', () => {
