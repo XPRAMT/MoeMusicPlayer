@@ -14,7 +14,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 專輯詳情的曲目捲動視窗固定從「封面完全收合後的標題高度＋欄標題高度」（Y0）開始，捲動期間位置與大小不變，捲軸比例固定；內容最前面有等於收合行程（桌面 120 CSS px、窄版 80 CSS px）的空白，原生 scrollTop 前段收合封面（桌面 200、窄版 160 → 80 CSS px；標題高度 = 封面 + 上下內距（桌面 36、窄版 28）），之後才捲曲目，往上時同樣先回到清單頂端再展開封面，收合量恆為 `min(scrollTop, 收合行程)`。列不會被標題蓋住，因此不做逐列 clip-path、不做原生／邏輯捲動映射，也不攔截滾輪；封面、標題與欄標題位置由 CSS scroll timeline 依 scrollTop 驅動，不支援時以 scroll 事件換算的收合量更新。2026-10-16 已用 Release WebView2 CDP 驗證：快速拖曳捲軸 1,565 幀中沒有任何列出現在欄標題下緣以上，`clientHeight`、`scrollHeight`、捲動視窗頂端位置固定。架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。
 
-專輯首頁卡片依「曲目欄位」分頁的「專輯卡片最大寬度」（`trackListColumns.albumCardMaxWidthPx`，預設 180 CSS px，範圍 100–500）填滿整列：欄數 = ceil((可用寬度 + 間距) / (最大寬度 + 間距))、至少 1，卡片平分剩餘寬度，不留右側空隙且不超過最大寬度；封面與文字隨卡片寬度縮放，虛擬列高由同一寬度計算。純函式為 `album-index-layout.js` 的 `getAlbumCardGrid`。Release CDP 多視窗寬度驗收尚未完成（建置時使用者的播放器正在執行，未強制關閉）。
+專輯首頁卡片依「曲目欄位」分頁的「專輯卡片最大寬度」（`trackListColumns.albumCardMaxWidthPx`，預設 180 CSS px，範圍 100–500）填滿整列：欄數 = ceil((可用寬度 + 間距) / (最大寬度 + 間距))、至少 1，卡片平分剩餘寬度，不留右側空隙且不超過最大寬度；封面與文字隨卡片寬度縮放，虛擬列高由同一寬度計算。純函式為 `album-index-layout.js` 的 `getAlbumCardGrid`。Release CDP 多視窗寬度驗收尚未完成（建置時使用者的播放器正在執行，未強制關閉）。 專輯首頁排序列四欄標籤一律置中：排序鈕以 `1fr｜標籤｜1fr` 三欄格線排版，▲▼ 放在右欄，標籤不因指示符號或欄位非數值而偏移；垂直 −3.25 px 光學偏移不變。
 
 快速查找面板（`PagedVirtualList` 與 `AlbumIndex`）每列項目數先取近正方形 round(√標籤數)，再以可用寬度上限 floor((可用寬度 − 2×12 內距 + 4 間距) / (2em 格寬 + 4 間距)) 截斷、至少 1；可用寬度 = min(清單區寬, 視窗寬) − 24 px，格寬以 `--font-title` × 2 計算。寬度優先：放不下時改為更多列而非橫向捲動。純函式在 `quick-index.js`（`getQuickIndexColumnCount`／`getQuickIndexMaxFittingColumns`／`getQuickIndexAvailableWidth`），Release CDP 驗收尚待使用者播放器關閉後補做。
 

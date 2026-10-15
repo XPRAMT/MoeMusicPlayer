@@ -407,6 +407,13 @@
   .album-index-shell { display:flex; min-width:0; min-height:0; flex:1 1 auto; flex-direction:column; }
   .album-index-sort-header { position:relative; flex:0 0 auto; padding:0 clamp(18px,2vw,34px); }
   .album-index-sort-row { box-sizing:border-box; width:100%; min-width:0; --track-list-min-width:0px; --paged-grid-template:repeat(4,minmax(0,1fr)); }
+  /* Center every label, including 專輯 (a non-numeric column that defaulted to left alignment).
+     The 1fr | label | 1fr grid keeps the label centered whether or not the sort indicator is shown;
+     the indicator sits in the right track. The -3.25px optical offset on label/indicator is unchanged. */
+  .album-index-sort-row :global(.column-sort-button) { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); justify-content:stretch; text-align:center; }
+  .album-index-sort-row :global(.column-sort-button)::before { content:""; }
+  .album-index-sort-row :global(.column-sort-label) { grid-column:2; }
+  .album-index-sort-row :global(.column-sort-indicator) { grid-column:3; justify-self:start; }
   :global(.album-index-sort-row.track-list-header) { box-sizing:border-box; height:var(--paged-header-height,37px); min-height:var(--paged-header-height,37px); }
   .album-grid-viewport { min-width:0; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; padding:16px clamp(18px,2vw,34px) var(--album-vertical-gap); scrollbar-color:rgba(var(--text-rgb),0.2) transparent; scrollbar-width:thin; }
   .album-grid-canvas { position:relative; min-width:0; }

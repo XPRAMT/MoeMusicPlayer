@@ -160,3 +160,12 @@ test('album card maximum width normalizes persisted values', () => {
   assert.equal(normalizeAlbumCardMaxWidthPx(999), 500);
   assert.equal(normalizeAlbumCardMaxWidthPx(200.4), 200);
 });
+test('album index sort header centers labels independently of the sort indicator', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/lib/AlbumIndex.svelte', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../src/app.css', import.meta.url), 'utf8');
+  assert.match(source, /\.album-index-sort-row :global\(\.column-sort-button\) \{ display:grid; grid-template-columns:minmax\(0,1fr\) auto minmax\(0,1fr\);/);
+  assert.match(source, /\.album-index-sort-row :global\(\.column-sort-label\) \{ grid-column:2; \}/);
+  assert.match(source, /\.album-index-sort-row :global\(\.column-sort-indicator\) \{ grid-column:3; justify-self:start; \}/);
+  assert.match(css, /top: var\(--track-header-text-optical-offset, -3\.25px\);/);
+});
