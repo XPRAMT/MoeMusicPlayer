@@ -49,8 +49,10 @@ test('numeric list columns are centered while text columns keep their left align
   const cells = await readFile(new URL('../src/lib/TrackColumnCells.svelte', import.meta.url), 'utf8');
   const appCss = await readFile(new URL('../src/app.css', import.meta.url), 'utf8');
   assert.match(cells, /class:is-numeric=\{isNumericListColumn\(column\.id\)\}/);
+  assert.match(cells, /class:is-audio-format-header=\{column\.id === 'audioFormat'\}/);
   assert.match(cells, /class:is-numeric=\{isNumericListColumn\(cell\.id\)\}/);
   assert.match(cells, /\.list-column\.is-numeric \.column-sort-button\s*\{\s*justify-content:\s*center;/);
+  assert.match(cells, /\.list-column\.is-audio-format-header \.column-sort-button\s*\{\s*justify-content:\s*center;/);
   assert.match(cells, /\.column-index\.is-sortable \.column-sort-button\s*\{\s*justify-content:\s*center;/);
   assert.match(appCss, /\.list-column\.is-numeric\s*\{\s*text-align:\s*center;/);
   assert.match(appCss, /\.column-index,[\s\S]*?text-align:\s*center;/);
@@ -443,15 +445,18 @@ test('a missing or whitespace title shows the file name and not artist or album'
   assert.equal(displayTrackTitle({ title: ' 晴天 ' }, '未命名曲目'), '晴天');
 });
 
-test('play count is played_ms / duration_ms with tidy precision', () => {
+test('play count is played_ms / duration_ms with one decimal except zero', () => {
   assert.equal(formatPlayCount(130_000, 100_000), '1.3');
-  assert.equal(formatPlayCount(200_000, 100_000), '2');
+  assert.equal(formatPlayCount(100_000, 100_000), '1.0');
+  assert.equal(formatPlayCount(110_000, 100_000), '1.1');
+  assert.equal(formatPlayCount(200_000, 100_000), '2.0');
   assert.equal(formatPlayCount(0, 100_000), '0');
   assert.equal(formatPlayCount(50_000, 0), '—');
   assert.equal(formatPlayCount(50_000, null), '—');
   assert.equal(formatPlayCount(50_000, undefined), '—');
   assert.equal(formatPlayCount(undefined, 100_000), '0');
   assert.equal(formatTrackColumnValue('playCount', { playedMs: 130_000, durationMs: 100_000 }, formatDuration), '1.3');
+  assert.equal(formatTrackColumnValue('playCount', { playedMs: 200_000, durationMs: 100_000 }, formatDuration), '2.0');
   assert.equal(formatTrackColumnValue('playCount', { playedMs: 10, durationMs: null }, formatDuration), '—');
 });
 

@@ -42,8 +42,8 @@ test('queue heading sort mutates playback traversal and keeps drag reordering en
 });
 
 test('resizable list header separators remain visible without hover', () => {
-  const baseRule = /\.column-resize-handle::after\s*\{[^}]*background:\s*rgba\(var\(--text-rgb\),\s*0\.3\)/;
-  const hoverRule = /\.list-column\.is-resizable:hover \.column-resize-handle::after,[\s\S]*?\.column-resize-handle:hover::after\s*\{[^}]*background:\s*rgba\(var\(--text-rgb\),\s*0\.65\)/;
+  const baseRule = /\.column-resize-handle::after\s*\{[^}]*background:\s*var\(--divider-color\);[^}]*opacity:\s*0\.3/;
+  const hoverRule = /\.list-column\.is-resizable:hover \.column-resize-handle::after,[\s\S]*?\.column-resize-handle:hover::after\s*\{[^}]*opacity:\s*0\.65/;
   assert.match(trackColumnCellsSource, baseRule);
   assert.match(trackColumnCellsSource, hoverRule);
 });

@@ -124,6 +124,7 @@
     <span
       class={`list-column list-column-${column.id}`}
       class:is-numeric={isNumericListColumn(column.id)}
+      class:is-audio-format-header={column.id === 'audioFormat'}
       class:is-sortable={sortable}
       class:is-resizable={resizable && RESIZABLE_TRACK_COLUMN_IDS.has(column.id as never)}
       role="columnheader"
@@ -212,6 +213,16 @@
   }
 
   .list-column.is-numeric .column-sort-button {
+    justify-content: center;
+    text-align: center;
+  }
+
+  .list-column.is-audio-format-header {
+    justify-content: center;
+    text-align: center;
+  }
+
+  .list-column.is-audio-format-header .column-sort-button {
     justify-content: center;
     text-align: center;
   }

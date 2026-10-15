@@ -331,7 +331,7 @@ export function formatPlayCount(playedMs, durationMs) {
   const ratio = played / durationMs;
   if (!Number.isFinite(ratio) || ratio < 0) return '—';
   const rounded = Math.round(ratio * 10) / 10;
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  return rounded === 0 ? '0' : rounded.toFixed(1);
 }
 
 /**
