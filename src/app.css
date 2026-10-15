@@ -4752,3 +4752,13 @@ input:focus-visible {
 .sleep-timer-value:hover,
 .sleep-timer-value:focus-visible { background: rgba(var(--text-rgb), 0.06); }
 .sleep-timer-hint { max-width: 220px; margin: 0; color: var(--text-soft); font-size: var(--font-caption); text-align: center; }
+
+/* Touch swipe-to-dismiss (src/lib/swipe-dismiss.js): let the browser keep the cross axis
+   (nav list / settings scroll vertically) while the dismiss axis reaches the gesture helper. */
+.sidebar.floating-surface.nav-panel-open,
+.now-playing-quick-settings-drawer {
+  touch-action: pan-y;
+}
+.cover-stage {
+  touch-action: pan-x;
+}

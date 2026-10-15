@@ -140,6 +140,7 @@
   import PlaylistTree from './lib/PlaylistTree.svelte';
   import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerMinutes, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
   import type { SleepTimerSnapshot } from './lib/ipc';
+  import { swipeDismiss } from './lib/swipe-dismiss.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import SyncErrorDetails from './lib/SyncErrorDetails.svelte';
@@ -3799,6 +3800,7 @@
     aria-label="主要導覽"
     inert={isNowPlayingOpen || (isNarrowNav && !isNavPanelOpen)}
     onclick={handleSidebarClick}
+    use:swipeDismiss={{ direction: 'left', enabled: isNarrowNav && isNavPanelOpen, onDismiss: () => closeNavPanel('outside', false) }}
   >
     <div class="brand-lockup">
       <div class="brand-mark">
@@ -4293,6 +4295,7 @@
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
+                  use:swipeDismiss={{ direction: 'down', enabled: isNowPlayingOpen, onDismiss: () => void closeNowPlaying() }}
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
                   style:width={coverFrame ? `${coverFrame.width}px` : undefined}
@@ -4338,6 +4341,7 @@
         <dialog open
           bind:this={quickSettingsDialog}
           class="now-playing-quick-settings-drawer floating-surface"
+          use:swipeDismiss={{ direction: 'right', onDismiss: () => void closeQuickSettings() }}
           aria-modal="true"
           aria-labelledby="now-playing-quick-settings-title"
           data-testid="now-playing-quick-settings"
