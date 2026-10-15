@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import { getAlbumIndexScrollTop, setAlbumIndexScrollTop } from './album-index-scroll.js';
   import { getErrorText, invokeCommand } from './ipc';
   import type { AlbumIndexEntry, AlbumIndexSort, AlbumIndexSortField } from './ipc';
@@ -27,6 +27,7 @@
   let viewportWidth = $state(0);
   let viewportHeight = $state(0);
   let scrollTop = $state(0);
+  let visibleCardDomDiagnostic = $state('pending');
   let scrollPositionRestored = $state(false);
   let restoreFrame: number | null = null;
   let requestRevision = 0;
@@ -108,7 +109,7 @@
       const item = listData.itemAt(row.start);
       return `${row.start}:${item ? `${item.displayName}/${item.trackCount}` : 'null'}`;
     }).join(' ');
-    return `sort=${sortField}/${sortDirection}; total=${totalCount}/${pageSnapshot.totalCount ?? 'null'}; cache=${pageSnapshot.cachedItemCount}; pending=${pageSnapshot.pendingPageCount}; range=${visibleDataRange ? `${visibleDataRange.start}-${visibleDataRange.end}` : 'null'}; rows=${rows}; sample=${sample}`;
+    return `sort=${sortField}/${sortDirection}; total=${totalCount}/${pageSnapshot.totalCount ?? 'null'}; cache=${pageSnapshot.cachedItemCount}; pending=${pageSnapshot.pendingPageCount}; range=${visibleDataRange ? `${visibleDataRange.start}-${visibleDataRange.end}` : 'null'}; rows=${rows}; sample=${sample}; DOM=${visibleCardDomDiagnostic}`;
   });
 
   async function load(): Promise<void> {
@@ -204,6 +205,25 @@
     if (pageSnapshot.scope !== null && range && range.end > range.start) {
       void listData.ensureRange(range.start, range.end);
     }
+  });
+
+  $effect(() => {
+    pageSnapshot.revision;
+    visibleRows;
+    const element = viewport;
+    if (!element) return;
+    void tick().then(() => {
+      if (viewport !== element) return;
+      const cards = [...element.querySelectorAll<HTMLElement>('.album-card')];
+      const first = cards[0];
+      if (!first) {
+        visibleCardDomDiagnostic = `0/${element.querySelectorAll('.album-index-card-row').length} rows`;
+        return;
+      }
+      const rect = first.getBoundingClientRect();
+      const style = getComputedStyle(first);
+      visibleCardDomDiagnostic = `${cards.length} cards; first=${Math.round(rect.left)},${Math.round(rect.top)} ${Math.round(rect.width)}x${Math.round(rect.height)} ${style.display}/${style.visibility}/${style.opacity}`;
+    });
   });
 
   function openQuickIndex(event: MouseEvent): void {
