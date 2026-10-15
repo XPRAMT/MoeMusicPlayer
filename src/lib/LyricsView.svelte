@@ -140,6 +140,7 @@
   let userScrollResetTimer: ReturnType<typeof setTimeout> | null = null;
   let timingOffsetSec = $state(0);
   let timingPanelOpen = $state(false);
+  let timingPanelElement = $state<HTMLDivElement | null>(null);
   let candidateQuery = $state('');
 
   const controller = createLyricsController({
@@ -562,7 +563,16 @@
   function resetTimingOffset(): void {
     setTimingOffsetSec(0);
   }
+
+  function handleTimingPanelOutsidePointerDown(event: PointerEvent): void {
+    if (!timingPanelOpen || !(event.target instanceof Node)) return;
+    if (timingPanelElement?.contains(event.target)) return;
+    if (event.target instanceof Element && event.target.closest('[aria-label="同步歌詞延遲調整"]')) return;
+    timingPanelOpen = false;
+  }
 </script>
+
+<svelte:window onpointerdown={handleTimingPanelOutsidePointerDown} />
 
 <div
   class="lyrics-view"
@@ -583,11 +593,11 @@
     <p class="lyrics-placeholder" role="status">正在讀取本機與已保存的歌詞…</p>
   {:else}
     {#if timingPanelOpen && isTimed}
-      <div class="lyrics-timing-panel floating-surface" role="group" aria-label="歌詞同步延遲" data-testid="lyrics-timing-panel">
+      <div bind:this={timingPanelElement} class="lyrics-timing-panel floating-surface" role="group" aria-label="歌詞同步延遲" data-testid="lyrics-timing-panel">
         <div class="lyrics-timing-panel-header">
           <strong>同步歌詞延遲</strong>
           <span class="lyrics-timing-value" data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingOffsetSec)}</span>
-          <button type="button" class="soft-button" onclick={() => { timingPanelOpen = false; }}>關閉</button>
+          <button type="button" class="soft-button" onclick={resetTimingOffset}>重設</button>
         </div>
         <div class="lyrics-timing-controls">
           <button type="button" class="soft-button" aria-label="延遲減少 0.1 秒" onclick={() => nudgeTimingOffset(-LYRICS_TIMING_OFFSET_STEP_SEC)}>−0.1</button>
@@ -605,7 +615,6 @@
             oninput={onTimingOffsetInput}
           />
           <button type="button" class="soft-button" aria-label="延遲增加 0.1 秒" onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
-          <button type="button" class="soft-button" onclick={resetTimingOffset}>重設</button>
         </div>
       </div>
     {/if}

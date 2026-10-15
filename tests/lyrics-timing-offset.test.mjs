@@ -37,6 +37,11 @@ test('timing panel overlays lyrics without extra header guidance', async () => {
   const source = await readFile(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
   assert.match(source, /class="lyrics-timing-panel floating-surface"/);
   assert.match(source, /\.lyrics-timing-panel \{[\s\S]*?position: absolute;[\s\S]*?top: 0;[\s\S]*?left: 0;/);
+  assert.match(source, /<svelte:window onpointerdown=\{handleTimingPanelOutsidePointerDown\}/);
+  assert.match(source, /timingPanelElement\?\.contains\(event\.target\)/);
+  assert.match(source, /closest\('\[aria-label="同步歌詞延遲調整"\]'\)/);
+  assert.match(source, /<button[^>]*onclick=\{resetTimingOffset\}>重設<\/button>/);
+  assert.doesNotMatch(source, /onclick=\{\(\) => \{ timingPanelOpen = false; \}\}>關閉/);
   assert.doesNotMatch(source, /正值延後歌詞，負值提前歌詞/);
   assert.doesNotMatch(source, /範圍 ±5 秒/);
 });
