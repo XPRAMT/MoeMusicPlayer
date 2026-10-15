@@ -56,9 +56,7 @@
   background: linear-gradient(
     to bottom,
     var(--list-group-row-background) 0,
-    var(--list-group-row-background) calc(100% - var(--divider-width)),
-    transparent calc(100% - var(--divider-width)),
-    transparent 100%
+    var(--list-group-row-background) 100%
   );
   /* Do not composite the translucent row fill underneath the border. */
   background-clip: padding-box;
@@ -68,9 +66,7 @@
   background: linear-gradient(
     to bottom,
     var(--list-group-row-hover-background) 0,
-    var(--list-group-row-hover-background) calc(100% - var(--divider-width)),
-    transparent calc(100% - var(--divider-width)),
-    transparent 100%
+    var(--list-group-row-hover-background) 100%
   );
   background-clip: padding-box;
 }
