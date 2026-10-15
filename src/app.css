@@ -1397,7 +1397,7 @@ input:focus-visible {
   justify-content: center;
   gap: 0;
   padding: 0 10px;
-  border: 1px solid rgba(var(--text-rgb), 0.18);
+  border: 1px solid var(--line);
   border-radius: 10px;
   color: var(--text-soft);
   background: transparent;
