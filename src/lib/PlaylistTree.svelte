@@ -191,7 +191,7 @@
     gap: 3px;
     margin: 4px 0 0;
     padding: 5px 0 2px 12px;
-    border-top: 1px solid var(--line);
+    border-top: var(--divider-width) solid var(--line);
     list-style: none;
   }
 

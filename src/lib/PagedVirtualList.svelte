@@ -906,8 +906,8 @@
   .paged-virtual-group-row {
     display: flex;
     align-items: center;
-    border-top: 1px solid rgba(var(--text-rgb), 0.055);
-    border-bottom: 1px solid rgba(var(--text-rgb), 0.055);
+    border-top: var(--divider-width) solid rgba(var(--text-rgb), 0.055);
+    border-bottom: var(--divider-width) solid rgba(var(--text-rgb), 0.055);
     background: var(--list-group-row-background);
   }
 

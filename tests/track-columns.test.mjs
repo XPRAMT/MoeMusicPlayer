@@ -38,11 +38,13 @@ import {
 const formatDuration = (value) => `${Math.floor(value / 60_000)}:${String(Math.floor(value / 1000) % 60).padStart(2, '0')}`;
 
 test('list headers use only the shared bottom boundary and sort buttons fill their cells', async () => {
-  const [appCss, trackList, columnCells, virtualList, app] = await Promise.all([
+  const [appCss, trackList, columnCells, virtualList, albumIndex, playlistTree, app] = await Promise.all([
     readFile(new URL('../src/app.css', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/TrackList.svelte', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/TrackColumnCells.svelte', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/PagedVirtualList.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/AlbumIndex.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/PlaylistTree.svelte', import.meta.url), 'utf8'),
     readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
   ]);
   const tableHeader = appCss.match(/\.track-table-head\s*\{([^}]+)\}/)?.[1] ?? '';
@@ -55,8 +57,14 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
   assert.doesNotMatch(tableHeader, /border-bottom\s*:/);
   assert.doesNotMatch(listHeader, /background\s*:/);
   assert.match(virtualHeaderLine, /bottom:\s*0/);
-  assert.match(virtualHeaderLine, /height:\s*0\.8px/);
+  assert.match(appCss, /--divider-width:\s*1px/);
+  assert.match(virtualHeaderLine, /height:\s*var\(--divider-width\)/);
   assert.match(virtualHeaderLine, /background:\s*var\(--line\)/);
+  assert.match(virtualList, /border-top:\s*var\(--divider-width\)/);
+  assert.match(virtualList, /border-bottom:\s*var\(--divider-width\)/);
+  assert.match(albumIndex, /border-top:\s*var\(--divider-width\)/);
+  assert.match(albumIndex, /border-bottom:\s*var\(--divider-width\)/);
+  assert.match(playlistTree, /border-top:\s*var\(--divider-width\)/);
   assert.match(headerTextOffset, /top:\s*var\(--track-header-text-optical-offset,\s*-3\.25px\)/);
   assert.match(app, /-3\.25\s*\/\s*devicePixelRatio/);
   assert.match(app, /addEventListener\('resize', updateTrackHeaderTextOffset\)/);

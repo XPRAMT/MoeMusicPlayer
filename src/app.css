@@ -16,6 +16,7 @@
   --sidebar-bg: #090909;
   --line: rgba(245, 251, 255, 0.11);
   --line-strong: rgba(245, 251, 255, 0.19);
+  --divider-width: 1px;
   --list-group-row-background: rgba(var(--text-rgb), 0.05);
   --list-group-row-hover-background: rgba(var(--text-rgb), 0.10);
   --text: #f5fbff;
@@ -115,7 +116,7 @@ input:focus-visible {
   height: var(--window-titlebar-height, 32px);
   align-items: stretch;
   justify-content: space-between;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--divider-width) solid var(--line);
   color: var(--text-soft);
   background: color-mix(in srgb, var(--page) 92%, transparent);
   backdrop-filter: blur(10px);
@@ -541,7 +542,7 @@ input:focus-visible {
   padding: 0;
   overflow: hidden;
   border: 0;
-  border-left: 1px solid var(--line-strong);
+  border-left: var(--divider-width) solid var(--line-strong);
   border-radius: 0;
   box-sizing: border-box;
 }
@@ -592,7 +593,7 @@ input:focus-visible {
 
 .now-playing-quick-settings-drawer.floating-surface {
   border: 0;
-  border-left: 1px solid var(--line-strong);
+  border-left: var(--divider-width) solid var(--line-strong);
   border-radius: 0;
 }
 
@@ -605,18 +606,18 @@ input:focus-visible {
   gap: 12px;
 }
 
-.quick-settings-drawer-header { flex: 0 0 auto; padding: 18px 20px 12px; border-bottom: 1px solid var(--line); }
+.quick-settings-drawer-header { flex: 0 0 auto; padding: 18px 20px 12px; border-bottom: var(--divider-width) solid var(--line); }
 .quick-settings-drawer-header h2 { margin: 0; font-size: var(--font-title); }
 .quick-settings-drawer-header .icon-button { display: grid; width: 36px; min-height: 36px; flex: 0 0 auto; place-items: center; padding: 0; }
 
 .quick-settings-drawer-nav {
   flex: 0 0 auto;
   padding: 10px 20px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--divider-width) solid var(--line);
 }
 .quick-settings-drawer-nav .settings-tabs { margin: 0; }
 
-.quick-settings-nav { display: flex; flex: 0 0 auto; gap: 7px; padding: 10px 20px; border-bottom: 1px solid var(--line); }
+.quick-settings-nav { display: flex; flex: 0 0 auto; gap: 7px; padding: 10px 20px; border-bottom: var(--divider-width) solid var(--line); }
 .quick-settings-nav button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--text-soft); background: transparent; font-size: var(--font-caption); cursor: pointer; }
 .quick-settings-nav button:hover { border-color: var(--accent); color: var(--accent-text); }
 
@@ -656,7 +657,7 @@ input:focus-visible {
   min-width: 0;
   flex-direction: column;
   padding: var(--sidebar-brand-inset) 19px 21px;
-  border-right: 1px solid var(--line);
+  border-right: var(--divider-width) solid var(--line);
   background: var(--sidebar-bg);
 }
 
@@ -871,7 +872,7 @@ input:focus-visible {
 }
 
 .sidebar-rule {
-  height: 1px;
+  height: var(--divider-width);
   margin: 24px 4px 19px;
   background: var(--line);
 }
@@ -992,7 +993,7 @@ input:focus-visible {
   justify-content: space-between;
   gap: 16px;
   padding: 0 clamp(22px, 4vw, 59px);
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--divider-width) solid var(--line);
 }
 
 .topbar-title-block {
@@ -1671,7 +1672,7 @@ input:focus-visible {
   right: 0;
   bottom: 0;
   left: 0;
-  height: 0.8px;
+  height: var(--divider-width);
   pointer-events: none;
   background: var(--line);
 }
@@ -1709,7 +1710,7 @@ input:focus-visible {
 
 .track-row {
   min-height: var(--paged-row-height, 50px);
-  border-bottom: 1px solid rgba(var(--text-rgb), 0.055);
+  border-bottom: var(--divider-width) solid rgba(var(--text-rgb), 0.055);
   color: var(--text);
   font-size: var(--font-body);
   transition: background 120ms ease;
@@ -2786,7 +2787,7 @@ input:focus-visible {
   gap: 10px;
   align-items: center;
   padding: 8px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-bottom: var(--divider-width) solid color-mix(in srgb, var(--text) 18%, transparent);
 }
 
 .shortcut-row:last-child {
@@ -3178,7 +3179,7 @@ input:focus-visible {
 
 .configured-sources-heading {
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--divider-width) solid var(--line);
 }
 
 .configured-source {
@@ -3188,7 +3189,7 @@ input:focus-visible {
   justify-content: space-between;
   gap: 12px;
   padding: 11px 0;
-  border-bottom: 1px solid rgba(var(--text-rgb), 0.055);
+  border-bottom: var(--divider-width) solid rgba(var(--text-rgb), 0.055);
 }
 
 .configured-source:last-child {
@@ -3306,7 +3307,7 @@ input:focus-visible {
   gap: 12px;
   margin-top: 22px;
   padding-top: 18px;
-  border-top: 1px solid var(--line);
+  border-top: var(--divider-width) solid var(--line);
 }
 
 .now-playing-appearance-settings > .settings-panel-header {
@@ -4119,7 +4120,7 @@ input:focus-visible {
 
 .playlist-entry-head {
   min-height: 37px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--divider-width) solid var(--line);
   color: var(--text-soft);
   background: rgba(var(--text-rgb), 0.017);
   font-family: Consolas, monospace;
@@ -4128,7 +4129,7 @@ input:focus-visible {
 
 .playlist-entry-row:not(.track-row) {
   min-height: var(--paged-row-height, 50px);
-  border-bottom: 1px solid rgba(var(--text-rgb), 0.055);
+  border-bottom: var(--divider-width) solid rgba(var(--text-rgb), 0.055);
 }
 
 .playlist-entry-row:last-child {
@@ -4267,7 +4268,7 @@ input:focus-visible {
     justify-content: space-between;
     padding: 0 13px;
     border-right: 0;
-    border-bottom: 1px solid var(--line);
+    border-bottom: var(--divider-width) solid var(--line);
   }
 
   .brand-lockup { margin: 0; }
