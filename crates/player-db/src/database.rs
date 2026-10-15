@@ -1997,9 +1997,19 @@ impl Database {
             ),
             _ => return Err(DatabaseError::CorruptData("invalid index sort field".to_owned())),
         };
-        if kind == "artist" {
+        // The unmarked entry is a synthetic "未知" title, so sorting it by its
+        // display text lets its locale collation split the natural-language
+        // groups. Treat it as a dedicated text-sort category instead: last in
+        // ascending order and first in descending order. Metric sorts remain
+        // purely metric-based, so unmarked entries still participate normally.
+        if sort_field == "title"
+            && matches!(
+                kind,
+                "artist" | "album" | "artist-navigation" | "album-navigation"
+            )
+        {
             order_by = format!(
-                "CASE WHEN identity_key='artist:unmarked' THEN 1 ELSE 0 END ASC, {order_by}"
+                "CASE WHEN identity_key IN ('artist:unmarked', 'album:unmarked') THEN 1 ELSE 0 END {direction_sql}, {order_by}"
             );
         }
         let materialize_sql = format!(
@@ -6987,11 +6997,18 @@ mod tests {
                 .iter()
                 .map(|entry| entry.key.as_str())
                 .collect::<Vec<_>>(),
-            vec!["album:unmarked", "album:未知"],
-            "equal displayed titles use the stable identity tie-breaker, not a fixed-last rule"
+            vec!["album:未知", "album:unmarked"],
+            "the named album remains in its locale group; the unmarked album is the final unknown category"
         );
-        assert_eq!(snapshot.quick_index.groups[0].label, "未知");
-        assert_eq!(snapshot.quick_index.groups[0].before_index, 0);
+        assert_eq!(
+            snapshot
+                .quick_index
+                .groups
+                .iter()
+                .map(|group| (group.label.as_str(), group.before_index))
+                .collect::<Vec<_>>(),
+            [("ㄨ", 0), ("未知", 1)]
+        );
 
         let tracks = db
             .list_album_tracks_page(&unknown.aliases, 0, 10)
@@ -7469,6 +7486,176 @@ mod tests {
             .expect("album without disc classification");
         assert!(facets.quick_index_ascending.groups.is_empty());
         assert!(facets.quick_index_descending.groups.is_empty());
+    }
+
+    #[test]
+    fn unmarked_album_and_artist_text_groups_follow_sort_direction() {
+        let mut db = Database::from_connection_with_collation(
+            Connection::open_in_memory().expect("connection"),
+            MusicCollationSpec::from_locale_parts("zh-TW", Some(CollationType::Zhuyin)),
+        )
+        .expect("Taiwanese locale database");
+        let root = add_root(
+            &db,
+            MediaSourceKind::WindowsFilesystem,
+            "unknown-text-groups",
+        );
+        let mut records = [
+            record(&root, "w1", "path:w1", "無謬の花", 1, 1_800_000_000_100),
+            record(&root, "w2", "path:w2", "文明EP", 1, 1_800_000_000_101),
+            record(
+                &root,
+                "unmarked",
+                "path:unmarked",
+                "Unmarked",
+                1,
+                1_800_000_000_102,
+            ),
+        ];
+        records[0].metadata.as_mut().expect("metadata").album = Some("無謬の花".to_owned());
+        records[0].metadata.as_mut().expect("metadata").artist = Some("無謬の花".to_owned());
+        records[1].metadata.as_mut().expect("metadata").album = Some("文明EP".to_owned());
+        records[1].metadata.as_mut().expect("metadata").artist = Some("文明EP".to_owned());
+        records[2].metadata.as_mut().expect("metadata").album = None;
+        records[2].metadata.as_mut().expect("metadata").artist = None;
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            1_800_000_000_200,
+        );
+
+        let album_ascending = db
+            .create_album_index_snapshot("title", "asc", true)
+            .expect("ascending album snapshot");
+        let albums: player_core::Page<AlbumIndexEntry> = db
+            .get_index_snapshot_page(&album_ascending.snapshot_id, 0, 20)
+            .expect("ascending albums");
+        assert_eq!(
+            albums.items.last().map(|item| item.display_name.as_str()),
+            Some("未知")
+        );
+        assert_eq!(
+            album_ascending
+                .quick_index
+                .groups
+                .last()
+                .map(|group| group.before_index),
+            Some(albums.total_count - 1),
+            "ascending album quick index must put the unknown group after every locale group"
+        );
+        assert_eq!(
+            album_ascending
+                .quick_index
+                .groups
+                .iter()
+                .map(|group| (group.label.as_str(), group.before_index))
+                .collect::<Vec<_>>(),
+            [("ㄨ", 0), ("未知", 2)],
+            "unknown albums must not split one ICU Zhuyin category"
+        );
+        assert_eq!(
+            album_ascending
+                .quick_index
+                .groups
+                .last()
+                .map(|group| group.label.as_str()),
+            Some("未知")
+        );
+
+        let album_descending = db
+            .create_album_index_snapshot("title", "desc", true)
+            .expect("descending album snapshot");
+        let albums: player_core::Page<AlbumIndexEntry> = db
+            .get_index_snapshot_page(&album_descending.snapshot_id, 0, 20)
+            .expect("descending albums");
+        assert_eq!(
+            albums.items.first().map(|item| item.display_name.as_str()),
+            Some("未知")
+        );
+        assert_eq!(
+            album_descending
+                .quick_index
+                .groups
+                .first()
+                .map(|group| group.label.as_str()),
+            Some("未知")
+        );
+        assert_eq!(
+            album_descending
+                .quick_index
+                .groups
+                .first()
+                .map(|group| group.before_index),
+            Some(0)
+        );
+        assert_eq!(
+            album_descending
+                .quick_index
+                .groups
+                .iter()
+                .map(|group| (group.label.as_str(), group.before_index))
+                .collect::<Vec<_>>(),
+            [("未知", 0), ("ㄨ", 1)]
+        );
+
+        let artist_ascending = db
+            .create_artist_index_snapshot("title", "asc", true)
+            .expect("ascending artist snapshot");
+        let artists: player_core::Page<ArtistIndexEntry> = db
+            .get_index_snapshot_page(&artist_ascending.snapshot_id, 0, 20)
+            .expect("ascending artists");
+        assert_eq!(
+            artists.items.last().map(|item| item.display_name.as_str()),
+            Some("未知")
+        );
+        assert_eq!(
+            artist_ascending
+                .quick_index
+                .groups
+                .last()
+                .map(|group| group.label.as_str()),
+            Some("未知")
+        );
+        assert_eq!(
+            artist_ascending
+                .quick_index
+                .groups
+                .iter()
+                .map(|group| (group.label.as_str(), group.before_index))
+                .collect::<Vec<_>>(),
+            [("ㄨ", 0), ("未知", 2)]
+        );
+
+        let artist_descending = db
+            .create_artist_index_snapshot("title", "desc", true)
+            .expect("descending artist snapshot");
+        let artists: player_core::Page<ArtistIndexEntry> = db
+            .get_index_snapshot_page(&artist_descending.snapshot_id, 0, 20)
+            .expect("descending artists");
+        assert_eq!(
+            artists.items.first().map(|item| item.display_name.as_str()),
+            Some("未知")
+        );
+        assert_eq!(
+            artist_descending
+                .quick_index
+                .groups
+                .first()
+                .map(|group| group.label.as_str()),
+            Some("未知")
+        );
+        assert_eq!(
+            artist_descending
+                .quick_index
+                .groups
+                .iter()
+                .map(|group| (group.label.as_str(), group.before_index))
+                .collect::<Vec<_>>(),
+            [("未知", 0), ("ㄨ", 1)]
+        );
     }
 
     #[test]
