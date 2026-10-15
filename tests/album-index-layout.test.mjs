@@ -101,11 +101,13 @@ test('album card rows rematerialize cached page items when revision changes with
 test('album group and card rows share compact vertical spacing and global group colors', () => {
   assert.match(albumIndexSource, /physicalPixelsToCssPixels\(40, devicePixelRatio\)/);
   assert.match(albumIndexSource, /groupHeadingHeight = \$derived\(Math\.max\(30, rowHeightPx \* 0\.7\)\)/);
-  assert.match(albumIndexSource, /border-top:1px solid rgba\(var\(--text-rgb\),0\.055\)/);
+  assert.match(albumIndexSource, /background:linear-gradient\(to bottom,transparent 0,transparent var\(--divider-width\),var\(--list-group-row-background\) var\(--divider-width\)\)/);
   assert.match(albumIndexSource, /groupCardGap: verticalGap/);
   assert.match(albumIndexSource, /cardWidth \+ 52 \+ verticalGap/);
+  assert.match(albumIndexSource, /--album-vertical-gap:\$\{verticalGap\}px/);
+  assert.match(albumIndexSource, /padding:16px clamp\(18px,2vw,34px\) var\(--album-vertical-gap\)/);
   assert.match(albumIndexSource, /devicePixelRatio = window\.devicePixelRatio > 0 \? window\.devicePixelRatio : 1/);
-  assert.match(albumIndexSource, /background:var\(--list-group-row-background\)/);
-  assert.match(albumIndexSource, /\.album-index-group-row:hover \{ background:var\(--list-group-row-hover-background\); \}/);
+  assert.match(albumIndexSource, /var\(--list-group-row-background\) var\(--divider-width\)\)/);
+  assert.match(albumIndexSource, /\.album-index-group-row:hover \{ background:linear-gradient\(to bottom,transparent 0,transparent var\(--divider-width\),var\(--list-group-row-hover-background\) var\(--divider-width\)\); \}/);
   assert.match(albumIndexSource, /column-gap:\$\{gap\}px/);
 });
