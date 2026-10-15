@@ -1672,9 +1672,11 @@ input:focus-visible {
   right: 0;
   bottom: 0;
   left: 0;
-  height: var(--divider-width);
+  height: 0;
+  box-sizing: content-box;
   pointer-events: none;
-  background: var(--line);
+  border-bottom: var(--divider-width) solid var(--line);
+  background: none;
 }
 
 .configurable-track-grid {

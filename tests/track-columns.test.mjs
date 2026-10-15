@@ -58,8 +58,10 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
   assert.doesNotMatch(listHeader, /background\s*:/);
   assert.match(virtualHeaderLine, /bottom:\s*0/);
   assert.match(appCss, /--divider-width:\s*1px/);
-  assert.match(virtualHeaderLine, /height:\s*var\(--divider-width\)/);
-  assert.match(virtualHeaderLine, /background:\s*var\(--line\)/);
+  assert.match(virtualHeaderLine, /height:\s*0/);
+  assert.match(virtualHeaderLine, /box-sizing:\s*content-box/);
+  assert.match(virtualHeaderLine, /border-bottom:\s*var\(--divider-width\) solid var\(--line\)/);
+  assert.match(virtualHeaderLine, /background:\s*none/);
   assert.match(virtualList, /border-top:\s*var\(--divider-width\)/);
   assert.match(virtualList, /border-bottom:\s*var\(--divider-width\)/);
   assert.match(albumIndex, /border-top:\s*var\(--divider-width\)/);
