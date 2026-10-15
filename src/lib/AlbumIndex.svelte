@@ -408,6 +408,7 @@
   .album-grid-canvas { position:relative; min-width:0; }
   .album-index-group-row, .album-index-card-row { position:absolute; top:0; right:0; left:0; box-sizing:border-box; }
   .album-index-group-row { display:flex; align-items:center; }
+  .album-index-group-row.list-group-row-surface { border-bottom:0; }
   .album-index-group-button { display:flex; width:100%; height:100%; min-width:0; align-items:center; justify-content:center; box-sizing:border-box; padding:0; border:0; border-radius:0; color:var(--text); background:transparent; cursor:pointer; font:inherit; }
   .album-index-group-button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
   .album-index-card-row { display:grid; align-content:start; }
