@@ -3,9 +3,40 @@ import assert from 'node:assert/strict';
 import {
   getAlbumDetailNativeScrollTop,
   getAlbumDetailCoverSize,
+  getAlbumDetailListClipTop,
+  advanceAlbumDetailWheelScroll,
   mapAlbumDetailNativeScroll,
   mapAlbumDetailWheelDelta,
 } from '../src/lib/album-detail-collapse.js';
+
+test('album detail list clip follows the column header below the collapsing heading', () => {
+  assert.equal(getAlbumDetailListClipTop(184, 0, 37), 221);
+  assert.equal(getAlbumDetailListClipTop(184, 40, 37), 181);
+  assert.equal(getAlbumDetailListClipTop(184, 84, 37), 137);
+  assert.equal(getAlbumDetailListClipTop(20, 50, 37), 37);
+});
+
+test('album detail wheel input animates smoothly toward the accumulated target', () => {
+  const target = 80;
+  const firstFrame = advanceAlbumDetailWheelScroll(0, target, 16);
+  assert.ok(firstFrame > 0 && firstFrame < target);
+  let position = firstFrame;
+  for (let frame = 1; frame < 12; frame += 1) {
+    const next = advanceAlbumDetailWheelScroll(position, target, 16);
+    assert.ok(next > position && next < target);
+    position = next;
+  }
+  assert.ok(target - position < 1);
+  assert.equal(advanceAlbumDetailWheelScroll(position, target, 0), position);
+});
+
+test('album detail wheel animation follows target reversals without overshooting', () => {
+  const current = advanceAlbumDetailWheelScroll(20, 100, 16);
+  const reversed = advanceAlbumDetailWheelScroll(current, 0, 16);
+  assert.ok(reversed < current);
+  assert.ok(reversed > 0);
+  assert.equal(advanceAlbumDetailWheelScroll(0, Number.NaN, 16), 0);
+});
 
 test('album detail cover shrinks one CSS pixel per downward scroll pixel', () => {
   assert.equal(getAlbumDetailCoverSize(148, 0), 148);

@@ -47,7 +47,7 @@
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
   } from './queue-reorder.js';
-  import { mapAlbumDetailNativeScroll, mapAlbumDetailWheelDelta } from './album-detail-collapse.js';
+  import { advanceAlbumDetailWheelScroll, getAlbumDetailListClipTop, mapAlbumDetailNativeScroll, mapAlbumDetailWheelDelta } from './album-detail-collapse.js';
 
   interface Props<Item> {
     totalCount: number | null;
@@ -184,6 +184,9 @@
   let hasPreviousGroupSnapshot = false;
   let lastNativeScrollTop = 0;
   let handlingMappedScroll = false;
+  let wheelAnimationFrame: number | null = null;
+  let wheelTargetNativeScrollTop: number | null = null;
+  let lastWheelAnimationTime = 0;
 
   const virtualDataCount = $derived(totalCount ?? 40);
   const renderGroupRows = $derived(groupingReady ? groupRows : []);
@@ -237,6 +240,7 @@
 
   function setLogicalScrollTop(logicalTop: number, collapseOffset = leadingCollapseOffset): void {
     if (!viewport) return;
+    cancelWheelScrollAnimation();
     const nativeMaximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
     const next = Math.max(0, Math.min(nativeMaximum - (hasLeadingOverlay ? collapseOffset : 0), logicalTop));
     const nativeTop = nativeScrollTopFor(next, collapseOffset);
@@ -300,6 +304,32 @@
     setLogicalScrollTop(nextLogical, nextCollapse);
   }
 
+  function cancelWheelScrollAnimation(): void {
+    if (wheelAnimationFrame !== null) cancelAnimationFrame(wheelAnimationFrame);
+    wheelAnimationFrame = null;
+    wheelTargetNativeScrollTop = null;
+    lastWheelAnimationTime = 0;
+  }
+
+  function animateWheelScroll(now: number): void {
+    wheelAnimationFrame = null;
+    if (!viewport || wheelTargetNativeScrollTop === null) return;
+    const maximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    const target = Math.max(0, Math.min(maximum, wheelTargetNativeScrollTop));
+    wheelTargetNativeScrollTop = target;
+    const current = viewport.scrollTop;
+    const elapsed = lastWheelAnimationTime === 0 ? 16 : now - lastWheelAnimationTime;
+    lastWheelAnimationTime = now;
+    const next = advanceAlbumDetailWheelScroll(current, target, elapsed);
+    if (next === target || Math.abs(target - next) <= 0.25) {
+      viewport.scrollTop = target;
+      cancelWheelScrollAnimation();
+      return;
+    }
+    viewport.scrollTop = next;
+    wheelAnimationFrame = requestAnimationFrame(animateWheelScroll);
+  }
+
   function getVisibleRowsRect(): DOMRect | null {
     if (!viewport) return null;
     const rect = viewport.getBoundingClientRect();
@@ -315,7 +345,13 @@
       : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
         ? event.deltaY * getVisibleRowsHeight()
         : event.deltaY;
-    moveLogicalBy(delta);
+    const maximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    const currentTarget = wheelTargetNativeScrollTop ?? viewport.scrollTop;
+    wheelTargetNativeScrollTop = Math.max(0, Math.min(maximum, currentTarget + delta));
+    if (wheelAnimationFrame === null) {
+      lastWheelAnimationTime = 0;
+      wheelAnimationFrame = requestAnimationFrame(animateWheelScroll);
+    }
   }
 
   $effect(() => {
@@ -464,6 +500,7 @@
   });
 
   onMount(() => {
+    const stopWheelAnimation = () => cancelWheelScrollAnimation();
     const updateMetrics = () => {
       const narrow = window.matchMedia('(max-width: 620px)').matches;
       const shortDesktop = window.matchMedia('(max-height: 680px) and (min-width: 621px)').matches;
@@ -502,15 +539,21 @@
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateMetrics);
     if (observer && frame) observer.observe(frame);
     if (observer && viewport) observer.observe(viewport);
+    viewport?.addEventListener('pointerdown', stopWheelAnimation);
+    viewport?.addEventListener('keydown', stopWheelAnimation);
     return () => {
       window.removeEventListener('resize', updateMetrics);
       observer?.disconnect();
+      viewport?.removeEventListener('pointerdown', stopWheelAnimation);
+      viewport?.removeEventListener('keydown', stopWheelAnimation);
+      cancelWheelScrollAnimation();
       endDragState();
       recalculateMetrics = () => {};
     };
   });
 
   onDestroy(() => {
+    cancelWheelScrollAnimation();
     const finalScrollTop = viewport?.clientHeight ? logicalScrollTopFromNative(viewport.scrollTop) : lastVisibleScrollTop;
     rememberVisibleScrollPosition(finalScrollTop);
   });
@@ -846,7 +889,7 @@
     aria-activedescendant={activeDescendantId}
     aria-busy={pending || totalCount === null}
     tabindex="0"
-    style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
+    style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px;--paged-list-clip-top:${getAlbumDetailListClipTop(leadingOverlayHeight, leadingCollapseOffset, headerHeight)}px`}
     class:is-reordering={dragFromIndex !== null}
     onscroll={handleViewportScroll}
     onwheel={hasLeadingOverlay ? handleViewportWheel : undefined}
@@ -1003,6 +1046,7 @@
     max-height: none;
     overflow: auto;
     flex: none;
+    clip-path: inset(var(--paged-list-clip-top, 0px) 0 0);
   }
 
   .paged-virtual-frame.leading-overlay .paged-virtual-header {

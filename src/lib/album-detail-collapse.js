@@ -1,4 +1,17 @@
 export const MIN_ALBUM_DETAIL_COVER_SIZE_PX = 64;
+const WHEEL_SCROLL_TIME_CONSTANT_MS = 40;
+
+/** Ease wheel input toward its target without changing the scroll-distance mapping. */
+/** @param {number} current @param {number} target @param {number} elapsedMs @returns {number} */
+export function advanceAlbumDetailWheelScroll(current, target, elapsedMs) {
+  const position = Number.isFinite(current) ? current : 0;
+  const destination = Number.isFinite(target) ? target : position;
+  const remaining = destination - position;
+  if (Math.abs(remaining) <= 0.25) return destination;
+  const elapsed = Number.isFinite(elapsedMs) ? Math.max(0, Math.min(64, elapsedMs)) : 0;
+  const progress = 1 - Math.exp(-elapsed / WHEEL_SCROLL_TIME_CONSTANT_MS);
+  return position + remaining * progress;
+}
 
 /** The maximum amount of the fixed album heading that can be uncovered. */
 /** @param {number} baseSize @returns {number} */
@@ -13,6 +26,15 @@ export function getAlbumDetailCoverSize(baseSize, scrollPeak) {
   const base = Number.isFinite(baseSize) ? Math.max(MIN_ALBUM_DETAIL_COVER_SIZE_PX, baseSize) : 148;
   const peak = Number.isFinite(scrollPeak) ? Math.max(0, scrollPeak) : 0;
   return Math.max(MIN_ALBUM_DETAIL_COVER_SIZE_PX, base - peak);
+}
+
+/** Keep list rows clipped below the moving album heading and column header. */
+/** @param {number} headingHeight @param {number} collapseOffset @param {number} headerHeight @returns {number} */
+export function getAlbumDetailListClipTop(headingHeight, collapseOffset, headerHeight) {
+  const heading = Number.isFinite(headingHeight) ? Math.max(0, headingHeight) : 0;
+  const collapse = Number.isFinite(collapseOffset) ? Math.max(0, collapseOffset) : 0;
+  const header = Number.isFinite(headerHeight) ? Math.max(0, headerHeight) : 0;
+  return Math.max(0, heading - collapse) + header;
 }
 
 /**
