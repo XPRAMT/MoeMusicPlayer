@@ -12,7 +12,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 ## 目前工作狀態
 
-正在實作專輯詳情頁封面隨歌曲列表捲動收合：向下捲動每 1 CSS px 縮小 1 CSS px，最小 64 px；往上捲時維持已收合尺寸，列表回到頂端才展開。前端變更在 `AlbumDetail.svelte`、`TrackList.svelte`、`PagedVirtualList.svelte` 與 `album-detail-collapse.js`。收合 helper 的 4 個單元測試、列表／分頁相關 20 個 Node 測試、`npm run check`（0 errors／warnings）及 `cargo fmt --all -- --check` 均通過。全套 Node 測試 265/267；另有兩個未在本變更範圍內的既有 UI 斷言失敗（專輯分組列樣式、底欄封面導覽），尚未處理。此功能仍待正式 Release 執行檔 WebView2 驗收。
+專輯詳情封面收合已完成並包含於固定 Windows Release。正式 `release/moemusicplayer.exe` 的 WebView2 CDP 驗收確認窄版封面由 116 px 隨下捲 20 px 變為 96 px、上捲保持 96 px、深捲縮至 64 px、回到頂端恢復 116 px；右側統計仍保持在標題區。正常模式重新啟動後確認診斷埠已關閉。專屬 4 個單元測試、列表／分頁 20 個 Node 測試、`npm run check`（0 errors／warnings）及 `cargo fmt --all -- --check` 通過。全套 Node 測試仍有 2 項失敗：`album group and card rows share compact vertical spacing and global group colors`、`the footer artwork opens and closes a full-window Now Playing overlay`；未在本次範圍內，後續觸及相關 UI 時再修。
 
 ## 重要資料與架構邊界
 
