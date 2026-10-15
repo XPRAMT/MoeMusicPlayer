@@ -4727,7 +4727,8 @@ input:focus-visible {
   position: absolute;
   z-index: 40;
   top: calc(100% + 8px);
-  right: 0;
+  left: 50%;
+  transform: translateX(calc(-50% + var(--sleep-timer-popover-shift-x, 0px)));
   display: grid;
   width: max-content;
   max-width: min(260px, calc(100vw - 24px));

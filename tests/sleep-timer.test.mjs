@@ -59,3 +59,14 @@ test('sleep timer button sits immediately left of the lyrics controls and the de
   assert.match(rust, /crate::playback_pause\(/, 'expiry pauses (not stops) playback');
   assert.match(rust, /SystemTime::now\(\)/, 'deadline uses the wall clock');
 });
+
+test('sleep timer popover reuses the shared centered/clamped popover positioning', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8');
+  assert.match(app, /sleepTimerPopoverShiftX = getPopoverHorizontalShiftPx\(/);
+  const rule = css.match(/\.sleep-timer-popover \{[^}]*\}/)[0];
+  assert.match(rule, /left: 50%;/);
+  assert.match(rule, /translateX\(calc\(-50% \+ var\(--sleep-timer-popover-shift-x, 0px\)\)\)/);
+  assert.doesNotMatch(rule, /right: 0/);
+});

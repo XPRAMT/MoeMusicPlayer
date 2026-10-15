@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, setContext, tick, untrack } from 'svelte';
   import { writable } from 'svelte/store';
-  import { getVolumePopoverLeftShiftPx } from './lib/volume-popover-position.js';
+  import { getPopoverHorizontalShiftPx, getVolumePopoverLeftShiftPx } from './lib/volume-popover-position.js';
   import {
     IconAlertCircle,
     IconArrowLeft,
@@ -222,6 +222,8 @@
   let sleepTimerNow = $state(Date.now());
   let isSleepTimerOpen = $state(false);
   let sleepTimerAnchor = $state<HTMLDivElement | null>(null);
+  let sleepTimerPopover = $state<HTMLDivElement | null>(null);
+  let sleepTimerPopoverShiftX = $state(0);
   let sleepTimerToggle = $state<HTMLButtonElement | null>(null);
   let sleepTimerDrag: { pointerId: number; lastY: number; carry: number } | null = null;
   let sleepTimerWheelCarry = 0;
@@ -277,6 +279,27 @@
     if (next === sleepTimerMinutes && sleepTimerActive === next > 0) return;
     void setSleepTimerMinutes(next);
   }
+
+  // Same positioning as the volume and favorite popovers: centered on the button, shifted only as
+  // far as needed to keep the shared 8px window inset (getPopoverHorizontalShiftPx).
+  $effect(() => {
+    if (!isSleepTimerOpen) {
+      sleepTimerPopoverShiftX = 0;
+      return;
+    }
+    let active = true;
+    const updateAlignment = (): void => {
+      if (!active || !sleepTimerAnchor || !sleepTimerPopover) return;
+      const anchor = sleepTimerAnchor.getBoundingClientRect();
+      sleepTimerPopoverShiftX = getPopoverHorizontalShiftPx(anchor.left + anchor.width / 2, sleepTimerPopover.getBoundingClientRect().width, window.innerWidth);
+    };
+    window.addEventListener('resize', updateAlignment);
+    void tick().then(updateAlignment);
+    return () => {
+      active = false;
+      window.removeEventListener('resize', updateAlignment);
+    };
+  });
 
   function toggleSleepTimerPopover(): void {
     isSleepTimerOpen = !isSleepTimerOpen;
@@ -4231,7 +4254,7 @@
               <IconAlarm size={18} stroke={1.7} aria-hidden="true" />
             </button>
             {#if isSleepTimerOpen}
-              <div class="sleep-timer-popover floating-surface" role="dialog" aria-label="睡眠定時">
+              <div bind:this={sleepTimerPopover} class="sleep-timer-popover floating-surface" style:--sleep-timer-popover-shift-x={`${sleepTimerPopoverShiftX}px`} role="dialog" aria-label="睡眠定時">
                 <div
                   class="sleep-timer-value"
                   class:is-active={sleepTimerActive}
