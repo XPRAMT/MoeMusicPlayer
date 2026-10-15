@@ -21,21 +21,14 @@ pub(crate) fn set_playlist_membership(
         if already_present {
             return false;
         }
-        let key = locator_sort_key(&locator);
-        let insertion = playlist
-            .entries
-            .iter()
-            .enumerate()
-            .filter_map(|(position, entry)| {
-                let existing_key = locator_sort_key(&entry.locator);
-                (natural_title_cmp(&existing_key, &key) != Ordering::Greater)
-                    .then_some((position, existing_key))
-            })
-            .max_by(|(left_position, left_key), (right_position, right_key)| {
-                natural_title_cmp(left_key, right_key)
-                    .then_with(|| left_position.cmp(right_position))
-            })
-            .map_or(0, |(position, _)| position + 1);
+        let insertion = match &locator {
+            MediaLocator::FileSystem(path) => {
+                filesystem_insertion_position(&playlist.entries, path)
+            }
+            // Keep the existing Android/content-URI behavior unchanged. Content URIs do not
+            // consistently expose a filesystem parent path.
+            MediaLocator::ContentUri(_) => locator_insertion_position(&playlist.entries, &locator),
+        };
         playlist.entries.insert(
             insertion,
             PlaylistEntry {
@@ -60,6 +53,78 @@ fn locator_sort_key(locator: &MediaLocator) -> String {
         MediaLocator::FileSystem(path) => windows_path_sort_key(path),
         MediaLocator::ContentUri(uri) => uri.clone(),
     }
+}
+
+fn locator_insertion_position(entries: &[PlaylistEntry], locator: &MediaLocator) -> usize {
+    let key = locator_sort_key(locator);
+    entries
+        .iter()
+        .enumerate()
+        .filter_map(|(position, entry)| {
+            let existing_key = locator_sort_key(&entry.locator);
+            (natural_title_cmp(&existing_key, &key) != Ordering::Greater)
+                .then_some((position, existing_key))
+        })
+        .max_by(|(left_position, left_key), (right_position, right_key)| {
+            natural_title_cmp(left_key, right_key).then_with(|| left_position.cmp(right_position))
+        })
+        .map_or(0, |(position, _)| position + 1)
+}
+
+fn filesystem_insertion_position(entries: &[PlaylistEntry], path: &std::path::Path) -> usize {
+    let Some(mut directory) = filesystem_parent_sort_key(path) else {
+        return entries.len();
+    };
+
+    loop {
+        if let Some(position) = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(position, entry)| {
+                let MediaLocator::FileSystem(existing_path) = &entry.locator else {
+                    return None;
+                };
+                let existing_directory = filesystem_parent_sort_key(existing_path)?;
+                (natural_title_cmp(&existing_directory, &directory) == Ordering::Equal)
+                    .then_some(position)
+            })
+            .next_back()
+        {
+            return position + 1;
+        }
+
+        let Some(parent) = parent_directory_sort_key(&directory) else {
+            return entries.len();
+        };
+        directory = parent;
+    }
+}
+
+fn filesystem_parent_sort_key(path: &std::path::Path) -> Option<String> {
+    let path = windows_path_sort_key(path);
+    parent_path_key(&path)
+}
+
+fn parent_directory_sort_key(path: &str) -> Option<String> {
+    parent_path_key(path)
+}
+
+fn parent_path_key(path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    let separator = path.rfind('/')?;
+
+    // Preserve a drive root as `D:/` instead of reducing it to `D:`.
+    if separator == 2
+        && path.as_bytes().get(1) == Some(&b':')
+        && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+    {
+        return Some(path[..=separator].to_owned());
+    }
+    // Preserve the POSIX root when the parent is `/`.
+    if separator == 0 {
+        return Some("/".to_owned());
+    }
+    Some(path[..separator].to_owned())
 }
 
 fn windows_path_sort_key(path: &std::path::Path) -> String {
@@ -99,14 +164,14 @@ mod tests {
     }
 
     #[test]
-    fn favorite_add_uses_natural_path_order_and_keeps_existing_relative_order() {
+    fn favorite_add_uses_parent_folder_and_keeps_existing_relative_order() {
         let first = TrackId::new();
         let second = TrackId::new();
         let third = TrackId::new();
         let inserted = TrackId::new();
         let mut playlist = Playlist::new("Mix");
-        // The original playlist is deliberately not globally sorted; its existing sequence must
-        // remain [first, second, third] after placing the new path before the first later path.
+        // Filename ordering is ignored within one folder, so the new entry follows that folder's
+        // last existing entry even when filenames would sort in the middle.
         playlist.entries = vec![
             entry("song 1.flac", first),
             entry("song 10.flac", second),
@@ -126,7 +191,124 @@ mod tests {
                 .iter()
                 .map(|item| item.track_id)
                 .collect::<Vec<_>>(),
-            vec![Some(first), Some(inserted), Some(second), Some(third)]
+            vec![Some(first), Some(second), Some(third), Some(inserted)]
+        );
+    }
+
+    #[test]
+    fn favorite_add_inserts_after_the_last_entry_from_the_same_folder() {
+        let first = TrackId::new();
+        let other_folder = TrackId::new();
+        let last_same_folder = TrackId::new();
+        let inserted = TrackId::new();
+        let mut playlist = Playlist::new("Mix");
+        playlist.entries = vec![
+            PlaylistEntry {
+                track_id: Some(first),
+                locator: MediaLocator::FileSystem(PathBuf::from("D:/Music/A/one.flac")),
+                title: None,
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: Some(other_folder),
+                locator: MediaLocator::FileSystem(PathBuf::from("D:/Music/B/one.flac")),
+                title: None,
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: Some(last_same_folder),
+                locator: MediaLocator::FileSystem(PathBuf::from("D:/Music/A/two.flac")),
+                title: None,
+                duration_ms: None,
+            },
+        ];
+
+        set_playlist_membership(
+            &mut playlist,
+            inserted,
+            MediaLocator::FileSystem(PathBuf::from("D:/Music/A/0.flac")),
+            true,
+        );
+
+        assert_eq!(
+            playlist
+                .entries
+                .iter()
+                .map(|entry| entry.track_id)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(first),
+                Some(other_folder),
+                Some(last_same_folder),
+                Some(inserted)
+            ]
+        );
+    }
+
+    #[test]
+    fn favorite_add_falls_back_to_the_nearest_ancestor_folder() {
+        let ancestor_entry = TrackId::new();
+        let other_entry = TrackId::new();
+        let inserted = TrackId::new();
+        let mut playlist = Playlist::new("Mix");
+        playlist.entries = vec![
+            PlaylistEntry {
+                track_id: Some(ancestor_entry),
+                locator: MediaLocator::FileSystem(PathBuf::from("D:/Music/root.flac")),
+                title: None,
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: Some(other_entry),
+                locator: MediaLocator::FileSystem(PathBuf::from("D:/Other/track.flac")),
+                title: None,
+                duration_ms: None,
+            },
+        ];
+
+        set_playlist_membership(
+            &mut playlist,
+            inserted,
+            MediaLocator::FileSystem(PathBuf::from("D:/Music/Artist/Album/new.flac")),
+            true,
+        );
+
+        assert_eq!(
+            playlist
+                .entries
+                .iter()
+                .map(|entry| entry.track_id)
+                .collect::<Vec<_>>(),
+            vec![Some(ancestor_entry), Some(inserted), Some(other_entry)]
+        );
+    }
+
+    #[test]
+    fn favorite_add_appends_when_no_folder_or_ancestor_is_present() {
+        let existing = TrackId::new();
+        let inserted = TrackId::new();
+        let mut playlist = Playlist::new("Mix");
+        playlist.entries.push(PlaylistEntry {
+            track_id: Some(existing),
+            locator: MediaLocator::FileSystem(PathBuf::from("E:/Archive/track.flac")),
+            title: None,
+            duration_ms: None,
+        });
+
+        set_playlist_membership(
+            &mut playlist,
+            inserted,
+            MediaLocator::FileSystem(PathBuf::from("D:/Music/new.flac")),
+            true,
+        );
+
+        assert_eq!(
+            playlist
+                .entries
+                .iter()
+                .map(|entry| entry.track_id)
+                .collect::<Vec<_>>(),
+            vec![Some(existing), Some(inserted)]
         );
     }
 
@@ -168,15 +350,17 @@ mod tests {
                 MediaLocator::ContentUri(_) => panic!("expected filesystem path"),
             })
             .collect::<Vec<_>>();
-        assert_eq!(actual_paths[0], old_paths[0]);
-        assert_eq!(actual_paths[1], old_paths[1]);
-        assert_eq!(actual_paths[2], old_paths[2]);
         assert_eq!(
-            actual_paths[3],
-            r"D:\Music\Hi-Res\[Hi-Res][hanser]\hanser - M87黑洞.flac"
+            actual_paths,
+            vec![
+                old_paths[0].to_owned(),
+                old_paths[1].to_owned(),
+                old_paths[2].to_owned(),
+                old_paths[3].to_owned(),
+                r"D:\Music\Hi-Res\[Hi-Res][hanser]\hanser - M87黑洞.flac".to_owned(),
+                old_paths[4].to_owned(),
+            ]
         );
-        assert_eq!(actual_paths[4], old_paths[3]);
-        assert_eq!(actual_paths[5], old_paths[4]);
     }
 
     #[test]
@@ -199,6 +383,44 @@ mod tests {
                 .entries
                 .iter()
                 .map(|item| item.track_id)
+                .collect::<Vec<_>>(),
+            vec![Some(first), Some(second), Some(inserted)]
+        );
+    }
+
+    #[test]
+    fn content_uri_favorites_keep_the_existing_uri_sorting() {
+        let first = TrackId::new();
+        let second = TrackId::new();
+        let inserted = TrackId::new();
+        let mut playlist = Playlist::new("Android");
+        playlist.entries = vec![
+            PlaylistEntry {
+                track_id: Some(first),
+                locator: MediaLocator::ContentUri("content://media/audio/1".to_owned()),
+                title: None,
+                duration_ms: None,
+            },
+            PlaylistEntry {
+                track_id: Some(second),
+                locator: MediaLocator::ContentUri("content://media/audio/10".to_owned()),
+                title: None,
+                duration_ms: None,
+            },
+        ];
+
+        set_playlist_membership(
+            &mut playlist,
+            inserted,
+            MediaLocator::ContentUri("content://media/audio/2".to_owned()),
+            true,
+        );
+
+        assert_eq!(
+            playlist
+                .entries
+                .iter()
+                .map(|entry| entry.track_id)
                 .collect::<Vec<_>>(),
             vec![Some(first), Some(inserted), Some(second)]
         );
