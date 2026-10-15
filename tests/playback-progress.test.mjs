@@ -80,8 +80,8 @@ test('progress slider publishes playhead percent for the edge glow gradient', ()
   assert.match(progressSource, /const progressPercent = \$derived\(/);
   assert.match(progressSource, /class="progress-hit" style=\{`--progress-pct: \$\{progressPercent\}%`\}/);
   assert.match(css, /\.progress-hit::after/);
-  assert.match(css, /--dock-progress-hit:\s*10px/);
-  assert.match(css, /--dock-progress-track:\s*3px/);
+  assert.match(css, /--dock-edge-progress-hit:\s*10px/);
+  assert.match(css, /--dock-edge-progress-track:\s*3px/);
   assert.match(css, /margin-top:\s*calc\(-0\.5 \* var\(--dock-progress-hit\) - 0\.5 \* var\(--dock-progress-track\)\)/);
   assert.match(css, /\.progress-hit::after[\s\S]*?transform:\s*translateY\(-50%\)/);
 });

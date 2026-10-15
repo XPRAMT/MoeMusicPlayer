@@ -18,7 +18,11 @@ test('floating panels share Quick Settings surface tokens', async () => {
   assert.match(css, /box-shadow: var\(--floating-surface-shadow\)/);
   // Narrow-layout navigation panel reuses the shared floating surface.
   assert.match(app, /class:floating-surface=\{isNarrowNav\}/);
-  assert.match(css, /\.app-shell \.sidebar\.floating-surface \{[^}]*position: fixed;[^}]*top: calc\(var\(--window-titlebar-height\) \+ var\(--android-safe-top, 0px\)\);[^}]*bottom: calc\(var\(--dock-height\) \+ var\(--android-safe-bottom, 0px\)\);[^}]*left: 0;[^}]*border-radius: 0 var\(--floating-surface-radius\) var\(--floating-surface-radius\) 0;/s);
+  assert.match(css, /\.app-shell \.sidebar\.floating-surface \{[^}]*position: fixed;[^}]*top: calc\(var\(--window-titlebar-height\) \+ var\(--android-safe-top, 0px\)\);[^}]*bottom: calc\(var\(--dock-height\) \+ var\(--android-safe-bottom, 0px\) \+ var\(--nav-panel-dock-overhang\)\);[^}]*left: 0;[^}]*border-radius: 0;/s);
+  // Edge timeline overhang is derived from the shared progress tokens, not a literal.
+  assert.match(css, /\.app-shell:has\(\.player-dock\[data-timeline-style="edge"\]\) \.sidebar\.floating-surface \{\s*--nav-panel-dock-overhang: calc\(0\.5 \* var\(--dock-edge-progress-hit\) \+ 0\.5 \* var\(--dock-edge-progress-track\)\);/);
+  assert.match(css, /margin-top: calc\(-0\.5 \* var\(--dock-progress-hit\) - 0\.5 \* var\(--dock-progress-track\)\);/);
+  assert.match(css, /--dock-progress-hit: var\(--dock-edge-progress-hit\);/);
 
   assert.match(app, /class="now-playing-quick-settings-drawer floating-surface"/);
   assert.match(app, /class="volume-popover floating-surface"/);
