@@ -177,6 +177,10 @@
     void loadSnapshot();
   }
 
+  function retryPage(offset: number): void {
+    void listData.retry(offset);
+  }
+
   $effect(() => {
     const range = visibleDataRange;
     if (pageSnapshot.scope !== null && range && range.end > range.start) {
@@ -321,6 +325,15 @@
       </div>
     </div>
   {/if}
+  {#if pageSnapshot.errors.length > 0}
+    {@const pageError = pageSnapshot.errors[0]}
+    <div class="album-index-page-error" role="alert">
+      <span>專輯卡片載入失敗：{getErrorText(pageError?.message)}</span>
+      {#if pageError}
+        <button class="text-button" type="button" onclick={() => retryPage(pageError.offset)}>重試</button>
+      {/if}
+    </div>
+  {/if}
   {#if error}
     <div class="album-index-message" role="alert"><span>無法載入專輯：{error}</span><button class="text-button" type="button" onclick={() => void load()}>重試</button></div>
   {:else if totalCount === 0 && loading}
@@ -387,5 +400,6 @@
   .album-quick-index-label:focus-visible { outline:2px solid var(--line); outline-offset:0; }
   .album-quick-index-label.unavailable { color:var(--muted); opacity:0.45; cursor:default; }
   .album-index-message { display:flex; min-height:160px; flex:1; align-items:center; justify-content:center; gap:12px; color:var(--muted); font-size:var(--font-body); }
+  .album-index-page-error { display:flex; flex:0 0 auto; align-items:center; justify-content:center; gap:12px; padding:8px 16px; color:var(--danger,var(--text)); font-size:var(--font-caption); }
   @media (max-width:620px) { .album-index-sort-header { padding-right:14px; padding-left:14px; } .album-grid-viewport { padding-right:14px; padding-left:14px; } }
 </style>
