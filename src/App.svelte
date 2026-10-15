@@ -754,10 +754,6 @@
         '--track-header-text-optical-offset',
         `${-3.25 / devicePixelRatio}px`,
       );
-      document.documentElement.style.setProperty(
-        '--track-header-line-height',
-        `${2 / devicePixelRatio}px`,
-      );
     };
     const applyAndroidInsets = (value?: AndroidWindowInsets): void => {
       let insets = value;
