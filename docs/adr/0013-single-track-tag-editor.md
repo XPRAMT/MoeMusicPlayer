@@ -129,6 +129,14 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - lofty 驗證（樣本複本）：MP3（含 v2.3→v2.4 升級）、FLAC、M4A、Opus、WAV（寫 ID3v2 chunk）皆可往返；ID3v2 不接受 `ItemKey::Lyrics`，改寫 USLT（`UnsyncLyrics`）。該 Ogg Vorbis 樣本 lofty 讀取失敗（與既有掃描一致），未處理。
 - 偏離／暫定：封面設定（JPG 品質、自動縮放短邊）暫存於前端 localStorage（每裝置），尚未進 `settings.json`；儲存後以既有增量 `library_sync` 更新曲庫投影（會走訪來源目錄，尚非單曲投影更新）；JPEG 且不需縮放時原樣寫入以免重壓縮，其他格式一律轉 JPEG。Android 標籤讀寫與頻譜圖尚未接上（`track_path` 只支援 Windows 檔案路徑），Android 全螢幕頻譜頁的 UI 已就緒。
 
+## Android 後端（2026-10-16）
+
+- 曲庫曲目在 Android 是 `content://`（MediaStore 或 SAF 文件），不直接當檔案路徑用。讀取、封面、頻譜都先複製成 app cache 的私有工作檔（副檔名取自顯示名稱，沒有時看 MIME），再沿用桌面同一套 lofty／symphonia 程式。
+- 存檔：工作檔上照桌面語意寫入（同目錄暫存→寫入→重讀驗證→rename），另留一份原檔還原點；再經 ContentResolver 寫回：先用 "rw" 開啟，拿到描述元之後才寫入，最後 truncate 到新長度，所以權限失敗時原檔不會被截斷。寫回後重新讀出並逐位元組比對，寫回或驗證失敗就推回原檔。無法做到真正的原子 rename，這是 Android 文件存取的限制。
+- 權限：MediaStore 項目在 Android 11+ 以 `MediaStore.createWriteRequest` 請使用者同意，Android 10 用 `RecoverableSecurityException` 的授權畫面；使用者拒絕，或 SAF 資料夾只授權讀取，就回報需要重新授權（可寫入）。
+- 封面選擇、頻譜圖「開啟 A／B」用系統文件選擇器（ACTION_OPEN_DOCUMENT），封面匯出用 ACTION_CREATE_DOCUMENT；Android 沒有拖放，也不提供「在資料夾中顯示」。
+- 頻譜圖在 Android 是全螢幕頁。單檔上限 512 MiB（快取租約上限）。
+
 ## 風險
 
 - 寫入損壞音訊檔：以暫存檔＋原子取代＋重讀驗證緩解；仍須用各格式樣本做回歸測試。
