@@ -68,6 +68,14 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - 快取：UserData `spectrogram-cache/<路徑+大小+mtime 雜湊>.png`，有大小上限 LRU。
 - 截止頻率估計：找高頻能量持續低於門檻的頻帶，顯示「約 16 kHz 截止，可能源自有損編碼」作參考。
 
+### 歌詞「導入」按鈕（Phase 1）
+
+- 歌詞欄位旁有「導入」按鈕：按下後以本曲**目前使用中的線上歌詞**取代歌詞欄位內容。
+- 只是暫存編輯：算作未儲存變更（欄位標示已修改），儲存前可還原；按「儲存」才依 D7 寫入內嵌歌詞，不產生 `.lrc`。
+- 本曲沒有使用線上歌詞時，按鈕停用（灰掉並以提示說明原因）。
+- 現有程式中線上歌詞的存放方式：SQLite `player-db` 的 `track_lyrics` 表（`database.rs` 的 `get_track_lyrics`／`save_automatic_track_lyrics`／`save_manual_track_lyrics`），候選快取在 `lyric_candidates` 表。前端經 IPC `lyrics_get_track`（`src-tauri/src/lyrics_service.rs`）取得 `TrackLyrics`（`src/lib/ipc.ts`），其 `source` 為 `'local' | 'embedded' | 'netease' | 'qqmusic' | 'manual'`。判斷規則：`source` 是 `netease`／`qqmusic`／`manual`（手動選的線上候選）時才算線上歌詞、按鈕可用；`local`／`embedded` 或已清除（`cleared:` 候選）時停用。實作時再確認 `manual` 的實際來源。
+- 格式：`TrackLyrics` 存的是解析後的 `lines`（含 `offsetMs`、`synced`），導入時需序列化成 LRC 文字（同步歌詞輸出 `[mm:ss.xx]`，套用 offset；非同步則輸出純文字）。若原始 LRC 文字仍保留在 DB，優先使用原文。
+
 ### UI 位置
 
 - 開啟：任何曲目列右鍵／長按選單「歌曲資訊」，以及正在播放頁的選單按鈕；快速鍵 Alt+Enter（同 Windows 檔案內容）。
@@ -76,7 +84,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 
 ## 分期
 
-- **Phase 1（MVP）**：**第一項實作：FFT 頻譜圖**（含快取、截止頻率提示，使用者確認為最高優先）；其後為常用欄位讀寫（標題、演出者、專輯、專輯演出者、作曲、碟號/總數、音軌號/總數、日期、內嵌歌詞、單張封面：匯出／取代、JPG 品質、自動縮放）、暫存＋儲存、路徑與在資料夾中顯示、音訊屬性唯讀、原子寫入（mtime 照常更新）＋正在播放處理、DB 投影同步。格式：MP3（一律 ID3v2.4）/FLAC/M4A/Ogg/Opus/WAV/APE；DSF 唯讀。桌面＋Android。
+- **Phase 1（MVP）**：**第一項實作：FFT 頻譜圖**（含快取、截止頻率提示，使用者確認為最高優先）；其後為常用欄位讀寫（標題、演出者、專輯、專輯演出者、作曲、碟號/總數、音軌號/總數、日期、內嵌歌詞（含「導入」目前線上歌詞按鈕）、單張封面：匯出／取代、JPG 品質、自動縮放）、暫存＋儲存、路徑與在資料夾中顯示、音訊屬性唯讀、原子寫入（mtime 照常更新）＋正在播放處理、DB 投影同步。格式：MP3（一律 ID3v2.4）/FLAC/M4A/Ogg/Opus/WAV/APE；DSF 唯讀。桌面＋Android。
 - **Phase 2**：全部原始欄位檢視/編輯、多封面含類型、既有 `.lrc` 唯讀並列與同步預覽。
 - **Phase 3**：儲存後撤銷（標籤備份）、ReplayGain 顯示/計算、檔名 ↔ 標籤（單曲依樣板重新命名，需同步播放清單路徑）、DSF 寫入。
 - 未來（不在範圍）：多檔批次編輯。
