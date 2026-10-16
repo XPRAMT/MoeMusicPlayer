@@ -293,6 +293,12 @@
 <div class="track-details floating-surface" role="dialog" aria-modal="true" aria-label="歌曲資訊">
   <header class="track-details-header">
     <h2>歌曲資訊</h2>
+    {#if notice}<span class="track-details-saved">{notice}</span>{/if}
+    <div class="track-details-actions">
+      <button type="button" class="soft-button" disabled={!anyDirty || saving} onclick={resetAll}>還原</button>
+      <button type="button" class="soft-button" onclick={requestClose}>關閉</button>
+      <button type="button" class="soft-button is-primary" disabled={!anyDirty || saving || !!details?.readOnly} onclick={() => void save()}>{saving ? '儲存中…' : '儲存'}</button>
+    </div>
   </header>
 
   <div class="track-details-body">
@@ -383,12 +389,6 @@
     {/if}
   </div>
 
-  <footer class="track-details-footer">
-    {#if notice}<span class="track-details-saved">{notice}</span>{/if}
-    <button type="button" class="soft-button" disabled={!anyDirty || saving} onclick={resetAll}>還原</button>
-    <button type="button" class="soft-button" onclick={requestClose}>關閉</button>
-    <button type="button" class="soft-button is-primary" disabled={!anyDirty || saving || !!details?.readOnly} onclick={() => void save()}>{saving ? '儲存中…' : '儲存'}</button>
-  </footer>
 </div>
 </div>
 
@@ -401,8 +401,10 @@
     max-height: calc(100dvh - 64px - var(--android-safe-top, 0px) - var(--android-safe-bottom, 0px));
     display: flex; flex-direction: column; color: var(--text-primary, inherit);
   }
-  .track-details-header { padding: 14px 18px 8px; }
-  .track-details-header h2 { margin: 0 0 6px; font-size: 1.1rem; }
+  .track-details-header { display: flex; align-items: center; gap: 8px; padding: 12px 18px 8px; min-width: 0; }
+  .track-details-header h2 { margin: 0; font-size: 1.1rem; white-space: nowrap; flex: none; }
+  .track-details-actions { display: flex; flex: none; gap: 6px; margin-left: auto; }
+  .track-details-actions .soft-button { white-space: nowrap; }
   .track-details-path { display: flex; gap: 8px; align-items: center; min-width: 0; }
   .track-details-path-label { opacity: 0.7; font-size: 0.85rem; flex: none; }
   .track-details-path code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; font-size: 0.85rem; opacity: 0.85; }
@@ -441,8 +443,7 @@
   .track-details-props { display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 0.85rem; align-items: center; }
   .track-details-props dt { opacity: 0.7; }
   .track-details-props dd { margin: 0; }
-  .track-details-footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 10px 18px 14px; }
-  .track-details-saved { margin-right: auto; opacity: 0.8; font-size: 0.85rem; }
+  .track-details-saved { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.8; font-size: 0.85rem; }
   .is-primary { font-weight: 600; }
   @media (max-width: 820px) {
     .track-details { inset: 0; left: 0; top: 0; translate: none; width: 100vw; max-height: none; height: 100dvh; border-radius: 0; box-sizing: border-box; padding: var(--android-safe-top, 0px) var(--android-safe-right, 0px) var(--android-safe-bottom, 0px) var(--android-safe-left, 0px); }
