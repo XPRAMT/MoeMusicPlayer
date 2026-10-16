@@ -78,7 +78,7 @@ test('progress slider remains visible and is not collapsed with volume-state hid
 test('progress slider publishes playhead percent for the edge glow gradient', () => {
   const css = readFileSync(path.join(root, 'src/app.css'), 'utf8');
   assert.match(progressSource, /const progressPercent = \$derived\(/);
-  assert.match(progressSource, /class="progress-hit" style=\{`--progress-pct: \$\{progressPercent\}%`\}/);
+  assert.match(progressSource, /class="progress-hit" style=\{`--progress-pct: \$\{progressPercent\}%; --progress-ratio: \$\{progressPercent \/ 100\}`\}/);
   assert.match(css, /\.progress-hit::after/);
   assert.match(css, /--dock-edge-progress-hit:\s*10px/);
   assert.match(css, /--dock-edge-progress-track:\s*3px/);

@@ -163,6 +163,8 @@ export function swipeDismiss(node, params) {
     start = null;
     const dir = direction;
     direction = null;
+    // Release capture right away so a dismiss that hides this node never keeps the next touch.
+    try { if (node.hasPointerCapture?.(event.pointerId)) node.releasePointerCapture(event.pointerId); } catch { /* gone */ }
     if (!locked || !dir) return;
     const action = getSwipeActions(options)[dir];
     if (!action) { if (damped()) reset(true); return; }

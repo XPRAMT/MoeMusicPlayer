@@ -128,7 +128,7 @@
 
 <div class="progress-row" data-timeline-style={timelineStyle}>
   <span class="progress-time progress-time-elapsed">{formatDuration(displayedPositionMs)}</span>
-  <div class="progress-hit" style={`--progress-pct: ${progressPercent}%`}>
+  <div class="progress-hit" style={`--progress-pct: ${progressPercent}%; --progress-ratio: ${progressPercent / 100}`}>
     <input
       class="progress-slider"
       type="range"

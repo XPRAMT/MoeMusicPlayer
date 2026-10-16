@@ -106,6 +106,11 @@ html,
 }
 
 /* Focus rings only for keyboard focus; touch/mouse focus never shows an outline. */
+/* No double-tap-zoom gesture: taps dispatch click immediately, and a tap right after a
+   swipe (e.g. collapsing the playback page from the cover) is not swallowed as a double tap. */
+html {
+  touch-action: manipulation;
+}
 :focus:not(:focus-visible) {
   outline: none;
 }
@@ -4049,8 +4054,33 @@ input:focus-visible {
   );
 }
 
-.progress-hit:has(.progress-slider:disabled)::after {
+.progress-hit:has(.progress-slider:disabled)::after,
+.progress-hit:has(.progress-slider:disabled)::before {
   opacity: 0.4;
+}
+
+/* Painted thumb positioned by percentage of the track, so a layout width change (dock
+   reflow when the playback page opens/closes) moves it with the track instead of the
+   native thumb jumping. No transition on position. The native thumb stays for hit-testing. */
+.progress-hit::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  /* Same travel as the native thumb: thumb/2 .. 100% - thumb/2. */
+  left: calc(var(--progress-thumb) / 2 + (100% - var(--progress-thumb)) * var(--progress-ratio, 0));
+  z-index: 2;
+  box-sizing: border-box;
+  width: var(--progress-thumb);
+  height: var(--progress-thumb);
+  border: 1px solid var(--progress-glow);
+  border-radius: 50%;
+  background: var(--progress-glow);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 0 4px rgba(var(--accent-rgb), 0.35);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  transition: none;
 }
 
 .progress-slider {
@@ -4083,6 +4113,7 @@ input:focus-visible {
     0 1px 2px rgba(0, 0, 0, 0.35),
     0 0 4px rgba(var(--accent-rgb), 0.35);
   appearance: none;
+  opacity: 0;
 }
 
 .progress-slider::-moz-range-thumb {
@@ -4094,6 +4125,7 @@ input:focus-visible {
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.35),
     0 0 4px rgba(var(--accent-rgb), 0.35);
+  opacity: 0;
 }
 
 .volume-slider::-webkit-slider-thumb {
