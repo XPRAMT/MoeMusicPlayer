@@ -2837,6 +2837,14 @@
   // Android system Back (MainActivity -> window.__moeHandleBack). Closes the top-most overlay,
   // then the playback page, then a detail page. Returns false at the root so native moves the
   // task to the background (playback continues).
+  // Page to return to when leaving Settings via Back/Esc/mouse back (lists keep their own scroll cache).
+  let viewBeforeSettings: View | null = null;
+  let lastNonSettingsView: View = 'library';
+  $effect(() => {
+    if (activeView === 'settings') viewBeforeSettings = lastNonSettingsView;
+    else lastNonSettingsView = activeView;
+  });
+
   function handleAndroidBack(): boolean {
     if (androidSpectrogramTrackId) { androidSpectrogramTrackId = null; return true; }
     if (trackDetailsTrackId) { window.dispatchEvent(new CustomEvent('moe:track-details-request-close')); return true; }
@@ -2845,6 +2853,7 @@
     if (isQuickSettingsOpen) { void closeQuickSettings(); return true; }
     if (isNavPanelOpen) { closeNavPanel('escape', false); return true; }
     if (isNowPlayingOpen) { void closeNowPlaying(); return true; }
+    if (activeView === 'settings') { activeView = viewBeforeSettings ?? 'library'; return true; }
     if (activeView === 'album-detail') { navigateToAlbumIndex(); return true; }
     if (activeView === 'artist-detail') { navigateToArtistIndex(); return true; }
     return false;
