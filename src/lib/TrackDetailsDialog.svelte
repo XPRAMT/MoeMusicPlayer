@@ -65,11 +65,50 @@
   let coverUrl = $state<string | null>(null);
   let pendingCoverPath = $state<string | null>(null);
   let pendingCoverUrl = $state<string | null>(null);
+  type CoverInfo = { width: number; height: number; mime: string; bytes: number };
+  /** Facts of the staged (picked / pasted, not yet saved) image. */
+  let stagedCoverInfo = $state<CoverInfo | null>(null);
+
+  function sniffImageMime(bytes: Uint8Array, fallback: string): string {
+    if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'image/jpeg';
+    if (bytes[0] === 0x89 && bytes[1] === 0x50) return 'image/png';
+    if (bytes[0] === 0x47 && bytes[1] === 0x49) return 'image/gif';
+    if (bytes[0] === 0x42 && bytes[1] === 0x4d) return 'image/bmp';
+    if (bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+    return fallback || 'image/unknown';
+  }
+
+  async function describeStaged(blob: Blob) {
+    stagedCoverInfo = null;
+    try {
+      const head = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+      const bitmap = await createImageBitmap(blob);
+      stagedCoverInfo = { width: bitmap.width, height: bitmap.height, mime: sniffImageMime(head, blob.type), bytes: blob.size };
+      bitmap.close();
+    } catch { /* undecodable: Save will report the error */ }
+  }
+
+  /** Mirrors player_tags::cover::prepare_cover: JPEG kept as-is unless resized; otherwise
+   *  re-encoded to JPEG; auto-resize only shrinks to the short edge, keeping aspect ratio. */
+  function savedCoverPlan(info: CoverInfo, options: CoverEditOptions): { width: number; height: number; reencode: boolean } {
+    let { width, height } = info;
+    const short = Math.min(width, height);
+    if (options.autoResize && short > options.shortEdgePx) {
+      const scale = options.shortEdgePx / short;
+      width = Math.max(1, Math.round(width * scale));
+      height = Math.max(1, Math.round(height * scale));
+    }
+    const resized = width !== info.width || height !== info.height;
+    return { width, height, reencode: resized || info.mime !== 'image/jpeg' };
+  }
   let removeCover = $state(false);
   let onlineLyricsText = $state<string | null>(null);
   let coverOptions = $state<CoverEditOptions>(loadCoverEditOptions());
 
   const isDirty = (key: keyof TagFields) => !!draft && !!original && draft[key] !== original[key];
+  // Cover facts shown next to the preview follow the staged state, not the loaded file.
+  const shownCover = $derived(removeCover ? null : pendingCoverPath ? stagedCoverInfo : details?.cover ?? null);
+  const savedPlan = $derived(pendingCoverPath && stagedCoverInfo ? savedCoverPlan(stagedCoverInfo, coverOptions) : null);
   const coverDirty = $derived(pendingCoverPath !== null || removeCover);
   const anyDirty = $derived(!!draft && !!original && (Object.keys(original) as (keyof TagFields)[]).some((key) => draft![key] !== original![key]) || coverDirty);
 
@@ -143,6 +182,7 @@
     pendingCoverBase64 = await blobToBase64(blob);
     revoke(pendingCoverUrl);
     pendingCoverUrl = URL.createObjectURL(blob);
+    void describeStaged(blob);
     pendingCoverPath = CLIPBOARD_COVER;
     removeCover = false;
   }
@@ -171,7 +211,9 @@
     if (!path) return;
     const bytes = await invoke<ArrayBuffer>('track_details_read_image', { path });
     revoke(pendingCoverUrl);
-    pendingCoverUrl = URL.createObjectURL(new Blob([bytes]));
+    const pickedBlob = new Blob([bytes]);
+    pendingCoverUrl = URL.createObjectURL(pickedBlob);
+    void describeStaged(pickedBlob);
     pendingCoverPath = path;
     pendingCoverBase64 = null;
     removeCover = false;
@@ -292,7 +334,10 @@
           {/if}
         </div>
         <div class="track-details-cover-meta">
-          {#if details.cover}<p>{details.cover.width}×{details.cover.height} · {details.cover.mime.replace('image/', '').toUpperCase()} · {formatBytes(details.cover.bytes)}</p>{/if}
+          {#if shownCover}
+            <p>{shownCover.width}×{shownCover.height} · {shownCover.mime.replace('image/', '').toUpperCase()} · {formatBytes(shownCover.bytes)}{#if pendingCoverPath}（未儲存）{/if}</p>
+            {#if pendingCoverPath && savedPlan?.reencode}<p class="track-details-cover-plan">儲存時：{savedPlan.width}×{savedPlan.height} JPG（品質 {coverOptions.jpegQuality}%）</p>{/if}
+          {/if}
           <div class="track-details-row-buttons">
             <button type="button" class="soft-button" disabled={details.readOnly} onclick={() => void pickCover()}>選擇封面</button>
             <button type="button" class="soft-button" disabled={!details.cover} onclick={() => void exportCover()}>匯出封面</button>
