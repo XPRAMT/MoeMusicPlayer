@@ -12,8 +12,32 @@ use tauri::{AppHandle, State};
 
 use super::AppState;
 
+/// Library locators can carry the `\\?\` verbatim prefix (from `std::fs::canonicalize`).
+/// Explorer / the shell do not accept it and users should not see it: `\\?\C:\x` -> `C:\x`,
+/// `\\?\UNC\server\share\x` -> `\\server\share\x`. Other verbatim forms are kept.
+fn strip_verbatim(path: std::path::PathBuf) -> std::path::PathBuf {
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return std::path::PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            return std::path::PathBuf::from(rest);
+        }
+    }
+    path
+}
+
 #[cfg(target_os = "windows")]
 fn track_path(state: &AppState, track_id: &str) -> Result<std::path::PathBuf, String> {
+    track_path_raw(state, track_id).map(strip_verbatim)
+}
+
+#[cfg(target_os = "windows")]
+fn track_path_raw(state: &AppState, track_id: &str) -> Result<std::path::PathBuf, String> {
     use player_core::{MediaLocator, TrackId};
 
     let id = TrackId::parse(track_id).map_err(|error| format!("曲目 ID 無效：{error}"))?;
@@ -101,7 +125,7 @@ fn source_from_string(value: &str) -> Result<TrackSource, String> {
     if value.starts_with("content://") {
         return Ok(TrackSource::Content(value.to_owned()));
     }
-    let path = std::path::PathBuf::from(value);
+    let path = strip_verbatim(std::path::PathBuf::from(value));
     if !path.is_file() {
         return Err("找不到檔案".to_owned());
     }
@@ -603,18 +627,67 @@ pub async fn track_details_reveal(
     #[cfg(target_os = "windows")]
     {
         let path = track_path(&state, &track_id)?;
-        let mut argument = std::ffi::OsString::from("/select,");
-        argument.push(path.as_os_str());
-        std::process::Command::new("explorer.exe")
-            .arg(argument)
-            .spawn()
-            .map_err(|error| format!("無法開啟檔案總管：{error}"))?;
-        Ok(())
+        if !path.exists() {
+            return Err(format!("找不到檔案：{}", path.display()));
+        }
+        // SHOpenFolderAndSelectItems takes the path as data, so spaces / commas / Unicode
+        // need no command-line quoting (explorer.exe "/select," parsing breaks on those).
+        blocking(move || reveal_in_explorer(&path)).await
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (state, track_id);
         Err("此平台不支援".to_owned())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_in_explorer(path: &std::path::Path) -> Result<(), String> {
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+    use windows::core::HSTRING;
+
+    let wide = HSTRING::from(path.as_os_str());
+    // SAFETY: COM is initialized for this blocking worker thread and balanced below; the
+    // PIDL is owned here and freed exactly once.
+    unsafe {
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let pidl = ILCreateFromPathW(&wide);
+        let result = if pidl.is_null() {
+            Err(format!("無法解析路徑：{}", path.display()))
+        } else {
+            let opened = SHOpenFolderAndSelectItems(pidl, None, 0)
+                .map_err(|error| format!("無法開啟檔案總管：{error}"));
+            ILFree(Some(pidl));
+            opened
+        };
+        if initialized {
+            CoUninitialize();
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_verbatim;
+    use std::path::PathBuf;
+
+    #[test]
+    fn strips_verbatim_drive_and_unc_prefixes() {
+        assert_eq!(
+            strip_verbatim(PathBuf::from(r"\\?\C:\音樂\a, b (1).flac")),
+            PathBuf::from(r"C:\音樂\a, b (1).flac")
+        );
+        assert_eq!(
+            strip_verbatim(PathBuf::from(r"\\?\UNC\nas\share\x y.mp3")),
+            PathBuf::from(r"\\nas\share\x y.mp3")
+        );
+        assert_eq!(strip_verbatim(PathBuf::from(r"C:\x.mp3")), PathBuf::from(r"C:\x.mp3"));
+        assert_eq!(
+            strip_verbatim(PathBuf::from(r"\\?\Volume{abc}\x")),
+            PathBuf::from(r"\\?\Volume{abc}\x")
+        );
     }
 }
 
