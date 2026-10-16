@@ -335,20 +335,22 @@
           {/if}
         </div>
         <div class="track-details-cover-meta">
+          <div class="track-details-row-buttons">
+            <button type="button" class="soft-button" aria-label="選擇封面" title="選擇封面圖片（儲存後才寫入）" disabled={details.readOnly} onclick={() => void pickCover()}>選擇</button>
+            <button type="button" class="soft-button" aria-label="匯出封面" title="匯出封面" disabled={!details.cover} onclick={() => void exportCover()}>匯出</button>
+            <button type="button" class="soft-button" aria-label="複製封面" title="複製封面到剪貼簿" disabled={!details.cover} onclick={() => void copyCover()}>複製</button>
+            <button type="button" class="soft-button" aria-label="貼上封面" title={clipboardImage ? '以剪貼簿圖片作為新封面（儲存後才寫入）' : '剪貼簿中沒有圖片'} disabled={details.readOnly || !clipboardImage} onclick={() => void pasteCover()}>貼上</button>
+            <button type="button" class="soft-button" aria-label="移除封面" title="移除封面（儲存後才寫入）" disabled={details.readOnly || (!details.cover && !pendingCoverPath)} onclick={() => { removeCover = true; pendingCoverPath = null; pendingCoverBase64 = null; }}>移除</button>
+          </div>
+          <div class="track-details-cover-option-row">
+            <label>JPG品質 <input type="number" min="1" max="100" value={coverOptions.jpegQuality} onchange={(event) => updateCoverOptions({ jpegQuality: Math.min(100, Math.max(1, Number(event.currentTarget.value) || 100)) })} />%</label>
+            <label><input type="checkbox" checked={coverOptions.autoResize} onchange={(event) => updateCoverOptions({ autoResize: event.currentTarget.checked })} />自動縮放</label>
+          </div>
+          <label>短邊 <input type="number" min="64" max="10000" step="10" disabled={!coverOptions.autoResize} value={coverOptions.shortEdgePx} onchange={(event) => updateCoverOptions({ shortEdgePx: Math.max(64, Number(event.currentTarget.value) || 2160) })} /> px（保持長寬比）</label>
           {#if shownCover}
             <p>{shownCover.width}×{shownCover.height} · {shownCover.mime.replace('image/', '').toUpperCase()} · {formatBytes(shownCover.bytes)}{#if pendingCoverPath}（未儲存）{/if}</p>
             {#if pendingCoverPath && savedPlan?.reencode}<p class="track-details-cover-plan">儲存時：{savedPlan.width}×{savedPlan.height} JPG（品質 {coverOptions.jpegQuality}%）</p>{/if}
           {/if}
-          <div class="track-details-row-buttons">
-            <button type="button" class="soft-button" disabled={details.readOnly} onclick={() => void pickCover()}>選擇封面</button>
-            <button type="button" class="soft-button" disabled={!details.cover} onclick={() => void exportCover()}>匯出封面</button>
-            <button type="button" class="soft-button" disabled={!details.cover} onclick={() => void copyCover()}>複製封面</button>
-            <button type="button" class="soft-button" disabled={details.readOnly || !clipboardImage} title={clipboardImage ? '以剪貼簿圖片作為新封面（儲存後才寫入）' : '剪貼簿中沒有圖片'} onclick={() => void pasteCover()}>貼上封面</button>
-            <button type="button" class="soft-button" disabled={details.readOnly || (!details.cover && !pendingCoverPath)} onclick={() => { removeCover = true; pendingCoverPath = null; pendingCoverBase64 = null; }}>移除封面</button>
-          </div>
-          <label>JPG 品質 <input type="number" min="1" max="100" value={coverOptions.jpegQuality} onchange={(event) => updateCoverOptions({ jpegQuality: Math.min(100, Math.max(1, Number(event.currentTarget.value) || 100)) })} /> %</label>
-          <label><input type="checkbox" checked={coverOptions.autoResize} onchange={(event) => updateCoverOptions({ autoResize: event.currentTarget.checked })} /> 自動縮放：短邊</label>
-          <label><input type="number" min="64" max="10000" step="10" disabled={!coverOptions.autoResize} value={coverOptions.shortEdgePx} onchange={(event) => updateCoverOptions({ shortEdgePx: Math.max(64, Number(event.currentTarget.value) || 2160) })} /> px（保持長寬比）</label>
         </div>
       </section>
 
@@ -411,6 +413,7 @@
   .track-details-cover-meta { display: grid; gap: 6px; font-size: 0.9rem; }
   .track-details-cover-meta p { margin: 0; opacity: 0.8; }
   .track-details-cover-meta input[type='number'] { width: 80px; }
+  .track-details-cover-option-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; }
   .track-details-row-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
   .track-details-layer { display: contents; }
   .track-details-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px 12px; }
