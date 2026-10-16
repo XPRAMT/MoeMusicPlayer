@@ -48,7 +48,11 @@
   /** Move the dialog to <body> so no ancestor stacking context (the player shell) can put the
    *  dock above it. */
   function portal(node: HTMLElement) {
-    document.body.appendChild(node);
+    // Mount inside .app-shell: it carries the live appearance vars (--quick-settings-opacity /
+    // -blur, backdrop settings) that .floating-surface reads, so the panel matches the quick
+    // settings drawer and follows setting changes. A direct child of .app-shell with a high
+    // z-index still sits above the dock.
+    (document.querySelector('.app-shell') ?? document.body).appendChild(node);
     return { destroy() { node.remove(); } };
   }
 

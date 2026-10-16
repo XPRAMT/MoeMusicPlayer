@@ -481,24 +481,24 @@
 </div>
 
 <style>
-  .spectrogram-page { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; background: #0b0b10; color: #e8e8ee; font-size: 13px; z-index: 80; }
+  .spectrogram-page { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(10px + var(--android-safe-top, 0px)) calc(14px + var(--android-safe-right, 0px)) calc(10px + var(--android-safe-bottom, 0px)) calc(14px + var(--android-safe-left, 0px)); background: var(--page, #0b0b10); color: var(--text, #e8e8ee); font-size: 13px; z-index: 80; }
   .spectrogram-page.is-drag-over { outline: 3px dashed #8a7dff; outline-offset: -6px; }
   .spectrogram-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .sg-spacer { flex: 1; }
-  .sg-button { background: #22222c; color: inherit; border: 1px solid #3a3a48; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
-  .sg-button:hover { background: #2c2c38; }
+  .sg-button { background: var(--panel-soft, #22222c); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  .sg-button:hover { background: rgba(var(--accent-rgb, 138, 125, 255), 0.18); }
   .sg-button.is-active { border-color: #8a7dff; }
   .sg-button:disabled { opacity: 0.5; cursor: default; }
   .sg-inline { display: flex; align-items: center; gap: 5px; }
-  .sg-inline select, .sg-settings select, .sg-settings input { background: #0f0f15; color: inherit; border: 1px solid #3a3a48; border-radius: 4px; padding: 2px 4px; font: inherit; }
-  .sg-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 10px; background: #15151c; border: 1px solid #2c2c38; border-radius: 6px; }
+  .sg-inline select, .sg-settings select, .sg-settings input { background: var(--panel, #0f0f15); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 4px; padding: 2px 4px; font: inherit; }
+  .sg-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 10px; background: var(--panel, #15151c); border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.16); border-radius: 6px; }
   .sg-settings label { display: flex; align-items: center; gap: 6px; }
   .sg-settings input[type='number'] { width: 70px; }
   .sg-info-row { display: flex; gap: 18px; flex-wrap: wrap; }
   .sg-info { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; min-width: 0; }
   .sg-info strong { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sg-info span { opacity: 0.75; }
-  .sg-tag { background: #8a7dff; color: #0b0b10; border-radius: 3px; padding: 0 5px; }
+  .sg-tag { background: var(--accent, #8a7dff); color: var(--accent-foreground, #0b0b10); border-radius: 3px; padding: 0 5px; }
   .sg-cutoff { color: #ffcf6b; opacity: 1 !important; }
   .sg-error { color: #ff7a7a; opacity: 1 !important; }
   .sg-plots { flex: 1; min-height: 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 10px; }
@@ -514,7 +514,7 @@
   .sg-world { position: absolute; pointer-events: none; }
   .sg-world img { position: absolute; left: 0; bottom: 0; display: block; user-select: none; }
   .sg-grid { position: absolute; left: 0; right: 0; height: 1px; background: rgb(255 255 255 / 0.1); pointer-events: none; }
-  .sg-divider { position: absolute; left: 0; right: 0; height: 2px; background: #0b0b10; pointer-events: none; }
+  .sg-divider { position: absolute; left: 0; right: 0; height: 2px; background: var(--page, #0b0b10); pointer-events: none; }
   .sg-crosshair { position: absolute; top: 0; bottom: 0; width: 1px; background: rgb(255 255 255 / 0.35); pointer-events: none; }
   .sg-hover { position: absolute; padding: 4px 7px; border-radius: 4px; background: rgb(0 0 0 / 0.8); pointer-events: none; white-space: nowrap; line-height: 1.4; z-index: 3; }
   .sg-badge { position: absolute; top: 6px; right: 8px; padding: 2px 6px; border-radius: 4px; background: rgb(0 0 0 / 0.6); font-size: 12px; pointer-events: none; }
