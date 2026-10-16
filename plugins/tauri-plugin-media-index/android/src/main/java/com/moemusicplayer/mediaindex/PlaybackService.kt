@@ -157,9 +157,16 @@ class PlaybackService : MediaSessionService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
         }
-        session = MediaSession.Builder(this, forwarding)
+        val builtSession = MediaSession.Builder(this, forwarding)
             .apply { if (sessionActivity != null) setSessionActivity(sessionActivity) }
             .build()
+        session = builtSession
+        // The service is started with startService and no in-app MediaController ever connects, so
+        // Media3 would never learn about the session and never post its media notification. Adding it
+        // explicitly lets DefaultMediaNotificationProvider show the MediaStyle notification (cover,
+        // title, artist, previous / play-pause / next from the queue-aware commands), promote the
+        // service to a mediaPlayback foreground service while playing, and remove it on stop.
+        addSession(builtSession)
 
         pollThread = HandlerThread("moe-playback-command-poll").apply { start() }
         pollHandler = Handler(pollThread.looper)
@@ -169,6 +176,14 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+
+    /** Swiping the app away while paused/stopped clears the notification and ends the service. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val player = exoPlayer
+        if (player == null || !player.playWhenReady || player.mediaItemCount == 0) {
+            stopSelf()
+        }
+    }
 
     override fun onDestroy() {
         serviceDestroyed = true
@@ -197,6 +212,7 @@ class PlaybackService : MediaSessionService() {
         }
         pollHandler.removeCallbacksAndMessages(null)
         pollThread.quitSafely()
+        session?.let { removeSession(it) }
         session?.release()
         session = null
         sessionPlayer = null

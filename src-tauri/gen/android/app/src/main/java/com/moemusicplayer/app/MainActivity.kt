@@ -1,11 +1,16 @@
 package com.moemusicplayer.app
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -53,6 +58,21 @@ class MainActivity : TauriActivity() {
       windowInsets
     }
     ViewCompat.requestApplyInsets(content)
+    requestNotificationPermissionIfNeeded()
+  }
+
+  /** One system prompt per process start until granted; denial only hides the media notification. */
+  private fun requestNotificationPermissionIfNeeded() {
+    val granted = Build.VERSION.SDK_INT < NotificationPermissionPolicy.TIRAMISU ||
+      ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    if (!NotificationPermissionPolicy.shouldRequest(Build.VERSION.SDK_INT, granted, notificationPermissionAsked)) return
+    notificationPermissionAsked = true
+    ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
+  }
+
+  private companion object {
+    const val NOTIFICATION_PERMISSION_REQUEST = 4107
+    @Volatile var notificationPermissionAsked = false
   }
 
   override fun onWebViewCreate(webView: WebView) {
