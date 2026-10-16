@@ -78,6 +78,11 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     webView.addJavascriptInterface(androidInsetsBridge, "MoeAndroidInsets")
+    // App UI, not a document: no pinch / double-tap page zoom (the viewport meta also sets
+    // user-scalable=no). Scrolling and JS gestures are unaffected.
+    webView.settings.setSupportZoom(false)
+    webView.settings.builtInZoomControls = false
+    webView.settings.displayZoomControls = false
   }
 
   private fun findWebView(view: View): WebView? {
