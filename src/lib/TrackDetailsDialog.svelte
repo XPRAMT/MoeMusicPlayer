@@ -302,6 +302,7 @@
       <div class="track-details-path">
         <span class="track-details-path-label">路徑</span>
         <code title={details.path}>{details.path}</code>
+        <button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button>
         <button type="button" class="soft-button" onclick={() => void navigator.clipboard.writeText(details!.path)}>複製路徑</button>
         {#if !isAndroid}
         <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>在資料夾中顯示</button>
@@ -314,7 +315,7 @@
         <dt>時長</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
         <dt>位元率</dt><dd>{details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? '—'} kbps</dd>
         <dt>取樣率</dt><dd>{details.properties.sampleRate ? `${details.properties.sampleRate} Hz` : '—'}</dd>
-        <dt>位元深度</dt><dd class="track-details-with-action">{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}<button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button></dd>
+        <dt>位元深度</dt><dd>{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}</dd>
         <dt>聲道</dt><dd>{details.properties.channels ?? '—'}</dd>
         <dt>修改時間</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
         <dt>檔案大小</dt><dd>{formatBytes(details.fileSize)}</dd>
