@@ -357,10 +357,15 @@ pub async fn spectrogram_window_open(app: AppHandle, track_id: String) -> Result
         window
             .emit(SPECTROGRAM_TRACK_EVENT, &track_id)
             .map_err(|error| error.to_string())?;
+        #[cfg(desktop)]
         let _ = window.unminimize();
         let _ = window.set_focus();
         return Ok(());
     }
+    #[cfg(mobile)]
+    return Err("spectrogram window is desktop-only".into());
+    #[cfg(desktop)]
+    {
     let url = format!("index.html?view=spectrogram&track={track_id}");
     WebviewWindowBuilder::new(&app, SPECTROGRAM_WINDOW_LABEL, WebviewUrl::App(url.into()))
         .title("頻譜圖")
@@ -369,4 +374,5 @@ pub async fn spectrogram_window_open(app: AppHandle, track_id: String) -> Result
         .build()
         .map_err(|error| format!("無法開啟頻譜圖視窗：{error}"))?;
     Ok(())
+    }
 }
