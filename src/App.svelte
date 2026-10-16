@@ -118,6 +118,7 @@
   import { appTooltip } from './lib/app-tooltip.js';
   import { TRACK_TEXT_OVERFLOW_CONTEXT, type TrackTextOverflowMode } from './lib/track-text-overflow-context';
   import { QUEUE_REORDER_LONG_PRESS_MS, QUEUE_REORDER_MOVE_CANCEL_PX } from './lib/queue-reorder.js';
+  import { exceedsLongPressSlop, longPressDragGuard } from './lib/long-press-reorder.js';
 
   import {
     SHORTCUT_ACTIONS,
@@ -1454,9 +1455,7 @@
   function handleTrackColumnOrderPointerMove(event: PointerEvent): void {
     const pending = trackColumnOrderPending;
     if (pending?.pointerId === event.pointerId && !trackColumnOrderDrag) {
-      const dx = event.clientX - pending.startX;
-      const dy = event.clientY - pending.startY;
-      if ((dx * dx) + (dy * dy) > QUEUE_REORDER_MOVE_CANCEL_PX * QUEUE_REORDER_MOVE_CANCEL_PX) {
+      if (exceedsLongPressSlop(event.clientX - pending.startX, event.clientY - pending.startY, QUEUE_REORDER_MOVE_CANCEL_PX)) {
         clearTrackColumnOrderTimer();
         trackColumnOrderPending = null;
       }
@@ -3478,7 +3477,7 @@
                   <button class="soft-button" class:is-active={trackTextOverflowMode === 'middle'} type="button" aria-pressed={trackTextOverflowMode === 'middle'} onclick={() => persistTrackColumnSettings({ textOverflowMode: 'middle' })}>隱藏中段</button>
                   <button class="soft-button" class:is-active={trackTextOverflowMode === 'end'} type="button" aria-pressed={trackTextOverflowMode === 'end'} onclick={() => persistTrackColumnSettings({ textOverflowMode: 'end' })}>隱藏後段</button>
                 </div>
-                <ol class="track-column-settings" aria-label="曲目資訊欄位設定">
+                <ol class="track-column-settings" use:longPressDragGuard={() => trackColumnOrderDrag !== null} aria-label="曲目資訊欄位設定">
                   {#each trackColumnPreferences as preference, index (preference.id)}
                     {@const definition = TRACK_COLUMN_DEFINITIONS.find((column) => column.id === preference.id)!}
                     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

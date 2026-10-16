@@ -2695,6 +2695,9 @@ input:focus-visible {
 }
 
 .track-column-setting-row {
+  /* Quick swipes scroll natively; a long-press drag blocks panning via longPressDragGuard. */
+  touch-action: pan-x pan-y;
+  -webkit-touch-callout: none;
   position: relative;
   display: grid;
   min-width: 0;

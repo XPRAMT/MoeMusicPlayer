@@ -48,6 +48,7 @@
     QUEUE_REORDER_MOVE_CANCEL_PX,
   } from './queue-reorder.js';
   import { getGridTemplateMinWidthPx } from './grid-min-width.js';
+  import { exceedsLongPressSlop, longPressDragGuard } from './long-press-reorder.js';
   import { getAlbumDetailNativeScrollTop, getAlbumDetailScrollerTop, getAlbumDetailScrollState } from './album-detail-collapse.js';
 
   interface Props<Item> {
@@ -714,9 +715,7 @@
 
   function handleRowPointerMove(event: PointerEvent): void {
     if (pendingPointer && pendingPointer.pointerId === event.pointerId && dragFromIndex === null) {
-      const dx = event.clientX - pendingPointer.startX;
-      const dy = event.clientY - pendingPointer.startY;
-      if ((dx * dx) + (dy * dy) > QUEUE_REORDER_MOVE_CANCEL_PX * QUEUE_REORDER_MOVE_CANCEL_PX) {
+      if (exceedsLongPressSlop(event.clientX - pendingPointer.startX, event.clientY - pendingPointer.startY, QUEUE_REORDER_MOVE_CANCEL_PX)) {
         clearLongPressTimer();
         pendingPointer = null;
       }
@@ -793,6 +792,7 @@
     style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${effectiveMinContentWidth}px`}
     class:album-detail-scroll-timeline={hasLeadingOverlay && supportsScrollDrivenAlbumOverlay}
     class:is-reordering={dragFromIndex !== null}
+    use:longPressDragGuard={() => dragFromIndex !== null}
     onscroll={handleViewportScroll}
     onkeydown={handleKeydown}
   >
