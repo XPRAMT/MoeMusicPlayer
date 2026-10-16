@@ -325,6 +325,75 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Ok(())
     }
 
+    /// Cache a library audio document (up to 512 MiB) together with its display name, for
+    /// tag editing / spectrogram rendering on a private work copy.
+    pub(crate) fn cache_audio_for_edit(
+        &self,
+        uri: &str,
+    ) -> Result<(ContentCacheLease, Option<String>)> {
+        let value: serde_json::Value = self.0.run_mobile_plugin(
+            "cacheContentUriNamed",
+            json!({ "contentUri": uri, "maxBytes": MAX_EDIT_BYTES }),
+        )?;
+        let display_name = value
+            .get("displayName")
+            .and_then(|name| name.as_str())
+            .map(str::to_owned);
+        let response: ContentCacheLeaseResponse = serde_json::from_value(value)
+            .map_err(|error| crate::Error::Response(error.to_string()))?;
+        Ok((self.content_cache_lease(response, MAX_EDIT_BYTES)?, display_name))
+    }
+
+    /// Write an edited audio work copy back over its document. Android asks the user for
+    /// MediaStore write consent (createWriteRequest / RecoverableSecurityException) when needed;
+    /// a refusal surfaces as an error containing `WRITE_ACCESS_DENIED`.
+    pub(crate) fn write_audio_cache_lease(
+        &self,
+        lease: &ContentCacheLease,
+        destination_uri: &str,
+    ) -> Result<()> {
+        let metadata = std::fs::metadata(lease.path())?;
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_EDIT_BYTES {
+            return Err(crate::Error::Response(
+                "audio cache lease is missing, empty or exceeds 512 MiB".to_owned(),
+            ));
+        }
+        let _: serde_json::Value = self.0.run_mobile_plugin(
+            "writeAudioCacheLease",
+            json!({ "token": lease.token(), "destinationUri": destination_uri }),
+        )?;
+        Ok(())
+    }
+
+    /// System document picker (ACTION_OPEN_DOCUMENT). Returns (uri, display name).
+    pub(crate) fn pick_open_document(
+        &self,
+        mime_types: &[&str],
+    ) -> Result<Option<(String, Option<String>)>> {
+        let value: serde_json::Value = self
+            .0
+            .run_mobile_plugin("pickOpenDocument", json!({ "mimeTypes": mime_types }))?;
+        let uri = value.get("uri").and_then(|uri| uri.as_str()).map(str::to_owned);
+        let name = value
+            .get("displayName")
+            .and_then(|name| name.as_str())
+            .map(str::to_owned);
+        Ok(uri.map(|uri| (uri, name)))
+    }
+
+    /// System "save as" picker (ACTION_CREATE_DOCUMENT). Returns the created document URI.
+    pub(crate) fn pick_create_document(
+        &self,
+        suggested_name: &str,
+        mime_type: &str,
+    ) -> Result<Option<String>> {
+        let response = self.0.run_mobile_plugin::<UriResponse>(
+            "pickCreateDocument",
+            json!({ "suggestedName": suggested_name, "mimeType": mime_type }),
+        )?;
+        Ok(response.uri)
+    }
+
     pub(crate) fn pick_playlist_import(&self) -> Result<Option<SafPlaylistImport>> {
         let response = self
             .0
@@ -592,6 +661,7 @@ fn has_useful_metadata(metadata: &TrackMetadata) -> bool {
 }
 
 const MAX_PLAYLIST_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_EDIT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_LYRICS_BYTES: u64 = 2 * 1024 * 1024;
 
 fn is_uuid_token(token: &str) -> bool {

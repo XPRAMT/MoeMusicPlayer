@@ -13,6 +13,7 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.activity.result.ActivityResult
+import androidx.activity.result.IntentSenderRequest
 import app.tauri.PermissionState
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
@@ -47,6 +48,17 @@ class MediaStoreScanArgs {
 class SafScanArgs {
     var sourceId: String? = null
     var treeUri: String? = null
+}
+
+@InvokeArg
+class OpenDocumentArgs {
+    var mimeTypes: Array<String>? = null
+}
+
+@InvokeArg
+class CreateDocumentArgs {
+    var suggestedName: String? = null
+    var mimeType: String? = null
 }
 
 @InvokeArg
@@ -259,6 +271,131 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             writeContentCacheLease(token, Uri.parse(destination))
             JSObject()
         }
+    }
+
+    @Command
+    fun cacheContentUriNamed(invoke: Invoke) {
+        val args = invoke.parseArgs(ContentUriArgs::class.java)
+        val rawUri = args.contentUri
+        val maxBytes = args.maxBytes
+        if (rawUri.isNullOrBlank() || maxBytes == null || maxBytes <= 0L || maxBytes > MAX_CONTENT_LEASE_BYTES) {
+            invoke.reject("contentUri and maxBytes (1..$MAX_CONTENT_LEASE_BYTES) are required")
+            return
+        }
+        async(invoke) {
+            val uri = Uri.parse(rawUri)
+            val response = cacheContentUri(uri, maxBytes)
+            response.put("displayName", queryDisplayName(uri) ?: JSONObject.NULL)
+            response
+        }
+    }
+
+    /** Track details save: write an edited work copy back over the audio document. */
+    @Command
+    fun writeAudioCacheLease(invoke: Invoke) {
+        val args = invoke.parseArgs(WriteLeaseArgs::class.java)
+        val token = args.token
+        val destination = args.destinationUri
+        if (token.isNullOrBlank() || destination.isNullOrBlank()) {
+            invoke.reject("token and destinationUri are required")
+            return
+        }
+        val uri = Uri.parse(destination)
+        io.execute {
+            try {
+                val written = writeAudioLease(token, uri)
+                invoke.resolve(JSObject().apply { put("bytes", written) })
+            } catch (error: SecurityException) {
+                activity.runOnUiThread { requestAudioWriteAccess(invoke, uri, error) }
+            } catch (error: Exception) {
+                invoke.reject(error.message ?: error.javaClass.simpleName)
+            }
+        }
+    }
+
+    private fun requestAudioWriteAccess(invoke: Invoke, uri: Uri, error: SecurityException) {
+        val sender = try {
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && uri.authority == MediaStore.AUTHORITY ->
+                    MediaStore.createWriteRequest(resolver, listOf(uri)).intentSender
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && error is android.app.RecoverableSecurityException ->
+                    error.userAction.actionIntent.intentSender
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        }
+        if (sender == null) {
+            invoke.reject(
+                "WRITE_ACCESS_DENIED: no write access to this file" +
+                    if (uri.authority == MediaStore.AUTHORITY) "" else " (re-authorize the SAF folder with write access)",
+            )
+            return
+        }
+        startIntentSenderForResult(invoke, IntentSenderRequest.Builder(sender).build(), "onAudioWriteGranted")
+    }
+
+    @ActivityCallback
+    private fun onAudioWriteGranted(invoke: Invoke, result: ActivityResult) {
+        if (result.resultCode != Activity.RESULT_OK) {
+            invoke.reject("WRITE_ACCESS_DENIED: the user declined write access")
+            return
+        }
+        val args = invoke.parseArgs(WriteLeaseArgs::class.java)
+        val token = args.token
+        val destination = args.destinationUri
+        if (token.isNullOrBlank() || destination.isNullOrBlank()) {
+            invoke.reject("token and destinationUri are required")
+            return
+        }
+        io.execute {
+            try {
+                val written = writeAudioLease(token, Uri.parse(destination))
+                invoke.resolve(JSObject().apply { put("bytes", written) })
+            } catch (error: SecurityException) {
+                invoke.reject("WRITE_ACCESS_DENIED: ${error.message ?: "write access still denied"}")
+            } catch (error: Exception) {
+                invoke.reject(error.message ?: error.javaClass.simpleName)
+            }
+        }
+    }
+
+    @Command
+    fun pickOpenDocument(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenDocumentArgs::class.java)
+        val mimeTypes = args.mimeTypes?.filter(String::isNotBlank)?.toTypedArray().orEmpty()
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = if (mimeTypes.size == 1) mimeTypes[0] else "*/*"
+            if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivityForResult(invoke, intent, "onOpenDocumentPicked")
+    }
+
+    @ActivityCallback
+    private fun onOpenDocumentPicked(invoke: Invoke, result: ActivityResult) {
+        val uri = result.data?.data
+        if (result.resultCode != Activity.RESULT_OK || uri == null) {
+            invoke.resolve(JSObject().put("uri", JSONObject.NULL).put("displayName", JSONObject.NULL))
+            return
+        }
+        io.execute {
+            val name = try { queryDisplayName(uri) } catch (_: Exception) { null }
+            invoke.resolve(JSObject().put("uri", uri.toString()).put("displayName", name ?: JSONObject.NULL))
+        }
+    }
+
+    @Command
+    fun pickCreateDocument(invoke: Invoke) {
+        val args = invoke.parseArgs(CreateDocumentArgs::class.java)
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = args.mimeType?.takeIf(String::isNotBlank) ?: "application/octet-stream"
+            putExtra(Intent.EXTRA_TITLE, args.suggestedName?.takeIf(String::isNotBlank) ?: "export")
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }
+        startActivityForResult(invoke, intent, "onPlaylistExportPicked")
     }
 
     @Command
@@ -1098,6 +1235,41 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         val output = resolver.openOutputStream(destination, "wt")
             ?: throw IOException("Could not open selected playlist destination")
         file.inputStream().use { input -> output.use { input.copyTo(it, COPY_BUFFER_SIZE) } }
+    }
+
+    /**
+     * Overwrite [destination] with the lease bytes. Opens with "rw" first so nothing is
+     * truncated until the descriptor is granted (permission failures leave the file intact),
+     * then truncates to the new length after writing.
+     */
+    private fun writeAudioLease(token: String, destination: Uri): Long {
+        if (!TOKEN_PATTERN.matches(token)) throw IOException("Invalid cache lease token")
+        val file = File(leaseDirectory(), "$token.bin")
+        if (!file.isFile || file.length() == 0L || file.length() > MAX_CONTENT_LEASE_BYTES) {
+            throw IOException("Audio cache lease is missing or oversized")
+        }
+        val descriptor = try {
+            resolver.openFileDescriptor(destination, "rw")
+        } catch (error: SecurityException) {
+            throw error
+        } catch (_: Exception) {
+            null
+        } ?: resolver.openFileDescriptor(destination, "rwt")
+            ?: throw IOException("Could not open the audio document for writing")
+        descriptor.use { pfd ->
+            FileOutputStream(pfd.fileDescriptor).use { output ->
+                val channel = output.channel
+                channel.position(0L)
+                file.inputStream().use { input -> input.copyTo(output, COPY_BUFFER_SIZE) }
+                channel.truncate(file.length())
+                try {
+                    output.fd.sync()
+                } catch (_: java.io.SyncFailedException) {
+                    // Some providers expose non-syncable descriptors; the close still flushes.
+                }
+            }
+        }
+        return file.length()
     }
 
     private fun leaseDirectory(): File = File(appContext.cacheDir, "media-index/leases")

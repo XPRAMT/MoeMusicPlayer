@@ -252,6 +252,30 @@ impl<R: Runtime> MediaIndex<R> {
         self.platform.pick_playlist_create(suggested_name)
     }
 
+    /// Cache a library audio document with its display name (track details / spectrogram).
+    #[cfg(target_os = "android")]
+    pub fn cache_audio_for_edit(&self, uri: &str) -> Result<(ContentCacheLease, Option<String>)> {
+        self.platform.cache_audio_for_edit(uri)
+    }
+
+    /// Write an edited audio work copy back over its document (may prompt for write consent).
+    #[cfg(target_os = "android")]
+    pub fn write_audio_cache_lease(&self, lease: &ContentCacheLease, destination_uri: &str) -> Result<()> {
+        self.platform.write_audio_cache_lease(lease, destination_uri)
+    }
+
+    /// System document picker; returns (uri, display name).
+    #[cfg(target_os = "android")]
+    pub fn pick_open_document(&self, mime_types: &[&str]) -> Result<Option<(String, Option<String>)>> {
+        self.platform.pick_open_document(mime_types)
+    }
+
+    /// System "save as" document picker; returns the created document URI.
+    #[cfg(target_os = "android")]
+    pub fn pick_create_document(&self, suggested_name: &str, mime_type: &str) -> Result<Option<String>> {
+        self.platform.pick_create_document(suggested_name, mime_type)
+    }
+
     /// Read an adjacent LRC only when both URIs are inside the same persisted SAF tree.
     pub fn read_saf_lyric_sibling(
         &self,

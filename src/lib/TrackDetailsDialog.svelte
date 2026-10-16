@@ -20,6 +20,8 @@
     cover: { mime: string; width: number; height: number; bytes: number } | null;
   };
 
+  // Android: tracks are content:// documents; there is no file manager "reveal".
+  const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
   let { trackId, onClose, onSaved, onOpenSpectrogram }: {
     trackId: string;
     onClose: () => void;
@@ -168,7 +170,9 @@
       <div class="track-details-path">
         <code title={details.path}>{details.path}</code>
         <button type="button" class="soft-button" onclick={() => void navigator.clipboard.writeText(details!.path)}>複製路徑</button>
+        {#if !isAndroid}
         <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>在資料夾中顯示</button>
+        {/if}
       </div>
     {/if}
   </header>
