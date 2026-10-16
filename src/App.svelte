@@ -2850,6 +2850,36 @@
   }
   if (typeof window !== 'undefined') (window as unknown as { __moeHandleBack?: () => boolean }).__moeHandleBack = handleAndroidBack;
 
+  // Desktop: Esc and the mouse Back button share the same back stack (root = no-op).
+  // Capture phase so the older per-overlay Esc handlers don't double-handle.
+  $effect(() => {
+    const isEditable = (el: Element | null): el is HTMLElement =>
+      el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.repeat) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const active = document.activeElement;
+      if (isEditable(active)) { active.blur(); return; }
+      handleAndroidBack();
+    };
+    const blockMouseBack = (event: MouseEvent) => { if (event.button === 3) event.preventDefault(); };
+    const onMouseBack = (event: MouseEvent) => {
+      if (event.button !== 3) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      handleAndroidBack();
+    };
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('mousedown', blockMouseBack, true);
+    window.addEventListener('mouseup', onMouseBack, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('mousedown', blockMouseBack, true);
+      window.removeEventListener('mouseup', onMouseBack, true);
+    };
+  });
+
   async function openNowPlaying(): Promise<void> {
     if (!playback?.currentTrack || isNowPlayingOpen) return;
     nowPlayingReturnView = activeView;
