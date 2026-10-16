@@ -8,5 +8,8 @@ pub mod spectrogram;
 pub mod tags;
 
 pub use cover::{prepare_cover, CoverOptions, PreparedCover};
-pub use spectrogram::{render_spectrogram, Spectrogram, SpectrogramOptions};
+pub use spectrogram::{
+    colormap_lut, render_spectrogram, ChannelSelect, Colormap, Spectrogram, SpectrogramOptions,
+    WindowFunction,
+};
 pub use tags::{read_details, write_edit, AudioProperties, TagEdit, TagFields, TrackDetails};

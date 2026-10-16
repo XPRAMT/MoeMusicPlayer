@@ -239,41 +239,46 @@ pub async fn track_details_reveal(
 pub struct SpectrogramDto {
     pub png_base64: String,
     pub sample_rate: u32,
+    pub channels: u32,
+    pub panels: u32,
     pub duration_ms: u64,
     pub columns: u32,
     pub height: u32,
+    pub max_frequency_hz: u32,
     pub cutoff_hz: Option<u32>,
     pub file_name: String,
+    pub path: String,
 }
 
+/// Render a spectrogram with the window's current settings (FFT size, window function,
+/// colormap, channel, dB range, linear/log axis, max frequency). Missing fields use
+/// defaults.
 #[tauri::command]
 pub async fn track_spectrogram(
     state: State<'_, AppState>,
     track_id: String,
-    columns: Option<u32>,
-    height: Option<u32>,
+    options: Option<player_tags::SpectrogramOptions>,
 ) -> Result<SpectrogramDto, String> {
     let path = track_path(&state, &track_id)?;
     blocking(move || {
-        let defaults = player_tags::SpectrogramOptions::default();
-        let options = player_tags::SpectrogramOptions {
-            columns: columns.unwrap_or(defaults.columns),
-            height: height.unwrap_or(defaults.height),
-            ..defaults
-        };
+        let options = options.unwrap_or_default();
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let spectrogram = player_tags::render_spectrogram(&path, options, &cancel)?;
         Ok(SpectrogramDto {
             png_base64: base64::engine::general_purpose::STANDARD.encode(&spectrogram.png),
             sample_rate: spectrogram.sample_rate,
+            channels: spectrogram.channels,
+            panels: spectrogram.panels,
             duration_ms: spectrogram.duration_ms,
             columns: spectrogram.columns,
             height: spectrogram.height,
+            max_frequency_hz: spectrogram.max_frequency_hz,
             cutoff_hz: spectrogram.cutoff_hz,
             file_name: path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            path: path.to_string_lossy().into_owned(),
         })
     })
     .await

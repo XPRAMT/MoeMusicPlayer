@@ -3191,6 +3191,7 @@ dependencies = [
  "lofty",
  "realfft",
  "serde",
+ "serde_json",
  "symphonia",
 ]
 

@@ -25,3 +25,4 @@ serde = { version = "1", features = ["derive"] }
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 lofty = "0.25.4"
+serde_json = "1"

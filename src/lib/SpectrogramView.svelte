@@ -1,31 +1,72 @@
 <script lang="ts">
   // 頻譜圖：桌面為獨立 Tauri 視窗（label `spectrogram`），Android 以全螢幕頁面呈現（ADR 0013）。
+  // 視窗內可換曲（曲庫搜尋、播放佇列上／下一首、跟隨目前播放），並調整配色與分析參數。
   import { onDestroy, onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import {
+    COLORMAPS,
+    FFT_SIZES,
+    WINDOW_FUNCTIONS,
+    fractionToFrequency,
+    frequencyTicks,
+    frequencyToFraction,
+    loadSpectrogramSettings,
+    saveSpectrogramSettings,
+    toRenderOptions,
+    type SpectrogramSettings,
+  } from './spectrogram-settings.js';
 
-  type Spectrogram = { pngBase64: string; sampleRate: number; durationMs: number; columns: number; height: number; cutoffHz: number | null; fileName: string };
+  type Spectrogram = {
+    pngBase64: string; sampleRate: number; channels: number; panels: number; durationMs: number;
+    columns: number; height: number; maxFrequencyHz: number; cutoffHz: number | null; fileName: string; path: string;
+  };
+  type TrackLite = { id: string; title: string | null; artist: string | null; album: string | null };
+  type QueueItem = { trackId: string; track: TrackLite | null; isCurrent: boolean };
 
   let { trackId: initialTrackId, onClose }: { trackId: string; onClose?: () => void } = $props();
 
   let trackId = $state('');
+  let trackLabel = $state('');
   let data = $state<Spectrogram | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(false);
-  let hover = $state<{ x: number; y: number; time: string; freq: string } | null>(null);
-  let image = $state<HTMLImageElement | null>(null);
+  let settings = $state<SpectrogramSettings>(loadSpectrogramSettings());
+  let showSettings = $state(false);
+  let hover = $state<{ x: number; y: number; time: string; freq: string; channel: string } | null>(null);
+  let plot = $state<HTMLDivElement | null>(null);
+  let searchText = $state('');
+  let searchResults = $state<TrackLite[]>([]);
+  let searchOpen = $state(false);
   let unlisten: UnlistenFn | null = null;
+  let followTimer: ReturnType<typeof setInterval> | null = null;
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let renderTimer: ReturnType<typeof setTimeout> | null = null;
   let requestSerial = 0;
+  let renderedKey = '';
 
-  async function load(id: string) {
-    trackId = id;
+  const describe = (t: TrackLite | null | undefined) => t ? [t.title, t.artist].filter(Boolean).join(' — ') : '';
+
+  function renderSize() {
+    const rect = plot?.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    return { columns: (rect?.width ?? 1200) * dpr, height: (rect?.height ?? 500) * dpr };
+  }
+
+  async function render(force = false) {
+    if (!trackId) return;
+    const size = renderSize();
+    const options = toRenderOptions(settings, size.columns, size.height);
+    const key = JSON.stringify([trackId, options]);
+    if (!force && key === renderedKey) return;
+    renderedKey = key;
     const serial = ++requestSerial;
     loading = true; error = null;
     try {
-      const result = await invoke<Spectrogram>('track_spectrogram', { trackId: id });
+      const result = await invoke<Spectrogram>('track_spectrogram', { trackId, options });
       if (serial !== requestSerial) return;
       data = result;
-      document.title = `頻譜圖 — ${result.fileName}`;
+      document.title = `頻譜圖 — ${trackLabel || result.fileName}`;
     } catch (cause) {
       if (serial === requestSerial) { error = String(cause); data = null; }
     } finally {
@@ -33,79 +74,281 @@
     }
   }
 
-  const nyquist = $derived(data ? data.sampleRate / 2 : 0);
-  const freqTicks = $derived(nyquist ? Array.from({ length: Math.floor(nyquist / 2000) + 1 }, (_, i) => i * 2000).filter((f) => f <= nyquist) : []);
+  function scheduleRender(delay = 250) {
+    if (renderTimer) clearTimeout(renderTimer);
+    renderTimer = setTimeout(() => void render(), delay);
+  }
+
+  async function setTrack(id: string, label?: string) {
+    if (!id) return;
+    trackId = id;
+    trackLabel = label ?? '';
+    await render(true);
+  }
+
+  function updateSettings(patch: Partial<SpectrogramSettings>) {
+    settings = { ...settings, ...patch };
+    saveSpectrogramSettings(settings);
+    if ('followPlaying' in patch) { setupFollow(); return; }
+    scheduleRender();
+  }
+
+  async function currentPlaying(): Promise<TrackLite | null> {
+    try {
+      const snapshot = await invoke<{ currentTrack: TrackLite | null }>('playback_get_snapshot', {});
+      return snapshot.currentTrack;
+    } catch { return null; }
+  }
+
+  function setupFollow() {
+    if (followTimer) { clearInterval(followTimer); followTimer = null; }
+    if (!settings.followPlaying) return;
+    const tick = async () => {
+      const current = await currentPlaying();
+      if (current && current.id !== trackId) void setTrack(current.id, describe(current));
+    };
+    void tick();
+    followTimer = setInterval(() => void tick(), 1500);
+  }
+
+  async function queueNeighbour(step: 1 | -1) {
+    try {
+      const items: QueueItem[] = [];
+      for (let offset = 0; offset < 20000; offset += 500) {
+        const page = await invoke<{ total: number; items: QueueItem[] }>('playback_get_queue_page', { offset, limit: 500 });
+        items.push(...page.items);
+        if (offset + 500 >= page.total) break;
+      }
+      if (items.length === 0) { error = '播放佇列是空的'; return; }
+      let index = items.findIndex((item) => item.trackId === trackId);
+      if (index < 0) index = items.findIndex((item) => item.isCurrent);
+      const next = items[(Math.max(0, index) + step + items.length) % items.length];
+      if (settings.followPlaying) updateSettings({ followPlaying: false });
+      await setTrack(next.trackId, describe(next.track));
+    } catch (cause) { error = String(cause); }
+  }
+
+  async function playingNow() {
+    const current = await currentPlaying();
+    if (current) await setTrack(current.id, describe(current));
+  }
+
+  function onSearchInput() {
+    if (searchTimer) clearTimeout(searchTimer);
+    const query = searchText.trim();
+    if (!query) { searchResults = []; return; }
+    searchTimer = setTimeout(async () => {
+      try {
+        const page = await invoke<{ items: TrackLite[] }>('library_get_page', { query, offset: 0, limit: 40 });
+        searchResults = page.items;
+        searchOpen = true;
+      } catch (cause) { error = String(cause); }
+    }, 200);
+  }
+
+  function pickResult(track: TrackLite) {
+    searchOpen = false; searchText = '';
+    if (settings.followPlaying) updateSettings({ followPlaying: false });
+    void setTrack(track.id, describe(track));
+  }
+
+  // Axis geometry
+  const panels = $derived(data?.panels ?? 1);
+  const maxHz = $derived(data?.maxFrequencyHz ?? 22050);
+  const ticks = $derived(frequencyTicks(maxHz, settings.logFrequency));
   const timeTicks = $derived.by(() => {
     if (!data) return [] as number[];
     const total = data.durationMs / 1000;
-    const step = [5, 10, 15, 30, 60, 120, 300].find((s) => total / s <= 12) ?? 600;
+    const step = [1, 2, 5, 10, 15, 30, 60, 120, 300].find((s) => total / s <= 14) ?? 600;
     return Array.from({ length: Math.floor(total / step) + 1 }, (_, i) => i * step);
   });
+  const channelName = (i: number, total: number) => total === 2 ? (i === 0 ? 'L' : 'R') : `Ch ${i + 1}`;
   const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-  const fmtFreq = (f: number) => (f >= 1000 ? `${(f / 1000).toFixed(f % 1000 ? 1 : 0)} kHz` : `${Math.round(f)} Hz`);
+  const fmtFreq = (f: number) => (f >= 1000 ? `${(f / 1000).toFixed(f >= 10000 || f % 1000 === 0 ? 0 : 1)}k` : `${Math.round(f)}`);
 
   function onMove(event: PointerEvent) {
-    if (!data || !image) return;
-    const rect = image.getBoundingClientRect();
+    if (!data || !plot) return;
+    const rect = plot.getBoundingClientRect();
     const fx = (event.clientX - rect.left) / rect.width;
-    const fy = (event.clientY - rect.top) / rect.height;
-    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) { hover = null; return; }
-    hover = { x: event.clientX - rect.left, y: event.clientY - rect.top, time: fmtTime((fx * data.durationMs) / 1000), freq: fmtFreq((1 - fy) * nyquist) };
+    const fyAll = (event.clientY - rect.top) / rect.height;
+    if (fx < 0 || fx > 1 || fyAll < 0 || fyAll > 1) { hover = null; return; }
+    const panel = Math.min(panels - 1, Math.floor(fyAll * panels));
+    const fy = fyAll * panels - panel;
+    const hz = fractionToFrequency(1 - fy, maxHz, settings.logFrequency);
+    hover = {
+      x: event.clientX - rect.left, y: event.clientY - rect.top,
+      time: fmtTime((fx * data.durationMs) / 1000),
+      freq: `${hz >= 1000 ? (hz / 1000).toFixed(2) + ' kHz' : Math.round(hz) + ' Hz'}`,
+      channel: panels > 1 ? channelName(panel, panels) : '',
+    };
   }
 
+  function channelValue(): string {
+    const c = settings.channel;
+    return c.mode === 'channel' ? `channel:${c.index}` : c.mode;
+  }
+  function setChannel(value: string) {
+    if (value.startsWith('channel:')) updateSettings({ channel: { mode: 'channel', index: Number(value.slice(8)) } });
+    else updateSettings({ channel: value === 'separate' ? { mode: 'separate' } : { mode: 'mix' } });
+  }
+  const channelCount = $derived(data?.channels ?? 2);
+  const colormapGradient = $derived(COLORMAPS.find((c) => c.value === settings.colormap)?.gradient ?? '');
+
+  let resizeObserver: ResizeObserver | null = null;
   onMount(async () => {
-    void load(initialTrackId);
+    if (settings.followPlaying) {
+      setupFollow();
+    } else {
+      await setTrack(initialTrackId);
+    }
+    if (plot) {
+      resizeObserver = new ResizeObserver(() => scheduleRender(400));
+      resizeObserver.observe(plot);
+    }
     try {
-      unlisten = await listen<string>('spectrogram-track', (event) => void load(event.payload));
+      unlisten = await listen<string>('spectrogram-track', (event) => {
+        if (settings.followPlaying) updateSettings({ followPlaying: false });
+        void setTrack(event.payload);
+      });
     } catch { /* not in a Tauri window */ }
   });
-  onDestroy(() => unlisten?.());
+  onDestroy(() => {
+    unlisten?.();
+    resizeObserver?.disconnect();
+    if (followTimer) clearInterval(followTimer);
+    if (renderTimer) clearTimeout(renderTimer);
+    if (searchTimer) clearTimeout(searchTimer);
+  });
 </script>
 
 <div class="spectrogram-page">
-  <header class="spectrogram-header">
-    {#if onClose}<button type="button" class="soft-button" onclick={onClose}>返回</button>{/if}
-    <h1>{data?.fileName ?? '頻譜圖'}</h1>
-    {#if data}
-      <span class="spectrogram-meta">{data.sampleRate} Hz · {fmtTime(data.durationMs / 1000)}{#if data.cutoffHz} · 約 {fmtFreq(data.cutoffHz)} 以上無能量（可能源自有損編碼，僅供參考）{/if}</span>
-    {/if}
-  </header>
-  {#if error}<p class="spectrogram-error" role="alert">{error}</p>{/if}
-  {#if loading && !data}<p class="spectrogram-loading">計算中…</p>{/if}
-  {#if data}
-    <div class="spectrogram-plot" class:is-loading={loading}>
-      <div class="spectrogram-yaxis">
-        {#each freqTicks as f (f)}<span style:bottom={`${(f / nyquist) * 100}%`}>{fmtFreq(f)}</span>{/each}
-      </div>
-      <div class="spectrogram-image" role="img" aria-label="頻譜圖" onpointermove={onMove} onpointerleave={() => (hover = null)}>
-        <img bind:this={image} src={`data:image/png;base64,${data.pngBase64}`} alt="" draggable="false" />
-        {#each freqTicks as f (f)}<i class="grid-h" style:bottom={`${(f / nyquist) * 100}%`}></i>{/each}
-        {#if hover}<div class="spectrogram-hover" style:left={`${hover.x + 12}px`} style:top={`${hover.y + 12}px`}>{hover.time} · {hover.freq}</div>{/if}
-      </div>
-      <div></div>
-      <div class="spectrogram-xaxis">
-        {#each timeTicks as t (t)}<span style:left={`${((t * 1000) / data.durationMs) * 100}%`}>{fmtTime(t)}</span>{/each}
-      </div>
+  <header class="spectrogram-toolbar">
+    {#if onClose}<button type="button" class="sg-button" onclick={onClose}>返回</button>{/if}
+    <button type="button" class="sg-button" title="播放佇列上一首" aria-label="播放佇列上一首" onclick={() => void queueNeighbour(-1)}>◀</button>
+    <button type="button" class="sg-button" title="播放佇列下一首" aria-label="播放佇列下一首" onclick={() => void queueNeighbour(1)}>▶</button>
+    <button type="button" class="sg-button" onclick={() => void playingNow()}>目前播放</button>
+    <label class="sg-check"><input type="checkbox" checked={settings.followPlaying} onchange={(e) => updateSettings({ followPlaying: e.currentTarget.checked })} /> 跟隨播放</label>
+    <div class="sg-search">
+      <input type="search" placeholder="搜尋曲庫…" bind:value={searchText} oninput={onSearchInput} onfocus={() => (searchOpen = searchResults.length > 0)} onkeydown={(e) => { if (e.key === 'Escape') searchOpen = false; if (e.key === 'Enter' && searchResults[0]) pickResult(searchResults[0]); }} />
+      {#if searchOpen && searchResults.length > 0}
+        <ul class="sg-results" role="listbox">
+          {#each searchResults as result (result.id)}
+            <li><button type="button" onclick={() => pickResult(result)}><b>{result.title ?? '（無標題）'}</b><span>{[result.artist, result.album].filter(Boolean).join(' · ')}</span></button></li>
+          {/each}
+        </ul>
+      {/if}
     </div>
-    <div class="spectrogram-legend"><span>−120 dB</span><i></i><span>0 dB</span></div>
+    <button type="button" class="sg-button" class:is-active={showSettings} aria-expanded={showSettings} onclick={() => (showSettings = !showSettings)}>設定</button>
+    <button type="button" class="sg-button" disabled={loading} onclick={() => void render(true)}>重新繪製</button>
+  </header>
+
+  {#if showSettings}
+    <section class="sg-settings" aria-label="頻譜圖設定">
+      <label>配色
+        <select value={settings.colormap} onchange={(e) => updateSettings({ colormap: e.currentTarget.value })}>
+          {#each COLORMAPS as c (c.value)}<option value={c.value}>{c.label}</option>{/each}
+        </select>
+      </label>
+      <label>FFT 大小
+        <select value={String(settings.fftSize)} onchange={(e) => updateSettings({ fftSize: Number(e.currentTarget.value) })}>
+          {#each FFT_SIZES as size (size)}<option value={String(size)}>{size}</option>{/each}
+        </select>
+      </label>
+      <label>窗函數
+        <select value={settings.window} onchange={(e) => updateSettings({ window: e.currentTarget.value })}>
+          {#each WINDOW_FUNCTIONS as w (w.value)}<option value={w.value}>{w.label}</option>{/each}
+        </select>
+      </label>
+      <label>頻率軸
+        <select value={settings.logFrequency ? 'log' : 'linear'} onchange={(e) => updateSettings({ logFrequency: e.currentTarget.value === 'log' })}>
+          <option value="linear">線性</option><option value="log">對數</option>
+        </select>
+      </label>
+      <label>聲道
+        <select value={channelValue()} onchange={(e) => setChannel(e.currentTarget.value)}>
+          <option value="mix">混合</option>
+          {#each Array.from({ length: Math.max(1, channelCount) }, (_, i) => i) as i (i)}<option value={`channel:${i}`}>{channelName(i, channelCount)}</option>{/each}
+          <option value="separate">各聲道分開</option>
+        </select>
+      </label>
+      <label>dB 下限 <input type="number" step="5" min="-200" max="-1" value={settings.dbFloor} onchange={(e) => updateSettings({ dbFloor: Number(e.currentTarget.value) })} /></label>
+      <label>dB 上限 <input type="number" step="5" min="-199" max="20" value={settings.dbCeiling} onchange={(e) => updateSettings({ dbCeiling: Number(e.currentTarget.value) })} /></label>
+      <label>最高頻率 (kHz)
+        <input type="number" step="1" min="0.1" placeholder="自動" value={settings.maxFrequencyHz ? settings.maxFrequencyHz / 1000 : ''} onchange={(e) => { const v = Number(e.currentTarget.value); updateSettings({ maxFrequencyHz: e.currentTarget.value && v > 0 ? Math.round(v * 1000) : null }); }} />
+      </label>
+    </section>
   {/if}
+
+  <div class="sg-info">
+    <strong title={data?.path}>{trackLabel || data?.fileName || '頻譜圖'}</strong>
+    {#if data}
+      <span>{data.sampleRate} Hz · {data.channels} ch · {fmtTime(data.durationMs / 1000)}</span>
+      {#if data.cutoffHz}<span class="sg-cutoff">約 {(data.cutoffHz / 1000).toFixed(1)} kHz 以上幾乎無能量（可能源自有損編碼，僅供參考）</span>{/if}
+    {/if}
+    {#if loading}<span class="sg-loading">計算中…</span>{/if}
+  </div>
+  {#if error}<p class="sg-error" role="alert">{error}</p>{/if}
+
+  <div class="sg-plot-area">
+    <div class="sg-yaxis">
+      {#each Array.from({ length: panels }, (_, p) => p) as p (p)}
+        {#each ticks as f (f)}
+          <span style:top={`${((p + 1 - frequencyToFraction(f, maxHz, settings.logFrequency)) / panels) * 100}%`}>{fmtFreq(f)}</span>
+        {/each}
+        {#if panels > 1}<em style:top={`${((p + 0.5) / panels) * 100}%`}>{channelName(p, panels)}</em>{/if}
+      {/each}
+    </div>
+    <div class="sg-plot" bind:this={plot} role="img" aria-label="頻譜圖" onpointermove={onMove} onpointerleave={() => (hover = null)} class:is-loading={loading}>
+      {#if data}<img src={`data:image/png;base64,${data.pngBase64}`} alt="" draggable="false" />{/if}
+      {#each Array.from({ length: panels }, (_, p) => p) as p (p)}
+        {#each ticks as f (f)}<i class="sg-grid" style:top={`${((p + 1 - frequencyToFraction(f, maxHz, settings.logFrequency)) / panels) * 100}%`}></i>{/each}
+        {#if p > 0}<i class="sg-divider" style:top={`${(p / panels) * 100}%`}></i>{/if}
+      {/each}
+      {#if hover}<div class="sg-hover" style:left={`${hover.x + 12}px`} style:top={`${hover.y + 12}px`}>{hover.channel ? `${hover.channel} · ` : ''}{hover.time} · {hover.freq}</div>{/if}
+    </div>
+    <div></div>
+    <div class="sg-xaxis">
+      {#if data}{#each timeTicks as t (t)}<span style:left={`${((t * 1000) / data.durationMs) * 100}%`}>{fmtTime(t)}</span>{/each}{/if}
+    </div>
+  </div>
+  <div class="sg-legend"><span>{settings.dbFloor} dB</span><i style:background={colormapGradient}></i><span>{settings.dbCeiling} dB</span><span class="sg-hint">Hz 刻度：k = kHz</span></div>
 </div>
 
 <style>
-  .spectrogram-page { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; background: #0b0b10; color: #e8e8ee; font-size: 13px; z-index: 80; }
-  .spectrogram-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-  .spectrogram-header h1 { font-size: 15px; margin: 0; }
-  .spectrogram-meta { opacity: 0.75; }
-  .spectrogram-error { color: #ff7a7a; }
-  .spectrogram-plot { flex: 1; min-height: 0; display: grid; grid-template-columns: 64px 1fr; grid-template-rows: 1fr 22px; }
-  .spectrogram-plot.is-loading { opacity: 0.6; }
-  .spectrogram-yaxis, .spectrogram-xaxis { position: relative; font-size: 11px; opacity: 0.8; }
-  .spectrogram-yaxis span { position: absolute; right: 6px; translate: 0 50%; white-space: nowrap; }
-  .spectrogram-xaxis span { position: absolute; top: 4px; translate: -50% 0; white-space: nowrap; }
-  .spectrogram-image { position: relative; min-height: 0; overflow: hidden; cursor: crosshair; }
-  .spectrogram-image img { width: 100%; height: 100%; display: block; image-rendering: auto; user-select: none; }
-  .grid-h { position: absolute; left: 0; right: 0; height: 1px; background: rgb(255 255 255 / 0.12); pointer-events: none; }
-  .spectrogram-hover { position: absolute; padding: 2px 6px; border-radius: 4px; background: rgb(0 0 0 / 0.75); pointer-events: none; white-space: nowrap; }
-  .spectrogram-legend { display: flex; align-items: center; gap: 8px; margin-left: 64px; font-size: 11px; opacity: 0.8; }
-  .spectrogram-legend i { width: 200px; height: 8px; border-radius: 2px; background: linear-gradient(90deg, rgb(0 0 4), rgb(59 15 112), rgb(140 41 129), rgb(222 73 104), rgb(254 159 109), rgb(252 253 191)); }
+  .spectrogram-page { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; background: #0b0b10; color: #e8e8ee; font-size: 13px; z-index: 80; }
+  .spectrogram-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .sg-button { background: #22222c; color: inherit; border: 1px solid #3a3a48; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  .sg-button:hover { background: #2c2c38; }
+  .sg-button.is-active { border-color: #8a7dff; }
+  .sg-button:disabled { opacity: 0.5; cursor: default; }
+  .sg-check { display: flex; align-items: center; gap: 4px; }
+  .sg-search { position: relative; flex: 1; min-width: 180px; max-width: 420px; }
+  .sg-search input { width: 100%; box-sizing: border-box; background: #15151c; color: inherit; border: 1px solid #3a3a48; border-radius: 6px; padding: 4px 8px; font: inherit; }
+  .sg-results { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; right: 0; max-height: 50vh; overflow: auto; margin: 0; padding: 4px; list-style: none; background: #1a1a22; border: 1px solid #3a3a48; border-radius: 6px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.5); }
+  .sg-results button { width: 100%; text-align: left; display: grid; gap: 1px; background: none; border: 0; color: inherit; padding: 5px 8px; border-radius: 4px; cursor: pointer; font: inherit; }
+  .sg-results button:hover { background: #2c2c38; }
+  .sg-results span { opacity: 0.65; font-size: 12px; }
+  .sg-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 10px; background: #15151c; border: 1px solid #2c2c38; border-radius: 6px; }
+  .sg-settings label { display: flex; align-items: center; gap: 6px; }
+  .sg-settings select, .sg-settings input { background: #0f0f15; color: inherit; border: 1px solid #3a3a48; border-radius: 4px; padding: 2px 4px; font: inherit; }
+  .sg-settings input[type='number'] { width: 70px; }
+  .sg-info { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .sg-info strong { font-size: 14px; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sg-info span { opacity: 0.75; }
+  .sg-cutoff { color: #ffcf6b; opacity: 1 !important; }
+  .sg-error { color: #ff7a7a; margin: 0; }
+  .sg-plot-area { flex: 1; min-height: 0; display: grid; grid-template-columns: 52px 1fr; grid-template-rows: 1fr 20px; }
+  .sg-yaxis, .sg-xaxis { position: relative; font-size: 11px; opacity: 0.8; }
+  .sg-yaxis span { position: absolute; right: 6px; translate: 0 -50%; white-space: nowrap; }
+  .sg-yaxis em { position: absolute; left: 0; translate: 0 -50%; font-style: normal; font-weight: 600; color: #8a7dff; }
+  .sg-xaxis span { position: absolute; top: 3px; translate: -50% 0; white-space: nowrap; }
+  .sg-plot { position: relative; min-height: 0; overflow: hidden; cursor: crosshair; background: #000; }
+  .sg-plot.is-loading img { opacity: 0.55; }
+  .sg-plot img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; user-select: none; }
+  .sg-grid { position: absolute; left: 0; right: 0; height: 1px; background: rgb(255 255 255 / 0.1); pointer-events: none; }
+  .sg-divider { position: absolute; left: 0; right: 0; height: 2px; background: #0b0b10; pointer-events: none; }
+  .sg-hover { position: absolute; padding: 2px 6px; border-radius: 4px; background: rgb(0 0 0 / 0.78); pointer-events: none; white-space: nowrap; }
+  .sg-legend { display: flex; align-items: center; gap: 8px; margin-left: 52px; font-size: 11px; opacity: 0.85; }
+  .sg-legend i { width: 220px; height: 8px; border-radius: 2px; }
+  .sg-hint { margin-left: auto; opacity: 0.6; }
 </style>
