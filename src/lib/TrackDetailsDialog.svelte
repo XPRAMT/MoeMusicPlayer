@@ -2,7 +2,7 @@
   // 歌曲詳細資訊面板（ADR 0013 Phase 1）：單曲標籤檢視／暫存編輯，按「儲存」才寫檔。
   import { onDestroy, onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { isOnlineLyrics, lyricsToText } from './lyrics-import.js';
+  import { hasLyricsInUse, lyricsToText } from './lyrics-import.js';
   import {
     loadCoverEditOptions,
     saveCoverEditOptions,
@@ -95,7 +95,7 @@
     }
     try {
       const lyrics = await invoke<{ lyrics: { provider?: string; source: string; synced: boolean; lines: { startMs: number | null; text: string; translation: string | null }[] } | null }>('lyrics_get_track', { trackId });
-      onlineLyricsText = isOnlineLyrics(lyrics.lyrics) ? lyricsToText(lyrics.lyrics!) : null;
+      onlineLyricsText = hasLyricsInUse(lyrics.lyrics) ? lyricsToText(lyrics.lyrics!) : null;
     } catch {
       onlineLyricsText = null;
     }
@@ -323,7 +323,7 @@
         <div class="track-details-field is-wide is-lyrics" class:is-dirty={isDirty('lyrics')}>
           <span class="track-details-lyrics-label">
             歌詞（內嵌）
-            <button type="button" class="soft-button" disabled={details.readOnly || onlineLyricsText === null} title={onlineLyricsText === null ? '此曲目目前沒有使用線上歌詞' : '以目前使用中的線上歌詞取代（儲存後才寫入）'} onclick={importOnlineLyrics}>導入線上歌詞</button>
+            <button type="button" class="soft-button" disabled={details.readOnly || onlineLyricsText === null || onlineLyricsText === draft.lyrics} title={onlineLyricsText === null ? '此曲目目前沒有使用中的歌詞' : onlineLyricsText === draft.lyrics ? '內嵌歌詞已與使用中歌詞相同' : '以播放器目前使用的歌詞取代（線上、.lrc、手動選擇等；同步時間戳保留為 LRC，儲存後才寫入）'} onclick={importOnlineLyrics}>導入使用中歌詞</button>
             {#if isDirty('lyrics')}<button type="button" class="track-details-reset" aria-label="還原歌詞" title="還原" onclick={() => resetField('lyrics')}>↺</button>{/if}
           </span>
           <textarea rows="10" bind:value={draft.lyrics} readonly={details.readOnly} aria-label="歌詞"></textarea>

@@ -1,13 +1,10 @@
-// Helpers for the song details panel's 「導入」 button (ADR 0013).
-// Only lyrics coming from an online provider qualify; `provider` survives manual selection.
+// Helpers for the song details panel's 「導入使用中歌詞」 button (ADR 0013).
+// Any lyrics the player is currently using for the track qualify, whatever the source
+// (online provider, .lrc sidecar, manually chosen file, embedded tag).
 
-const ONLINE_PROVIDERS = new Set(['netease', 'qqmusic']);
-
-/** @param {{ provider?: string, source?: string, lines?: unknown[] } | null | undefined} lyrics */
-export function isOnlineLyrics(lyrics) {
-  if (!lyrics || !Array.isArray(lyrics.lines) || lyrics.lines.length === 0) return false;
-  const provider = lyrics.provider ?? lyrics.source;
-  return ONLINE_PROVIDERS.has(provider ?? '');
+/** @param {{ lines?: unknown[] } | null | undefined} lyrics */
+export function hasLyricsInUse(lyrics) {
+  return !!lyrics && Array.isArray(lyrics.lines) && lyrics.lines.length > 0;
 }
 
 /** @param {number} ms */
@@ -22,9 +19,9 @@ export function formatLrcTimestamp(ms) {
 
 /**
  * Serialize parsed lyrics to text. Synced lines become LRC (offsets are already applied
- * by the backend parser); a translation, when present, is emitted as a second line with
- * the same timestamp (the common NetEase-style bilingual LRC convention).
- * @param {{ synced: boolean, lines: { startMs: number | null, text: string, translation?: string | null }[] }} lyrics
+ * by the backend parser). Translation and romanization, when present, follow the original
+ * line as extra lines with the same timestamp (the bilingual LRC convention the parser reads).
+ * @param {{ synced: boolean, lines: { startMs: number | null, text: string, translation?: string | null, romanization?: string | null }[] }} lyrics
  */
 export function lyricsToText(lyrics) {
   const out = [];
@@ -32,6 +29,7 @@ export function lyricsToText(lyrics) {
     const stamp = lyrics.synced && line.startMs != null ? formatLrcTimestamp(line.startMs) : '';
     out.push(`${stamp}${line.text}`);
     if (line.translation) out.push(`${stamp}${line.translation}`);
+    if (line.romanization) out.push(`${stamp}${line.romanization}`);
   }
   return out.join('\n');
 }

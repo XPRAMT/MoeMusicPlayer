@@ -129,6 +129,12 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - lofty 驗證（樣本複本）：MP3（含 v2.3→v2.4 升級）、FLAC、M4A、Opus、WAV（寫 ID3v2 chunk）皆可往返；ID3v2 不接受 `ItemKey::Lyrics`，改寫 USLT（`UnsyncLyrics`）。該 Ogg Vorbis 樣本 lofty 讀取失敗（與既有掃描一致），未處理。
 - 偏離／暫定：封面設定（JPG 品質、自動縮放短邊）暫存於前端 localStorage（每裝置），尚未進 `settings.json`；儲存後以既有增量 `library_sync` 更新曲庫投影（會走訪來源目錄，尚非單曲投影更新）；JPEG 且不需縮放時原樣寫入以免重壓縮，其他格式一律轉 JPEG。Android 標籤讀寫與頻譜圖尚未接上（`track_path` 只支援 Windows 檔案路徑），Android 全螢幕頻譜頁的 UI 已就緒。
 
+## 「導入使用中歌詞」（2026-10-17 使用者修訂）
+
+- 按鈕改名「導入使用中歌詞」，取代先前只限線上來源的「導入」：播放器目前為此曲使用的歌詞，不論來源（網易雲／QQ 線上、同名 .lrc、手動選擇的歌詞檔、內嵌）都可匯入。
+- 同步歌詞輸出為 LRC 時間戳；翻譯與羅馬音以相同時間戳的額外行跟在原文後。
+- 沒有使用中歌詞，或使用中歌詞與欄位內容相同時停用；只暫存，按儲存才寫檔。
+
 ## Android 後端（2026-10-16）
 
 - 曲庫曲目在 Android 是 `content://`（MediaStore 或 SAF 文件），不直接當檔案路徑用。讀取、封面、頻譜都先複製成 app cache 的私有工作檔（副檔名取自顯示名稱，沒有時看 MIME），再沿用桌面同一套 lofty／symphonia 程式。
