@@ -2833,6 +2833,23 @@
     );
   }
 
+  // Android system Back (MainActivity -> window.__moeHandleBack). Closes the top-most overlay,
+  // then the playback page, then a detail page. Returns false at the root so native moves the
+  // task to the background (playback continues).
+  function handleAndroidBack(): boolean {
+    if (androidSpectrogramTrackId) { androidSpectrogramTrackId = null; return true; }
+    if (trackDetailsTrackId) { window.dispatchEvent(new CustomEvent('moe:track-details-request-close')); return true; }
+    if (isSleepTimerOpen) { closeSleepTimerPopover(false); return true; }
+    if (volumeExpanded) { volumeExpanded = false; volumePopoverLeftShiftPx = 0; return true; }
+    if (isQuickSettingsOpen) { void closeQuickSettings(); return true; }
+    if (isNavPanelOpen) { closeNavPanel('escape', false); return true; }
+    if (isNowPlayingOpen) { void closeNowPlaying(); return true; }
+    if (activeView === 'album-detail') { navigateToAlbumIndex(); return true; }
+    if (activeView === 'artist-detail') { navigateToArtistIndex(); return true; }
+    return false;
+  }
+  if (typeof window !== 'undefined') (window as unknown as { __moeHandleBack?: () => boolean }).__moeHandleBack = handleAndroidBack;
+
   async function openNowPlaying(): Promise<void> {
     if (!playback?.currentTrack || isNowPlayingOpen) return;
     nowPlayingReturnView = activeView;

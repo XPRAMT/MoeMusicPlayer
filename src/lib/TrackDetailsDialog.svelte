@@ -283,8 +283,8 @@
 
   let lastTrackId = '';
   $effect(() => { if (trackId !== lastTrackId) { lastTrackId = trackId; void load(); } });
-  onMount(() => { window.addEventListener('keydown', onKeydown); window.addEventListener('focus', refreshClipboard); void refreshClipboard(); });
-  onDestroy(() => { window.removeEventListener('keydown', onKeydown); window.removeEventListener('focus', refreshClipboard); revoke(coverUrl); revoke(pendingCoverUrl); });
+  onMount(() => { window.addEventListener('keydown', onKeydown); window.addEventListener('moe:track-details-request-close', requestClose); window.addEventListener('focus', refreshClipboard); void refreshClipboard(); });
+  onDestroy(() => { window.removeEventListener('keydown', onKeydown); window.removeEventListener('moe:track-details-request-close', requestClose); window.removeEventListener('focus', refreshClipboard); revoke(coverUrl); revoke(pendingCoverUrl); });
 </script>
 
 <div class="track-details-layer" use:portal>

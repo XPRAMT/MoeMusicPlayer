@@ -18,6 +18,7 @@ import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
   private val androidInsetsBridge = AndroidInsetsBridge()
+  private var appWebView: WebView? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -66,6 +67,21 @@ class MainActivity : TauriActivity() {
       windowInsets
     }
     ViewCompat.requestApplyInsets(content)
+    // System Back (predictive-back compatible dispatcher): the web UI closes its top-most
+    // overlay / page via window.__moeHandleBack(); when nothing is left, send the task to the
+    // background instead of finishing, so the PlaybackService keeps playing.
+    onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+      override fun handleOnBackPressed() {
+        val webView = appWebView
+        if (webView == null) {
+          moveTaskToBack(true)
+          return
+        }
+        webView.evaluateJavascript(
+          "(function(){try{return !!(window.__moeHandleBack&&window.__moeHandleBack());}catch(e){return false;}})()",
+        ) { result -> if (result != "true") moveTaskToBack(true) }
+      }
+    })
     requestNotificationPermissionIfNeeded()
   }
 
@@ -86,6 +102,7 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     webView.addJavascriptInterface(androidInsetsBridge, "MoeAndroidInsets")
+    appWebView = webView
     // App UI, not a document: no pinch / double-tap page zoom (the viewport meta also sets
     // user-scalable=no). Scrolling and JS gestures are unaffected.
     webView.settings.setSupportZoom(false)
