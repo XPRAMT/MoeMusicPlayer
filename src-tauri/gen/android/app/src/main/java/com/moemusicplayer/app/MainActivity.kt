@@ -22,6 +22,14 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    // Transparent navigation bar for 3-button and gesture navigation alike: content draws
+    // behind it and pads by the native bottom inset (--android-safe-bottom).
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      window.isNavigationBarContrastEnforced = false
+      window.isStatusBarContrastEnforced = false
+    }
+    @Suppress("DEPRECATION")
+    window.navigationBarColor = android.graphics.Color.TRANSPARENT
 
     val content = findViewById<View>(android.R.id.content)
     content.setPadding(0, 0, 0, 0)
