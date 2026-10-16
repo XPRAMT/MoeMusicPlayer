@@ -1,7 +1,7 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { getSwipeOffset, getSwipeVelocity, isSwipeAxisForDirection, isSwipePointer, resolveSwipeAxis, shouldDismissSwipe, SWIPE_IGNORE_SELECTOR } from '../src/lib/swipe-dismiss.js';
+import { getSwipeActions, resolveSwipeDirection, getSwipeOffset, getSwipeVelocity, isSwipeAxisForDirection, isSwipePointer, resolveSwipeAxis, shouldDismissSwipe, SWIPE_IGNORE_SELECTOR } from '../src/lib/swipe-dismiss.js';
 
 test('axis lock waits for slop and picks the dominant axis', () => {
   assert.equal(resolveSwipeAxis(3, 4), null);
@@ -45,5 +45,29 @@ test('nav panel, quick settings and cover are wired with the shared helper', () 
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /use:swipeDismiss=\{\{ direction: 'left'[^}]*closeNavPanel/);
   assert.match(app, /use:swipeDismiss=\{\{ direction: 'right'[^}]*closeQuickSettings/);
-  assert.match(app, /use:swipeDismiss=\{\{ direction: 'down'[^}]*closeNowPlaying/);
+  // Cover: still image, left = previous, right = next (as the user specified), down = close.
+  const cover = app.match(/use:swipeDismiss=\{\{ follow: false[^\n]*/)?.[0] ?? '';
+  assert.match(cover, /left: \(\) => void controlPlayback\('playback_previous'\)/);
+  assert.match(cover, /right: \(\) => void controlPlayback\('playback_next'\)/);
+  assert.match(cover, /down: \(\) => void closeNowPlaying\(\)/);
+});
+
+test('locked swipe resolves its direction from the locked axis sign', () => {
+  assert.equal(resolveSwipeDirection('x', -40, 10), 'left');
+  assert.equal(resolveSwipeDirection('x', 40, -10), 'right');
+  assert.equal(resolveSwipeDirection('y', 5, 60), 'down');
+  assert.equal(resolveSwipeDirection('y', 5, -60), 'up');
+});
+
+test('single-direction and multi-action options map to handlers; missing directions are ignored', () => {
+  const close = () => {};
+  assert.deepEqual(Object.keys(getSwipeActions({ direction: 'left', onDismiss: close })), ['left']);
+  const prev = () => {}; const next = () => {};
+  const actions = getSwipeActions({ follow: false, actions: { left: prev, right: next, down: close } });
+  assert.equal(actions.left, prev);
+  assert.equal(actions.right, next);
+  assert.equal(actions.up, undefined);
+  // Non-following swipes still use the same release thresholds.
+  assert.equal(shouldDismissSwipe({ offsetPx: 100, sizePx: 300, velocityPxPerMs: 0 }), true);
+  assert.equal(shouldDismissSwipe({ offsetPx: 40, sizePx: 300, velocityPxPerMs: 0.1 }), false);
 });

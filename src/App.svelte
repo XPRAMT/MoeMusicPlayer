@@ -4376,7 +4376,7 @@
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
-                  use:swipeDismiss={{ direction: 'down', enabled: isNowPlayingOpen, onDismiss: () => void closeNowPlaying() }}
+                  use:swipeDismiss={{ follow: false, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_previous'), right: () => void controlPlayback('playback_next'), down: () => void closeNowPlaying() } }}
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
                   style:width={coverFrame ? `${coverFrame.width}px` : undefined}

@@ -4763,5 +4763,5 @@ input:focus-visible {
   touch-action: pan-y;
 }
 .cover-stage {
-  touch-action: pan-x;
+  touch-action: none;
 }

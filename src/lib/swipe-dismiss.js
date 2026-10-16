@@ -9,7 +9,11 @@ export const SWIPE_IGNORE_SELECTOR = 'input, select, textarea, [role="slider"], 
 
 /** @typedef {'left' | 'right' | 'down' | 'up'} SwipeDirection */
 /** @typedef {{ x: number, y: number, t: number }} SwipeSample */
-/** @typedef {{ direction: SwipeDirection, onDismiss: () => void, enabled?: boolean }} SwipeDismissOptions */
+/**
+ * Either one dismiss direction (`direction` + `onDismiss`) or several (`actions`). `follow: false` keeps the
+ * element still: nothing moves while dragging and the action fires only on release.
+ * @typedef {{ direction?: SwipeDirection, onDismiss?: () => void, actions?: Partial<Record<SwipeDirection, () => void>>, follow?: boolean, enabled?: boolean }} SwipeDismissOptions
+ */
 
 /** @type {Record<SwipeDirection, 'x' | 'y'>} */
 const AXIS = { left: 'x', right: 'x', down: 'y', up: 'y' };
@@ -51,6 +55,18 @@ export function shouldDismissSwipe({ offsetPx, sizePx, velocityPxPerMs }, ratio 
   return velocityPxPerMs >= velocity;
 }
 
+/** Direction of a locked swipe from the sign of the locked axis. @param {'x' | 'y'} axis @param {number} dx @param {number} dy @returns {SwipeDirection} */
+export function resolveSwipeDirection(axis, dx, dy) {
+  if (axis === 'x') return dx < 0 ? 'left' : 'right';
+  return dy > 0 ? 'down' : 'up';
+}
+
+/** @param {SwipeDismissOptions} options @returns {Partial<Record<SwipeDirection, () => void>>} */
+export function getSwipeActions(options) {
+  if (options.actions) return options.actions;
+  return options.direction && options.onDismiss ? { [options.direction]: options.onDismiss } : {};
+}
+
 /** @param {string} pointerType */
 export function isSwipePointer(pointerType) {
   return pointerType === 'touch' || pointerType === 'pen';
@@ -75,9 +91,11 @@ export function swipeDismiss(node, params) {
   let axis = null;
   /** @type {SwipeSample[]} */
   let samples = [];
+  /** @type {SwipeDirection | null} */
+  let direction = null;
   let suppressClick = false;
   const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const size = () => (AXIS[options.direction] === 'x' ? node.offsetWidth : node.offsetHeight);
+  const follows = () => options.follow !== false;
 
   /** @param {boolean} animate */
   function reset(animate) {
@@ -103,12 +121,15 @@ export function swipeDismiss(node, params) {
     if (!axis) {
       axis = resolveSwipeAxis(dx, dy);
       if (!axis) return;
-      if (!isSwipeAxisForDirection(options.direction, axis)) { start = null; return; }
+      const resolved = resolveSwipeDirection(axis, dx, dy);
+      if (!getSwipeActions(options)[resolved]) { start = null; return; }
+      direction = resolved;
       try { node.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
-      node.style.transition = 'none';
+      if (follows()) node.style.transition = 'none';
     }
+    if (!direction) return;
     samples = [...samples.slice(-1), { x: event.clientX, y: event.clientY, t: event.timeStamp }];
-    node.style.translate = translateFor(options.direction, getSwipeOffset(options.direction, dx, dy));
+    if (follows()) node.style.translate = translateFor(direction, getSwipeOffset(direction, dx, dy));
     if (event.cancelable) event.preventDefault();
   }
 
@@ -119,19 +140,23 @@ export function swipeDismiss(node, params) {
     const dx = event.clientX - start.x;
     const dy = event.clientY - start.y;
     start = null;
-    if (!locked) return;
+    const dir = direction;
+    direction = null;
+    if (!locked || !dir) return;
+    const action = getSwipeActions(options)[dir];
+    if (!action) return;
     suppressClick = true;
     setTimeout(() => { suppressClick = false; }, 0);
-    const offsetPx = getSwipeOffset(options.direction, dx, dy);
+    const offsetPx = getSwipeOffset(dir, dx, dy);
     const last = { x: event.clientX, y: event.clientY, t: event.timeStamp };
-    const velocityPxPerMs = getSwipeVelocity(options.direction, samples[0], last);
-    const sizePx = size();
+    const velocityPxPerMs = getSwipeVelocity(dir, samples[0], last);
+    const sizePx = AXIS[dir] === 'x' ? node.offsetWidth : node.offsetHeight;
     if (event.type === 'pointerup' && shouldDismissSwipe({ offsetPx, sizePx, velocityPxPerMs })) {
-      if (reduced()) { node.style.transition = ''; node.style.translate = ''; options.onDismiss(); return; }
+      if (!follows() || reduced()) { node.style.transition = ''; node.style.translate = ''; action(); return; }
       node.style.transition = `translate ${SWIPE_SETTLE_MS}ms ease-in`;
-      node.style.translate = translateFor(options.direction, Math.max(sizePx, offsetPx));
-      setTimeout(() => { options.onDismiss(); node.style.transition = ''; node.style.translate = ''; }, SWIPE_SETTLE_MS);
-    } else {
+      node.style.translate = translateFor(dir, Math.max(sizePx, offsetPx));
+      setTimeout(() => { action(); node.style.transition = ''; node.style.translate = ''; }, SWIPE_SETTLE_MS);
+    } else if (follows()) {
       reset(true);
     }
   }
