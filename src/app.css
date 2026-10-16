@@ -544,6 +544,12 @@ input:focus-visible {
   cursor: pointer;
 }
 
+/* The playback overlay clips (overflow: hidden) at the status-bar inset, which hid the drawer's
+   negative top. While the drawer is open, let it paint under the status bar (Android). */
+.now-playing-overlay:has(> .now-playing-quick-settings-drawer) {
+  overflow: visible;
+}
+
 .now-playing-quick-settings-drawer {
   position: absolute;
   z-index: 29;
