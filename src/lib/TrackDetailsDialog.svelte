@@ -311,7 +311,7 @@
       </div>
 
       <dl class="track-details-props">
-        <dt>格式</dt><dd>{formatAudioFormat({ codec: details.format, sampleRateHz: details.properties.sampleRate, bitDepth: details.properties.bitDepth, bitrateBps: (details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? 0) * 1000 })}</dd>
+        <dt>格式</dt><dd>{formatAudioFormat({ codec: details.format })}</dd>
         <dt>標籤</dt><dd>{details.tagFormat || '—'}</dd>
         <dt>時長</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
         <dt>位元率</dt><dd>{details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? '—'} kbps</dd>

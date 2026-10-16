@@ -213,8 +213,29 @@ fn sniff_mime(data: &[u8]) -> &'static str {
     }
 }
 
-fn format_name(file_type: FileType) -> String {
-    format!("{file_type:?}")
+/// Short uppercase container name shown in the details panel (matches the app's codec labels:
+/// MP3, FLAC, WAV, ...). MP4 audio keeps its file extension (M4A / MP4 / M4B).
+fn format_name(file_type: FileType, path: &Path) -> String {
+    let extension = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_uppercase())
+        .unwrap_or_default();
+    match file_type {
+        FileType::Mpeg => "MP3".to_owned(),
+        FileType::Flac => "FLAC".to_owned(),
+        FileType::Wav => "WAV".to_owned(),
+        FileType::Aiff => "AIFF".to_owned(),
+        FileType::Aac => "AAC".to_owned(),
+        FileType::Ape => "APE".to_owned(),
+        FileType::Opus => "OPUS".to_owned(),
+        FileType::Vorbis => "OGG".to_owned(),
+        FileType::Speex => "SPEEX".to_owned(),
+        FileType::WavPack => "WV".to_owned(),
+        FileType::Mpc => "MPC".to_owned(),
+        FileType::Mp4 if !extension.is_empty() => extension,
+        FileType::Mp4 => "MP4".to_owned(),
+        other => format!("{other:?}").to_uppercase(),
+    }
 }
 
 pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
@@ -245,7 +266,7 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
         return Ok(details);
     }
     let file = lofty::read_from_path(path).map_err(|e| format!("讀取標籤失敗：{e}"))?;
-    details.format = format_name(file.file_type());
+    details.format = format_name(file.file_type(), path);
     let p = file.properties();
     details.properties = AudioProperties {
         duration_ms: p.duration().as_millis() as u64,
@@ -361,4 +382,18 @@ pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
     }
     result?;
     read_details(path)
+}
+
+#[cfg(test)]
+mod format_name_tests {
+    use super::*;
+
+    #[test]
+    fn container_names_are_short_uppercase() {
+        assert_eq!(format_name(FileType::Mpeg, Path::new("a.mp3")), "MP3");
+        assert_eq!(format_name(FileType::Flac, Path::new("a.flac")), "FLAC");
+        assert_eq!(format_name(FileType::Wav, Path::new("a.wav")), "WAV");
+        assert_eq!(format_name(FileType::Mp4, Path::new("a.m4a")), "M4A");
+        assert_eq!(format_name(FileType::Mp4, Path::new("a")), "MP4");
+    }
 }
