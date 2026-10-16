@@ -45,10 +45,10 @@ test('nav panel, quick settings and cover are wired with the shared helper', () 
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(app, /use:swipeDismiss=\{\{ direction: 'left'[^}]*closeNavPanel/);
   assert.match(app, /use:swipeDismiss=\{\{ direction: 'right'[^}]*closeQuickSettings/);
-  // Cover: still image, left = previous, right = next (as the user specified), down = close.
+  // Cover: still image, left = next, right = previous (user-verified on device), down = close.
   const cover = app.match(/use:swipeDismiss=\{\{ follow: false[^\n]*/)?.[0] ?? '';
-  assert.match(cover, /left: \(\) => void controlPlayback\('playback_previous'\)/);
-  assert.match(cover, /right: \(\) => void controlPlayback\('playback_next'\)/);
+  assert.match(cover, /left: \(\) => void controlPlayback\('playback_next'\)/);
+  assert.match(cover, /right: \(\) => void controlPlayback\('playback_previous'\)/);
   assert.match(cover, /down: \(\) => void closeNowPlaying\(\)/);
 });
 
