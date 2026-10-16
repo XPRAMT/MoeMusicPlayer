@@ -1,6 +1,7 @@
 pub mod artwork;
 pub mod library;
-pub mod lyrics;
+pub mod zh_t2s;
+mod lyrics;
 pub mod playback_queue;
 pub mod playback_statistics;
 pub mod playlist;

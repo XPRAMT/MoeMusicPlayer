@@ -4278,7 +4278,7 @@
                 columns={trackColumnPreferences}
                 columnWidths={trackColumnWidths}
                 rowHeightPx={trackRowHeightPx}
-                groupingEnabled={groupingEnabled}
+                groupingEnabled={groupingEnabled && playback?.shuffle !== true}
                 sort={queueSort}
                 hideSortDirection={playback?.shuffle === true}
                 onSort={handleQueueSort}

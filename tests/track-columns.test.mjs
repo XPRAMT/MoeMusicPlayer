@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
@@ -359,7 +359,9 @@ test('grouping mode setting persists and reaches all sortable list views', async
   assert.match(app, /啟用分組模式/);
   assert.match(app, /啟用後可能增加載入時間/);
   assert.match(app, /groupingEnabled,/);
-  assert.equal([...app.matchAll(/groupingEnabled=\{groupingEnabled\}/g)].length, 6);
+  assert.equal([...app.matchAll(/groupingEnabled=\{groupingEnabled\}/g)].length, 5);
+  // Play queue: shuffle hides group headers (order is random); shuffle off restores them.
+  assert.match(app, /groupingEnabled=\{groupingEnabled && playback\?\.shuffle !== true\}/);
   for (const source of [trackList, playlist, queue, artist, album]) {
     assert.match(source, /groupingEnabled/);
   }

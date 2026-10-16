@@ -569,10 +569,19 @@ fn text_similarity(left: &str, right: &str) -> f32 {
     1.0 - distance as f32 / max_len as f32
 }
 
+fn fold_chinese_script(character: char) -> char {
+    crate::zh_t2s::T2S
+        .binary_search_by_key(&character, |(from, _)| *from)
+        .map(|index| crate::zh_t2s::T2S[index].1)
+        .unwrap_or(character)
+}
+
 fn normalized_tokens(value: &str) -> String {
+    // Fold Traditional/Simplified Chinese to one script so 愛/爱 or 戀/恋 compare equal.
     let compatibility = value
         .nfkc()
         .flat_map(char::to_lowercase)
+        .map(fold_chinese_script)
         .collect::<String>();
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -1074,5 +1083,20 @@ mod tests {
         untimed.lyrics = parse_lrc("plain lyrics").expect("fixture plain lyrics");
         assert!(!untimed.lyrics.synced);
         assert!(auto_lyric_candidate(&local, &[untimed]).is_none());
+    }
+
+    #[test]
+    fn title_and_artist_similarity_ignore_simplified_traditional_differences() {
+        assert_eq!(text_similarity("愛的戀歌", "爱的恋歌"), 1.0);
+        assert_eq!(text_similarity("戀愛サーキュレーション", "恋爱サーキュレーション"), 1.0);
+        assert_eq!(text_similarity("張學友", "张学友"), 1.0);
+        let local = LyricsTrackMetadata {
+            title: Some("愛".into()),
+            artist: Some("鄧紫棋".into()),
+            album: None,
+            duration_ms: Some(200_000),
+        };
+        let remote = candidate("zh", "爱", "邓紫棋", None, Some(200_500));
+        assert!(passes_auto_match_gates(&local, &remote));
     }
 }
