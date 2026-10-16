@@ -5,6 +5,7 @@ members = [
     "crates/player-db",
     "crates/player-platform-windows",
     "crates/player-audio-windows",
+    "crates/player-tags",
     "crates/moe-update",
     "plugins/tauri-plugin-media-index",
 ]
