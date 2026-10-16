@@ -428,7 +428,6 @@
   .track-details-lyrics-label .track-details-reset { position: static; }
   /* Two label/value pairs per row: 格式|標籤, 時長|位元率 … (rows split around the cover). */
   .track-details-props { display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 0.85rem; align-items: center; }
-  .track-details-with-action { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .track-details-props dt { opacity: 0.7; }
   .track-details-props dd { margin: 0; }
   .track-details-footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 10px 18px 14px; }
