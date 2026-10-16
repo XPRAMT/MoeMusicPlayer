@@ -395,7 +395,9 @@
   .track-details-scrim { position: fixed; inset: 0; z-index: 1000; border: 0; background: rgb(0 0 0 / 0.35); }
   .track-details {
     position: fixed; z-index: 1001; left: 50%; top: 50%; translate: -50% -50%;
-    width: min(880px, calc(100vw - 32px)); max-height: calc(100vh - 64px);
+    width: min(880px, calc(100vw - 32px - var(--android-safe-left, 0px) - var(--android-safe-right, 0px)));
+    /* Android insets come from native (MainActivity -> --android-safe-*), env() is 0 there. */
+    max-height: calc(100dvh - 64px - var(--android-safe-top, 0px) - var(--android-safe-bottom, 0px));
     display: flex; flex-direction: column; color: var(--text-primary, inherit);
   }
   .track-details-header { padding: 14px 18px 8px; }
@@ -442,6 +444,6 @@
   .track-details-saved { margin-right: auto; opacity: 0.8; font-size: 0.85rem; }
   .is-primary { font-weight: 600; }
   @media (max-width: 820px) {
-    .track-details { inset: 0; left: 0; top: 0; translate: none; width: 100vw; max-height: none; height: 100%; border-radius: 0; box-sizing: border-box; padding: var(--android-safe-top, 0px) var(--android-safe-right, 0px) var(--android-safe-bottom, 0px) var(--android-safe-left, 0px); }
+    .track-details { inset: 0; left: 0; top: 0; translate: none; width: 100vw; max-height: none; height: 100dvh; border-radius: 0; box-sizing: border-box; padding: var(--android-safe-top, 0px) var(--android-safe-right, 0px) var(--android-safe-bottom, 0px) var(--android-safe-left, 0px); }
   }
 </style>
