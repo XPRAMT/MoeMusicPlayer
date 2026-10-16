@@ -4778,3 +4778,14 @@ input:focus-visible {
 .cover-stage {
   touch-action: none;
 }
+
+/* Swipe-to-dismiss drag: keep the moving panel on its own composited layer and isolate its
+   layout/paint so pointermoves only move a texture (the nav drawer sits over the busy library
+   page; without this Android WebView re-rasterizes it per frame). Removed when the drag ends. */
+.is-swiping {
+  will-change: translate;
+  contain: layout style;
+}
+.sidebar.floating-surface.is-swiping {
+  animation: none;
+}

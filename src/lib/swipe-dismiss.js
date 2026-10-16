@@ -137,6 +137,8 @@ export function swipeDismiss(node, params) {
       direction = resolved;
       try { node.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
       if (follows() || damped()) node.style.transition = 'none';
+      // Promote to its own compositor layer only while dragging (see .is-swiping in app.css).
+      if (follows()) node.classList.add('is-swiping');
     }
     if (!direction) return;
     samples = [...samples.slice(-1), { x: event.clientX, y: event.clientY, t: event.timeStamp }];
@@ -154,6 +156,7 @@ export function swipeDismiss(node, params) {
   /** @param {PointerEvent} event */
   function up(event) {
     if (!start || event.pointerId !== start.id) return;
+    node.classList.remove('is-swiping');
     const locked = axis !== null;
     const dx = event.clientX - start.x;
     const dy = event.clientY - start.y;
