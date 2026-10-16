@@ -69,6 +69,9 @@ pub struct LyricLineDto {
 pub struct TrackLyricsDto {
     pub track_id: String,
     pub source: LyricsSourceDto,
+    /// Underlying provider even when `source` is `manual` (the song panel's import button
+    /// only accepts online providers).
+    pub provider: LyricsProviderDto,
     pub title: String,
     pub artist: Option<String>,
     pub album: Option<String>,
@@ -1594,6 +1597,12 @@ fn track_lyrics_dto(
     TrackLyricsDto {
         track_id: track_id.to_string(),
         source,
+        provider: match provider {
+            LyricProvider::NetEase => LyricsProviderDto::NetEase,
+            LyricProvider::Qq => LyricsProviderDto::QqMusic,
+            LyricProvider::Sidecar => LyricsProviderDto::Local,
+            LyricProvider::Embedded => LyricsProviderDto::Embedded,
+        },
         title: track.title.clone().unwrap_or_default(),
         artist: track.artist.clone(),
         album: track.album.clone(),

@@ -2503,6 +2503,7 @@ dependencies = [
  "player-core",
  "player-db",
  "player-platform-windows",
+ "player-tags",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",

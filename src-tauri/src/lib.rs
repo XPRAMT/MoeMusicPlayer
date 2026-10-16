@@ -53,6 +53,7 @@ use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImpo
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 mod sleep_timer;
+mod track_details;
 pub mod updater;
 use settings::{
     clamp_window_geometry_to_monitors, AlbumDetailSort, AlbumIndexSort, AppSettings,
@@ -7787,14 +7788,11 @@ fn playback_get_queue_quick_index_groupings(
     let (_revision, queue) = {
         let service = android_playback_service(&state)?;
         match service.queue_snapshot()? {
-            Some((revision, snapshot)) => (
-                revision,
-                {
-                    // Validate like playback does, but read the snapshot's public fields (same shape as Windows).
-                    PlaybackQueue::restore(snapshot.clone()).map_err(|error| error.to_owned())?;
-                    Some(snapshot)
-                },
-            ),
+            Some((revision, snapshot)) => (revision, {
+                // Validate like playback does, but read the snapshot's public fields (same shape as Windows).
+                PlaybackQueue::restore(snapshot.clone()).map_err(|error| error.to_owned())?;
+                Some(snapshot)
+            }),
             None => (0, None),
         }
     };
@@ -10496,6 +10494,15 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            track_details::track_details_get,
+            track_details::track_details_cover,
+            track_details::track_details_save,
+            track_details::track_details_pick_cover,
+            track_details::track_details_read_image,
+            track_details::track_details_export_cover,
+            track_details::track_details_reveal,
+            track_details::track_spectrogram,
+            track_details::spectrogram_window_open,
             updater::about_get_info,
             updater::update_get_state,
             updater::update_check,
