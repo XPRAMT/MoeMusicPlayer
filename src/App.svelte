@@ -4427,7 +4427,7 @@
                     onkeydown={(event) => handleSleepTimerKeydown(event, 'minutes')}
                   >{sleepTimerParts.minutes}</span>
                 </div>
-                <p class="sleep-timer-hint">在小時或分鐘上拖曳、滑動或滾動，每格 1；到 00:00 時暫停播放</p>
+                <p class="sleep-timer-hint" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;margin:0">在小時或分鐘上拖曳、滑動或滾動，每格 1；到 00:00 時暫停播放</p>
                 {#if sleepTimerActive}
                   <button class="text-button sleep-timer-cancel" type="button" onclick={() => void setSleepTimerMinutes(0)}>取消定時</button>
                 {/if}
