@@ -2,7 +2,7 @@
 
 ## 狀態
 
-Proposed（設計草案，尚未實作）。範圍限定**單曲**；多檔批次編輯不在此 ADR 範圍。
+Proposed（設計草案，尚未實作）。範圍限定**單曲**；多檔批次編輯不在此 ADR 範圍。D2／D3／D4／D9、封面範圍與頻譜圖優先（D11）已由使用者確認；D7 仍待確認。
 
 ## 背景
 
@@ -16,13 +16,13 @@ Mp3tag 強在批次、轉換、完整欄位；它沒有播放器整合與頻譜�
 
 1. **完整原始欄位**：除常用欄位外，列出檔案內所有 frame／atom／Vorbis comment（含自訂 TXXX、`----:com.apple.iTunes:*`、未知項），可新增／刪除／編輯。
 2. **音訊屬性**（唯讀）：容器／編碼、位元率（CBR/VBR）、取樣率、位元深度、聲道、時長、檔案大小、標籤版本（ID3v2.3/2.4、APEv2…）、ReplayGain 值。
-3. **多張封面含類型**（Front/Back/Artist…），顯示尺寸／格式／大小，可取代、匯出、移除。
+3. **封面**：目前只處理**一張**（前封面），顯示尺寸／格式／大小，可**匯出成檔案**或**以新圖取代**；可調 JPG 品質與自動縮放（見 D9）。多張封面含類型（Front/Back/Artist…）延後。
 4. **歌詞**：內嵌（USLT／LYRICS）與同資料夾 `.lrc` 並列顯示，標示來源；支援同步 LRC 預覽並跟播放進度高亮。
 5. **頻譜圖**：dB 色階、時間／頻率軸、截止頻率估計，作為「假無損」參考（只提示，不下定論）。
 6. **與播放器整合**：從正在播放／任何列表開啟、儲存後列表即時更新、正在播放的檔案也能安全寫入。
 7. **撤銷**：儲存前可逐欄還原；儲存後可「還原到上次儲存前」（見決策 D5）。
 
-Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」兩分頁、多值欄位以 `; ` 呈現；Picard 顯示「原值 → 新值」差異。本設計採用：分頁＋暫存欄位以顏色標示已修改並可單欄還原。
+Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」兩分頁；Picard 顯示「原值 → 新值」差異。本設計採用：分頁＋暫存欄位以顏色標示已修改並可單欄還原。
 
 ## 決策（建議）
 
@@ -38,7 +38,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 ### 寫入安全
 
 1. 複製原檔到同目錄暫存檔 `.<name>.moetmp`，在暫存檔上由 lofty 寫入，`fsync` 後以 `ReplaceFileW`（Windows）／rename 原子取代；失敗則刪暫存檔、原檔不動。
-2. 預設**保留原 mtime**（可在設定關閉），因為曲庫排序「加入日期」等可能依 mtime。
+2. 寫入後檔案 mtime **照常更新**為寫入時間，不保留舊 mtime、也不提供保留選項（已確認）。
 3. 正在播放的檔案：Windows 播放端若以共用讀取開檔，ReplaceFileW 可能因無 `FILE_SHARE_DELETE` 失敗。建議播放端改以 `FILE_SHARE_READ|FILE_SHARE_DELETE` 開檔（已開的 handle 繼續讀舊資料）；若仍失敗，記住位置→釋放 handle→寫入→從原位置續播，不中斷使用者操作。
 4. 備份：寫入前把原檔的**標籤區段**（非整檔）存到 UserData `tag-backups/<hash>.json`（含封面），保留最近 N 筆，供「還原上次儲存」。
 5. 寫完：重讀標籤 → 只更新該曲 SQLite 投影與相關專輯／演出者聚合 → 發事件讓列表、正在播放、Windows SMTC／Android Media3 metadata 刷新；不全庫重掃。
@@ -49,7 +49,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 | 格式 | lofty 寫入 | 備註 |
 |---|---|---|
 | MP3 ID3v2.4 | 可 | |
-| MP3 ID3v2.3 | 可（`WriteOptions::use_id3v23`，需實作時驗證） | 預設保留檔案原版本（D3） |
+| MP3 ID3v2.3 | 不寫 | 已確認：MP3 一律升為 ID3v2.4 寫入（D3），讀取仍支援 2.3 |
 | FLAC | 可（Vorbis comment＋PICTURE） | |
 | M4A/ALAC | 可（ilst，含 freeform `----`） | |
 | Ogg Vorbis / Opus | 可 | 封面為 METADATA_BLOCK_PICTURE |
@@ -57,7 +57,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 | APE | 可（APEv2） | |
 | DSF | **不支援** | lofty 無 DSF；DSF 尾端是 ID3v2，可自寫小解析器或先唯讀 |
 
-替代方案：`id3` crate（ID3 細部控制較強，含 2.3）、`metaflac`、`mp4ameta`。建議 MVP 只用 lofty；若驗證 ID3v2.3 寫入或特定 frame 有問題再針對 MP3 換 `id3`。
+替代方案：`id3` crate、`metaflac`、`mp4ameta`。建議 MVP 只用 lofty；若驗證 ID3v2.4 寫入或特定 frame 有問題再針對 MP3 換 `id3`。
 
 ### 頻譜圖
 
@@ -76,23 +76,24 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 
 ## 分期
 
-- **Phase 1（MVP）**：常用欄位讀寫（標題、演出者、專輯、專輯演出者、作曲、碟號/總數、音軌號/總數、日期、內嵌歌詞、單張前封面）、暫存＋儲存、路徑與在資料夾中顯示、音訊屬性唯讀、原子寫入＋保留 mtime＋正在播放處理、DB 投影同步。格式：MP3/FLAC/M4A/Ogg/Opus/WAV/APE；DSF 唯讀。桌面＋Android。
-- **Phase 2**：頻譜圖（含快取、截止頻率提示）、全部原始欄位檢視/編輯、多封面含類型、`.lrc` 並列與同步預覽。
+- **Phase 1（MVP）**：**第一項實作：FFT 頻譜圖**（含快取、截止頻率提示，使用者確認為最高優先）；其後為常用欄位讀寫（標題、演出者、專輯、專輯演出者、作曲、碟號/總數、音軌號/總數、日期、內嵌歌詞、單張封面：匯出／取代、JPG 品質、自動縮放）、暫存＋儲存、路徑與在資料夾中顯示、音訊屬性唯讀、原子寫入（mtime 照常更新）＋正在播放處理、DB 投影同步。格式：MP3（一律 ID3v2.4）/FLAC/M4A/Ogg/Opus/WAV/APE；DSF 唯讀。桌面＋Android。
+- **Phase 2**：全部原始欄位檢視/編輯、多封面含類型、`.lrc` 並列與同步預覽。
 - **Phase 3**：儲存後撤銷（標籤備份）、ReplayGain 顯示/計算、檔名 ↔ 標籤（單曲依樣板重新命名，需同步播放清單路徑）、DSF 寫入。
 - 未來（不在範圍）：多檔批次編輯。
 
 ## 待決事項（附建議預設）
 
 - D1 模組位置：新 crate `player-tags` vs 放 `player-core`。建議新 crate。
-- D2 mtime：寫入後保留原 mtime？建議預設保留，設定可關。
-- D3 ID3 版本：保留原版本 vs 一律 2.4。建議保留原版本，無標籤時用 2.4。
-- D4 多值欄位（多位演出者）：以 `; ` 分隔編輯並寫成多值 vs 單字串。建議 UI 用 `; `，寫入時依格式存多值（ID3v2.4 null 分隔、Vorbis 多個欄位），ID3v2.3 用 `/` 合併。
+- D2 mtime：**已確認**——寫入後 mtime 照常更新，不保留舊值，無相關設定。
+- D3 ID3 版本：**已確認**——MP3 一律升為 ID3v2.4（含原本是 v2.3 的檔案）。
+- D4 演出者等欄位：**已確認**——純文字輸入、原樣寫入單一字串，不做 `; ` 分隔或多值格式化；播放時由程式自動格式化。
 - D5 撤銷：只做儲存前還原 vs 也做儲存後還原。建議 MVP 只做儲存前，Phase 3 加標籤備份。
 - D6 正在播放的檔案：改播放端 share mode vs 寫入時暫停釋放。建議先改 share mode，失敗時退回「記位置→釋放→寫→續播」。
-- D7 歌詞儲存位置：同時存在內嵌與 .lrc 時編輯哪一個。建議編輯目前播放器實際使用的來源，並明確標示；另一個唯讀顯示。
+- D7 歌詞儲存位置：同時存在內嵌與 .lrc 時編輯哪一個。建議編輯目前播放器實際使用的來源，並明確標示；另一個唯讀顯示。**待使用者確認**。
 - D8 頻譜圖格式：Rust 產 PNG vs 傳原始資料到 canvas。建議 PNG（簡單、可快取、Android 也省事）。
-- D9 封面寫入：是否自動縮圖／轉 JPEG。建議原樣寫入，大於 2 MB 時提示但不強制。
+- D9 封面寫入：**已確認**——目前只處理一張封面，可匯出或取代。設定：JPG 品質可調；自動縮放開關，開啟時可設定短邊 px，一律保持長寬比。
 - D10 DSF：MVP 唯讀 vs 自寫 ID3 尾端寫入。建議 MVP 唯讀。
+- D11 頻譜圖分期：**已確認**——頻譜圖移到 Phase 1，且為第一個實作項目。
 
 ## 風險
 
@@ -101,5 +102,4 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - Windows 檔案鎖定（播放端、防毒、雲端同步）導致取代失敗：給清楚錯誤並保留原檔。
 - Android SAF 無原子 rename，失敗時可能留下半寫檔；以先備份與寫後驗證緩解。
 - 長檔／高取樣率頻譜計算的 CPU 與電量（Android）：抽樣欄位、可取消、快取。
-- 保留 mtime 可能讓外部同步工具（如雲端）忽略變更：設定可關並說明。
 - DB 投影與檔案不一致（寫成功但更新 DB 失敗）：以重讀檔案為準，下次掃描修正。
