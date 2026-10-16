@@ -417,6 +417,9 @@ pub struct TrackTagSaveRequest {
     pub fields: player_tags::TagFields,
     #[serde(default)]
     pub replace_cover_path: Option<String>,
+    /// Clipboard image (base64 of the original bytes), staged like a picked file.
+    #[serde(default)]
+    pub replace_cover_base64: Option<String>,
     #[serde(default)]
     pub remove_cover: bool,
     pub cover_options: player_tags::CoverOptions,
@@ -433,7 +436,14 @@ pub async fn track_details_save(
     blocking(move || {
         let replace_cover = match &request.replace_cover_path {
             Some(image) => Some(read_image_source(&app, image)?),
-            None => None,
+            None => match &request.replace_cover_base64 {
+                Some(data) => Some(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(data.as_bytes())
+                        .map_err(|error| format!("剪貼簿圖片格式錯誤：{error}"))?,
+                ),
+                None => None,
+            },
         };
         let edit = player_tags::TagEdit {
             fields: request.fields,

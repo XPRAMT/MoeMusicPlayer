@@ -88,7 +88,7 @@
       details = result;
       original = { ...result.fields };
       draft = { ...result.fields };
-      pendingCoverPath = null; revoke(pendingCoverUrl); pendingCoverUrl = null; removeCover = false;
+      pendingCoverPath = null; pendingCoverBase64 = null; revoke(pendingCoverUrl); pendingCoverUrl = null; removeCover = false;
       await loadCover();
     } catch (cause) {
       error = String(cause);
@@ -108,7 +108,62 @@
   function resetField(key: keyof TagFields) { if (draft && original) draft[key] = original[key]; }
   function resetAll() {
     if (original) draft = { ...original };
-    pendingCoverPath = null; revoke(pendingCoverUrl); pendingCoverUrl = null; removeCover = false;
+    pendingCoverPath = null; pendingCoverBase64 = null; revoke(pendingCoverUrl); pendingCoverUrl = null; removeCover = false;
+  }
+
+  // Clipboard image staged as the new cover (base64 of the original bytes; Save applies the
+  // JPG quality / resize options like a picked file).
+  const CLIPBOARD_COVER = '__clipboard__';
+  let pendingCoverBase64 = $state<string | null>(null);
+  let clipboardImage = $state<Blob | null>(null);
+
+  async function readClipboardImage(): Promise<Blob | null> {
+    try {
+      if (!navigator.clipboard?.read) return null;
+      for (const item of await navigator.clipboard.read()) {
+        const type = item.types.find((value) => value.startsWith('image/'));
+        if (type) return await item.getType(type);
+      }
+    } catch { /* permission denied / not focused / unsupported */ }
+    return null;
+  }
+
+  async function refreshClipboard() { clipboardImage = await readClipboardImage(); }
+
+  async function blobToBase64(blob: Blob): Promise<string> {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+    return btoa(binary);
+  }
+
+  async function pasteCover() {
+    const blob = clipboardImage ?? await readClipboardImage();
+    if (!blob) { error = '剪貼簿中沒有圖片'; return; }
+    pendingCoverBase64 = await blobToBase64(blob);
+    revoke(pendingCoverUrl);
+    pendingCoverUrl = URL.createObjectURL(blob);
+    pendingCoverPath = CLIPBOARD_COVER;
+    removeCover = false;
+  }
+
+  /** Clipboard images must be PNG: re-encode the current cover through a canvas. */
+  async function copyCover() {
+    try {
+      const bytes = await invoke<ArrayBuffer>('track_details_cover', { trackId });
+      if (!bytes || bytes.byteLength === 0) { error = '此曲目沒有內嵌封面'; return; }
+      const bitmap = await createImageBitmap(new Blob([bytes]));
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width; canvas.height = bitmap.height;
+      canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('PNG 轉換失敗')), 'image/png'));
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+      notice = '已複製封面';
+      void refreshClipboard();
+    } catch (cause) {
+      error = `複製封面失敗：${String(cause)}`;
+    }
   }
 
   async function pickCover() {
@@ -118,6 +173,7 @@
     revoke(pendingCoverUrl);
     pendingCoverUrl = URL.createObjectURL(new Blob([bytes]));
     pendingCoverPath = path;
+    pendingCoverBase64 = null;
     removeCover = false;
   }
 
@@ -134,12 +190,18 @@
     try {
       const result = await invoke<TrackDetails>('track_details_save', {
         trackId,
-        request: { fields: draft, replaceCoverPath: pendingCoverPath, removeCover, coverOptions },
+        request: {
+          fields: draft,
+          replaceCoverPath: pendingCoverPath === CLIPBOARD_COVER ? null : pendingCoverPath,
+          replaceCoverBase64: pendingCoverPath === CLIPBOARD_COVER ? pendingCoverBase64 : null,
+          removeCover,
+          coverOptions,
+        },
       });
       details = result;
       original = { ...result.fields };
       draft = { ...result.fields };
-      pendingCoverPath = null; revoke(pendingCoverUrl); pendingCoverUrl = null; removeCover = false;
+      pendingCoverPath = null; pendingCoverBase64 = null; revoke(pendingCoverUrl); pendingCoverUrl = null; removeCover = false;
       await loadCover();
       notice = '已儲存';
       onSaved?.();
@@ -179,8 +241,8 @@
 
   let lastTrackId = '';
   $effect(() => { if (trackId !== lastTrackId) { lastTrackId = trackId; void load(); } });
-  onMount(() => window.addEventListener('keydown', onKeydown));
-  onDestroy(() => { window.removeEventListener('keydown', onKeydown); revoke(coverUrl); revoke(pendingCoverUrl); });
+  onMount(() => { window.addEventListener('keydown', onKeydown); window.addEventListener('focus', refreshClipboard); void refreshClipboard(); });
+  onDestroy(() => { window.removeEventListener('keydown', onKeydown); window.removeEventListener('focus', refreshClipboard); revoke(coverUrl); revoke(pendingCoverUrl); });
 </script>
 
 <div class="track-details-layer" use:portal>
@@ -220,10 +282,12 @@
           {#if details.cover}<p>{details.cover.width}×{details.cover.height} · {details.cover.mime.replace('image/', '').toUpperCase()} · {formatBytes(details.cover.bytes)}</p>{/if}
           <div class="track-details-row-buttons">
             <button type="button" class="soft-button" disabled={details.readOnly} onclick={() => void pickCover()}>選擇封面</button>
+            {#if clipboardImage}<button type="button" class="soft-button" disabled={details.readOnly} onclick={() => void pasteCover()}>貼上封面</button>{/if}
             <button type="button" class="soft-button" disabled={!details.cover} onclick={() => void exportCover()}>匯出封面</button>
-            <button type="button" class="soft-button" disabled={details.readOnly || (!details.cover && !pendingCoverPath)} onclick={() => { removeCover = true; pendingCoverPath = null; }}>移除</button>
+            <button type="button" class="soft-button" disabled={!details.cover} onclick={() => void copyCover()}>複製封面</button>
+            <button type="button" class="soft-button" disabled={details.readOnly || (!details.cover && !pendingCoverPath)} onclick={() => { removeCover = true; pendingCoverPath = null; pendingCoverBase64 = null; }}>移除封面</button>
           </div>
-          <label>JPG 品質 <input type="number" min="1" max="100" value={coverOptions.jpegQuality} onchange={(event) => updateCoverOptions({ jpegQuality: Math.min(100, Math.max(1, Number(event.currentTarget.value) || 100)) })} /></label>
+          <label>JPG 品質 <input type="number" min="1" max="100" value={coverOptions.jpegQuality} onchange={(event) => updateCoverOptions({ jpegQuality: Math.min(100, Math.max(1, Number(event.currentTarget.value) || 100)) })} /> %</label>
           <label><input type="checkbox" checked={coverOptions.autoResize} onchange={(event) => updateCoverOptions({ autoResize: event.currentTarget.checked })} /> 自動縮放：短邊</label>
           <label><input type="number" min="64" max="10000" step="10" disabled={!coverOptions.autoResize} value={coverOptions.shortEdgePx} onchange={(event) => updateCoverOptions({ shortEdgePx: Math.max(64, Number(event.currentTarget.value) || 2160) })} /> px（保持長寬比）</label>
         </div>
@@ -304,7 +368,7 @@
   .track-details-layer { display: contents; }
   .track-details-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px 12px; }
   /* Date / track / disc share one row; columns shrink (min 0) instead of overlapping. */
-  .track-details-number-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 8px 12px; }
+  .track-details-number-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
   .track-details-number-row input { min-width: 0; width: 100%; box-sizing: border-box; }
   .track-details-field { position: relative; display: grid; gap: 3px; font-size: 0.85rem; }
   .track-details-field.is-wide { grid-column: 1 / -1; }

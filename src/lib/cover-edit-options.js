@@ -1,7 +1,10 @@
 // Cover edit settings for the song details panel (ADR 0013 D9): JPG quality and optional
 // short-edge auto-resize (aspect ratio always kept). Persisted locally per device.
 
-const KEY = 'moe.coverEditOptions';
+// v2: defaults changed to JPG 100 / short edge 2160. Older stored values (v1 key) are
+// dropped once so everyone starts from the new defaults.
+const KEY = 'moe.coverEditOptions.v2';
+const LEGACY_KEYS = ['moe.coverEditOptions'];
 
 /** @typedef {{ jpegQuality: number, autoResize: boolean, shortEdgePx: number }} CoverEditOptions */
 
@@ -23,6 +26,7 @@ export function normalizeCoverEditOptions(value) {
 /** @returns {CoverEditOptions} */
 export function loadCoverEditOptions() {
   try {
+    for (const legacy of LEGACY_KEYS) localStorage.removeItem(legacy);
     return normalizeCoverEditOptions(JSON.parse(localStorage.getItem(KEY) ?? 'null'));
   } catch {
     return { ...DEFAULT_COVER_EDIT_OPTIONS };
