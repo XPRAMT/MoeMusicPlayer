@@ -238,6 +238,7 @@ pub async fn track_details_reveal(
 #[serde(rename_all = "camelCase")]
 pub struct SpectrogramDto {
     pub png_base64: String,
+    pub levels_base64: String,
     pub sample_rate: u32,
     pub channels: u32,
     pub channel_labels: Vec<String>,
@@ -251,9 +252,36 @@ pub struct SpectrogramDto {
     pub path: String,
 }
 
-/// Render a spectrogram with the window's current settings (FFT size, window function,
-/// colormap, channel, dB range, linear/log axis, max frequency). Missing fields use
-/// defaults.
+fn spectrogram_dto(
+    path: &std::path::Path,
+    options: Option<player_tags::SpectrogramOptions>,
+) -> Result<SpectrogramDto, String> {
+    let options = options.unwrap_or_default();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let spectrogram = player_tags::render_spectrogram(path, options, &cancel)?;
+    let engine = base64::engine::general_purpose::STANDARD;
+    Ok(SpectrogramDto {
+        png_base64: engine.encode(&spectrogram.png),
+        levels_base64: engine.encode(&spectrogram.levels),
+        sample_rate: spectrogram.sample_rate,
+        channels: spectrogram.channels,
+        channel_labels: spectrogram.channel_labels,
+        panels: spectrogram.panels,
+        duration_ms: spectrogram.duration_ms,
+        columns: spectrogram.columns,
+        height: spectrogram.height,
+        max_frequency_hz: spectrogram.max_frequency_hz,
+        cutoff_hz: spectrogram.cutoff_hz,
+        file_name: path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        path: path.to_string_lossy().into_owned(),
+    })
+}
+
+/// Render a library track's spectrogram with the window's current settings (FFT size,
+/// window function, colormap, channel, dB range, linear/log axis, max frequency).
 #[tauri::command]
 pub async fn track_spectrogram(
     state: State<'_, AppState>,
@@ -261,29 +289,59 @@ pub async fn track_spectrogram(
     options: Option<player_tags::SpectrogramOptions>,
 ) -> Result<SpectrogramDto, String> {
     let path = track_path(&state, &track_id)?;
-    blocking(move || {
-        let options = options.unwrap_or_default();
-        let cancel = std::sync::atomic::AtomicBool::new(false);
-        let spectrogram = player_tags::render_spectrogram(&path, options, &cancel)?;
-        Ok(SpectrogramDto {
-            png_base64: base64::engine::general_purpose::STANDARD.encode(&spectrogram.png),
-            sample_rate: spectrogram.sample_rate,
-            channels: spectrogram.channels,
-            channel_labels: spectrogram.channel_labels.clone(),
-            panels: spectrogram.panels,
-            duration_ms: spectrogram.duration_ms,
-            columns: spectrogram.columns,
-            height: spectrogram.height,
-            max_frequency_hz: spectrogram.max_frequency_hz,
-            cutoff_hz: spectrogram.cutoff_hz,
-            file_name: path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            path: path.to_string_lossy().into_owned(),
-        })
-    })
-    .await
+    blocking(move || spectrogram_dto(&path, options)).await
+}
+
+/// Render any audio file chosen in the spectrogram window (dialog or drag-and-drop);
+/// it does not need to be in the library.
+#[tauri::command]
+pub async fn spectrogram_render_file(
+    path: String,
+    options: Option<player_tags::SpectrogramOptions>,
+) -> Result<SpectrogramDto, String> {
+    let path = std::path::PathBuf::from(path);
+    if !path.is_file() {
+        return Err("找不到檔案".to_owned());
+    }
+    blocking(move || spectrogram_dto(&path, options)).await
+}
+
+/// File dialog for the spectrogram window's 「開啟 A／B」.
+#[tauri::command]
+pub async fn spectrogram_pick_file(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        let selected = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("開啟音訊檔")
+            .add_filter(
+                "音訊",
+                &[
+                    "mp3", "flac", "m4a", "mp4", "aac", "alac", "ogg", "oga", "wav", "wave", "aif",
+                    "aiff", "mka", "mkv", "webm", "caf",
+                ],
+            )
+            .add_filter("所有檔案", &["*"])
+            .blocking_pick_file();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| format!("無法取得檔案路徑：{error}"))?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, window);
+        Err("此平台尚未支援開啟檔案".to_owned())
+    }
 }
 
 pub const SPECTROGRAM_WINDOW_LABEL: &str = "spectrogram";

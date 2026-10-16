@@ -10502,6 +10502,8 @@ pub fn run() {
             track_details::track_details_export_cover,
             track_details::track_details_reveal,
             track_details::track_spectrogram,
+            track_details::spectrogram_render_file,
+            track_details::spectrogram_pick_file,
             track_details::spectrogram_window_open,
             updater::about_get_info,
             updater::update_get_state,

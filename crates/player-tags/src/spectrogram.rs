@@ -89,6 +89,8 @@ impl Default for SpectrogramOptions {
 #[derive(Debug, Clone)]
 pub struct Spectrogram {
     pub png: Vec<u8>,
+    /// Row-major 0–255 intensity per pixel (same size as the PNG); dB = floor + v/255·range.
+    pub levels: Vec<u8>,
     pub sample_rate: u32,
     pub channels: u32,
     /// Display label per decoded channel (L, R, C, LFE, SL, SR…; `Ch n` when unknown).
@@ -440,13 +442,16 @@ pub fn render_spectrogram(
     let range = options.db_ceiling - floor;
     let out_cols = spectra[0].len() as u32;
     let mut img = ImageBuffer::<Rgb<u8>, Vec<u8>>::new(out_cols, panel_height * streams as u32);
+    let mut levels = vec![0u8; (out_cols * panel_height * streams as u32) as usize];
     for (s, panel) in spectra.iter().enumerate() {
         for (x, column) in panel.iter().enumerate() {
             for (y, &(lo, hi)) in row_bins.iter().enumerate() {
                 let db = column[lo..hi].iter().copied().fold(f32::MIN, f32::max);
                 let t = ((db - floor) / range).clamp(0.0, 1.0);
-                let rgb = lut[(t * 255.0).round() as usize];
-                img.put_pixel(x as u32, s as u32 * panel_height + y as u32, Rgb(rgb));
+                let level = (t * 255.0).round() as u8;
+                let row = s as u32 * panel_height + y as u32;
+                levels[(row * out_cols + x as u32) as usize] = level;
+                img.put_pixel(x as u32, row, Rgb(lut[level as usize]));
             }
         }
     }
@@ -456,6 +461,7 @@ pub fn render_spectrogram(
         .map_err(|e| format!("PNG 編碼失敗：{e}"))?;
     Ok(Spectrogram {
         png,
+        levels,
         sample_rate,
         channels: channel_count as u32,
         channel_labels: channel_labels(track.codec_params.channels, channel_count),
