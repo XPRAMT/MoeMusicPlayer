@@ -143,7 +143,7 @@
   import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
-  import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, beginSleepTimerEdit, getSleepTimerEditMinutes, stepSleepTimerEdit, SLEEP_TIMER_EDIT_IDLE_MS, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
+  import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, splitSleepTimerClock, beginSleepTimerEdit, getSleepTimerEditMinutes, stepSleepTimerEdit, SLEEP_TIMER_EDIT_IDLE_MS, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
   import type { SleepTimerSnapshot } from './lib/ipc';
   import { swipeDismiss } from './lib/swipe-dismiss.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
@@ -261,8 +261,9 @@
   const sleepTimerLiveMinutes = $derived(getSleepTimerDisplayMinutes(getSleepTimerRemainingMs(sleepTimerEndsAt, sleepTimerNow)));
   // While adjusting, show the gesture's own value so the live tick cannot change the other field.
   const sleepTimerMinutes = $derived(sleepTimerEdit ? getSleepTimerEditMinutes(sleepTimerEdit) : sleepTimerLiveMinutes);
-  const sleepTimerLabel = $derived(formatSleepTimer(sleepTimerMinutes));
-  const sleepTimerParts = $derived(splitSleepTimer(sleepTimerMinutes));
+  // hh:mm:ss live countdown; while adjusting, seconds read 00 (adjustments land on hh:mm:00).
+  const sleepTimerParts = $derived(sleepTimerEdit ? { ...splitSleepTimer(sleepTimerMinutes), seconds: '00' } : splitSleepTimerClock(getSleepTimerRemainingMs(sleepTimerEndsAt, sleepTimerNow)));
+  const sleepTimerLabel = $derived(`${sleepTimerParts.hours}:${sleepTimerParts.minutes}:${sleepTimerParts.seconds}`);
 
   function applySleepTimerSnapshot(snapshot: SleepTimerSnapshot): void {
     sleepTimerEndsAt = snapshot.endsAtMs ?? null;
@@ -286,7 +287,7 @@
       // Rust pauses playback and emits the reset; this only keeps the label honest meanwhile.
       if (sleepTimerEndsAt !== null && sleepTimerNow >= sleepTimerEndsAt) sleepTimerEndsAt = null;
     };
-    const timer = window.setInterval(tick, 1000);
+    const timer = window.setInterval(tick, 250);
     document.addEventListener('visibilitychange', tick);
     return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
   });
@@ -4425,7 +4426,7 @@
                     onpointerup={endSleepTimerDrag}
                     onpointercancel={endSleepTimerDrag}
                     onkeydown={(event) => handleSleepTimerKeydown(event, 'minutes')}
-                  >{sleepTimerParts.minutes}</span>
+                  >{sleepTimerParts.minutes}</span><span class="sleep-timer-colon" aria-hidden="true">:</span><span class="sleep-timer-seconds" aria-hidden="true">{sleepTimerParts.seconds}</span>
                 </div>
                 <p class="sleep-timer-hint" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;margin:0">在小時或分鐘上拖曳、滑動或滾動，每格 1；到 00:00 時暫停播放</p>
                 {#if sleepTimerActive}
@@ -4450,7 +4451,7 @@
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
-                  use:swipeDismiss={{ follow: false, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() } }}
+                  use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() } }}
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
                   style:width={coverFrame ? `${coverFrame.width}px` : undefined}

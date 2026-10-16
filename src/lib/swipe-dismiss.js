@@ -12,7 +12,7 @@ export const SWIPE_IGNORE_SELECTOR = 'input, select, textarea, [role="slider"], 
 /**
  * Either one dismiss direction (`direction` + `onDismiss`) or several (`actions`). `follow: false` keeps the
  * element still: nothing moves while dragging and the action fires only on release.
- * @typedef {{ direction?: SwipeDirection, onDismiss?: () => void, actions?: Partial<Record<SwipeDirection, () => void>>, follow?: boolean, enabled?: boolean }} SwipeDismissOptions
+ * @typedef {{ direction?: SwipeDirection, onDismiss?: () => void, actions?: Partial<Record<SwipeDirection, () => void>>, follow?: boolean, damped?: boolean, enabled?: boolean }} SwipeDismissOptions
  */
 
 /** @type {Record<SwipeDirection, 'x' | 'y'>} */
@@ -72,6 +72,14 @@ export function isSwipePointer(pointerType) {
   return pointerType === 'touch' || pointerType === 'pen';
 }
 
+/** Max travel (px) of a `damped` swipe: subtle rubber-band feedback that never reveals the edge. */
+export const SWIPE_DAMPED_MAX_PX = 24;
+/** Rubber-band curve: ~1:1 at first, asymptotically capped at maxPx. @param {number} offsetPx */
+export function getDampedSwipeOffset(offsetPx, maxPx = SWIPE_DAMPED_MAX_PX) {
+  if (!Number.isFinite(offsetPx) || offsetPx <= 0) return 0;
+  return maxPx * (1 - Math.exp(-offsetPx / (maxPx * 3)));
+}
+
 /** @param {SwipeDirection} direction @param {number} offset */
 function translateFor(direction, offset) {
   const v = offset * SIGN[direction];
@@ -96,11 +104,14 @@ export function swipeDismiss(node, params) {
   let suppressClick = false;
   const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const follows = () => options.follow !== false;
+  const damped = () => options.follow === false && options.damped === true && !reduced();
 
   /** @param {boolean} animate */
   function reset(animate) {
-    node.style.transition = animate && !reduced() ? `translate ${SWIPE_SETTLE_MS}ms ease` : '';
+    node.style.transition = animate && !reduced() ? `translate ${SWIPE_SETTLE_MS}ms ease, scale ${SWIPE_SETTLE_MS}ms ease, opacity ${SWIPE_SETTLE_MS}ms ease` : '';
     node.style.translate = '';
+    node.style.scale = '';
+    node.style.opacity = '';
     if (animate && !reduced()) setTimeout(() => { if (!start) node.style.transition = ''; }, SWIPE_SETTLE_MS);
   }
 
@@ -125,11 +136,18 @@ export function swipeDismiss(node, params) {
       if (!getSwipeActions(options)[resolved]) { start = null; return; }
       direction = resolved;
       try { node.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
-      if (follows()) node.style.transition = 'none';
+      if (follows() || damped()) node.style.transition = 'none';
     }
     if (!direction) return;
     samples = [...samples.slice(-1), { x: event.clientX, y: event.clientY, t: event.timeStamp }];
     if (follows()) node.style.translate = translateFor(direction, getSwipeOffset(direction, dx, dy));
+    else if (damped()) {
+      const d = getDampedSwipeOffset(getSwipeOffset(direction, dx, dy));
+      const k = d / SWIPE_DAMPED_MAX_PX;
+      node.style.translate = translateFor(direction, d);
+      node.style.scale = String(1 - 0.03 * k);
+      node.style.opacity = String(1 - 0.15 * k);
+    }
     if (event.cancelable) event.preventDefault();
   }
 
@@ -144,7 +162,8 @@ export function swipeDismiss(node, params) {
     direction = null;
     if (!locked || !dir) return;
     const action = getSwipeActions(options)[dir];
-    if (!action) return;
+    if (!action) { if (damped()) reset(true); return; }
+    if (options.damped) reset(true);
     suppressClick = true;
     setTimeout(() => { suppressClick = false; }, 0);
     const offsetPx = getSwipeOffset(dir, dx, dy);

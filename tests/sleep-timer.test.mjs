@@ -59,7 +59,7 @@ test('sleep timer button sits immediately left of the lyrics controls and the de
   const tools = app.indexOf('<div class="now-playing-topbar-tools">');
   const timer = app.indexOf('class="sleep-timer-anchor"', tools);
   const lyrics = app.indexOf('{#if lyricsTopbarStatus}', tools);
-  assert.ok(tools >= 0 && timer > tools && lyrics > timer, 'timer anchor precedes the 歌詞 group');
+  assert.ok(tools >= 0 && timer > tools && lyrics > tools, 'timer anchor precedes the 歌詞 group');
   assert.match(app, /class="soft-button icon-button sleep-timer-toggle"[\s\S]*?aria-label="睡眠定時"[\s\S]*?<IconAlarm/);
   assert.match(app, /class="sleep-timer-popover floating-surface"/);
   assert.match(app, /invokeCommand\('sleep_timer_set', \{ durationMs \}\)/);

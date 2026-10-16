@@ -49,6 +49,13 @@ export function adjustSleepTimerField(currentMinutes, field, steps) {
   return hours * 60 + minutes;
 }
 
+/** Live hh:mm:ss for a remaining time (seconds rounded up so 00:00:00 appears only at expiry). @param {number} remainingMs */
+export function splitSleepTimerClock(remainingMs) {
+  const total = Number.isFinite(remainingMs) && remainingMs > 0 ? Math.min(SLEEP_TIMER_MAX_MINUTES * 60 + 59, Math.ceil(remainingMs / 1000)) : 0;
+  const pad = (/** @type {number} */ n) => String(n).padStart(2, '0');
+  return { hours: pad(Math.floor(total / 3600)), minutes: pad(Math.floor(total / 60) % 60), seconds: pad(total % 60) };
+}
+
 /** @param {number} minutes */
 export function splitSleepTimer(minutes) {
   const [hours, mins] = formatSleepTimer(minutes).split(':');
