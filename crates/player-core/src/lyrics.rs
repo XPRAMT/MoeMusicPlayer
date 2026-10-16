@@ -3,7 +3,12 @@ use std::collections::{BTreeMap, VecDeque};
 use unicode_normalization::UnicodeNormalization;
 
 pub const MAX_LYRIC_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
-pub const AUTO_MATCH_MIN_SCORE: f32 = 0.8;
+/// Automatic lyric acceptance gates (both must pass; the weighted score only ranks).
+/// Title: same normalized similarity used for 「標題相符」 in the match explanation.
+pub const AUTO_MATCH_TITLE_MIN_SIMILARITY: f32 = 0.88;
+/// Duration: the full-credit bucket of the duration score (|local - remote| <= 2 s).
+/// Both durations must be known; an unverifiable duration never auto-applies.
+pub const AUTO_MATCH_MAX_DURATION_DIFF_MS: u64 = 2_000;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum LyricProvider {
@@ -344,13 +349,28 @@ pub fn rank_lyric_candidates(
     ranked
 }
 
-/// Return the highest-ranked timed candidate only when its score is strictly above the threshold.
-pub fn auto_lyric_candidate(ranked: &[LyricCandidate]) -> Option<&LyricCandidate> {
-    let best = ranked.first()?;
-    if best.score <= AUTO_MATCH_MIN_SCORE || !best.lyrics.synced {
-        return None;
-    }
-    Some(best)
+/// Pass/fail for automatic use: title close AND duration close (see the gate constants).
+pub fn passes_auto_match_gates(local: &LyricsTrackMetadata, candidate: &LyricCandidate) -> bool {
+    let title_close = matches!(
+        (&local.title, &candidate.title),
+        (Some(local), Some(remote)) if text_similarity(local, remote) >= AUTO_MATCH_TITLE_MIN_SIMILARITY
+    );
+    let duration_close = matches!(
+        (local.duration_ms, candidate.duration_ms),
+        (Some(local), Some(remote)) if local.abs_diff(remote) <= AUTO_MATCH_MAX_DURATION_DIFF_MS
+    );
+    title_close && duration_close
+}
+
+/// Highest-scored timed candidate among those passing the gates. `ranked` is sorted by score
+/// (see `rank_lyric_candidates`), so the score only orders; it no longer decides acceptance.
+pub fn auto_lyric_candidate<'a>(
+    local: &LyricsTrackMetadata,
+    ranked: &'a [LyricCandidate],
+) -> Option<&'a LyricCandidate> {
+    ranked
+        .iter()
+        .find(|candidate| candidate.lyrics.synced && passes_auto_match_gates(local, candidate))
 }
 
 pub fn score_lyric_candidate(
@@ -998,40 +1018,61 @@ mod tests {
             .any(|reason| reason.contains("專輯不同（低權重）")));
     }
 
-    #[test]
-    fn automatic_selection_requires_score_strictly_above_point_eight() {
-        let mut at_threshold = candidate("threshold", "Song", "Artist", None, None);
-        at_threshold.score = 0.8;
-        assert!(auto_lyric_candidate(&[at_threshold]).is_none());
-
-        let mut just_above = candidate("just-above", "Song", "Artist", None, None);
-        just_above.score = 0.800_001;
-        assert_eq!(
-            auto_lyric_candidate(&[just_above]).map(|item| item.candidate_id.as_str()),
-            Some("just-above")
-        );
+    fn gate_local() -> LyricsTrackMetadata {
+        LyricsTrackMetadata {
+            title: Some("Song".into()),
+            artist: Some("Artist".into()),
+            album: None,
+            duration_ms: Some(180_000),
+        }
     }
 
     #[test]
-    fn automatic_selection_keeps_the_highest_candidate_when_scores_are_close() {
-        let mut highest = candidate("highest", "Song", "Artist", None, None);
-        highest.score = 0.800_1;
-        let mut close_second =
-            candidate("close-second", "Song Live", "Different Artist", None, None);
-        close_second.score = 0.800_09;
-
+    fn automatic_selection_requires_title_and_duration_gates_not_score() {
+        let local = gate_local();
+        let mut low_score_but_close = candidate("close", "Song", "Other Artist", None, Some(181_500));
+        low_score_but_close.score = 0.1;
         assert_eq!(
-            auto_lyric_candidate(&[highest, close_second]).map(|item| item.candidate_id.as_str()),
-            Some("highest")
+            auto_lyric_candidate(&local, &[low_score_but_close]).map(|item| item.candidate_id.as_str()),
+            Some("close")
+        );
+
+        let mut high_score_far_duration = candidate("far", "Song", "Artist", None, Some(182_001));
+        high_score_far_duration.score = 0.99;
+        assert!(auto_lyric_candidate(&local, &[high_score_far_duration]).is_none());
+
+        let mut different_title = candidate("title", "Another Tune", "Artist", None, Some(180_000));
+        different_title.score = 0.99;
+        assert!(auto_lyric_candidate(&local, &[different_title]).is_none());
+
+        let mut unknown_duration = candidate("unknown", "Song", "Artist", None, None);
+        unknown_duration.score = 0.99;
+        assert!(auto_lyric_candidate(&local, &[unknown_duration]).is_none());
+    }
+
+    #[test]
+    fn automatic_selection_picks_highest_score_among_passing_candidates() {
+        let local = gate_local();
+        let mut failing_top = candidate("failing-top", "Song", "Artist", None, Some(200_000));
+        failing_top.score = 0.99;
+        let mut passing_high = candidate("passing-high", "Song", "Artist", None, Some(180_500));
+        passing_high.score = 0.9;
+        let mut passing_low = candidate("passing-low", "Song", "Someone", None, Some(179_000));
+        passing_low.score = 0.6;
+        assert_eq!(
+            auto_lyric_candidate(&local, &[failing_top, passing_high, passing_low])
+                .map(|item| item.candidate_id.as_str()),
+            Some("passing-high")
         );
     }
 
     #[test]
     fn automatic_selection_still_requires_timed_lyrics() {
-        let mut untimed = candidate("untimed", "Song", "Artist", None, None);
+        let local = gate_local();
+        let mut untimed = candidate("untimed", "Song", "Artist", None, Some(180_000));
         untimed.score = 0.99;
         untimed.lyrics = parse_lrc("plain lyrics").expect("fixture plain lyrics");
         assert!(!untimed.lyrics.synced);
-        assert!(auto_lyric_candidate(&[untimed]).is_none());
+        assert!(auto_lyric_candidate(&local, &[untimed]).is_none());
     }
 }
