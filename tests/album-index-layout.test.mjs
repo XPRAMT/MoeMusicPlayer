@@ -114,7 +114,7 @@ test('album group and card rows share compact vertical spacing and global group 
   assert.match(albumIndexSource, /physicalPixelsToCssPixels\(40, devicePixelRatio\)/);
   assert.match(albumIndexSource, /groupHeadingHeight = \$derived\(Math\.max\(30, rowHeightPx \* 0\.7\)\)/);
   assert.match(albumIndexSource, /class="album-index-group-row list-group-row-surface"/);
-  assert.match(pagedVirtualListSource, /class="paged-virtual-row paged-virtual-group-row list-group-row-surface"/);
+  assert.match(pagedVirtualListSource, /class="paged-virtual-group-cell list-group-row-surface"/);
   assert.match(appCssSource, /\.list-group-row-surface \{[\s\S]*?border-bottom: var\(--divider-width\) solid var\(--divider-color\)[\s\S]*?var\(--list-group-row-background\) 100%/);
   assert.match(appCssSource, /\.list-group-row-surface:hover \{[\s\S]*?var\(--list-group-row-hover-background\) 100%/);
   assert.match(albumIndexSource, /groupCardGap: verticalGap/);

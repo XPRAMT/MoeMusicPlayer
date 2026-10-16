@@ -150,6 +150,8 @@
   let viewport: HTMLDivElement | undefined = $state();
   let scrollTop = $state(0);
   let headerShift = $state(0);
+  // Visible width for pinned group headers; updated on resize only (never per scroll frame).
+  let viewportClientWidth = $state(0);
   let headerGutter = $state(0);
   let viewportHeight = $state(480);
   let metricsReady = $state(false);
@@ -455,6 +457,7 @@
       viewportHeight = nextViewportHeight;
       if (effectiveViewportHeight > 0) metricsReady = true;
       if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
+      if (viewport) viewportClientWidth = viewport.clientWidth;
       if (viewport) onViewportScrollTopChange?.(scrollTop, collapseOffset);
     };
     recalculateMetrics = updateMetrics;
@@ -789,7 +792,7 @@
     aria-activedescendant={activeDescendantId}
     aria-busy={pending || totalCount === null}
     tabindex="0"
-    style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${effectiveMinContentWidth}px`}
+    style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${effectiveMinContentWidth}px;--paged-viewport-width:${viewportClientWidth > 0 ? `${viewportClientWidth}px` : '100%'}`}
     class:album-detail-scroll-timeline={hasLeadingOverlay && supportsScrollDrivenAlbumOverlay}
     class:is-reordering={dragFromIndex !== null}
     use:longPressDragGuard={() => dragFromIndex !== null}
@@ -816,12 +819,12 @@
       {#if virtualRow.kind === 'group'}
         <div
           {id}
-          class="paged-virtual-row paged-virtual-group-row list-group-row-surface"
+          class="paged-virtual-row paged-virtual-group-row"
           role="row"
           aria-rowindex={virtualRow.visualIndex + 2}
-          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px);translate:${headerShift}px 0`}
+          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px)`}
         >
-          <div class="paged-virtual-group-cell" role="gridcell" aria-colspan={columnCount}>
+          <div class="paged-virtual-group-cell list-group-row-surface" role="gridcell" aria-colspan={columnCount}>
             <button type="button" class="paged-virtual-group-button" aria-label={`開啟「${virtualRow.label}」字首索引`} onclick={openQuickIndex}>{virtualRow.label}</button>
           </div>
         </div>
@@ -1056,11 +1059,19 @@
   .paged-virtual-group-row {
     display: flex;
     align-items: center;
+    right: auto;
+    width: max(100%, var(--track-list-min-width, 0px));
+    overflow: visible;
   }
 
+  /* Pure-CSS pin: the row spans the full scroll width; the cell sticks to the left edge and is
+     exactly the visible width, so it never moves while rows scroll horizontally (no JS per frame). */
   .paged-virtual-group-cell {
+    position: sticky;
+    left: 0;
+    box-sizing: border-box;
     display: flex;
-    width: 100%;
+    width: var(--paged-viewport-width, 100%);
     height: 100%;
     min-width: 0;
     align-items: center;
