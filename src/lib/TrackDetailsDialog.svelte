@@ -275,6 +275,8 @@
         <dt>位元深度</dt><dd class="track-details-with-action">{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}<button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button></dd>
         <dt>聲道</dt><dd>{details.properties.channels ?? '—'}</dd>
         <dt>修改時間</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
+        <dt>檔案大小</dt><dd>{formatBytes(details.fileSize)}</dd>
+        <dt>建立時間</dt><dd>{formatDate(details.createdUnixMs)}</dd>
       </dl>
 
       <section class="track-details-cover">
@@ -293,9 +295,9 @@
           {#if details.cover}<p>{details.cover.width}×{details.cover.height} · {details.cover.mime.replace('image/', '').toUpperCase()} · {formatBytes(details.cover.bytes)}</p>{/if}
           <div class="track-details-row-buttons">
             <button type="button" class="soft-button" disabled={details.readOnly} onclick={() => void pickCover()}>選擇封面</button>
-            {#if clipboardImage}<button type="button" class="soft-button" disabled={details.readOnly} onclick={() => void pasteCover()}>貼上封面</button>{/if}
             <button type="button" class="soft-button" disabled={!details.cover} onclick={() => void exportCover()}>匯出封面</button>
             <button type="button" class="soft-button" disabled={!details.cover} onclick={() => void copyCover()}>複製封面</button>
+            <button type="button" class="soft-button" disabled={details.readOnly || !clipboardImage} title={clipboardImage ? '以剪貼簿圖片作為新封面（儲存後才寫入）' : '剪貼簿中沒有圖片'} onclick={() => void pasteCover()}>貼上封面</button>
             <button type="button" class="soft-button" disabled={details.readOnly || (!details.cover && !pendingCoverPath)} onclick={() => { removeCover = true; pendingCoverPath = null; pendingCoverBase64 = null; }}>移除封面</button>
           </div>
           <label>JPG 品質 <input type="number" min="1" max="100" value={coverOptions.jpegQuality} onchange={(event) => updateCoverOptions({ jpegQuality: Math.min(100, Math.max(1, Number(event.currentTarget.value) || 100)) })} /> %</label>
@@ -304,10 +306,7 @@
         </div>
       </section>
 
-      <dl class="track-details-props">
-        <dt>檔案大小</dt><dd>{formatBytes(details.fileSize)}</dd>
-        <dt>建立時間</dt><dd>{formatDate(details.createdUnixMs)}</dd>
-      </dl>
+
 
       <section class="track-details-fields">
         {#snippet fieldInput(field: { key: keyof TagFields; label: string }, wide: boolean)}
