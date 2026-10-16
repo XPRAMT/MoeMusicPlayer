@@ -81,7 +81,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 
 ### UI 位置
 
-- 開啟：任何曲目列右鍵／長按選單「歌曲資訊」，以及正在播放頁的選單按鈕；快速鍵 Alt+Enter（同 Windows 檔案內容）。
+- 開啟（使用者確認）：**主要入口**是播放頁頂欄的資訊圖示按鈕（ⓘ，aria-label「歌曲資訊」），位於「羅」（羅馬拼音）切換與「快速設定」按鈕之間，開啟目前播放曲目的面板；曲目列右鍵／長按選單等其他入口為次要、日後再加。
 - 桌面：沿用 `.floating-surface` 樣式的大型對話框（置中、可捲動），頂部為封面縮圖＋標題＋路徑（唯讀、「在資料夾中顯示」、「複製路徑」），分頁：**標籤**／**歌詞**／**封面**／**全部欄位**／**屬性**（含「頻譜圖」按鈕，開獨立視窗）。底部固定「還原」「取消」「儲存」，未儲存欄位以強調色標示。
 - Android：全螢幕頁（返回鍵＝取消並確認），分頁改為頂部可橫向捲動的標籤列；頻譜圖可橫向捲動放大。
 
@@ -105,6 +105,13 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - D9 封面寫入：**已確認**——目前只處理一張封面，可匯出或取代。設定：JPG 品質可調；自動縮放開關，開啟時可設定短邊 px，一律保持長寬比。
 - D10 DSF：MVP 唯讀 vs 自寫 ID3 尾端寫入。建議 MVP 唯讀。
 - D11 頻譜圖分期：**已確認**——頻譜圖移到 Phase 1，且為第一個實作項目。
+
+## Phase 1 實作現況（2026-10-16）
+
+- Rust：`crates/player-tags`（`read_details`／`write_edit`／`prepare_cover`／`render_spectrogram`），`src-tauri/src/track_details.rs` 提供 IPC 與頻譜圖視窗（label `spectrogram`，載入 `index.html?view=spectrogram&track=<id>`，已加入 capability `default.json`）。
+- 前端：`src/lib/TrackDetailsDialog.svelte`、`src/lib/SpectrogramView.svelte`（`main.ts` 依 `view=spectrogram` 掛載）、`lyrics-import.js`（導入判斷與 LRC 序列化）、`cover-edit-options.js`。
+- lofty 驗證（樣本複本）：MP3（含 v2.3→v2.4 升級）、FLAC、M4A、Opus、WAV（寫 ID3v2 chunk）皆可往返；ID3v2 不接受 `ItemKey::Lyrics`，改寫 USLT（`UnsyncLyrics`）。該 Ogg Vorbis 樣本 lofty 讀取失敗（與既有掃描一致），未處理。
+- 偏離／暫定：封面設定（JPG 品質、自動縮放短邊）暫存於前端 localStorage（每裝置），尚未進 `settings.json`；儲存後以既有增量 `library_sync` 更新曲庫投影（會走訪來源目錄，尚非單曲投影更新）；JPEG 且不需縮放時原樣寫入以免重壓縮，其他格式一律轉 JPEG。Android 標籤讀寫與頻譜圖尚未接上（`track_path` 只支援 Windows 檔案路徑），Android 全螢幕頻譜頁的 UI 已就緒。
 
 ## 風險
 
