@@ -105,7 +105,8 @@ html,
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Focus rings only for keyboard focus; touch/mouse focus never shows an outline. */(:focus-visible) {
+/* Focus rings only for keyboard focus; touch/mouse focus never shows an outline. */
+:focus:not(:focus-visible) {
   outline: none;
 }
 
