@@ -4304,6 +4304,32 @@
           </p>
         </div>
         <div class="now-playing-topbar-tools">
+          {#if lyricsTopbarStatus}
+            <div class="lyrics-topbar-status" role="group" aria-label="歌詞來源與同步操作">
+              <button
+                type="button"
+                class="soft-button lyrics-topbar-action"
+                use:appTooltip={`目前來源：${lyricsTopbarStatus.source}（開啟候選以手動指定）`}
+                aria-label="手動指定歌詞"
+                disabled={!playback?.currentTrack}
+                onclick={() => lyricsTopbarStatus?.openManualSelection()}
+              >歌詞</button>
+              <button
+                type="button"
+                class="soft-button lyrics-topbar-action"
+                class:is-active={lyricsTopbarStatus.timingPanelOpen}
+                use:appTooltip={lyricsTopbarStatus.canAdjustTiming ? `目前：${lyricsTopbarStatus.sync}（調整延遲 ±10 秒）` : '目前不是同步歌詞，無法調整延遲'}
+                aria-label="同步歌詞延遲調整"
+                aria-pressed={lyricsTopbarStatus.timingPanelOpen}
+                disabled={!lyricsTopbarStatus.canAdjustTiming}
+                onclick={() => lyricsTopbarStatus?.toggleTimingOffset()}
+              >同步</button>
+            </div>
+          {/if}
+          <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
+            <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label="切換譯文顯示" onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>譯</button>
+            <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label="切換羅馬拼音顯示" onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>羅</button>
+          </div>
           <div class="sleep-timer-anchor" bind:this={sleepTimerAnchor}>
             <button
               bind:this={sleepTimerToggle}
@@ -4360,32 +4386,6 @@
                 {/if}
               </div>
             {/if}
-          </div>
-          {#if lyricsTopbarStatus}
-            <div class="lyrics-topbar-status" role="group" aria-label="歌詞來源與同步操作">
-              <button
-                type="button"
-                class="soft-button lyrics-topbar-action"
-                use:appTooltip={`目前來源：${lyricsTopbarStatus.source}（開啟候選以手動指定）`}
-                aria-label="手動指定歌詞"
-                disabled={!playback?.currentTrack}
-                onclick={() => lyricsTopbarStatus?.openManualSelection()}
-              >歌詞</button>
-              <button
-                type="button"
-                class="soft-button lyrics-topbar-action"
-                class:is-active={lyricsTopbarStatus.timingPanelOpen}
-                use:appTooltip={lyricsTopbarStatus.canAdjustTiming ? `目前：${lyricsTopbarStatus.sync}（調整延遲 ±10 秒）` : '目前不是同步歌詞，無法調整延遲'}
-                aria-label="同步歌詞延遲調整"
-                aria-pressed={lyricsTopbarStatus.timingPanelOpen}
-                disabled={!lyricsTopbarStatus.canAdjustTiming}
-                onclick={() => lyricsTopbarStatus?.toggleTimingOffset()}
-              >同步</button>
-            </div>
-          {/if}
-          <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
-            <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label="切換譯文顯示" onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>譯</button>
-            <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label="切換羅馬拼音顯示" onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>羅</button>
           </div>
           <button class="soft-button icon-button now-playing-track-details-trigger" type="button" aria-label="歌曲資訊" use:appTooltip={'歌曲資訊'} aria-haspopup="dialog" aria-expanded={trackDetailsTrackId !== null} disabled={!playback?.currentTrack} onclick={openTrackDetails}>
             <IconInfoCircle size={18} stroke={1.7} aria-hidden="true" />
