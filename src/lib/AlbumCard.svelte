@@ -26,7 +26,7 @@
   const memoryCacheKey = $derived(albumCardArtworkMemoryKey(refreshKey, album.key, artworkRevision));
   const displayedImageUrls = $derived(resolveAlbumArtworkDisplaySources(imageUrls, {
     fallbackUrl: defaultCoverUrl,
-    resolved: cacheResolved || album.unmarked,
+    resolved: cacheResolved,
   }));
   const summary = $derived.by(() => {
     const trackCount = `${album.trackCount}首曲目`;
@@ -125,7 +125,7 @@
   }
 
   async function loadCover(): Promise<void> {
-    if (!active || busy || cacheResolved || album.unmarked) return;
+    // The unmarked (未知) group loads artwork like any album: its aliases ("" / blank) match its tracks.
     const cached = acquireAlbumCardArtwork(memoryCacheKey);
     if (cached) {
       const previousLease = releaseArtworkCacheLease;
