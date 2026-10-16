@@ -1,0 +1,292 @@
+<script lang="ts">
+  // 歌曲詳細資訊面板（ADR 0013 Phase 1）：單曲標籤檢視／暫存編輯，按「儲存」才寫檔。
+  import { onDestroy, onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
+  import { isOnlineLyrics, lyricsToText } from './lyrics-import.js';
+  import {
+    loadCoverEditOptions,
+    saveCoverEditOptions,
+    type CoverEditOptions,
+  } from './cover-edit-options.js';
+
+  type TagFields = {
+    title: string; artist: string; album: string; albumArtist: string; composer: string; genre: string;
+    trackNumber: string; trackTotal: string; discNumber: string; discTotal: string; date: string; lyrics: string;
+  };
+  type TrackDetails = {
+    path: string; fileName: string; fileSize: number; modifiedUnixMs: number | null; format: string;
+    tagFormat: string; readOnly: boolean; readOnlyReason: string | null; fields: TagFields;
+    properties: { durationMs: number; overallBitrateKbps: number | null; audioBitrateKbps: number | null; sampleRate: number | null; bitDepth: number | null; channels: number | null };
+    cover: { mime: string; width: number; height: number; bytes: number } | null;
+  };
+
+  let { trackId, onClose, onSaved, onOpenSpectrogram }: {
+    trackId: string;
+    onClose: () => void;
+    onSaved?: () => void;
+    onOpenSpectrogram: (trackId: string) => void;
+  } = $props();
+
+  const TEXT_FIELDS: { key: keyof TagFields; label: string; wide?: boolean }[] = [
+    { key: 'title', label: '標題', wide: true },
+    { key: 'artist', label: '演出者', wide: true },
+    { key: 'album', label: '專輯', wide: true },
+    { key: 'albumArtist', label: '專輯演出者', wide: true },
+    { key: 'composer', label: '作曲', wide: true },
+    { key: 'genre', label: '類型' },
+    { key: 'date', label: '錄音日期' },
+    { key: 'trackNumber', label: '音軌號' },
+    { key: 'trackTotal', label: '音軌總數' },
+    { key: 'discNumber', label: '碟號' },
+    { key: 'discTotal', label: '碟片總數' },
+  ];
+
+  let details = $state<TrackDetails | null>(null);
+  let original = $state<TagFields | null>(null);
+  let draft = $state<TagFields | null>(null);
+  let error = $state<string | null>(null);
+  let notice = $state<string | null>(null);
+  let saving = $state(false);
+  let coverUrl = $state<string | null>(null);
+  let pendingCoverPath = $state<string | null>(null);
+  let pendingCoverUrl = $state<string | null>(null);
+  let removeCover = $state(false);
+  let onlineLyricsText = $state<string | null>(null);
+  let coverOptions = $state<CoverEditOptions>(loadCoverEditOptions());
+
+  const isDirty = (key: keyof TagFields) => !!draft && !!original && draft[key] !== original[key];
+  const coverDirty = $derived(pendingCoverPath !== null || removeCover);
+  const anyDirty = $derived(!!draft && !!original && (Object.keys(original) as (keyof TagFields)[]).some((key) => draft![key] !== original![key]) || coverDirty);
+
+  function revoke(url: string | null) { if (url) URL.revokeObjectURL(url); }
+
+  async function loadCover() {
+    revoke(coverUrl); coverUrl = null;
+    const bytes = await invoke<ArrayBuffer>('track_details_cover', { trackId });
+    if (bytes && bytes.byteLength > 0) coverUrl = URL.createObjectURL(new Blob([bytes]));
+  }
+
+  async function load() {
+    error = null;
+    try {
+      const result = await invoke<TrackDetails>('track_details_get', { trackId });
+      details = result;
+      original = { ...result.fields };
+      draft = { ...result.fields };
+      pendingCoverPath = null; revoke(pendingCoverUrl); pendingCoverUrl = null; removeCover = false;
+      await loadCover();
+    } catch (cause) {
+      error = String(cause);
+    }
+    try {
+      const lyrics = await invoke<{ lyrics: { provider?: string; source: string; synced: boolean; lines: { startMs: number | null; text: string; translation: string | null }[] } | null }>('lyrics_get_track', { trackId });
+      onlineLyricsText = isOnlineLyrics(lyrics.lyrics) ? lyricsToText(lyrics.lyrics!) : null;
+    } catch {
+      onlineLyricsText = null;
+    }
+  }
+
+  function importOnlineLyrics() {
+    if (draft && onlineLyricsText !== null) draft.lyrics = onlineLyricsText;
+  }
+
+  function resetField(key: keyof TagFields) { if (draft && original) draft[key] = original[key]; }
+  function resetAll() {
+    if (original) draft = { ...original };
+    pendingCoverPath = null; revoke(pendingCoverUrl); pendingCoverUrl = null; removeCover = false;
+  }
+
+  async function pickCover() {
+    const path = await invoke<string | null>('track_details_pick_cover');
+    if (!path) return;
+    const bytes = await invoke<ArrayBuffer>('track_details_read_image', { path });
+    revoke(pendingCoverUrl);
+    pendingCoverUrl = URL.createObjectURL(new Blob([bytes]));
+    pendingCoverPath = path;
+    removeCover = false;
+  }
+
+  async function exportCover() {
+    try {
+      const saved = await invoke<string | null>('track_details_export_cover', { trackId });
+      if (saved) notice = `已匯出：${saved}`;
+    } catch (cause) { error = String(cause); }
+  }
+
+  async function save() {
+    if (!draft || saving) return;
+    saving = true; error = null; notice = null;
+    try {
+      const result = await invoke<TrackDetails>('track_details_save', {
+        trackId,
+        request: { fields: draft, replaceCoverPath: pendingCoverPath, removeCover, coverOptions },
+      });
+      details = result;
+      original = { ...result.fields };
+      draft = { ...result.fields };
+      pendingCoverPath = null; revoke(pendingCoverUrl); pendingCoverUrl = null; removeCover = false;
+      await loadCover();
+      notice = '已儲存';
+      onSaved?.();
+    } catch (cause) {
+      error = String(cause);
+    } finally {
+      saving = false;
+    }
+  }
+
+  function requestClose() {
+    if (anyDirty && !confirm('有尚未儲存的變更，確定要關閉嗎？')) return;
+    onClose();
+  }
+
+  function updateCoverOptions(patch: Partial<CoverEditOptions>) {
+    coverOptions = { ...coverOptions, ...patch };
+    saveCoverEditOptions(coverOptions);
+  }
+
+  function onKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') { event.preventDefault(); requestClose(); }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void save(); }
+  }
+
+  const formatBytes = (bytes: number) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : `${Math.round(bytes / 1024)} KB`;
+  const formatDuration = (ms: number) => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+  const formatDate = (ms: number | null) => ms == null ? '—' : new Date(ms).toLocaleString('zh-TW', { hour12: false });
+
+  let lastTrackId = '';
+  $effect(() => { if (trackId !== lastTrackId) { lastTrackId = trackId; void load(); } });
+  onMount(() => window.addEventListener('keydown', onKeydown));
+  onDestroy(() => { window.removeEventListener('keydown', onKeydown); revoke(coverUrl); revoke(pendingCoverUrl); });
+</script>
+
+<button class="track-details-scrim" type="button" tabindex="-1" aria-label="關閉歌曲資訊" onclick={requestClose}></button>
+<div class="track-details floating-surface" role="dialog" aria-modal="true" aria-label="歌曲資訊">
+  <header class="track-details-header">
+    <h2>歌曲資訊</h2>
+    {#if details}
+      <div class="track-details-path">
+        <code title={details.path}>{details.path}</code>
+        <button type="button" class="soft-button" onclick={() => void navigator.clipboard.writeText(details!.path)}>複製路徑</button>
+        <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>在資料夾中顯示</button>
+      </div>
+    {/if}
+  </header>
+
+  <div class="track-details-body">
+    {#if error}<p class="track-details-error" role="alert">{error}</p>{/if}
+    {#if details?.readOnly}<p class="track-details-notice">{details.readOnlyReason ?? '此檔案為唯讀'}</p>{/if}
+
+    {#if details && draft}
+      <section class="track-details-cover">
+        <div class="track-details-cover-preview" class:is-dirty={coverDirty}>
+          {#if removeCover}
+            <span>（將移除封面）</span>
+          {:else if pendingCoverUrl}
+            <img src={pendingCoverUrl} alt="新封面預覽" />
+          {:else if coverUrl}
+            <img src={coverUrl} alt="目前封面" />
+          {:else}
+            <span>無封面</span>
+          {/if}
+        </div>
+        <div class="track-details-cover-meta">
+          {#if details.cover}<p>{details.cover.width}×{details.cover.height} · {details.cover.mime.replace('image/', '').toUpperCase()} · {formatBytes(details.cover.bytes)}</p>{/if}
+          <div class="track-details-row-buttons">
+            <button type="button" class="soft-button" disabled={details.readOnly} onclick={() => void pickCover()}>取代封面…</button>
+            <button type="button" class="soft-button" disabled={!details.cover} onclick={() => void exportCover()}>匯出封面…</button>
+            <button type="button" class="soft-button" disabled={details.readOnly || (!details.cover && !pendingCoverPath)} onclick={() => { removeCover = true; pendingCoverPath = null; }}>移除</button>
+          </div>
+          <label>JPG 品質 <input type="number" min="1" max="100" value={coverOptions.jpegQuality} onchange={(event) => updateCoverOptions({ jpegQuality: Math.min(100, Math.max(1, Number(event.currentTarget.value) || 90)) })} /></label>
+          <label><input type="checkbox" checked={coverOptions.autoResize} onchange={(event) => updateCoverOptions({ autoResize: event.currentTarget.checked })} /> 自動縮放：短邊</label>
+          <label><input type="number" min="64" max="10000" step="10" disabled={!coverOptions.autoResize} value={coverOptions.shortEdgePx} onchange={(event) => updateCoverOptions({ shortEdgePx: Math.max(64, Number(event.currentTarget.value) || 1000) })} /> px（保持長寬比）</label>
+        </div>
+      </section>
+
+      <section class="track-details-fields">
+        {#each TEXT_FIELDS as field (field.key)}
+          <label class="track-details-field" class:is-wide={field.wide} class:is-dirty={isDirty(field.key)}>
+            <span>{field.label}</span>
+            <input type="text" bind:value={draft[field.key]} readonly={details.readOnly} />
+            {#if isDirty(field.key)}<button type="button" class="track-details-reset" aria-label={`還原${field.label}`} title="還原" onclick={() => resetField(field.key)}>↺</button>{/if}
+          </label>
+        {/each}
+        <div class="track-details-field is-wide is-lyrics" class:is-dirty={isDirty('lyrics')}>
+          <span class="track-details-lyrics-label">
+            歌詞（內嵌）
+            <button type="button" class="soft-button" disabled={details.readOnly || onlineLyricsText === null} title={onlineLyricsText === null ? '此曲目目前沒有使用線上歌詞' : '以目前使用中的線上歌詞取代（儲存後才寫入）'} onclick={importOnlineLyrics}>導入</button>
+            {#if isDirty('lyrics')}<button type="button" class="track-details-reset" aria-label="還原歌詞" title="還原" onclick={() => resetField('lyrics')}>↺</button>{/if}
+          </span>
+          <textarea rows="10" bind:value={draft.lyrics} readonly={details.readOnly} aria-label="歌詞"></textarea>
+        </div>
+      </section>
+
+      <section class="track-details-props">
+        <dl>
+          <dt>格式</dt><dd>{details.format}{details.tagFormat ? ` · ${details.tagFormat}` : ''}</dd>
+          <dt>時長</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
+          <dt>位元率</dt><dd>{details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? '—'} kbps</dd>
+          <dt>取樣率</dt><dd>{details.properties.sampleRate ? `${details.properties.sampleRate} Hz` : '—'}</dd>
+          <dt>位元深度</dt><dd>{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}</dd>
+          <dt>聲道</dt><dd>{details.properties.channels ?? '—'}</dd>
+          <dt>檔案大小</dt><dd>{formatBytes(details.fileSize)}</dd>
+          <dt>修改時間</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
+        </dl>
+        <button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button>
+      </section>
+    {:else if !error}
+      <p>讀取中…</p>
+    {/if}
+  </div>
+
+  <footer class="track-details-footer">
+    {#if notice}<span class="track-details-saved">{notice}</span>{/if}
+    <button type="button" class="soft-button" disabled={!anyDirty || saving} onclick={resetAll}>還原</button>
+    <button type="button" class="soft-button" onclick={requestClose}>關閉</button>
+    <button type="button" class="soft-button is-primary" disabled={!anyDirty || saving || !!details?.readOnly} onclick={() => void save()}>{saving ? '儲存中…' : '儲存'}</button>
+  </footer>
+</div>
+
+<style>
+  .track-details-scrim { position: fixed; inset: 0; z-index: 60; border: 0; background: rgb(0 0 0 / 0.35); }
+  .track-details {
+    position: fixed; z-index: 61; left: 50%; top: 50%; translate: -50% -50%;
+    width: min(880px, calc(100vw - 32px)); max-height: calc(100vh - 64px);
+    display: flex; flex-direction: column; color: var(--text-primary, inherit);
+  }
+  .track-details-header { padding: 14px 18px 8px; }
+  .track-details-header h2 { margin: 0 0 6px; font-size: 1.1rem; }
+  .track-details-path { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .track-details-path code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; font-size: 0.85rem; opacity: 0.85; }
+  .track-details-body { overflow: auto; padding: 8px 18px; display: grid; gap: 14px; }
+  .track-details-error { color: #ff6b6b; margin: 0; }
+  .track-details-notice { margin: 0; opacity: 0.8; }
+  .track-details-cover { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+  .track-details-cover-preview { width: 160px; height: 160px; display: grid; place-items: center; border-radius: 8px; background: rgb(127 127 127 / 0.15); overflow: hidden; outline: 2px solid transparent; }
+  .track-details-cover-preview.is-dirty { outline-color: var(--accent, #6aa7ff); }
+  .track-details-cover-preview img { width: 100%; height: 100%; object-fit: contain; }
+  .track-details-cover-meta { display: grid; gap: 6px; font-size: 0.9rem; }
+  .track-details-cover-meta p { margin: 0; opacity: 0.8; }
+  .track-details-cover-meta input[type='number'] { width: 80px; }
+  .track-details-row-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+  .track-details-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 12px; }
+  .track-details-field { position: relative; display: grid; gap: 3px; font-size: 0.85rem; }
+  .track-details-field.is-wide { grid-column: 1 / -1; }
+  .track-details-field > span { opacity: 0.75; }
+  .track-details-field input, .track-details-field textarea { font: inherit; font-size: 0.95rem; padding: 5px 8px; border-radius: 6px; border: 1px solid rgb(127 127 127 / 0.35); background: rgb(127 127 127 / 0.08); color: inherit; }
+  .track-details-field textarea { resize: vertical; font-family: inherit; }
+  .track-details-field.is-dirty input, .track-details-field.is-dirty textarea { border-color: var(--accent, #6aa7ff); }
+  .track-details-reset { position: absolute; right: 6px; top: 22px; border: 0; background: none; color: inherit; cursor: pointer; opacity: 0.7; }
+  .track-details-lyrics-label { display: flex; align-items: center; gap: 8px; opacity: 1 !important; }
+  .track-details-lyrics-label .track-details-reset { position: static; }
+  .track-details-props { display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+  .track-details-props dl { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 3px 12px; margin: 0; font-size: 0.85rem; }
+  .track-details-props dt { opacity: 0.7; }
+  .track-details-props dd { margin: 0; }
+  .track-details-footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 10px 18px 14px; }
+  .track-details-saved { margin-right: auto; opacity: 0.8; font-size: 0.85rem; }
+  .is-primary { font-weight: 600; }
+  @media (max-width: 820px) {
+    .track-details { inset: 0; left: 0; top: 0; translate: none; width: 100vw; max-height: none; height: 100%; border-radius: 0; }
+  }
+</style>

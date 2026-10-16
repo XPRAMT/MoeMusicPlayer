@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount, setContext, tick, untrack } from 'svelte';
   import { writable } from 'svelte/store';
+  import { invoke as invokeTauri } from '@tauri-apps/api/core';
+  import TrackDetailsDialog from './lib/TrackDetailsDialog.svelte';
+  import SpectrogramView from './lib/SpectrogramView.svelte';
   import { getPopoverHorizontalShiftPx, getVolumePopoverLeftShiftPx } from './lib/volume-popover-position.js';
   import {
     IconAlertCircle,
@@ -23,6 +26,7 @@
     IconSearch,
     IconSettings,
   IconAlarm,
+  IconInfoCircle,
     IconUsers,
     IconVolume2,
     IconX,
@@ -222,6 +226,27 @@
   let sleepTimerEndsAt = $state<number | null>(null);
   let sleepTimerNow = $state(Date.now());
   let isSleepTimerOpen = $state(false);
+  // 歌曲資訊面板（ADR 0013）：播放頁頂欄資訊按鈕開啟目前播放曲目。
+  let trackDetailsTrackId = $state<string | null>(null);
+  // Android 沒有多視窗，頻譜圖改以全螢幕頁面呈現；桌面開獨立 Tauri 視窗。
+  let androidSpectrogramTrackId = $state<string | null>(null);
+
+  function openTrackDetails(): void {
+    const id = playback?.currentTrack?.id;
+    if (id) trackDetailsTrackId = id;
+  }
+
+  async function openSpectrogram(trackId: string): Promise<void> {
+    if (capabilities?.platform === 'android') {
+      androidSpectrogramTrackId = trackId;
+      return;
+    }
+    try {
+      await invokeTauri('spectrogram_window_open', { trackId });
+    } catch (error) {
+      console.error('spectrogram window', error);
+    }
+  }
   let sleepTimerAnchor = $state<HTMLDivElement | null>(null);
   let sleepTimerPopover = $state<HTMLDivElement | null>(null);
   let sleepTimerPopoverShiftX = $state(0);
@@ -4362,6 +4387,9 @@
             <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label="切換譯文顯示" onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>譯</button>
             <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label="切換羅馬拼音顯示" onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>羅</button>
           </div>
+          <button class="soft-button icon-button now-playing-track-details-trigger" type="button" aria-label="歌曲資訊" use:appTooltip={'歌曲資訊'} aria-haspopup="dialog" aria-expanded={trackDetailsTrackId !== null} disabled={!playback?.currentTrack} onclick={openTrackDetails}>
+            <IconInfoCircle size={18} stroke={1.7} aria-hidden="true" />
+          </button>
           <button bind:this={quickSettingsTrigger} class="soft-button icon-button now-playing-quick-settings-trigger" type="button" aria-label="開啟快速設定" use:appTooltip={'快速設定'} aria-haspopup="dialog" aria-expanded={isQuickSettingsOpen} onclick={() => void openQuickSettings()}>
             <IconSettings size={18} stroke={1.7} aria-hidden="true" />
           </button>
@@ -4416,6 +4444,12 @@
           </section>
         </div>
       </div>
+      {#if trackDetailsTrackId}
+        <TrackDetailsDialog trackId={trackDetailsTrackId} onClose={() => { trackDetailsTrackId = null; }} onSaved={() => void syncLibrary()} onOpenSpectrogram={(id) => void openSpectrogram(id)} />
+      {/if}
+      {#if androidSpectrogramTrackId}
+        <SpectrogramView trackId={androidSpectrogramTrackId} onClose={() => { androidSpectrogramTrackId = null; }} />
+      {/if}
       {#if isQuickSettingsOpen}
         <button class="now-playing-quick-settings-scrim" type="button" tabindex="-1" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}></button>
         <dialog open
