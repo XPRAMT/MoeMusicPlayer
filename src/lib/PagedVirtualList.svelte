@@ -47,6 +47,7 @@
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
   } from './queue-reorder.js';
+  import { getGridTemplateMinWidthPx } from './grid-min-width.js';
   import { getAlbumDetailNativeScrollTop, getAlbumDetailScrollerTop, getAlbumDetailScrollState } from './album-detail-collapse.js';
 
   interface Props<Item> {
@@ -141,6 +142,10 @@
   }: Props<Item> = $props();
 
   let frame: HTMLDivElement | undefined = $state();
+  // Rows never shrink below the grid template's own minimums (px/em/minmax), so every track table
+  // overflows its viewport and scrolls horizontally instead of clipping columns in narrow windows.
+  let gridEmPx = $state(16);
+  const effectiveMinContentWidth = $derived(Math.max(minContentWidth, getGridTemplateMinWidthPx(gridTemplate, gridEmPx)));
   let viewport: HTMLDivElement | undefined = $state();
   let scrollTop = $state(0);
   let headerShift = $state(0);
@@ -414,6 +419,10 @@
   });
 
   onMount(() => {
+    if (viewport) {
+      const fontSize = Number.parseFloat(getComputedStyle(viewport).fontSize);
+      if (Number.isFinite(fontSize) && fontSize > 0) gridEmPx = fontSize;
+    }
     const updateMetrics = () => {
       const narrow = window.matchMedia('(max-width: 620px)').matches;
       const shortDesktop = window.matchMedia('(max-height: 680px) and (min-width: 621px)').matches;
@@ -764,7 +773,7 @@
   class:fill-available={fillAvailable}
   class:leading-overlay={hasLeadingOverlay}
   bind:this={frame}
-  style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px;--paged-leading-height:${leadingOverlayHeight}px;--paged-collapse-range:${leadingCollapseRange}px;--paged-viewport-top:${viewportTopOffset}px`}
+  style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${effectiveMinContentWidth}px;--paged-leading-height:${leadingOverlayHeight}px;--paged-collapse-range:${leadingCollapseRange}px;--paged-viewport-top:${viewportTopOffset}px`}
 >
   <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;${hasLeadingOverlay ? `top:${Math.max(0, leadingOverlayHeight - collapseOffset)}px;right:${headerGutter}px;` : `padding-right:${headerGutter}px;`}`}>
     <div class="paged-virtual-header-shift" style={`transform:translateX(${-headerShift}px)`}>
@@ -781,7 +790,7 @@
     aria-activedescendant={activeDescendantId}
     aria-busy={pending || totalCount === null}
     tabindex="0"
-    style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${minContentWidth}px`}
+    style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${effectiveMinContentWidth}px`}
     class:album-detail-scroll-timeline={hasLeadingOverlay && supportsScrollDrivenAlbumOverlay}
     class:is-reordering={dragFromIndex !== null}
     onscroll={handleViewportScroll}
@@ -982,8 +991,9 @@
     outline-offset: 2px;
   }
 
+  /* Long-press reorder still allows native pans on both axes (horizontal overflow on touch). */
   .paged-virtual-row.reorderable {
-    touch-action: pan-y;
+    touch-action: pan-x pan-y;
   }
 
   .paged-virtual-row.is-dragging {
