@@ -1,6 +1,6 @@
 <script lang="ts">
   // 頻譜圖：桌面為獨立 Tauri 視窗（label `spectrogram`），Android 以全螢幕頁面呈現（ADR 0013）。
-  // 視窗內可換曲（曲庫搜尋、播放佇列上／下一首、跟隨目前播放），並調整配色與分析參數。
+  // 視窗內可調整配色、分析參數與聲道（混合／L／R／分開）；不在視窗內換曲。
   import { onDestroy, onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -18,11 +18,10 @@
   } from './spectrogram-settings.js';
 
   type Spectrogram = {
-    pngBase64: string; sampleRate: number; channels: number; panels: number; durationMs: number;
+    pngBase64: string; sampleRate: number; channels: number; channelLabels: string[]; panels: number; durationMs: number;
     columns: number; height: number; maxFrequencyHz: number; cutoffHz: number | null; fileName: string; path: string;
   };
   type TrackLite = { id: string; title: string | null; artist: string | null; album: string | null };
-  type QueueItem = { trackId: string; track: TrackLite | null; isCurrent: boolean };
 
   let { trackId: initialTrackId, onClose }: { trackId: string; onClose?: () => void } = $props();
 
@@ -35,18 +34,12 @@
   let showSettings = $state(false);
   let hover = $state<{ x: number; y: number; time: string; freq: string; channel: string } | null>(null);
   let plot = $state<HTMLDivElement | null>(null);
-  let searchText = $state('');
-  let searchResults = $state<TrackLite[]>([]);
-  let searchOpen = $state(false);
   let unlisten: UnlistenFn | null = null;
-  let followTimer: ReturnType<typeof setInterval> | null = null;
-  let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let renderTimer: ReturnType<typeof setTimeout> | null = null;
   let requestSerial = 0;
   let renderedKey = '';
 
-  const describe = (t: TrackLite | null | undefined) => t ? [t.title, t.artist].filter(Boolean).join(' — ') : '';
-
+  
   function renderSize() {
     const rect = plot?.getBoundingClientRect();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -89,67 +82,7 @@
   function updateSettings(patch: Partial<SpectrogramSettings>) {
     settings = { ...settings, ...patch };
     saveSpectrogramSettings(settings);
-    if ('followPlaying' in patch) { setupFollow(); return; }
     scheduleRender();
-  }
-
-  async function currentPlaying(): Promise<TrackLite | null> {
-    try {
-      const snapshot = await invoke<{ currentTrack: TrackLite | null }>('playback_get_snapshot', {});
-      return snapshot.currentTrack;
-    } catch { return null; }
-  }
-
-  function setupFollow() {
-    if (followTimer) { clearInterval(followTimer); followTimer = null; }
-    if (!settings.followPlaying) return;
-    const tick = async () => {
-      const current = await currentPlaying();
-      if (current && current.id !== trackId) void setTrack(current.id, describe(current));
-    };
-    void tick();
-    followTimer = setInterval(() => void tick(), 1500);
-  }
-
-  async function queueNeighbour(step: 1 | -1) {
-    try {
-      const items: QueueItem[] = [];
-      for (let offset = 0; offset < 20000; offset += 500) {
-        const page = await invoke<{ total: number; items: QueueItem[] }>('playback_get_queue_page', { offset, limit: 500 });
-        items.push(...page.items);
-        if (offset + 500 >= page.total) break;
-      }
-      if (items.length === 0) { error = '播放佇列是空的'; return; }
-      let index = items.findIndex((item) => item.trackId === trackId);
-      if (index < 0) index = items.findIndex((item) => item.isCurrent);
-      const next = items[(Math.max(0, index) + step + items.length) % items.length];
-      if (settings.followPlaying) updateSettings({ followPlaying: false });
-      await setTrack(next.trackId, describe(next.track));
-    } catch (cause) { error = String(cause); }
-  }
-
-  async function playingNow() {
-    const current = await currentPlaying();
-    if (current) await setTrack(current.id, describe(current));
-  }
-
-  function onSearchInput() {
-    if (searchTimer) clearTimeout(searchTimer);
-    const query = searchText.trim();
-    if (!query) { searchResults = []; return; }
-    searchTimer = setTimeout(async () => {
-      try {
-        const page = await invoke<{ items: TrackLite[] }>('library_get_page', { query, offset: 0, limit: 40 });
-        searchResults = page.items;
-        searchOpen = true;
-      } catch (cause) { error = String(cause); }
-    }, 200);
-  }
-
-  function pickResult(track: TrackLite) {
-    searchOpen = false; searchText = '';
-    if (settings.followPlaying) updateSettings({ followPlaying: false });
-    void setTrack(track.id, describe(track));
   }
 
   // Axis geometry
@@ -162,7 +95,8 @@
     const step = [1, 2, 5, 10, 15, 30, 60, 120, 300].find((s) => total / s <= 14) ?? 600;
     return Array.from({ length: Math.floor(total / step) + 1 }, (_, i) => i * step);
   });
-  const channelName = (i: number, total: number) => total === 2 ? (i === 0 ? 'L' : 'R') : `Ch ${i + 1}`;
+  // Labels come from the decoded layout (L, R, C, LFE, SL, SR…), so 5.1/7.1 list every channel.
+  const channelName = (i: number, total: number) => data?.channelLabels?.[i] ?? (total === 1 ? 'Mono' : `Ch ${i + 1}`);
   const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   const fmtFreq = (f: number) => (f >= 1000 ? `${(f / 1000).toFixed(f >= 10000 || f % 1000 === 0 ? 0 : 1)}k` : `${Math.round(f)}`);
 
@@ -196,18 +130,13 @@
 
   let resizeObserver: ResizeObserver | null = null;
   onMount(async () => {
-    if (settings.followPlaying) {
-      setupFollow();
-    } else {
-      await setTrack(initialTrackId);
-    }
+    await setTrack(initialTrackId);
     if (plot) {
       resizeObserver = new ResizeObserver(() => scheduleRender(400));
       resizeObserver.observe(plot);
     }
     try {
       unlisten = await listen<string>('spectrogram-track', (event) => {
-        if (settings.followPlaying) updateSettings({ followPlaying: false });
         void setTrack(event.payload);
       });
     } catch { /* not in a Tauri window */ }
@@ -215,29 +144,13 @@
   onDestroy(() => {
     unlisten?.();
     resizeObserver?.disconnect();
-    if (followTimer) clearInterval(followTimer);
     if (renderTimer) clearTimeout(renderTimer);
-    if (searchTimer) clearTimeout(searchTimer);
   });
 </script>
 
 <div class="spectrogram-page">
   <header class="spectrogram-toolbar">
     {#if onClose}<button type="button" class="sg-button" onclick={onClose}>返回</button>{/if}
-    <button type="button" class="sg-button" title="播放佇列上一首" aria-label="播放佇列上一首" onclick={() => void queueNeighbour(-1)}>◀</button>
-    <button type="button" class="sg-button" title="播放佇列下一首" aria-label="播放佇列下一首" onclick={() => void queueNeighbour(1)}>▶</button>
-    <button type="button" class="sg-button" onclick={() => void playingNow()}>目前播放</button>
-    <label class="sg-check"><input type="checkbox" checked={settings.followPlaying} onchange={(e) => updateSettings({ followPlaying: e.currentTarget.checked })} /> 跟隨播放</label>
-    <div class="sg-search">
-      <input type="search" placeholder="搜尋曲庫…" bind:value={searchText} oninput={onSearchInput} onfocus={() => (searchOpen = searchResults.length > 0)} onkeydown={(e) => { if (e.key === 'Escape') searchOpen = false; if (e.key === 'Enter' && searchResults[0]) pickResult(searchResults[0]); }} />
-      {#if searchOpen && searchResults.length > 0}
-        <ul class="sg-results" role="listbox">
-          {#each searchResults as result (result.id)}
-            <li><button type="button" onclick={() => pickResult(result)}><b>{result.title ?? '（無標題）'}</b><span>{[result.artist, result.album].filter(Boolean).join(' · ')}</span></button></li>
-          {/each}
-        </ul>
-      {/if}
-    </div>
     <button type="button" class="sg-button" class:is-active={showSettings} aria-expanded={showSettings} onclick={() => (showSettings = !showSettings)}>設定</button>
     <button type="button" class="sg-button" disabled={loading} onclick={() => void render(true)}>重新繪製</button>
   </header>
@@ -266,7 +179,7 @@
       </label>
       <label>聲道
         <select value={channelValue()} onchange={(e) => setChannel(e.currentTarget.value)}>
-          <option value="mix">混合</option>
+          <option value="mix">混合（全部聲道）</option>
           {#each Array.from({ length: Math.max(1, channelCount) }, (_, i) => i) as i (i)}<option value={`channel:${i}`}>{channelName(i, channelCount)}</option>{/each}
           <option value="separate">各聲道分開</option>
         </select>
@@ -316,18 +229,11 @@
 
 <style>
   .spectrogram-page { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; background: #0b0b10; color: #e8e8ee; font-size: 13px; z-index: 80; }
-  .spectrogram-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .spectrogram-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 6px; flex-wrap: wrap; }
   .sg-button { background: #22222c; color: inherit; border: 1px solid #3a3a48; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
   .sg-button:hover { background: #2c2c38; }
   .sg-button.is-active { border-color: #8a7dff; }
   .sg-button:disabled { opacity: 0.5; cursor: default; }
-  .sg-check { display: flex; align-items: center; gap: 4px; }
-  .sg-search { position: relative; flex: 1; min-width: 180px; max-width: 420px; }
-  .sg-search input { width: 100%; box-sizing: border-box; background: #15151c; color: inherit; border: 1px solid #3a3a48; border-radius: 6px; padding: 4px 8px; font: inherit; }
-  .sg-results { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; right: 0; max-height: 50vh; overflow: auto; margin: 0; padding: 4px; list-style: none; background: #1a1a22; border: 1px solid #3a3a48; border-radius: 6px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.5); }
-  .sg-results button { width: 100%; text-align: left; display: grid; gap: 1px; background: none; border: 0; color: inherit; padding: 5px 8px; border-radius: 4px; cursor: pointer; font: inherit; }
-  .sg-results button:hover { background: #2c2c38; }
-  .sg-results span { opacity: 0.65; font-size: 12px; }
   .sg-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 10px; background: #15151c; border: 1px solid #2c2c38; border-radius: 6px; }
   .sg-settings label { display: flex; align-items: center; gap: 6px; }
   .sg-settings select, .sg-settings input { background: #0f0f15; color: inherit; border: 1px solid #3a3a48; border-radius: 4px; padding: 2px 4px; font: inherit; }

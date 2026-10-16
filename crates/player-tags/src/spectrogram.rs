@@ -91,6 +91,8 @@ pub struct Spectrogram {
     pub png: Vec<u8>,
     pub sample_rate: u32,
     pub channels: u32,
+    /// Display label per decoded channel (L, R, C, LFE, SL, SR…; `Ch n` when unknown).
+    pub channel_labels: Vec<String>,
     pub duration_ms: u64,
     pub columns: u32,
     pub height: u32,
@@ -146,6 +148,53 @@ fn stops(map: Colormap) -> Stops {
         Colormap::Viridis => VIRIDIS,
         Colormap::Grayscale => GRAY,
     }
+}
+
+/// Labels for the decoded channel layout, in interleaved order.
+pub fn channel_labels(
+    channels: Option<symphonia::core::audio::Channels>,
+    count: usize,
+) -> Vec<String> {
+    use symphonia::core::audio::Channels as C;
+    let known: Vec<String> = channels
+        .map(|layout| {
+            layout
+                .iter()
+                .map(|channel| {
+                    let label = match channel {
+                        c if c == C::FRONT_LEFT => "L",
+                        c if c == C::FRONT_RIGHT => "R",
+                        c if c == C::FRONT_CENTRE => "C",
+                        c if c == C::LFE1 => "LFE",
+                        c if c == C::LFE2 => "LFE2",
+                        c if c == C::REAR_LEFT => "RL",
+                        c if c == C::REAR_RIGHT => "RR",
+                        c if c == C::REAR_CENTRE => "RC",
+                        c if c == C::FRONT_LEFT_CENTRE => "FLC",
+                        c if c == C::FRONT_RIGHT_CENTRE => "FRC",
+                        c if c == C::SIDE_LEFT => "SL",
+                        c if c == C::SIDE_RIGHT => "SR",
+                        c if c == C::TOP_CENTRE => "TC",
+                        c if c == C::TOP_FRONT_LEFT => "TFL",
+                        c if c == C::TOP_FRONT_CENTRE => "TFC",
+                        c if c == C::TOP_FRONT_RIGHT => "TFR",
+                        c if c == C::TOP_REAR_LEFT => "TRL",
+                        c if c == C::TOP_REAR_CENTRE => "TRC",
+                        c if c == C::TOP_REAR_RIGHT => "TRR",
+                        _ => "",
+                    };
+                    label.to_owned()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (0..count)
+        .map(|i| match known.get(i) {
+            Some(label) if !label.is_empty() => label.clone(),
+            _ if count == 1 => "Mono".to_owned(),
+            _ => format!("Ch {}", i + 1),
+        })
+        .collect()
 }
 
 /// 256-entry lookup table for a colormap.
@@ -409,6 +458,7 @@ pub fn render_spectrogram(
         png,
         sample_rate,
         channels: channel_count as u32,
+        channel_labels: channel_labels(track.codec_params.channels, channel_count),
         duration_ms: total * 1000 / u64::from(sample_rate),
         columns: out_cols,
         height: img.height(),
@@ -465,6 +515,23 @@ mod tests {
             (0..n).map(|i| (2.0 * std::f32::consts::PI * bin * i as f32 / n as f32).sin()),
         );
         assert!(column[100] > -1.0 && column[100] < 1.0, "{}", column[100]);
+    }
+
+    #[test]
+    fn surround_layout_gets_standard_labels() {
+        use symphonia::core::audio::Channels as C;
+        let layout = C::FRONT_LEFT
+            | C::FRONT_RIGHT
+            | C::FRONT_CENTRE
+            | C::LFE1
+            | C::SIDE_LEFT
+            | C::SIDE_RIGHT;
+        assert_eq!(
+            channel_labels(Some(layout), 6),
+            ["L", "R", "C", "LFE", "SL", "SR"]
+        );
+        assert_eq!(channel_labels(None, 3), ["Ch 1", "Ch 2", "Ch 3"]);
+        assert_eq!(channel_labels(None, 1), ["Mono"]);
     }
 
     #[test]

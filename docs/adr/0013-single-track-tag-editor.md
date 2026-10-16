@@ -79,9 +79,9 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - 現有程式中線上歌詞的存放方式：SQLite `player-db` 的 `track_lyrics` 表（`database.rs` 的 `get_track_lyrics`／`save_automatic_track_lyrics`／`save_manual_track_lyrics`），候選快取在 `lyric_candidates` 表。前端經 IPC `lyrics_get_track`（`src-tauri/src/lyrics_service.rs`）取得 `TrackLyrics`（`src/lib/ipc.ts`），其 `source` 為 `'local' | 'embedded' | 'netease' | 'qqmusic' | 'manual'`。判斷規則：`source` 是 `netease`／`qqmusic`／`manual`（手動選的線上候選）時才算線上歌詞、按鈕可用；`local`／`embedded` 或已清除（`cleared:` 候選）時停用。實作時再確認 `manual` 的實際來源。
 - 格式：`TrackLyrics` 存的是解析後的 `lines`（含 `offsetMs`、`synced`），導入時需序列化成 LRC 文字（同步歌詞輸出 `[mm:ss.xx]`，套用 offset；非同步則輸出純文字）。若原始 LRC 文字仍保留在 DB，優先使用原文。
 
-### 頻譜圖視窗功能（使用者確認：比照 Spek／Audacity 等級）
+### 頻譜圖視窗功能（使用者確認）
 
-- **視窗內換曲**：曲庫搜尋（`library_get_page`，輸入即搜、Enter 選第一筆）、播放佇列上一首／下一首（依目前顯示曲目在佇列中的位置，循環）、「目前播放」一鍵切換，以及「跟隨播放」開關（每 1.5 秒讀 `playback_get_snapshot`，換曲時自動重繪；手動換曲會關閉跟隨）。從面板再按「頻譜圖」會以 `spectrogram-track` 事件換曲。
+- **不在視窗內換曲**（使用者更正：「切換音軌」指聲道）：沒有曲庫搜尋、佇列上／下一首或跟隨播放；視窗顯示從面板開啟的曲目，從面板再按「頻譜圖」會以 `spectrogram-track` 事件換成該曲。聲道選單依解碼串流的實際聲道數動態列出（支援 5.1、7.1 等任意聲道數），標籤取自 symphonia 聲道配置（L、R、C、LFE、SL、SR、RL、RR…，未知時為 `Ch n`），另有「混合（全部聲道）」與「各聲道上下分開」。
 - **配色**：Spek（預設）、Magma、Inferno、Viridis、灰階；Rust 端 256 階 LUT，前端圖例以相同色標的 CSS 漸層顯示。
 - **分析設定**：FFT 大小 1024–16384、窗函數（Hann／Hamming／Blackman／Blackman-Harris／矩形，以窗的相干增益正規化，滿幅正弦約 0 dBFS）、頻率軸線性／對數（對數下限 20 Hz）、dB 下限／上限、聲道（混合／單一聲道／各聲道上下分開）、最高頻率（空白＝Nyquist）。輸出解析度依繪圖區實際大小（×DPR，最多 2 倍）決定，視窗縮放後自動重繪；另有「重新繪製」。
 - 設定存於 localStorage `moe.spectrogramSettings`（每裝置），經 `toRenderOptions` 轉成 Rust `SpectrogramOptions`（serde camelCase；聲道為 `{ mode, index }`）。

@@ -23,8 +23,7 @@ export const COLORMAPS = [
 /**
  * @typedef {{ mode: 'mix' } | { mode: 'separate' } | { mode: 'channel', index: number }} ChannelSelect
  * @typedef {{ fftSize: number, window: string, colormap: string, channel: ChannelSelect,
- *   dbFloor: number, dbCeiling: number, logFrequency: boolean, maxFrequencyHz: number | null,
- *   followPlaying: boolean }} SpectrogramSettings
+ *   dbFloor: number, dbCeiling: number, logFrequency: boolean, maxFrequencyHz: number | null }} SpectrogramSettings
  */
 
 /** @type {SpectrogramSettings} */
@@ -37,7 +36,6 @@ export const DEFAULT_SPECTROGRAM_SETTINGS = {
   dbCeiling: 0,
   logFrequency: false,
   maxFrequencyHz: null,
-  followPlaying: false,
 };
 
 /** @param {unknown} value @returns {SpectrogramSettings} */
@@ -64,7 +62,6 @@ export function normalizeSpectrogramSettings(value) {
     dbCeiling,
     logFrequency: raw.logFrequency === true,
     maxFrequencyHz,
-    followPlaying: raw.followPlaying === true,
   };
 }
 
