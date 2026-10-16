@@ -185,6 +185,14 @@ export function swipeDismiss(node, params) {
     }
   }
 
+  // Pointer preventDefault does not stop the native gesture: without this the WebView starts a
+  // scroll/fling for the locked swipe, and a tap while that fling runs only cancels it (no click),
+  // which left the dock dead for a moment after collapsing the playback page from the cover.
+  /** @param {TouchEvent} event */
+  function touchMove(event) {
+    if (direction && event.cancelable) event.preventDefault();
+  }
+
   /** @param {MouseEvent} event */
   function click(event) {
     if (!suppressClick) return;
@@ -198,6 +206,7 @@ export function swipeDismiss(node, params) {
   node.addEventListener('pointerup', up);
   node.addEventListener('pointercancel', up);
   node.addEventListener('click', click, true);
+  node.addEventListener('touchmove', touchMove, { passive: false });
   return {
     /** @param {SwipeDismissOptions} next */
     update(next) { options = next; if (next.enabled === false) { start = null; reset(false); } },
@@ -207,6 +216,7 @@ export function swipeDismiss(node, params) {
       node.removeEventListener('pointerup', up);
       node.removeEventListener('pointercancel', up);
       node.removeEventListener('click', click, true);
+      node.removeEventListener('touchmove', touchMove);
     }
   };
 }
