@@ -97,7 +97,8 @@ input {
 }
 
 /* No WebView tap highlight anywhere (Android draws a blue box on any clickable element, not just
-   buttons); the app's own :active styles are the touch feedback. */,
+   buttons); the app's own :active styles are the touch feedback. */
+html,
 *,
 *::before,
 *::after {
