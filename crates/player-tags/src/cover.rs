@@ -15,9 +15,9 @@ pub struct CoverOptions {
 impl Default for CoverOptions {
     fn default() -> Self {
         Self {
-            jpeg_quality: 90,
+            jpeg_quality: 100,
             auto_resize: false,
-            short_edge_px: 1000,
+            short_edge_px: 2160,
         }
     }
 }

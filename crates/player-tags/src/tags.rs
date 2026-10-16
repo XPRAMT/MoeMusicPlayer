@@ -94,6 +94,8 @@ pub struct TrackDetails {
     pub file_name: String,
     pub file_size: u64,
     pub modified_unix_ms: Option<u64>,
+    /// File creation time when the platform reports it (Windows); `None` otherwise.
+    pub created_unix_ms: Option<u64>,
     pub format: String,
     /// e.g. "ID3v2.3", "VorbisComments", "MP4 ilst"; empty when no tag.
     pub tag_format: String,
@@ -131,14 +133,32 @@ fn id3v2_version(path: &Path) -> Option<u8> {
     (&header[..3] == b"ID3").then_some(header[3])
 }
 
-fn file_meta(path: &Path) -> Result<(u64, Option<u64>), String> {
+fn file_meta(path: &Path) -> Result<(u64, Option<u64>, Option<u64>), String> {
     let meta = fs::metadata(path).map_err(|e| format!("無法讀取檔案資訊：{e}"))?;
     let modified = meta
         .modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as u64);
-    Ok((meta.len(), modified))
+    let created = meta
+        .created()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64);
+    Ok((meta.len(), modified, created))
+}
+
+/// Human-readable tag format label (e.g. "Vorbis Comments" instead of `VorbisComments`).
+fn friendly_tag_type(tag_type: TagType) -> String {
+    match tag_type {
+        TagType::VorbisComments => "Vorbis Comments".to_owned(),
+        TagType::Mp4Ilst => "MP4 (iTunes ilst)".to_owned(),
+        TagType::Ape => "APEv2".to_owned(),
+        TagType::Id3v1 => "ID3v1".to_owned(),
+        TagType::RiffInfo => "RIFF INFO".to_owned(),
+        TagType::AiffText => "AIFF Text".to_owned(),
+        other => format!("{other:?}"),
+    }
 }
 
 /// ID3v2 cannot hold `ItemKey::Lyrics`; lyrics (including LRC text) go to USLT there.
@@ -198,7 +218,7 @@ fn format_name(file_type: FileType) -> String {
 }
 
 pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
-    let (file_size, modified_unix_ms) = file_meta(path)?;
+    let (file_size, modified_unix_ms, created_unix_ms) = file_meta(path)?;
     let mut details = TrackDetails {
         path: path.to_string_lossy().into_owned(),
         file_name: path
@@ -207,6 +227,7 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
             .unwrap_or_default(),
         file_size,
         modified_unix_ms,
+        created_unix_ms,
         format: path
             .extension()
             .map(|e| e.to_string_lossy().to_uppercase())
@@ -242,7 +263,8 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
     {
         details.tag_format = match (tag.tag_type(), id3v2_version(path)) {
             (TagType::Id3v2, Some(v)) => format!("ID3v2.{v}"),
-            (t, _) => format!("{t:?}"),
+            (TagType::Id3v2, None) => "ID3v2".to_owned(),
+            (t, _) => friendly_tag_type(t),
         };
         for (key, _, get_mut) in FIELD_KEYS.iter() {
             if let Some(value) = tag.get_string(effective_key(*key, tag.tag_type())) {

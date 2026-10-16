@@ -6,7 +6,7 @@ const KEY = 'moe.coverEditOptions';
 /** @typedef {{ jpegQuality: number, autoResize: boolean, shortEdgePx: number }} CoverEditOptions */
 
 /** @type {CoverEditOptions} */
-export const DEFAULT_COVER_EDIT_OPTIONS = { jpegQuality: 90, autoResize: false, shortEdgePx: 1000 };
+export const DEFAULT_COVER_EDIT_OPTIONS = { jpegQuality: 100, autoResize: false, shortEdgePx: 2160 };
 
 /** @param {unknown} value @returns {CoverEditOptions} */
 export function normalizeCoverEditOptions(value) {

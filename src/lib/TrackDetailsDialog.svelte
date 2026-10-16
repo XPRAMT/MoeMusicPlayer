@@ -14,7 +14,7 @@
     trackNumber: string; trackTotal: string; discNumber: string; discTotal: string; date: string; lyrics: string;
   };
   type TrackDetails = {
-    path: string; fileName: string; fileSize: number; modifiedUnixMs: number | null; format: string;
+    path: string; fileName: string; fileSize: number; modifiedUnixMs: number | null; createdUnixMs: number | null; format: string;
     tagFormat: string; readOnly: boolean; readOnlyReason: string | null; fields: TagFields;
     properties: { durationMs: number; overallBitrateKbps: number | null; audioBitrateKbps: number | null; sampleRate: number | null; bitDepth: number | null; channels: number | null };
     cover: { mime: string; width: number; height: number; bytes: number } | null;
@@ -29,19 +29,28 @@
     onOpenSpectrogram: (trackId: string) => void;
   } = $props();
 
-  const TEXT_FIELDS: { key: keyof TagFields; label: string; wide?: boolean }[] = [
-    { key: 'title', label: '標題', wide: true },
-    { key: 'artist', label: '演出者', wide: true },
-    { key: 'album', label: '專輯', wide: true },
-    { key: 'albumArtist', label: '專輯演出者', wide: true },
-    { key: 'composer', label: '作曲', wide: true },
+  // trackTotal / discTotal are not shown; they stay in the draft unchanged, so Save keeps
+  // whatever the file has.
+  const WIDE_FIELDS: { key: keyof TagFields; label: string }[] = [
+    { key: 'title', label: '標題' },
+    { key: 'artist', label: '演出者' },
+    { key: 'album', label: '專輯' },
+    { key: 'albumArtist', label: '專輯演出者' },
+    { key: 'composer', label: '作曲' },
     { key: 'genre', label: '類型' },
+  ];
+  const NUMBER_ROW: { key: keyof TagFields; label: string }[] = [
     { key: 'date', label: '錄音日期' },
     { key: 'trackNumber', label: '音軌號' },
-    { key: 'trackTotal', label: '音軌總數' },
     { key: 'discNumber', label: '碟號' },
-    { key: 'discTotal', label: '碟片總數' },
   ];
+
+  /** Move the dialog to <body> so no ancestor stacking context (the player shell) can put the
+   *  dock above it. */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy() { node.remove(); } };
+  }
 
   let details = $state<TrackDetails | null>(null);
   let original = $state<TagFields | null>(null);
@@ -154,7 +163,15 @@
 
   const formatBytes = (bytes: number) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : `${Math.round(bytes / 1024)} KB`;
   const formatDuration = (ms: number) => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
-  const formatDate = (ms: number | null) => ms == null ? '—' : new Date(ms).toLocaleString('zh-TW', { hour12: false });
+  const pad = (value: number) => String(value).padStart(2, '0');
+  /** Local time with zone, e.g. 2026-10-16 23:54 (UTC+8). */
+  const formatDate = (ms: number | null) => {
+    if (ms == null) return '—';
+    const date = new Date(ms);
+    const offset = -date.getTimezoneOffset();
+    const zone = `UTC${offset >= 0 ? '+' : '-'}${Math.floor(Math.abs(offset) / 60)}${Math.abs(offset) % 60 ? `:${pad(Math.abs(offset) % 60)}` : ''}`;
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())} (${zone})`;
+  };
 
   let lastTrackId = '';
   $effect(() => { if (trackId !== lastTrackId) { lastTrackId = trackId; void load(); } });
@@ -162,6 +179,7 @@
   onDestroy(() => { window.removeEventListener('keydown', onKeydown); revoke(coverUrl); revoke(pendingCoverUrl); });
 </script>
 
+<div class="track-details-layer" use:portal>
 <button class="track-details-scrim" type="button" tabindex="-1" aria-label="關閉歌曲資訊" onclick={requestClose}></button>
 <div class="track-details floating-surface" role="dialog" aria-modal="true" aria-label="歌曲資訊">
   <header class="track-details-header">
@@ -197,28 +215,32 @@
         <div class="track-details-cover-meta">
           {#if details.cover}<p>{details.cover.width}×{details.cover.height} · {details.cover.mime.replace('image/', '').toUpperCase()} · {formatBytes(details.cover.bytes)}</p>{/if}
           <div class="track-details-row-buttons">
-            <button type="button" class="soft-button" disabled={details.readOnly} onclick={() => void pickCover()}>取代封面…</button>
-            <button type="button" class="soft-button" disabled={!details.cover} onclick={() => void exportCover()}>匯出封面…</button>
+            <button type="button" class="soft-button" disabled={details.readOnly} onclick={() => void pickCover()}>選擇封面</button>
+            <button type="button" class="soft-button" disabled={!details.cover} onclick={() => void exportCover()}>匯出封面</button>
             <button type="button" class="soft-button" disabled={details.readOnly || (!details.cover && !pendingCoverPath)} onclick={() => { removeCover = true; pendingCoverPath = null; }}>移除</button>
           </div>
-          <label>JPG 品質 <input type="number" min="1" max="100" value={coverOptions.jpegQuality} onchange={(event) => updateCoverOptions({ jpegQuality: Math.min(100, Math.max(1, Number(event.currentTarget.value) || 90)) })} /></label>
+          <label>JPG 品質 <input type="number" min="1" max="100" value={coverOptions.jpegQuality} onchange={(event) => updateCoverOptions({ jpegQuality: Math.min(100, Math.max(1, Number(event.currentTarget.value) || 100)) })} /></label>
           <label><input type="checkbox" checked={coverOptions.autoResize} onchange={(event) => updateCoverOptions({ autoResize: event.currentTarget.checked })} /> 自動縮放：短邊</label>
-          <label><input type="number" min="64" max="10000" step="10" disabled={!coverOptions.autoResize} value={coverOptions.shortEdgePx} onchange={(event) => updateCoverOptions({ shortEdgePx: Math.max(64, Number(event.currentTarget.value) || 1000) })} /> px（保持長寬比）</label>
+          <label><input type="number" min="64" max="10000" step="10" disabled={!coverOptions.autoResize} value={coverOptions.shortEdgePx} onchange={(event) => updateCoverOptions({ shortEdgePx: Math.max(64, Number(event.currentTarget.value) || 2160) })} /> px（保持長寬比）</label>
         </div>
       </section>
 
       <section class="track-details-fields">
-        {#each TEXT_FIELDS as field (field.key)}
-          <label class="track-details-field" class:is-wide={field.wide} class:is-dirty={isDirty(field.key)}>
+        {#snippet fieldInput(field: { key: keyof TagFields; label: string }, wide: boolean)}
+          <label class="track-details-field" class:is-wide={wide} class:is-dirty={isDirty(field.key)}>
             <span>{field.label}</span>
-            <input type="text" bind:value={draft[field.key]} readonly={details.readOnly} />
+            <input type="text" bind:value={draft![field.key]} readonly={details!.readOnly} />
             {#if isDirty(field.key)}<button type="button" class="track-details-reset" aria-label={`還原${field.label}`} title="還原" onclick={() => resetField(field.key)}>↺</button>{/if}
           </label>
-        {/each}
+        {/snippet}
+        {#each WIDE_FIELDS as field (field.key)}{@render fieldInput(field, true)}{/each}
+        <div class="track-details-number-row">
+          {#each NUMBER_ROW as field (field.key)}{@render fieldInput(field, false)}{/each}
+        </div>
         <div class="track-details-field is-wide is-lyrics" class:is-dirty={isDirty('lyrics')}>
           <span class="track-details-lyrics-label">
             歌詞（內嵌）
-            <button type="button" class="soft-button" disabled={details.readOnly || onlineLyricsText === null} title={onlineLyricsText === null ? '此曲目目前沒有使用線上歌詞' : '以目前使用中的線上歌詞取代（儲存後才寫入）'} onclick={importOnlineLyrics}>導入</button>
+            <button type="button" class="soft-button" disabled={details.readOnly || onlineLyricsText === null} title={onlineLyricsText === null ? '此曲目目前沒有使用線上歌詞' : '以目前使用中的線上歌詞取代（儲存後才寫入）'} onclick={importOnlineLyrics}>導入線上歌詞</button>
             {#if isDirty('lyrics')}<button type="button" class="track-details-reset" aria-label="還原歌詞" title="還原" onclick={() => resetField('lyrics')}>↺</button>{/if}
           </span>
           <textarea rows="10" bind:value={draft.lyrics} readonly={details.readOnly} aria-label="歌詞"></textarea>
@@ -235,6 +257,7 @@
           <dt>聲道</dt><dd>{details.properties.channels ?? '—'}</dd>
           <dt>檔案大小</dt><dd>{formatBytes(details.fileSize)}</dd>
           <dt>修改時間</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
+          {#if details.createdUnixMs != null}<dt>建立時間</dt><dd>{formatDate(details.createdUnixMs)}</dd>{/if}
         </dl>
         <button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button>
       </section>
@@ -250,11 +273,12 @@
     <button type="button" class="soft-button is-primary" disabled={!anyDirty || saving || !!details?.readOnly} onclick={() => void save()}>{saving ? '儲存中…' : '儲存'}</button>
   </footer>
 </div>
+</div>
 
 <style>
-  .track-details-scrim { position: fixed; inset: 0; z-index: 60; border: 0; background: rgb(0 0 0 / 0.35); }
+  .track-details-scrim { position: fixed; inset: 0; z-index: 1000; border: 0; background: rgb(0 0 0 / 0.35); }
   .track-details {
-    position: fixed; z-index: 61; left: 50%; top: 50%; translate: -50% -50%;
+    position: fixed; z-index: 1001; left: 50%; top: 50%; translate: -50% -50%;
     width: min(880px, calc(100vw - 32px)); max-height: calc(100vh - 64px);
     display: flex; flex-direction: column; color: var(--text-primary, inherit);
   }
@@ -273,7 +297,11 @@
   .track-details-cover-meta p { margin: 0; opacity: 0.8; }
   .track-details-cover-meta input[type='number'] { width: 80px; }
   .track-details-row-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
-  .track-details-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 12px; }
+  .track-details-layer { display: contents; }
+  .track-details-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px 12px; }
+  /* Date / track / disc share one row; columns shrink (min 0) instead of overlapping. */
+  .track-details-number-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 8px 12px; }
+  .track-details-number-row input { min-width: 0; width: 100%; box-sizing: border-box; }
   .track-details-field { position: relative; display: grid; gap: 3px; font-size: 0.85rem; }
   .track-details-field.is-wide { grid-column: 1 / -1; }
   .track-details-field > span { opacity: 0.75; }
@@ -291,6 +319,6 @@
   .track-details-saved { margin-right: auto; opacity: 0.8; font-size: 0.85rem; }
   .is-primary { font-weight: 600; }
   @media (max-width: 820px) {
-    .track-details { inset: 0; left: 0; top: 0; translate: none; width: 100vw; max-height: none; height: 100%; border-radius: 0; }
+    .track-details { inset: 0; left: 0; top: 0; translate: none; width: 100vw; max-height: none; height: 100%; border-radius: 0; box-sizing: border-box; padding: var(--android-safe-top, 0px) var(--android-safe-right, 0px) var(--android-safe-bottom, 0px) var(--android-safe-left, 0px); }
   }
 </style>

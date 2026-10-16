@@ -134,10 +134,17 @@ fn with_readable<T>(
 }
 
 fn present_details(
+    app: &AppHandle,
     mut details: player_tags::TrackDetails,
     name: String,
     location: String,
 ) -> player_tags::TrackDetails {
+    let _ = app;
+    #[cfg(target_os = "android")]
+    if location.starts_with("content://") {
+        details.modified_unix_ms = android_io::document_modified_ms(app, &location);
+        details.created_unix_ms = None;
+    }
     details.file_name = name;
     details.path = location;
     details
@@ -170,6 +177,17 @@ mod android_io {
     pub struct WorkFile {
         pub path: PathBuf,
         pub display_name: Option<String>,
+    }
+
+    /// Document modification time reported by the provider (the work copy's own times are
+    /// meaningless). Android exposes no creation time.
+    pub fn document_modified_ms(app: &AppHandle, uri: &str) -> Option<u64> {
+        app.media_index()
+            .probe_content_uri(uri)
+            .ok()
+            .flatten()
+            .and_then(|meta| meta.modified_at_utc_ms)
+            .and_then(|ms| u64::try_from(ms).ok())
     }
 
     impl WorkFile {
@@ -371,7 +389,7 @@ pub async fn track_details_get(
     let source = track_source(&state, &track_id)?;
     blocking(move || {
         let (details, name, location) = with_readable(&app, &source, player_tags::read_details)?;
-        Ok(present_details(details, name, location))
+        Ok(present_details(&app, details, name, location))
     })
     .await
 }
@@ -433,7 +451,7 @@ pub async fn track_details_save(
                 let original = android_io::duplicate(&app, &work)?;
                 let details = player_tags::write_edit(&work.path, &edit)?;
                 android_io::write_back(&app, &work.path, &original.path, uri)?;
-                Ok(present_details(details, work.display_name(), uri.clone()))
+                Ok(present_details(&app, details, work.display_name(), uri.clone()))
             }
         }
     })
