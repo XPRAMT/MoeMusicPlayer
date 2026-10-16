@@ -20,7 +20,7 @@
     { id: 'trackDuration', label: '播放時長' },
   ];
   // All columns share the same font-size as their cells so em widths match between header and rows.
-  // 演出者 column width: drag the header splitter (mouse/touch/pen); persisted; double-click resets.
+  // 演出者 column width: dragged at its header border (shared resize handle); persisted.
   const TITLE_WIDTH_KEY = 'moe.artistIndex.titleWidthPx';
   const TITLE_WIDTH_MIN = 120;
   const TITLE_WIDTH_MAX = 1200;
@@ -32,30 +32,14 @@
     } catch { return null; }
   }
   let titleWidth = $state<number | null>(readTitleWidth());
-  let titleDrag: { id: number; startX: number; startWidth: number } | null = null;
   const ARTIST_GRID = $derived(`36px ${titleWidth === null ? 'minmax(150px,1fr)' : `${titleWidth}px`} 6em 6em 6em 6em`);
 
-  function startTitleResize(event: PointerEvent): void {
-    const header = (event.currentTarget as HTMLElement).parentElement;
-    const cell = header?.children[1] as HTMLElement | undefined;
-    titleDrag = { id: event.pointerId, startX: event.clientX, startWidth: titleWidth ?? cell?.getBoundingClientRect().width ?? 240 };
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    event.preventDefault();
-    event.stopPropagation();
+  // Same column-resize handle as the track lists (TrackColumnCells), at the column border.
+  function setTitleWidth(widthPx: number): void {
+    titleWidth = clampTitleWidth(widthPx);
+    try { localStorage.setItem(TITLE_WIDTH_KEY, String(titleWidth)); } catch { /* storage unavailable */ }
   }
-  function moveTitleResize(event: PointerEvent): void {
-    if (!titleDrag || titleDrag.id !== event.pointerId) return;
-    titleWidth = clampTitleWidth(titleDrag.startWidth + event.clientX - titleDrag.startX);
-  }
-  function endTitleResize(event: PointerEvent): void {
-    if (!titleDrag || titleDrag.id !== event.pointerId) return;
-    titleDrag = null;
-    try { if (titleWidth !== null) localStorage.setItem(TITLE_WIDTH_KEY, String(titleWidth)); } catch { /* storage unavailable */ }
-  }
-  function resetTitleWidth(): void {
-    titleWidth = null;
-    try { localStorage.removeItem(TITLE_WIDTH_KEY); } catch { /* storage unavailable */ }
-  }
+
 
   interface Props {
     refreshKey: number;
@@ -233,19 +217,9 @@
             sortable={true}
             sort={{ field: sortField, direction: sortDirection }}
             onSort={(field) => changeSort(field as SortField)}
+            resizable={true}
+            onResize={(_columnId, widthPx) => setTitleWidth(widthPx)}
           />
-          <span
-            class="artist-title-resizer"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="調整演出者欄寬（雙擊還原）"
-            style:left={titleWidth === null ? 'calc(36px + max(150px, (100% - 36px - 24em)) - 5px)' : `${36 + titleWidth - 5}px`}
-            onpointerdown={startTitleResize}
-            onpointermove={moveTitleResize}
-            onpointerup={endTitleResize}
-            onpointercancel={endTitleResize}
-            ondblclick={resetTitleWidth}
-          ></span>
         </div>
       {/snippet}
       {#snippet row(row: VirtualListRow<ArtistRow>)}
@@ -270,27 +244,3 @@
   {/if}
 </div>
 
-<style>
-  :global(.track-list-header:has(> .artist-title-resizer)) { position: relative; }
-  .artist-title-resizer {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    z-index: 3;
-    width: 10px;
-    cursor: col-resize;
-    touch-action: none;
-  }
-  .artist-title-resizer::after {
-    content: '';
-    position: absolute;
-    top: 25%;
-    bottom: 25%;
-    left: 4px;
-    width: 2px;
-    border-radius: 1px;
-    background: var(--divider-color, currentColor);
-    opacity: 0.5;
-  }
-  .artist-title-resizer:hover::after, .artist-title-resizer:active::after { opacity: 1; background: var(--accent-text, currentColor); }
-</style>

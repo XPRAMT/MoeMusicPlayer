@@ -295,8 +295,8 @@
     <h2>歌曲資訊</h2>
     {#if notice}<span class="track-details-saved">{notice}</span>{/if}
     <div class="track-details-actions">
+      <button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button>
       <button type="button" class="soft-button" disabled={!anyDirty || saving} onclick={resetAll}>還原</button>
-      <button type="button" class="soft-button" onclick={requestClose}>關閉</button>
       <button type="button" class="soft-button is-primary" disabled={!anyDirty || saving || !!details?.readOnly} onclick={() => void save()}>{saving ? '儲存中…' : '儲存'}</button>
     </div>
   </header>
@@ -309,7 +309,6 @@
       <div class="track-details-path">
         <span class="track-details-path-label">路徑</span>
         <code title={details.path}>{details.path}</code>
-        <button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button>
         <button type="button" class="soft-button" onclick={() => void navigator.clipboard.writeText(details!.path)}>複製路徑</button>
         {#if !isAndroid}
         <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>在資料夾中顯示</button>
