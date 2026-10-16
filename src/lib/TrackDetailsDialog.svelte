@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatAudioFormat } from './track-columns.js';
   // 歌曲詳細資訊面板（ADR 0013 Phase 1）：單曲標籤檢視／暫存編輯，按「儲存」才寫檔。
   import { onDestroy, onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
@@ -310,7 +311,7 @@
       </div>
 
       <dl class="track-details-props">
-        <dt>格式</dt><dd>{details.format || '—'}</dd>
+        <dt>格式</dt><dd>{formatAudioFormat({ codec: details.format, sampleRateHz: details.properties.sampleRate, bitDepth: details.properties.bitDepth, bitrateBps: (details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? 0) * 1000 })}</dd>
         <dt>標籤</dt><dd>{details.tagFormat || '—'}</dd>
         <dt>時長</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
         <dt>位元率</dt><dd>{details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? '—'} kbps</dd>

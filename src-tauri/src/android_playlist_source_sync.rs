@@ -67,15 +67,13 @@ where
     }
     reject_excessive_entries_before_parse(playlist_bytes)?;
 
-    let extension = source.display_name.rsplit('.').next().unwrap_or_default();
+    let extension = android_playlist_extension(&source.display_name, document_uri, playlist_bytes);
     let synthetic_file =
         PathBuf::from("__android_saf_playlist_parent__").join(format!("playlist.{extension}"));
-    let mut parsed = if extension.eq_ignore_ascii_case("m3u8") {
+    let mut parsed = if extension == "m3u8" {
         parse_m3u8(playlist_bytes, &synthetic_file)
-    } else if extension.eq_ignore_ascii_case("m3u") {
-        parse_m3u(playlist_bytes, &synthetic_file)
     } else {
-        return Err("Android playlist must have an .m3u or .m3u8 display name".to_owned());
+        parse_m3u(playlist_bytes, &synthetic_file)
     }
     .map_err(|error| format!("unable to parse Android playlist: {error}"))?;
     if parsed.entries.len() > MAX_ANDROID_PLAYLIST_ENTRIES {
@@ -399,6 +397,56 @@ where
     ) -> Result<TrackMetadata, TrackMetadataError> {
         (self.read_metadata)(track)
     }
+}
+
+/// Playlist encoding for an SAF playlist source. `display_name` is the user-facing source label
+/// (e.g. "Love") and often has no extension, so it is only one hint: then the document URI's
+/// file name (SAF document ids carry the path, e.g. `primary:Music/Love.m3u8`), and finally the
+/// bytes: valid UTF-8 (or a UTF-8 BOM) parses as m3u8, anything else as legacy m3u.
+pub(crate) fn android_playlist_extension(display_name: &str, document_uri: &str, bytes: &[u8]) -> &'static str {
+    fn from_name(name: &str) -> Option<&'static str> {
+        let extension = name.rsplit_once('.')?.1.trim();
+        if extension.eq_ignore_ascii_case("m3u8") {
+            Some("m3u8")
+        } else if extension.eq_ignore_ascii_case("m3u") {
+            Some("m3u")
+        } else {
+            None
+        }
+    }
+    if let Some(found) = from_name(display_name) {
+        return found;
+    }
+    let decoded = percent_decode(document_uri.rsplit('/').next().unwrap_or_default());
+    if let Some(found) = from_name(&decoded) {
+        return found;
+    }
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) || std::str::from_utf8(bytes).is_ok() {
+        "m3u8"
+    } else {
+        "m3u"
+    }
+}
+
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Some(value) = std::str::from_utf8(&bytes[index + 1..index + 3])
+                .ok()
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
+                out.push(value);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -929,5 +977,16 @@ mod tests {
                 .len(),
             100_000
         );
+    }
+
+    #[test]
+    fn playlist_extension_falls_back_to_uri_then_content() {
+        use super::android_playlist_extension as ext;
+        assert_eq!(ext("list.m3u8", "content://p/document/x", b""), "m3u8");
+        assert_eq!(ext("Old.M3U", "content://p/document/x", b"\xff"), "m3u");
+        assert_eq!(ext("Favorites", "content://com.android.externalstorage.documents/tree/primary%3AMusic/document/primary%3AMusic%2FLove.m3u8", b"#EXTM3U\n"), "m3u8");
+        assert_eq!(ext("Love", "content://p/document/primary%3AMusic%2FLove.m3u", b"a.flac\n"), "m3u");
+        assert_eq!(ext("Love", "content://media/external/audio/playlists/12", "#EXTM3U\n\u{6b4c}.flac\n".as_bytes()), "m3u8");
+        assert_eq!(ext("Love", "content://media/external/audio/playlists/12", b"\xb7\xd3.mp3\n"), "m3u");
     }
 }

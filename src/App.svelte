@@ -3807,11 +3807,11 @@
                 <div class="source-action-heading"><strong>共享音樂</strong><span>MediaStore</span></div>
                 <p>先授權讀取音樂，再選擇裝置提供的媒體儲存空間。</p>
                 <div class="source-action-row source-action-buttons">
-                  <button class="primary-button" type="button" onclick={() => void requestMediaStorePermission()} disabled={!sourceSyncReady || isUpdatingSource}>
+                  <button class="soft-button" type="button" onclick={() => void requestMediaStorePermission()} disabled={!sourceSyncReady || isUpdatingSource}>
                     {mediaPermissionGranted ? '重新檢查授權' : '授權並讀取共享音樂'}
                   </button>
                   {#if mediaPermissionGranted}
-                    <button class="outline-button" type="button" onclick={() => void loadMediaStoreVolumes()} disabled={isLoadingVolumes || isUpdatingSource}>
+                    <button class="soft-button" type="button" onclick={() => void loadMediaStoreVolumes()} disabled={isLoadingVolumes || isUpdatingSource}>
                       {isLoadingVolumes ? '載入中' : '重新載入儲存空間'}
                     </button>
                   {/if}
@@ -3819,7 +3819,7 @@
                 {#if mediaStoreVolumes.length > 0}
                   <div class="media-volume-list" aria-label="MediaStore 儲存空間">
                     {#each mediaStoreVolumes as volume (volume.volumeName)}
-                      <button class="volume-choice" type="button" onclick={() => void addMediaStoreVolume(volume)} disabled={isUpdatingSource}>
+                      <button class="soft-button volume-choice" type="button" onclick={() => void addMediaStoreVolume(volume)} disabled={isUpdatingSource}>
                         <span>{volume.displayName}</span><small>加入並同步</small>
                       </button>
                     {/each}
@@ -3831,7 +3831,7 @@
               <div class="source-action-card android-source-actions">
                 <div class="source-action-heading"><strong>選擇文件資料夾</strong><span>SAF</span></div>
                 <p>使用 Android 系統文件選擇器授權資料夾；URI 與授權留在原生端管理。</p>
-                <button class="outline-button" type="button" onclick={() => void pickSafSource()} disabled={!sourceSyncReady || isUpdatingSource}>
+                <button class="soft-button" type="button" onclick={() => void pickSafSource()} disabled={!sourceSyncReady || isUpdatingSource}>
                   {isUpdatingSource ? '處理中' : '選擇資料夾並同步'}
                 </button>
               </div>
