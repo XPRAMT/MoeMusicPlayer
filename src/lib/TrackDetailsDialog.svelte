@@ -250,15 +250,6 @@
 <div class="track-details floating-surface" role="dialog" aria-modal="true" aria-label="歌曲資訊">
   <header class="track-details-header">
     <h2>歌曲資訊</h2>
-    {#if details}
-      <div class="track-details-path">
-        <code title={details.path}>{details.path}</code>
-        <button type="button" class="soft-button" onclick={() => void navigator.clipboard.writeText(details!.path)}>複製路徑</button>
-        {#if !isAndroid}
-        <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>在資料夾中顯示</button>
-        {/if}
-      </div>
-    {/if}
   </header>
 
   <div class="track-details-body">
@@ -266,6 +257,26 @@
     {#if details?.readOnly}<p class="track-details-notice">{details.readOnlyReason ?? '此檔案為唯讀'}</p>{/if}
 
     {#if details && draft}
+      <div class="track-details-path">
+        <span class="track-details-path-label">路徑</span>
+        <code title={details.path}>{details.path}</code>
+        <button type="button" class="soft-button" onclick={() => void navigator.clipboard.writeText(details!.path)}>複製路徑</button>
+        {#if !isAndroid}
+        <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>在資料夾中顯示</button>
+        {/if}
+      </div>
+
+      <dl class="track-details-props">
+        <dt>格式</dt><dd>{details.format || '—'}</dd>
+        <dt>標籤</dt><dd>{details.tagFormat || '—'}</dd>
+        <dt>時長</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
+        <dt>位元率</dt><dd>{details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? '—'} kbps</dd>
+        <dt>取樣率</dt><dd>{details.properties.sampleRate ? `${details.properties.sampleRate} Hz` : '—'}</dd>
+        <dt>位元深度</dt><dd class="track-details-with-action">{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}<button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button></dd>
+        <dt>聲道</dt><dd>{details.properties.channels ?? '—'}</dd>
+        <dt>修改時間</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
+      </dl>
+
       <section class="track-details-cover">
         <div class="track-details-cover-preview" class:is-dirty={coverDirty}>
           {#if removeCover}
@@ -293,6 +304,11 @@
         </div>
       </section>
 
+      <dl class="track-details-props">
+        <dt>檔案大小</dt><dd>{formatBytes(details.fileSize)}</dd>
+        <dt>建立時間</dt><dd>{formatDate(details.createdUnixMs)}</dd>
+      </dl>
+
       <section class="track-details-fields">
         {#snippet fieldInput(field: { key: keyof TagFields; label: string }, wide: boolean)}
           <label class="track-details-field" class:is-wide={wide} class:is-dirty={isDirty(field.key)}>
@@ -313,22 +329,6 @@
           </span>
           <textarea rows="10" bind:value={draft.lyrics} readonly={details.readOnly} aria-label="歌詞"></textarea>
         </div>
-      </section>
-
-      <section class="track-details-props">
-        <dl>
-          <dt>格式</dt><dd>{details.format || '—'}</dd>
-          <dt>標籤</dt><dd>{details.tagFormat || '—'}</dd>
-          <dt>時長</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
-          <dt>位元率</dt><dd>{details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? '—'} kbps</dd>
-          <dt>取樣率</dt><dd>{details.properties.sampleRate ? `${details.properties.sampleRate} Hz` : '—'}</dd>
-          <dt>位元深度</dt><dd>{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}</dd>
-          <dt>聲道</dt><dd>{details.properties.channels ?? '—'}</dd>
-          <dt>修改時間</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
-          <dt>檔案大小</dt><dd>{formatBytes(details.fileSize)}</dd>
-          <dt>建立時間</dt><dd>{formatDate(details.createdUnixMs)}</dd>
-        </dl>
-        <button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button>
       </section>
     {:else if !error}
       <p>讀取中…</p>
@@ -354,6 +354,7 @@
   .track-details-header { padding: 14px 18px 8px; }
   .track-details-header h2 { margin: 0 0 6px; font-size: 1.1rem; }
   .track-details-path { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .track-details-path-label { opacity: 0.7; font-size: 0.85rem; flex: none; }
   .track-details-path code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; font-size: 0.85rem; opacity: 0.85; }
   .track-details-body { overflow: auto; padding: 8px 18px; display: grid; gap: 14px; }
   .track-details-error { color: #ff6b6b; margin: 0; }
@@ -380,8 +381,9 @@
   .track-details-reset { position: absolute; right: 6px; top: 22px; border: 0; background: none; color: inherit; cursor: pointer; opacity: 0.7; }
   .track-details-lyrics-label { display: flex; align-items: center; gap: 8px; opacity: 1 !important; }
   .track-details-lyrics-label .track-details-reset { position: static; }
-  .track-details-props { display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
-  .track-details-props dl { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 3px 12px; margin: 0; font-size: 0.85rem; }
+  /* Two label/value pairs per row: 格式|標籤, 時長|位元率 … (rows split around the cover). */
+  .track-details-props { display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 0.85rem; align-items: center; }
+  .track-details-with-action { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .track-details-props dt { opacity: 0.7; }
   .track-details-props dd { margin: 0; }
   .track-details-footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 10px 18px 14px; }
