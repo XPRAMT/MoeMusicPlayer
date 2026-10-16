@@ -317,15 +317,16 @@
 
       <section class="track-details-props">
         <dl>
-          <dt>格式</dt><dd>{details.format}{details.tagFormat ? ` · ${details.tagFormat}` : ''}</dd>
+          <dt>格式</dt><dd>{details.format || '—'}</dd>
+          <dt>標籤</dt><dd>{details.tagFormat || '—'}</dd>
           <dt>時長</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
           <dt>位元率</dt><dd>{details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? '—'} kbps</dd>
           <dt>取樣率</dt><dd>{details.properties.sampleRate ? `${details.properties.sampleRate} Hz` : '—'}</dd>
           <dt>位元深度</dt><dd>{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}</dd>
           <dt>聲道</dt><dd>{details.properties.channels ?? '—'}</dd>
-          <dt>檔案大小</dt><dd>{formatBytes(details.fileSize)}</dd>
           <dt>修改時間</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
-          {#if details.createdUnixMs != null}<dt>建立時間</dt><dd>{formatDate(details.createdUnixMs)}</dd>{/if}
+          <dt>檔案大小</dt><dd>{formatBytes(details.fileSize)}</dd>
+          <dt>建立時間</dt><dd>{formatDate(details.createdUnixMs)}</dd>
         </dl>
         <button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button>
       </section>
