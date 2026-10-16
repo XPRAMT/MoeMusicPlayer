@@ -707,6 +707,10 @@ pub struct SpectrogramDto {
     pub cutoff_hz: Option<u32>,
     pub file_name: String,
     pub path: String,
+    /// Diagnostics: local copy (Android content://), decode+FFT+PNG, base64.
+    pub prepare_ms: u64,
+    pub render_ms: u64,
+    pub encode_ms: u64,
 }
 
 fn spectrogram_dto(
@@ -716,13 +720,26 @@ fn spectrogram_dto(
 ) -> Result<SpectrogramDto, String> {
     let options = options.unwrap_or_default();
     let cancel = std::sync::atomic::AtomicBool::new(false);
+    let started = std::time::Instant::now();
+    let mut render_ms = 0u64;
     let (spectrogram, file_name, location) = with_readable(app, source, |path| {
-        player_tags::render_spectrogram(path, options, &cancel)
+        let render_started = std::time::Instant::now();
+        let result = player_tags::render_spectrogram(path, options, &cancel);
+        render_ms = render_started.elapsed().as_millis() as u64;
+        result
     })?;
+    let prepare_ms = (started.elapsed().as_millis() as u64).saturating_sub(render_ms);
+    let encode_started = std::time::Instant::now();
     let engine = base64::engine::general_purpose::STANDARD;
+    let png_base64 = engine.encode(&spectrogram.png);
+    let levels_base64 = engine.encode(&spectrogram.levels);
+    let encode_ms = encode_started.elapsed().as_millis() as u64;
     Ok(SpectrogramDto {
-        png_base64: engine.encode(&spectrogram.png),
-        levels_base64: engine.encode(&spectrogram.levels),
+        prepare_ms,
+        render_ms,
+        encode_ms,
+        png_base64,
+        levels_base64,
         sample_rate: spectrogram.sample_rate,
         channels: spectrogram.channels,
         channel_labels: spectrogram.channel_labels,

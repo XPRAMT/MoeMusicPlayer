@@ -819,7 +819,7 @@
           class="paged-virtual-row paged-virtual-group-row list-group-row-surface"
           role="row"
           aria-rowindex={virtualRow.visualIndex + 2}
-          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px)`}
+          style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px);translate:${headerShift}px 0`}
         >
           <div class="paged-virtual-group-cell" role="gridcell" aria-colspan={columnCount}>
             <button type="button" class="paged-virtual-group-button" aria-label={`開啟「${virtualRow.label}」字首索引`} onclick={openQuickIndex}>{virtualRow.label}</button>
@@ -1051,6 +1051,8 @@
     width: max(100%, var(--track-list-min-width, 0px));
   }
 
+  /* Group headers stay pinned to the visible viewport width (translate follows scrollLeft) while
+     the rows scroll horizontally; vertical behavior is unchanged. */
   .paged-virtual-group-row {
     display: flex;
     align-items: center;

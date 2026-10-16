@@ -11,3 +11,12 @@ members = [
 ]
 default-members = ["src-tauri"]
 resolver = "2"
+
+# Heavy DSP/decoder deps (symphonia, rustfft, png, lofty) are 10-30x slower unoptimized; the
+# Android APK is a debug build, so optimize dependencies + player-tags even in the dev profile.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.player-tags]
+opt-level = 3
+

@@ -3,6 +3,13 @@
   // 可開啟任意檔案（對話框／拖放）並以 A／B 比較：單張、並排、疊圖（切換／透明度／差異）、分割滑桿。
   // A、B 共用設定、軸與縮放平移；滑鼠讀值同時顯示兩者。不在視窗內瀏覽曲庫換曲。
   import { onDestroy, onMount } from 'svelte';
+  // Android: the page opens from the detail dialog, which is portaled into .app-shell at
+  // z-index 1000+. Mount the page there too (above it and the dock) so it is not covered.
+  function portalToShell(node: HTMLElement) {
+    const shell = document.querySelector('.app-shell');
+    if (shell) shell.appendChild(node);
+    return { destroy() { if (shell) node.remove(); } };
+  }
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
@@ -72,9 +79,12 @@
     const mine = ++serial[side];
     loading[side] = true; errors[side] = null;
     try {
+      const requested = performance.now();
       const data = source.kind === 'track'
         ? await invoke<Spectrogram>('track_spectrogram', { trackId: source.id, options })
         : await invoke<Spectrogram>('spectrogram_render_file', { path: source.path, options });
+      const timing = data as unknown as { prepareMs?: number; renderMs?: number; encodeMs?: number };
+      console.info(`[spectrogram] ${side} total=${Math.round(performance.now() - requested)}ms prepare=${timing.prepareMs}ms render=${timing.renderMs}ms encode=${timing.encodeMs}ms cols=${data.columns} h=${data.height}`);
       if (mine !== serial[side]) return;
       loaded[side] = { data, levels: decodeLevels(data.levelsBase64) };
       if (side === 'A') document.title = `頻譜圖 — ${data.fileName}`;
@@ -379,7 +389,7 @@
   </div>
 {/snippet}
 
-<div class="spectrogram-page" class:is-drag-over={dragOver}>
+<div class="spectrogram-page" class:is-drag-over={dragOver} use:portalToShell>
   <header class="spectrogram-toolbar">
     {#if onClose}<button type="button" class="sg-button" onclick={onClose}>返回</button>{/if}
     <button type="button" class="sg-button" onclick={() => void pickFile('A')}>開啟 A…</button>
@@ -481,7 +491,7 @@
 </div>
 
 <style>
-  .spectrogram-page { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(10px + var(--android-safe-top, 0px)) calc(14px + var(--android-safe-right, 0px)) calc(10px + var(--android-safe-bottom, 0px)) calc(14px + var(--android-safe-left, 0px)); background: var(--page, #0b0b10); color: var(--text, #e8e8ee); font-size: 13px; z-index: 80; }
+  .spectrogram-page { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(10px + var(--android-safe-top, 0px)) calc(14px + var(--android-safe-right, 0px)) calc(10px + var(--android-safe-bottom, 0px)) calc(14px + var(--android-safe-left, 0px)); background: var(--page, #0b0b10); color: var(--text, #e8e8ee); font-size: 13px; z-index: 1100; }
   .spectrogram-page.is-drag-over { outline: 3px dashed #8a7dff; outline-offset: -6px; }
   .spectrogram-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .sg-spacer { flex: 1; }

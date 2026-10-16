@@ -4353,7 +4353,9 @@ input:focus-visible {
     /* Flush under the title bar and against the left edge; ends above the dock and exactly at the
        top of the visible edge-timeline line (which overhangs the dock top). */
     --nav-panel-dock-overhang: 0px;
-    top: calc(var(--window-titlebar-height) + var(--android-safe-top, 0px));
+    /* Android: background extends under the status bar; content starts below it. */
+    top: var(--window-titlebar-height);
+    padding-top: calc(var(--sidebar-brand-inset) + var(--android-safe-top, 0px));
     bottom: calc(var(--dock-height) + var(--android-safe-bottom, 0px) + var(--nav-panel-dock-overhang));
     left: 0;
     width: min(calc(300px + var(--android-safe-left, 0px)), calc(100vw - var(--android-safe-right, 0px) - 16px));
