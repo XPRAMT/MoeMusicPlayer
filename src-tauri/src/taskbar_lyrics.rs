@@ -11,7 +11,7 @@ use player_platform_windows::taskbar::{
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_HIDEWINDOW,
+    GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWLP_HWNDPARENT, GWL_EXSTYLE, HWND_TOPMOST, SWP_HIDEWINDOW,
     SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_SHOWWINDOW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW,
 };
@@ -122,17 +122,31 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
     let mut visible = false;
     while !stop.load(Ordering::Relaxed) {
         let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
-            // The window is gone (closed from outside): let the next `apply` start a fresh watcher.
-            if let Ok(mut guard) = STOP.lock() {
-                if guard.as_ref().is_some_and(|current| Arc::ptr_eq(current, &stop)) {
-                    *guard = None;
+            // The window is gone. It is owned by the taskbar, so it dies when Explorer restarts: make a new one
+            // unless this watcher was stopped meanwhile (or the window cannot be made).
+            if stop.load(Ordering::Relaxed) || ensure_window(&app).is_err() {
+                if let Ok(mut guard) = STOP.lock() {
+                    if guard.as_ref().is_some_and(|current| Arc::ptr_eq(current, &stop)) {
+                        *guard = None;
+                    }
                 }
+                break;
             }
-            break;
+            visible = false;
+            std::thread::sleep(POLL_STEP);
+            continue;
         };
         if let Ok(hwnd) = window.hwnd() {
             let hwnd = HWND(hwnd.0);
-            let area = target_area(&prober);
+            let (area, tray) = target_area(&prober);
+            // Owned by the taskbar, the window keeps its place above it: when the taskbar takes focus (a tray click, the
+            // Windows quick settings) Windows lifts it into a higher layer than any ordinary topmost window.
+            if tray != 0 {
+                let tray = HWND(tray as *mut _);
+                if unsafe { GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT) } != tray.0 as isize {
+                    unsafe { SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, tray.0 as isize) };
+                }
+            }
             match area {
                 Some(area) => {
                     // Re-asserted every pass: clicking the taskbar raises it over other topmost windows.
@@ -184,18 +198,21 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
     }
 }
 
-/// The free stretch lyrics may use right now, or `None` when they should be hidden.
-fn target_area(prober: &TaskbarProber) -> Option<Rect> {
-    let probe = prober.probe().ok()?;
+/// The free stretch lyrics may use right now (`None` when they should be hidden) and the taskbar window (0 when unknown).
+fn target_area(prober: &TaskbarProber) -> (Option<Rect>, isize) {
+    let Ok(probe) = prober.probe() else {
+        return (None, 0);
+    };
     if probe.covered || probe.auto_hide || probe.vertical {
-        return None;
+        return (None, probe.tray_window);
     }
     let scale = |css_px: i32| css_px * probe.dpi.max(96) as i32 / 96;
-    pick_free_area(
+    let area = pick_free_area(
         probe.bounds,
         &probe.occupied,
         AreaChoice::Widest,
         scale(MARGIN_CSS_PX),
         scale(MIN_WIDTH_CSS_PX),
-    )
+    );
+    (area, probe.tray_window)
 }

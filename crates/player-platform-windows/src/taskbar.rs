@@ -99,6 +99,8 @@ pub struct TaskbarProbe {
     pub covered: bool,
     /// Left or right edge: not supported.
     pub vertical: bool,
+    /// The `Shell_TrayWnd` window (an `HWND` value), so the lyrics window can be made its owned window.
+    pub tray_window: isize,
 }
 
 #[cfg(windows)]
@@ -196,6 +198,7 @@ mod imp {
                 auto_hide,
                 covered: covered || !visible,
                 vertical,
+                tray_window: tray.0 as isize,
             })
         }
 
