@@ -76,14 +76,24 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
 fn embedded_artwork(path: &Path, oversized: &mut bool) -> Option<ArtworkImage> {
     let native_path = to_extended_path(path).ok()?;
     let file = open_regular_file_without_following_reparse_points(&native_path)?;
-    let options = ParseOptions::new().read_properties(false);
-    let reader = std::io::BufReader::new(file);
-    let probe = match FileType::from_path(path) {
-        Some(file_type) => Probe::with_file_type(reader, file_type),
-        None => Probe::new(reader).guess_file_type().ok()?,
-    };
-    let tagged_file = probe.options(options).read().ok()?;
-    let tags = tagged_file.tags();
+    // DSF is not a lofty format: its cover lives in the ID3v2 tag at the end of the file.
+    let dsd_tags;
+    let tagged_file;
+    let tags: &[lofty::tag::Tag] =
+        if player_formats::decode_engine(path) == player_formats::DecodeEngine::Dsd {
+            let (_, tag) = player_dsd::id3::read_dsf_from(file).ok()?;
+            dsd_tags = tag.into_iter().collect::<Vec<_>>();
+            &dsd_tags
+        } else {
+            let options = ParseOptions::new().read_properties(false);
+            let reader = std::io::BufReader::new(file);
+            let probe = match FileType::from_path(path) {
+                Some(file_type) => Probe::with_file_type(reader, file_type),
+                None => Probe::new(reader).guess_file_type().ok()?,
+            };
+            tagged_file = probe.options(options).read().ok()?;
+            tagged_file.tags()
+        };
 
     for picture in tags
         .iter()
@@ -471,6 +481,21 @@ mod tests {
         fs::write(path, bytes).expect("write synthetic ID3v2 picture");
     }
 
+    /// A DSF whose trailing ID3v2 tag carries `embedded` as its front cover.
+    fn write_tagged_dsf(path: &Path, embedded: &[u8]) {
+        let id3_file = path.with_extension("id3.tmp");
+        write_tagged_mp3(&id3_file, embedded);
+        let mut id3 = fs::read(&id3_file).expect("read synthetic ID3v2");
+        let _ = fs::remove_file(&id3_file);
+        id3.truncate(id3.len() - 4); // drop the MPEG frame stub
+        let mut file =
+            player_dsd::testing::build_dsf(2_822_400, 8_000, 4096, true, &[vec![0x69; 1000]]);
+        let tag_offset = file.len() as u64;
+        file[20..28].copy_from_slice(&tag_offset.to_le_bytes());
+        file.extend_from_slice(&id3);
+        fs::write(path, file).expect("write synthetic DSF");
+    }
+
     fn only_locator(path: PathBuf) -> Vec<MediaLocator> {
         vec![MediaLocator::FileSystem(path)]
     }
@@ -494,6 +519,18 @@ mod tests {
         assert_eq!(artwork.mime_type(), "image/png");
         assert_eq!(artwork.bytes(), embedded);
         assert_eq!(artwork.dimensions(), (1, 1));
+    }
+
+    #[test]
+    fn dsf_embedded_cover_is_read_from_the_trailing_id3v2_tag() {
+        let dir = TestDirectory::new("dsf-cover");
+        let audio = dir.path().join("track.dsf");
+        let embedded = tiny_png();
+        write_tagged_dsf(&audio, &embedded);
+
+        let artwork = expect_found(&only_locator(audio));
+        assert_eq!(artwork.mime_type(), "image/png");
+        assert_eq!(artwork.bytes(), embedded);
     }
 
     #[test]

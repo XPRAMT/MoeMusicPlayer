@@ -403,6 +403,8 @@ export function isDsdCodec(codec) {
  * @param {{ omitLosslessBitrate?: boolean }} [options]
  */
 export function formatAudioFormat(item, options = {}) {
+  // The track list passes `omitLosslessBitrate: true`: lossless formats (including DSD) show no average bitrate there.
+  // Everywhere else (the Now Playing top bar) the bitrate is shown.
   const omitLosslessBitrate = options.omitLosslessBitrate === true;
   const parts = [];
   if (typeof item.codec === 'string' && item.codec.trim()) {

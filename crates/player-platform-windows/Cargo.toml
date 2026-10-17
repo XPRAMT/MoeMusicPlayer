@@ -22,3 +22,4 @@ windows = { version = "0.62.2", features = [
 
 [dev-dependencies]
 player-db = { path = "../player-db" }
+player-dsd = { path = "../player-dsd", features = ["id3", "testing"] }

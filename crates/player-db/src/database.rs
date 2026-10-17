@@ -296,7 +296,8 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
     format!(
         "CASE TRIM(UPPER(COALESCE(t.codec, ''))) \
          WHEN 'WAV' THEN 6 WHEN 'WAVE' THEN 6 WHEN 'FLAC' THEN 5 WHEN 'VORBIS' THEN 4 WHEN 'OGG VORBIS' THEN 4 \
-         WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 2 WHEN 'M4A' THEN 2 WHEN 'AAC' THEN 2 WHEN 'MP4A' THEN 2 WHEN 'MP3' THEN 1 ELSE 0 END {direction}, \
+         WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 2 WHEN 'M4A' THEN 2 WHEN 'AAC' THEN 2 WHEN 'MP4A' THEN 2 WHEN 'MP3' THEN 1 \
+         ELSE CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) LIKE 'DSD%' THEN 7 ELSE 0 END END {direction}, \
          COALESCE(t.sample_rate_hz, 0) {direction}, \
          CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) IN ('WAV','WAVE','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','PCM','TAK','TTA') \
               THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction}, \
@@ -10057,6 +10058,8 @@ mod tests {
             ("flac16", "Flac", 96_000, Some(16), None),
             ("flac44", "Flac", 44_100, Some(24), None),
             ("wav", "Wav", 44_100, Some(16), None),
+            ("dsd64", "DSD64", 2_822_400, Some(1), Some(5_644_800)),
+            ("dsd128", "DSD128", 5_644_800, Some(1), Some(11_289_600)),
         ];
         let records = definitions
             .iter()
@@ -10110,7 +10113,10 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             codecs,
-            vec!["MP3", "Mp4", "Opus", "Opus", "Opus", "Vorbis", "Flac", "Flac", "Flac", "Wav"]
+            vec![
+                "MP3", "Mp4", "Opus", "Opus", "Opus", "Vorbis", "Flac", "Flac", "Flac", "Wav", "DSD64",
+                "DSD128"
+            ]
         );
         assert_eq!(sorted.items[2].bitrate_bps, Some(96_000));
         assert_eq!(sorted.items[3].bitrate_bps, Some(160_000));
@@ -10139,7 +10145,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "mp3", "mp4", "opus96", "opus160", "opus96k", "vorbis", "flac44", "flac16",
-                "flac24", "wav"
+                "flac24", "wav", "dsd64", "dsd128"
             ]
         );
         assert_eq!(library_sorted.items[2].bitrate_bps, Some(96_000));
@@ -10186,16 +10192,17 @@ mod tests {
                 .map(|item| item.title.as_deref().expect("title"))
                 .collect::<Vec<_>>(),
             vec![
-                "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160", "opus96",
+                "dsd128", "dsd64", "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160",
+                "opus96",
                 "mp4", "mp3"
             ]
         );
-        assert_eq!(playlist_desc.items[1].bit_depth, Some(24));
-        assert_eq!(playlist_desc.items[2].bit_depth, Some(16));
-        assert_eq!(playlist_desc.items[3].sample_rate_hz, Some(44_100));
-        assert_eq!(playlist_desc.items[5].sample_rate_hz, Some(96_000));
-        assert_eq!(playlist_desc.items[6].bitrate_bps, Some(160_000));
-        assert_eq!(playlist_desc.items[7].bitrate_bps, Some(96_000));
+        assert_eq!(playlist_desc.items[3].bit_depth, Some(24));
+        assert_eq!(playlist_desc.items[4].bit_depth, Some(16));
+        assert_eq!(playlist_desc.items[5].sample_rate_hz, Some(44_100));
+        assert_eq!(playlist_desc.items[7].sample_rate_hz, Some(96_000));
+        assert_eq!(playlist_desc.items[8].bitrate_bps, Some(160_000));
+        assert_eq!(playlist_desc.items[9].bitrate_bps, Some(96_000));
         let library_desc = db
             .list_tracks_page(ListTracksQuery {
                 offset: 0,
@@ -10215,16 +10222,17 @@ mod tests {
                 .map(|item| item.title.as_deref().expect("title"))
                 .collect::<Vec<_>>(),
             vec![
-                "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160", "opus96",
+                "dsd128", "dsd64", "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160",
+                "opus96",
                 "mp4", "mp3"
             ]
         );
-        assert_eq!(library_desc.items[1].bit_depth, Some(24));
-        assert_eq!(library_desc.items[2].bit_depth, Some(16));
-        assert_eq!(library_desc.items[3].sample_rate_hz, Some(44_100));
-        assert_eq!(library_desc.items[5].sample_rate_hz, Some(96_000));
-        assert_eq!(library_desc.items[6].bitrate_bps, Some(160_000));
-        assert_eq!(library_desc.items[7].bitrate_bps, Some(96_000));
+        assert_eq!(library_desc.items[3].bit_depth, Some(24));
+        assert_eq!(library_desc.items[4].bit_depth, Some(16));
+        assert_eq!(library_desc.items[5].sample_rate_hz, Some(44_100));
+        assert_eq!(library_desc.items[7].sample_rate_hz, Some(96_000));
+        assert_eq!(library_desc.items[8].bitrate_bps, Some(160_000));
+        assert_eq!(library_desc.items[9].bitrate_bps, Some(96_000));
         let queue_track_ids_desc = db
             .list_track_ids_filtered(
                 None,

@@ -47,21 +47,27 @@ pub fn parse_id3v2_bytes(bytes: &[u8]) -> Result<Option<Tag>, DsdError> {
 
 /// Stream info and tag of a DSF file. The tag is `None` when the file has none or it cannot be parsed.
 pub fn read_dsf(path: &Path) -> Result<(DsdInfo, Option<Tag>), DsdError> {
-    let file = File::open(path)?;
-    let reader = DsfReader::open(BufReader::new(file))?;
-    let info = reader.info();
-    let Some(offset) = reader.id3v2_offset() else {
+    read_dsf_from(File::open(path)?)
+}
+
+/// Like [`read_dsf`], for a file the caller already opened (for example with extra path-safety checks).
+pub fn read_dsf_from<R: Read + Seek + Send>(
+    mut reader: R,
+) -> Result<(DsdInfo, Option<Tag>), DsdError> {
+    let dsf = DsfReader::open(BufReader::new(&mut reader))?;
+    let info = dsf.info();
+    let Some(offset) = dsf.id3v2_offset() else {
         return Ok((info, None));
     };
-    let mut file = File::open(path)?;
-    let length = file.seek(SeekFrom::End(0))?;
+    drop(dsf);
+    let length = reader.seek(SeekFrom::End(0))?;
     let size = length.saturating_sub(offset);
     if size == 0 || size > MAX_TAG_BYTES {
         return Ok((info, None));
     }
-    file.seek(SeekFrom::Start(offset))?;
+    reader.seek(SeekFrom::Start(offset))?;
     let mut bytes = vec![0_u8; size as usize];
-    file.read_exact(&mut bytes)?;
+    reader.read_exact(&mut bytes)?;
     // A damaged tag must not hide a playable file.
     Ok((info, parse_id3v2_bytes(&bytes).unwrap_or(None)))
 }

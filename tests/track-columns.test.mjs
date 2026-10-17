@@ -419,6 +419,12 @@ test('audio format uses only supplied source fields and formats nullable values'
     }, formatDuration),
     'FLAC．96 kHz．24 bit',
   );
+  assert.equal(
+    formatTrackColumnValue('audioFormat', {
+      codec: 'DSD64', sampleRateHz: 2_822_400, bitDepth: 1, bitrateBps: 5_644_800,
+    }, formatDuration),
+    'DSD64．2.8 MHz．1 bit',
+  );
 });
 
 test('Hi-Res badge requires at least 48 kHz sample rate and 24-bit source depth', () => {
