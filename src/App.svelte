@@ -3805,7 +3805,7 @@
                   </div>
                 </div>
                 <div class="cover-corner-setting" role="group" aria-label={tr("語言")}>
-                  <div class="layout-choice-row lyrics-text-effect-row">
+                  <div class="layout-choice-row lyrics-text-effect-row language-choice-row">
                     {#each LANGUAGE_CHOICES as choice (choice)}
                       <button
                         type="button"

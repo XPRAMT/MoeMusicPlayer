@@ -3063,6 +3063,18 @@ input:focus-visible {
   color: var(--accent-text);
 }
 
+/* Language choices are as wide as their text and wrap, so more languages never take over the settings page. */
+.layout-choice-row.language-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.layout-choice-row.language-choice-row button {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+}
+
 .layout-choice-row button strong,
 .layout-choice-button strong {
   color: var(--text);
