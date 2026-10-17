@@ -73,12 +73,11 @@ export function isDoubleTap(previous, next) {
 }
 
 /**
- * use:coverZoom={{ enabled, onZoom, resetKey }} on the cover element, which is the element that gets transformed. Mouse: wheel
+ * use:coverZoom={{ enabled, onZoom }} on the cover element, which is the element that gets transformed. Mouse: wheel
  * over the cover zooms at the cursor, drag pans while zoomed. Touch/pen: pinch zooms, one finger pans while zoomed.
  * Double click / double tap restores the original size. `onZoom` receives the current scale (1 = not zoomed).
- * When `resetKey` changes (a different track/cover), the zoom is dropped immediately.
  * @param {HTMLElement} node
- * @param {{ enabled?: boolean, onZoom?: (scale: number) => void, resetKey?: unknown }} params
+ * @param {{ enabled?: boolean, onZoom?: (scale: number) => void }} params
  */
 export function coverZoom(node, params) {
   let options = params;
@@ -229,12 +228,7 @@ export function coverZoom(node, params) {
   return {
     /** @param {typeof params} next */
     update(next) {
-      const keyChanged = next.resetKey !== options.resetKey;
       options = next;
-      if (keyChanged && state.scale !== COVER_ZOOM_REST) {
-        pointers.clear(); pinch = null; pan = null; lastTap = null;
-        apply({ ...COVER_ZOOM_IDENTITY }, false);
-      }
       if (!active()) { pointers.clear(); pinch = null; pan = null; reset(); }
     },
     destroy() {

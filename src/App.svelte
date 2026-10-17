@@ -576,6 +576,7 @@
   let coverStageElement = $state<HTMLDivElement | null>(null);
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   let coverZoomScale = $state(1);
+  let coverBaseAvailable: { width: number; height: number } | null = null;
   // 1 at original size or larger, fading to 0 as the cover shrinks to the minimum: the artwork pane's fr share.
   let coverShrinkShare = $derived(Math.min(1, Math.max(0, (coverZoomScale - COVER_ZOOM_MIN) / (1 - COVER_ZOOM_MIN))));
   let sources = $state<LibrarySource[]>([]);
@@ -1057,9 +1058,6 @@
   });
 
   function updateCoverFrame(): void {
-    // While zoomed the artwork pane is resized by the zoom itself; refitting to it would feed back (shrink to
-    // nothing / grow without bound). The base frame is refreshed once the zoom is back at 1.
-    if (untrack(() => coverZoomScale) !== 1) return;
     const stage = coverStageElement;
     const artworkPane = stage?.parentElement;
     const image = stage?.querySelector('img');
@@ -1068,12 +1066,17 @@
       return;
     }
 
+    // While zoomed the artwork pane is resized by the zoom itself; fitting to it would feed back (shrink to nothing /
+    // grow without bound). Fit to the pane size measured at 1x instead, so a new track's cover keeps the zoom.
+    if (untrack(() => coverZoomScale) === 1 || !coverBaseAvailable) {
+      coverBaseAvailable = { width: artworkPane.clientWidth, height: artworkPane.clientHeight };
+    }
     const maxDimension = window.innerHeight * 0.92;
     const nextFrame = calculateArtworkFrame({
       sourceWidth: image.naturalWidth,
       sourceHeight: image.naturalHeight,
-      availableWidth: artworkPane.clientWidth,
-      availableHeight: artworkPane.clientHeight,
+      availableWidth: coverBaseAvailable.width,
+      availableHeight: coverBaseAvailable.height,
       maxWidth: maxDimension,
       maxHeight: maxDimension,
       border: 0,
@@ -4530,7 +4533,7 @@
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
-                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: (scale) => { coverZoomScale = scale; }, resetKey: `${playback?.currentTrack?.id ?? ''}|${activeArtwork.objectUrl ?? ''}` }}
+                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: (scale) => { coverZoomScale = scale; } }}
                   use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() } }}
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
