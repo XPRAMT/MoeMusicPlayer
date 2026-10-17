@@ -145,8 +145,8 @@ pub fn auto_terms(source: usize, device: usize) -> MixTerms {
         }
         // Everything else: channel for channel as far as both go.
         (s, d) => {
-            for channel in 0..s.min(d) {
-                terms[channel].push((channel, 1.0));
+            for (channel, term) in terms.iter_mut().enumerate().take(s.min(d)) {
+                term.push((channel, 1.0));
             }
         }
     }
@@ -282,7 +282,7 @@ mod tests {
             ..OutputDeviceSetting::default()
         };
         assert_eq!(
-            active_devices(&[disabled.clone()]),
+            active_devices(std::slice::from_ref(&disabled)),
             vec![OutputDeviceSetting::default()]
         );
         let one = OutputDeviceSetting {

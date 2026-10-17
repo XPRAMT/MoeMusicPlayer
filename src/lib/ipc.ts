@@ -134,6 +134,33 @@ export interface DsdPlaybackSettings {
   outputRateHz: number;
 }
 
+/** Where one output channel of a device takes its sound from (`source` is 0-based; null is silence). */
+export interface ChannelRouteEntry {
+  source: number | null;
+  gainPercent: number;
+}
+
+/** One chosen playback device (id null is "the system default"); the first enabled one is the main output. */
+export interface OutputDeviceEntry {
+  id: string | null;
+  /** The device's name when it was last seen. */
+  name: string;
+  enabled: boolean;
+  volumePercent: number;
+  delayMs: number;
+  /** One route per output channel of the device; null is automatic. */
+  channelMap: ChannelRouteEntry[] | null;
+}
+
+/** A playback device Windows lists right now. */
+export interface AudioOutputDevice {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  channels: number;
+  sampleRate: number;
+}
+
 /** Interface language choice (ADR 0019). */
 export type LanguageChoice = 'system' | 'zh-TW' | 'zh-CN' | 'ja' | 'en';
 
@@ -731,6 +758,22 @@ interface IpcContract {
   taskbar_lyrics_theme: {
     args: Record<string, never>;
     result: boolean;
+  };
+  audio_list_output_devices: {
+    args: Record<string, never>;
+    result: AudioOutputDevice[];
+  };
+  audio_output_device_errors: {
+    args: Record<string, never>;
+    result: { id: string | null; message: string }[];
+  };
+  settings_get_output_devices: {
+    args: Record<string, never>;
+    result: OutputDeviceEntry[];
+  };
+  settings_set_output_devices: {
+    args: { devices: OutputDeviceEntry[] };
+    result: OutputDeviceEntry[];
   };
   settings_get_dsd: {
     args: Record<string, never>;

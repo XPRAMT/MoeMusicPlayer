@@ -179,6 +179,7 @@
   import PlaybackProgress from './lib/PlaybackProgress.svelte';
   import LyricsView from './lib/LyricsView.svelte';
   import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
+  import OutputDevicesSettings from './lib/OutputDevicesSettings.svelte';
   import OpacityCalculation from './lib/OpacityCalculation.svelte';
   import WindowTitlebar from './lib/WindowTitlebar.svelte';
   import AboutPage from './lib/AboutPage.svelte';
@@ -3972,6 +3973,7 @@
               {@const outputStatus = describeOutputFormat(playback?.outputFormat)}
               <div id="{scope}playback-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}playback-tab" tabindex="0">
                 {#if capabilities?.platform === 'windows'}
+                <OutputDevicesSettings />
                 <div class="resampling-status" role="status">
                   <span>{tr("目前輸出")}</span>
                   <strong>{outputStatus.text}</strong>

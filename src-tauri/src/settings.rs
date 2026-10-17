@@ -937,6 +937,9 @@ pub struct ChannelRouteEntry {
 #[serde(rename_all = "camelCase")]
 pub struct OutputDeviceEntry {
     pub id: Option<String>,
+    /// The device's name when it was last seen, so the list can name a device that is unplugged right now.
+    #[serde(default)]
+    pub name: String,
     pub enabled: bool,
     pub volume_percent: u8,
     pub delay_ms: u32,
@@ -951,6 +954,7 @@ impl OutputDeviceEntry {
 
     pub fn normalized(mut self) -> Self {
         self.id = self.id.filter(|id| !id.trim().is_empty());
+        self.name = self.name.trim().chars().take(200).collect();
         self.volume_percent = self.volume_percent.min(100);
         self.delay_ms = self.delay_ms.min(Self::MAX_DELAY_MS);
         if let Some(routes) = self.channel_map.as_mut() {
@@ -985,6 +989,11 @@ fn lenient_output_devices(value: Option<serde_json::Value>) -> Vec<OutputDeviceE
         .filter_map(serde_json::Value::as_object)
         .map(|object| OutputDeviceEntry {
             id: object.get("id").and_then(serde_json::Value::as_str).map(str::to_owned),
+            name: object
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
             enabled: object.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true),
             volume_percent: object
                 .get("volumePercent")
@@ -2400,9 +2409,10 @@ mod tests {
         let store = SettingsStore::open(&path, AppSettings::default()).unwrap();
         assert!(store.snapshot().unwrap().output_devices.is_empty());
         let chosen = vec![
-            OutputDeviceEntry { id: None, enabled: true, volume_percent: 80, delay_ms: 0, channel_map: None },
+            OutputDeviceEntry { id: None, name: String::new(), enabled: true, volume_percent: 80, delay_ms: 0, channel_map: None },
             OutputDeviceEntry {
                 id: Some("wasapi:{abc}".to_owned()),
+                name: "Speakers".to_owned(),
                 enabled: false,
                 volume_percent: 50,
                 delay_ms: 250,
@@ -2423,6 +2433,7 @@ mod tests {
         let persisted: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(persisted["outputDevices"][1]["delayMs"], 250);
+        assert_eq!(persisted["outputDevices"][1]["name"], "Speakers");
         assert_eq!(persisted["outputDevices"][1]["channelMap"][0]["source"], 1);
         assert!(persisted["outputDevices"][0]["id"].is_null());
     }
@@ -2439,7 +2450,7 @@ mod tests {
         assert_eq!(parsed[0].volume_percent, 100);
         assert_eq!(parsed[0].delay_ms, 2000);
         assert_eq!(parsed[0].channel_map, Some(vec![ChannelRouteEntry { source: None, gain_percent: 100 }]));
-        assert_eq!(parsed[1], OutputDeviceEntry { id: None, enabled: true, volume_percent: 100, delay_ms: 0, channel_map: None });
+        assert_eq!(parsed[1], OutputDeviceEntry { id: None, name: String::new(), enabled: true, volume_percent: 100, delay_ms: 0, channel_map: None });
         assert!(lenient_output_devices(Some(serde_json::json!(7))).is_empty());
         assert!(lenient_output_devices(None).is_empty());
     }

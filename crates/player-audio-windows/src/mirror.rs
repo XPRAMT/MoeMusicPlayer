@@ -130,14 +130,11 @@ impl RingReader {
             return false;
         }
         let ring_channels = self.ring.channels.load(Ordering::Relaxed).max(1) as usize;
-        for channel in 0..ring_channels {
-            let value = f32::from_bits(
+        for (channel, slot) in out.iter_mut().enumerate().take(ring_channels) {
+            *slot = f32::from_bits(
                 self.ring.data[((self.read + channel as u64) % RING_SAMPLES as u64) as usize]
                     .load(Ordering::Relaxed),
             );
-            if channel < MAX_CHANNELS {
-                out[channel] = value;
-            }
         }
         self.read += ring_channels as u64;
         true
