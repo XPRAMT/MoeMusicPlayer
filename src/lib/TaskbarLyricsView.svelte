@@ -162,7 +162,8 @@
     overflow: hidden;
     font-size: var(--taskbar-lyrics-size, 16px);
     font-weight: 500;
-    line-height: 1.25;
+    /* The font's own content box is 1.33 em (Segoe UI): a shorter line box clips the bottoms of g, y and j. */
+    line-height: 1.4;
     white-space: nowrap;
     pointer-events: none;
   }

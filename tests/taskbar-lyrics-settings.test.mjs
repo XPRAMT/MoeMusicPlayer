@@ -26,8 +26,8 @@ test('colour follows the taskbar theme unless a custom colour is chosen', () => 
 
 test('the font shrinks to fit the window height, more with a translation line', () => {
   assert.equal(fitTaskbarLyricsFontSize(16, 32, false), 16);
-  assert.equal(fitTaskbarLyricsFontSize(32, 32, false), 25);
-  assert.equal(fitTaskbarLyricsFontSize(16, 32, true), 14);
+  assert.equal(fitTaskbarLyricsFontSize(32, 32, false), 22);
+  assert.equal(fitTaskbarLyricsFontSize(16, 32, true), 13);
   assert.equal(fitTaskbarLyricsFontSize(16, 0, true), 16);
   assert.equal(fitTaskbarLyricsFontSize(16, 4, false), 8);
 });

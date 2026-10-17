@@ -63,7 +63,7 @@ export function getTaskbarLyricsColor(settings, taskbarIsLight) {
  */
 export function fitTaskbarLyricsFontSize(fontSizePx, heightPx, withTranslation) {
   if (!(heightPx > 0)) return fontSizePx;
-  // Line box = 1.25 em; the translation line is 0.75 of the main size.
-  const lines = withTranslation ? 1.25 * 1.75 : 1.25;
+  // Line box = 1.4 em (the font's content box is 1.33 em, so descenders are not clipped); the translation line is 0.75 of the main size.
+  const lines = withTranslation ? 1.4 * 1.75 : 1.4;
   return Math.max(8, Math.min(fontSizePx, Math.floor(heightPx / lines)));
 }
