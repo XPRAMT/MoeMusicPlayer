@@ -4,7 +4,8 @@
   "description": "Default window access for the MoeMusicPlayer desktop shell.",
   "windows": [
     "main",
-    "spectrogram"
+    "spectrogram",
+    "taskbar-lyrics"
   ],
   "permissions": [
     "core:default",

@@ -54,6 +54,8 @@ use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImpo
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 mod sleep_timer;
+#[cfg(target_os = "windows")]
+mod taskbar_lyrics;
 mod track_details;
 pub mod updater;
 use settings::{
@@ -6071,6 +6073,50 @@ fn settings_get_dsd(state: State<'_, AppState>) -> Result<settings::DsdPlaybackS
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn settings_get_taskbar_lyrics(
+    state: State<'_, AppState>,
+) -> Result<settings::TaskbarLyricsSettings, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.taskbar_lyrics)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the taskbar-lyrics settings and apply them: the window opens or closes, and every window gets the new
+/// values through the `taskbar-lyrics-settings` event.
+#[tauri::command]
+async fn settings_set_taskbar_lyrics(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: settings::TaskbarLyricsSettings,
+) -> Result<settings::TaskbarLyricsSettings, String> {
+    let requested = settings.normalized();
+    let saved = state
+        .settings
+        .update(|stored| {
+            stored.taskbar_lyrics = requested.clone();
+            Ok(())
+        })
+        .map(|stored| stored.taskbar_lyrics)
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    taskbar_lyrics::apply(&app, &saved).await?;
+    #[cfg(not(target_os = "windows"))]
+    let _ = &app;
+    Ok(saved)
+}
+
+/// Whether the Windows taskbar is in its light theme (the taskbar lyrics colour themselves from this).
+#[tauri::command]
+fn taskbar_lyrics_theme() -> bool {
+    #[cfg(target_os = "windows")]
+    return taskbar_lyrics::system_uses_light_theme();
+    #[cfg(not(target_os = "windows"))]
+    false
+}
+
 /// Persist the DSD gain and output rate, then apply them to the running player: the gain eases in smoothly while a
 /// track plays; a new output rate restarts a playing DSD track from its position.
 #[tauri::command]
@@ -10307,6 +10353,9 @@ pub fn run() {
                     tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
                         remember_main_window_normal_frame(window);
                     }
+                    tauri::WindowEvent::Destroyed => {
+                        taskbar_lyrics::shutdown(window.app_handle());
+                    }
                     tauri::WindowEvent::CloseRequested { api, .. } => {
                         persist_main_window_geometry(window);
                         let app = window.app_handle().clone();
@@ -10374,6 +10423,9 @@ pub fn run() {
             settings_get_dsee_hx,
             settings_set_dsee_hx,
             settings_get_dsd,
+            settings_get_taskbar_lyrics,
+            settings_set_taskbar_lyrics,
+            taskbar_lyrics_theme,
             settings_set_dsd,
             settings_get_cover_zoom,
             settings_set_cover_zoom,
@@ -10661,6 +10713,16 @@ pub fn run() {
                 }
                 window.show()?;
                 let _ = window.set_focus();
+            }
+            #[cfg(target_os = "windows")]
+            if initial_settings.taskbar_lyrics.enabled {
+                let handle = app.handle().clone();
+                let taskbar_lyrics = initial_settings.taskbar_lyrics.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = taskbar_lyrics::apply(&handle, &taskbar_lyrics).await {
+                        eprintln!("{error}");
+                    }
+                });
             }
             #[cfg(target_os = "windows")]
             if let Some(path) = initial_audio_path {

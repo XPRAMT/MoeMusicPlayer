@@ -736,6 +736,114 @@ fn lenient_cover_zoom(value: Option<serde_json::Value>) -> CoverZoomSettings {
     CoverZoomSettings { scale }.normalized()
 }
 
+/// Which free stretch of the taskbar the lyrics go in.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskbarLyricsArea {
+    /// The widest free stretch.
+    #[default]
+    Auto,
+    Left,
+    Right,
+}
+
+/// Where the text sits inside that stretch.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskbarLyricsAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// Lyrics drawn on the free part of the Windows taskbar (ADR 0018). Stored everywhere so the file stays portable.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskbarLyricsSettings {
+    pub enabled: bool,
+    pub area: TaskbarLyricsArea,
+    pub align: TaskbarLyricsAlign,
+    /// CSS px of the main line.
+    pub font_size_px: u8,
+    /// False: black or white by the taskbar's own light/dark theme.
+    pub use_custom_color: bool,
+    /// `#rrggbb`.
+    pub custom_color: String,
+    /// A second, smaller line with the translation when the lyrics have one.
+    pub show_translation: bool,
+}
+
+impl TaskbarLyricsSettings {
+    pub const FONT_SIZE_RANGE_PX: (u8, u8) = (10, 32);
+    pub const DEFAULT_FONT_SIZE_PX: u8 = 16;
+    pub const DEFAULT_CUSTOM_COLOR: &'static str = "#ffffff";
+
+    pub fn normalized(mut self) -> Self {
+        self.font_size_px = self
+            .font_size_px
+            .clamp(Self::FONT_SIZE_RANGE_PX.0, Self::FONT_SIZE_RANGE_PX.1);
+        if !is_hex_color(&self.custom_color) {
+            self.custom_color = Self::DEFAULT_CUSTOM_COLOR.to_owned();
+        }
+        self.custom_color.make_ascii_lowercase();
+        self
+    }
+}
+
+impl Default for TaskbarLyricsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            area: TaskbarLyricsArea::default(),
+            align: TaskbarLyricsAlign::default(),
+            font_size_px: Self::DEFAULT_FONT_SIZE_PX,
+            use_custom_color: false,
+            custom_color: Self::DEFAULT_CUSTOM_COLOR.to_owned(),
+            show_translation: false,
+        }
+    }
+}
+
+fn is_hex_color(value: &str) -> bool {
+    value.len() == 7
+        && value.starts_with('#')
+        && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Missing, malformed or out-of-range values fall back to the defaults field by field.
+fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSettings {
+    let defaults = TaskbarLyricsSettings::default();
+    let Some(object) = value.as_ref().and_then(serde_json::Value::as_object) else {
+        return defaults;
+    };
+    let field = |name: &str| object.get(name).cloned();
+    TaskbarLyricsSettings {
+        enabled: field("enabled")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(defaults.enabled),
+        area: field("area")
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or(defaults.area),
+        align: field("align")
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or(defaults.align),
+        font_size_px: field("fontSizePx")
+            .and_then(|value| value.as_u64())
+            .map_or(defaults.font_size_px, |size| size.min(255) as u8),
+        use_custom_color: field("useCustomColor")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(defaults.use_custom_color),
+        custom_color: field("customColor")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or(defaults.custom_color),
+        show_translation: field("showTranslation")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(defaults.show_translation),
+    }
+    .normalized()
+}
+
 /// DSD→PCM playback settings (Windows; stored everywhere so the file stays portable): the digital gain in dB
 /// (1 to 6) and the PCM rate DSD is converted to (176.4 or 352.8 kHz).
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -1231,6 +1339,9 @@ pub struct AppSettings {
     /// Now Playing cover size remembered across restarts (shrunk only; see `CoverZoomSettings`).
     #[serde(default)]
     pub cover_zoom: CoverZoomSettings,
+    /// Lyrics on the Windows taskbar (Settings → lyrics).
+    #[serde(default)]
+    pub taskbar_lyrics: TaskbarLyricsSettings,
 }
 
 impl Default for AppSettings {
@@ -1257,6 +1368,7 @@ impl Default for AppSettings {
             resume_playback: false,
             dsd: DsdPlaybackSettings::default(),
             cover_zoom: CoverZoomSettings::default(),
+            taskbar_lyrics: TaskbarLyricsSettings::default(),
         }
     }
 }
@@ -1696,6 +1808,7 @@ struct RawSettings {
     resume_playback: Option<bool>,
     dsd: Option<serde_json::Value>,
     cover_zoom: Option<serde_json::Value>,
+    taskbar_lyrics: Option<serde_json::Value>,
 }
 
 fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
@@ -1745,6 +1858,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         resume_playback: raw.resume_playback.unwrap_or(false),
         dsd: lenient_dsd_settings(raw.dsd),
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
+        taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -2161,6 +2275,50 @@ mod tests {
         assert_eq!((parsed.gain_db, parsed.output_rate_hz), (6.0, 176_400));
         assert_eq!(lenient_dsd_settings(Some(serde_json::json!(7))), DsdPlaybackSettings::default());
         assert_eq!(lenient_dsd_settings(None), DsdPlaybackSettings::default());
+    }
+
+    #[test]
+    fn taskbar_lyrics_settings_repair_field_by_field_and_roundtrip() {
+        let defaults = TaskbarLyricsSettings::default();
+        assert!(!defaults.enabled);
+        let parsed = lenient_taskbar_lyrics(Some(serde_json::json!({
+            "enabled": true, "area": "right", "align": "sideways", "fontSizePx": 99,
+            "useCustomColor": true, "customColor": "#ABCDEF", "showTranslation": "yes"
+        })));
+        assert!(parsed.enabled);
+        assert_eq!(parsed.area, TaskbarLyricsArea::Right);
+        assert_eq!(parsed.align, TaskbarLyricsAlign::Left);
+        assert_eq!(parsed.font_size_px, 32);
+        assert_eq!(parsed.custom_color, "#abcdef");
+        assert!(!parsed.show_translation);
+        let bad = lenient_taskbar_lyrics(Some(serde_json::json!({"fontSizePx": 2, "customColor": "red"})));
+        assert_eq!((bad.font_size_px, bad.custom_color.as_str()), (10, "#ffffff"));
+        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!(7))), defaults);
+        assert_eq!(lenient_taskbar_lyrics(None), defaults);
+
+        let directory = test_directory("taskbar-lyrics");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        let chosen = TaskbarLyricsSettings {
+            enabled: true,
+            area: TaskbarLyricsArea::Left,
+            align: TaskbarLyricsAlign::Center,
+            font_size_px: 20,
+            use_custom_color: true,
+            custom_color: "#112233".into(),
+            show_translation: true,
+        };
+        store
+            .update(|settings| {
+                settings.taskbar_lyrics = chosen.clone();
+                Ok(())
+            })
+            .expect("save");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen");
+        assert_eq!(reopened.snapshot().unwrap().taskbar_lyrics, chosen);
+        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["taskbarLyrics"]["area"], "left");
+        assert_eq!(persisted["taskbarLyrics"]["fontSizePx"], 20);
     }
 
     #[test]

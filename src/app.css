@@ -2665,6 +2665,31 @@ input:focus-visible {
   background: rgba(var(--text-rgb), 0.02);
 }
 
+.taskbar-lyrics-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--settings-item-gap);
+}
+
+.taskbar-lyrics-heading {
+  margin-top: 12px;
+}
+
+.lyrics-preference-toggle input.taskbar-lyrics-color {
+  width: 44px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.lyrics-preference-toggle input.taskbar-lyrics-color:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .lyrics-preference-toggle input {
   width: 16px;
   height: 16px;

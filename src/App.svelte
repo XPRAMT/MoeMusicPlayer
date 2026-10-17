@@ -157,7 +157,12 @@
     formatDsdOutputRate,
     normalizeDsdSettings,
   } from './lib/dsd-settings.js';
-  import type { DsdPlaybackSettings } from './lib/ipc';
+  import type { DsdPlaybackSettings, TaskbarLyricsSettings } from './lib/ipc';
+  import {
+    DEFAULT_TASKBAR_LYRICS_SETTINGS,
+    TASKBAR_LYRICS_FONT_SIZE_PX,
+    normalizeTaskbarLyricsSettings,
+  } from './lib/taskbar-lyrics-settings.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import SyncErrorDetails from './lib/SyncErrorDetails.svelte';
@@ -528,6 +533,10 @@
   let dsdSettingsError = $state<string | null>(null);
   let dsdSettingsRevision = 0;
   let dsdSettingsQueue: Promise<void> = Promise.resolve();
+  let taskbarLyricsSettings = $state<TaskbarLyricsSettings>({ ...DEFAULT_TASKBAR_LYRICS_SETTINGS });
+  let taskbarLyricsError = $state<string | null>(null);
+  let taskbarLyricsRevision = 0;
+  let taskbarLyricsQueue: Promise<void> = Promise.resolve();
   let dseeHxError = $state<string | null>(null);
   let nowPlayingAppearancePreferences = $state<NowPlayingAppearancePreferences>(
     normalizeNowPlayingAppearancePreferences(DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES),
@@ -1313,6 +1322,7 @@
         loadResamplingMode(),
         loadDseeHx(),
         loadDsdSettings(),
+        loadTaskbarLyricsSettings(),
         loadCoverZoom(),
         loadShortcutSettings(),
         loadNowPlayingAppearancePreferences(),
@@ -2119,6 +2129,34 @@
         dsdSettingsError = getErrorText(error);
       }
       void loadPlaybackSnapshot(false);
+    });
+  }
+
+  async function loadTaskbarLyricsSettings(): Promise<void> {
+    const revision = taskbarLyricsRevision;
+    try {
+      const stored = await invokeCommand('settings_get_taskbar_lyrics', {});
+      if (revision !== taskbarLyricsRevision) return;
+      taskbarLyricsSettings = normalizeTaskbarLyricsSettings(stored);
+    } catch (error) {
+      if (revision !== taskbarLyricsRevision) return;
+      taskbarLyricsError = `無法讀取工作列歌詞設定：${getErrorText(error)}`;
+    }
+  }
+
+  function setTaskbarLyricsSettings(patch: Partial<TaskbarLyricsSettings>): void {
+    const next = normalizeTaskbarLyricsSettings({ ...taskbarLyricsSettings, ...patch });
+    taskbarLyricsSettings = next;
+    taskbarLyricsError = null;
+    const revision = ++taskbarLyricsRevision;
+    if (!isTauri()) return;
+    taskbarLyricsQueue = taskbarLyricsQueue.catch(() => undefined).then(async () => {
+      try {
+        const saved = await invokeCommand('settings_set_taskbar_lyrics', { settings: next });
+        if (revision === taskbarLyricsRevision) taskbarLyricsSettings = normalizeTaskbarLyricsSettings(saved);
+      } catch (error) {
+        if (revision === taskbarLyricsRevision) taskbarLyricsError = getErrorText(error);
+      }
     });
   }
 
@@ -3948,6 +3986,77 @@
                   onLyricsChange={updateLyricsPreferences}
                   onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
                 />
+                {#if capabilities?.platform === 'windows'}
+                  <div class="settings-panel-header taskbar-lyrics-heading">
+                    <div>
+                      <h3>工作列歌詞</h3>
+                      <p>在工作列沒被工作鈕和系統匣佔用的空白處顯示目前這一句歌詞（只顯示有時間軸的歌詞）。工作列自動隱藏、有全螢幕程式或空白處太窄時不顯示。</p>
+                    </div>
+                  </div>
+                  <div class="taskbar-lyrics-settings" role="group" aria-label="工作列歌詞設定">
+                    <label class="lyrics-preference-toggle">
+                      <input type="checkbox" checked={taskbarLyricsSettings.enabled} onchange={(event) => setTaskbarLyricsSettings({ enabled: event.currentTarget.checked })} />
+                      <span><strong>顯示工作列歌詞</strong><small>在工作列空白處繪製目前播放的歌詞</small></span>
+                    </label>
+                    <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-area-label">
+                      <span id="{scope}taskbar-lyrics-area-label" class="cover-corner-setting-label"><strong>顯示位置</strong></span>
+                      <div class="layout-choice-row lyrics-text-effect-row">
+                        {#each [['auto', '自動（較寬的空白）'], ['left', '左側空白'], ['right', '右側空白']] as [value, label] (value)}
+                          <button
+                            type="button"
+                            aria-pressed={taskbarLyricsSettings.area === value}
+                            class:chosen={taskbarLyricsSettings.area === value}
+                            onclick={() => setTaskbarLyricsSettings({ area: value as TaskbarLyricsSettings['area'] })}
+                          >{label}</button>
+                        {/each}
+                      </div>
+                    </div>
+                    <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-align-label">
+                      <span id="{scope}taskbar-lyrics-align-label" class="cover-corner-setting-label"><strong>對齊</strong></span>
+                      <div class="layout-choice-row lyrics-text-effect-row">
+                        {#each [['left', '靠左'], ['center', '置中'], ['right', '靠右']] as [value, label] (value)}
+                          <button
+                            type="button"
+                            aria-pressed={taskbarLyricsSettings.align === value}
+                            class:chosen={taskbarLyricsSettings.align === value}
+                            onclick={() => setTaskbarLyricsSettings({ align: value as TaskbarLyricsSettings['align'] })}
+                          >{label}</button>
+                        {/each}
+                      </div>
+                    </div>
+                    <label class="lyrics-preference-range">
+                      <span><strong>字體大小</strong><output>{taskbarLyricsSettings.fontSizePx} px</output></span>
+                      <input
+                        type="range"
+                        min={TASKBAR_LYRICS_FONT_SIZE_PX.min}
+                        max={TASKBAR_LYRICS_FONT_SIZE_PX.max}
+                        step="1"
+                        value={taskbarLyricsSettings.fontSizePx}
+                        aria-label="工作列歌詞字體大小"
+                        oninput={(event) => setTaskbarLyricsSettings({ fontSizePx: Number(event.currentTarget.value) })}
+                      />
+                    </label>
+                    <label class="lyrics-preference-toggle">
+                      <input type="checkbox" checked={taskbarLyricsSettings.useCustomColor} onchange={(event) => setTaskbarLyricsSettings({ useCustomColor: event.currentTarget.checked })} />
+                      <span><strong>自訂顏色</strong><small>關閉時依工作列的深淺色自動使用黑色或白色</small></span>
+                      <input
+                        class="taskbar-lyrics-color"
+                        type="color"
+                        value={taskbarLyricsSettings.customColor}
+                        disabled={!taskbarLyricsSettings.useCustomColor}
+                        aria-label="工作列歌詞顏色"
+                        onchange={(event) => setTaskbarLyricsSettings({ customColor: event.currentTarget.value })}
+                      />
+                    </label>
+                    <label class="lyrics-preference-toggle">
+                      <input type="checkbox" checked={taskbarLyricsSettings.showTranslation} onchange={(event) => setTaskbarLyricsSettings({ showTranslation: event.currentTarget.checked })} />
+                      <span><strong>顯示譯文</strong><small>歌詞有翻譯時，在原文下方多顯示一行較小的譯文</small></span>
+                    </label>
+                    {#if taskbarLyricsError}
+                      <p class="settings-preference-status" role="status">{taskbarLyricsError}</p>
+                    {/if}
+                  </div>
+                {/if}
               </div>
             {:else if settingsSection === 'shortcuts'}
               <div id="{scope}shortcuts-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}shortcuts-tab" tabindex="0">

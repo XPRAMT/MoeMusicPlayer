@@ -16,6 +16,8 @@ mod lyrics;
 #[cfg(windows)]
 mod system_index;
 
+pub mod taskbar;
+
 #[cfg(windows)]
 pub use player_core::windows_locator_key;
 

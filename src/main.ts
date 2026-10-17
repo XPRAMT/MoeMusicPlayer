@@ -1,6 +1,7 @@
 import { mount } from 'svelte';
 import App from './App.svelte';
 import SpectrogramView from './lib/SpectrogramView.svelte';
+import TaskbarLyricsView from './lib/TaskbarLyricsView.svelte';
 import './app.css';
 
 // The desktop spectrogram opens as a separate window (ADR 0013) that loads this same
@@ -8,9 +9,13 @@ import './app.css';
 const params = new URLSearchParams(window.location.search);
 const target = document.getElementById('app')!;
 
+// The taskbar lyrics (ADR 0018) are another window of the same bundle: `?view=taskbar-lyrics`.
+const view = params.get('view');
 const app =
-  params.get('view') === 'spectrogram'
+  view === 'spectrogram'
     ? mount(SpectrogramView, { target, props: { trackId: params.get('track') ?? '' } })
-    : mount(App, { target });
+    : view === 'taskbar-lyrics'
+      ? mount(TaskbarLyricsView, { target })
+      : mount(App, { target });
 
 export default app;

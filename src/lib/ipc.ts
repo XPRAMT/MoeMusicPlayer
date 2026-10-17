@@ -133,6 +133,18 @@ export interface DsdPlaybackSettings {
   outputRateHz: number;
 }
 
+/** Lyrics drawn on the free part of the Windows taskbar (ADR 0018). */
+export interface TaskbarLyricsSettings {
+  enabled: boolean;
+  area: 'auto' | 'left' | 'right';
+  align: 'left' | 'center' | 'right';
+  fontSizePx: number;
+  useCustomColor: boolean;
+  /** `#rrggbb` */
+  customColor: string;
+  showTranslation: boolean;
+}
+
 /** Now Playing cover size remembered across restarts (shrunk only). */
 export interface CoverZoomSettings {
   /** 0.4 to 1; only a shrunk cover is remembered (an enlarged one is stored as 1). */
@@ -693,6 +705,18 @@ interface IpcContract {
   };
   settings_set_dsee_hx: {
     args: { enabled: boolean };
+    result: boolean;
+  };
+  settings_get_taskbar_lyrics: {
+    args: Record<string, never>;
+    result: TaskbarLyricsSettings;
+  };
+  settings_set_taskbar_lyrics: {
+    args: { settings: TaskbarLyricsSettings };
+    result: TaskbarLyricsSettings;
+  };
+  taskbar_lyrics_theme: {
+    args: Record<string, never>;
     result: boolean;
   };
   settings_get_dsd: {
