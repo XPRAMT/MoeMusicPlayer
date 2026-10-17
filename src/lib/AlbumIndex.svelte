@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tr } from './i18n.js';
+  import { displayUnknown } from './unknown-label.js';
   import { onDestroy, tick } from 'svelte';
   import { getAlbumIndexScrollTop, setAlbumIndexScrollTop } from './album-index-scroll.js';
   import { getErrorText, invokeCommand } from './ipc';
@@ -374,7 +375,7 @@
         {#each visibleRenderRows as row (row.kind === 'group' ? `group:${row.beforeIndex}:${row.label}` : `cards:${row.start}`)}
           {#if row.kind === 'group'}
             <div class="album-index-group-row list-group-row-surface" style={`height:${row.height}px;transform:translateY(${row.top}px)`}>
-              <button type="button" class="album-index-group-button" aria-label={tr("開啟「{0}」字首索引", [row.label])} onclick={openQuickIndex}>{row.label}</button>
+              <button type="button" class="album-index-group-button" aria-label={tr("開啟「{0}」字首索引", [displayUnknown(row.label)])} onclick={openQuickIndex}>{displayUnknown(row.label)}</button>
             </div>
           {:else}
             <div class="album-index-card-row" style={`height:${row.height}px;transform:translateY(${row.top}px);grid-template-columns:repeat(${columns},minmax(0,1fr));column-gap:${gap}px`}>

@@ -21,4 +21,5 @@ Every interface string was hard-coded Traditional Chinese (about 730 distinct st
 - Messages produced by the Rust backend (errors, file dialog titles) stay Traditional. They need either error codes translated in the frontend or a Rust-side catalog.
 - Data is never translated: track titles, artist and album names, lyrics, playlist names, release notes from the update server.
 - Operating-system chrome (window control tooltips, native dialogs) follows the system language.
-- Quick-index group labels from the library (such as 漢字 and 未知) are produced by the backend.
+- Rust backend messages stay Traditional by the user's decision (for now).
+- Quick-index group labels come from the backend. 漢字 only exists for Japanese collation and is not translated. The 未知 placeholder (tracks without a name, artist or album) is shown through `displayUnknown()` (`src/lib/unknown-label.js`, which calls `tr('未知')`): Simplified and Japanese show 未知, and the English catalog must map it to `unknown`.

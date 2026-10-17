@@ -1,5 +1,6 @@
 <script lang="ts">
   import { LANGUAGE_CHOICES, getLanguageChoice, tr } from './lib/i18n.js';
+  import { displayUnknown } from './lib/unknown-label.js';
   import { adoptSavedLanguage, changeLanguage, followLanguageChange } from './lib/language-sync.js';
   import { onDestroy, onMount, setContext, tick, untrack } from 'svelte';
   import { writable } from 'svelte/store';
@@ -745,7 +746,7 @@
       : activeView === 'artists'
         ? tr('演出者')
         : activeView === 'artist-detail'
-          ? tr("演出者．{0}", [selectedArtist?.displayName ?? ''])
+          ? tr("演出者．{0}", [displayUnknown(selectedArtist?.displayName ?? '')])
       : activeView === 'albums'
         ? tr('專輯')
         : activeView === 'album-detail'

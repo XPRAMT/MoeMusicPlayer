@@ -37,6 +37,7 @@
 
 <script lang="ts" generics="Item">
   import { tr } from './i18n.js';
+  import { displayUnknown } from './unknown-label.js';
   import { onDestroy, onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import {
@@ -826,7 +827,7 @@
           style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px)`}
         >
           <div class="paged-virtual-group-cell list-group-row-surface" role="gridcell" aria-colspan={columnCount}>
-            <button type="button" class="paged-virtual-group-button" aria-label={tr("開啟「{0}」字首索引", [virtualRow.label])} onclick={openQuickIndex}>{virtualRow.label}</button>
+            <button type="button" class="paged-virtual-group-button" aria-label={tr("開啟「{0}」字首索引", [displayUnknown(virtualRow.label)])} onclick={openQuickIndex}>{displayUnknown(virtualRow.label)}</button>
           </div>
         </div>
       {:else}

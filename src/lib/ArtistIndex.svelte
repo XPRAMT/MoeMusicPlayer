@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tr } from './i18n.js';
+  import { displayUnknown } from './unknown-label.js';
   import { onDestroy, onMount } from 'svelte';
   import { getErrorText, invokeCommand, type ArtistIndexEntry, type ArtistListSort } from './ipc';
   import { DEFAULT_TRACK_ROW_HEIGHT_PX } from './track-columns.js';
@@ -230,7 +231,7 @@
             columns={ARTIST_COLUMNS}
             indexLabel={formatListOrder(row.index)}
             cells={[
-              { id: 'title', text: row.item.displayName },
+              { id: 'title', text: displayUnknown(row.item.displayName) },
               { id: 'trackCount', text: row.item.trackCount.toLocaleString() },
               { id: 'albumCount', text: row.item.albumCount.toLocaleString() },
               { id: 'duration', text: formatDurationHours(row.item.playedMs) },

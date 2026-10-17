@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tr } from './i18n.js';
+  import { displayUnknown } from './unknown-label.js';
   import { onDestroy, onMount, untrack } from 'svelte';
   import { getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBase64, putAlbumThumbnailBase64ForTrack } from './ipc';
   import { acquireAlbumCardArtwork, albumCardArtworkMemoryKey, copyToArrayBuffer, createAlbumThumbnailInWorker, getAlbumArtworkSelectionRevision, getAlbumCardSelectionTrackIds, loadAlbumCardThumbnails, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
@@ -200,7 +201,7 @@
   <span class="album-card-art" aria-hidden="true">
     <AlbumArtworkMosaic sources={displayedImageUrls} />
   </span>
-  <span class="album-card-name">{album.displayName}</span>
+  <span class="album-card-name">{displayUnknown(album.displayName)}</span>
   <span class="album-card-summary">{summary}</span>
 </button>
 
