@@ -2,6 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { formatSlideshowFolderLabel } from '../src/lib/background-source-label.js';
+import { systemWallpaperOpacityPercent } from '../src/lib/backdrop-contrast.js';
+
+test('Android wallpaper opacity never collapses to an opaque overlay in automatic opacity mode', () => {
+  assert.equal(systemWallpaperOpacityPercent({ automaticTextColor: 'white', clarityPercent: 62, opacityPercent: 40 }), 38);
+  assert.equal(systemWallpaperOpacityPercent({ automaticTextColor: 'black', clarityPercent: 20, opacityPercent: 40 }), 80);
+  assert.equal(systemWallpaperOpacityPercent({ automaticTextColor: null, clarityPercent: 62, opacityPercent: 40 }), 40);
+  assert.equal(systemWallpaperOpacityPercent({ automaticTextColor: 'white', clarityPercent: 150, opacityPercent: 40 }), 0);
+});
 
 test('slideshow folder label prettifies Android SAF tree URIs and keeps desktop paths', () => {
   assert.equal(formatSlideshowFolderLabel(null), null);
@@ -27,10 +35,30 @@ test('Android background modes are enabled and wallpaper uses the native transpa
   assert.match(app, /classList\.toggle\('has-android-wallpaper-backdrop'/);
   assert.match(app, /main-backdrop is-system-wallpaper/);
   assert.match(css, /:root\.has-android-wallpaper-backdrop body \{\s*background: transparent;/);
-  assert.match(css, /opacity: calc\(1 - var\(--main-background-opacity/);
+  assert.match(css, /opacity: calc\(1 - var\(--system-wallpaper-opacity/);
+  assert.match(app, /--system-wallpaper-opacity: \$\{androidWallpaperOpacityPercent \/ 100\}/);
   const kotlin = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/MediaIndexPlugin.kt', import.meta.url), 'utf8');
   assert.match(kotlin, /FLAG_SHOW_WALLPAPER/);
-  assert.doesNotMatch(kotlin, /WallpaperManager\.getInstance|getWallpaperFile\(/);
+  assert.match(kotlin, /fun readSystemWallpaper/);
+  assert.match(kotlin, /isExternalStorageManager\(\)/);
+  assert.match(kotlin, /ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION/);
   const manifest = readFileSync(new URL('../src-tauri/gen/android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
-  assert.doesNotMatch(manifest, /MANAGE_EXTERNAL_STORAGE|READ_EXTERNAL_STORAGE/);
+  assert.match(manifest, /android\.permission\.MANAGE_EXTERNAL_STORAGE/);
+  assert.match(app, /androidWallpaperHasImage/);
+  const details = readFileSync(new URL('../src-tauri/src/track_details.rs', import.meta.url), 'utf8');
+  assert.match(details, /fn write_in_place/);
+  assert.match(details, /if let Some\(path\) = direct_path\(app, uri\)/);
+});
+
+test('track details Save asks before overwriting and cancel keeps edits', () => {
+  const dialog = readFileSync(new URL('../src/lib/TrackDetailsDialog.svelte', import.meta.url), 'utf8');
+  assert.match(dialog, /onclick=\{requestSave\}/);
+  assert.match(dialog, /event\.key\.toLowerCase\(\) === 's'\) \{ event\.preventDefault\(\); requestSave\(\); \}/);
+  assert.match(dialog, /if \(confirmingSave\) \{ cancelSave\(\); return; \}/);
+  assert.match(dialog, /class="track-details-confirm floating-surface"/);
+  assert.match(dialog, /\u5c07\u6703\u8986\u5beb\u6a94\u6848\u539f\u6709\u8cc7\u8a0a\uff0c\u662f\u5426\u7e7c\u7e8c\uff1f/);
+  const confirmBody = dialog.slice(dialog.indexOf('function confirmSave'), dialog.indexOf('function focusOnMount'));
+  assert.match(confirmBody, /void save\(\)/);
+  const cancelBody = dialog.slice(dialog.indexOf('function cancelSave'), dialog.indexOf('function confirmSave'));
+  assert.doesNotMatch(cancelBody, /draft|original|save\(/);
 });

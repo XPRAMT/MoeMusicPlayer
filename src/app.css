@@ -303,6 +303,25 @@ input:focus-visible {
   background: transparent;
 }
 
+.all-files-access-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 18%, transparent);
+  border-radius: 10px;
+}
+
+.all-files-access-card p {
+  margin: 4px 0 0;
+}
+
+.all-files-access-card button {
+  flex: none;
+}
+
 .main-backdrop.is-system-wallpaper {
   background: transparent;
 }
@@ -312,7 +331,7 @@ input:focus-visible {
   inset: 0;
   background: var(--page);
   content: '';
-  opacity: calc(1 - var(--main-background-opacity, 0.4));
+  opacity: calc(1 - var(--system-wallpaper-opacity, 0.4));
 }
 
 .app-shell.has-main-backdrop .sidebar,

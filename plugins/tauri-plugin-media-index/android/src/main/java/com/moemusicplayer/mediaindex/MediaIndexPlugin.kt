@@ -3,18 +3,25 @@ package com.moemusicplayer.mediaindex
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.WallpaperManager
 import android.content.ContentResolver
 import android.content.Intent
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -79,6 +86,11 @@ class ContentUriArgs {
 class WallpaperBackdropArgs {
     var enabled: Boolean? = null
     var blurPx: Int? = null
+}
+
+@InvokeArg
+class FilePathArgs {
+    var path: String? = null
 }
 
 @InvokeArg
@@ -724,7 +736,151 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    private fun allFilesAccessGranted(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
+
+    /** MANAGE_EXTERNAL_STORAGE ("All files access", ADR 0014) state. */
+    @Command
+    fun allFilesAccessStatus(invoke: Invoke) {
+        invoke.resolve(
+            JSObject()
+                .put("supported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                .put("granted", allFilesAccessGranted()),
+        )
+    }
+
+    /** Open the system "All files access" page for this app; the user toggles it there. */
+    @Command
+    fun requestAllFilesAccess(invoke: Invoke) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            invoke.reject("All files access requires Android 11 or newer")
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                try {
+                    activity.startActivity(
+                        Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                            .setData(Uri.parse("package:${activity.packageName}")),
+                    )
+                } catch (_: Exception) {
+                    activity.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                }
+                invoke.resolve(JSObject().put("launched", true))
+            } catch (error: Exception) {
+                invoke.reject("Could not open the all files access settings: ${error.message}")
+            }
+        }
+    }
+
+    /**
+     * Real file path of a MediaStore / ExternalStorageProvider document, only when All files access
+     * is granted and the file exists (then Rust may read/write it directly, without a per-file
+     * createWriteRequest). Returns null otherwise so callers keep the ContentResolver path.
+     */
+    @Command
+    fun resolveDirectPath(invoke: Invoke) {
+        val rawUri = invoke.parseArgs(ContentUriArgs::class.java).contentUri
+        if (rawUri.isNullOrBlank()) {
+            invoke.reject("contentUri is required")
+            return
+        }
+        io.execute {
+            val path = try {
+                if (allFilesAccessGranted()) directPathFor(Uri.parse(rawUri)) else null
+            } catch (_: Exception) {
+                null
+            }
+            invoke.resolve(JSObject().put("path", path ?: JSONObject.NULL))
+        }
+    }
+
+    private fun directPathFor(uri: Uri): String? {
+        val candidate = when (uri.authority) {
+            MediaStore.AUTHORITY -> resolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { rows ->
+                if (rows.moveToFirst()) rows.stringOrNull(0) else null
+            }
+            "com.android.externalstorage.documents" -> {
+                val documentId = DocumentsContract.getDocumentId(uri)
+                externalStoragePathFor(documentId)
+            }
+            else -> null
+        } ?: return null
+        val file = File(candidate)
+        return if (file.isFile) file.absolutePath else null
+    }
+
+    /** Ask MediaStore to re-read a file changed through its direct path. */
+    @Command
+    fun scanFile(invoke: Invoke) {
+        val path = invoke.parseArgs(FilePathArgs::class.java).path
+        if (path.isNullOrBlank()) {
+            invoke.reject("path is required")
+            return
+        }
+        MediaScannerConnection.scanFile(appContext, arrayOf(path), null, null)
+        invoke.resolve(JSObject())
+    }
+
+    /**
+     * Copy the static system wallpaper (as displayed) into the app cache as JPEG. Android 13+ only
+     * allows this with All files access; a live wallpaper has no bitmap. The result has a path, or
+     * a reason ("permission" | "live" | "unavailable").
+     */
+    @Command
+    fun readSystemWallpaper(invoke: Invoke) {
+        io.execute {
+            val response = JSObject()
+            try {
+                val manager = WallpaperManager.getInstance(appContext)
+                if (manager.wallpaperInfo != null) {
+                    invoke.resolve(response.put("path", JSONObject.NULL).put("reason", "live"))
+                    return@execute
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !allFilesAccessGranted()) {
+                    invoke.resolve(response.put("path", JSONObject.NULL).put("reason", "permission"))
+                    return@execute
+                }
+                val drawable = manager.drawable
+                if (drawable == null) {
+                    invoke.resolve(response.put("path", JSONObject.NULL).put("reason", "unavailable"))
+                    return@execute
+                }
+                val bitmap = if (drawable is BitmapDrawable && drawable.bitmap != null) {
+                    drawable.bitmap
+                } else {
+                    val width = drawable.intrinsicWidth.takeIf { it > 0 } ?: 1080
+                    val height = drawable.intrinsicHeight.takeIf { it > 0 } ?: 1920
+                    Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { target ->
+                        val canvas = Canvas(target)
+                        drawable.setBounds(0, 0, width, height)
+                        drawable.draw(canvas)
+                    }
+                }
+                val directory = File(appContext.cacheDir, "wallpaper").apply { mkdirs() }
+                val output = File(directory, "system-wallpaper.jpg")
+                val temporary = File(directory, "system-wallpaper.jpg.tmp")
+                FileOutputStream(temporary).use { stream ->
+                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)) {
+                        throw IOException("JPEG encoding failed")
+                    }
+                }
+                if (!temporary.renameTo(output)) {
+                    output.delete()
+                    if (!temporary.renameTo(output)) throw IOException("Could not store the wallpaper copy")
+                }
+                invoke.resolve(response.put("path", output.absolutePath).put("reason", JSONObject.NULL))
+            } catch (error: SecurityException) {
+                invoke.resolve(response.put("path", JSONObject.NULL).put("reason", "permission"))
+            } catch (error: Exception) {
+                invoke.reject("Could not read the system wallpaper: ${error.message}")
+            }
+        }
+    }
+
     private var savedWindowBackground: Drawable? = null
+    private var savedWindowFormat: Int = PixelFormat.OPAQUE
+    private val savedViewBackgrounds = mutableListOf<Pair<View, Drawable?>>()
     private var wallpaperBackdropActive = false
 
     /**
@@ -743,11 +899,26 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                 val window = activity.window
                 var blurApplied = false
                 if (enabled) {
-                    if (!wallpaperBackdropActive) savedWindowBackground = window.decorView.background
+                    val webView = findWebView(window.decorView)
+                    if (!wallpaperBackdropActive) {
+                        savedWindowBackground = window.decorView.background
+                        savedWindowFormat = window.attributes.format
+                        savedViewBackgrounds.clear()
+                        // Every ancestor between the WebView and the decor view must be clear too.
+                        var parent = webView?.parent
+                        while (parent is View && parent !== window.decorView) {
+                            savedViewBackgrounds.add(parent to parent.background)
+                            parent = parent.parent
+                        }
+                    }
                     wallpaperBackdropActive = true
+                    // An opaque window surface paints black under transparent content, hiding the
+                    // wallpaper even though this window is the wallpaper target.
+                    window.setFormat(PixelFormat.TRANSLUCENT)
                     window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
                     window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-                    findWebView(window.decorView)?.setBackgroundColor(Color.TRANSPARENT)
+                    savedViewBackgrounds.forEach { (view, _) -> view.background = null }
+                    webView?.setBackgroundColor(Color.TRANSPARENT)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         val supported = activity.windowManager.isCrossWindowBlurEnabled
                         window.setBackgroundBlurRadius(if (supported) blurPx else 0)
@@ -758,6 +929,9 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) window.setBackgroundBlurRadius(0)
                     window.setBackgroundDrawable(savedWindowBackground ?: ColorDrawable(Color.BLACK))
+                    savedViewBackgrounds.forEach { (view, background) -> view.background = background }
+                    savedViewBackgrounds.clear()
+                    window.setFormat(savedWindowFormat)
                     savedWindowBackground = null
                 }
                 val blurSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && activity.windowManager.isCrossWindowBlurEnabled
@@ -1760,6 +1934,17 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             displayName?.startsWith('.') == true
 
         internal const val MAX_SLIDESHOW_IMAGES = 10_000
+
+        /** "primary:Music/a.flac" -> /storage/emulated/0/Music/a.flac; "1A2B-3C4D:x" -> /storage/1A2B-3C4D/x. */
+        internal fun externalStoragePathFor(documentId: String): String? {
+            val colon = documentId.indexOf(':')
+            if (colon <= 0) return null
+            val volume = documentId.substring(0, colon)
+            val relative = documentId.substring(colon + 1)
+            if (relative.split('/').any { it == ".." }) return null
+            val root = if (volume == "primary") "/storage/emulated/0" else "/storage/$volume"
+            return if (relative.isEmpty()) root else "$root/$relative"
+        }
         private val SLIDESHOW_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp")
         private val SLIDESHOW_IMAGE_MIME_TYPES = setOf("image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp", "image/x-ms-bmp")
 

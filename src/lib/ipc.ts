@@ -620,6 +620,14 @@ interface IpcContract {
     args: Record<string, never>;
     result: ArrayBuffer;
   };
+  android_all_files_access_status: {
+    args: Record<string, never>;
+    result: AndroidAllFilesAccessStatus | null;
+  };
+  android_request_all_files_access: {
+    args: Record<string, never>;
+    result: void;
+  };
   appearance_set_android_wallpaper_backdrop: {
     args: { enabled: boolean; blurPx: number };
     result: AndroidWallpaperBackdropStatus | null;
@@ -943,6 +951,12 @@ interface IpcContract {
 }
 
 export type IpcCommand = keyof IpcContract;
+
+/** Android MANAGE_EXTERNAL_STORAGE ("All files access") state (ADR 0014). */
+export type AndroidAllFilesAccessStatus = {
+  supported: boolean;
+  granted: boolean;
+};
 
 /** Android FLAG_SHOW_WALLPAPER backdrop state reported by the native plugin. */
 export type AndroidWallpaperBackdropStatus = {

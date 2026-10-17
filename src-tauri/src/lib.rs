@@ -5892,9 +5892,16 @@ fn main_background_bytes(app: &AppHandle, state: &AppState) -> Result<Vec<u8>, S
             }
             #[cfg(target_os = "android")]
             {
-                // Android composites the wallpaper natively behind the transparent WebView
-                // (FLAG_SHOW_WALLPAPER); apps cannot read its pixels since Android 13/14.
-                return Ok(Vec::new());
+                // With All files access (ADR 0014) the static wallpaper is copied like the
+                // Windows one. Otherwise (no permission / live wallpaper) return nothing, and the
+                // frontend falls back to FLAG_SHOW_WALLPAPER compositing (ADR 0008).
+                match app.media_index().read_system_wallpaper() {
+                    Ok(read) => match read.path {
+                        Some(path) => Some(std::path::PathBuf::from(path)),
+                        None => return Ok(Vec::new()),
+                    },
+                    Err(_) => return Ok(Vec::new()),
+                }
             }
             #[cfg(not(any(target_os = "windows", target_os = "android")))]
             {
@@ -5979,6 +5986,49 @@ fn next_slideshow_bytes(
         .main_background
         .next_slideshow_image(&folder, theme.slideshow_order)?;
     read_background_image(&path)
+}
+
+/// Android All files access (MANAGE_EXTERNAL_STORAGE) state; None on other platforms.
+#[tauri::command]
+async fn android_all_files_access_status(
+    app: AppHandle,
+) -> Result<Option<tauri_plugin_media_index::AllFilesAccessStatus>, String> {
+    #[cfg(target_os = "android")]
+    {
+        return tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .all_files_access_status()
+                .map(Some)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+/// Open the Android All files access settings page for this app.
+#[tauri::command]
+async fn android_request_all_files_access(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        return tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .request_all_files_access()
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Only Android has All files access".to_owned())
+    }
 }
 
 /// Android: show the system wallpaper behind the transparent WebView. No-op elsewhere.
@@ -10661,6 +10711,8 @@ pub fn run() {
             appearance_get_main_background,
             appearance_next_slideshow_background,
             appearance_set_android_wallpaper_backdrop,
+            android_all_files_access_status,
+            android_request_all_files_access,
             settings_get_lyrics_preferences,
             settings_set_lyrics_preferences,
             settings_get_now_playing_appearance_preferences,

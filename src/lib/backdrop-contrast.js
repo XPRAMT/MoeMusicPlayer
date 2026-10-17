@@ -109,6 +109,20 @@ export async function sampleImageAverage(imageUrl, textColor = null) {
 }
 
 /**
+ * Opacity for the Android system wallpaper, which is composited natively and cannot be sampled.
+ * Manual modes use the saved opacity. Automatic background opacity uses the worst case (a fully
+ * white wallpaper under white text, or fully black under black text). In both cases the clarity
+ * bound becomes opacity < 1 - clarity, so text keeps its contrast whatever the wallpaper is.
+ * @param {{ automaticTextColor: 'white' | 'black' | null, clarityPercent: number, opacityPercent: number }} input
+ * @returns {number}
+ */
+export function systemWallpaperOpacityPercent(input) {
+  const clamp = (/** @type {number} */ value) => Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+  if (!input.automaticTextColor) return clamp(input.opacityPercent);
+  return clamp(100 - clamp(input.clarityPercent));
+}
+
+/**
  * Resolve the contrast sampling color for a backdrop stack.
  * Returns null when there is no usable image contribution (caller should use page color).
  * @param {{

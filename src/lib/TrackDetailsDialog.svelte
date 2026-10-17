@@ -63,6 +63,8 @@
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let saving = $state(false);
+  /** Overwrite confirmation shown before Save writes the file. */
+  let confirmingSave = $state(false);
   let coverUrl = $state<string | null>(null);
   let pendingCoverPath = $state<string | null>(null);
   let pendingCoverUrl = $state<string | null>(null);
@@ -227,6 +229,25 @@
     } catch (cause) { error = String(cause); }
   }
 
+  /** Save button / Ctrl+S: ask before overwriting the file. Cancel keeps all staged edits. */
+  function requestSave() {
+    if (!draft || saving || !anyDirty || details?.readOnly) return;
+    confirmingSave = true;
+  }
+
+  function cancelSave() {
+    confirmingSave = false;
+  }
+
+  function confirmSave() {
+    confirmingSave = false;
+    void save();
+  }
+
+  function focusOnMount(node: HTMLElement) {
+    node.focus();
+  }
+
   async function save() {
     if (!draft || saving) return;
     saving = true; error = null; notice = null;
@@ -256,6 +277,8 @@
   }
 
   function requestClose() {
+    // Esc / Android back / scrim first dismiss the overwrite confirmation (edits are kept).
+    if (confirmingSave) { cancelSave(); return; }
     if (anyDirty && !confirm('有尚未儲存的變更，確定要關閉嗎？')) return;
     onClose();
   }
@@ -267,7 +290,7 @@
 
   function onKeydown(event: KeyboardEvent) {
     if (event.key === 'Escape') { event.preventDefault(); requestClose(); }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void save(); }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); requestSave(); }
   }
 
   const formatBytes = (bytes: number) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : `${Math.round(bytes / 1024)} KB`;
@@ -297,7 +320,7 @@
     <div class="track-details-actions">
       <button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button>
       <button type="button" class="soft-button" disabled={!anyDirty || saving} onclick={resetAll}>還原</button>
-      <button type="button" class="soft-button is-primary" disabled={!anyDirty || saving || !!details?.readOnly} onclick={() => void save()}>{saving ? '儲存中…' : '儲存'}</button>
+      <button type="button" class="soft-button is-primary" disabled={!anyDirty || saving || !!details?.readOnly} onclick={requestSave}>{saving ? '儲存中…' : '儲存'}</button>
     </div>
   </header>
 
@@ -389,9 +412,27 @@
   </div>
 
 </div>
+{#if confirmingSave}
+  <button class="track-details-confirm-scrim" type="button" tabindex="-1" aria-label="取消儲存" onclick={cancelSave}></button>
+  <div class="track-details-confirm floating-surface" role="alertdialog" aria-modal="true" aria-labelledby="track-details-confirm-text" data-testid="track-details-save-confirm">
+    <p id="track-details-confirm-text">將會覆寫檔案原有資訊，是否繼續？</p>
+    <div class="track-details-confirm-actions">
+      <button type="button" class="soft-button" onclick={cancelSave}>取消</button>
+      <button type="button" class="soft-button is-primary" use:focusOnMount onclick={confirmSave}>確認</button>
+    </div>
+  </div>
+{/if}
 </div>
 
 <style>
+  .track-details-confirm-scrim { position: fixed; inset: 0; z-index: 1002; border: 0; background: rgb(0 0 0 / 0.2); }
+  .track-details-confirm {
+    position: fixed; z-index: 1003; left: 50%; top: 50%; translate: -50% -50%;
+    width: min(360px, calc(100vw - 32px - var(--android-safe-left, 0px) - var(--android-safe-right, 0px)));
+    padding: 18px 18px 14px; display: grid; gap: 14px;
+  }
+  .track-details-confirm p { margin: 0; line-height: 1.5; }
+  .track-details-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
   .track-details-scrim { position: fixed; inset: 0; z-index: 1000; border: 0; background: rgb(0 0 0 / 0.35); }
   .track-details {
     position: fixed; z-index: 1001; left: 50%; top: 50%; translate: -50% -50%;

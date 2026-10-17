@@ -77,7 +77,7 @@
     isHexColor,
     normalizeThemePreferences,
   } from './lib/theme';
-  import { getBackdropTargetPercent, resolveBackdropContrast } from './lib/backdrop-contrast.js';
+  import { getBackdropTargetPercent, resolveBackdropContrast, systemWallpaperOpacityPercent } from './lib/backdrop-contrast.js';
   import { createDecodedImageObjectUrl } from './lib/decoded-image-object-url.js';
   import { splitArtists } from './lib/artist-names.js';
   import { readDetailNavigationRoute, withDetailNavigationRoute } from './lib/detail-navigation-history.js';
@@ -145,7 +145,7 @@
   import PlaylistTree from './lib/PlaylistTree.svelte';
   import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, splitSleepTimerClock, beginSleepTimerEdit, getSleepTimerEditMinutes, stepSleepTimerEdit, SLEEP_TIMER_EDIT_IDLE_MS, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
   import type { SleepTimerSnapshot } from './lib/ipc';
-  import type { AndroidWallpaperBackdropStatus } from './lib/ipc';
+  import type { AndroidAllFilesAccessStatus, AndroidWallpaperBackdropStatus } from './lib/ipc';
   import { formatSlideshowFolderLabel } from './lib/background-source-label.js';
   import { swipeDismiss } from './lib/swipe-dismiss.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
@@ -765,14 +765,60 @@
   // Android cannot read wallpaper pixels (Android 13/14+ WallpaperManager restrictions), so the
   // native window shows the wallpaper behind a transparent WebView instead (ADR 0008).
   let androidWallpaperBackdrop = $state<AndroidWallpaperBackdropStatus | null>(null);
+  // With All files access the static wallpaper is read as an image (like Windows); the native
+  // FLAG_SHOW_WALLPAPER backdrop is only the fallback (no permission or live wallpaper).
+  let androidWallpaperHasImage = $state(false);
+  let allFilesAccess = $state<AndroidAllFilesAccessStatus | null>(null);
+  let allFilesAccessBusy = $state(false);
+
+  async function refreshAllFilesAccess(): Promise<void> {
+    if (!isTauri() || capabilities?.platform !== 'android') return;
+    try {
+      const previous = allFilesAccess?.granted;
+      allFilesAccess = await invokeCommand('android_all_files_access_status', {});
+      if (previous !== undefined && previous !== allFilesAccess?.granted && themePreferences.mainBackgroundMode === 'systemWallpaper') {
+        await loadMainBackground();
+      }
+    } catch {
+      allFilesAccess = null;
+    }
+  }
+
+  async function requestAllFilesAccess(): Promise<void> {
+    allFilesAccessBusy = true;
+    try {
+      await invokeCommand('android_request_all_files_access', {});
+    } catch (error) {
+      sourceError = getErrorText(error);
+    } finally {
+      allFilesAccessBusy = false;
+    }
+  }
+
+  $effect(() => {
+    if (runtimePlatform !== 'android') return;
+    void refreshAllFilesAccess();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshAllFilesAccess();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  });
   const androidWallpaperActive = $derived(
-    runtimePlatform === 'android' && mainBackgroundMode === 'systemWallpaper' && androidWallpaperBackdrop?.active === true,
+    runtimePlatform === 'android' && mainBackgroundMode === 'systemWallpaper' && !androidWallpaperHasImage && androidWallpaperBackdrop?.active === true,
   );
   const androidWallpaperBlurPx = $derived(themePreferences.mainBackgroundBlurPx);
+  // The wallpaper pixels are not readable, so automatic opacity cannot sample them (it would
+  // resolve to 0 and hide the wallpaper behind an opaque page colour). Use the worst-case bound.
+  const androidWallpaperOpacityPercent = $derived(systemWallpaperOpacityPercent({
+    automaticTextColor: themePreferences.colorMode === 'autoBackgroundOpacity' ? themePreferences.backgroundOpacityTextColor : null,
+    clarityPercent: themePreferences.mainBackgroundClarityPercent,
+    opacityPercent: themePreferences.mainBackgroundOpacityPercent,
+  }));
 
   $effect(() => {
     if (!isTauri() || runtimePlatform !== 'android') return;
-    const enabled = mainBackgroundMode === 'systemWallpaper';
+    const enabled = mainBackgroundMode === 'systemWallpaper' && !androidWallpaperHasImage;
     const blurPx = enabled ? Math.round(androidWallpaperBlurPx * (window.devicePixelRatio || 1)) : 0;
     let cancelled = false;
     void invokeCommand('appearance_set_android_wallpaper_backdrop', { enabled, blurPx })
@@ -906,7 +952,7 @@
     slideshowNextInSeconds = null;
     slideshowTimingScope = null;
     slideshowStartedAt = null;
-    if (mode === 'systemWallpaper' && platform === 'windows') {
+    if (mode === 'systemWallpaper' && (platform === 'windows' || platform === 'android')) {
       let nextAt = Date.now() + 60_000;
       let disposed = false;
       let checkTimer = 0;
@@ -1205,6 +1251,11 @@
     try {
       const bytes = await getMainBackgroundBytes();
       if (revision !== mainBackgroundReadRevision) return;
+      if (capabilities?.platform === 'android' && themePreferences.mainBackgroundMode === 'systemWallpaper') {
+        androidWallpaperHasImage = bytes.byteLength > 0;
+        // No readable wallpaper: drop any previous image so the native backdrop shows instead.
+        if (bytes.byteLength === 0) clearMainBackgroundImage();
+      }
       await setMainBackgroundBytes(bytes, revision);
       if (revision !== mainBackgroundReadRevision) return;
       mainBackgroundError = null;
@@ -3517,8 +3568,10 @@
                 {:else if themePreferences.mainBackgroundMode === 'albumCover'}
                   <p class="source-muted-note">背景會跟隨目前播放歌曲的專輯封面；沒有可用封面時暫時顯示純色。</p>
                 {:else if themePreferences.mainBackgroundMode === 'systemWallpaper'}
-                  {#if capabilities?.platform === 'android'}
-                    <p class="source-muted-note">由系統直接在介面後方顯示目前桌布（含動態桌布），更換桌布會立即生效。{androidWallpaperBackdrop && !androidWallpaperBackdrop.blurSupported ? '此裝置未啟用跨視窗模糊，背景模糊無效。' : ''}</p>
+                  {#if capabilities?.platform === 'android' && androidWallpaperHasImage}
+                    <p class="source-muted-note">已透過「所有檔案存取權」讀取目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {systemWallpaperNextInSeconds ?? 60}s。</p>
+                  {:else if capabilities?.platform === 'android'}
+                    <p class="source-muted-note">由系統直接在介面後方顯示目前桌布（含動態桌布），更換桌布會立即生效；此模式無法依桌布內容自動調整對比。{androidWallpaperBackdrop && !androidWallpaperBackdrop.blurSupported ? '此裝置未啟用跨視窗模糊，背景模糊無效。' : ''}{allFilesAccess?.supported && !allFilesAccess.granted ? '開啟「音樂來源」中的「所有檔案存取權」後即可讀取靜態桌布圖片。' : ''}</p>
                   {:else}
                     <p class="source-muted-note">讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {systemWallpaperNextInSeconds ?? 60}s。</p>
                   {/if}
@@ -3780,6 +3833,21 @@
                       <h3 id="{scope}source-settings-heading">管理音樂來源</h3>
                     </div>
                   </div>
+                  {#if capabilities?.platform === 'android' && allFilesAccess?.supported}
+                    <div class="all-files-access-card" data-testid="all-files-access">
+                      <div>
+                        <strong>所有檔案存取權</strong>
+                        <p class="source-muted-note">
+                          {allFilesAccess.granted
+                            ? '已授權：編輯歌曲資訊時直接寫入檔案，不再逐首詢問；系統桌布背景可直接讀取圖片。'
+                            : '未授權：編輯歌曲資訊時須逐首同意寫入，系統桌布只能透過系統合成顯示。授權後可直接存取音樂檔與桌布。'}
+                        </p>
+                      </div>
+                      <button class="soft-button" type="button" disabled={allFilesAccessBusy} onclick={() => void requestAllFilesAccess()}>
+                        {allFilesAccess.granted ? '管理權限' : '前往授權'}
+                      </button>
+                    </div>
+                  {/if}
             {#if syncProgress}
               <section
                 class="sync-progress-banner"
@@ -3953,7 +4021,7 @@
     <WindowTitlebar transparent={isNowPlayingOpen || effectiveMainBackgroundUrl !== null} />
   {/if}
   {#if androidWallpaperActive}
-    <div class="main-backdrop is-system-wallpaper" data-testid="main-backdrop" aria-hidden="true"></div>
+    <div class="main-backdrop is-system-wallpaper" data-testid="main-backdrop" aria-hidden="true" style={`--system-wallpaper-opacity: ${androidWallpaperOpacityPercent / 100}`}></div>
   {:else if effectiveMainBackgroundUrl}
     <div class="main-backdrop" data-testid="main-backdrop" aria-hidden="true">
       <img src={effectiveMainBackgroundUrl} alt="" />

@@ -60,6 +60,22 @@ pub struct ContentCacheLease {
     mime_type: Option<String>,
 }
 
+/// Android All files access state.
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AllFilesAccessStatus {
+    pub supported: bool,
+    pub granted: bool,
+}
+
+/// Static wallpaper copy (path) or why there is none ("permission" | "live" | "unavailable").
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemWallpaperRead {
+    pub path: Option<String>,
+    pub reason: Option<String>,
+}
+
 /// Result of toggling the Android wallpaper backdrop.
 #[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,6 +178,36 @@ impl<R: Runtime> MediaIndex<R> {
     /// Request the narrow audio-reading permission required by MediaStore.
     pub fn request_media_store_permission(&self) -> Result<bool> {
         self.platform.request_media_store_permission()
+    }
+
+    /// MANAGE_EXTERNAL_STORAGE ("All files access") state.
+    #[cfg(target_os = "android")]
+    pub fn all_files_access_status(&self) -> Result<AllFilesAccessStatus> {
+        self.platform.all_files_access_status()
+    }
+
+    /// Open the system All files access page for this app.
+    #[cfg(target_os = "android")]
+    pub fn request_all_files_access(&self) -> Result<()> {
+        self.platform.request_all_files_access()
+    }
+
+    /// Real file path for a content URI when All files access is granted and the file exists.
+    #[cfg(target_os = "android")]
+    pub fn resolve_direct_path(&self, uri: &str) -> Result<Option<String>> {
+        self.platform.resolve_direct_path(uri)
+    }
+
+    /// Ask MediaStore to rescan a file changed through its direct path.
+    #[cfg(target_os = "android")]
+    pub fn scan_file(&self, path: &str) -> Result<()> {
+        self.platform.scan_file(path)
+    }
+
+    /// Copy the static system wallpaper into the app cache (needs All files access on Android 13+).
+    #[cfg(target_os = "android")]
+    pub fn read_system_wallpaper(&self) -> Result<SystemWallpaperRead> {
+        self.platform.read_system_wallpaper()
     }
 
     /// Recursive, path-sorted image document URIs inside a persisted SAF tree (slideshow source).

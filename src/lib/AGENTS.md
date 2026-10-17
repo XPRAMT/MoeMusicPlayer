@@ -33,7 +33,8 @@
 ## 背景與播放頁
 
 - 背景來源切換先載入並解碼新圖，成功套用後才撤銷舊 Object URL；讀取中或失敗時保留舊圖，避免閃黑／閃底色。主介面和播放頁封面背景都依 blur 的 1.5σ 延伸，不附加固定放大倍率。
-- Android 背景（ADR 0008）：單圖以文件選擇器挑選並複製到 `UserData/background`；幻燈片以 SAF 資料夾（持久讀取權）遞迴列圖，與桌面共用順序／隨機及切換時間邏輯，資料夾以 `formatSlideshowFolderLabel` 顯示成「內部儲存空間/…」。系統桌布不讀像素（Android 13/14+ 需 MANAGE_EXTERNAL_STORAGE，已否決），改由 `appearance_set_android_wallpaper_backdrop` 打開 `FLAG_SHOW_WALLPAPER`，並讓視窗和 WebView 透明；網頁端在 `:root.has-android-wallpaper-backdrop` 下讓 html/body 透明，`.main-backdrop.is-system-wallpaper::before` 以 `1 − 不透明度` 疊上 `--page`。模糊只在裝置支援跨視窗模糊時才生效。該模式不做縮放，也不做自動對比取樣。
+- Android 背景（ADR 0008）：單圖以文件選擇器挑選並複製到 `UserData/background`；幻燈片以 SAF 資料夾（持久讀取權）遞迴列圖，與桌面共用順序／隨機及切換時間邏輯，資料夾以 `formatSlideshowFolderLabel` 顯示成「內部儲存空間/…」。系統桌布不讀像素（Android 13/14+ 需 MANAGE_EXTERNAL_STORAGE，已否決），改由 `appearance_set_android_wallpaper_backdrop` 打開 `FLAG_SHOW_WALLPAPER`，並讓視窗和 WebView 透明；網頁端在 `:root.has-android-wallpaper-backdrop` 下讓 html/body 透明，`.main-backdrop.is-system-wallpaper::before` 以 `1 − 不透明度` 疊上 `--page`。模糊只在裝置支援跨視窗模糊時才生效。該模式不做縮放，也不做自動對比取樣：自動背景透明度模式以最壞情況估算透明度（`systemWallpaperOpacityPercent` = 100 − 清晰度），不得讓覆蓋層變成不透明。若已授權「所有檔案存取權」（ADR 0014），就改為讀取靜態桌布圖片（`androidWallpaperHasImage`），與 Windows 相同，每 60 s 檢查一次；這時不啟用原生 backdrop。
+- 歌曲資訊按「儲存」（或 Ctrl+S）時，先在 `.app-shell` 內顯示 `.floating-surface` 確認面板「將會覆寫檔案原有資訊，是否繼續？」（確認／取消）。按確認才寫檔；取消、Esc、Android 返回鍵或點遮罩都只關閉確認面板，暫存的編輯保留。
 - 自動背景透明度的估算先縮成 32×32。一般自動文字顏色模式以 alpha 加權的算術 RGB 平均；自動背景透明度模式先與黑／白底色合成，再依文字顏色取最亮／最暗一半像素平均。避免線性化或逐級試探透明度。
 - 播放頁是覆蓋層，底層頁面與播放列狀態不因開關重建；播放頁本身不捲動，歌詞區獨立捲動。無封面時移除封面欄、歌詞置中並使用主介面背景影像層，不讓主介面控件透出。
 - 專輯詳情封面收合規則：曲目捲動視窗固定從 Y0（完全收合的標題＋欄標題）開始，捲動中不得改變其位置、大小或捲軸比例；內容前置等於收合行程的空白。向下捲時前段 scrollTop 以 1 CSS px 對 1 CSS px 縮封面至最小 80 px（展開最大 200 px），之後才捲曲目；向上先回到清單頂端再展開封面。原生捲軸、滾輪與鍵盤都使用瀏覽器原生捲動，不得攔截滾輪、不得做原生／邏輯捲動映射或逐列 clip-path。封面、標題與欄標題位置由 CSS scroll timeline 依捲動位置驅動，不得改成時間補間動畫。標題外框與欄位格線寬度扣除原生捲動槽並與列項對齊，標題外框不得覆蓋捲軸命中區。右側演出者與統計維持顯示。

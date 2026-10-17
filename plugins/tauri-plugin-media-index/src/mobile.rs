@@ -184,6 +184,35 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Ok(response.granted)
     }
 
+    pub(crate) fn all_files_access_status(&self) -> Result<crate::AllFilesAccessStatus> {
+        Ok(self.0.run_mobile_plugin::<crate::AllFilesAccessStatus>("allFilesAccessStatus", json!({}))?)
+    }
+
+    pub(crate) fn request_all_files_access(&self) -> Result<()> {
+        self.0.run_mobile_plugin::<serde_json::Value>("requestAllFilesAccess", json!({}))?;
+        Ok(())
+    }
+
+    pub(crate) fn resolve_direct_path(&self, uri: &str) -> Result<Option<String>> {
+        #[derive(serde::Deserialize)]
+        struct DirectPathResponse {
+            path: Option<String>,
+        }
+        Ok(self
+            .0
+            .run_mobile_plugin::<DirectPathResponse>("resolveDirectPath", json!({ "contentUri": uri }))?
+            .path)
+    }
+
+    pub(crate) fn scan_file(&self, path: &str) -> Result<()> {
+        self.0.run_mobile_plugin::<serde_json::Value>("scanFile", json!({ "path": path }))?;
+        Ok(())
+    }
+
+    pub(crate) fn read_system_wallpaper(&self) -> Result<crate::SystemWallpaperRead> {
+        Ok(self.0.run_mobile_plugin::<crate::SystemWallpaperRead>("readSystemWallpaper", json!({}))?)
+    }
+
     pub(crate) fn list_saf_images(&self, tree_uri: &str) -> Result<Vec<String>> {
         #[derive(serde::Deserialize)]
         struct SafImagesResponse {

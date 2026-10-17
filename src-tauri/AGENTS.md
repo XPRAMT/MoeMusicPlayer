@@ -22,6 +22,7 @@
 - Windows 音訊副檔名與實際 decoder capability 分開維護；MP4 影片不可當作音訊來源，M4A 是音訊容器。新增 codec 前同步測 metadata、duration、decode、seek 與打包授權。
 - Android SAF URI 權限與 MediaStore locator 都是平台資料；權限失效或來源離線時保留舊投影和使用者資料。背景播放由 Media3 `MediaSessionService`／Rust playback actor 維持，不得依賴 Activity 存活。
 - Android 主背景（ADR 0008）：`appearance_pick_main_background` 先複製文件內容再安裝；幻燈片的 `StoredPath::Uri` 經 `next_slideshow_bytes` 和 `MainBackgroundRuntime::*_with` 注入 `listSafImages` 掃描，每張圖以 cache lease 讀取；系統桌布模式回傳空位元組，由原生 `setWallpaperBackdrop` 合成桌布。取得與切換背景的命令為 async，並在 spawn_blocking 中執行，因為 Android plugin 呼叫不可在主執行緒阻塞。
+- Android「所有檔案存取權」（MANAGE_EXTERNAL_STORAGE，選用，ADR 0014）：設定頁的「音樂來源」可開啟系統授權頁（`android_request_all_files_access`）。授權後，`track_details::android_io::push` 以 `resolveDirectPath` 取得實體路徑**原地覆寫**（不用 temp + rename，否則 MediaStore 會換 id），之後 `scanFile`；系統桌布以 `readSystemWallpaper` 複製成 JPEG。未授權時一律退回 ContentResolver／createWriteRequest 與 FLAG_SHOW_WALLPAPER。
 - 更新功能沿用現行便攜雙 EXE 結構與固定 GitHub release trust boundary；詳細流程參照 `docs/adr/0007-portable-windows-updates.md`。
 
 ## 驗證

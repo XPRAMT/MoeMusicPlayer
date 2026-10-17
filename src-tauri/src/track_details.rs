@@ -340,7 +340,33 @@ mod android_io {
         }
     }
 
+    /// Real file behind the document when All files access is granted (ADR 0014).
+    fn direct_path(app: &AppHandle, uri: &str) -> Option<PathBuf> {
+        app.media_index()
+            .resolve_direct_path(uri)
+            .ok()
+            .flatten()
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+    }
+
+    /// Overwrite the file in place (same path and MediaStore row; no temp + rename, which would
+    /// make MediaStore assign a new id and break library locators).
+    fn write_in_place(source: &Path, destination: &Path) -> Result<(), String> {
+        let mut input = std::fs::File::open(source).map_err(|error| error.to_string())?;
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(destination)
+            .map_err(|error| error.to_string())?;
+        std::io::copy(&mut input, &mut output).map_err(|error| error.to_string())?;
+        output.sync_all().map_err(|error| error.to_string())
+    }
+
     fn push(app: &AppHandle, source: &Path, uri: &str) -> Result<(), String> {
+        if let Some(path) = direct_path(app, uri) {
+            return write_in_place(source, &path);
+        }
         let index = app.media_index();
         let lease = index.create_cache_lease().map_err(|error| error.to_string())?;
         std::fs::copy(source, lease.path()).map_err(|error| error.to_string())?;
@@ -368,12 +394,22 @@ mod android_io {
         if !files_equal(&check.path, edited)? {
             drop(check);
             let restored = push(app, original, uri).is_ok();
+            rescan(app, uri);
             return Err(format!(
                 "寫回後驗證不一致{}",
                 if restored { "，已還原原檔" } else { "，還原原檔也失敗，請檢查檔案" }
             ));
         }
+        rescan(app, uri);
         Ok(())
+    }
+
+    /// After a direct-path write, MediaStore must re-read size/tags (ContentResolver writes do this
+    /// themselves).
+    fn rescan(app: &AppHandle, uri: &str) {
+        if let Some(path) = direct_path(app, uri) {
+            let _ = app.media_index().scan_file(&path.to_string_lossy());
+        }
     }
 
     /// Small document (picked cover image) into memory.
