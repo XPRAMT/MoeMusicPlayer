@@ -18,7 +18,10 @@ mod dsd;
 #[cfg(windows)]
 mod dsee;
 #[cfg(windows)]
+mod mirror;
+#[cfg(windows)]
 mod opus;
+pub mod output_devices;
 #[cfg(windows)]
 mod resample;
 #[cfg(windows)]
@@ -278,6 +281,10 @@ pub(crate) struct ResamplingConfig {
     track_rate_hint: AtomicU32,
     dsee_hx: AtomicBool,
     pub(crate) dsd: Arc<DsdOptions>,
+    /// The output devices the user chose (empty: the system default). Shared so a rebuilt backend opens the same ones.
+    devices: RwLock<Vec<output_devices::OutputDeviceSetting>>,
+    /// Why a chosen device is not playing (`None` is the system default), for the settings page.
+    device_errors: Mutex<Vec<(Option<String>, String)>>,
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -288,7 +295,38 @@ impl ResamplingConfig {
             track_rate_hint: AtomicU32::new(0),
             dsee_hx: AtomicBool::new(dsee_hx),
             dsd: Arc::new(DsdOptions::default()),
+            devices: RwLock::new(Vec::new()),
+            device_errors: Mutex::new(Vec::new()),
         }
+    }
+
+    pub(crate) fn devices(&self) -> Vec<output_devices::OutputDeviceSetting> {
+        self.devices
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn set_devices(&self, devices: Vec<output_devices::OutputDeviceSetting>) {
+        *self
+            .devices
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = devices;
+    }
+
+    /// The device the main output opens: the first enabled one (`None`: the system default).
+    pub(crate) fn primary_device(&self) -> Option<String> {
+        output_devices::active_devices(&self.devices())
+            .into_iter()
+            .next()
+            .and_then(|device| device.id)
+    }
+
+    pub(crate) fn set_device_errors(&self, errors: Vec<(Option<String>, String)>) {
+        *self
+            .device_errors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = errors;
     }
 
     fn encode(mode: ResamplingMode) -> u8 {
@@ -447,6 +485,14 @@ pub trait AudioBackend: 'static {
     fn set_dsd_settings(&mut self, _settings: DsdSettings) -> Result<(), AudioError> {
         Ok(())
     }
+    /// Apply the chosen output devices (the first enabled one is the main output, the others mirror it). A live
+    /// track keeps playing; only a change of the main device or its channel map restarts it at its position.
+    fn set_output_devices(
+        &mut self,
+        _devices: Vec<output_devices::OutputDeviceSetting>,
+    ) -> Result<(), AudioError> {
+        Ok(())
+    }
     /// Current sample-rate path, for status display.
     fn resampling_info(&self) -> Option<ResamplingInfo> {
         None
@@ -535,6 +581,7 @@ enum Command {
     SetResampling(ResamplingMode),
     SetDseeHx(bool),
     SetDsdSettings(DsdSettings),
+    SetOutputDevices(Vec<output_devices::OutputDeviceSetting>),
     CheckpointAccounting,
     Shutdown,
 }
@@ -785,6 +832,39 @@ impl PlayerHandle {
         settings: DsdSettings,
     ) -> Result<CommandTicket, AudioError> {
         self.enqueue_with_ack(Command::SetDsdSettings(settings))
+    }
+
+    /// Set the chosen output devices right away, without touching the loaded track (for start-up).
+    pub fn configure_output_devices(&self, devices: Vec<output_devices::OutputDeviceSetting>) {
+        if let Some(config) = self.inner.resampling.as_ref() {
+            config.set_devices(devices);
+        }
+    }
+
+    /// Change the output devices; mirrors open in the background and the main output is rebuilt when its device
+    /// changed.
+    pub fn request_set_output_devices(
+        &self,
+        devices: Vec<output_devices::OutputDeviceSetting>,
+    ) -> Result<CommandTicket, AudioError> {
+        if let Some(config) = self.inner.resampling.as_ref() {
+            config.set_devices(devices.clone());
+        }
+        self.enqueue_with_ack(Command::SetOutputDevices(devices))
+    }
+
+    /// Chosen devices that are not playing right now, each with the reason (`None` is the system default).
+    pub fn output_device_errors(&self) -> Vec<(Option<String>, String)> {
+        self.inner
+            .resampling
+            .as_ref()
+            .map_or_else(Vec::new, |config| {
+                config
+                    .device_errors
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
     }
 
     /// Sample and request persistence of the final active playback interval
@@ -1377,7 +1457,10 @@ fn handle_command_during_recovery(
             Ok(())
         }
         // The worker already recorded the preference; the rebuilt backend gets it.
-        Command::SetResampling(_) | Command::SetDseeHx(_) | Command::SetDsdSettings(_) => Ok(()),
+        Command::SetResampling(_)
+        | Command::SetDseeHx(_)
+        | Command::SetDsdSettings(_)
+        | Command::SetOutputDevices(_) => Ok(()),
         Command::CheckpointAccounting => {
             meter.request_flush();
             Ok(())
@@ -1670,6 +1753,27 @@ fn handle_command(
         Command::SetDsdSettings(settings) => {
             let state = read_snapshot(snapshot).state;
             if let Err(error) = backend.set_dsd_settings(settings) {
+                set_error(snapshot, events, error.clone());
+                return Err(error);
+            }
+            if current_path.is_some()
+                && matches!(
+                    state,
+                    PlaybackState::Ready | PlaybackState::Playing | PlaybackState::Paused
+                )
+            {
+                let position = backend.position();
+                update_snapshot(snapshot, events, |snapshot| {
+                    snapshot.position = snapshot
+                        .duration
+                        .map_or(position, |duration| position.min(duration));
+                });
+                meter.reset_anchor(state, position);
+            }
+        }
+        Command::SetOutputDevices(devices) => {
+            let state = read_snapshot(snapshot).state;
+            if let Err(error) = backend.set_output_devices(devices) {
                 set_error(snapshot, events, error.clone());
                 return Err(error);
             }

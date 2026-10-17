@@ -31,6 +31,7 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -43,6 +44,12 @@ use rodio::{
     ChannelCount, Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Sample, SampleRate, Source,
 };
 
+use crate::mirror::{
+    DelayLine, MirrorControl, MirrorHub, MirrorSource, MixSource, Ring, Tee, JITTER_MARGIN_MS,
+};
+use crate::output_devices::{
+    active_devices, find_output_device, ChannelMixer, ChannelRoute, OutputDeviceSetting,
+};
 use crate::resample::{needs_resampling, Resampled};
 use crate::{
     AudioBackend, AudioError, DsdOptions, DsdSettings, DseeHxState, OutputStatus, ResamplingConfig,
@@ -75,7 +82,42 @@ pub(super) struct RodioBackend {
     dsee_enabled: bool,
     /// Windows-builtin only: the track rate the endpoint refused, and why.
     fallback: Option<OutputFallback>,
+    /// The device the main output was opened for (`None`: the system default).
+    opened_for: Option<String>,
+    /// Copies of the track for the other chosen devices.
+    hub: Arc<MirrorHub>,
+    mirrors: Vec<MirrorOutput>,
+    pending: Vec<PendingMirror>,
+    /// Devices that failed to open or died, with the reason and when to try again.
+    failed: Vec<(OutputDeviceSetting, String, Instant)>,
+    master_volume: f32,
+    reported_errors: Vec<(Option<String>, String)>,
 }
+
+/// A device that plays a copy of the track next to the main output.
+struct MirrorOutput {
+    setting: OutputDeviceSetting,
+    // Owns CPAL's stream; dropped on a disposal thread.
+    sink: Option<MixerDeviceSink>,
+    ring: Arc<Ring>,
+    hub: Arc<MirrorHub>,
+    control: Arc<MirrorControl>,
+    signals: Arc<OutputSignals>,
+}
+
+impl Drop for MirrorOutput {
+    fn drop(&mut self) {
+        self.hub.remove_ring(&self.ring);
+    }
+}
+
+struct PendingMirror {
+    setting: OutputDeviceSetting,
+    result: mpsc::Receiver<Result<MirrorOutput, String>>,
+}
+
+/// How long a device that failed to open waits before the next attempt.
+const MIRROR_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 struct OpenOutput {
     // The device sink owns CPAL's WASAPI stream and must outlive the player.
@@ -197,24 +239,30 @@ impl RodioBackend {
             ResamplingMode::HighQuality => None,
         };
         let mut fallback = None;
+        let device = config.primary_device();
         let output = match requested {
-            Some(rate) => match open_output_with_timeout(Some(rate), OUTPUT_OPEN_TIMEOUT) {
-                Ok(output) => output,
-                Err(error) => {
-                    let reason = error.to_string();
-                    log_refused_rate(rate, &reason);
-                    let output = open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT)?;
-                    fallback = Some(OutputFallback { rate, reason });
-                    output
+            Some(rate) => {
+                match open_output_with_timeout(Some(rate), OUTPUT_OPEN_TIMEOUT, &device) {
+                    Ok(output) => output,
+                    Err(error) => {
+                        let reason = error.to_string();
+                        log_refused_rate(rate, &reason);
+                        let output = open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT, &device)?;
+                        fallback = Some(OutputFallback { rate, reason });
+                        output
+                    }
                 }
-            },
-            None => open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT)?,
+            }
+            None => open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT, &device)?,
         };
         let mut track = TrackPlayer::new(output.sink.mixer().clone(), output.sample_rate);
         track.dsee_enabled = config.dsee_hx();
         track.dsd = Arc::clone(&config.dsd);
+        track.device_channels = usize::from(output.sink.config().channel_count().get());
+        let hub = MirrorHub::new();
+        track.hub = Arc::clone(&hub);
         let now = Instant::now();
-        Ok(Self {
+        let mut backend = Self {
             output: Some(output),
             track,
             last_device_check: now,
@@ -223,7 +271,221 @@ impl RodioBackend {
             mode,
             dsee_enabled: config.dsee_hx(),
             fallback,
-        })
+            opened_for: device,
+            hub,
+            mirrors: Vec::new(),
+            pending: Vec::new(),
+            failed: Vec::new(),
+            master_volume: 1.0,
+            reported_errors: Vec::new(),
+        };
+        let _ = backend.apply_devices();
+        Ok(backend)
+    }
+
+    /// Bring the main output and the mirrors in line with the chosen devices. A change of the main device or of its
+    /// channel map restarts the loaded track at its position; everything else is applied live.
+    fn apply_devices(&mut self) -> Result<(), AudioError> {
+        let active = active_devices(&self.config.devices());
+        let Some(primary) = active.first().cloned() else {
+            return Ok(());
+        };
+        let mirrors_wanted = active.len() > 1;
+        let margin = if mirrors_wanted { JITTER_MARGIN_MS } else { 0 };
+        self.track
+            .delay_ms
+            .store(margin + primary.delay_ms, Ordering::Relaxed);
+        self.track.set_device_volume(primary.volume());
+        let map_changed = self.track.map != primary.channel_map;
+        self.track.map = primary.channel_map.clone();
+
+        let mut restart = map_changed && self.track.path.is_some();
+        if self.opened_for != primary.id {
+            let resume = self.track.resume_point();
+            match open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT, &primary.id) {
+                Ok(output) => {
+                    self.replace_output(output);
+                    self.opened_for = primary.id.clone();
+                    self.fallback = None;
+                    if let Some(rate) = self.track.playback_rate.or(self.track.source_rate) {
+                        if resume.is_some() {
+                            self.prepare_output_for(rate);
+                        }
+                    }
+                    if let Some((path, position)) = resume {
+                        self.track.seek_by_reopening(&path, position)?;
+                        restart = false;
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[audio] could not open the chosen output device: {error}");
+                    self.failed
+                        .retain(|(setting, _, _)| setting.id != primary.id);
+                }
+            }
+        }
+        if restart {
+            if let Some((path, position)) = self.track.resume_point() {
+                self.track.seek_by_reopening(&path, position)?;
+            }
+        }
+
+        // Mirrors: keep the ones still wanted (updating their settings), close the others, open the new ones.
+        let wanted: Vec<OutputDeviceSetting> = active.into_iter().skip(1).collect();
+        let mut kept = Vec::new();
+        for mirror in self.mirrors.drain(..) {
+            if wanted.iter().any(|setting| setting.id == mirror.setting.id) {
+                kept.push(mirror);
+            } else {
+                dispose_mirror(mirror);
+            }
+        }
+        self.mirrors = kept;
+        self.pending.retain(|pending| {
+            wanted
+                .iter()
+                .any(|setting| setting.id == pending.setting.id)
+        });
+        self.failed
+            .retain(|(setting, _, _)| wanted.iter().any(|wanted| wanted.id == setting.id));
+        for setting in &wanted {
+            if let Some(mirror) = self
+                .mirrors
+                .iter_mut()
+                .find(|mirror| mirror.setting.id == setting.id)
+            {
+                mirror
+                    .control
+                    .delay_ms
+                    .store(setting.delay_ms, Ordering::Relaxed);
+                mirror.control.set_map(setting.channel_map.clone());
+                mirror
+                    .control
+                    .set_gain(self.master_volume * setting.volume());
+                mirror.setting = setting.clone();
+                continue;
+            }
+            if let Some(pending) = self
+                .pending
+                .iter_mut()
+                .find(|pending| pending.setting.id == setting.id)
+            {
+                pending.setting = setting.clone();
+                continue;
+            }
+            if let Some(failed) = self
+                .failed
+                .iter_mut()
+                .find(|(failed, _, _)| failed.id == setting.id)
+            {
+                // Retry right away; a changed setting is a reason to look again.
+                failed.0 = setting.clone();
+                failed.2 = Instant::now() - MIRROR_RETRY_INTERVAL;
+                continue;
+            }
+            self.start_mirror(setting.clone());
+        }
+        self.report_errors();
+        Ok(())
+    }
+
+    fn start_mirror(&mut self, setting: OutputDeviceSetting) {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let hub = Arc::clone(&self.hub);
+        let gain = self.master_volume * setting.volume();
+        let opening = setting.clone();
+        let spawned = thread::Builder::new()
+            .name("moe-audio-mirror-open".to_owned())
+            .spawn(move || {
+                let _ = tx.send(open_mirror(opening, hub, gain));
+            });
+        match spawned {
+            Ok(_) => self.pending.push(PendingMirror {
+                setting,
+                result: rx,
+            }),
+            Err(error) => self
+                .failed
+                .push((setting, error.to_string(), Instant::now())),
+        }
+    }
+
+    /// Install mirrors that finished opening, drop ones whose stream died and retry the failed ones.
+    fn poll_mirrors(&mut self) {
+        let mut index = 0;
+        while index < self.pending.len() {
+            let outcome = match self.pending[index].result.try_recv() {
+                Ok(outcome) => Some(outcome),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                    "the output device thread stopped unexpectedly".to_owned(),
+                )),
+            };
+            let Some(outcome) = outcome else {
+                index += 1;
+                continue;
+            };
+            let pending = self.pending.remove(index);
+            match outcome {
+                Ok(mirror) => {
+                    mirror
+                        .control
+                        .set_gain(self.master_volume * mirror.setting.volume());
+                    self.mirrors.push(mirror);
+                }
+                Err(reason) => self.failed.push((pending.setting, reason, Instant::now())),
+            }
+        }
+        let mut index = 0;
+        while index < self.mirrors.len() {
+            let failure = self.mirrors[index]
+                .signals
+                .failure
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            match failure {
+                Some(reason) => {
+                    let mirror = self.mirrors.remove(index);
+                    self.failed
+                        .push((mirror.setting.clone(), reason, Instant::now()));
+                    dispose_mirror(mirror);
+                }
+                None => index += 1,
+            }
+        }
+        let due: Vec<OutputDeviceSetting> = self
+            .failed
+            .iter()
+            .filter(|(_, _, since)| since.elapsed() >= MIRROR_RETRY_INTERVAL)
+            .map(|(setting, _, _)| setting.clone())
+            .collect();
+        for setting in due {
+            self.failed.retain(|(failed, _, _)| failed.id != setting.id);
+            self.start_mirror(setting);
+        }
+        self.report_errors();
+    }
+
+    /// Publish which chosen devices are not playing, for the settings page.
+    fn report_errors(&mut self) {
+        let mut errors: Vec<(Option<String>, String)> = self
+            .failed
+            .iter()
+            .map(|(setting, reason, _)| (setting.id.clone(), reason.clone()))
+            .collect();
+        if let (Some(wanted), Some(output)) = (self.config.primary_device(), self.output.as_ref()) {
+            if output.device_id.as_deref() != Some(wanted.as_str()) {
+                errors.push((
+                    Some(wanted),
+                    "the device was not found; the system default is playing instead".to_owned(),
+                ));
+            }
+        }
+        if errors != self.reported_errors {
+            self.config.set_device_errors(errors.clone());
+            self.reported_errors = errors;
+        }
     }
 
     /// Bring the stream to the rate the current mode wants for a track at
@@ -251,7 +513,11 @@ impl RodioBackend {
         match plan {
             OutputPlan::Keep => false,
             OutputPlan::OpenAt(rate) => {
-                match open_output_with_timeout(Some(rate), OUTPUT_OPEN_TIMEOUT) {
+                match open_output_with_timeout(
+                    Some(rate),
+                    OUTPUT_OPEN_TIMEOUT,
+                    &self.config.primary_device(),
+                ) {
                     Ok(output) => {
                         self.replace_output(output);
                         true
@@ -271,7 +537,7 @@ impl RodioBackend {
     /// Reopen with the device's mix format. On failure the current stream is
     /// kept; it still works, just at a different rate than preferred.
     fn reopen_mix(&mut self) -> bool {
-        match open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT) {
+        match open_output_with_timeout(None, OUTPUT_OPEN_TIMEOUT, &self.config.primary_device()) {
             Ok(output) => {
                 self.replace_output(output);
                 true
@@ -284,6 +550,7 @@ impl RodioBackend {
     }
 
     fn replace_output(&mut self, output: OpenOutput) {
+        self.track.device_channels = usize::from(output.sink.config().channel_count().get());
         let old_player = self
             .track
             .attach(output.sink.mixer().clone(), output.sample_rate);
@@ -322,8 +589,22 @@ fn dispose_off_worker(output: Option<OpenOutput>, player: Option<Arc<Player>>) {
         });
 }
 
+/// Closing a mirror's stream joins its render thread; do that off the worker like the main output.
+fn dispose_mirror(mut mirror: MirrorOutput) {
+    let sink = mirror.sink.take();
+    let _ = thread::Builder::new()
+        .name("moe-audio-mirror-dispose".to_owned())
+        .spawn(move || {
+            drop(mirror);
+            drop(sink);
+        });
+}
+
 impl Drop for RodioBackend {
     fn drop(&mut self) {
+        for mirror in self.mirrors.drain(..) {
+            dispose_mirror(mirror);
+        }
         dispose_off_worker(self.output.take(), self.track.player.take());
     }
 }
@@ -342,12 +623,20 @@ impl AudioBackend for RodioBackend {
 
     fn pause(&mut self) -> Result<(), AudioError> {
         self.track.pause();
+        // The mirrors would otherwise play out what they buffered after the main output stopped.
+        self.hub.flush_mirrors();
         Ok(())
     }
 
     fn stop(&mut self) -> Result<(), AudioError> {
         self.track.stop();
+        self.hub.flush();
         Ok(())
+    }
+
+    fn set_output_devices(&mut self, devices: Vec<OutputDeviceSetting>) -> Result<(), AudioError> {
+        self.config.set_devices(devices);
+        self.apply_devices()
     }
 
     fn seek(&mut self, position: Duration) -> Result<Duration, AudioError> {
@@ -475,7 +764,11 @@ impl AudioBackend for RodioBackend {
     }
 
     fn set_volume(&mut self, volume: f32) -> Result<(), AudioError> {
+        self.master_volume = volume;
         self.track.set_volume(volume);
+        for mirror in &self.mirrors {
+            mirror.control.set_gain(volume * mirror.setting.volume());
+        }
         Ok(())
     }
 
@@ -488,6 +781,7 @@ impl AudioBackend for RodioBackend {
     }
 
     fn output_status(&mut self) -> OutputStatus {
+        self.poll_mirrors();
         let Some(output) = self.output.as_ref() else {
             return OutputStatus::Lost("output stream is closed".to_owned());
         };
@@ -511,9 +805,11 @@ impl AudioBackend for RodioBackend {
 
         if now.duration_since(self.last_device_check) >= DEFAULT_DEVICE_POLL_INTERVAL {
             self.last_device_check = now;
-            if let (Some(opened), Some(default)) =
-                (output.device_id.as_deref(), default_output_device_id())
-            {
+            if let (Some(opened), Some(default), true) = (
+                output.device_id.as_deref(),
+                default_output_device_id(),
+                self.config.primary_device().is_none(),
+            ) {
                 if opened != default {
                     return OutputStatus::DefaultDeviceChanged;
                 }
@@ -536,14 +832,16 @@ fn default_output_device_id() -> Option<String> {
 fn open_output_with_timeout(
     rate: Option<SampleRate>,
     timeout: Duration,
+    device: &Option<String>,
 ) -> Result<OpenOutput, AudioError> {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let device = device.clone();
     thread::Builder::new()
         .name("moe-audio-output-open".to_owned())
         .spawn(move || {
             // If the worker gave up, the send fails and the late stream is
             // dropped here instead of on the worker.
-            let _ = result_tx.send(open_output(rate));
+            let _ = result_tx.send(open_output(rate, device.as_deref()));
         })
         .map_err(|error| AudioError::OutputDevice(error.to_string()))?;
     match result_rx.recv_timeout(timeout) {
@@ -571,10 +869,18 @@ fn stream_buffer_frames(rate: SampleRate) -> u32 {
     }
 }
 
-fn open_output(rate: Option<SampleRate>) -> Result<OpenOutput, AudioError> {
-    let device = rodio::cpal::default_host()
-        .default_output_device()
-        .ok_or_else(|| AudioError::OutputDevice("no default output device".to_owned()))?;
+/// Open the chosen device, or the system default when none is chosen or the chosen one is gone.
+fn open_output(rate: Option<SampleRate>, chosen: Option<&str>) -> Result<OpenOutput, AudioError> {
+    let chosen_device = chosen.and_then(find_output_device);
+    if chosen.is_some() && chosen_device.is_none() {
+        eprintln!("[audio] the chosen output device was not found; using the system default");
+    }
+    let device = match chosen_device {
+        Some(device) => device,
+        None => rodio::cpal::default_host()
+            .default_output_device()
+            .ok_or_else(|| AudioError::OutputDevice("no default output device".to_owned()))?,
+    };
     let device_id = device.id().ok().map(|id| id.to_string());
     let device_rate = device
         .default_output_config()
@@ -618,6 +924,53 @@ fn open_output(rate: Option<SampleRate>) -> Result<OpenOutput, AudioError> {
         sample_rate,
         device_rate: device_rate.unwrap_or(sample_rate),
         mix: rate.is_none(),
+    })
+}
+
+/// Open a mirror device (on a helper thread) and start its source.
+fn open_mirror(
+    setting: OutputDeviceSetting,
+    hub: Arc<MirrorHub>,
+    gain: f32,
+) -> Result<MirrorOutput, String> {
+    let device = match setting.id.as_deref() {
+        Some(id) => find_output_device(id).ok_or_else(|| "the device was not found".to_owned())?,
+        None => rodio::cpal::default_host()
+            .default_output_device()
+            .ok_or_else(|| "no default output device".to_owned())?,
+    };
+    let signals = Arc::new(OutputSignals::default());
+    let mut sink = DeviceSinkBuilder::from_device(device)
+        .map_err(|error| error.to_string())?
+        .with_error_callback(stream_error_callback(Arc::clone(&signals)))
+        .open_sink_or_fallback()
+        .map_err(|error| error.to_string())?;
+    sink.log_on_drop(false);
+    let channels = usize::from(sink.config().channel_count().get());
+    let rate = sink.config().sample_rate().get();
+    let ring = hub.add_ring();
+    let control = MirrorControl::new(gain, setting.delay_ms);
+    control.set_map(setting.channel_map.clone());
+    sink.mixer().add(MirrorSource::new(
+        Arc::clone(&ring),
+        Arc::clone(&control),
+        channels,
+        rate,
+        setting.channel_map.clone(),
+    ));
+    sink.mixer().add(Heartbeat {
+        channels: sink.config().channel_count(),
+        sample_rate: sink.config().sample_rate(),
+        signals: Arc::clone(&signals),
+        pending: 0,
+    });
+    Ok(MirrorOutput {
+        setting,
+        sink: Some(sink),
+        ring,
+        hub,
+        control,
+        signals,
     })
 }
 
@@ -712,11 +1065,27 @@ struct TrackPlayer {
     dsee_notice: Option<String>,
     /// The current source goes through the in-app high-quality resampler.
     in_app: bool,
+    /// Copies of the track for the mirror devices, and the main output's own delay, channel map and volume.
+    hub: Arc<MirrorHub>,
+    delay_ms: Arc<AtomicU32>,
+    map: Option<Vec<ChannelRoute>>,
+    device_channels: usize,
+    device_volume: f32,
+    /// Samples of delay-line silence the current player has played, and samples per second of the chain.
+    silence: Arc<AtomicU64>,
+    silence_rate: f64,
 }
 
 impl TrackPlayer {
     fn new(mixer: Mixer, output_rate: SampleRate) -> Self {
         Self {
+            hub: MirrorHub::new(),
+            delay_ms: Arc::new(AtomicU32::new(0)),
+            map: None,
+            device_channels: 2,
+            device_volume: 1.0,
+            silence: Arc::new(AtomicU64::new(0)),
+            silence_rate: 0.0,
             dsd: Arc::new(DsdOptions::default()),
             mixer,
             output_rate,
@@ -911,14 +1280,58 @@ impl TrackPlayer {
     fn set_volume(&mut self, volume: f32) {
         self.volume = volume;
         if let Some(player) = self.player.as_ref() {
-            player.set_volume(volume);
+            player.set_volume(volume * self.device_volume);
+        }
+    }
+
+    fn set_device_volume(&mut self, volume: f32) {
+        self.device_volume = volume;
+        if let Some(player) = self.player.as_ref() {
+            player.set_volume(self.volume * volume);
         }
     }
 
     fn position(&self) -> Duration {
         match self.player.as_ref() {
-            Some(player) => self.base + player.get_pos(),
+            Some(player) => {
+                // The delay line's leading silence is not part of the track.
+                let silence = if self.silence_rate > 0.0 {
+                    Duration::from_secs_f64(
+                        self.silence.load(Ordering::Relaxed) as f64 / self.silence_rate,
+                    )
+                } else {
+                    Duration::ZERO
+                };
+                self.base + player.get_pos().saturating_sub(silence)
+            }
             None => self.base,
+        }
+    }
+
+    /// Hand a track's samples to `player` through the tee (copies for the mirrors), the delay line and, when the
+    /// device has a channel map, the channel mixer.
+    fn append_chain<S>(&mut self, player: &Player, source: S)
+    where
+        S: Source<Item = Sample> + Send + 'static,
+    {
+        let channels = usize::from(source.channels().get());
+        self.silence = Arc::new(AtomicU64::new(0));
+        self.silence_rate = f64::from(source.sample_rate().get()) * channels as f64;
+        let tee = Tee::new(source, Arc::clone(&self.hub));
+        let delayed = DelayLine::new(
+            tee,
+            Arc::clone(&self.delay_ms),
+            Arc::clone(&self.hub),
+            Arc::clone(&self.silence),
+        );
+        match self.map.as_deref() {
+            Some(map) => {
+                let mixer = ChannelMixer::new(Some(map), channels, self.device_channels);
+                // The silence the mixer's output counts is per output channel.
+                self.silence_rate = f64::from(delayed.sample_rate().get()) * channels as f64;
+                player.append(MixSource::new(delayed, mixer));
+            }
+            None => player.append(delayed),
         }
     }
 
@@ -948,7 +1361,7 @@ impl TrackPlayer {
         let playback_rate = playback.sample_rate();
         self.playback_rate = Some(playback_rate);
         let player = Player::connect_new(&self.mixer);
-        player.set_volume(self.volume);
+        player.set_volume(self.volume * self.device_volume);
         if self.paused {
             player.pause();
         }
@@ -956,7 +1369,7 @@ impl TrackPlayer {
         if needs_resampling(playback_rate, self.output_rate) {
             match Resampled::new(playback, self.output_rate) {
                 Ok(resampled) => {
-                    player.append(resampled);
+                    self.append_chain(&player, resampled);
                     self.in_app = true;
                 }
                 Err(rejected) => {
@@ -967,11 +1380,11 @@ impl TrackPlayer {
                         self.output_rate.get(),
                         rejected.error
                     );
-                    player.append(rejected.source);
+                    self.append_chain(&player, rejected.source);
                 }
             }
         } else {
-            player.append(playback);
+            self.append_chain(&player, playback);
         }
         if let Some(previous) = self.player.replace(Arc::new(player)) {
             previous.stop();
@@ -1550,6 +1963,72 @@ mod tests {
         let dropping = Instant::now();
         drop(backend);
         assert!(dropping.elapsed() < Duration::from_millis(200));
+    }
+
+    /// The system default plus a second real device at once (muted): the mirror opens, consumes audio, the main
+    /// output's delay does not shift the reported position, and removing the mirror closes it.
+    #[test]
+    #[ignore = "opens two real output devices (muted); run manually"]
+    fn real_two_devices_play_together() {
+        let devices = crate::output_devices::list_output_devices();
+        assert!(devices.len() >= 2, "needs two output devices: {devices:?}");
+        let second = devices
+            .iter()
+            .find(|device| !device.is_default)
+            .expect("a second device");
+        let mut backend = backend(ResamplingMode::HighQuality);
+        backend.set_volume(0.0).unwrap();
+        backend.load(&fixture("seek-tone.wav")).unwrap();
+        let both = vec![
+            OutputDeviceSetting {
+                id: None,
+                enabled: true,
+                volume_percent: 100,
+                delay_ms: 300,
+                channel_map: None,
+            },
+            OutputDeviceSetting {
+                id: Some(second.id.clone()),
+                enabled: true,
+                volume_percent: 100,
+                delay_ms: 0,
+                channel_map: None,
+            },
+        ];
+        backend.set_output_devices(both).unwrap();
+        backend.play().unwrap();
+        let started = Instant::now();
+        while backend.mirrors.is_empty() && started.elapsed() < Duration::from_secs(5) {
+            let _ = backend.output_status();
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            backend.mirrors.len(),
+            1,
+            "errors: {:?}",
+            backend.reported_errors
+        );
+        thread::sleep(Duration::from_millis(1_500));
+        assert_eq!(backend.output_status(), OutputStatus::Healthy);
+        let consumed = backend.mirrors[0].control.consumed.load(Ordering::Relaxed);
+        assert!(consumed > 10_000, "the mirror consumed {consumed} frames");
+        let position = backend.position();
+        assert!(
+            (Duration::from_millis(900)..=Duration::from_millis(1_800)).contains(&position),
+            "{position:?}"
+        );
+        let after_seek = backend.seek(Duration::from_millis(1_000)).unwrap();
+        assert!((Duration::from_millis(950)..=Duration::from_millis(1_100)).contains(&after_seek));
+        let single = vec![OutputDeviceSetting {
+            id: None,
+            enabled: true,
+            volume_percent: 100,
+            delay_ms: 0,
+            channel_map: None,
+        }];
+        backend.set_output_devices(single).unwrap();
+        assert!(backend.mirrors.is_empty());
+        assert_eq!(backend.output_status(), OutputStatus::Healthy);
     }
 
     /// Plays silent 44.1 kHz and 96 kHz tones in both modes on the real
