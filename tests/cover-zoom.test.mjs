@@ -66,3 +66,27 @@ test('a saved zoom round-trips as fractions of the cover size and survives a dif
   assert.deepEqual(coverZoomFromFractions({ scale: 0.6, offsetX: 1, offsetY: 1 }, 400, 400), { scale: 0.6, x: 0, y: 0 });
   assert.deepEqual(coverZoomToFractions({ scale: 1, x: 0, y: 0 }, 0, 0), { scale: 1, offsetX: 0, offsetY: 0 });
 });
+
+test('the browser image drag is cancelled so a mouse drag can pan the zoomed cover', async () => {
+  const listeners = new Map();
+  const node = {
+    style: {},
+    dataset: {},
+    offsetWidth: 100,
+    offsetHeight: 100,
+    addEventListener: (type, handler) => listeners.set(type, handler),
+    removeEventListener: (type) => listeners.delete(type),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
+  };
+  const { coverZoom } = await import('../src/lib/cover-zoom.js');
+  const action = coverZoom(node, {});
+  assert.ok(listeners.has('dragstart'));
+  let prevented = false;
+  listeners.get('dragstart')({ preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true);
+  const hadCancel = 'cancelAnimationFrame' in globalThis;
+  if (!hadCancel) globalThis.cancelAnimationFrame = () => {};
+  action.destroy();
+  if (!hadCancel) delete globalThis.cancelAnimationFrame;
+  assert.equal(listeners.has('dragstart'), false);
+});

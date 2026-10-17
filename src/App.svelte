@@ -4825,7 +4825,7 @@
                   style:height={coverFrame ? `${coverFrame.height}px` : undefined}
                 >
                   {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
-                    <img class="cover-stage-image" src={activeArtwork.objectUrl} alt={`${currentTrackTitle(playback?.currentTrack)} 封面`} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
+                    <img class="cover-stage-image" draggable="false" src={activeArtwork.objectUrl} alt={`${currentTrackTitle(playback?.currentTrack)} 封面`} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
                   {:else}
                     <div class="cover-orbit cover-orbit-a"></div>
                     <div class="cover-orbit cover-orbit-b"></div>

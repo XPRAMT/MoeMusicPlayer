@@ -270,6 +270,11 @@ export function coverZoom(node, params) {
     if (isDoubleTap(lastTap, tap)) { lastTap = null; reset(); } else lastTap = tap;
   }
 
+  /** The browser's own image drag would start on the first mouse move and cancel the pointer (no panning). @param {Event} event */
+  function dragstart(event) {
+    event.preventDefault();
+  }
+
   function dblclick() {
     if (active()) reset();
   }
@@ -293,6 +298,7 @@ export function coverZoom(node, params) {
   node.addEventListener('pointerup', up);
   node.addEventListener('pointercancel', up);
   node.addEventListener('dblclick', dblclick);
+  node.addEventListener('dragstart', dragstart);
   node.addEventListener('click', click, true);
   return {
     /** @param {typeof params} next */
@@ -314,6 +320,7 @@ export function coverZoom(node, params) {
       node.removeEventListener('pointermove', move);
       node.removeEventListener('pointerup', up);
       node.removeEventListener('pointercancel', up);
+      node.removeEventListener('dragstart', dragstart);
       node.removeEventListener('dblclick', dblclick);
       node.removeEventListener('click', click, true);
       node.style.transform = '';
