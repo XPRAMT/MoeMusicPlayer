@@ -191,10 +191,24 @@ impl<R: Runtime> MediaIndex<R> {
         self.platform.clipboard_has_image()
     }
 
-    /// Copy the clipboard image into the app cache; returns its path, or None without an image.
+    /// Copy the clipboard image into the app cache; returns `Ok(path)`, or `Err(reason)` without
+    /// an image (`noClip`: nothing readable, e.g. not focused; `noImage`).
     #[cfg(target_os = "android")]
-    pub fn read_clipboard_image(&self) -> Result<Option<String>> {
+    pub fn read_clipboard_image(&self) -> Result<std::result::Result<String, String>> {
         self.platform.read_clipboard_image()
+    }
+
+    /// Private cache folder whose image files `write_clipboard_image` may put on the clipboard.
+    #[cfg(target_os = "android")]
+    pub fn clipboard_share_directory(&self) -> Result<std::path::PathBuf> {
+        self.platform.clipboard_share_directory()
+    }
+
+    /// Put an image file (inside `clipboard_share_directory`) on the system clipboard as a
+    /// FileProvider content URI with its image MIME type.
+    #[cfg(target_os = "android")]
+    pub fn write_clipboard_image(&self, path: &str) -> Result<()> {
+        self.platform.write_clipboard_image(path)
     }
 
     /// Best-effort: show a real-path folder in a file manager. False when no app accepted it.

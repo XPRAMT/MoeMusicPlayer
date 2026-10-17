@@ -194,9 +194,34 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Ok(value.get("hasImage").and_then(serde_json::Value::as_bool).unwrap_or(false))
     }
 
-    pub(crate) fn read_clipboard_image(&self) -> Result<Option<String>> {
+    pub(crate) fn read_clipboard_image(&self) -> Result<std::result::Result<String, String>> {
         let value: serde_json::Value = self.0.run_mobile_plugin("readClipboardImage", json!({}))?;
-        Ok(value.get("path").and_then(|path| path.as_str()).map(str::to_owned))
+        Ok(match value.get("path").and_then(|path| path.as_str()) {
+            Some(path) => Ok(path.to_owned()),
+            None => Err(value
+                .get("reason")
+                .and_then(|reason| reason.as_str())
+                .unwrap_or("noImage")
+                .to_owned()),
+        })
+    }
+
+    pub(crate) fn clipboard_share_directory(&self) -> Result<PathBuf> {
+        let value: serde_json::Value = self
+            .0
+            .run_mobile_plugin("clipboardShareDirectory", json!({}))?;
+        value
+            .get("path")
+            .and_then(|path| path.as_str())
+            .map(PathBuf::from)
+            .ok_or_else(|| crate::Error::Response("no clipboard directory".into()))
+    }
+
+    pub(crate) fn write_clipboard_image(&self, path: &str) -> Result<()> {
+        let _: serde_json::Value = self
+            .0
+            .run_mobile_plugin("writeClipboardImage", json!({ "path": path }))?;
+        Ok(())
     }
 
     pub(crate) fn open_folder_in_file_manager(&self, path: &str) -> Result<bool> {

@@ -21,7 +21,7 @@
     cover: { mime: string; width: number; height: number; bytes: number } | null;
   };
 
-  // Android: 「用檔案管理員開啟」 opens the containing folder (no app can select the file), and the
+  // Android: 「在資料夾中開啟」 opens the containing folder (no app can select the file), and the
   // clipboard is read natively (WebView rejects navigator.clipboard.read() for images).
   const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
   let { trackId, onClose, onSaved, onOpenSpectrogram }: {
@@ -163,10 +163,9 @@
 
   async function readClipboardImage(): Promise<Blob | null> {
     if (isAndroid) {
-      try {
-        const bytes = await invoke<ArrayBuffer>('track_details_read_clipboard_image');
-        return bytes && bytes.byteLength > 0 ? new Blob([bytes]) : null;
-      } catch { return null; }
+      // Throws the native reason (not focused / no readable image) so 貼上 can show it.
+      const bytes = await invoke<ArrayBuffer>('track_details_read_clipboard_image');
+      return bytes && bytes.byteLength > 0 ? new Blob([bytes]) : null;
     }
     try {
       if (!navigator.clipboard?.read) return null;
@@ -180,7 +179,8 @@
 
   async function refreshClipboard() {
     if (isAndroid) {
-      // Only the clip description is checked here; the image is copied when 貼上 is pressed.
+      // Only the clip description is checked here (a hint: Android hides the clip while the app is
+      // unfocused); 貼上 stays enabled on Android and reads the clipboard when pressed.
       try { clipboardHasImage = await invoke<boolean>('track_details_clipboard_has_image'); } catch { clipboardHasImage = false; }
       return;
     }
@@ -197,7 +197,8 @@
   }
 
   async function pasteCover() {
-    const blob = clipboardImage ?? await readClipboardImage();
+    let blob: Blob | null;
+    try { blob = clipboardImage ?? await readClipboardImage(); } catch (cause) { error = String(cause); return; }
     if (!blob) { error = '剪貼簿中沒有圖片'; return; }
     pendingCoverBase64 = await blobToBase64(blob);
     revoke(pendingCoverUrl);
@@ -209,6 +210,18 @@
 
   /** Clipboard images must be PNG: re-encode the current cover through a canvas. */
   async function copyCover() {
+    if (isAndroid) {
+      // WebView's navigator.clipboard.write() resolves for images without reaching the system
+      // clipboard; the native side shares the cover as a content URI instead.
+      try {
+        await invoke('track_details_copy_cover', { trackId });
+        notice = '已複製封面';
+        void refreshClipboard();
+      } catch (cause) {
+        error = `複製封面失敗：${String(cause)}`;
+      }
+      return;
+    }
     try {
       const bytes = await invoke<ArrayBuffer>('track_details_cover', { trackId });
       if (!bytes || bytes.byteLength === 0) { error = '此曲目沒有內嵌封面'; return; }
@@ -350,7 +363,7 @@
         <span class="track-details-path-label">路徑</span>
         <code title={details.path}>{details.path}</code>
         <button type="button" class="soft-button" onclick={() => void navigator.clipboard.writeText(details!.path)}>複製路徑</button>
-        <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>{isAndroid ? '用檔案管理員開啟' : '在資料夾中顯示'}</button>
+        <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>在資料夾中開啟</button>
       </div>
 
       <dl class="track-details-props">
@@ -383,7 +396,7 @@
             <button type="button" class="soft-button" aria-label="選擇封面" title="選擇封面圖片（儲存後才寫入）" disabled={details.readOnly} onclick={() => void pickCover()}>選擇</button>
             <button type="button" class="soft-button" aria-label="匯出封面" title="匯出封面" disabled={!details.cover} onclick={() => void exportCover()}>匯出</button>
             <button type="button" class="soft-button" aria-label="複製封面" title="複製封面到剪貼簿" disabled={!details.cover} onclick={() => void copyCover()}>複製</button>
-            <button type="button" class="soft-button" aria-label="貼上封面" title={clipboardHasImage ? '以剪貼簿圖片作為新封面（儲存後才寫入）' : '剪貼簿中沒有圖片'} disabled={details.readOnly || !clipboardHasImage} onclick={() => void pasteCover()}>貼上</button>
+            <button type="button" class="soft-button" aria-label="貼上封面" title={clipboardHasImage ? '以剪貼簿圖片作為新封面（儲存後才寫入）' : isAndroid ? '讀取剪貼簿圖片作為新封面（儲存後才寫入）' : '剪貼簿中沒有圖片'} disabled={details.readOnly || (!isAndroid && !clipboardHasImage)} onclick={() => void pasteCover()}>貼上</button>
             <button type="button" class="soft-button" aria-label="移除封面" title="移除封面（儲存後才寫入）" disabled={details.readOnly || (!details.cover && !pendingCoverPath)} onclick={() => { removeCover = true; pendingCoverPath = null; pendingCoverBase64 = null; }}>移除</button>
           </div>
           <div class="track-details-cover-option-row">

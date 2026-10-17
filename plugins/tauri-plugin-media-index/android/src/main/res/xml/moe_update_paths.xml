@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Only the update APK cache folder is shareable (with the system package installer). -->
+<!-- Only these cache folders are shareable: update APKs (system package installer) and the
+     cover image put on the clipboard (apps that paste it). -->
 <paths>
     <cache-path name="updates" path="updates/" />
+    <cache-path name="clipboard" path="clipboard-share/" />
 </paths>

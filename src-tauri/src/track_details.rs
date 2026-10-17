@@ -651,7 +651,7 @@ pub async fn track_details_export_cover(
     }
 }
 
-/// Reveal the file in Explorer with it selected. Android: 「用檔案管理員開啟」 shows the
+/// Reveal the file in Explorer with it selected. Android: 「在資料夾中開啟」 shows the
 /// containing folder in a file manager (best effort; no app selects the file itself).
 #[tauri::command]
 pub async fn track_details_reveal(
@@ -717,20 +717,30 @@ pub async fn track_details_clipboard_has_image(app: AppHandle) -> Result<bool, S
     }
 }
 
-/// Android: the clipboard image bytes (copied to the app cache by the native side first), or an
-/// empty response when the clipboard holds no image.
+/// Android: the clipboard image bytes (copied to the app cache by the native side first); an
+/// error message when the clipboard holds no readable image.
 #[tauri::command]
 pub async fn track_details_read_clipboard_image(app: AppHandle) -> Result<Response, String> {
     #[cfg(target_os = "android")]
     {
         use tauri_plugin_media_index::MediaIndexExt;
         let bytes = blocking(move || {
-            let Some(path) = app
+            let path = match app
                 .media_index()
                 .read_clipboard_image()
                 .map_err(|error| error.to_string())?
-            else {
-                return Ok(Vec::new());
+            {
+                Ok(path) => path,
+                Err(reason) if reason == "noClip" => {
+                    return Err(
+                        "無法讀取剪貼簿：請確認 MoeMusicPlayer 在前景後再按「貼上」。".to_owned(),
+                    )
+                }
+                Err(_) => {
+                    return Err(
+                        "剪貼簿中沒有可讀取的圖片（支援 JPEG、PNG、WebP、GIF、BMP）。".to_owned(),
+                    )
+                }
             };
             let result = read_image_source(&app, &path);
             let _ = std::fs::remove_file(&path);
@@ -743,6 +753,63 @@ pub async fn track_details_read_clipboard_image(app: AppHandle) -> Result<Respon
     {
         let _ = app;
         Err("此平台使用 WebView 剪貼簿".to_owned())
+    }
+}
+
+/// Android: put the track's embedded cover on the system clipboard natively. Android WebView's
+/// navigator.clipboard.write() resolves for images without placing anything on ClipboardManager,
+/// so the cover is written to a private cache file and shared as a FileProvider content URI.
+#[tauri::command]
+pub async fn track_details_copy_cover(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_id: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_media_index::MediaIndexExt;
+        let source = track_source(&state, &track_id)?;
+        blocking(move || {
+            let (cover, _, _) = with_readable(&app, &source, player_tags::tags::read_cover)?;
+            let Some((bytes, _)) = cover.filter(|(bytes, _)| !bytes.is_empty()) else {
+                return Err("此曲目沒有內嵌封面".to_owned());
+            };
+            let extension =
+                image_extension(&bytes).ok_or_else(|| "封面不是可複製的圖片格式".to_owned())?;
+            let directory = app
+                .media_index()
+                .clipboard_share_directory()
+                .map_err(|error| error.to_string())?;
+            std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+            let path = directory.join(format!("cover-{}.{extension}", uuid::Uuid::new_v4()));
+            std::fs::write(&path, &bytes).map_err(|error| format!("寫入暫存封面失敗：{error}"))?;
+            app.media_index()
+                .write_clipboard_image(&path.to_string_lossy())
+                .map_err(|error| format!("複製封面失敗：{error}"))
+        })
+        .await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, state, track_id);
+        Err("此平台使用 WebView 剪貼簿".to_owned())
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn image_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        Some("jpg")
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some("webp")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.starts_with(b"BM") {
+        Some("bmp")
+    } else {
+        None
     }
 }
 
@@ -777,6 +844,17 @@ fn reveal_in_explorer(path: &std::path::Path) -> Result<(), String> {
 mod tests {
     use super::strip_verbatim;
     use std::path::PathBuf;
+
+    #[test]
+    fn clipboard_cover_extension_follows_the_image_signature() {
+        use super::image_extension;
+        assert_eq!(image_extension(&[0xff, 0xd8, 0xff, 0xe0]), Some("jpg"));
+        assert_eq!(image_extension(b"\x89PNG\r\n\x1a\n...."), Some("png"));
+        assert_eq!(image_extension(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(image_extension(b"RIFF\0\0\0\0WAVEfmt "), None);
+        assert_eq!(image_extension(b"GIF89a"), Some("gif"));
+        assert_eq!(image_extension(b"text"), None);
+    }
 
     #[test]
     fn strips_verbatim_drive_and_unc_prefixes() {

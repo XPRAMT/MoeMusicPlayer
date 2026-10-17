@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.WallpaperManager
+import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.ContentResolver
 import android.content.Context
@@ -24,6 +26,7 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -142,56 +145,137 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
      * Whether the clipboard currently holds an image. Only the clip description is read, so this
      * neither copies data nor triggers Android 12+'s "pasted from" notice. Android WebView rejects
      * navigator.clipboard.read() for images, so the cover paste goes through ClipboardManager.
+     * Android 10+ only exposes the clip while this app has window focus, so `readable` is false when
+     * the description could not be read (the UI keeps 貼上 enabled and reads on click).
      */
     @Command
     fun clipboardImageStatus(invoke: Invoke) {
         activity.runOnUiThread {
             val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
             val description = try { clipboard?.primaryClipDescription } catch (_: Exception) { null }
-            invoke.resolve(JSObject().put("hasImage", description?.hasMimeType("image/*") == true))
+            val types = description?.let { value -> (0 until value.mimeTypeCount).map(value::getMimeType) }
+            val hasImage = description != null && (description.hasMimeType("image/*") ||
+                description.hasMimeType(ClipDescription.MIMETYPE_TEXT_URILIST))
+            Log.i(TAG, "clipboard status: focus=${activity.hasWindowFocus()} hasClip=${clipboard?.hasPrimaryClip()} types=$types hasImage=$hasImage")
+            invoke.resolve(JSObject().put("hasImage", hasImage).put("readable", description != null))
         }
     }
 
     /**
      * Copy the first image item of the clipboard into the app cache and return its path (the
-     * clip's temporary URI grant ends with the clip). `path` is null when there is no image.
+     * clip's temporary URI grant ends with the clip). Accepts content:// URIs (galleries, browsers,
+     * this app's own copy) and file:// URIs, from the item URI or a text/uri-list item; the bytes
+     * must sniff as JPEG / PNG / WebP / GIF / BMP. `path` is null with `reason` `noClip` (nothing
+     * readable, e.g. the app is not focused) or `noImage`.
      */
     @Command
     fun readClipboardImage(invoke: Invoke) {
         activity.runOnUiThread {
             val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            val clip = try { clipboard?.primaryClip } catch (_: Exception) { null }
-            val uri = clip?.let { data ->
-                (0 until data.itemCount).firstNotNullOfOrNull { index ->
-                    data.getItemAt(index).uri?.takeIf { candidate ->
-                        resolver.getType(candidate)?.startsWith("image/") == true ||
-                            data.description.hasMimeType("image/*")
-                    }
-                }
+            val clip = try { clipboard?.primaryClip } catch (error: Exception) {
+                Log.w(TAG, "clipboard read failed", error)
+                null
             }
-            if (uri == null) {
-                invoke.resolve(JSObject().put("path", JSONObject.NULL))
+            if (clip == null) {
+                Log.i(TAG, "clipboard read: no clip (focus=${activity.hasWindowFocus()} hasClip=${clipboard?.hasPrimaryClip()})")
+                invoke.resolve(JSObject().put("path", JSONObject.NULL).put("reason", "noClip"))
                 return@runOnUiThread
             }
+            val types = (0 until clip.description.mimeTypeCount).map(clip.description::getMimeType)
+            val uris = (0 until clip.itemCount).flatMap { index ->
+                val item = clip.getItemAt(index)
+                listOfNotNull(item.uri) + (item.text?.toString().orEmpty().lineSequence()
+                    .map(String::trim)
+                    .filter { it.startsWith("content://") || it.startsWith("file://") }
+                    .map(Uri::parse)
+                    .toList())
+            }
+            Log.i(TAG, "clipboard read: items=${clip.itemCount} types=$types uris=${uris.map { it.scheme + "://" + it.authority }}")
             io.execute {
-                try {
-                    val directory = File(appContext.cacheDir, "clipboard").apply { mkdirs() }
-                    directory.listFiles()?.forEach { it.delete() }
-                    val target = File(directory, "clipboard-${UUID.randomUUID()}")
-                    val bytes = resolver.openInputStream(uri)?.use { readBounded(it, MAX_ARTWORK_BYTES) }
-                        ?: throw IOException("clipboard image is not readable")
-                    FileOutputStream(target).use { it.write(bytes) }
-                    invoke.resolve(JSObject().put("path", target.absolutePath).put("mimeType", resolver.getType(uri)))
-                } catch (error: Exception) {
-                    invoke.reject("Could not read the clipboard image: ${error.message}")
+                val directory = File(appContext.cacheDir, "clipboard").apply { mkdirs() }
+                directory.listFiles()?.forEach { it.delete() }
+                for (uri in uris) {
+                    try {
+                        val bytes = openClipboardUri(uri)?.use { readBounded(it, MAX_ARTWORK_BYTES) } ?: continue
+                        val mimeType = imageMimeType(bytes)
+                        if (mimeType == null) {
+                            Log.i(TAG, "clipboard item is not an image: ${uri.scheme}://${uri.authority} type=${typeOf(uri)}")
+                            continue
+                        }
+                        val target = File(directory, "clipboard-${UUID.randomUUID()}")
+                        FileOutputStream(target).use { it.write(bytes) }
+                        invoke.resolve(JSObject().put("path", target.absolutePath).put("mimeType", mimeType))
+                        return@execute
+                    } catch (error: Exception) {
+                        Log.w(TAG, "clipboard item unreadable: ${uri.scheme}://${uri.authority}: ${error.message}")
+                    }
                 }
+                invoke.resolve(JSObject().put("path", JSONObject.NULL).put("reason", "noImage"))
+            }
+        }
+    }
+
+    private fun openClipboardUri(uri: Uri): java.io.InputStream? = when (uri.scheme) {
+        ContentResolver.SCHEME_CONTENT -> resolver.openInputStream(uri)
+        ContentResolver.SCHEME_FILE -> uri.path?.let { File(it).inputStream() }
+        else -> null
+    }
+
+    private fun typeOf(uri: Uri): String? = try { resolver.getType(uri) } catch (_: Exception) { null }
+
+    private fun imageMimeType(bytes: ByteArray): String? = artworkMimeType(bytes) ?: when {
+        bytes.size >= 6 && String(bytes, 0, 6, Charsets.US_ASCII).let { it == "GIF87a" || it == "GIF89a" } -> "image/gif"
+        bytes.size >= 2 && bytes[0] == 'B'.code.toByte() && bytes[1] == 'M'.code.toByte() -> "image/bmp"
+        else -> null
+    }
+
+    /** Private cache folder whose files can be put on the clipboard (FileProvider `clipboard-share/`). */
+    @Command
+    fun clipboardShareDirectory(invoke: Invoke) {
+        val directory = File(appContext.cacheDir, CLIPBOARD_SHARE_DIRECTORY).apply { mkdirs() }
+        invoke.resolve(JSObject().put("path", directory.absolutePath))
+    }
+
+    /**
+     * Put an image file from the clipboard-share cache on the system clipboard as a FileProvider
+     * content URI with its exact image MIME type, so this app and other apps can paste it (the
+     * clipboard service grants readers temporary access). Older shared files are removed.
+     */
+    @Command
+    fun writeClipboardImage(invoke: Invoke) {
+        val path = invoke.parseArgs(FilePathArgs::class.java).path
+        val file = path?.let(::File)
+        val share = File(appContext.cacheDir, CLIPBOARD_SHARE_DIRECTORY).canonicalFile
+        if (file == null || !file.isFile || !file.canonicalPath.startsWith(share.path + File.separator)) {
+            invoke.reject("Clipboard image is missing")
+            return
+        }
+        val head = file.inputStream().use { input -> ByteArray(16).let { buffer -> buffer.copyOf(input.read(buffer).coerceAtLeast(0)) } }
+        val mimeType = imageMimeType(head)
+        if (mimeType == null) {
+            invoke.reject("Not an image")
+            return
+        }
+        share.listFiles()?.filter { it.canonicalPath != file.canonicalPath }?.forEach { it.delete() }
+        activity.runOnUiThread {
+            try {
+                val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.moe.updates", file)
+                val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData(ClipDescription("cover", arrayOf(mimeType)), ClipData.Item(uri)))
+                Log.i(TAG, "clipboard write: $mimeType ${file.length()} bytes")
+                invoke.resolve(JSObject().put("mimeType", mimeType))
+            } catch (error: Exception) {
+                invoke.reject("Could not copy the image: ${error.message}")
             }
         }
     }
 
     /**
-     * Best-effort "open containing folder": show the folder in the system Files app (DocumentsUI)
-     * via its ExternalStorageProvider document URI, then any app that views directories.
+     * Best-effort "open containing folder" in the system Files app (DocumentsUI) via the folder's
+     * ExternalStorageProvider document URI. No URI grant flag: this app holds no permission on that
+     * provider, so FLAG_GRANT_READ_URI_PERMISSION makes startActivity throw SecurityException
+     * (DocumentsUI has its own access). Every form is tried with startActivity + catch rather than a
+     * resolveActivity pre-check (package visibility hides results on Android 11+).
      */
     @Command
     fun openFolderInFileManager(invoke: Invoke) {
@@ -202,21 +286,25 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             return
         }
         val uri = DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTHORITY, documentId)
-        val candidates = listOf(
-            Intent(Intent.ACTION_VIEW).setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR),
-            Intent(Intent.ACTION_VIEW).setDataAndType(uri, "resource/folder"),
-            Intent(Intent.ACTION_VIEW, uri),
-        ).map { intent ->
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        val view = { type: String? ->
+            Intent(Intent.ACTION_VIEW).apply { if (type == null) data = uri else setDataAndType(uri, type) }
         }
+        val candidates = listOf(
+            view(DocumentsContract.Document.MIME_TYPE_DIR),
+            view(DocumentsContract.Document.MIME_TYPE_DIR).setPackage("com.google.android.documentsui"),
+            view(DocumentsContract.Document.MIME_TYPE_DIR).setPackage("com.android.documentsui"),
+            view("resource/folder"),
+            view(null),
+        ).map { intent -> intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
         activity.runOnUiThread {
-            for (intent in candidates) {
+            for ((index, intent) in candidates.withIndex()) {
                 try {
                     activity.startActivity(intent)
+                    Log.i(TAG, "open folder: started form $index")
                     invoke.resolve(JSObject().put("opened", true))
                     return@runOnUiThread
-                } catch (_: Exception) {
-                    // Try the next form; file managers differ in what they accept.
+                } catch (error: Exception) {
+                    Log.w(TAG, "open folder form $index failed: ${error.javaClass.simpleName}: ${error.message}")
                 }
             }
             invoke.resolve(JSObject().put("opened", false))
@@ -1329,6 +1417,8 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
 
         private const val MAX_CONTENT_LEASE_BYTES = 512L * 1024 * 1024
         private const val MAX_ARTWORK_BYTES = 32L * 1024 * 1024
+        private const val TAG = "MoeMediaIndex"
+        private const val CLIPBOARD_SHARE_DIRECTORY = "clipboard-share"
         private const val MAX_PLAYLIST_BYTES = 32L * 1024 * 1024
         private const val MAX_LYRICS_BYTES = 2L * 1024 * 1024
         private const val MAX_TOTAL_LEASE_BYTES = 512L * 1024 * 1024

@@ -10194,6 +10194,7 @@ pub fn run() {
             track_details::track_details_reveal,
             track_details::track_details_clipboard_has_image,
             track_details::track_details_read_clipboard_image,
+            track_details::track_details_copy_cover,
             track_details::track_spectrogram,
             track_details::spectrogram_render_file,
             track_details::spectrogram_pick_file,
