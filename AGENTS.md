@@ -50,7 +50,7 @@ Android 與 Windows 對齊（2026-10-17）：
 - 更新：Android arm64 從同一個 GitHub Release 讀取 `moemusicplayer-android-update.json` 與 APK，驗證 SHA-256 後交給系統安裝程式（ADR 0015）。發布腳本為 `npm run release:android`，只有加上 `-Upload -ReleaseTag` 才會上傳。
   - Android 封面剪貼簿讀取與複製已由使用者確認可運作；「在資料夾中開啟」、排除資料夾、本機歌詞候選及 APK 更新仍待裝置驗收（目前 Release 尚無 Android 資產）。
 
-正在播放封面縮放（`src/lib/cover-zoom.js`，action `coverZoom` 掛在 `.cover-stage`，`tests/cover-zoom.test.mjs`）：桌面游標在封面上用滾輪縮放（以游標為錨點），Android 雙指縮放；範圍 1–4 倍，雙擊（觸控為 300 ms 內雙點）恢復原大小，放大後可拖曳平移（位移夾在放大後溢出量內）。縮放套在包住封面與歌詞的 `.now-playing-zoom-layer`（`transform: translate scale`，原點置中，外層 `.now-playing-view` 裁切），因此歌詞區域與封面同比例縮放；歌詞自己的滾輪捲動不受影響。放大期間封面的左右滑切歌／下滑關閉停用（`swipeDismiss` 的 `enabled` 帶 `!isCoverZoomed`），第二指按下時以合成 pointercancel 取消第一指的滑動；關閉正在播放頁時自動還原。Release 與手機實測尚待使用者回報。
+正在播放封面縮放（`src/lib/cover-zoom.js`，action `coverZoom` 掛在 `.cover-stage`，`tests/cover-zoom.test.mjs`）：桌面游標在封面上用滾輪縮放（以游標為錨點），Android 雙指縮放；範圍 1–4 倍，雙擊（觸控為 300 ms 內雙點）恢復原大小，放大後可拖曳平移（位移夾在放大後溢出量內）。縮放只對封面本身套 `transform: translate scale`（原點置中），歌詞區域不跟著放大；佈局以 `--np-cover-width`／`--np-cover-height` × `--np-cover-zoom`（掛在 `.now-playing-view`）預留放大後封面的欄寬（窄版為列高），所以歌詞區域被封面擠壓、範圍變小，封面溢出的部分由卡片裁切。放大期間封面的左右滑切歌／下滑關閉停用（`swipeDismiss` 的 `enabled` 帶 `!isCoverZoomed`），第二指按下時以合成 pointercancel 取消第一指的滑動；關閉正在播放頁時自動還原。Release 與手機實測尚待使用者回報。
 
 下一步（未來最佳化，非目前缺陷）：快速拖曳捲軸時虛擬列表可能短暫出現空白列，原因是合成器先捲動、主執行緒重繪與資料頁載入較晚。可考慮的緩解：overscan 改為約一個視窗高度、尚未載入的列一律繪製輕量佔位列、捲動時只在可見範圍改變才通知上層、列加上 `contain: content`。
 

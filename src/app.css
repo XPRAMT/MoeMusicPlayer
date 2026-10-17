@@ -2178,17 +2178,19 @@ input:focus-visible {
   container-type: inline-size;
 }
 
-.now-playing-zoom-layer {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 0;
-  flex-direction: column;
-  transform-origin: center;
+.cover-stage.is-cover-zoomed {
+  position: relative;
+  z-index: 1;
+  will-change: transform;
 }
 
-.now-playing-zoom-layer.is-cover-zoomed {
-  will-change: transform;
+/* Zoomed cover: reserve its scaled size in the card so the lyrics area is squeezed, not scaled. */
+.now-playing-card:not(.lyrics-hidden):not(.artwork-hidden) {
+  grid-template-columns: minmax(calc(var(--np-cover-width, 0px) * var(--np-cover-zoom, 1)), 1.05fr) minmax(0, 0.95fr);
+}
+
+.now-playing-card.layout-b:not(.lyrics-hidden):not(.artwork-hidden) {
+  grid-template-columns: minmax(0, 1.05fr) minmax(calc(var(--np-cover-width, 0px) * var(--np-cover-zoom, 1)), 0.95fr);
 }
 
 .now-playing-artwork {
@@ -4691,6 +4693,17 @@ input:focus-visible {
 
   .now-playing-view .now-playing-card.layout-b {
     grid-template-rows: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  }
+
+  /* Stacked: the zoomed cover squeezes the lyrics vertically instead of sideways. */
+  .now-playing-view .now-playing-card:not(.lyrics-hidden):not(.artwork-hidden) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(calc(var(--np-cover-height, 0px) * var(--np-cover-zoom, 1)), 1.18fr) minmax(0, 0.82fr);
+  }
+
+  .now-playing-view .now-playing-card.layout-b:not(.lyrics-hidden):not(.artwork-hidden) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 0.82fr) minmax(calc(var(--np-cover-height, 0px) * var(--np-cover-zoom, 1)), 1.18fr);
   }
 
   .now-playing-view .now-playing-card.lyrics-hidden {

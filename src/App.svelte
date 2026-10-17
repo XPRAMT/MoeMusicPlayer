@@ -575,8 +575,8 @@
   let activeArtwork = $state<ActiveArtworkState>({ trackId: null, status: 'empty', objectUrl: null });
   let coverStageElement = $state<HTMLDivElement | null>(null);
   let coverFrame = $state<{ width: number; height: number } | null>(null);
-  let coverZoomLayer = $state<HTMLElement | null>(null);
-  let isCoverZoomed = $state(false);
+  let coverZoomScale = $state(1);
+  let isCoverZoomed = $derived(coverZoomScale > 1);
   let sources = $state<LibrarySource[]>([]);
   let excludedFolders = $state<ExcludedFolder[]>([]);
   let sourceError = $state<string | null>(null);
@@ -4508,14 +4508,15 @@
       </header>
       <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body" inert={isQuickSettingsOpen}>
         <div class="now-playing-overlay-content">
-          <section class="now-playing-view" aria-label="正在播放" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}>
-            <div class="now-playing-zoom-layer" bind:this={coverZoomLayer}>
+          <section class="now-playing-view" aria-label="正在播放" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}
+            style:--np-cover-width={coverFrame ? `${coverFrame.width}px` : undefined}
+            style:--np-cover-zoom={coverZoomScale}>
             <NowPlayingArrangement layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved} artworkVisible={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
               {#snippet artwork()}
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
-                  use:coverZoom={{ layer: coverZoomLayer, enabled: isNowPlayingOpen, onChange: (zoomed) => { isCoverZoomed = zoomed; } }}
+                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: (scale) => { coverZoomScale = scale; } }}
                   use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen && !isCoverZoomed, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() } }}
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
@@ -4554,7 +4555,6 @@
                 />
               {/snippet}
             </NowPlayingArrangement>
-            </div>
           </section>
         </div>
       </div>

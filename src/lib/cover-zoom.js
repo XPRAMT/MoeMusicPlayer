@@ -1,6 +1,7 @@
-// Now-playing cover zoom: wheel (mouse over the cover) or two-finger pinch zooms the cover and the lyrics
-// area together (one transform on the shared layer); double click / double tap restores. Pure math is
-// exported for tests; `coverZoom` is the Svelte action that wires the events.
+// Now-playing cover zoom: wheel (mouse over the cover) or two-finger pinch scales the cover itself (CSS transform on
+// the cover element); double click / double tap restores. The layout reserves the zoomed cover size so the lyrics
+// area is squeezed by the cover instead of scaling with it (see --np-cover-zoom in app.css). Pure math is exported
+// for tests; `coverZoom` is the Svelte action that wires the events.
 
 export const COVER_ZOOM_MIN = 1;
 export const COVER_ZOOM_MAX = 4;
@@ -19,7 +20,7 @@ function clamp(value, min, max) {
 }
 
 /**
- * Keep the scaled layer covering its own unscaled box: |offset| <= (scale - 1) * size / 2.
+ * Keep the scaled cover covering its own unscaled box: |offset| <= (scale - 1) * size / 2.
  * @param {CoverZoomState} state @param {number} width @param {number} height @returns {CoverZoomState}
  */
 export function clampCoverZoom(state, width, height) {
@@ -32,7 +33,7 @@ export function clampCoverZoom(state, width, height) {
 
 /**
  * Zoom to `nextScale` keeping the screen point under the cursor/fingers fixed.
- * `anchorX/Y` are relative to the layer's current visual centre (screen px).
+ * `anchorX/Y` are relative to the cover's current visual centre (screen px).
  * @param {CoverZoomState} state @param {number} nextScale @param {number} anchorX @param {number} anchorY @param {number} width @param {number} height
  */
 export function zoomCoverAt(state, nextScale, anchorX, anchorY, width, height) {
@@ -55,7 +56,7 @@ export function pointerDistance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-/** CSS transform for the zoom layer (transform-origin: center). @param {CoverZoomState} state */
+/** CSS transform for the cover (transform-origin: center). @param {CoverZoomState} state */
 export function coverZoomTransform(state) {
   if (state.scale <= COVER_ZOOM_MIN) return '';
   return `translate(${state.x.toFixed(2)}px, ${state.y.toFixed(2)}px) scale(${state.scale.toFixed(4)})`;
@@ -71,11 +72,11 @@ export function isDoubleTap(previous, next) {
 }
 
 /**
- * use:coverZoom={{ layer, enabled, onChange }} on the cover element; `layer` is the element that is transformed
- * (it contains both the cover and the lyrics). Mouse: wheel over the cover zooms at the cursor, drag pans while
- * zoomed. Touch/pen: pinch zooms, one finger pans while zoomed. Double click / double tap resets.
+ * use:coverZoom={{ enabled, onZoom }} on the cover element, which is the element that gets transformed. Mouse: wheel
+ * over the cover zooms at the cursor, drag pans while zoomed. Touch/pen: pinch zooms, one finger pans while zoomed.
+ * Double click / double tap resets. `onZoom` receives the current scale (1 = not zoomed).
  * @param {HTMLElement} node
- * @param {{ layer: HTMLElement | null, enabled?: boolean, onChange?: (zoomed: boolean) => void }} params
+ * @param {{ enabled?: boolean, onZoom?: (scale: number) => void }} params
  */
 export function coverZoom(node, params) {
   let options = params;
@@ -91,31 +92,24 @@ export function coverZoom(node, params) {
   let lastTap = null;
   let suppressClick = false;
   const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const active = () => options.enabled !== false && options.layer !== null;
+  const active = () => options.enabled !== false;
 
   function layerSize() {
-    const layer = options.layer;
-    return { width: layer?.offsetWidth ?? 0, height: layer?.offsetHeight ?? 0 };
+    return { width: node.offsetWidth, height: node.offsetHeight };
   }
 
   /** @param {CoverZoomState} next @param {boolean} animate */
   function apply(next, animate) {
-    const layer = options.layer;
-    const wasZoomed = state.scale > COVER_ZOOM_MIN;
     state = next;
-    if (layer) {
-      layer.style.transition = animate && !reduced() ? 'transform 160ms ease' : 'none';
-      layer.style.transform = coverZoomTransform(state);
-      layer.classList.toggle('is-cover-zoomed', state.scale > COVER_ZOOM_MIN);
-    }
-    const zoomed = state.scale > COVER_ZOOM_MIN;
-    if (zoomed !== wasZoomed) options.onChange?.(zoomed);
+    node.style.transition = animate && !reduced() ? 'transform 160ms ease' : 'none';
+    node.style.transform = coverZoomTransform(state);
+    node.classList.toggle('is-cover-zoomed', state.scale > COVER_ZOOM_MIN);
+    options.onZoom?.(state.scale);
   }
 
-  /** Anchor relative to the layer's visual centre. @param {number} clientX @param {number} clientY */
+  /** Anchor relative to the cover's visual centre. @param {number} clientX @param {number} clientY */
   function anchorOf(clientX, clientY) {
-    const rect = options.layer?.getBoundingClientRect();
-    if (!rect) return { x: 0, y: 0 };
+    const rect = node.getBoundingClientRect();
     return { x: clientX - (rect.left + rect.width / 2), y: clientY - (rect.top + rect.height / 2) };
   }
 
@@ -237,7 +231,8 @@ export function coverZoom(node, params) {
       node.removeEventListener('pointercancel', up);
       node.removeEventListener('dblclick', dblclick);
       node.removeEventListener('click', click, true);
-      if (options.layer) { options.layer.style.transform = ''; options.layer.classList.remove('is-cover-zoomed'); }
+      node.style.transform = '';
+      node.classList.remove('is-cover-zoomed');
     }
   };
 }
