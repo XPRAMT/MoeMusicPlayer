@@ -694,6 +694,7 @@
   "關閉隨機播放": "Turn shuffle off",
   "類型": "Genre",
   "譯": "Tr",
+  "譯文大小（相對原文）": "Translation size (relative to the original)",
   "譯文與羅馬拼音字級": "Translation and romanization text size",
   "欄位文字不足時的隱藏方式": "How to hide text when a column is too narrow",
   "疊圖": "Overlay",

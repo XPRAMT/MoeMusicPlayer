@@ -213,14 +213,14 @@ impl LyricsPreferences {
                 "inactiveOpacityPercent must be between 10 and 100".into(),
             ));
         }
-        if self.primary_font_size_px > 50 {
+        if !(1..=50).contains(&self.primary_font_size_px) {
             return Err(SettingsError::InvalidData(
-                "primaryFontSizePx must be between 0 and 50".into(),
+                "primaryFontSizePx must be between 1 and 50".into(),
             ));
         }
-        if self.auxiliary_font_size_px > 50 {
+        if !(1..=50).contains(&self.auxiliary_font_size_px) {
             return Err(SettingsError::InvalidData(
-                "auxiliaryFontSizePx must be between 0 and 50".into(),
+                "auxiliaryFontSizePx must be between 1 and 50".into(),
             ));
         }
         if self.line_gap_px > 50 {
@@ -777,6 +777,8 @@ pub struct TaskbarLyricsSettings {
     pub align: TaskbarLyricsAlign,
     /// CSS px of the main line.
     pub font_size_px: u8,
+    /// Size of the translation line as a percentage of the main line (100 = the same size).
+    pub translation_scale_percent: u8,
     /// False: black or white by the taskbar's own light/dark theme.
     pub use_custom_color: bool,
     /// `#rrggbb`.
@@ -786,14 +788,20 @@ pub struct TaskbarLyricsSettings {
 }
 
 impl TaskbarLyricsSettings {
-    pub const FONT_SIZE_RANGE_PX: (u8, u8) = (10, 32);
+    pub const FONT_SIZE_RANGE_PX: (u8, u8) = (1, 50);
     pub const DEFAULT_FONT_SIZE_PX: u8 = 16;
+    pub const TRANSLATION_SCALE_RANGE_PERCENT: (u8, u8) = (1, 100);
+    pub const DEFAULT_TRANSLATION_SCALE_PERCENT: u8 = 75;
     pub const DEFAULT_CUSTOM_COLOR: &'static str = "#ffffff";
 
     pub fn normalized(mut self) -> Self {
         self.font_size_px = self
             .font_size_px
             .clamp(Self::FONT_SIZE_RANGE_PX.0, Self::FONT_SIZE_RANGE_PX.1);
+        self.translation_scale_percent = self.translation_scale_percent.clamp(
+            Self::TRANSLATION_SCALE_RANGE_PERCENT.0,
+            Self::TRANSLATION_SCALE_RANGE_PERCENT.1,
+        );
         if !is_hex_color(&self.custom_color) {
             self.custom_color = Self::DEFAULT_CUSTOM_COLOR.to_owned();
         }
@@ -808,6 +816,7 @@ impl Default for TaskbarLyricsSettings {
             enabled: false,
             align: TaskbarLyricsAlign::default(),
             font_size_px: Self::DEFAULT_FONT_SIZE_PX,
+            translation_scale_percent: Self::DEFAULT_TRANSLATION_SCALE_PERCENT,
             use_custom_color: false,
             custom_color: Self::DEFAULT_CUSTOM_COLOR.to_owned(),
             show_translation: false,
@@ -838,6 +847,9 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
         font_size_px: field("fontSizePx")
             .and_then(|value| value.as_u64())
             .map_or(defaults.font_size_px, |size| size.min(255) as u8),
+        translation_scale_percent: field("translationScalePercent")
+            .and_then(|value| value.as_u64())
+            .map_or(defaults.translation_scale_percent, |scale| scale.min(255) as u8),
         use_custom_color: field("useCustomColor")
             .and_then(|value| value.as_bool())
             .unwrap_or(defaults.use_custom_color),
@@ -1877,6 +1889,9 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
     if settings.lyrics_preferences.line_gap_px > 50 {
         settings.lyrics_preferences.line_gap_px = 50;
     }
+    // The font sizes used to start at 0; they now start at 1.
+    settings.lyrics_preferences.primary_font_size_px = settings.lyrics_preferences.primary_font_size_px.max(1);
+    settings.lyrics_preferences.auxiliary_font_size_px = settings.lyrics_preferences.auxiliary_font_size_px.max(1);
     settings.validate()?;
     Ok((
         settings,
@@ -2326,11 +2341,16 @@ mod tests {
         })));
         assert!(parsed.enabled);
         assert_eq!(parsed.align, TaskbarLyricsAlign::Left);
-        assert_eq!(parsed.font_size_px, 32);
+        assert_eq!(parsed.font_size_px, 50);
+        assert_eq!(parsed.translation_scale_percent, 75, "a missing scale is the default");
         assert_eq!(parsed.custom_color, "#abcdef");
         assert!(!parsed.show_translation);
         let bad = lenient_taskbar_lyrics(Some(serde_json::json!({"fontSizePx": 2, "customColor": "red"})));
-        assert_eq!((bad.font_size_px, bad.custom_color.as_str()), (10, "#ffffff"));
+        assert_eq!((bad.font_size_px, bad.custom_color.as_str()), (2, "#ffffff"));
+        let tiny = lenient_taskbar_lyrics(Some(serde_json::json!({"fontSizePx": 0, "translationScalePercent": 0})));
+        assert_eq!((tiny.font_size_px, tiny.translation_scale_percent), (1, 1));
+        let big = lenient_taskbar_lyrics(Some(serde_json::json!({"translationScalePercent": 250})));
+        assert_eq!(big.translation_scale_percent, 100);
         assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!(7))), defaults);
         assert_eq!(lenient_taskbar_lyrics(None), defaults);
 
@@ -2341,6 +2361,7 @@ mod tests {
             enabled: true,
             align: TaskbarLyricsAlign::Center,
             font_size_px: 20,
+            translation_scale_percent: 60,
             use_custom_color: true,
             custom_color: "#112233".into(),
             show_translation: true,
@@ -2795,11 +2816,17 @@ mod tests {
     fn lyrics_preference_numeric_ranges_are_inclusive_and_reject_out_of_range_values() {
         let mut minimum = LyricsPreferences {
             inactive_opacity_percent: 10,
-            primary_font_size_px: 0,
-            auxiliary_font_size_px: 0,
+            primary_font_size_px: 1,
+            auxiliary_font_size_px: 1,
             ..LyricsPreferences::default()
         };
         minimum.validate().expect("accept lower bounds");
+        minimum.primary_font_size_px = 0;
+        assert!(minimum.validate().is_err(), "the font sizes start at 1");
+        minimum.primary_font_size_px = 1;
+        minimum.auxiliary_font_size_px = 0;
+        assert!(minimum.validate().is_err(), "the font sizes start at 1");
+        minimum.auxiliary_font_size_px = 1;
 
         let maximum = LyricsPreferences {
             inactive_opacity_percent: 100,
@@ -2831,6 +2858,21 @@ mod tests {
         minimum.primary_font_size_px = 14;
         minimum.auxiliary_font_size_px = 51;
         assert!(minimum.validate().is_err());
+    }
+
+    #[test]
+    fn lyrics_font_sizes_saved_as_zero_load_as_one() {
+        let directory = test_directory("lyrics-font-zero");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        drop(store);
+        let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value["lyricsPreferences"]["primaryFontSizePx"] = serde_json::json!(0);
+        value["lyricsPreferences"]["auxiliaryFontSizePx"] = serde_json::json!(0);
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("old file still loads");
+        let preferences = reopened.snapshot().unwrap().lyrics_preferences;
+        assert_eq!((preferences.primary_font_size_px, preferences.auxiliary_font_size_px), (1, 1));
     }
 
     #[test]

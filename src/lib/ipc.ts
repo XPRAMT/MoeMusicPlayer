@@ -142,6 +142,8 @@ export interface TaskbarLyricsSettings {
   enabled: boolean;
   align: 'left' | 'center' | 'right';
   fontSizePx: number;
+  /** The translation line as a percentage of the main line (1 to 100). */
+  translationScalePercent: number;
   useCustomColor: boolean;
   /** `#rrggbb` */
   customColor: string;

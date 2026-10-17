@@ -15,8 +15,8 @@ export const LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);
 
 export const LYRICS_PREFERENCE_LIMITS = Object.freeze({
   inactiveOpacityPercent: Object.freeze({ min: 10, max: 100 }),
-  primaryFontSizePx: Object.freeze({ min: 0, max: 50 }),
-  auxiliaryFontSizePx: Object.freeze({ min: 0, max: 50 }),
+  primaryFontSizePx: Object.freeze({ min: 1, max: 50 }),
+  auxiliaryFontSizePx: Object.freeze({ min: 1, max: 50 }),
   lineGapPx: Object.freeze({ min: 0, max: 50 }),
 });
 

@@ -15,6 +15,7 @@
   import {
     DEFAULT_TASKBAR_LYRICS_SETTINGS,
     fitTaskbarLyricsFontSize,
+    getLyricScrollProgress,
     getTaskbarLyricsColor,
     normalizeTaskbarLyricsSettings,
   } from './taskbar-lyrics-settings.js';
@@ -22,7 +23,8 @@
   // The Now Playing page reads the playback snapshot every 100 ms; so does this window, so a line changes at the same
   // moment in both.
   const SNAPSHOT_POLL_MS = 100;
-  const MIN_FIT_SCALE = 0.7;
+  /** How long the last line of a track is assumed to stay when the track length is unknown. */
+  const LAST_LINE_FALLBACK_MS = 5000;
 
   let settings = $state<TaskbarLyricsSettings>({ ...DEFAULT_TASKBAR_LYRICS_SETTINGS });
   let taskbarIsLight = $state(false);
@@ -30,37 +32,49 @@
   let playbackState = $state<PlaybackSnapshot['state']>('stopped');
   let trackId = $state<string | null>(null);
   let positionMs = $state(0);
+  let durationMs = $state<number | null>(null);
   let viewportHeight = $state(typeof window === 'undefined' ? 0 : window.innerHeight);
-  let fontScale = $state(1);
-  let boxElement = $state<HTMLElement | null>(null);
-  let lineElement = $state<HTMLElement | null>(null);
+  let viewportWidth = $state(typeof window === 'undefined' ? 0 : window.innerWidth);
+  // How far past the window each line reaches (px); a line wider than the window scrolls by that much.
+  let mainOverflow = $state(0);
+  let translationOverflow = $state(0);
+  let mainClip = $state<HTMLElement | null>(null);
+  let mainTrack = $state<HTMLElement | null>(null);
+  let translationClip = $state<HTMLElement | null>(null);
+  let translationTrack = $state<HTMLElement | null>(null);
 
   // Lines of another track (the data arrives a moment after a track change) are never drawn.
   let timeline = $derived(data && data.trackId === trackId ? buildTimedLyricTimeline(data.lines) : []);
-  let activeIndex = $derived.by(() => {
-    // The per-track delay lives in localStorage, shared with the Now Playing page, and is read live.
-    const offsetMs = (data?.offsetMs ?? 0) + lyricsTimingDelaySecToOffsetMs(loadLyricsTimingOffsetSec(trackId));
-    return getDisplayActiveLyricIndex(findActiveLyricIndex(timeline, positionMs, offsetMs), playbackState);
+  // The per-track delay lives in localStorage, shared with the Now Playing page, and is read live.
+  let timingOffsetMs = $derived((data?.offsetMs ?? 0) + lyricsTimingDelaySecToOffsetMs(loadLyricsTimingOffsetSec(trackId)));
+  let activeIndex = $derived(getDisplayActiveLyricIndex(findActiveLyricIndex(timeline, positionMs, timingOffsetMs), playbackState));
+  // A line scrolls over the time it is shown: from its own start to the start of the next line (the end of the track
+  // for the last one).
+  let scrollProgress = $derived.by(() => {
+    if (activeIndex < 0) return 0;
+    const start = timeline[activeIndex].startMs;
+    const next = timeline[activeIndex + 1]?.startMs ?? (durationMs !== null ? durationMs - timingOffsetMs : start + LAST_LINE_FALLBACK_MS);
+    return getLyricScrollProgress(positionMs + timingOffsetMs - start, Math.max(1000, next - start));
   });
   let activeLine = $derived(activeIndex >= 0 ? timeline[activeIndex]?.line : undefined);
   let text = $derived(activeLine?.text?.trim() ?? '');
   let translation = $derived(settings.showTranslation ? (activeLine?.translation?.trim() ?? '') : '');
-  let baseFontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, viewportHeight, translation !== ''));
+  let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, viewportHeight, translation !== '' ? settings.translationScalePercent : 0));
   let color = $derived(getTaskbarLyricsColor(settings, taskbarIsLight));
   let alignItems = $derived(settings.align === 'center' ? 'center' : settings.align === 'right' ? 'flex-end' : 'flex-start');
 
-  // A line wider than the window shrinks (down to MIN_FIT_SCALE) before it is cut off with an ellipsis.
+  // Measure how far each line reaches past the window (after the text, the font size or the window size changed).
   $effect(() => {
     text;
     translation;
-    baseFontPx;
-    const box = boxElement;
-    const line = lineElement;
-    if (!box || !line) return;
+    fontPx;
+    settings.translationScalePercent;
+    viewportWidth;
+    const main = [mainClip, mainTrack] as const;
+    const second = [translationClip, translationTrack] as const;
     requestAnimationFrame(() => {
-      const natural = line.scrollWidth / fontScale;
-      const available = box.clientWidth;
-      fontScale = natural > available && natural > 0 ? Math.max(MIN_FIT_SCALE, available / natural) : 1;
+      mainOverflow = main[0] && main[1] ? Math.max(0, Math.ceil(main[1].offsetWidth - main[0].clientWidth)) : 0;
+      translationOverflow = second[0] && second[1] ? Math.max(0, Math.ceil(second[1].offsetWidth - second[0].clientWidth)) : 0;
     });
   });
 
@@ -71,6 +85,7 @@
     try {
       const snapshot = await invokeCommand('playback_get_snapshot', {});
       positionMs = snapshot.positionMs;
+      durationMs = snapshot.durationMs;
       playbackState = snapshot.state;
       trackId = snapshot.currentTrack?.id ?? null;
     } catch {
@@ -84,6 +99,7 @@
   const unlisteners: UnlistenFn[] = [];
   const onResize = () => {
     viewportHeight = window.innerHeight;
+    viewportWidth = window.innerWidth;
   };
 
   onMount(() => {
@@ -123,18 +139,22 @@
 
 <div
   class="taskbar-lyrics"
-  bind:this={boxElement}
   style:align-items={alignItems}
   style:text-align={settings.align}
   style:color
-  style:--taskbar-lyrics-size={`${baseFontPx * fontScale}px`}
+  style:--taskbar-lyrics-size={`${fontPx}px`}
+  style:--taskbar-lyrics-translation-scale={settings.translationScalePercent / 100}
 >
   {#key activeIndex}
     {#if text}
-      <div class="taskbar-lyrics-line" bind:this={lineElement} in:fade={{ duration: 120 }}>
-        <span class="taskbar-lyrics-main">{text}</span>
+      <div class="taskbar-lyrics-line" in:fade={{ duration: 120 }}>
+        <span class="taskbar-lyrics-main" bind:this={mainClip}>
+          <span class="taskbar-lyrics-track" bind:this={mainTrack} style:transform={`translateX(${-mainOverflow * scrollProgress}px)`}>{text}</span>
+        </span>
         {#if translation}
-          <span class="taskbar-lyrics-translation">{translation}</span>
+          <span class="taskbar-lyrics-translation" bind:this={translationClip}>
+            <span class="taskbar-lyrics-track" bind:this={translationTrack} style:transform={`translateX(${-translationOverflow * scrollProgress}px)`}>{translation}</span>
+          </span>
         {/if}
       </div>
     {/if}
@@ -174,15 +194,23 @@
     max-width: 100%;
   }
 
+  /* A line wider than the window is clipped here and its track scrolls inside (see scrollProgress). */
   .taskbar-lyrics-main,
   .taskbar-lyrics-translation {
     display: block;
+    max-width: 100%;
     overflow: hidden;
-    text-overflow: ellipsis;
+  }
+
+  .taskbar-lyrics-track {
+    display: inline-block;
+    white-space: nowrap;
+    /* The page reads the position every 100 ms: glide between readings. */
+    transition: transform 100ms linear;
   }
 
   .taskbar-lyrics-translation {
-    font-size: 0.75em;
+    font-size: calc(var(--taskbar-lyrics-translation-scale, 0.75) * 1em);
     opacity: 0.8;
   }
 </style>

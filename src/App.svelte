@@ -168,6 +168,7 @@
   import {
     DEFAULT_TASKBAR_LYRICS_SETTINGS,
     TASKBAR_LYRICS_FONT_SIZE_PX,
+    TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT,
     normalizeTaskbarLyricsSettings,
   } from './lib/taskbar-lyrics-settings.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
@@ -4175,6 +4176,19 @@
                     <label class="lyrics-preference-toggle">
                       <input type="checkbox" checked={taskbarLyricsSettings.showTranslation} onchange={(event) => setTaskbarLyricsSettings({ showTranslation: event.currentTarget.checked })} />
                       <span><strong>{tr("顯示譯文")}</strong><small>{tr("歌詞有翻譯時，在原文下方多顯示一行較小的譯文")}</small></span>
+                    </label>
+                    <label class="lyrics-preference-range">
+                      <span><strong>{tr("譯文大小（相對原文）")}</strong><output>{taskbarLyricsSettings.translationScalePercent}%</output></span>
+                      <input
+                        type="range"
+                        min={TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT.min}
+                        max={TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT.max}
+                        step="1"
+                        value={taskbarLyricsSettings.translationScalePercent}
+                        disabled={!taskbarLyricsSettings.showTranslation}
+                        aria-label={tr("譯文大小（相對原文）")}
+                        oninput={(event) => setTaskbarLyricsSettings({ translationScalePercent: Number(event.currentTarget.value) })}
+                      />
                     </label>
                     {#if taskbarLyricsError}
                       <p class="settings-preference-status" role="status">{taskbarLyricsError}</p>
