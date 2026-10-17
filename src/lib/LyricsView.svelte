@@ -21,6 +21,11 @@
   import {
     buildLyricsLayout,
     buildTimedLyricTimeline,
+    computeLyricsInkLineHeight,
+    LYRICS_AUXILIARY_LINE_HEIGHT,
+    LYRICS_INK_ASCENT_SAMPLE,
+    LYRICS_INK_DESCENT_SAMPLE,
+    LYRICS_PRIMARY_LINE_HEIGHT,
     findLyricsRowAtOffset,
     findActiveLyricIndex,
     getPlainLyricWindow,
@@ -131,6 +136,35 @@
   let plainViewportHeight = $state(480);
   let timedViewportHeight = $state(480);
   let layoutWidth = $state(0);
+  let lyricsRoot = $state<HTMLElement | null>(null);
+  // Line-height = font-specific ink fit (ascenders + descenders, no extra leading); the row padding adds
+  // the 3px first-shadow extent. Measured once per font so 2-line clamping never cuts descenders.
+  let inkLineHeights = $state({ primary: LYRICS_PRIMARY_LINE_HEIGHT, auxiliary: LYRICS_AUXILIARY_LINE_HEIGHT });
+  function measureInkLineHeight(context: CanvasRenderingContext2D, font: string, fallback: number): number {
+    context.font = font;
+    const ascent = context.measureText(LYRICS_INK_ASCENT_SAMPLE);
+    const descent = context.measureText(LYRICS_INK_DESCENT_SAMPLE);
+    return computeLyricsInkLineHeight({
+      fontAscent: ascent.fontBoundingBoxAscent / 100,
+      fontDescent: ascent.fontBoundingBoxDescent / 100,
+      inkAscent: Math.max(ascent.actualBoundingBoxAscent, descent.actualBoundingBoxAscent) / 100,
+      inkDescent: Math.max(ascent.actualBoundingBoxDescent, descent.actualBoundingBoxDescent) / 100,
+    }, fallback);
+  }
+  function measureInkLineHeights(): void {
+    const root = lyricsRoot;
+    const context = root ? document.createElement('canvas').getContext('2d') : null;
+    if (!root || !context) return;
+    const family = getComputedStyle(root).fontFamily;
+    const primary = measureInkLineHeight(context, `550 100px ${family}`, LYRICS_PRIMARY_LINE_HEIGHT);
+    const auxiliary = measureInkLineHeight(context, `400 100px ${family}`, LYRICS_AUXILIARY_LINE_HEIGHT);
+    if (primary !== inkLineHeights.primary || auxiliary !== inkLineHeights.auxiliary) inkLineHeights = { primary, auxiliary };
+  }
+  $effect(() => {
+    if (!lyricsRoot) return;
+    measureInkLineHeights();
+    void document.fonts?.ready.then(() => measureInkLineHeights());
+  });
   let layoutRevision = $state(0);
   let previousTrackId: string | null | undefined;
   let previousPlainLayout: ReturnType<typeof buildLyricsLayout> | null = null;
@@ -207,13 +241,14 @@
   let displayActiveTimedIndex = $derived(
     getDisplayActiveLyricIndex(activeTimedIndex, effectivePlaybackState),
   );
-  let timedLayout = $derived(buildLyricsLayout(timedLines, preferences, preferences.lineGapPx, layoutWidth));
+  let layoutPreferences = $derived({ ...preferences, primaryLineHeight: inkLineHeights.primary, auxiliaryLineHeight: inkLineHeights.auxiliary });
+  let timedLayout = $derived(buildLyricsLayout(timedLines, layoutPreferences, preferences.lineGapPx, layoutWidth));
   let visibleActiveTimedIndex = $derived(
     displayActiveTimedIndex >= 0 && timedLayout.heights[displayActiveTimedIndex] > 0
       ? displayActiveTimedIndex
       : -1,
   );
-  let plainLayout = $derived(buildLyricsLayout(lines, preferences, preferences.lineGapPx, layoutWidth));
+  let plainLayout = $derived(buildLyricsLayout(lines, layoutPreferences, preferences.lineGapPx, layoutWidth));
   let timedTotalHeight = $derived.by(() => { layoutRevision; return timedLayout.totalHeight; });
   let timedCanvasHeight = $derived(timedTotalHeight + timedViewportHeight);
   let timedEdgePadding = $derived(timedViewportHeight / 2);
@@ -575,6 +610,7 @@
 <svelte:window onpointerdown={handleTimingPanelOutsidePointerDown} />
 
 <div
+  bind:this={lyricsRoot}
   class="lyrics-view"
   data-testid="lyrics-view"
   data-track-id={viewState.trackId ?? ''}
@@ -585,7 +621,7 @@
   data-text-effect={preferences.textEffect}
   data-active-cue-index={activeTimedIndex}
   data-layout-revision={layoutRevision}
-  style={`--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${preferences.auxiliaryFontSizePx}px`}
+  style={`--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${preferences.auxiliaryFontSizePx}px;--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
 >
   {#if !trackId}
     <p class="lyrics-placeholder" role="status">播放歌曲後會在此顯示歌詞。</p>
@@ -896,15 +932,15 @@
     display: -webkit-box;
     box-sizing: border-box;
     min-width: 0;
-    max-height: calc(var(--lyric-primary-font-size, 14px) * 1.2 * 2);
+    max-height: calc(var(--lyric-primary-font-size, 14px) * var(--lyric-primary-line-height, 1.35) * 2);
     flex: 0 1 auto;
     margin: 0;
     overflow: hidden;
     color: inherit;
     font-size: var(--lyric-primary-font-size, 14px);
     font-weight: 550;
-    /* Tight line box (no extra leading slack); vertical room comes from the glow padding. */
-    line-height: 1.2;
+    /* Measured ink fit (ascenders + descenders, no extra leading); vertical room comes from the shadow padding. */
+    line-height: var(--lyric-primary-line-height, 1.35);
     line-clamp: 2;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -925,7 +961,7 @@
     overflow: visible;
     color: var(--muted);
     font-size: var(--lyric-auxiliary-font-size, 10px);
-    line-height: 1.2;
+    line-height: var(--lyric-auxiliary-line-height, 1.35);
     white-space: normal;
     overflow-wrap: anywhere;
     word-break: break-word;

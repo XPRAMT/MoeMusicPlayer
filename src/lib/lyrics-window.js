@@ -1,5 +1,5 @@
 /** @typedef {import('./ipc').LyricLine} LyricLine */
-/** @typedef {import('./ipc').LyricsPreferences} LyricsPreferences */
+/** @typedef {import('./ipc').LyricsPreferences & { primaryLineHeight?: number, auxiliaryLineHeight?: number }} LyricsPreferences */
 
 /** @typedef {{ index: number, startMs: number, line: LyricLine }} TimedLyric */
 /** @typedef {{ heights: Float64Array, gaps: Float64Array, visibleIndices: Uint32Array, tree: Float64Array, offsets: Float64Array, totalHeight: number, generation: number }} LyricsLayout */
@@ -11,8 +11,29 @@ export const LYRICS_ROW_GAP_PX = 2;
 export const LYRICS_ROW_VERTICAL_PADDING_PX = 6;
 export const LYRICS_ROW_BORDER_PX = 0;
 export const LYRICS_PRIMARY_MAX_LINES = 2;
-export const LYRICS_PRIMARY_LINE_HEIGHT = 1.2;
-export const LYRICS_AUXILIARY_LINE_HEIGHT = 1.2;
+/** Fallback line-height ratios; LyricsView measures the real ink fit per font (see computeLyricsInkLineHeight). */
+export const LYRICS_PRIMARY_LINE_HEIGHT = 1.35;
+export const LYRICS_AUXILIARY_LINE_HEIGHT = 1.35;
+
+/** Glyph samples: tallest Latin/CJK ascenders and Latin descenders used to measure the ink box. */
+export const LYRICS_INK_ASCENT_SAMPLE = 'Hbdfhklt\u570b\u611b\u6200';
+export const LYRICS_INK_DESCENT_SAMPLE = 'gjpqy\u570b\u611b';
+
+/**
+ * Smallest line-height (in em) whose line box holds the glyph ink (ascenders + descenders) given how the
+ * browser places the baseline: the font content area (fontAscent + fontDescent) is centred in the line box,
+ * so the line may shrink by twice the smaller of the ink margins. Ratios are per 1em; invalid input -> fallback.
+ * @param {{ fontAscent: number, fontDescent: number, inkAscent: number, inkDescent: number }} metrics
+ * @param {number} [fallback]
+ */
+export function computeLyricsInkLineHeight(metrics, fallback = LYRICS_PRIMARY_LINE_HEIGHT) {
+  const { fontAscent, fontDescent, inkAscent, inkDescent } = metrics ?? {};
+  if (![fontAscent, fontDescent, inkAscent, inkDescent].every((value) => Number.isFinite(value) && value >= 0)) return fallback;
+  if (!(fontAscent + fontDescent > 0) || !(inkAscent + inkDescent > 0)) return fallback;
+  const ratio = fontAscent + fontDescent + 2 * Math.max(inkAscent - fontAscent, inkDescent - fontDescent);
+  if (!(ratio > 0.5 && ratio < 3)) return fallback;
+  return Math.ceil(ratio * 1000) / 1000;
+}
 
 let nextGeneration = 1;
 
@@ -76,8 +97,8 @@ export function getLyricsLineEstimate(line, preferences) {
   const hasRomanization = preferences.showRomanization && hasVisibleText(line?.romanization);
   const slots = Number(hasPrimary) + Number(hasTranslation) + Number(hasRomanization);
   if (!slots) return 0;
-  return (hasPrimary ? preferences.primaryFontSizePx * LYRICS_PRIMARY_LINE_HEIGHT : 0)
-    + (Number(hasTranslation) + Number(hasRomanization)) * preferences.auxiliaryFontSizePx * LYRICS_AUXILIARY_LINE_HEIGHT
+  return (hasPrimary ? preferences.primaryFontSizePx * (preferences.primaryLineHeight ?? LYRICS_PRIMARY_LINE_HEIGHT) : 0)
+    + (Number(hasTranslation) + Number(hasRomanization)) * preferences.auxiliaryFontSizePx * (preferences.auxiliaryLineHeight ?? LYRICS_AUXILIARY_LINE_HEIGHT)
     + Math.max(0, slots - 1) * LYRICS_ROW_GAP_PX
     + LYRICS_ROW_VERTICAL_PADDING_PX + LYRICS_ROW_BORDER_PX;
 }
