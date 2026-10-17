@@ -65,6 +65,9 @@ pub struct ContentCacheLease {
 #[serde(rename_all = "camelCase")]
 pub struct AllFilesAccessStatus {
     pub supported: bool,
+    /// Android 10 or older: legacy READ/WRITE_EXTERNAL_STORAGE runtime permission.
+    #[serde(default)]
+    pub legacy: bool,
     pub granted: bool,
 }
 
@@ -173,11 +176,6 @@ impl<R: Runtime> MediaIndex<R> {
     /// List concrete external MediaStore volumes. Generation is available on API 30+.
     pub fn list_media_store_volumes(&self) -> Result<MediaStoreVolumes> {
         self.platform.list_media_store_volumes()
-    }
-
-    /// Request the narrow audio-reading permission required by MediaStore.
-    pub fn request_media_store_permission(&self) -> Result<bool> {
-        self.platform.request_media_store_permission()
     }
 
     /// MANAGE_EXTERNAL_STORAGE ("All files access") state.

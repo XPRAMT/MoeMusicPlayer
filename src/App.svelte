@@ -582,7 +582,6 @@
   let sourceSyncResults = $state<SourceSyncResult[]>([]);
   let syncProgress = $state<SyncProgressViewState | null>(null);
   let mediaStoreVolumes = $state<MediaStoreVolumeOption[]>([]);
-  let mediaPermissionGranted = $state<boolean | null>(null);
   let playlists = $state<PlaylistSummary[]>([]);
   let selectedPlaylistId = $state<string | null>(null);
   let playlistListRevision = $state(0);
@@ -789,6 +788,8 @@
     allFilesAccessBusy = true;
     try {
       await invokeCommand('android_request_all_files_access', {});
+      // Android 10 and older answer the runtime prompt in place; Android 11+ re-checks on return.
+      await refreshAllFilesAccess();
     } catch (error) {
       sourceError = getErrorText(error);
     } finally {
@@ -804,6 +805,12 @@
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
+  });
+
+  // Shared-music volumes are listed only with storage access (no separate MediaStore prompt).
+  $effect(() => {
+    if (runtimePlatform !== 'android' || allFilesAccess?.granted !== true) return;
+    void loadMediaStoreVolumes();
   });
   const androidWallpaperActive = $derived(
     runtimePlatform === 'android' && mainBackgroundMode === 'systemWallpaper' && !androidWallpaperHasImage && androidWallpaperBackdrop?.active === true,
@@ -2538,27 +2545,11 @@
     }
   }
 
-  async function requestMediaStorePermission(): Promise<void> {
-    if (isUpdatingSource) return;
-    isUpdatingSource = true;
-    sourceError = null;
-    try {
-      mediaPermissionGranted = await invokeCommand('android_media_request_permission', {});
-      if (mediaPermissionGranted) await loadMediaStoreVolumes();
-      else sourceError = '尚未授權讀取共享音樂；既有曲庫仍會保留。';
-    } catch (error) {
-      sourceError = getErrorText(error);
-    } finally {
-      isUpdatingSource = false;
-    }
-  }
-
   async function loadMediaStoreVolumes(): Promise<void> {
     isLoadingVolumes = true;
     sourceError = null;
     try {
       mediaStoreVolumes = await invokeCommand('android_media_list_volumes', {});
-      mediaPermissionGranted = true;
     } catch (error) {
       mediaStoreVolumes = [];
       sourceError = getErrorText(error);
@@ -3837,18 +3828,14 @@
                       <h3 id="{scope}source-settings-heading">管理音樂來源</h3>
                     </div>
                   </div>
-                  {#if capabilities?.platform === 'android' && allFilesAccess?.supported}
+                  {#if capabilities?.platform === 'android' && allFilesAccess && !allFilesAccess.granted}
                     <div class="all-files-access-card" data-testid="all-files-access">
                       <div>
                         <strong>所有檔案存取權</strong>
-                        <p class="source-muted-note">
-                          {allFilesAccess.granted
-                            ? '已授權：編輯歌曲資訊時直接寫入檔案，不再逐首詢問；系統桌布背景可直接讀取圖片。'
-                            : '未授權：編輯歌曲資訊時須逐首同意寫入，系統桌布只能透過系統合成顯示。授權後可直接存取音樂檔與桌布。'}
-                        </p>
+                        <p class="source-muted-note">掃描共享音樂、直接寫入歌曲資訊與讀取系統桌布都需要此權限。{allFilesAccess.legacy ? '' : '按下後在系統頁面開啟「允許存取所有檔案」，再返回本程式。'}</p>
                       </div>
                       <button class="soft-button" type="button" disabled={allFilesAccessBusy} onclick={() => void requestAllFilesAccess()}>
-                        {allFilesAccess.granted ? '管理權限' : '前往授權'}
+                        前往授權
                       </button>
                     </div>
                   {/if}
@@ -3916,17 +3903,16 @@
             {:else if capabilities?.platform === 'android'}
               <div class="source-action-card android-source-actions">
                 <div class="source-action-heading"><strong>共享音樂</strong><span>MediaStore</span></div>
-                <p>先授權讀取音樂，再選擇裝置提供的媒體儲存空間。</p>
-                <div class="source-action-row source-action-buttons">
-                  <button class="soft-button" type="button" onclick={() => void requestMediaStorePermission()} disabled={!sourceSyncReady || isUpdatingSource}>
-                    {mediaPermissionGranted ? '重新檢查授權' : '授權並讀取共享音樂'}
-                  </button>
-                  {#if mediaPermissionGranted}
+                {#if allFilesAccess?.granted}
+                  <p>選擇裝置提供的媒體儲存空間。</p>
+                  <div class="source-action-row source-action-buttons">
                     <button class="soft-button" type="button" onclick={() => void loadMediaStoreVolumes()} disabled={isLoadingVolumes || isUpdatingSource}>
                       {isLoadingVolumes ? '載入中' : '重新載入儲存空間'}
                     </button>
-                  {/if}
-                </div>
+                  </div>
+                {:else}
+                  <p>需先開啟上方的「所有檔案存取權」，才能掃描共享音樂。</p>
+                {/if}
                 {#if mediaStoreVolumes.length > 0}
                   <div class="media-volume-list" aria-label="MediaStore 儲存空間">
                     {#each mediaStoreVolumes as volume (volume.volumeName)}
@@ -3935,7 +3921,7 @@
                       </button>
                     {/each}
                   </div>
-                {:else if mediaPermissionGranted && !isLoadingVolumes}
+                {:else if allFilesAccess?.granted && !isLoadingVolumes}
                   <p class="source-muted-note">目前沒有可用的共享媒體儲存空間。</p>
                 {/if}
               </div>

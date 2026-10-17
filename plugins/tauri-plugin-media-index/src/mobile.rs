@@ -23,7 +23,7 @@ use tauri::{
 use crate::adapter::{looks_like_tree_uri, media_store_volume, scan_from_response};
 use crate::models::{
     BooleanResponse, ContentCacheLeaseResponse, ContentUriProbeResponse, LyricsTextResponse,
-    MyLovePlaylistResponse, PermissionResponse, ReadMetadataResponse,
+    MyLovePlaylistResponse, ReadMetadataResponse,
     ResolvedSafPlaylistEntryResponse, SafPlaylistImportResponse, SafTreeResponse, ScanResponse,
     UriResponse, VolumesResponse,
 };
@@ -175,13 +175,6 @@ impl<R: Runtime> PlatformMediaIndex<R> {
                 })
                 .collect(),
         })
-    }
-
-    pub(crate) fn request_media_store_permission(&self) -> Result<bool> {
-        let response = self
-            .0
-            .run_mobile_plugin::<PermissionResponse>("requestMediaReadPermission", ())?;
-        Ok(response.granted)
     }
 
     pub(crate) fn all_files_access_status(&self) -> Result<crate::AllFilesAccessStatus> {

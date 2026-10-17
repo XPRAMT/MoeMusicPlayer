@@ -138,13 +138,10 @@ class PlaylistResolveArgs {
 
 @TauriPlugin(
     permissions = [
+        // Android 10 and older only (maxSdkVersion 29). Android 11+ uses All files access (ADR 0014).
         Permission(
-            strings = [Manifest.permission.READ_EXTERNAL_STORAGE],
-            alias = "readExternalStorage",
-        ),
-        Permission(
-            strings = [Manifest.permission.READ_MEDIA_AUDIO],
-            alias = "readMediaAudio",
+            strings = [Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE],
+            alias = "legacyStorage",
         ),
     ],
 )
@@ -190,21 +187,9 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    @Command
-    fun requestMediaReadPermission(invoke: Invoke) {
-        val alias = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            "readMediaAudio"
-        } else {
-            "readExternalStorage"
-        }
-        requestPermissionForAlias(alias, invoke, "onMediaPermissionResult")
-    }
-
     @PermissionCallback
-    private fun onMediaPermissionResult(invoke: Invoke) {
-        val response = JSObject()
-        response.put("granted", hasMediaReadPermission())
-        invoke.resolve(response)
+    private fun onLegacyStoragePermissionResult(invoke: Invoke) {
+        invoke.resolve(JSObject().put("launched", false).put("granted", hasStorageAccess()))
     }
 
     @Command
@@ -767,13 +752,26 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     private fun allFilesAccessGranted(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
 
-    /** MANAGE_EXTERNAL_STORAGE ("All files access", ADR 0014) state. */
+    /**
+     * Storage access used for shared-music scanning and direct edits (ADR 0014): Android 11+ needs
+     * All files access; Android 10 and older use legacy READ/WRITE_EXTERNAL_STORAGE.
+     */
+    private fun hasStorageAccess(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            activity.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+
+    /** Storage access state; `legacy` = Android 10 or older (runtime permission instead of the settings page). */
     @Command
     fun allFilesAccessStatus(invoke: Invoke) {
         invoke.resolve(
             JSObject()
-                .put("supported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
-                .put("granted", allFilesAccessGranted()),
+                .put("supported", true)
+                .put("legacy", Build.VERSION.SDK_INT < Build.VERSION_CODES.R)
+                .put("granted", hasStorageAccess()),
         )
     }
 
@@ -781,7 +779,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun requestAllFilesAccess(invoke: Invoke) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            invoke.reject("All files access requires Android 11 or newer")
+            requestPermissionForAlias("legacyStorage", invoke, "onLegacyStoragePermissionResult")
             return
         }
         activity.runOnUiThread {
@@ -794,7 +792,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                 } catch (_: Exception) {
                     activity.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
                 }
-                invoke.resolve(JSObject().put("launched", true))
+                invoke.resolve(JSObject().put("launched", true).put("granted", hasStorageAccess()))
             } catch (error: Exception) {
                 invoke.reject("Could not open the all files access settings: ${error.message}")
             }
@@ -1160,8 +1158,8 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     private fun scanMediaStore(sourceId: String, volumeName: String): JSObject {
-        if (!hasMediaReadPermission()) {
-            return scanResult("permissionRevoked", "Audio media permission is not granted")
+        if (!hasStorageAccess()) {
+            return scanResult("permissionRevoked", "All files access is not granted")
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -1839,14 +1837,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     private fun getStoreGeneration(volumeName: String): Long? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) MediaStore.getGeneration(activity, volumeName) else null
 
-    private fun hasMediaReadPermission(): Boolean {
-        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_AUDIO
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        }
-        return activity.checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    }
 
     private fun isLegacyExternalStorageMounted(): Boolean {
         val state = Environment.getExternalStorageState()

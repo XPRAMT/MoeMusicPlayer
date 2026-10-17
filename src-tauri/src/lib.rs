@@ -6829,13 +6829,6 @@ fn source_tree_uri(source: &SourceEntry) -> Option<&str> {
 }
 
 #[tauri::command]
-fn android_media_request_permission(app: AppHandle) -> Result<bool, String> {
-    app.media_index()
-        .request_media_store_permission()
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 fn android_media_list_volumes(app: AppHandle) -> Result<Vec<MediaStoreVolumeOption>, String> {
     app.media_index()
         .list_media_store_volumes()
@@ -10774,7 +10767,6 @@ pub fn run() {
             library_remove_excluded_folder,
             library_set_source_enabled,
             library_remove_source,
-            android_media_request_permission,
             android_media_list_volumes,
             android_media_add_volume,
             android_saf_pick_source,

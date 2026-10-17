@@ -50,10 +50,6 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Err(Error::Unsupported("MediaStore volume enumeration"))
     }
 
-    pub(crate) fn request_media_store_permission(&self) -> Result<bool> {
-        Err(Error::Unsupported("Android media permission request"))
-    }
-
     pub(crate) fn pick_saf_tree(&self) -> Result<Option<String>> {
         Err(Error::Unsupported("Android document-tree picker"))
     }

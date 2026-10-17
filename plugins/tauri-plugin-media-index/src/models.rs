@@ -102,12 +102,6 @@ pub(crate) struct SourceError {
 }
 
 #[cfg(target_os = "android")]
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PermissionResponse {
-    pub granted: bool,
-}
-
 #[cfg(target_os = "android")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

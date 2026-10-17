@@ -65,3 +65,16 @@ test('track details Save asks before overwriting and cancel keeps edits', () => 
   const cancelBody = dialog.slice(dialog.indexOf('function cancelSave'), dialog.indexOf('function confirmSave'));
   assert.doesNotMatch(cancelBody, /draft|original|save\(/);
 });
+
+test('Android shared music uses All files access only (no READ_MEDIA_AUDIO flow)', () => {
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  const kotlin = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/MediaIndexPlugin.kt', import.meta.url), 'utf8');
+  const pluginManifest = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+  assert.doesNotMatch(pluginManifest, /READ_MEDIA_AUDIO/);
+  assert.match(pluginManifest, /READ_EXTERNAL_STORAGE" android:maxSdkVersion="29"/);
+  assert.match(pluginManifest, /WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/);
+  assert.doesNotMatch(kotlin, /READ_MEDIA_AUDIO|requestMediaReadPermission/);
+  assert.match(kotlin, /if \(!hasStorageAccess\(\)\) \{\n?\s*return scanResult\("permissionRevoked"/);
+  assert.doesNotMatch(app, /android_media_request_permission|mediaPermissionGranted/);
+  assert.match(app, /capabilities\?\.platform === 'android' && allFilesAccess && !allFilesAccess\.granted/);
+});

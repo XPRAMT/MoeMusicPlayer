@@ -17,6 +17,14 @@ Status: accepted (2026-10-17). This partly supersedes the "MANAGE_EXTERNAL_STORA
 - When not granted, or when the path cannot be resolved, everything falls back to the existing ContentResolver / SAF / `createWriteRequest` flow and to the `FLAG_SHOW_WALLPAPER` backdrop (ADR 0008). A live wallpaper always uses the backdrop.
 - Reading track bytes still uses the ContentResolver. It needs no prompt and keeps one code path.
 
+## Update (2026-10-17): All files access is the only storage permission
+
+- The separate MediaStore read permission flow (`READ_MEDIA_AUDIO`, the 「共享音樂 / MediaStore」 authorize button and its prompt) is removed, along with the `READ_MEDIA_AUDIO` manifest entry and the `requestMediaReadPermission` / `android_media_request_permission` bridge.
+- Gate for shared-music (MediaStore) scanning and direct edits: `Environment.isExternalStorageManager()` on Android 11+. On Android 10 and older, the gate is the legacy `READ_EXTERNAL_STORAGE` / `WRITE_EXTERNAL_STORAGE` runtime permission (both declared with `maxSdkVersion="29"`), requested from the same 「前往授權」 button.
+- MediaStore remains the index for shared music; All files access allows querying it.
+- The 所有檔案存取權 card is shown only while access is missing. Once access is granted, the MediaStore volume list loads automatically.
+- Existing MediaStore sources whose access is missing report `permissionRevoked` and keep their library projection until access is granted.
+
 ## Consequences
 
 - One manual system toggle replaces per-file prompts. Revoking the toggle at any time silently returns to the fallback paths.

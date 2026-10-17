@@ -816,10 +816,6 @@ interface IpcContract {
     args: { sourceId: string };
     result: LibrarySource[];
   };
-  android_media_request_permission: {
-    args: Record<string, never>;
-    result: boolean;
-  };
   android_media_list_volumes: {
     args: Record<string, never>;
     result: MediaStoreVolumeOption[];
@@ -955,6 +951,8 @@ export type IpcCommand = keyof IpcContract;
 /** Android MANAGE_EXTERNAL_STORAGE ("All files access") state (ADR 0014). */
 export type AndroidAllFilesAccessStatus = {
   supported: boolean;
+  /** Android 10 or older: legacy READ/WRITE_EXTERNAL_STORAGE runtime permission. */
+  legacy?: boolean;
   granted: boolean;
 };
 
