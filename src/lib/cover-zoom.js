@@ -3,7 +3,8 @@
 // area is squeezed by the cover instead of scaling with it (see --np-cover-zoom in app.css). Pure math is exported
 // for tests; `coverZoom` is the Svelte action that wires the events.
 
-export const COVER_ZOOM_MIN = 1;
+export const COVER_ZOOM_MIN = 0.4;
+export const COVER_ZOOM_REST = 1;
 export const COVER_ZOOM_MAX = 4;
 export const COVER_ZOOM_WHEEL_STEP = 0.0015;
 export const COVER_DOUBLE_TAP_MS = 300;
@@ -20,12 +21,12 @@ function clamp(value, min, max) {
 }
 
 /**
- * Keep the scaled cover covering its own unscaled box: |offset| <= (scale - 1) * size / 2.
+ * Zoom range is COVER_ZOOM_MIN..COVER_ZOOM_MAX (1 = original size; below 1 the cover shrinks in place). Keep an enlarged cover covering its own unscaled box: |offset| <= (scale - 1) * size / 2.
  * @param {CoverZoomState} state @param {number} width @param {number} height @returns {CoverZoomState}
  */
 export function clampCoverZoom(state, width, height) {
   const scale = clamp(Number.isFinite(state.scale) ? state.scale : 1, COVER_ZOOM_MIN, COVER_ZOOM_MAX);
-  if (scale <= COVER_ZOOM_MIN) return { scale: COVER_ZOOM_MIN, x: 0, y: 0 };
+  if (scale <= COVER_ZOOM_REST) return { scale, x: 0, y: 0 };
   const maxX = ((scale - 1) * Math.max(0, width)) / 2;
   const maxY = ((scale - 1) * Math.max(0, height)) / 2;
   return { scale, x: clamp(state.x, -maxX, maxX), y: clamp(state.y, -maxY, maxY) };
@@ -58,7 +59,7 @@ export function pointerDistance(a, b) {
 
 /** CSS transform for the cover (transform-origin: center). @param {CoverZoomState} state */
 export function coverZoomTransform(state) {
-  if (state.scale <= COVER_ZOOM_MIN) return '';
+  if (state.scale === COVER_ZOOM_REST) return '';
   return `translate(${state.x.toFixed(2)}px, ${state.y.toFixed(2)}px) scale(${state.scale.toFixed(4)})`;
 }
 
@@ -74,7 +75,7 @@ export function isDoubleTap(previous, next) {
 /**
  * use:coverZoom={{ enabled, onZoom }} on the cover element, which is the element that gets transformed. Mouse: wheel
  * over the cover zooms at the cursor, drag pans while zoomed. Touch/pen: pinch zooms, one finger pans while zoomed.
- * Double click / double tap resets. `onZoom` receives the current scale (1 = not zoomed).
+ * Double click / double tap restores the original size. `onZoom` receives the current scale (1 = not zoomed).
  * @param {HTMLElement} node
  * @param {{ enabled?: boolean, onZoom?: (scale: number) => void }} params
  */
@@ -103,7 +104,7 @@ export function coverZoom(node, params) {
     state = next;
     node.style.transition = animate && !reduced() ? 'transform 160ms ease' : 'none';
     node.style.transform = coverZoomTransform(state);
-    node.classList.toggle('is-cover-zoomed', state.scale > COVER_ZOOM_MIN);
+    node.classList.toggle('is-cover-zoomed', state.scale !== COVER_ZOOM_REST);
     options.onZoom?.(state.scale);
   }
 
@@ -121,7 +122,7 @@ export function coverZoom(node, params) {
   }
 
   function reset() {
-    if (state.scale > COVER_ZOOM_MIN) apply({ ...COVER_ZOOM_IDENTITY }, true);
+    if (state.scale !== COVER_ZOOM_REST) apply({ ...COVER_ZOOM_IDENTITY }, true);
   }
 
   /** @param {WheelEvent} event */
@@ -146,7 +147,7 @@ export function coverZoom(node, params) {
       for (const id of pointers.keys()) {
         try { node.setPointerCapture(id); } catch { /* gone */ }
       }
-    } else if (pointers.size === 1 && state.scale > COVER_ZOOM_MIN) {
+    } else if (pointers.size === 1 && state.scale > COVER_ZOOM_REST) {
       pan = { x: event.clientX, y: event.clientY, ox: state.x, oy: state.y, moved: false };
       try { node.setPointerCapture(event.pointerId); } catch { /* gone */ }
     }
@@ -183,7 +184,7 @@ export function coverZoom(node, params) {
     pointers.delete(event.pointerId);
     if (pointers.size < 2) pinch = null;
     if (pointers.size === 0) pan = null;
-    else if (pointers.size === 1 && state.scale > COVER_ZOOM_MIN) {
+    else if (pointers.size === 1 && state.scale > COVER_ZOOM_REST) {
       const [rest] = [...pointers.values()];
       pan = { x: rest.x, y: rest.y, ox: state.x, oy: state.y, moved: true };
     }

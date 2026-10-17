@@ -576,7 +576,7 @@
   let coverStageElement = $state<HTMLDivElement | null>(null);
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   let coverZoomScale = $state(1);
-  let isCoverZoomed = $derived(coverZoomScale > 1);
+  let isCoverZoomed = $derived(coverZoomScale !== 1);
   let sources = $state<LibrarySource[]>([]);
   let excludedFolders = $state<ExcludedFolder[]>([]);
   let sourceError = $state<string | null>(null);

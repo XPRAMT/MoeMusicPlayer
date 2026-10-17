@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   COVER_ZOOM_MAX,
+  COVER_ZOOM_MIN,
   clampCoverZoom,
   coverZoomTransform,
   getWheelZoomFactor,
@@ -11,8 +12,9 @@ import {
 
 const identity = { scale: 1, x: 0, y: 0 };
 
-test('zoom is clamped to 1..max and scale 1 always recentres', () => {
-  assert.deepEqual(zoomCoverAt(identity, 0.2, 50, 50, 800, 600), identity);
+test('zoom is clamped to min..max and scale 1 or below always recentres', () => {
+  assert.deepEqual(zoomCoverAt(identity, 0.1, 50, 50, 800, 600), { scale: COVER_ZOOM_MIN, x: 0, y: 0 });
+  assert.deepEqual(zoomCoverAt(identity, 0.7, 50, 50, 800, 600), { scale: 0.7, x: 0, y: 0 });
   assert.equal(zoomCoverAt(identity, 99, 0, 0, 800, 600).scale, COVER_ZOOM_MAX);
   assert.deepEqual(clampCoverZoom({ scale: 1, x: 40, y: -9 }, 800, 600), identity);
 });
@@ -37,6 +39,7 @@ test('wheel up zooms in, wheel down zooms out, line mode is stronger', () => {
 
 test('identity renders no transform; zoomed renders translate and scale', () => {
   assert.equal(coverZoomTransform(identity), '');
+  assert.match(coverZoomTransform({ scale: 0.5, x: 0, y: 0 }), /scale\(0\.5000\)/);
   assert.match(coverZoomTransform({ scale: 2, x: 10, y: -5 }), /translate\(10\.00px, -5\.00px\) scale\(2\.0000\)/);
 });
 
