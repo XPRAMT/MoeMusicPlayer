@@ -4767,7 +4767,9 @@ input:focus-visible {
     row-gap: 0;
     font-size: var(--font-caption);
   }
-  .app-shell.has-now-playing-backdrop .player-dock { padding-right: 8px; padding-left: 8px; }
+  /* Keep --dock-pad-x in sync with the padding: the edge timeline bleeds by -1 * --dock-pad-x, so a
+     stale 16px made the track 16px wider than the window (thumb jumped on open/close). */
+  .app-shell.has-now-playing-backdrop .player-dock { --dock-pad-x: 8px; padding-right: var(--dock-pad-x); padding-left: var(--dock-pad-x); }
   .app-shell.has-now-playing-backdrop .dock-track { gap: 4px; }
   .dock-track-title-link { font-size: var(--font-body); }
   .dock-track-artist-link { font-size: var(--font-caption); }

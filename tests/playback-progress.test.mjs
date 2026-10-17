@@ -86,3 +86,10 @@ test('progress slider publishes playhead percent for the edge glow gradient', ()
   assert.match(css, /\.progress-hit::after[\s\S]*?transform:\s*translateY\(-50%\)/);
 });
 
+
+test('narrow open dock keeps --dock-pad-x equal to its padding so the edge timeline never overflows the window', () => {
+  const css = readFileSync(path.join(root, 'src/app.css'), 'utf8');
+  assert.match(css, /\.player-dock\[data-timeline-style="edge"\] \.progress-row \{[^}]*left: calc\(-1 \* var\(--dock-pad-x\)\)/);
+  assert.match(css, /\.app-shell\.has-now-playing-backdrop \.player-dock \{ --dock-pad-x: 8px; padding-right: var\(--dock-pad-x\); padding-left: var\(--dock-pad-x\); \}/);
+  assert.doesNotMatch(css, /\.app-shell\.has-now-playing-backdrop \.player-dock \{ padding-right: 8px; padding-left: 8px; \}/);
+});
