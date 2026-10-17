@@ -92,6 +92,7 @@ export function coverZoom(node, params) {
   /** @type {{ x: number, y: number, t: number } | null} */
   let lastTap = null;
   let suppressClick = false;
+  let dispatchingCancel = false;
   const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const active = () => options.enabled !== false;
 
@@ -143,7 +144,10 @@ export function coverZoom(node, params) {
       lastTap = null;
       // Let the swipe-to-skip gesture on the same element drop the first finger (it ignores pointercancel dismissals).
       const [firstId] = [...pointers.keys()];
+      // Our own up() listens for pointercancel too, so mark this one as synthetic and ignore it there.
+      dispatchingCancel = true;
       try { node.dispatchEvent(new PointerEvent('pointercancel', { pointerId: firstId, bubbles: true })); } catch { /* unsupported */ }
+      dispatchingCancel = false;
       for (const id of pointers.keys()) {
         try { node.setPointerCapture(id); } catch { /* gone */ }
       }
@@ -178,7 +182,7 @@ export function coverZoom(node, params) {
 
   /** @param {PointerEvent} event */
   function up(event) {
-    if (!pointers.has(event.pointerId)) return;
+    if (dispatchingCancel || !pointers.has(event.pointerId)) return;
     const wasPinching = pinch !== null;
     const moved = pan?.moved === true;
     pointers.delete(event.pointerId);

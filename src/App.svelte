@@ -147,7 +147,7 @@
   import type { AndroidAllFilesAccessStatus, AndroidWallpaperBackdropStatus } from './lib/ipc';
   import { formatSlideshowFolderLabel } from './lib/background-source-label.js';
   import { swipeDismiss } from './lib/swipe-dismiss.js';
-  import { coverZoom } from './lib/cover-zoom.js';
+  import { coverZoom, COVER_ZOOM_MIN } from './lib/cover-zoom.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import SyncErrorDetails from './lib/SyncErrorDetails.svelte';
@@ -577,6 +577,8 @@
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   let coverZoomScale = $state(1);
   let isCoverZoomed = $derived(coverZoomScale !== 1);
+  // 1 at original size or larger, fading to 0 as the cover shrinks to the minimum: the artwork pane's fr share.
+  let coverShrinkShare = $derived(Math.min(1, Math.max(0, (coverZoomScale - COVER_ZOOM_MIN) / (1 - COVER_ZOOM_MIN))));
   let sources = $state<LibrarySource[]>([]);
   let excludedFolders = $state<ExcludedFolder[]>([]);
   let sourceError = $state<string | null>(null);
@@ -4510,7 +4512,10 @@
         <div class="now-playing-overlay-content">
           <section class="now-playing-view" aria-label="正在播放" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}
             style:--np-cover-width={coverFrame ? `${coverFrame.width}px` : undefined}
-            style:--np-cover-zoom={coverZoomScale}>
+            style:--np-cover-zoom={coverZoomScale}
+            style:--np-art-col-a={`${(1.05 * coverShrinkShare).toFixed(4)}fr`}
+            style:--np-art-col-b={`${(0.95 * coverShrinkShare).toFixed(4)}fr`}
+            style:--np-art-row={`${(1.18 * coverShrinkShare).toFixed(4)}fr`}>
             <NowPlayingArrangement layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved} artworkVisible={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
               {#snippet artwork()}
                 <div
