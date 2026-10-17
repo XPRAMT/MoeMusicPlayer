@@ -55,7 +55,8 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 | Ogg Vorbis / Opus | 可 | 封面為 METADATA_BLOCK_PICTURE |
 | WAV | 可（RIFF INFO＋ID3v2 chunk） | INFO 欄位少，建議寫 ID3 chunk |
 | APE | 可（APEv2） | |
-| DSF | **不支援** | lofty 無 DSF；DSF 尾端是 ID3v2，可自寫小解析器或先唯讀 |
+| DSF | **可讀寫（2026-10-17 起）** | lofty 無 DSF；改由 `player-dsd` 解析檔頭與檔尾 ID3v2（`id3` feature），寫入時重寫檔尾 ID3v2.4 並更新檔頭的檔案總大小與標籤指標，音訊資料逐位元組不變 |
+| DFF | 唯讀 | 尚無讀取器 |
 
 替代方案：`id3` crate、`metaflac`、`mp4ameta`。建議 MVP 只用 lofty；若驗證 ID3v2.4 寫入或特定 frame 有問題再針對 MP3 換 `id3`。
 
@@ -119,7 +120,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - D7 歌詞儲存位置：**已確認**——一律寫入內嵌歌詞，永不建立或儲存 `.lrc`；既有 `.lrc` 僅唯讀顯示。
 - D8 頻譜圖格式：Rust 產 PNG vs 傳原始資料到 canvas。建議 PNG（簡單、可快取、Android 也省事）。
 - D9 封面寫入：**已確認**——目前只處理一張封面，可匯出或取代。設定：JPG 品質可調；自動縮放開關，開啟時可設定短邊 px，一律保持長寬比。
-- D10 DSF：MVP 唯讀 vs 自寫 ID3 尾端寫入。建議 MVP 唯讀。
+- D10 DSF：MVP 唯讀 vs 自寫 ID3 尾端寫入。MVP 唯讀；**2026-10-17 修訂：DSF 改為可寫**（理由：ADR 0016 之後 DSF 可播放、可掃描，`player-dsd` 已能解析 DSF 並讀出檔尾 ID3v2；寫入沿用暫存檔 → 重讀驗證 → 改名取代流程，驗證包含音訊資訊與標題）。DFF 仍唯讀。
 - D11 頻譜圖分期：**已確認**——頻譜圖移到 Phase 1，且為第一個實作項目。
 
 ## Phase 1 實作現況（2026-10-16）

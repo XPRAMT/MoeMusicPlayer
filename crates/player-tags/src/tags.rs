@@ -10,7 +10,7 @@ use lofty::prelude::{ItemKey, TagExt};
 use lofty::tag::{Tag, TagType};
 use serde::{Deserialize, Serialize};
 
-use crate::cover::{prepare_cover, CoverOptions};
+use crate::cover::{prepare_cover, CoverOptions, PreparedCover};
 
 /// Common editable fields. Empty string means "absent".
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -310,12 +310,14 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
         properties: AudioProperties::default(),
         cover: None,
     };
+    if is_dsd(path) {
+        // DSF: properties from the header, tag from the trailing ID3v2; editable (ADR 0013 D10, revised).
+        fill_dsf_details(&mut details, path)?;
+        return Ok(details);
+    }
     if is_read_only_format(path) {
         details.read_only = true;
-        details.read_only_reason = Some("DSF/DFF 目前僅支援唯讀（ADR 0013 D10）".into());
-        if is_dsd(path) {
-            fill_dsf_details(&mut details, path)?;
-        }
+        details.read_only_reason = Some("DFF 目前僅支援唯讀（ADR 0013 D10）".into());
         return Ok(details);
     }
     let file = lofty::read_from_path(path).map_err(|e| format!("讀取標籤失敗：{e}"))?;
@@ -376,7 +378,7 @@ fn temp_path_for(path: &Path) -> PathBuf {
 /// updated normally. On failure the original is untouched.
 pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
     if is_read_only_format(path) {
-        return Err("DSF/DFF 目前僅支援唯讀".into());
+        return Err("DFF 目前僅支援唯讀".into());
     }
     let cover = match &edit.replace_cover {
         Some(bytes) => Some(prepare_cover(bytes, edit.cover_options)?),
@@ -384,6 +386,9 @@ pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
     };
     let temp = temp_path_for(path);
     let result = (|| {
+        if is_dsd(path) {
+            return write_dsf_edit(path, &temp, edit, cover.as_ref());
+        }
         fs::copy(path, &temp).map_err(|e| format!("建立暫存檔失敗：{e}"))?;
         let mut file = lofty::read_from_path(&temp).map_err(|e| format!("讀取標籤失敗：{e}"))?;
         let tag_type = target_tag_type(&file);
@@ -391,37 +396,7 @@ pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
             file.insert_tag(Tag::new(tag_type));
         }
         let tag = file.tag_mut(tag_type).ok_or("無法建立標籤")?;
-        for (key, get, _) in FIELD_KEYS.iter() {
-            let key = &effective_key(*key, tag_type);
-            let desired = get(&edit.fields);
-            let current = tag.get_string(*key).unwrap_or("");
-            if desired == current {
-                continue;
-            }
-            if desired.is_empty() {
-                tag.remove_key(*key);
-            } else if !tag.insert_text(*key, desired.clone()) {
-                return Err(format!("此格式不支援欄位 {key:?}"));
-            }
-        }
-        if edit.remove_cover || cover.is_some() {
-            tag.remove_picture_type(PictureType::CoverFront);
-            // Single-cover model: drop an untyped "Other" cover too so the new one is used.
-            tag.remove_picture_type(PictureType::Other);
-        }
-        if let Some(cover) = &cover {
-            let mime = if cover.mime == "image/jpeg" {
-                MimeType::Jpeg
-            } else {
-                MimeType::Png
-            };
-            tag.push_picture(
-                Picture::unchecked(cover.data.clone())
-                    .pic_type(PictureType::CoverFront)
-                    .mime_type(mime)
-                    .build(),
-            );
-        }
+        apply_edit_to_tag(tag, tag_type, edit, cover.as_ref())?;
         // Default WriteOptions write ID3v2.4 (decision D3: always upgrade MP3 to v2.4).
         tag.save_to_path(&temp, WriteOptions::default())
             .map_err(|e| format!("寫入標籤失敗：{e}"))?;
@@ -435,6 +410,81 @@ pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
     }
     result?;
     read_details(path)
+}
+
+/// Apply the staged field and cover changes to a tag (shared by every format).
+fn apply_edit_to_tag(
+    tag: &mut Tag,
+    tag_type: TagType,
+    edit: &TagEdit,
+    cover: Option<&PreparedCover>,
+) -> Result<(), String> {
+    for (key, get, _) in FIELD_KEYS.iter() {
+        let key = &effective_key(*key, tag_type);
+        let desired = get(&edit.fields);
+        let current = tag.get_string(*key).unwrap_or("");
+        if desired == current {
+            continue;
+        }
+        if desired.is_empty() {
+            tag.remove_key(*key);
+        } else if !tag.insert_text(*key, desired.clone()) {
+            return Err(format!("此格式不支援欄位 {key:?}"));
+        }
+    }
+    if edit.remove_cover || cover.is_some() {
+        tag.remove_picture_type(PictureType::CoverFront);
+        // Single-cover model: drop an untyped "Other" cover too so the new one is used.
+        tag.remove_picture_type(PictureType::Other);
+    }
+    if let Some(cover) = cover {
+        let mime = if cover.mime == "image/jpeg" {
+            MimeType::Jpeg
+        } else {
+            MimeType::Png
+        };
+        tag.push_picture(
+            Picture::unchecked(cover.data.clone())
+                .pic_type(PictureType::CoverFront)
+                .mime_type(mime)
+                .build(),
+        );
+    }
+    Ok(())
+}
+
+/// DSF: rewrite the file with its trailing ID3v2.4 tag replaced (audio untouched, header pointers fixed), verify
+/// the result, then replace the original.
+fn write_dsf_edit(
+    path: &Path,
+    temp: &Path,
+    edit: &TagEdit,
+    cover: Option<&PreparedCover>,
+) -> Result<(), String> {
+    let (_, existing) =
+        player_dsd::id3::read_dsf(path).map_err(|e| format!("讀取標籤失敗：{e}"))?;
+    let mut tag = existing.unwrap_or_else(|| Tag::new(TagType::Id3v2));
+    apply_edit_to_tag(&mut tag, TagType::Id3v2, edit, cover)?;
+    player_dsd::id3::rewrite_dsf_with_tag(path, temp, &tag)
+        .map_err(|e| format!("寫入標籤失敗：{e}"))?;
+    // Verify: the new file parses and carries the title we wrote, and the stream is as long as before.
+    let before = player_dsd::id3::read_dsf(path)
+        .map_err(|e| format!("讀取標籤失敗：{e}"))?
+        .0;
+    let (after, written) =
+        player_dsd::id3::read_dsf(temp).map_err(|e| format!("寫入後驗證失敗：{e}"))?;
+    if after != before {
+        return Err("寫入後驗證失敗：音訊資訊與原檔不一致".into());
+    }
+    let wrote_title = written
+        .as_ref()
+        .and_then(|tag| tag.get_string(ItemKey::TrackTitle))
+        .unwrap_or("");
+    if wrote_title != edit.fields.title {
+        return Err("寫入後驗證失敗：標題與預期不符".into());
+    }
+    fs::rename(temp, path).map_err(|e| format!("取代原檔失敗（檔案可能被占用）：{e}"))?;
+    Ok(())
 }
 
 #[cfg(test)]

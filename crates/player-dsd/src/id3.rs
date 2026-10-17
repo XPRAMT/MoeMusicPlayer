@@ -5,16 +5,16 @@
 //! including embedded pictures.
 
 use std::fs::File;
-use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use lofty::config::ParseOptions;
+use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
 use lofty::file::TaggedFileExt;
 use lofty::mpeg::MpegFile;
-use lofty::tag::Tag;
+use lofty::tag::{Tag, TagExt};
 
-use crate::dsf::DsfReader;
+use crate::dsf::{DsfReader, DATA_HEADER_SIZE, DATA_OFFSET};
 use crate::stream::{DsdError, DsdInfo, DsdStream};
 
 /// Largest tag read from a file (cover art included).
@@ -70,6 +70,49 @@ pub fn read_dsf_from<R: Read + Seek + Send>(
     reader.read_exact(&mut bytes)?;
     // A damaged tag must not hide a playable file.
     Ok((info, parse_id3v2_bytes(&bytes).unwrap_or(None)))
+}
+
+/// Write `destination` as a copy of the DSF at `source` whose trailing ID3v2 tag is replaced by `tag` (written as
+/// ID3v2.4). The audio data is copied byte for byte; the header's total-file-size and metadata-pointer fields are
+/// updated. An empty `tag` removes the tag (pointer 0). `destination` must not be `source`.
+pub fn rewrite_dsf_with_tag(source: &Path, destination: &Path, tag: &Tag) -> Result<(), DsdError> {
+    // Validate with the regular reader first (also rejects truncated or malformed files).
+    DsfReader::open(BufReader::new(File::open(source)?))?;
+    let mut input = File::open(source)?;
+    let file_length = input.seek(SeekFrom::End(0))?;
+    let mut header = [0_u8; DATA_OFFSET as usize];
+    input.seek(SeekFrom::Start(0))?;
+    input.read_exact(&mut header)?;
+    let data_chunk_size = u64::from_le_bytes(header[84..92].try_into().expect("8 bytes"));
+    // The audio (everything up to the end of the data chunk) is kept; the old tag and anything after it is dropped.
+    let audio_end = DATA_OFFSET - DATA_HEADER_SIZE + data_chunk_size;
+    if audio_end > file_length || audio_end < DATA_OFFSET {
+        return Err(DsdError::InvalidFormat("data 區塊超出檔案範圍".into()));
+    }
+
+    let mut tag_bytes = Vec::new();
+    if !tag.is_empty() {
+        tag.dump_to(&mut tag_bytes, WriteOptions::default())
+            .map_err(|error| DsdError::InvalidFormat(format!("無法產生 ID3v2 標籤：{error}")))?;
+    }
+    let total_length = audio_end + tag_bytes.len() as u64;
+    let pointer = if tag_bytes.is_empty() { 0 } else { audio_end };
+    header[12..20].copy_from_slice(&total_length.to_le_bytes());
+    header[20..28].copy_from_slice(&pointer.to_le_bytes());
+
+    let mut output = File::create(destination)?;
+    output.write_all(&header)?;
+    input.seek(SeekFrom::Start(DATA_OFFSET))?;
+    let copied = std::io::copy(
+        &mut Read::by_ref(&mut input).take(audio_end - DATA_OFFSET),
+        &mut output,
+    )?;
+    if copied != audio_end - DATA_OFFSET {
+        return Err(DsdError::Io("複製音訊資料時檔案提早結束".into()));
+    }
+    output.write_all(&tag_bytes)?;
+    output.sync_all()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -128,6 +171,121 @@ mod tests {
         let tag = tag.expect("tag");
         assert_eq!(tag.title().as_deref(), Some("DSD 曲名"));
         assert_eq!(tag.artist().as_deref(), Some("DSD 演出者"));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    fn temp_dir(label: &str) -> std::path::PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("moe-dsd-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    fn read_all_bytes(path: &Path) -> Vec<Vec<u8>> {
+        let mut reader = DsfReader::open(BufReader::new(File::open(path).unwrap())).unwrap();
+        let channels = usize::from(reader.info().channels);
+        let mut all = vec![Vec::new(); channels];
+        let mut buffers = vec![Vec::new(); channels];
+        while reader.read(4096, &mut buffers).unwrap() > 0 {
+            for (target, buffer) in all.iter_mut().zip(&buffers) {
+                target.extend_from_slice(buffer);
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn rewriting_replaces_the_tag_keeps_the_audio_and_fixes_the_header() {
+        let directory = temp_dir("rewrite");
+        let source = directory.join("in.dsf");
+        let payload: Vec<u8> = (0..10_000_u32)
+            .map(|value| (value * 31 % 251) as u8)
+            .collect();
+        let mut file =
+            crate::testing::build_dsf(2_822_400, 80_000, 4096, true, &[payload.clone(), payload]);
+        let old_tag_offset = file.len() as u64;
+        file[20..28].copy_from_slice(&old_tag_offset.to_le_bytes());
+        file.extend_from_slice(&id3_bytes("舊曲名", "舊演出者"));
+        std::fs::write(&source, &file).unwrap();
+
+        let (_, tag) = read_dsf(&source).unwrap();
+        let mut tag = tag.expect("tag");
+        tag.set_title("新曲名".to_owned());
+        tag.set_artist("新演出者".to_owned());
+        tag.insert_text(ItemKey::Lyrics, "[00:01.00]歌詞".to_owned());
+        let destination = directory.join("out.dsf");
+        rewrite_dsf_with_tag(&source, &destination, &tag).unwrap();
+
+        let (info, edited) = read_dsf(&destination).unwrap();
+        assert_eq!(info.samples_per_channel, 80_000);
+        let edited = edited.expect("tag after rewrite");
+        assert_eq!(edited.title().as_deref(), Some("新曲名"));
+        assert_eq!(edited.artist().as_deref(), Some("新演出者"));
+        assert_eq!(edited.album().as_deref(), Some("專輯"));
+        assert_eq!(read_all_bytes(&source), read_all_bytes(&destination));
+        let bytes = std::fs::read(&destination).unwrap();
+        assert_eq!(
+            u64::from_le_bytes(bytes[12..20].try_into().unwrap()),
+            bytes.len() as u64
+        );
+        assert_eq!(
+            u64::from_le_bytes(bytes[20..28].try_into().unwrap()),
+            old_tag_offset
+        );
+        // Rewriting again (the tag grows or shrinks) still produces a valid file.
+        let third = directory.join("third.dsf");
+        let mut shorter = edited.clone();
+        shorter.remove_key(ItemKey::Lyrics);
+        shorter.set_title("短".to_owned());
+        rewrite_dsf_with_tag(&destination, &third, &shorter).unwrap();
+        assert_eq!(
+            read_dsf(&third).unwrap().1.unwrap().title().as_deref(),
+            Some("短")
+        );
+        assert_eq!(read_all_bytes(&source), read_all_bytes(&third));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn rewriting_with_an_empty_tag_removes_it() {
+        let directory = temp_dir("remove-tag");
+        let source = directory.join("in.dsf");
+        let mut file = crate::testing::build_dsf(2_822_400, 8_000, 4096, true, &[vec![0x69; 1000]]);
+        let old_tag_offset = file.len() as u64;
+        file[20..28].copy_from_slice(&old_tag_offset.to_le_bytes());
+        file.extend_from_slice(&id3_bytes("x", "y"));
+        std::fs::write(&source, &file).unwrap();
+        let destination = directory.join("out.dsf");
+        rewrite_dsf_with_tag(&source, &destination, &Tag::new(TagType::Id3v2)).unwrap();
+        let bytes = std::fs::read(&destination).unwrap();
+        assert_eq!(bytes.len() as u64, old_tag_offset);
+        assert_eq!(u64::from_le_bytes(bytes[20..28].try_into().unwrap()), 0);
+        assert!(read_dsf(&destination).unwrap().1.is_none());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn adding_a_tag_to_an_untagged_dsf_works() {
+        let directory = temp_dir("add-tag");
+        let source = directory.join("in.dsf");
+        std::fs::write(
+            &source,
+            crate::testing::build_dsf(2_822_400, 8_000, 4096, true, &[vec![0x69; 1000]]),
+        )
+        .unwrap();
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.set_title("新增".to_owned());
+        let destination = directory.join("out.dsf");
+        rewrite_dsf_with_tag(&source, &destination, &tag).unwrap();
+        assert_eq!(
+            read_dsf(&destination)
+                .unwrap()
+                .1
+                .unwrap()
+                .title()
+                .as_deref(),
+            Some("新增")
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 
