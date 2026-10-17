@@ -9648,6 +9648,11 @@ pub(crate) fn apply_downloaded_update(
         .playback
         .as_ref()
         .is_some_and(|playback| playback.player.snapshot().state == AudioPlaybackState::Playing);
+    if was_playing {
+        if let Some(path) = state.database_path.as_deref() {
+            write_resume_playback_marker(path);
+        }
+    }
     let result = database_lifecycle::finish_update_shutdown(
         &state.shutdown,
         &state.database_work,
@@ -9706,6 +9711,9 @@ pub(crate) fn apply_downloaded_update(
     });
     if let Err(error) = result {
         database_lifecycle::abort_update_shutdown(&state.shutdown, &state.database_work);
+        if let Some(path) = state.database_path.as_deref() {
+            take_resume_playback_marker(path);
+        }
         if was_playing {
             if let Some(playback) = state.playback.as_ref() {
                 let _ = playback.player.request_play();
@@ -9741,6 +9749,11 @@ fn schedule_database_shutdown(app: AppHandle, request: database_lifecycle::Shutd
                 if let (Some(database), Some(playback)) =
                     (state.database.as_ref(), state.playback.as_ref())
                 {
+                    if playback.player.snapshot().state == AudioPlaybackState::Playing {
+                        if let Some(path) = state.database_path.as_deref() {
+                            write_resume_playback_marker(path);
+                        }
+                    }
                     if let Err(error) = checkpoint_playback_position(database, playback, true) {
                         eprintln!("無法在關閉時保存播放狀態：{error}");
                     }
@@ -9790,6 +9803,47 @@ fn schedule_database_shutdown(app: AppHandle, request: database_lifecycle::Shutd
             app.exit(0);
         }
     });
+}
+
+/// Marker next to the database: present only when the previous run ended (normal close or update restart)
+/// while audio was playing. It is consumed on the next launch to resume playback.
+#[cfg(target_os = "windows")]
+const RESUME_PLAYBACK_MARKER: &str = "resume-playback.flag";
+
+#[cfg(target_os = "windows")]
+fn resume_playback_marker_path(database_path: &std::path::Path) -> std::path::PathBuf {
+    database_path.with_file_name(RESUME_PLAYBACK_MARKER)
+}
+
+#[cfg(target_os = "windows")]
+fn write_resume_playback_marker(database_path: &std::path::Path) {
+    if let Err(error) = std::fs::write(resume_playback_marker_path(database_path), b"1") {
+        eprintln!("無法記錄關閉時的播放狀態：{error}");
+    }
+}
+
+/// Remove the marker and report whether it existed.
+#[cfg(target_os = "windows")]
+fn take_resume_playback_marker(database_path: &std::path::Path) -> bool {
+    std::fs::remove_file(resume_playback_marker_path(database_path)).is_ok()
+}
+
+/// Resume playback of the restored session when the last run ended while playing.
+#[cfg(target_os = "windows")]
+fn resume_playback_if_marked(database_path: &std::path::Path, service: &WindowsPlaybackService) {
+    if !take_resume_playback_marker(database_path) {
+        return;
+    }
+    if service.snapshot().state != "ready" {
+        return;
+    }
+    if let Err(error) = service
+        .player
+        .request_play()
+        .and_then(|ticket| ticket.wait(Duration::from_secs(2)))
+    {
+        eprintln!("無法接續上次的播放：{}", playback_audio_error_message(&error));
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -10374,6 +10428,8 @@ pub fn run() {
                                 .unwrap_or_else(std::sync::PoisonError::into_inner) =
                                 Some(error.clone());
                             eprintln!("無法完整還原播放狀態，已保留檢查點：{error}");
+                        } else {
+                            resume_playback_if_marked(&database_path, &service);
                         }
                         if let Err(error) = service.start_statistics_collector(&database_path) {
                             *service
@@ -12780,5 +12836,23 @@ mod windows_library_integration_tests {
             );
             thread::sleep(Duration::from_millis(5));
         }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod resume_marker_tests {
+    use super::*;
+
+    #[test]
+    fn marker_is_consumed_once() {
+        let dir = std::env::temp_dir().join(format!("moe-resume-marker-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let database_path = dir.join("moemusicplayer.sqlite3");
+        assert!(!take_resume_playback_marker(&database_path));
+        write_resume_playback_marker(&database_path);
+        assert!(resume_playback_marker_path(&database_path).exists());
+        assert!(take_resume_playback_marker(&database_path));
+        assert!(!take_resume_playback_marker(&database_path));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
