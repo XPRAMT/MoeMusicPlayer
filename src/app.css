@@ -2178,9 +2178,13 @@ input:focus-visible {
   container-type: inline-size;
 }
 
-.cover-stage.is-cover-zoomed {
+.now-playing-view .cover-stage.is-cover-zoomed {
   position: relative;
   z-index: 1;
+  /* The pane is resized by the zoom; max-width/height: 100% would clamp one side and crop the cover. */
+  max-width: none;
+  max-height: none;
+  flex: none;
   will-change: transform;
 }
 
