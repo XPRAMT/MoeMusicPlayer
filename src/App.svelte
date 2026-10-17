@@ -576,6 +576,8 @@
   let coverStageElement = $state<HTMLDivElement | null>(null);
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   let coverZoomScale = $state(1);
+  // Last zoom state; restored onto the cover element when it is re-created (track change).
+  let coverZoomSaved = $state.raw<{ scale: number; x: number; y: number }>({ scale: 1, x: 0, y: 0 });
   let coverBaseAvailable: { width: number; height: number } | null = null;
   // 1 at original size or larger, fading to 0 as the cover shrinks to the minimum: the artwork pane's fr share.
   let coverShrinkShare = $derived(Math.min(1, Math.max(0, (coverZoomScale - COVER_ZOOM_MIN) / (1 - COVER_ZOOM_MIN))));
@@ -4533,7 +4535,7 @@
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
-                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: (scale) => { coverZoomScale = scale; } }}
+                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: (zoom) => { coverZoomSaved = { ...zoom }; coverZoomScale = zoom.scale; }, initial: coverZoomSaved }}
                   use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() } }}
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}

@@ -73,11 +73,13 @@ export function isDoubleTap(previous, next) {
 }
 
 /**
- * use:coverZoom={{ enabled, onZoom }} on the cover element, which is the element that gets transformed. Mouse: wheel
+ * use:coverZoom={{ enabled, onZoom, initial }} on the cover element, which is the element that gets transformed. Mouse: wheel
  * over the cover zooms at the cursor, drag pans while zoomed. Touch/pen: pinch zooms, one finger pans while zoomed.
- * Double click / double tap restores the original size. `onZoom` receives the current scale (1 = not zoomed).
+ * Double click / double tap restores the original size. `onZoom` receives the current state
+ * ({ scale, x, y }; scale 1 = not zoomed). The cover element is re-created on track changes (the artwork pane is removed
+ * while the next cover loads), so the owner keeps the last state and passes it back as `initial` to restore it.
  * @param {HTMLElement} node
- * @param {{ enabled?: boolean, onZoom?: (scale: number) => void }} params
+ * @param {{ enabled?: boolean, onZoom?: (state: CoverZoomState) => void, initial?: CoverZoomState }} params
  */
 export function coverZoom(node, params) {
   let options = params;
@@ -109,7 +111,7 @@ export function coverZoom(node, params) {
     // (track change), which would drop a class added from here.
     if (state.scale !== COVER_ZOOM_REST) node.dataset.coverZoomed = '';
     else delete node.dataset.coverZoomed;
-    options.onZoom?.(state.scale);
+    options.onZoom?.(state);
   }
 
   /** Anchor relative to the cover's visual centre. @param {number} clientX @param {number} clientY */
@@ -255,6 +257,8 @@ export function coverZoom(node, params) {
     event.preventDefault();
     event.stopPropagation();
   }
+
+  if (options.initial && options.initial.scale !== COVER_ZOOM_REST) apply({ ...options.initial }, false);
 
   node.addEventListener('wheel', wheel, { passive: false });
   node.addEventListener('pointerdown', down);
