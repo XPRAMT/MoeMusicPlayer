@@ -164,6 +164,27 @@ export function copyToArrayBuffer(bytes) {
   return buffer;
 }
 
+/**
+ * True when both cover lists show the same images in the same order, compared by SHA-256 of the image
+ * bytes (blob/data URLs differ even for identical content). Any read failure counts as "different".
+ * @param {string[]} current @param {string[]} next
+ * @param {(url: string) => Promise<ArrayBuffer>} [readBytes]
+ */
+export async function albumCoverSourcesHaveSameContent(current, next, readBytes = async (url) => (await fetch(url)).arrayBuffer()) {
+  if (current.length === 0 || current.length !== next.length) return false;
+  try {
+    for (let index = 0; index < current.length; index += 1) {
+      if (current[index] === next[index]) continue;
+      const [left, right] = await Promise.all([readBytes(current[index]), readBytes(next[index])]);
+      if (left.byteLength !== right.byteLength) return false;
+      if (await sha256Hex(left) !== await sha256Hex(right)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** @param {ArrayBuffer} bytes @returns {Promise<string>} */
 export async function sha256Hex(bytes) {
   const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);

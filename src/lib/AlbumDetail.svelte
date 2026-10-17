@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type QuickIndexSnapshot, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
-  import { advanceAlbumArtworkSelectionRevision, copyToArrayBuffer, createAlbumThumbnail, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
+  import { advanceAlbumArtworkSelectionRevision, albumCoverSourcesHaveSameContent, copyToArrayBuffer, createAlbumThumbnail, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import { detectArtworkMimeType } from './active-track-artwork';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
@@ -199,6 +199,13 @@
         if (current !== revision) return;
         selectedIds = selection?.trackIds.slice(0, 4) ?? [];
         urls = await loadThumbnails(selectedIds, current);
+      }
+      // The scan picked exactly what is already on screen (same image bytes): keep the current sources,
+      // so there is no src swap/reload and no selection-revision bump that would refresh caches.
+      if (current === revision && !coverScanResolved
+        && await albumCoverSourcesHaveSameContent(initialCoverSources, urls)) {
+        urls.forEach((url) => URL.revokeObjectURL(url));
+        return;
       }
       if (current === revision) {
         for (const url of ownedCoverUrls) URL.revokeObjectURL(url);

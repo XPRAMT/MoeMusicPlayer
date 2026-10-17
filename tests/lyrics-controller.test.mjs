@@ -146,9 +146,9 @@ test('variable row geometry adds only nonempty enabled auxiliary lines', () => {
     { text: '  ', translation: '', romanization: null },
   ];
   const layout = buildLyricsLayout(rows, base, 24);
-  const primary = base.primaryFontSizePx * 1.35 + 14;
-  const oneAux = primary + 2 + base.auxiliaryFontSizePx * 1.25;
-  const twoAux = primary + 4 + 2 * base.auxiliaryFontSizePx * 1.25;
+  const primary = base.primaryFontSizePx * 1.2 + 16;
+  const oneAux = primary + 2 + base.auxiliaryFontSizePx * 1.2;
+  const twoAux = primary + 4 + 2 * base.auxiliaryFontSizePx * 1.2;
 
   assert.equal(layout.heights[0], primary);
   assert.equal(layout.heights[1], primary);

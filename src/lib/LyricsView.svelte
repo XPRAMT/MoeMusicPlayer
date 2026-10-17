@@ -819,6 +819,14 @@
     flex: 0 0 auto;
   }
 
+  /* Shadow geometry shared by text-shadow/filter and row padding: each row's vertical padding equals the
+     glow blur radius, so at line spacing 0 neighbouring glows meet exactly; the spacing setting adds on top.
+     Keep LYRICS_ROW_VERTICAL_PADDING_PX (lyrics-window.js) = 2 x --lyric-glow-blur. */
+  .lyrics-view {
+    --lyric-shadow-blur: 3px;
+    --lyric-glow-blur: 8px;
+  }
+
   .lyric-line {
     display: flex;
     box-sizing: border-box;
@@ -828,8 +836,9 @@
     flex-direction: column;
     justify-content: center;
     gap: 2px;
-    overflow: hidden;
-    padding: 7px 9px;
+    /* Visible so the glow is never hard-cut at the row edge (the viewport still clips/masks). */
+    overflow: visible;
+    padding: var(--lyric-glow-blur) 9px;
     margin-bottom: var(--lyric-gap-after, 0px);
     border-bottom: 0;
     color: var(--muted);
@@ -850,12 +859,21 @@
   }
 
 
-  .lyrics-view[data-text-effect='shadow'] .lyric-primary,
   .lyrics-view[data-text-effect='shadow'] .lyric-translation,
   .lyrics-view[data-text-effect='shadow'] .lyric-romanization {
     text-shadow:
-      0 1px 3px rgba(var(--text-inverse-rgb), 0.82),
-      0 0 8px rgba(var(--text-inverse-rgb), 0.38);
+      0 0 var(--lyric-shadow-blur) rgba(var(--text-inverse-rgb), 0.82),
+      0 0 var(--lyric-glow-blur) rgba(var(--text-inverse-rgb), 0.38);
+  }
+
+  /* The primary line must clip (2-line clamp; later lines are still painted), and a text-shadow would be
+     clipped with it. A filter is applied after the element's own overflow clip, so the same shadow drawn
+     as drop-shadow fades out naturally past the clamped box. */
+  .lyrics-view[data-text-effect='shadow'] .lyric-primary {
+    text-shadow: none;
+    filter:
+      drop-shadow(0 0 var(--lyric-shadow-blur) rgba(var(--text-inverse-rgb), 0.82))
+      drop-shadow(0 0 var(--lyric-glow-blur) rgba(var(--text-inverse-rgb), 0.38));
   }
 
   .lyrics-view[data-text-effect='stroke'] .lyric-primary,
@@ -877,14 +895,15 @@
     display: -webkit-box;
     box-sizing: border-box;
     min-width: 0;
-    max-height: calc(var(--lyric-primary-font-size, 14px) * 1.35 * 2);
+    max-height: calc(var(--lyric-primary-font-size, 14px) * 1.2 * 2);
     flex: 0 1 auto;
     margin: 0;
     overflow: hidden;
     color: inherit;
     font-size: var(--lyric-primary-font-size, 14px);
     font-weight: 550;
-    line-height: 1.35;
+    /* Tight line box (no extra leading slack); vertical room comes from the glow padding. */
+    line-height: 1.2;
     line-clamp: 2;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -905,7 +924,7 @@
     overflow: visible;
     color: var(--muted);
     font-size: var(--lyric-auxiliary-font-size, 10px);
-    line-height: 1.25;
+    line-height: 1.2;
     white-space: normal;
     overflow-wrap: anywhere;
     word-break: break-word;
