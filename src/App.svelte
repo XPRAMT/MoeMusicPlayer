@@ -1,6 +1,10 @@
 <script lang="ts">
   import { LANGUAGE_CHOICES, getLanguageChoice, tr } from './lib/i18n.js';
   import { displayUnknown } from './lib/unknown-label.js';
+  import { createLyricsController } from './lib/lyrics-controller.js';
+  import { defaultLyricsApi } from './lib/lyrics-api';
+  import { convertTrackLyrics } from './lib/lyrics-traditional.js';
+  import { buildTaskbarLyricsData, type TaskbarLyricsData } from './lib/taskbar-lyrics-data.js';
   import { adoptSavedLanguage, changeLanguage, followLanguageChange } from './lib/language-sync.js';
   import { onDestroy, onMount, setContext, tick, untrack } from 'svelte';
   import { writable } from 'svelte/store';
@@ -34,7 +38,7 @@
     IconVolume2,
     IconX,
   } from '@tabler/icons-svelte-runes';
-  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { isTauri } from '@tauri-apps/api/core';
   import {
     getErrorText,
@@ -701,6 +705,18 @@
     },
     afterChange: () => tick(),
   });
+
+  // The lyrics of the current track are loaded here, once, for everything that shows them: the Now Playing page
+  // (LyricsView shows this state) and the taskbar lyrics window (it is sent the same lyrics). Two loaders used to
+  // search separately and disagreed after a manual choice, a removal or a preference change.
+  const lyricsController = createLyricsController({
+    api: defaultLyricsApi,
+    onChange(next) {
+      lyricsState = next;
+    },
+  });
+  let lyricsState = $state(lyricsController.getState());
+  let taskbarLyricsData = $state<TaskbarLyricsData | null>(null);
 
   const volumeCommandQueue = createVolumeCommandQueue({
     send: sendPlaybackVolumeCommand,
@@ -1563,6 +1579,55 @@
     }
   }
 
+  /** Lyrics are loaded while something shows them: the Now Playing page (once opened) or the taskbar lyrics. */
+  $effect(() => {
+    const wanted = isNowPlayingMounted || (capabilities?.platform === 'windows' && taskbarLyricsSettings.enabled);
+    const track = playback?.currentTrack ?? null;
+    const id = wanted && track ? track.id : null;
+    const title = track?.title ?? null;
+    const artist = track?.artist ?? null;
+    untrack(() => void lyricsController.setTrack(id, { title, artist }));
+  });
+
+  // The lyrics as the page shows them (Simplified-to-Traditional applied), reduced for the taskbar window.
+  $effect(() => {
+    const lyrics = lyricsState.lyrics;
+    const trackId = lyricsState.trackId;
+    const convert = lyricsPreferences.simplifiedToTraditional;
+    let cancelled = false;
+    void (async () => {
+      let shown = lyrics;
+      if (lyrics && convert) {
+        try {
+          shown = { ...lyrics, lines: (await convertTrackLyrics(lyrics)).lines };
+        } catch {
+          shown = lyrics;
+        }
+      }
+      if (!cancelled) taskbarLyricsData = buildTaskbarLyricsData(trackId, shown);
+    })();
+    return () => { cancelled = true; };
+  });
+
+  // Send them to the taskbar window whenever they change, and when the window opens and asks.
+  $effect(() => {
+    const data = taskbarLyricsData;
+    if (!isTauri() || !data || capabilities?.platform !== 'windows' || !taskbarLyricsSettings.enabled) return;
+    void emitTo('taskbar-lyrics', 'taskbar-lyrics-data', data).catch(() => {});
+  });
+
+  $effect(() => {
+    if (!isTauri() || capabilities?.platform !== 'windows') return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen('taskbar-lyrics-request', () => {
+      if (taskbarLyricsData) void emitTo('taskbar-lyrics', 'taskbar-lyrics-data', taskbarLyricsData).catch(() => {});
+    })
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
+  });
+
   /** Saving tags rewrote the file: rescan the library, then reload the playing track (summary, cover, lyrics). */
   async function reloadAfterTrackDetailsSaved(): Promise<void> {
     await syncLibrary();
@@ -1572,6 +1637,7 @@
       playbackError = getErrorText(error);
     }
     artworkController.reload();
+    void lyricsController.reload();
     void loadPlaybackSnapshot(false);
   }
 
@@ -4912,6 +4978,8 @@
                   onPreferencesChange={(patch) => updateLyricsPreferences(patch, true)}
                   onLyricsRemovedChange={(removed) => { nowPlayingLyricsRemoved = removed; }}
                   onStatusChange={(status) => { lyricsTopbarStatus = status; }}
+                  sharedController={lyricsController}
+                  sharedState={lyricsState}
                 />
               {/snippet}
             </NowPlayingArrangement>

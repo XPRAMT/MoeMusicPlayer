@@ -2,7 +2,7 @@
   import { tr } from './i18n.js';
   import { onDestroy, tick } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  import { invokeCommand } from './ipc';
+  import { defaultLyricsApi, type LyricsApi } from './lyrics-api';
   import type {
     LyricLine,
     LyricsCandidate,
@@ -46,15 +46,6 @@
     saveLyricsTimingOffsetSec,
   } from './lyrics-timing-offset.js';
 
-  type LyricsApi = {
-    getTrack: (args: { trackId: string }) => Promise<LyricsTrackResult>;
-    search: (args: { trackId: string; requestId: string; manual?: boolean; query?: string; queryAlternates?: string[] }) => Promise<LyricsTrackResult>;
-    selectCandidate: (args: { trackId: string; candidateId: string }) => Promise<TrackLyrics>;
-    cancelSearch: (args: { requestId: string }) => Promise<void>;
-    clearTrack: (args: { trackId: string }) => Promise<LyricsTrackResult>;
-    loadMore?: (args: { trackId: string }) => Promise<LyricsTrackResult>;
-  };
-
   type LyricsViewState = {
     trackId: string | null;
     phase: 'idle' | 'loading' | 'ready' | 'empty' | 'candidates' | 'searching' | 'error';
@@ -92,16 +83,11 @@
     onLyricsRemovedChange?: (removed: boolean) => void;
     onStatusChange?: (status: LyricsTopbarStatus | null) => void;
     api?: LyricsApi;
+    /** The app shell's lyrics controller and its state. When given, this view only shows them (the shell loads the
+     *  lyrics once for every consumer, for example the taskbar lyrics); alone it creates its own. */
+    sharedController?: ReturnType<typeof createLyricsController>;
+    sharedState?: LyricsViewState;
   }
-
-  const defaultLyricsApi: LyricsApi = {
-    getTrack: (args) => invokeCommand('lyrics_get_track', args),
-    search: (args) => invokeCommand('lyrics_search', args),
-    selectCandidate: (args) => invokeCommand('lyrics_select_candidate', args),
-    cancelSearch: (args) => invokeCommand('lyrics_cancel_search', args),
-    clearTrack: (args) => invokeCommand('lyrics_clear_track', args),
-    loadMore: (args) => invokeCommand('lyrics_load_more', args),
-  };
 
   let {
     trackId,
@@ -115,9 +101,11 @@
     onLyricsRemovedChange,
     onStatusChange,
     api = defaultLyricsApi,
+    sharedController,
+    sharedState,
   }: Props = $props();
 
-  let viewState = $state<LyricsViewState>({
+  let ownState = $state<LyricsViewState>({
     trackId: null,
     phase: 'idle',
     lyrics: null,
@@ -132,6 +120,7 @@
     hasMore: false,
     isLoadingMore: false,
   });
+  let viewState = $derived(sharedState ?? ownState);
   let timedViewport = $state<HTMLDivElement | null>(null);
   let plainViewport = $state<HTMLDivElement | null>(null);
   let plainScrollTop = $state(0);
@@ -179,7 +168,8 @@
   let timingPanelElement = $state<HTMLDivElement | null>(null);
   let candidateQuery = $state('');
 
-  const controller = createLyricsController({
+  // svelte-ignore state_referenced_locally
+  const controller = sharedController ?? createLyricsController({
     api: {
       getTrack: (args) => api.getTrack(args),
       search: (args) => api.search(args),
@@ -189,7 +179,7 @@
       loadMore: (args) => api.loadMore?.(args) ?? Promise.resolve({ lyrics: null, candidates: [], status: 'empty', error: null, hasMore: false }),
     },
     onChange(nextState: LyricsViewState) {
-      viewState = nextState;
+      ownState = nextState;
     },
   });
 
@@ -429,7 +419,7 @@
     timingPanelOpen = false;
     candidateQuery = '';
     timingOffsetSec = loadLyricsTimingOffsetSec(nextTrackId);
-    void controller.setTrack(nextTrackId, { title: trackTitle, artist: trackArtist });
+    if (!sharedController) void controller.setTrack(nextTrackId, { title: trackTitle, artist: trackArtist });
   });
 
   $effect(() => {
@@ -516,6 +506,8 @@
 
   // Tags were saved for the playing track: read its (possibly embedded) lyrics again.
   $effect(() => {
+    // With the shell's controller the shell reloads it.
+    if (sharedController) return;
     let unlisten: (() => void) | undefined;
     let disposed = false;
     void listen<string | null>('current-track-refreshed', (event) => {
@@ -532,7 +524,7 @@
     };
   });
 
-  onDestroy(() => { onStatusChange?.(null); controller.dispose(); rowObserver?.disconnect(); });
+  onDestroy(() => { onStatusChange?.(null); if (!sharedController) controller.dispose(); rowObserver?.disconnect(); });
 
   function sourceLabel(source: TrackLyrics['source']): string {
     switch (source) {
