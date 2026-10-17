@@ -21,6 +21,8 @@
     standardRoutes,
   } from './output-devices.js';
 
+  const SHARED_EVENT = 'moe-output-devices-saved';
+  const instance = Symbol('output-devices');
   const SAVE_DELAY_MS = 250;
   const ERROR_POLL_MS = 3000;
 
@@ -100,6 +102,8 @@
         if (disposed || revision !== saveRevision) return;
         entries = saved;
         failure = null;
+        // The quick-settings drawer and the settings page each mount this list; keep them in step.
+        window.dispatchEvent(new CustomEvent(SHARED_EVENT, { detail: { source: instance, entries: saved } }));
       } catch (error) {
         if (!disposed && revision === saveRevision) failure = getErrorText(error);
       }
@@ -168,13 +172,20 @@
     return label ? tr('聲道 {0}（{1}）', [channel + 1, label]) : tr('聲道 {0}', [channel + 1]);
   }
 
+  function adoptShared(event: Event): void {
+    const detail = (event as CustomEvent<{ source: symbol; entries: OutputDeviceEntry[] }>).detail;
+    if (detail.source !== instance && !saveTimer) entries = detail.entries;
+  }
+
   onMount(() => {
+    window.addEventListener(SHARED_EVENT, adoptShared);
     void load();
     pollTimer = setInterval(() => void refreshErrors(), ERROR_POLL_MS);
   });
 
   onDestroy(() => {
     disposed = true;
+    window.removeEventListener(SHARED_EVENT, adoptShared);
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
