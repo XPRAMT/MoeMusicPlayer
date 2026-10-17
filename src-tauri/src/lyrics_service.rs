@@ -18,7 +18,10 @@ use player_core::{
 use player_db::Database;
 use serde::Serialize;
 use tauri::{AppHandle, State};
-use tokio::{sync::Semaphore, task::JoinSet};
+use tokio::{
+    sync::{OnceCell, Semaphore},
+    task::JoinSet,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::lyrics_provider::{
@@ -165,11 +168,24 @@ pub(super) struct LyricSearchTerms {
     pub(super) query_alternates: Vec<String>,
 }
 
+/// What one automatic search produced, shared by every window that asked for the same track.
+#[derive(Clone)]
+struct AutoSearchOutcome {
+    result: Result<LyricsTrackResultDto, String>,
+    /// The search was cancelled before it finished: it says nothing about the lyrics, so a window that was only
+    /// waiting for it must search again itself.
+    cancelled: bool,
+}
+
 pub struct LyricsService<T: crate::lyrics_provider::HttpTransport = ReqwestHttpTransport> {
     client: Arc<LyricsProviderClient<T>>,
     active_searches: Arc<Mutex<HashMap<String, ActiveLyricsSearch>>>,
     next_generation: AtomicU64,
     browse: Mutex<Option<LyricBrowseSession>>,
+    /// Automatic searches in flight, one per track. The main window's lyrics view and the taskbar-lyrics window both
+    /// look for lyrics when a track starts, and a second search would cancel the first (`begin_search` keeps one
+    /// search alive), which showed "no lyrics found" in the window whose search was cancelled.
+    auto_flights: Mutex<HashMap<TrackId, Arc<OnceCell<AutoSearchOutcome>>>>,
 }
 
 impl Default for LyricsService<ReqwestHttpTransport> {
@@ -185,6 +201,60 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
             active_searches: Arc::new(Mutex::new(HashMap::new())),
             next_generation: AtomicU64::new(1),
             browse: Mutex::new(None),
+            auto_flights: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Run `search` for an automatic request on `track_id`, or wait for the identical search another window already
+    /// started and share its result. `search` returns the result and whether its search was cancelled; a cancelled
+    /// search someone else started is not trusted, the caller then searches itself.
+    async fn shared_auto_search<F, Fut>(
+        &self,
+        track_id: TrackId,
+        search: F,
+    ) -> Result<LyricsTrackResultDto, String>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = (Result<LyricsTrackResultDto, String>, bool)>,
+    {
+        loop {
+            let (flight, leader) = {
+                let mut flights = self
+                    .auto_flights
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                match flights.get(&track_id) {
+                    Some(flight) => (Arc::clone(flight), false),
+                    None => {
+                        let flight = Arc::new(OnceCell::new());
+                        flights.insert(track_id, Arc::clone(&flight));
+                        (flight, true)
+                    }
+                }
+            };
+            let outcome = flight
+                .get_or_init(|| async {
+                    let (result, cancelled) = search().await;
+                    AutoSearchOutcome { result, cancelled }
+                })
+                .await
+                .clone();
+            {
+                let mut flights = self
+                    .auto_flights
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if flights
+                    .get(&track_id)
+                    .is_some_and(|current| Arc::ptr_eq(current, &flight))
+                {
+                    flights.remove(&track_id);
+                }
+            }
+            if outcome.cancelled && !leader {
+                continue;
+            }
+            return outcome.result;
         }
     }
 
@@ -1030,10 +1100,64 @@ pub async fn lyrics_search(
     let _database_work = super::enter_database_work(&state)?;
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
     validate_request_id(&request_id)?;
-    let manual = manual.unwrap_or(false);
-    let database = super::lyrics_database_for_track(&state, track_id)?;
+    if manual.unwrap_or(false) {
+        let never_cancelled = Mutex::new(None);
+        return lyrics_search_body(
+            &state,
+            &app,
+            track_id,
+            &request_id,
+            true,
+            query,
+            query_alternates,
+            &never_cancelled,
+        )
+        .await;
+    }
+    // Automatic: every window that asks about this track shares one provider search.
+    let state_ref: &super::AppState = &state;
+    state
+        .lyrics_service
+        .shared_auto_search(track_id, || async {
+            let token_slot = Mutex::new(None);
+            let result = lyrics_search_body(
+                state_ref,
+                &app,
+                track_id,
+                &request_id,
+                false,
+                query.clone(),
+                query_alternates.clone(),
+                &token_slot,
+            )
+            .await;
+            let cancelled = token_slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled);
+            (result, cancelled)
+        })
+        .await
+}
 
-    let (cancellation, _guard) = state.lyrics_service.begin_search(&request_id)?;
+#[allow(clippy::too_many_arguments)]
+async fn lyrics_search_body(
+    state: &super::AppState,
+    app: &AppHandle,
+    track_id: TrackId,
+    request_id: &str,
+    manual: bool,
+    query: Option<String>,
+    query_alternates: Option<Vec<String>>,
+    token_slot: &Mutex<Option<CancellationToken>>,
+) -> Result<LyricsTrackResultDto, String> {
+    let database = super::lyrics_database_for_track(state, track_id)?;
+
+    let (cancellation, _guard) = state.lyrics_service.begin_search(request_id)?;
+    *token_slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cancellation.clone());
     let settings = state
         .settings
         .snapshot()
@@ -1041,7 +1165,7 @@ pub async fn lyrics_search(
     let initial = load_track_result_with_context(
         database.as_database(),
         track_id,
-        Some(&app),
+        Some(app),
         &settings.sources,
     )
     .await?;
@@ -2955,5 +3079,70 @@ mod tests {
         assert_eq!(serialized["hasWordSyncedLyrics"], false);
         assert_eq!(serialized["hasTranslation"], true);
         assert_eq!(serialized["hasRomanization"], true);
+    }
+    #[tokio::test]
+    async fn windows_asking_about_the_same_track_share_one_automatic_search() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+        let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
+        let track_id = TrackId::new();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(Notify::new());
+        let search = |runs: Arc<AtomicUsize>, release: Arc<Notify>| {
+            move || {
+                let runs = runs.clone();
+                let release = release.clone();
+                async move {
+                    runs.fetch_add(1, AtomicOrdering::SeqCst);
+                    release.notified().await;
+                    (Ok(super::LyricsTrackResultDto::empty(None)), false)
+                }
+            }
+        };
+        let first = service.shared_auto_search(track_id, search(runs.clone(), release.clone()));
+        let second = service.shared_auto_search(track_id, search(runs.clone(), release.clone()));
+        let released = async {
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+            release.notify_waiters();
+        };
+        let (first, second, _) = tokio::join!(first, second, released);
+        assert!(first.is_ok() && second.is_ok());
+        assert_eq!(runs.load(AtomicOrdering::SeqCst), 1, "the second window waited for the first search");
+        assert!(service.auto_flights.lock().unwrap().is_empty(), "finished searches are forgotten");
+    }
+
+    #[tokio::test]
+    async fn a_waiting_window_searches_again_when_the_search_it_waited_for_was_cancelled() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+        let service = LyricsService::new(LyricsProviderClient::new(FixtureTransport::default()));
+        let track_id = TrackId::new();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(Notify::new());
+        let make = |runs: Arc<AtomicUsize>, release: Arc<Notify>| {
+            move || {
+                let runs = runs.clone();
+                let release = release.clone();
+                async move {
+                    let run = runs.fetch_add(1, AtomicOrdering::SeqCst);
+                    if run == 0 {
+                        release.notified().await;
+                        // The first search is cancelled: it found nothing out.
+                        (Ok(super::LyricsTrackResultDto::empty(None)), true)
+                    } else {
+                        (Ok(super::LyricsTrackResultDto::empty(Some("second".into()))), false)
+                    }
+                }
+            }
+        };
+        let first = service.shared_auto_search(track_id, make(runs.clone(), release.clone()));
+        let second = service.shared_auto_search(track_id, make(runs.clone(), release.clone()));
+        let released = async {
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+            release.notify_waiters();
+        };
+        let (_first, second, _) = tokio::join!(first, second, released);
+        assert_eq!(runs.load(AtomicOrdering::SeqCst), 2, "the waiting window ran its own search");
+        assert_eq!(second.unwrap().error.as_deref(), Some("second"));
     }
 }

@@ -506,7 +506,7 @@
   "登錄播放器支援的音訊格式，再由 Windows 設定中選擇預設應用程式。": "Registers the audio formats the player supports; then choose the default app in Windows settings.",
   "發布時間：": "Published:",
   "發行日期": "Release date",
-  "發行時間": "Release time",
+  "發行時間": "Date",
   "發現新版本": "A new version is available",
   "發現新版本 {0}": "A new version {0} is available",
   "短邊": "Short edge",

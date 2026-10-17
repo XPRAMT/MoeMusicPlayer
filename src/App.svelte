@@ -4978,7 +4978,8 @@
           aria-label={playback?.currentTrack ? tr("開啟正在播放：{0}", [currentTrackTitle(playback.currentTrack)]) : tr('尚未選擇歌曲')}
           disabled={!playback?.currentTrack}
         >
-          {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
+          <!-- While the next track's cover loads the controller still holds the previous image: keep it until the new one replaces it (no flash of the placeholder). -->
+          {#if (activeArtwork.status === 'ready' || activeArtwork.status === 'loading') && activeArtwork.objectUrl}
             <img class="dock-art-image" src={activeArtwork.objectUrl} alt="" onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
           {:else}
             <IconMusic size={22} stroke={1.6} aria-hidden="true" />
