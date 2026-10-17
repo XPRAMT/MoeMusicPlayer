@@ -184,6 +184,24 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Ok(response.granted)
     }
 
+    pub(crate) fn list_saf_images(&self, tree_uri: &str) -> Result<Vec<String>> {
+        #[derive(serde::Deserialize)]
+        struct SafImagesResponse {
+            uris: Vec<String>,
+        }
+        let response = self
+            .0
+            .run_mobile_plugin::<SafImagesResponse>("listSafImages", json!({ "treeUri": tree_uri }))?;
+        Ok(response.uris)
+    }
+
+    pub(crate) fn set_wallpaper_backdrop(&self, enabled: bool, blur_px: u32) -> Result<crate::WallpaperBackdropStatus> {
+        Ok(self.0.run_mobile_plugin::<crate::WallpaperBackdropStatus>(
+            "setWallpaperBackdrop",
+            json!({ "enabled": enabled, "blurPx": blur_px }),
+        )?)
+    }
+
     pub(crate) fn pick_saf_tree(&self) -> Result<Option<String>> {
         let response = self
             .0

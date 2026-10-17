@@ -620,6 +620,10 @@ interface IpcContract {
     args: Record<string, never>;
     result: ArrayBuffer;
   };
+  appearance_set_android_wallpaper_backdrop: {
+    args: { enabled: boolean; blurPx: number };
+    result: AndroidWallpaperBackdropStatus | null;
+  };
   settings_get_track_list_columns: {
     args: Record<string, never>;
     result: TrackListColumnSettings;
@@ -939,6 +943,13 @@ interface IpcContract {
 }
 
 export type IpcCommand = keyof IpcContract;
+
+/** Android FLAG_SHOW_WALLPAPER backdrop state reported by the native plugin. */
+export type AndroidWallpaperBackdropStatus = {
+  active: boolean;
+  blurApplied: boolean;
+  blurSupported: boolean;
+};
 
 export function invokeCommand<Command extends IpcCommand>(
   command: Command,

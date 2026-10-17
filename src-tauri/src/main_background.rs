@@ -31,7 +31,19 @@ impl MainBackgroundRuntime {
         folder: &Path,
         order: SlideshowOrder,
     ) -> Result<(), String> {
-        let files = scan_slideshow_images(folder)?;
+        self.configure_slideshow_with(folder, order, scan_slideshow_images)
+    }
+
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    /// Same as configure_slideshow with a caller-provided scanner (Android SAF trees list content URIs,
+    /// carried as lossless UTF-8 PathBufs).
+    pub(crate) fn configure_slideshow_with(
+        &self,
+        folder: &Path,
+        order: SlideshowOrder,
+        scan: impl FnOnce(&Path) -> Result<Vec<PathBuf>, String>,
+    ) -> Result<(), String> {
+        let files = scan(folder)?;
         if files.is_empty() {
             return Err("所選資料夾及其子資料夾中沒有可用的圖片。".to_owned());
         }
@@ -48,6 +60,16 @@ impl MainBackgroundRuntime {
         folder: &Path,
         order: SlideshowOrder,
     ) -> Result<PathBuf, String> {
+        self.next_slideshow_image_with(folder, order, scan_slideshow_images)
+    }
+
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(crate) fn next_slideshow_image_with(
+        &self,
+        folder: &Path,
+        order: SlideshowOrder,
+        scan: impl FnOnce(&Path) -> Result<Vec<PathBuf>, String>,
+    ) -> Result<PathBuf, String> {
         let mut state = self
             .slideshow
             .lock()
@@ -56,7 +78,7 @@ impl MainBackgroundRuntime {
             .as_ref()
             .is_none_or(|current| current.folder != folder || current.order != order);
         if needs_refresh {
-            let files = scan_slideshow_images(folder)?;
+            let files = scan(folder)?;
             if files.is_empty() {
                 *state = None;
                 return Err("所選資料夾及其子資料夾中沒有可用的圖片。".to_owned());
@@ -172,7 +194,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{scan_slideshow_images, Slideshow};
+    use super::{scan_slideshow_images, MainBackgroundRuntime, Slideshow};
     use crate::settings::SlideshowOrder;
 
     fn temp_dir() -> PathBuf {
@@ -202,6 +224,38 @@ mod tests {
             vec![PathBuf::from("b.JPG"), PathBuf::from("sub").join("a.png")]
         );
         fs::remove_dir_all(root).expect("remove directory");
+    }
+
+    #[test]
+    fn injected_scanner_drives_uri_keyed_slideshow_and_rescans_only_on_source_change() {
+        let runtime = MainBackgroundRuntime::default();
+        let tree = PathBuf::from("content://com.android.externalstorage.documents/tree/primary%3APictures");
+        let uris = vec![
+            PathBuf::from("content://docs/tree/primary%3APictures/document/primary%3APictures%2Fa.png"),
+            PathBuf::from("content://docs/tree/primary%3APictures/document/primary%3APictures%2Fb.jpg"),
+        ];
+        let scans = std::cell::Cell::new(0);
+        let scan = |_: &std::path::Path| {
+            scans.set(scans.get() + 1);
+            Ok(uris.clone())
+        };
+        runtime
+            .configure_slideshow_with(&tree, SlideshowOrder::Sequential, scan)
+            .expect("configure");
+        let first = runtime
+            .next_slideshow_image_with(&tree, SlideshowOrder::Sequential, scan)
+            .expect("first");
+        let second = runtime
+            .next_slideshow_image_with(&tree, SlideshowOrder::Sequential, scan)
+            .expect("second");
+        assert_eq!(vec![first, second], uris);
+        assert_eq!(scans.get(), 1);
+        let empty = runtime.next_slideshow_image_with(
+            &PathBuf::from("content://other"),
+            SlideshowOrder::Sequential,
+            |_| Ok(Vec::new()),
+        );
+        assert!(empty.is_err());
     }
 
     #[test]

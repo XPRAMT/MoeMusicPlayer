@@ -5729,7 +5729,37 @@ async fn appearance_pick_main_background(
             .map_err(|error| error.to_string())?;
         Ok(Some(true))
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        let _ = (window, state);
+        return tauri::async_runtime::spawn_blocking(move || -> Result<Option<bool>, String> {
+            let index = app.media_index();
+            let Some((uri, _)) = index
+                .pick_open_document(&ANDROID_BACKGROUND_IMAGE_MIME_TYPES)
+                .map_err(|error| error.to_string())?
+            else {
+                return Ok(None);
+            };
+            // Copy the picked document into UserData so the background survives a revoked grant.
+            let lease = index
+                .cache_content_uri(&uri, MAIN_BACKGROUND_MAX_BYTES)
+                .map_err(|error| format!("無法讀取背景圖片：{error}"))?;
+            let state = app.state::<AppState>();
+            install_main_background(&state, lease.path())?;
+            drop(lease);
+            state
+                .settings
+                .update(|settings| {
+                    settings.theme.main_background_mode = MainBackgroundMode::SingleImage;
+                    Ok(())
+                })
+                .map_err(|error| error.to_string())?;
+            Ok(Some(true))
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (app, window, state);
         Err("此平台尚未提供背景圖片選擇。".to_owned())
@@ -5777,7 +5807,42 @@ async fn appearance_pick_slideshow_folder(
             .map_err(|error| error.to_string())?;
         Ok(Some(true))
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        let _ = (window, state);
+        return tauri::async_runtime::spawn_blocking(move || -> Result<Option<bool>, String> {
+            let Some(tree_uri) = app
+                .media_index()
+                .pick_saf_tree()
+                .map_err(|error| error.to_string())?
+            else {
+                return Ok(None);
+            };
+            let state = app.state::<AppState>();
+            let order = state
+                .settings
+                .snapshot()
+                .map_err(|error| error.to_string())?
+                .theme
+                .slideshow_order;
+            let key = std::path::PathBuf::from(&tree_uri);
+            state.main_background.configure_slideshow_with(&key, order, |_| {
+                android_slideshow_images(&app, &tree_uri)
+            })?;
+            state
+                .settings
+                .update(|settings| {
+                    settings.theme.slideshow_folder = Some(settings::StoredPath::Uri(tree_uri.clone()));
+                    settings.theme.main_background_mode = MainBackgroundMode::Slideshow;
+                    Ok(())
+                })
+                .map_err(|error| error.to_string())?;
+            Ok(Some(true))
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (app, window, state);
         Err("此平台尚未提供幻燈片資料夾選擇。".to_owned())
@@ -5795,7 +5860,17 @@ fn appearance_clear_main_background(state: State<'_, AppState>) -> Result<(), St
 }
 
 #[tauri::command]
-fn appearance_get_main_background(state: State<'_, AppState>) -> Result<Response, String> {
+async fn appearance_get_main_background(app: AppHandle) -> Result<Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        main_background_bytes(&app, &state)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(Response::new(bytes))
+}
+
+fn main_background_bytes(app: &AppHandle, state: &AppState) -> Result<Vec<u8>, String> {
     let theme = state
         .settings
         .snapshot()
@@ -5806,65 +5881,129 @@ fn appearance_get_main_background(state: State<'_, AppState>) -> Result<Response
         MainBackgroundMode::SingleImage => {
             Some(user_data_directory(&state)?.join(MAIN_BACKGROUND_FILE_NAME))
         }
-        MainBackgroundMode::Slideshow => {
-            let folder = theme
-                .slideshow_folder
-                .as_ref()
-                .ok_or_else(|| "請先選擇幻燈片圖片資料夾。".to_owned())?
-                .to_path_buf()
-                .map_err(|error| error.to_string())?;
-            Some(
-                state
-                    .main_background
-                    .next_slideshow_image(&folder, theme.slideshow_order)?,
-            )
-        }
+        MainBackgroundMode::Slideshow => return next_slideshow_bytes(app, state, &theme),
         MainBackgroundMode::SystemWallpaper => {
             #[cfg(target_os = "windows")]
             {
                 match windows_system_wallpaper_path() {
                     Ok(path) => Some(path),
-                    Err(_) => return Ok(Response::new(Vec::new())),
+                    Err(_) => return Ok(Vec::new()),
                 }
             }
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(target_os = "android")]
+            {
+                // Android composites the wallpaper natively behind the transparent WebView
+                // (FLAG_SHOW_WALLPAPER); apps cannot read its pixels since Android 13/14.
+                return Ok(Vec::new());
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "android")))]
             {
                 return Err("系統桌布背景目前只支援 Windows。".to_owned());
             }
         }
     };
     let Some(path) = image else {
-        return Ok(Response::new(Vec::new()));
+        return Ok(Vec::new());
     };
     match read_background_image(&path) {
-        Ok(bytes) => Ok(Response::new(bytes)),
+        Ok(bytes) => Ok(bytes),
         Err(_) if theme.main_background_mode == MainBackgroundMode::SystemWallpaper => {
-            Ok(Response::new(Vec::new()))
+            Ok(Vec::new())
         }
         Err(error) => Err(error),
     }
 }
 
 #[tauri::command]
-fn appearance_next_slideshow_background(state: State<'_, AppState>) -> Result<Response, String> {
-    let theme = state
-        .settings
-        .snapshot()
-        .map_err(|error| error.to_string())?
-        .theme;
-    if theme.main_background_mode != MainBackgroundMode::Slideshow {
-        return Err("目前沒有啟用幻燈片背景。".to_owned());
-    }
+async fn appearance_next_slideshow_background(app: AppHandle) -> Result<Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let theme = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?
+            .theme;
+        if theme.main_background_mode != MainBackgroundMode::Slideshow {
+            return Err("目前沒有啟用幻燈片背景。".to_owned());
+        }
+        next_slideshow_bytes(&app, &state, &theme)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(Response::new(bytes))
+}
+
+#[cfg(target_os = "android")]
+const ANDROID_BACKGROUND_IMAGE_MIME_TYPES: [&str; 5] =
+    ["image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"];
+
+#[cfg(target_os = "android")]
+fn android_slideshow_images(
+    app: &AppHandle,
+    tree_uri: &str,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    app.media_index()
+        .list_saf_images(tree_uri)
+        .map(|uris| uris.into_iter().map(std::path::PathBuf::from).collect())
+        .map_err(|error| format!("無法讀取幻燈片資料夾：{error}"))
+}
+
+/// Advance the slideshow and read the next image. Android SAF trees are keyed by their tree URI
+/// (as a UTF-8 PathBuf) and each entry is a document URI read through a short-lived cache lease.
+fn next_slideshow_bytes(
+    app: &AppHandle,
+    state: &AppState,
+    theme: &settings::ThemeSettings,
+) -> Result<Vec<u8>, String> {
     let folder = theme
         .slideshow_folder
         .as_ref()
-        .ok_or_else(|| "請先選擇幻燈片圖片資料夾。".to_owned())?
-        .to_path_buf()
-        .map_err(|error| error.to_string())?;
+        .ok_or_else(|| "請先選擇幻燈片背景資料夾。".to_owned())?;
+    #[cfg(target_os = "android")]
+    if let settings::StoredPath::Uri(tree_uri) = folder {
+        let key = std::path::PathBuf::from(tree_uri);
+        let image = state
+            .main_background
+            .next_slideshow_image_with(&key, theme.slideshow_order, |_| {
+                android_slideshow_images(app, tree_uri)
+            })?;
+        let lease = app
+            .media_index()
+            .cache_content_uri(&image.to_string_lossy(), MAIN_BACKGROUND_MAX_BYTES)
+            .map_err(|error| format!("無法讀取背景圖片：{error}"))?;
+        return read_background_image(lease.path());
+    }
+    let _ = app;
+    let folder = folder.to_path_buf().map_err(|error| error.to_string())?;
     let path = state
         .main_background
         .next_slideshow_image(&folder, theme.slideshow_order)?;
-    read_background_image(&path).map(Response::new)
+    read_background_image(&path)
+}
+
+/// Android: show the system wallpaper behind the transparent WebView. No-op elsewhere.
+#[tauri::command]
+async fn appearance_set_android_wallpaper_backdrop(
+    app: AppHandle,
+    enabled: bool,
+    blur_px: u32,
+) -> Result<Option<tauri_plugin_media_index::WallpaperBackdropStatus>, String> {
+    #[cfg(target_os = "android")]
+    {
+        return tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .set_wallpaper_backdrop(enabled, blur_px)
+                .map(Some)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, enabled, blur_px);
+        Ok(None)
+    }
 }
 
 fn read_background_image(path: &std::path::Path) -> Result<Vec<u8>, String> {
@@ -10521,6 +10660,7 @@ pub fn run() {
             appearance_clear_main_background,
             appearance_get_main_background,
             appearance_next_slideshow_background,
+            appearance_set_android_wallpaper_backdrop,
             settings_get_lyrics_preferences,
             settings_set_lyrics_preferences,
             settings_get_now_playing_appearance_preferences,

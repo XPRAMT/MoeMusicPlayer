@@ -297,6 +297,24 @@ input:focus-visible {
   background: transparent;
 }
 
+/* Android system wallpaper: the window shows the wallpaper behind a transparent WebView. */
+:root.has-android-wallpaper-backdrop,
+:root.has-android-wallpaper-backdrop body {
+  background: transparent;
+}
+
+.main-backdrop.is-system-wallpaper {
+  background: transparent;
+}
+
+.main-backdrop.is-system-wallpaper::before {
+  position: absolute;
+  inset: 0;
+  background: var(--page);
+  content: '';
+  opacity: calc(1 - var(--main-background-opacity, 0.4));
+}
+
 .app-shell.has-main-backdrop .sidebar,
 .app-shell.has-main-backdrop .workspace,
 .app-shell.has-main-backdrop .player-dock {

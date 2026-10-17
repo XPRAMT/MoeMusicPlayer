@@ -60,6 +60,15 @@ pub struct ContentCacheLease {
     mime_type: Option<String>,
 }
 
+/// Result of toggling the Android wallpaper backdrop.
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WallpaperBackdropStatus {
+    pub active: bool,
+    pub blur_applied: bool,
+    pub blur_supported: bool,
+}
+
 impl ContentCacheLease {
     #[cfg(target_os = "android")]
     pub(crate) fn new(
@@ -153,6 +162,18 @@ impl<R: Runtime> MediaIndex<R> {
     /// Request the narrow audio-reading permission required by MediaStore.
     pub fn request_media_store_permission(&self) -> Result<bool> {
         self.platform.request_media_store_permission()
+    }
+
+    /// Recursive, path-sorted image document URIs inside a persisted SAF tree (slideshow source).
+    #[cfg(target_os = "android")]
+    pub fn list_saf_images(&self, tree_uri: &str) -> Result<Vec<String>> {
+        self.platform.list_saf_images(tree_uri)
+    }
+
+    /// Composite the system wallpaper behind the transparent WebView (FLAG_SHOW_WALLPAPER).
+    #[cfg(target_os = "android")]
+    pub fn set_wallpaper_backdrop(&self, enabled: bool, blur_px: u32) -> Result<WallpaperBackdropStatus> {
+        self.platform.set_wallpaper_backdrop(enabled, blur_px)
     }
 
     /// Show the Android document-tree picker and persist its read grant.

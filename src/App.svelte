@@ -145,6 +145,8 @@
   import PlaylistTree from './lib/PlaylistTree.svelte';
   import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, splitSleepTimerClock, beginSleepTimerEdit, getSleepTimerEditMinutes, stepSleepTimerEdit, SLEEP_TIMER_EDIT_IDLE_MS, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
   import type { SleepTimerSnapshot } from './lib/ipc';
+  import type { AndroidWallpaperBackdropStatus } from './lib/ipc';
+  import { formatSlideshowFolderLabel } from './lib/background-source-label.js';
   import { swipeDismiss } from './lib/swipe-dismiss.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
@@ -760,6 +762,36 @@
   const slideshowFolder = $derived(themePreferences.slideshowFolder);
   const slideshowIntervalMinutes = $derived(themePreferences.slideshowIntervalMinutes);
   const runtimePlatform = $derived(capabilities?.platform);
+  // Android cannot read wallpaper pixels (Android 13/14+ WallpaperManager restrictions), so the
+  // native window shows the wallpaper behind a transparent WebView instead (ADR 0008).
+  let androidWallpaperBackdrop = $state<AndroidWallpaperBackdropStatus | null>(null);
+  const androidWallpaperActive = $derived(
+    runtimePlatform === 'android' && mainBackgroundMode === 'systemWallpaper' && androidWallpaperBackdrop?.active === true,
+  );
+  const androidWallpaperBlurPx = $derived(themePreferences.mainBackgroundBlurPx);
+
+  $effect(() => {
+    if (!isTauri() || runtimePlatform !== 'android') return;
+    const enabled = mainBackgroundMode === 'systemWallpaper';
+    const blurPx = enabled ? Math.round(androidWallpaperBlurPx * (window.devicePixelRatio || 1)) : 0;
+    let cancelled = false;
+    void invokeCommand('appearance_set_android_wallpaper_backdrop', { enabled, blurPx })
+      .then((status) => {
+        if (!cancelled) androidWallpaperBackdrop = status ?? null;
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        androidWallpaperBackdrop = null;
+        if (enabled) mainBackgroundError = getErrorText(error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  $effect(() => {
+    document.documentElement.classList.toggle('has-android-wallpaper-backdrop', androidWallpaperActive);
+  });
 
   $effect(() => {
     const snapshot = playback;
@@ -1316,8 +1348,7 @@
   }
 
   async function selectMainBackgroundMode(mode: ThemePreferences['mainBackgroundMode']): Promise<void> {
-    if (capabilities?.platform === 'android' && (mode === 'singleImage' || mode === 'slideshow' || mode === 'systemWallpaper')) return;
-    if (mode === 'systemWallpaper' && capabilities?.platform !== 'windows') return;
+    if (mode === 'systemWallpaper' && capabilities?.platform !== 'windows' && capabilities?.platform !== 'android') return;
     mainBackgroundReadRevision += 1;
     updateMainBackgroundLook({ mainBackgroundMode: mode });
     if (mode === 'solid') clearMainBackgroundImage();
@@ -3449,15 +3480,10 @@
                       class:is-active={themePreferences.mainBackgroundMode === option.mode}
                       type="button"
                       aria-pressed={themePreferences.mainBackgroundMode === option.mode}
-                      disabled={capabilities?.platform === 'android' && (option.mode === 'singleImage' || option.mode === 'slideshow' || option.mode === 'systemWallpaper')}
-                      use:appTooltip={capabilities?.platform === 'android' && option.mode === 'systemWallpaper' ? 'Android 系統桌布背景尚未支援' : undefined}
                       onclick={() => void selectMainBackgroundMode(option.mode as ThemePreferences['mainBackgroundMode'])}
                     >{option.label}</button>
                   {/each}
                 </div>
-                {#if capabilities?.platform === 'android'}
-                  <p class="source-muted-note">Android 暫不支援本機圖片選取、幻燈片與系統桌布；純色與專輯封面模式可用。</p>
-                {/if}
                 {#if themePreferences.mainBackgroundMode === 'singleImage'}
                   <div class="source-action-row source-action-buttons">
                     <button class="soft-button" type="button" onclick={() => void pickMainBackground()} disabled={mainBackgroundBusy}>
@@ -3475,7 +3501,7 @@
                     </button>
                   </div>
                   <p class="source-muted-note slideshow-folder-note">
-                    <span>{themePreferences.slideshowFolder ?? '尚未選擇資料夾，請選擇包含圖片的資料夾。'}</span>
+                    <span>{formatSlideshowFolderLabel(themePreferences.slideshowFolder) ?? '尚未選擇資料夾，請選擇包含圖片的資料夾。'}</span>
                     {#if themePreferences.slideshowFolder && slideshowNextInSeconds !== null}
                       <span class="slideshow-countdown">下一張 {formatSlideshowCountdown(slideshowNextInSeconds)}</span>
                     {/if}
@@ -3491,7 +3517,11 @@
                 {:else if themePreferences.mainBackgroundMode === 'albumCover'}
                   <p class="source-muted-note">背景會跟隨目前播放歌曲的專輯封面；沒有可用封面時暫時顯示純色。</p>
                 {:else if themePreferences.mainBackgroundMode === 'systemWallpaper'}
-                  <p class="source-muted-note">讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {systemWallpaperNextInSeconds ?? 60}s。</p>
+                  {#if capabilities?.platform === 'android'}
+                    <p class="source-muted-note">由系統直接在介面後方顯示目前桌布（含動態桌布），更換桌布會立即生效。{androidWallpaperBackdrop && !androidWallpaperBackdrop.blurSupported ? '此裝置未啟用跨視窗模糊，背景模糊無效。' : ''}</p>
+                  {:else}
+                    <p class="source-muted-note">讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {systemWallpaperNextInSeconds ?? 60}s。</p>
+                  {/if}
                 {/if}
                 {#if themePreferences.mainBackgroundMode !== 'solid'}
                   <label class="lyrics-preference-range">
@@ -3916,13 +3946,15 @@
   class:has-now-playing-backdrop={isNowPlayingOpen}
   class:has-custom-titlebar={showCustomTitlebar}
   data-active-view={activeView}
-  class:has-main-backdrop={effectiveMainBackgroundUrl !== null}
+  class:has-main-backdrop={effectiveMainBackgroundUrl !== null || androidWallpaperActive}
   style={`--np-background-blur: ${nowPlayingAppearancePreferences.backgroundBlurPx}px; --np-background-bleed: ${nowPlayingAppearancePreferences.backgroundBlurPx * 1.5}px; --np-background-opacity: ${(themePreferences.colorMode === 'autoBackgroundOpacity' ? nowPlayingBackgroundEffectiveOpacityPercent : nowPlayingAppearancePreferences.backgroundOpacityPercent) / 100}; --main-background-blur: ${themePreferences.mainBackgroundBlurPx}px; --main-background-bleed: ${themePreferences.mainBackgroundBlurPx * 1.5}px; --main-background-opacity: ${(themePreferences.colorMode === 'autoBackgroundOpacity' ? mainBackgroundEffectiveOpacityPercent : themePreferences.mainBackgroundOpacityPercent) / 100}; --quick-settings-opacity: ${themePreferences.quickSettingsOpacityPercent}%; --quick-settings-blur: ${themePreferences.quickSettingsBlurPx}px;`}
 >
   {#if showCustomTitlebar}
     <WindowTitlebar transparent={isNowPlayingOpen || effectiveMainBackgroundUrl !== null} />
   {/if}
-  {#if effectiveMainBackgroundUrl}
+  {#if androidWallpaperActive}
+    <div class="main-backdrop is-system-wallpaper" data-testid="main-backdrop" aria-hidden="true"></div>
+  {:else if effectiveMainBackgroundUrl}
     <div class="main-backdrop" data-testid="main-backdrop" aria-hidden="true">
       <img src={effectiveMainBackgroundUrl} alt="" />
     </div>

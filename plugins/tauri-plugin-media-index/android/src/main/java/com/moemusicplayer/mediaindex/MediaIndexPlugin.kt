@@ -6,12 +6,19 @@ import android.app.AlertDialog
 import android.content.ContentResolver
 import android.content.Intent
 import android.database.Cursor
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.webkit.WebView
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.IntentSenderRequest
 import app.tauri.PermissionState
@@ -66,6 +73,12 @@ class ContentUriArgs {
     var contentUri: String? = null
     var maxBytes: Long? = null
     var treeUri: String? = null
+}
+
+@InvokeArg
+class WallpaperBackdropArgs {
+    var enabled: Boolean? = null
+    var blurPx: Int? = null
 }
 
 @InvokeArg
@@ -651,6 +664,116 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (error: SecurityException) {
             invoke.reject("Could not persist document-tree access: ${error.message}")
         }
+    }
+
+    /** Recursive image list of a persisted SAF tree for the main-background slideshow (sorted by path). */
+    @Command
+    fun listSafImages(invoke: Invoke) {
+        val rawUri = invoke.parseArgs(TreeUriArgs::class.java).treeUri
+        if (rawUri.isNullOrBlank()) {
+            invoke.reject("treeUri is required")
+            return
+        }
+        io.execute {
+            try {
+                val treeUri = Uri.parse(rawUri)
+                if (resolver.persistedUriPermissions.none { it.uri == treeUri && it.isReadPermission }) {
+                    invoke.reject("The persisted SAF read grant is missing")
+                    return@execute
+                }
+                val images = mutableListOf<Pair<String, String>>()
+                val queue = ArrayDeque<Pair<String, String>>()
+                val visited = mutableSetOf<String>()
+                queue.addLast(DocumentsContract.getTreeDocumentId(treeUri) to "")
+                val projection = arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                )
+                var truncated = false
+                while (queue.isNotEmpty()) {
+                    val (parentId, prefix) = queue.removeFirst()
+                    if (!visited.add(parentId)) continue
+                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+                    resolver.query(children, projection, null, null, null)?.use { rows ->
+                        val idColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                        val mimeColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                        val nameColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                        while (rows.moveToNext()) {
+                            val id = rows.stringOrNull(idColumn) ?: continue
+                            val name = rows.stringOrNull(nameColumn)
+                            if (isHiddenDocument(name)) continue
+                            val mime = rows.stringOrNull(mimeColumn)
+                            val path = prefix + (name ?: id)
+                            if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                                queue.addLast(id to "$path/")
+                            } else if (isSlideshowImage(mime, name)) {
+                                if (images.size >= MAX_SLIDESHOW_IMAGES) { truncated = true; continue }
+                                images.add(path to DocumentsContract.buildDocumentUriUsingTree(treeUri, id).toString())
+                            }
+                        }
+                    }
+                }
+                images.sortWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.first })
+                val uris = JSONArray()
+                images.forEach { uris.put(it.second) }
+                invoke.resolve(JSObject().put("uris", uris).put("truncated", truncated))
+            } catch (error: Exception) {
+                invoke.reject("Could not list slideshow images: ${error.message}")
+            }
+        }
+    }
+
+    private var savedWindowBackground: Drawable? = null
+    private var wallpaperBackdropActive = false
+
+    /**
+     * Show the system wallpaper behind the (transparent) WebView via FLAG_SHOW_WALLPAPER. Android 13+ no
+     * longer lets ordinary apps read wallpaper pixels (WallpaperManager.getDrawable needs
+     * MANAGE_EXTERNAL_STORAGE), but the window manager can still composite it behind our window. Blur uses
+     * cross-window background blur when the device supports it.
+     */
+    @Command
+    fun setWallpaperBackdrop(invoke: Invoke) {
+        val args = invoke.parseArgs(WallpaperBackdropArgs::class.java)
+        val enabled = args.enabled == true
+        val blurPx = (args.blurPx ?: 0).coerceIn(0, 150)
+        activity.runOnUiThread {
+            try {
+                val window = activity.window
+                var blurApplied = false
+                if (enabled) {
+                    if (!wallpaperBackdropActive) savedWindowBackground = window.decorView.background
+                    wallpaperBackdropActive = true
+                    window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
+                    window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                    findWebView(window.decorView)?.setBackgroundColor(Color.TRANSPARENT)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val supported = activity.windowManager.isCrossWindowBlurEnabled
+                        window.setBackgroundBlurRadius(if (supported) blurPx else 0)
+                        blurApplied = supported && blurPx > 0
+                    }
+                } else if (wallpaperBackdropActive) {
+                    wallpaperBackdropActive = false
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) window.setBackgroundBlurRadius(0)
+                    window.setBackgroundDrawable(savedWindowBackground ?: ColorDrawable(Color.BLACK))
+                    savedWindowBackground = null
+                }
+                val blurSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && activity.windowManager.isCrossWindowBlurEnabled
+                invoke.resolve(JSObject().put("active", wallpaperBackdropActive).put("blurApplied", blurApplied).put("blurSupported", blurSupported))
+            } catch (error: Exception) {
+                invoke.reject("Could not show the system wallpaper: ${error.message}")
+            }
+        }
+    }
+
+    private fun findWebView(view: View): WebView? {
+        if (view is WebView) return view
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) findWebView(view.getChildAt(index))?.let { return it }
+        }
+        return null
     }
 
     @Command
@@ -1635,6 +1758,19 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
 
         internal fun isHiddenDocument(displayName: String?): Boolean =
             displayName?.startsWith('.') == true
+
+        internal const val MAX_SLIDESHOW_IMAGES = 10_000
+        private val SLIDESHOW_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp")
+        private val SLIDESHOW_IMAGE_MIME_TYPES = setOf("image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp", "image/x-ms-bmp")
+
+        /** Same formats as the desktop slideshow (main_background.rs is_supported_image). */
+        internal fun isSlideshowImage(mimeType: String?, displayName: String?): Boolean {
+            val mime = mimeType?.lowercase()
+            if (mime != null && mime in SLIDESHOW_IMAGE_MIME_TYPES) return true
+            if (mime != null && mime != "application/octet-stream") return false
+            val extension = displayName?.substringAfterLast('.', "")?.lowercase().orEmpty()
+            return extension in SLIDESHOW_IMAGE_EXTENSIONS
+        }
 
         internal fun splitTrackNumber(encoded: Long?): Pair<Int?, Int?> {
             if (encoded == null || encoded < 0L) return null to null
