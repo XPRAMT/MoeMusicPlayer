@@ -45,8 +45,8 @@ use rodio::{
 
 use crate::resample::{needs_resampling, Resampled};
 use crate::{
-    AudioBackend, AudioError, DseeHxState, OutputStatus, ResamplingConfig, ResamplingConversion,
-    ResamplingInfo, ResamplingMode,
+    AudioBackend, AudioError, DsdOptions, DsdSettings, DseeHxState, OutputStatus, ResamplingConfig,
+    ResamplingConversion, ResamplingInfo, ResamplingMode,
 };
 
 /// Upper bound for opening a WASAPI endpoint. A driver that hangs inside
@@ -212,6 +212,7 @@ impl RodioBackend {
         };
         let mut track = TrackPlayer::new(output.sink.mixer().clone(), output.sample_rate);
         track.dsee_enabled = config.dsee_hx();
+        track.dsd = Arc::clone(&config.dsd);
         let now = Instant::now();
         Ok(Self {
             output: Some(output),
@@ -329,7 +330,7 @@ impl Drop for RodioBackend {
 
 impl AudioBackend for RodioBackend {
     fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
-        let decoder = open_decoder(path)?;
+        let decoder = open_decoder_with(path, &self.config.dsd)?;
         let plan = self.plan_for(path, &decoder);
         self.prepare_output_for(plan_rate(&decoder, plan.output_rate));
         self.track.load_decoder(path, decoder, plan.engagement)
@@ -363,7 +364,7 @@ impl AudioBackend for RodioBackend {
         path: &Path,
         position: Duration,
     ) -> Result<(Option<Duration>, Duration), AudioError> {
-        let decoder = open_decoder(path)?;
+        let decoder = open_decoder_with(path, &self.config.dsd)?;
         let plan = self.plan_for(path, &decoder);
         self.prepare_output_for(plan_rate(&decoder, plan.output_rate));
         self.track
@@ -405,7 +406,32 @@ impl AudioBackend for RodioBackend {
             return Ok(());
         };
         let was_playing = !self.track.paused;
-        let decoder = open_decoder(&path)?;
+        let decoder = open_decoder_with(&path, &self.config.dsd)?;
+        let plan = self.plan_for(&path, &decoder);
+        self.prepare_output_for(plan_rate(&decoder, plan.output_rate));
+        self.track
+            .load_decoder_at(&path, decoder, position, plan.engagement)?;
+        if was_playing {
+            self.track.play()?;
+        }
+        Ok(())
+    }
+
+    fn set_dsd_settings(&mut self, settings: DsdSettings) -> Result<(), AudioError> {
+        let before = self.config.dsd.settings();
+        self.config.dsd.set(settings);
+        // The gain is followed live by the sources that are playing; only a new output rate needs a reload.
+        if before.output_rate == self.config.dsd.settings().output_rate {
+            return Ok(());
+        }
+        let Some((path, position)) = self.track.resume_point() else {
+            return Ok(());
+        };
+        if !crate::dsd::is_dsd_path(&path) {
+            return Ok(());
+        }
+        let was_playing = !self.track.paused;
+        let decoder = open_decoder_with(&path, &self.config.dsd)?;
         let plan = self.plan_for(&path, &decoder);
         self.prepare_output_for(plan_rate(&decoder, plan.output_rate));
         self.track
@@ -665,6 +691,8 @@ struct SeekOutcome {
 
 /// One local track on a mixer, driven only through non-waiting Rodio calls.
 struct TrackPlayer {
+    /// DSD settings shared with the backend (replaced by the backend's own after construction).
+    dsd: Arc<DsdOptions>,
     mixer: Mixer,
     /// The mixer's rate; tracks at other rates are wrapped in [`Resampled`].
     output_rate: SampleRate,
@@ -689,6 +717,7 @@ struct TrackPlayer {
 impl TrackPlayer {
     fn new(mixer: Mixer, output_rate: SampleRate) -> Self {
         Self {
+            dsd: Arc::new(DsdOptions::default()),
             mixer,
             output_rate,
             player: None,
@@ -707,7 +736,7 @@ impl TrackPlayer {
 
     #[cfg(test)]
     fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
-        let decoder = open_decoder(path)?;
+        let decoder = open_decoder_with(path, &self.dsd)?;
         self.load_decoder(path, decoder, crate::dsee::Engagement::Off)
     }
 
@@ -730,7 +759,7 @@ impl TrackPlayer {
         path: &Path,
         position: Duration,
     ) -> Result<(Option<Duration>, Duration), AudioError> {
-        let decoder = open_decoder(path)?;
+        let decoder = open_decoder_with(path, &self.dsd)?;
         self.load_decoder_at(path, decoder, position, crate::dsee::Engagement::Off)
     }
 
@@ -751,7 +780,7 @@ impl TrackPlayer {
             target
         } else {
             // A failed seek may leave the decoder mid-stream; start over.
-            decoder = open_decoder(path)?;
+            decoder = open_decoder_with(path, &self.dsd)?;
             Duration::ZERO
         };
         self.paused = true;
@@ -870,7 +899,7 @@ impl TrackPlayer {
         path: &Path,
         position: Duration,
     ) -> Result<Duration, AudioError> {
-        let mut decoder = open_decoder(path)?;
+        let mut decoder = open_decoder_with(path, &self.dsd)?;
         let plan = crate::dsee::plan(self.dsee_enabled, path, &track_signal(&decoder));
         decoder
             .try_seek(position)
@@ -978,7 +1007,7 @@ impl TrackPlayer {
                 Err(crate::dsee::OpenError::Lost(notice)) => {
                     self.dsee_state = DseeHxState::Unavailable;
                     self.dsee_notice = Some(notice);
-                    let mut decoder = open_decoder(path)?;
+                    let mut decoder = open_decoder_with(path, &self.dsd)?;
                     if !base.is_zero() {
                         let _ = decoder.try_seek(base);
                     }
@@ -1145,10 +1174,17 @@ fn try_seek_with_deadline(
     result_rx.recv_timeout(timeout).ok()
 }
 
+/// Open a file with the default DSD settings (tests and fixtures).
+#[cfg(test)]
 fn open_decoder(path: &Path) -> Result<AudioDecoder, AudioError> {
+    open_decoder_with(path, &DsdOptions::default())
+}
+
+fn open_decoder_with(path: &Path, dsd: &DsdOptions) -> Result<AudioDecoder, AudioError> {
     match player_formats::decode_engine(path) {
         player_formats::DecodeEngine::Dsd => {
-            return crate::dsd::open_dsf(path).map(|source| AudioDecoder::Dsd(Box::new(source)));
+            return crate::dsd::open_dsf(path, dsd)
+                .map(|source| AudioDecoder::Dsd(Box::new(source)));
         }
         player_formats::DecodeEngine::Opus => {
             return crate::opus::open_opus(path).map(|source| AudioDecoder::Opus(Box::new(source)));
@@ -1159,7 +1195,9 @@ fn open_decoder(path: &Path) -> Result<AudioDecoder, AudioError> {
     let ogg_extension = path
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("ogg") || extension.eq_ignore_ascii_case("oga"));
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("ogg") || extension.eq_ignore_ascii_case("oga")
+        });
     if ogg_extension && player_opus::sniff_opus_file(path) {
         return crate::opus::open_opus(path).map(|source| AudioDecoder::Opus(Box::new(source)));
     }
@@ -1196,7 +1234,11 @@ mod tests {
     fn write_test_opus(name: &str, seconds: f64) -> (PathBuf, usize) {
         let frames = (48_000.0 * seconds) as usize;
         let path = std::env::temp_dir().join(format!("moe-{name}-{}.opus", std::process::id()));
-        std::fs::write(&path, player_opus::testing::write_opus(frames, 2, 1_000.0, 0, 0)).unwrap();
+        std::fs::write(
+            &path,
+            player_opus::testing::write_opus(frames, 2, 1_000.0, 0, 0),
+        )
+        .unwrap();
         (path, frames)
     }
 
@@ -1209,7 +1251,11 @@ mod tests {
         let left = lsb(modulate(samples, tone(rate, 1_000.0, 0.25)));
         let right = lsb(modulate(samples, tone(rate, 3_000.0, 0.25)));
         let path = std::env::temp_dir().join(format!("moe-{name}-{}.dsf", std::process::id()));
-        std::fs::write(&path, build_dsf(rate, samples as u64, 4096, true, &[left, right])).unwrap();
+        std::fs::write(
+            &path,
+            build_dsf(rate, samples as u64, 4096, true, &[left, right]),
+        )
+        .unwrap();
         (path, samples)
     }
 
@@ -1266,7 +1312,10 @@ mod tests {
     fn a_corrupt_dsf_reports_a_decode_error_not_a_panic() {
         let path = std::env::temp_dir().join(format!("moe-bad-{}.dsf", std::process::id()));
         std::fs::write(&path, b"DSD but not really").unwrap();
-        assert!(matches!(open_decoder(&path), Err(AudioError::Decode { .. })));
+        assert!(matches!(
+            open_decoder(&path),
+            Err(AudioError::Decode { .. })
+        ));
         let _ = std::fs::remove_file(path);
     }
 
@@ -1282,12 +1331,22 @@ mod tests {
                 let path = entry.path();
                 if path.is_dir() {
                     stack.push(path);
-                } else if path.extension().is_some_and(|extension| extension == "dsf") && checked < 8 {
-                    let mut decoder = open_decoder(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
+                } else if path.extension().is_some_and(|extension| extension == "dsf")
+                    && checked < 8
+                {
+                    let mut decoder =
+                        open_decoder(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
                     let duration = decoder.total_duration().expect("duration");
                     let head: Vec<f32> = decoder.by_ref().take(176_400 * 2).collect();
-                    let rms = (head.iter().map(|sample| f64::from(*sample).powi(2)).sum::<f64>() / head.len() as f64).sqrt();
-                    let peak = head.iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+                    let rms = (head
+                        .iter()
+                        .map(|sample| f64::from(*sample).powi(2))
+                        .sum::<f64>()
+                        / head.len() as f64)
+                        .sqrt();
+                    let peak = head
+                        .iter()
+                        .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
                     decoder.try_seek(duration / 2).expect("seek to the middle");
                     let middle = decoder.by_ref().take(4_000).count();
                     println!("{path:?}: {duration:?}, 1 s RMS {rms:.4}, peak {peak:.3}, middle frames {middle}");
@@ -1308,12 +1367,17 @@ mod tests {
         let mut files = Vec::new();
         let mut stack = vec![PathBuf::from(r"D:\Music\Loss")];
         while let Some(directory) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&directory) else { continue };
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
                     stack.push(path);
-                } else if path.extension().is_some_and(|extension| extension == "opus") {
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension == "opus")
+                {
                     files.push(path);
                 }
             }
@@ -1321,14 +1385,19 @@ mod tests {
         files.sort();
         assert!(!files.is_empty(), "no .opus files found");
         for path in files.iter().take(6) {
-            let mut decoder = open_decoder(path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
+            let mut decoder =
+                open_decoder(path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
             let duration = decoder.total_duration().expect("duration");
             let channels = usize::from(decoder.channels().get());
             let samples: Vec<f32> = decoder.by_ref().collect();
             let frames = samples.len() / channels;
             let expected = (duration.as_secs_f64() * 48_000.0).round() as usize;
-            let peak = samples.iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-            println!("{path:?}: {duration:?}, {frames} frames (expected {expected}), peak {peak:.3}");
+            let peak = samples
+                .iter()
+                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+            println!(
+                "{path:?}: {duration:?}, {frames} frames (expected {expected}), peak {peak:.3}"
+            );
             assert_eq!(frames, expected);
             assert!(samples.iter().all(|sample| sample.is_finite()));
             assert!(peak > 0.01);
@@ -1366,12 +1435,21 @@ mod tests {
                 count += 1;
             }
             let rms = (sum / count as f64).sqrt();
-            println!("peak {:+.2} dBFS, RMS {:+.2} dBFS  {:?}", 20.0 * f64::from(peak).log10(), 20.0 * rms.log10(), path.file_name().unwrap());
+            println!(
+                "peak {:+.2} dBFS, RMS {:+.2} dBFS  {:?}",
+                20.0 * f64::from(peak).log10(),
+                20.0 * rms.log10(),
+                path.file_name().unwrap()
+            );
             peaks.push(peak);
         }
         peaks.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        println!("median peak {:+.2} dBFS, max peak {:+.2} dBFS over {} files",
-            20.0 * f64::from(peaks[peaks.len() / 2]).log10(), 20.0 * f64::from(*peaks.last().unwrap()).log10(), peaks.len());
+        println!(
+            "median peak {:+.2} dBFS, max peak {:+.2} dBFS over {} files",
+            20.0 * f64::from(peaks[peaks.len() / 2]).log10(),
+            20.0 * f64::from(*peaks.last().unwrap()).log10(),
+            peaks.len()
+        );
     }
 
     #[test]

@@ -6035,6 +6035,71 @@ async fn settings_set_dsee_hx(state: State<'_, AppState>, enabled: bool) -> Resu
 }
 
 #[tauri::command]
+fn settings_get_cover_zoom(state: State<'_, AppState>) -> Result<settings::CoverZoomSettings, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.cover_zoom)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the Now Playing cover size. Only a shrunk cover (0.4 to 1) is remembered; an enlarged one is saved as 1.
+#[tauri::command]
+fn settings_set_cover_zoom(
+    state: State<'_, AppState>,
+    scale: f32,
+) -> Result<settings::CoverZoomSettings, String> {
+    let requested = settings::CoverZoomSettings { scale }.normalized();
+    state
+        .settings
+        .update(|settings| {
+            settings.cover_zoom = requested;
+            Ok(())
+        })
+        .map(|settings| settings.cover_zoom)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_get_dsd(state: State<'_, AppState>) -> Result<settings::DsdPlaybackSettings, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.dsd)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the DSD gain and output rate, then apply them to the running player: the gain eases in smoothly while a
+/// track plays; a new output rate restarts a playing DSD track from its position.
+#[tauri::command]
+async fn settings_set_dsd(
+    state: State<'_, AppState>,
+    gain_db: f32,
+    output_rate_hz: u32,
+) -> Result<settings::DsdPlaybackSettings, String> {
+    let requested = settings::DsdPlaybackSettings { gain_db, output_rate_hz }.normalized();
+    let saved = state
+        .settings
+        .update(|settings| {
+            settings.dsd = requested;
+            Ok(())
+        })
+        .map(|settings| settings.dsd)
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(service) = state.playback.as_ref() {
+            let applied = match set_playback_dsd(service, saved) {
+                Ok(ticket) => await_playback_ack_within(ticket, Duration::from_secs(10)).await,
+                Err(error) => Err(error),
+            };
+            applied.map_err(|error| format!("設定已保存，但套用到播放器失敗：{error}"))?;
+        }
+    }
+    Ok(saved)
+}
+
+#[tauri::command]
 fn library_add_windows_folder(
     state: State<'_, AppState>,
     path: String,
@@ -9396,6 +9461,24 @@ fn set_playback_resampling(
 }
 
 #[cfg(target_os = "windows")]
+fn set_playback_dsd(
+    service: &WindowsPlaybackService,
+    saved: settings::DsdPlaybackSettings,
+) -> Result<CommandTicket, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    service
+        .player
+        .request_set_dsd_settings(player_audio_windows::DsdSettings {
+            gain_db: saved.gain_db,
+            output_rate: saved.output_rate_hz,
+        })
+        .map_err(|error| playback_audio_error_message(&error))
+}
+
+#[cfg(target_os = "windows")]
 fn set_playback_dsee_hx(
     service: &WindowsPlaybackService,
     enabled: bool,
@@ -10286,6 +10369,10 @@ pub fn run() {
             settings_set_resampling_mode,
             settings_get_dsee_hx,
             settings_set_dsee_hx,
+            settings_get_dsd,
+            settings_set_dsd,
+            settings_get_cover_zoom,
+            settings_set_cover_zoom,
             settings_get_shortcuts,
             settings_set_shortcuts,
             get_runtime_capabilities,
@@ -10413,6 +10500,10 @@ pub fn run() {
                 initial_settings.dsee_hx,
             ) {
                 Ok(player) => {
+                    player.configure_dsd(player_audio_windows::DsdSettings {
+                        gain_db: initial_settings.dsd.gain_db,
+                        output_rate: initial_settings.dsd.output_rate_hz,
+                    });
                     let service = WindowsPlaybackService::with_modes(
                         player,
                         initial_settings.shuffle,

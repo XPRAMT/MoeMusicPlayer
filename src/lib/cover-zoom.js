@@ -57,6 +57,30 @@ export function pointerDistance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+/**
+ * The pan as fractions of the cover's own size, for settings.json (so it survives a window resize).
+ * @param {CoverZoomState} state @param {number} width @param {number} height
+ */
+export function coverZoomToFractions(state, width, height) {
+  return {
+    scale: state.scale,
+    offsetX: width > 0 ? state.x / width : 0,
+    offsetY: height > 0 ? state.y / height : 0,
+  };
+}
+
+/**
+ * A saved zoom back into pixels for a cover of `width` x `height`, repaired and clamped.
+ * @param {{ scale?: number, offsetX?: number, offsetY?: number } | null | undefined} saved @param {number} width @param {number} height
+ * @returns {CoverZoomState}
+ */
+export function coverZoomFromFractions(saved, width, height) {
+  const scale = typeof saved?.scale === 'number' && Number.isFinite(saved.scale) ? saved.scale : COVER_ZOOM_REST;
+  const x = typeof saved?.offsetX === 'number' && Number.isFinite(saved.offsetX) ? saved.offsetX * width : 0;
+  const y = typeof saved?.offsetY === 'number' && Number.isFinite(saved.offsetY) ? saved.offsetY * height : 0;
+  return clampCoverZoom({ scale, x, y }, width, height);
+}
+
 /** CSS transform for the cover (transform-origin: center). @param {CoverZoomState} state */
 export function coverZoomTransform(state) {
   if (state.scale === COVER_ZOOM_REST) return '';
@@ -73,13 +97,13 @@ export function isDoubleTap(previous, next) {
 }
 
 /**
- * use:coverZoom={{ enabled, onZoom, initial }} on the cover element, which is the element that gets transformed. Mouse: wheel
+ * use:coverZoom={{ enabled, onZoom, initial, syncScale }} on the cover element, which is the element that gets transformed. Mouse: wheel
  * over the cover zooms at the cursor, drag pans while zoomed. Touch/pen: pinch zooms, one finger pans while zoomed.
  * Double click / double tap restores the original size. `onZoom` receives the current state
  * ({ scale, x, y }; scale 1 = not zoomed). The cover element is re-created on track changes (the artwork pane is removed
  * while the next cover loads), so the owner keeps the last state and passes it back as `initial` to restore it.
  * @param {HTMLElement} node
- * @param {{ enabled?: boolean, onZoom?: (state: CoverZoomState) => void, initial?: CoverZoomState }} params
+ * @param {{ enabled?: boolean, onZoom?: (state: CoverZoomState, size: { width: number, height: number }) => void, initial?: CoverZoomState | ((node: HTMLElement) => CoverZoomState), syncScale?: number }} params
  */
 export function coverZoom(node, params) {
   let options = params;
@@ -102,8 +126,8 @@ export function coverZoom(node, params) {
     return { width: node.offsetWidth, height: node.offsetHeight };
   }
 
-  /** @param {CoverZoomState} next @param {boolean} animate */
-  function apply(next, animate) {
+  /** @param {CoverZoomState} next @param {boolean} animate @param {boolean} [notify] */
+  function apply(next, animate, notify = true) {
     state = next;
     node.style.transition = animate && !reduced() ? 'transform 160ms ease' : 'none';
     node.style.transform = coverZoomTransform(state);
@@ -111,7 +135,7 @@ export function coverZoom(node, params) {
     // (track change), which would drop a class added from here.
     if (state.scale !== COVER_ZOOM_REST) node.dataset.coverZoomed = '';
     else delete node.dataset.coverZoomed;
-    options.onZoom?.(state);
+    if (notify) options.onZoom?.(state, { width: node.offsetWidth, height: node.offsetHeight });
   }
 
   /** Anchor relative to the cover's visual centre. @param {number} clientX @param {number} clientY */
@@ -258,7 +282,10 @@ export function coverZoom(node, params) {
     event.stopPropagation();
   }
 
-  if (options.initial && options.initial.scale !== COVER_ZOOM_REST) apply({ ...options.initial }, false);
+  const initial = typeof options.initial === 'function' ? options.initial(node) : options.initial;
+  // Restoring the owner's saved state must not report it back (it would overwrite the saved pan while the cover
+  // has no size yet).
+  if (initial && initial.scale !== COVER_ZOOM_REST) apply({ ...initial }, false, false);
 
   node.addEventListener('wheel', wheel, { passive: false });
   node.addEventListener('pointerdown', down);
@@ -271,7 +298,14 @@ export function coverZoom(node, params) {
     /** @param {typeof params} next */
     update(next) {
       options = next;
-      if (!active()) { pointers.clear(); pinch = null; pan = null; reset(); }
+      // The owner can drop the zoom from outside (an enlarged cover is reset when the track changes): when it says
+      // the scale is back at 1 while this element is still zoomed, follow it.
+      if (next.syncScale === COVER_ZOOM_REST && state.scale !== COVER_ZOOM_REST) {
+        pointers.clear(); pinch = null; pan = null; lastTap = null;
+        apply({ ...COVER_ZOOM_IDENTITY }, false, false);
+      }
+      // A disabled cover (the Now Playing page is closed) keeps its zoom: only a double click restores it.
+      if (!active()) { pointers.clear(); pinch = null; pan = null; }
     },
     destroy() {
       cancelAnimationFrame(settleFrame);

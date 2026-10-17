@@ -695,6 +695,106 @@ pub enum ResamplingMode {
 
 /// An unknown or malformed stored value falls back to the default instead of
 /// rejecting the whole settings file.
+/// Now Playing cover size remembered across restarts. Only a **shrunk** cover is remembered (0.4 to 1, 1 = original
+/// size): an enlarged cover, and any pan, is not saved, so the next start begins at the original size. Within a run the
+/// zoom (enlarged or shrunk) stays until the user double-clicks the cover.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverZoomSettings {
+    pub scale: f32,
+}
+
+impl CoverZoomSettings {
+    pub const SCALE_RANGE: (f32, f32) = (0.4, 1.0);
+
+    /// A scale above 1 (an enlarged cover) or a non-finite one is not remembered: it becomes 1.
+    pub fn normalized(self) -> Self {
+        let scale = if self.scale.is_finite() {
+            self.scale.clamp(Self::SCALE_RANGE.0, Self::SCALE_RANGE.1)
+        } else {
+            1.0
+        };
+        Self { scale }
+    }
+}
+
+impl Default for CoverZoomSettings {
+    fn default() -> Self {
+        Self { scale: 1.0 }
+    }
+}
+
+/// Missing or malformed values (and the pan fields an earlier build wrote) are ignored.
+fn lenient_cover_zoom(value: Option<serde_json::Value>) -> CoverZoomSettings {
+    let defaults = CoverZoomSettings::default();
+    let scale = value
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get("scale"))
+        .and_then(serde_json::Value::as_f64)
+        .map_or(defaults.scale, |scale| scale as f32);
+    CoverZoomSettings { scale }.normalized()
+}
+
+/// DSD→PCM playback settings (Windows; stored everywhere so the file stays portable): the digital gain in dB
+/// (1 to 6) and the PCM rate DSD is converted to (176.4 or 352.8 kHz).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsdPlaybackSettings {
+    pub gain_db: f32,
+    pub output_rate_hz: u32,
+}
+
+impl DsdPlaybackSettings {
+    pub const GAIN_RANGE_DB: (f32, f32) = (1.0, 6.0);
+    pub const OUTPUT_RATES_HZ: [u32; 2] = [176_400, 352_800];
+    pub const DEFAULT_GAIN_DB: f32 = 3.0;
+
+    /// A gain outside the range is clamped (a non-finite one becomes the default); an unsupported rate becomes 176.4 kHz.
+    pub fn normalized(self) -> Self {
+        let gain_db = if self.gain_db.is_finite() {
+            self.gain_db.clamp(Self::GAIN_RANGE_DB.0, Self::GAIN_RANGE_DB.1)
+        } else {
+            Self::DEFAULT_GAIN_DB
+        };
+        let output_rate_hz = if Self::OUTPUT_RATES_HZ.contains(&self.output_rate_hz) {
+            self.output_rate_hz
+        } else {
+            Self::OUTPUT_RATES_HZ[0]
+        };
+        Self { gain_db, output_rate_hz }
+    }
+}
+
+impl Default for DsdPlaybackSettings {
+    fn default() -> Self {
+        Self {
+            gain_db: Self::DEFAULT_GAIN_DB,
+            output_rate_hz: Self::OUTPUT_RATES_HZ[0],
+        }
+    }
+}
+
+/// Missing, malformed or out-of-range values fall back to the defaults field by field.
+fn lenient_dsd_settings(value: Option<serde_json::Value>) -> DsdPlaybackSettings {
+    let defaults = DsdPlaybackSettings::default();
+    let Some(object) = value.as_ref().and_then(serde_json::Value::as_object) else {
+        return defaults;
+    };
+    DsdPlaybackSettings {
+        gain_db: object
+            .get("gainDb")
+            .and_then(serde_json::Value::as_f64)
+            .map_or(defaults.gain_db, |gain| gain as f32),
+        output_rate_hz: object
+            .get("outputRateHz")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|rate| u32::try_from(rate).ok())
+            .unwrap_or(defaults.output_rate_hz),
+    }
+    .normalized()
+}
+
 fn lenient_resampling_mode(value: Option<serde_json::Value>) -> ResamplingMode {
     value
         .and_then(|value| serde_json::from_value(value).ok())
@@ -1082,7 +1182,7 @@ fn correct_legacy_wheel_direction(mut shortcuts: ShortcutSettings) -> ShortcutSe
     shortcuts
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub schema_version: u32,
@@ -1125,6 +1225,12 @@ pub struct AppSettings {
     /// shutdown, consumed (reset to false) on the next launch to resume playback. Windows only.
     #[serde(default)]
     pub resume_playback: bool,
+    /// DSD→PCM gain and output rate (Settings → output).
+    #[serde(default)]
+    pub dsd: DsdPlaybackSettings,
+    /// Now Playing cover size remembered across restarts (shrunk only; see `CoverZoomSettings`).
+    #[serde(default)]
+    pub cover_zoom: CoverZoomSettings,
 }
 
 impl Default for AppSettings {
@@ -1149,6 +1255,8 @@ impl Default for AppSettings {
             window_geometry: None,
             shortcuts: ShortcutSettings::default(),
             resume_playback: false,
+            dsd: DsdPlaybackSettings::default(),
+            cover_zoom: CoverZoomSettings::default(),
         }
     }
 }
@@ -1586,6 +1694,8 @@ struct RawSettings {
     window_geometry: Option<WindowGeometry>,
     shortcuts: Option<serde_json::Value>,
     resume_playback: Option<bool>,
+    dsd: Option<serde_json::Value>,
+    cover_zoom: Option<serde_json::Value>,
 }
 
 fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
@@ -1633,6 +1743,8 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         window_geometry: raw.window_geometry,
         shortcuts: lenient_shortcuts(raw.shortcuts),
         resume_playback: raw.resume_playback.unwrap_or(false),
+        dsd: lenient_dsd_settings(raw.dsd),
+        cover_zoom: lenient_cover_zoom(raw.cover_zoom),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -1983,6 +2095,72 @@ mod tests {
         let settings = reopened.snapshot().unwrap();
         assert!(settings.shuffle);
         assert_eq!(settings.repeat_mode, RepeatMode::All);
+    }
+
+    #[test]
+    fn dsd_settings_default_normalise_and_roundtrip() {
+        let defaults = DsdPlaybackSettings::default();
+        assert_eq!((defaults.gain_db, defaults.output_rate_hz), (3.0, 176_400));
+        let odd = DsdPlaybackSettings { gain_db: 40.0, output_rate_hz: 192_000 }.normalized();
+        assert_eq!((odd.gain_db, odd.output_rate_hz), (6.0, 176_400));
+        assert_eq!(DsdPlaybackSettings { gain_db: 0.2, output_rate_hz: 352_800 }.normalized().gain_db, 1.0);
+        assert_eq!(DsdPlaybackSettings { gain_db: f32::NAN, output_rate_hz: 352_800 }.normalized().gain_db, 3.0);
+
+        let directory = test_directory("dsd-settings");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        assert_eq!(store.snapshot().unwrap().dsd, defaults);
+        store
+            .update(|settings| {
+                settings.dsd = DsdPlaybackSettings { gain_db: 5.0, output_rate_hz: 352_800 };
+                Ok(())
+            })
+            .expect("persist DSD settings");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert_eq!(reopened.snapshot().unwrap().dsd, DsdPlaybackSettings { gain_db: 5.0, output_rate_hz: 352_800 });
+        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["dsd"]["gainDb"], 5.0);
+        assert_eq!(persisted["dsd"]["outputRateHz"], 352_800);
+    }
+
+    #[test]
+    fn only_a_shrunk_cover_is_remembered() {
+        assert_eq!(CoverZoomSettings::default().scale, 1.0);
+        assert_eq!(CoverZoomSettings { scale: 0.6 }.normalized().scale, 0.6);
+        assert_eq!(CoverZoomSettings { scale: 0.1 }.normalized().scale, 0.4, "the minimum is 0.4");
+        assert_eq!(CoverZoomSettings { scale: 2.5 }.normalized().scale, 1.0, "an enlarged cover is not remembered");
+        assert_eq!(CoverZoomSettings { scale: f32::NAN }.normalized().scale, 1.0);
+
+        let directory = test_directory("cover-zoom");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        assert_eq!(store.snapshot().unwrap().cover_zoom, CoverZoomSettings::default());
+        store
+            .update(|settings| {
+                settings.cover_zoom = CoverZoomSettings { scale: 0.55 };
+                Ok(())
+            })
+            .expect("persist cover zoom");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert_eq!(reopened.snapshot().unwrap().cover_zoom, CoverZoomSettings { scale: 0.55 });
+        // A value written by the earlier build (with a pan) is read as its scale, repaired.
+        assert_eq!(
+            lenient_cover_zoom(Some(serde_json::json!({"scale": 2.0, "offsetX": 0.3, "offsetY": 0.1}))).scale,
+            1.0
+        );
+        assert_eq!(lenient_cover_zoom(Some(serde_json::json!({"scale": 0.7, "offsetX": 0.3}))).scale, 0.7);
+        assert_eq!(lenient_cover_zoom(Some(serde_json::json!({"scale": "big"}))), CoverZoomSettings::default());
+        assert_eq!(lenient_cover_zoom(None), CoverZoomSettings::default());
+    }
+
+    #[test]
+    fn malformed_dsd_settings_fall_back_field_by_field() {
+        let parsed = lenient_dsd_settings(Some(serde_json::json!({"gainDb": "loud", "outputRateHz": 352_800})));
+        assert_eq!((parsed.gain_db, parsed.output_rate_hz), (3.0, 352_800));
+        let parsed = lenient_dsd_settings(Some(serde_json::json!({"gainDb": 99, "outputRateHz": 44_100})));
+        assert_eq!((parsed.gain_db, parsed.output_rate_hz), (6.0, 176_400));
+        assert_eq!(lenient_dsd_settings(Some(serde_json::json!(7))), DsdPlaybackSettings::default());
+        assert_eq!(lenient_dsd_settings(None), DsdPlaybackSettings::default());
     }
 
     #[test]

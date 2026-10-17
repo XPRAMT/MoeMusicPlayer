@@ -4,6 +4,8 @@ import {
   COVER_ZOOM_MAX,
   COVER_ZOOM_MIN,
   clampCoverZoom,
+  coverZoomFromFractions,
+  coverZoomToFractions,
   coverZoomTransform,
   getWheelZoomFactor,
   isDoubleTap,
@@ -48,4 +50,19 @@ test('double tap needs two close taps in time and place', () => {
   assert.equal(isDoubleTap({ x: 0, y: 0, t: 0 }, { x: 5, y: 5, t: 200 }), true);
   assert.equal(isDoubleTap({ x: 0, y: 0, t: 0 }, { x: 5, y: 5, t: 900 }), false);
   assert.equal(isDoubleTap({ x: 0, y: 0, t: 0 }, { x: 300, y: 5, t: 100 }), false);
+});
+
+test('a saved zoom round-trips as fractions of the cover size and survives a different cover size', () => {
+  const state = { scale: 2, x: 100, y: -50 };
+  const saved = coverZoomToFractions(state, 400, 400);
+  assert.deepEqual(saved, { scale: 2, offsetX: 0.25, offsetY: -0.125 });
+  assert.deepEqual(coverZoomFromFractions(saved, 400, 400), state);
+  // On a smaller cover the pan scales with it.
+  assert.deepEqual(coverZoomFromFractions(saved, 200, 200), { scale: 2, x: 50, y: -25 });
+  // Missing, malformed or out-of-range values are repaired and the pan is clamped (|offset| <= (scale - 1) * size / 2).
+  assert.deepEqual(coverZoomFromFractions(null, 400, 400), { scale: 1, x: 0, y: 0 });
+  assert.deepEqual(coverZoomFromFractions({ scale: 'big', offsetX: 'left' }, 400, 400), { scale: 1, x: 0, y: 0 });
+  assert.deepEqual(coverZoomFromFractions({ scale: 2, offsetX: 3, offsetY: -3 }, 400, 400), { scale: 2, x: 200, y: -200 });
+  assert.deepEqual(coverZoomFromFractions({ scale: 0.6, offsetX: 1, offsetY: 1 }, 400, 400), { scale: 0.6, x: 0, y: 0 });
+  assert.deepEqual(coverZoomToFractions({ scale: 1, x: 0, y: 0 }, 0, 0), { scale: 1, offsetX: 0, offsetY: 0 });
 });

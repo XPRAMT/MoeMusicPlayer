@@ -4871,3 +4871,38 @@ input:focus-visible {
 .sidebar.floating-surface.is-swiping {
   animation: none;
 }
+
+/* Settings > output > DSD playback */
+.dsd-settings {
+  display: grid;
+  gap: 12px;
+}
+
+.dsd-setting-row {
+  display: grid;
+  gap: 6px;
+}
+
+.dsd-setting-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dsd-setting-label output {
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.dsd-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dsd-setting-hint {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--font-caption);
+}

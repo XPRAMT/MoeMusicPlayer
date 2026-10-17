@@ -1,6 +1,7 @@
 //! The rodio source for DSD→PCM playback (ADR 0016): pulls DSD from a [`DsdStream`], converts it block by block and
 //! hands out interleaved `f32` samples at a fixed PCM rate, delay-compensated and trimmed to the exact frame count.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,15 +9,14 @@ use rodio::source::SeekError;
 use rodio::{ChannelCount, Sample, SampleRate, Source};
 
 use player_dsd::convert::{ConversionPlan, DsdPcmConverter};
-use player_dsd::stream::{DsdError, DsdInfo, DsdStream, DSD_BASE_RATE, DSD_IDLE_BYTE};
+use player_dsd::stream::{DsdError, DsdInfo, DsdStream, DSD_IDLE_BYTE};
 
-/// PCM rate every DSD track is converted to unless told otherwise (ADR 0016).
-pub(crate) const DEFAULT_OUTPUT_RATE: u32 = DSD_BASE_RATE * 4;
-/// Digital gain applied to the ±1 bit mapping. The mapping puts DSD's nominal 0 dB reference (50% modulation) near
-/// −6 dBFS, so DSD would play several dB quieter than PCM. Measured over 25 of the owner's 99 DSF files (whole-track
-/// peaks): median −4.45 dBFS, maximum −3.52 dBFS. +3 dB lifts the loudest of them to −0.5 dBFS, which still clips
-/// nothing, and brings DSD closer to PCM loudness; samples stay `f32` until the device.
-pub(crate) const DEFAULT_GAIN_DB: f32 = 3.0;
+/// PCM rate used by the tests (the playback rate comes from the settings, 176.4 kHz by default).
+#[cfg(test)]
+pub(crate) const DEFAULT_OUTPUT_RATE: u32 = 176_400;
+/// Time constant of the gain smoothing: when the gain setting changes while a track plays, the gain eases to the new
+/// value instead of jumping.
+const GAIN_SMOOTHING_SECONDS: f64 = 0.3;
 
 /// Bytes per channel read from the stream per refill (one DSF block).
 const READ_BYTES: usize = 4096;
@@ -49,10 +49,30 @@ pub(crate) struct DsdPcmSource<S: DsdStream> {
     /// Interleaved output of the current refill.
     pcm: Vec<Sample>,
     pcm_pos: usize,
+    /// Target gain in dB (`f32` bits), shared so it can change while playing.
+    gain_target: Arc<AtomicU32>,
+    /// Linear gain applied now; eases toward the target.
+    gain_now: f32,
+    gain_smoothing: f32,
 }
 
 impl<S: DsdStream> DsdPcmSource<S> {
+    /// A source with a fixed gain.
+    #[cfg(test)]
     pub(crate) fn new(stream: S, out_rate: u32, gain_db: f32) -> Result<Self, DsdError> {
+        Self::with_gain(
+            stream,
+            out_rate,
+            Arc::new(AtomicU32::new(gain_db.to_bits())),
+        )
+    }
+
+    /// A source whose gain follows `gain_db_target` (dB as `f32` bits). It starts at the target's current value.
+    pub(crate) fn with_gain(
+        stream: S,
+        out_rate: u32,
+        gain_db_target: Arc<AtomicU32>,
+    ) -> Result<Self, DsdError> {
         let info = stream.info();
         if info.channels == 0 || info.channels > MAX_CHANNELS {
             return Err(DsdError::Unsupported(format!(
@@ -72,7 +92,10 @@ impl<S: DsdStream> DsdPcmSource<S> {
         let discard_frames = plan.discard_frames() as u64;
         let preroll_bytes = (plan.settle_bytes() * 2).max(MIN_PREROLL_BYTES) as u64;
         let total_frames = info.samples_per_channel / plan.ratio as u64;
-        let converter = DsdPcmConverter::new(plan, channels, gain_db);
+        let converter = DsdPcmConverter::new(plan, channels, 0.0);
+        let gain_now = db_to_linear(f32::from_bits(gain_db_target.load(Ordering::Relaxed)));
+        let gain_smoothing =
+            (1.0 - (-1.0 / (GAIN_SMOOTHING_SECONDS * f64::from(out_rate))).exp()) as f32;
         Ok(Self {
             stream,
             info,
@@ -91,6 +114,9 @@ impl<S: DsdStream> DsdPcmSource<S> {
             chan_out: vec![Vec::new(); channels],
             pcm: Vec::new(),
             pcm_pos: 0,
+            gain_target: gain_db_target,
+            gain_now,
+            gain_smoothing,
         })
     }
 
@@ -129,9 +155,17 @@ impl<S: DsdStream> DsdPcmSource<S> {
             let skip = self.discard.min(produced);
             self.discard -= skip;
             let take = (produced - skip).min(self.total_frames - self.frames_emitted);
+            let target = db_to_linear(f32::from_bits(self.gain_target.load(Ordering::Relaxed)));
             for frame in skip..skip + take {
+                // One-pole smoothing toward the target gain (a no-op once they match).
+                if self.gain_now != target {
+                    self.gain_now += (target - self.gain_now) * self.gain_smoothing;
+                    if (target - self.gain_now).abs() < 1e-6 {
+                        self.gain_now = target;
+                    }
+                }
                 for channel in &self.chan_out {
-                    self.pcm.push(channel[frame as usize]);
+                    self.pcm.push(channel[frame as usize] * self.gain_now);
                 }
             }
             self.frames_emitted += take;
@@ -160,6 +194,10 @@ impl<S: DsdStream> DsdPcmSource<S> {
     fn duration_of(&self, frames: u64) -> Duration {
         Duration::from_secs_f64(frames as f64 / f64::from(self.out_rate))
     }
+}
+
+fn db_to_linear(db: f32) -> f32 {
+    10_f32.powf(db / 20.0)
 }
 
 impl<S: DsdStream> Iterator for DsdPcmSource<S> {
@@ -290,6 +328,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_gain_follows_its_target_without_jumping() {
+        let (file, _) = stereo_file(2.0);
+        let target = Arc::new(AtomicU32::new(0.0_f32.to_bits()));
+        let mut source = DsdPcmSource::with_gain(
+            DsfReader::open(Cursor::new(file)).unwrap(),
+            DEFAULT_OUTPUT_RATE,
+            Arc::clone(&target),
+        )
+        .unwrap();
+        // Level of the 1 kHz tone per 10 ms window (exactly ten cycles, so the fit is clean).
+        const WINDOW: usize = 1_764;
+        let mut levels = Vec::new();
+        let mut frame_index = 0;
+        let take_window = |source: &mut DsdPcmSource<DsfReader<Cursor<Vec<u8>>>>,
+                               frame_index: &mut usize| {
+            let samples: Vec<Sample> = source.by_ref().take(2 * WINDOW).collect();
+            let left: Vec<f32> = samples.iter().step_by(2).copied().collect();
+            let level = fit_sine(&left, *frame_index, 176_400, 1_000.0).0;
+            *frame_index += WINDOW;
+            level
+        };
+        for _ in 0..5 {
+            levels.push(take_window(&mut source, &mut frame_index));
+        }
+        let before = levels[4];
+        // +6 dB (x1.995) from now on.
+        target.store(6.0_f32.to_bits(), Ordering::Relaxed);
+        for _ in 0..130 {
+            levels.push(take_window(&mut source, &mut frame_index));
+        }
+        let after = *levels.last().unwrap();
+        assert!((after / before - 1.995).abs() < 0.03, "{before} -> {after}");
+        // A smooth ease: no 10 ms window is more than 6% louder than the one before it (a jump would be ~100%).
+        let worst = levels
+            .windows(2)
+            .map(|pair| pair[1] / pair[0])
+            .fold(0.0_f64, f64::max);
+        assert!(worst < 1.06, "largest window-to-window rise {worst}");
+        // ...and it really is a ramp: ~30% of the way after one time constant (0.3 s = 30 windows) is well below 100%.
+        assert!(
+            levels[5 + 5] / before < 1.2,
+            "still near the start after 50 ms"
+        );
     }
 
     #[test]

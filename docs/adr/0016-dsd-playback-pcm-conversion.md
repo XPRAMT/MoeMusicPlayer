@@ -76,6 +76,20 @@ Output rate default **176.4 kHz** (DSD64 ÷16, DSD128 ÷32, DSD256 ÷64, DSD512 
 
 Synthetic DSD from a high-order sigma-delta modulator, written as DSF by the tests: 1 kHz tone amplitude and flatness (±0.02 dB to 20 kHz); alias rejection at `k·R/8 ± 1…20 kHz` of at least 100 dB; an impulse test for delay compensation; sequential versus seeked output equality over random positions; exact output frame count; DSD256 stereo conversion several times faster than real time. An `#[ignore]` smoke test reads a real file from `D:\Music\DSD`.
 
+## Settings (added later)
+
+Settings → output → "DSD 播放" offers a manual gain of +1 to +6 dB (default +3) and the PCM output rate, 176.4 kHz (default) or 352.8 kHz. The gain is a shared atomic that playing sources follow with a 0.3 s time constant, so changing it never jumps; a new output rate reloads the playing DSD track from its position. An automatic gain (whole-track peak analysis, target −0.1 dBFS) was built and then removed: the analysis is disk-bound (3 to 8 s for a cold 200 to 650 MB file, about 22 GB for the owner's library), so it could not be instant and the owner chose manual only. A by-product of that measurement: the peak at 352.8 kHz is about 0 to 2 dB higher than at 176.4 kHz, because more ultrasonic noise is kept.
+
+## Filter style (considered, not offered)
+
+Dedicated players expose "sharp / slow roll-off" and linear versus minimum phase because their conversion goes straight to 44.1 or 48 kHz, where the filter's transition band sits at 20 kHz. Here the DSD stages convert to 176.4 or 352.8 kHz with a flat passband up to 40 kHz (stage-A passband edge about 98 kHz, stopband from about 313 kHz), and the audible 20 kHz anti-aliasing is done by the shared rubato resampler that every PCM track also uses. So the styles would differ only far above the audio band:
+
+- A shorter, gentler linear-phase design (about 64 taps, roughly 80 dB stopband instead of 110 dB) saves about 10 µs of delay and some CPU, at the cost of more ultrasonic leakage.
+- A longer, steeper one (256 taps, about 125 dB) adds about 20 µs of delay for no audible gain.
+- Minimum phase removes the (tens of microseconds of) pre-ringing and halves the delay, but makes the phase non-linear near the ultrasonic cutoff; in the audio band it is indistinguishable.
+
+Total delay of the current design is about 100 µs at DSD64. If a lower output rate (88.2 or 44.1 kHz) is ever offered, the filter style becomes audible and should be revisited then.
+
 ## Considered options
 
 - **Use `rdsd2pcm` / `dsd2dxd`:** the most complete, but GPL-3.0, which forbids the noncommercial restriction. Used only as an offline reference for comparing frequency response, never linked or shipped.

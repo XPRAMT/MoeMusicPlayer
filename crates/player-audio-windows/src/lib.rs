@@ -179,6 +179,94 @@ pub struct ResamplingInfo {
     pub dsee_output_rate: Option<u32>,
 }
 
+/// DSD→PCM playback settings (settings → output, ADR 0016).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DsdSettings {
+    /// Digital gain in dB (the settings page offers +1 to +6). Changes follow smoothly while a track plays.
+    pub gain_db: f32,
+    /// PCM rate the DSD is converted to: 176 400 or 352 800 Hz. A change reloads the playing track.
+    pub output_rate: u32,
+}
+
+/// DSD output rates the converter offers.
+pub const DSD_OUTPUT_RATES: [u32; 2] = [176_400, 352_800];
+/// Range of the manual DSD gain in dB.
+pub const DSD_GAIN_RANGE_DB: (f32, f32) = (1.0, 6.0);
+/// The gain DSD plays at unless set: DSD's nominal level sits near −6 dBFS, and +3 dB lifted the loudest of 25 of the
+/// owner's files to −0.5 dBFS at 176.4 kHz.
+pub const DSD_DEFAULT_GAIN_DB: f32 = 3.0;
+
+impl Default for DsdSettings {
+    fn default() -> Self {
+        Self {
+            gain_db: DSD_DEFAULT_GAIN_DB,
+            output_rate: DSD_OUTPUT_RATES[0],
+        }
+    }
+}
+
+impl DsdSettings {
+    /// The settings with an out-of-range gain clamped and an unsupported rate replaced by 176.4 kHz.
+    pub fn normalized(self) -> Self {
+        let gain_db = if self.gain_db.is_finite() {
+            self.gain_db.clamp(DSD_GAIN_RANGE_DB.0, DSD_GAIN_RANGE_DB.1)
+        } else {
+            DSD_DEFAULT_GAIN_DB
+        };
+        let output_rate = if DSD_OUTPUT_RATES.contains(&self.output_rate) {
+            self.output_rate
+        } else {
+            DSD_OUTPUT_RATES[0]
+        };
+        Self {
+            gain_db,
+            output_rate,
+        }
+    }
+}
+
+/// DSD settings shared with the backend. The gain is a shared atomic so sources that are already playing follow it.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Debug)]
+pub(crate) struct DsdOptions {
+    output_rate: AtomicU32,
+    /// Gain in dB as `f32` bits.
+    gain_db_bits: Arc<AtomicU32>,
+}
+
+impl Default for DsdOptions {
+    fn default() -> Self {
+        let defaults = DsdSettings::default();
+        Self {
+            output_rate: AtomicU32::new(defaults.output_rate),
+            gain_db_bits: Arc::new(AtomicU32::new(defaults.gain_db.to_bits())),
+        }
+    }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl DsdOptions {
+    pub(crate) fn settings(&self) -> DsdSettings {
+        DsdSettings {
+            gain_db: f32::from_bits(self.gain_db_bits.load(AtomicOrdering::Relaxed)),
+            output_rate: self.output_rate.load(AtomicOrdering::Relaxed),
+        }
+    }
+
+    pub(crate) fn set(&self, settings: DsdSettings) {
+        let settings = settings.normalized();
+        self.output_rate
+            .store(settings.output_rate, AtomicOrdering::Relaxed);
+        self.gain_db_bits
+            .store(settings.gain_db.to_bits(), AtomicOrdering::Relaxed);
+    }
+
+    /// The shared gain every DSD source follows.
+    pub(crate) fn gain_handle(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.gain_db_bits)
+    }
+}
+
 /// Resampling preferences shared with the backend factory, so an output that
 /// is rebuilt after a device change opens in the current mode and, in
 /// Windows-builtin mode, directly at the current track's rate.
@@ -189,6 +277,7 @@ pub(crate) struct ResamplingConfig {
     /// Rate of the most recently loaded track; 0 when unknown.
     track_rate_hint: AtomicU32,
     dsee_hx: AtomicBool,
+    pub(crate) dsd: Arc<DsdOptions>,
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -198,6 +287,7 @@ impl ResamplingConfig {
             mode: AtomicU8::new(Self::encode(mode)),
             track_rate_hint: AtomicU32::new(0),
             dsee_hx: AtomicBool::new(dsee_hx),
+            dsd: Arc::new(DsdOptions::default()),
         }
     }
 
@@ -352,6 +442,11 @@ pub trait AudioBackend: 'static {
     fn set_dsee_hx(&mut self, _enabled: bool) -> Result<(), AudioError> {
         Ok(())
     }
+    /// Apply new DSD settings. A change of output rate restarts a loaded DSD track at its current position; the gain
+    /// is followed live.
+    fn set_dsd_settings(&mut self, _settings: DsdSettings) -> Result<(), AudioError> {
+        Ok(())
+    }
     /// Current sample-rate path, for status display.
     fn resampling_info(&self) -> Option<ResamplingInfo> {
         None
@@ -439,6 +534,7 @@ enum Command {
     SetVolume(f32),
     SetResampling(ResamplingMode),
     SetDseeHx(bool),
+    SetDsdSettings(DsdSettings),
     CheckpointAccounting,
     Shutdown,
 }
@@ -673,6 +769,22 @@ impl PlayerHandle {
             config.set_dsee_hx(enabled);
         }
         self.enqueue_with_ack(Command::SetDseeHx(enabled))
+    }
+
+    /// Set the DSD settings right away, without touching the loaded track (for start-up).
+    pub fn configure_dsd(&self, settings: DsdSettings) {
+        if let Some(config) = self.inner.resampling.as_ref() {
+            config.dsd.set(settings);
+        }
+    }
+
+    /// Change the DSD settings. The gain follows smoothly while a track plays; a new output rate restarts a loaded
+    /// DSD track from its position.
+    pub fn request_set_dsd_settings(
+        &self,
+        settings: DsdSettings,
+    ) -> Result<CommandTicket, AudioError> {
+        self.enqueue_with_ack(Command::SetDsdSettings(settings))
     }
 
     /// Sample and request persistence of the final active playback interval
@@ -1265,7 +1377,7 @@ fn handle_command_during_recovery(
             Ok(())
         }
         // The worker already recorded the preference; the rebuilt backend gets it.
-        Command::SetResampling(_) | Command::SetDseeHx(_) => Ok(()),
+        Command::SetResampling(_) | Command::SetDseeHx(_) | Command::SetDsdSettings(_) => Ok(()),
         Command::CheckpointAccounting => {
             meter.request_flush();
             Ok(())
@@ -1537,6 +1649,27 @@ fn handle_command(
         Command::SetDseeHx(enabled) => {
             let state = read_snapshot(snapshot).state;
             if let Err(error) = backend.set_dsee_hx(enabled) {
+                set_error(snapshot, events, error.clone());
+                return Err(error);
+            }
+            if current_path.is_some()
+                && matches!(
+                    state,
+                    PlaybackState::Ready | PlaybackState::Playing | PlaybackState::Paused
+                )
+            {
+                let position = backend.position();
+                update_snapshot(snapshot, events, |snapshot| {
+                    snapshot.position = snapshot
+                        .duration
+                        .map_or(position, |duration| position.min(duration));
+                });
+                meter.reset_anchor(state, position);
+            }
+        }
+        Command::SetDsdSettings(settings) => {
+            let state = read_snapshot(snapshot).state;
+            if let Err(error) = backend.set_dsd_settings(settings) {
                 set_error(snapshot, events, error.clone());
                 return Err(error);
             }
@@ -1835,6 +1968,65 @@ fn update_snapshot(
     };
     if current_state != previous_state {
         let _ = events.try_send(AudioEvent::StateChanged(current_state));
+    }
+}
+
+#[cfg(test)]
+mod dsd_settings_tests {
+    use super::*;
+
+    #[test]
+    fn settings_are_normalised_and_shared_through_the_options() {
+        assert_eq!(DsdSettings::default().gain_db, 3.0);
+        assert_eq!(DsdSettings::default().output_rate, 176_400);
+        let odd = DsdSettings {
+            gain_db: 99.0,
+            output_rate: 192_000,
+        }
+        .normalized();
+        assert_eq!(
+            odd,
+            DsdSettings {
+                gain_db: 6.0,
+                output_rate: 176_400
+            }
+        );
+        assert_eq!(
+            DsdSettings {
+                gain_db: -4.0,
+                output_rate: 352_800
+            }
+            .normalized()
+            .gain_db,
+            1.0
+        );
+        assert_eq!(
+            DsdSettings {
+                gain_db: f32::NAN,
+                output_rate: 352_800
+            }
+            .normalized()
+            .gain_db,
+            3.0
+        );
+        let options = DsdOptions::default();
+        let handle = options.gain_handle();
+        options.set(DsdSettings {
+            gain_db: 5.0,
+            output_rate: 352_800,
+        });
+        assert_eq!(
+            options.settings(),
+            DsdSettings {
+                gain_db: 5.0,
+                output_rate: 352_800
+            }
+        );
+        assert_eq!(
+            f32::from_bits(handle.load(AtomicOrdering::Relaxed)),
+            5.0,
+            "live sources see the new gain"
+        );
     }
 }
 

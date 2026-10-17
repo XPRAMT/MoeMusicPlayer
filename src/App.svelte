@@ -147,7 +147,15 @@
   import type { AndroidAllFilesAccessStatus, AndroidWallpaperBackdropStatus } from './lib/ipc';
   import { formatSlideshowFolderLabel } from './lib/background-source-label.js';
   import { swipeDismiss } from './lib/swipe-dismiss.js';
-  import { coverZoom, COVER_ZOOM_MIN } from './lib/cover-zoom.js';
+  import { coverZoom, coverZoomFromFractions, coverZoomToFractions, COVER_ZOOM_MIN } from './lib/cover-zoom.js';
+  import {
+    DSD_GAIN_OPTIONS_DB,
+    DSD_OUTPUT_RATES_HZ,
+    formatDsdGain,
+    formatDsdOutputRate,
+    normalizeDsdSettings,
+  } from './lib/dsd-settings.js';
+  import type { DsdPlaybackSettings } from './lib/ipc';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import SyncErrorDetails from './lib/SyncErrorDetails.svelte';
@@ -513,6 +521,11 @@
   let resamplingModeError = $state<string | null>(null);
   let dseeHx = $state(false);
   let dseeHxState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
+  let dsdSettings = $state<DsdPlaybackSettings>({ gainDb: 3, outputRateHz: 176_400 });
+  let dsdSettingsState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
+  let dsdSettingsError = $state<string | null>(null);
+  let dsdSettingsRevision = 0;
+  let dsdSettingsQueue: Promise<void> = Promise.resolve();
   let dseeHxError = $state<string | null>(null);
   let nowPlayingAppearancePreferences = $state<NowPlayingAppearancePreferences>(
     normalizeNowPlayingAppearancePreferences(DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES),
@@ -577,12 +590,18 @@
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   // The top bar shows the recording date only when the track has one (no "—" placeholder).
   let nowPlayingReleaseDate = $derived(formatTrackColumnValue('year', playback?.currentTrack ?? {}, () => '—'));
-  let coverZoomScale = $state(1);
-  // Last zoom state; restored onto the cover element when it is re-created (track change).
-  let coverZoomSaved = $state.raw<{ scale: number; x: number; y: number }>({ scale: 1, x: 0, y: 0 });
+  // The cover zoom of this run (scale, and pan as fractions of the cover size): it stays across tracks and closing the
+  // page; a double click resets it, and an enlarged cover also returns to the original size when the track changes
+  // (a shrunk cover stays). Across restarts only a shrunk cover is remembered
+  // (settings.json `coverZoom.scale`, 0.4 to 1); an enlarged cover and its pan are not saved.
+  let coverZoomPersisted = $state.raw<{ scale: number; offsetX: number; offsetY: number }>({ scale: 1, offsetX: 0, offsetY: 0 });
+  let coverZoomScale = $derived(coverZoomPersisted.scale);
+  // The base cover frame is measured at zoom 1 first; until it exists the layout ignores the saved zoom.
+  let coverBaseReady = $state(false);
+  let coverLayoutScale = $derived(coverBaseReady ? coverZoomScale : 1);
   let coverBaseAvailable: { width: number; height: number } | null = null;
   // 1 at original size or larger, fading to 0 as the cover shrinks to the minimum: the artwork pane's fr share.
-  let coverShrinkShare = $derived(Math.min(1, Math.max(0, (coverZoomScale - COVER_ZOOM_MIN) / (1 - COVER_ZOOM_MIN))));
+  let coverShrinkShare = $derived(Math.min(1, Math.max(0, (coverLayoutScale - COVER_ZOOM_MIN) / (1 - COVER_ZOOM_MIN))));
   let sources = $state<LibrarySource[]>([]);
   let excludedFolders = $state<ExcludedFolder[]>([]);
   let sourceError = $state<string | null>(null);
@@ -1096,6 +1115,65 @@
     if (!coverFrame || coverFrame.width !== nextSize.width || coverFrame.height !== nextSize.height) {
       coverFrame = nextSize;
     }
+    coverBaseReady = true;
+  }
+
+  function handleCoverZoom(zoom: { scale: number; x: number; y: number }, size: { width: number; height: number }): void {
+    const next = coverZoomToFractions(zoom, size.width, size.height);
+    // A cover with no size yet cannot express its pan as a fraction: keep the saved one.
+    coverZoomPersisted = size.width > 0 && size.height > 0
+      ? next
+      : { ...next, offsetX: coverZoomPersisted.offsetX, offsetY: coverZoomPersisted.offsetY };
+    scheduleCoverZoomSave();
+  }
+
+  // An enlarged cover goes back to the original size when the track changes; a shrunk cover stays shrunk.
+  let coverZoomTrackId: string | null | undefined;
+  $effect(() => {
+    const trackId = playback?.currentTrack?.id ?? null;
+    untrack(() => {
+      const changed = coverZoomTrackId !== undefined && coverZoomTrackId !== trackId;
+      coverZoomTrackId = trackId;
+      if (changed && coverZoomPersisted.scale > 1) coverZoomPersisted = { scale: 1, offsetX: 0, offsetY: 0 };
+    });
+  });
+
+  function restoreCoverZoom(node: HTMLElement): { scale: number; x: number; y: number } {
+    return coverZoomFromFractions(coverZoomPersisted, node.offsetWidth, node.offsetHeight);
+  }
+
+  let coverZoomSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let coverZoomLastSaved = '';
+
+  function scheduleCoverZoomSave(): void {
+    if (!isTauri()) return;
+    if (coverZoomSaveTimer) clearTimeout(coverZoomSaveTimer);
+    coverZoomSaveTimer = setTimeout(() => void saveCoverZoom(), 300);
+  }
+
+  async function saveCoverZoom(): Promise<void> {
+    coverZoomSaveTimer = null;
+    // Only a shrunk cover is remembered; enlarging is saved as the original size.
+    const scale = Math.min(1, coverZoomPersisted.scale);
+    const key = String(scale);
+    if (key === coverZoomLastSaved) return;
+    try {
+      await invokeCommand('settings_set_cover_zoom', { scale });
+      coverZoomLastSaved = key;
+    } catch (error) {
+      console.warn('無法保存封面縮放：', getErrorText(error));
+    }
+  }
+
+  async function loadCoverZoom(): Promise<void> {
+    try {
+      const stored = await invokeCommand('settings_get_cover_zoom', {});
+      const scale = Number.isFinite(stored.scale) ? Math.min(1, stored.scale) : 1;
+      coverZoomPersisted = { scale, offsetX: 0, offsetY: 0 };
+      coverZoomLastSaved = String(scale);
+    } catch (error) {
+      console.warn('無法讀取封面縮放：', getErrorText(error));
+    }
   }
 
   $effect(() => {
@@ -1230,6 +1308,8 @@
         loadNowPlayingLayout(),
         loadResamplingMode(),
         loadDseeHx(),
+        loadDsdSettings(),
+        loadCoverZoom(),
         loadShortcutSettings(),
         loadNowPlayingAppearancePreferences(),
         loadLyricsPreferences(),
@@ -1990,6 +2070,49 @@
         if (revision !== dseeHxRevision) return;
         dseeHxState = 'error';
         dseeHxError = getErrorText(error);
+      }
+      void loadPlaybackSnapshot(false);
+    });
+  }
+
+  async function loadDsdSettings(): Promise<void> {
+    const revision = dsdSettingsRevision;
+    try {
+      const stored = await invokeCommand('settings_get_dsd', {});
+      if (revision !== dsdSettingsRevision) return;
+      dsdSettings = normalizeDsdSettings(stored);
+      dsdSettingsState = 'saved';
+      dsdSettingsError = null;
+    } catch (error) {
+      if (revision !== dsdSettingsRevision) return;
+      dsdSettingsState = 'error';
+      dsdSettingsError = `無法讀取 DSD 設定：${getErrorText(error)}`;
+    }
+  }
+
+  function setDsdSettings(patch: Partial<DsdPlaybackSettings>): void {
+    const next = normalizeDsdSettings({ ...dsdSettings, ...patch });
+    dsdSettings = next;
+    dsdSettingsError = null;
+    const revision = ++dsdSettingsRevision;
+    if (!isTauri()) {
+      dsdSettingsState = 'preview';
+      dsdSettingsError = '瀏覽器預覽不會保存 DSD 設定。';
+      return;
+    }
+    dsdSettingsState = 'saving';
+    dsdSettingsQueue = dsdSettingsQueue.catch(() => undefined).then(async () => {
+      if (revision !== dsdSettingsRevision) return;
+      try {
+        const saved = await invokeCommand('settings_set_dsd', { gainDb: next.gainDb, outputRateHz: next.outputRateHz });
+        if (revision !== dsdSettingsRevision) return;
+        dsdSettings = normalizeDsdSettings(saved);
+        dsdSettingsState = 'saved';
+        dsdSettingsError = null;
+      } catch (error) {
+        if (revision !== dsdSettingsRevision) return;
+        dsdSettingsState = 'error';
+        dsdSettingsError = getErrorText(error);
       }
       void loadPlaybackSnapshot(false);
     });
@@ -3613,7 +3736,7 @@
                     type="range"
                     min={MIN_ALBUM_CARD_MAX_WIDTH_PX}
                     max={MAX_ALBUM_CARD_MAX_WIDTH_PX}
-                    step="1"
+                    step="10"
                     value={albumCardMaxWidthPx}
                     aria-label="專輯卡片最大寬度"
                     oninput={(event) => previewAlbumCardMaxWidth(Number(event.currentTarget.value))}
@@ -3715,6 +3838,48 @@
                       <small>串流透過 Sony Music Center 濾鏡處理，需要先安裝 Sony Music Center，播放器載入 'C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax'，本專案不會散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。</small>
                     </span>
                   </label>
+                </div>
+                <div class="settings-panel-header">
+                  <div>
+                    <h3>DSD 播放</h3>
+                    <p>DSD（.dsf）會先在播放器內轉成 PCM 再輸出。增益補償 DSD 較低的標稱電平；播放中調整增益會平滑漸變，不會突然變大聲。改變輸出取樣率時，正在播放的 DSD 曲目會從目前位置重新開始。</p>
+                  </div>
+                </div>
+                <div class="dsd-settings" role="group" aria-label="DSD 播放設定">
+                  <div class="dsd-setting-row" role="group" aria-label="DSD 增益">
+                    <span class="dsd-setting-label"><strong>增益</strong><output>{formatDsdGain(dsdSettings.gainDb)}</output></span>
+                    <div class="dsd-choice-row">
+                      {#each DSD_GAIN_OPTIONS_DB as option (option)}
+                        <button
+                          type="button"
+                          class="soft-button"
+                          class:is-active={dsdSettings.gainDb === option}
+                          aria-pressed={dsdSettings.gainDb === option}
+                          aria-label={`DSD 增益 ${formatDsdGain(option)}`}
+                          disabled={dsdSettingsState === 'loading'}
+                          onclick={() => setDsdSettings({ gainDb: option })}
+                        >{formatDsdGain(option)}</button>
+                      {/each}
+                    </div>
+                  </div>
+                  <div class="dsd-setting-row" role="group" aria-label="DSD 輸出取樣率">
+                    <span class="dsd-setting-label"><strong>輸出取樣率</strong><output>{formatDsdOutputRate(dsdSettings.outputRateHz)}</output></span>
+                    <div class="dsd-choice-row">
+                      {#each DSD_OUTPUT_RATES_HZ as rate (rate)}
+                        <button
+                          type="button"
+                          class="soft-button"
+                          class:is-active={dsdSettings.outputRateHz === rate}
+                          aria-pressed={dsdSettings.outputRateHz === rate}
+                          aria-label={`DSD 輸出取樣率 ${formatDsdOutputRate(rate)}`}
+                          disabled={dsdSettingsState === 'loading'}
+                          onclick={() => setDsdSettings({ outputRateHz: rate })}
+                        >{formatDsdOutputRate(rate)}</button>
+                      {/each}
+                    </div>
+                  </div>
+                  <p class="dsd-setting-hint">352.8 kHz 保留較多超音波成分，峰值通常比 176.4 kHz 高約 0 到 2 dB；增益較高時請留意削波。</p>
+                  {#if dsdSettingsError}<p class="source-error-message" role="alert">{dsdSettingsError}</p>{/if}
                 </div>
               </div>
             {:else if settingsSection === 'now-playing'}
@@ -4525,7 +4690,7 @@
         <div class="now-playing-overlay-content">
           <section class="now-playing-view" aria-label="正在播放" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}
             style:--np-cover-width={coverFrame ? `${coverFrame.width}px` : undefined}
-            style:--np-cover-zoom={coverZoomScale}
+            style:--np-cover-zoom={coverLayoutScale}
             style:--np-art-col-a={`${(1.05 * coverShrinkShare).toFixed(4)}fr`}
             style:--np-art-col-b={`${(0.95 * coverShrinkShare).toFixed(4)}fr`}
             style:--np-art-row={`${(1.18 * coverShrinkShare).toFixed(4)}fr`}
@@ -4537,7 +4702,7 @@
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
-                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: (zoom) => { coverZoomSaved = { ...zoom }; coverZoomScale = zoom.scale; }, initial: coverZoomSaved }}
+                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: handleCoverZoom, initial: restoreCoverZoom, syncScale: coverZoomPersisted.scale }}
                   use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() } }}
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}

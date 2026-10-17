@@ -127,6 +127,18 @@ export interface TrackListColumnSettings {
 }
 
 export type NowPlayingLayout = 'a' | 'b';
+/** DSD→PCM playback settings: digital gain (1 to 6 dB) and the PCM rate DSD is converted to. */
+export interface DsdPlaybackSettings {
+  gainDb: number;
+  outputRateHz: number;
+}
+
+/** Now Playing cover size remembered across restarts (shrunk only). */
+export interface CoverZoomSettings {
+  /** 0.4 to 1; only a shrunk cover is remembered (an enlarged one is stored as 1). */
+  scale: number;
+}
+
 export type ResamplingMode = 'windowsBuiltin' | 'highQuality';
 export type CoverCornerStyle = 'rounded' | 'square';
 export type TimelineStyle = 'edge';
@@ -682,6 +694,22 @@ interface IpcContract {
   settings_set_dsee_hx: {
     args: { enabled: boolean };
     result: boolean;
+  };
+  settings_get_dsd: {
+    args: Record<string, never>;
+    result: DsdPlaybackSettings;
+  };
+  settings_set_dsd: {
+    args: { gainDb: number; outputRateHz: number };
+    result: DsdPlaybackSettings;
+  };
+  settings_get_cover_zoom: {
+    args: Record<string, never>;
+    result: CoverZoomSettings;
+  };
+  settings_set_cover_zoom: {
+    args: { scale: number };
+    result: CoverZoomSettings;
   };
   settings_get_shortcuts: {
     args: Record<string, never>;
