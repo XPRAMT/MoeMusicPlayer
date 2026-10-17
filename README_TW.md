@@ -65,4 +65,4 @@ MoeMusicPlayer 是**原始碼公開（source-available）軟體，不是開源�
 - 可重新散佈（含修改版），條件是沿用相同授權；散佈時須附上授權全文（或網址）與 [NOTICE](NOTICE) 內的 `Required Notice:` 行，讓取得者能找到原始來源。
 - 禁止商業使用。
 
-美術素材：`icon/SilverWolfIcon.png` 是作者以 AI 生成的非官方圖，隨本授權提供；圖中角色的權利屬於其權利人。不在此授權範圍：`src/assets/hi-res-badge.svg` 與 `icon/DefaultCover.jpg`（詳見 [NOTICE](NOTICE)），其權利屬於各自的權利人。專案相依的第三方軟體維持各自的授權；「設定 → 關於」與 `licenses/credits.json` 列出版本與連結。
+美術素材：`icon/SilverWolfIcon.png` 與 `icon/DefaultCover.jpg` 是作者以 AI 生成的非官方圖，隨本授權提供；前者圖中角色的權利屬於其權利人。不在此授權範圍：`src/assets/hi-res-badge.svg`（商標，詳見 [NOTICE](NOTICE)），其權利屬於權利人。專案相依的第三方軟體維持各自的授權；「設定 → 關於」與 `licenses/credits.json` 列出版本與連結。
