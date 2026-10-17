@@ -776,6 +776,17 @@ interface IpcContract {
     args: Record<string, never>;
     result: RuntimeCapabilities;
   };
+  /** Where the track is in the library list as pages see it (0-based), or null when the list does not contain it. */
+  library_get_track_position: {
+    args: {
+      query: string | null;
+      queryAlternates: string[];
+      fieldFilter: TrackFieldFilter | null;
+      sort: LibraryListSort;
+      trackId: string;
+    };
+    result: number | null;
+  };
   library_get_page: {
     args: TrackPageRequest;
     result: TrackPage;

@@ -4602,6 +4602,7 @@
                 groupingEnabled={groupingEnabled}
                 sort={librarySort}
                 livePlayCount={livePlayCount}
+                locateTrackId={playback?.currentTrack?.id ?? null}
                 onPlay={playTrack}
                 onSort={handleLibrarySort}
                 onColumnResize={handleTrackColumnResize}

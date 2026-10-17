@@ -370,12 +370,12 @@
   </PagedVirtualList>
   <button
     type="button"
-    class="queue-locate-fab"
+    class="locate-fab"
     aria-label={tr("定位到目前播放曲目")}
     use:appTooltip={tr('定位到目前播放曲目')}
     disabled={!canLocateCurrent || locating}
     onclick={() => void locateCurrentTrack()}
-  ><span class="queue-locate-fab-dot" aria-hidden="true"></span></button>
+  ><span class="locate-fab-dot" aria-hidden="true"></span></button>
 {/if}
 </div>
 
@@ -400,47 +400,5 @@
     margin: 0 0 8px;
     color: var(--text-soft);
     font-size: var(--font-caption);
-  }
-
-  .queue-locate-fab {
-    position: absolute;
-    right: 28px;
-    bottom: 28px;
-    z-index: 4;
-    display: grid;
-    width: 38px;
-    height: 38px;
-    place-items: center;
-    padding: 0;
-    border: 1px solid var(--line);
-    border-radius: 50%;
-    color: var(--text);
-    background: color-mix(in srgb, var(--text-inverse) var(--quick-settings-opacity, 70%), transparent);
-    -webkit-backdrop-filter: blur(var(--quick-settings-blur, 12px));
-    backdrop-filter: blur(var(--quick-settings-blur, 12px));
-    cursor: pointer;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-  }
-
-  .queue-locate-fab-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: currentColor;
-  }
-
-  .queue-locate-fab:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--accent-text) 55%, var(--line));
-    color: var(--accent-text);
-  }
-
-  .queue-locate-fab:disabled {
-    cursor: default;
-    opacity: 0.45;
-  }
-
-  .queue-locate-fab:focus-visible {
-    outline: 2px solid var(--accent-text);
-    outline-offset: 2px;
   }
 </style>

@@ -3009,6 +3009,63 @@ async fn library_get_page(
     .await
 }
 
+/// Where `track_id` is in the library list as the page query orders it (0-based), or `None` when the list does not
+/// contain it (a filter hides it, or it is not in the library). The library page's "locate the playing track" button
+/// scrolls there.
+#[tauri::command]
+async fn library_get_track_position(
+    app: AppHandle,
+    query: Option<String>,
+    query_alternates: Option<Vec<String>>,
+    field_filter: Option<TrackFieldFilter>,
+    sort: Option<TrackListSort>,
+    track_id: String,
+) -> Result<Option<u64>, String> {
+    let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
+    let request = ListTracksQuery {
+        query,
+        field_filter,
+        offset: 0,
+        limit: u32::MAX,
+        sort: sort.unwrap_or_default(),
+    };
+    let query_alternates = query_alternates.unwrap_or_default();
+    run_database_work(app, move |state| {
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        #[cfg(target_os = "windows")]
+        if let Some(temporary_database) = state
+            .playback
+            .as_ref()
+            .filter(|playback| playback.external_queue_active.load(Ordering::Acquire))
+            .and_then(|playback| {
+                playback
+                    .temporary_catalog
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
+        {
+            // The page query merges the Explorer-opened tracks into the library list: find the track in that merge.
+            let page = merged_library_page(database, &temporary_database, request, &query_alternates)
+                .map_err(|error| error.to_string())?;
+            return Ok(page
+                .items
+                .iter()
+                .position(|track| track.id == track_id)
+                .map(|index| index as u64));
+        }
+        database
+            .track_position(&request, &query_alternates, track_id)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
 #[tauri::command]
 async fn library_get_quick_index_for_tracks(
     app: AppHandle,
@@ -10556,6 +10613,7 @@ pub fn run() {
             settings_set_shortcuts,
             get_runtime_capabilities,
             library_get_page,
+            library_get_track_position,
             library_create_artist_index_snapshot,
             library_get_artist_index_snapshot_page,
             library_resolve_artist_index_entry,

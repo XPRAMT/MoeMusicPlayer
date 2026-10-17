@@ -152,6 +152,7 @@
   "目前沒有可用的播放清單來源。": "No playlist source is available.",
   "目前沒有可定位的播放曲目。": "There is no playing track to locate.",
   "目前來源：{0}（開啟候選以手動指定）": "Current source: {0} (open the candidates to choose manually)",
+  "目前的列表（含搜尋與篩選）中沒有這首曲目。": "This track is not in the current list (including the search and filters).",
   "目前封面": "Current cover",
   "目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。": "This is a browser preview. Open the local library from the MoeMusicPlayer desktop app.",
   "目前啟用的曲庫沒有專輯資料。": "The enabled library has no album data.",

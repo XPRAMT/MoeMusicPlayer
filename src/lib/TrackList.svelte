@@ -31,6 +31,7 @@
   } from './track-columns.js';
   import { withLivePlayedMs } from './live-play-count.js';
   import { PagedListController } from './track-list-data.js';
+  import { appTooltip } from './app-tooltip.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
@@ -68,6 +69,9 @@
     onSort?: (columnId: TrackListColumnPreference['id']) => void;
     fieldFilter?: TrackPageRequest['fieldFilter'];
     livePlayCount?: { trackId: string; playedMs: number }[];
+    /** Shows the floating "locate the playing track" button (library list only): the playing track's id, or null when
+     *  nothing plays. Left out, there is no button. */
+    locateTrackId?: string | null;
   }
 
   let {
@@ -101,6 +105,7 @@
     onSort,
     livePlayCount = [],
     fieldFilter = null,
+    locateTrackId,
   }: Props = $props();
 
   let normalizedColumns = $derived(normalizeTrackColumnPreferences(columns));
@@ -260,6 +265,41 @@
     return listData.itemAt(index);
   }
 
+  let scrollToIndexRequest = $state<{ index: number; token: number } | null>(null);
+  let scrollRequestToken = 0;
+  let locating = $state(false);
+  let locateError = $state<string | null>(null);
+  let showLocate = $derived(locateTrackId !== undefined && !fetchPage);
+
+  /** Scroll the list to the playing track: ask the backend where it is in this list's order, load that page, scroll. */
+  async function locateCurrentTrack(): Promise<void> {
+    if (locating || !locateTrackId || snapshot.totalCount === 0) return;
+    locating = true;
+    locateError = null;
+    try {
+      const currentQuery = query.trim() || null;
+      const index = await invokeCommand('library_get_track_position', {
+        query: currentQuery,
+        queryAlternates: (await getSearchVariants(currentQuery)).slice(1),
+        fieldFilter: fieldFilter ?? null,
+        sort: normalizedSort,
+        trackId: locateTrackId,
+      });
+      if (index === null) {
+        locateError = tr('目前的列表（含搜尋與篩選）中沒有這首曲目。');
+        return;
+      }
+      const start = Math.max(0, index - 250);
+      await listData.ensureRange(start, start + 500);
+      scrollRequestToken += 1;
+      scrollToIndexRequest = { index, token: scrollRequestToken };
+    } catch (error) {
+      locateError = getErrorText(error);
+    } finally {
+      locating = false;
+    }
+  }
+
   function handleSort(columnId: string): void {
     onSort?.(columnId as TrackListColumnPreference['id']);
   }
@@ -269,12 +309,16 @@
   }
 </script>
 
-<div class="track-list-shell" class:album-detail-overlay={leadingOverlayHeight > 0}>
+<div class="track-list-shell" class:album-detail-overlay={leadingOverlayHeight > 0} class:has-locate={showLocate}>
 {#if snapshot.errors.length > 0}
   <div class="track-list-error" role="alert">
     <span>{getErrorText(snapshot.errors[0]?.message)}</span>
     <button type="button" class="text-button" onclick={retryFirstError}>{tr("重試載入")}</button>
   </div>
+{/if}
+
+{#if locateError}
+  <div class="locate-status" role="status">{locateError}</div>
 {/if}
 
 {#if snapshot.totalCount === 0}
@@ -309,6 +353,7 @@
     className="track-list-viewport"
     rowClassName="track-row virtual-track-row configurable-track-grid"
     listName={tr("曲庫")}
+    {scrollToIndexRequest}
     onRange={handleRange}
     onPlay={(track) => playRow(track)}
     {onViewportScrollTopChange}
@@ -349,6 +394,16 @@
       {/if}
     {/snippet}
   </PagedVirtualList>
+  {#if showLocate}
+    <button
+      type="button"
+      class="locate-fab"
+      aria-label={tr("定位到目前播放曲目")}
+      use:appTooltip={tr('定位到目前播放曲目')}
+      disabled={!locateTrackId || locating}
+      onclick={() => void locateCurrentTrack()}
+    ><span class="locate-fab-dot" aria-hidden="true"></span></button>
+  {/if}
 {/if}
 </div>
 
@@ -381,6 +436,10 @@
 
   :global(.virtual-track-row) {
     min-height: var(--paged-row-height, 50px);
+  }
+
+  .track-list-shell.has-locate {
+    position: relative;
   }
 
 </style>

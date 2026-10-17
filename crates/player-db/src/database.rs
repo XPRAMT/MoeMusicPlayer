@@ -3780,6 +3780,57 @@ impl Database {
         })
     }
 
+    /// The 0-based position of `track_id` in the filtered and sorted library list (the order `list_tracks_page`
+    /// pages through), or `None` when the track is not in that list. One SQLite statement: the same filter and
+    /// ordering as the pages, numbered with `ROW_NUMBER()`.
+    pub fn track_position(
+        &self,
+        request: &ListTracksQuery,
+        query_alternates: &[String],
+        track_id: TrackId,
+    ) -> Result<Option<u64>, DatabaseError> {
+        let connection = self.lock()?;
+        let query_json = search_terms_json(
+            request
+                .query
+                .as_deref()
+                .filter(|text| !text.trim().is_empty()),
+            query_alternates,
+        )?;
+        let (title_filter, artist_filter, album_filter) =
+            field_filter_values(request.field_filter.as_ref())?;
+        let order_by = tracks_order_by_sql(request.sort);
+        // Everything after the select list (FROM and the filters) is shared with the page query.
+        let from_where = TRACKS_PAGE_SELECT_SQL
+            .find("\n FROM tracks t")
+            .map(|start| &TRACKS_PAGE_SELECT_SQL[start..])
+            .ok_or_else(|| {
+                DatabaseError::CorruptData("track page query changed shape".to_owned())
+            })?;
+        let sql = format!(
+            "SELECT position FROM (
+                 SELECT t.track_id AS id, ROW_NUMBER() OVER (ORDER BY {order_by}) - 1 AS position{from_where}
+             ) WHERE id = ?7"
+        );
+        // ?2 and ?3 (limit and offset of the page query) are not used here.
+        let position = connection
+            .query_row(
+                &sql,
+                params![
+                    query_json,
+                    0_i64,
+                    0_i64,
+                    title_filter,
+                    artist_filter,
+                    album_filter,
+                    track_id.to_string()
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        Ok(position.map(|position| position.max(0) as u64))
+    }
+
     /// Read the complete filtered and sorted result with one SQLite statement. This is reserved
     /// for backend snapshot construction (for example, merging the transient Explorer catalog);
     /// renderer-facing pages must continue to use `list_tracks_page_with_alternates`.
@@ -9503,6 +9554,81 @@ mod tests {
     }
 
     #[test]
+    fn track_position_matches_the_page_order_for_every_sort_and_filter() {
+        let path = std::env::temp_dir().join(format!(
+            "moemusic-track-position-{}.sqlite3",
+            TrackId::new()
+        ));
+        let mut db = Database::open(&path).expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "track-position");
+        let records: Vec<_> = ["delta", "alpha", "charlie", "bravo", "echo"]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                record(
+                    &root,
+                    name,
+                    name,
+                    name,
+                    100 + index as u64,
+                    1_000 + index as i64,
+                )
+            })
+            .collect();
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2_000,
+        );
+
+        for field in [
+            TrackSortField::Title,
+            TrackSortField::Artist,
+            TrackSortField::Album,
+        ] {
+            for direction in [TrackSortDirection::Asc, TrackSortDirection::Desc] {
+                for query in [None, Some("a".to_owned())] {
+                    let request = ListTracksQuery {
+                        offset: 0,
+                        limit: 100,
+                        query: query.clone(),
+                        field_filter: None,
+                        sort: TrackListSort { field, direction },
+                    };
+                    let page = db.list_tracks_page(request.clone()).expect("page");
+                    assert!(!page.items.is_empty());
+                    for (index, track) in page.items.iter().enumerate() {
+                        assert_eq!(
+                            db.track_position(&request, &[], track.id)
+                                .expect("position"),
+                            Some(index as u64),
+                            "{field:?} {direction:?} {query:?}: {:?}",
+                            track.title
+                        );
+                    }
+                }
+            }
+        }
+        // A track the filter hides, and one that does not exist, have no position.
+        let request = ListTracksQuery {
+            offset: 0,
+            limit: 100,
+            query: Some("charlie".to_owned()),
+            field_filter: None,
+            sort: Default::default(),
+        };
+        let hidden = track_id_for_query(&db, "alpha");
+        assert_eq!(db.track_position(&request, &[], hidden).unwrap(), None);
+        assert_eq!(
+            db.track_position(&request, &[], TrackId::new()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn missing_track_title_uses_displayed_file_name_for_title_sorting() {
         let path = std::env::temp_dir().join(format!(
             "moemusic-missing-title-sort-{}.sqlite3",
@@ -10114,8 +10240,8 @@ mod tests {
         assert_eq!(
             codecs,
             vec![
-                "MP3", "Mp4", "Opus", "Opus", "Opus", "Vorbis", "Flac", "Flac", "Flac", "Wav", "DSD64",
-                "DSD128"
+                "MP3", "Mp4", "Opus", "Opus", "Opus", "Vorbis", "Flac", "Flac", "Flac", "Wav",
+                "DSD64", "DSD128"
             ]
         );
         assert_eq!(sorted.items[2].bitrate_bps, Some(96_000));
@@ -10192,9 +10318,8 @@ mod tests {
                 .map(|item| item.title.as_deref().expect("title"))
                 .collect::<Vec<_>>(),
             vec![
-                "dsd128", "dsd64", "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160",
-                "opus96",
-                "mp4", "mp3"
+                "dsd128", "dsd64", "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k",
+                "opus160", "opus96", "mp4", "mp3"
             ]
         );
         assert_eq!(playlist_desc.items[3].bit_depth, Some(24));
@@ -10222,9 +10347,8 @@ mod tests {
                 .map(|item| item.title.as_deref().expect("title"))
                 .collect::<Vec<_>>(),
             vec![
-                "dsd128", "dsd64", "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k", "opus160",
-                "opus96",
-                "mp4", "mp3"
+                "dsd128", "dsd64", "wav", "flac24", "flac16", "flac44", "vorbis", "opus96k",
+                "opus160", "opus96", "mp4", "mp3"
             ]
         );
         assert_eq!(library_desc.items[3].bit_depth, Some(24));
