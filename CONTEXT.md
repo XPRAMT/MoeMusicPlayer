@@ -50,6 +50,13 @@ This glossary defines the music-library identity and playback terms shared by th
 
 **Resampling mode**: The Windows playback setting that decides who converts a track whose sample rate differs from the output: the app's high-quality resampler (default, stream stays at the device mix rate) or the Windows audio engine (stream opened at the track's rate). Both use shared mode and are not bit-perfect.
 
+**DSD（Direct Stream Digital）**: A 1-bit, very-high-rate audio representation stored in DSF or DFF files. Its rates are 64, 128, 256 or 512 times 44.1 kHz and are named DSD64, DSD128, DSD256 and DSD512.
+_Avoid_: SACD (a disc format), 1-bit PCM
+
+**DSD-to-PCM conversion**: Playing a DSD track by converting it in software to PCM at a fixed rate (176.4 kHz by default) before the normal output path. It works on any output device and is not bit-perfect.
+
+**DoP (DSD over PCM)**: Sending the original DSD bits to a DSD-capable DAC packed inside PCM frames. It needs an exclusive, unprocessed output at an exact rate, so it is separate from the normal output path and is not available yet.
+
 **Playback queue**: A session-local ordered sequence of stable Track IDs drawn from the active library query or a user playlist. Library order follows the visible library sort; playlist order follows entry order and keeps repeated playable entries. Queue IDs stay in Rust and are not copied into the Renderer.
 
 **Shuffle**: A queue traversal order that keeps the current entry in place, visits each remaining entry once per cycle, and supports previous/next traversal through the same order. Weighted shuffle uses `1 / (1 + played_ms / duration_ms)` to raise the relative chance of less-played tracks when a traversal is generated; unknown or zero duration uses neutral weight `1`. Turning shuffle off resumes source order at the current entry.
