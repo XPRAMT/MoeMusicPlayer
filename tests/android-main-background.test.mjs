@@ -45,6 +45,9 @@ test('Android background modes are enabled and wallpaper uses the native transpa
   const manifest = readFileSync(new URL('../src-tauri/gen/android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
   assert.match(manifest, /android\.permission\.MANAGE_EXTERNAL_STORAGE/);
   assert.match(app, /androidWallpaperHasImage/);
+  // FLAG_SHOW_WALLPAPER fallback caused repaint trails on NX809J; it must stay off.
+  assert.match(app, /const ANDROID_WALLPAPER_BACKDROP_ENABLED = false;/);
+  assert.match(app, /const enabled = ANDROID_WALLPAPER_BACKDROP_ENABLED && /);
   const details = readFileSync(new URL('../src-tauri/src/track_details.rs', import.meta.url), 'utf8');
   assert.match(details, /fn write_in_place/);
   assert.match(details, /if let Some\(path\) = direct_path\(app, uri\)/);

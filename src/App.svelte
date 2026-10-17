@@ -764,6 +764,7 @@
   const runtimePlatform = $derived(capabilities?.platform);
   // Android cannot read wallpaper pixels (Android 13/14+ WallpaperManager restrictions), so the
   // native window shows the wallpaper behind a transparent WebView instead (ADR 0008).
+  const ANDROID_WALLPAPER_BACKDROP_ENABLED = false;
   let androidWallpaperBackdrop = $state<AndroidWallpaperBackdropStatus | null>(null);
   // With All files access the static wallpaper is read as an image (like Windows); the native
   // FLAG_SHOW_WALLPAPER backdrop is only the fallback (no permission or live wallpaper).
@@ -818,7 +819,10 @@
 
   $effect(() => {
     if (!isTauri() || runtimePlatform !== 'android') return;
-    const enabled = mainBackgroundMode === 'systemWallpaper' && !androidWallpaperHasImage;
+    // FLAG_SHOW_WALLPAPER fallback is disabled: on NX809J (Android 16) the translucent WebView
+    // window left repaint trails (ghost copies while scrolling) and still showed black. Without
+    // All files access the wallpaper mode shows the solid page colour instead.
+    const enabled = ANDROID_WALLPAPER_BACKDROP_ENABLED && mainBackgroundMode === 'systemWallpaper' && !androidWallpaperHasImage;
     const blurPx = enabled ? Math.round(androidWallpaperBlurPx * (window.devicePixelRatio || 1)) : 0;
     let cancelled = false;
     void invokeCommand('appearance_set_android_wallpaper_backdrop', { enabled, blurPx })
@@ -3571,7 +3575,7 @@
                   {#if capabilities?.platform === 'android' && androidWallpaperHasImage}
                     <p class="source-muted-note">已透過「所有檔案存取權」讀取目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {systemWallpaperNextInSeconds ?? 60}s。</p>
                   {:else if capabilities?.platform === 'android'}
-                    <p class="source-muted-note">由系統直接在介面後方顯示目前桌布（含動態桌布），更換桌布會立即生效；此模式無法依桌布內容自動調整對比。{androidWallpaperBackdrop && !androidWallpaperBackdrop.blurSupported ? '此裝置未啟用跨視窗模糊，背景模糊無效。' : ''}{allFilesAccess?.supported && !allFilesAccess.granted ? '開啟「音樂來源」中的「所有檔案存取權」後即可讀取靜態桌布圖片。' : ''}</p>
+                    <p class="source-muted-note">{allFilesAccess?.supported && !allFilesAccess.granted ? 'Android 13 以上須開啟「音樂來源」中的「所有檔案存取權」才能讀取系統桌布；未授權時顯示純色背景。' : '無法讀取系統桌布（動態桌布沒有可讀取的圖片），目前顯示純色背景。'}</p>
                   {:else}
                     <p class="source-muted-note">讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {systemWallpaperNextInSeconds ?? 60}s。</p>
                   {/if}
