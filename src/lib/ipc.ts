@@ -136,7 +136,6 @@ export interface DsdPlaybackSettings {
 /** Lyrics drawn on the free part of the Windows taskbar (ADR 0018). */
 export interface TaskbarLyricsSettings {
   enabled: boolean;
-  area: 'auto' | 'left' | 'right';
   align: 'left' | 'center' | 'right';
   fontSizePx: number;
   useCustomColor: boolean;

@@ -1,7 +1,7 @@
 //! Lyrics on the Windows taskbar (ADR 0018): a transparent, click-through, always-on-top window that a watcher thread
 //! keeps over the free stretch of the taskbar. The window's page (`?view=taskbar-lyrics`) owns the lyric state.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW,
 };
 
-use crate::settings::{TaskbarLyricsArea, TaskbarLyricsSettings};
+use crate::settings::TaskbarLyricsSettings;
 
 pub const WINDOW_LABEL: &str = "taskbar-lyrics";
 /// Emitted with the saved `TaskbarLyricsSettings` whenever they change.
@@ -31,23 +31,6 @@ const MARGIN_CSS_PX: i32 = 8;
 const MIN_WIDTH_CSS_PX: i32 = 120;
 
 static STOP: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
-static AREA: AtomicU8 = AtomicU8::new(0);
-
-fn area_code(area: TaskbarLyricsArea) -> u8 {
-    match area {
-        TaskbarLyricsArea::Auto => 0,
-        TaskbarLyricsArea::Left => 1,
-        TaskbarLyricsArea::Right => 2,
-    }
-}
-
-fn area_choice() -> AreaChoice {
-    match AREA.load(Ordering::Relaxed) {
-        1 => AreaChoice::Leftmost,
-        2 => AreaChoice::Rightmost,
-        _ => AreaChoice::Widest,
-    }
-}
 
 pub fn system_uses_light_theme() -> bool {
     taskbar_uses_light_theme()
@@ -55,7 +38,6 @@ pub fn system_uses_light_theme() -> bool {
 
 /// Make the running state match `settings`: open the window and start the watcher, or stop both.
 pub async fn apply(app: &AppHandle, settings: &TaskbarLyricsSettings) -> Result<(), String> {
-    AREA.store(area_code(settings.area), Ordering::Relaxed);
     if settings.enabled {
         ensure_window(app)?;
         start_watcher(app);
@@ -212,7 +194,7 @@ fn target_area(prober: &TaskbarProber) -> Option<Rect> {
     pick_free_area(
         probe.bounds,
         &probe.occupied,
-        area_choice(),
+        AreaChoice::Widest,
         scale(MARGIN_CSS_PX),
         scale(MIN_WIDTH_CSS_PX),
     )

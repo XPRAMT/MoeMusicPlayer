@@ -10,8 +10,8 @@ import {
 test('taskbar lyrics settings are repaired field by field', () => {
   assert.deepEqual(normalizeTaskbarLyricsSettings(null), DEFAULT_TASKBAR_LYRICS_SETTINGS);
   assert.deepEqual(normalizeTaskbarLyricsSettings({
-    enabled: true, area: 'right', align: 'center', fontSizePx: 20.4, useCustomColor: true, customColor: '#ABCDEF', showTranslation: true,
-  }), { enabled: true, area: 'right', align: 'center', fontSizePx: 20, useCustomColor: true, customColor: '#abcdef', showTranslation: true });
+    enabled: true, align: 'center', fontSizePx: 20.4, useCustomColor: true, customColor: '#ABCDEF', showTranslation: true,
+  }), { enabled: true, align: 'center', fontSizePx: 20, useCustomColor: true, customColor: '#abcdef', showTranslation: true });
   const repaired = normalizeTaskbarLyricsSettings({ enabled: 'yes', area: 'up', align: 3, fontSizePx: 99, customColor: 'red', showTranslation: 1 });
   assert.deepEqual(repaired, { ...DEFAULT_TASKBAR_LYRICS_SETTINGS, fontSizePx: 32 });
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 1 }).fontSizePx, 10);

@@ -736,17 +736,6 @@ fn lenient_cover_zoom(value: Option<serde_json::Value>) -> CoverZoomSettings {
     CoverZoomSettings { scale }.normalized()
 }
 
-/// Which free stretch of the taskbar the lyrics go in.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TaskbarLyricsArea {
-    /// The widest free stretch.
-    #[default]
-    Auto,
-    Left,
-    Right,
-}
-
 /// Where the text sits inside that stretch.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -762,7 +751,6 @@ pub enum TaskbarLyricsAlign {
 #[serde(rename_all = "camelCase")]
 pub struct TaskbarLyricsSettings {
     pub enabled: bool,
-    pub area: TaskbarLyricsArea,
     pub align: TaskbarLyricsAlign,
     /// CSS px of the main line.
     pub font_size_px: u8,
@@ -795,7 +783,6 @@ impl Default for TaskbarLyricsSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            area: TaskbarLyricsArea::default(),
             align: TaskbarLyricsAlign::default(),
             font_size_px: Self::DEFAULT_FONT_SIZE_PX,
             use_custom_color: false,
@@ -822,9 +809,6 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
         enabled: field("enabled")
             .and_then(|value| value.as_bool())
             .unwrap_or(defaults.enabled),
-        area: field("area")
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or(defaults.area),
         align: field("align")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.align),
@@ -2286,7 +2270,6 @@ mod tests {
             "useCustomColor": true, "customColor": "#ABCDEF", "showTranslation": "yes"
         })));
         assert!(parsed.enabled);
-        assert_eq!(parsed.area, TaskbarLyricsArea::Right);
         assert_eq!(parsed.align, TaskbarLyricsAlign::Left);
         assert_eq!(parsed.font_size_px, 32);
         assert_eq!(parsed.custom_color, "#abcdef");
@@ -2301,7 +2284,6 @@ mod tests {
         let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
         let chosen = TaskbarLyricsSettings {
             enabled: true,
-            area: TaskbarLyricsArea::Left,
             align: TaskbarLyricsAlign::Center,
             font_size_px: 20,
             use_custom_color: true,
@@ -2317,7 +2299,7 @@ mod tests {
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen");
         assert_eq!(reopened.snapshot().unwrap().taskbar_lyrics, chosen);
         let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted["taskbarLyrics"]["area"], "left");
+        assert!(persisted["taskbarLyrics"].get("area").is_none());
         assert_eq!(persisted["taskbarLyrics"]["fontSizePx"], 20);
     }
 

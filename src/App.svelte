@@ -3998,19 +3998,6 @@
                       <input type="checkbox" checked={taskbarLyricsSettings.enabled} onchange={(event) => setTaskbarLyricsSettings({ enabled: event.currentTarget.checked })} />
                       <span><strong>顯示工作列歌詞</strong><small>在工作列空白處繪製目前播放的歌詞</small></span>
                     </label>
-                    <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-area-label">
-                      <span id="{scope}taskbar-lyrics-area-label" class="cover-corner-setting-label"><strong>顯示位置</strong></span>
-                      <div class="layout-choice-row lyrics-text-effect-row">
-                        {#each [['auto', '自動'], ['left', '左側空白'], ['right', '右側空白']] as [value, label] (value)}
-                          <button
-                            type="button"
-                            aria-pressed={taskbarLyricsSettings.area === value}
-                            class:chosen={taskbarLyricsSettings.area === value}
-                            onclick={() => setTaskbarLyricsSettings({ area: value as TaskbarLyricsSettings['area'] })}
-                          >{label}</button>
-                        {/each}
-                      </div>
-                    </div>
                     <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-align-label">
                       <span id="{scope}taskbar-lyrics-align-label" class="cover-corner-setting-label"><strong>對齊</strong></span>
                       <div class="layout-choice-row lyrics-text-effect-row">

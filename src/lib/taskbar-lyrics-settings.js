@@ -2,16 +2,14 @@
 // enforces the same ranges.
 
 export const TASKBAR_LYRICS_FONT_SIZE_PX = Object.freeze({ min: 10, max: 32, default: 16 });
-export const TASKBAR_LYRICS_AREAS = Object.freeze(['auto', 'left', 'right']);
 export const TASKBAR_LYRICS_ALIGNMENTS = Object.freeze(['left', 'center', 'right']);
 export const TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR = '#ffffff';
 
-/** @typedef {{ enabled: boolean, area: 'auto'|'left'|'right', align: 'left'|'center'|'right', fontSizePx: number, useCustomColor: boolean, customColor: string, showTranslation: boolean }} TaskbarLyricsSettings */
+/** @typedef {{ enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, useCustomColor: boolean, customColor: string, showTranslation: boolean }} TaskbarLyricsSettings */
 
 /** @type {Readonly<TaskbarLyricsSettings>} */
 export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
   enabled: false,
-  area: 'auto',
   align: 'left',
   fontSizePx: TASKBAR_LYRICS_FONT_SIZE_PX.default,
   useCustomColor: false,
@@ -38,9 +36,6 @@ export function normalizeTaskbarLyricsSettings(value) {
     : defaults.fontSizePx;
   return {
     enabled: typeof source.enabled === 'boolean' ? source.enabled : defaults.enabled,
-    area: TASKBAR_LYRICS_AREAS.includes(/** @type {string} */ (source.area))
-      ? /** @type {'auto'|'left'|'right'} */ (source.area)
-      : defaults.area,
     align: TASKBAR_LYRICS_ALIGNMENTS.includes(/** @type {string} */ (source.align))
       ? /** @type {'left'|'center'|'right'} */ (source.align)
       : defaults.align,
