@@ -1058,6 +1058,9 @@
   });
 
   function updateCoverFrame(): void {
+    // While zoomed the artwork pane is resized by the zoom itself; refitting to it would feed back (shrink to
+    // nothing / grow without bound). The base frame is refreshed once the zoom is back at 1.
+    if (untrack(() => coverZoomScale) !== 1) return;
     const stage = coverStageElement;
     const artworkPane = stage?.parentElement;
     const image = stage?.querySelector('img');
@@ -1109,6 +1112,10 @@
       observer.disconnect();
       image?.removeEventListener('load', updateCoverFrame);
     };
+  });
+
+  $effect(() => {
+    if (coverZoomScale === 1) untrack(updateCoverFrame);
   });
 
   onMount(() => {
