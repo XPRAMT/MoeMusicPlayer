@@ -820,8 +820,9 @@
   }
 
   /* Shadow geometry shared by text-shadow/filter and row padding: each row's vertical padding equals the
-     glow blur radius, so at line spacing 0 neighbouring glows meet exactly; the spacing setting adds on top.
-     Keep LYRICS_ROW_VERTICAL_PADDING_PX (lyrics-window.js) = 2 x --lyric-glow-blur. */
+     first (tight) shadow's blur radius, so at line spacing 0 neighbouring tight shadows just touch; the wider
+     glow may overlap neighbours. The spacing setting adds on top.
+     Keep LYRICS_ROW_VERTICAL_PADDING_PX (lyrics-window.js) = 2 x --lyric-shadow-blur. */
   .lyrics-view {
     --lyric-shadow-blur: 3px;
     --lyric-glow-blur: 8px;
@@ -838,7 +839,7 @@
     gap: 2px;
     /* Visible so the glow is never hard-cut at the row edge (the viewport still clips/masks). */
     overflow: visible;
-    padding: var(--lyric-glow-blur) 9px;
+    padding: var(--lyric-shadow-blur) 9px;
     margin-bottom: var(--lyric-gap-after, 0px);
     border-bottom: 0;
     color: var(--muted);
@@ -862,7 +863,7 @@
   .lyrics-view[data-text-effect='shadow'] .lyric-translation,
   .lyrics-view[data-text-effect='shadow'] .lyric-romanization {
     text-shadow:
-      0 0 var(--lyric-shadow-blur) rgba(var(--text-inverse-rgb), 0.82),
+      0 0 var(--lyric-shadow-blur) rgba(var(--text-inverse-rgb), 0.6),
       0 0 var(--lyric-glow-blur) rgba(var(--text-inverse-rgb), 0.38);
   }
 
@@ -872,7 +873,7 @@
   .lyrics-view[data-text-effect='shadow'] .lyric-primary {
     text-shadow: none;
     filter:
-      drop-shadow(0 0 var(--lyric-shadow-blur) rgba(var(--text-inverse-rgb), 0.82))
+      drop-shadow(0 0 var(--lyric-shadow-blur) rgba(var(--text-inverse-rgb), 0.6))
       drop-shadow(0 0 var(--lyric-glow-blur) rgba(var(--text-inverse-rgb), 0.38));
   }
 

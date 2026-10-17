@@ -7,8 +7,8 @@
 export const TIMED_LYRIC_RADIUS = 20;
 export const PLAIN_LYRIC_OVERSCAN = 6;
 export const LYRICS_ROW_GAP_PX = 2;
-/** 2 x --lyric-glow-blur (8px) in LyricsView.svelte: row padding equals the glow radius. */
-export const LYRICS_ROW_VERTICAL_PADDING_PX = 16;
+/** 2 x --lyric-shadow-blur (3px) in LyricsView.svelte: row padding equals the first shadow radius. */
+export const LYRICS_ROW_VERTICAL_PADDING_PX = 6;
 export const LYRICS_ROW_BORDER_PX = 0;
 export const LYRICS_PRIMARY_MAX_LINES = 2;
 export const LYRICS_PRIMARY_LINE_HEIGHT = 1.2;

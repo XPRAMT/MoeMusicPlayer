@@ -146,7 +146,7 @@ test('variable row geometry adds only nonempty enabled auxiliary lines', () => {
     { text: '  ', translation: '', romanization: null },
   ];
   const layout = buildLyricsLayout(rows, base, 24);
-  const primary = base.primaryFontSizePx * 1.2 + 16;
+  const primary = base.primaryFontSizePx * 1.2 + 6;
   const oneAux = primary + 2 + base.auxiliaryFontSizePx * 1.2;
   const twoAux = primary + 4 + 2 * base.auxiliaryFontSizePx * 1.2;
 
@@ -176,8 +176,9 @@ test('measured wrapped primary updates the shared Fenwick prefix without rebuild
   ], DEFAULT_LYRICS_PREFERENCES, 24);
   const initialNext = getLyricsOffset(layout, 2);
   assert.equal(updateLyricsRowHeight(layout, 1, layout.heights[1] + 18), true);
-  assert.equal(getLyricsOffset(layout, 2), initialNext + 18);
-  assert.equal(layout.totalHeight, getLyricsOffset(layout, 3));
+  // Fenwick sums are floating point; compare within rounding.
+  assert.ok(Math.abs(getLyricsOffset(layout, 2) - (initialNext + 18)) < 1e-9);
+  assert.ok(Math.abs(layout.totalHeight - getLyricsOffset(layout, 3)) < 1e-9);
 });
 
 test('layout binary search skips empty rows, honors gap extremes and keeps all-empty documents bounded', () => {
