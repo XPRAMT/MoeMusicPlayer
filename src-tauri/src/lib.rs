@@ -10347,6 +10347,18 @@ pub fn run() {
 
     builder
         .on_window_event(|window, event| {
+            // A close request sent to the taskbar-lyrics window (tools that close "the process's main window" can
+            // pick it, and Windows sends WM_CLOSE to every window at logoff) means the app should quit: forward it
+            // to the main window's normal close flow instead of destroying only the lyrics window.
+            #[cfg(target_os = "windows")]
+            if window.label() == taskbar_lyrics::WINDOW_LABEL {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    if let Some(main) = window.app_handle().get_webview_window("main") {
+                        let _ = main.close();
+                    }
+                }
+            }
             #[cfg(target_os = "windows")]
             if window.label() == "main" {
                 match event {

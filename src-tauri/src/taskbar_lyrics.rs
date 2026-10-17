@@ -140,6 +140,12 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
     let mut visible = false;
     while !stop.load(Ordering::Relaxed) {
         let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+            // The window is gone (closed from outside): let the next `apply` start a fresh watcher.
+            if let Ok(mut guard) = STOP.lock() {
+                if guard.as_ref().is_some_and(|current| Arc::ptr_eq(current, &stop)) {
+                    *guard = None;
+                }
+            }
             break;
         };
         if let Ok(hwnd) = window.hwnd() {
