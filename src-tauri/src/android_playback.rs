@@ -218,6 +218,7 @@ impl AndroidPlaybackService {
         database_path: &Path,
         shuffle: bool,
         repeat_mode: RepeatMode,
+        resume: ResumeHook,
     ) -> Result<Self, String> {
         if let Some(existing) = PROCESS_SERVICE.get() {
             return Ok(Self(Arc::clone(existing)));
@@ -258,7 +259,7 @@ impl AndroidPlaybackService {
         thread::Builder::new()
             .name("moe-android-playback".to_owned())
             .spawn(move || {
-                AndroidActor::new(
+                let mut actor = AndroidActor::new(
                     database,
                     actor_shared,
                     request_rx,
@@ -267,8 +268,11 @@ impl AndroidPlaybackService {
                     runtime_id,
                     shuffle,
                     repeat_mode,
-                )
-                .run();
+                );
+                actor.resume_on_restore = resume.initial;
+                actor.resume_reported.set(resume.initial);
+                actor.resume_sink = resume.sink;
+                actor.run();
             })
             .map_err(|error| format!("無法啟動 Android 播放 worker：{error}"))?;
 
@@ -343,6 +347,13 @@ fn finish_stale_statistics_runtimes(database: &Database) {
     }
 }
 
+/// Persisted "was playing" flag (settings.json `resumePlayback`): the value from the last run and a sink that
+/// records changes while playing, so a killed process can still resume on the next launch.
+pub(crate) struct ResumeHook {
+    pub(crate) initial: bool,
+    pub(crate) sink: Option<Arc<dyn Fn(bool) + Send + Sync>>,
+}
+
 struct AndroidActor {
     database: Database,
     shared: Arc<SharedService>,
@@ -363,6 +374,9 @@ struct AndroidActor {
     last_flush: Instant,
     stats_status: Option<String>,
     last_capabilities: Option<(bool, bool)>,
+    resume_on_restore: bool,
+    resume_reported: std::cell::Cell<bool>,
+    resume_sink: Option<Arc<dyn Fn(bool) + Send + Sync>>,
 }
 
 impl AndroidActor {
@@ -397,6 +411,9 @@ impl AndroidActor {
             last_flush: Instant::now(),
             stats_status: None,
             last_capabilities: None,
+            resume_on_restore: false,
+            resume_reported: std::cell::Cell::new(false),
+            resume_sink: None,
         }
     }
 
@@ -1296,7 +1313,18 @@ impl AndroidActor {
         self.publish_snapshot();
     }
 
+    /// Record playing/paused in settings.json whenever it changes (not on every snapshot).
+    fn report_resume_state(&self) {
+        let playing = self.native.state == "playing";
+        if self.resume_reported.replace(playing) != playing {
+            if let Some(sink) = self.resume_sink.as_ref() {
+                sink(playing);
+            }
+        }
+    }
+
     fn publish_snapshot(&self) -> PlaybackSnapshot {
+        self.report_resume_state();
         let queue = self.queue.as_ref();
         let duration_ms = self.native.duration_ms.or_else(|| {
             self.current_track
@@ -1472,7 +1500,7 @@ impl AndroidActor {
             Some(self.native_metadata(&track)),
             Some(checkpoint.position_ms),
             None,
-            Some(false),
+            Some(self.resume_on_restore),
             None,
             None,
         );
@@ -1482,7 +1510,9 @@ impl AndroidActor {
                 if let Err(error) = self.update_capabilities(&request_id) {
                     self.native.error = Some(error);
                 }
-                self.native.state = "ready".into();
+                if !self.resume_on_restore {
+                    self.native.state = "ready".into();
+                }
                 self.publish_snapshot();
             }
             Err(error) => {

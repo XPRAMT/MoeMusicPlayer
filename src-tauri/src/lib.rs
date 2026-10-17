@@ -470,7 +470,7 @@ struct AppState {
     queue_display_sort_cache: std::sync::Mutex<Option<QueueDisplaySortCache>>,
     #[cfg(target_os = "windows")]
     shutdown: database_lifecycle::ShutdownCoordinator,
-    settings: SettingsStore,
+    settings: Arc<SettingsStore>,
     main_background: main_background::MainBackgroundRuntime,
     #[cfg(target_os = "windows")]
     window_frame: std::sync::Mutex<WindowFrameMemory>,
@@ -10390,8 +10390,10 @@ pub fn run() {
             } else {
                 AppSettings::default()
             };
-            let settings = SettingsStore::open(&settings_path, legacy_settings)
-                .map_err(|error| format!("開啟使用者設定失敗：{error}"))?;
+            let settings = Arc::new(
+                SettingsStore::open(&settings_path, legacy_settings)
+                    .map_err(|error| format!("開啟使用者設定失敗：{error}"))?,
+            );
             if let Some(database) = database.as_ref() {
                 if let Err(error) = database.clear_legacy_theme_preferences() {
                     eprintln!("無法清除已遷移的 SQLite 外觀偏好：{error}");
@@ -10459,6 +10461,20 @@ pub fn run() {
                     path,
                     initial_settings.shuffle,
                     initial_settings.repeat_mode,
+                    android_playback::ResumeHook {
+                        initial: initial_settings.resume_playback,
+                        sink: Some({
+                            let settings = Arc::clone(&settings);
+                            Arc::new(move |playing| {
+                                if let Err(error) = settings.update(|settings| {
+                                    settings.resume_playback = playing;
+                                    Ok(())
+                                }) {
+                                    eprintln!("無法記錄播放狀態：{error}");
+                                }
+                            })
+                        }),
+                    },
                 ) {
                     Ok(service) => {
                         match app.handle().media_index().ensure_playback_service_started() {
