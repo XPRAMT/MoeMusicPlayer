@@ -278,7 +278,11 @@ class PlaybackService : MediaSessionService() {
                 "load" -> {
                     val uri = command.optString("contentUri")
                     val trackId = command.optString("trackId")
-                    require(uri.startsWith("content://")) { "Android playback requires an authorized content URI" }
+                    // Library tracks are real paths under All files access (file://, ADR 0014);
+                    // remaining legacy tracks may still be content:// URIs.
+                    require(uri.startsWith("file:///") || uri.startsWith("content://")) {
+                        "Android playback requires a file:// or content:// URI"
+                    }
                     require(trackId.isNotBlank()) { "trackId is required" }
                     val metadata = command.optJSONObject("metadata") ?: JSONObject()
                     val artworkBytes = preparedArtworkBytes.remove(commandId)

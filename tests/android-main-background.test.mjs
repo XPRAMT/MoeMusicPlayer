@@ -94,4 +94,7 @@ test('Android sources are real paths with no per-item SAF/MediaStore grants (ADR
   assert.match(rust, /android_path_migration::migrate_legacy_sources/);
   assert.doesNotMatch(rust, /pick_saf_tree|has_saf_permission|has_saf_write_permission|resolve_saf_playlist_entry|write_audio_cache_lease/);
   assert.doesNotMatch(pluginManifest, /READ_MEDIA_AUDIO/);
+  const service = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/PlaybackService.kt', import.meta.url), 'utf8');
+  assert.match(service, /uri\.startsWith\("file:\/\/\/"\) \|\| uri\.startsWith\("content:\/\/"\)/);
+  assert.doesNotMatch(service, /requires an authorized content URI/);
 });
