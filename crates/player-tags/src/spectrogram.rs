@@ -285,37 +285,58 @@ pub fn render_spectrogram(
     let height = options.height.clamp(64, 4096);
 
     let file = File::open(path).map_err(|e| format!("無法開啟檔案：{e}"))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-    let probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+    // Opus has its own decoder (ADR 0017); everything else goes through Symphonia.
+    let use_opus = player_formats::decode_engine(path) == player_formats::DecodeEngine::Opus
+        || player_opus::sniff_opus_file(path);
+    let mut opus_reader = None;
+    let mut symphonia_input = None;
+    let (sample_rate, channel_count, known_frames, channel_layout) = if use_opus {
+        let reader = player_opus::OpusReader::open(std::io::BufReader::new(file))
+            .map_err(|e| format!("無法開啟 Opus：{e}"))?;
+        let info = reader.info();
+        opus_reader = Some(reader);
+        (
+            player_opus::OPUS_RATE,
+            usize::from(info.channels).max(1),
+            info.total_frames,
+            None,
         )
-        .map_err(|e| format!("無法辨識音訊格式：{e}"))?;
-    let mut format = probed.format;
-    let track = format
-        .tracks()
-        .iter()
-        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-        .ok_or("找不到音訊軌")?
-        .clone();
-    let sample_rate = track.codec_params.sample_rate.ok_or("未知取樣率")?;
-    let channel_count = track
-        .codec_params
-        .channels
-        .map(|c| c.count())
-        .unwrap_or(2)
-        .max(1);
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
-        .map_err(|e| format!("不支援的編碼：{e}"))?;
-    let known_frames = track.codec_params.n_frames;
+    } else {
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let mut hint = Hint::new();
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            hint.with_extension(ext);
+        }
+        let probed = symphonia::default::get_probe()
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
+            .map_err(|e| format!("無法辨識音訊格式：{e}"))?;
+        let format = probed.format;
+        let track = format
+            .tracks()
+            .iter()
+            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+            .ok_or("找不到音訊軌")?
+            .clone();
+        let sample_rate = track.codec_params.sample_rate.ok_or("未知取樣率")?;
+        let channel_count = track
+            .codec_params
+            .channels
+            .map(|c| c.count())
+            .unwrap_or(2)
+            .max(1);
+        let decoder = symphonia::default::get_codecs()
+            .make(&track.codec_params, &DecoderOptions::default())
+            .map_err(|e| format!("不支援的編碼：{e}"))?;
+        let known_frames = track.codec_params.n_frames;
+        let layout = track.codec_params.channels;
+        symphonia_input = Some((format, decoder, track.id));
+        (sample_rate, channel_count, known_frames, layout)
+    };
 
     let streams = match options.channel {
         ChannelSelect::Separate => channel_count,
@@ -343,58 +364,81 @@ pub fn render_spectrogram(
     };
     let mut next_col = 0usize;
     let mut index: u64 = 0;
-    let mut sample_buf: Option<SampleBuffer<f32>> = None;
-
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            return Err("已取消".into());
-        }
-        let packet = match format.next_packet() {
-            Ok(p) => p,
-            Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(SymError::ResetRequired) => break,
-            Err(e) => return Err(format!("讀取封包失敗：{e}")),
-        };
-        if packet.track_id() != track.id {
-            continue;
-        }
-        let decoded = match decoder.decode(&packet) {
-            Ok(d) => d,
-            Err(SymError::DecodeError(_)) => continue,
-            Err(e) => return Err(format!("解碼失敗：{e}")),
-        };
-        let spec = *decoded.spec();
-        let channels = spec.channels.count().max(1);
-        let needed = decoded.capacity() * channels;
-        if sample_buf.as_ref().is_none_or(|b| b.capacity() < needed) {
-            sample_buf = Some(SampleBuffer::new(decoded.capacity() as u64, spec));
-        }
-        let buf = sample_buf.as_mut().expect("buffer");
-        buf.copy_interleaved_ref(decoded);
-        for frame in buf.samples().chunks(channels) {
-            match known_frames {
-                Some(total) => {
-                    for (s, ring) in rings.iter_mut().enumerate() {
-                        if ring.len() == n {
-                            ring.pop_front();
-                        }
-                        ring.push_back(select(frame, s));
+    // One decoded frame (all channels) from either decoder.
+    let mut feed = |frame: &[f32]| {
+        match known_frames {
+            Some(total) => {
+                for (s, ring) in rings.iter_mut().enumerate() {
+                    if ring.len() == n {
+                        ring.pop_front();
                     }
-                    while next_col < cols && index == column_end(next_col, total) {
-                        for (s, ring) in rings.iter().enumerate() {
-                            let column = analyzer.analyse(ring.iter().copied());
-                            spectra[s].push(column);
-                        }
-                        next_col += 1;
-                    }
+                    ring.push_back(select(frame, s));
                 }
-                None => {
-                    for (s, store) in collected.iter_mut().enumerate() {
-                        store.push(select(frame, s));
+                while next_col < cols && index == column_end(next_col, total) {
+                    for (s, ring) in rings.iter().enumerate() {
+                        let column = analyzer.analyse(ring.iter().copied());
+                        spectra[s].push(column);
                     }
+                    next_col += 1;
                 }
             }
-            index += 1;
+            None => {
+                for (s, store) in collected.iter_mut().enumerate() {
+                    store.push(select(frame, s));
+                }
+            }
+        }
+        index += 1;
+    };
+
+    if let Some(mut reader) = opus_reader {
+        let mut buffer = Vec::new();
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("已取消".into());
+            }
+            buffer.clear();
+            let frames = reader
+                .read_frames(&mut buffer)
+                .map_err(|e| format!("解碼失敗：{e}"))?;
+            if frames == 0 {
+                break;
+            }
+            for frame in buffer.chunks(channel_count) {
+                feed(frame);
+            }
+        }
+    } else if let Some((mut format, mut decoder, track_id)) = symphonia_input {
+        let mut sample_buf: Option<SampleBuffer<f32>> = None;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("已取消".into());
+            }
+            let packet = match format.next_packet() {
+                Ok(p) => p,
+                Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(SymError::ResetRequired) => break,
+                Err(e) => return Err(format!("讀取封包失敗：{e}")),
+            };
+            if packet.track_id() != track_id {
+                continue;
+            }
+            let decoded = match decoder.decode(&packet) {
+                Ok(d) => d,
+                Err(SymError::DecodeError(_)) => continue,
+                Err(e) => return Err(format!("解碼失敗：{e}")),
+            };
+            let spec = *decoded.spec();
+            let channels = spec.channels.count().max(1);
+            let needed = decoded.capacity() * channels;
+            if sample_buf.as_ref().is_none_or(|b| b.capacity() < needed) {
+                sample_buf = Some(SampleBuffer::new(decoded.capacity() as u64, spec));
+            }
+            let buf = sample_buf.as_mut().expect("buffer");
+            buf.copy_interleaved_ref(decoded);
+            for frame in buf.samples().chunks(channels) {
+                feed(frame);
+            }
         }
     }
     let total = known_frames.map(|t| t.min(index)).unwrap_or(index);
@@ -467,7 +511,7 @@ pub fn render_spectrogram(
         levels,
         sample_rate,
         channels: channel_count as u32,
-        channel_labels: channel_labels(track.codec_params.channels, channel_count),
+        channel_labels: channel_labels(channel_layout, channel_count),
         duration_ms: total * 1000 / u64::from(sample_rate),
         columns: out_cols,
         height: img.height(),

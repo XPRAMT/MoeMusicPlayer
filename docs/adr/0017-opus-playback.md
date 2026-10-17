@@ -16,7 +16,7 @@ Opus files (`.opus`, and `.ogg`/`.oga` files that hold an Opus stream) are scann
 - **Gain and trimming follow RFC 7845**: the header output gain is applied; the first `pre-skip` frames are dropped; output stops at the final granule position, so the length is exact. `R128_*` tags are not applied.
 - **Ogg sniffing.** `.opus` goes to this decoder. `.ogg`/`.oga` files are opened with rodio unless their first packet is `OpusHead`, in which case they use this decoder too.
 - **Tags.** Reading, scanning and writing go through lofty, which already supports Ogg Opus (Vorbis comments, embedded pictures). Opus is therefore editable in the details panel with the existing flow; a test writes a synthetic Opus file and edits it.
-- No spectrogram yet: the spectrogram decoder is Symphonia-based, so Opus stays marked as unsupported there until it is moved onto this decoder.
+- Spectrogram: `player-tags` decodes Opus (and Ogg files whose first packet is `OpusHead`) with this reader instead of Symphonia; the rest of the spectrogram pipeline is shared.
 
 ## Considered options
 

@@ -8,6 +8,7 @@ description = "Single-track tag read/write and spectrogram rendering (ADR 0013)"
 [dependencies]
 player-formats = { path = "../player-formats" }
 player-dsd = { path = "../player-dsd", features = ["id3"] }
+player-opus = { path = "../player-opus" }
 lofty = "0.25.4"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 realfft = "3"

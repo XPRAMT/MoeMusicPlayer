@@ -138,7 +138,7 @@ const FORMATS: &[FormatInfo] = &[
         true,
         &["audio/ogg", "application/ogg", "audio/vorbis"],
     ),
-    info(FormatId::Opus, "OPUS", true, false, &["audio/opus"]),
+    info(FormatId::Opus, "OPUS", true, true, &["audio/opus"]),
     info(FormatId::Speex, "SPEEX", true, true, &[]),
     info(FormatId::Matroska, "MKA", true, true, &[]),
     info(FormatId::Ape, "APE", true, true, &[]),
@@ -452,7 +452,7 @@ mod tests {
         }
         assert!(tag_write_supported(Path::new("a.flac")));
         assert!(tag_write_supported(Path::new("a.unknown")));
-        assert!(!spectrogram_supported(Path::new("a.opus")));
+        assert!(spectrogram_supported(Path::new("a.opus")));
         assert!(spectrogram_supported(Path::new("a.mp3")));
     }
 
