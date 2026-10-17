@@ -15,20 +15,10 @@ use player_core::{
     TrackIdentity, unix_path_key,
 };
 
-/// Audio extensions accepted on Android. `.mp4` stays excluded like the desktop scanner (video).
-const AUDIO_EXTENSIONS: &[&str] = &[
-    "aac", "ac3", "aif", "aiff", "alac", "amr", "ape", "dff", "dsf", "flac", "m4a", "m4b", "mid",
-    "midi", "mka", "mp3", "oga", "ogg", "opus", "spx", "wav", "wave", "wma",
-];
-
+/// Whether Android's library scanner accepts the path. The set lives in `player-formats` (`.mp4` stays excluded
+/// like the desktop scanner: video).
 pub fn is_supported_audio_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            AUDIO_EXTENSIONS
-                .iter()
-                .any(|known| known.eq_ignore_ascii_case(extension))
-        })
+    player_formats::is_android_library_audio(path)
 }
 
 /// `/storage/emulated/<user>` or `/storage/<volume>`: its `Android/` app-data tree is skipped.

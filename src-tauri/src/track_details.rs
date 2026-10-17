@@ -278,18 +278,9 @@ mod android_io {
         {
             return extension.to_ascii_lowercase();
         }
-        match mime.unwrap_or_default().to_ascii_lowercase().as_str() {
-            "audio/mpeg" | "audio/mp3" => "mp3",
-            "audio/flac" | "audio/x-flac" => "flac",
-            "audio/mp4" | "audio/x-m4a" | "audio/m4a" | "audio/aac" | "audio/mp4a-latm" => "m4a",
-            "audio/ogg" | "application/ogg" | "audio/vorbis" => "ogg",
-            "audio/opus" => "opus",
-            "audio/wav" | "audio/x-wav" | "audio/vnd.wave" | "audio/wave" => "wav",
-            "audio/aiff" | "audio/x-aiff" => "aiff",
-            "audio/x-dsf" | "audio/dsf" => "dsf",
-            _ => "bin",
-        }
-        .to_owned()
+        player_formats::extension_for_mime(mime.unwrap_or_default())
+            .unwrap_or("bin")
+            .to_owned()
     }
 
     /// Copy the document into a private work file with a format-revealing extension.
@@ -978,10 +969,7 @@ pub async fn spectrogram_pick_file(
             .set_title("開啟音訊檔")
             .add_filter(
                 "音訊",
-                &[
-                    "mp3", "flac", "m4a", "mp4", "aac", "alac", "ogg", "oga", "wav", "wave", "aif",
-                    "aiff", "mka", "mkv", "webm", "caf",
-                ],
+                &player_formats::open_dialog_extensions(),
             )
             .add_filter("所有檔案", &["*"])
             .blocking_pick_file();

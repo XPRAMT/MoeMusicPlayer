@@ -277,6 +277,9 @@ pub fn render_spectrogram(
     options: SpectrogramOptions,
     cancel: &AtomicBool,
 ) -> Result<Spectrogram, String> {
+    if !player_formats::spectrogram_supported(path) {
+        return Err("此格式不支援頻譜圖。".to_owned());
+    }
     let n = options.fft_size.clamp(256, 32768).next_power_of_two();
     let cols = options.columns.clamp(16, 8000) as usize;
     let height = options.height.clamp(64, 4096);

@@ -2,6 +2,7 @@
 members = [
     "src-tauri",
     "crates/player-core",
+    "crates/player-formats",
     "crates/player-db",
     "crates/player-platform-windows",
     "crates/player-audio-windows",

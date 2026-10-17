@@ -17,6 +17,7 @@ tauri-build = { version = "2.7.0", features = [] }
 moe-update = { package = "moemusicplayer-updater", path = "../crates/moe-update" }
 player-core = { path = "../crates/player-core" }
 player-db = { path = "../crates/player-db" }
+player-formats = { path = "../crates/player-formats" }
 player-tags = { path = "../crates/player-tags" }
 tauri-plugin-media-index = { path = "../plugins/tauri-plugin-media-index" }
 base64 = "0.22"

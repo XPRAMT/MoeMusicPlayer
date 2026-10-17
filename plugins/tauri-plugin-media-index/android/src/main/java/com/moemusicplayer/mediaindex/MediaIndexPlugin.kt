@@ -1409,9 +1409,11 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             return AudioCandidate.NO
         }
 
+        // Mirrors player-formats::android_candidate_extensions(); the test
+        // plugins/tauri-plugin-media-index/tests/kotlin_extension_list.rs fails when the two drift.
         private val AUDIO_EXTENSIONS = setOf(
             "aac", "ac3", "aif", "aiff", "alac", "amr", "ape", "dff", "dsf", "flac",
-            "m4a", "m4b", "mid", "midi", "mp3", "mp4", "oga", "ogg", "opus", "spx",
+            "m4a", "m4b", "mid", "midi", "mka", "mp3", "mp4", "oga", "ogg", "opus", "spx",
             "wav", "wave", "wma",
         )
 

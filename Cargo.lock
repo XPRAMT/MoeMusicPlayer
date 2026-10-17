@@ -2502,6 +2502,7 @@ dependencies = [
  "player-audio-windows",
  "player-core",
  "player-db",
+ "player-formats",
  "player-platform-windows",
  "player-tags",
  "reqwest 0.12.28",
@@ -3172,6 +3173,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-formats"
+version = "0.1.0"
+
+[[package]]
 name = "player-platform-windows"
 version = "0.1.0"
 dependencies = [
@@ -3179,6 +3184,7 @@ dependencies = [
  "matroska",
  "player-core",
  "player-db",
+ "player-formats",
  "symphonia",
  "windows",
 ]
@@ -3189,6 +3195,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "lofty",
+ "player-formats",
  "realfft",
  "serde",
  "serde_json",
@@ -4822,6 +4829,7 @@ version = "0.1.0"
 dependencies = [
  "lofty",
  "player-core",
+ "player-formats",
  "serde",
  "serde_json",
  "symphonia",

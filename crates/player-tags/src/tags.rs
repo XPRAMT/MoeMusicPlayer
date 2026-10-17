@@ -121,10 +121,9 @@ pub struct TagEdit {
     pub cover_options: CoverOptions,
 }
 
-fn is_dsf(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("dsf") || e.eq_ignore_ascii_case("dff"))
+/// DSF/DFF are read-only (ADR 0013 D10); the capability table decides.
+fn is_read_only_format(path: &Path) -> bool {
+    !player_formats::tag_write_supported(path)
 }
 
 fn id3v2_version(path: &Path) -> Option<u8> {
@@ -189,7 +188,7 @@ fn front_cover(tag: &Tag) -> Option<&Picture> {
 
 /// Read the front cover bytes and mime type (for export).
 pub fn read_cover(path: &Path) -> Result<Option<(Vec<u8>, String)>, String> {
-    if is_dsf(path) {
+    if is_read_only_format(path) {
         return Ok(None);
     }
     let file = lofty::read_from_path(path).map_err(|e| format!("讀取標籤失敗：{e}"))?;
@@ -260,7 +259,7 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
         properties: AudioProperties::default(),
         cover: None,
     };
-    if is_dsf(path) {
+    if is_read_only_format(path) {
         details.read_only = true;
         details.read_only_reason = Some("DSF/DFF 目前僅支援唯讀（ADR 0013 D10）".into());
         return Ok(details);
@@ -322,7 +321,7 @@ fn temp_path_for(path: &Path) -> PathBuf {
 /// ID3v2.4), verify by re-reading, then rename over the original. The file's mtime is
 /// updated normally. On failure the original is untouched.
 pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
-    if is_dsf(path) {
+    if is_read_only_format(path) {
         return Err("DSF/DFF 目前僅支援唯讀".into());
     }
     let cover = match &edit.replace_cover {

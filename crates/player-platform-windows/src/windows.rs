@@ -9,7 +9,7 @@ use std::{
 
 use lofty::{
     config::ParseOptions,
-    file::{FileType, TaggedFile, EXTENSIONS},
+    file::{FileType, TaggedFile},
     mpeg::{Layer, MpegFile},
     prelude::{Accessor, AudioFile, TaggedFileExt},
     probe::Probe,
@@ -790,45 +790,19 @@ fn empty_scan(source_id: player_core::SourceId) -> SourceScan {
 
 /// Whether the path has a supported audio extension, excluding MP4/MKV video files.
 /// M4A and MKA remain accepted as audio containers; this filter does not infer or constrain their codec.
+/// The accepted set lives in `player-formats`.
 pub fn is_supported_audio_file(path: &Path) -> bool {
-    if is_video_mp4(path) {
-        return false;
-    }
-
-    path.extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("mka")
-                || extension.eq_ignore_ascii_case("oga")
-                || EXTENSIONS
-                    .iter()
-                    .any(|known| known.eq_ignore_ascii_case(extension))
-        })
+    player_formats::is_windows_library_audio(path)
 }
 
 /// MP4 files are treated as video candidates and excluded from Windows library projection.
 pub fn is_video_mp4(path: &Path) -> bool {
-    path.extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+    player_formats::is_video_mp4(path)
 }
 
 /// File extensions accepted by the library scanner, formatted for Windows association keys.
 pub fn supported_audio_extensions() -> Vec<String> {
-    let mut extensions: Vec<String> = EXTENSIONS
-        .iter()
-        .filter(|extension| !extension.eq_ignore_ascii_case("mp4"))
-        .map(|extension| format!(".{extension}"))
-        .collect();
-    for extension in [".mka", ".oga"] {
-        if !extensions
-            .iter()
-            .any(|existing| existing.eq_ignore_ascii_case(extension))
-        {
-            extensions.push(extension.to_owned());
-        }
-    }
-    extensions
+    player_formats::windows_library_extensions()
 }
 
 fn read_matroska_audio_metadata(path: &Path) -> Result<TrackMetadata, TrackMetadataError> {

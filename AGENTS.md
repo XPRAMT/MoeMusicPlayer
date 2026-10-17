@@ -54,6 +54,8 @@ Android 與 Windows 對齊（2026-10-17）：
 
 接續播放（Windows／Android）：`settings.json` 的 `resumePlayback`（預設 false）。正常關閉或更新重啟時若音訊正在播放，`set_resume_playback(true)` 寫入（更新流程在暫停前就記錄，失敗中止時改回 false）；下次啟動成功還原播放 session 後（狀態 `ready`）`take_resume_playback` 重設為 false 並 `request_play`。播放中被強制結束或當機不會寫入，因此不會自動播放。Android：播放 actor（`android_playback.rs`）在播放／暫停狀態改變時透過 `ResumeHook.sink` 即時寫入同一欄位（行程被殺也保留），啟動時 `restore_session` 若欄位為 true 就以 `play_when_ready` 載入並續播；`AppState.settings` 為 `Arc<SettingsStore>` 以便共享。Release 與裝置實測待使用者確認。
 
+格式能力表（`crates/player-formats`，零相依）：所有「這個副檔名是什麼／能做什麼」的判斷都查這張表——Windows 與 Android 的資料庫掃描（`is_windows_library_audio`／`is_android_library_audio`、`windows_library_extensions`）、檔案關聯、開檔對話框（`open_dialog_extensions`）、標籤可否寫入（`tag_write_supported`，DSF/DFF 唯讀）、頻譜圖可否產生（`spectrogram_supported`，Opus／DSF／DFF 為否，直接回「此格式不支援頻譜圖」）、MIME→副檔名（`extension_for_mime`）。新增格式只改 `FORMATS`／`EXTENSIONS` 兩張表；單元測試鎖定各平台既有集合，`plugins/tauri-plugin-media-index/tests/kotlin_extension_list.rs` 會在 Kotlin 的 `AUDIO_EXTENSIONS`（無 MIME 時的候選判斷，Kotlin 無法引用 Rust）與表不一致時失敗。注意 Windows 掃描集合沿用先前 lofty 的清單加 `mka`／`oga`、扣掉 `mp4`，**不含 dsf／dff／alac／wave**（Android 才收錄 dsf／dff），之後加入 DSD 與 Opus 播放時再決定是否納入 Windows 掃描。解碼能力（rodio／Symphonia 能否播）尚未進表，下一步由 DSD／Opus 解碼器一併納入。
+
 下一步（未來最佳化，非目前缺陷）：快速拖曳捲軸時虛擬列表可能短暫出現空白列，原因是合成器先捲動、主執行緒重繪與資料頁載入較晚。可考慮的緩解：overscan 改為約一個視窗高度、尚未載入的列一律繪製輕量佔位列、捲動時只在可見範圍改變才通知上層、列加上 `contain: content`。
 
 ## 重要資料與架構邊界
