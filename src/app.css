@@ -2178,6 +2178,19 @@ input:focus-visible {
   container-type: inline-size;
 }
 
+.now-playing-zoom-layer {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  transform-origin: center;
+}
+
+.now-playing-zoom-layer.is-cover-zoomed {
+  will-change: transform;
+}
+
 .now-playing-artwork {
   display: grid;
   width: 100%;

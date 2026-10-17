@@ -147,6 +147,7 @@
   import type { AndroidAllFilesAccessStatus, AndroidWallpaperBackdropStatus } from './lib/ipc';
   import { formatSlideshowFolderLabel } from './lib/background-source-label.js';
   import { swipeDismiss } from './lib/swipe-dismiss.js';
+  import { coverZoom } from './lib/cover-zoom.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import SyncErrorDetails from './lib/SyncErrorDetails.svelte';
@@ -574,6 +575,8 @@
   let activeArtwork = $state<ActiveArtworkState>({ trackId: null, status: 'empty', objectUrl: null });
   let coverStageElement = $state<HTMLDivElement | null>(null);
   let coverFrame = $state<{ width: number; height: number } | null>(null);
+  let coverZoomLayer = $state<HTMLElement | null>(null);
+  let isCoverZoomed = $state(false);
   let sources = $state<LibrarySource[]>([]);
   let excludedFolders = $state<ExcludedFolder[]>([]);
   let sourceError = $state<string | null>(null);
@@ -4506,12 +4509,14 @@
       <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body" inert={isQuickSettingsOpen}>
         <div class="now-playing-overlay-content">
           <section class="now-playing-view" aria-label="正在播放" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}>
+            <div class="now-playing-zoom-layer" bind:this={coverZoomLayer}>
             <NowPlayingArrangement layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved} artworkVisible={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
               {#snippet artwork()}
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
-                  use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() } }}
+                  use:coverZoom={{ layer: coverZoomLayer, enabled: isNowPlayingOpen, onChange: (zoomed) => { isCoverZoomed = zoomed; } }}
+                  use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen && !isCoverZoomed, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() } }}
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
                   style:width={coverFrame ? `${coverFrame.width}px` : undefined}
@@ -4549,6 +4554,7 @@
                 />
               {/snippet}
             </NowPlayingArrangement>
+            </div>
           </section>
         </div>
       </div>
