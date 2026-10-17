@@ -2199,6 +2199,8 @@
     const revision = ++taskbarLyricsRevision;
     if (!isTauri()) return;
     taskbarLyricsQueue = taskbarLyricsQueue.catch(() => undefined).then(async () => {
+      // A burst of changes (dragging in the colour picker) only saves the latest one.
+      if (revision !== taskbarLyricsRevision) return;
       try {
         const saved = await invokeCommand('settings_set_taskbar_lyrics', { settings: next });
         if (revision === taskbarLyricsRevision) taskbarLyricsSettings = normalizeTaskbarLyricsSettings(saved);
@@ -4101,7 +4103,7 @@
                         value={taskbarLyricsSettings.customColor}
                         disabled={!taskbarLyricsSettings.useCustomColor}
                         aria-label={tr("工作列歌詞顏色")}
-                        onchange={(event) => setTaskbarLyricsSettings({ customColor: event.currentTarget.value })}
+                        oninput={(event) => setTaskbarLyricsSettings({ customColor: event.currentTarget.value })}
                       />
                     </label>
                     <label class="lyrics-preference-toggle">
