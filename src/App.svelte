@@ -4001,7 +4001,7 @@
                     <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-area-label">
                       <span id="{scope}taskbar-lyrics-area-label" class="cover-corner-setting-label"><strong>顯示位置</strong></span>
                       <div class="layout-choice-row lyrics-text-effect-row">
-                        {#each [['auto', '自動（較寬的空白）'], ['left', '左側空白'], ['right', '右側空白']] as [value, label] (value)}
+                        {#each [['auto', '自動'], ['left', '左側空白'], ['right', '右側空白']] as [value, label] (value)}
                           <button
                             type="button"
                             aria-pressed={taskbarLyricsSettings.area === value}
