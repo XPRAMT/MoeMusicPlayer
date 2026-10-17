@@ -922,6 +922,98 @@ fn lenient_dsd_settings(value: Option<serde_json::Value>) -> DsdPlaybackSettings
     .normalized()
 }
 
+/// Where one output channel of a device takes its sound from (Settings -> output -> device details).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelRouteEntry {
+    /// 0-based source channel, or `None` for silence.
+    pub source: Option<u8>,
+    pub gain_percent: u8,
+}
+
+/// One chosen output device. `id` is `None` for "the system default". The first enabled entry is the main output; the
+/// others play the same music at the same time. An empty list means the system default alone.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputDeviceEntry {
+    pub id: Option<String>,
+    pub enabled: bool,
+    pub volume_percent: u8,
+    pub delay_ms: u32,
+    /// One route per output channel of the device; `None` is automatic.
+    pub channel_map: Option<Vec<ChannelRouteEntry>>,
+}
+
+impl OutputDeviceEntry {
+    pub const MAX_DELAY_MS: u32 = 2000;
+    pub const MAX_ENTRIES: usize = 16;
+    pub const MAX_CHANNELS: usize = 32;
+
+    pub fn normalized(mut self) -> Self {
+        self.id = self.id.filter(|id| !id.trim().is_empty());
+        self.volume_percent = self.volume_percent.min(100);
+        self.delay_ms = self.delay_ms.min(Self::MAX_DELAY_MS);
+        if let Some(routes) = self.channel_map.as_mut() {
+            routes.truncate(Self::MAX_CHANNELS);
+            for route in routes.iter_mut() {
+                route.gain_percent = route.gain_percent.min(100);
+            }
+        }
+        self
+    }
+}
+
+/// Normalise, drop repeated devices (the first entry of a device wins) and cap the list.
+pub fn normalize_output_devices(devices: Vec<OutputDeviceEntry>) -> Vec<OutputDeviceEntry> {
+    let mut result: Vec<OutputDeviceEntry> = Vec::new();
+    for device in devices {
+        let device = device.normalized();
+        if result.iter().all(|existing| existing.id != device.id) && result.len() < OutputDeviceEntry::MAX_ENTRIES {
+            result.push(device);
+        }
+    }
+    result
+}
+
+/// Missing or malformed entries and fields fall back to the defaults one by one.
+fn lenient_output_devices(value: Option<serde_json::Value>) -> Vec<OutputDeviceEntry> {
+    let Some(items) = value.as_ref().and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let devices = items
+        .iter()
+        .filter_map(serde_json::Value::as_object)
+        .map(|object| OutputDeviceEntry {
+            id: object.get("id").and_then(serde_json::Value::as_str).map(str::to_owned),
+            enabled: object.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true),
+            volume_percent: object
+                .get("volumePercent")
+                .and_then(serde_json::Value::as_u64)
+                .map_or(100, |value| value.min(100) as u8),
+            delay_ms: object
+                .get("delayMs")
+                .and_then(serde_json::Value::as_u64)
+                .map_or(0, |value| value.min(u64::from(OutputDeviceEntry::MAX_DELAY_MS)) as u32),
+            channel_map: object.get("channelMap").and_then(serde_json::Value::as_array).map(|routes| {
+                routes
+                    .iter()
+                    .map(|route| ChannelRouteEntry {
+                        source: route
+                            .get("source")
+                            .and_then(serde_json::Value::as_u64)
+                            .and_then(|source| u8::try_from(source).ok()),
+                        gain_percent: route
+                            .get("gainPercent")
+                            .and_then(serde_json::Value::as_u64)
+                            .map_or(100, |gain| gain.min(100) as u8),
+                    })
+                    .collect()
+            }),
+        })
+        .collect();
+    normalize_output_devices(devices)
+}
+
 fn lenient_resampling_mode(value: Option<serde_json::Value>) -> ResamplingMode {
     value
         .and_then(|value| serde_json::from_value(value).ok())
@@ -1355,6 +1447,9 @@ pub struct AppSettings {
     /// DSD→PCM gain and output rate (Settings → output).
     #[serde(default)]
     pub dsd: DsdPlaybackSettings,
+    /// The chosen output devices (Settings -> output); empty is the system default alone.
+    #[serde(default)]
+    pub output_devices: Vec<OutputDeviceEntry>,
     /// Now Playing cover size remembered across restarts (shrunk only; see `CoverZoomSettings`).
     #[serde(default)]
     pub cover_zoom: CoverZoomSettings,
@@ -1389,6 +1484,7 @@ impl Default for AppSettings {
             shortcuts: ShortcutSettings::default(),
             resume_playback: false,
             dsd: DsdPlaybackSettings::default(),
+            output_devices: Vec::new(),
             cover_zoom: CoverZoomSettings::default(),
             taskbar_lyrics: TaskbarLyricsSettings::default(),
             language: UiLanguage::default(),
@@ -1830,6 +1926,7 @@ struct RawSettings {
     shortcuts: Option<serde_json::Value>,
     resume_playback: Option<bool>,
     dsd: Option<serde_json::Value>,
+    output_devices: Option<serde_json::Value>,
     cover_zoom: Option<serde_json::Value>,
     taskbar_lyrics: Option<serde_json::Value>,
     language: Option<serde_json::Value>,
@@ -1881,6 +1978,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         shortcuts: lenient_shortcuts(raw.shortcuts),
         resume_playback: raw.resume_playback.unwrap_or(false),
         dsd: lenient_dsd_settings(raw.dsd),
+        output_devices: lenient_output_devices(raw.output_devices),
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
         language: lenient_language(raw.language),
@@ -2293,6 +2391,57 @@ mod tests {
         assert_eq!(lenient_cover_zoom(Some(serde_json::json!({"scale": 0.7, "offsetX": 0.3}))).scale, 0.7);
         assert_eq!(lenient_cover_zoom(Some(serde_json::json!({"scale": "big"}))), CoverZoomSettings::default());
         assert_eq!(lenient_cover_zoom(None), CoverZoomSettings::default());
+    }
+
+    #[test]
+    fn output_devices_default_to_none_roundtrip_and_clamp() {
+        let directory = test_directory("output-devices");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).unwrap();
+        assert!(store.snapshot().unwrap().output_devices.is_empty());
+        let chosen = vec![
+            OutputDeviceEntry { id: None, enabled: true, volume_percent: 80, delay_ms: 0, channel_map: None },
+            OutputDeviceEntry {
+                id: Some("wasapi:{abc}".to_owned()),
+                enabled: false,
+                volume_percent: 50,
+                delay_ms: 250,
+                channel_map: Some(vec![
+                    ChannelRouteEntry { source: Some(1), gain_percent: 100 },
+                    ChannelRouteEntry { source: None, gain_percent: 40 },
+                ]),
+            },
+        ];
+        store
+            .update(|settings| {
+                settings.output_devices = chosen.clone();
+                Ok(())
+            })
+            .unwrap();
+        let reopened = SettingsStore::open(&path, AppSettings::default()).unwrap();
+        assert_eq!(reopened.snapshot().unwrap().output_devices, chosen);
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["outputDevices"][1]["delayMs"], 250);
+        assert_eq!(persisted["outputDevices"][1]["channelMap"][0]["source"], 1);
+        assert!(persisted["outputDevices"][0]["id"].is_null());
+    }
+
+    #[test]
+    fn malformed_output_devices_fall_back_entry_by_entry() {
+        let parsed = lenient_output_devices(Some(serde_json::json!([
+            {"id": "a", "volumePercent": 500, "delayMs": 99999, "channelMap": [{"source": 300, "gainPercent": 250}]},
+            "junk",
+            {"id": "a", "enabled": false},
+            {"enabled": "yes"},
+        ])));
+        assert_eq!(parsed.len(), 2, "the repeated device and the junk entry are dropped: {parsed:?}");
+        assert_eq!(parsed[0].volume_percent, 100);
+        assert_eq!(parsed[0].delay_ms, 2000);
+        assert_eq!(parsed[0].channel_map, Some(vec![ChannelRouteEntry { source: None, gain_percent: 100 }]));
+        assert_eq!(parsed[1], OutputDeviceEntry { id: None, enabled: true, volume_percent: 100, delay_ms: 0, channel_map: None });
+        assert!(lenient_output_devices(Some(serde_json::json!(7))).is_empty());
+        assert!(lenient_output_devices(None).is_empty());
     }
 
     #[test]

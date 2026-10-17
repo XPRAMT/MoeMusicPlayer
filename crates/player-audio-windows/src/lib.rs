@@ -616,9 +616,20 @@ impl PlayerHandle {
 
     /// Create the backend with the saved resampling mode and DSEE HX switch.
     pub fn with_output(mode: ResamplingMode, dsee_hx: bool) -> Result<Self, AudioError> {
+        Self::with_output_devices(mode, dsee_hx, Vec::new())
+    }
+
+    /// Like [`with_output`](Self::with_output), opening the chosen output devices from the start (empty: the system
+    /// default).
+    pub fn with_output_devices(
+        mode: ResamplingMode,
+        dsee_hx: bool,
+        devices: Vec<output_devices::OutputDeviceSetting>,
+    ) -> Result<Self, AudioError> {
         #[cfg(windows)]
         {
             let config = Arc::new(ResamplingConfig::new(mode, dsee_hx));
+            config.set_devices(devices);
             let factory_config = Arc::clone(&config);
             Self::spawn(
                 BackendSource::recoverable(move || {
@@ -632,7 +643,7 @@ impl PlayerHandle {
 
         #[cfg(not(windows))]
         {
-            let _ = (mode, dsee_hx);
+            let _ = (mode, dsee_hx, devices);
             Err(AudioError::UnsupportedPlatform)
         }
     }

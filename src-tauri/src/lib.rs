@@ -6141,6 +6141,105 @@ fn settings_set_cover_zoom(
         .map_err(|error| error.to_string())
 }
 
+/// One playback device as the output settings list it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioOutputDevice {
+    id: String,
+    name: String,
+    is_default: bool,
+    channels: u16,
+    sample_rate: u32,
+}
+
+/// Why a chosen device is not playing (`id` is `None` for the system default).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioOutputDeviceError {
+    id: Option<String>,
+    message: String,
+}
+
+/// The playback devices Windows offers right now, the system default first. Android has no device choice.
+#[tauri::command]
+async fn audio_list_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            player_audio_windows::output_devices::list_output_devices()
+                .into_iter()
+                .map(|device| AudioOutputDevice {
+                    id: device.id,
+                    name: device.name,
+                    is_default: device.is_default,
+                    channels: device.channels,
+                    sample_rate: device.sample_rate,
+                })
+                .collect()
+        })
+        .await
+        .map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    Ok(Vec::new())
+}
+
+#[tauri::command]
+fn audio_output_device_errors(state: State<'_, AppState>) -> Vec<AudioOutputDeviceError> {
+    #[cfg(target_os = "windows")]
+    if let Some(service) = state.playback.as_ref() {
+        return service
+            .player
+            .output_device_errors()
+            .into_iter()
+            .map(|(id, message)| AudioOutputDeviceError { id, message })
+            .collect();
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = &state;
+    Vec::new()
+}
+
+#[tauri::command]
+fn settings_get_output_devices(
+    state: State<'_, AppState>,
+) -> Result<Vec<settings::OutputDeviceEntry>, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.output_devices)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the chosen output devices, then apply them: mirrors open in the background, and the main output is rebuilt
+/// only when its device or channel map changed.
+#[tauri::command]
+async fn settings_set_output_devices(
+    state: State<'_, AppState>,
+    devices: Vec<settings::OutputDeviceEntry>,
+) -> Result<Vec<settings::OutputDeviceEntry>, String> {
+    let requested = settings::normalize_output_devices(devices);
+    let saved = state
+        .settings
+        .update(|settings| {
+            settings.output_devices = requested.clone();
+            Ok(())
+        })
+        .map(|settings| settings.output_devices)
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(service) = state.playback.as_ref() {
+            let applied = match set_playback_output_devices(service, &saved) {
+                Ok(ticket) => await_playback_ack_within(ticket, Duration::from_secs(15)).await,
+                Err(error) => Err(error),
+            };
+            applied.map_err(|error| format!("設定已保存，但套用到播放器失敗：{error}"))?;
+        }
+    }
+    Ok(saved)
+}
+
 #[tauri::command]
 fn settings_get_dsd(state: State<'_, AppState>) -> Result<settings::DsdPlaybackSettings, String> {
     state
@@ -9677,6 +9776,45 @@ fn set_playback_resampling(
 }
 
 #[cfg(target_os = "windows")]
+fn output_device_settings(
+    entries: &[settings::OutputDeviceEntry],
+) -> Vec<player_audio_windows::output_devices::OutputDeviceSetting> {
+    entries
+        .iter()
+        .map(|entry| player_audio_windows::output_devices::OutputDeviceSetting {
+            id: entry.id.clone(),
+            enabled: entry.enabled,
+            volume_percent: entry.volume_percent,
+            delay_ms: entry.delay_ms,
+            channel_map: entry.channel_map.as_ref().map(|routes| {
+                routes
+                    .iter()
+                    .map(|route| player_audio_windows::output_devices::ChannelRoute {
+                        source: route.source,
+                        gain_percent: route.gain_percent,
+                    })
+                    .collect()
+            }),
+        })
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn set_playback_output_devices(
+    service: &WindowsPlaybackService,
+    entries: &[settings::OutputDeviceEntry],
+) -> Result<CommandTicket, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    service
+        .player
+        .request_set_output_devices(output_device_settings(entries))
+        .map_err(|error| playback_audio_error_message(&error))
+}
+
+#[cfg(target_os = "windows")]
 fn set_playback_dsd(
     service: &WindowsPlaybackService,
     saved: settings::DsdPlaybackSettings,
@@ -10601,6 +10739,10 @@ pub fn run() {
             settings_get_dsee_hx,
             settings_set_dsee_hx,
             settings_get_dsd,
+            audio_list_output_devices,
+            audio_output_device_errors,
+            settings_get_output_devices,
+            settings_set_output_devices,
             settings_get_language,
             settings_set_language,
             settings_get_taskbar_lyrics,
@@ -10735,9 +10877,10 @@ pub fn run() {
             #[cfg(target_os = "android")]
             android_dsd::set_gain_db(initial_settings.dsd.gain_db);
             #[cfg(target_os = "windows")]
-            let (playback, playback_error) = match PlayerHandle::with_output(
+            let (playback, playback_error) = match PlayerHandle::with_output_devices(
                 audio_resampling_mode(initial_settings.resampling_mode),
                 initial_settings.dsee_hx,
+                output_device_settings(&initial_settings.output_devices),
             ) {
                 Ok(player) => {
                     player.configure_dsd(player_audio_windows::DsdSettings {
