@@ -105,7 +105,10 @@ export function coverZoom(node, params) {
     state = next;
     node.style.transition = animate && !reduced() ? 'transform 160ms ease' : 'none';
     node.style.transform = coverZoomTransform(state);
-    node.classList.toggle('is-cover-zoomed', state.scale !== COVER_ZOOM_REST);
+    // A data attribute, not a class: Svelte rewrites the class list of this element when `has-artwork` toggles
+    // (track change), which would drop a class added from here.
+    if (state.scale !== COVER_ZOOM_REST) node.dataset.coverZoomed = '';
+    else delete node.dataset.coverZoomed;
     options.onZoom?.(state.scale);
   }
 
@@ -276,7 +279,7 @@ export function coverZoom(node, params) {
       node.removeEventListener('dblclick', dblclick);
       node.removeEventListener('click', click, true);
       node.style.transform = '';
-      node.classList.remove('is-cover-zoomed');
+      delete node.dataset.coverZoomed;
     }
   };
 }

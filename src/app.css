@@ -2178,7 +2178,7 @@ input:focus-visible {
   container-type: inline-size;
 }
 
-.now-playing-view .cover-stage.is-cover-zoomed {
+.now-playing-view .cover-stage[data-cover-zoomed] {
   position: relative;
   z-index: 1;
   /* The pane is resized by the zoom; max-width/height: 100% would clamp one side and crop the cover. */
