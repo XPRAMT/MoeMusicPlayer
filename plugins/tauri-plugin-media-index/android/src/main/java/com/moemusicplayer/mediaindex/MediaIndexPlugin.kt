@@ -28,6 +28,8 @@ import android.view.WindowManager
 import android.webkit.WebView
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import app.tauri.PermissionState
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
@@ -394,6 +396,32 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             type = if (mimeTypes.size == 1) mimeTypes[0] else "*/*"
             if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivityForResult(invoke, intent, "onOpenDocumentPicked")
+    }
+
+    /**
+     * Single image via the Android Photo Picker (PickVisualMedia, ImageOnly). If the picker is not
+     * available, fall back to the SAF document picker limited to the given image MIME types. The
+     * grant is temporary; callers copy the bytes right away.
+     */
+    @Command
+    fun pickVisualImage(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenDocumentArgs::class.java)
+        val intent = if (ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(activity)) {
+            ActivityResultContracts.PickVisualMedia().createIntent(
+                activity,
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+            )
+        } else {
+            val mimeTypes = args.mimeTypes?.filter(String::isNotBlank)?.toTypedArray()?.takeIf { it.isNotEmpty() }
+                ?: arrayOf("image/*")
+            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = if (mimeTypes.size == 1) mimeTypes[0] else "image/*"
+                if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
         }
         startActivityForResult(invoke, intent, "onOpenDocumentPicked")
     }

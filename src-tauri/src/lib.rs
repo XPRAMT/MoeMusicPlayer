@@ -5734,8 +5734,9 @@ async fn appearance_pick_main_background(
         let _ = (window, state);
         return tauri::async_runtime::spawn_blocking(move || -> Result<Option<bool>, String> {
             let index = app.media_index();
-            let Some((uri, _)) = index
-                .pick_open_document(&ANDROID_BACKGROUND_IMAGE_MIME_TYPES)
+            // Photo Picker first (no storage permission, image-only); document picker fallback.
+            let Some(uri) = index
+                .pick_visual_image(&ANDROID_BACKGROUND_IMAGE_MIME_TYPES)
                 .map_err(|error| error.to_string())?
             else {
                 return Ok(None);

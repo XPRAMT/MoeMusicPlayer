@@ -413,6 +413,14 @@ impl<R: Runtime> PlatformMediaIndex<R> {
     }
 
     /// System document picker (ACTION_OPEN_DOCUMENT). Returns (uri, display name).
+    /// Photo Picker (image only), falling back to the document picker with `mime_types`.
+    pub(crate) fn pick_visual_image(&self, mime_types: &[&str]) -> Result<Option<String>> {
+        let value: serde_json::Value = self
+            .0
+            .run_mobile_plugin("pickVisualImage", json!({ "mimeTypes": mime_types }))?;
+        Ok(value.get("uri").and_then(|uri| uri.as_str()).map(str::to_owned))
+    }
+
     pub(crate) fn pick_open_document(
         &self,
         mime_types: &[&str],

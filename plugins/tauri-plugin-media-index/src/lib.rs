@@ -331,6 +331,12 @@ impl<R: Runtime> MediaIndex<R> {
         self.platform.write_audio_cache_lease(lease, destination_uri)
     }
 
+    /// Android Photo Picker (image only); falls back to the document picker.
+    #[cfg(target_os = "android")]
+    pub fn pick_visual_image(&self, mime_types: &[&str]) -> Result<Option<String>> {
+        self.platform.pick_visual_image(mime_types)
+    }
+
     /// System document picker; returns (uri, display name).
     #[cfg(target_os = "android")]
     pub fn pick_open_document(&self, mime_types: &[&str]) -> Result<Option<(String, Option<String>)>> {
