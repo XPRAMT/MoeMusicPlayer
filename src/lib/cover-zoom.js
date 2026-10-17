@@ -86,7 +86,7 @@ export function coverZoom(node, params) {
   let state = { ...COVER_ZOOM_IDENTITY };
   /** @type {Map<number, { x: number, y: number }>} */
   const pointers = new Map();
-  /** @type {{ distance: number, scale: number } | null} */
+  /** @type {{ distance: number, scale: number, midX: number, midY: number } | null} */
   let pinch = null;
   /** @type {{ x: number, y: number, ox: number, oy: number, moved: boolean } | null} */
   let pan = null;
@@ -140,7 +140,7 @@ export function coverZoom(node, params) {
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
-      pinch = { distance: Math.max(1, pointerDistance(a, b)), scale: state.scale };
+      pinch = { distance: Math.max(1, pointerDistance(a, b)), scale: state.scale, midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2 };
       pan = null;
       lastTap = null;
       // Let the swipe-to-skip gesture on the same element drop the first finger (it ignores pointercancel dismissals).
@@ -152,7 +152,7 @@ export function coverZoom(node, params) {
       for (const id of pointers.keys()) {
         try { node.setPointerCapture(id); } catch { /* gone */ }
       }
-    } else if (pointers.size === 1 && state.scale > COVER_ZOOM_REST) {
+    } else if (pointers.size === 1 && event.pointerType === 'mouse' && state.scale > COVER_ZOOM_REST) {
       pan = { x: event.clientX, y: event.clientY, ox: state.x, oy: state.y, moved: false };
       try { node.setPointerCapture(event.pointerId); } catch { /* gone */ }
     }
@@ -164,9 +164,15 @@ export function coverZoom(node, params) {
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pinch && pointers.size >= 2) {
       const [a, b] = [...pointers.values()];
-      const mid = anchorOf((a.x + b.x) / 2, (a.y + b.y) / 2);
+      const midX = (a.x + b.x) / 2;
+      const midY = (a.y + b.y) / 2;
+      const mid = anchorOf(midX, midY);
       const { width, height } = layerSize();
-      apply(zoomCoverAt(state, pinch.scale * (pointerDistance(a, b) / pinch.distance), mid.x, mid.y, width, height), false);
+      const zoomed = zoomCoverAt(state, pinch.scale * (pointerDistance(a, b) / pinch.distance), mid.x, mid.y, width, height);
+      // Two fingers moving together pan the zoomed cover.
+      apply(clampCoverZoom({ scale: zoomed.scale, x: zoomed.x + (midX - pinch.midX), y: zoomed.y + (midY - pinch.midY) }, width, height), false);
+      pinch.midX = midX;
+      pinch.midY = midY;
       suppressClick = true;
       if (event.cancelable) event.preventDefault();
     } else if (pan && pointers.size === 1) {
@@ -189,10 +195,7 @@ export function coverZoom(node, params) {
     pointers.delete(event.pointerId);
     if (pointers.size < 2) pinch = null;
     if (pointers.size === 0) pan = null;
-    else if (pointers.size === 1 && state.scale > COVER_ZOOM_REST) {
-      const [rest] = [...pointers.values()];
-      pan = { x: rest.x, y: rest.y, ox: state.x, oy: state.y, moved: true };
-    }
+
     if (wasPinching || moved) {
       setTimeout(() => { suppressClick = false; }, 0);
       lastTap = null;
