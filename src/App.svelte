@@ -4531,7 +4531,7 @@
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
-                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: (scale) => { coverZoomScale = scale; } }}
+                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: (scale) => { coverZoomScale = scale; }, resetKey: `${playback?.currentTrack?.id ?? ''}|${activeArtwork.objectUrl ?? ''}` }}
                   use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen && !isCoverZoomed, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() } }}
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
