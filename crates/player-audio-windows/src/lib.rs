@@ -18,6 +18,8 @@ mod dsd;
 #[cfg(windows)]
 mod dsee;
 #[cfg(windows)]
+mod opus;
+#[cfg(windows)]
 mod resample;
 #[cfg(windows)]
 mod rodio_backend;

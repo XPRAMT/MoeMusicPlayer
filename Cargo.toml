@@ -4,6 +4,7 @@ members = [
     "crates/player-core",
     "crates/player-dsd",
     "crates/player-formats",
+    "crates/player-opus",
     "crates/player-db",
     "crates/player-platform-windows",
     "crates/player-audio-windows",

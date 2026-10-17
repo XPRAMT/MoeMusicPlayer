@@ -10,8 +10,10 @@ player-formats = { path = "../player-formats" }
 
 [dev-dependencies]
 player-dsd = { path = "../player-dsd", features = ["testing"] }
+player-opus = { path = "../player-opus", features = ["testing"] }
 
 [target.'cfg(windows)'.dependencies]
+player-opus = { path = "../player-opus" }
 rodio = { version = "=0.22.2", default-features = false, features = [
     "playback",
     "symphonia-alac",

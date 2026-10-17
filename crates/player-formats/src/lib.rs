@@ -42,6 +42,9 @@ pub enum DecodeEngine {
     Rodio,
     /// The DSD→PCM converter (ADR 0016).
     Dsd,
+    /// libopus over our Ogg reader (ADR 0017). `.ogg`/`.oga` files are routed here only when their first packet is
+    /// `OpusHead` (the caller sniffs the content).
+    Opus,
 }
 
 /// What the player can do with a format.
@@ -62,6 +65,7 @@ impl FormatInfo {
     pub fn decode_engine(&self) -> DecodeEngine {
         match self.id {
             FormatId::Dsf => DecodeEngine::Dsd,
+            FormatId::Opus => DecodeEngine::Opus,
             _ => DecodeEngine::Rodio,
         }
     }
@@ -453,9 +457,11 @@ mod tests {
     }
 
     #[test]
-    fn only_dsf_uses_the_dsd_converter() {
+    fn only_dsf_and_opus_use_their_own_decoders() {
         assert_eq!(decode_engine(Path::new("a.DSF")), DecodeEngine::Dsd);
         assert_eq!(decode_engine(Path::new("a.dff")), DecodeEngine::Rodio);
+        assert_eq!(decode_engine(Path::new("a.OPUS")), DecodeEngine::Opus);
+        assert_eq!(decode_engine(Path::new("a.ogg")), DecodeEngine::Rodio);
         assert_eq!(decode_engine(Path::new("a.flac")), DecodeEngine::Rodio);
         assert_eq!(decode_engine(Path::new("a.unknown")), DecodeEngine::Rodio);
     }

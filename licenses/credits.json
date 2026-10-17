@@ -187,5 +187,19 @@
     "license": "Apache-2.0",
     "repositoryUrl": "https://github.com/microsoft/TypeScript",
     "purpose": "前端型別與程式編譯"
+  },
+  {
+    "name": "opus (Rust bindings)",
+    "version": "0.4.0",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/SpaceManiac/opus-rs",
+    "purpose": "Opus 解碼（libopus 綁定）"
+  },
+  {
+    "name": "libopus (opusic-sys)",
+    "version": "0.7.5",
+    "license": "BSD-3-Clause",
+    "repositoryUrl": "https://opus-codec.org",
+    "purpose": "Opus 編解碼器（隨程式靜態連結）"
   }
 ]

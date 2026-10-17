@@ -997,12 +997,13 @@ impl TrackPlayer {
 
 type FileDecoder = AudioDecoder;
 
-/// Whatever decodes the current file: rodio/Symphonia for most formats, the DSD→PCM converter for DSF
-/// (`player_formats::decode_engine`).
+/// Whatever decodes the current file: rodio/Symphonia for most formats, the DSD→PCM converter for DSF and libopus for
+/// Opus (`player_formats::decode_engine`).
 enum AudioDecoder {
     Rodio(Decoder<BufReader<File>>),
     /// Boxed: the converter state is several times larger than a rodio decoder.
     Dsd(Box<crate::dsd::DsfPcmSource>),
+    Opus(Box<crate::opus::OpusFileSource>),
 }
 
 impl Iterator for AudioDecoder {
@@ -1012,6 +1013,7 @@ impl Iterator for AudioDecoder {
         match self {
             Self::Rodio(source) => source.next(),
             Self::Dsd(source) => source.next(),
+            Self::Opus(source) => source.next(),
         }
     }
 }
@@ -1021,6 +1023,7 @@ impl Source for AudioDecoder {
         match self {
             Self::Rodio(source) => source.current_span_len(),
             Self::Dsd(source) => source.current_span_len(),
+            Self::Opus(source) => source.current_span_len(),
         }
     }
 
@@ -1028,6 +1031,7 @@ impl Source for AudioDecoder {
         match self {
             Self::Rodio(source) => source.channels(),
             Self::Dsd(source) => source.channels(),
+            Self::Opus(source) => source.channels(),
         }
     }
 
@@ -1035,6 +1039,7 @@ impl Source for AudioDecoder {
         match self {
             Self::Rodio(source) => source.sample_rate(),
             Self::Dsd(source) => source.sample_rate(),
+            Self::Opus(source) => source.sample_rate(),
         }
     }
 
@@ -1042,6 +1047,7 @@ impl Source for AudioDecoder {
         match self {
             Self::Rodio(source) => source.total_duration(),
             Self::Dsd(source) => source.total_duration(),
+            Self::Opus(source) => source.total_duration(),
         }
     }
 
@@ -1049,6 +1055,7 @@ impl Source for AudioDecoder {
         match self {
             Self::Rodio(source) => source.try_seek(position),
             Self::Dsd(source) => source.try_seek(position),
+            Self::Opus(source) => source.try_seek(position),
         }
     }
 }
@@ -1139,8 +1146,22 @@ fn try_seek_with_deadline(
 }
 
 fn open_decoder(path: &Path) -> Result<AudioDecoder, AudioError> {
-    if player_formats::decode_engine(path) == player_formats::DecodeEngine::Dsd {
-        return crate::dsd::open_dsf(path).map(|source| AudioDecoder::Dsd(Box::new(source)));
+    match player_formats::decode_engine(path) {
+        player_formats::DecodeEngine::Dsd => {
+            return crate::dsd::open_dsf(path).map(|source| AudioDecoder::Dsd(Box::new(source)));
+        }
+        player_formats::DecodeEngine::Opus => {
+            return crate::opus::open_opus(path).map(|source| AudioDecoder::Opus(Box::new(source)));
+        }
+        player_formats::DecodeEngine::Rodio => {}
+    }
+    // Ogg files may hold Vorbis (rodio) or Opus: look at the first packet.
+    let ogg_extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ogg") || extension.eq_ignore_ascii_case("oga"));
+    if ogg_extension && player_opus::sniff_opus_file(path) {
+        return crate::opus::open_opus(path).map(|source| AudioDecoder::Opus(Box::new(source)));
     }
     let file = File::open(path).map_err(|error| AudioError::FileOpen {
         path: path.to_path_buf(),
@@ -1169,6 +1190,14 @@ mod tests {
             .join("tests")
             .join("fixtures")
             .join(name)
+    }
+
+    /// Write a stereo Opus file (a tone per channel) to a temporary path; returns it and its length in frames.
+    fn write_test_opus(name: &str, seconds: f64) -> (PathBuf, usize) {
+        let frames = (48_000.0 * seconds) as usize;
+        let path = std::env::temp_dir().join(format!("moe-{name}-{}.opus", std::process::id()));
+        std::fs::write(&path, player_opus::testing::write_opus(frames, 2, 1_000.0, 0, 0)).unwrap();
+        (path, frames)
     }
 
     /// Write a stereo DSD64 file (1 kHz and 3 kHz tones) to a temporary path.
@@ -1200,6 +1229,37 @@ mod tests {
         decoder.try_seek(Duration::from_millis(50)).expect("seek");
         assert_eq!(decoder.by_ref().count(), (frames - 8_820) * 2);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn opus_files_open_as_48_khz_pcm_and_seek() {
+        let (path, frames) = write_test_opus("open", 2.0);
+        let mut decoder = open_decoder(&path).expect("Opus opens");
+        assert!(matches!(decoder, AudioDecoder::Opus(_)));
+        assert_eq!(decoder.sample_rate().get(), 48_000);
+        assert_eq!(decoder.channels().get(), 2);
+        assert_eq!(
+            decoder.total_duration().unwrap(),
+            Duration::from_secs_f64(frames as f64 / 48_000.0)
+        );
+        assert_eq!(decoder.by_ref().count(), frames * 2);
+        decoder.try_seek(Duration::from_millis(500)).expect("seek");
+        assert_eq!(decoder.by_ref().count(), (frames - 24_000) * 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn an_opus_stream_in_an_ogg_file_is_sniffed_and_a_vorbis_ogg_still_goes_to_rodio() {
+        let (opus_path, _) = write_test_opus("sniff", 0.5);
+        let renamed = opus_path.with_extension("ogg");
+        std::fs::rename(&opus_path, &renamed).unwrap();
+        assert!(matches!(open_decoder(&renamed), Ok(AudioDecoder::Opus(_))));
+        let _ = std::fs::remove_file(renamed);
+        // The shipped Vorbis fixture must keep using rodio.
+        let vorbis = fixture("seek-tone.ogg");
+        if vorbis.exists() {
+            assert!(matches!(open_decoder(&vorbis), Ok(AudioDecoder::Rodio(_))));
+        }
     }
 
     #[test]
@@ -1238,6 +1298,43 @@ mod tests {
             }
         }
         assert!(checked > 0, "no DSF files found");
+    }
+
+    /// Decodes real Opus files from the owner's library (`-- --ignored`): the decoded length must match the stated
+    /// duration, the signal must be finite and non-silent, and seeking to the middle must work.
+    #[test]
+    #[ignore = "needs Opus files in the library folder on drive D"]
+    fn real_opus_files_decode_and_seek() {
+        let mut files = Vec::new();
+        let mut stack = vec![PathBuf::from(r"D:\Music\Loss")];
+        while let Some(directory) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|extension| extension == "opus") {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        assert!(!files.is_empty(), "no .opus files found");
+        for path in files.iter().take(6) {
+            let mut decoder = open_decoder(path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
+            let duration = decoder.total_duration().expect("duration");
+            let channels = usize::from(decoder.channels().get());
+            let samples: Vec<f32> = decoder.by_ref().collect();
+            let frames = samples.len() / channels;
+            let expected = (duration.as_secs_f64() * 48_000.0).round() as usize;
+            let peak = samples.iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+            println!("{path:?}: {duration:?}, {frames} frames (expected {expected}), peak {peak:.3}");
+            assert_eq!(frames, expected);
+            assert!(samples.iter().all(|sample| sample.is_finite()));
+            assert!(peak > 0.01);
+            decoder.try_seek(duration / 2).expect("seek to the middle");
+            assert_eq!(decoder.by_ref().take(4_000).count(), 4_000);
+        }
     }
 
     /// Whole-track peak and RMS of up to 24 DSF files spread over the library folder (`--release -- --ignored`),
