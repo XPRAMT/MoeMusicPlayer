@@ -743,3 +743,32 @@ test('load more appends the next lyric page until the source is exhausted', asyn
   controller.dispose();
 });
 
+
+test('reload reads the current track again and keeps showing the old lyrics until the new ones arrive', async () => {
+  let embedded = 'old';
+  const states = [];
+  const controller = createLyricsController({
+    api: {
+      getTrack: async ({ trackId }) => ({ lyrics: lyric(trackId, 'embedded', embedded), candidates: [], status: 'ready', error: null }),
+      search: async () => emptyResult(),
+      selectCandidate: async () => lyric('a'),
+      cancelSearch: async () => {},
+      clearTrack: async () => emptyResult(),
+    },
+    onChange: (state) => states.push(state),
+  });
+  await controller.setTrack('a');
+  assert.equal(controller.getState().lyrics.lines[0].text, 'old');
+
+  embedded = 'edited';
+  const before = states.length;
+  const reloading = controller.reload();
+  assert.equal(controller.getState().lyrics.lines[0].text, 'old', 'the old lyrics stay while reloading');
+  await reloading;
+  assert.equal(controller.getState().lyrics.lines[0].text, 'edited');
+  assert.ok(states.length > before);
+  // Nothing to reload without a track.
+  await controller.setTrack(null);
+  await controller.reload();
+  assert.equal(controller.getState().lyrics, null);
+});

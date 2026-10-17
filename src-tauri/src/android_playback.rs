@@ -97,6 +97,8 @@ pub(crate) enum PlaybackAction {
         sort: TrackListSort,
         expected_revision: u64,
     },
+    /// The current track's tags were edited: read its summary from the library again.
+    RefreshCurrentTrack,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -539,6 +541,18 @@ impl AndroidActor {
                 self.publish_queue();
                 self.save_session()?;
                 self.update_capabilities(request_id)?;
+                Ok(self.publish_snapshot())
+            }
+            PlaybackAction::RefreshCurrentTrack => {
+                if let Some(track_id) = self.current_track.as_ref().map(|track| track.id) {
+                    if let Some(summary) = self
+                        .database
+                        .get_track_summary(track_id)
+                        .map_err(|error| error.to_string())?
+                    {
+                        self.current_track = Some(summary);
+                    }
+                }
                 Ok(self.publish_snapshot())
             }
             PlaybackAction::SetQueueOrder {

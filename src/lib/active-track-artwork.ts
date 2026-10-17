@@ -10,6 +10,8 @@ export interface ActiveArtworkState {
 
 export interface ActiveTrackArtworkController {
   setTrack(trackId: string | null): void;
+  /** Read the current track's cover again (its file was edited); the old image stays until the new one is ready. */
+  reload(): void;
   imageFailed(objectUrl: string): void;
   snapshot(): ActiveArtworkState;
   dispose(): void;
@@ -170,6 +172,12 @@ export function createActiveTrackArtworkController(
       }
 
       publish({ trackId: nextTrackId, status: 'loading', objectUrl: state.objectUrl });
+      startRequest();
+    },
+
+    reload() {
+      if (disposed || !currentTrackId) return;
+      generation += 1;
       startRequest();
     },
 

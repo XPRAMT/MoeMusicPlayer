@@ -1545,6 +1545,18 @@
     }
   }
 
+  /** Saving tags rewrote the file: rescan the library, then reload the playing track (summary, cover, lyrics). */
+  async function reloadAfterTrackDetailsSaved(): Promise<void> {
+    await syncLibrary();
+    try {
+      await invokeCommand('playback_refresh_current_track', {});
+    } catch (error) {
+      playbackError = getErrorText(error);
+    }
+    artworkController.reload();
+    void loadPlaybackSnapshot(false);
+  }
+
   async function loadTrackColumnSettings(): Promise<void> {
     const revision = trackColumnSettingsRevision;
     try {
@@ -4848,7 +4860,7 @@
         </div>
       </div>
       {#if trackDetailsTrackId}
-        <TrackDetailsDialog trackId={trackDetailsTrackId} onClose={() => { trackDetailsTrackId = null; }} onSaved={() => void syncLibrary()} onOpenSpectrogram={(id) => void openSpectrogram(id)} />
+        <TrackDetailsDialog trackId={trackDetailsTrackId} onClose={() => { trackDetailsTrackId = null; }} onSaved={() => void reloadAfterTrackDetailsSaved()} onOpenSpectrogram={(id) => void openSpectrogram(id)} />
       {/if}
       {#if androidSpectrogramTrackId}
         <SpectrogramView trackId={androidSpectrogramTrackId} onClose={() => { androidSpectrogramTrackId = null; }} />

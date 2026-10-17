@@ -155,6 +155,9 @@
     void listen<TaskbarLyricsSettings>('taskbar-lyrics-settings', (event) => {
       settings = normalizeTaskbarLyricsSettings(event.payload);
     }).then((unlisten) => unlisteners.push(unlisten));
+    void listen<string | null>('current-track-refreshed', (event) => {
+      if (event.payload && event.payload === trackId) void controller.reload();
+    }).then((unlisten) => unlisteners.push(unlisten));
     void listen<boolean>('taskbar-lyrics-theme', (event) => {
       taskbarIsLight = event.payload;
     }).then((unlisten) => unlisteners.push(unlisten));

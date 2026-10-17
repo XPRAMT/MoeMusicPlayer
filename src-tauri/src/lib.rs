@@ -802,6 +802,14 @@ impl ArtworkPump {
         }
     }
 
+    /// Forget the cover of the active track so the next update reads it again (its file's tags were edited).
+    fn invalidate(&mut self) {
+        self.active_track = None;
+        self.pending = None;
+        self.image = None;
+        self.lookup_complete = false;
+    }
+
     #[cfg(test)]
     fn update(
         &mut self,
@@ -1784,6 +1792,18 @@ fn set_statistics_status(status: &Mutex<Option<String>>, message: Option<String>
 
 #[cfg(target_os = "windows")]
 impl WindowsSystemMediaService {
+    /// The current track's metadata and cover changed: publish them again on the next update.
+    fn refresh_current_track(&self) {
+        self.artwork
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .invalidate();
+        *self
+            .last_update
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
     fn new(controller: SystemMediaController) -> Self {
         Self {
             controller: Mutex::new(Some(controller)),
@@ -7907,6 +7927,67 @@ async fn playback_play(
     }
 }
 
+/// Event sent to every window with the id of the track whose summary, cover and embedded lyrics were just reloaded.
+const CURRENT_TRACK_REFRESHED_EVENT: &str = "current-track-refreshed";
+
+/// Reload the current track from the library after its tags were saved (the caller syncs the library first): its
+/// summary in the playback snapshot, the system media metadata and cover, and, through the event, each window's
+/// cover and lyrics.
+#[tauri::command]
+async fn playback_refresh_current_track(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<PlaybackSnapshot, String> {
+    let _database_work = enter_database_work(&state)?;
+    #[cfg(target_os = "windows")]
+    let snapshot = {
+        let service = windows_playback_service(&state)?;
+        let current = service
+            .current_track
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|track| track.id);
+        if let (Some(track_id), Some(database)) = (current, state.database.as_ref()) {
+            let external = service
+                .external_tracks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(&track_id);
+            if !external {
+                if let Some(summary) = database
+                    .get_track_summary(track_id)
+                    .map_err(|error| error.to_string())?
+                {
+                    *service
+                        .current_track
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(summary);
+                }
+            }
+        }
+        if let Some(system_media) = state.system_media.as_ref() {
+            system_media.refresh_current_track();
+        }
+        bump_queue_revision(service);
+        service.snapshot()
+    };
+    #[cfg(target_os = "android")]
+    let snapshot = android_playback_service(&state)?
+        .execute(android_playback::PlaybackAction::RefreshCurrentTrack)
+        .await?;
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    let snapshot = {
+        let _ = &state;
+        return Err("此平台尚未提供本機音訊播放服務。".to_owned());
+    };
+    let _ = app.emit(
+        CURRENT_TRACK_REFRESHED_EVENT,
+        snapshot.current_track.as_ref().map(|track| track.id.to_string()),
+    );
+    Ok(snapshot)
+}
+
 #[tauri::command]
 async fn playback_pause(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
     let _database_work = enter_database_work(&state)?;
@@ -10486,6 +10567,7 @@ pub fn run() {
             android_pick_folder_source,
             library_sync,
             playback_get_snapshot,
+            playback_refresh_current_track,
             playback_get_queue_page,
             playback_get_queue_quick_index_groupings,
             library_get_track_artwork,

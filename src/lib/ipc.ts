@@ -902,6 +902,11 @@ interface IpcContract {
     args: Record<string, never>;
     result: string | null;
   };
+  /** Reload the current track's summary, cover and system-media metadata after its tags were saved. */
+  playback_refresh_current_track: {
+    args: Record<string, never>;
+    result: PlaybackSnapshot;
+  };
   playback_get_snapshot: {
     args: Record<string, never>;
     result: PlaybackSnapshot;

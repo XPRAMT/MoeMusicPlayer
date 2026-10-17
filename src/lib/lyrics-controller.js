@@ -247,6 +247,14 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       if (trackId) await loadTrack(trackId, generation, trackMetadata);
     },
 
+    /** Load the current track's lyrics again (embedded lyrics were edited), keeping what is shown until then. */
+    async reload() {
+      if (disposed || !activeTrackId) return;
+      generation += 1;
+      cancelActiveRequest();
+      await loadTrack(activeTrackId, generation, activeTrackMetadata);
+    },
+
     async retry() {
       if (disposed || !activeTrackId) return;
       if (state.failedStage === 'search') {

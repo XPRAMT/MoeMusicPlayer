@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte';
+  import { listen } from '@tauri-apps/api/event';
   import { invokeCommand } from './ipc';
   import type {
     LyricLine,
@@ -509,6 +510,24 @@
       element.removeEventListener('touchstart', onUserScroll);
       if (userScrollResetTimer) clearTimeout(userScrollResetTimer);
       userScrollResetTimer = null;
+    };
+  });
+
+  // Tags were saved for the playing track: read its (possibly embedded) lyrics again.
+  $effect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<string | null>('current-track-refreshed', (event) => {
+      if (event.payload && event.payload === viewState.trackId) void controller.reload();
+    })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
     };
   });
 

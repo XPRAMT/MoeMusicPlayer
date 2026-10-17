@@ -216,3 +216,30 @@ test('binary signatures identify supported original raster formats without decod
   assert.equal(detectArtworkMimeType(bytes(0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50)), 'image/webp');
   assert.equal(detectArtworkMimeType(bytes(0x00, 0x01, 0x02)), null);
 });
+
+test('reload fetches the same track again and swaps in the new image', async () => {
+  let version = 0;
+  const { controller, states, revoked } = controllerWith({
+    fetchBytes: async () => bytes(0xff, 0xd8, 0xff, ++version),
+  });
+  controller.setTrack('t1');
+  await nextTurn();
+  await nextTurn();
+  const first = controller.snapshot().objectUrl;
+  assert.equal(controller.snapshot().status, 'ready');
+
+  controller.reload();
+  await nextTurn();
+  await nextTurn();
+  const second = controller.snapshot().objectUrl;
+  assert.equal(version, 2);
+  assert.notEqual(second, first);
+  assert.equal(controller.snapshot().status, 'ready');
+  assert.ok(revoked.includes(first));
+  assert.ok(states.length > 1);
+
+  controller.setTrack(null);
+  controller.reload();
+  await nextTurn();
+  assert.equal(version, 2, 'no track, nothing fetched');
+});
