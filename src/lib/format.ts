@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 export function formatDuration(durationMs: number | null | undefined): string {
   if (durationMs === null || durationMs === undefined || !Number.isFinite(durationMs)) {
     return '—:—';
@@ -21,7 +22,7 @@ export function formatDurationHours(durationMs: number | null | undefined): stri
 }
 
 export function formatAlbumDetailSummary(trackCount: number, playedMs: number, durationMs: number): string {
-  return `${trackCount.toLocaleString()}首曲目．累積播放 ${formatDurationHours(playedMs)}．播放時長 ${formatDurationHours(durationMs)}`;
+  return tr('{0}首曲目．累積播放 {1}．播放時長 {2}', [trackCount.toLocaleString(), formatDurationHours(playedMs), formatDurationHours(durationMs)]);
 }
 
 /** Show only the track number; album Disc groups already identify the disc. */

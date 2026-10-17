@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { onDestroy, tick } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invokeCommand } from './ipc';
@@ -381,8 +382,8 @@
     plainLayout.generation;
     timingPanelOpen;
     timingOffsetSec;
-    const source = viewState.lyrics ? sourceLabel(viewState.lyrics.source) : '尚未載入';
-    const sync = viewState.lyrics ? (isTimed ? '同步歌詞' : '純歌詞') : '沒有歌詞';
+    const source = viewState.lyrics ? sourceLabel(viewState.lyrics.source) : tr('尚未載入');
+    const sync = viewState.lyrics ? (isTimed ? tr('同步歌詞') : tr('純歌詞')) : tr('沒有歌詞');
     onStatusChange?.({
       source,
       sync,
@@ -535,31 +536,31 @@
 
   function sourceLabel(source: TrackLyrics['source']): string {
     switch (source) {
-      case 'local': return '本機 LRC';
-      case 'embedded': return '內嵌歌詞';
-      case 'netease': return '網易雲';
-      case 'qqmusic': return 'QQ 音樂';
-      case 'manual': return '手動指定';
+      case 'local': return tr('本機 LRC');
+      case 'embedded': return tr('內嵌歌詞');
+      case 'netease': return tr('網易雲');
+      case 'qqmusic': return tr('QQ 音樂');
+      case 'manual': return tr('手動指定');
     }
   }
 
   function providerLabel(provider: LyricsCandidate['provider']): string {
-    if (provider === 'qqmusic') return 'QQ 音樂';
-    if (provider === 'local') return '本機 LRC';
-    if (provider === 'embedded') return '內嵌歌詞';
-    return '網易雲';
+    if (provider === 'qqmusic') return tr('QQ 音樂');
+    if (provider === 'local') return tr('本機 LRC');
+    if (provider === 'embedded') return tr('內嵌歌詞');
+    return tr('網易雲');
   }
 
   function confidenceLabel(confidence: LyricsCandidate['confidence']): string {
     switch (confidence) {
-      case 'high': return '高信心';
-      case 'medium': return '中信心';
-      case 'low': return '低信心';
+      case 'high': return tr('高信心');
+      case 'medium': return tr('中信心');
+      case 'low': return tr('低信心');
     }
   }
 
   function formatCandidateDuration(durationMs: number | null): string {
-    if (durationMs === null || !Number.isFinite(durationMs) || durationMs < 0) return '長度未知';
+    if (durationMs === null || !Number.isFinite(durationMs) || durationMs < 0) return tr('長度未知');
     const totalSeconds = Math.floor(durationMs / 1000);
     return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, '0')}`;
   }
@@ -621,7 +622,7 @@
   function handleTimingPanelOutsidePointerDown(event: PointerEvent): void {
     if (!timingPanelOpen || !(event.target instanceof Node)) return;
     if (timingPanelElement?.contains(event.target)) return;
-    if (event.target instanceof Element && event.target.closest('[aria-label="同步歌詞延遲調整"]')) return;
+    if (event.target instanceof Element && event.target.closest(tr('[aria-label="同步歌詞延遲調整"]'))) return;
     timingPanelOpen = false;
   }
 </script>
@@ -643,19 +644,19 @@
   style={`--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${preferences.auxiliaryFontSizePx}px;--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
 >
   {#if !trackId}
-    <p class="lyrics-placeholder" role="status">播放歌曲後會在此顯示歌詞。</p>
+    <p class="lyrics-placeholder" role="status">{tr("播放歌曲後會在此顯示歌詞。")}</p>
   {:else if viewState.phase === 'loading' && !viewState.lyrics}
-    <p class="lyrics-placeholder" role="status">正在讀取本機與已保存的歌詞…</p>
+    <p class="lyrics-placeholder" role="status">{tr("正在讀取本機與已保存的歌詞…")}</p>
   {:else}
     {#if timingPanelOpen && isTimed}
-      <div bind:this={timingPanelElement} class="lyrics-timing-panel floating-surface" role="group" aria-label="歌詞同步延遲" data-testid="lyrics-timing-panel">
+      <div bind:this={timingPanelElement} class="lyrics-timing-panel floating-surface" role="group" aria-label={tr("歌詞同步延遲")} data-testid="lyrics-timing-panel">
         <div class="lyrics-timing-panel-header">
-          <strong>同步歌詞延遲</strong>
+          <strong>{tr("同步歌詞延遲")}</strong>
           <span class="lyrics-timing-value" data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingOffsetSec)}</span>
-          <button type="button" class="soft-button" onclick={resetTimingOffset}>重設</button>
+          <button type="button" class="soft-button" onclick={resetTimingOffset}>{tr("重設")}</button>
         </div>
         <div class="lyrics-timing-controls">
-          <button type="button" class="soft-button" aria-label="延遲減少 0.1 秒" onclick={() => nudgeTimingOffset(-LYRICS_TIMING_OFFSET_STEP_SEC)}>−0.1</button>
+          <button type="button" class="soft-button" aria-label={tr("延遲減少 0.1 秒")} onclick={() => nudgeTimingOffset(-LYRICS_TIMING_OFFSET_STEP_SEC)}>−0.1</button>
           <input
             class="lyrics-timing-slider"
             type="range"
@@ -663,13 +664,13 @@
             max={LYRICS_TIMING_OFFSET_MAX_SEC}
             step={LYRICS_TIMING_OFFSET_STEP_SEC}
             value={timingOffsetSec}
-            aria-label="歌詞延遲秒數"
+            aria-label={tr("歌詞延遲秒數")}
             aria-valuemin={LYRICS_TIMING_OFFSET_MIN_SEC}
             aria-valuemax={LYRICS_TIMING_OFFSET_MAX_SEC}
             aria-valuenow={timingOffsetSec}
             oninput={onTimingOffsetInput}
           />
-          <button type="button" class="soft-button" aria-label="延遲增加 0.1 秒" onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
+          <button type="button" class="soft-button" aria-label={tr("延遲增加 0.1 秒")} onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
         </div>
       </div>
     {/if}
@@ -677,7 +678,7 @@
       <div
         class="lyrics-lines-viewport timed-lyrics-viewport"
         role="region"
-        aria-label="同步歌詞"
+        aria-label={tr("同步歌詞")}
         aria-live="off"
         bind:this={timedViewport}
         data-testid="timed-lyrics"
@@ -712,7 +713,7 @@
       <div
         class="lyrics-lines-viewport plain-lyrics-viewport"
         role="region"
-        aria-label="純歌詞，可捲動瀏覽"
+        aria-label={tr("純歌詞，可捲動瀏覽")}
         aria-live="off"
         bind:this={plainViewport}
         data-testid="plain-lyrics"
@@ -733,46 +734,46 @@
         <div class="lyrics-spacer" style={`height:${plainWindow.afterHeight}px`} aria-hidden="true"></div>
       </div>
     {:else if viewState.lyrics && !selectionUiOpen}
-      <p class="lyrics-placeholder" role="status">這份歌詞沒有可顯示的文字。</p>
+      <p class="lyrics-placeholder" role="status">{tr("這份歌詞沒有可顯示的文字。")}</p>
     {/if}
 
     {#if viewState.error}
       <div class="lyrics-message lyrics-error" role="alert">
         <span>{viewState.error}</span>
         {#if viewState.failedStage === 'load'}
-          <button type="button" class="soft-button" onclick={retry}>重試讀取</button>
-          <button type="button" class="soft-button" onclick={searchAgain}>線上搜尋</button>
+          <button type="button" class="soft-button" onclick={retry}>{tr("重試讀取")}</button>
+          <button type="button" class="soft-button" onclick={searchAgain}>{tr("線上搜尋")}</button>
         {:else if viewState.failedStage === 'selection'}
-          <button type="button" class="soft-button" onclick={retry}>重試指定</button>
+          <button type="button" class="soft-button" onclick={retry}>{tr("重試指定")}</button>
         {:else}
-          <button type="button" class="soft-button" onclick={searchAgain}>重試搜尋</button>
+          <button type="button" class="soft-button" onclick={searchAgain}>{tr("重試搜尋")}</button>
         {/if}
       </div>
     {/if}
 
     {#if viewState.isSearching}
       <div class="lyrics-message lyrics-searching" role="status">
-        <span>正在搜尋網易雲與 QQ 音樂歌詞…</span>
-        <button type="button" class="soft-button" onclick={cancelSearch}>取消搜尋</button>
+        <span>{tr("正在搜尋網易雲與 QQ 音樂歌詞…")}</span>
+        <button type="button" class="soft-button" onclick={cancelSearch}>{tr("取消搜尋")}</button>
       </div>
     {:else if showCandidatePicker}
-      <section class="lyrics-candidates" aria-label="歌詞候選" data-testid="lyrics-candidates">
+      <section class="lyrics-candidates" aria-label={tr("歌詞候選")} data-testid="lyrics-candidates">
         <form class="lyrics-candidates-search" onsubmit={submitCandidateSearch}>
           <input
             class="lyrics-candidates-search-input"
             type="search"
             value={candidateQuery}
             oninput={onCandidateQueryInput}
-            placeholder="搜尋歌詞關鍵字…"
-            aria-label="搜尋歌詞關鍵字"
+            placeholder={tr("搜尋歌詞關鍵字…")}
+            aria-label={tr("搜尋歌詞關鍵字")}
             autocomplete="off"
             spellcheck="false"
             data-testid="lyrics-candidates-search"
           />
           <div class="lyrics-candidates-actions">
-            <button type="submit" class="soft-button">搜尋</button>
-            <button type="button" class="soft-button" data-testid="lyrics-dismiss" onclick={dismissSelection}>關閉</button>
-            <button type="button" class="soft-button" data-testid="lyrics-remove" onclick={removeLyrics}>移除歌詞</button>
+            <button type="submit" class="soft-button">{tr("搜尋")}</button>
+            <button type="button" class="soft-button" data-testid="lyrics-dismiss" onclick={dismissSelection}>{tr("關閉")}</button>
+            <button type="button" class="soft-button" data-testid="lyrics-remove" onclick={removeLyrics}>{tr("移除歌詞")}</button>
           </div>
         </form>
         <ul>
@@ -782,7 +783,7 @@
               <div class="candidate-copy">
                 <strong>{candidate.title}</strong>
                 <span>{candidate.artist}{candidate.album ? ` · ${candidate.album}` : ''}</span>
-                <small>{providerLabel(candidate.provider)} · {confidenceLabel(candidate.confidence)} · 分數 {candidate.score.toFixed(2)} · {formatCandidateDuration(candidate.durationMs)} · {presentation.formatLabel}</small>
+                <small>{providerLabel(candidate.provider)} · {confidenceLabel(candidate.confidence)} {tr("· 分數")} {candidate.score.toFixed(2)} · {formatCandidateDuration(candidate.durationMs)} · {presentation.formatLabel}</small>
                 {#if candidate.previewLines.length > 0}
                   <span class="candidate-preview">{candidate.previewLines.slice(0, 2).join(' / ')}</span>
                 {:else if presentation.previewNotice}
@@ -798,15 +799,15 @@
                 disabled={viewState.selectingCandidateId !== null}
                 onclick={() => selectCandidate(candidate.id)}
               >
-                {viewState.selectingCandidateId === candidate.id ? '套用中…' : '選擇'}
+                {viewState.selectingCandidateId === candidate.id ? tr('套用中…') : tr('選擇')}
               </button>
             </li>
           {:else}
             <li class="lyrics-candidate-empty" role="status">
               {#if viewState.candidates.length === 0}
-                找不到符合的歌詞。可輸入關鍵字後再搜尋。
+                {tr("找不到符合的歌詞。可輸入關鍵字後再搜尋。")}
               {:else}
-                沒有符合「{candidateQuery.trim()}」的候選。
+                {tr("沒有符合「{0}」的候選。", [candidateQuery.trim()])}
               {/if}
             </li>
           {/each}
@@ -819,7 +820,7 @@
                 disabled={viewState.isLoadingMore}
                 onclick={() => void controller.loadMore()}
               >
-                {viewState.isLoadingMore ? '載入中…' : '載入更多歌詞'}
+                {viewState.isLoadingMore ? tr('載入中…') : tr('載入更多歌詞')}
               </button>
             </li>
           {/if}

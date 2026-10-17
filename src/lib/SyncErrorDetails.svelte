@@ -1,4 +1,5 @@
 ﻿<script lang="ts">
+  import { tr } from './i18n.js';
   import type { LibrarySource, SourceSyncResult } from './ipc';
 
   let { results, sources }: { results: SourceSyncResult[]; sources: LibrarySource[] } = $props();
@@ -18,32 +19,32 @@
 </script>
 
 {#if resultsWithErrors.length > 0 || savedErrorFallbacks.length > 0}
-  <section class="sync-error-details" aria-label="來源同步錯誤明細">
+  <section class="sync-error-details" aria-label={tr("來源同步錯誤明細")}>
     {#each currentErrorDetails as entry (entry.result.sourceId)}
       <details class="sync-error-group">
         <summary>
           <span>{entry.result.displayName}</span>
-          <strong>{entry.result.errorCount.toLocaleString()} 個錯誤</strong>
+          <strong>{entry.result.errorCount.toLocaleString()} {tr("個錯誤")}</strong>
           {#if entry.result.state === 'complete'}
-            <span class="sync-complete-with-errors">掃描已完成，部分項目有錯誤</span>
+            <span class="sync-complete-with-errors">{tr("掃描已完成，部分項目有錯誤")}</span>
           {/if}
-          <span class="sync-error-disclosure">查看錯誤明細</span>
+          <span class="sync-error-disclosure">{tr("查看錯誤明細")}</span>
         </summary>
         {#if entry.errors.length > 0}
           <ul>
             {#each entry.errors as error, index (`${entry.result.sourceId}:${index}`)}
               <li>
-                <code>{error.item ?? '來源層級'}</code>
+                <code>{error.item ?? tr('來源層級')}</code>
                 <span>{error.message}</span>
               </li>
             {/each}
           </ul>
         {:else}
-          <p class="sync-error-note">本次同步回報了 {entry.result.errorCount.toLocaleString()} 個錯誤，但沒有可用的逐項明細。</p>
+          <p class="sync-error-note">{tr("本次同步回報了 {0} 個錯誤，但沒有可用的逐項明細。", [entry.result.errorCount.toLocaleString()])}</p>
         {/if}
         {#if entry.result.errorsTruncated ?? false}
           <p class="sync-error-note">
-            為控制回傳量，僅顯示前 {entry.errors.length.toLocaleString()} 筆；本次錯誤總數為 {entry.result.errorCount.toLocaleString()} 筆。
+            {tr("為控制回傳量，僅顯示前 {0} 筆；本次錯誤總數為 {1} 筆。", [entry.errors.length.toLocaleString(), entry.result.errorCount.toLocaleString()])}
           </p>
         {/if}
       </details>
@@ -51,8 +52,8 @@
 
     {#each savedErrorFallbacks as source (source.id)}
       <div class="sync-saved-error">
-        <strong>{source.displayName}：上次記錄的同步錯誤原因</strong>
-        <p>未保存逐項明細，可能來自先前同步。</p>
+        <strong>{source.displayName}{tr("：上次記錄的同步錯誤原因")}</strong>
+        <p>{tr("未保存逐項明細，可能來自先前同步。")}</p>
         <code>{source.lastError?.trim()}</code>
       </div>
     {/each}

@@ -6094,6 +6094,34 @@ fn settings_get_dsd(state: State<'_, AppState>) -> Result<settings::DsdPlaybackS
 }
 
 #[tauri::command]
+fn settings_get_language(state: State<'_, AppState>) -> Result<settings::UiLanguage, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.language)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the interface language and tell every window (each reloads itself to apply it).
+#[tauri::command]
+fn settings_set_language(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    language: settings::UiLanguage,
+) -> Result<settings::UiLanguage, String> {
+    let saved = state
+        .settings
+        .update(|stored| {
+            stored.language = language;
+            Ok(())
+        })
+        .map(|stored| stored.language)
+        .map_err(|error| error.to_string())?;
+    let _ = app.emit("app-language-changed", saved);
+    Ok(saved)
+}
+
+#[tauri::command]
 fn settings_get_taskbar_lyrics(
     state: State<'_, AppState>,
 ) -> Result<settings::TaskbarLyricsSettings, String> {
@@ -10516,6 +10544,8 @@ pub fn run() {
             settings_get_dsee_hx,
             settings_set_dsee_hx,
             settings_get_dsd,
+            settings_get_language,
+            settings_set_language,
             settings_get_taskbar_lyrics,
             settings_set_taskbar_lyrics,
             taskbar_lyrics_theme,

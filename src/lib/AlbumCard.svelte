@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { onDestroy, onMount, untrack } from 'svelte';
   import { getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBase64, putAlbumThumbnailBase64ForTrack } from './ipc';
   import { acquireAlbumCardArtwork, albumCardArtworkMemoryKey, copyToArrayBuffer, createAlbumThumbnailInWorker, getAlbumArtworkSelectionRevision, getAlbumCardSelectionTrackIds, loadAlbumCardThumbnails, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
@@ -29,7 +30,7 @@
     resolved: cacheResolved,
   }));
   const summary = $derived.by(() => {
-    const trackCount = `${album.trackCount}首曲目`;
+    const trackCount = tr("{0}首曲目", [album.trackCount]);
     if (sortField === 'duration') return `${trackCount}．${formatDurationHours(album.durationMs)}`;
     if (sortField === 'played') return `${trackCount}．${formatDurationHours(album.playedMs)}`;
     return trackCount;
@@ -68,7 +69,7 @@
       try { thumbnail = new Uint8Array(await getAlbumThumbnailBytesForTrack(trackId)); } catch { thumbnail = new Uint8Array(); }
       if (thumbnail.length <= 3) thumbnail = processed.bytes;
       await putAlbumThumbnailBase64ForTrack(trackId, processed.sha256, processed.dataBase64).catch((error) => {
-        console.warn('無法保存專輯卡片縮圖快取', error);
+        console.warn(tr('無法保存專輯卡片縮圖快取'), error);
         return putAlbumThumbnailBase64(processed.sha256, processed.dataBase64).catch(() => undefined);
       });
       return {
@@ -150,7 +151,7 @@
       if (!cacheResolved) remember(urls, bytes);
     } catch (error) {
       urls.forEach((url) => URL.revokeObjectURL(url));
-      console.warn(`無法載入專輯「${album.displayName}」封面`, error);
+      console.warn(tr("無法載入專輯「{0}」封面", [album.displayName]), error);
     } finally {
       busy = false;
     }
@@ -195,7 +196,7 @@
   onDestroy(() => { destroyed = true; requestRevision += 1; releaseArtworkCacheLease?.(); });
 </script>
 
-<button class="album-card" type="button" bind:this={card} onclick={() => onSelect(album, displayedImageUrls)} aria-label={`開啟專輯「${album.displayName}」，${album.trackCount} 首曲目`}>
+<button class="album-card" type="button" bind:this={card} onclick={() => onSelect(album, displayedImageUrls)} aria-label={tr("開啟專輯「{0}」，{1} 首曲目", [album.displayName, album.trackCount])}>
   <span class="album-card-art" aria-hidden="true">
     <AlbumArtworkMosaic sources={displayedImageUrls} />
   </span>

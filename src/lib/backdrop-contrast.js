@@ -1,5 +1,6 @@
 import { compositeBackgroundHex, isHexColor } from './theme.js';
 
+import { tr } from './i18n.js';
 /** @typedef {import('./ipc').BackdropOpacityCalculation} BackdropOpacityCalculation */
 
 const SAMPLE_SIZE = 32;
@@ -190,8 +191,8 @@ export async function resolveBackdropContrast(input) {
         imagePercent,
         opacityPercent: Math.round(opacityPercent),
         displayText: needsAdjustment
-          ? `目標亮度（${targetPercent}%）÷圖片平均亮度（${imagePercent}%）= 透明度（${Math.round(opacityPercent)}%）`
-          : `目標亮度（${targetPercent}%）≥圖片平均亮度（${imagePercent}%），不處理`,
+          ? tr("目標亮度（{0}%）÷圖片平均亮度（{1}%）= 透明度（{2}%）", [targetPercent, imagePercent, Math.round(opacityPercent)])
+          : tr("目標亮度（{0}%）≥圖片平均亮度（{1}%），不處理", [targetPercent, imagePercent]),
       };
     } else {
       // Higher clarity asks for a brighter result: Y > clarity.
@@ -213,8 +214,8 @@ export async function resolveBackdropContrast(input) {
         imagePercent,
         opacityPercent: Math.round(opacityPercent),
         displayText: needsAdjustment
-          ? `（100%−目標亮度（${targetPercent}%））÷（100%−圖片平均亮度（${imagePercent}%））= 透明度（${Math.round(opacityPercent)}%）`
-          : `目標亮度（${targetPercent}%）≤圖片平均亮度（${imagePercent}%），不處理`,
+          ? tr("（100%−目標亮度（{0}%））÷（100%−圖片平均亮度（{1}%））= 透明度（{2}%）", [targetPercent, imagePercent, Math.round(opacityPercent)])
+          : tr("目標亮度（{0}%）≤圖片平均亮度（{1}%），不處理", [targetPercent, imagePercent]),
       };
     }
   }

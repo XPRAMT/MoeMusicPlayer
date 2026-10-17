@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 // @ts-check
 
 /**
@@ -10,7 +11,7 @@
 export function formatSlideshowFolderLabel(value) {
   if (!value) return null;
   const primary = /^\/storage\/emulated\/0(?:\/(.*))?$/.exec(value);
-  if (primary) return primary[1] ? `內部儲存空間/${primary[1].replace(/\/+$/, '')}` : '內部儲存空間';
+  if (primary) return primary[1] ? tr("內部儲存空間/{0}", [primary[1].replace(/\/+$/, '')]) : tr('內部儲存空間');
   if (!value.startsWith('content://')) return value;
   const match = /\/tree\/([^/]+)/.exec(value);
   if (!match) return value;
@@ -24,6 +25,6 @@ export function formatSlideshowFolderLabel(value) {
   if (colon < 0) return documentId;
   const volume = documentId.slice(0, colon);
   const path = documentId.slice(colon + 1);
-  const volumeLabel = volume === 'primary' ? '內部儲存空間' : volume;
+  const volumeLabel = volume === 'primary' ? tr('內部儲存空間') : volume;
   return path ? `${volumeLabel}/${path}` : volumeLabel;
 }

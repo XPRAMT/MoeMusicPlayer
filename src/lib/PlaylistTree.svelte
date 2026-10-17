@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { IconPlaylist } from '@tabler/icons-svelte-runes';
   import type { PlaylistSummary } from './ipc';
   import { appTooltip } from './app-tooltip.js';
@@ -17,12 +18,12 @@
   }
 </script>
 
-<nav class="playlist-tree" aria-label="播放清單">
+<nav class="playlist-tree" aria-label={tr("播放清單")}>
   <div class="playlist-tree-heading" class:active>
     <button class="playlist-tree-open" class:active type="button" aria-current={active ? 'page' : undefined} onclick={onOpen}>
       <IconPlaylist size={17} stroke={1.7} aria-hidden="true" />
-      <span class="playlist-tree-open-label">播放清單</span>
-      <span class="playlist-tree-count" aria-label={`${playlists.length} 份播放清單`}>{playlists.length.toLocaleString()}</span>
+      <span class="playlist-tree-open-label">{tr("播放清單")}</span>
+      <span class="playlist-tree-count" aria-label={tr("{0} 份播放清單", [playlists.length])}>{playlists.length.toLocaleString()}</span>
     </button>
   </div>
 
@@ -34,13 +35,13 @@
           class:selected={active && selectedPlaylistId === playlist.id}
           type="button"
           aria-current={active && selectedPlaylistId === playlist.id ? 'page' : undefined}
-          use:appTooltip={playlist.name.trim() || '未命名播放清單'}
+          use:appTooltip={playlist.name.trim() || tr('未命名播放清單')}
           onclick={() => choosePlaylist(playlist.id)}
         >
           <IconPlaylist size={17} stroke={1.6} aria-hidden="true" />
           <span class="playlist-tree-copy">
-            <strong>{playlist.name.trim() || '未命名播放清單'}</strong>
-            <small>{playlist.entryCount.toLocaleString()} 個項目</small>
+            <strong>{playlist.name.trim() || tr('未命名播放清單')}</strong>
+            <small>{playlist.entryCount.toLocaleString()} {tr("個項目")}</small>
           </span>
         </button>
       </li>

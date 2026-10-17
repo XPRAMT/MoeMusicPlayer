@@ -1,4 +1,5 @@
 ﻿import type { UpdateInstallMode, UpdateState } from './ipc';
+import { getActiveLanguage, tr } from './i18n.js';
 
 export interface UpdateControllerPorts {
   subscribe: (receive: (state: UpdateState) => void) => Promise<() => void>;
@@ -89,10 +90,10 @@ export function createUpdateController(ports: UpdateControllerPorts) {
 }
 
 export function formatBuildTime(value: string | null | undefined, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Taipei'): string {
-  if (!value || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return '未提供';
+  if (!value || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return tr('未提供');
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return '未提供';
-  return new Intl.DateTimeFormat('zh-TW', {
+  if (!Number.isFinite(date.getTime())) return tr('未提供');
+  return new Intl.DateTimeFormat(getActiveLanguage(), {
     timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'shortOffset',
   }).format(date);
@@ -100,19 +101,19 @@ export function formatBuildTime(value: string | null | undefined, timeZone = Int
 
 export function updateStatusText(state: UpdateState): string {
   switch (state.status) {
-    case 'checking': return '正在檢查更新…';
-    case 'current': return '目前已是最新版本。';
-    case 'available': return `發現新版本 ${state.latest?.version ?? ''}`.trim();
-    case 'downloading': return '正在下載更新…';
-    case 'ready': return '下載完成，正在驗證更新…';
-    case 'deferred': return '更新已準備完成，下次啟動會完成更新。';
-    case 'restarting': return '更新已準備完成，正在重新啟動播放器…';
-    case 'installPermission': return '請在剛開啟的系統設定中允許本程式「安裝不明應用程式」，返回後再按「下載並安裝」。';
-    case 'installing': return '已交給系統安裝程式；請依畫面確認安裝。安裝完成後重新開啟播放器。';
-    case 'unpublished': return '目前沒有可用的已發布版本。';
-    case 'unsupported': return '目前平台不支援自動更新。';
-    case 'error': return state.error || '更新失敗，請重試。';
-    default: return '尚未檢查更新。';
+    case 'checking': return tr('正在檢查更新…');
+    case 'current': return tr('目前已是最新版本。');
+    case 'available': return tr('發現新版本 {0}', [state.latest?.version ?? '']).trim();
+    case 'downloading': return tr('正在下載更新…');
+    case 'ready': return tr('下載完成，正在驗證更新…');
+    case 'deferred': return tr('更新已準備完成，下次啟動會完成更新。');
+    case 'restarting': return tr('更新已準備完成，正在重新啟動播放器…');
+    case 'installPermission': return tr('請在剛開啟的系統設定中允許本程式「安裝不明應用程式」，返回後再按「下載並安裝」。');
+    case 'installing': return tr('已交給系統安裝程式；請依畫面確認安裝。安裝完成後重新開啟播放器。');
+    case 'unpublished': return tr('目前沒有可用的已發布版本。');
+    case 'unsupported': return tr('目前平台不支援自動更新。');
+    case 'error': return state.error || tr('更新失敗，請重試。');
+    default: return tr('尚未檢查更新。');
   }
 }
 

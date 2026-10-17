@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /** @typedef {import('./ipc').LyricsCandidate} LyricsCandidate */
 
 /**
@@ -9,19 +10,19 @@ export function getCandidatePresentation(candidate) {
     && candidate.hasWordSyncedLyrics
     && candidate.previewLines.length === 0;
   const formatLabel = candidate.hasWordSyncedLyrics
-    ? '逐字歌詞'
+    ? tr('逐字歌詞')
     : candidate.hasSyncedLyrics
-      ? '逐行歌詞'
-      : '純歌詞';
+      ? tr('逐行歌詞')
+      : tr('純歌詞');
   const auxiliaryLabels = [
-    candidate.hasTranslation ? '譯' : null,
-    candidate.hasRomanization ? '羅' : null,
+    candidate.hasTranslation ? tr('譯') : null,
+    candidate.hasRomanization ? tr('羅') : null,
   ].filter(Boolean);
 
   return {
     formatLabel: [formatLabel, ...auxiliaryLabels].join(' · '),
     previewNotice: qrcUnavailable
-      ? '原始 QRC 尚未解碼，目前無法預覽；仍可使用「選擇」保存。'
+      ? tr('原始 QRC 尚未解碼，目前無法預覽；仍可使用「選擇」保存。')
       : null,
   };
 }

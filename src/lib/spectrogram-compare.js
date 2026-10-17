@@ -1,13 +1,14 @@
+import { tr } from './i18n.js';
 // A/B spectrogram comparison helpers (ADR 0013): shared view (zoom/pan), layer geometry
 // on shared axes, level sampling for hover readout, difference image, drop targeting.
 
 const PREFS_KEY = 'moe.spectrogramCompare';
 export const COMPARE_MODES = [
-  { value: 'single', label: '單張' },
-  { value: 'sideH', label: '並排（左右）' },
-  { value: 'sideV', label: '並排（上下）' },
-  { value: 'overlay', label: '疊圖' },
-  { value: 'wipe', label: '分割滑桿' },
+  { value: 'single', label: tr('單張') },
+  { value: 'sideH', label: tr('並排（左右）') },
+  { value: 'sideV', label: tr('並排（上下）') },
+  { value: 'overlay', label: tr('疊圖') },
+  { value: 'wipe', label: tr('分割滑桿') },
 ];
 
 /** @typedef {{ x0: number, x1: number, y0: number, y1: number }} View  y is bottom-up */

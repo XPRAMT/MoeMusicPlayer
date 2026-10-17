@@ -4,6 +4,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { fade } from 'svelte/transition';
+  import { followLanguageChange } from './language-sync.js';
   import { invokeCommand } from './ipc';
   import type { LyricLine, LyricsPreferences, PlaybackSnapshot, TaskbarLyricsSettings, TrackLyrics } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
@@ -158,6 +159,7 @@
     void listen<string | null>('current-track-refreshed', (event) => {
       if (event.payload && event.payload === trackId) void controller.reload();
     }).then((unlisten) => unlisteners.push(unlisten));
+    void listen<string>('app-language-changed', (event) => followLanguageChange(event.payload)).then((unlisten) => unlisteners.push(unlisten));
     void listen<boolean>('taskbar-lyrics-theme', (event) => {
       taskbarIsLight = event.payload;
     }).then((unlisten) => unlisteners.push(unlisten));

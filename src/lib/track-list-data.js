@@ -1,4 +1,5 @@
-﻿/** @typedef {import('./ipc').TrackPage} TrackPage */
+﻿import { tr } from './i18n.js';
+/** @typedef {import('./ipc').TrackPage} TrackPage */
 /** @typedef {import('./ipc').TrackSummary} TrackSummary */
 /** @template Item @typedef {{ items: Item[], offset: number, limit: number, totalCount: number }} PagedResponse */
 /** @template Scope @typedef {{ scope: Scope, offset: number, limit: number }} PagedRequest */
@@ -135,7 +136,7 @@ export class PagedListController {
       1,
       Math.floor(options.maxConcurrentRequests ?? TRACK_LIST_MAX_CONCURRENT_REQUESTS),
     );
-    this.listName = options.listName ?? '列表';
+    this.listName = options.listName ?? tr('列表');
     this.onChange = options.onChange ?? (() => {});
 
     /** @type {Scope | null} */
@@ -402,10 +403,10 @@ export class PagedListController {
       if (!this.isCurrent(state)) return;
 
       if (!this.isValidPage(page, state.offset)) {
-        throw new Error(`${this.listName}分頁資料格式不符，請重新載入。`);
+        throw new Error(tr("{0}分頁資料格式不符，請重新載入。", [this.listName]));
       }
       if (this.totalCount !== null && page.totalCount !== this.totalCount) {
-        throw new Error(`${this.listName}在瀏覽期間有變更，請重新載入列表。`);
+        throw new Error(tr("{0}在瀏覽期間有變更，請重新載入列表。", [this.listName]));
       }
 
       this.totalCount = page.totalCount;
@@ -544,5 +545,5 @@ export class PagedTrackList extends PagedListController {
 function errorMessage(error) {
   if (typeof error === 'string' && error.trim()) return error;
   if (error instanceof Error && error.message.trim()) return error.message;
-  return '無法載入曲庫頁面，請重試。';
+  return tr('無法載入曲庫頁面，請重試。');
 }

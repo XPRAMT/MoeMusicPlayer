@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { LANGUAGE_CHOICES, getLanguageChoice, tr } from './lib/i18n.js';
+  import { adoptSavedLanguage, changeLanguage, followLanguageChange } from './lib/language-sync.js';
   import { onDestroy, onMount, setContext, tick, untrack } from 'svelte';
   import { writable } from 'svelte/store';
   import { invoke as invokeTauri } from '@tauri-apps/api/core';
@@ -157,7 +159,7 @@
     formatDsdOutputRate,
     normalizeDsdSettings,
   } from './lib/dsd-settings.js';
-  import type { DsdPlaybackSettings, TaskbarLyricsSettings } from './lib/ipc';
+  import type { DsdPlaybackSettings, LanguageChoice, TaskbarLyricsSettings } from './lib/ipc';
   import {
     DEFAULT_TASKBAR_LYRICS_SETTINGS,
     TASKBAR_LYRICS_FONT_SIZE_PX,
@@ -286,6 +288,16 @@
     sleepTimerEndsAt = snapshot.endsAtMs ?? null;
     sleepTimerNow = Date.now();
   }
+
+  // Another window changed the interface language: reload to apply it.
+  $effect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<string>('app-language-changed', (event) => followLanguageChange(event.payload))
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
+  });
 
   $effect(() => {
     let disposed = false;
@@ -533,6 +545,8 @@
   let dsdSettingsError = $state<string | null>(null);
   let dsdSettingsRevision = 0;
   let dsdSettingsQueue: Promise<void> = Promise.resolve();
+  let languageChoice = $state<LanguageChoice>(getLanguageChoice());
+  let languageError = $state<string | null>(null);
   let taskbarLyricsSettings = $state<TaskbarLyricsSettings>({ ...DEFAULT_TASKBAR_LYRICS_SETTINGS });
   let taskbarLyricsError = $state<string | null>(null);
   let taskbarLyricsRevision = 0;
@@ -707,7 +721,7 @@
     },
     onError(error) {
       nowPlayingAppearanceState = 'error';
-      nowPlayingAppearanceError = `無法保存正在播放外觀：${getErrorText(error)}`;
+      nowPlayingAppearanceError = tr("無法保存正在播放外觀：{0}", [getErrorText(error)]);
     },
   });
 
@@ -727,51 +741,51 @@
   );
   const pageTitle = $derived(
     activeView === 'library'
-      ? '我的曲庫'
+      ? tr('我的曲庫')
       : activeView === 'artists'
-        ? '演出者'
+        ? tr('演出者')
         : activeView === 'artist-detail'
-          ? `演出者．${selectedArtist?.displayName ?? ''}`
+          ? tr("演出者．{0}", [selectedArtist?.displayName ?? ''])
       : activeView === 'albums'
-        ? '專輯'
+        ? tr('專輯')
         : activeView === 'album-detail'
-          ? `專輯．${selectedAlbum?.unmarked ? '其它' : selectedAlbum?.displayName ?? ''}`
+          ? tr("專輯．{0}", [selectedAlbum?.unmarked ? tr('其它') : selectedAlbum?.displayName ?? ''])
       : activeView === 'playlists'
         ? selectedPlaylist
-          ? `我的播放清單．${selectedPlaylist.name.trim() || '未命名播放清單'}`
-          : '我的播放清單'
+          ? tr("我的播放清單．{0}", [selectedPlaylist.name.trim() || tr('未命名播放清單')])
+          : tr('我的播放清單')
         : activeView === 'queue'
-          ? '播放佇列'
-          : '設定',
+          ? tr('播放佇列')
+          : tr('設定'),
   );
   const isListPage = $derived(
     activeView === 'library' || activeView === 'artists' || activeView === 'artist-detail' || activeView === 'albums' || activeView === 'album-detail' || activeView === 'playlists' || activeView === 'queue',
   );
   const pageTrackCountLabel = $derived.by(() => {
     if (activeView === 'library') {
-      return `${libraryTrackCount === null ? '' : `${libraryTrackCount.toLocaleString()} `}首曲目`;
+      return tr("{0}首曲目", [libraryTrackCount === null ? '' : `${libraryTrackCount.toLocaleString()} `]);
     }
     if (activeView === 'artists') {
-      return `${artistIndexCount === null ? '' : `${artistIndexCount.toLocaleString()} `}位演出者`;
+      return tr("{0}位演出者", [artistIndexCount === null ? '' : `${artistIndexCount.toLocaleString()} `]);
     }
     if (activeView === 'albums') {
-      return `${albumIndexCount === null ? '' : `${albumIndexCount.toLocaleString()} `}張專輯`;
+      return tr("{0}張專輯", [albumIndexCount === null ? '' : `${albumIndexCount.toLocaleString()} `]);
     }
     if (activeView === 'playlists') {
       const count = playlistTrackCount ?? selectedPlaylist?.entryCount ?? null;
       if (count === null) return null;
-      return `${count.toLocaleString()} 首曲目`;
+      return tr("{0} 首曲目", [count.toLocaleString()]);
     }
     if (activeView === 'queue') {
       if (queueTrackCount === null) return null;
-      return `${queueTrackCount.toLocaleString()} 首曲目`;
+      return tr("{0} 首曲目", [queueTrackCount.toLocaleString()]);
     }
     if (activeView === 'artist-detail') {
-      return `${artistTrackCount === null ? '' : `${artistTrackCount.toLocaleString()} `}首曲目`;
+      return tr("{0}首曲目", [artistTrackCount === null ? '' : `${artistTrackCount.toLocaleString()} `]);
     }
     if (activeView === 'album-detail') {
       const count = albumTrackCount ?? selectedAlbum?.trackCount ?? null;
-      return `${count === null ? '' : `${count.toLocaleString()} `}首曲目`;
+      return tr("{0}首曲目", [count === null ? '' : `${count.toLocaleString()} `]);
     }
     return null;
   });
@@ -1174,7 +1188,7 @@
       await invokeCommand('settings_set_cover_zoom', { scale });
       coverZoomLastSaved = key;
     } catch (error) {
-      console.warn('無法保存封面縮放：', getErrorText(error));
+      console.warn(tr('無法保存封面縮放：'), getErrorText(error));
     }
   }
 
@@ -1185,7 +1199,7 @@
       coverZoomPersisted = { scale, offsetX: 0, offsetY: 0 };
       coverZoomLastSaved = String(scale);
     } catch (error) {
-      console.warn('無法讀取封面縮放：', getErrorText(error));
+      console.warn(tr('無法讀取封面縮放：'), getErrorText(error));
     }
   }
 
@@ -1298,7 +1312,7 @@
         unlistenProgress?.();
         unlistenFinished?.();
         await loadCapabilities();
-        if (!disposed) runtimeError = `無法訂閱曲庫同步狀態：${getErrorText(error)}`;
+        if (!disposed) runtimeError = tr("無法訂閱曲庫同步狀態：{0}", [getErrorText(error)]);
         return;
       }
 
@@ -1323,6 +1337,7 @@
         loadDseeHx(),
         loadDsdSettings(),
         loadTaskbarLyricsSettings(),
+        loadLanguage(),
         loadCoverZoom(),
         loadShortcutSettings(),
         loadNowPlayingAppearancePreferences(),
@@ -1383,7 +1398,7 @@
       mainBackgroundError = null;
     } catch (error) {
       if (revision !== mainBackgroundReadRevision) return;
-      mainBackgroundError = `無法讀取主介面背景：${getErrorText(error)}`;
+      mainBackgroundError = tr("無法讀取主介面背景：{0}", [getErrorText(error)]);
     }
   }
 
@@ -1463,7 +1478,7 @@
 
   async function pickMainBackground(): Promise<void> {
     if (!isTauri() || mainBackgroundBusy) {
-      mainBackgroundError = isTauri() ? null : '瀏覽器預覽無法選擇背景圖片。';
+      mainBackgroundError = isTauri() ? null : tr('瀏覽器預覽無法選擇背景圖片。');
       return;
     }
     mainBackgroundBusy = true;
@@ -1485,7 +1500,7 @@
 
   async function pickSlideshowFolder(): Promise<void> {
     if (!isTauri() || mainBackgroundBusy) {
-      mainBackgroundError = isTauri() ? null : '瀏覽器預覽無法選擇幻燈片資料夾。';
+      mainBackgroundError = isTauri() ? null : tr('瀏覽器預覽無法選擇幻燈片資料夾。');
       return;
     }
     mainBackgroundBusy = true;
@@ -1541,7 +1556,7 @@
     } catch (error) {
       if (revision !== themeRevision) return;
       themeSaveState = 'error';
-      themeSaveError = `無法讀取已保存的外觀設定：${getErrorText(error)}`;
+      themeSaveError = tr("無法讀取已保存的外觀設定：{0}", [getErrorText(error)]);
     }
   }
 
@@ -1575,7 +1590,7 @@
     } catch (error) {
       if (revision !== trackColumnSettingsRevision) return;
       trackColumnSettingsState = 'error';
-      trackColumnSettingsError = `無法讀取曲目欄位設定：${getErrorText(error)}`;
+      trackColumnSettingsError = tr("無法讀取曲目欄位設定：{0}", [getErrorText(error)]);
     }
   }
 
@@ -1614,7 +1629,7 @@
     const revision = ++trackColumnSettingsRevision;
     if (!isTauri()) {
       trackColumnSettingsState = 'preview';
-      trackColumnSettingsError = '瀏覽器預覽不會保存曲目欄位設定。';
+      trackColumnSettingsError = tr('瀏覽器預覽不會保存曲目欄位設定。');
       return;
     }
 
@@ -1647,7 +1662,7 @@
       } catch (error) {
         if (revision !== trackColumnSettingsRevision) return;
         trackColumnSettingsState = 'error';
-        trackColumnSettingsError = `無法保存曲目欄位設定：${getErrorText(error)}`;
+        trackColumnSettingsError = tr("無法保存曲目欄位設定：{0}", [getErrorText(error)]);
       }
     });
   }
@@ -1797,7 +1812,7 @@
       playbackError = null;
     } catch (error) {
       queueSort = previousSort;
-      playbackError = `播放佇列排序失敗：${getErrorText(error)}`;
+      playbackError = tr("播放佇列排序失敗：{0}", [getErrorText(error)]);
     } finally {
       queueSortBusy = false;
     }
@@ -1814,7 +1829,7 @@
     } catch (error) {
       if (revision !== nowPlayingLayoutRevision) return;
       nowPlayingLayoutState = 'error';
-      nowPlayingLayoutError = `無法讀取正在播放版面設定：${getErrorText(error)}`;
+      nowPlayingLayoutError = tr("無法讀取正在播放版面設定：{0}", [getErrorText(error)]);
     }
   }
 
@@ -1824,7 +1839,7 @@
     const revision = ++nowPlayingLayoutRevision;
     if (!isTauri()) {
       nowPlayingLayoutState = 'preview';
-      nowPlayingLayoutError = '瀏覽器預覽不會保存正在播放版面設定。';
+      nowPlayingLayoutError = tr('瀏覽器預覽不會保存正在播放版面設定。');
       return;
     }
 
@@ -1840,7 +1855,7 @@
       } catch (error) {
         if (revision !== nowPlayingLayoutRevision) return;
         nowPlayingLayoutState = 'error';
-        nowPlayingLayoutError = `無法保存正在播放版面設定：${getErrorText(error)}`;
+        nowPlayingLayoutError = tr("無法保存正在播放版面設定：{0}", [getErrorText(error)]);
       }
     });
   }
@@ -1856,7 +1871,7 @@
     } catch (error) {
       if (revision !== resamplingModeRevision) return;
       resamplingModeState = 'error';
-      resamplingModeError = `無法讀取取樣率轉換設定：${getErrorText(error)}`;
+      resamplingModeError = tr("無法讀取取樣率轉換設定：{0}", [getErrorText(error)]);
     }
   }
 
@@ -1866,7 +1881,7 @@
     const revision = ++resamplingModeRevision;
     if (!isTauri()) {
       resamplingModeState = 'preview';
-      resamplingModeError = '瀏覽器預覽不會保存取樣率轉換設定。';
+      resamplingModeError = tr('瀏覽器預覽不會保存取樣率轉換設定。');
       return;
     }
 
@@ -1899,7 +1914,7 @@
     } catch (error) {
       if (revision !== dseeHxRevision) return;
       dseeHxState = 'error';
-      dseeHxError = `無法讀取 DSEE HX 設定：${getErrorText(error)}`;
+      dseeHxError = tr("無法讀取 DSEE HX 設定：{0}", [getErrorText(error)]);
     }
   }
 
@@ -2080,7 +2095,7 @@
     const revision = ++dseeHxRevision;
     if (!isTauri()) {
       dseeHxState = 'preview';
-      dseeHxError = '瀏覽器預覽不會保存 DSEE HX 設定。';
+      dseeHxError = tr('瀏覽器預覽不會保存 DSEE HX 設定。');
       return;
     }
     dseeHxState = 'saving';
@@ -2112,7 +2127,7 @@
     } catch (error) {
       if (revision !== dsdSettingsRevision) return;
       dsdSettingsState = 'error';
-      dsdSettingsError = `無法讀取 DSD 設定：${getErrorText(error)}`;
+      dsdSettingsError = tr("無法讀取 DSD 設定：{0}", [getErrorText(error)]);
     }
   }
 
@@ -2123,7 +2138,7 @@
     const revision = ++dsdSettingsRevision;
     if (!isTauri()) {
       dsdSettingsState = 'preview';
-      dsdSettingsError = '瀏覽器預覽不會保存 DSD 設定。';
+      dsdSettingsError = tr('瀏覽器預覽不會保存 DSD 設定。');
       return;
     }
     dsdSettingsState = 'saving';
@@ -2144,6 +2159,24 @@
     });
   }
 
+  /** The saved language wins: when this page loaded with another one, adopt it (reloads once). */
+  async function loadLanguage(): Promise<void> {
+    try {
+      adoptSavedLanguage(await invokeCommand('settings_get_language', {}));
+    } catch {
+      // Keep the language this page loaded with.
+    }
+  }
+
+  async function chooseLanguage(next: LanguageChoice): Promise<void> {
+    languageError = null;
+    try {
+      await changeLanguage(next, (choice) => invokeCommand('settings_set_language', { language: choice as LanguageChoice }));
+    } catch (error) {
+      languageError = getErrorText(error);
+    }
+  }
+
   async function loadTaskbarLyricsSettings(): Promise<void> {
     const revision = taskbarLyricsRevision;
     try {
@@ -2152,7 +2185,7 @@
       taskbarLyricsSettings = normalizeTaskbarLyricsSettings(stored);
     } catch (error) {
       if (revision !== taskbarLyricsRevision) return;
-      taskbarLyricsError = `無法讀取工作列歌詞設定：${getErrorText(error)}`;
+      taskbarLyricsError = tr("無法讀取工作列歌詞設定：{0}", [getErrorText(error)]);
     }
   }
 
@@ -2183,7 +2216,7 @@
     } catch (error) {
       if (revision !== nowPlayingAppearanceRevision) return;
       nowPlayingAppearanceState = 'error';
-      nowPlayingAppearanceError = `無法讀取正在播放外觀：${getErrorText(error)}`;
+      nowPlayingAppearanceError = tr("無法讀取正在播放外觀：{0}", [getErrorText(error)]);
     }
   }
 
@@ -2199,7 +2232,7 @@
     nowPlayingAppearanceRevision += 1;
     if (!isTauri()) {
       nowPlayingAppearanceState = 'preview';
-      nowPlayingAppearanceError = '瀏覽器預覽不會保存正在播放外觀設定。';
+      nowPlayingAppearanceError = tr('瀏覽器預覽不會保存正在播放外觀設定。');
       return;
     }
     nowPlayingAppearanceWriter.schedule(nowPlayingAppearancePreferences, immediate);
@@ -2216,7 +2249,7 @@
     } catch (error) {
       if (revision !== lyricsPreferencesRevision) return;
       lyricsPreferencesState = 'error';
-      lyricsPreferencesError = `無法讀取歌詞設定：${getErrorText(error)}`;
+      lyricsPreferencesError = tr("無法讀取歌詞設定：{0}", [getErrorText(error)]);
     }
   }
 
@@ -2226,7 +2259,7 @@
     const revision = ++lyricsPreferencesRevision;
     if (!isTauri()) {
       lyricsPreferencesState = 'preview';
-      lyricsPreferencesError = '瀏覽器預覽不會保存歌詞設定。';
+      lyricsPreferencesError = tr('瀏覽器預覽不會保存歌詞設定。');
       return;
     }
 
@@ -2256,7 +2289,7 @@
       } catch (error) {
         if (revision !== lyricsPreferencesRevision) return;
         lyricsPreferencesState = 'error';
-        lyricsPreferencesError = `無法保存歌詞設定：${getErrorText(error)}`;
+        lyricsPreferencesError = tr("無法保存歌詞設定：{0}", [getErrorText(error)]);
       }
     });
   }
@@ -2270,7 +2303,7 @@
       settingsRecoveryWarning = warning;
       settingsSourceRegistryAuthoritative = authoritative;
     } catch (error) {
-      settingsRecoveryWarning = `無法確認設定檔狀態：${getErrorText(error)}`;
+      settingsRecoveryWarning = tr("無法確認設定檔狀態：{0}", [getErrorText(error)]);
       settingsSourceRegistryAuthoritative = false;
     }
   }
@@ -2325,7 +2358,7 @@
   function queueThemeSave(preferences: ThemePreferences, revision: number): void {
     if (!isTauri()) {
       themeSaveState = 'preview';
-      themeSaveError = '瀏覽器預覽不會保存外觀設定。';
+      themeSaveError = tr('瀏覽器預覽不會保存外觀設定。');
       return;
     }
 
@@ -2341,7 +2374,7 @@
       } catch (error) {
         if (revision !== themeRevision) return;
         themeSaveState = 'error';
-        themeSaveError = `無法保存外觀設定：${getErrorText(error)}`;
+        themeSaveError = tr("無法保存外觀設定：{0}", [getErrorText(error)]);
       }
     });
   }
@@ -2425,9 +2458,9 @@
       };
     });
     const summary = event.error
-      ? `同步失敗：${event.error}`
+      ? tr("同步失敗：{0}", [event.error])
       : event.sources.length === 0
-        ? '尚未加入可同步的音樂來源。'
+        ? tr('尚未加入可同步的音樂來源。')
         : formatProgressSummary(Object.values(sources));
     syncProgress = {
       ...current,
@@ -2448,33 +2481,33 @@
       (source) => source.outcome !== 'complete' || source.errorCount > 0,
     ).length;
     const errorCount = sources.reduce((sum, source) => sum + source.errorCount, 0);
-    return `${sources.length} 個來源已檢查；${complete} 個掃描完整，${attention} 個需要留意；${errorCount} 個項目錯誤。`;
+    return tr("{0} 個來源已檢查；{1} 個掃描完整，{2} 個需要留意；{3} 個項目錯誤。", [sources.length, complete, attention, errorCount]);
   }
 
   function syncProgressLine(progress: LibrarySyncProgressEvent): string {
     if (progress.stage === 'finished') {
       const outcome = progress.outcome === 'complete'
-        ? '同步完成'
+        ? tr('同步完成')
         : progress.outcome === 'cancelled'
-          ? '已取消'
+          ? tr('已取消')
           : progress.outcome === 'unavailable'
-            ? '來源暫不可用'
+            ? tr('來源暫不可用')
             : progress.outcome === 'permissionRevoked'
-              ? '需要重新授權'
+              ? tr('需要重新授權')
               : progress.outcome === 'failed'
-                ? '同步失敗'
-                : '掃描未完成';
-      return `${outcome}；${progress.errorCount.toLocaleString()} 個項目錯誤`;
+                ? tr('同步失敗')
+                : tr('掃描未完成');
+      return tr("{0}；{1} 個項目錯誤", [outcome, progress.errorCount.toLocaleString()]);
     }
     if (progress.stage === 'enumerating') {
       const count = progress.processed.toLocaleString();
       return progress.total === null
-        ? `掃描中，已檢查 ${count} 個檔案系統項目；總數尚未確定`
-        : `掃描中，已檢查 ${count} / ${progress.total.toLocaleString()} 個檔案系統項目`;
+        ? tr("掃描中，已檢查 {0} 個檔案系統項目；總數尚未確定", [count])
+        : tr("掃描中，已檢查 {0} / {1} 個檔案系統項目", [count, progress.total.toLocaleString()]);
     }
-    const stage = progress.stage === 'metadata' ? '讀取曲目資訊' : '寫入曲庫';
+    const stage = progress.stage === 'metadata' ? tr('讀取曲目資訊') : tr('寫入曲庫');
     const total = progress.total === null ? '—' : progress.total.toLocaleString();
-    return `${stage}，${progress.processed.toLocaleString()} / ${total} 首曲目`;
+    return tr("{0}，{1} / {2} 首曲目", [stage, progress.processed.toLocaleString(), total]);
   }
 
   async function loadCapabilities(): Promise<void> {
@@ -2526,8 +2559,8 @@
       ).length;
       const errorCount = result.sources.reduce((sum, source) => sum + source.errorCount, 0);
       sourceSyncSummary = result.sources.length === 0
-        ? '尚未加入可同步的音樂來源。'
-        : `${result.sources.length} 個來源已檢查；${completed} 個掃描完整，${attention} 個需要留意；${errorCount} 個項目錯誤。`;
+        ? tr('尚未加入可同步的音樂來源。')
+        : tr("{0} 個來源已檢查；{1} 個掃描完整，{2} 個需要留意；{3} 個項目錯誤。", [result.sources.length, completed, attention, errorCount]);
       await loadSources();
       // Playlist-file orphan cleanup may delete sidebar projections during sync.
       if (libraryReady) await loadPlaylists(undefined, true);
@@ -2654,7 +2687,7 @@
       if (!result) return;
       await loadPlaylists(result.playlist.id);
       await loadSources();
-      sourceSyncSummary = `已加入播放清單「${result.playlist.name}」。`;
+      sourceSyncSummary = tr("已加入播放清單「{0}」。", [result.playlist.name]);
     } catch (error) {
       sourceError = getErrorText(error);
     } finally {
@@ -2692,9 +2725,9 @@
       libraryListRevision += 1;
       if (source.kind === 'playlist_file') {
         await loadPlaylists();
-        sourceSyncSummary = '已移除播放清單來源；側欄清單已刪除，曲庫中的曲目仍會保留。';
+        sourceSyncSummary = tr('已移除播放清單來源；側欄清單已刪除，曲庫中的曲目仍會保留。');
       } else {
-        sourceSyncSummary = '已移除音樂來源；曲庫資料仍會保留，之後不再同步此位置。';
+        sourceSyncSummary = tr('已移除音樂來源；曲庫資料仍會保留，之後不再同步此位置。');
       }
     } catch (error) {
       sourceError = getErrorText(error);
@@ -2729,7 +2762,7 @@
       excludedFolders = await invokeCommand('library_remove_excluded_folder', {
         excludedId: excluded.id,
       });
-      sourceSyncSummary = '已移除排除資料夾；下次同步會重新掃入此位置的曲目。';
+      sourceSyncSummary = tr('已移除排除資料夾；下次同步會重新掃入此位置的曲目。');
       await syncLibrary();
     } catch (error) {
       sourceError = getErrorText(error);
@@ -2758,14 +2791,14 @@
 
   function sourceKindLabel(kind: string): string {
     switch (kind) {
-      case 'playlist_file': return '播放清單檔案';
+      case 'playlist_file': return tr('播放清單檔案');
       case 'androidFilesystem':
-      case 'android_filesystem': return 'Android 音樂資料夾';
+      case 'android_filesystem': return tr('Android 音樂資料夾');
       case 'androidMediaStore':
-      case 'android_media_store': return 'Android MediaStore（舊版，待遷移）';
+      case 'android_media_store': return tr('Android MediaStore（舊版，待遷移）');
       case 'androidSaf':
-      case 'android_saf': return 'Android 文件資料夾（舊版，待遷移）';
-      default: return 'Windows 音樂資料夾';
+      case 'android_saf': return tr('Android 文件資料夾（舊版，待遷移）');
+      default: return tr('Windows 音樂資料夾');
     }
   }
 
@@ -2873,7 +2906,7 @@
           return;
         }
       } catch (error) {
-        console.error('無法還原瀏覽歷史中的演出者明細', error);
+        console.error(tr('無法還原瀏覽歷史中的演出者明細'), error);
       }
       if (revision !== detailHistoryRestoreRevision) return;
       rememberedArtistView = 'artists';
@@ -2893,7 +2926,7 @@
           return;
         }
       } catch (error) {
-        console.error('無法還原瀏覽歷史中的專輯明細', error);
+        console.error(tr('無法還原瀏覽歷史中的專輯明細'), error);
       }
       if (revision !== detailHistoryRestoreRevision) return;
       rememberedAlbumView = 'albums';
@@ -2995,7 +3028,7 @@
       if (isNowPlayingOpen) await closeNowPlaying();
       openAlbumEntry(album, preserveIndex);
     } catch (error) {
-      console.error(`無法開啟專輯「${trimmedName}」的明細`, error);
+      console.error(tr("無法開啟專輯「{0}」的明細", [trimmedName]), error);
     }
   }
 
@@ -3026,7 +3059,7 @@
       if (isNowPlayingOpen) await closeNowPlaying();
       openArtistEntry(artist);
     } catch (error) {
-      console.error(`無法開啟演出者「${trimmedName}」的明細`, error);
+      console.error(tr("無法開啟演出者「{0}」的明細", [trimmedName]), error);
     }
   }
 
@@ -3451,27 +3484,27 @@
   }
 
   function capabilityLabel(capability: FeatureCapability | undefined): string {
-    if (!capability) return capabilities?.platform === 'android' ? '等待 Android 服務' : '等待桌面服務';
-    if (capability.state === 'ready') return '已就緒';
-    if (capability.state === 'unavailable') return '目前無法使用';
-    return '尚未就緒';
+    if (!capability) return capabilities?.platform === 'android' ? tr('等待 Android 服務') : tr('等待桌面服務');
+    if (capability.state === 'ready') return tr('已就緒');
+    if (capability.state === 'unavailable') return tr('目前無法使用');
+    return tr('尚未就緒');
   }
 
   function showCapabilityDetail(capability: FeatureCapability | undefined): string {
     return capability?.detail ?? runtimeError ?? (
       capabilities?.platform === 'android'
-        ? '請確認「所有檔案存取權」及音訊服務狀態。'
-        : '請由 MoeMusicPlayer 桌面程式開啟。'
+        ? tr('請確認「所有檔案存取權」及音訊服務狀態。')
+        : tr('請由 MoeMusicPlayer 桌面程式開啟。')
     );
   }
 
   function currentTrackTitle(track: TrackSummary | null | undefined): string {
-    if (!track) return '尚未選擇曲目';
-    return displayTrackTitle(track, '未命名曲目');
+    if (!track) return tr('尚未選擇曲目');
+    return displayTrackTitle(track, tr('未命名曲目'));
   }
 
   function currentTrackArtist(track: TrackSummary | null | undefined): string {
-    return track?.artist?.trim() || '選取曲庫中的曲目開始播放';
+    return track?.artist?.trim() || tr('選取曲庫中的曲目開始播放');
   }
 
   function formatSlideshowCountdown(totalSeconds: number): string {
@@ -3485,7 +3518,7 @@
 <svelte:window onpointerup={finishVolumeInteraction} onpointercancel={finishVolumeInteraction} onpointerdown={handleWindowPointerDown} onkeydown={handleWindowKeydown} onresize={updateVolumePopoverAlignment} />
 
 {#snippet settingsTabs(scope: string)}
-            <div class="settings-tabs" role="tablist" aria-label="設定分類">
+            <div class="settings-tabs" role="tablist" aria-label={tr("設定分類")}>
               <button
                 id="{scope}appearance-tab"
                 class="soft-button settings-tab"
@@ -3494,7 +3527,7 @@
                 aria-selected={settingsSection === 'appearance'}
                 aria-controls="{scope}appearance-panel"
                 onclick={() => selectSettingsSection('appearance')}
-              >主介面</button>
+              >{tr("主介面")}</button>
               <button
                 id="{scope}track-columns-tab"
                 class="soft-button settings-tab"
@@ -3503,7 +3536,7 @@
                 aria-selected={settingsSection === 'track-columns'}
                 aria-controls="{scope}track-columns-panel"
                 onclick={() => selectSettingsSection('track-columns')}
-              >曲目欄位</button>
+              >{tr("曲目欄位")}</button>
               <button
                 id="{scope}now-playing-tab"
                 class="soft-button settings-tab"
@@ -3512,7 +3545,7 @@
                 aria-selected={settingsSection === 'now-playing'}
                 aria-controls="{scope}now-playing-layout-panel"
                 onclick={() => selectSettingsSection('now-playing')}
-              >播放頁</button>
+              >{tr("播放頁")}</button>
               <button
                 id="{scope}lyrics-tab"
                 class="soft-button settings-tab"
@@ -3521,7 +3554,7 @@
                 aria-selected={settingsSection === 'lyrics'}
                 aria-controls="{scope}lyrics-panel"
                 onclick={() => selectSettingsSection('lyrics')}
-              >歌詞</button>
+              >{tr("歌詞")}</button>
               {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
                 <button
                   id="{scope}playback-tab"
@@ -3531,7 +3564,7 @@
                   aria-selected={settingsSection === 'playback'}
                   aria-controls="{scope}playback-panel"
                   onclick={() => selectSettingsSection('playback')}
-                >輸出</button>
+                >{tr("輸出")}</button>
               {/if}
               <button
                 id="{scope}shortcuts-tab"
@@ -3541,7 +3574,7 @@
                 aria-selected={settingsSection === 'shortcuts'}
                 aria-controls="{scope}shortcuts-panel"
                 onclick={() => selectSettingsSection('shortcuts')}
-              >快捷鍵</button>
+              >{tr("快捷鍵")}</button>
               <button
                 id="{scope}sources-tab"
                 class="soft-button settings-tab"
@@ -3550,7 +3583,7 @@
                 aria-selected={settingsSection === 'sources'}
                 aria-controls="{scope}sources-panel"
                 onclick={() => selectSettingsSection('sources')}
-              >音樂來源</button>
+              >{tr("音樂來源")}</button>
               <button
                 id="{scope}about-tab"
                 class="soft-button settings-tab"
@@ -3559,7 +3592,7 @@
                 aria-selected={settingsSection === 'about'}
                 aria-controls="{scope}about-panel"
                 onclick={() => selectSettingsSection('about')}
-              >關於</button>
+              >{tr("關於")}</button>
             </div>
 {/snippet}
 
@@ -3570,10 +3603,10 @@
 
             {#if settingsRecoveryWarning}
               <div class="source-error-message" role="status">
-                設定檔修復通知：{settingsRecoveryWarning}
+                {tr("設定檔修復通知：")}{settingsRecoveryWarning}
                 {#if !settingsSourceRegistryAuthoritative}
-                  <p>為保留原有曲庫，來源同步已暫停。請重新登記全部音樂資料夾與播放清單檔案，再確認恢復同步。</p>
-                  <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void confirmSourceRegistry()}>我已確認來源清單，恢復同步</button>
+                  <p>{tr("為保留原有曲庫，來源同步已暫停。請重新登記全部音樂資料夾與播放清單檔案，再確認恢復同步。")}</p>
+                  <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void confirmSourceRegistry()}>{tr("我已確認來源清單，恢復同步")}</button>
                 {/if}
               </div>
             {/if}
@@ -3582,93 +3615,93 @@
               <div id="{scope}appearance-panel" class="settings-panel main-interface-panel" role="tabpanel" aria-labelledby="{scope}appearance-tab" tabindex="0">
                 <div class="settings-panel-header">
                   <div>
-                    <h3>顏色</h3>
-                    <p>選擇文字顏色或圖片透明度的自動調整方式，並自訂主色。</p>
+                    <h3>{tr("顏色")}</h3>
+                    <p>{tr("選擇文字顏色或圖片透明度的自動調整方式，並自訂主色。")}</p>
                   </div>
-                  <button class="soft-button" type="button" onclick={resetThemePreferences}>恢復預設</button>
+                  <button class="soft-button" type="button" onclick={resetThemePreferences}>{tr("恢復預設")}</button>
                 </div>
                 <div class="appearance-color-grid">
                   <label class="theme-color-control">
                     <input
                       type="color"
-                      aria-label="主色"
+                      aria-label={tr("主色")}
                       value={themePreferences.accentHex}
                       oninput={(event) => updateThemeColor('accentHex', event.currentTarget.value)}
                       onchange={saveThemePreferencesNow}
                     />
                     <span class="theme-color-copy">
-                      <strong>主色</strong>
+                      <strong>{tr("主色")}</strong>
                       <code>{themePreferences.accentHex}</code>
                     </span>
                   </label>
                 </div>
                 <label class="lyrics-preference-range">
-                  <span><strong>框線透明度</strong><output>{themePreferences.borderOpacityPercent}%</output></span>
+                  <span><strong>{tr("框線透明度")}</strong><output>{themePreferences.borderOpacityPercent}%</output></span>
                   <input
                     type="range"
                     min="0"
                     max="100"
                     step="1"
                     value={themePreferences.borderOpacityPercent}
-                    aria-label="框線透明度"
+                    aria-label={tr("框線透明度")}
                     oninput={(event) => updateMainBackgroundLook({ borderOpacityPercent: Number(event.currentTarget.value) })}
                     onchange={saveThemePreferencesNow}
                   />
                 </label>
                 <label class="lyrics-preference-range">
-                  <span><strong>分隔線透明度</strong><output>{themePreferences.dividerOpacityPercent}%</output></span>
+                  <span><strong>{tr("分隔線透明度")}</strong><output>{themePreferences.dividerOpacityPercent}%</output></span>
                   <input
                     type="range"
                     min="0"
                     max="100"
                     step="1"
                     value={themePreferences.dividerOpacityPercent}
-                    aria-label="分隔線透明度"
+                    aria-label={tr("分隔線透明度")}
                     oninput={(event) => updateMainBackgroundLook({ dividerOpacityPercent: Number(event.currentTarget.value) })}
                     onchange={saveThemePreferencesNow}
                   />
                 </label>
                 <div class="color-mode-settings">
-                  <div class="color-mode-picker" role="group" aria-label="顏色模式">
-                    <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoTextColor'} type="button" aria-pressed={themePreferences.colorMode === 'autoTextColor'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoTextColor' }); saveThemePreferencesNow(); }}>自動文字顏色</button>
-                    <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoBackgroundOpacity'} type="button" aria-pressed={themePreferences.colorMode === 'autoBackgroundOpacity'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoBackgroundOpacity' }); saveThemePreferencesNow(); }}>自動背景透明度</button>
+                  <div class="color-mode-picker" role="group" aria-label={tr("顏色模式")}>
+                    <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoTextColor'} type="button" aria-pressed={themePreferences.colorMode === 'autoTextColor'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoTextColor' }); saveThemePreferencesNow(); }}>{tr("自動文字顏色")}</button>
+                    <button class="soft-button" class:is-active={themePreferences.colorMode === 'autoBackgroundOpacity'} type="button" aria-pressed={themePreferences.colorMode === 'autoBackgroundOpacity'} onclick={() => { updateMainBackgroundLook({ colorMode: 'autoBackgroundOpacity' }); saveThemePreferencesNow(); }}>{tr("自動背景透明度")}</button>
                   </div>
                   <div class="appearance-color-grid">
                     {#if themePreferences.colorMode === 'autoTextColor'}
                       <label class="theme-color-control">
                         <input
                           type="color"
-                          aria-label="背景色"
+                          aria-label={tr("背景色")}
                           value={themePreferences.backgroundHex}
                           oninput={(event) => updateThemeColor('backgroundHex', event.currentTarget.value)}
                           onchange={saveThemePreferencesNow}
                         />
                         <span class="theme-color-copy">
-                          <strong>背景色</strong>
+                          <strong>{tr("背景色")}</strong>
                           <code>{themePreferences.backgroundHex}</code>
                         </span>
                       </label>
                     {:else}
-                      <div class="cover-corner-setting" role="group" aria-label="文字顏色">
-                        <span class="cover-corner-setting-label"><strong>文字顏色</strong></span>
+                      <div class="cover-corner-setting" role="group" aria-label={tr("文字顏色")}>
+                        <span class="cover-corner-setting-label"><strong>{tr("文字顏色")}</strong></span>
                         <div class="text-color-choice-row">
-                          <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'white'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'white'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'white' }); saveThemePreferencesNow(); }}>白色字</button>
-                          <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'black'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'black'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'black' }); saveThemePreferencesNow(); }}>黑色字</button>
+                          <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'white'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'white'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'white' }); saveThemePreferencesNow(); }}>{tr("白色字")}</button>
+                          <button class="soft-button" class:is-active={themePreferences.backgroundOpacityTextColor === 'black'} type="button" aria-pressed={themePreferences.backgroundOpacityTextColor === 'black'} onclick={() => { updateMainBackgroundLook({ backgroundOpacityTextColor: 'black' }); saveThemePreferencesNow(); }}>{tr("黑色字")}</button>
                         </div>
-                        <p class="source-muted-note">背景色固定為{themePreferences.backgroundOpacityTextColor === 'white' ? '純黑' : '純白'}；主介面與播放頁各自依照清晰度設定調整背景圖片透明度。</p>
+                        <p class="source-muted-note">{tr("背景色固定為{0}；主介面與播放頁各自依照清晰度設定調整背景圖片透明度。", [themePreferences.backgroundOpacityTextColor === 'white' ? tr('純黑') : tr('純白')])}</p>
                       </div>
                     {/if}
                   </div>
                   {#if themePreferences.colorMode === 'autoTextColor'}
                     <label class="lyrics-preference-range">
-                      <span><strong>自動切換文字顏色閥值</strong><output>{themePreferences.autoTextColorThresholdPercent}%</output></span>
+                      <span><strong>{tr("自動切換文字顏色閥值")}</strong><output>{themePreferences.autoTextColorThresholdPercent}%</output></span>
                       <input
                         type="range"
                         min="0"
                         max="100"
                         step="1"
                         value={themePreferences.autoTextColorThresholdPercent}
-                        aria-label="自動切換文字顏色閥值"
+                        aria-label={tr("自動切換文字顏色閥值")}
                         oninput={(event) => updateMainBackgroundLook({ autoTextColorThresholdPercent: Number(event.currentTarget.value) })}
                         onchange={saveThemePreferencesNow}
                       />
@@ -3677,17 +3710,17 @@
                 </div>
                 <div class="settings-panel-header">
                   <div>
-                    <h3>主介面背景</h3>
-                    <p>選擇主介面的背景來源。模糊與透明度不會改變播放頁封面背景。</p>
+                    <h3>{tr("主介面背景")}</h3>
+                    <p>{tr("選擇主介面的背景來源。模糊與透明度不會改變播放頁封面背景。")}</p>
                   </div>
                 </div>
-                <div class="main-background-mode-picker" role="group" aria-label="主介面背景模式">
+                <div class="main-background-mode-picker" role="group" aria-label={tr("主介面背景模式")}>
                   {#each [
-                    { mode: 'solid', label: '純色' },
-                    { mode: 'singleImage', label: '單圖' },
-                    { mode: 'slideshow', label: '幻燈片' },
-                    { mode: 'albumCover', label: '專輯封面' },
-                    { mode: 'systemWallpaper', label: '系統桌布' },
+                    { mode: 'solid', label: tr('純色') },
+                    { mode: 'singleImage', label: tr('單圖') },
+                    { mode: 'slideshow', label: tr('幻燈片') },
+                    { mode: 'albumCover', label: tr('專輯封面') },
+                    { mode: 'systemWallpaper', label: tr('系統桌布') },
                   ] as option (option.mode)}
                     <button
                       class="soft-button"
@@ -3701,111 +3734,132 @@
                 {#if themePreferences.mainBackgroundMode === 'singleImage'}
                   <div class="source-action-row source-action-buttons">
                     <button class="soft-button" type="button" onclick={() => void pickMainBackground()} disabled={mainBackgroundBusy}>
-                      {mainBackgroundBusy ? '處理中' : '選擇圖片'}
+                      {mainBackgroundBusy ? tr('處理中') : tr('選擇圖片')}
                     </button>
                     <button class="soft-button" type="button" onclick={() => void clearMainBackground()} disabled={mainBackgroundBusy || !mainBackgroundUrl}>
-                      移除圖片
+                      {tr("移除圖片")}
                     </button>
                   </div>
-                  {#if !mainBackgroundUrl}<p class="source-muted-note">尚未選擇圖片，將顯示純色背景。</p>{/if}
+                  {#if !mainBackgroundUrl}<p class="source-muted-note">{tr("尚未選擇圖片，將顯示純色背景。")}</p>{/if}
                 {:else if themePreferences.mainBackgroundMode === 'slideshow'}
                   <div class="source-action-row source-action-buttons">
                     <button class="soft-button" type="button" onclick={() => void pickSlideshowFolder()} disabled={mainBackgroundBusy}>
-                      {mainBackgroundBusy ? '處理中' : '選擇資料夾'}
+                      {mainBackgroundBusy ? tr('處理中') : tr('選擇資料夾')}
                     </button>
                   </div>
                   <p class="source-muted-note slideshow-folder-note">
-                    <span>{formatSlideshowFolderLabel(themePreferences.slideshowFolder) ?? '尚未選擇資料夾，請選擇包含圖片的資料夾。'}</span>
+                    <span>{formatSlideshowFolderLabel(themePreferences.slideshowFolder) ?? tr('尚未選擇資料夾，請選擇包含圖片的資料夾。')}</span>
                     {#if themePreferences.slideshowFolder && slideshowNextInSeconds !== null}
-                      <span class="slideshow-countdown">下一張 {formatSlideshowCountdown(slideshowNextInSeconds)}</span>
+                      <span class="slideshow-countdown">{tr("下一張")} {formatSlideshowCountdown(slideshowNextInSeconds)}</span>
                     {/if}
                   </p>
-                  <div class="main-background-mode-picker" role="group" aria-label="幻燈片播放順序">
-                    <button class="soft-button" class:is-active={themePreferences.slideshowOrder === 'sequential'} type="button" aria-pressed={themePreferences.slideshowOrder === 'sequential'} onclick={() => { updateMainBackgroundLook({ slideshowOrder: 'sequential' }); saveThemePreferencesNow(); }}>順序播放</button>
-                    <button class="soft-button" class:is-active={themePreferences.slideshowOrder === 'random'} type="button" aria-pressed={themePreferences.slideshowOrder === 'random'} onclick={() => { updateMainBackgroundLook({ slideshowOrder: 'random' }); saveThemePreferencesNow(); }}>隨機播放</button>
+                  <div class="main-background-mode-picker" role="group" aria-label={tr("幻燈片播放順序")}>
+                    <button class="soft-button" class:is-active={themePreferences.slideshowOrder === 'sequential'} type="button" aria-pressed={themePreferences.slideshowOrder === 'sequential'} onclick={() => { updateMainBackgroundLook({ slideshowOrder: 'sequential' }); saveThemePreferencesNow(); }}>{tr("順序播放")}</button>
+                    <button class="soft-button" class:is-active={themePreferences.slideshowOrder === 'random'} type="button" aria-pressed={themePreferences.slideshowOrder === 'random'} onclick={() => { updateMainBackgroundLook({ slideshowOrder: 'random' }); saveThemePreferencesNow(); }}>{tr("隨機播放")}</button>
                   </div>
                   <label class="lyrics-preference-range">
-                    <span><strong>切換時間</strong><output>{themePreferences.slideshowIntervalMinutes} 分鐘</output></span>
-                    <input type="range" min="1" max="120" step="1" value={themePreferences.slideshowIntervalMinutes} aria-label="幻燈片切換時間" oninput={(event) => updateMainBackgroundLook({ slideshowIntervalMinutes: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                    <span><strong>{tr("切換時間")}</strong><output>{themePreferences.slideshowIntervalMinutes} {tr("分鐘")}</output></span>
+                    <input type="range" min="1" max="120" step="1" value={themePreferences.slideshowIntervalMinutes} aria-label={tr("幻燈片切換時間")} oninput={(event) => updateMainBackgroundLook({ slideshowIntervalMinutes: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                   </label>
                 {:else if themePreferences.mainBackgroundMode === 'albumCover'}
-                  <p class="source-muted-note">背景會跟隨目前播放歌曲的專輯封面；沒有可用封面時暫時顯示純色。</p>
+                  <p class="source-muted-note">{tr("背景會跟隨目前播放歌曲的專輯封面；沒有可用封面時暫時顯示純色。")}</p>
                 {:else if themePreferences.mainBackgroundMode === 'systemWallpaper'}
                   {#if capabilities?.platform === 'android' && androidWallpaperHasImage}
-                    <p class="source-muted-note">已透過「所有檔案存取權」讀取目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {systemWallpaperNextInSeconds ?? 60}s。</p>
+                    <p class="source-muted-note">{tr("已透過「所有檔案存取權」讀取目前的系統桌布，並每分鐘檢查是否已變更，下次檢查")} {systemWallpaperNextInSeconds ?? 60}s。</p>
                   {:else if capabilities?.platform === 'android'}
-                    <p class="source-muted-note">{allFilesAccess?.supported && !allFilesAccess.granted ? 'Android 13 以上須開啟「音樂來源」中的「所有檔案存取權」才能讀取系統桌布；未授權時顯示純色背景。' : '無法讀取系統桌布（動態桌布沒有可讀取的圖片），目前顯示純色背景。'}</p>
+                    <p class="source-muted-note">{allFilesAccess?.supported && !allFilesAccess.granted ? tr('Android 13 以上須開啟「音樂來源」中的「所有檔案存取權」才能讀取系統桌布；未授權時顯示純色背景。') : tr('無法讀取系統桌布（動態桌布沒有可讀取的圖片），目前顯示純色背景。')}</p>
                   {:else}
-                    <p class="source-muted-note">讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {systemWallpaperNextInSeconds ?? 60}s。</p>
+                    <p class="source-muted-note">{tr("讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更，下次檢查")} {systemWallpaperNextInSeconds ?? 60}s。</p>
                   {/if}
                 {/if}
                 {#if themePreferences.mainBackgroundMode !== 'solid'}
                   <label class="lyrics-preference-range">
-                    <span><strong>背景模糊</strong><output>{themePreferences.mainBackgroundBlurPx}px</output></span>
-                    <input type="range" min="0" max="50" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label="主介面背景模糊程度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                    <span><strong>{tr("背景模糊")}</strong><output>{themePreferences.mainBackgroundBlurPx}px</output></span>
+                    <input type="range" min="0" max="50" step="1" value={themePreferences.mainBackgroundBlurPx} aria-label={tr("主介面背景模糊程度")} oninput={(event) => updateMainBackgroundLook({ mainBackgroundBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                   </label>
                   {#if themePreferences.colorMode === 'autoBackgroundOpacity'}
                     <label class="lyrics-preference-range">
-                      <span><strong>清晰度</strong><output>{themePreferences.mainBackgroundClarityPercent}%</output></span>
-                      <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundClarityPercent} aria-label="主介面背景清晰度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundClarityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                      <span><strong>{tr("清晰度")}</strong><output>{themePreferences.mainBackgroundClarityPercent}%</output></span>
+                      <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundClarityPercent} aria-label={tr("主介面背景清晰度")} oninput={(event) => updateMainBackgroundLook({ mainBackgroundClarityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                     </label>
                   {/if}
                   <label class="lyrics-preference-range">
-                    <span><strong>背景透明度</strong>{#if themePreferences.colorMode !== 'autoBackgroundOpacity'}<output>{themePreferences.mainBackgroundOpacityPercent}%</output>{/if}</span>
+                    <span><strong>{tr("背景透明度")}</strong>{#if themePreferences.colorMode !== 'autoBackgroundOpacity'}<output>{themePreferences.mainBackgroundOpacityPercent}%</output>{/if}</span>
                     {#if themePreferences.colorMode === 'autoBackgroundOpacity'}
-                      <OpacityCalculation calculation={mainBackgroundOpacityCalculation} description="依目前背景圖片的平均亮度與文字顏色自動計算。" emptyMessage="沒有可讀取的背景圖片，使用固定底色。" />
+                      <OpacityCalculation calculation={mainBackgroundOpacityCalculation} description={tr("依目前背景圖片的平均亮度與文字顏色自動計算。")} emptyMessage={tr("沒有可讀取的背景圖片，使用固定底色。")} />
                     {:else}
-                      <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundOpacityPercent} aria-label="主介面背景透明度" oninput={(event) => updateMainBackgroundLook({ mainBackgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                      <input type="range" min="0" max="100" step="1" value={themePreferences.mainBackgroundOpacityPercent} aria-label={tr("主介面背景透明度")} oninput={(event) => updateMainBackgroundLook({ mainBackgroundOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                     {/if}
                   </label>
                 {/if}
                 {#if mainBackgroundError}
                   <p class="theme-save-status error" role="alert">{mainBackgroundError}</p>
                 {/if}
+                <div class="settings-panel-header language-heading">
+                  <div>
+                    <h3>{tr("語言")}</h3>
+                    <p>{tr("切換語言後會重新載入介面。")}</p>
+                  </div>
+                </div>
+                <div class="cover-corner-setting" role="group" aria-label={tr("語言")}>
+                  <div class="layout-choice-row lyrics-text-effect-row">
+                    {#each LANGUAGE_CHOICES as choice (choice)}
+                      <button
+                        type="button"
+                        aria-pressed={languageChoice === choice}
+                        class:chosen={languageChoice === choice}
+                        onclick={() => void chooseLanguage(choice as LanguageChoice)}
+                      >{choice === 'system' ? tr("跟隨系統") : choice === 'zh-TW' ? '繁體中文' : '简体中文'}</button>
+                    {/each}
+                  </div>
+                </div>
+                {#if languageError}
+                  <p class="theme-save-status error" role="alert">{languageError}</p>
+                {/if}
               </div>
             {:else if settingsSection === 'track-columns'}
               <div id="{scope}track-columns-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}track-columns-tab" tabindex="0">
                 <div class="settings-panel-header">
                   <div>
-                    <h3>曲目欄位與列表高度</h3>
-                    <p>曲庫、播放清單與播放佇列共用欄位順序、顯示、高度及分組設定；序號與播放操作固定在兩側。</p>
+                    <h3>{tr("曲目欄位與列表高度")}</h3>
+                    <p>{tr("曲庫、播放清單與播放佇列共用欄位順序、顯示、高度及分組設定；序號與播放操作固定在兩側。")}</p>
                   </div>
                 </div>
                 <label class="lyrics-preference-range track-row-height-setting">
-                  <span><strong>列表高度</strong><output>{trackRowHeightPx}px</output></span>
+                  <span><strong>{tr("列表高度")}</strong><output>{trackRowHeightPx}px</output></span>
                   <input
                     type="range"
                     min="30"
                     max="60"
                     step="1"
                     value={trackRowHeightPx}
-                    aria-label="列表高度"
+                    aria-label={tr("列表高度")}
                     oninput={(event) => previewTrackRowHeight(Number(event.currentTarget.value))}
                     onchange={(event) => commitTrackRowHeight(Number(event.currentTarget.value))}
                   />
                 </label>
                 <label class="lyrics-preference-range track-row-height-setting">
-                  <span><strong>專輯卡片最大寬度</strong><output>{albumCardMaxWidthPx}px</output></span>
+                  <span><strong>{tr("專輯卡片最大寬度")}</strong><output>{albumCardMaxWidthPx}px</output></span>
                   <input
                     type="range"
                     min={MIN_ALBUM_CARD_MAX_WIDTH_PX}
                     max={MAX_ALBUM_CARD_MAX_WIDTH_PX}
                     step="10"
                     value={albumCardMaxWidthPx}
-                    aria-label="專輯卡片最大寬度"
+                    aria-label={tr("專輯卡片最大寬度")}
                     oninput={(event) => previewAlbumCardMaxWidth(Number(event.currentTarget.value))}
                     onchange={(event) => commitAlbumCardMaxWidth(Number(event.currentTarget.value))}
                   />
                 </label>
                 <label class="lyrics-preference-toggle track-grouping-setting">
-                  <input type="checkbox" checked={groupingEnabled} aria-label="啟用分組模式" onchange={(event) => setGroupingEnabled(event.currentTarget.checked)} />
-                  <span><strong>啟用分組模式</strong><small>啟用後可能增加載入時間</small></span>
+                  <input type="checkbox" checked={groupingEnabled} aria-label={tr("啟用分組模式")} onchange={(event) => setGroupingEnabled(event.currentTarget.checked)} />
+                  <span><strong>{tr("啟用分組模式")}</strong><small>{tr("啟用後可能增加載入時間")}</small></span>
                 </label>
-                <div class="track-text-overflow-setting" role="group" aria-label="欄位文字不足時的隱藏方式">
-                  <button class="soft-button" class:is-active={trackTextOverflowMode === 'middle'} type="button" aria-pressed={trackTextOverflowMode === 'middle'} onclick={() => persistTrackColumnSettings({ textOverflowMode: 'middle' })}>隱藏中段</button>
-                  <button class="soft-button" class:is-active={trackTextOverflowMode === 'end'} type="button" aria-pressed={trackTextOverflowMode === 'end'} onclick={() => persistTrackColumnSettings({ textOverflowMode: 'end' })}>隱藏後段</button>
+                <div class="track-text-overflow-setting" role="group" aria-label={tr("欄位文字不足時的隱藏方式")}>
+                  <button class="soft-button" class:is-active={trackTextOverflowMode === 'middle'} type="button" aria-pressed={trackTextOverflowMode === 'middle'} onclick={() => persistTrackColumnSettings({ textOverflowMode: 'middle' })}>{tr("隱藏中段")}</button>
+                  <button class="soft-button" class:is-active={trackTextOverflowMode === 'end'} type="button" aria-pressed={trackTextOverflowMode === 'end'} onclick={() => persistTrackColumnSettings({ textOverflowMode: 'end' })}>{tr("隱藏後段")}</button>
                 </div>
-                <ol class="track-column-settings" use:longPressDragGuard={() => trackColumnOrderDrag !== null} aria-label="曲目資訊欄位設定">
+                <ol class="track-column-settings" use:longPressDragGuard={() => trackColumnOrderDrag !== null} aria-label={tr("曲目資訊欄位設定")}>
                   {#each trackColumnPreferences as preference, index (preference.id)}
                     {@const definition = TRACK_COLUMN_DEFINITIONS.find((column) => column.id === preference.id)!}
                     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -3815,7 +3869,7 @@
                       class:column-order-drop-before={trackColumnOrderDrag !== null && trackColumnOrderDrag.toIndex === index && trackColumnOrderDrag.fromIndex > index}
                       class:column-order-drop-after={trackColumnOrderDrag !== null && trackColumnOrderDrag.toIndex === index && trackColumnOrderDrag.fromIndex < index}
                       data-track-column-index={index}
-                      use:appTooltip={'長按 300 毫秒後拖曳排序；鍵盤可用上下方向鍵'}
+                      use:appTooltip={tr('長按 300 毫秒後拖曳排序；鍵盤可用上下方向鍵')}
                       onpointerdown={(event) => handleTrackColumnOrderPointerDown(event, index)}
                       onpointermove={handleTrackColumnOrderPointerMove}
                       onpointerup={finishTrackColumnOrderPointer}
@@ -3825,15 +3879,15 @@
                         <input
                           type="checkbox"
                           checked={preference.visible}
-                          aria-label={`顯示${definition.label}欄`}
-                          use:appTooltip={'上下方向鍵可調整欄位順序'}
+                          aria-label={tr("顯示{0}欄", [definition.label])}
+                          use:appTooltip={tr('上下方向鍵可調整欄位順序')}
                           onchange={(event) => setTrackColumnVisible(preference.id, event.currentTarget.checked)}
                           onkeydown={(event) => handleTrackColumnOrderKeydown(event, preference.id)}
                         />
                         <span>{definition.label}</span>
                       </label>
                       <div class="track-column-order-actions">
-                        <span aria-label={`第 ${index + 1} 欄`}>{index + 1}</span>
+                        <span aria-label={tr("第 {0} 欄", [index + 1])}>{index + 1}</span>
                       </div>
                     </li>
                   {/each}
@@ -3844,7 +3898,7 @@
               <div id="{scope}playback-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}playback-tab" tabindex="0">
                 {#if capabilities?.platform === 'windows'}
                 <div class="resampling-status" role="status">
-                  <span>目前輸出</span>
+                  <span>{tr("目前輸出")}</span>
                   <strong>{outputStatus.text}</strong>
                   {#if outputStatus.notice}
                     <p use:appTooltip={playback?.outputFormat?.fallbackReason ?? undefined}>{outputStatus.notice}</p>
@@ -3852,34 +3906,34 @@
                 </div>
                 <div class="settings-panel-header">
                   <div>
-                    <h3>取樣率轉換</h3>
-                    <p>曲目的取樣率與輸出裝置不同時的轉換方式。兩種方式都使用 Windows 共享模式輸出，並非 bit-perfect；取樣率相同時不做任何轉換。</p>
+                    <h3>{tr("取樣率轉換")}</h3>
+                    <p>{tr("曲目的取樣率與輸出裝置不同時的轉換方式。兩種方式都使用 Windows 共享模式輸出，並非 bit-perfect；取樣率相同時不做任何轉換。")}</p>
                   </div>
                 </div>
-                <div class="resampling-stack" role="group" aria-label="取樣率轉換與 DSEE HX">
+                <div class="resampling-stack" role="group" aria-label={tr("取樣率轉換與 DSEE HX")}>
                   <button
                     type="button"
                     class="layout-choice-button"
-                    aria-label="高品質取樣率轉換"
+                    aria-label={tr("高品質取樣率轉換")}
                     aria-pressed={resamplingMode === 'highQuality'}
                     class:chosen={resamplingMode === 'highQuality'}
                     disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
                     onclick={() => setResamplingMode('highQuality')}
                   >
-                    <strong>高品質</strong>
-                    <span>輸出維持在裝置的混音取樣率，由 rubato 的 FFT 進行取樣率轉換（區塊大小 2048）。濾波範圍依來源與輸出取樣率自動調整；取樣率相同時直接輸出。切換不同取樣率的曲目時不必重新開啟輸出。</span>
+                    <strong>{tr("高品質")}</strong>
+                    <span>{tr("輸出維持在裝置的混音取樣率，由 rubato 的 FFT 進行取樣率轉換（區塊大小 2048）。濾波範圍依來源與輸出取樣率自動調整；取樣率相同時直接輸出。切換不同取樣率的曲目時不必重新開啟輸出。")}</span>
                   </button>
                   <button
                     type="button"
                     class="layout-choice-button"
-                    aria-label="Windows 內建取樣率轉換"
+                    aria-label={tr("Windows 內建取樣率轉換")}
                     aria-pressed={resamplingMode === 'windowsBuiltin'}
                     class:chosen={resamplingMode === 'windowsBuiltin'}
                     disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
                     onclick={() => setResamplingMode('windowsBuiltin')}
                   >
-                    <strong>Windows 內建</strong>
-                    <span>以曲目的取樣率開啟輸出，交由 Windows 音訊引擎轉換為裝置格式。前後曲目取樣率不同時需重新開啟輸出，換曲時可能短暫停頓；裝置無法以該取樣率開啟時會自動改用高品質轉換。</span>
+                    <strong>{tr("Windows 內建")}</strong>
+                    <span>{tr("以曲目的取樣率開啟輸出，交由 Windows 音訊引擎轉換為裝置格式。前後曲目取樣率不同時需重新開啟輸出，換曲時可能短暫停頓；裝置無法以該取樣率開啟時會自動改用高品質轉換。")}</span>
                   </button>
                   <label class="resampling-option">
                     <input
@@ -3889,21 +3943,21 @@
                       onchange={(event) => setDseeHx(event.currentTarget.checked)}
                     />
                     <span class="resampling-option-copy">
-                      <strong>啟用 DSEE HX</strong>
-                      <small>串流透過 Sony Music Center 濾鏡處理，需要先安裝 Sony Music Center，播放器載入 'C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax'，本專案不會散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。</small>
+                      <strong>{tr("啟用 DSEE HX")}</strong>
+                      <small>{tr("串流透過 Sony Music Center 濾鏡處理，需要先安裝 Sony Music Center，播放器載入 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax'，本專案不會散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。")}</small>
                     </span>
                   </label>
                 </div>
                 {/if}
                 <div class="settings-panel-header">
                   <div>
-                    <h3>DSD 播放</h3>
-                    <p>DSD（.dsf）會先在播放器內轉成 PCM 再輸出。增益補償 DSD 較低的標稱電平；播放中調整增益會平滑漸變，不會突然變大聲。{#if capabilities?.platform === 'android'}Android 的音訊輸出上限為 192 kHz，所以輸出取樣率固定為 176.4 kHz。{:else}改變輸出取樣率時，正在播放的 DSD 曲目會從目前位置重新開始。{/if}</p>
+                    <h3>{tr("DSD 播放")}</h3>
+                    <p>{tr("DSD（.dsf）會先在播放器內轉成 PCM 再輸出。增益補償 DSD 較低的標稱電平；播放中調整增益會平滑漸變，不會突然變大聲。")}{#if capabilities?.platform === 'android'}{tr("Android 的音訊輸出上限為 192 kHz，所以輸出取樣率固定為 176.4 kHz。")}{:else}{tr("改變輸出取樣率時，正在播放的 DSD 曲目會從目前位置重新開始。")}{/if}</p>
                   </div>
                 </div>
-                <div class="dsd-settings" role="group" aria-label="DSD 播放設定">
-                  <div class="dsd-setting-row" role="group" aria-label="DSD 增益">
-                    <span class="dsd-setting-label"><strong>增益</strong><output>{formatDsdGain(dsdSettings.gainDb)}</output></span>
+                <div class="dsd-settings" role="group" aria-label={tr("DSD 播放設定")}>
+                  <div class="dsd-setting-row" role="group" aria-label={tr("DSD 增益")}>
+                    <span class="dsd-setting-label"><strong>{tr("增益")}</strong><output>{formatDsdGain(dsdSettings.gainDb)}</output></span>
                     <input
                       class="dsd-gain-slider"
                       type="range"
@@ -3911,14 +3965,14 @@
                       max={DSD_GAIN_MAX_DB}
                       step={DSD_GAIN_STEP_DB}
                       value={dsdSettings.gainDb}
-                      aria-label="DSD 增益"
+                      aria-label={tr("DSD 增益")}
                       aria-valuetext={formatDsdGain(dsdSettings.gainDb)}
                       disabled={dsdSettingsState === 'loading'}
                       oninput={(event) => setDsdSettings({ gainDb: Number(event.currentTarget.value) })}
                     />
                   </div>
-                  <div class="dsd-setting-row" role="group" aria-label="DSD 輸出取樣率">
-                    <span class="dsd-setting-label"><strong>輸出取樣率</strong><output>{formatDsdOutputRate(dsdEffectiveRateHz)}</output></span>
+                  <div class="dsd-setting-row" role="group" aria-label={tr("DSD 輸出取樣率")}>
+                    <span class="dsd-setting-label"><strong>{tr("輸出取樣率")}</strong><output>{formatDsdOutputRate(dsdEffectiveRateHz)}</output></span>
                     <div class="dsd-choice-row">
                       {#each DSD_OUTPUT_RATES_HZ as rate (rate)}
                         <button
@@ -3926,7 +3980,7 @@
                           class="soft-button"
                           class:is-active={dsdEffectiveRateHz === rate}
                           aria-pressed={dsdEffectiveRateHz === rate}
-                          aria-label={`DSD 輸出取樣率 ${formatDsdOutputRate(rate)}`}
+                          aria-label={tr("DSD 輸出取樣率 {0}", [formatDsdOutputRate(rate)])}
                           disabled={dsdSettingsState === 'loading' || (capabilities?.platform === 'android' && rate !== 176_400)}
                           onclick={() => setDsdSettings({ outputRateHz: rate })}
                         >{formatDsdOutputRate(rate)}</button>
@@ -3934,7 +3988,7 @@
                     </div>
                   </div>
                   {#if capabilities?.platform !== 'android'}
-                    <p class="dsd-setting-hint">352.8 kHz 保留較多超音波成分，峰值通常比 176.4 kHz 高約 0 到 2 dB；增益較高時請留意削波。</p>
+                    <p class="dsd-setting-hint">{tr("352.8 kHz 保留較多超音波成分，峰值通常比 176.4 kHz 高約 0 到 2 dB；增益較高時請留意削波。")}</p>
                   {/if}
                   {#if dsdSettingsError}<p class="source-error-message" role="alert">{dsdSettingsError}</p>{/if}
                 </div>
@@ -3943,7 +3997,7 @@
               <div id="{scope}now-playing-layout-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}now-playing-tab" tabindex="0">
                 <div class="settings-panel-header">
                   <div>
-                    <h3>封面與歌詞排列</h3>
+                    <h3>{tr("封面與歌詞排列")}</h3>
                   </div>
                 </div>
                 <NowPlayingQuickSettingsControls
@@ -3963,24 +4017,24 @@
                 />
                 <div class="settings-panel-header">
                   <div>
-                    <h3>快速設定面板</h3>
-                    <p>調整播放頁右側快速設定抽屜的底色不透明度與背景模糊。底色與文字相反。</p>
+                    <h3>{tr("快速設定面板")}</h3>
+                    <p>{tr("調整播放頁右側快速設定抽屜的底色不透明度與背景模糊。底色與文字相反。")}</p>
                   </div>
                 </div>
                 <label class="lyrics-preference-range">
-                  <span><strong>面板透明度</strong><output>{themePreferences.quickSettingsOpacityPercent}%</output></span>
-                  <input type="range" min="0" max="100" step="1" value={themePreferences.quickSettingsOpacityPercent} aria-label="快速設定面板透明度" oninput={(event) => updateQuickSettingsLook({ quickSettingsOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                  <span><strong>{tr("面板透明度")}</strong><output>{themePreferences.quickSettingsOpacityPercent}%</output></span>
+                  <input type="range" min="0" max="100" step="1" value={themePreferences.quickSettingsOpacityPercent} aria-label={tr("快速設定面板透明度")} oninput={(event) => updateQuickSettingsLook({ quickSettingsOpacityPercent: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                 </label>
                 <label class="lyrics-preference-range">
-                  <span><strong>面板模糊</strong><output>{themePreferences.quickSettingsBlurPx}px</output></span>
-                  <input type="range" min="0" max="50" step="1" value={themePreferences.quickSettingsBlurPx} aria-label="快速設定面板模糊程度" oninput={(event) => updateQuickSettingsLook({ quickSettingsBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
+                  <span><strong>{tr("面板模糊")}</strong><output>{themePreferences.quickSettingsBlurPx}px</output></span>
+                  <input type="range" min="0" max="50" step="1" value={themePreferences.quickSettingsBlurPx} aria-label={tr("快速設定面板模糊程度")} oninput={(event) => updateQuickSettingsLook({ quickSettingsBlurPx: Number(event.currentTarget.value) })} onchange={saveThemePreferencesNow} />
                 </label>
               </div>
             {:else if settingsSection === 'lyrics'}
               <div id="{scope}lyrics-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}lyrics-tab" tabindex="0">
                 <div class="settings-panel-header">
                   <div>
-                    <h3>歌詞顯示</h3>
+                    <h3>{tr("歌詞顯示")}</h3>
                   </div>
                 </div>
                 <NowPlayingQuickSettingsControls
@@ -4001,19 +4055,19 @@
                 {#if capabilities?.platform === 'windows'}
                   <div class="settings-panel-header taskbar-lyrics-heading">
                     <div>
-                      <h3>工作列歌詞</h3>
-                      <p>在工作列沒被工作鈕和系統匣佔用的空白處顯示目前這一句歌詞（只顯示有時間軸的歌詞）。工作列自動隱藏、有全螢幕程式或空白處太窄時不顯示。</p>
+                      <h3>{tr("工作列歌詞")}</h3>
+                      <p>{tr("在工作列沒被工作鈕和系統匣佔用的空白處顯示目前這一句歌詞（只顯示有時間軸的歌詞）。工作列自動隱藏、有全螢幕程式或空白處太窄時不顯示。")}</p>
                     </div>
                   </div>
-                  <div class="taskbar-lyrics-settings" role="group" aria-label="工作列歌詞設定">
+                  <div class="taskbar-lyrics-settings" role="group" aria-label={tr("工作列歌詞設定")}>
                     <label class="lyrics-preference-toggle">
                       <input type="checkbox" checked={taskbarLyricsSettings.enabled} onchange={(event) => setTaskbarLyricsSettings({ enabled: event.currentTarget.checked })} />
-                      <span><strong>顯示工作列歌詞</strong><small>在工作列空白處繪製目前播放的歌詞</small></span>
+                      <span><strong>{tr("顯示工作列歌詞")}</strong><small>{tr("在工作列空白處繪製目前播放的歌詞")}</small></span>
                     </label>
                     <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-align-label">
-                      <span id="{scope}taskbar-lyrics-align-label" class="cover-corner-setting-label"><strong>對齊</strong></span>
+                      <span id="{scope}taskbar-lyrics-align-label" class="cover-corner-setting-label"><strong>{tr("對齊")}</strong></span>
                       <div class="layout-choice-row lyrics-text-effect-row">
-                        {#each [['left', '靠左'], ['center', '置中'], ['right', '靠右']] as [value, label] (value)}
+                        {#each [['left', tr('靠左')], ['center', tr('置中')], ['right', tr('靠右')]] as [value, label] (value)}
                           <button
                             type="button"
                             aria-pressed={taskbarLyricsSettings.align === value}
@@ -4024,32 +4078,32 @@
                       </div>
                     </div>
                     <label class="lyrics-preference-range">
-                      <span><strong>字體大小</strong><output>{taskbarLyricsSettings.fontSizePx} px</output></span>
+                      <span><strong>{tr("字體大小")}</strong><output>{taskbarLyricsSettings.fontSizePx} px</output></span>
                       <input
                         type="range"
                         min={TASKBAR_LYRICS_FONT_SIZE_PX.min}
                         max={TASKBAR_LYRICS_FONT_SIZE_PX.max}
                         step="1"
                         value={taskbarLyricsSettings.fontSizePx}
-                        aria-label="工作列歌詞字體大小"
+                        aria-label={tr("工作列歌詞字體大小")}
                         oninput={(event) => setTaskbarLyricsSettings({ fontSizePx: Number(event.currentTarget.value) })}
                       />
                     </label>
                     <label class="lyrics-preference-toggle">
                       <input type="checkbox" checked={taskbarLyricsSettings.useCustomColor} onchange={(event) => setTaskbarLyricsSettings({ useCustomColor: event.currentTarget.checked })} />
-                      <span><strong>自訂顏色</strong><small>關閉時依工作列的深淺色自動使用黑色或白色</small></span>
+                      <span><strong>{tr("自訂顏色")}</strong><small>{tr("關閉時依工作列的深淺色自動使用黑色或白色")}</small></span>
                       <input
                         class="taskbar-lyrics-color"
                         type="color"
                         value={taskbarLyricsSettings.customColor}
                         disabled={!taskbarLyricsSettings.useCustomColor}
-                        aria-label="工作列歌詞顏色"
+                        aria-label={tr("工作列歌詞顏色")}
                         onchange={(event) => setTaskbarLyricsSettings({ customColor: event.currentTarget.value })}
                       />
                     </label>
                     <label class="lyrics-preference-toggle">
                       <input type="checkbox" checked={taskbarLyricsSettings.showTranslation} onchange={(event) => setTaskbarLyricsSettings({ showTranslation: event.currentTarget.checked })} />
-                      <span><strong>顯示譯文</strong><small>歌詞有翻譯時，在原文下方多顯示一行較小的譯文</small></span>
+                      <span><strong>{tr("顯示譯文")}</strong><small>{tr("歌詞有翻譯時，在原文下方多顯示一行較小的譯文")}</small></span>
                     </label>
                     {#if taskbarLyricsError}
                       <p class="settings-preference-status" role="status">{taskbarLyricsError}</p>
@@ -4061,12 +4115,12 @@
               <div id="{scope}shortcuts-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}shortcuts-tab" tabindex="0">
                 <div class="settings-panel-header">
                   <div>
-                    <h3>快捷鍵</h3>
-                    <p>可綁定鍵盤、滑鼠滾輪、滑鼠側鍵、手柄按鈕與搖桿方向。預設不含手柄。點「新增」後按下要使用的操作，Esc 取消。輸入文字時不會觸發。</p>
+                    <h3>{tr("快捷鍵")}</h3>
+                    <p>{tr("可綁定鍵盤、滑鼠滾輪、滑鼠側鍵、手柄按鈕與搖桿方向。預設不含手柄。點「新增」後按下要使用的操作，Esc 取消。輸入文字時不會觸發。")}</p>
                   </div>
                 </div>
                 {#if capturingShortcut}
-                  <p class="settings-preference-status" role="status">正在設定「{SHORTCUT_ACTIONS.find((action) => action.id === capturingShortcut)?.label}」。請按下按鍵、滾動滾輪、按滑鼠側鍵、手柄按鈕，或把搖桿推到要綁定的方向。</p>
+                  <p class="settings-preference-status" role="status">{tr("正在設定「{0}」。請按下按鍵、滾動滾輪、按滑鼠側鍵、手柄按鈕，或把搖桿推到要綁定的方向。", [SHORTCUT_ACTIONS.find((action) => action.id === capturingShortcut)?.label])}</p>
                 {/if}
                 <div class="shortcut-list">
                   {#each SHORTCUT_ACTIONS as action (action.id)}
@@ -4074,15 +4128,15 @@
                       <strong>{action.label}</strong>
                       <div class="shortcut-bindings">
                         {#each shortcutSettings[action.id] as binding (`${binding.device}:${binding.code}`)}
-                          <button class="shortcut-chip" type="button" aria-label={`移除${action.label}的${shortcutBindingLabel(binding)}`} onclick={() => deleteShortcutBinding(action.id, binding)}>
+                          <button class="shortcut-chip" type="button" aria-label={tr("移除{0}的{1}", [action.label, shortcutBindingLabel(binding)])} onclick={() => deleteShortcutBinding(action.id, binding)}>
                             {shortcutBindingLabel(binding)}
                             <span aria-hidden="true">×</span>
                           </button>
                         {:else}
-                          <span class="shortcut-empty">未綁定</span>
+                          <span class="shortcut-empty">{tr("未綁定")}</span>
                         {/each}
                       </div>
-                      <button class="soft-button" type="button" onclick={() => beginShortcutCapture(action.id)}>新增</button>
+                      <button class="soft-button" type="button" onclick={() => beginShortcutCapture(action.id)}>{tr("新增")}</button>
                     </div>
                   {/each}
                 </div>
@@ -4096,17 +4150,17 @@
                 <section class="settings-view" aria-labelledby="{scope}source-settings-heading">
                   <div class="settings-panel-header settings-source-heading">
                     <div>
-                      <h3 id="{scope}source-settings-heading">管理音樂來源</h3>
+                      <h3 id="{scope}source-settings-heading">{tr("管理音樂來源")}</h3>
                     </div>
                   </div>
                   {#if capabilities?.platform === 'android' && allFilesAccess && !allFilesAccess.granted}
                     <div class="all-files-access-card" data-testid="all-files-access">
                       <div>
-                        <strong>所有檔案存取權</strong>
-                        <p class="source-muted-note">掃描共享音樂、直接寫入歌曲資訊與讀取系統桌布都需要此權限。{allFilesAccess.legacy ? '' : '按下後在系統頁面開啟「允許存取所有檔案」，再返回本程式。'}</p>
+                        <strong>{tr("所有檔案存取權")}</strong>
+                        <p class="source-muted-note">{tr("掃描共享音樂、直接寫入歌曲資訊與讀取系統桌布都需要此權限。")}{allFilesAccess.legacy ? '' : tr('按下後在系統頁面開啟「允許存取所有檔案」，再返回本程式。')}</p>
                       </div>
                       <button class="soft-button" type="button" disabled={allFilesAccessBusy} onclick={() => void requestAllFilesAccess()}>
-                        前往授權
+                        {tr("前往授權")}
                       </button>
                     </div>
                   {/if}
@@ -4118,12 +4172,12 @@
                 data-testid="sync-progress-banner"
                 role="status"
                 aria-live="polite"
-                aria-label="音樂來源同步狀態"
+                aria-label={tr("音樂來源同步狀態")}
               >
                 <div class="sync-progress-heading">
-                  <strong>{syncProgress.active ? '背景同步進行中' : '最近一次同步摘要'}</strong>
+                  <strong>{syncProgress.active ? tr('背景同步進行中') : tr('最近一次同步摘要')}</strong>
                   {#if syncProgress.active}
-                    <span class="sync-progress-count">{syncProgressDoneCount} / {syncProgress.sourceCount} 個來源完成</span>
+                    <span class="sync-progress-count">{syncProgressDoneCount} / {syncProgress.sourceCount} {tr("個來源完成")}</span>
                   {/if}
                 </div>
                 {#if syncProgress.summary}
@@ -4137,7 +4191,7 @@
                         <span class="sync-progress-source-detail">{syncProgressLine(source)}</span>
                         {#if source.total !== null && source.stage !== 'finished'}
                           <progress
-                            aria-label={`${source.displayName} 階段進度`}
+                            aria-label={tr("{0} 階段進度", [source.displayName])}
                             max={Math.max(1, source.total)}
                             value={Math.min(source.processed, Math.max(1, source.total))}
                           ></progress>
@@ -4159,7 +4213,7 @@
                   onclick={() => void pickWindowsFolder()}
                   disabled={!sourceSyncReady || isUpdatingSource}
                 >
-                  {isUpdatingSource ? '處理中' : '選擇資料夾'}
+                  {isUpdatingSource ? tr('處理中') : tr('選擇資料夾')}
                 </button>
                 <button
                   class="soft-button"
@@ -4168,7 +4222,7 @@
                   disabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation}
                   use:appTooltip={showCapabilityDetail(capabilities?.playlistExchange)}
                 >
-                  {isUpdatingSource ? '處理中' : '選擇播放清單'}
+                  {isUpdatingSource ? tr('處理中') : tr('選擇播放清單')}
                 </button>
               </div>
             {:else if capabilities?.platform === 'android'}
@@ -4179,7 +4233,7 @@
                   onclick={() => void pickAndroidFolderSource()}
                   disabled={!sourceSyncReady || isUpdatingSource || allFilesAccess?.granted !== true}
                 >
-                  {isUpdatingSource ? '處理中' : '選擇資料夾'}
+                  {isUpdatingSource ? tr('處理中') : tr('選擇資料夾')}
                 </button>
                 <button
                   class="soft-button"
@@ -4188,7 +4242,7 @@
                   disabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation || allFilesAccess?.granted !== true}
                   use:appTooltip={showCapabilityDetail(capabilities?.playlistExchange)}
                 >
-                  {isUpdatingSource ? '處理中' : '選擇播放清單'}
+                  {isUpdatingSource ? tr('處理中') : tr('選擇播放清單')}
                 </button>
               </div>
             {:else}
@@ -4206,18 +4260,18 @@
             {/if}
 
             <div class="configured-sources" aria-live="polite">
-              <div class="configured-sources-heading"><strong>已加入的來源</strong><span>{sources.length}</span></div>
+              <div class="configured-sources-heading"><strong>{tr("已加入的來源")}</strong><span>{sources.length}</span></div>
               {#if isLoadingSources && sources.length === 0}
-                <p class="source-muted-note">正在讀取來源…</p>
+                <p class="source-muted-note">{tr("正在讀取來源…")}</p>
               {:else if sources.length === 0}
-                <p class="source-muted-note">尚未加入來源。加入後會自動開始同步。</p>
+                <p class="source-muted-note">{tr("尚未加入來源。加入後會自動開始同步。")}</p>
               {:else}
                 {#each sources as source (source.id)}
                   <div class="configured-source">
                     <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{sourceKindLabel(source.kind)}</small><small class="configured-source-location" use:appTooltip={source.location}>{source.location}</small></div>
                     <div class="configured-source-actions">
-                      <label><input type="checkbox" checked={source.enabled} disabled={isUpdatingSource} onchange={(event) => void setSourceEnabled(source, event.currentTarget.checked)} />啟用</label>
-                      <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeSource(source)}>移除</button>
+                      <label><input type="checkbox" checked={source.enabled} disabled={isUpdatingSource} onchange={(event) => void setSourceEnabled(source, event.currentTarget.checked)} />{tr("啟用")}</label>
+                      <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeSource(source)}>{tr("移除")}</button>
                     </div>
                   </div>
                 {/each}
@@ -4232,21 +4286,21 @@
                   onclick={() => void pickExcludedFolder()}
                   disabled={!sourceSyncReady || isUpdatingSource || (capabilities?.platform === 'android' && allFilesAccess?.granted !== true)}
                 >
-                  {isUpdatingSource ? '處理中' : '選擇排除資料夾'}
+                  {isUpdatingSource ? tr('處理中') : tr('選擇排除資料夾')}
                 </button>
               </div>
               <div class="configured-sources excluded-folders" aria-live="polite">
-                <div class="configured-sources-heading"><strong>已排除的來源</strong><span>{excludedFolders.length}</span></div>
+                <div class="configured-sources-heading"><strong>{tr("已排除的來源")}</strong><span>{excludedFolders.length}</span></div>
                 {#if isLoadingSources && excludedFolders.length === 0}
-                  <p class="source-muted-note">正在讀取排除清單…</p>
+                  <p class="source-muted-note">{tr("正在讀取排除清單…")}</p>
                 {:else if excludedFolders.length === 0}
-                  <p class="source-muted-note">尚未排除資料夾。排除後，同步會略過該資料夾內的曲目。</p>
+                  <p class="source-muted-note">{tr("尚未排除資料夾。排除後，同步會略過該資料夾內的曲目。")}</p>
                 {:else}
                   {#each excludedFolders as excluded (excluded.id)}
                     <div class="configured-source">
                       <div class="configured-source-copy"><strong>{excluded.displayName}</strong><small class="configured-source-location" use:appTooltip={excluded.location}>{excluded.location}</small></div>
                       <div class="configured-source-actions">
-                        <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeExcludedFolder(excluded)}>移除</button>
+                        <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeExcludedFolder(excluded)}>{tr("移除")}</button>
                       </div>
                     </div>
                   {/each}
@@ -4284,7 +4338,7 @@
     />
   {/if}
   {#if isNavPanelOpen}
-    <button class="nav-panel-scrim" type="button" tabindex="-1" aria-label="關閉導覽" onclick={() => closeNavPanel('outside', false)}></button>
+    <button class="nav-panel-scrim" type="button" tabindex="-1" aria-label={tr("關閉導覽")} onclick={() => closeNavPanel('outside', false)}></button>
   {/if}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
   <aside
@@ -4292,7 +4346,7 @@
     class="sidebar"
     class:floating-surface={isNarrowNav}
     class:nav-panel-open={isNavPanelOpen}
-    aria-label="主要導覽"
+    aria-label={tr("主要導覽")}
     inert={isNowPlayingOpen || (isNarrowNav && !isNavPanelOpen)}
     onclick={handleSidebarClick}
     use:swipeDismiss={{ direction: 'left', enabled: isNarrowNav && isNavPanelOpen, onDismiss: () => closeNavPanel('outside', false) }}
@@ -4312,8 +4366,8 @@
       <input
         bind:this={librarySearchInput}
         type="search"
-        aria-label="搜尋曲庫"
-        placeholder="搜尋歌名、演出者或專輯"
+        aria-label={tr("搜尋曲庫")}
+        placeholder={tr("搜尋歌名、演出者或專輯")}
         value={query}
         oninput={handleSearchInput}
         disabled={!libraryReady}
@@ -4329,7 +4383,7 @@
         onclick={() => (activeView = 'library')}
       >
         <IconMusic size={20} stroke={1.6} aria-hidden="true" />
-        <span class="nav-label">曲庫</span>
+        <span class="nav-label">{tr("曲庫")}</span>
         <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
       <button
@@ -4339,7 +4393,7 @@
         onclick={navigateToArtistSection}
       >
         <IconUsers size={20} stroke={1.6} aria-hidden="true" />
-        <span class="nav-label">演出者</span>
+        <span class="nav-label">{tr("演出者")}</span>
         <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
       <button
@@ -4349,7 +4403,7 @@
         onclick={navigateToAlbumSection}
       >
         <IconDisc size={20} stroke={1.6} aria-hidden="true" />
-        <span class="nav-label">專輯</span>
+        <span class="nav-label">{tr("專輯")}</span>
         <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
       <button
@@ -4359,7 +4413,7 @@
         onclick={() => (activeView = 'queue')}
       >
         <IconList size={20} stroke={1.6} aria-hidden="true" />
-        <span class="nav-label">播放佇列</span>
+        <span class="nav-label">{tr("播放佇列")}</span>
         <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
     </nav>
@@ -4374,7 +4428,7 @@
       />
     </div>
     </div>
-    <nav class="sidebar-settings" aria-label="設定">
+    <nav class="sidebar-settings" aria-label={tr("設定")}>
       <button
         class="nav-link"
         class:active={activeView === 'settings'}
@@ -4382,7 +4436,7 @@
         onclick={() => (activeView = 'settings')}
       >
         <IconSettings size={20} stroke={1.6} aria-hidden="true" />
-        <span class="nav-label">設定</span>
+        <span class="nav-label">{tr("設定")}</span>
         <span class="nav-arrow" aria-hidden="true"><IconChevronRight size={15} stroke={1.7} aria-hidden="true" /></span>
       </button>
     </nav>
@@ -4394,7 +4448,7 @@
         bind:this={navPanelToggle}
         class="nav-panel-toggle"
         type="button"
-        aria-label={isNavPanelOpen ? '關閉導覽' : '開啟導覽'}
+        aria-label={isNavPanelOpen ? tr('關閉導覽') : tr('開啟導覽')}
         aria-expanded={isNavPanelOpen}
         aria-controls="app-sidebar"
         onclick={toggleNavPanel}
@@ -4404,9 +4458,9 @@
       <div class="topbar-title-block">
         <h1 id="page-heading" class="page-title">
           {#if activeView === 'artist-detail'}
-            <button class="artist-page-back" type="button" aria-label="返回演出者首頁" onclick={navigateToArtistIndex}>演出者</button><span aria-hidden="true">．</span><span>{selectedArtist?.displayName ?? ''}</span>
+            <button class="artist-page-back" type="button" aria-label={tr("返回演出者首頁")} onclick={navigateToArtistIndex}>{tr("演出者")}</button><span aria-hidden="true">．</span><span>{selectedArtist?.displayName ?? ''}</span>
           {:else if activeView === 'album-detail'}
-            <button class="artist-page-back" type="button" aria-label="返回專輯首頁" onclick={navigateToAlbumIndex}>專輯</button><span aria-hidden="true">．</span><span>{selectedAlbum?.unmarked ? '其它' : selectedAlbum?.displayName ?? ''}</span>
+            <button class="artist-page-back" type="button" aria-label={tr("返回專輯首頁")} onclick={navigateToAlbumIndex}>{tr("專輯")}</button><span aria-hidden="true">．</span><span>{selectedAlbum?.unmarked ? tr('其它') : selectedAlbum?.displayName ?? ''}</span>
           {:else}
             {pageTitle}
           {/if}
@@ -4419,13 +4473,13 @@
         <button
           class="soft-button topbar-refresh-button"
           type="button"
-          aria-label="重新整理音樂來源"
-          use:appTooltip={sourceSyncReady ? '重新同步本機來源' : showCapabilityDetail(capabilities?.sourceSync)}
+          aria-label={tr("重新整理音樂來源")}
+          use:appTooltip={sourceSyncReady ? tr('重新同步本機來源') : showCapabilityDetail(capabilities?.sourceSync)}
           onclick={() => void syncLibrary()}
           disabled={!sourceSyncReady || isSyncing}
         >
           <IconRefresh size={16} stroke={1.7} class={isSyncing ? 'spin' : ''} aria-hidden="true" />
-          <span>{isSyncing ? '同步中' : '重新整理'}</span>
+          <span>{isSyncing ? tr('同步中') : tr('重新整理')}</span>
         </button>
       </div>
     </header>
@@ -4441,10 +4495,10 @@
                 </div>
                 <div class="not-ready-copy">
                   <span class="state-label">NATIVE SERVICE</span>
-                  <h3>{runtimeError ? '尚未連上桌面服務' : '曲庫服務尚未就緒'}</h3>
+                  <h3>{runtimeError ? tr('尚未連上桌面服務') : tr('曲庫服務尚未就緒')}</h3>
                   <p>{showCapabilityDetail(capabilities?.library)}</p>
                 </div>
-                <div class="not-ready-meta"><span class="status-dot" aria-hidden="true"></span> 尚未載入曲目</div>
+                <div class="not-ready-meta"><span class="status-dot" aria-hidden="true"></span> {tr("尚未載入曲目")}</div>
               </div>
             {:else}
               <TrackList
@@ -4473,7 +4527,7 @@
             {#if !libraryReady}
               <div class="not-ready-panel" role="status">
                 <div class="not-ready-icon" aria-hidden="true"><IconUsers size={22} stroke={1.6} /></div>
-                <div class="not-ready-copy"><span class="state-label">LIBRARY</span><h3>演出者服務尚未就緒</h3><p>{showCapabilityDetail(capabilities?.library)}</p></div>
+                <div class="not-ready-copy"><span class="state-label">LIBRARY</span><h3>{tr("演出者服務尚未就緒")}</h3><p>{showCapabilityDetail(capabilities?.library)}</p></div>
               </div>
             {:else}
               <ArtistIndex
@@ -4521,7 +4575,7 @@
             {#if !libraryReady}
               <div class="not-ready-panel" role="status">
                 <div class="not-ready-icon" aria-hidden="true"><IconMusic size={22} stroke={1.6} /></div>
-                <div class="not-ready-copy"><span class="state-label">LIBRARY</span><h3>專輯服務尚未就緒</h3><p>{showCapabilityDetail(capabilities?.library)}</p></div>
+                <div class="not-ready-copy"><span class="state-label">LIBRARY</span><h3>{tr("專輯服務尚未就緒")}</h3><p>{showCapabilityDetail(capabilities?.library)}</p></div>
               </div>
             {:else}
               <AlbumIndex
@@ -4567,27 +4621,27 @@
             {#if playlistError}
               <div class="inline-message" role="alert">
                 <span class="message-mark"><IconAlertCircle size={16} stroke={1.8} aria-hidden="true" /></span>
-                <div><strong>播放清單操作失敗</strong><p>{playlistError}</p></div>
-                <button class="text-button" type="button" onclick={() => { if (selectedPlaylistId) refreshPlaylistEntries(); else void loadPlaylists(); }}>再試一次</button>
+                <div><strong>{tr("播放清單操作失敗")}</strong><p>{playlistError}</p></div>
+                <button class="text-button" type="button" onclick={() => { if (selectedPlaylistId) refreshPlaylistEntries(); else void loadPlaylists(); }}>{tr("再試一次")}</button>
               </div>
             {/if}
 
             {#if !libraryReady}
               <div class="not-ready-panel">
                 <div class="not-ready-icon" aria-hidden="true"><IconMusic size={24} stroke={1.6} aria-hidden="true" /></div>
-                <div class="not-ready-copy"><span class="state-label">NATIVE SERVICE</span><h3>播放清單服務尚未就緒</h3><p>{showCapabilityDetail(capabilities?.library)}</p></div>
+                <div class="not-ready-copy"><span class="state-label">NATIVE SERVICE</span><h3>{tr("播放清單服務尚未就緒")}</h3><p>{showCapabilityDetail(capabilities?.library)}</p></div>
               </div>
             {:else if isLoadingPlaylists && playlists.length === 0}
-              <div class="loading-panel"><span class="loader-ring"></span><span>正在載入播放清單…</span></div>
+              <div class="loading-panel"><span class="loader-ring"></span><span>{tr("正在載入播放清單…")}</span></div>
             {:else if playlists.length === 0}
               <div class="empty-panel">
                 <div class="empty-wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
-                <h3>尚無播放清單</h3>
-                <p>在「設定 → 音樂來源」選擇播放清單檔案加入來源。</p>
+                <h3>{tr("尚無播放清單")}</h3>
+                <p>{tr("在「設定 → 音樂來源」選擇播放清單檔案加入來源。")}</p>
               </div>
             {:else if selectedPlaylist}
               <div class="playlist-browser">
-                <section class="playlist-detail" aria-label={selectedPlaylist.name.trim() || '未命名播放清單'}>
+                <section class="playlist-detail" aria-label={selectedPlaylist.name.trim() || tr('未命名播放清單')}>
                   <PlaylistEntryList
                     playlistId={selectedPlaylist.id}
                     resetKey={playlistListRevision}
@@ -4607,8 +4661,8 @@
               </div>
             {:else}
               <div class="empty-panel">
-                <h3>尚未選擇播放清單</h3>
-                <p>從左側選擇播放清單。</p>
+                <h3>{tr("尚未選擇播放清單")}</h3>
+                <p>{tr("從左側選擇播放清單。")}</p>
               </div>
             {/if}
           </section>
@@ -4618,7 +4672,7 @@
             {#if !playbackReady}
               <div class="not-ready-panel" role="status">
                 <div class="not-ready-icon" aria-hidden="true"><IconList size={22} stroke={1.6} /></div>
-                <div class="not-ready-copy"><span class="state-label">PLAYBACK</span><h3>播放佇列服務尚未就緒</h3><p>{showCapabilityDetail(capabilities?.playback)}</p></div>
+                <div class="not-ready-copy"><span class="state-label">PLAYBACK</span><h3>{tr("播放佇列服務尚未就緒")}</h3><p>{showCapabilityDetail(capabilities?.playback)}</p></div>
               </div>
             {:else}
               <PlaybackQueueList
@@ -4653,7 +4707,7 @@
       class="now-playing-overlay"
       class:is-open={isNowPlayingOpen}
       data-testid="now-playing-overlay"
-      aria-label="正在播放"
+      aria-label={tr("正在播放")}
       aria-hidden={!isNowPlayingOpen}
       inert={!isNowPlayingOpen}
     >
@@ -4662,79 +4716,79 @@
           bind:this={nowPlayingBackButton}
           class="soft-button icon-button now-playing-overlay-return"
           type="button"
-          aria-label="返回播放前頁面"
+          aria-label={tr("返回播放前頁面")}
           onclick={() => void closeNowPlaying()}
         >
           <IconArrowLeft size={17} stroke={1.8} aria-hidden="true" />
         </button>
         <div class="now-playing-header-track">
-          <nav class="now-playing-track-info" aria-label="曲目資訊與曲庫分類" use:hideWrappedTrailingTrackSeparators>
+          <nav class="now-playing-track-info" aria-label={tr("曲目資訊與曲庫分類")} use:hideWrappedTrailingTrackSeparators>
             <span class="now-playing-track-block now-playing-artist-block" data-track-block="artist">
               {#if nowPlayingArtists.length === 0}
-                <button type="button" data-track-field="artist" disabled use:appTooltip={'沒有演出者分類資料'} aria-label="沒有演出者分類資料">—</button>
+                <button type="button" data-track-field="artist" disabled use:appTooltip={tr('沒有演出者分類資料')} aria-label={tr("沒有演出者分類資料")}>—</button>
               {:else}
                 {#each nowPlayingArtists as artist, index (artist)}
                   <span class="now-playing-artist-unit">
                     {#if index > 0}<span class="now-playing-artist-sep" aria-hidden="true">/</span>{/if}
-                     <button type="button" data-track-field="artist" use:appTooltip={artist} aria-label={`開啟演出者「${artist}」明細`} onclick={() => void openArtistDetailForName(artist)}>{artist}</button>
+                     <button type="button" data-track-field="artist" use:appTooltip={artist} aria-label={tr("開啟演出者「{0}」明細", [artist])} onclick={() => void openArtistDetailForName(artist)}>{artist}</button>
                   </span>
                 {/each}
               {/if}
             </span>
             <span class="now-playing-track-block now-playing-album-block" data-track-block="album">
-               <button type="button" data-track-field="album" disabled={!trackFieldValue(playback?.currentTrack, 'album')} use:appTooltip={trackFieldValue(playback?.currentTrack, 'album') ?? '沒有專輯分類資料'} aria-label={trackFieldValue(playback?.currentTrack, 'album') ? `開啟專輯「${trackFieldValue(playback?.currentTrack, 'album')}」明細` : '沒有專輯分類資料'} onclick={() => { const album = trackFieldValue(playback?.currentTrack, 'album'); if (album) void openAlbumDetailForName(album); }}>{trackFieldLabel(playback?.currentTrack, 'album')}</button>
+               <button type="button" data-track-field="album" disabled={!trackFieldValue(playback?.currentTrack, 'album')} use:appTooltip={trackFieldValue(playback?.currentTrack, 'album') ?? tr('沒有專輯分類資料')} aria-label={trackFieldValue(playback?.currentTrack, 'album') ? tr("開啟專輯「{0}」明細", [trackFieldValue(playback?.currentTrack, 'album')]) : tr('沒有專輯分類資料')} onclick={() => { const album = trackFieldValue(playback?.currentTrack, 'album'); if (album) void openAlbumDetailForName(album); }}>{trackFieldLabel(playback?.currentTrack, 'album')}</button>
             </span>
             <span class="now-playing-track-block now-playing-title-block" data-track-block="title">
               <button
                 type="button"
                 class="now-playing-track-title"
                 data-track-field="title"
-                aria-label={`在曲庫搜尋「${trackFieldLabel(playback?.currentTrack, 'title')}」`}
+                aria-label={tr("在曲庫搜尋「{0}」", [trackFieldLabel(playback?.currentTrack, 'title')])}
                 disabled={!playback?.currentTrack}
-                use:appTooltip={displayTrackTitle(playback?.currentTrack, '') || '沒有曲名'}
+                use:appTooltip={displayTrackTitle(playback?.currentTrack, '') || tr('沒有曲名')}
                 onclick={() => void searchNowPlayingTitle()}
               >{trackFieldLabel(playback?.currentTrack, 'title')}</button>
             </span>
           </nav>
-          <p class="now-playing-format" aria-label="音質格式、發行日期與播放次數">
+          <p class="now-playing-format" aria-label={tr("音質格式、發行日期與播放次數")}>
             <span class="now-playing-audio-quality">
               <span>{formatAudioFormat(playback?.currentTrack ?? {})}</span>
               {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" use:appTooltip={'Hi-Res'} />{/if}
             </span>
             {#if nowPlayingReleaseDate !== '—'}
-              <span class="now-playing-release-date-block now-playing-release-date" aria-label="發行日期">{nowPlayingReleaseDate}</span>
+              <span class="now-playing-release-date-block now-playing-release-date" aria-label={tr("發行日期")}>{nowPlayingReleaseDate}</span>
             {/if}
-            <span class="now-playing-play-count-block now-playing-play-count" aria-label="播放次數">
-              播放次數 {formatTrackColumnValue('playCount', withLivePlayedMs(playback?.currentTrack ?? {}, livePlayCount), () => '—')}
+            <span class="now-playing-play-count-block now-playing-play-count" aria-label={tr("播放次數")}>
+              {tr("播放次數")} {formatTrackColumnValue('playCount', withLivePlayedMs(playback?.currentTrack ?? {}, livePlayCount), () => '—')}
             </span>
           </p>
         </div>
         <div class="now-playing-topbar-tools">
           {#if lyricsTopbarStatus}
-            <div class="lyrics-topbar-status" role="group" aria-label="歌詞來源與同步操作">
+            <div class="lyrics-topbar-status" role="group" aria-label={tr("歌詞來源與同步操作")}>
               <button
                 type="button"
                 class="soft-button lyrics-topbar-action"
-                use:appTooltip={`目前來源：${lyricsTopbarStatus.source}（開啟候選以手動指定）`}
-                aria-label="手動指定歌詞"
+                use:appTooltip={tr("目前來源：{0}（開啟候選以手動指定）", [lyricsTopbarStatus.source])}
+                aria-label={tr("手動指定歌詞")}
                 disabled={!playback?.currentTrack}
                 onclick={() => lyricsTopbarStatus?.openManualSelection()}
-              >歌詞</button>
+              >{tr("歌詞")}</button>
               <button
                 type="button"
                 class="soft-button lyrics-topbar-action"
                 class:is-active={lyricsTopbarStatus.timingPanelOpen}
-                use:appTooltip={lyricsTopbarStatus.canAdjustTiming ? `目前：${lyricsTopbarStatus.sync}（調整延遲 ±10 秒）` : '目前不是同步歌詞，無法調整延遲'}
-                aria-label="同步歌詞延遲調整"
+                use:appTooltip={lyricsTopbarStatus.canAdjustTiming ? tr("目前：{0}（調整延遲 ±10 秒）", [lyricsTopbarStatus.sync]) : tr('目前不是同步歌詞，無法調整延遲')}
+                aria-label={tr("同步歌詞延遲調整")}
                 aria-pressed={lyricsTopbarStatus.timingPanelOpen}
                 disabled={!lyricsTopbarStatus.canAdjustTiming}
                 onclick={() => lyricsTopbarStatus?.toggleTimingOffset()}
-              >同步</button>
+              >{tr("同步")}</button>
             </div>
           {/if}
-          <div class="lyrics-topbar-toggles" role="group" aria-label="歌詞副行顯示">
-            <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label="切換譯文顯示" onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>譯</button>
-            <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label="切換羅馬拼音顯示" onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>羅</button>
+          <div class="lyrics-topbar-toggles" role="group" aria-label={tr("歌詞副行顯示")}>
+            <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showTranslation} aria-label={tr("切換譯文顯示")} onclick={() => updateLyricsPreferences({ showTranslation: !lyricsPreferences.showTranslation }, true)}>{tr("譯")}</button>
+            <button type="button" class="soft-button lyrics-toggle" aria-pressed={lyricsPreferences.showRomanization} aria-label={tr("切換羅馬拼音顯示")} onclick={() => updateLyricsPreferences({ showRomanization: !lyricsPreferences.showRomanization }, true)}>{tr("羅")}</button>
           </div>
           <div class="sleep-timer-anchor" bind:this={sleepTimerAnchor}>
             <button
@@ -4742,27 +4796,27 @@
               class="soft-button icon-button sleep-timer-toggle"
               class:is-active={sleepTimerActive}
               type="button"
-              aria-label="睡眠定時"
+              aria-label={tr("睡眠定時")}
               aria-haspopup="dialog"
               aria-expanded={isSleepTimerOpen}
               aria-pressed={sleepTimerActive}
-              use:appTooltip={sleepTimerActive ? `睡眠定時（剩餘 ${sleepTimerLabel}）` : '睡眠定時'}
+              use:appTooltip={sleepTimerActive ? tr("睡眠定時（剩餘 {0}）", [sleepTimerLabel]) : tr('睡眠定時')}
               onclick={toggleSleepTimerPopover}
             >
               <IconAlarm size={18} stroke={1.7} aria-hidden="true" />
             </button>
             {#if isSleepTimerOpen}
-              <div bind:this={sleepTimerPopover} class="sleep-timer-popover floating-surface" style:--sleep-timer-popover-shift-x={`${sleepTimerPopoverShiftX}px`} role="dialog" aria-label="睡眠定時">
+              <div bind:this={sleepTimerPopover} class="sleep-timer-popover floating-surface" style:--sleep-timer-popover-shift-x={`${sleepTimerPopoverShiftX}px`} role="dialog" aria-label={tr("睡眠定時")}>
                 <div class="sleep-timer-value" class:is-active={sleepTimerActive}>
                   <span
                     class="sleep-timer-field"
                     role="slider"
                     tabindex="0"
-                    aria-label="睡眠定時小時"
+                    aria-label={tr("睡眠定時小時")}
                     aria-valuemin={0}
                     aria-valuemax={SLEEP_TIMER_MAX_HOURS}
                     aria-valuenow={Number(sleepTimerParts.hours)}
-                    aria-valuetext={sleepTimerActive ? `剩餘 ${sleepTimerLabel}` : '未啟用'}
+                    aria-valuetext={sleepTimerActive ? tr("剩餘 {0}", [sleepTimerLabel]) : tr('未啟用')}
                     use:sleepTimerWheel={'hours'}
                     onpointerdown={(event) => startSleepTimerDrag(event, 'hours')}
                     onpointermove={moveSleepTimerDrag}
@@ -4773,11 +4827,11 @@
                     class="sleep-timer-field"
                     role="slider"
                     tabindex="0"
-                    aria-label="睡眠定時分鐘"
+                    aria-label={tr("睡眠定時分鐘")}
                     aria-valuemin={0}
                     aria-valuemax={SLEEP_TIMER_MAX_MINUTE_FIELD}
                     aria-valuenow={Number(sleepTimerParts.minutes)}
-                    aria-valuetext={sleepTimerActive ? `剩餘 ${sleepTimerLabel}` : '未啟用'}
+                    aria-valuetext={sleepTimerActive ? tr("剩餘 {0}", [sleepTimerLabel]) : tr('未啟用')}
                     use:sleepTimerWheel={'minutes'}
                     onpointerdown={(event) => startSleepTimerDrag(event, 'minutes')}
                     onpointermove={moveSleepTimerDrag}
@@ -4786,24 +4840,24 @@
                     onkeydown={(event) => handleSleepTimerKeydown(event, 'minutes')}
                   >{sleepTimerParts.minutes}</span><span class="sleep-timer-colon" aria-hidden="true">:</span><span class="sleep-timer-seconds" aria-hidden="true">{sleepTimerParts.seconds}</span>
                 </div>
-                <p class="sleep-timer-hint" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;margin:0">在小時或分鐘上拖曳、滑動或滾動，每格 1；到 00:00 時暫停播放</p>
+                <p class="sleep-timer-hint" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;margin:0">{tr("在小時或分鐘上拖曳、滑動或滾動，每格 1；到 00:00 時暫停播放")}</p>
                 {#if sleepTimerActive}
-                  <button class="text-button sleep-timer-cancel" type="button" onclick={() => void setSleepTimerMinutes(0)}>取消定時</button>
+                  <button class="text-button sleep-timer-cancel" type="button" onclick={() => void setSleepTimerMinutes(0)}>{tr("取消定時")}</button>
                 {/if}
               </div>
             {/if}
           </div>
-          <button class="soft-button icon-button now-playing-track-details-trigger" type="button" aria-label="歌曲資訊" use:appTooltip={'歌曲資訊'} aria-haspopup="dialog" aria-expanded={trackDetailsTrackId !== null} disabled={!playback?.currentTrack} onclick={openTrackDetails}>
+          <button class="soft-button icon-button now-playing-track-details-trigger" type="button" aria-label={tr("歌曲資訊")} use:appTooltip={tr('歌曲資訊')} aria-haspopup="dialog" aria-expanded={trackDetailsTrackId !== null} disabled={!playback?.currentTrack} onclick={openTrackDetails}>
             <IconInfoCircle size={18} stroke={1.7} aria-hidden="true" />
           </button>
-          <button bind:this={quickSettingsTrigger} class="soft-button icon-button now-playing-quick-settings-trigger" type="button" aria-label="開啟快速設定" use:appTooltip={'快速設定'} aria-haspopup="dialog" aria-expanded={isQuickSettingsOpen} onclick={() => void openQuickSettings()}>
+          <button bind:this={quickSettingsTrigger} class="soft-button icon-button now-playing-quick-settings-trigger" type="button" aria-label={tr("開啟快速設定")} use:appTooltip={tr('快速設定')} aria-haspopup="dialog" aria-expanded={isQuickSettingsOpen} onclick={() => void openQuickSettings()}>
             <IconSettings size={18} stroke={1.7} aria-hidden="true" />
           </button>
         </div>
       </header>
       <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body" inert={isQuickSettingsOpen}>
         <div class="now-playing-overlay-content">
-          <section class="now-playing-view" aria-label="正在播放" style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}
+          <section class="now-playing-view" aria-label={tr("正在播放")} style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}
             style:--np-cover-width={coverFrame ? `${coverFrame.width}px` : undefined}
             style:--np-cover-zoom={coverLayoutScale}
             style:--np-art-col-a={`${(1.05 * coverShrinkShare).toFixed(4)}fr`}
@@ -4825,18 +4879,18 @@
                   style:height={coverFrame ? `${coverFrame.height}px` : undefined}
                 >
                   {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
-                    <img class="cover-stage-image" draggable="false" src={activeArtwork.objectUrl} alt={`${currentTrackTitle(playback?.currentTrack)} 封面`} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
+                    <img class="cover-stage-image" draggable="false" src={activeArtwork.objectUrl} alt={tr("{0} 封面", [currentTrackTitle(playback?.currentTrack)])} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
                   {:else}
                     <div class="cover-orbit cover-orbit-a"></div>
                     <div class="cover-orbit cover-orbit-b"></div>
                     <div class="cover-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
                     <span class="cover-stage-label">MOE / LOCAL</span>
                     {#if activeArtwork.status === 'too-large'}
-                      <span class="cover-fallback-message">原圖超過 32 MiB 或 64 百萬像素上限</span>
+                      <span class="cover-fallback-message">{tr("原圖超過 32 MiB 或 64 百萬像素上限")}</span>
                     {:else if activeArtwork.status === 'error'}
-                      <span class="cover-fallback-message">封面格式不支援或無法讀取</span>
+                      <span class="cover-fallback-message">{tr("封面格式不支援或無法讀取")}</span>
                     {:else if activeArtwork.status === 'missing' && playback?.currentTrack}
-                      <span class="cover-fallback-message">沒有可用封面</span>
+                      <span class="cover-fallback-message">{tr("沒有可用封面")}</span>
                     {/if}
                   {/if}
                 </div>
@@ -4866,7 +4920,7 @@
         <SpectrogramView trackId={androidSpectrogramTrackId} onClose={() => { androidSpectrogramTrackId = null; }} />
       {/if}
       {#if isQuickSettingsOpen}
-        <button class="now-playing-quick-settings-scrim" type="button" tabindex="-1" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}></button>
+        <button class="now-playing-quick-settings-scrim" type="button" tabindex="-1" aria-label={tr("關閉快速設定")} onclick={() => void closeQuickSettings()}></button>
         <dialog open
           bind:this={quickSettingsDialog}
           class="now-playing-quick-settings-drawer floating-surface"
@@ -4878,8 +4932,8 @@
           style:--quick-settings-blur={`${themePreferences.quickSettingsBlurPx}px`}
         >
           <header class="quick-settings-drawer-header">
-            <h2 id="now-playing-quick-settings-title">快速設定</h2>
-            <button bind:this={quickSettingsCloseButton} class="soft-button icon-button" type="button" aria-label="關閉快速設定" onclick={() => void closeQuickSettings()}><IconX size={18} stroke={1.8} aria-hidden="true" /></button>
+            <h2 id="now-playing-quick-settings-title">{tr("快速設定")}</h2>
+            <button bind:this={quickSettingsCloseButton} class="soft-button icon-button" type="button" aria-label={tr("關閉快速設定")} onclick={() => void closeQuickSettings()}><IconX size={18} stroke={1.8} aria-hidden="true" /></button>
           </header>
           <div class="quick-settings-drawer-nav">
             {@render settingsTabs('quick-')}
@@ -4897,20 +4951,20 @@
       type="button"
       class="now-playing-quick-settings-dock-dismiss"
       tabindex="-1"
-      aria-label="關閉快速設定"
+      aria-label={tr("關閉快速設定")}
       onclick={() => void closeQuickSettings()}
     ></button>
   {/if}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <footer class="player-dock" data-timeline-style={nowPlayingAppearancePreferences.timelineStyle} aria-label="播放控制" inert={isQuickSettingsOpen} onclick={toggleNowPlayingFromDock}>
+  <footer class="player-dock" data-timeline-style={nowPlayingAppearancePreferences.timelineStyle} aria-label={tr("播放控制")} inert={isQuickSettingsOpen} onclick={toggleNowPlayingFromDock}>
     <div class="dock-track" class:dock-track-dismiss={isNowPlayingOpen}>
       {#if isNowPlayingOpen}
         <button
           class="dock-now-playing-dismiss"
           type="button"
-          aria-label="返回播放前頁面"
-           use:appTooltip={'返回播放前頁面'}
+          aria-label={tr("返回播放前頁面")}
+           use:appTooltip={tr('返回播放前頁面')}
           onclick={() => void closeNowPlaying()}
         ></button>
       {:else}
@@ -4918,7 +4972,7 @@
           class="dock-art"
           type="button"
           bind:this={dockArtworkButton}
-          aria-label={playback?.currentTrack ? `開啟正在播放：${currentTrackTitle(playback.currentTrack)}` : '尚未選擇歌曲'}
+          aria-label={playback?.currentTrack ? tr("開啟正在播放：{0}", [currentTrackTitle(playback.currentTrack)]) : tr('尚未選擇歌曲')}
           disabled={!playback?.currentTrack}
         >
           {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
@@ -4941,27 +4995,27 @@
           platform={capabilities?.platform ?? 'unsupported'}
           onChange={async () => { await loadPlaylists(); await loadSources(); }}
         />
-        <button class="control-button secondary-control" type="button" aria-label="隨機播放" use:appTooltip={playbackControlTooltips.shuffle} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} aria-pressed={playback?.shuffle === true} onclick={toggleShuffle}>
+        <button class="control-button secondary-control" type="button" aria-label={tr("隨機播放")} use:appTooltip={playbackControlTooltips.shuffle} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.shuffle} aria-pressed={playback?.shuffle === true} onclick={toggleShuffle}>
           {#if playback?.shuffle}
             <IconArrowsShuffle size={23} stroke={1.7} aria-hidden="true" />
           {:else}
             <IconArrowsRight size={23} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
-        <button class="control-button navigation-control" type="button" aria-label="上一首" use:appTooltip={playbackControlTooltips.previous} disabled={!playbackNavigationReady || (!playback?.canPrevious && (playback?.positionMs ?? 0) <= 3000) || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
+        <button class="control-button navigation-control" type="button" aria-label={tr("上一首")} use:appTooltip={playbackControlTooltips.previous} disabled={!playbackNavigationReady || (!playback?.canPrevious && (playback?.positionMs ?? 0) <= 3000) || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
           <IconPlayerTrackPrev size={23} stroke={1.7} aria-hidden="true" />
         </button>
-        <button class="play-button" type="button" aria-label={playback?.isPlaying ? '暫停' : '播放'} use:appTooltip={playbackControlTooltips.playPause} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
+        <button class="play-button" type="button" aria-label={playback?.isPlaying ? tr('暫停') : tr('播放')} use:appTooltip={playbackControlTooltips.playPause} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
           {#if playback?.isPlaying}
             <IconPlayerPause size={26} stroke={1.7} aria-hidden="true" />
           {:else}
             <IconPlayerPlay size={26} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
-        <button class="control-button navigation-control" type="button" aria-label="下一首" use:appTooltip={playbackControlTooltips.next} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
+        <button class="control-button navigation-control" type="button" aria-label={tr("下一首")} use:appTooltip={playbackControlTooltips.next} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
           <IconPlayerTrackNext size={23} stroke={1.7} aria-hidden="true" />
         </button>
-        <button class="control-button secondary-control" type="button" aria-label="循環播放" use:appTooltip={playbackControlTooltips.repeat} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
+        <button class="control-button secondary-control" type="button" aria-label={tr("循環播放")} use:appTooltip={playbackControlTooltips.repeat} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>
           {#if playback?.repeatMode === 'one'}
             <IconRepeatOnce size={23} stroke={1.7} aria-hidden="true" />
           {:else if playback?.repeatMode === 'all'}
@@ -4978,10 +5032,10 @@
           <button
             class="volume-toggle"
             type="button"
-            aria-label="音量"
+            aria-label={tr("音量")}
             aria-expanded={volumeExpanded}
             aria-haspopup="dialog"
-            use:appTooltip={volumeExpanded ? '收合音量' : '展開音量'}
+            use:appTooltip={volumeExpanded ? tr('收合音量') : tr('展開音量')}
             disabled={!playbackReady}
             onclick={toggleVolumeExpanded}
           >
@@ -4990,7 +5044,7 @@
           <div
             class="volume-popover floating-surface"
             role="dialog"
-            aria-label="音量控制"
+            aria-label={tr("音量控制")}
             hidden={!volumeExpanded}
             bind:this={volumePopoverElement}
             style:--volume-popover-shift-left={`${volumePopoverLeftShiftPx}px`}
@@ -5002,7 +5056,7 @@
               max="1"
               step="0.01"
               value={volumeDraft ?? playback?.volume ?? confirmedVolume ?? 0}
-              aria-label="音量滑桿"
+              aria-label={tr("音量滑桿")}
               tabindex={volumeExpanded ? 0 : -1}
               disabled={!playbackReady || !volumeExpanded}
               onpointerdown={startVolumeInteraction}

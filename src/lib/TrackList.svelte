@@ -1,4 +1,5 @@
 ﻿<script lang="ts">
+  import { tr } from './i18n.js';
   import {
     getErrorText,
     invokeCommand,
@@ -154,7 +155,7 @@
       };
       return requestTrackPage(request);
     },
-    { listName: '曲庫', onChange: () => { snapshot = listData.snapshot(); } },
+    { listName: tr('曲庫'), onChange: () => { snapshot = listData.snapshot(); } },
   );
 
   $effect(() => {
@@ -232,7 +233,7 @@
       if (isCurrent()) quickIndexReady = true;
     }).catch((reason: unknown) => {
       if (isCurrent()) {
-        console.error('無法建立曲目首字索引', reason);
+        console.error(tr('無法建立曲目首字索引'), reason);
         quickIndexReady = true;
       }
     });
@@ -272,12 +273,12 @@
 {#if snapshot.errors.length > 0}
   <div class="track-list-error" role="alert">
     <span>{getErrorText(snapshot.errors[0]?.message)}</span>
-    <button type="button" class="text-button" onclick={retryFirstError}>重試載入</button>
+    <button type="button" class="text-button" onclick={retryFirstError}>{tr("重試載入")}</button>
   </div>
 {/if}
 
 {#if snapshot.totalCount === 0}
-  <div class="track-list-empty" role="status">{query.trim() ? '找不到相符曲目。' : '曲庫目前是空的。'}</div>
+  <div class="track-list-empty" role="status">{query.trim() ? tr('找不到相符曲目。') : tr('曲庫目前是空的。')}</div>
 {:else}
   <PagedVirtualList
     totalCount={snapshot.totalCount}
@@ -300,14 +301,14 @@
     groupingReady={!groupingEnabled || (quickIndexOverride === undefined ? quickIndexReady : quickIndexOverride !== null)}
     quickIndexLabels={visibleQuickIndex?.labels}
     ariaLabel={sortable
-      ? '曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序'
-      : '曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目'}
+      ? tr('曲庫曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目；點擊欄位標題排序')
+      : tr('曲目；使用方向鍵瀏覽，按 Enter 播放目前曲目')}
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
     minContentWidth={listMinWidth}
     className="track-list-viewport"
     rowClassName="track-row virtual-track-row configurable-track-grid"
-    listName="曲庫"
+    listName={tr("曲庫")}
     onRange={handleRange}
     onPlay={(track) => playRow(track)}
     {onViewportScrollTopChange}

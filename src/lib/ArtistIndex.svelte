@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { onDestroy, onMount } from 'svelte';
   import { getErrorText, invokeCommand, type ArtistIndexEntry, type ArtistListSort } from './ipc';
   import { DEFAULT_TRACK_ROW_HEIGHT_PX } from './track-columns.js';
@@ -13,11 +14,11 @@
   type SortField = 'title' | 'trackCount' | 'albumCount' | 'duration' | 'trackDuration';
 
   const ARTIST_COLUMNS = [
-    { id: 'title', label: '演出者' },
-    { id: 'trackCount', label: '歌曲數量' },
-    { id: 'albumCount', label: '專輯數量' },
-    { id: 'duration', label: '累積播放' },
-    { id: 'trackDuration', label: '播放時長' },
+    { id: 'title', label: tr('演出者') },
+    { id: 'trackCount', label: tr('歌曲數量') },
+    { id: 'albumCount', label: tr('專輯數量') },
+    { id: 'duration', label: tr('累積播放') },
+    { id: 'trackDuration', label: tr('播放時長') },
   ];
   // All columns share the same font-size as their cells so em widths match between header and rows.
   // 演出者 column width: dragged at its header border (shared resize handle); persisted.
@@ -71,7 +72,7 @@
       const snapshotId = String(scope ?? '');
       return invokeCommand('library_get_artist_index_snapshot_page', { snapshotId, offset, limit });
     },
-    { listName: '演出者', onChange: () => { pageSnapshot = listData.snapshot(); } },
+    { listName: tr('演出者'), onChange: () => { pageSnapshot = listData.snapshot(); } },
   );
 
   async function load(): Promise<void> {
@@ -135,7 +136,7 @@
       .then(() => invokeCommand('settings_set_artist_list_sort', { preference }))
       .then(() => undefined)
       .catch((reason: unknown) => {
-        console.error('無法保存演出者清單排序方式', reason);
+        console.error(tr('無法保存演出者清單排序方式'), reason);
       });
   }
 
@@ -145,7 +146,7 @@
       sortField = preference.field;
       sortDirection = preference.direction;
     } catch (reason) {
-      console.error('無法讀取演出者清單排序方式，使用預設排序', reason);
+      console.error(tr('無法讀取演出者清單排序方式，使用預設排序'), reason);
     }
     await load();
     initialized = true;
@@ -171,16 +172,16 @@
   });
 </script>
 
-<div class="track-list-shell" aria-label="演出者清單">
+<div class="track-list-shell" aria-label={tr("演出者清單")}>
   {#if error}
     <div class="track-list-error" role="alert">
-      <span>無法載入演出者清單：{error}</span>
-      <button class="text-button" type="button" onclick={() => void load()}>重試</button>
+      <span>{tr("無法載入演出者清單：")}{error}</span>
+      <button class="text-button" type="button" onclick={() => void load()}>{tr("重試")}</button>
     </div>
   {:else if !initialized || (loading && pageSnapshot.cachedItemCount === 0)}
     <div class="track-list-empty" aria-hidden="true"></div>
   {:else if visibleCount === 0}
-    <div class="track-list-empty" role="status">目前啟用的曲庫沒有演出者資料。</div>
+    <div class="track-list-empty" role="status">{tr("目前啟用的曲庫沒有演出者資料。")}</div>
   {:else}
     <PagedVirtualList
       totalCount={visibleCount}
@@ -200,12 +201,12 @@
       groupRows={groupingEnabled && sortField === 'title' ? quickIndex?.groups : []}
       groupingReady={!groupingEnabled || sortField !== 'title' || quickIndexReady}
       quickIndexLabels={groupingEnabled && sortField === 'title' ? quickIndex?.labels : []}
-      ariaLabel="演出者統計；使用方向鍵瀏覽，按 Enter 開啟演出者歌曲"
+      ariaLabel={tr("演出者統計；使用方向鍵瀏覽，按 Enter 開啟演出者歌曲")}
       columnCount={ARTIST_COLUMNS.length + 1}
       gridTemplate={ARTIST_GRID}
       className="track-list-viewport"
       rowClassName="track-row virtual-track-row configurable-track-grid artist-index-row"
-      listName="演出者"
+      listName={tr("演出者")}
       onRange={(range) => { void listData.ensureRange(range.start, range.end); }}
       onPlay={(artist) => onSelect(artist)}
     >

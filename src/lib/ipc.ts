@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { tr } from './i18n.js';
 
 export type FeatureState = 'ready' | 'notReady' | 'unavailable';
 
@@ -132,6 +133,9 @@ export interface DsdPlaybackSettings {
   gainDb: number;
   outputRateHz: number;
 }
+
+/** Interface language choice (ADR 0019). */
+export type LanguageChoice = 'system' | 'zh-TW' | 'zh-CN';
 
 /** Lyrics drawn on the free part of the Windows taskbar (ADR 0018). */
 export interface TaskbarLyricsSettings {
@@ -706,6 +710,14 @@ interface IpcContract {
     args: { enabled: boolean };
     result: boolean;
   };
+  settings_get_language: {
+    args: Record<string, never>;
+    result: LanguageChoice;
+  };
+  settings_set_language: {
+    args: { language: LanguageChoice };
+    result: LanguageChoice;
+  };
   settings_get_taskbar_lyrics: {
     args: Record<string, never>;
     result: TaskbarLyricsSettings;
@@ -1012,7 +1024,7 @@ export function invokeCommand<Command extends IpcCommand>(
 ): Promise<IpcContract[Command]['result']> {
   if (!isTauri()) {
     return Promise.reject(
-      new Error('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。'),
+      new Error(tr('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。')),
     );
   }
 
@@ -1026,7 +1038,7 @@ export function invokeCommand<Command extends IpcCommand>(
 export function getTrackArtworkBytes(trackId: string): Promise<ArrayBuffer> {
   if (!isTauri()) {
     return Promise.reject(
-      new Error('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。'),
+      new Error(tr('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。')),
     );
   }
   return invoke<ArrayBuffer>('library_get_track_artwork', { trackId });
@@ -1034,13 +1046,13 @@ export function getTrackArtworkBytes(trackId: string): Promise<ArrayBuffer> {
 
 /** Retrieve a previously generated square album-card thumbnail by source-artwork SHA-256. */
 export function getAlbumThumbnailBytes(sha256: string): Promise<ArrayBuffer> {
-  if (!isTauri()) return Promise.reject(new Error('專輯縮圖快取需要 MoeMusicPlayer 桌面程式。'));
+  if (!isTauri()) return Promise.reject(new Error(tr('專輯縮圖快取需要 MoeMusicPlayer 桌面程式。')));
   return invoke<ArrayBuffer>('album_artwork_cache_get', { sha256 });
 }
 
 /** Save a generated JPEG thumbnail to the rebuildable platform cache. */
 export function putAlbumThumbnailBytes(sha256: string, bytes: ArrayBuffer): Promise<void> {
-  if (!isTauri()) return Promise.reject(new Error('專輯縮圖快取需要 MoeMusicPlayer 桌面程式。'));
+  if (!isTauri()) return Promise.reject(new Error(tr('專輯縮圖快取需要 MoeMusicPlayer 桌面程式。')));
   const binary = new Uint8Array(bytes);
   let binaryText = '';
   for (let offset = 0; offset < binary.length; offset += 0x8000) {
@@ -1052,7 +1064,7 @@ export function putAlbumThumbnailBytes(sha256: string, bytes: ArrayBuffer): Prom
 
 /** Save thumbnail bytes already base64-encoded by the background artwork worker. */
 export function putAlbumThumbnailBase64(sha256: string, dataBase64: string): Promise<void> {
-  if (!isTauri()) return Promise.reject(new Error('專輯縮圖快取需要 MoeMusicPlayer 桌面程式。'));
+  if (!isTauri()) return Promise.reject(new Error(tr('專輯縮圖快取需要 MoeMusicPlayer 桌面程式。')));
   return invoke<void>('album_artwork_cache_put', { sha256, dataBase64 });
 }
 
@@ -1083,7 +1095,7 @@ export function markAlbumArtworkMissing(trackId: string): Promise<void> {
 export function getMainBackgroundBytes(): Promise<ArrayBuffer> {
   if (!isTauri()) {
     return Promise.reject(
-      new Error('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。'),
+      new Error(tr('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。')),
     );
   }
   return invoke<ArrayBuffer>('appearance_get_main_background', {});
@@ -1092,7 +1104,7 @@ export function getMainBackgroundBytes(): Promise<ArrayBuffer> {
 export function nextSlideshowBackgroundBytes(): Promise<ArrayBuffer> {
   if (!isTauri()) {
     return Promise.reject(
-      new Error('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。'),
+      new Error(tr('目前是瀏覽器預覽；請從 MoeMusicPlayer 桌面程式開啟本機曲庫。')),
     );
   }
   return invoke<ArrayBuffer>('appearance_next_slideshow_background', {});
@@ -1115,5 +1127,5 @@ export function isReady(capability: FeatureCapability | undefined): boolean {
 export function getErrorText(error: unknown): string {
   if (typeof error === 'string' && error.trim()) return error;
   if (error instanceof Error && error.message.trim()) return error.message;
-  return '桌面服務目前無法回應。';
+  return tr('桌面服務目前無法回應。');
 }

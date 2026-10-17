@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { formatDuration } from './format';
   import {
     clampPlaybackPosition,
@@ -135,7 +136,7 @@
       min="0"
       max={Math.max(1, durationMs ?? 0)}
       value={displayedPositionMs}
-      aria-label="播放進度"
+      aria-label={tr("播放進度")}
       disabled={!seekEnabled}
       onpointerdown={beginPointerSeek}
       oninput={updateDraft}

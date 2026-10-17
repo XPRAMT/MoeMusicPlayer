@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { appTooltip } from './app-tooltip.js';
   import { getErrorText, invokeCommand, type LibraryListSort, type PlaybackQueuePage, type PlaybackQueuePageItem, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
   import { formatDuration } from './format';
@@ -111,7 +112,7 @@
       updateCurrentEntry(page, scope, requestCursorGeneration);
       return adaptPlaybackQueuePage(page, { offset, limit });
     },
-    { listName: '播放佇列', onChange: () => { queueSnapshot = queue.snapshot(); } },
+    { listName: tr('播放佇列'), onChange: () => { queueSnapshot = queue.snapshot(); } },
   );
   let snapshot = $derived(queueSnapshot);
 
@@ -155,7 +156,7 @@
       if (isCurrent()) quickIndexReady = true;
     }).catch((reason: unknown) => {
       if (isCurrent()) {
-        console.error('無法建立播放佇列首字索引', reason);
+        console.error(tr('無法建立播放佇列首字索引'), reason);
         quickIndexReady = true;
       }
     });
@@ -223,7 +224,7 @@
   }
 
   function displayValue(id: (typeof TRACK_COLUMN_DEFINITIONS)[number]['id'], item: PlaybackQueuePageItem): string {
-    if (!item.track) return id === 'title' ? '曲目資訊暫不可用' : '—';
+    if (!item.track) return id === 'title' ? tr('曲目資訊暫不可用') : '—';
     return formatTrackColumnValue(id, withLivePlayedMs(item.track, livePlayCount), formatDuration);
   }
 
@@ -261,7 +262,7 @@
           : null;
       }
       if (index === null) {
-        locateError = '目前沒有可定位的播放曲目。';
+        locateError = tr('目前沒有可定位的播放曲目。');
         return;
       }
       const start = Math.max(0, index - Math.floor(TRACK_PAGE_SIZE / 2));
@@ -282,14 +283,14 @@
 {#if snapshot.errors.length > 0}
   <div class="track-list-error" role="alert">
     <span>{getErrorText(snapshot.errors[0]?.message)}</span>
-    <button type="button" class="text-button" onclick={retryFirstError}>重試載入</button>
+    <button type="button" class="text-button" onclick={retryFirstError}>{tr("重試載入")}</button>
   </div>
 {/if}
 {#if cursorError}
-  <div class="queue-cursor-error" role="status">佇列位置更新失敗：{cursorError}</div>
+  <div class="queue-cursor-error" role="status">{tr("佇列位置更新失敗：")}{cursorError}</div>
 {/if}
 {#if reorderError}
-  <div class="queue-cursor-error" role="alert">調整順序失敗：{reorderError}</div>
+  <div class="queue-cursor-error" role="alert">{tr("調整順序失敗：")}{reorderError}</div>
 {/if}
 {#if locateError}
   <div class="queue-cursor-error" role="status">{locateError}</div>
@@ -297,8 +298,8 @@
 
 {#if snapshot.totalCount === 0}
   <div class="empty-panel queue-empty" role="status">
-    <h3>播放佇列是空的</h3>
-    <p>從曲庫或播放清單開始播放歌曲後，佇列會顯示在這裡。</p>
+    <h3>{tr("播放佇列是空的")}</h3>
+    <p>{tr("從曲庫或播放清單開始播放歌曲後，佇列會顯示在這裡。")}</p>
   </div>
 {:else}
   <PagedVirtualList
@@ -320,13 +321,13 @@
     compactHeaderHeight={37}
     fillAvailable={true}
     listId="playback-queue"
-    ariaLabel="目前播放佇列；長按拖曳可調整順序，使用方向鍵瀏覽，按 Enter 播放目前項目"
+    ariaLabel={tr("目前播放佇列；長按拖曳可調整順序，使用方向鍵瀏覽，按 Enter 播放目前項目")}
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
     minContentWidth={listMinWidth}
     className="track-list-viewport playback-queue-viewport"
     rowClassName="track-row virtual-track-row configurable-track-grid playback-queue-row"
-    listName="播放佇列"
+    listName={tr("播放佇列")}
     longPressReorder={true}
     {scrollToIndexRequest}
     onRange={handleRange}
@@ -358,7 +359,7 @@
           cells={visibleColumns.map((column) => ({
             id: column.id,
             text: displayValue(column.id, row.item!),
-            title: column.id === 'title' && row.item?.track === null ? '曲目目前無法取得中繼資料' : undefined,
+            title: column.id === 'title' && row.item?.track === null ? tr('曲目目前無法取得中繼資料') : undefined,
             hiRes: column.id === 'audioFormat' ? isHiResTrack(row.item?.track) : false,
           }))}
         />
@@ -370,8 +371,8 @@
   <button
     type="button"
     class="queue-locate-fab"
-    aria-label="定位到目前播放曲目"
-    use:appTooltip={'定位到目前播放曲目'}
+    aria-label={tr("定位到目前播放曲目")}
+    use:appTooltip={tr('定位到目前播放曲目')}
     disabled={!canLocateCurrent || locating}
     onclick={() => void locateCurrentTrack()}
   ><span class="queue-locate-fab-dot" aria-hidden="true"></span></button>

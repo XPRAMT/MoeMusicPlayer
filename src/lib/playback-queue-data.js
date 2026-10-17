@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /** @typedef {import('./ipc').PlaybackQueuePage} PlaybackQueuePage */
 /** @typedef {import('./ipc').PlaybackQueuePageItem} PlaybackQueuePageItem */
 
@@ -10,7 +11,7 @@
 export function adaptPlaybackQueuePage(page, request) {
   const totalCount = Number(page?.total);
   if (!Number.isSafeInteger(totalCount) || totalCount < 0) {
-    throw new Error('播放佇列項目數量超出支援範圍。');
+    throw new Error(tr('播放佇列項目數量超出支援範圍。'));
   }
   if (
     !page
@@ -22,7 +23,7 @@ export function adaptPlaybackQueuePage(page, request) {
     || page.offset + page.items.length > totalCount
     || (page.items.length === 0 && page.offset < totalCount)
   ) {
-    throw new Error('播放佇列分頁資料格式不符，請重新載入。');
+    throw new Error(tr('播放佇列分頁資料格式不符，請重新載入。'));
   }
   return {
     items: page.items,
@@ -37,7 +38,7 @@ export function playbackQueueCurrentEntryPosition(page) {
   if (page?.currentEntryPosition === null || page?.currentEntryPosition === undefined) return null;
   const position = Number(page.currentEntryPosition);
   if (!Number.isSafeInteger(position) || position < 0) {
-    throw new Error('播放佇列目前項目位置超出支援範圍。');
+    throw new Error(tr('播放佇列目前項目位置超出支援範圍。'));
   }
   return position;
 }

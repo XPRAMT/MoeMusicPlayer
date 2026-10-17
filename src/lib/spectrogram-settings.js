@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 // Spectrogram window settings (ADR 0013): persisted per device in localStorage and sent
 // to the Rust renderer as `SpectrogramOptions`.
 
@@ -9,7 +10,7 @@ export const WINDOW_FUNCTIONS = [
   { value: 'hamming', label: 'Hamming' },
   { value: 'blackman', label: 'Blackman' },
   { value: 'blackmanHarris', label: 'Blackman-Harris' },
-  { value: 'rectangular', label: '矩形（無窗）' },
+  { value: 'rectangular', label: tr('矩形（無窗）') },
 ];
 /** CSS gradients mirror the Rust colormap stops (crates/player-tags/src/spectrogram.rs). */
 export const COLORMAPS = [
@@ -17,7 +18,7 @@ export const COLORMAPS = [
   { value: 'magma', label: 'Magma', gradient: 'linear-gradient(90deg,#000004,#3b0f70 20%,#8c2981 40%,#de4968 60%,#fe9f6d 80%,#fcfdbf)' },
   { value: 'inferno', label: 'Inferno', gradient: 'linear-gradient(90deg,#000004,#420a68 20%,#932667 40%,#dd513a 60%,#fca50a 80%,#fcffa4)' },
   { value: 'viridis', label: 'Viridis', gradient: 'linear-gradient(90deg,#440154,#3b528b 25%,#21918c 50%,#5ec962 75%,#fde725)' },
-  { value: 'grayscale', label: '灰階', gradient: 'linear-gradient(90deg,#000,#fff)' },
+  { value: 'grayscale', label: tr('灰階'), gradient: 'linear-gradient(90deg,#000,#fff)' },
 ];
 
 /**

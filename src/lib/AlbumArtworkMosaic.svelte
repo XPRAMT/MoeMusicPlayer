@@ -1,10 +1,11 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   interface Props {
     sources: string[];
     label?: string;
   }
 
-  let { sources, label = '專輯封面' }: Props = $props();
+  let { sources, label = tr('專輯封面') }: Props = $props();
   const layout = $derived(`cover-count-${Math.max(1, Math.min(4, sources.length))}`);
 </script>
 

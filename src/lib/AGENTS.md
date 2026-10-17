@@ -4,6 +4,7 @@
 
 ## UI 共用規則
 
+- **所有使用者看得到的文字都用 `tr('繁體中文原文')`**（`src/lib/i18n.js`，ADR 0019）：繁體原文就是 key，帶值用 `{0}`、`{1}` 位置佔位符（`tr('共 {0} 首', [n])`），不要用字串相加或在 `tr` 外組句子。新增或修改文字後執行 `node scripts/i18n-catalog.mjs` 重新產生 `src/lib/i18n/zh-CN.json`（`tests/i18n-catalog.test.mjs` 會檢查）；簡體用詞不對時改 `zh-CN.overrides.json`（逐句）或 `zh-CN.terms.json`（全域用詞），不要手改 `zh-CN.json`。語言在頁面載入時決定，切換語言會重新載入視窗，所以模組層級常數也可以呼叫 `tr()`。使用者資料（曲名、歌詞、播放清單名稱）與後端回傳的訊息不翻譯。讀原始碼比對中文字面值的測試要先 `import './helpers/untr-fs.mjs'`。
 - 重用既有元件、CSS token 與共用樣式，不另造相同用途的按鈕／浮板／列表。字級使用既有 token；不得任意新增數值字級。
 - 所有 App 內提示用 `appTooltip` action 與 `.app-tooltip.floating-surface`；不要新增原生 HTML `title`。保留 hover／focus 語意與 ARIA 描述。
 - 浮出控件與彈窗沿用快速設定面板 `.floating-surface` 的背景、模糊、線色和陰影；其遮罩、焦點圈限、捲動及關閉行為依各元件需求。

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { formatAudioFormat } from './track-columns.js';
   // 歌曲詳細資訊面板（ADR 0013 Phase 1）：單曲標籤檢視／暫存編輯，按「儲存」才寫檔。
   import { onDestroy, onMount } from 'svelte';
@@ -34,17 +35,17 @@
   // trackTotal / discTotal are not shown; they stay in the draft unchanged, so Save keeps
   // whatever the file has.
   const WIDE_FIELDS: { key: keyof TagFields; label: string }[] = [
-    { key: 'title', label: '標題' },
-    { key: 'artist', label: '演出者' },
-    { key: 'album', label: '專輯' },
-    { key: 'albumArtist', label: '專輯演出者' },
-    { key: 'composer', label: '作曲' },
-    { key: 'genre', label: '類型' },
+    { key: 'title', label: tr('標題') },
+    { key: 'artist', label: tr('演出者') },
+    { key: 'album', label: tr('專輯') },
+    { key: 'albumArtist', label: tr('專輯演出者') },
+    { key: 'composer', label: tr('作曲') },
+    { key: 'genre', label: tr('類型') },
   ];
   const NUMBER_ROW: { key: keyof TagFields; label: string }[] = [
-    { key: 'date', label: '錄音日期' },
-    { key: 'trackNumber', label: '音軌號' },
-    { key: 'discNumber', label: '碟號' },
+    { key: 'date', label: tr('錄音日期') },
+    { key: 'trackNumber', label: tr('音軌號') },
+    { key: 'discNumber', label: tr('碟號') },
   ];
 
   /** Move the dialog to <body> so no ancestor stacking context (the player shell) can put the
@@ -199,7 +200,7 @@
   async function pasteCover() {
     let blob: Blob | null;
     try { blob = clipboardImage ?? await readClipboardImage(); } catch (cause) { error = String(cause); return; }
-    if (!blob) { error = '剪貼簿中沒有圖片'; return; }
+    if (!blob) { error = tr('剪貼簿中沒有圖片'); return; }
     pendingCoverBase64 = await blobToBase64(blob);
     revoke(pendingCoverUrl);
     pendingCoverUrl = URL.createObjectURL(blob);
@@ -215,27 +216,27 @@
       // clipboard; the native side shares the cover as a content URI instead.
       try {
         await invoke('track_details_copy_cover', { trackId });
-        notice = '已複製封面';
+        notice = tr('已複製封面');
         void refreshClipboard();
       } catch (cause) {
-        error = `複製封面失敗：${String(cause)}`;
+        error = tr("複製封面失敗：{0}", [String(cause)]);
       }
       return;
     }
     try {
       const bytes = await invoke<ArrayBuffer>('track_details_cover', { trackId });
-      if (!bytes || bytes.byteLength === 0) { error = '此曲目沒有內嵌封面'; return; }
+      if (!bytes || bytes.byteLength === 0) { error = tr('此曲目沒有內嵌封面'); return; }
       const bitmap = await createImageBitmap(new Blob([bytes]));
       const canvas = document.createElement('canvas');
       canvas.width = bitmap.width; canvas.height = bitmap.height;
       canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
       bitmap.close();
-      const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('PNG 轉換失敗')), 'image/png'));
+      const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error(tr('PNG 轉換失敗'))), 'image/png'));
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
-      notice = '已複製封面';
+      notice = tr('已複製封面');
       void refreshClipboard();
     } catch (cause) {
-      error = `複製封面失敗：${String(cause)}`;
+      error = tr("複製封面失敗：{0}", [String(cause)]);
     }
   }
 
@@ -255,7 +256,7 @@
   async function exportCover() {
     try {
       const saved = await invoke<string | null>('track_details_export_cover', { trackId });
-      if (saved) notice = `已匯出：${saved}`;
+      if (saved) notice = tr("已匯出：{0}", [saved]);
     } catch (cause) { error = String(cause); }
   }
 
@@ -297,7 +298,7 @@
       draft = { ...result.fields };
       pendingCoverPath = null; pendingCoverBase64 = null; revoke(pendingCoverUrl); pendingCoverUrl = null; removeCover = false;
       await loadCover();
-      notice = '已儲存';
+      notice = tr('已儲存');
       onSaved?.();
     } catch (cause) {
       error = String(cause);
@@ -309,7 +310,7 @@
   function requestClose() {
     // Esc / Android back / scrim first dismiss the overwrite confirmation (edits are kept).
     if (confirmingSave) { cancelSave(); return; }
-    if (anyDirty && !confirm('有尚未儲存的變更，確定要關閉嗎？')) return;
+    if (anyDirty && !confirm(tr('有尚未儲存的變更，確定要關閉嗎？'))) return;
     onClose();
   }
 
@@ -342,71 +343,71 @@
 </script>
 
 <div class="track-details-layer" use:portal>
-<button class="track-details-scrim" type="button" tabindex="-1" aria-label="關閉歌曲資訊" onclick={requestClose}></button>
-<div class="track-details floating-surface" role="dialog" aria-modal="true" aria-label="歌曲資訊">
+<button class="track-details-scrim" type="button" tabindex="-1" aria-label={tr("關閉歌曲資訊")} onclick={requestClose}></button>
+<div class="track-details floating-surface" role="dialog" aria-modal="true" aria-label={tr("歌曲資訊")}>
   <header class="track-details-header">
-    <h2>歌曲資訊</h2>
+    <h2>{tr("歌曲資訊")}</h2>
     {#if notice}<span class="track-details-saved">{notice}</span>{/if}
     <div class="track-details-actions">
-      <button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>頻譜圖</button>
-      <button type="button" class="soft-button" disabled={!anyDirty || saving} onclick={resetAll}>還原</button>
-      <button type="button" class="soft-button is-primary" disabled={!anyDirty || saving || !!details?.readOnly} onclick={requestSave}>{saving ? '儲存中…' : '儲存'}</button>
+      <button type="button" class="soft-button" onclick={() => onOpenSpectrogram(trackId)}>{tr("頻譜圖")}</button>
+      <button type="button" class="soft-button" disabled={!anyDirty || saving} onclick={resetAll}>{tr("還原")}</button>
+      <button type="button" class="soft-button is-primary" disabled={!anyDirty || saving || !!details?.readOnly} onclick={requestSave}>{saving ? tr('儲存中…') : tr('儲存')}</button>
     </div>
   </header>
 
   <div class="track-details-body">
     {#if error}<p class="track-details-error" role="alert">{error}</p>{/if}
-    {#if details?.readOnly}<p class="track-details-notice">{details.readOnlyReason ?? '此檔案為唯讀'}</p>{/if}
+    {#if details?.readOnly}<p class="track-details-notice">{details.readOnlyReason ?? tr('此檔案為唯讀')}</p>{/if}
 
     {#if details && draft}
       <div class="track-details-path">
-        <span class="track-details-path-label">路徑</span>
+        <span class="track-details-path-label">{tr("路徑")}</span>
         <code title={details.path}>{details.path}</code>
-        <button type="button" class="soft-button" onclick={() => void navigator.clipboard.writeText(details!.path)}>複製路徑</button>
-        <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>在資料夾中開啟</button>
+        <button type="button" class="soft-button" onclick={() => void navigator.clipboard.writeText(details!.path)}>{tr("複製路徑")}</button>
+        <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>{tr("在資料夾中開啟")}</button>
       </div>
 
       <dl class="track-details-props">
-        <dt>格式</dt><dd>{formatAudioFormat({ codec: details.format })}</dd>
-        <dt>標籤</dt><dd>{details.tagFormat || '—'}</dd>
-        <dt>時長</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
-        <dt>位元率</dt><dd>{details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? '—'} kbps</dd>
-        <dt>取樣率</dt><dd>{details.properties.sampleRate ? `${details.properties.sampleRate} Hz` : '—'}</dd>
-        <dt>位元深度</dt><dd>{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}</dd>
-        <dt>聲道</dt><dd>{details.properties.channels ?? '—'}</dd>
-        <dt>修改時間</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
-        <dt>檔案大小</dt><dd>{formatBytes(details.fileSize)}</dd>
-        <dt>建立時間</dt><dd>{formatDate(details.createdUnixMs)}</dd>
+        <dt>{tr("格式")}</dt><dd>{formatAudioFormat({ codec: details.format })}</dd>
+        <dt>{tr("標籤")}</dt><dd>{details.tagFormat || '—'}</dd>
+        <dt>{tr("時長")}</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
+        <dt>{tr("位元率")}</dt><dd>{details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? '—'} kbps</dd>
+        <dt>{tr("取樣率")}</dt><dd>{details.properties.sampleRate ? `${details.properties.sampleRate} Hz` : '—'}</dd>
+        <dt>{tr("位元深度")}</dt><dd>{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}</dd>
+        <dt>{tr("聲道")}</dt><dd>{details.properties.channels ?? '—'}</dd>
+        <dt>{tr("修改時間")}</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
+        <dt>{tr("檔案大小")}</dt><dd>{formatBytes(details.fileSize)}</dd>
+        <dt>{tr("建立時間")}</dt><dd>{formatDate(details.createdUnixMs)}</dd>
       </dl>
 
       <section class="track-details-cover">
         <div class="track-details-cover-preview" class:is-dirty={coverDirty}>
           {#if removeCover}
-            <span>（將移除封面）</span>
+            <span>{tr("（將移除封面）")}</span>
           {:else if pendingCoverUrl}
-            <img src={pendingCoverUrl} alt="新封面預覽" />
+            <img src={pendingCoverUrl} alt={tr("新封面預覽")} />
           {:else if coverUrl}
-            <img src={coverUrl} alt="目前封面" />
+            <img src={coverUrl} alt={tr("目前封面")} />
           {:else}
-            <span>無封面</span>
+            <span>{tr("無封面")}</span>
           {/if}
         </div>
         <div class="track-details-cover-meta">
           <div class="track-details-row-buttons">
-            <button type="button" class="soft-button" aria-label="選擇封面" title="選擇封面圖片（儲存後才寫入）" disabled={details.readOnly} onclick={() => void pickCover()}>選擇</button>
-            <button type="button" class="soft-button" aria-label="匯出封面" title="匯出封面" disabled={!details.cover} onclick={() => void exportCover()}>匯出</button>
-            <button type="button" class="soft-button" aria-label="複製封面" title="複製封面到剪貼簿" disabled={!details.cover} onclick={() => void copyCover()}>複製</button>
-            <button type="button" class="soft-button" aria-label="貼上封面" title={clipboardHasImage ? '以剪貼簿圖片作為新封面（儲存後才寫入）' : isAndroid ? '讀取剪貼簿圖片作為新封面（儲存後才寫入）' : '剪貼簿中沒有圖片'} disabled={details.readOnly || (!isAndroid && !clipboardHasImage)} onclick={() => void pasteCover()}>貼上</button>
-            <button type="button" class="soft-button" aria-label="移除封面" title="移除封面（儲存後才寫入）" disabled={details.readOnly || (!details.cover && !pendingCoverPath)} onclick={() => { removeCover = true; pendingCoverPath = null; pendingCoverBase64 = null; }}>移除</button>
+            <button type="button" class="soft-button" aria-label={tr("選擇封面")} title={tr("選擇封面圖片（儲存後才寫入）")} disabled={details.readOnly} onclick={() => void pickCover()}>{tr("選擇")}</button>
+            <button type="button" class="soft-button" aria-label={tr("匯出封面")} title={tr("匯出封面")} disabled={!details.cover} onclick={() => void exportCover()}>{tr("匯出")}</button>
+            <button type="button" class="soft-button" aria-label={tr("複製封面")} title={tr("複製封面到剪貼簿")} disabled={!details.cover} onclick={() => void copyCover()}>{tr("複製")}</button>
+            <button type="button" class="soft-button" aria-label={tr("貼上封面")} title={clipboardHasImage ? tr('以剪貼簿圖片作為新封面（儲存後才寫入）') : isAndroid ? tr('讀取剪貼簿圖片作為新封面（儲存後才寫入）') : tr('剪貼簿中沒有圖片')} disabled={details.readOnly || (!isAndroid && !clipboardHasImage)} onclick={() => void pasteCover()}>{tr("貼上")}</button>
+            <button type="button" class="soft-button" aria-label={tr("移除封面")} title={tr("移除封面（儲存後才寫入）")} disabled={details.readOnly || (!details.cover && !pendingCoverPath)} onclick={() => { removeCover = true; pendingCoverPath = null; pendingCoverBase64 = null; }}>{tr("移除")}</button>
           </div>
           <div class="track-details-cover-option-row">
-            <label>JPG品質 <input type="number" min="1" max="100" value={coverOptions.jpegQuality} onchange={(event) => updateCoverOptions({ jpegQuality: Math.min(100, Math.max(1, Number(event.currentTarget.value) || 100)) })} />%</label>
-            <label><input type="checkbox" checked={coverOptions.autoResize} onchange={(event) => updateCoverOptions({ autoResize: event.currentTarget.checked })} />自動縮放</label>
+            <label>{tr("JPG品質")} <input type="number" min="1" max="100" value={coverOptions.jpegQuality} onchange={(event) => updateCoverOptions({ jpegQuality: Math.min(100, Math.max(1, Number(event.currentTarget.value) || 100)) })} />%</label>
+            <label><input type="checkbox" checked={coverOptions.autoResize} onchange={(event) => updateCoverOptions({ autoResize: event.currentTarget.checked })} />{tr("自動縮放")}</label>
           </div>
-          <label>短邊 <input type="number" min="64" max="10000" step="10" disabled={!coverOptions.autoResize} value={coverOptions.shortEdgePx} onchange={(event) => updateCoverOptions({ shortEdgePx: Math.max(64, Number(event.currentTarget.value) || 2160) })} /> px（保持長寬比）</label>
+          <label>{tr("短邊")} <input type="number" min="64" max="10000" step="10" disabled={!coverOptions.autoResize} value={coverOptions.shortEdgePx} onchange={(event) => updateCoverOptions({ shortEdgePx: Math.max(64, Number(event.currentTarget.value) || 2160) })} /> {tr("px（保持長寬比）")}</label>
           {#if shownCover}
-            <p>{shownCover.width}×{shownCover.height} · {shownCover.mime.replace('image/', '').toUpperCase()} · {formatBytes(shownCover.bytes)}{#if pendingCoverPath}（未儲存）{/if}</p>
-            {#if pendingCoverPath && savedPlan?.reencode}<p class="track-details-cover-plan">儲存時：{savedPlan.width}×{savedPlan.height} JPG（品質 {coverOptions.jpegQuality}%）</p>{/if}
+            <p>{shownCover.width}×{shownCover.height} · {shownCover.mime.replace('image/', '').toUpperCase()} · {formatBytes(shownCover.bytes)}{#if pendingCoverPath}{tr("（未儲存）")}{/if}</p>
+            {#if pendingCoverPath && savedPlan?.reencode}<p class="track-details-cover-plan">{tr("儲存時：{0}×{1} JPG（品質", [savedPlan.width, savedPlan.height])} {coverOptions.jpegQuality}%）</p>{/if}
           {/if}
         </div>
       </section>
@@ -418,7 +419,7 @@
           <label class="track-details-field" class:is-wide={wide} class:is-dirty={isDirty(field.key)}>
             <span>{field.label}</span>
             <input type="text" bind:value={draft![field.key]} readonly={details!.readOnly} />
-            {#if isDirty(field.key)}<button type="button" class="track-details-reset" aria-label={`還原${field.label}`} title="還原" onclick={() => resetField(field.key)}>↺</button>{/if}
+            {#if isDirty(field.key)}<button type="button" class="track-details-reset" aria-label={tr("還原{0}", [field.label])} title={tr("還原")} onclick={() => resetField(field.key)}>↺</button>{/if}
           </label>
         {/snippet}
         {#each WIDE_FIELDS as field (field.key)}{@render fieldInput(field, true)}{/each}
@@ -427,26 +428,26 @@
         </div>
         <div class="track-details-field is-wide is-lyrics" class:is-dirty={isDirty('lyrics')}>
           <span class="track-details-lyrics-label">
-            歌詞（內嵌）
-            <button type="button" class="soft-button" disabled={details.readOnly || onlineLyricsText === null || onlineLyricsText === draft.lyrics} title={onlineLyricsText === null ? '此曲目目前沒有使用中的歌詞' : onlineLyricsText === draft.lyrics ? '內嵌歌詞已與使用中歌詞相同' : '以播放器目前使用的歌詞取代（線上、.lrc、手動選擇等；同步時間戳保留為 LRC，儲存後才寫入）'} onclick={importOnlineLyrics}>導入使用中歌詞</button>
-            {#if isDirty('lyrics')}<button type="button" class="track-details-reset" aria-label="還原歌詞" title="還原" onclick={() => resetField('lyrics')}>↺</button>{/if}
+            {tr("歌詞（內嵌）")}
+            <button type="button" class="soft-button" disabled={details.readOnly || onlineLyricsText === null || onlineLyricsText === draft.lyrics} title={onlineLyricsText === null ? tr('此曲目目前沒有使用中的歌詞') : onlineLyricsText === draft.lyrics ? tr('內嵌歌詞已與使用中歌詞相同') : tr('以播放器目前使用的歌詞取代（線上、.lrc、手動選擇等；同步時間戳保留為 LRC，儲存後才寫入）')} onclick={importOnlineLyrics}>{tr("導入使用中歌詞")}</button>
+            {#if isDirty('lyrics')}<button type="button" class="track-details-reset" aria-label={tr("還原歌詞")} title={tr("還原")} onclick={() => resetField('lyrics')}>↺</button>{/if}
           </span>
-          <textarea rows="30" bind:value={draft.lyrics} readonly={details.readOnly} aria-label="歌詞"></textarea>
+          <textarea rows="30" bind:value={draft.lyrics} readonly={details.readOnly} aria-label={tr("歌詞")}></textarea>
         </div>
       </section>
     {:else if !error}
-      <p>讀取中…</p>
+      <p>{tr("讀取中…")}</p>
     {/if}
   </div>
 
 </div>
 {#if confirmingSave}
-  <button class="track-details-confirm-scrim" type="button" tabindex="-1" aria-label="取消儲存" onclick={cancelSave}></button>
+  <button class="track-details-confirm-scrim" type="button" tabindex="-1" aria-label={tr("取消儲存")} onclick={cancelSave}></button>
   <div class="track-details-confirm floating-surface" role="alertdialog" aria-modal="true" aria-labelledby="track-details-confirm-text" data-testid="track-details-save-confirm">
-    <p id="track-details-confirm-text">將會覆寫檔案原有資訊，是否繼續？</p>
+    <p id="track-details-confirm-text">{tr("將會覆寫檔案原有資訊，是否繼續？")}</p>
     <div class="track-details-confirm-actions">
-      <button type="button" class="soft-button" onclick={cancelSave}>取消</button>
-      <button type="button" class="soft-button is-primary" use:focusOnMount onclick={confirmSave}>確認</button>
+      <button type="button" class="soft-button" onclick={cancelSave}>{tr("取消")}</button>
+      <button type="button" class="soft-button is-primary" use:focusOnMount onclick={confirmSave}>{tr("確認")}</button>
     </div>
   </div>
 {/if}

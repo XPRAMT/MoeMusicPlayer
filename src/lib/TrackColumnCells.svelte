@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { getContext } from 'svelte';
   import { readable } from 'svelte/store';
   import type { TrackTextOverflowMode, TrackTextOverflowStore } from './track-text-overflow-context';
@@ -51,7 +52,7 @@
     sortable = false,
     sortableIndex = false,
     sort = null,
-    indexSortLabel = '依播放清單中的順序排序',
+    indexSortLabel = tr('依播放清單中的順序排序'),
     hideSortDirection = false,
     onSort,
     onIndexSort,
@@ -142,7 +143,7 @@
           type="button"
           class="column-sort-button"
           onclick={() => handleSortClick(column.id)}
-          use:appTooltip={`依${column.label}排序`}
+          use:appTooltip={tr("依{0}排序", [column.label])}
         >
           <span class="column-sort-label">{column.label}</span>
           {#if sort?.field === column.id && !hideSortDirection}
@@ -157,7 +158,7 @@
           class="column-resize-handle"
           role="separator"
           aria-orientation="vertical"
-          aria-label={`調整${column.label}欄寬`}
+          aria-label={tr("調整{0}欄寬", [column.label])}
           onpointerdown={(event) => handleResizePointerDown(event, column.id)}
           onpointermove={handleResizePointerMove}
           onpointerup={handleResizePointerUp}

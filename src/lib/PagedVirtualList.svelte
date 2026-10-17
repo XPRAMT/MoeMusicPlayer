@@ -36,6 +36,7 @@
 </script>
 
 <script lang="ts" generics="Item">
+  import { tr } from './i18n.js';
   import { onDestroy, onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import {
@@ -825,7 +826,7 @@
           style={`height:${groupRowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px)`}
         >
           <div class="paged-virtual-group-cell list-group-row-surface" role="gridcell" aria-colspan={columnCount}>
-            <button type="button" class="paged-virtual-group-button" aria-label={`開啟「${virtualRow.label}」字首索引`} onclick={openQuickIndex}>{virtualRow.label}</button>
+            <button type="button" class="paged-virtual-group-button" aria-label={tr("開啟「{0}」字首索引", [virtualRow.label])} onclick={openQuickIndex}>{virtualRow.label}</button>
           </div>
         </div>
       {:else}
@@ -840,7 +841,7 @@
         aria-rowindex={virtualRow.visualIndex + 2}
         aria-selected={selected}
         tabindex={rowActivates && virtualRow.item !== null ? -1 : undefined}
-        aria-label={virtualRow.item === null ? `第 ${virtualRow.index + 1} 項，正在載入` : undefined}
+        aria-label={virtualRow.item === null ? tr("第 {0} 項，正在載入", [virtualRow.index + 1]) : undefined}
         style={`height:${rowHeight}px;transform:translateY(${contentLeadingHeight + rowTop}px)`}
         class:activates={rowActivates && virtualRow.item !== null}
         class:reorderable={longPressReorder && virtualRow.item !== null}
@@ -875,8 +876,8 @@
     {/each}
   </div>
   {#if quickIndexOpen}
-    <button type="button" class="quick-index-backdrop" aria-label="關閉首字索引" onclick={() => closeQuickIndex()}></button>
-    <div bind:this={quickIndexDialog} class="quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${getQuickIndexColumnCount(quickIndexLabels.length, { availableWidthPx: quickIndexMaxWidth, cellSizePx: quickIndexCellSizePx })};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label="快速首字查找" tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
+    <button type="button" class="quick-index-backdrop" aria-label={tr("關閉首字索引")} onclick={() => closeQuickIndex()}></button>
+    <div bind:this={quickIndexDialog} class="quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${getQuickIndexColumnCount(quickIndexLabels.length, { availableWidthPx: quickIndexMaxWidth, cellSizePx: quickIndexCellSizePx })};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label={tr("快速首字查找")} tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
       <div class="quick-index-label-grid">
         {#each quickIndexLabels as label (label)}
           {@const available = availableIndexLabels.has(label)}

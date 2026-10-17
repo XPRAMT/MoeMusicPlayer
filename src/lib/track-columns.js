@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /** @typedef {'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'audioFormat' | 'duration' | 'playCount'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
 /** @typedef {{ title: number, artist: number, album: number }} TrackColumnWidths */
@@ -12,14 +13,14 @@ const FLEXIBLE_WIDTH_MAX_PX = 800;
 
 /** @type {ReadonlyArray<{ id: TrackColumnId, label: string, min: string, minPx: number }>} */
 export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
-  { id: 'title', label: '曲目', min: 'minmax(150px,1.7fr)', minPx: 150 },
-  { id: 'artist', label: '演出者', min: 'minmax(110px,1.15fr)', minPx: 110 },
-  { id: 'album', label: '專輯', min: 'minmax(120px,1.25fr)', minPx: 120 },
-  { id: 'year', label: '發行時間', min: '6em', minPx: 78 },
-  { id: 'createdAt', label: '新增時間', min: '6em', minPx: 78 },
-  { id: 'audioFormat', label: '音訊格式', min: '163px', minPx: 163 },
-  { id: 'duration', label: '長度', min: '4em', minPx: 52 },
-  { id: 'playCount', label: '播放次數', min: '5em', minPx: 65 },
+  { id: 'title', label: tr('曲目'), min: 'minmax(150px,1.7fr)', minPx: 150 },
+  { id: 'artist', label: tr('演出者'), min: 'minmax(110px,1.15fr)', minPx: 110 },
+  { id: 'album', label: tr('專輯'), min: 'minmax(120px,1.25fr)', minPx: 120 },
+  { id: 'year', label: tr('發行時間'), min: '6em', minPx: 78 },
+  { id: 'createdAt', label: tr('新增時間'), min: '6em', minPx: 78 },
+  { id: 'audioFormat', label: tr('音訊格式'), min: '163px', minPx: 163 },
+  { id: 'duration', label: tr('長度'), min: '4em', minPx: 52 },
+  { id: 'playCount', label: tr('播放次數'), min: '5em', minPx: 65 },
 ]);
 
 /** Column values rendered as dates, counts, or durations use centered alignment. */
@@ -467,7 +468,7 @@ export function displayTrackTitle(item, fallback = '') {
  * @param {(durationMs: number | null | undefined) => string} formatDuration
  * @param {string} titleFallback
  */
-export function formatTrackColumnValue(id, item, formatDuration, titleFallback = '未命名曲目') {
+export function formatTrackColumnValue(id, item, formatDuration, titleFallback = tr('未命名曲目')) {
   switch (id) {
     case 'title':
       return displayTrackTitle(item, titleFallback);

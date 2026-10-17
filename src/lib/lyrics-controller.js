@@ -2,6 +2,7 @@
 /** @typedef {import('./ipc').TrackLyrics} TrackLyrics */
 import { getAutomaticSearchVariants, getSearchVariants } from './search-variants.js';
 
+import { tr } from './i18n.js';
 let requestSequence = 0;
 
 /** @returns {string} */
@@ -14,7 +15,7 @@ function createRequestId() {
 /** @param {unknown} error */
 function errorMessage(error) {
   if (error instanceof Error && error.message) return error.message;
-  return typeof error === 'string' && error ? error : '歌詞服務目前無法使用。';
+  return typeof error === 'string' && error ? error : tr('歌詞服務目前無法使用。');
 }
 
 /**
@@ -26,7 +27,7 @@ function errorMessage(error) {
  */
 function stateFromResult(trackId, result, failedStage, options = {}) {
   if (result.lyrics && result.lyrics.trackId !== trackId) {
-    throw new Error('歌詞資料與目前播放曲目不一致。');
+    throw new Error(tr('歌詞資料與目前播放曲目不一致。'));
   }
 
   const candidates = Array.isArray(result.candidates) ? result.candidates : [];
@@ -356,7 +357,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       if (typeof api.clearTrack !== 'function') {
         update({
           ...state,
-          error: '目前環境不支援移除歌詞。',
+          error: tr('目前環境不支援移除歌詞。'),
           failedStage: 'selection',
         });
         return;
@@ -437,7 +438,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       try {
         const lyrics = await api.selectCandidate({ trackId, candidateId });
         if (!isCurrent(trackId, requestGeneration)) return;
-        if (lyrics.trackId !== trackId) throw new Error('歌詞資料與目前播放曲目不一致。');
+        if (lyrics.trackId !== trackId) throw new Error(tr('歌詞資料與目前播放曲目不一致。'));
         update({
           trackId,
           phase: 'ready',

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { onDestroy, onMount } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type QuickIndexSnapshot, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
@@ -94,7 +95,7 @@
     sortSaveQueue = sortSaveQueue
       .catch(() => undefined)
       .then(() => invokeCommand('settings_set_album_detail_sort', { preference }))
-      .catch((error) => console.warn('無法保存專輯歌曲排序設定', error));
+      .catch((error) => console.warn(tr('無法保存專輯歌曲排序設定'), error));
   }
 
   onMount(() => {
@@ -110,7 +111,7 @@
     void invokeCommand('settings_get_album_detail_sort', {}).then((preference) => {
       if (!cancelled) detailSort = normalizeAlbumDetailSort(preference);
     }).catch((error) => {
-      console.warn('無法讀取專輯歌曲排序設定，使用曲目編號排序', error);
+      console.warn(tr('無法讀取專輯歌曲排序設定，使用曲目編號排序'), error);
     }).finally(() => {
       if (!cancelled) sortReady = true;
     });
@@ -144,7 +145,7 @@
         imageBytes = new Uint8Array(await blob.arrayBuffer());
       }
       await putAlbumThumbnailBytesForTrack(trackId, contentKey, copyToArrayBuffer(imageBytes)).catch((error) => {
-        console.warn('無法保存專輯封面曲目索引', error);
+        console.warn(tr('無法保存專輯封面曲目索引'), error);
       });
       return URL.createObjectURL(new Blob([copyToArrayBuffer(imageBytes)], { type: 'image/jpeg' }));
     });
@@ -157,7 +158,7 @@
       try {
         const url = await makeThumbnail(trackId);
         if (url) urls.push(url);
-      } catch (error) { console.warn('無法載入專輯拼貼縮圖', error); }
+      } catch (error) { console.warn(tr('無法載入專輯拼貼縮圖'), error); }
     }
     return urls;
   }
@@ -247,7 +248,7 @@
         listId={`album-detail-${album.key}`}
         {selectedTrackId} {playbackReady} {isSendingPlaybackCommand} {columns} {columnWidths} {rowHeightPx} sort={detailTrackSort} {livePlayCount}
         fetchPage={fetchPage} {onPlay} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
-        sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel="依專輯曲目編號排序" onIndexSort={handleIndexSort}
+        sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel={tr("依專輯曲目編號排序")} onIndexSort={handleIndexSort}
         quickIndexOverride={albumDiscQuickIndex}
         quickIndexAlbumNames={album.aliases}
         {groupingEnabled}
@@ -263,18 +264,18 @@
     style={`--album-detail-cover-size:${albumCoverSize}px`}
   >
     <div class="album-detail-art">
-      <AlbumArtworkMosaic sources={displayedCoverUrls} label={`${album.displayName} 封面拼貼`} />
+      <AlbumArtworkMosaic sources={displayedCoverUrls} label={tr("{0} 封面拼貼", [album.displayName])} />
     </div>
     <div class="album-detail-summary">
       <div class="album-detail-artists">
-        <span class="album-detail-value">{artists.length ? artists.join('．') : '未知'}</span>
+        <span class="album-detail-value">{artists.length ? artists.join('．') : tr('未知')}</span>
       </div>
       <div class="album-detail-stats">
-        <span><span class="album-detail-label">累積播放</span><span class="album-detail-value">{formatDurationHours(album.playedMs)}</span></span>
-        <span><span class="album-detail-label">播放時長</span><span class="album-detail-value">{formatDurationHours(album.durationMs)}</span></span>
+        <span><span class="album-detail-label">{tr("累積播放")}</span><span class="album-detail-value">{formatDurationHours(album.playedMs)}</span></span>
+        <span><span class="album-detail-label">{tr("播放時長")}</span><span class="album-detail-value">{formatDurationHours(album.durationMs)}</span></span>
       </div>
-      {#if scanError}<span class="album-detail-error" role="status">封面整理失敗：{scanError}</span>{/if}
-      {#if scanning && coverUrls.length === 0}<span class="album-detail-status" role="status">正在整理封面…</span>{/if}
+      {#if scanError}<span class="album-detail-error" role="status">{tr("封面整理失敗：")}{scanError}</span>{/if}
+      {#if scanning && coverUrls.length === 0}<span class="album-detail-status" role="status">{tr("正在整理封面…")}</span>{/if}
     </div>
   </div>
 </div>

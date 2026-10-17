@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /** Per-track lyrics display delay (seconds). Positive delays lyrics relative to audio. */
 
 export const LYRICS_TIMING_OFFSET_MIN_SEC = -10;
@@ -56,5 +57,5 @@ export function saveLyricsTimingOffsetSec(trackId, delaySec) {
 export function formatLyricsTimingOffsetSec(delaySec) {
   const value = clampLyricsTimingOffsetSec(delaySec);
   const sign = value > 0 ? '+' : '';
-  return sign + value.toFixed(1) + ' 秒';
+  return sign + value.toFixed(1) + tr(' 秒');
 }

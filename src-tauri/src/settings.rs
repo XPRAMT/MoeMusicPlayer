@@ -746,6 +746,25 @@ pub enum TaskbarLyricsAlign {
     Right,
 }
 
+/// Interface language (ADR 0019): follow the system, or a fixed language.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum UiLanguage {
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "zh-TW")]
+    ZhTw,
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+}
+
+/// An unknown or malformed value falls back to following the system.
+fn lenient_language(value: Option<serde_json::Value>) -> UiLanguage {
+    value
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
 /// Lyrics drawn on the free part of the Windows taskbar (ADR 0018). Stored everywhere so the file stays portable.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1326,6 +1345,9 @@ pub struct AppSettings {
     /// Lyrics on the Windows taskbar (Settings → lyrics).
     #[serde(default)]
     pub taskbar_lyrics: TaskbarLyricsSettings,
+    /// Interface language (Settings → main).
+    #[serde(default)]
+    pub language: UiLanguage,
 }
 
 impl Default for AppSettings {
@@ -1353,6 +1375,7 @@ impl Default for AppSettings {
             dsd: DsdPlaybackSettings::default(),
             cover_zoom: CoverZoomSettings::default(),
             taskbar_lyrics: TaskbarLyricsSettings::default(),
+            language: UiLanguage::default(),
         }
     }
 }
@@ -1793,6 +1816,7 @@ struct RawSettings {
     dsd: Option<serde_json::Value>,
     cover_zoom: Option<serde_json::Value>,
     taskbar_lyrics: Option<serde_json::Value>,
+    language: Option<serde_json::Value>,
 }
 
 fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
@@ -1843,6 +1867,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         dsd: lenient_dsd_settings(raw.dsd),
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
+        language: lenient_language(raw.language),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -2259,6 +2284,30 @@ mod tests {
         assert_eq!((parsed.gain_db, parsed.output_rate_hz), (6.0, 176_400));
         assert_eq!(lenient_dsd_settings(Some(serde_json::json!(7))), DsdPlaybackSettings::default());
         assert_eq!(lenient_dsd_settings(None), DsdPlaybackSettings::default());
+    }
+
+    #[test]
+    fn the_interface_language_defaults_to_system_and_survives_restart() {
+        assert_eq!(UiLanguage::default(), UiLanguage::System);
+        assert_eq!(lenient_language(Some(serde_json::json!("zh-CN"))), UiLanguage::ZhCn);
+        assert_eq!(lenient_language(Some(serde_json::json!("zh-TW"))), UiLanguage::ZhTw);
+        assert_eq!(lenient_language(Some(serde_json::json!("fr"))), UiLanguage::System);
+        assert_eq!(lenient_language(Some(serde_json::json!(3))), UiLanguage::System);
+        assert_eq!(lenient_language(None), UiLanguage::System);
+
+        let directory = test_directory("language");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        store
+            .update(|settings| {
+                settings.language = UiLanguage::ZhCn;
+                Ok(())
+            })
+            .expect("save");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen");
+        assert_eq!(reopened.snapshot().unwrap().language, UiLanguage::ZhCn);
+        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["language"], "zh-CN");
     }
 
     #[test]

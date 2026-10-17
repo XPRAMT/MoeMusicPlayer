@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 /** @typedef {'fullscreen' | 'playPause' | 'seekBack' | 'seekForward' | 'previous' | 'next'} ShortcutAction */
 /** @typedef {'keyboard' | 'mouse' | 'gamepad'} ShortcutDevice */
 /**
@@ -11,54 +12,54 @@
 
 /** @type {{ id: ShortcutAction, label: string }[]} */
 export const SHORTCUT_ACTIONS = [
-  { id: 'fullscreen', label: '全螢幕切換' },
-  { id: 'playPause', label: '播放／暫停' },
-  { id: 'seekBack', label: '後退 5 秒' },
-  { id: 'seekForward', label: '前進 5 秒' },
-  { id: 'previous', label: '上一首' },
-  { id: 'next', label: '下一首' },
+  { id: 'fullscreen', label: tr('全螢幕切換') },
+  { id: 'playPause', label: tr('播放／暫停') },
+  { id: 'seekBack', label: tr('後退 5 秒') },
+  { id: 'seekForward', label: tr('前進 5 秒') },
+  { id: 'previous', label: tr('上一首') },
+  { id: 'next', label: tr('下一首') },
 ];
 
 /** @type {ShortcutAction[]} */
 const ACTIONS = SHORTCUT_ACTIONS.map((action) => action.id);
 const MOUSE_CODES = new Set(['wheelUp', 'wheelDown', 'back', 'forward']);
 const GAMEPAD_LABELS = {
-  button0: '手柄 A',
-  button1: '手柄 B',
-  button2: '手柄 X',
-  button3: '手柄 Y',
-  button4: '手柄 LB',
-  button5: '手柄 RB',
-  button6: '手柄 LT',
-  button7: '手柄 RT',
-  button8: '手柄返回',
-  button9: '手柄開始',
-  button10: '手柄左搖桿',
-  button11: '手柄右搖桿',
-  button12: '手柄方向上',
-  button13: '手柄方向下',
-  button14: '手柄方向左',
-  button15: '手柄方向右',
-  stickLeftXMinus: '左搖桿左',
-  stickLeftXPlus: '左搖桿右',
-  stickLeftYMinus: '左搖桿上',
-  stickLeftYPlus: '左搖桿下',
-  stickRightXMinus: '右搖桿左',
-  stickRightXPlus: '右搖桿右',
-  stickRightYMinus: '右搖桿上',
-  stickRightYPlus: '右搖桿下',
+  button0: tr('手柄 A'),
+  button1: tr('手柄 B'),
+  button2: tr('手柄 X'),
+  button3: tr('手柄 Y'),
+  button4: tr('手柄 LB'),
+  button5: tr('手柄 RB'),
+  button6: tr('手柄 LT'),
+  button7: tr('手柄 RT'),
+  button8: tr('手柄返回'),
+  button9: tr('手柄開始'),
+  button10: tr('手柄左搖桿'),
+  button11: tr('手柄右搖桿'),
+  button12: tr('手柄方向上'),
+  button13: tr('手柄方向下'),
+  button14: tr('手柄方向左'),
+  button15: tr('手柄方向右'),
+  stickLeftXMinus: tr('左搖桿左'),
+  stickLeftXPlus: tr('左搖桿右'),
+  stickLeftYMinus: tr('左搖桿上'),
+  stickLeftYPlus: tr('左搖桿下'),
+  stickRightXMinus: tr('右搖桿左'),
+  stickRightXPlus: tr('右搖桿右'),
+  stickRightYMinus: tr('右搖桿上'),
+  stickRightYPlus: tr('右搖桿下'),
 };
 const KEY_LABELS = {
   F11: 'F11',
-  Space: '空白鍵',
-  ArrowLeft: '左方向鍵',
-  ArrowRight: '右方向鍵',
+  Space: tr('空白鍵'),
+  ArrowLeft: tr('左方向鍵'),
+  ArrowRight: tr('右方向鍵'),
   PageUp: 'Page Up',
   PageDown: 'Page Down',
-  wheelUp: '滾輪向上',
-  wheelDown: '滾輪向下',
-  back: '滑鼠上頁',
-  forward: '滑鼠下頁',
+  wheelUp: tr('滾輪向上'),
+  wheelDown: tr('滾輪向下'),
+  back: tr('滑鼠上頁'),
+  forward: tr('滑鼠下頁'),
 };
 
 /** @returns {ShortcutSettings} */

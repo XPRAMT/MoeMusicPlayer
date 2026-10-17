@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { tick } from 'svelte';
   import { IconHeart, IconHeartCheck, IconPlus } from '@tabler/icons-svelte-runes';
   import { invokeCommand, type FavoritePlaylist, type FavoritePlaylists } from './ipc';
@@ -183,11 +184,11 @@
     class:has-favorites={isFavorited}
     type="button"
     bind:this={favoriteButtonElement}
-    aria-label="收藏曲目"
+    aria-label={tr("收藏曲目")}
     aria-haspopup="dialog"
     aria-expanded={open}
     aria-pressed={isFavorited}
-    use:appTooltip={'加入或移出播放清單'}
+    use:appTooltip={tr('加入或移出播放清單')}
     disabled={!trackId || platform === 'unsupported'}
     onclick={toggle}
   >
@@ -202,34 +203,34 @@
       class="favorite-popover floating-surface"
       role="dialog"
       tabindex="-1"
-      aria-label="收藏到播放清單"
+      aria-label={tr("收藏到播放清單")}
       data-testid="favorite-popover"
       bind:this={favoritePopoverElement}
       style:--favorite-popover-shift-x={`${favoritePopoverShiftX}px`}
     >
       <header class="favorite-popover-heading">
-        <strong>加入播放清單</strong>
+        <strong>{tr("加入播放清單")}</strong>
         <button
           class="favorite-close soft-button icon-button"
           type="button"
-          aria-label="建立播放清單"
-          use:appTooltip={'建立播放清單'}
+          aria-label={tr("建立播放清單")}
+          use:appTooltip={tr('建立播放清單')}
           disabled={loading || busySourceId !== null}
           onclick={() => void createPlaylist()}
         ><IconPlus size={18} stroke={1.8} aria-hidden="true" /></button>
       </header>
       {#if setupRequired}
         <div class="favorite-setup">
-          <p>建立「我的最愛」播放清單。建議選擇公用 Music 資料夾，也可以在資料夾選擇器中選擇其他位置。</p>
+          <p>{tr("建立「我的最愛」播放清單。建議選擇公用 Music 資料夾，也可以在資料夾選擇器中選擇其他位置。")}</p>
           <button class="soft-button" type="button" disabled={loading} onclick={() => void createMyLove()}>
-            {loading ? '處理中…' : platform === 'android' ? '選擇資料夾並建立' : '建立我的最愛'}
+            {loading ? tr('處理中…') : platform === 'android' ? tr('選擇資料夾並建立') : tr('建立我的最愛')}
           </button>
         </div>
       {/if}
       {#if loading && playlists.length === 0}
         <p class="favorite-message" aria-hidden="true"></p>
       {:else if playlists.length === 0 && !setupRequired}
-        <p class="favorite-message">目前沒有可用的播放清單來源。</p>
+        <p class="favorite-message">{tr("目前沒有可用的播放清單來源。")}</p>
       {:else if playlists.length > 0}
         <ul class="favorite-playlist-list">
           {#each playlists as playlist (playlist.sourceId)}
@@ -239,12 +240,12 @@
                   type="checkbox"
                   checked={playlist.selected}
                   disabled={!playlist.writable || loading || busySourceId !== null}
-                  aria-label={`加入${playlist.displayName}`}
+                  aria-label={tr("加入{0}", [playlist.displayName])}
                   onchange={(event) => void changeMembership(playlist, event.currentTarget.checked)}
                 />
                 <span>{playlist.displayName}</span>
                 {#if !playlist.writable}
-                  <small>請到「設定 → 音樂來源」重新加入，以授予寫入權限</small>
+                  <small>{tr("請到「設定 → 音樂來源」重新加入，以授予寫入權限")}</small>
                 {/if}
               </label>
             </li>

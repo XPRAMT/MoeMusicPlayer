@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   import { onDestroy, tick } from 'svelte';
   import { getAlbumIndexScrollTop, setAlbumIndexScrollTop } from './album-index-scroll.js';
   import { getErrorText, invokeCommand } from './ipc';
@@ -57,17 +58,17 @@
     async ({ scope, offset, limit }) => invokeCommand('library_get_album_index_snapshot_page', {
       snapshotId: String(scope ?? ''), offset, limit,
     }),
-    { listName: '專輯', onChange: () => { pageSnapshot = listData.snapshot(); } },
+    { listName: tr('專輯'), onChange: () => { pageSnapshot = listData.snapshot(); } },
   );
   const gap = 18;
   const verticalGap = $derived(physicalPixelsToCssPixels(40, devicePixelRatio));
   const groupHeadingHeight = $derived(Math.max(30, rowHeightPx * 0.7));
   const overscanRows = 2;
   const albumColumns = [
-    { id: 'title', label: '專輯' },
-    { id: 'trackCount', label: '歌曲數量' },
-    { id: 'played', label: '累積播放' },
-    { id: 'duration', label: '播放時長' },
+    { id: 'title', label: tr('專輯') },
+    { id: 'trackCount', label: tr('歌曲數量') },
+    { id: 'played', label: tr('累積播放') },
+    { id: 'duration', label: tr('播放時長') },
   ];
 
   const cardGrid = $derived(getAlbumCardGrid(viewportWidth, albumCardMaxWidthPx, gap));
@@ -131,7 +132,7 @@
           sortField = saved.field;
           sortDirection = saved.direction;
         } catch (reason) {
-          console.warn('無法讀取專輯列表排序設定，使用預設排序', reason);
+          console.warn(tr('無法讀取專輯列表排序設定，使用預設排序'), reason);
         }
         sortLoaded = true;
       }
@@ -187,7 +188,7 @@
     }
     const preference: AlbumIndexSort = { field, direction: sortDirection };
     void invokeCommand('settings_set_album_index_sort', { preference }).catch((reason) => {
-      console.warn('無法保存專輯列表排序設定', reason);
+      console.warn(tr('無法保存專輯列表排序設定'), reason);
     });
     if (viewport) {
       viewport.scrollTop = 0;
@@ -335,7 +336,7 @@
   });
 </script>
 
-<div class="album-index-shell" aria-label="專輯卡片清單">
+<div class="album-index-shell" aria-label={tr("專輯卡片清單")}>
   {#if !error}
     <div class="paged-virtual-header album-index-sort-header">
       <div class="paged-virtual-header-shift">
@@ -355,25 +356,25 @@
   {#if pageSnapshot.errors.length > 0}
     {@const pageError = pageSnapshot.errors[0]}
     <div class="album-index-page-error" role="alert">
-      <span>專輯卡片載入失敗：{getErrorText(pageError?.message)}</span>
+      <span>{tr("專輯卡片載入失敗：")}{getErrorText(pageError?.message)}</span>
       {#if pageError}
-        <button class="text-button" type="button" onclick={() => retryPage(pageError.offset)}>重試</button>
+        <button class="text-button" type="button" onclick={() => retryPage(pageError.offset)}>{tr("重試")}</button>
       {/if}
     </div>
   {/if}
   {#if error}
-    <div class="album-index-message" role="alert"><span>無法載入專輯：{error}</span><button class="text-button" type="button" onclick={() => void load()}>重試</button></div>
+    <div class="album-index-message" role="alert"><span>{tr("無法載入專輯：")}{error}</span><button class="text-button" type="button" onclick={() => void load()}>{tr("重試")}</button></div>
   {:else if totalCount === 0 && loading}
     <div class="album-index-message" aria-hidden="true"></div>
   {:else if totalCount === 0}
-    <div class="album-index-message" role="status">目前啟用的曲庫沒有專輯資料。</div>
+    <div class="album-index-message" role="status">{tr("目前啟用的曲庫沒有專輯資料。")}</div>
   {:else}
     <div class="album-grid-viewport" style={`--album-vertical-gap:${verticalGap}px`} bind:this={viewport} data-scroll-restored={scrollPositionRestored} onscroll={handleScroll}>
       <div class="album-grid-canvas" style={`height:${rowLayout.totalHeight}px;--album-card-width:${cardWidth}px;--album-card-text-height:${cardTextHeight}px`}>
         {#each visibleRenderRows as row (row.kind === 'group' ? `group:${row.beforeIndex}:${row.label}` : `cards:${row.start}`)}
           {#if row.kind === 'group'}
             <div class="album-index-group-row list-group-row-surface" style={`height:${row.height}px;transform:translateY(${row.top}px)`}>
-              <button type="button" class="album-index-group-button" aria-label={`開啟「${row.label}」字首索引`} onclick={openQuickIndex}>{row.label}</button>
+              <button type="button" class="album-index-group-button" aria-label={tr("開啟「{0}」字首索引", [row.label])} onclick={openQuickIndex}>{row.label}</button>
             </div>
           {:else}
             <div class="album-index-card-row" style={`height:${row.height}px;transform:translateY(${row.top}px);grid-template-columns:repeat(${columns},minmax(0,1fr));column-gap:${gap}px`}>
@@ -392,8 +393,8 @@
   {/if}
 </div>
 {#if quickIndexOpen}
-  <button type="button" class="album-quick-index-backdrop" aria-label="關閉首字索引" onclick={() => closeQuickIndex()}></button>
-  <div bind:this={quickIndexDialog} class="album-quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${getQuickIndexColumnCount(quickIndex?.labels.length ?? 0, { availableWidthPx: quickIndexMaxWidth, cellSizePx: quickIndexCellSizePx })};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label="快速首字查找" tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
+  <button type="button" class="album-quick-index-backdrop" aria-label={tr("關閉首字索引")} onclick={() => closeQuickIndex()}></button>
+  <div bind:this={quickIndexDialog} class="album-quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${getQuickIndexColumnCount(quickIndex?.labels.length ?? 0, { availableWidthPx: quickIndexMaxWidth, cellSizePx: quickIndexCellSizePx })};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label={tr("快速首字查找")} tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
     <div class="album-quick-index-label-grid">
       {#each quickIndex?.labels ?? [] as label (label)}
         {@const available = availableQuickIndexLabels.has(label)}

@@ -1,4 +1,5 @@
-﻿/**
+﻿import { tr } from './i18n.js';
+/**
  * @typedef {{
  *   mode: 'windowsBuiltin' | 'highQuality',
  *   sourceRateHz: number | null,
@@ -28,21 +29,21 @@ export function formatSampleRate(hz) {
  * @returns {OutputFormatStatus}
  */
 export function describeOutputFormat(format) {
-  if (!format) return { text: '音訊輸出尚未開啟。', notice: null };
+  if (!format) return { text: tr('音訊輸出尚未開啟。'), notice: null };
   const output = formatSampleRate(format.outputRateHz);
   const device = formatSampleRate(format.deviceRateHz);
   if (format.sourceRateHz == null) {
-    return { text: `尚未載入曲目（輸出 ${output}）`, notice: null };
+    return { text: tr("尚未載入曲目（輸出 {0}）", [output]), notice: null };
   }
   const source = formatSampleRate(format.sourceRateHz);
   if (format.dseeHx === 'active') {
     const enhancedRate = format.dseeOutputRateHz ?? 96_000;
     const enhanced = `${source} → ${formatSampleRate(enhancedRate)}（DSEE HX）`;
     if (format.conversion === 'windows') {
-      return { text: `${enhanced}，再交由 Windows 轉換為 ${device}`, notice: format.dseeNotice };
+      return { text: tr("{0}，再交由 Windows 轉換為 {1}", [enhanced, device]), notice: format.dseeNotice };
     }
     if ((format.conversion === 'highQuality' || format.conversion === 'basic') && format.outputRateHz !== enhancedRate) {
-      return { text: `${enhanced} → ${output}（高品質）`, notice: format.dseeNotice };
+      return { text: tr("{0} → {1}（高品質）", [enhanced, output]), notice: format.dseeNotice };
     }
     return { text: enhanced, notice: format.dseeNotice };
   }
@@ -65,19 +66,19 @@ function describeSampleRatePath(format, source, output, device) {
     case 'highQuality': {
       const notice = format.mode === 'windowsBuiltin'
         ? format.fallbackReason
-          ? `Windows 無法以 ${source} 開啟共享模式輸出，已改用 ${output} 並以高品質轉換。`
-          : `輸出裝置未以 ${source} 開啟，暫以高品質轉換。`
+          ? tr("Windows 無法以 {0} 開啟共享模式輸出，已改用 {1} 並以高品質轉換。", [source, output])
+          : tr("輸出裝置未以 {0} 開啟，暫以高品質轉換。", [source])
         : null;
-      return { text: `${source} → ${output}（高品質）`, notice };
+      return { text: tr("{0} → {1}（高品質）", [source, output]), notice };
     }
     case 'windows':
-      return { text: `${source}（交由 Windows 轉換為 ${device}）`, notice: null };
+      return { text: tr("{0}（交由 Windows 轉換為 {1}）", [source, device]), notice: null };
     case 'basic':
       return {
-        text: `${source} → ${output}（基本轉換）`,
-        notice: '高品質轉換器無法處理此格式，已改用基本轉換。',
+        text: tr("{0} → {1}（基本轉換）", [source, output]),
+        notice: tr('高品質轉換器無法處理此格式，已改用基本轉換。'),
       };
     default:
-      return { text: `原生 ${source}（未轉換）`, notice: null };
+      return { text: tr("原生 {0}（未轉換）", [source]), notice: null };
   }
 }

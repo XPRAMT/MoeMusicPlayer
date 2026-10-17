@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tr } from './i18n.js';
   // 頻譜圖：桌面為獨立 Tauri 視窗（label `spectrogram`），Android 以全螢幕頁面呈現（ADR 0013）。
   // 可開啟任意檔案（對話框／拖放）並以 A／B 比較：單張、並排、疊圖（切換／透明度／差異）、分割滑桿。
   // A、B 共用設定、軸與縮放平移；滑鼠讀值同時顯示兩者。不在視窗內瀏覽曲庫換曲。
@@ -12,6 +13,7 @@
   }
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { followLanguageChange } from './language-sync.js';
   import {
     COLORMAPS, FFT_SIZES, WINDOW_FUNCTIONS, fractionToFrequency, frequencyTicks, frequencyToFraction,
     loadSpectrogramSettings, saveSpectrogramSettings, toRenderOptions, type SpectrogramSettings,
@@ -87,7 +89,7 @@
       console.info(`[spectrogram] ${side} total=${Math.round(performance.now() - requested)}ms prepare=${timing.prepareMs}ms render=${timing.renderMs}ms encode=${timing.encodeMs}ms cols=${data.columns} h=${data.height}`);
       if (mine !== serial[side]) return;
       loaded[side] = { data, levels: decodeLevels(data.levelsBase64) };
-      if (side === 'A') document.title = `頻譜圖 — ${data.fileName}`;
+      if (side === 'A') document.title = tr("頻譜圖 — {0}", [data.fileName]);
     } catch (cause) {
       if (mine === serial[side]) { errors[side] = String(cause); loaded[side] = null; }
     } finally {
@@ -295,6 +297,7 @@
       resizeObserver.observe(sizer);
     }
     try {
+      unlisteners.push(await listen<string>('app-language-changed', (event) => followLanguageChange(event.payload)));
       unlisteners.push(await listen<string>('spectrogram-track', (event) => setSource('A', { kind: 'track', id: event.payload })));
       const { getCurrentWebview } = await import('@tauri-apps/api/webview');
       unlisteners.push(await getCurrentWebview().onDragDropEvent((event) => {
@@ -345,7 +348,7 @@
         {/if}
       {/each}
     </div>
-    <div class="sg-plot" data-drop-side={dropSide} role="img" aria-label="頻譜圖"
+    <div class="sg-plot" data-drop-side={dropSide} role="img" aria-label={tr("頻譜圖")}
       onpointermove={onPointerMove} onpointerdown={onPointerDown} onpointerup={onPointerUp} onpointercancel={onPointerUp}
       onpointerleave={() => { hover = null; }} onwheel={onWheel} ondblclick={() => { view = { ...FULL_VIEW }; }}>
       {#if content === 'A' || content === 'B'}
@@ -360,7 +363,7 @@
       {:else}
         {@render layer('A', 1, prefs.wipe)}
         {@render layer('B', 1, prefs.wipe)}
-        <div class="sg-wipe" style:left={`${prefs.wipe * 100}%`} role="slider" aria-label="分割位置" aria-valuenow={Math.round(prefs.wipe * 100)} tabindex="0"
+        <div class="sg-wipe" style:left={`${prefs.wipe * 100}%`} role="slider" aria-label={tr("分割位置")} aria-valuenow={Math.round(prefs.wipe * 100)} tabindex="0"
           onpointerdown={onWipeDown} onpointermove={onWipeMove} onpointerup={() => { wipeDragging = false; }}><span>A｜B</span></div>
       {/if}
       {#each Array.from({ length: panels }, (_, p) => p) as p (p)}
@@ -370,9 +373,9 @@
         {/each}
         {#if p > 0}{@const top = toViewTop(panelWorldY(p, 1))}{#if top > 0 && top < 1}<i class="sg-divider" style:top={`${top * 100}%`}></i>{/if}{/if}
       {/each}
-      {#if dropSide && loading[dropSide]}<span class="sg-badge">計算中…</span>{/if}
-      {#if dropSide && !loaded[dropSide] && !loading[dropSide]}<span class="sg-empty">拖放檔案或按「開啟 {dropSide}」</span>{/if}
-      {#if content === 'overlay' && !diffUrl}<span class="sg-badge">{showB ? `B 透明度 ${Math.round(prefs.opacityB * 100)}%` : '只顯示 A'}（Space 切換）</span>{/if}
+      {#if dropSide && loading[dropSide]}<span class="sg-badge">{tr("計算中…")}</span>{/if}
+      {#if dropSide && !loaded[dropSide] && !loading[dropSide]}<span class="sg-empty">{tr("拖放檔案或按「開啟")} {dropSide}」</span>{/if}
+      {#if content === 'overlay' && !diffUrl}<span class="sg-badge">{showB ? tr("B 透明度 {0}%", [Math.round(prefs.opacityB * 100)]) : tr('只顯示 A')}{tr("（Space 切換）")}</span>{/if}
       {#if info}
         <div class="sg-crosshair" style:left={`${toViewX(hover!.wx) * 100}%`}></div>
           <div class="sg-hover" style:left={`min(${hover!.x + 14}px, calc(100% - 190px))`} style:top={`${hover!.y + 14}px`}>
@@ -391,62 +394,62 @@
 
 <div class="spectrogram-page" class:is-drag-over={dragOver} use:portalToShell>
   <header class="spectrogram-toolbar">
-    {#if onClose}<button type="button" class="sg-button" onclick={onClose}>返回</button>{/if}
-    <button type="button" class="sg-button" onclick={() => void pickFile('A')}>開啟 A…</button>
-    <button type="button" class="sg-button" onclick={() => void pickFile('B')}>開啟 B…</button>
+    {#if onClose}<button type="button" class="sg-button" onclick={onClose}>{tr("返回")}</button>{/if}
+    <button type="button" class="sg-button" onclick={() => void pickFile('A')}>{tr("開啟 A…")}</button>
+    <button type="button" class="sg-button" onclick={() => void pickFile('B')}>{tr("開啟 B…")}</button>
     {#if loaded.B}
-      <button type="button" class="sg-button" onclick={swap} title="交換 A／B">⇄</button>
-      <button type="button" class="sg-button" onclick={clearB}>關閉 B</button>
+      <button type="button" class="sg-button" onclick={swap} title={tr("交換 A／B")}>⇄</button>
+      <button type="button" class="sg-button" onclick={clearB}>{tr("關閉 B")}</button>
     {/if}
-    <label class="sg-inline">比較
+    <label class="sg-inline">{tr("比較")}
       <select value={prefs.mode} onchange={(e) => updatePrefs({ mode: e.currentTarget.value })}>
         {#each COMPARE_MODES as m (m.value)}<option value={m.value}>{m.label}</option>{/each}
       </select>
     </label>
     {#if compareActive && prefs.mode === 'overlay'}
-      <button type="button" class="sg-button" class:is-active={!showB} disabled={prefs.difference} onclick={() => (showB = !showB)}>{showB ? 'A+B' : '只看 A'}</button>
-      <label class="sg-inline">B 透明度 <input type="range" min="0" max="1" step="0.05" value={prefs.opacityB} disabled={prefs.difference} oninput={(e) => updatePrefs({ opacityB: Number(e.currentTarget.value) })} /></label>
-      <label class="sg-inline"><input type="checkbox" checked={prefs.difference} onchange={(e) => updatePrefs({ difference: e.currentTarget.checked })} /> 差異圖（B − A）</label>
+      <button type="button" class="sg-button" class:is-active={!showB} disabled={prefs.difference} onclick={() => (showB = !showB)}>{showB ? 'A+B' : tr('只看 A')}</button>
+      <label class="sg-inline">{tr("B 透明度")} <input type="range" min="0" max="1" step="0.05" value={prefs.opacityB} disabled={prefs.difference} oninput={(e) => updatePrefs({ opacityB: Number(e.currentTarget.value) })} /></label>
+      <label class="sg-inline"><input type="checkbox" checked={prefs.difference} onchange={(e) => updatePrefs({ difference: e.currentTarget.checked })} /> {tr("差異圖（B − A）")}</label>
     {/if}
     <span class="sg-spacer"></span>
-    <button type="button" class="sg-button" onclick={() => { view = { ...FULL_VIEW }; }} title="重置縮放（雙擊圖面或按 0）">重置縮放</button>
-    <button type="button" class="sg-button" class:is-active={showSettings} aria-expanded={showSettings} onclick={() => (showSettings = !showSettings)}>設定</button>
-    <button type="button" class="sg-button" disabled={loading.A || loading.B} onclick={() => renderAll(true)}>重新繪製</button>
+    <button type="button" class="sg-button" onclick={() => { view = { ...FULL_VIEW }; }} title={tr("重置縮放（雙擊圖面或按 0）")}>{tr("重置縮放")}</button>
+    <button type="button" class="sg-button" class:is-active={showSettings} aria-expanded={showSettings} onclick={() => (showSettings = !showSettings)}>{tr("設定")}</button>
+    <button type="button" class="sg-button" disabled={loading.A || loading.B} onclick={() => renderAll(true)}>{tr("重新繪製")}</button>
   </header>
 
   {#if showSettings}
-    <section class="sg-settings" aria-label="頻譜圖設定">
-      <label>配色
+    <section class="sg-settings" aria-label={tr("頻譜圖設定")}>
+      <label>{tr("配色")}
         <select value={settings.colormap} onchange={(e) => updateSettings({ colormap: e.currentTarget.value })}>
           {#each COLORMAPS as c (c.value)}<option value={c.value}>{c.label}</option>{/each}
         </select>
       </label>
-      <label>FFT 大小
+      <label>{tr("FFT 大小")}
         <select value={String(settings.fftSize)} onchange={(e) => updateSettings({ fftSize: Number(e.currentTarget.value) })}>
           {#each FFT_SIZES as size (size)}<option value={String(size)}>{size}</option>{/each}
         </select>
       </label>
-      <label>窗函數
+      <label>{tr("窗函數")}
         <select value={settings.window} onchange={(e) => updateSettings({ window: e.currentTarget.value })}>
           {#each WINDOW_FUNCTIONS as w (w.value)}<option value={w.value}>{w.label}</option>{/each}
         </select>
       </label>
-      <label>頻率軸
+      <label>{tr("頻率軸")}
         <select value={settings.logFrequency ? 'log' : 'linear'} onchange={(e) => updateSettings({ logFrequency: e.currentTarget.value === 'log' })}>
-          <option value="linear">線性</option><option value="log">對數</option>
+          <option value="linear">{tr("線性")}</option><option value="log">{tr("對數")}</option>
         </select>
       </label>
-      <label>聲道
+      <label>{tr("聲道")}
         <select value={channelValue()} onchange={(e) => setChannel(e.currentTarget.value)}>
-          <option value="mix">混合（全部聲道）</option>
+          <option value="mix">{tr("混合（全部聲道）")}</option>
           {#each channelOptions as i (i)}<option value={`channel:${i}`}>{channelName(i)}</option>{/each}
-          <option value="separate">各聲道分開</option>
+          <option value="separate">{tr("各聲道分開")}</option>
         </select>
       </label>
-      <label>dB 下限 <input type="number" step="5" min="-200" max="-1" value={settings.dbFloor} onchange={(e) => updateSettings({ dbFloor: Number(e.currentTarget.value) })} /></label>
-      <label>dB 上限 <input type="number" step="5" min="-199" max="20" value={settings.dbCeiling} onchange={(e) => updateSettings({ dbCeiling: Number(e.currentTarget.value) })} /></label>
-      <label>最高頻率 (kHz)
-        <input type="number" step="1" min="0.1" placeholder="自動" value={settings.maxFrequencyHz ? settings.maxFrequencyHz / 1000 : ''} onchange={(e) => { const v = Number(e.currentTarget.value); updateSettings({ maxFrequencyHz: e.currentTarget.value && v > 0 ? Math.round(v * 1000) : null }); }} />
+      <label>{tr("dB 下限")} <input type="number" step="5" min="-200" max="-1" value={settings.dbFloor} onchange={(e) => updateSettings({ dbFloor: Number(e.currentTarget.value) })} /></label>
+      <label>{tr("dB 上限")} <input type="number" step="5" min="-199" max="20" value={settings.dbCeiling} onchange={(e) => updateSettings({ dbCeiling: Number(e.currentTarget.value) })} /></label>
+      <label>{tr("最高頻率 (kHz)")}
+        <input type="number" step="1" min="0.1" placeholder={tr("自動")} value={settings.maxFrequencyHz ? settings.maxFrequencyHz / 1000 : ''} onchange={(e) => { const v = Number(e.currentTarget.value); updateSettings({ maxFrequencyHz: e.currentTarget.value && v > 0 ? Math.round(v * 1000) : null }); }} />
       </label>
     </section>
   {/if}
@@ -456,12 +459,12 @@
       {@const item = loaded[side]}
       <div class="sg-info">
         <b class="sg-tag">{side}</b>
-        <strong title={item?.data.path}>{item?.data.fileName ?? (sources[side] ? '…' : '（未開啟）')}</strong>
+        <strong title={item?.data.path}>{item?.data.fileName ?? (sources[side] ? '…' : tr('（未開啟）'))}</strong>
         {#if item}
           <span>{item.data.sampleRate} Hz · {item.data.channels} ch · {Math.floor(item.data.durationMs / 60000)}:{String(Math.floor((item.data.durationMs / 1000) % 60)).padStart(2, '0')}</span>
-          {#if item.data.cutoffHz}<span class="sg-cutoff">約 {(item.data.cutoffHz / 1000).toFixed(1)} kHz 以上幾乎無能量（僅供參考）</span>{/if}
+          {#if item.data.cutoffHz}<span class="sg-cutoff">{tr("約 {0} kHz 以上幾乎無能量（僅供參考）", [(item.data.cutoffHz / 1000).toFixed(1)])}</span>{/if}
         {/if}
-        {#if loading[side]}<span>計算中…</span>{/if}
+        {#if loading[side]}<span>{tr("計算中…")}</span>{/if}
         {#if errors[side]}<span class="sg-error">{errors[side]}</span>{/if}
       </div>
     {/each}
@@ -481,13 +484,13 @@
   </div>
   <div class="sg-legend">
     {#if diffUrl}
-      <span>B 較弱 −{(range / 2).toFixed(0)} dB</span><i style:background="linear-gradient(90deg,#00f,#fff,#f00)"></i><span>B 較強 +{(range / 2).toFixed(0)} dB</span>
+      <span>{tr("B 較弱 −")}{(range / 2).toFixed(0)} dB</span><i style:background="linear-gradient(90deg,#00f,#fff,#f00)"></i><span>{tr("B 較強 +")}{(range / 2).toFixed(0)} dB</span>
     {:else}
       <span>{settings.dbFloor} dB</span><i style:background={colormapGradient}></i><span>{settings.dbCeiling} dB</span>
     {/if}
-    <span class="sg-hint">滾輪：縮放時間 · Shift+滾輪：縮放頻率 · 拖曳：平移 · 雙擊：重置 · 拖放檔案開啟（兩個檔案＝A＋B）</span>
+    <span class="sg-hint">{tr("滾輪：縮放時間 · Shift+滾輪：縮放頻率 · 拖曳：平移 · 雙擊：重置 · 拖放檔案開啟（兩個檔案＝A＋B）")}</span>
   </div>
-  {#if dragOver}<div class="sg-drop-hint">放開以開啟（兩個檔案＝A 與 B）</div>{/if}
+  {#if dragOver}<div class="sg-drop-hint">{tr("放開以開啟（兩個檔案＝A 與 B）")}</div>{/if}
 </div>
 
 <style>

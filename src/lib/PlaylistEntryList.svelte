@@ -24,6 +24,7 @@
 </script>
 
 <script lang="ts">
+  import { tr } from './i18n.js';
 import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistListSort, type PlaylistPage, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
 import { formatDuration } from './format';
 import { formatListOrder } from './list-order.js';
@@ -121,7 +122,7 @@ import { PagedListController } from './track-list-data.js';
       const request = { ...requestScope, offset, limit };
       return requestPlaylistPage(request);
     },
-    { listName: '播放清單', onChange: () => { snapshot = entries.snapshot(); } },
+    { listName: tr('播放清單'), onChange: () => { snapshot = entries.snapshot(); } },
   );
 
   $effect(() => {
@@ -164,7 +165,7 @@ import { PagedListController } from './track-list-data.js';
       if (isCurrent()) quickIndexReady = true;
     }).catch((reason: unknown) => {
       if (isCurrent()) {
-        console.error('無法建立播放清單首字索引', reason);
+        console.error(tr('無法建立播放清單首字索引'), reason);
         quickIndexReady = true;
       }
     });
@@ -206,12 +207,12 @@ import { PagedListController } from './track-list-data.js';
 {#if snapshot.errors.length > 0}
   <div class="track-list-error" role="alert">
     <span>{getErrorText(snapshot.errors[0]?.message)}</span>
-    <button type="button" class="text-button" onclick={retryFirstError}>重試載入</button>
+    <button type="button" class="text-button" onclick={retryFirstError}>{tr("重試載入")}</button>
   </div>
 {/if}
 
 {#if snapshot.totalCount === 0}
-  <div class="empty-panel playlist-empty"><h3>這份清單沒有項目</h3><p>在「設定 → 音樂來源」更新此播放清單來源後再重新整理。</p></div>
+  <div class="empty-panel playlist-empty"><h3>{tr("這份清單沒有項目")}</h3><p>{tr("在「設定 → 音樂來源」更新此播放清單來源後再重新整理。")}</p></div>
 {:else}
   <PagedVirtualList
     totalCount={snapshot.totalCount}
@@ -228,7 +229,7 @@ import { PagedListController } from './track-list-data.js';
     compactHeaderHeight={37}
     fillAvailable={true}
     listId={`playlist-${playlistId}`}
-    ariaLabel="播放清單項目；點擊欄位標題排序；使用方向鍵瀏覽，按 Enter 播放目前項目"
+    ariaLabel={tr("播放清單項目；點擊欄位標題排序；使用方向鍵瀏覽，按 Enter 播放目前項目")}
     columnCount={listColumnCount}
     gridTemplate={listGridTemplate}
     minContentWidth={listMinWidth}
@@ -239,7 +240,7 @@ import { PagedListController } from './track-list-data.js';
     quickIndexLabels={groupingEnabled ? quickIndex?.labels : []}
     scrollRestoreReady={snapshot.scope === JSON.stringify({ playlistId, sort }) && snapshot.totalCount !== null && snapshot.pendingPageCount === 0}
     rowClassName="track-row virtual-track-row configurable-track-grid playlist-entry-row"
-    listName="播放清單"
+    listName={tr("播放清單")}
     onRange={handleRange}
     onPlay={(entry) => playEntry(entry)}
   >
@@ -267,8 +268,8 @@ import { PagedListController } from './track-list-data.js';
             const item = withLivePlayedMs(row.item!, livePlayCount);
             return {
               id: column.id,
-              text: formatTrackColumnValue(column.id, item, formatDuration, '未命名項目'),
-              title: column.id === 'title' && !row.item?.hasEnabledMapping ? '目前未對應到可播放的曲庫曲目' : undefined,
+              text: formatTrackColumnValue(column.id, item, formatDuration, tr('未命名項目')),
+              title: column.id === 'title' && !row.item?.hasEnabledMapping ? tr('目前未對應到可播放的曲庫曲目') : undefined,
               hiRes: column.id === 'audioFormat' ? isHiResTrack(item) : false,
             };
           })}

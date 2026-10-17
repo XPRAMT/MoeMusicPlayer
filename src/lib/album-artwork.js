@@ -1,3 +1,4 @@
+import { tr } from './i18n.js';
 export const ALBUM_ART_THUMBNAIL_SIZE = 512;
 export const ALBUM_ART_HASH_SIZE = 32;
 export const ALBUM_ART_SIMILARITY_DISTANCE = 6;
@@ -210,7 +211,7 @@ export function createAlbumThumbnailInWorker(bytes, mimeType, size = ALBUM_ART_T
 function pumpThumbnailWorkers() {
   if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') {
     while (thumbnailWorkerQueue.length > 0) {
-      thumbnailWorkerQueue.shift()?.reject(new Error('此 WebView 不支援背景封面縮圖處理。'));
+      thumbnailWorkerQueue.shift()?.reject(new Error(tr('此 WebView 不支援背景封面縮圖處理。')));
     }
     return;
   }
@@ -234,7 +235,7 @@ function pumpThumbnailWorkers() {
               dataBase64: event.data.dataBase64,
             });
           } else {
-            current.reject(new Error(event.data?.error || '背景封面縮圖處理失敗。'));
+            current.reject(new Error(event.data?.error || tr('背景封面縮圖處理失敗。')));
           }
           pumpThumbnailWorkers();
         });
@@ -242,7 +243,7 @@ function pumpThumbnailWorkers() {
           const current = createdSlot.job;
           createdSlot.job = null;
           createdSlot.busy = false;
-          if (current) current.reject(new Error(event.message || '背景封面縮圖工作者停止運作。'));
+          if (current) current.reject(new Error(event.message || tr('背景封面縮圖工作者停止運作。')));
           worker.terminate();
           const index = thumbnailWorkerSlots.indexOf(createdSlot);
           if (index >= 0) thumbnailWorkerSlots.splice(index, 1);
@@ -289,12 +290,12 @@ export async function createAlbumThumbnail(bytes, mimeType, size = ALBUM_ART_THU
     canvas.width = edge;
     canvas.height = edge;
     const context = canvas.getContext('2d', { alpha: false });
-    if (!context) throw new Error('無法建立專輯封面縮圖。');
+    if (!context) throw new Error(tr('無法建立專輯封面縮圖。'));
     context.fillStyle = '#000';
     context.fillRect(0, 0, edge, edge);
     context.drawImage(bitmap, sx, sy, cropSize, cropSize, 0, 0, edge, edge);
     return await new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('無法編碼專輯封面縮圖。')), 'image/jpeg', 0.90);
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error(tr('無法編碼專輯封面縮圖。'))), 'image/jpeg', 0.90);
     });
   } finally {
     bitmap.close();
@@ -308,7 +309,7 @@ export async function createAlbumThumbnail(bytes, mimeType, size = ALBUM_ART_THU
  */
 export function perceptualHash32(grayPixels) {
   if (!grayPixels || grayPixels.length !== ALBUM_ART_HASH_SIZE * ALBUM_ART_HASH_SIZE) {
-    throw new RangeError('感知雜湊輸入必須是 32×32 灰階像素。');
+    throw new RangeError(tr('感知雜湊輸入必須是 32×32 灰階像素。'));
   }
   const size = ALBUM_ART_HASH_SIZE;
   let mean = 0;
@@ -366,7 +367,7 @@ export async function perceptualHashArtwork(bytes, mimeType) {
     canvas.width = edge;
     canvas.height = edge;
     const context = canvas.getContext('2d', { willReadFrequently: true });
-    if (!context) throw new Error('無法計算專輯封面相似度。');
+    if (!context) throw new Error(tr('無法計算專輯封面相似度。'));
     context.fillStyle = '#000';
     context.fillRect(0, 0, edge, edge);
     context.drawImage(bitmap, sx, sy, cropSize, cropSize, 0, 0, edge, edge);
