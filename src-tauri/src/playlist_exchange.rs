@@ -29,7 +29,7 @@ pub fn import_playlist_file(
     save_imported_playlist(database, playlist)
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "android", test))]
 pub fn read_playlist_file(path: &Path) -> Result<player_core::Playlist, String> {
     let bytes = std::fs::read(path).map_err(|error| format!("無法讀取選擇的播放清單：{error}"))?;
     read_playlist_bytes(&bytes, path)
@@ -61,7 +61,7 @@ pub fn read_playlist_bytes(bytes: &[u8], path: &Path) -> Result<player_core::Pla
     Ok(playlist)
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "android", test))]
 pub fn import_playlist_file_with_id(
     database: &Database,
     path: &Path,
@@ -72,7 +72,7 @@ pub fn import_playlist_file_with_id(
     save_imported_playlist(database, playlist)
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "android", test))]
 fn save_imported_playlist(
     database: &Database,
     playlist: player_core::Playlist,

@@ -1,9 +1,9 @@
 //! Single-track details panel and spectrogram window IPC (ADR 0013).
 //!
-//! Windows edits files in place (atomic temp + rename). Android tracks are `content://`
-//! documents (MediaStore or SAF): they are copied to a private work file, edited/rendered
-//! there with the same code, then written back through the ContentResolver (see
-//! `android_io`), with byte verification and restore of the original on failure.
+//! Windows edits files in place (atomic temp + rename). Android tracks are real paths under All
+//! files access (ADR 0014) and are edited like files; a remaining legacy `content://` track is
+//! copied to a private work file, edited there, then written back in place through its real path
+//! (see `android_io`), with byte verification and restore of the original on failure.
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -364,24 +364,21 @@ mod android_io {
     }
 
     fn push(app: &AppHandle, source: &Path, uri: &str) -> Result<(), String> {
-        if let Some(path) = direct_path(app, uri) {
-            return write_in_place(source, &path);
+        // No per-file MediaStore/SAF write prompts (ADR 0014): writes go to the real path,
+        // which needs All files access.
+        match direct_path(app, uri) {
+            Some(path) => write_in_place(source, &path),
+            None => Err("NO_DIRECT_PATH".to_owned()),
         }
-        let index = app.media_index();
-        let lease = index.create_cache_lease().map_err(|error| error.to_string())?;
-        std::fs::copy(source, lease.path()).map_err(|error| error.to_string())?;
-        index
-            .write_audio_cache_lease(&lease, uri)
-            .map_err(|error| error.to_string())
     }
 
     /// Write the edited work file back through the ContentResolver, then re-read and compare
     /// bytes. On a write/verify failure the original bytes are pushed back.
     pub fn write_back(app: &AppHandle, edited: &Path, original: &Path, uri: &str) -> Result<(), String> {
         if let Err(error) = push(app, edited, uri) {
-            if error.contains("WRITE_ACCESS_DENIED") {
+            if error.contains("NO_DIRECT_PATH") {
                 return Err(
-                    "沒有寫入此檔案的權限（已拒絕授權，或 SAF 資料夾只授權讀取；請重新授權可寫入的資料夾）".to_owned(),
+                    "無法取得此檔案的實際路徑；請在 Android 設定開啟 MoeMusicPlayer 的「所有檔案存取權」。".to_owned(),
                 );
             }
             let restored = push(app, original, uri).is_ok();

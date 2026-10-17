@@ -25,6 +25,57 @@ Status: accepted (2026-10-17). This partly supersedes the "MANAGE_EXTERNAL_STORA
 - The 所有檔案存取權 card is shown only while access is missing. Once access is granted, the MediaStore volume list loads automatically.
 - Existing MediaStore sources whose access is missing report `permissionRevoked` and keep their library projection until access is granted.
 
+## Update (2026-10-17, later): real-path sources, no per-item grants
+
+Decision: on Android, All files access (Android ≤10: the legacy storage permission) is the
+**only** storage authorization. Every per-item grant is removed:
+
+- SAF tree/document grants for music folders, playlists, 我的最愛 and the slideshow folder
+  (`pickSafTree`, `pickMyLoveFolder`, `pickPlaylistImport/Create/Export`, `releaseSafTree`,
+  `hasSafPermission`, `resolveSafPlaylistEntry`, `readSafLyricSibling`, `listSafImages`, …).
+- MediaStore sources (`scanMediaStore`, `mediaStoreVolumes`, the 「共享音樂 MediaStore」 block).
+- Per-file MediaStore write prompts (`createWriteRequest`, `RecoverableSecurityException`,
+  `writeAudioCacheLease`). Tag edits write the real file in place; without a real path the save
+  fails with a request to enable 所有檔案存取權.
+
+Folders and playlists are real filesystem paths, like desktop sources:
+
+- 設定 → 音樂來源 on Android shows 「選擇資料夾」 and 「選擇播放清單」. The system picker is used
+  only to point at a location; the tree/document URI is converted to `/storage/emulated/0/…`
+  (`storage_paths`, Kotlin `externalStoragePathFor` / `documentPathFor`) and no grant is persisted.
+- Folder sources have kind `android_filesystem`, a `FileSystem` locator, and are scanned by
+  `fs_scan::scan_directory` (skips hidden entries, symlinks, `.nomedia` folders and `Android/` at a
+  volume root; an unreadable subfolder makes the scan `Incomplete`, so nothing is deleted).
+  Item id and locator key are both `unix_path_key(canonical path)`.
+- Playlist sources (incl. 我的最愛) share the Windows path-based sync
+  (`playlist_source_sync::sync_playlist_file_source_with`); favorites are rewritten through the
+  real path (temp + rename). 我的最愛 is created as `<picked folder>/MyLove.m3u8` and an existing
+  file is never overwritten.
+- Playback, artwork (embedded via `file://`, then `cover.jpg`/`folder.jpg`/`cover.png`/`folder.png`)
+  and `.lrc` sidecars read the real path.
+
+Migration (`android_path_migration`, run at the start of `library_sync`, only while access is
+granted, idempotent):
+
+1. A full copy of the database (`VACUUM INTO`) and `settings.json` is written to
+   `<app data>/pre-path-migration-<ms>/`, with `migration-report.txt`. If the backup fails, nothing
+   is migrated.
+2. Each legacy MediaStore / SAF folder source and each SAF playlist source is converted in place
+   (same source id): every `source_mappings` row is rewritten to the path key the scanner will
+   produce (MediaStore: `_data` via `resolveDirectPaths`; SAF: document id → path). `TrackId`s do
+   not change, so play statistics, lyrics, playlist entries and the playback session stay attached.
+   A MediaStore volume becomes its storage root (`/storage/emulated/0`), so files outside `Music/`
+   that were in the library stay in it.
+3. A legacy slideshow tree URI becomes its folder path.
+
+Until migrated (access missing), legacy sources are reported unavailable and are not scanned, so
+their projection is kept.
+
+Root cause of 「已撤銷此播放清單的 SAF 文件樹權限」 on 我的最愛: the import picker released the
+persisted grant of a tree after a cancelled/empty pick (`releasePersistedTreeReadGrant`) even when
+that same tree (`primary:Music`) backed the existing 我的最愛 source. Without per-item grants this
+class of failure no longer exists.
+
 ## Consequences
 
 - One manual system toggle replaces per-file prompts. Revoking the toggle at any time silently returns to the fallback paths.

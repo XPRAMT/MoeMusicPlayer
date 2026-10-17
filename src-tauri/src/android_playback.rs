@@ -1359,6 +1359,10 @@ impl AndroidActor {
             .and_then(|locators| {
                 locators.into_iter().find_map(|locator| match locator {
                     MediaLocator::ContentUri(uri) => Some(uri),
+                    // Real-path track (ADR 0014): Media3 reads embedded art from file:// URIs.
+                    #[cfg(unix)]
+                    MediaLocator::FileSystem(path) => player_core::file_uri_for_path(&path),
+                    #[cfg(not(unix))]
                     MediaLocator::FileSystem(_) => None,
                 })
             });

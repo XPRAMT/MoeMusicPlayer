@@ -55,18 +55,6 @@ class OfficialUrlArgs {
 }
 
 @InvokeArg
-class MediaStoreScanArgs {
-    var sourceId: String? = null
-    var volumeName: String? = null
-}
-
-@InvokeArg
-class SafScanArgs {
-    var sourceId: String? = null
-    var treeUri: String? = null
-}
-
-@InvokeArg
 class OpenDocumentArgs {
     var mimeTypes: Array<String>? = null
 }
@@ -96,8 +84,8 @@ class FilePathArgs {
 }
 
 @InvokeArg
-class TreeUriArgs {
-    var treeUri: String? = null
+class UriListArgs {
+    var uris: List<String>? = null
 }
 
 @InvokeArg
@@ -106,34 +94,9 @@ class CacheLeaseArgs {
 }
 
 @InvokeArg
-class PlaylistExportArgs {
-    var suggestedName: String? = null
-}
-
-@InvokeArg
-class PlaylistCreateArgs {
-    var treeUri: String? = null
-    var suggestedName: String? = null
-}
-
-@InvokeArg
 class WriteLeaseArgs {
     var token: String? = null
     var destinationUri: String? = null
-}
-
-@InvokeArg
-class SafLyricsArgs {
-    var treeUri: String? = null
-    var audioUri: String? = null
-    var maxBytes: Long? = null
-}
-
-@InvokeArg
-class PlaylistResolveArgs {
-    var treeUri: String? = null
-    var playlistUri: String? = null
-    var locator: String? = null
 }
 
 @TauriPlugin(
@@ -173,11 +136,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
-    fun mediaStoreVolumes(invoke: Invoke) {
-        async(invoke) { buildMediaStoreVolumes() }
-    }
-
-    @Command
     fun ensurePlaybackServiceStarted(invoke: Invoke) {
         try {
             activity.startService(Intent(activity, PlaybackService::class.java))
@@ -190,30 +148,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     @PermissionCallback
     private fun onLegacyStoragePermissionResult(invoke: Invoke) {
         invoke.resolve(JSObject().put("launched", false).put("granted", hasStorageAccess()))
-    }
-
-    @Command
-    fun scanMediaStore(invoke: Invoke) {
-        val args = invoke.parseArgs(MediaStoreScanArgs::class.java)
-        val sourceId = args.sourceId
-        val volumeName = args.volumeName
-        if (sourceId.isNullOrBlank() || volumeName.isNullOrBlank()) {
-            invoke.reject("sourceId and volumeName are required")
-            return
-        }
-        async(invoke) { scanMediaStore(sourceId, volumeName) }
-    }
-
-    @Command
-    fun scanSafTree(invoke: Invoke) {
-        val args = invoke.parseArgs(SafScanArgs::class.java)
-        val sourceId = args.sourceId
-        val rawTreeUri = args.treeUri
-        if (sourceId.isNullOrBlank() || rawTreeUri.isNullOrBlank()) {
-            invoke.reject("sourceId and treeUri are required")
-            return
-        }
-        async(invoke) { scanSafTree(sourceId, Uri.parse(rawTreeUri)) }
     }
 
     @Command
@@ -302,76 +236,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    /** Track details save: write an edited work copy back over the audio document. */
-    @Command
-    fun writeAudioCacheLease(invoke: Invoke) {
-        val args = invoke.parseArgs(WriteLeaseArgs::class.java)
-        val token = args.token
-        val destination = args.destinationUri
-        if (token.isNullOrBlank() || destination.isNullOrBlank()) {
-            invoke.reject("token and destinationUri are required")
-            return
-        }
-        val uri = Uri.parse(destination)
-        io.execute {
-            try {
-                val written = writeAudioLease(token, uri)
-                invoke.resolve(JSObject().apply { put("bytes", written) })
-            } catch (error: SecurityException) {
-                activity.runOnUiThread { requestAudioWriteAccess(invoke, uri, error) }
-            } catch (error: Exception) {
-                invoke.reject(error.message ?: error.javaClass.simpleName)
-            }
-        }
-    }
-
-    private fun requestAudioWriteAccess(invoke: Invoke, uri: Uri, error: SecurityException) {
-        val sender = try {
-            when {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && uri.authority == MediaStore.AUTHORITY ->
-                    MediaStore.createWriteRequest(resolver, listOf(uri)).intentSender
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && error is android.app.RecoverableSecurityException ->
-                    error.userAction.actionIntent.intentSender
-                else -> null
-            }
-        } catch (_: Exception) {
-            null
-        }
-        if (sender == null) {
-            invoke.reject(
-                "WRITE_ACCESS_DENIED: no write access to this file" +
-                    if (uri.authority == MediaStore.AUTHORITY) "" else " (re-authorize the SAF folder with write access)",
-            )
-            return
-        }
-        startIntentSenderForResult(invoke, IntentSenderRequest.Builder(sender).build(), "onAudioWriteGranted")
-    }
-
-    @ActivityCallback
-    private fun onAudioWriteGranted(invoke: Invoke, result: ActivityResult) {
-        if (result.resultCode != Activity.RESULT_OK) {
-            invoke.reject("WRITE_ACCESS_DENIED: the user declined write access")
-            return
-        }
-        val args = invoke.parseArgs(WriteLeaseArgs::class.java)
-        val token = args.token
-        val destination = args.destinationUri
-        if (token.isNullOrBlank() || destination.isNullOrBlank()) {
-            invoke.reject("token and destinationUri are required")
-            return
-        }
-        io.execute {
-            try {
-                val written = writeAudioLease(token, Uri.parse(destination))
-                invoke.resolve(JSObject().apply { put("bytes", written) })
-            } catch (error: SecurityException) {
-                invoke.reject("WRITE_ACCESS_DENIED: ${error.message ?: "write access still denied"}")
-            } catch (error: Exception) {
-                invoke.reject(error.message ?: error.javaClass.simpleName)
-            }
-        }
-    }
-
     @Command
     fun pickOpenDocument(invoke: Invoke) {
         val args = invoke.parseArgs(OpenDocumentArgs::class.java)
@@ -436,201 +300,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         startActivityForResult(invoke, intent, "onPlaylistExportPicked")
     }
 
-    @Command
-    fun pickPlaylistImport(invoke: Invoke) {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-            addFlags(
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
-                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
-            )
-        }
-        startActivityForResult(invoke, intent, "onPlaylistImportTreePicked")
-    }
-
-    @ActivityCallback
-    private fun onPlaylistImportTreePicked(invoke: Invoke, result: ActivityResult) {
-        val treeUri = result.data?.data
-        if (result.resultCode != Activity.RESULT_OK || treeUri == null) {
-            invoke.resolve(JSObject().put("playlistUri", JSONObject.NULL).put("treeUri", JSONObject.NULL).put("displayName", JSONObject.NULL))
-            return
-        }
-        val readGrant = result.data?.flags?.and(Intent.FLAG_GRANT_READ_URI_PERMISSION) ?: 0
-        if (readGrant == 0) {
-            invoke.reject("The document provider did not grant playlist-tree read access")
-            return
-        }
-        val writeGrant = result.data?.flags?.and(Intent.FLAG_GRANT_WRITE_URI_PERMISSION) ?: 0
-        if (writeGrant == 0) {
-            invoke.reject("The document provider did not grant playlist-tree write access")
-            return
-        }
-        try {
-            resolver.takePersistableUriPermission(treeUri, readGrant or writeGrant)
-            io.execute {
-                try {
-                    val playlists = listPlaylistDocuments(treeUri)
-                    activity.runOnUiThread {
-                        when (playlists.size) {
-                            0 -> {
-                                releasePersistedTreeReadGrant(treeUri)
-                                invoke.reject("No M3U or M3U8 playlist was found in the selected folder")
-                            }
-                            1 -> resolvePlaylistPick(invoke, treeUri, playlists.single())
-                            else -> {
-                                val labels = playlists.map { (uri, name) ->
-                                    val documentId = DocumentsContract.getDocumentId(uri)
-                                    "$name — ${documentId.substringAfter(':', documentId)}"
-                                }.toTypedArray()
-                                AlertDialog.Builder(activity)
-                                    .setTitle("Choose a playlist")
-                                    .setItems(labels) { _, index -> resolvePlaylistPick(invoke, treeUri, playlists[index]) }
-                                    .setOnCancelListener {
-                                        releasePersistedTreeReadGrant(treeUri)
-                                        invoke.resolve(JSObject().put("playlistUri", JSONObject.NULL).put("treeUri", JSONObject.NULL).put("displayName", JSONObject.NULL))
-                                    }
-                                    .show()
-                            }
-                        }
-                    }
-                } catch (error: Exception) {
-                    activity.runOnUiThread {
-                        releasePersistedTreeReadGrant(treeUri)
-                        invoke.reject(error.message ?: "Could not enumerate playlists in the selected folder")
-                    }
-                }
-            }
-        } catch (error: SecurityException) {
-            invoke.reject("Could not preserve playlist-tree access: ${error.message}")
-        }
-    }
-
-    @Command
-    fun resolveSafPlaylistEntry(invoke: Invoke) {
-        val args = invoke.parseArgs(PlaylistResolveArgs::class.java)
-        val tree = args.treeUri
-        val playlist = args.playlistUri
-        val locator = args.locator
-        if (tree.isNullOrBlank() || playlist.isNullOrBlank() || locator.isNullOrBlank()) {
-            invoke.reject("treeUri, playlistUri and locator are required")
-            return
-        }
-        async(invoke) {
-            val resolved = resolveSafPlaylistEntry(Uri.parse(tree), Uri.parse(playlist), locator)
-            if (resolved == null) {
-                JSObject().put("contentUri", JSONObject.NULL)
-                    .put("sizeBytes", JSONObject.NULL)
-                    .put("modifiedAtUtcMs", JSONObject.NULL)
-            } else {
-                val (sizeBytes, modifiedAtUtcMs) = queryDocumentFingerprint(resolved)
-                JSObject().put("contentUri", resolved.toString())
-                    .put("sizeBytes", sizeBytes ?: JSONObject.NULL)
-                    .put("modifiedAtUtcMs", modifiedAtUtcMs ?: JSONObject.NULL)
-            }
-        }
-    }
-
-    @Command
-    fun pickPlaylistExport(invoke: Invoke) {
-        val args = invoke.parseArgs(PlaylistExportArgs::class.java)
-        val suggestedName = args.suggestedName?.takeIf(String::isNotBlank) ?: "playlist.m3u8"
-        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "audio/x-mpegurl"
-            putExtra(Intent.EXTRA_TITLE, suggestedName)
-            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        }
-        startActivityForResult(invoke, intent, "onPlaylistExportPicked")
-    }
-
-    @Command
-    fun pickPlaylistCreate(invoke: Invoke) {
-        val args = invoke.parseArgs(PlaylistCreateArgs::class.java)
-        val rawTreeUri = args.treeUri
-        if (rawTreeUri.isNullOrBlank()) {
-            invoke.reject("treeUri is required")
-            return
-        }
-        val treeUri = Uri.parse(rawTreeUri)
-        if (!DocumentsContract.isTreeUri(treeUri) || !hasPersistedTreeWriteGrant(treeUri)) {
-            invoke.reject("The selected playlist folder has no persisted read/write access")
-            return
-        }
-        val suggestedName = args.suggestedName?.takeIf(String::isNotBlank) ?: "新播放清單.m3u8"
-        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "audio/x-mpegurl"
-            putExtra(Intent.EXTRA_TITLE, suggestedName)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                putExtra(DocumentsContract.EXTRA_INITIAL_URI, treeUri)
-            }
-            addFlags(
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-        }
-        startActivityForResult(invoke, intent, "onPlaylistCreatePicked")
-    }
-
-    @ActivityCallback
-    private fun onPlaylistCreatePicked(invoke: Invoke, result: ActivityResult) {
-        val args = invoke.parseArgs(PlaylistCreateArgs::class.java)
-        val rawTreeUri = args.treeUri
-        if (rawTreeUri.isNullOrBlank()) {
-            invoke.reject("treeUri is required")
-            return
-        }
-        val uri = result.data?.data
-        if (result.resultCode != Activity.RESULT_OK || uri == null) {
-            invoke.resolve(JSObject().put("uri", JSONObject.NULL).put("displayName", JSONObject.NULL))
-            return
-        }
-        val flags = result.data?.flags ?: 0
-        val readGrant = flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
-        val writeGrant = flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        if (readGrant == 0 || writeGrant == 0) {
-            invoke.reject("The document provider did not grant playlist read/write access")
-            return
-        }
-        io.execute {
-            try {
-                val currentName = queryDisplayName(uri)
-                    ?: throw IOException("Could not read the created playlist filename")
-                val treeUri = Uri.parse(rawTreeUri)
-                val createdDocumentId = DocumentsContract.getDocumentId(uri)
-                var targetUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, createdDocumentId)
-                if (!currentName.endsWith(".m3u8", ignoreCase = true)) {
-                    val baseName = currentName.substringBeforeLast('.', currentName)
-                    val renamed = DocumentsContract.renameDocument(resolver, targetUri, "$baseName.m3u8")
-                        ?: throw IOException("Could not apply the .m3u8 extension")
-                    targetUri = DocumentsContract.buildDocumentUriUsingTree(
-                        treeUri,
-                        DocumentsContract.getDocumentId(renamed),
-                    )
-                }
-                val finalName = queryDisplayName(targetUri)
-                    ?: throw IOException("Could not read the final playlist filename")
-                resolver.openOutputStream(targetUri, "wt")?.use { output ->
-                    val playlistName = finalName.substringBeforeLast('.', finalName)
-                        .replace('\r', ' ').replace('\n', ' ')
-                    output.write("#EXTM3U\n#PLAYLIST:$playlistName\n".toByteArray(Charsets.UTF_8))
-                } ?: throw IOException("Could not initialize the new M3U8 playlist")
-                activity.runOnUiThread {
-                    invoke.resolve(
-                        JSObject()
-                            .put("uri", targetUri.toString())
-                            .put("displayName", finalName),
-                    )
-                }
-            } catch (error: Exception) {
-                activity.runOnUiThread {
-                    invoke.reject(error.message ?: "Could not create the M3U8 playlist")
-                }
-            }
-        }
-    }
-
     @ActivityCallback
     private fun onPlaylistExportPicked(invoke: Invoke, result: ActivityResult) {
         val uri = result.data?.data
@@ -639,114 +308,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             return
         }
         invoke.resolve(JSObject().put("uri", uri.toString()))
-    }
-
-    @Command
-    fun readSafLyricSibling(invoke: Invoke) {
-        val args = invoke.parseArgs(SafLyricsArgs::class.java)
-        val tree = args.treeUri
-        val audio = args.audioUri
-        val maxBytes = args.maxBytes ?: MAX_LYRICS_BYTES
-        if (tree.isNullOrBlank() || audio.isNullOrBlank() || maxBytes <= 0L || maxBytes > MAX_LYRICS_BYTES) {
-            invoke.reject("treeUri, audioUri and maxBytes (1..$MAX_LYRICS_BYTES) are required")
-            return
-        }
-        async(invoke) { readSafLyricSibling(Uri.parse(tree), Uri.parse(audio), maxBytes) }
-    }
-
-    @Command
-    fun pickSafTree(invoke: Invoke) {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-            addFlags(
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
-                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
-            )
-        }
-        startActivityForResult(invoke, intent, "onSafTreePicked")
-    }
-
-    @ActivityCallback
-    private fun onSafTreePicked(invoke: Invoke, result: ActivityResult) {
-        val uri = result.data?.data
-        if (result.resultCode != Activity.RESULT_OK || uri == null) {
-            val response = JSObject()
-            response.put("uri", JSONObject.NULL)
-            invoke.resolve(response)
-            return
-        }
-
-        val readGrant = result.data?.flags?.and(Intent.FLAG_GRANT_READ_URI_PERMISSION) ?: 0
-        if (readGrant == 0) {
-            invoke.reject("The document provider did not grant read access")
-            return
-        }
-        try {
-            resolver.takePersistableUriPermission(uri, readGrant)
-            val response = JSObject()
-            response.put("uri", uri.toString())
-            invoke.resolve(response)
-        } catch (error: SecurityException) {
-            invoke.reject("Could not persist document-tree access: ${error.message}")
-        }
-    }
-
-    /** Recursive image list of a persisted SAF tree for the main-background slideshow (sorted by path). */
-    @Command
-    fun listSafImages(invoke: Invoke) {
-        val rawUri = invoke.parseArgs(TreeUriArgs::class.java).treeUri
-        if (rawUri.isNullOrBlank()) {
-            invoke.reject("treeUri is required")
-            return
-        }
-        io.execute {
-            try {
-                val treeUri = Uri.parse(rawUri)
-                if (resolver.persistedUriPermissions.none { it.uri == treeUri && it.isReadPermission }) {
-                    invoke.reject("The persisted SAF read grant is missing")
-                    return@execute
-                }
-                val images = mutableListOf<Pair<String, String>>()
-                val queue = ArrayDeque<Pair<String, String>>()
-                val visited = mutableSetOf<String>()
-                queue.addLast(DocumentsContract.getTreeDocumentId(treeUri) to "")
-                val projection = arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                )
-                var truncated = false
-                while (queue.isNotEmpty()) {
-                    val (parentId, prefix) = queue.removeFirst()
-                    if (!visited.add(parentId)) continue
-                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
-                    resolver.query(children, projection, null, null, null)?.use { rows ->
-                        val idColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                        val mimeColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
-                        val nameColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                        while (rows.moveToNext()) {
-                            val id = rows.stringOrNull(idColumn) ?: continue
-                            val name = rows.stringOrNull(nameColumn)
-                            if (isHiddenDocument(name)) continue
-                            val mime = rows.stringOrNull(mimeColumn)
-                            val path = prefix + (name ?: id)
-                            if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                                queue.addLast(id to "$path/")
-                            } else if (isSlideshowImage(mime, name)) {
-                                if (images.size >= MAX_SLIDESHOW_IMAGES) { truncated = true; continue }
-                                images.add(path to DocumentsContract.buildDocumentUriUsingTree(treeUri, id).toString())
-                            }
-                        }
-                    }
-                }
-                images.sortWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.first })
-                val uris = JSONArray()
-                images.forEach { uris.put(it.second) }
-                invoke.resolve(JSObject().put("uris", uris).put("truncated", truncated))
-            } catch (error: Exception) {
-                invoke.reject("Could not list slideshow images: ${error.message}")
-            }
-        }
     }
 
     private fun allFilesAccessGranted(): Boolean =
@@ -800,9 +361,135 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
+     * Folder picker used only to choose a location (ADR 0014): the tree URI is converted to its
+     * real path and no persisted grant is taken. Scanning then uses All files access.
+     */
+    @Command
+    fun pickDirectoryPath(invoke: Invoke) {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                putExtra(
+                    DocumentsContract.EXTRA_INITIAL_URI,
+                    DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Music"),
+                )
+            }
+        }
+        startActivityForResult(invoke, intent, "onDirectoryPathPicked")
+    }
+
+    @ActivityCallback
+    private fun onDirectoryPathPicked(invoke: Invoke, result: ActivityResult) {
+        val uri = result.data?.data
+        if (result.resultCode != Activity.RESULT_OK || uri == null) {
+            invoke.resolve(JSObject().put("path", JSONObject.NULL))
+            return
+        }
+        val path = try {
+            if (uri.authority == "com.android.externalstorage.documents") {
+                externalStoragePathFor(DocumentsContract.getTreeDocumentId(uri))
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+        if (path == null || !File(path).isDirectory) {
+            invoke.reject("Please choose a folder on the device storage")
+            return
+        }
+        invoke.resolve(JSObject().put("path", File(path).absolutePath))
+    }
+
+    /** Document picker used only to choose a file; returns its real path (no persisted grant). */
+    @Command
+    fun pickDocumentPath(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenDocumentArgs::class.java)
+        val mimeTypes = args.mimeTypes?.filter(String::isNotBlank)?.toTypedArray().orEmpty()
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = if (mimeTypes.size == 1) mimeTypes[0] else "*/*"
+            if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+        }
+        startActivityForResult(invoke, intent, "onDocumentPathPicked")
+    }
+
+    /** "Save as" picker used only to name a new file; returns its real path (no persisted grant). */
+    @Command
+    fun pickCreateDocumentPath(invoke: Invoke) {
+        val args = invoke.parseArgs(CreateDocumentArgs::class.java)
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = args.mimeType?.takeIf(String::isNotBlank) ?: "application/octet-stream"
+            putExtra(Intent.EXTRA_TITLE, args.suggestedName?.takeIf(String::isNotBlank) ?: "export")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                putExtra(
+                    DocumentsContract.EXTRA_INITIAL_URI,
+                    DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Music"),
+                )
+            }
+        }
+        startActivityForResult(invoke, intent, "onDocumentPathPicked")
+    }
+
+    @ActivityCallback
+    private fun onDocumentPathPicked(invoke: Invoke, result: ActivityResult) {
+        val uri = result.data?.data
+        if (result.resultCode != Activity.RESULT_OK || uri == null) {
+            invoke.resolve(JSObject().put("path", JSONObject.NULL))
+            return
+        }
+        io.execute {
+            val path = try { documentPathFor(uri) } catch (_: Exception) { null }
+            if (path == null) {
+                invoke.reject("Please choose a file on the device storage")
+            } else {
+                invoke.resolve(JSObject().put("path", path))
+            }
+        }
+    }
+
+    /** Real path for a picked document (ExternalStorageProvider, MediaStore, or media documents). */
+    private fun documentPathFor(uri: Uri): String? {
+        directPathFor(uri)?.let { return it }
+        if (uri.authority == "com.android.providers.media.documents") {
+            val (type, id) = DocumentsContract.getDocumentId(uri).split(':', limit = 2).let {
+                if (it.size == 2) it[0] to it[1] else return null
+            }
+            val collection = when (type) {
+                "audio" -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                "image" -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                "video" -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                else -> MediaStore.Files.getContentUri("external")
+            }
+            val id64 = id.toLongOrNull() ?: return null
+            return directPathFor(android.content.ContentUris.withAppendedId(collection, id64))
+        }
+        return null
+    }
+
+    /** Real paths for many MediaStore / ExternalStorageProvider URIs, in order (source migration). */
+    @Command
+    fun resolveDirectPaths(invoke: Invoke) {
+        val args = invoke.parseArgs(UriListArgs::class.java)
+        val uris = args.uris.orEmpty()
+        io.execute {
+            val paths = org.json.JSONArray()
+            for (raw in uris) {
+                val path = try {
+                    if (hasStorageAccess()) directPathFor(Uri.parse(raw)) else null
+                } catch (_: Exception) {
+                    null
+                }
+                paths.put(path ?: JSONObject.NULL)
+            }
+            invoke.resolve(JSObject().put("paths", paths))
+        }
+    }
+
+    /**
      * Real file path of a MediaStore / ExternalStorageProvider document, only when All files access
-     * is granted and the file exists (then Rust may read/write it directly, without a per-file
-     * createWriteRequest). Returns null otherwise so callers keep the ContentResolver path.
+     * is granted and the file exists (then Rust reads/writes it directly). Returns null otherwise;
+     * there is no per-file write-prompt fallback (ADR 0014).
      */
     @Command
     fun resolveDirectPath(invoke: Invoke) {
@@ -977,117 +664,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
-    fun hasSafPermission(invoke: Invoke) {
-        val args = invoke.parseArgs(TreeUriArgs::class.java)
-        val rawUri = args.treeUri
-        if (rawUri.isNullOrBlank()) {
-            invoke.reject("treeUri is required")
-            return
-        }
-        val uri = Uri.parse(rawUri)
-        val granted = resolver.persistedUriPermissions.any {
-            it.isReadPermission && it.uri == uri
-        }
-        val response = JSObject()
-        response.put("granted", granted)
-        invoke.resolve(response)
-    }
-
-    @Command
-    fun hasSafWritePermission(invoke: Invoke) {
-        val args = invoke.parseArgs(TreeUriArgs::class.java)
-        val uri = args.treeUri?.let(Uri::parse)
-        if (uri == null || !DocumentsContract.isTreeUri(uri)) {
-            invoke.reject("treeUri must be a SAF tree URI")
-            return
-        }
-        invoke.resolve(JSObject().put("granted", hasPersistedTreeWriteGrant(uri)))
-    }
-
-    @Command
-    fun pickMyLoveFolder(invoke: Invoke) {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-            addFlags(
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
-                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
-            )
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                putExtra(
-                    DocumentsContract.EXTRA_INITIAL_URI,
-                    DocumentsContract.buildDocumentUri(
-                        "com.android.externalstorage.documents",
-                        "primary:Music",
-                    ),
-                )
-            }
-        }
-        startActivityForResult(invoke, intent, "onMyLoveFolderPicked")
-    }
-
-    @ActivityCallback
-    private fun onMyLoveFolderPicked(invoke: Invoke, result: ActivityResult) {
-        val uri = result.data?.data
-        if (result.resultCode != Activity.RESULT_OK || uri == null) {
-            invoke.resolve(JSObject().put("uri", JSONObject.NULL))
-            return
-        }
-        val readGrant = result.data?.flags?.and(Intent.FLAG_GRANT_READ_URI_PERMISSION) ?: 0
-        val writeGrant = result.data?.flags?.and(Intent.FLAG_GRANT_WRITE_URI_PERMISSION) ?: 0
-        if (readGrant == 0 || writeGrant == 0) {
-            invoke.reject("The document provider must grant read and write access")
-            return
-        }
-        try {
-            resolver.takePersistableUriPermission(uri, readGrant or writeGrant)
-            invoke.resolve(JSObject().put("uri", uri.toString()))
-        } catch (error: SecurityException) {
-            invoke.reject("Could not preserve My Love folder access: ${error.message}")
-        }
-    }
-
-    @Command
-    fun ensureMyLovePlaylist(invoke: Invoke) {
-        val args = invoke.parseArgs(TreeUriArgs::class.java)
-        val rawTree = args.treeUri
-        if (rawTree.isNullOrBlank()) {
-            invoke.reject("treeUri is required")
-            return
-        }
-        async(invoke) {
-            val tree = Uri.parse(rawTree)
-            if (!DocumentsContract.isTreeUri(tree) || !hasPersistedTreeWriteGrant(tree)) {
-                throw SecurityException("My Love folder has no persisted SAF write grant")
-            }
-            val rootId = DocumentsContract.getTreeDocumentId(tree)
-            val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, rootId)
-            val projection = arrayOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            )
-            var existing: Uri? = null
-            resolver.query(children, projection, null, null, null)?.use { cursor ->
-                val idColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                val nameColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                while (cursor.moveToNext()) {
-                    if (cursor.getString(nameColumn).equals("MyLove.m3u8", ignoreCase = true)) {
-                        existing = DocumentsContract.buildDocumentUriUsingTree(tree, cursor.getString(idColumn))
-                        break
-                    }
-                }
-            } ?: throw IOException("Could not enumerate the selected My Love folder")
-            val playlist = existing ?: DocumentsContract.createDocument(
-                resolver,
-                DocumentsContract.buildDocumentUriUsingTree(tree, rootId),
-                "audio/x-mpegurl",
-                "MyLove.m3u8",
-            ) ?: throw IOException("Could not create MyLove.m3u8 in the selected folder")
-            JSObject().put("playlistUri", playlist.toString()).put("displayName", "我的最愛")
-        }
-    }
-
-    @Command
     fun probeContentUri(invoke: Invoke) {
         val args = invoke.parseArgs(ContentUriArgs::class.java)
         val rawUri = args.contentUri
@@ -1138,232 +714,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         }
     } catch (_: Exception) {
         null
-    }
-
-    @Command
-    fun releaseSafTree(invoke: Invoke) {
-        val args = invoke.parseArgs(TreeUriArgs::class.java)
-        val rawUri = args.treeUri
-        if (rawUri.isNullOrBlank()) {
-            invoke.reject("treeUri is required")
-            return
-        }
-        val uri = Uri.parse(rawUri)
-        try {
-            resolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        } catch (_: SecurityException) {
-            // Releasing a removed or already-revoked source is intentionally idempotent.
-        }
-        invoke.resolve(JSObject())
-    }
-
-    private fun scanMediaStore(sourceId: String, volumeName: String): JSObject {
-        if (!hasStorageAccess()) {
-            return scanResult("permissionRevoked", "All files access is not granted")
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val currentVolumes = MediaStore.getExternalVolumeNames(activity)
-            if (volumeName !in currentVolumes) {
-                return scanResult("unavailable", "MediaStore volume '$volumeName' is unavailable")
-            }
-        } else if (volumeName != "external" || !isLegacyExternalStorageMounted()) {
-            return scanResult("unavailable", "External MediaStore volume is unavailable")
-        }
-
-        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Audio.Media.getContentUri(volumeName)
-        } else {
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-        }
-        val versionBefore = getStoreVersion(volumeName)
-        val generationBefore = getStoreGeneration(volumeName)
-        val tracks = JSONArray()
-        val errors = JSONArray()
-        var incomplete = false
-
-        try {
-            val projection = mutableListOf(
-                MediaStore.Audio.Media._ID,
-                MediaStore.Audio.Media.SIZE,
-                MediaStore.Audio.Media.DATE_MODIFIED,
-            )
-            val cursor = resolver.query(collection, projection.toTypedArray(), null, null, null)
-                ?: return scanResult("unavailable", "MediaStore returned no cursor for '$volumeName'")
-            cursor.use { rows ->
-                val idColumn = rows.getColumnIndex(MediaStore.Audio.Media._ID)
-                val sizeColumn = rows.getColumnIndex(MediaStore.Audio.Media.SIZE)
-                val modifiedColumn = rows.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
-                if (idColumn < 0 || sizeColumn < 0) {
-                    return scanResult("incomplete", "MediaStore omitted required identity or size columns")
-                }
-
-                while (rows.moveToNext()) {
-                    try {
-                        val id = rows.getLong(idColumn)
-                        val size = rows.longOrNull(sizeColumn)
-                        if (size == null || size < 0L) {
-                            incomplete = true
-                            errors.put(sourceError("$volumeName:$id", "MediaStore row has no valid size"))
-                            continue
-                        }
-                        val modifiedSeconds = rows.longOrNull(modifiedColumn)
-                        val modifiedMillis = modifiedSeconds?.let { seconds ->
-                            if (seconds >= 0 && seconds <= Long.MAX_VALUE / 1000L) seconds * 1000L else null
-                        }
-                        val uri = Uri.withAppendedPath(collection, id.toString())
-                        tracks.put(trackRecord(
-                            sourceId = sourceId,
-                            sourceItemId = "$volumeName:$id",
-                            contentUri = uri.toString(),
-                            sizeBytes = size,
-                            modifiedAtUtcMs = modifiedMillis,
-                            metadata = null,
-                        ))
-                    } catch (error: Exception) {
-                        incomplete = true
-                        errors.put(sourceError(null, "Could not read a MediaStore row: ${error.message}"))
-                    }
-                }
-            }
-        } catch (error: SecurityException) {
-            return scanResult(
-                "permissionRevoked",
-                "MediaStore permission was revoked during the query: ${error.message}",
-                tracks,
-                errors,
-            )
-        } catch (error: Exception) {
-            return scanResult(
-                "incomplete",
-                "MediaStore query did not finish: ${error.message}",
-                tracks,
-                errors,
-            )
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && volumeName !in MediaStore.getExternalVolumeNames(activity)) {
-            return scanResult("unavailable", "MediaStore volume '$volumeName' disappeared during the query", tracks, errors)
-        }
-        val versionAfter = getStoreVersion(volumeName)
-        val generationAfter = getStoreGeneration(volumeName)
-        if ((versionBefore != null && versionAfter != versionBefore) ||
-            (generationBefore != null && generationAfter != generationBefore)
-        ) {
-            incomplete = true
-            errors.put(sourceError(null, "MediaStore changed while the full scan was running"))
-        }
-        return scanResult(if (incomplete) "incomplete" else "complete", null, tracks, errors)
-    }
-
-    private fun scanSafTree(sourceId: String, treeUri: Uri): JSObject {
-        if (!DocumentsContract.isTreeUri(treeUri)) {
-            return scanResult("unavailable", "SAF source is not a document-tree URI")
-        }
-        if (resolver.persistedUriPermissions.none { it.uri == treeUri && it.isReadPermission }) {
-            return scanResult("permissionRevoked", "The persisted SAF read grant is missing")
-        }
-
-        val rootDocumentId = try {
-            DocumentsContract.getTreeDocumentId(treeUri)
-        } catch (error: Exception) {
-            return scanResult("unavailable", "SAF tree URI cannot be opened: ${error.message}")
-        }
-        val queue = ArrayDeque<String>()
-        val visitedDirectories = mutableSetOf<String>()
-        val tracks = JSONArray()
-        val errors = JSONArray()
-        var incomplete = false
-        queue.addLast(rootDocumentId)
-        val projection = arrayOf(
-            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-            DocumentsContract.Document.COLUMN_MIME_TYPE,
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            DocumentsContract.Document.COLUMN_SIZE,
-            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-        )
-
-        while (queue.isNotEmpty()) {
-            val parentId = queue.removeFirst()
-            if (!visitedDirectories.add(parentId)) {
-                incomplete = true
-                errors.put(sourceError(parentId, "SAF provider returned a repeated directory identity"))
-                continue
-            }
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
-            try {
-                val cursor = resolver.query(childrenUri, projection, null, null, null)
-                if (cursor == null) {
-                    incomplete = true
-                    errors.put(sourceError(parentId, "SAF provider returned no child-document cursor"))
-                    continue
-                }
-                cursor.use { rows ->
-                    val idColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                    val mimeColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
-                    val nameColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                    val sizeColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
-                    val modifiedColumn = rows.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-                    if (idColumn < 0 || mimeColumn < 0) {
-                        incomplete = true
-                        errors.put(sourceError(parentId, "SAF provider omitted document identity or MIME columns"))
-                        continue
-                    }
-                    while (rows.moveToNext()) {
-                        val documentId = rows.stringOrNull(idColumn)
-                        val displayName = rows.stringOrNull(nameColumn)
-                        val mimeType = rows.stringOrNull(mimeColumn)
-                        if (isHiddenDocument(displayName)) continue
-                        if (documentId == null || mimeType == null) {
-                            incomplete = true
-                            errors.put(sourceError(documentId, "SAF row has no document ID or MIME type"))
-                            continue
-                        }
-                        if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
-                            queue.addLast(documentId)
-                            continue
-                        }
-                        when (audioCandidate(mimeType, displayName)) {
-                            AudioCandidate.NO -> continue
-                            AudioCandidate.UNKNOWN -> {
-                                incomplete = true
-                                errors.put(sourceError(documentId, "SAF document type could not be identified"))
-                                continue
-                            }
-                            AudioCandidate.YES -> Unit
-                        }
-
-                        val size = rows.longOrNull(sizeColumn)
-                        if (size == null || size < 0L || displayName == null) {
-                            incomplete = true
-                            errors.put(sourceError(documentId, "SAF audio document has incomplete size or name metadata"))
-                            continue
-                        }
-                        val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
-                        val authority = treeUri.authority ?: "unknown"
-                tracks.put(trackRecord(
-                            sourceId = sourceId,
-                            sourceItemId = "$authority:$documentId",
-                            contentUri = documentUri.toString(),
-                            sizeBytes = size,
-                            modifiedAtUtcMs = rows.longOrNull(modifiedColumn)?.takeIf { it >= 0L },
-                    metadata = null,
-                        ))
-                    }
-                }
-            } catch (error: SecurityException) {
-                return scanResult(
-                    "permissionRevoked",
-                    "The SAF read grant was revoked during traversal: ${error.message}",
-                    tracks,
-                    errors,
-                )
-            } catch (error: Exception) {
-                incomplete = true
-                errors.put(sourceError(parentId, "Could not enumerate SAF directory: ${error.message}"))
-            }
-        }
-        return scanResult(if (incomplete) "incomplete" else "complete", null, tracks, errors)
     }
 
     private fun readMetadata(uri: Uri): JSObject {
@@ -1560,41 +910,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         file.inputStream().use { input -> output.use { input.copyTo(it, COPY_BUFFER_SIZE) } }
     }
 
-    /**
-     * Overwrite [destination] with the lease bytes. Opens with "rw" first so nothing is
-     * truncated until the descriptor is granted (permission failures leave the file intact),
-     * then truncates to the new length after writing.
-     */
-    private fun writeAudioLease(token: String, destination: Uri): Long {
-        if (!TOKEN_PATTERN.matches(token)) throw IOException("Invalid cache lease token")
-        val file = File(leaseDirectory(), "$token.bin")
-        if (!file.isFile || file.length() == 0L || file.length() > MAX_CONTENT_LEASE_BYTES) {
-            throw IOException("Audio cache lease is missing or oversized")
-        }
-        val descriptor = try {
-            resolver.openFileDescriptor(destination, "rw")
-        } catch (error: SecurityException) {
-            throw error
-        } catch (_: Exception) {
-            null
-        } ?: resolver.openFileDescriptor(destination, "rwt")
-            ?: throw IOException("Could not open the audio document for writing")
-        descriptor.use { pfd ->
-            FileOutputStream(pfd.fileDescriptor).use { output ->
-                val channel = output.channel
-                channel.position(0L)
-                file.inputStream().use { input -> input.copyTo(output, COPY_BUFFER_SIZE) }
-                channel.truncate(file.length())
-                try {
-                    output.fd.sync()
-                } catch (_: java.io.SyncFailedException) {
-                    // Some providers expose non-syncable descriptors; the close still flushes.
-                }
-            }
-        }
-        return file.length()
-    }
-
     private fun leaseDirectory(): File = File(appContext.cacheDir, "media-index/leases")
 
     private fun cleanupExpiredLeases() {
@@ -1611,100 +926,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         val currentBytes = currentLeaseBytes()
         if (expectedBytes < 0L || currentBytes > MAX_TOTAL_LEASE_BYTES - expectedBytes) {
             throw IOException("CACHE_LEASE_LIMIT")
-        }
-    }
-
-    private fun readSafLyricSibling(treeUri: Uri, audioUri: Uri, maxBytes: Long): JSObject {
-        val uri = findSafSibling(treeUri, audioUri, ".lrc")
-            ?: return JSObject().put("text", JSONObject.NULL)
-        val input = resolver.openInputStream(uri) ?: throw IOException("Could not open authorized lyric sidecar")
-        val bytes = input.use { readBounded(it, maxBytes) }
-        val text = bytes.toString(Charsets.UTF_8)
-        if (!text.toByteArray(Charsets.UTF_8).contentEquals(bytes)) {
-            throw IOException("Lyric sidecar is not valid UTF-8")
-        }
-        return JSObject().put("text", text)
-    }
-
-    private fun listPlaylistDocuments(treeUri: Uri): List<Pair<Uri, String>> {
-        require(DocumentsContract.isTreeUri(treeUri)) { "Selected location is not a SAF document tree" }
-        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
-        val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, rootId)
-        val projection = arrayOf(
-            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-        )
-        val playlists = mutableListOf<Pair<Uri, String>>()
-        resolver.query(children, projection, null, null, null)?.use { cursor ->
-            val idColumn = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-            val nameColumn = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-            require(idColumn >= 0 && nameColumn >= 0) { "Document provider omitted playlist entry fields" }
-            while (cursor.moveToNext()) {
-                val documentId = cursor.getString(idColumn)
-                val name = cursor.getString(nameColumn)
-                if (name.substringAfterLast('.', "").lowercase() in setOf("m3u", "m3u8")) {
-                    playlists.add(DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId) to name)
-                    require(playlists.size <= MAX_PLAYLIST_CANDIDATES) {
-                        "Selected folder contains more than $MAX_PLAYLIST_CANDIDATES playlists"
-                    }
-                }
-            }
-        } ?: throw IOException("Document provider returned no selected folder entries")
-        return playlists
-    }
-
-    private fun resolvePlaylistPick(invoke: Invoke, treeUri: Uri, playlist: Pair<Uri, String>) {
-        invoke.resolve(JSObject().apply {
-            put("playlistUri", playlist.first.toString())
-            put("treeUri", treeUri.toString())
-            put("displayName", playlist.second)
-        })
-    }
-
-    private fun resolveSafPlaylistEntry(treeUri: Uri, playlistUri: Uri, locator: String): Uri? {
-        if (!DocumentsContract.isTreeUri(treeUri) || !DocumentsContract.isTreeUri(playlistUri)) return null
-        if (treeUri.authority != playlistUri.authority || !hasPersistedTreeReadGrant(treeUri)) {
-            throw SecurityException("Playlist entry is outside the persisted SAF grant")
-        }
-        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
-        val playlistId = DocumentsContract.getDocumentId(playlistUri)
-        if (!playlistId.startsWith("$rootId/")) {
-            throw SecurityException("Selected playlist is outside its SAF root")
-        }
-        val playlistRelative = playlistId.removePrefix("$rootId/")
-        if (playlistRelative.contains('/')) {
-            throw SecurityException("Playlist picker returned a document outside the selected folder")
-        }
-        val path = try {
-            normalizeSafPlaylistLocator(locator)
-        } catch (error: IllegalArgumentException) {
-            throw SecurityException("M3U relative entry escapes the selected SAF folder", error)
-        } ?: return null
-        var parentId = rootId
-        var resolved: Uri? = null
-        for (component in path) {
-            resolved = findChildDocument(treeUri, parentId, component) ?: return null
-            parentId = DocumentsContract.getDocumentId(resolved)
-        }
-        return resolved
-    }
-
-    private fun hasPersistedTreeReadGrant(uri: Uri): Boolean = resolver.persistedUriPermissions.any {
-        it.isReadPermission && it.uri == uri
-    }
-
-    private fun hasPersistedTreeWriteGrant(uri: Uri): Boolean = resolver.persistedUriPermissions.any {
-        it.isWritePermission && it.uri == uri
-    }
-
-    private fun releasePersistedTreeReadGrant(uri: Uri) {
-        try {
-            resolver.releasePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-        } catch (_: SecurityException) {
-            // A revoked or already-released picker result needs no follow-up.
         }
     }
 
@@ -1729,21 +950,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             findSafSiblingByName(treeUri, audioUri, name)?.let { return it }
         }
         return null
-    }
-
-    private fun findSafSibling(treeUri: Uri, audioUri: Uri, extension: String): Uri? {
-        if (!DocumentsContract.isTreeUri(treeUri) || !DocumentsContract.isTreeUri(audioUri)) return null
-        return try {
-            val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
-            if (DocumentsContract.getTreeDocumentId(audioUri) != treeDocumentId) return null
-            val audioDocumentId = DocumentsContract.getDocumentId(audioUri)
-            val audioName = queryDisplayName(audioUri) ?: return null
-            val stem = audioName.substringBeforeLast('.', audioName)
-            val targetName = "$stem$extension"
-            findChildDocument(treeUri, audioDocumentId.substringBeforeLast('/', ""), targetName)
-        } catch (_: Exception) {
-            null
-        }
     }
 
     private fun findSafSiblingByName(treeUri: Uri, audioUri: Uri, name: String): Uri? {
@@ -1808,27 +1014,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(137.toByte(), 80, 78, 71, 13, 10, 26, 10)) -> "image/png"
         bytes.size >= 12 && bytes.copyOfRange(0, 4).contentEquals("RIFF".toByteArray()) -> "image/webp"
         else -> null
-    }
-
-    private fun buildMediaStoreVolumes(): JSObject {
-        val apiLevel = Build.VERSION.SDK_INT
-        val names = if (apiLevel >= Build.VERSION_CODES.Q) {
-            MediaStore.getExternalVolumeNames(activity).sorted()
-        } else {
-            listOf("external")
-        }
-        val volumes = JSONArray()
-        for (name in names) {
-            val item = JSONObject()
-            item.put("volumeName", name)
-            item.put("version", getStoreVersion(name) ?: JSONObject.NULL)
-            item.put("generation", getStoreGeneration(name) ?: JSONObject.NULL)
-            volumes.put(item)
-        }
-        val response = JSObject()
-        response.put("apiLevel", apiLevel)
-        response.put("volumes", volumes)
-        return response
     }
 
     private fun getStoreVersion(volumeName: String): String? =

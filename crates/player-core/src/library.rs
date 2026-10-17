@@ -135,8 +135,12 @@ pub enum MediaSourceKind {
     WindowsSystemIndex,
     WindowsFilesystem,
     PlaylistFile,
+    /// Legacy Android MediaStore volume source; migrated to `AndroidFilesystem` (ADR 0014).
     AndroidMediaStore,
+    /// Legacy Android SAF document-tree source; migrated to `AndroidFilesystem` (ADR 0014).
     AndroidSaf,
+    /// Android folder scanned through its real path under All files access (ADR 0014).
+    AndroidFilesystem,
     Other,
 }
 

@@ -1,4 +1,5 @@
 pub mod artwork;
+mod filesystem_key;
 pub mod library;
 pub mod lyrics;
 mod zh_t2s;
@@ -40,5 +41,8 @@ pub use sync::{
     SyncProgress, SyncProgressOutcome, SyncProgressStage, SyncProgressUnit, SyncReport,
     TrackSyncState,
 };
+pub use filesystem_key::unix_path_from_key;
+#[cfg(unix)]
+pub use filesystem_key::{file_uri_for_path, unix_path_key};
 #[cfg(windows)]
 pub use windows_locator::windows_locator_key;

@@ -3322,42 +3322,6 @@ input:focus-visible {
   margin-top: 13px;
 }
 
-.media-volume-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.volume-choice {
-  display: flex;
-  min-width: 0;
-  min-height: 42px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 9px;
-  padding: 0 11px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: rgba(var(--text-rgb), 0.02);
-  cursor: pointer;
-  text-align: left;
-}
-
-.volume-choice span {
-  overflow: hidden;
-  color: var(--text);
-  font-size: var(--font-caption);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.volume-choice small {
-  flex: 0 0 auto;
-  color: var(--status-success);
-  font-size: var(--font-caption);
-}
-
 .configured-sources {
   padding-bottom: 7px;
 }

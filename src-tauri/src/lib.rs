@@ -36,6 +36,7 @@ use tauri::{
     ipc::Response, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size,
     State, WebviewWindow,
 };
+#[cfg_attr(not(target_os = "android"), allow(unused_imports))]
 use tauri_plugin_media_index::MediaIndexExt;
 #[cfg(any(target_os = "windows", target_os = "android"))]
 mod database_lifecycle;
@@ -49,7 +50,7 @@ mod window_icon;
 #[cfg(target_os = "windows")]
 mod windows_file_associations;
 use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImportResult};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 mod sleep_timer;
@@ -69,13 +70,13 @@ mod android_artwork;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod android_playback;
-#[cfg(any(target_os = "android", test))]
-mod android_playlist_source_sync;
+#[cfg(target_os = "android")]
+mod android_path_migration;
 mod favorites;
 mod lyrics_provider;
 mod lyrics_service;
 mod main_background;
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "android", test))]
 mod playlist_source_sync;
 #[cfg(target_os = "windows")]
 mod windows_data_directory;
@@ -2196,13 +2197,6 @@ struct ExcludedFolder {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MediaStoreVolumeOption {
-    volume_name: String,
-    display_name: String,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct SourceSyncError {
     item: Option<String>,
     message: String,
@@ -3411,33 +3405,8 @@ async fn album_artwork_selection_ensure(
         let candidates = database
             .album_artwork_candidate_locators(&album_names)
             .map_err(|error| error.to_string())?;
-        #[cfg(target_os = "android")]
-        let mut tree_uris = state
-            .settings
-            .snapshot()
-            .map_err(|error| error.to_string())?
-            .sources
-            .iter()
-            .filter(|source| source.enabled)
-            .filter_map(|source| match &source.kind {
-                SourceEntryKind::Folder {
-                    media_kind: MediaSourceKind::AndroidSaf,
-                    path: settings::StoredPath::Uri(tree_uri),
-                } => Some(tree_uri.clone()),
-                SourceEntryKind::PlaylistFile {
-                    tree_uri: Some(tree_uri),
-                    ..
-                } => Some(tree_uri.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        #[cfg(target_os = "android")]
-        {
-            tree_uris.sort();
-            tree_uris.dedup();
-        }
-        #[cfg(not(target_os = "android"))]
-        let tree_uris = Vec::new();
+        // Android folder artwork is read through real paths (ADR 0014); no SAF trees.
+        let tree_uris: Vec<String> = Vec::new();
         Ok((directory, None, Some(candidates), tree_uris))
     })
     .await?;
@@ -4313,13 +4282,8 @@ fn favorites_get_playlists(
                         .any(|locator| same_favorite_locator(locator, &entry.locator))
             })
         });
-        #[cfg(target_os = "android")]
-        let writable = tree_uri.as_deref().is_some_and(|tree| {
-            _app.media_index()
-                .has_saf_write_permission(tree)
-                .unwrap_or(false)
-        });
-        #[cfg(target_os = "windows")]
+        // Android writes favorites through the real path under All files access (ADR 0014).
+        #[cfg(any(target_os = "windows", target_os = "android"))]
         let writable = path.to_path_buf().is_ok();
         #[cfg(not(any(target_os = "windows", target_os = "android")))]
         let writable = false;
@@ -4378,14 +4342,6 @@ async fn favorites_set_membership(
             return Err("只能收藏到播放清單檔案來源。".to_owned());
         };
         let _ = (path, tree_uri);
-        #[cfg(target_os = "android")]
-        if !tree_uri.as_deref().is_some_and(|tree| {
-            app.media_index()
-                .has_saf_write_permission(tree)
-                .unwrap_or(false)
-        }) {
-            return Err("此 Android 播放清單目前沒有 SAF 寫入授權。請在「設定 → 音樂來源」重新選取該播放清單來源並授予讀寫權限。".to_owned());
-        }
         let target_locators = favorite_track_locators(&state, database, track_id)?;
         let target_locator = target_locators
             .first()
@@ -4468,56 +4424,95 @@ async fn favorites_create_my_love(
     }
     #[cfg(target_os = "android")]
     {
-        let Some(selected_tree_uri) = _app
-            .media_index()
-            .pick_my_love_folder()
-            .map_err(|error| error.to_string())?
-        else {
+        // The folder picker only locates a directory; MyLove.m3u8 is created (never
+        // overwritten) and synced through its real path under All files access (ADR 0014).
+        let picker_app = _app.clone();
+        let picked = tauri::async_runtime::spawn_blocking(move || {
+            picker_app.media_index().pick_directory_path()
+        })
+        .await
+        .map_err(|error| format!("資料夾選擇工作失敗：{error}"))?
+        .map_err(|error| error.to_string())?;
+        let Some(directory) = picked else {
             return Ok(());
         };
-        let (playlist_uri, display_name) = _app
-            .media_index()
-            .ensure_my_love_playlist(&selected_tree_uri)
-            .map_err(|error| error.to_string())?;
-        let _database_work = enter_database_work(&state)?;
-        let database = state.database.as_ref().ok_or_else(|| {
-            state
-                .database_error
-                .clone()
-                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-        })?;
-        let settings = state
-            .settings
-            .snapshot()
-            .map_err(|error| error.to_string())?;
-        if let Some(existing) = settings
-            .sources
-            .iter()
-            .find(|source| is_my_love_source(source))
+        let directory = std::fs::canonicalize(&directory)
+            .map_err(|error| format!("無法確認選取的資料夾：{error}"))?;
+        let path = directory.join("MyLove.m3u8");
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
         {
-            let mut source = existing.clone();
-            source.enabled = true;
-            let playlist_id = match &mut source.kind {
-                SourceEntryKind::PlaylistFile {
-                    playlist_id,
-                    path,
-                    tree_uri: source_tree_uri,
-                } => {
-                    *path = settings::StoredPath::Uri(playlist_uri.clone());
-                    *source_tree_uri = Some(selected_tree_uri.clone());
-                    *playlist_id
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all("#EXTM3U\n#PLAYLIST:我的最愛\n".as_bytes())
+                    .map_err(|error| format!("無法建立 MyLove.m3u8：{error}"))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(format!("無法建立 MyLove.m3u8：{error}")),
+        }
+        {
+            let _database_work = enter_database_work(&state)?;
+            let database = state.database.as_ref().ok_or_else(|| {
+                state
+                    .database_error
+                    .clone()
+                    .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+            })?;
+            let settings = state
+                .settings
+                .snapshot()
+                .map_err(|error| error.to_string())?;
+            let stored = settings::StoredPath::from_path(&path).map_err(|error| error.to_string())?;
+            let source = match settings
+                .sources
+                .iter()
+                .find(|source| is_my_love_source(source))
+            {
+                Some(existing) => {
+                    let mut source = existing.clone();
+                    source.enabled = true;
+                    match &mut source.kind {
+                        SourceEntryKind::PlaylistFile {
+                            path: source_path,
+                            tree_uri,
+                            ..
+                        } => {
+                            *source_path = stored;
+                            *tree_uri = None;
+                        }
+                        _ => return Err("我的最愛來源型態無效。".to_owned()),
+                    }
+                    source
                 }
-                _ => return Err("我的最愛來源型態無效。".to_owned()),
+                None => SourceEntry {
+                    id: SourceId::new(),
+                    display_name: "我的最愛".to_owned(),
+                    enabled: true,
+                    kind: SourceEntryKind::PlaylistFile {
+                        playlist_id: PlaylistId::new(),
+                        path: stored,
+                        tree_uri: None,
+                    },
+                },
             };
+            let SourceEntryKind::PlaylistFile { playlist_id, .. } = &source.kind else {
+                unreachable!();
+            };
+            let playlist_id = *playlist_id;
             state
                 .settings
                 .upsert_source(source.clone())
                 .map_err(|error| error.to_string())?;
-            let root = source
-                .database_projection()
-                .map_err(|error| error.to_string())?;
             database
-                .save_library_root(&root)
+                .save_library_root(&LibraryRoot {
+                    id: source.id,
+                    kind: MediaSourceKind::PlaylistFile,
+                    display_name: "我的最愛".to_owned(),
+                    locator: MediaLocator::FileSystem(path.clone()),
+                    enabled: true,
+                })
                 .map_err(|error| error.to_string())?;
             if database
                 .get_playlist(playlist_id)
@@ -4532,41 +4527,8 @@ async fn favorites_create_my_love(
                     })
                     .map_err(|error| error.to_string())?;
             }
-            return Ok(());
         }
-        let source_id = SourceId::new();
-        let playlist_id = PlaylistId::new();
-        state
-            .settings
-            .upsert_source(SourceEntry {
-                id: source_id,
-                display_name,
-                enabled: true,
-                kind: SourceEntryKind::PlaylistFile {
-                    playlist_id,
-                    path: settings::StoredPath::Uri(playlist_uri.clone()),
-                    tree_uri: Some(selected_tree_uri.clone()),
-                },
-            })
-            .map_err(|error| error.to_string())?;
-        let playlist = player_core::Playlist {
-            id: playlist_id,
-            name: "我的最愛".to_owned(),
-            entries: Vec::new(),
-        };
-        database
-            .save_playlist(&playlist)
-            .map_err(|error| error.to_string())?;
-        database
-            .save_library_root(&LibraryRoot {
-                id: source_id,
-                kind: MediaSourceKind::PlaylistFile,
-                display_name: "我的最愛".to_owned(),
-                locator: MediaLocator::ContentUri(playlist_uri),
-                enabled: true,
-            })
-            .map_err(|error| error.to_string())?;
-        drop(_database_work);
+        library_sync(_app.clone()).await?;
         Ok(())
     }
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
@@ -4582,24 +4544,51 @@ async fn favorites_create_playlist(
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     {
-        use tauri_plugin_dialog::DialogExt;
+        #[cfg(target_os = "windows")]
+        let mut path = {
+            use tauri_plugin_dialog::DialogExt;
 
-        let selected = app
-            .dialog()
-            .file()
-            .set_parent(&window)
-            .set_title("建立播放清單")
-            .set_file_name("新播放清單.m3u8")
-            .add_filter("M3U8 播放清單", &["m3u8"])
-            .blocking_save_file();
-        let Some(selected) = selected else {
-            return Ok(None);
+            let selected = app
+                .dialog()
+                .file()
+                .set_parent(&window)
+                .set_title("建立播放清單")
+                .set_file_name("新播放清單.m3u8")
+                .add_filter("M3U8 播放清單", &["m3u8"])
+                .blocking_save_file();
+            let Some(selected) = selected else {
+                return Ok(None);
+            };
+            selected
+                .into_path()
+                .map_err(|error| format!("無法取得播放清單檔案路徑：{error}"))?
         };
-        let mut path = selected
-            .into_path()
-            .map_err(|error| format!("無法取得播放清單檔案路徑：{error}"))?;
+        // Android: the "save as" picker only names the file (it creates it empty); the playlist
+        // is then written and synced through its real path (All files access, ADR 0014).
+        #[cfg(target_os = "android")]
+        let mut path = {
+            let _ = &window;
+            let picker_app = app.clone();
+            let picked = tauri::async_runtime::spawn_blocking(move || {
+                picker_app
+                    .media_index()
+                    .pick_create_document_path("新播放清單.m3u8", "audio/x-mpegurl")
+            })
+            .await
+            .map_err(|error| format!("播放清單建立工作失敗：{error}"))?
+            .map_err(|error| error.to_string())?;
+            let Some(path) = picked else {
+                return Ok(None);
+            };
+            let path = std::path::PathBuf::from(path);
+            if std::fs::metadata(&path).is_ok_and(|metadata| metadata.len() == 0) {
+                // The picker's empty placeholder: replace it so the header below is written.
+                let _ = std::fs::remove_file(&path);
+            }
+            path
+        };
         if !path
             .extension()
             .and_then(|extension| extension.to_str())
@@ -4690,117 +4679,6 @@ async fn favorites_create_playlist(
         drop(_database_work);
         library_sync(app.clone()).await?;
         Ok(Some(display_name))
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        let _ = &window;
-        let Some(created) = app
-            .media_index()
-            .pick_playlist_create("新播放清單.m3u8")
-            .map_err(|error| error.to_string())?
-        else {
-            return Ok(None);
-        };
-        let playlist_uri = created.playlist_uri.clone();
-        let media_index_app = app.clone();
-        let playlist_bytes = tauri::async_runtime::spawn_blocking(move || {
-            let lease = media_index_app
-                .media_index()
-                .cache_content_uri(
-                    &playlist_uri,
-                    android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64,
-                )
-                .map_err(|error| error.to_string())?;
-            std::fs::read(lease.path()).map_err(|error| format!("讀取新播放清單失敗：{error}"))
-        })
-        .await
-        .map_err(|error| format!("讀取新播放清單工作失敗：{error}"))??;
-        let display_name = std::path::Path::new(&created.display_name)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .filter(|name| {
-                std::path::Path::new(name)
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("m3u8"))
-            })
-            .ok_or_else(|| "新播放清單必須使用 .m3u8 副檔名。".to_owned())?
-            .to_owned();
-        let parsed = playlist_exchange::read_playlist_bytes(
-            &playlist_bytes,
-            std::path::Path::new(&display_name),
-        )?;
-
-        let _database_work = enter_database_work(&state)?;
-        let database = state.database.as_ref().ok_or_else(|| {
-            state
-                .database_error
-                .clone()
-                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-        })?;
-        let settings = state
-            .settings
-            .snapshot()
-            .map_err(|error| error.to_string())?;
-        let existing = settings.sources.iter().find(|source| {
-            matches!(
-                &source.kind,
-                SourceEntryKind::PlaylistFile {
-                    path: settings::StoredPath::Uri(uri),
-                    tree_uri: Some(tree),
-                    ..
-                } if uri == &created.playlist_uri && tree == &created.tree_uri
-            )
-        });
-        let (source_id, playlist_id) = if let Some(source) = existing {
-            let SourceEntryKind::PlaylistFile { playlist_id, .. } = &source.kind else {
-                unreachable!();
-            };
-            (source.id, *playlist_id)
-        } else {
-            let playlist_id = database
-                .unique_playlist_id_matching_locators(
-                    &parsed.name,
-                    &parsed
-                        .entries
-                        .iter()
-                        .map(|entry| entry.locator.clone())
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(|error| error.to_string())?
-                .unwrap_or(parsed.id);
-            (SourceId::new(), playlist_id)
-        };
-        let mut playlist = parsed;
-        playlist.id = playlist_id;
-        let resolved_name = playlist.name.clone();
-        database
-            .save_playlist(&playlist)
-            .map_err(|error| error.to_string())?;
-        let source = SourceEntry {
-            id: source_id,
-            display_name: resolved_name.clone(),
-            enabled: true,
-            kind: SourceEntryKind::PlaylistFile {
-                playlist_id,
-                path: settings::StoredPath::Uri(created.playlist_uri.clone()),
-                tree_uri: Some(created.tree_uri.clone()),
-            },
-        };
-        state
-            .settings
-            .upsert_source(source.clone())
-            .map_err(|error| error.to_string())?;
-        let root = source
-            .database_projection()
-            .map_err(|error| error.to_string())?;
-        database
-            .save_library_root(&root)
-            .map_err(|error| error.to_string())?;
-        drop(_database_work);
-        library_sync(app.clone()).await?;
-        Ok(Some(resolved_name))
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
@@ -4979,7 +4857,14 @@ fn same_favorite_locator(left: &MediaLocator, right: &MediaLocator) -> bool {
             {
                 player_core::windows_locator_key(left) == player_core::windows_locator_key(right)
             }
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(target_os = "android")]
+            {
+                left == right
+                    || std::fs::canonicalize(left).ok().is_some_and(|left| {
+                        std::fs::canonicalize(right).ok().as_deref() == Some(left.as_path())
+                    })
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "android")))]
             {
                 left == right
             }
@@ -4988,7 +4873,7 @@ fn same_favorite_locator(left: &MediaLocator, right: &MediaLocator) -> bool {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 fn read_favorite_source(
     _app: &AppHandle,
     source: &SourceEntry,
@@ -4999,34 +4884,6 @@ fn read_favorite_source(
         .map_err(|error| error.to_string())?;
     let bytes = std::fs::read(&path).map_err(|error| format!("無法重新讀取播放清單：{error}"))?;
     Ok((Some(path), bytes))
-}
-
-#[cfg(target_os = "android")]
-fn read_favorite_source(
-    app: &AppHandle,
-    source: &SourceEntry,
-) -> Result<(Option<std::path::PathBuf>, Vec<u8>), String> {
-    use std::io::Read;
-    let settings::StoredPath::Uri(uri) = source.path() else {
-        return Err("Android 播放清單沒有 SAF 文件 URI。".to_owned());
-    };
-    let lease = app
-        .media_index()
-        .cache_content_uri(
-            uri,
-            android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64,
-        )
-        .map_err(|error| error.to_string())?;
-    let mut bytes = Vec::new();
-    std::fs::File::open(lease.path())
-        .map_err(|error| error.to_string())?
-        .take(android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
-    if bytes.len() > android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES {
-        return Err("播放清單超過 32 MiB 限制。".to_owned());
-    }
-    Ok((None, bytes))
 }
 
 fn resolve_favorite_entry_ids(
@@ -5046,52 +4903,24 @@ fn resolve_favorite_entry_ids(
     }
     #[cfg(target_os = "android")]
     {
-        let SourceEntryKind::PlaylistFile {
-            path: settings::StoredPath::Uri(playlist_uri),
-            tree_uri: Some(tree_uri),
-            ..
-        } = &source.kind
-        else {
-            return Err("SAF 播放清單來源缺少文件樹。".to_owned());
-        };
+        // Real paths (ADR 0014): entries resolve by their canonical path, like library tracks.
+        let _ = (app, source);
         for entry in &mut playlist.entries {
             let locator = match &entry.locator {
-                MediaLocator::FileSystem(path) if !path.is_absolute() => {
-                    let value = path.to_string_lossy();
-                    let is_windows_absolute = value.as_bytes().get(1) == Some(&b':')
-                        && value
-                            .as_bytes()
-                            .first()
-                            .is_some_and(u8::is_ascii_alphabetic);
-                    (!is_windows_absolute).then(|| value.replace('\\', "/"))
-                }
-                MediaLocator::FileSystem(_) => None,
-                MediaLocator::ContentUri(uri) => {
-                    entry.track_id = database
-                        .resolve_track_id_for_locator(&MediaLocator::ContentUri(uri.clone()))
-                        .map_err(|error| error.to_string())?;
-                    None
-                }
+                MediaLocator::FileSystem(path) => MediaLocator::FileSystem(
+                    std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()),
+                ),
+                other => other.clone(),
             };
-            if let Some(locator) = locator {
-                if let Some(resolved) = app
-                    .media_index()
-                    .resolve_saf_playlist_entry(tree_uri, playlist_uri, &locator)
-                    .map_err(|error| error.to_string())?
-                {
-                    entry.track_id = database
-                        .resolve_track_id_for_locator(&MediaLocator::ContentUri(
-                            resolved.content_uri,
-                        ))
-                        .map_err(|error| error.to_string())?;
-                }
-            }
+            entry.track_id = database
+                .resolve_track_id_for_locator(&locator)
+                .map_err(|error| error.to_string())?;
         }
     }
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 fn write_favorite_source(
     _app: &AppHandle,
     source: &SourceEntry,
@@ -5114,50 +4943,59 @@ fn write_favorite_source(
     Ok(())
 }
 
-#[cfg(target_os = "android")]
-fn write_favorite_source(
-    app: &AppHandle,
-    source: &SourceEntry,
-    _path: Option<&std::path::Path>,
-    bytes: &[u8],
-) -> Result<(), String> {
-    let settings::StoredPath::Uri(uri) = source.path() else {
-        return Err("Android 播放清單沒有 SAF 文件 URI。".to_owned());
-    };
-    let lease = app
-        .media_index()
-        .create_cache_lease()
-        .map_err(|error| error.to_string())?;
-    std::fs::write(lease.path(), bytes)
-        .map_err(|error| format!("無法寫入播放清單暫存檔：{error}"))?;
-    app.media_index()
-        .write_content_cache_lease(&lease, uri)
-        .map_err(|error| format!("無法寫入 SAF 播放清單：{error}"))
-}
-
 #[tauri::command]
 async fn playlist_import_m3u(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<PlaylistImportResult>, String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     {
-        use tauri_plugin_dialog::DialogExt;
+        #[cfg(target_os = "windows")]
+        let path = {
+            use tauri_plugin_dialog::DialogExt;
 
-        let selected = app
-            .dialog()
-            .file()
-            .set_parent(&window)
-            .set_title("匯入播放清單")
-            .add_filter("M3U / M3U8 播放清單", &["m3u", "m3u8"])
-            .blocking_pick_file();
-        let Some(selected) = selected else {
-            return Ok(None);
+            let selected = app
+                .dialog()
+                .file()
+                .set_parent(&window)
+                .set_title("匯入播放清單")
+                .add_filter("M3U / M3U8 播放清單", &["m3u", "m3u8"])
+                .blocking_pick_file();
+            let Some(selected) = selected else {
+                return Ok(None);
+            };
+            selected
+                .into_path()
+                .map_err(|error| format!("無法取得選取的本機播放清單路徑：{error}"))?
         };
-        let path = selected
-            .into_path()
-            .map_err(|error| format!("無法取得選取的本機播放清單路徑：{error}"))?;
+        // Android: the picker only locates the file; it is read through its real path under
+        // All files access, with no persisted SAF grant (ADR 0014).
+        #[cfg(target_os = "android")]
+        let path = {
+            let _ = &window;
+            let picker_app = app.clone();
+            let picked = tauri::async_runtime::spawn_blocking(move || {
+                picker_app.media_index().pick_document_path(&["*/*"])
+            })
+            .await
+            .map_err(|error| format!("播放清單選擇工作失敗：{error}"))?
+            .map_err(|error| error.to_string())?;
+            let Some(path) = picked else {
+                return Ok(None);
+            };
+            let path = std::path::PathBuf::from(path);
+            if !path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("m3u") || extension.eq_ignore_ascii_case("m3u8")
+                })
+            {
+                return Err("選取的檔案不是 .m3u 或 .m3u8 播放清單。".to_owned());
+            }
+            path
+        };
         let _database_work = enter_database_work(&state)?;
         let database = state.database.as_ref().ok_or_else(|| {
             state
@@ -5230,162 +5068,10 @@ async fn playlist_import_m3u(
         Ok(Some(imported))
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
-        #[cfg(target_os = "android")]
-        {
-            let _ = window;
-            let Some(selected) = app
-                .media_index()
-                .pick_playlist_import()
-                .map_err(|error| error.to_string())?
-            else {
-                return Ok(None);
-            };
-            if !app
-                .media_index()
-                .has_saf_permission(&selected.tree_uri)
-                .map_err(|error| error.to_string())?
-            {
-                return Err("Android 未保留此播放清單文件樹的讀取授權。".to_owned());
-            }
-            if !app
-                .media_index()
-                .has_saf_write_permission(&selected.tree_uri)
-                .map_err(|error| error.to_string())?
-            {
-                return Err(
-                    "加入播放清單來源需要讀取與寫入授權，請重新選取資料夾並允許修改播放清單。"
-                        .to_owned(),
-                );
-            }
-            let playlist_uri = selected.playlist_uri.clone();
-            let app_for_read = app.clone();
-            let playlist_bytes = tauri::async_runtime::spawn_blocking(move || {
-                let lease = app_for_read
-                    .media_index()
-                    .cache_content_uri(
-                        &playlist_uri,
-                        android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64,
-                    )
-                    .map_err(|error| error.to_string())?;
-                let metadata = std::fs::metadata(lease.path())
-                    .map_err(|error| format!("無法讀取播放清單快取：{error}"))?;
-                if metadata.len() > android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64
-                {
-                    return Err("Android 播放清單超過 32 MiB 限制。".to_owned());
-                }
-                let mut bytes = Vec::with_capacity(metadata.len() as usize);
-                {
-                    use std::io::Read;
-                    std::fs::File::open(lease.path())
-                        .and_then(|file| {
-                            file.take(
-                                android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64 + 1,
-                            )
-                            .read_to_end(&mut bytes)
-                        })
-                        .map_err(|error| format!("讀取播放清單快取失敗：{error}"))?;
-                }
-                if bytes.len() > android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES {
-                    return Err("Android 播放清單超過 32 MiB 限制。".to_owned());
-                }
-                Ok(bytes)
-            })
-            .await
-            .map_err(|error| format!("讀取 Android 播放清單工作失敗：{error}"))??;
-
-            let file_name = std::path::Path::new(&selected.display_name)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .filter(|name| {
-                    name.rsplit_once('.').is_some_and(|(_, ext)| {
-                        matches!(ext.to_ascii_lowercase().as_str(), "m3u" | "m3u8")
-                    })
-                })
-                .ok_or_else(|| "選取的文件不是 .m3u 或 .m3u8 播放清單。".to_owned())?;
-            let parse_path = std::path::PathBuf::from(file_name);
-            let parsed = playlist_exchange::read_playlist_bytes(&playlist_bytes, &parse_path)?;
-            let _database_work = enter_database_work(&state)?;
-            let database = state.database.as_ref().ok_or_else(|| {
-                state
-                    .database_error
-                    .clone()
-                    .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-            })?;
-            let settings = state
-                .settings
-                .snapshot()
-                .map_err(|error| error.to_string())?;
-            let existing = settings.sources.iter().find(|source| {
-                matches!(
-                    &source.kind,
-                    SourceEntryKind::PlaylistFile {
-                        path: settings::StoredPath::Uri(path),
-                        tree_uri: Some(tree),
-                        ..
-                    } if path == &selected.playlist_uri && tree == &selected.tree_uri
-                )
-            });
-            let (source_id, playlist_id) = if let Some(source) = existing {
-                let SourceEntryKind::PlaylistFile { playlist_id, .. } = source.kind else {
-                    unreachable!();
-                };
-                (source.id, playlist_id)
-            } else {
-                let playlist_id = database
-                    .unique_playlist_id_matching_locators(
-                        &parsed.name,
-                        &parsed
-                            .entries
-                            .iter()
-                            .map(|entry| entry.locator.clone())
-                            .collect::<Vec<_>>(),
-                    )
-                    .map_err(|error| error.to_string())?
-                    .unwrap_or(parsed.id);
-                (SourceId::new(), playlist_id)
-            };
-            state
-                .settings
-                .upsert_source(SourceEntry {
-                    id: source_id,
-                    display_name: file_name.to_owned(),
-                    enabled: true,
-                    kind: SourceEntryKind::PlaylistFile {
-                        playlist_id,
-                        path: settings::StoredPath::Uri(selected.playlist_uri),
-                        tree_uri: Some(selected.tree_uri),
-                    },
-                })
-                .map_err(|error| error.to_string())?;
-            drop(_database_work);
-            let sync = library_sync(app.clone()).await?;
-            let _post_sync_database_work = enter_database_work(&state)?;
-            let saved = database
-                .get_playlist(playlist_id)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| "播放清單同步後無法重新讀取。".to_owned())?;
-            let result = PlaylistImportResult {
-                playlist: PlaylistSummary {
-                    id: saved.id,
-                    name: saved.name,
-                    entry_count: saved.entries.len() as u64,
-                },
-                matched_entries: saved
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.track_id.is_some())
-                    .count() as u64,
-            };
-            let _ = sync;
-            Ok(Some(result))
-        }
-        #[cfg(not(target_os = "android"))]
-        {
-            let _ = (app, window, state);
-            Err("M3U/M3U8 原生檔案匯入目前只支援 Windows 與 Android。".to_owned())
-        }
+        let _ = (app, window, state);
+        Err("M3U/M3U8 原生檔案匯入目前只支援 Windows 與 Android。".to_owned())
     }
 }
 
@@ -5465,11 +5151,6 @@ async fn playlist_export_m3u(
         #[cfg(target_os = "android")]
         {
             let _ = window;
-            if relative_paths {
-                return Err(
-                    "Android 匯出使用已授權的 content URI；目前不支援相對路徑匯出。".to_owned(),
-                );
-            }
             let database_path = state.database_path.clone().ok_or_else(|| {
                 state
                     .database_error
@@ -5499,28 +5180,28 @@ async fn playlist_export_m3u(
             let app_for_export = app.clone();
             let exported = tauri::async_runtime::spawn_blocking(
                 move || -> Result<Option<PlaylistExportResult>, String> {
-                    let media_index = app_for_export.media_index();
-                    let Some(destination_uri) = media_index
-                        .pick_playlist_export(&suggested_name)
+                    // The picker only names the file; it is written through its real path
+                    // under All files access (ADR 0014). Relative entries use its folder.
+                    let Some(path) = app_for_export
+                        .media_index()
+                        .pick_create_document_path(&suggested_name, "audio/x-mpegurl")
                         .map_err(|error| error.to_string())?
                     else {
                         return Ok(None);
                     };
-                    let lease = media_index
-                        .create_cache_lease()
-                        .map_err(|error| error.to_string())?;
+                    let path = std::path::PathBuf::from(path);
+                    let relative_root = relative_paths
+                        .then(|| path.parent().map(std::path::Path::to_path_buf))
+                        .flatten();
                     let database =
                         Database::open(database_path).map_err(|error| error.to_string())?;
                     let result = export_playlist_file(
                         &database,
                         &playlist_id.to_string(),
-                        lease.path(),
+                        &path,
                         &extension,
-                        None,
+                        relative_root.as_deref(),
                     )?;
-                    media_index
-                        .write_content_cache_lease(&lease, &destination_uri)
-                        .map_err(|error| error.to_string())?;
                     Ok(Some(result))
                 },
             )
@@ -5808,17 +5489,20 @@ async fn appearance_pick_slideshow_folder(
             .map_err(|error| error.to_string())?;
         Ok(Some(true))
     }
+    // Android: the folder picker only locates the directory; images are listed and read
+    // through its real path under All files access (ADR 0014).
     #[cfg(target_os = "android")]
     {
         let _ = (window, state);
         return tauri::async_runtime::spawn_blocking(move || -> Result<Option<bool>, String> {
-            let Some(tree_uri) = app
+            let Some(folder) = app
                 .media_index()
-                .pick_saf_tree()
+                .pick_directory_path()
                 .map_err(|error| error.to_string())?
             else {
                 return Ok(None);
             };
+            let folder = std::path::PathBuf::from(folder);
             let state = app.state::<AppState>();
             let order = state
                 .settings
@@ -5826,14 +5510,13 @@ async fn appearance_pick_slideshow_folder(
                 .map_err(|error| error.to_string())?
                 .theme
                 .slideshow_order;
-            let key = std::path::PathBuf::from(&tree_uri);
-            state.main_background.configure_slideshow_with(&key, order, |_| {
-                android_slideshow_images(&app, &tree_uri)
-            })?;
+            state.main_background.configure_slideshow(&folder, order)?;
+            let stored_path =
+                settings::StoredPath::from_path(&folder).map_err(|error| error.to_string())?;
             state
                 .settings
                 .update(|settings| {
-                    settings.theme.slideshow_folder = Some(settings::StoredPath::Uri(tree_uri.clone()));
+                    settings.theme.slideshow_folder = Some(stored_path);
                     settings.theme.main_background_mode = MainBackgroundMode::Slideshow;
                     Ok(())
                 })
@@ -5945,19 +5628,7 @@ async fn appearance_next_slideshow_background(app: AppHandle) -> Result<Response
 const ANDROID_BACKGROUND_IMAGE_MIME_TYPES: [&str; 5] =
     ["image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"];
 
-#[cfg(target_os = "android")]
-fn android_slideshow_images(
-    app: &AppHandle,
-    tree_uri: &str,
-) -> Result<Vec<std::path::PathBuf>, String> {
-    app.media_index()
-        .list_saf_images(tree_uri)
-        .map(|uris| uris.into_iter().map(std::path::PathBuf::from).collect())
-        .map_err(|error| format!("無法讀取幻燈片資料夾：{error}"))
-}
-
-/// Advance the slideshow and read the next image. Android SAF trees are keyed by their tree URI
-/// (as a UTF-8 PathBuf) and each entry is a document URI read through a short-lived cache lease.
+/// Advance the slideshow and read the next image from the folder's real path.
 fn next_slideshow_bytes(
     app: &AppHandle,
     state: &AppState,
@@ -5967,19 +5638,8 @@ fn next_slideshow_bytes(
         .slideshow_folder
         .as_ref()
         .ok_or_else(|| "請先選擇幻燈片背景資料夾。".to_owned())?;
-    #[cfg(target_os = "android")]
-    if let settings::StoredPath::Uri(tree_uri) = folder {
-        let key = std::path::PathBuf::from(tree_uri);
-        let image = state
-            .main_background
-            .next_slideshow_image_with(&key, theme.slideshow_order, |_| {
-                android_slideshow_images(app, tree_uri)
-            })?;
-        let lease = app
-            .media_index()
-            .cache_content_uri(&image.to_string_lossy(), MAIN_BACKGROUND_MAX_BYTES)
-            .map_err(|error| format!("無法讀取背景圖片：{error}"))?;
-        return read_background_image(lease.path());
+    if matches!(folder, settings::StoredPath::Uri(_)) {
+        return Err("幻燈片資料夾使用舊版 SAF 授權；請重新選擇資料夾。".to_owned());
     }
     let _ = app;
     let folder = folder.to_path_buf().map_err(|error| error.to_string())?;
@@ -6792,19 +6452,6 @@ fn library_remove_source(
             .save_library_root(&root)
             .map_err(|error| error.to_string())?;
     }
-    #[cfg(target_os = "android")]
-    if let Some(tree_uri) = source_tree_uri(&removed) {
-        let tree_still_used = settings
-            .sources
-            .iter()
-            .any(|source| source_tree_uri(source) == Some(tree_uri));
-        if !tree_still_used {
-            if let Err(error) = app.media_index().release_saf_tree(tree_uri) {
-                eprintln!("無法釋放已移除來源的 SAF 授權：{error}");
-            }
-        }
-    }
-    #[cfg(not(target_os = "android"))]
     let _ = app;
     settings
         .sources
@@ -6813,117 +6460,65 @@ fn library_remove_source(
         .collect()
 }
 
-#[cfg(target_os = "android")]
-fn source_tree_uri(source: &SourceEntry) -> Option<&str> {
-    match &source.kind {
-        SourceEntryKind::Folder {
-            media_kind: MediaSourceKind::AndroidSaf,
-            path: settings::StoredPath::Uri(uri),
-        } => Some(uri),
-        SourceEntryKind::PlaylistFile {
-            tree_uri: Some(uri),
-            ..
-        } => Some(uri),
-        _ => None,
-    }
-}
-
+/// Android: choose a folder and register it as a real-path library source (ADR 0014). The system
+/// picker is used only to point at a location; no SAF grant is kept and scanning reads the folder
+/// directly under All files access.
 #[tauri::command]
-fn android_media_list_volumes(app: AppHandle) -> Result<Vec<MediaStoreVolumeOption>, String> {
-    app.media_index()
-        .list_media_store_volumes()
-        .map(|volumes| {
-            volumes
-                .volumes
-                .into_iter()
-                .map(|volume| MediaStoreVolumeOption {
-                    display_name: media_volume_display_name(&volume.volume_name),
-                    volume_name: volume.volume_name,
-                })
-                .collect()
-        })
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn android_media_add_volume(
-    state: State<'_, AppState>,
-    app: AppHandle,
-    volume_name: String,
-) -> Result<LibrarySource, String> {
-    let _database_work = enter_database_work(&state)?;
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    let volume_name = volume_name.trim();
-    if volume_name.is_empty() {
-        return Err("MediaStore 儲存空間名稱不可為空。".to_owned());
-    }
-
-    let volume_exists = app
-        .media_index()
-        .list_media_store_volumes()
-        .map_err(|error| error.to_string())?
-        .volumes
-        .iter()
-        .any(|volume| volume.volume_name == volume_name);
-    if !volume_exists {
-        return Err("這個 MediaStore 儲存空間已不存在，請重新載入清單。".to_owned());
-    }
-
-    let locator = MediaLocator::ContentUri(format!("content://media/{volume_name}/audio/media"));
-    let mut root = add_or_get_root(
-        database,
-        MediaSourceKind::AndroidMediaStore,
-        media_volume_display_name(volume_name),
-        locator,
-    )?;
-    root.enabled = true;
-    register_folder_source(database, &state.settings, &root)?;
-    source_summary(database, &root)
-}
-
-#[tauri::command]
-fn android_saf_pick_source(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<Option<LibrarySource>, String> {
-    let database = state.database.as_ref().ok_or_else(|| {
-        state
-            .database_error
-            .clone()
-            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
-    })?;
-    let Some(uri) = app
-        .media_index()
-        .pick_saf_tree()
-        .map_err(|error| error.to_string())?
-    else {
-        return Ok(None);
-    };
-    if !app
-        .media_index()
-        .has_saf_permission(&uri)
-        .map_err(|error| error.to_string())?
+async fn android_pick_folder_source(app: AppHandle) -> Result<Option<LibrarySource>, String> {
+    #[cfg(target_os = "android")]
     {
-        return Err("Android 未保留這個資料夾的讀取授權。".to_owned());
+        let picker_app = app.clone();
+        let picked = tauri::async_runtime::spawn_blocking(move || {
+            picker_app.media_index().pick_directory_path()
+        })
+        .await
+        .map_err(|error| format!("資料夾選擇工作失敗：{error}"))?
+        .map_err(|error| error.to_string())?;
+        let Some(path) = picked else {
+            return Ok(None);
+        };
+        let path = std::fs::canonicalize(&path)
+            .map_err(|error| format!("無法開啟指定資料夾：{error}"))?;
+        if !path.is_dir() {
+            return Err("指定路徑不是資料夾。".to_owned());
+        }
+        let state = app.state::<AppState>();
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let _database_work = enter_database_work(&state)?;
+        let mut root = add_or_get_root(
+            database,
+            MediaSourceKind::AndroidFilesystem,
+            android_folder_display_name(&path),
+            MediaLocator::FileSystem(path),
+        )?;
+        root.enabled = true;
+        register_folder_source(database, &state.settings, &root)?;
+        source_summary(database, &root).map(Some)
     }
-
-    let _database_work = enter_database_work(&state)?;
-    let mut root = add_or_get_root(
-        database,
-        MediaSourceKind::AndroidSaf,
-        "Android 文件資料夾".to_owned(),
-        MediaLocator::ContentUri(uri),
-    )?;
-    root.enabled = true;
-    register_folder_source(database, &state.settings, &root)?;
-    source_summary(database, &root).map(Some)
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Android 資料夾選擇器只適用於 Android。".to_owned())
+    }
 }
 
+#[cfg(target_os = "android")]
+fn android_folder_display_name(path: &std::path::Path) -> String {
+    if path == std::path::Path::new("/storage/emulated/0") {
+        return "內部儲存空間".to_owned();
+    }
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "音樂資料夾".to_owned())
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn register_folder_source(
     database: &Database,
     settings: &SettingsStore,
@@ -6938,6 +6533,7 @@ fn register_folder_source(
         .map_err(|error| error.to_string())
 }
 
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn add_or_get_root(
     database: &Database,
     kind: MediaSourceKind,
@@ -6985,15 +6581,8 @@ fn source_kind_name(kind: MediaSourceKind) -> &'static str {
         MediaSourceKind::PlaylistFile => "playlistFile",
         MediaSourceKind::AndroidMediaStore => "androidMediaStore",
         MediaSourceKind::AndroidSaf => "androidSaf",
+        MediaSourceKind::AndroidFilesystem => "androidFilesystem",
         MediaSourceKind::Other => "other",
-    }
-}
-
-fn media_volume_display_name(volume_name: &str) -> String {
-    match volume_name {
-        "external_primary" => "共用儲存空間".to_owned(),
-        "external" => "外部儲存空間".to_owned(),
-        _ => format!("儲存空間 {volume_name}"),
     }
 }
 
@@ -7025,6 +6614,20 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _database_work = database_work;
         let mut database = Database::open(database_path).map_err(|error| error.to_string())?;
+        // Legacy MediaStore/SAF sources become real-path sources before syncing (ADR 0014).
+        #[cfg(target_os = "android")]
+        let source_settings = {
+            let report = android_path_migration::migrate_legacy_sources(&sync_app, &database)?;
+            if report.backup_directory.is_some() {
+                sync_app
+                    .state::<AppState>()
+                    .settings
+                    .snapshot()
+                    .map_err(|error| error.to_string())?
+            } else {
+                source_settings
+            }
+        };
         let mut on_progress = |root: &LibraryRoot,
                                source_index: usize,
                                source_count: usize,
@@ -7088,21 +6691,12 @@ where
     #[cfg(target_os = "android")]
     {
         let _ = excluded_folders;
+        let synced_at_utc_ms = now_utc_epoch_ms()?;
         let roots = configured_sources
             .iter()
             .filter_map(|source| source.library_root().ok().flatten())
+            .filter(|root| root.enabled)
             .collect::<Vec<_>>();
-        let synced_at_utc_ms = now_utc_epoch_ms()?;
-        let roots: Vec<_> = roots
-            .into_iter()
-            .filter(|root| {
-                root.enabled
-                    && matches!(
-                        root.kind,
-                        MediaSourceKind::AndroidMediaStore | MediaSourceKind::AndroidSaf
-                    )
-            })
-            .collect();
         let playlist_sources = configured_sources
             .iter()
             .filter(|source| source.enabled)
@@ -7111,9 +6705,22 @@ where
             .collect::<Vec<_>>();
         let source_count = roots.len() + playlist_sources.len();
         let mut sources = Vec::new();
+        let mut folder_roots = Vec::new();
+        for root in roots {
+            if root.kind == MediaSourceKind::AndroidFilesystem {
+                folder_roots.push(root);
+            } else {
+                // Legacy MediaStore/SAF: never scanned again; its mappings stay untouched until
+                // the path migration (needs All files access) converts it (ADR 0014).
+                sources.push(unavailable_source_summary(
+                    &root,
+                    "舊版 MediaStore/SAF 來源：請開啟「所有檔案存取權」，MoeMusicPlayer 會自動改為資料夾路徑來源。",
+                ));
+            }
+        }
         app.media_index()
             .with_adapter(|index| -> Result<(), String> {
-                for (source_index, root) in roots.iter().enumerate() {
+                for (source_index, root) in folder_roots.iter().enumerate() {
                     let report = SyncEngine::sync_with_progress(
                         root,
                         index,
@@ -7128,138 +6735,28 @@ where
                 }
                 Ok(())
             })?;
+        let mut reader = AndroidPlaylistReader { app };
         for source in playlist_sources {
             let root = source
                 .database_projection()
                 .map_err(|error| error.to_string())?;
-            let SourceEntryKind::PlaylistFile {
-                path: settings::StoredPath::Uri(playlist_uri),
-                tree_uri: Some(tree_uri),
-                ..
-            } = &source.kind
-            else {
+            if matches!(source.path(), settings::StoredPath::Uri(_)) {
                 sources.push(unavailable_source_summary(
                     &root,
-                    "播放清單來源缺少有效的 SAF URI 或文件樹授權。",
-                ));
-                continue;
-            };
-            let media_index = app.media_index();
-            match media_index.has_saf_permission(tree_uri) {
-                Ok(true) => {}
-                Ok(false) => {
-                    sources.push(unavailable_source_summary(
-                        &root,
-                        "已撤銷此播放清單的 SAF 文件樹權限。",
-                    ));
-                    continue;
-                }
-                Err(error) => {
-                    sources.push(unavailable_source_summary(
-                        &root,
-                        format!("無法確認 SAF 文件樹權限：{error}"),
-                    ));
-                    continue;
-                }
-            }
-            let lease = match media_index.cache_content_uri(
-                playlist_uri,
-                android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64,
-            ) {
-                Ok(lease) => lease,
-                Err(error) => {
-                    sources.push(unavailable_source_summary(
-                        &root,
-                        format!("無法讀取 SAF 播放清單：{error}"),
-                    ));
-                    continue;
-                }
-            };
-            let file_metadata = match std::fs::metadata(lease.path()) {
-                Ok(metadata)
-                    if metadata.len()
-                        <= android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64 =>
-                {
-                    metadata
-                }
-                Ok(metadata) => {
-                    sources.push(unavailable_source_summary(
-                        &root,
-                        format!(
-                            "播放清單大小 {} bytes 超過 {} bytes 上限。",
-                            metadata.len(),
-                            android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES
-                        ),
-                    ));
-                    continue;
-                }
-                Err(error) => {
-                    sources.push(unavailable_source_summary(
-                        &root,
-                        format!("無法讀取 SAF 播放清單檔案資訊：{error}"),
-                    ));
-                    continue;
-                }
-            };
-            let mut playlist_bytes = Vec::with_capacity(file_metadata.len() as usize);
-            let read_result = {
-                use std::io::Read;
-                std::fs::File::open(lease.path()).and_then(|file| {
-                    file.take(android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES as u64 + 1)
-                        .read_to_end(&mut playlist_bytes)
-                })
-            };
-            if let Err(error) = read_result {
-                sources.push(unavailable_source_summary(
-                    &root,
-                    format!("無法讀取暫存的 SAF 播放清單：{error}"),
+                    "舊版 SAF 播放清單：請開啟「所有檔案存取權」，MoeMusicPlayer 會自動改為檔案路徑。",
                 ));
                 continue;
             }
-            if playlist_bytes.len() > android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES {
-                sources.push(unavailable_source_summary(
-                    &root,
-                    format!(
-                        "讀取的播放清單大小 {} bytes 超過 {} bytes 上限。",
-                        playlist_bytes.len(),
-                        android_playlist_source_sync::MAX_ANDROID_PLAYLIST_BYTES
-                    ),
-                ));
-                continue;
-            }
-            let authorized_content_uris =
-                authorized_android_playlist_content_uris(database, app, &source, &playlist_bytes)?;
-            let report = android_playlist_source_sync::sync_android_playlist_source(
+            match playlist_source_sync::sync_playlist_file_source_with(
                 database,
                 &source,
-                &playlist_bytes,
-                None,
                 synced_at_utc_ms,
-                |locator| {
-                    media_index
-                        .resolve_saf_playlist_entry(tree_uri, playlist_uri, locator)
-                        .map(|entry| {
-                            entry.map(|entry| {
-                                android_playlist_source_sync::ResolvedSafPlaylistEntry {
-                                    content_uri: entry.content_uri,
-                                    size_bytes: entry.size_bytes,
-                                    modified_at_utc_ms: entry
-                                        .modified_at_utc_ms
-                                        .and_then(|value| i64::try_from(value).ok()),
-                                }
-                            })
-                        })
-                        .map_err(|error| error.to_string())
-                },
-                |uri| Ok(authorized_content_uris.get(uri).cloned().flatten()),
-                |record| media_index.read_metadata(record),
-            );
-            drop(lease);
-            match report {
+                &mut reader,
+            ) {
                 Ok(Some(report)) => sources.push(sync_summary(&root, report)),
                 Ok(None) => sources.push(unavailable_source_summary(
                     &root,
-                    "播放清單同步沒有產生來源結果。",
+                    "無法讀取播放清單檔案；請確認檔案存在且已開啟「所有檔案存取權」。",
                 )),
                 Err(error) => sources.push(unavailable_source_summary(
                     &root,
@@ -7277,74 +6774,28 @@ where
     }
 }
 
+/// Android playlist media read through real paths under All files access (ADR 0014).
 #[cfg(target_os = "android")]
-fn authorized_android_playlist_content_uris(
-    database: &Database,
-    app: &AppHandle,
-    source: &SourceEntry,
-    bytes: &[u8],
-) -> Result<
-    std::collections::HashMap<
-        String,
-        Option<android_playlist_source_sync::ResolvedSafPlaylistEntry>,
-    >,
-    String,
-> {
-    use std::path::PathBuf;
+struct AndroidPlaylistReader<'a> {
+    app: &'a AppHandle,
+}
 
-    let extension = source.display_name.rsplit('.').next().unwrap_or_default();
-    let synthetic_file =
-        PathBuf::from("__android_saf_playlist_parent__").join(format!("playlist.{extension}"));
-    let parsed = if extension.eq_ignore_ascii_case("m3u8") {
-        player_core::parse_m3u8(bytes, &synthetic_file)
-    } else if extension.eq_ignore_ascii_case("m3u") {
-        player_core::parse_m3u(bytes, &synthetic_file)
-    } else {
-        return Ok(std::collections::HashMap::new());
-    };
-    let Ok(parsed) = parsed else {
-        // The sync module will report the parse error and leave the old projection untouched.
-        return Ok(std::collections::HashMap::new());
-    };
-
-    let mut authorized = std::collections::HashMap::new();
-    for entry in parsed.entries {
-        let MediaLocator::ContentUri(uri) = entry.locator else {
-            continue;
-        };
-        if authorized.contains_key(&uri) {
-            continue;
-        }
-        let locator = MediaLocator::ContentUri(uri.clone());
-        let track_id = database
-            .resolve_track_id_for_locator(&locator)
-            .map_err(|error| error.to_string())?;
-        let value = if let Some(track_id) = track_id {
-            let locators = database
-                .track_locators(track_id)
-                .map_err(|error| error.to_string())?;
-            if locators.contains(&locator) {
-                app.media_index()
-                    .probe_content_uri(&uri)
-                    .ok()
-                    .flatten()
-                    .filter(|metadata| metadata.content_uri == uri)
-                    .map(
-                        |metadata| android_playlist_source_sync::ResolvedSafPlaylistEntry {
-                            content_uri: metadata.content_uri,
-                            size_bytes: metadata.size_bytes,
-                            modified_at_utc_ms: metadata.modified_at_utc_ms,
-                        },
-                    )
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        authorized.insert(uri, value);
+#[cfg(target_os = "android")]
+impl playlist_source_sync::PlaylistMediaReader for AndroidPlaylistReader<'_> {
+    fn scan_paths(
+        &mut self,
+        source_id: SourceId,
+        paths: &[std::path::PathBuf],
+    ) -> player_core::SourceScan {
+        tauri_plugin_media_index::fs_scan::scan_paths(source_id, paths)
     }
-    Ok(authorized)
+
+    fn read_metadata(
+        &mut self,
+        track: &player_core::MediaTrackRecord,
+    ) -> Result<player_core::TrackMetadata, player_core::TrackMetadataError> {
+        self.app.media_index().read_metadata(track)
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -8117,28 +7568,7 @@ async fn library_get_track_artwork(
         let locators = database
             .track_locators(id)
             .map_err(|error| error.to_string())?;
-        let settings = state
-            .settings
-            .snapshot()
-            .map_err(|error| error.to_string())?;
-        let mut tree_uris = settings
-            .sources
-            .iter()
-            .filter(|source| source.enabled)
-            .filter_map(|source| match &source.kind {
-                SourceEntryKind::Folder {
-                    media_kind: MediaSourceKind::AndroidSaf,
-                    path: settings::StoredPath::Uri(tree_uri),
-                } => Some(tree_uri.clone()),
-                SourceEntryKind::PlaylistFile {
-                    tree_uri: Some(tree_uri),
-                    ..
-                } => Some(tree_uri.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        tree_uris.sort();
-        tree_uris.dedup();
+        let tree_uris: Vec<String> = Vec::new();
         let artwork = tauri::async_runtime::spawn_blocking(move || {
             find_android_artwork(&app, &locators, &tree_uris)
         })
@@ -8168,15 +7598,18 @@ fn find_android_artwork(
     use tauri_plugin_media_index::MediaIndexExt as _;
 
     let media_index = app.media_index();
+    // Embedded artwork: content URIs as-is, real paths as file:// URIs (ADR 0014).
     let content_uris = locators
         .iter()
         .filter_map(|locator| match locator {
-            MediaLocator::ContentUri(uri) if uri.starts_with("content://") => Some(uri.as_str()),
+            MediaLocator::ContentUri(uri) if uri.starts_with("content://") => Some(uri.clone()),
+            MediaLocator::FileSystem(path) if path.is_file() => player_core::file_uri_for_path(path),
             _ => None,
         })
         .collect::<Vec<_>>();
     let mut oversized = false;
-    for uri in content_uris {
+    for uri in &content_uris {
+        let uri = uri.as_str();
         let trees = if tree_uris.is_empty() {
             std::iter::once(None).collect::<Vec<_>>()
         } else {
@@ -8223,6 +7656,38 @@ fn find_android_artwork(
                     android_artwork::ArtworkError::Missing | android_artwork::ArtworkError::Invalid,
                 ) => {}
             }
+        }
+    }
+    // Folder artwork next to a real-path track (cover.jpg, folder.jpg, cover.png, folder.png).
+    for locator in locators {
+        let MediaLocator::FileSystem(path) = locator else {
+            continue;
+        };
+        let Some(cover) = tauri_plugin_media_index::fs_scan::folder_artwork(path) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        if std::fs::File::open(&cover)
+            .and_then(|file| {
+                file.take(player_core::MAX_ARTWORK_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+            })
+            .is_err()
+        {
+            continue;
+        }
+        if bytes.len() > player_core::MAX_ARTWORK_BYTES {
+            oversized = true;
+            continue;
+        }
+        let mime = match cover.extension().and_then(|extension| extension.to_str()) {
+            Some("png") => "image/png",
+            _ => "image/jpeg",
+        };
+        match android_artwork::image_from_bytes(&bytes, Some(mime)) {
+            Ok(image) => return Ok(image),
+            Err(android_artwork::ArtworkError::Oversized) => oversized = true,
+            Err(_) => {}
         }
     }
     if oversized {
@@ -10767,9 +10232,7 @@ pub fn run() {
             library_remove_excluded_folder,
             library_set_source_enabled,
             library_remove_source,
-            android_media_list_volumes,
-            android_media_add_volume,
-            android_saf_pick_source,
+            android_pick_folder_source,
             library_sync,
             playback_get_snapshot,
             playback_get_queue_page,

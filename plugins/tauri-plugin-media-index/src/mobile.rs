@@ -20,27 +20,13 @@ use tauri::{
     plugin::{PluginApi, PluginHandle},
 };
 
-use crate::adapter::{looks_like_tree_uri, media_store_volume, scan_from_response};
 use crate::models::{
-    BooleanResponse, ContentCacheLeaseResponse, ContentUriProbeResponse, LyricsTextResponse,
-    MyLovePlaylistResponse, ReadMetadataResponse,
-    ResolvedSafPlaylistEntryResponse, SafPlaylistImportResponse, SafTreeResponse, ScanResponse,
-    UriResponse, VolumesResponse,
+    ContentCacheLeaseResponse, ContentUriProbeResponse, ReadMetadataResponse, UriResponse,
 };
-use crate::{
-    ContentCacheLease, MediaStoreVolume, MediaStoreVolumes, ResolvedSafPlaylistEntry, Result,
-    SafPlaylistCreate, SafPlaylistImport,
-};
+use crate::{ContentCacheLease, Result};
 
 #[derive(Clone)]
 pub(crate) struct PlatformMediaIndex<R: Runtime>(Arc<PluginHandle<R>>);
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PlaylistCreateResponse {
-    uri: Option<String>,
-    display_name: Option<String>,
-}
 
 impl<R: Runtime> PlatformMediaIndex<R> {
     pub(crate) fn open_official_url(&self, url: &str) -> Result<()> {
@@ -58,45 +44,26 @@ impl<R: Runtime> PlatformMediaIndex<R> {
     }
 
     pub(crate) fn scan(&self, root: &LibraryRoot) -> SourceScan {
-        let request = match (&root.kind, &root.locator) {
-            (MediaSourceKind::AndroidMediaStore, MediaLocator::ContentUri(uri)) => {
-                match media_store_volume(uri) {
-                    Some(volume_name) => (
-                        "scanMediaStore",
-                        json!({
-                            "sourceId": root.id.to_string(),
-                            "volumeName": volume_name,
-                        }),
+        match (&root.kind, &root.locator) {
+            (MediaSourceKind::AndroidFilesystem, MediaLocator::FileSystem(_)) => {
+                match self.all_files_access_status() {
+                    Ok(status) if status.granted => crate::fs_scan::scan_directory(
+                        root,
+                        &mut |_| {},
+                        &player_core::SyncCancellation::default(),
                     ),
-                    None => {
-                        return unavailable_scan(
-                            root,
-                            "MediaStore source URI must identify a concrete media volume",
-                        );
-                    }
+                    Ok(_) => unavailable_scan(root, "All files access is not granted"),
+                    Err(error) => unavailable_scan(
+                        root,
+                        &format!("could not check All files access: {error}"),
+                    ),
                 }
             }
-            (MediaSourceKind::AndroidSaf, MediaLocator::ContentUri(uri)) => {
-                if !looks_like_tree_uri(uri) {
-                    return unavailable_scan(root, "SAF source is not a document-tree URI");
-                }
-                (
-                    "scanSafTree",
-                    json!({"sourceId": root.id.to_string(), "treeUri": uri}),
-                )
-            }
-            (MediaSourceKind::AndroidMediaStore | MediaSourceKind::AndroidSaf, _) => {
-                return unavailable_scan(root, "Android source requires a content URI");
-            }
-            _ => return unavailable_scan(root, "source kind is not supported by Android"),
-        };
-
-        let response = self
-            .0
-            .run_mobile_plugin::<ScanResponse>(request.0, request.1);
-        match response {
-            Ok(response) => scan_from_response(root, response),
-            Err(error) => unavailable_scan(root, &format!("Android source query failed: {error}")),
+            (MediaSourceKind::AndroidMediaStore | MediaSourceKind::AndroidSaf, _) => unavailable_scan(
+                root,
+                "legacy MediaStore/SAF source must be migrated to a folder path first (ADR 0014)",
+            ),
+            _ => unavailable_scan(root, "source kind is not supported by Android"),
         }
     }
 
@@ -104,11 +71,11 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         &self,
         record: &MediaTrackRecord,
     ) -> std::result::Result<TrackMetadata, TrackMetadataError> {
-        let MediaLocator::ContentUri(uri) = &record.locator else {
-            return Err(TrackMetadataError {
-                message: "Android media metadata requires a content URI".into(),
-            });
+        let uri = match &record.locator {
+            MediaLocator::ContentUri(uri) => uri.clone(),
+            MediaLocator::FileSystem(path) => return self.read_path_metadata(path),
         };
+        let uri = &uri;
         let lease = self
             .cache_content_uri(uri, 512 * 1024 * 1024)
             .map_err(|error| TrackMetadataError {
@@ -140,6 +107,30 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         }
     }
 
+    /// Tags of a real file (All files access): lofty, then Symphonia, then Android's retriever.
+    fn read_path_metadata(
+        &self,
+        path: &std::path::Path,
+    ) -> std::result::Result<TrackMetadata, TrackMetadataError> {
+        match parse_lofty_metadata(path, None) {
+            Ok(metadata) => Ok(metadata),
+            Err(lofty_error) => {
+                if let Ok(metadata) = crate::android_metadata::read(path) {
+                    if has_useful_metadata(&metadata) {
+                        return Ok(metadata);
+                    }
+                }
+                let uri = player_core::file_uri_for_path(path).ok_or_else(|| TrackMetadataError {
+                    message: format!("{}; path is not absolute", lofty_error.message),
+                })?;
+                self.read_metadata_with_android(&uri)
+                    .ok()
+                    .filter(has_useful_metadata)
+                    .ok_or(lofty_error)
+            }
+        }
+    }
+
     fn read_metadata_with_android(
         &self,
         uri: &str,
@@ -157,24 +148,6 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         })?;
         metadata.codec = metadata.codec.as_deref().and_then(normalize_android_codec);
         Ok(crate::adapter::into_core_metadata(metadata))
-    }
-
-    pub(crate) fn list_media_store_volumes(&self) -> Result<MediaStoreVolumes> {
-        let response = self
-            .0
-            .run_mobile_plugin::<VolumesResponse>("mediaStoreVolumes", ())?;
-        Ok(MediaStoreVolumes {
-            api_level: response.api_level,
-            volumes: response
-                .volumes
-                .into_iter()
-                .map(|volume| MediaStoreVolume {
-                    volume_name: volume.volume_name,
-                    version: volume.version,
-                    generation: volume.generation,
-                })
-                .collect(),
-        })
     }
 
     pub(crate) fn all_files_access_status(&self) -> Result<crate::AllFilesAccessStatus> {
@@ -197,6 +170,50 @@ impl<R: Runtime> PlatformMediaIndex<R> {
             .path)
     }
 
+    /// Real paths for many MediaStore / ExternalStorageProvider URIs (source migration).
+    pub(crate) fn resolve_direct_paths(&self, uris: &[String]) -> Result<Vec<Option<String>>> {
+        #[derive(serde::Deserialize)]
+        struct DirectPathsResponse {
+            paths: Vec<Option<String>>,
+        }
+        let response = self
+            .0
+            .run_mobile_plugin::<DirectPathsResponse>("resolveDirectPaths", json!({ "uris": uris }))?;
+        if response.paths.len() != uris.len() {
+            return Err(crate::Error::Response(
+                "Android returned a different number of resolved paths".to_owned(),
+            ));
+        }
+        Ok(response.paths)
+    }
+
+    /// Folder picker that only yields a real path; no persisted SAF grant is kept (ADR 0014).
+    pub(crate) fn pick_directory_path(&self) -> Result<Option<String>> {
+        let value: serde_json::Value = self.0.run_mobile_plugin("pickDirectoryPath", json!({}))?;
+        Ok(value.get("path").and_then(|path| path.as_str()).map(str::to_owned))
+    }
+
+    /// Document picker that only yields a real file path (no persisted grant).
+    pub(crate) fn pick_document_path(&self, mime_types: &[&str]) -> Result<Option<String>> {
+        let value: serde_json::Value = self
+            .0
+            .run_mobile_plugin("pickDocumentPath", json!({ "mimeTypes": mime_types }))?;
+        Ok(value.get("path").and_then(|path| path.as_str()).map(str::to_owned))
+    }
+
+    /// "Save as" picker that only yields the real path of the created file (no persisted grant).
+    pub(crate) fn pick_create_document_path(
+        &self,
+        suggested_name: &str,
+        mime_type: &str,
+    ) -> Result<Option<String>> {
+        let value: serde_json::Value = self.0.run_mobile_plugin(
+            "pickCreateDocumentPath",
+            json!({ "suggestedName": suggested_name, "mimeType": mime_type }),
+        )?;
+        Ok(value.get("path").and_then(|path| path.as_str()).map(str::to_owned))
+    }
+
     pub(crate) fn scan_file(&self, path: &str) -> Result<()> {
         self.0.run_mobile_plugin::<serde_json::Value>("scanFile", json!({ "path": path }))?;
         Ok(())
@@ -206,79 +223,11 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Ok(self.0.run_mobile_plugin::<crate::SystemWallpaperRead>("readSystemWallpaper", json!({}))?)
     }
 
-    pub(crate) fn list_saf_images(&self, tree_uri: &str) -> Result<Vec<String>> {
-        #[derive(serde::Deserialize)]
-        struct SafImagesResponse {
-            uris: Vec<String>,
-        }
-        let response = self
-            .0
-            .run_mobile_plugin::<SafImagesResponse>("listSafImages", json!({ "treeUri": tree_uri }))?;
-        Ok(response.uris)
-    }
-
     pub(crate) fn set_wallpaper_backdrop(&self, enabled: bool, blur_px: u32) -> Result<crate::WallpaperBackdropStatus> {
         Ok(self.0.run_mobile_plugin::<crate::WallpaperBackdropStatus>(
             "setWallpaperBackdrop",
             json!({ "enabled": enabled, "blurPx": blur_px }),
         )?)
-    }
-
-    pub(crate) fn pick_saf_tree(&self) -> Result<Option<String>> {
-        let response = self
-            .0
-            .run_mobile_plugin::<SafTreeResponse>("pickSafTree", ())?;
-        Ok(response.uri)
-    }
-
-    pub(crate) fn has_saf_permission(&self, uri: &str) -> Result<bool> {
-        let response = self
-            .0
-            .run_mobile_plugin::<BooleanResponse>("hasSafPermission", json!({"treeUri": uri}))?;
-        Ok(response.granted)
-    }
-
-    pub(crate) fn has_saf_write_permission(&self, uri: &str) -> Result<bool> {
-        let response = self.0.run_mobile_plugin::<BooleanResponse>(
-            "hasSafWritePermission",
-            json!({"treeUri": uri}),
-        )?;
-        Ok(response.granted)
-    }
-
-    pub(crate) fn pick_my_love_folder(&self) -> Result<Option<String>> {
-        let response = self
-            .0
-            .run_mobile_plugin::<SafTreeResponse>("pickMyLoveFolder", ())?;
-        Ok(response.uri)
-    }
-
-    pub(crate) fn pick_playlist_create(
-        &self,
-        suggested_name: &str,
-    ) -> Result<Option<SafPlaylistCreate>> {
-        let Some(tree_uri) = self.pick_my_love_folder()? else {
-            return Ok(None);
-        };
-        let response = self.0.run_mobile_plugin::<PlaylistCreateResponse>(
-            "pickPlaylistCreate",
-            json!({ "treeUri": tree_uri, "suggestedName": suggested_name }),
-        )?;
-        Ok(response.uri.map(|playlist_uri| SafPlaylistCreate {
-            playlist_uri,
-            tree_uri,
-            display_name: response
-                .display_name
-                .unwrap_or_else(|| suggested_name.to_owned()),
-        }))
-    }
-
-    pub(crate) fn ensure_my_love_playlist(&self, tree_uri: &str) -> Result<(String, String)> {
-        let response = self.0.run_mobile_plugin::<MyLovePlaylistResponse>(
-            "ensureMyLovePlaylist",
-            json!({"treeUri": tree_uri}),
-        )?;
-        Ok((response.playlist_uri, response.display_name))
     }
 
     pub(crate) fn probe_content_uri(&self, uri: &str) -> Result<Option<crate::ContentUriMetadata>> {
@@ -303,13 +252,6 @@ impl<R: Runtime> PlatformMediaIndex<R> {
                 "Android content URI probe returned metadata without an authorized URI".to_owned(),
             )),
         }
-    }
-
-    pub(crate) fn release_saf_tree(&self, uri: &str) -> Result<()> {
-        let _: serde_json::Value = self
-            .0
-            .run_mobile_plugin("releaseSafTree", json!({"treeUri": uri}))?;
-        Ok(())
     }
 
     pub(crate) fn ensure_playback_service_started(&self) -> Result<()> {
@@ -384,27 +326,6 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Ok((self.content_cache_lease(response, MAX_EDIT_BYTES)?, display_name))
     }
 
-    /// Write an edited audio work copy back over its document. Android asks the user for
-    /// MediaStore write consent (createWriteRequest / RecoverableSecurityException) when needed;
-    /// a refusal surfaces as an error containing `WRITE_ACCESS_DENIED`.
-    pub(crate) fn write_audio_cache_lease(
-        &self,
-        lease: &ContentCacheLease,
-        destination_uri: &str,
-    ) -> Result<()> {
-        let metadata = std::fs::metadata(lease.path())?;
-        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_EDIT_BYTES {
-            return Err(crate::Error::Response(
-                "audio cache lease is missing, empty or exceeds 512 MiB".to_owned(),
-            ));
-        }
-        let _: serde_json::Value = self.0.run_mobile_plugin(
-            "writeAudioCacheLease",
-            json!({ "token": lease.token(), "destinationUri": destination_uri }),
-        )?;
-        Ok(())
-    }
-
     /// System document picker (ACTION_OPEN_DOCUMENT). Returns (uri, display name).
     /// Photo Picker (image only), falling back to the document picker with `mime_types`.
     pub(crate) fn pick_visual_image(&self, mime_types: &[&str]) -> Result<Option<String>> {
@@ -440,90 +361,6 @@ impl<R: Runtime> PlatformMediaIndex<R> {
             json!({ "suggestedName": suggested_name, "mimeType": mime_type }),
         )?;
         Ok(response.uri)
-    }
-
-    pub(crate) fn pick_playlist_import(&self) -> Result<Option<SafPlaylistImport>> {
-        let response = self
-            .0
-            .run_mobile_plugin::<SafPlaylistImportResponse>("pickPlaylistImport", ())?;
-        match (
-            response.playlist_uri,
-            response.tree_uri,
-            response.display_name,
-        ) {
-            (Some(playlist_uri), Some(tree_uri), Some(display_name)) => {
-                Ok(Some(SafPlaylistImport {
-                    playlist_uri,
-                    tree_uri,
-                    display_name,
-                }))
-            }
-            (None, None, None) => Ok(None),
-            _ => Err(crate::Error::Response(
-                "Android playlist picker returned an incomplete SAF grant".to_owned(),
-            )),
-        }
-    }
-
-    pub(crate) fn resolve_saf_playlist_entry(
-        &self,
-        tree_uri: &str,
-        playlist_uri: &str,
-        locator: &str,
-    ) -> Result<Option<ResolvedSafPlaylistEntry>> {
-        let response = self
-            .0
-            .run_mobile_plugin::<ResolvedSafPlaylistEntryResponse>(
-                "resolveSafPlaylistEntry",
-                json!({ "treeUri": tree_uri, "playlistUri": playlist_uri, "locator": locator }),
-            )?;
-        match response.content_uri {
-            Some(content_uri) => Ok(Some(ResolvedSafPlaylistEntry {
-                content_uri,
-                size_bytes: response.size_bytes,
-                modified_at_utc_ms: response.modified_at_utc_ms,
-            })),
-            None if response.size_bytes.is_none() && response.modified_at_utc_ms.is_none() => {
-                Ok(None)
-            }
-            None => Err(crate::Error::Response(
-                "Android playlist resolver returned fingerprint data without a URI".to_owned(),
-            )),
-        }
-    }
-
-    pub(crate) fn pick_playlist_export(&self, suggested_name: &str) -> Result<Option<String>> {
-        let name = std::path::Path::new(suggested_name)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .filter(|value| {
-                let extension = value.rsplit_once('.').map(|(_, extension)| extension);
-                matches!(extension, Some("m3u" | "m3u8"))
-            })
-            .unwrap_or("playlist.m3u8");
-        let response = self.0.run_mobile_plugin::<UriResponse>(
-            "pickPlaylistExport",
-            json!({ "suggestedName": name }),
-        )?;
-        Ok(response.uri)
-    }
-
-    pub(crate) fn read_saf_lyric_sibling(
-        &self,
-        tree_uri: &str,
-        audio_uri: &str,
-        max_bytes: u64,
-    ) -> Result<Option<String>> {
-        if max_bytes == 0 || max_bytes > MAX_LYRICS_BYTES {
-            return Err(crate::Error::Response(
-                "lyric sidecar cap must be between 1 byte and 2 MiB".to_owned(),
-            ));
-        }
-        let response = self.0.run_mobile_plugin::<LyricsTextResponse>(
-            "readSafLyricSibling",
-            json!({ "treeUri": tree_uri, "audioUri": audio_uri, "maxBytes": max_bytes }),
-        )?;
-        Ok(response.text)
     }
 
     fn content_cache_lease(
@@ -710,7 +547,6 @@ fn has_useful_metadata(metadata: &TrackMetadata) -> bool {
 
 const MAX_PLAYLIST_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_EDIT_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_LYRICS_BYTES: u64 = 2 * 1024 * 1024;
 
 fn is_uuid_token(token: &str) -> bool {
     token.len() == 36

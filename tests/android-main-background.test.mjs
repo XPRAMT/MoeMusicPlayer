@@ -24,6 +24,8 @@ test('slideshow folder label prettifies Android SAF tree URIs and keeps desktop 
   );
   assert.equal(formatSlideshowFolderLabel('content://x/tree/primary%3A'), '\u5167\u90e8\u5132\u5b58\u7a7a\u9593');
   assert.equal(formatSlideshowFolderLabel('content://x/tree/%E0%A4%A'), 'content://x/tree/%E0%A4%A');
+  assert.equal(formatSlideshowFolderLabel('/storage/emulated/0/Pictures/\u9280\u72fc'), '\u5167\u90e8\u5132\u5b58\u7a7a\u9593/Pictures/\u9280\u72fc');
+  assert.equal(formatSlideshowFolderLabel('/storage/emulated/0'), '\u5167\u90e8\u5132\u5b58\u7a7a\u9593');
 });
 
 test('Android background modes are enabled and wallpaper uses the native transparent backdrop', () => {
@@ -74,7 +76,22 @@ test('Android shared music uses All files access only (no READ_MEDIA_AUDIO flow)
   assert.match(pluginManifest, /READ_EXTERNAL_STORAGE" android:maxSdkVersion="29"/);
   assert.match(pluginManifest, /WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/);
   assert.doesNotMatch(kotlin, /READ_MEDIA_AUDIO|requestMediaReadPermission/);
-  assert.match(kotlin, /if \(!hasStorageAccess\(\)\) \{\n?\s*return scanResult\("permissionRevoked"/);
   assert.doesNotMatch(app, /android_media_request_permission|mediaPermissionGranted/);
   assert.match(app, /capabilities\?\.platform === 'android' && allFilesAccess && !allFilesAccess\.granted/);
+});
+
+test('Android sources are real paths with no per-item SAF/MediaStore grants (ADR 0014)', () => {
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  const ipc = readFileSync(new URL('../src/lib/ipc.ts', import.meta.url), 'utf8');
+  const kotlin = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/MediaIndexPlugin.kt', import.meta.url), 'utf8');
+  const rust = readFileSync(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8');
+  const pluginManifest = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+  assert.doesNotMatch(app, /MediaStore<\/span>|<span>SAF<\/span>|android_media_list_volumes|android_media_add_volume|android_saf_pick_source/);
+  assert.doesNotMatch(ipc, /android_media_list_volumes|android_media_add_volume|android_saf_pick_source|MediaStoreVolumeOption/);
+  assert.match(app, /invokeCommand\('android_pick_folder_source', \{\}\)/);
+  assert.doesNotMatch(kotlin, /takePersistableUriPermission|createWriteRequest|RecoverableSecurityException|fun pickSafTree|fun scanMediaStore|fun pickMyLoveFolder/);
+  assert.match(kotlin, /fun pickDirectoryPath/);
+  assert.match(rust, /android_path_migration::migrate_legacy_sources/);
+  assert.doesNotMatch(rust, /pick_saf_tree|has_saf_permission|has_saf_write_permission|resolve_saf_playlist_entry|write_audio_cache_lease/);
+  assert.doesNotMatch(pluginManifest, /READ_MEDIA_AUDIO/);
 });

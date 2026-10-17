@@ -151,11 +151,6 @@ export interface ExcludedFolder {
   location: string;
 }
 
-export interface MediaStoreVolumeOption {
-  volumeName: string;
-  displayName: string;
-}
-
 export interface SourceSyncResult {
   sourceId: string;
   displayName: string;
@@ -816,15 +811,7 @@ interface IpcContract {
     args: { sourceId: string };
     result: LibrarySource[];
   };
-  android_media_list_volumes: {
-    args: Record<string, never>;
-    result: MediaStoreVolumeOption[];
-  };
-  android_media_add_volume: {
-    args: { volumeName: string };
-    result: LibrarySource;
-  };
-  android_saf_pick_source: {
+  android_pick_folder_source: {
     args: Record<string, never>;
     result: LibrarySource | null;
   };

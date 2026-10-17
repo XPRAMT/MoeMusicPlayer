@@ -47,7 +47,6 @@
     type LibrarySource,
     type ExcludedFolder,
     type SourceSyncResult,
-    type MediaStoreVolumeOption,
     type FeatureCapability,
     type LyricsPreferences,
     type NowPlayingLayout,
@@ -581,7 +580,6 @@
   let sourceSyncSummary = $state<string | null>(null);
   let sourceSyncResults = $state<SourceSyncResult[]>([]);
   let syncProgress = $state<SyncProgressViewState | null>(null);
-  let mediaStoreVolumes = $state<MediaStoreVolumeOption[]>([]);
   let playlists = $state<PlaylistSummary[]>([]);
   let selectedPlaylistId = $state<string | null>(null);
   let playlistListRevision = $state(0);
@@ -592,7 +590,6 @@
   let isSyncing = $state(false);
   let isLoadingSources = $state(false);
   let isUpdatingSource = $state(false);
-  let isLoadingVolumes = $state(false);
   let isLoadingPlaylists = $state(false);
   let isPlaylistOperation = $state(false);
   let isLoadingPlaybackSnapshot = false;
@@ -779,6 +776,11 @@
       if (previous !== undefined && previous !== allFilesAccess?.granted && themePreferences.mainBackgroundMode === 'systemWallpaper') {
         await loadMainBackground();
       }
+      // Newly granted access: real-path sources (and the legacy-source migration) can sync now.
+      if (previous === false && allFilesAccess?.granted === true && sourceSyncReady) {
+        await loadSources();
+        await syncLibrary();
+      }
     } catch {
       allFilesAccess = null;
     }
@@ -807,11 +809,6 @@
     return () => document.removeEventListener('visibilitychange', onVisible);
   });
 
-  // Shared-music volumes are listed only with storage access (no separate MediaStore prompt).
-  $effect(() => {
-    if (runtimePlatform !== 'android' || allFilesAccess?.granted !== true) return;
-    void loadMediaStoreVolumes();
-  });
   const androidWallpaperActive = $derived(
     runtimePlatform === 'android' && mainBackgroundMode === 'systemWallpaper' && !androidWallpaperHasImage && androidWallpaperBackdrop?.active === true,
   );
@@ -2545,40 +2542,12 @@
     }
   }
 
-  async function loadMediaStoreVolumes(): Promise<void> {
-    isLoadingVolumes = true;
-    sourceError = null;
-    try {
-      mediaStoreVolumes = await invokeCommand('android_media_list_volumes', {});
-    } catch (error) {
-      mediaStoreVolumes = [];
-      sourceError = getErrorText(error);
-    } finally {
-      isLoadingVolumes = false;
-    }
-  }
-
-  async function addMediaStoreVolume(volume: MediaStoreVolumeOption): Promise<void> {
-    if (isUpdatingSource) return;
+  async function pickAndroidFolderSource(): Promise<void> {
+    if (!sourceSyncReady || isUpdatingSource) return;
     isUpdatingSource = true;
     sourceError = null;
     try {
-      await invokeCommand('android_media_add_volume', { volumeName: volume.volumeName });
-      await loadSources();
-      await syncLibrary();
-    } catch (error) {
-      sourceError = getErrorText(error);
-    } finally {
-      isUpdatingSource = false;
-    }
-  }
-
-  async function pickSafSource(): Promise<void> {
-    if (isUpdatingSource) return;
-    isUpdatingSource = true;
-    sourceError = null;
-    try {
-      const source = await invokeCommand('android_saf_pick_source', {});
+      const source = await invokeCommand('android_pick_folder_source', {});
       if (source) {
         await loadSources();
         await syncLibrary();
@@ -2593,10 +2562,12 @@
   function sourceKindLabel(kind: string): string {
     switch (kind) {
       case 'playlist_file': return '播放清單檔案';
+      case 'androidFilesystem':
+      case 'android_filesystem': return 'Android 音樂資料夾';
       case 'androidMediaStore':
-      case 'android_media_store': return 'Android MediaStore';
+      case 'android_media_store': return 'Android MediaStore（舊版，待遷移）';
       case 'androidSaf':
-      case 'android_saf': return 'Android 文件資料夾';
+      case 'android_saf': return 'Android 文件資料夾（舊版，待遷移）';
       default: return 'Windows 音樂資料夾';
     }
   }
@@ -3292,7 +3263,7 @@
   function showCapabilityDetail(capability: FeatureCapability | undefined): string {
     return capability?.detail ?? runtimeError ?? (
       capabilities?.platform === 'android'
-        ? '請確認 Android 媒體來源授權及音訊服務狀態。'
+        ? '請確認「所有檔案存取權」及音訊服務狀態。'
         : '請由 MoeMusicPlayer 桌面程式開啟。'
     );
   }
@@ -3901,35 +3872,23 @@
                 </button>
               </div>
             {:else if capabilities?.platform === 'android'}
-              <div class="source-action-card android-source-actions">
-                <div class="source-action-heading"><strong>共享音樂</strong><span>MediaStore</span></div>
-                {#if allFilesAccess?.granted}
-                  <p>選擇裝置提供的媒體儲存空間。</p>
-                  <div class="source-action-row source-action-buttons">
-                    <button class="soft-button" type="button" onclick={() => void loadMediaStoreVolumes()} disabled={isLoadingVolumes || isUpdatingSource}>
-                      {isLoadingVolumes ? '載入中' : '重新載入儲存空間'}
-                    </button>
-                  </div>
-                {:else}
-                  <p>需先開啟上方的「所有檔案存取權」，才能掃描共享音樂。</p>
-                {/if}
-                {#if mediaStoreVolumes.length > 0}
-                  <div class="media-volume-list" aria-label="MediaStore 儲存空間">
-                    {#each mediaStoreVolumes as volume (volume.volumeName)}
-                      <button class="soft-button volume-choice" type="button" onclick={() => void addMediaStoreVolume(volume)} disabled={isUpdatingSource}>
-                        <span>{volume.displayName}</span><small>加入並同步</small>
-                      </button>
-                    {/each}
-                  </div>
-                {:else if allFilesAccess?.granted && !isLoadingVolumes}
-                  <p class="source-muted-note">目前沒有可用的共享媒體儲存空間。</p>
-                {/if}
-              </div>
-              <div class="source-action-card android-source-actions">
-                <div class="source-action-heading"><strong>選擇文件資料夾</strong><span>SAF</span></div>
-                <p>使用 Android 系統文件選擇器授權資料夾；URI 與授權留在原生端管理。</p>
-                <button class="soft-button" type="button" onclick={() => void pickSafSource()} disabled={!sourceSyncReady || isUpdatingSource}>
-                  {isUpdatingSource ? '處理中' : '選擇資料夾並同步'}
+              <div class="source-action-row source-action-buttons source-folder-picker">
+                <button
+                  class="soft-button"
+                  type="button"
+                  onclick={() => void pickAndroidFolderSource()}
+                  disabled={!sourceSyncReady || isUpdatingSource || allFilesAccess?.granted !== true}
+                >
+                  {isUpdatingSource ? '處理中' : '選擇資料夾'}
+                </button>
+                <button
+                  class="soft-button"
+                  type="button"
+                  onclick={() => void pickWindowsPlaylistSource()}
+                  disabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation || allFilesAccess?.granted !== true}
+                  use:appTooltip={showCapabilityDetail(capabilities?.playlistExchange)}
+                >
+                  {isUpdatingSource ? '處理中' : '選擇播放清單'}
                 </button>
               </div>
             {:else}

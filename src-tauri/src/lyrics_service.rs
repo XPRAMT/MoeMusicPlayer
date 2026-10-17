@@ -1458,53 +1458,42 @@ async fn local_lyrics_for_track(
     let locators = database
         .track_locators(track_id)
         .map_err(|error| error.to_string())?;
-    let Some(audio_uri) = locators.iter().find_map(|locator| match locator {
+    // Real paths first (ADR 0014: Android sources are folders under All files access).
+    let audio_path = locators.iter().find_map(|locator| match locator {
+        player_core::MediaLocator::FileSystem(path) if path.is_file() => Some(path.clone()),
+        _ => None,
+    });
+    let audio_uri = locators.iter().find_map(|locator| match locator {
         player_core::MediaLocator::ContentUri(uri) => Some(uri.clone()),
         player_core::MediaLocator::FileSystem(_) => None,
-    }) else {
+    });
+    if audio_path.is_none() && audio_uri.is_none() {
         return Ok(LocalLyricsLookup::Missing);
-    };
+    }
+    let _ = sources;
 
-    let tree_uris = sources
-        .iter()
-        .filter(|source| source.enabled)
-        .filter_map(|source| match &source.kind {
-            super::settings::SourceEntryKind::Folder {
-                media_kind: player_core::MediaSourceKind::AndroidSaf,
-                path: super::settings::StoredPath::Uri(uri),
-            } => Some(uri.clone()),
-            super::settings::SourceEntryKind::PlaylistFile {
-                tree_uri: Some(uri),
-                ..
-            } => Some(uri.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    for tree_uri in tree_uris {
-        let app = app.clone();
-        let audio_uri = audio_uri.clone();
-        let tree_uri = tree_uri.clone();
-        let sidecar = tauri::async_runtime::spawn_blocking(move || {
-            app.media_index()
-                .read_saf_lyric_sibling(&tree_uri, &audio_uri, MAX_LYRIC_PAYLOAD_BYTES as u64)
-                .map_err(|error| error.to_string())
-        })
-        .await
-        .map_err(|error| format!("讀取 Android 歌詞 sidecar 工作失敗：{error}"))??;
-        if let Some(text) = sidecar {
-            if text.len() > MAX_LYRIC_PAYLOAD_BYTES {
-                return Ok(LocalLyricsLookup::Oversized);
-            }
-            if let Ok(lyrics) = parse_lrc(&text) {
-                if !lyrics.lines.is_empty() {
-                    return Ok(LocalLyricsLookup::Found(track_lyrics_dto(
-                        track.id,
-                        track,
-                        LyricProvider::Sidecar,
-                        false,
-                        &lyrics,
-                    )));
-                }
+    if let Some(sidecar) = audio_path
+        .as_deref()
+        .and_then(|path| tauri_plugin_media_index::fs_scan::sibling_with_extension(path, "lrc"))
+    {
+        let bytes = tauri::async_runtime::spawn_blocking(move || std::fs::read(sidecar))
+            .await
+            .map_err(|error| format!("讀取 Android 歌詞 sidecar 工作失敗：{error}"))?
+            .map_err(|error| format!("無法讀取歌詞 sidecar：{error}"))?;
+        if bytes.len() > MAX_LYRIC_PAYLOAD_BYTES {
+            return Ok(LocalLyricsLookup::Oversized);
+        }
+        let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
+            .into_owned();
+        if let Ok(lyrics) = parse_lrc(&text) {
+            if !lyrics.lines.is_empty() {
+                return Ok(LocalLyricsLookup::Found(track_lyrics_dto(
+                    track.id,
+                    track,
+                    LyricProvider::Sidecar,
+                    false,
+                    &lyrics,
+                )));
             }
         }
     }
@@ -1512,11 +1501,18 @@ async fn local_lyrics_for_track(
     let app = app.clone();
     let lookup = tauri::async_runtime::spawn_blocking(
         move || -> Result<(Option<ParsedLyrics>, bool), String> {
-            let lease = app
-                .media_index()
-                .cache_content_uri(&audio_uri, 512 * 1024 * 1024)
-                .map_err(|error| error.to_string())?;
-            let tagged = Probe::open(lease.path())
+            let (path, _lease) = match (audio_path, audio_uri) {
+                (Some(path), _) => (path, None),
+                (None, Some(uri)) => {
+                    let lease = app
+                        .media_index()
+                        .cache_content_uri(&uri, 512 * 1024 * 1024)
+                        .map_err(|error| error.to_string())?;
+                    (lease.path().to_path_buf(), Some(lease))
+                }
+                (None, None) => return Ok((None, false)),
+            };
+            let tagged = Probe::open(&path)
                 .map_err(|error| format!("無法開啟 Android 曲目標籤：{error}"))?
                 .options(ParseOptions::new().read_properties(false))
                 .guess_file_type()

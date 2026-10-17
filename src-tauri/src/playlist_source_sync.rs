@@ -1,4 +1,7 @@
-#[cfg(target_os = "windows")]
+//! Playlist-file sources on real filesystem paths: Windows, and Android under All files access
+//! (ADR 0004, ADR 0014). The playlist file is the complete membership list.
+
+#[cfg(any(target_os = "windows", target_os = "android"))]
 use std::path::PathBuf;
 use std::{fs, time::UNIX_EPOCH};
 
@@ -14,19 +17,69 @@ use crate::{
     settings::{SourceEntry, SourceEntryKind},
 };
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 use player_core::{SourceScan, TrackMetadata, TrackMetadataError};
 #[cfg(target_os = "windows")]
 use player_platform_windows::{is_supported_audio_file, is_video_mp4, WindowsMediaIndex};
 
+/// Stable identity key of a native path (Windows UTF-16 key, Android `unix_path_key`).
 #[cfg(target_os = "windows")]
+pub fn path_key(path: &std::path::Path) -> String {
+    player_core::windows_locator_key(path)
+}
+
+#[cfg(target_os = "android")]
+pub fn path_key(path: &std::path::Path) -> String {
+    player_core::unix_path_key(path)
+}
+
+#[cfg(target_os = "android")]
+fn is_supported_audio_file(path: &std::path::Path) -> bool {
+    tauri_plugin_media_index::fs_scan::is_supported_audio_path(path)
+}
+
+#[cfg(target_os = "android")]
+fn is_video_mp4(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+}
+
+/// Platform media access used while syncing one playlist file.
+#[cfg(any(target_os = "windows", target_os = "android"))]
+pub trait PlaylistMediaReader {
+    fn scan_paths(&mut self, source_id: SourceId, paths: &[PathBuf]) -> SourceScan;
+    fn read_metadata(
+        &mut self,
+        track: &MediaTrackRecord,
+    ) -> Result<TrackMetadata, TrackMetadataError>;
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsPlaylistReader(WindowsMediaIndex);
+
+#[cfg(target_os = "windows")]
+impl PlaylistMediaReader for WindowsPlaylistReader {
+    fn scan_paths(&mut self, source_id: SourceId, paths: &[PathBuf]) -> SourceScan {
+        self.0.scan_playlist_paths(source_id, paths)
+    }
+
+    fn read_metadata(
+        &mut self,
+        track: &MediaTrackRecord,
+    ) -> Result<TrackMetadata, TrackMetadataError> {
+        self.0.read_metadata(track)
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "android"))]
 pub fn source_ids_for_path(
     sources: &[SourceEntry],
     requested_path: &std::path::Path,
 ) -> Result<(SourceId, Option<player_core::PlaylistId>, PathBuf), String> {
     let canonical = fs::canonicalize(requested_path)
         .map_err(|error| format!("無法確認播放清單路徑：{error}"))?;
-    let requested_key = player_core::windows_locator_key(&canonical);
+    let requested_key = path_key(&canonical);
     if let Some(source) = sources.iter().find(|source| {
         let SourceEntryKind::PlaylistFile { .. } = &source.kind else {
             return false;
@@ -36,7 +89,7 @@ pub fn source_ids_for_path(
             .to_path_buf()
             .ok()
             .map(|path| fs::canonicalize(&path).unwrap_or(path))
-            .is_some_and(|path| player_core::windows_locator_key(&path) == requested_key)
+            .is_some_and(|path| path_key(&path) == requested_key)
     }) {
         if let SourceEntryKind::PlaylistFile { playlist_id, .. } = &source.kind {
             return Ok((source.id, Some(*playlist_id), canonical));
@@ -54,6 +107,20 @@ pub fn sync_playlist_file_source(
     source: &SourceEntry,
     excluded_folders: &[PathBuf],
     synced_at_utc_ms: i64,
+) -> Result<Option<SyncReport>, String> {
+    let mut reader = WindowsPlaylistReader(WindowsMediaIndex::with_excluded_folders(
+        excluded_folders.iter().cloned(),
+    ));
+    sync_playlist_file_source_with(database, source, synced_at_utc_ms, &mut reader)
+}
+
+/// Same as the Windows entry point, with the platform's media reader (Android: real paths).
+#[cfg(any(target_os = "windows", target_os = "android"))]
+pub fn sync_playlist_file_source_with(
+    database: &mut Database,
+    source: &SourceEntry,
+    synced_at_utc_ms: i64,
+    reader: &mut dyn PlaylistMediaReader,
 ) -> Result<Option<SyncReport>, String> {
     let SourceEntryKind::PlaylistFile {
         playlist_id, path, ..
@@ -130,11 +197,10 @@ pub fn sync_playlist_file_source(
             MediaLocator::ContentUri(_) => None,
         })
         .collect::<Vec<_>>();
-    let mut windows = WindowsMediaIndex::with_excluded_folders(excluded_folders.iter().cloned());
-    let scan = windows.scan_playlist_paths(source.id, &media_paths);
+    let scan = reader.scan_paths(source.id, &media_paths);
     let mut index = PlaylistMediaIndex {
         scan: Some(scan),
-        windows,
+        reader,
     };
     let report =
         SyncEngine::sync_with_progress(&root, &mut index, database, synced_at_utc_ms, |_| {})
@@ -164,7 +230,7 @@ pub fn sync_playlist_file_source(
         let Ok(canonical) = fs::canonicalize(path) else {
             continue;
         };
-        let key = player_core::windows_locator_key(&canonical);
+        let key = path_key(&canonical);
         let track_id = if let Some(track_id) = resolved.get(&key) {
             *track_id
         } else {
@@ -201,14 +267,14 @@ pub fn sync_playlist_file_source(
     Ok(Some(report))
 }
 
-#[cfg(target_os = "windows")]
-struct PlaylistMediaIndex {
+#[cfg(any(target_os = "windows", target_os = "android"))]
+struct PlaylistMediaIndex<'a> {
     scan: Option<SourceScan>,
-    windows: WindowsMediaIndex,
+    reader: &'a mut dyn PlaylistMediaReader,
 }
 
-#[cfg(target_os = "windows")]
-impl MediaIndex for PlaylistMediaIndex {
+#[cfg(any(target_os = "windows", target_os = "android"))]
+impl MediaIndex for PlaylistMediaIndex<'_> {
     fn scan(&mut self, _root: &LibraryRoot) -> SourceScan {
         self.scan.take().unwrap_or_else(|| SourceScan {
             source_id: SourceId::new(),
@@ -224,11 +290,11 @@ impl MediaIndex for PlaylistMediaIndex {
         &mut self,
         track: &MediaTrackRecord,
     ) -> Result<TrackMetadata, TrackMetadataError> {
-        self.windows.read_metadata(track)
+        self.reader.read_metadata(track)
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
 pub fn sync_playlist_file_source(
     _database: &mut Database,
     _source: &SourceEntry,
