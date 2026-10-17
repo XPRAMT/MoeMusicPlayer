@@ -1610,10 +1610,13 @@
     return () => { cancelled = true; };
   });
 
-  // Send them to the taskbar window whenever they change, and when the window opens and asks.
+  // Send them to the taskbar window whenever they change, and when the window opens and asks. (`capabilities` is
+  // replaced every few seconds, so only its platform, a plain value, is tracked: the same lyrics are not sent again.)
+  let isWindowsPlatform = $derived(capabilities?.platform === 'windows');
+  let taskbarLyricsEnabled = $derived(taskbarLyricsSettings.enabled);
   $effect(() => {
     const data = taskbarLyricsData;
-    if (!isTauri() || !data || capabilities?.platform !== 'windows' || !taskbarLyricsSettings.enabled) return;
+    if (!isTauri() || !data || !isWindowsPlatform || !taskbarLyricsEnabled) return;
     void emitTo('taskbar-lyrics', 'taskbar-lyrics-data', data).catch(() => {});
   });
 
