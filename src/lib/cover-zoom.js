@@ -115,11 +115,44 @@ export function coverZoom(node, params) {
     return { x: clientX - (rect.left + rect.width / 2), y: clientY - (rect.top + rect.height / 2) };
   }
 
+  let settleFrame = 0;
+
+  /**
+   * Zooming changes the layout (the cover's column grows/shrinks, the lyrics get squeezed), which moves the cover's
+   * un-transformed centre. After the layout settles, shift the translation so the content point `u` (offset from the
+   * cover centre, in cover px) is again under `target` (client coords).
+   * @param {{ x: number, y: number }} target @param {{ x: number, y: number }} u
+   */
+  function settleAnchor(target, u) {
+    if (typeof requestAnimationFrame !== 'function') return;
+    cancelAnimationFrame(settleFrame);
+    settleFrame = requestAnimationFrame(() => {
+      settleFrame = 0;
+      if (state.scale === COVER_ZOOM_REST) return;
+      const rect = node.getBoundingClientRect();
+      const centreX = rect.left + rect.width / 2;
+      const centreY = rect.top + rect.height / 2;
+      const { width, height } = layerSize();
+      const dx = target.x - u.x * state.scale - centreX;
+      const dy = target.y - u.y * state.scale - centreY;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+      apply(clampCoverZoom({ scale: state.scale, x: state.x + dx, y: state.y + dy }, width, height), false);
+    });
+  }
+
+  /** Content offset from the cover centre (cover px) of the point currently at client (x, y). @param {number} clientX @param {number} clientY */
+  function contentOffsetAt(clientX, clientY) {
+    const a = anchorOf(clientX, clientY);
+    return { x: a.x / state.scale, y: a.y / state.scale };
+  }
+
   /** @param {number} scale @param {number} clientX @param {number} clientY */
   function zoomTo(scale, clientX, clientY) {
     const { width, height } = layerSize();
     const a = anchorOf(clientX, clientY);
+    const u = contentOffsetAt(clientX, clientY);
     apply(zoomCoverAt(state, scale, a.x, a.y, width, height), false);
+    settleAnchor({ x: clientX, y: clientY }, u);
   }
 
   function reset() {
@@ -166,12 +199,14 @@ export function coverZoom(node, params) {
       const midX = (a.x + b.x) / 2;
       const midY = (a.y + b.y) / 2;
       const mid = anchorOf(midX, midY);
+      const u = contentOffsetAt(pinch.midX, pinch.midY);
       const { width, height } = layerSize();
       const zoomed = zoomCoverAt(state, pinch.scale * (pointerDistance(a, b) / pinch.distance), mid.x, mid.y, width, height);
       // Two fingers moving together pan the zoomed cover.
       apply(clampCoverZoom({ scale: zoomed.scale, x: zoomed.x + (midX - pinch.midX), y: zoomed.y + (midY - pinch.midY) }, width, height), false);
       pinch.midX = midX;
       pinch.midY = midY;
+      settleAnchor({ x: midX, y: midY }, u);
       suppressClick = true;
       if (event.cancelable) event.preventDefault();
     } else if (pan && pointers.size === 1) {
@@ -232,6 +267,7 @@ export function coverZoom(node, params) {
       if (!active()) { pointers.clear(); pinch = null; pan = null; reset(); }
     },
     destroy() {
+      cancelAnimationFrame(settleFrame);
       node.removeEventListener('wheel', wheel);
       node.removeEventListener('pointerdown', down);
       node.removeEventListener('pointermove', move);
