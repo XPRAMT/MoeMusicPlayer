@@ -400,7 +400,7 @@ export function isDsdCodec(codec) {
 
 /**
  * @param {{ codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null }} item
- * @param {{ omitLosslessBitrate?: boolean }} [options]
+ * @param {{ omitLosslessBitrate?: boolean, omitDsdBitDepth?: boolean }} [options]
  */
 export function formatAudioFormat(item, options = {}) {
   // The track list passes `omitLosslessBitrate: true`: lossless formats (including DSD) show no average bitrate there.
@@ -419,7 +419,9 @@ export function formatAudioFormat(item, options = {}) {
       parts.push(`${Number.isInteger(kiloHertz) ? kiloHertz : kiloHertz.toFixed(1)} kHz`);
     }
   }
-  if (typeof item.bitDepth === 'number' && Number.isInteger(item.bitDepth) && item.bitDepth > 0) {
+  // DSD is always 1 bit, so the list leaves it out (`omitDsdBitDepth`).
+  const hideBitDepth = options.omitDsdBitDepth === true && isDsdCodec(item.codec);
+  if (!hideBitDepth && typeof item.bitDepth === 'number' && Number.isInteger(item.bitDepth) && item.bitDepth > 0) {
     parts.push(`${item.bitDepth} bit`);
   }
   const hideBitrate = omitLosslessBitrate && isLosslessCodec(item.codec);
@@ -478,7 +480,7 @@ export function formatTrackColumnValue(id, item, formatDuration, titleFallback =
     case 'createdAt':
       return formatCreatedAt(item.createdAtUtcMs);
     case 'audioFormat':
-      return formatAudioFormat(item, { omitLosslessBitrate: true });
+      return formatAudioFormat(item, { omitLosslessBitrate: true, omitDsdBitDepth: true });
     case 'duration':
       return item.durationMs === null || item.durationMs === undefined
         ? '—'

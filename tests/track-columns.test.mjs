@@ -42,6 +42,7 @@ const formatDuration = (value) => `${Math.floor(value / 60_000)}:${String(Math.f
 test('DSD tracks show the DSD rate name, MHz and 1 bit, hide the bitrate and always get the Hi-Res badge', () => {
   const dsd64 = { codec: 'DSD64', sampleRateHz: 2_822_400, bitDepth: 1, bitrateBps: 5_644_800 };
   assert.equal(formatAudioFormat(dsd64), 'DSD64．2.8 MHz．1 bit．5645 kbps');
+  assert.equal(formatAudioFormat(dsd64, { omitDsdBitDepth: true }), 'DSD64．2.8 MHz．5645 kbps');
   assert.equal(formatAudioFormat(dsd64, { omitLosslessBitrate: true }), 'DSD64．2.8 MHz．1 bit');
   assert.equal(formatAudioFormat({ codec: 'DSD256', sampleRateHz: 11_289_600, bitDepth: 1, bitrateBps: null }), 'DSD256．11.3 MHz．1 bit');
   assert.equal(isDsdCodec('dsd128'), true);
@@ -423,7 +424,7 @@ test('audio format uses only supplied source fields and formats nullable values'
     formatTrackColumnValue('audioFormat', {
       codec: 'DSD64', sampleRateHz: 2_822_400, bitDepth: 1, bitrateBps: 5_644_800,
     }, formatDuration),
-    'DSD64．2.8 MHz．1 bit',
+    'DSD64．2.8 MHz',
   );
 });
 

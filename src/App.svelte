@@ -575,6 +575,8 @@
   let activeArtwork = $state<ActiveArtworkState>({ trackId: null, status: 'empty', objectUrl: null });
   let coverStageElement = $state<HTMLDivElement | null>(null);
   let coverFrame = $state<{ width: number; height: number } | null>(null);
+  // The top bar shows the recording date only when the track has one (no "—" placeholder).
+  let nowPlayingReleaseDate = $derived(formatTrackColumnValue('year', playback?.currentTrack ?? {}, () => '—'));
   let coverZoomScale = $state(1);
   // Last zoom state; restored onto the cover element when it is re-created (track change).
   let coverZoomSaved = $state.raw<{ scale: number; x: number; y: number }>({ scale: 1, x: 0, y: 0 });
@@ -4419,9 +4421,9 @@
               <span>{formatAudioFormat(playback?.currentTrack ?? {})}</span>
               {#if isHiResTrack(playback?.currentTrack)}<img src={hiResBadgeUrl} alt="Hi-Res" use:appTooltip={'Hi-Res'} />{/if}
             </span>
-            <span class="now-playing-release-date-block now-playing-release-date" aria-label="發行日期">
-              {formatTrackColumnValue('year', playback?.currentTrack ?? {}, () => '—')}
-            </span>
+            {#if nowPlayingReleaseDate !== '—'}
+              <span class="now-playing-release-date-block now-playing-release-date" aria-label="發行日期">{nowPlayingReleaseDate}</span>
+            {/if}
             <span class="now-playing-play-count-block now-playing-play-count" aria-label="播放次數">
               播放次數 {formatTrackColumnValue('playCount', withLivePlayedMs(playback?.currentTrack ?? {}, livePlayCount), () => '—')}
             </span>
