@@ -48,6 +48,15 @@ Symphonia and rodio convert N-bit integers to `f32` by dividing by 2^(N−1). Th
 5. **Format negotiation** per track: try the source's native rate and depth first (container order: native depth, then 24-in-32, 32); if the endpoint refuses the rate, resample with the existing rubato path to the nearest supported rate (prefer integer ratios) and mark "not bit-perfect" with the reason; if nothing works, fall back to shared mode for that track and say why.
 6. **Route planning** (`plan_dsd_route(info, settings, endpoint_caps) -> Pcm{rate} | Dop{rate}`): DoP only when the setting is on, the output is exclusive and the endpoint accepts the exact DoP format at that rate; otherwise PCM with a notice (the DSD gain and rate settings keep applying to the PCM route only).
 
+### When the device does not accept the file's sample rate (decided 2026-10-18: automatic resampling)
+The user chose **automatic resampling**: playback never stops and never silently drops to shared mode because of a rate mismatch.
+1. Probe the track's native rate and bit depth with `IsFormatSupported` (the endpoint has no list to read, so candidates are probed and the answer is cached per device). Accepted: bit-perfect.
+2. Refused: resample (the existing rubato high-quality path) to the nearest accepted rate. Order of preference: an integer multiple in the same family (44.1 kHz material to 88.2 or 176.4 kHz, 48 kHz material to 96 or 192 kHz), then a non-integer rate of the other family, then, last, a lower rate. The status shows the real path and the reason, for example "Exclusive · 96 kHz (converted from 44.1 kHz) · not bit-perfect · the device does not accept 44.1 kHz".
+3. Bit depth that does not match only changes the container (24-in-32, 24 packed, 32): no data is changed for sources of 24 bits or less.
+4. If no format can be negotiated at all, that track plays in shared mode with the reason shown (the only case where shared mode is used silently); the next track tries exclusive again.
+5. **DSD:** when the endpoint refuses the exact DoP rate, the track takes the PCM route (DSD to PCM at the accepted rate nearest to the requested 176.4 or 352.8 kHz) and says why.
+6. A different rate from the previous track closes and re-opens the exclusive stream (short mute, mitigated by ramping down first); the same rate keeps it open. A "when the rate does not match" setting (automatic resampling, shared mode, skip the track) is not planned; automatic is the only behaviour.
+
 ### Behaviour rules
 - **Volume.** Proposed: in exclusive PCM the app volume is a software gain applied only below 100% (100% is a pure pass-through, so bit-perfect when left at 100%); in DoP the volume control is disabled with an explanation (volume is set on the DAC or amplifier). The DSD gain setting is PCM route only. DSEE HX and the shared-mode resampling choices are disabled while exclusive is active.
 - **Pause, seek, stop, track change.** PCM: silence. DoP: idle frames with continuous markers; stop sends about 100 ms of idle before closing; a track with the same format keeps the stream open (no re-open click); a format change closes and re-opens after a short mute.
@@ -66,6 +75,7 @@ Symphonia and rodio convert N-bit integers to `f32` by dividing by 2^(N−1). Th
 - **Later, not planned:** gapless across format changes, DSD512, native DSD over ASIO/UAC2, an exclusive mode for the Android build.
 
 ## Open questions for the user
+Resolved: a sample-rate mismatch resamples automatically (see above). Still open:
 1. **Is there a DoP-capable DAC to test with** (model, USB or S/PDIF)? Without one, P2 can be built and unit-tested but not heard; the Realtek digital output could carry DSD64 DoP (176.4 kHz) to an S/PDIF DAC.
 2. **Volume policy** in exclusive PCM: software gain below 100% (proposed) or no volume at all.
 3. **Do P0 (device selection) first?** Proposed: yes, it is needed for P1 anyway.
