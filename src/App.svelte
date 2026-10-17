@@ -801,7 +801,9 @@
 
   $effect(() => {
     if (runtimePlatform !== 'android') return;
-    void refreshAllFilesAccess();
+    // untrack: refreshAllFilesAccess reads and reassigns allFilesAccess synchronously; tracking it
+    // here re-ran this effect on every result (thousands of IPC calls/s, native crash on Android).
+    untrack(() => void refreshAllFilesAccess());
     const onVisible = () => {
       if (document.visibilityState === 'visible') void refreshAllFilesAccess();
     };

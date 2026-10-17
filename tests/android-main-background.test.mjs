@@ -98,3 +98,9 @@ test('Android sources are real paths with no per-item SAF/MediaStore grants (ADR
   assert.match(service, /uri\.startsWith\("file:\/\/\/"\) \|\| uri\.startsWith\("content:\/\/"\)/);
   assert.doesNotMatch(service, /requires an authorized content URI/);
 });
+
+test('All files access status check is untracked so it cannot re-trigger its own effect', () => {
+  const source = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  assert.match(source, /untrack\(\(\) => void refreshAllFilesAccess\(\)\)/);
+  assert.doesNotMatch(source, /\n\s*void refreshAllFilesAccess\(\);\s*\n\s*const onVisible/);
+});
