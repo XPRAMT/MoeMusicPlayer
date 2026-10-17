@@ -8,7 +8,6 @@ description = "Single-track tag read/write and spectrogram rendering (ADR 0013)"
 [dependencies]
 player-formats = { path = "../player-formats" }
 player-dsd = { path = "../player-dsd", features = ["id3"] }
-player-opus = { path = "../player-opus" }
 lofty = "0.25.4"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 realfft = "3"
@@ -24,6 +23,11 @@ symphonia = { version = "=0.5.5", default-features = false, features = [
     "pcm",
 ] }
 serde = { version = "1", features = ["derive"] }
+
+# libopus is built with cmake, which the Android build does not have; Android plays Opus with Media3 and has no
+# Opus spectrogram.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+player-opus = { path = "../player-opus" }
 
 [dev-dependencies]
 player-dsd = { path = "../player-dsd", features = ["id3", "testing"] }

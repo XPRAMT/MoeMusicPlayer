@@ -271,6 +271,57 @@ impl Analyzer {
     }
 }
 
+/// Opus input (ADR 0017). libopus is built with cmake, which the Android build does not have, and Android plays Opus
+/// with Media3, so there it has no Opus spectrogram.
+#[cfg(not(target_os = "android"))]
+mod opus_input {
+    use std::fs::File;
+    use std::io::BufReader;
+    use std::path::Path;
+
+    pub type Reader = player_opus::OpusReader<BufReader<File>>;
+
+    pub fn is_opus(path: &Path) -> bool {
+        player_formats::decode_engine(path) == player_formats::DecodeEngine::Opus
+            || player_opus::sniff_opus_file(path)
+    }
+
+    /// The reader with its sample rate, channel count and exact length in frames.
+    pub fn open(file: File) -> Result<(Reader, u32, usize, Option<u64>), String> {
+        let reader = player_opus::OpusReader::open(BufReader::new(file))
+            .map_err(|e| format!("無法開啟 Opus：{e}"))?;
+        let info = reader.info();
+        let channels = usize::from(info.channels).max(1);
+        Ok((reader, player_opus::OPUS_RATE, channels, info.total_frames))
+    }
+
+    pub fn read(reader: &mut Reader, out: &mut Vec<f32>) -> Result<usize, String> {
+        reader
+            .read_frames(out)
+            .map_err(|e| format!("解碼失敗：{e}"))
+    }
+}
+
+#[cfg(target_os = "android")]
+mod opus_input {
+    use std::fs::File;
+    use std::path::Path;
+
+    pub struct Reader;
+
+    pub fn is_opus(path: &Path) -> bool {
+        player_formats::decode_engine(path) == player_formats::DecodeEngine::Opus
+    }
+
+    pub fn open(_file: File) -> Result<(Reader, u32, usize, Option<u64>), String> {
+        Err("Android 不支援 Opus 頻譜圖。".to_owned())
+    }
+
+    pub fn read(_reader: &mut Reader, _out: &mut Vec<f32>) -> Result<usize, String> {
+        Err("Android 不支援 Opus 頻譜圖。".to_owned())
+    }
+}
+
 /// Render a spectrogram PNG for `path`.
 pub fn render_spectrogram(
     path: &Path,
@@ -286,21 +337,13 @@ pub fn render_spectrogram(
 
     let file = File::open(path).map_err(|e| format!("無法開啟檔案：{e}"))?;
     // Opus has its own decoder (ADR 0017); everything else goes through Symphonia.
-    let use_opus = player_formats::decode_engine(path) == player_formats::DecodeEngine::Opus
-        || player_opus::sniff_opus_file(path);
+    let use_opus = opus_input::is_opus(path);
     let mut opus_reader = None;
     let mut symphonia_input = None;
     let (sample_rate, channel_count, known_frames, channel_layout) = if use_opus {
-        let reader = player_opus::OpusReader::open(std::io::BufReader::new(file))
-            .map_err(|e| format!("無法開啟 Opus：{e}"))?;
-        let info = reader.info();
+        let (reader, rate, channels, frames) = opus_input::open(file)?;
         opus_reader = Some(reader);
-        (
-            player_opus::OPUS_RATE,
-            usize::from(info.channels).max(1),
-            info.total_frames,
-            None,
-        )
+        (rate, channels, frames, None)
     } else {
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
         let mut hint = Hint::new();
@@ -398,9 +441,7 @@ pub fn render_spectrogram(
                 return Err("已取消".into());
             }
             buffer.clear();
-            let frames = reader
-                .read_frames(&mut buffer)
-                .map_err(|e| format!("解碼失敗：{e}"))?;
+            let frames = opus_input::read(&mut reader, &mut buffer)?;
             if frames == 0 {
                 break;
             }
