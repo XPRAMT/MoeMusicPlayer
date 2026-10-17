@@ -231,7 +231,15 @@ pub fn list_output_devices() -> Vec<OutputDeviceInfo> {
             let id = device.id().ok()?.to_string();
             let name = device
                 .description()
-                .map(|description| description.name().to_owned())
+                // The name Windows shows in its sound settings ("耳機 (WF-1000XM6)"); CPAL keeps it as the first
+                // extended line when it differs from the short device description ("耳機").
+                .map(|description| {
+                    description
+                        .extended()
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| description.name().to_owned())
+                })
                 .unwrap_or_else(|_| id.clone());
             let config = device.default_output_config().ok();
             Some(OutputDeviceInfo {
