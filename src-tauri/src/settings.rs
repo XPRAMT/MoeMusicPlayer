@@ -1121,6 +1121,10 @@ pub struct AppSettings {
     /// Keyboard and mouse bindings. Missing values keep the player defaults.
     #[serde(default)]
     pub shortcuts: ShortcutSettings,
+    /// True when the last run ended (normal close or update restart) while audio was playing. Set at
+    /// shutdown, consumed (reset to false) on the next launch to resume playback. Windows only.
+    #[serde(default)]
+    pub resume_playback: bool,
 }
 
 impl Default for AppSettings {
@@ -1144,6 +1148,7 @@ impl Default for AppSettings {
             excluded_folders: Vec::new(),
             window_geometry: None,
             shortcuts: ShortcutSettings::default(),
+            resume_playback: false,
         }
     }
 }
@@ -1580,6 +1585,7 @@ struct RawSettings {
     excluded_folders: Option<Vec<ExcludedFolderEntry>>,
     window_geometry: Option<WindowGeometry>,
     shortcuts: Option<serde_json::Value>,
+    resume_playback: Option<bool>,
 }
 
 fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
@@ -1626,6 +1632,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         excluded_folders: raw.excluded_folders.unwrap_or_default(),
         window_geometry: raw.window_geometry,
         shortcuts: lenient_shortcuts(raw.shortcuts),
+        resume_playback: raw.resume_playback.unwrap_or(false),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -1976,6 +1983,22 @@ mod tests {
         let settings = reopened.snapshot().unwrap();
         assert!(settings.shuffle);
         assert_eq!(settings.repeat_mode, RepeatMode::All);
+    }
+
+    #[test]
+    fn resume_playback_flag_defaults_off_and_survives_restart() {
+        let directory = test_directory("resume-playback");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        assert!(!store.snapshot().unwrap().resume_playback);
+        store
+            .update(|settings| {
+                settings.resume_playback = true;
+                Ok(())
+            })
+            .expect("persist flag");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert!(reopened.snapshot().unwrap().resume_playback);
     }
 
     #[test]
