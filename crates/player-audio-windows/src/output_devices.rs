@@ -71,7 +71,8 @@ impl OutputDeviceSetting {
     }
 }
 
-/// The devices that play, in order: the first is the primary. Disabled entries are dropped. With no entry at all the
+/// The devices that play, in order: the first is the primary. Disabled entries are dropped, and so is the system
+/// default when a specific device is enabled. With no entry at all the
 /// system default plays, as before this feature existed.
 pub fn active_devices(settings: &[OutputDeviceSetting]) -> Vec<OutputDeviceSetting> {
     let mut active: Vec<OutputDeviceSetting> = Vec::new();
@@ -79,6 +80,10 @@ pub fn active_devices(settings: &[OutputDeviceSetting]) -> Vec<OutputDeviceSetti
         if !active.iter().any(|existing| existing.id == setting.id) {
             active.push(setting.clone().normalized());
         }
+    }
+    // A chosen device replaces the system default: with both, the same endpoint would play the music twice.
+    if active.iter().any(|setting| setting.id.is_some()) {
+        active.retain(|setting| setting.id.is_some());
     }
     if active.is_empty() {
         active.push(OutputDeviceSetting::default());
@@ -279,6 +284,17 @@ mod tests {
             source,
             gain_percent: gain,
         }
+    }
+
+    #[test]
+    fn a_chosen_device_replaces_the_system_default() {
+        let default = OutputDeviceSetting::default();
+        let chosen = OutputDeviceSetting {
+            id: Some("a".into()),
+            ..OutputDeviceSetting::default()
+        };
+        let active = active_devices(&[default, chosen.clone()]);
+        assert_eq!(active, vec![chosen]);
     }
 
     #[test]

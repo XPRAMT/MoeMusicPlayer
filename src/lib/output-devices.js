@@ -181,6 +181,25 @@ export function patchRow(rows, index, patch) {
 }
 
 /**
+ * Turn a row on or off. The system default and chosen devices exclude each other: choosing a device turns the system
+ * default off (the same endpoint would play twice), and choosing the system default turns the chosen devices off.
+ * @param {DeviceRow[]} rows
+ * @param {number} index
+ * @param {boolean} enabled
+ * @returns {DeviceRow[]}
+ */
+export function setRowEnabled(rows, index, enabled) {
+  let next = patchRow(rows, index, { enabled });
+  if (!enabled) return next;
+  for (let other = 0; other < next.length; other += 1) {
+    if (other === index) continue;
+    const conflicts = index === 0 ? other !== 0 : other === 0;
+    if (conflicts && rowEnabled(next, other)) next = patchRow(next, other, { enabled: false });
+  }
+  return next;
+}
+
+/**
  * Whether turning this row off would leave nothing playing.
  * @param {DeviceRow[]} rows
  * @param {number} index

@@ -14,6 +14,7 @@ import {
   playingCount,
   rowEnabled,
   routePresets,
+  setRowEnabled,
   standardRoutes,
 } from '../src/lib/output-devices.js';
 
@@ -76,4 +77,14 @@ test('channel presets are recognised and cover stereo and surround devices', () 
   assert.equal(activePreset(2, [{ source: 0, gainPercent: 50 }, { source: 1, gainPercent: 100 }]), null);
   assert.deepEqual(routePresets(1).map((preset) => preset.id), ['standard']);
   assert.equal(standardRoutes(10)[9].source, null, 'channels past the 8 nameable ones stay silent');
+});
+
+test('choosing a device turns the system default off and choosing the default turns the devices off', () => {
+  let rows = buildDeviceRows([], [speakers, earbuds]);
+  rows = setRowEnabled(rows, 1, true);
+  assert.deepEqual(rows.map((_, index) => rowEnabled(rows, index)), [false, true, false]);
+  rows = setRowEnabled(rows, 2, true);
+  assert.deepEqual(rows.map((_, index) => rowEnabled(rows, index)), [false, true, true]);
+  rows = setRowEnabled(rows, 0, true);
+  assert.deepEqual(rows.map((_, index) => rowEnabled(rows, index)), [true, false, false]);
 });

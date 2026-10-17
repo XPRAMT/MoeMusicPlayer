@@ -16,6 +16,7 @@
     isLastPlaying,
     mainRowIndex,
     patchRow,
+    setRowEnabled,
     rowEnabled,
     routePresets,
     standardRoutes,
@@ -130,6 +131,11 @@
     scheduleSave(immediate);
   }
 
+  function toggle(index: number, enabled: boolean): void {
+    entries = entriesFromRows(setRowEnabled(rows, index, enabled));
+    scheduleSave(true);
+  }
+
   function removeSaved(index: number): void {
     const id = rows[index].id;
     entries = entries.filter((entry) => entry.id !== id);
@@ -222,7 +228,7 @@
             checked={playing}
             disabled={lastPlaying}
             aria-label={row.id === null ? tr('系統預設') : row.name}
-            onchange={(event) => update(index, { enabled: event.currentTarget.checked }, true)}
+            onchange={(event) => toggle(index, event.currentTarget.checked)}
           />
           <span class="output-device-name">
             <strong>{row.id === null ? tr('系統預設') : row.name || tr('未知的裝置')}</strong>
