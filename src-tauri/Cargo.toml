@@ -1,6 +1,7 @@
 [package]
 name = "moemusicplayer"
 version = "0.1.0"
+license = "PolyForm-Noncommercial-1.0.0"
 description = "Local-first music player"
 authors = ["MoeMusicPlayer contributors"]
 edition = "2021"

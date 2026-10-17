@@ -1,0 +1,36 @@
+MoeMusicPlayer
+==============
+
+MoeMusicPlayer is source-available software, not open source. It is licensed under the PolyForm
+Noncommercial License 1.0.0 (see LICENSE, or https://polyformproject.org/licenses/noncommercial/1.0.0).
+You may use and modify it for noncommercial purposes, and redistribute it (with or without changes) under the
+same terms. Commercial use is not permitted.
+
+When you distribute any part of this software, you must keep the license terms (or the URL above) and the
+following line:
+
+Required Notice: Copyright (c) 2026 XPRAMT (https://github.com/XPRAMT/MoeMusicPlayer)
+
+MoeMusicPlayer is source-available software; 本專案為「原始碼公開」，不是開源專案。
+以 PolyForm Noncommercial 1.0.0 授權：可自由修改、自用，重新發布時須保留授權條款與上述 Required Notice，禁止商業使用。
+
+Artwork
+-------
+- icon/SilverWolfIcon.png is an unofficial illustration generated with AI by the author. It is provided under
+  this project's license like the rest of the code. The character it depicts belongs to its respective owner,
+  and no rights to that character are granted.
+
+Not covered by this license
+---------------------------
+The following files are third-party material. Their rights belong to their respective owners, and the PolyForm
+Noncommercial License does not grant you any rights to them:
+
+- src/assets/hi-res-badge.svg (Hi-Res Audio logo, a trademark of its owner)
+- icon/DefaultCover.jpg (placeholder cover image; its origin has not been confirmed)
+
+Third-party software
+--------------------
+This project depends on third-party packages under their own licenses (mostly MIT, Apache-2.0, BSD, ISC, Zlib,
+Unicode, and MPL-2.0 for the Symphonia audio decoders and a few others). They are listed with their versions,
+licenses and links in Settings > About and in licenses/credits.json. The MPL-2.0 packages remain under MPL-2.0;
+their source is available from the links given there.

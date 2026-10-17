@@ -3,7 +3,7 @@ name = "moemusicplayer-updater"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.90"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [lib]
 name = "moe_update"

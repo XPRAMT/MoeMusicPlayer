@@ -10,6 +10,10 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 - `CONTEXT.md`：共享領域詞彙；`docs/adr/`：已採納的架構決策。
 - `待辦清單.md`：由使用者維護；除使用者明確要求外，不得編輯。
 
+## 授權與定位
+
+本專案是「原始碼公開（source-available）」而非開源，採 PolyForm Noncommercial 1.0.0（根目錄 `LICENSE`、`NOTICE`；各 crate 與 `package.json` 的 license 為 SPDX `PolyForm-Noncommercial-1.0.0`）：可自由修改、自用，重新散佈須保留授權與 `Required Notice:` 行，禁止商用。文件與介面不得稱本專案為「open source／開源專案」（感謝第三方「開源」套件的文字不受影響）。**不得引入 GPL／AGPL（含 rdsd2pcm、dsd2dxd、GPL 版 FFmpeg）程式碼或連結**，因為它們不允許再加「禁止商用」；MIT／Apache／BSD／MPL／LGPL（動態連結）的相依可用，MPL 檔案維持 MPL。素材：`icon/SilverWolfIcon.png` 是作者以 AI 生成的非官方圖；`hi-res-badge.svg`（商標）與 `icon/DefaultCover.jpg`（來源待確認）不屬授權範圍。
+
 ## 目前工作狀態
 
 專輯詳情的曲目捲動視窗固定從「封面完全收合後的標題高度＋欄標題高度」（Y0）開始，捲動期間位置與大小不變，捲軸比例固定；內容最前面有等於收合行程（桌面 120 CSS px、窄版 80 CSS px）的空白，原生 scrollTop 前段收合封面（桌面 200、窄版 160 → 80 CSS px；標題高度 = 封面 + 上下內距（桌面 36、窄版 28）），之後才捲曲目，往上時同樣先回到清單頂端再展開封面，收合量恆為 `min(scrollTop, 收合行程)`。列不會被標題蓋住，因此不做逐列 clip-path、不做原生／邏輯捲動映射，也不攔截滾輪；封面、標題與欄標題位置由 CSS scroll timeline 依 scrollTop 驅動，不支援時以 scroll 事件換算的收合量更新。2026-10-16 已用 Release WebView2 CDP 驗證：快速拖曳捲軸 1,565 幀中沒有任何列出現在欄標題下緣以上，`clientHeight`、`scrollHeight`、捲動視窗頂端位置固定。架構決策見 [`docs/adr/0012-stable-album-detail-scrollport.md`](docs/adr/0012-stable-album-detail-scrollport.md)。

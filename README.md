@@ -4,6 +4,8 @@
 
 A local-first music player and library for Windows and Android. Add music folders or M3U/M3U8 playlists, browse and search your collection, and keep playback preferences and music data on your device.
 
+> **Source-available, not open source.** The source code is public and you may use and modify it for noncommercial purposes, but commercial use is not permitted. See [License](#license).
+
 ## Features
 
 - **Music library:** Windows scans folders and playlist files in the background. Android scans folders and playlist files by their real paths after you turn on **All files access**. On both platforms you can exclude folders; their tracks are skipped by scans. Scans keep previously indexed tracks when a source is unavailable or incomplete. Video files are excluded.
@@ -56,3 +58,13 @@ npm run android:build:arm64
 ```
 
 The debug APK is written to `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`. Turn on **All files access** in **Settings → Music Sources**, then add a folder or playlist. `npm run release:android` builds the APK with a fixed build identity. It also writes the in-app update assets (`moemusicplayer-android-arm64.apk`, `moemusicplayer-android-update.json`) to `release/update-assets/`. It publishes only with `-Upload -ReleaseTag <tag>`. The APK must be signed with the same key as the installed app.
+
+## License
+
+MoeMusicPlayer is **source-available software, not open source**, licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+- You may use it and modify it for noncommercial purposes (personal use, hobby projects, research, education, and similar).
+- You may redistribute it, with or without changes, under the same license. When you do, include the license text (or its URL) and the `Required Notice:` line from [NOTICE](NOTICE) so recipients can find the original source.
+- Commercial use is not permitted.
+
+Artwork: `icon/SilverWolfIcon.png` is an unofficial, AI-generated illustration by the author and is provided under this license; the character it depicts belongs to its owner. Not covered by this license: `src/assets/hi-res-badge.svg` and `icon/DefaultCover.jpg` (see [NOTICE](NOTICE)); their rights belong to their respective owners. Third-party software the project depends on keeps its own license; **Settings → About** and `licenses/credits.json` list them with versions and links.

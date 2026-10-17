@@ -4,6 +4,8 @@
 
 MoeMusicPlayer 是適用於 Windows 與 Android 的本機優先音樂播放器與曲庫。你可以加入音樂資料夾或 M3U/M3U8 播放清單、瀏覽及搜尋曲庫，並將播放偏好與音樂資料保存在裝置上。
 
+> **原始碼公開，不是開源。** 原始碼公開，可在非商業用途下自由使用與修改，但禁止商業使用。詳見[授權](#授權)。
+
 ## 功能
 
 - **音樂來源：** Windows 可在背景掃描資料夾與播放清單檔。Android 開啟「所有檔案存取權」後，以實際路徑掃描資料夾與播放清單檔。兩個平台都能排除資料夾，掃描時會略過其中的曲目。來源暫時無法使用或掃描未完成時，會保留先前已索引的曲目；影片不會加入曲庫。
@@ -54,3 +56,13 @@ npm run android:build:arm64
 ```
 
 Debug APK 輸出至 `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`。安裝後到「設定 → 音樂來源」開啟「所有檔案存取權」，再加入資料夾或播放清單。`npm run release:android` 會以固定建置識別建置 APK，並把應用程式內更新檔（`moemusicplayer-android-arm64.apk`、`moemusicplayer-android-update.json`）輸出到 `release/update-assets/`。只有加上 `-Upload -ReleaseTag <tag>` 才會發布。APK 必須與已安裝的程式使用同一把簽章金鑰。
+
+## 授權
+
+MoeMusicPlayer 是**原始碼公開（source-available）軟體，不是開源專案**，採用 [PolyForm Noncommercial License 1.0.0](LICENSE) 授權。
+
+- 可在非商業用途（個人使用、興趣專案、研究、教育等）下使用與修改。
+- 可重新散佈（含修改版），條件是沿用相同授權；散佈時須附上授權全文（或網址）與 [NOTICE](NOTICE) 內的 `Required Notice:` 行，讓取得者能找到原始來源。
+- 禁止商業使用。
+
+美術素材：`icon/SilverWolfIcon.png` 是作者以 AI 生成的非官方圖，隨本授權提供；圖中角色的權利屬於其權利人。不在此授權範圍：`src/assets/hi-res-badge.svg` 與 `icon/DefaultCover.jpg`（詳見 [NOTICE](NOTICE)），其權利屬於各自的權利人。專案相依的第三方軟體維持各自的授權；「設定 → 關於」與 `licenses/credits.json` 列出版本與連結。

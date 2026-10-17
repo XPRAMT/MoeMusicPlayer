@@ -4,6 +4,8 @@
   import { getErrorText, invokeCommand, type AboutInfo, type RuntimeCapabilities, type UpdateState } from './ipc';
   import { formatBuildTime, updateProgressPercent, updateStatusText } from './update-controller';
 
+  const LICENSE_URL = 'https://github.com/XPRAMT/MoeMusicPlayer/blob/master/LICENSE';
+
   let { platform, updateState, checkUpdate, showUpdate, idPrefix = '' }: {
     platform: RuntimeCapabilities['platform'] | undefined;
     updateState: UpdateState;
@@ -62,6 +64,7 @@
       <div><dt>提交</dt><dd><code>{info.gitCommit || '未提供'}</code></dd></div>
       <div><dt>架構</dt><dd>{info.architecture}</dd></div>
       <div><dt>專案</dt><dd><a class="about-link" href={info.repositoryUrl} onclick={(event) => void openLink(event, info!.repositoryUrl)}>GitHub<IconExternalLink size={14} aria-hidden="true" /></a></dd></div>
+      <div><dt>授權</dt><dd><a class="about-link" href={LICENSE_URL} onclick={(event) => void openLink(event, LICENSE_URL)}>PolyForm Noncommercial 1.0.0<IconExternalLink size={14} aria-hidden="true" /></a>（原始碼公開，禁止商用）</dd></div>
     </dl>
   {/if}
   {#if platform === 'windows'}
