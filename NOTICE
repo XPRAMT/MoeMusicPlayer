@@ -17,15 +17,11 @@ MoeMusicPlayer is source-available software; 本專案為「原始碼公開」�
 Artwork
 -------
 - icon/SilverWolfIcon.png and icon/DefaultCover.jpg are unofficial illustrations generated with AI by the
-  author. They are provided under this project's license like the rest of the code. The character depicted in
-  SilverWolfIcon.png belongs to its respective owner, and no rights to that character are granted.
-
-Not covered by this license
----------------------------
-The following file is third-party material. Its rights belong to its owner, and the PolyForm Noncommercial
-License does not grant you any rights to it:
-
-- src/assets/hi-res-badge.svg (Hi-Res Audio logo, a trademark of its owner)
+  author. The character depicted in SilverWolfIcon.png belongs to its respective owner.
+- src/assets/hi-res-badge.svg is an unofficial SVG redrawn with AI by the author, imitating the Hi-Res Audio
+  logo. The logo design and trademark belong to their owner.
+- The files above are provided under this project's license like the rest of the code, but no rights to the
+  characters, logos or trademarks they depict are granted.
 
 Third-party software
 --------------------

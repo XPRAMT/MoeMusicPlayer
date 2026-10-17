@@ -12,7 +12,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 ## 授權與定位
 
-本專案是「原始碼公開（source-available）」而非開源，採 PolyForm Noncommercial 1.0.0（根目錄 `LICENSE`、`NOTICE`；各 crate 與 `package.json` 的 license 為 SPDX `PolyForm-Noncommercial-1.0.0`）：可自由修改、自用，重新散佈須保留授權與 `Required Notice:` 行，禁止商用。文件與介面不得稱本專案為「open source／開源專案」（感謝第三方「開源」套件的文字不受影響）。**不得引入 GPL／AGPL（含 rdsd2pcm、dsd2dxd、GPL 版 FFmpeg）程式碼或連結**，因為它們不允許再加「禁止商用」；MIT／Apache／BSD／MPL／LGPL（動態連結）的相依可用，MPL 檔案維持 MPL。素材：`icon/SilverWolfIcon.png` 與 `icon/DefaultCover.jpg` 是作者以 AI 生成的非官方圖，隨專案授權提供（前者圖中角色的權利屬原權利人）；只有 `hi-res-badge.svg`（商標）不屬授權範圍。
+本專案是「原始碼公開（source-available）」而非開源，採 PolyForm Noncommercial 1.0.0（根目錄 `LICENSE`、`NOTICE`；各 crate 與 `package.json` 的 license 為 SPDX `PolyForm-Noncommercial-1.0.0`）：可自由修改、自用，重新散佈須保留授權與 `Required Notice:` 行，禁止商用。文件與介面不得稱本專案為「open source／開源專案」（感謝第三方「開源」套件的文字不受影響）。**不得引入 GPL／AGPL（含 rdsd2pcm、dsd2dxd、GPL 版 FFmpeg）程式碼或連結**，因為它們不允許再加「禁止商用」；MIT／Apache／BSD／MPL／LGPL（動態連結）的相依可用，MPL 檔案維持 MPL。素材：`icon/SilverWolfIcon.png`、`icon/DefaultCover.jpg` 與 `hi-res-badge.svg` 都是作者以 AI 生成／重繪的非官方圖，隨專案授權提供；但圖中角色（銀狼）與 Hi-Res Audio 標誌／商標的權利屬原權利人，授權不涵蓋。
 
 ## 目前工作狀態
 
