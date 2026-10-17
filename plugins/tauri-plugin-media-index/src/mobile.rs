@@ -113,6 +113,10 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         &self,
         path: &std::path::Path,
     ) -> std::result::Result<TrackMetadata, TrackMetadataError> {
+        // DSF is not a lofty format: header properties plus the ID3v2 tag at the end of the file.
+        if player_formats::decode_engine(path) == player_formats::DecodeEngine::Dsd {
+            return read_dsf_metadata(path);
+        }
         match parse_lofty_metadata(path, None) {
             Ok(metadata) => Ok(metadata),
             Err(lofty_error) => {
@@ -625,4 +629,36 @@ fn unavailable_scan(root: &LibraryRoot, reason: &str) -> SourceScan {
             message: reason.to_owned(),
         }],
     }
+}
+
+/// Metadata of a DSF file (properties from the header, tags from the trailing ID3v2 tag), like the Windows scanner.
+fn read_dsf_metadata(path: &std::path::Path) -> std::result::Result<TrackMetadata, TrackMetadataError> {
+    use lofty::prelude::{Accessor, ItemKey};
+
+    let (info, tag) = player_dsd::id3::read_dsf(path).map_err(|error| TrackMetadataError {
+        message: error.to_string(),
+    })?;
+    let tag = tag.as_ref();
+    let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
+    let release_date = tag
+        .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
+        .and_then(player_core::parse_recording_date);
+    let year = release_date.as_deref().and_then(player_core::recording_date_year);
+    Ok(TrackMetadata {
+        title: tag
+            .and_then(|tag| text(tag.title()))
+            .filter(|value| !value.trim().is_empty()),
+        artist: tag.and_then(|tag| text(tag.artist())),
+        album: tag.and_then(|tag| text(tag.album())),
+        album_artist: tag.and_then(|tag| tag.get_string(ItemKey::AlbumArtist).map(str::to_owned)),
+        track_number: tag.and_then(|tag| tag.track()),
+        disc_number: tag.and_then(|tag| tag.disk()),
+        duration_ms: Some(info.duration().as_millis().min(u64::MAX as u128) as u64),
+        codec: Some(info.rate_name()),
+        bitrate_bps: Some(info.sample_rate.saturating_mul(u32::from(info.channels))),
+        sample_rate_hz: Some(info.sample_rate),
+        release_date,
+        year,
+        bit_depth: Some(1),
+    })
 }

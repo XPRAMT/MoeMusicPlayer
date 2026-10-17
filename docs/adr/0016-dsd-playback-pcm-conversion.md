@@ -78,7 +78,11 @@ Synthetic DSD from a high-order sigma-delta modulator, written as DSF by the tes
 
 ## Settings (added later)
 
-Settings → output → "DSD 播放" offers a manual gain of +1 to +6 dB (default +3) and the PCM output rate, 176.4 kHz (default) or 352.8 kHz. The gain is a shared atomic that playing sources follow with a 0.3 s time constant, so changing it never jumps; a new output rate reloads the playing DSD track from its position. An automatic gain (whole-track peak analysis, target −0.1 dBFS) was built and then removed: the analysis is disk-bound (3 to 8 s for a cold 200 to 650 MB file, about 22 GB for the owner's library), so it could not be instant and the owner chose manual only. A by-product of that measurement: the peak at 352.8 kHz is about 0 to 2 dB higher than at 176.4 kHz, because more ultrasonic noise is kept.
+Settings → output → "DSD 播放" offers a manual gain slider of 0 to +6 dB in 0.5 dB steps (default +3) and the PCM output rate, 176.4 kHz (default) or 352.8 kHz. The gain is a shared atomic that playing sources follow with a 0.3 s time constant, so changing it never jumps; a new output rate reloads the playing DSD track from its position. An automatic gain (whole-track peak analysis, target −0.1 dBFS) was built and then removed: the analysis is disk-bound (3 to 8 s for a cold 200 to 650 MB file, about 22 GB for the owner's library), so it could not be instant and the owner chose manual only. A by-product of that measurement: the peak at 352.8 kHz is about 0 to 2 dB higher than at 176.4 kHz, because more ultrasonic noise is kept.
+
+## Android
+
+Android plays DSF too. Media3/ExoPlayer has no DSD decoder, and the playback queue and service are already Rust-driven, so the converter is reused instead of porting it: a `.dsf` track is loaded as `moedsd:///path`; a Kotlin `DsdDataSource` (routed by URI scheme) reads it through JNI as a WAV file of 32-bit float PCM at 176.4 kHz that `player_dsd::wav::DsdWavStream` produces on demand. The virtual file has a known length, so ExoPlayer gets the duration and seeks by byte position, which the reader maps to exact frame seeks. The same `DsdPcmReader` sits under the Windows rodio source and the Android data source. `DefaultRenderersFactory.setEnableAudioFloatOutput(true)` keeps the float samples (it only affects high-resolution PCM). Only 176.4 kHz is offered on Android because `AudioTrack` stops at 192 kHz. Android's mixer still resamples to the device rate, so this is conversion to PCM, not bit-perfect output, as on Windows.
 
 ## Filter style (considered, not offered)
 

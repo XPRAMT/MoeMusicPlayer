@@ -1,59 +1,24 @@
-//! The rodio source for DSD→PCM playback (ADR 0016): pulls DSD from a [`DsdStream`], converts it block by block and
-//! hands out interleaved `f32` samples at a fixed PCM rate, delay-compensated and trimmed to the exact frame count.
+//! The rodio source for DSD→PCM playback (ADR 0016): a thin wrapper over `player_dsd::reader::DsdPcmReader`, which does
+//! the conversion (block by block, delay-compensated, trimmed to the exact frame count, seekable, with a smoothed gain).
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Duration;
 
+use player_dsd::reader::DsdPcmReader;
+use player_dsd::stream::{DsdError, DsdStream};
 use rodio::source::SeekError;
 use rodio::{ChannelCount, Sample, SampleRate, Source};
-
-use player_dsd::convert::{ConversionPlan, DsdPcmConverter};
-use player_dsd::stream::{DsdError, DsdInfo, DsdStream, DSD_IDLE_BYTE};
 
 /// PCM rate used by the tests (the playback rate comes from the settings, 176.4 kHz by default).
 #[cfg(test)]
 pub(crate) const DEFAULT_OUTPUT_RATE: u32 = 176_400;
-/// Time constant of the gain smoothing: when the gain setting changes while a track plays, the gain eases to the new
-/// value instead of jumping.
-const GAIN_SMOOTHING_SECONDS: f64 = 0.3;
-
-/// Bytes per channel read from the stream per refill (one DSF block).
-const READ_BYTES: usize = 4096;
-/// Idle-pattern bytes per channel fed after the end of the stream to flush the filters; far more than the filters'
-/// delay, so the cap only protects against a logic error.
-const MAX_FLUSH_BYTES: usize = 64 * READ_BYTES;
-/// Minimum bytes replayed before a seek target so every filter has forgotten its (unknown) state.
-const MIN_PREROLL_BYTES: usize = 2048;
-/// Most channels the converter plays in this version.
-const MAX_CHANNELS: u16 = 2;
 
 pub(crate) struct DsdPcmSource<S: DsdStream> {
-    stream: S,
-    info: DsdInfo,
-    converter: DsdPcmConverter,
-    out_rate: u32,
-    channels: usize,
-    bytes_per_frame: u64,
-    discard_frames: u64,
-    preroll_bytes: u64,
-    total_frames: u64,
-    /// Raw converter outputs still to be dropped (delay compensation, or the pre-roll after a seek).
-    discard: u64,
-    /// Absolute index of the next frame to be produced into `pcm`.
-    frames_emitted: u64,
-    input_done: bool,
-    flushed_bytes: usize,
-    in_buf: Vec<Vec<u8>>,
-    chan_out: Vec<Vec<f32>>,
+    reader: DsdPcmReader<S>,
     /// Interleaved output of the current refill.
     pcm: Vec<Sample>,
     pcm_pos: usize,
-    /// Target gain in dB (`f32` bits), shared so it can change while playing.
-    gain_target: Arc<AtomicU32>,
-    /// Linear gain applied now; eases toward the target.
-    gain_now: f32,
-    gain_smoothing: f32,
 }
 
 impl<S: DsdStream> DsdPcmSource<S> {
@@ -73,131 +38,19 @@ impl<S: DsdStream> DsdPcmSource<S> {
         out_rate: u32,
         gain_db_target: Arc<AtomicU32>,
     ) -> Result<Self, DsdError> {
-        let info = stream.info();
-        if info.channels == 0 || info.channels > MAX_CHANNELS {
-            return Err(DsdError::Unsupported(format!(
-                "目前只支援單聲道與雙聲道 DSD（此檔 {} 聲道）",
-                info.channels
-            )));
-        }
-        if info.rate_multiple().is_none() {
-            return Err(DsdError::Unsupported(format!(
-                "不是 44.1 kHz 系列的 DSD 取樣率（{} Hz）",
-                info.sample_rate
-            )));
-        }
-        let plan = ConversionPlan::new(info.sample_rate, out_rate)?;
-        let channels = usize::from(info.channels);
-        let bytes_per_frame = plan.bytes_per_frame() as u64;
-        let discard_frames = plan.discard_frames() as u64;
-        let preroll_bytes = (plan.settle_bytes() * 2).max(MIN_PREROLL_BYTES) as u64;
-        let total_frames = info.samples_per_channel / plan.ratio as u64;
-        let converter = DsdPcmConverter::new(plan, channels, 0.0);
-        let gain_now = db_to_linear(f32::from_bits(gain_db_target.load(Ordering::Relaxed)));
-        let gain_smoothing =
-            (1.0 - (-1.0 / (GAIN_SMOOTHING_SECONDS * f64::from(out_rate))).exp()) as f32;
         Ok(Self {
-            stream,
-            info,
-            converter,
-            out_rate,
-            channels,
-            bytes_per_frame,
-            discard_frames,
-            preroll_bytes,
-            total_frames,
-            discard: discard_frames,
-            frames_emitted: 0,
-            input_done: false,
-            flushed_bytes: 0,
-            in_buf: vec![Vec::new(); channels],
-            chan_out: vec![Vec::new(); channels],
+            reader: DsdPcmReader::new(stream, out_rate, gain_db_target)?,
             pcm: Vec::new(),
             pcm_pos: 0,
-            gain_target: gain_db_target,
-            gain_now,
-            gain_smoothing,
         })
-    }
-
-    /// Convert more input until at least one frame is ready or the track is finished.
-    fn refill(&mut self) {
-        self.pcm.clear();
-        self.pcm_pos = 0;
-        while self.pcm.is_empty() && self.frames_emitted < self.total_frames {
-            let mut count = 0;
-            if !self.input_done {
-                match self.stream.read(READ_BYTES, &mut self.in_buf) {
-                    Ok(read) => count = read,
-                    Err(error) => {
-                        eprintln!("[audio] DSD read failed, ending the track: {error}");
-                        self.input_done = true;
-                    }
-                }
-                if count == 0 {
-                    self.input_done = true;
-                }
-            }
-            if count == 0 {
-                // Past the end: feed idle pattern so the filters can deliver the last frames.
-                if self.flushed_bytes >= MAX_FLUSH_BYTES {
-                    self.total_frames = self.frames_emitted;
-                    break;
-                }
-                for buffer in &mut self.in_buf {
-                    buffer.clear();
-                    buffer.resize(READ_BYTES, DSD_IDLE_BYTE);
-                }
-                self.flushed_bytes += READ_BYTES;
-            }
-            self.converter.process(&self.in_buf, &mut self.chan_out);
-            let produced = self.chan_out[0].len() as u64;
-            let skip = self.discard.min(produced);
-            self.discard -= skip;
-            let take = (produced - skip).min(self.total_frames - self.frames_emitted);
-            let target = db_to_linear(f32::from_bits(self.gain_target.load(Ordering::Relaxed)));
-            for frame in skip..skip + take {
-                // One-pole smoothing toward the target gain (a no-op once they match).
-                if self.gain_now != target {
-                    self.gain_now += (target - self.gain_now) * self.gain_smoothing;
-                    if (target - self.gain_now).abs() < 1e-6 {
-                        self.gain_now = target;
-                    }
-                }
-                for channel in &self.chan_out {
-                    self.pcm.push(channel[frame as usize] * self.gain_now);
-                }
-            }
-            self.frames_emitted += take;
-        }
     }
 
     /// Reposition so the next frame produced is `frame` (clamped to the end).
     pub(crate) fn seek_to_frame(&mut self, frame: u64) -> Result<(), DsdError> {
-        let target = frame.min(self.total_frames);
-        let raw_target = target + self.discard_frames;
-        // Start on a frame boundary of the input so the decimation phase matches a sequential run.
-        let start_byte = (raw_target * self.bytes_per_frame).saturating_sub(self.preroll_bytes)
-            / self.bytes_per_frame
-            * self.bytes_per_frame;
-        self.stream.seek_to_byte(start_byte)?;
-        self.converter.reset();
-        self.discard = raw_target - start_byte / self.bytes_per_frame;
-        self.frames_emitted = target;
-        self.input_done = false;
-        self.flushed_bytes = 0;
         self.pcm.clear();
         self.pcm_pos = 0;
-        Ok(())
+        self.reader.seek_to_frame(frame)
     }
-
-    fn duration_of(&self, frames: u64) -> Duration {
-        Duration::from_secs_f64(frames as f64 / f64::from(self.out_rate))
-    }
-}
-
-fn db_to_linear(db: f32) -> f32 {
-    10_f32.powf(db / 20.0)
 }
 
 impl<S: DsdStream> Iterator for DsdPcmSource<S> {
@@ -205,9 +58,15 @@ impl<S: DsdStream> Iterator for DsdPcmSource<S> {
 
     fn next(&mut self) -> Option<Sample> {
         if self.pcm_pos >= self.pcm.len() {
-            self.refill();
-            if self.pcm.is_empty() {
-                return None;
+            self.pcm.clear();
+            self.pcm_pos = 0;
+            match self.reader.read_frames(&mut self.pcm) {
+                Ok(0) => return None,
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!("[audio] DSD read failed, ending the track: {error}");
+                    return None;
+                }
             }
         }
         let sample = self.pcm[self.pcm_pos];
@@ -222,21 +81,21 @@ impl<S: DsdStream> Source for DsdPcmSource<S> {
     }
 
     fn channels(&self) -> ChannelCount {
-        ChannelCount::new(self.channels as u16).expect("DSD channel count is 1 or 2")
+        ChannelCount::new(self.reader.channels() as u16).expect("DSD channel count is 1 or 2")
     }
 
     fn sample_rate(&self) -> SampleRate {
-        SampleRate::new(self.out_rate).expect("DSD output rate")
+        SampleRate::new(self.reader.out_rate()).expect("DSD output rate")
     }
 
     fn total_duration(&self) -> Option<Duration> {
-        Some(self.duration_of(
-            self.info.samples_per_channel / (self.info.sample_rate / self.out_rate) as u64,
+        Some(Duration::from_secs_f64(
+            self.reader.total_frames() as f64 / f64::from(self.reader.out_rate()),
         ))
     }
 
     fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
-        let frame = (position.as_secs_f64() * f64::from(self.out_rate)).round() as u64;
+        let frame = (position.as_secs_f64() * f64::from(self.reader.out_rate())).round() as u64;
         self.seek_to_frame(frame)
             .map_err(|error| SeekError::Other(Arc::new(error)))
     }
@@ -245,6 +104,8 @@ impl<S: DsdStream> Source for DsdPcmSource<S> {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+
+    use std::sync::atomic::Ordering;
 
     use super::*;
     use player_dsd::dsf::DsfReader;
@@ -345,7 +206,7 @@ mod tests {
         let mut levels = Vec::new();
         let mut frame_index = 0;
         let take_window = |source: &mut DsdPcmSource<DsfReader<Cursor<Vec<u8>>>>,
-                               frame_index: &mut usize| {
+                           frame_index: &mut usize| {
             let samples: Vec<Sample> = source.by_ref().take(2 * WINDOW).collect();
             let left: Vec<f32> = samples.iter().step_by(2).copied().collect();
             let level = fit_sine(&left, *frame_index, 176_400, 1_000.0).0;

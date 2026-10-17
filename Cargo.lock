@@ -2511,6 +2511,7 @@ dependencies = [
  "player-audio-windows",
  "player-core",
  "player-db",
+ "player-dsd",
  "player-formats",
  "player-platform-windows",
  "player-tags",
@@ -4886,6 +4887,7 @@ version = "0.1.0"
 dependencies = [
  "lofty",
  "player-core",
+ "player-dsd",
  "player-formats",
  "serde",
  "serde_json",

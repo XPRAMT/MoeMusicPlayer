@@ -15,6 +15,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -99,8 +100,12 @@ class PlaybackService : MediaSessionService() {
         serviceGeneration = SERVICE_GENERATIONS.incrementAndGet()
 
         val extractors = DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)
-        val player = ExoPlayer.Builder(this, DefaultRenderersFactory(this))
-            .setMediaSourceFactory(DefaultMediaSourceFactory(this, extractors))
+        // DSD (.dsf) tracks arrive as moedsd:// URIs and are served as 32-bit float WAV by the Rust converter
+        // (ADR 0016), so float PCM output is enabled for them.
+        val dataSources = DsdAwareDataSourceFactory(DefaultDataSource.Factory(this))
+        val renderers = DefaultRenderersFactory(this).setEnableAudioFloatOutput(true)
+        val player = ExoPlayer.Builder(this, renderers)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources, extractors))
             .setAudioAttributes(
                 AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(),
                 true,
@@ -280,8 +285,8 @@ class PlaybackService : MediaSessionService() {
                     val trackId = command.optString("trackId")
                     // Library tracks are real paths under All files access (file://, ADR 0014);
                     // remaining legacy tracks may still be content:// URIs.
-                    require(uri.startsWith("file:///") || uri.startsWith("content://")) {
-                        "Android playback requires a file:// or content:// URI"
+                    require(uri.startsWith("file:///") || uri.startsWith("content://") || uri.startsWith("$DSD_URI_SCHEME:///")) {
+                        "Android playback requires a file://, content:// or $DSD_URI_SCHEME:// URI"
                     }
                     require(trackId.isNotBlank()) { "trackId is required" }
                     val metadata = command.optJSONObject("metadata") ?: JSONObject()
@@ -296,12 +301,13 @@ class PlaybackService : MediaSessionService() {
                         metadata.optStringOrNull("artworkUri")?.let { mediaMetadataBuilder.setArtworkUri(Uri.parse(it)) }
                     }
                     val mediaMetadata = mediaMetadataBuilder.build()
-                    val mediaItem = MediaItem.Builder()
+                    val mediaItemBuilder = MediaItem.Builder()
                         .setMediaId(trackId)
                         .setTag(commandId)
                         .setUri(Uri.parse(uri))
                         .setMediaMetadata(mediaMetadata)
-                        .build()
+                    if (uri.startsWith("$DSD_URI_SCHEME:")) mediaItemBuilder.setMimeType("audio/wav")
+                    val mediaItem = mediaItemBuilder.build()
                     endedEventLoadInstance = null
                     stopped = false
                     loadInstance = loadFence.begin(commandId, trackId)
@@ -436,7 +442,9 @@ class PlaybackService : MediaSessionService() {
         })
     }
 
-    private fun loadArtwork(contentUri: String, artworkUri: String?): ByteArray? {
+    private fun loadArtwork(loadUri: String, artworkUri: String?): ByteArray? {
+        // A DSD track is loaded as moedsd://; its file (and embedded picture) is the same path as file://.
+        val contentUri = if (loadUri.startsWith("$DSD_URI_SCHEME:")) "file:" + loadUri.removePrefix("$DSD_URI_SCHEME:") else loadUri
         val embedded = try {
             val retriever = android.media.MediaMetadataRetriever()
             try {

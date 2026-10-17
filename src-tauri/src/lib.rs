@@ -68,6 +68,8 @@ mod album_artwork_cache;
 #[cfg(any(target_os = "android", test))]
 mod android_artwork;
 #[cfg(any(target_os = "android", test))]
+mod android_dsd;
+#[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod android_playback;
 #[cfg(target_os = "android")]
@@ -6086,6 +6088,8 @@ async fn settings_set_dsd(
         })
         .map(|settings| settings.dsd)
         .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "android")]
+    android_dsd::set_gain_db(saved.gain_db);
     #[cfg(target_os = "windows")]
     {
         if let Some(service) = state.playback.as_ref() {
@@ -10494,6 +10498,8 @@ pub fn run() {
             let initial_settings = settings
                 .snapshot()
                 .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
+            #[cfg(target_os = "android")]
+            android_dsd::set_gain_db(initial_settings.dsd.gain_db);
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::with_output(
                 audio_resampling_mode(initial_settings.resampling_mode),

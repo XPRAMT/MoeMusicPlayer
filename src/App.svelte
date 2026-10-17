@@ -149,7 +149,9 @@
   import { swipeDismiss } from './lib/swipe-dismiss.js';
   import { coverZoom, coverZoomFromFractions, coverZoomToFractions, COVER_ZOOM_MIN } from './lib/cover-zoom.js';
   import {
-    DSD_GAIN_OPTIONS_DB,
+    DSD_GAIN_MAX_DB,
+    DSD_GAIN_MIN_DB,
+    DSD_GAIN_STEP_DB,
     DSD_OUTPUT_RATES_HZ,
     formatDsdGain,
     formatDsdOutputRate,
@@ -570,6 +572,8 @@
   let settingsRecoveryWarning = $state<string | null>(null);
   let settingsSourceRegistryAuthoritative = $state(true);
   let capabilities = $state<RuntimeCapabilities | null>(null);
+  // Android converts DSD to 176.4 kHz only (AudioTrack tops out at 192 kHz).
+  let dsdEffectiveRateHz = $derived(capabilities?.platform === 'android' ? 176_400 : dsdSettings.outputRateHz);
   const showCustomTitlebar = $derived(capabilities?.platform === 'windows');
   let runtimeError = $state<string | null>(null);
   let libraryTrackCount = $state<number | null>(null);
@@ -3468,7 +3472,7 @@
                 aria-controls="{scope}lyrics-panel"
                 onclick={() => selectSettingsSection('lyrics')}
               >歌詞</button>
-              {#if capabilities?.platform === 'windows'}
+              {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
                 <button
                   id="{scope}playback-tab"
                   class="soft-button settings-tab"
@@ -3788,6 +3792,7 @@
             {:else if settingsSection === 'playback'}
               {@const outputStatus = describeOutputFormat(playback?.outputFormat)}
               <div id="{scope}playback-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}playback-tab" tabindex="0">
+                {#if capabilities?.platform === 'windows'}
                 <div class="resampling-status" role="status">
                   <span>目前輸出</span>
                   <strong>{outputStatus.text}</strong>
@@ -3839,46 +3844,48 @@
                     </span>
                   </label>
                 </div>
+                {/if}
                 <div class="settings-panel-header">
                   <div>
                     <h3>DSD 播放</h3>
-                    <p>DSD（.dsf）會先在播放器內轉成 PCM 再輸出。增益補償 DSD 較低的標稱電平；播放中調整增益會平滑漸變，不會突然變大聲。改變輸出取樣率時，正在播放的 DSD 曲目會從目前位置重新開始。</p>
+                    <p>DSD（.dsf）會先在播放器內轉成 PCM 再輸出。增益補償 DSD 較低的標稱電平；播放中調整增益會平滑漸變，不會突然變大聲。{#if capabilities?.platform === 'android'}Android 的音訊輸出上限為 192 kHz，所以輸出取樣率固定為 176.4 kHz。{:else}改變輸出取樣率時，正在播放的 DSD 曲目會從目前位置重新開始。{/if}</p>
                   </div>
                 </div>
                 <div class="dsd-settings" role="group" aria-label="DSD 播放設定">
                   <div class="dsd-setting-row" role="group" aria-label="DSD 增益">
                     <span class="dsd-setting-label"><strong>增益</strong><output>{formatDsdGain(dsdSettings.gainDb)}</output></span>
-                    <div class="dsd-choice-row">
-                      {#each DSD_GAIN_OPTIONS_DB as option (option)}
-                        <button
-                          type="button"
-                          class="soft-button"
-                          class:is-active={dsdSettings.gainDb === option}
-                          aria-pressed={dsdSettings.gainDb === option}
-                          aria-label={`DSD 增益 ${formatDsdGain(option)}`}
-                          disabled={dsdSettingsState === 'loading'}
-                          onclick={() => setDsdSettings({ gainDb: option })}
-                        >{formatDsdGain(option)}</button>
-                      {/each}
-                    </div>
+                    <input
+                      class="dsd-gain-slider"
+                      type="range"
+                      min={DSD_GAIN_MIN_DB}
+                      max={DSD_GAIN_MAX_DB}
+                      step={DSD_GAIN_STEP_DB}
+                      value={dsdSettings.gainDb}
+                      aria-label="DSD 增益"
+                      aria-valuetext={formatDsdGain(dsdSettings.gainDb)}
+                      disabled={dsdSettingsState === 'loading'}
+                      oninput={(event) => setDsdSettings({ gainDb: Number(event.currentTarget.value) })}
+                    />
                   </div>
                   <div class="dsd-setting-row" role="group" aria-label="DSD 輸出取樣率">
-                    <span class="dsd-setting-label"><strong>輸出取樣率</strong><output>{formatDsdOutputRate(dsdSettings.outputRateHz)}</output></span>
+                    <span class="dsd-setting-label"><strong>輸出取樣率</strong><output>{formatDsdOutputRate(dsdEffectiveRateHz)}</output></span>
                     <div class="dsd-choice-row">
                       {#each DSD_OUTPUT_RATES_HZ as rate (rate)}
                         <button
                           type="button"
                           class="soft-button"
-                          class:is-active={dsdSettings.outputRateHz === rate}
-                          aria-pressed={dsdSettings.outputRateHz === rate}
+                          class:is-active={dsdEffectiveRateHz === rate}
+                          aria-pressed={dsdEffectiveRateHz === rate}
                           aria-label={`DSD 輸出取樣率 ${formatDsdOutputRate(rate)}`}
-                          disabled={dsdSettingsState === 'loading'}
+                          disabled={dsdSettingsState === 'loading' || (capabilities?.platform === 'android' && rate !== 176_400)}
                           onclick={() => setDsdSettings({ outputRateHz: rate })}
                         >{formatDsdOutputRate(rate)}</button>
                       {/each}
                     </div>
                   </div>
-                  <p class="dsd-setting-hint">352.8 kHz 保留較多超音波成分，峰值通常比 176.4 kHz 高約 0 到 2 dB；增益較高時請留意削波。</p>
+                  {#if capabilities?.platform !== 'android'}
+                    <p class="dsd-setting-hint">352.8 kHz 保留較多超音波成分，峰值通常比 176.4 kHz 高約 0 到 2 dB；增益較高時請留意削波。</p>
+                  {/if}
                   {#if dsdSettingsError}<p class="source-error-message" role="alert">{dsdSettingsError}</p>{/if}
                 </div>
               </div>

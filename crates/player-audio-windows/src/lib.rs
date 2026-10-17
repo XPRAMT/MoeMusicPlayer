@@ -191,7 +191,7 @@ pub struct DsdSettings {
 /// DSD output rates the converter offers.
 pub const DSD_OUTPUT_RATES: [u32; 2] = [176_400, 352_800];
 /// Range of the manual DSD gain in dB.
-pub const DSD_GAIN_RANGE_DB: (f32, f32) = (1.0, 6.0);
+pub const DSD_GAIN_RANGE_DB: (f32, f32) = (0.0, 6.0);
 /// The gain DSD plays at unless set: DSD's nominal level sits near −6 dBFS, and +3 dB lifted the loudest of 25 of the
 /// owner's files to −0.5 dBFS at 176.4 kHz.
 pub const DSD_DEFAULT_GAIN_DB: f32 = 3.0;
@@ -1998,7 +1998,7 @@ mod dsd_settings_tests {
             }
             .normalized()
             .gain_db,
-            1.0
+            0.0
         );
         assert_eq!(
             DsdSettings {

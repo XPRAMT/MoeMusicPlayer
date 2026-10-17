@@ -746,7 +746,7 @@ pub struct DsdPlaybackSettings {
 }
 
 impl DsdPlaybackSettings {
-    pub const GAIN_RANGE_DB: (f32, f32) = (1.0, 6.0);
+    pub const GAIN_RANGE_DB: (f32, f32) = (0.0, 6.0);
     pub const OUTPUT_RATES_HZ: [u32; 2] = [176_400, 352_800];
     pub const DEFAULT_GAIN_DB: f32 = 3.0;
 
@@ -2103,7 +2103,7 @@ mod tests {
         assert_eq!((defaults.gain_db, defaults.output_rate_hz), (3.0, 176_400));
         let odd = DsdPlaybackSettings { gain_db: 40.0, output_rate_hz: 192_000 }.normalized();
         assert_eq!((odd.gain_db, odd.output_rate_hz), (6.0, 176_400));
-        assert_eq!(DsdPlaybackSettings { gain_db: 0.2, output_rate_hz: 352_800 }.normalized().gain_db, 1.0);
+        assert_eq!(DsdPlaybackSettings { gain_db: -0.2, output_rate_hz: 352_800 }.normalized().gain_db, 0.0);
         assert_eq!(DsdPlaybackSettings { gain_db: f32::NAN, output_rate_hz: 352_800 }.normalized().gain_db, 3.0);
 
         let directory = test_directory("dsd-settings");

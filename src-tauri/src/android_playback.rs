@@ -592,9 +592,7 @@ impl AndroidActor {
             .get_track_summary(track_id)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
-        let uri = self
-            .database
-            .resolve_playable_content_uri(track_id)
+        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
             .map_err(|error| error.to_string())?;
         let replacement_queue = super::queue_for_track(&self.database, track_id, source.clone())?;
         let mut replacement_queue = replacement_queue;
@@ -641,9 +639,7 @@ impl AndroidActor {
             .get_track_summary(track_id)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
-        let uri = self
-            .database
-            .resolve_playable_content_uri(track_id)
+        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
             .map_err(|error| error.to_string())?;
         self.meter.seal_segment(&self.native, Instant::now());
         self.flush_statistics()?;
@@ -751,9 +747,7 @@ impl AndroidActor {
             .get_track_summary(track_id)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "佇列中的曲目暫時不在曲庫中。".to_owned())?;
-        let uri = self
-            .database
-            .resolve_playable_content_uri(track_id)
+        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
             .map_err(|error| error.to_string())?;
         let play_when_ready = natural || self.native.state == "playing";
         self.meter.seal_segment(&self.native, Instant::now());
@@ -801,9 +795,7 @@ impl AndroidActor {
             .get_track_summary(track_id)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
-        let uri = self
-            .database
-            .resolve_playable_content_uri(track_id)
+        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
             .map_err(|error| error.to_string())?;
         let track_id_text = track_id.to_string();
         let position_ms = if self.native.track_id.as_deref() == Some(track_id_text.as_str()) {
@@ -1195,9 +1187,7 @@ impl AndroidActor {
         if track.id != track_id {
             return Err("還原的播放游標與目前曲目不一致。".to_owned());
         }
-        let uri = self
-            .database
-            .resolve_playable_content_uri(track_id)
+        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
             .map_err(|error| format!("找不到目前曲目的有效來源：{error}"))?;
         let track_id_text = track_id.to_string();
         let position_ms = if self.native.track_id.as_deref() == Some(track_id_text.as_str()) {
@@ -1485,7 +1475,7 @@ impl AndroidActor {
             self.publish_snapshot();
             return;
         };
-        let Ok(uri) = self.database.resolve_playable_content_uri(track_id) else {
+        let Ok(uri) = crate::android_dsd::playable_uri(&self.database, track_id) else {
             self.native.state = "ready".into();
             self.native.error = Some("已保留播放狀態；目前 Android 來源暫不可用。".to_owned());
             self.publish_snapshot();

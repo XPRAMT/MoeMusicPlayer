@@ -4895,6 +4895,10 @@ input:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+.dsd-gain-slider {
+  width: 100%;
+}
+
 .dsd-choice-row {
   display: flex;
   flex-wrap: wrap;
