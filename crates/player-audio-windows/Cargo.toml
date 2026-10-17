@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 
+[dependencies]
+player-dsd = { path = "../player-dsd" }
+player-formats = { path = "../player-formats" }
+
+[dev-dependencies]
+player-dsd = { path = "../player-dsd", features = ["testing"] }
+
 [target.'cfg(windows)'.dependencies]
 rodio = { version = "=0.22.2", default-features = false, features = [
     "playback",

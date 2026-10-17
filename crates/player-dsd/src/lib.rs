@@ -1,0 +1,18 @@
+//! DSD support without any audio-output dependency (ADR 0016).
+//!
+//! - [`stream`]: the container-neutral DSD bitstream contract ([`stream::DsdStream`]).
+//! - [`dsf`]: the DSF reader.
+//! - [`convert`]: the DSD→PCM conversion core (table-lookup decimation plus halfband stages).
+//!
+//! The rodio source built on top lives in `player-audio-windows`; DoP, when it exists, is another consumer of
+//! [`stream::DsdStream`].
+
+pub mod convert;
+pub mod dsf;
+pub(crate) mod filters;
+#[cfg(feature = "id3")]
+pub mod id3;
+pub mod stream;
+
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;

@@ -387,7 +387,15 @@ export function formatYear(value) {
 export function isLosslessCodec(codec) {
   if (typeof codec !== 'string') return false;
   const name = codec.trim().toUpperCase();
-  return LOSSLESS_CODECS.has(name);
+  return LOSSLESS_CODECS.has(name) || isDsdCodec(name);
+}
+
+/**
+ * DSD64 / DSD128 / DSD256 / DSD512 (the codec label the DSF reader reports).
+ * @param {unknown} codec
+ */
+export function isDsdCodec(codec) {
+  return typeof codec === 'string' && /^DSD\d+$/i.test(codec.trim());
 }
 
 /**
@@ -401,8 +409,13 @@ export function formatAudioFormat(item, options = {}) {
     parts.push(item.codec.trim().toUpperCase());
   }
   if (typeof item.sampleRateHz === 'number' && Number.isFinite(item.sampleRateHz) && item.sampleRateHz > 0) {
-    const kiloHertz = item.sampleRateHz / 1000;
-    parts.push(`${Number.isInteger(kiloHertz) ? kiloHertz : kiloHertz.toFixed(1)} kHz`);
+    if (isDsdCodec(item.codec)) {
+      // DSD rates are in the megahertz range (2.8224 MHz for DSD64).
+      parts.push(`${(item.sampleRateHz / 1_000_000).toFixed(1)} MHz`);
+    } else {
+      const kiloHertz = item.sampleRateHz / 1000;
+      parts.push(`${Number.isInteger(kiloHertz) ? kiloHertz : kiloHertz.toFixed(1)} kHz`);
+    }
   }
   if (typeof item.bitDepth === 'number' && Number.isInteger(item.bitDepth) && item.bitDepth > 0) {
     parts.push(`${item.bitDepth} bit`);
@@ -420,10 +433,12 @@ export function formatAudioFormat(item, options = {}) {
 }
 
 /**
- * Hi-Res badges use source bit depth only. Lossy decoder PCM depth is not a source-depth claim.
- * @param {{ sampleRateHz?: number | null, bitDepth?: number | null } | null | undefined} item
+ * Hi-Res badges use source bit depth only. Lossy decoder PCM depth is not a source-depth claim. Every DSD file
+ * counts as Hi-Res (its 1-bit depth is not comparable with PCM bit depth).
+ * @param {{ codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null } | null | undefined} item
  */
 export function isHiResTrack(item) {
+  if (isDsdCodec(item?.codec)) return true;
   return typeof item?.sampleRateHz === 'number'
     && item.sampleRateHz >= 48_000
     && typeof item.bitDepth === 'number'

@@ -3139,6 +3139,8 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 name = "player-audio-windows"
 version = "0.1.0"
 dependencies = [
+ "player-dsd",
+ "player-formats",
  "rodio",
  "rubato",
  "symphonia",
@@ -3173,6 +3175,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-dsd"
+version = "0.1.0"
+dependencies = [
+ "lofty",
+]
+
+[[package]]
 name = "player-formats"
 version = "0.1.0"
 
@@ -3184,6 +3193,7 @@ dependencies = [
  "matroska",
  "player-core",
  "player-db",
+ "player-dsd",
  "player-formats",
  "symphonia",
  "windows",
@@ -3195,6 +3205,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "lofty",
+ "player-dsd",
  "player-formats",
  "realfft",
  "serde",

@@ -1,6 +1,6 @@
 # DSD playback: one DSD stream layer, a PCM converter now, DoP later
 
-Status: Proposed
+Status: Accepted
 
 Decision date: 2026-10-17, Asia/Taipei (UTC+08:00)
 
@@ -21,31 +21,48 @@ file ──► DsdStream (container, seek, normalised bit order) ──┬──
                                                              └──► DopPacker     (future)    ──► exclusive WASAPI output
 ```
 
-### Module layout (`crates/player-audio-windows/src/dsd/`)
+### Module layout
 
-- `stream.rs`: trait `DsdStream` and `DsdInfo` (channels, DSD sample rate, samples per channel, duration). Contract: `read(&mut self, out: &mut [Vec<u8>]) -> usize` returns planar bytes per channel with the **earliest bit in the most significant bit of each byte** (MSB-first), whatever the container stores, plus `seek_to_sample`, `position_samples`, and the idle pattern `0x69` for padding. Normalising once here means both renderers share one convention.
-- `dsf.rs`: `DsfReader` implements `DsdStream` (written here; no dependency on `dsd-reader`). Parses the `DSD `, `fmt `, `data` chunks, de-interleaves 4096-byte per-channel blocks, reverses bit order when the file is LSB-first, clamps to the declared sample count and to the real file length, and exposes the trailing ID3v2 offset. Corrupt headers are `AudioError::Decode`; more than two channels is `AudioError::UnsupportedFormat` with a message (multichannel is not supported in this phase).
+The code that does not touch audio output lives in its own crate so the library scanner, the details panel and
+the player share one DSF reader:
+
+- `crates/player-dsd` (no audio-output dependency):
+  - `stream.rs`: trait `DsdStream` and `DsdInfo` (channels, DSD sample rate, samples per channel, duration, rate name
+    such as "DSD64"). Contract: `read(max_bytes, &mut [Vec<u8>]) -> usize` returns planar bytes per channel with the
+    **earliest bit in the most significant bit of each byte**, whatever the container stores, plus `seek_to_byte`,
+    `position_bytes`, and the idle pattern `0x69` for padding. Normalising once here means both renderers share one
+    convention.
+  - `dsf.rs`: `DsfReader` implements `DsdStream` (written here; no dependency on `dsd-reader`). Parses the `DSD `,
+    `fmt `, `data` chunks, de-interleaves 4096-byte per-channel blocks, reverses bit order when the file is
+    LSB-first, clamps to the declared sample count and to the real file length (whole blocks only), and exposes the
+    trailing ID3v2 offset. Corrupt headers are errors; up to six channels are read.
+  - `filters.rs`, `convert.rs`: the filter design and the conversion core (below), on plain buffers.
+  - `id3.rs` (feature `id3`): reads the trailing ID3v2 tag of a DSF as a lofty `Tag` (lofty has no DSF reader, so the
+    tag bytes are wrapped in a minimal MP3 and read with its MPEG reader).
+  - `testing.rs` (feature `testing`): synthetic-signal helpers (sigma-delta modulator, DSF writer, sine fit).
+- `crates/player-audio-windows/src/dsd/`: `pcm.rs` has `DsdPcmSource<S: DsdStream>`, a rodio `Source` (`f32`, channels
+  from the file, fixed output rate, `total_duration`, `try_seek`); `mod.rs` opens a DSF as a playable source. More
+  than two channels or a rate outside the 44.1 kHz family is refused with a reason (multichannel is not supported in
+  this phase).
 - `dff.rs` (later, same trait): uncompressed DSDIFF only; DST-compressed files stay unsupported.
-- `filters.rs`: filter design (Kaiser windows) and the stage-A lookup table, built once per rate at first use.
-- `pcm.rs`: `DsdPcmSource<S: DsdStream>`, a rodio `Source` (`f32`, channels from the file, fixed output rate, `total_duration`, `try_seek`).
 - `dop.rs` (future): `DopPacker`, not created now.
 
 ### DSD→PCM conversion
 
 Output rate default **176.4 kHz** (DSD64 ÷16, DSD128 ÷32, DSD256 ÷64, DSD512 ÷128; all integer ratios because DSD is the 44.1 kHz family). 352.8 kHz may be offered later; 192 kHz is not an integer ratio and is not offered by default. The existing rubato resampler then adapts to the device rate, so this stage only has to remove DSD's ultrasonic noise.
 
-1. **Stage A, ÷8 by table lookup.** A linear-phase Kaiser FIR of 128 taps (16 groups of 8 taps) is folded into 16 tables of 256 `f32` entries, one per group, where each entry is the sum of the group's taps weighted ±1 by the byte's bits. One output sample is the sum of 16 lookups over the last 16 bytes. Bit `1` is `+1`, bit `0` is `−1`. Passband to 40 kHz within ±0.01 dB, stopband at least 110 dB from `R/8 − 40 kHz` upward. One byte in, one sample out, per channel.
-2. **Stage B, halfband ÷2**, repeated until the target rate (DSD64: once, DSD128: twice, DSD256: three times). A 127-tap Kaiser halfband (64 non-zero taps), passband 40 kHz within ±0.01 dB, stopband at least 110 dB from `Fin/2 − 40 kHz`.
-3. **Gain.** Samples are `f32` and are not clipped inside the source. A `gain_db` parameter exists from the start (default chosen after measuring the real files' peak headroom, recorded in the code and `AGENTS.md`); DSD's nominal 0 dB reference is 50% modulation, so an unscaled ±1 mapping puts it near −6 dBFS.
+1. **Stage A, ÷8 by table lookup.** A linear-phase Kaiser FIR (β 11.2) of 128 taps (16 groups of 8 taps) is folded into 16 tables of 256 `f32` entries, one per group, where each entry is the sum of the group's taps weighted ±1 by the byte's bits. One output sample is the sum of 16 lookups over the last 16 bytes. Bit `1` is `+1`, bit `0` is `−1`. Passband to 40 kHz within ±0.01 dB, stopband at least 110 dB from `R/8 − 40 kHz` upward. One byte in, one sample out, per channel.
+2. **Stage B, halfband ÷2**, repeated until the target rate (DSD64: once, DSD128: twice, DSD256: three times). Kaiser halfbands whose tap count (4k + 3, 23 to 55 in practice) follows from the stage's input rate with 100% margin on the transition width: passband 40 kHz within ±0.01 dB, stopband at least 100 dB from `Fin/2 − 40 kHz`. Early stages, which run at the highest rates, are the shortest.
+3. **Gain.** Samples are `f32` and are not clipped inside the source. A `gain_db` parameter exists; DSD's nominal 0 dB reference is 50% modulation, so an unscaled ±1 mapping puts it near −6 dBFS. The default is **+3 dB**, chosen from whole-track peaks of 25 of the owner's 99 files (median −4.45 dBFS, maximum −3.52 dBFS): the loudest then peaks at −0.5 dBFS and nothing clips.
 4. **Group delay.** Both stages are linear phase, so the total delay is constant. Output starts after that delay has been discarded; at end of stream the tail is flushed with idle pattern bytes (`0x69`, never zeros, so no DC step) and the output is cut to exactly `samples_per_channel / ratio` frames. Duration and position therefore match the file and the lyrics.
 5. **Seek.** Target DSD sample = `round(t × R)`, aligned down to a whole byte and a multiple of the total ratio. The stream is positioned `PREROLL_BYTES` earlier (2048 bytes, about 5.8 ms at DSD64, far above the filters' settling time) and the pre-roll output is discarded; at file start the history is primed with idle pattern bytes. `try_seek` is bounded work (one block read plus pre-roll), so it fits the backend's seek deadline.
 6. **Threading and I/O.** Decoding runs inline on the pull side like the other decoders. One 4096-byte block per channel (about 2048 output frames at DSD64) is converted per refill into preallocated buffers; `next()` does no allocation. The reader sits behind `DsdStream`, so a read-ahead wrapper can be added for slow media without touching the converter.
 
 ### Integration points
 
-- `player-formats` gains a decode engine per format (`Rodio` or `Dsd`). `open_decoder` returns an `AudioDecoder` enum (rodio decoder or DSD source) chosen from the table; `PlaybackSource` gets a DSD variant. DSEE HX is never engaged for DSD.
-- Windows library scanning adds `dsf` (and `dff` once supported) after the decoder exists. Track properties come from `DsdInfo` (rate, channels, duration, 1 bit); tags come from the trailing ID3v2 tag. Display labels are `DSD64/128/256/512`; every DSD file counts as Hi-Res.
-- `ResamplingConversion` / `ResamplingInfo` gain a DSD description (for example "DSD64 → PCM 176.4 kHz") so the existing status display can show the path.
+- `player-formats` gains a decode engine per format (`Rodio` or `Dsd`). `open_decoder` returns an `AudioDecoder` enum (rodio decoder or DSD source) chosen from the table, and DSEE HX bypasses it because the rate is above 48 kHz.
+- Windows library scanning, file association and the open-file dialog now include `dsf` (`dff` stays out until supported). Track properties come from `DsdInfo` (rate, channels, duration, 1 bit); tags and cover come from the trailing ID3v2 tag, in the scanner and in the read-only details panel. Display labels are `DSD64/128/256/512` with the rate in MHz; every DSD file counts as Hi-Res and shows no bitrate.
+- A DSD description in `ResamplingInfo` (for example "DSD64 → PCM 176.4 kHz") is deferred; the status display currently shows the converted 176.4 kHz track rate.
 - No new user setting in the first version: target rate and gain are constants. A `dsdOutputMode` setting is introduced only when DoP exists, with a schema bump.
 
 ### Reserved for DoP (not built)

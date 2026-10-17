@@ -16,6 +16,7 @@ import {
   formatTrackColumnValue,
   isNumericListColumn,
   formatYear,
+  isDsdCodec,
   isHiResTrack,
   isLosslessCodec,
   moveTrackColumn,
@@ -37,6 +38,19 @@ import {
 } from '../src/lib/track-columns.js';
 
 const formatDuration = (value) => `${Math.floor(value / 60_000)}:${String(Math.floor(value / 1000) % 60).padStart(2, '0')}`;
+
+test('DSD tracks show the DSD rate name, MHz and 1 bit, hide the bitrate and always get the Hi-Res badge', () => {
+  const dsd64 = { codec: 'DSD64', sampleRateHz: 2_822_400, bitDepth: 1, bitrateBps: 5_644_800 };
+  assert.equal(formatAudioFormat(dsd64), 'DSD64．2.8 MHz．1 bit．5645 kbps');
+  assert.equal(formatAudioFormat(dsd64, { omitLosslessBitrate: true }), 'DSD64．2.8 MHz．1 bit');
+  assert.equal(formatAudioFormat({ codec: 'DSD256', sampleRateHz: 11_289_600, bitDepth: 1, bitrateBps: null }), 'DSD256．11.3 MHz．1 bit');
+  assert.equal(isDsdCodec('dsd128'), true);
+  assert.equal(isDsdCodec('DSD'), false);
+  assert.equal(isDsdCodec('FLAC'), false);
+  assert.equal(isLosslessCodec('DSD64'), true);
+  assert.equal(isHiResTrack(dsd64), true);
+  assert.equal(isHiResTrack({ codec: 'FLAC', sampleRateHz: 44_100, bitDepth: 16 }), false);
+});
 
 test('numeric list columns are centered while text columns keep their left alignment', async () => {
   assert.deepEqual(

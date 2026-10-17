@@ -1,0 +1,15 @@
+[package]
+name = "player-dsd"
+version = "0.1.0"
+edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
+description = "DSD streams (DSF) and the DSD-to-PCM conversion core (ADR 0016); no audio-output dependencies"
+
+[features]
+# Synthetic-signal helpers (modulator, DSF writer, sine fit) for tests in other crates.
+testing = []
+# Read the ID3v2 tag at the end of a DSF file as a lofty tag.
+id3 = ["dep:lofty"]
+
+[dependencies]
+lofty = { version = "0.25.4", optional = true }

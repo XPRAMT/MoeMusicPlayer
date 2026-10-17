@@ -14,6 +14,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
+mod dsd;
+#[cfg(windows)]
 mod dsee;
 #[cfg(windows)]
 mod resample;

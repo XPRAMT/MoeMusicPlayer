@@ -293,7 +293,7 @@ impl RodioBackend {
         self.last_device_check = now;
     }
 
-    fn plan_for(&self, path: &Path, decoder: &Decoder<BufReader<File>>) -> crate::dsee::DseePlan {
+    fn plan_for(&self, path: &Path, decoder: &AudioDecoder) -> crate::dsee::DseePlan {
         crate::dsee::plan(self.dsee_enabled, path, &track_signal(decoder))
     }
 }
@@ -714,7 +714,7 @@ impl TrackPlayer {
     fn load_decoder(
         &mut self,
         path: &Path,
-        decoder: Decoder<BufReader<File>>,
+        decoder: AudioDecoder,
         engagement: crate::dsee::Engagement,
     ) -> Result<Option<Duration>, AudioError> {
         let duration = decoder.total_duration();
@@ -739,7 +739,7 @@ impl TrackPlayer {
     fn load_decoder_at(
         &mut self,
         path: &Path,
-        mut decoder: Decoder<BufReader<File>>,
+        mut decoder: AudioDecoder,
         position: Duration,
         engagement: crate::dsee::Engagement,
     ) -> Result<(Option<Duration>, Duration), AudioError> {
@@ -900,7 +900,7 @@ impl TrackPlayer {
     fn start(
         &mut self,
         path: &Path,
-        decoder: Decoder<BufReader<File>>,
+        decoder: AudioDecoder,
         base: Duration,
         engagement: crate::dsee::Engagement,
     ) -> Result<(), AudioError> {
@@ -954,7 +954,7 @@ impl TrackPlayer {
     fn attach_dsee(
         &mut self,
         path: &Path,
-        decoder: Decoder<BufReader<File>>,
+        decoder: AudioDecoder,
         base: Duration,
         engagement: crate::dsee::Engagement,
     ) -> Result<PlaybackSource, AudioError> {
@@ -995,7 +995,63 @@ impl TrackPlayer {
     }
 }
 
-type FileDecoder = Decoder<BufReader<File>>;
+type FileDecoder = AudioDecoder;
+
+/// Whatever decodes the current file: rodio/Symphonia for most formats, the DSD→PCM converter for DSF
+/// (`player_formats::decode_engine`).
+enum AudioDecoder {
+    Rodio(Decoder<BufReader<File>>),
+    /// Boxed: the converter state is several times larger than a rodio decoder.
+    Dsd(Box<crate::dsd::DsfPcmSource>),
+}
+
+impl Iterator for AudioDecoder {
+    type Item = Sample;
+
+    fn next(&mut self) -> Option<Sample> {
+        match self {
+            Self::Rodio(source) => source.next(),
+            Self::Dsd(source) => source.next(),
+        }
+    }
+}
+
+impl Source for AudioDecoder {
+    fn current_span_len(&self) -> Option<usize> {
+        match self {
+            Self::Rodio(source) => source.current_span_len(),
+            Self::Dsd(source) => source.current_span_len(),
+        }
+    }
+
+    fn channels(&self) -> ChannelCount {
+        match self {
+            Self::Rodio(source) => source.channels(),
+            Self::Dsd(source) => source.channels(),
+        }
+    }
+
+    fn sample_rate(&self) -> SampleRate {
+        match self {
+            Self::Rodio(source) => source.sample_rate(),
+            Self::Dsd(source) => source.sample_rate(),
+        }
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        match self {
+            Self::Rodio(source) => source.total_duration(),
+            Self::Dsd(source) => source.total_duration(),
+        }
+    }
+
+    fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
+        match self {
+            Self::Rodio(source) => source.try_seek(position),
+            Self::Dsd(source) => source.try_seek(position),
+        }
+    }
+}
 
 enum PlaybackSource {
     Direct(FileDecoder),
@@ -1082,20 +1138,25 @@ fn try_seek_with_deadline(
     result_rx.recv_timeout(timeout).ok()
 }
 
-fn open_decoder(path: &Path) -> Result<Decoder<BufReader<File>>, AudioError> {
+fn open_decoder(path: &Path) -> Result<AudioDecoder, AudioError> {
+    if player_formats::decode_engine(path) == player_formats::DecodeEngine::Dsd {
+        return crate::dsd::open_dsf(path).map(|source| AudioDecoder::Dsd(Box::new(source)));
+    }
     let file = File::open(path).map_err(|error| AudioError::FileOpen {
         path: path.to_path_buf(),
         message: error.to_string(),
     })?;
-    Decoder::try_from(file).map_err(|error| match error {
-        rodio::decoder::DecoderError::UnrecognizedFormat => AudioError::UnsupportedFormat {
-            path: path.to_path_buf(),
-        },
-        _ => AudioError::Decode {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        },
-    })
+    Decoder::try_from(file)
+        .map(AudioDecoder::Rodio)
+        .map_err(|error| match error {
+            rodio::decoder::DecoderError::UnrecognizedFormat => AudioError::UnsupportedFormat {
+                path: path.to_path_buf(),
+            },
+            _ => AudioError::Decode {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        })
 }
 
 #[cfg(test)]
@@ -1108,6 +1169,112 @@ mod tests {
             .join("tests")
             .join("fixtures")
             .join(name)
+    }
+
+    /// Write a stereo DSD64 file (1 kHz and 3 kHz tones) to a temporary path.
+    fn write_test_dsf(name: &str, seconds: f64) -> (PathBuf, usize) {
+        use player_dsd::testing::{build_dsf, modulate, tone};
+        let rate = 2_822_400_u32;
+        let samples = (f64::from(rate) * seconds) as usize / 16 * 16;
+        let lsb = |bytes: Vec<u8>| bytes.into_iter().map(u8::reverse_bits).collect::<Vec<u8>>();
+        let left = lsb(modulate(samples, tone(rate, 1_000.0, 0.25)));
+        let right = lsb(modulate(samples, tone(rate, 3_000.0, 0.25)));
+        let path = std::env::temp_dir().join(format!("moe-{name}-{}.dsf", std::process::id()));
+        std::fs::write(&path, build_dsf(rate, samples as u64, 4096, true, &[left, right])).unwrap();
+        (path, samples)
+    }
+
+    #[test]
+    fn dsf_files_open_as_176_4_khz_pcm_and_seek() {
+        let (path, samples) = write_test_dsf("open", 0.2);
+        let mut decoder = open_decoder(&path).expect("DSF opens");
+        assert!(matches!(decoder, AudioDecoder::Dsd(_)));
+        assert_eq!(decoder.sample_rate().get(), 176_400);
+        assert_eq!(decoder.channels().get(), 2);
+        let frames = samples / 16;
+        assert_eq!(
+            decoder.total_duration().unwrap(),
+            Duration::from_secs_f64(frames as f64 / 176_400.0)
+        );
+        assert_eq!(decoder.by_ref().count(), frames * 2);
+        decoder.try_seek(Duration::from_millis(50)).expect("seek");
+        assert_eq!(decoder.by_ref().count(), (frames - 8_820) * 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_corrupt_dsf_reports_a_decode_error_not_a_panic() {
+        let path = std::env::temp_dir().join(format!("moe-bad-{}.dsf", std::process::id()));
+        std::fs::write(&path, b"DSD but not really").unwrap();
+        assert!(matches!(open_decoder(&path), Err(AudioError::Decode { .. })));
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Plays every DSF in the owner's library folder for a moment (`-- --ignored`; the folder must exist).
+    #[test]
+    #[ignore = "needs the DSD folder on drive D"]
+    fn real_dsf_files_decode_and_seek() {
+        let root = PathBuf::from(r"D:\Music\DSD");
+        let mut checked = 0;
+        let mut stack = vec![root];
+        while let Some(directory) = stack.pop() {
+            for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|extension| extension == "dsf") && checked < 8 {
+                    let mut decoder = open_decoder(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
+                    let duration = decoder.total_duration().expect("duration");
+                    let head: Vec<f32> = decoder.by_ref().take(176_400 * 2).collect();
+                    let rms = (head.iter().map(|sample| f64::from(*sample).powi(2)).sum::<f64>() / head.len() as f64).sqrt();
+                    let peak = head.iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+                    decoder.try_seek(duration / 2).expect("seek to the middle");
+                    let middle = decoder.by_ref().take(4_000).count();
+                    println!("{path:?}: {duration:?}, 1 s RMS {rms:.4}, peak {peak:.3}, middle frames {middle}");
+                    assert!(head.iter().all(|sample| sample.is_finite()));
+                    assert_eq!(middle, 4_000);
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 0, "no DSF files found");
+    }
+
+    /// Whole-track peak and RMS of up to 24 DSF files spread over the library folder (`--release -- --ignored`),
+    /// used to pick the default DSD gain.
+    #[test]
+    #[ignore = "needs the DSD folder on drive D; run with --release"]
+    fn real_dsf_peak_levels() {
+        let mut files = Vec::new();
+        let mut stack = vec![PathBuf::from(r"D:\Music\DSD")];
+        while let Some(directory) = stack.pop() {
+            for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|extension| extension == "dsf") {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        let step = (files.len() / 24).max(1);
+        let mut peaks = Vec::new();
+        for path in files.iter().step_by(step) {
+            let decoder = open_decoder(path).unwrap();
+            let (mut peak, mut sum, mut count) = (0.0_f32, 0.0_f64, 0_u64);
+            for sample in decoder {
+                peak = peak.max(sample.abs());
+                sum += f64::from(sample).powi(2);
+                count += 1;
+            }
+            let rms = (sum / count as f64).sqrt();
+            println!("peak {:+.2} dBFS, RMS {:+.2} dBFS  {:?}", 20.0 * f64::from(peak).log10(), 20.0 * rms.log10(), path.file_name().unwrap());
+            peaks.push(peak);
+        }
+        peaks.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        println!("median peak {:+.2} dBFS, max peak {:+.2} dBFS over {} files",
+            20.0 * f64::from(peaks[peaks.len() / 2]).log10(), 20.0 * f64::from(*peaks.last().unwrap()).log10(), peaks.len());
     }
 
     #[test]

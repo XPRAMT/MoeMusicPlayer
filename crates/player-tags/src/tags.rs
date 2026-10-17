@@ -188,11 +188,19 @@ fn front_cover(tag: &Tag) -> Option<&Picture> {
 
 /// Read the front cover bytes and mime type (for export).
 pub fn read_cover(path: &Path) -> Result<Option<(Vec<u8>, String)>, String> {
-    if is_read_only_format(path) {
+    let dsd_tag;
+    let file;
+    let tag = if is_dsd(path) {
+        dsd_tag = player_dsd::id3::read_dsf(path)
+            .map_err(|e| e.to_string())?
+            .1;
+        dsd_tag.as_ref()
+    } else if is_read_only_format(path) {
         return Ok(None);
-    }
-    let file = lofty::read_from_path(path).map_err(|e| format!("讀取標籤失敗：{e}"))?;
-    let tag = file.primary_tag().or_else(|| file.first_tag());
+    } else {
+        file = lofty::read_from_path(path).map_err(|e| format!("讀取標籤失敗：{e}"))?;
+        file.primary_tag().or_else(|| file.first_tag())
+    };
     Ok(tag.and_then(front_cover).map(|p| {
         let mime = p
             .mime_type()
@@ -210,6 +218,49 @@ fn sniff_mime(data: &[u8]) -> &'static str {
         Ok(image::ImageFormat::Bmp) => "image/bmp",
         _ => "image/jpeg",
     }
+}
+
+fn is_dsd(path: &Path) -> bool {
+    player_formats::decode_engine(path) == player_formats::DecodeEngine::Dsd
+}
+
+/// DSF properties from the file header and tag fields from its trailing ID3v2 tag (read-only).
+fn fill_dsf_details(details: &mut TrackDetails, path: &Path) -> Result<(), String> {
+    let (info, tag) = player_dsd::id3::read_dsf(path).map_err(|e| e.to_string())?;
+    details.format = info.rate_name();
+    let duration_ms = info.duration().as_millis() as u64;
+    let bitrate_kbps = info.sample_rate.saturating_mul(u32::from(info.channels)) / 1000;
+    details.properties = AudioProperties {
+        duration_ms,
+        overall_bitrate_kbps: Some(bitrate_kbps),
+        audio_bitrate_kbps: Some(bitrate_kbps),
+        sample_rate: Some(info.sample_rate),
+        bit_depth: Some(1),
+        channels: u8::try_from(info.channels).ok(),
+    };
+    if let Some(tag) = tag.as_ref() {
+        details.tag_format = "ID3v2".to_owned();
+        for (key, _, get_mut) in FIELD_KEYS.iter() {
+            if let Some(value) = tag.get_string(effective_key(*key, tag.tag_type())) {
+                *get_mut(&mut details.fields) = value.to_owned();
+            }
+        }
+        if let Some(pic) = front_cover(tag) {
+            let (width, height) = image::load_from_memory(pic.data())
+                .map(|i| (i.width(), i.height()))
+                .unwrap_or((0, 0));
+            details.cover = Some(CoverInfo {
+                mime: pic
+                    .mime_type()
+                    .map(|m| m.as_str().to_owned())
+                    .unwrap_or_else(|| sniff_mime(pic.data()).to_owned()),
+                width,
+                height,
+                bytes: pic.data().len() as u64,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Short uppercase container name shown in the details panel (matches the app's codec labels:
@@ -262,6 +313,9 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
     if is_read_only_format(path) {
         details.read_only = true;
         details.read_only_reason = Some("DSF/DFF 目前僅支援唯讀（ADR 0013 D10）".into());
+        if is_dsd(path) {
+            fill_dsf_details(&mut details, path)?;
+        }
         return Ok(details);
     }
     let file = lofty::read_from_path(path).map_err(|e| format!("讀取標籤失敗：{e}"))?;

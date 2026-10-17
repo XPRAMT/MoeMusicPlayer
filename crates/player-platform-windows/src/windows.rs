@@ -468,6 +468,9 @@ impl MediaIndex for WindowsMediaIndex {
         {
             return read_matroska_audio_metadata(path);
         }
+        if player_formats::decode_engine(path) == player_formats::DecodeEngine::Dsd {
+            return read_dsf_audio_metadata(path);
+        }
 
         let probe = Probe::open(path).map_err(|error| TrackMetadataError {
             message: format!("could not open audio metadata: {error}"),
@@ -803,6 +806,38 @@ pub fn is_video_mp4(path: &Path) -> bool {
 /// File extensions accepted by the library scanner, formatted for Windows association keys.
 pub fn supported_audio_extensions() -> Vec<String> {
     player_formats::windows_library_extensions()
+}
+
+/// DSF: properties from the file header, tags from the ID3v2 tag at the end of the file (lofty has no DSF reader).
+fn read_dsf_audio_metadata(path: &Path) -> Result<TrackMetadata, TrackMetadataError> {
+    let (info, tag) = player_dsd::id3::read_dsf(path).map_err(|error| TrackMetadataError {
+        message: error.to_string(),
+    })?;
+    let tag = tag.as_ref();
+    let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
+    let release_date = tag
+        .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
+        .and_then(player_core::parse_recording_date);
+    let year = release_date
+        .as_deref()
+        .and_then(player_core::recording_date_year);
+    Ok(TrackMetadata {
+        title: tag
+            .and_then(|tag| text(tag.title()))
+            .filter(|value| !value.trim().is_empty()),
+        artist: tag.and_then(|tag| text(tag.artist())),
+        album: tag.and_then(|tag| text(tag.album())),
+        album_artist: tag.and_then(|tag| tag.get_string(ItemKey::AlbumArtist).map(str::to_owned)),
+        track_number: tag.and_then(|tag| tag.track()),
+        disc_number: tag.and_then(|tag| tag.disk()),
+        duration_ms: Some(info.duration().as_millis().min(u64::MAX as u128) as u64),
+        codec: Some(info.rate_name()),
+        bitrate_bps: Some(info.sample_rate.saturating_mul(u32::from(info.channels))),
+        sample_rate_hz: Some(info.sample_rate),
+        release_date,
+        year,
+        bit_depth: Some(1),
+    })
 }
 
 fn read_matroska_audio_metadata(path: &Path) -> Result<TrackMetadata, TrackMetadataError> {

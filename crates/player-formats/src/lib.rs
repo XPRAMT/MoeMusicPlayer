@@ -35,6 +35,15 @@ pub enum FormatId {
     Caf,
 }
 
+/// Which decoder plays a format.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DecodeEngine {
+    /// rodio with Symphonia (every format that is not listed below; a format it cannot decode fails when opened).
+    Rodio,
+    /// The DSD→PCM converter (ADR 0016).
+    Dsd,
+}
+
 /// What the player can do with a format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FormatInfo {
@@ -47,6 +56,15 @@ pub struct FormatInfo {
     pub spectrogram: bool,
     /// MIME types that map to this format (Android content resolver).
     pub mime_types: &'static [&'static str],
+}
+
+impl FormatInfo {
+    pub fn decode_engine(&self) -> DecodeEngine {
+        match self.id {
+            FormatId::Dsf => DecodeEngine::Dsd,
+            _ => DecodeEngine::Rodio,
+        }
+    }
 }
 
 const fn info(
@@ -215,7 +233,7 @@ const EXTENSIONS: &[ExtensionEntry] = &[
     ext("mpc", Mpc, true, false, false),
     ext("mp+", Mpc, true, false, false),
     ext("mpp", Mpc, true, false, false),
-    ext("dsf", Dsf, false, true, false),
+    ext("dsf", Dsf, true, true, true),
     ext("dff", Dff, false, true, false),
     ext("ac3", Ac3, false, true, false),
     ext("amr", Amr, false, true, false),
@@ -319,6 +337,11 @@ pub fn spectrogram_supported(path: &Path) -> bool {
     format_of_path(path).is_none_or(|format| format.spectrogram)
 }
 
+/// The decoder that plays this file. Unknown extensions go to rodio, which sniffs the content.
+pub fn decode_engine(path: &Path) -> DecodeEngine {
+    format_of_path(path).map_or(DecodeEngine::Rodio, FormatInfo::decode_engine)
+}
+
 /// File extension for a MIME type (no dot), when the format is known.
 pub fn extension_for_mime(mime: &str) -> Option<&'static str> {
     let mime = mime.to_ascii_lowercase();
@@ -368,13 +391,13 @@ mod tests {
         }
     }
 
-    /// Previously lofty's `EXTENSIONS` plus `mka`/`oga`, minus `mp4`.
+    /// Previously lofty's `EXTENSIONS` plus `mka`/`oga`, minus `mp4`; `dsf` since the DSD converter (ADR 0016).
     #[test]
     fn windows_library_set_is_unchanged() {
         let expected = [
             "aac", "ape", "aiff", "aif", "afc", "aifc", "mp3", "mp2", "mp1", "wav", "wv", "opus",
             "flac", "ogg", "m4a", "m4b", "m4p", "m4r", "m4v", "3gp", "mpc", "mp+", "mpp", "spx",
-            "mka", "oga",
+            "mka", "oga", "dsf",
         ]
         .map(|extension| format!(".{extension}"));
         assert_eq!(set(windows_library_extensions()), set(expected));
@@ -403,7 +426,7 @@ mod tests {
     fn open_dialog_set_is_unchanged() {
         let expected = [
             "mp3", "flac", "m4a", "mp4", "aac", "alac", "ogg", "oga", "wav", "wave", "aif", "aiff",
-            "mka", "mkv", "webm", "caf",
+            "mka", "mkv", "webm", "caf", "dsf",
         ];
         assert_eq!(set(open_dialog_extensions()), set(expected));
     }
@@ -426,6 +449,14 @@ mod tests {
         assert!(tag_write_supported(Path::new("a.unknown")));
         assert!(!spectrogram_supported(Path::new("a.opus")));
         assert!(spectrogram_supported(Path::new("a.mp3")));
+    }
+
+    #[test]
+    fn only_dsf_uses_the_dsd_converter() {
+        assert_eq!(decode_engine(Path::new("a.DSF")), DecodeEngine::Dsd);
+        assert_eq!(decode_engine(Path::new("a.dff")), DecodeEngine::Rodio);
+        assert_eq!(decode_engine(Path::new("a.flac")), DecodeEngine::Rodio);
+        assert_eq!(decode_engine(Path::new("a.unknown")), DecodeEngine::Rodio);
     }
 
     #[test]
