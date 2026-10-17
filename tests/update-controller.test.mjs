@@ -95,3 +95,15 @@ test('build timestamps require an explicit timezone and display Taipei local tim
   assert.match(formatBuildTime('2026-10-09T12:00:00Z', 'Asia/Taipei'), /20:00:00.*GMT\+8/);
   assert.equal(updateProgressPercent(state('downloading', { totalBytes: null })), null);
 });
+
+test('Android install permission prompt keeps the notification and allows retrying the installer', async () => {
+  const results = [state('installPermission'), state('installing')];
+  const f = fixture({ download: async (mode) => { f.calls.push(mode); return results.shift(); } });
+  await f.controller.start();
+  await f.controller.download('restartNow');
+  assert.equal(f.view().state.status, 'installPermission');
+  assert.equal(f.view().visible, true);
+  await f.controller.download('restartNow');
+  assert.equal(f.view().state.status, 'installing');
+  assert.deepEqual(f.calls.filter((call) => call === 'restartNow'), ['restartNow', 'restartNow']);
+});

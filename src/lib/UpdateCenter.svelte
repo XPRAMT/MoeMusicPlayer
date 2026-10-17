@@ -3,15 +3,18 @@
   import { listen } from '@tauri-apps/api/event';
   import { isTauri } from '@tauri-apps/api/core';
   import { invokeCommand, type UpdateInstallMode, type UpdateState } from './ipc';
-  import { createUpdateController, EMPTY_UPDATE_STATE, formatBuildTime, updateProgressPercent, updateStatusText } from './update-controller';
+  import { createUpdateController, EMPTY_UPDATE_STATE, formatBuildTime, UPDATE_DOWNLOADABLE_STATUSES, updateProgressPercent, updateStatusText } from './update-controller';
 
   let {
     enabled,
+    platform = 'windows',
     updateState = $bindable<UpdateState>({ ...EMPTY_UPDATE_STATE }),
     surfaceOpacityPercent = 70,
     surfaceBlurPx = 12,
   }: {
     enabled: boolean;
+    /** Android: one 「下載並安裝」 action (system installer); Windows: restart now / next launch. */
+    platform?: 'windows' | 'android' | 'unsupported';
     updateState?: UpdateState;
     surfaceOpacityPercent?: number;
     surfaceBlurPx?: number;
@@ -22,7 +25,7 @@
   let returnFocus: HTMLElement | null = null;
   let started = false;
   const progress = $derived(updateProgressPercent(updateState));
-  const canDownload = $derived(Boolean(updateState.latest) && ['available', 'error'].includes(updateState.status));
+  const canDownload = $derived(Boolean(updateState.latest) && UPDATE_DOWNLOADABLE_STATUSES.includes(updateState.status));
   const controller = createUpdateController({
     subscribe: (receive) => listen<UpdateState>('update-state-changed', (event) => receive(event.payload)),
     getState: () => invokeCommand('update_get_state', {}),
@@ -73,7 +76,11 @@
 >
   <div class="update-dialog-content">
     <h2 id="update-title">發現新版本{updateState.latest ? ` ${updateState.latest.version}` : ''}</h2>
-    <p id="update-description">選擇更新方式。下載期間可繼續播放；下載並驗證成功後才會依選擇完成更新。</p>
+    {#if platform === 'android'}
+      <p id="update-description">下載期間可繼續播放；APK 下載並通過 SHA-256 驗證後交給系統安裝程式，由你確認安裝。</p>
+    {:else}
+      <p id="update-description">選擇更新方式。下載期間可繼續播放；下載並驗證成功後才會依選擇完成更新。</p>
+    {/if}
     {#if updateState.latest}
       <p>發布時間：{formatBuildTime(updateState.latest.publishedAt)}</p>
       {#if updateState.latest.notes}<div class="update-release-notes">{updateState.latest.notes}</div>{/if}
@@ -85,8 +92,12 @@
     {/if}
     <div class="update-dialog-actions">
       <button bind:this={ignoreButton} class="soft-button" type="button" onclick={() => dismiss()}>忽略</button>
-      <button class="soft-button" type="button" disabled={!canDownload} onclick={() => download('restartNow')}>自動重新啟動</button>
-      <button class="soft-button" type="button" disabled={!canDownload} onclick={() => download('nextLaunch')}>下次啟動完成更新</button>
+      {#if platform === 'android'}
+        <button class="soft-button" type="button" disabled={!canDownload} onclick={() => download('restartNow')}>下載並安裝</button>
+      {:else}
+        <button class="soft-button" type="button" disabled={!canDownload} onclick={() => download('restartNow')}>自動重新啟動</button>
+        <button class="soft-button" type="button" disabled={!canDownload} onclick={() => download('nextLaunch')}>下次啟動完成更新</button>
+      {/if}
     </div>
   </div>
 </dialog>

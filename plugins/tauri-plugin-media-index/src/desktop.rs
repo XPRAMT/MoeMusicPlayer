@@ -17,7 +17,7 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Ok(Self(std::marker::PhantomData))
     }
 
-    pub(crate) fn scan(&self, root: &LibraryRoot) -> SourceScan {
+    pub(crate) fn scan(&self, root: &LibraryRoot, _excluded: &[std::path::PathBuf]) -> SourceScan {
         SourceScan {
             source_id: root.id,
             state: SourceScanState::Unavailable {

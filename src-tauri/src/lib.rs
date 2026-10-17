@@ -6234,7 +6234,7 @@ fn add_windows_folder_path_to_settings(
 fn library_list_excluded_folders(
     state: State<'_, AppState>,
 ) -> Result<Vec<ExcludedFolder>, String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     {
         let settings = state
             .settings
@@ -6247,7 +6247,7 @@ fn library_list_excluded_folders(
             .collect())
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = state;
         Ok(Vec::new())
@@ -6280,14 +6280,44 @@ async fn library_pick_excluded_folder(
         add_excluded_folder_path_to_settings(&state.settings, &path).map(Some)
     }
 
-    #[cfg(not(target_os = "windows"))]
+    // Android: the system folder picker only points at a location; the excluded folder is stored
+    // as a real path and applied by the real-path scanner (ADR 0014).
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
+        let picker_app = app.clone();
+        let picked = tauri::async_runtime::spawn_blocking(move || {
+            picker_app.media_index().pick_directory_path()
+        })
+        .await
+        .map_err(|error| format!("資料夾選擇工作失敗：{error}"))?
+        .map_err(|error| error.to_string())?;
+        let Some(path) = picked else {
+            return Ok(None);
+        };
+        let _database_work = enter_database_work(&state)?;
+        add_excluded_folder_path_to_settings(&state.settings, std::path::Path::new(&path)).map(Some)
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (app, window, state);
-        Err("排除資料夾只適用於 Windows。".to_owned())
+        Err("排除資料夾只適用於 Windows 與 Android。".to_owned())
     }
 }
 
+/// Comparison key for folder identity: case-folded Windows locator key, exact path on Android.
 #[cfg(target_os = "windows")]
+fn folder_identity_key(path: &std::path::Path) -> String {
+    windows_locator_key(path)
+}
+
+#[cfg(target_os = "android")]
+fn folder_identity_key(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+#[cfg(any(target_os = "windows", target_os = "android"))]
 fn add_excluded_folder_path_to_settings(
     settings: &SettingsStore,
     requested_path: &std::path::Path,
@@ -6299,12 +6329,12 @@ fn add_excluded_folder_path_to_settings(
     }
     let current = settings.snapshot().map_err(|error| error.to_string())?;
     validate_excluded_folder_path(&canonical_path, &current.sources)?;
-    let canonical_key = windows_locator_key(&canonical_path);
+    let canonical_key = folder_identity_key(&canonical_path);
     if let Some(existing) = current.excluded_folders.iter().find(|entry| {
         entry
             .path
             .to_path_buf()
-            .is_ok_and(|path| windows_locator_key(&path) == canonical_key)
+            .is_ok_and(|path| folder_identity_key(&path) == canonical_key)
     }) {
         return Ok(excluded_folder_summary(existing));
     }
@@ -6330,7 +6360,7 @@ fn library_remove_excluded_folder(
     state: State<'_, AppState>,
     excluded_id: String,
 ) -> Result<Vec<ExcludedFolder>, String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     {
         let _database_work = enter_database_work(&state)?;
         let id = SourceId::parse(&excluded_id)
@@ -6350,10 +6380,10 @@ fn library_remove_excluded_folder(
             .collect())
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         let _ = (state, excluded_id);
-        Err("排除資料夾只適用於 Windows。".to_owned())
+        Err("排除資料夾只適用於 Windows 與 Android。".to_owned())
     }
 }
 
@@ -6483,6 +6513,8 @@ async fn android_pick_folder_source(app: AppHandle) -> Result<Option<LibrarySour
             return Err("指定路徑不是資料夾。".to_owned());
         }
         let state = app.state::<AppState>();
+        let current = state.settings.snapshot().map_err(|error| error.to_string())?;
+        validate_source_folder_not_excluded(&path, &current.excluded_folders)?;
         let database = state.database.as_ref().ok_or_else(|| {
             state
                 .database_error
@@ -6641,9 +6673,9 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
                 progress,
             );
         };
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "android"))]
         let excluded_folders = excluded_folder_paths(&source_settings);
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "android")))]
         let excluded_folders = Vec::new();
         sync_configured_sources(
             &sync_app,
@@ -6690,7 +6722,6 @@ where
 
     #[cfg(target_os = "android")]
     {
-        let _ = excluded_folders;
         let synced_at_utc_ms = now_utc_epoch_ms()?;
         let roots = configured_sources
             .iter()
@@ -6719,7 +6750,7 @@ where
             }
         }
         app.media_index()
-            .with_adapter(|index| -> Result<(), String> {
+            .with_adapter_excluding(excluded_folders, |index| -> Result<(), String> {
                 for (source_index, root) in folder_roots.iter().enumerate() {
                     let report = SyncEngine::sync_with_progress(
                         root,
@@ -6807,12 +6838,24 @@ fn excluded_folder_paths(settings: &AppSettings) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
-#[cfg(target_os = "windows")]
+/// Android scanner compares canonical real paths component-wise, so stored paths are
+/// canonicalized here (a missing folder simply stays as stored).
+#[cfg(target_os = "android")]
+fn excluded_folder_paths(settings: &AppSettings) -> Vec<std::path::PathBuf> {
+    settings
+        .excluded_folders
+        .iter()
+        .filter_map(|entry| entry.path.to_path_buf().ok())
+        .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+        .collect()
+}
+
+#[cfg(any(target_os = "windows", target_os = "android"))]
 fn windows_path_is_same_or_under(path: &std::path::Path, ancestor: &std::path::Path) -> bool {
     path == ancestor || path.starts_with(ancestor)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 fn excluded_folder_summary(entry: &ExcludedFolderEntry) -> ExcludedFolder {
     ExcludedFolder {
         id: entry.id.to_string(),
@@ -6821,7 +6864,7 @@ fn excluded_folder_summary(entry: &ExcludedFolderEntry) -> ExcludedFolder {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 fn validate_excluded_folder_path(
     excluded: &std::path::Path,
     sources: &[SourceEntry],
@@ -6831,7 +6874,7 @@ fn validate_excluded_folder_path(
     if !excluded_canonical.is_dir() {
         return Err("指定路徑不是資料夾。".to_owned());
     }
-    let excluded_key = windows_locator_key(&excluded_canonical);
+    let excluded_key = folder_identity_key(&excluded_canonical);
     for source in sources {
         let SourceEntryKind::Folder { path, .. } = &source.kind else {
             continue;
@@ -6840,7 +6883,7 @@ fn validate_excluded_folder_path(
             continue;
         };
         let source_canonical = std::fs::canonicalize(&source_path).unwrap_or(source_path);
-        let source_key = windows_locator_key(&source_canonical);
+        let source_key = folder_identity_key(&source_canonical);
         if source_key == excluded_key {
             return Err("不能排除已加入的來源根目錄。".to_owned());
         }
@@ -6851,7 +6894,7 @@ fn validate_excluded_folder_path(
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 fn validate_source_folder_not_excluded(
     source: &std::path::Path,
     excluded_folders: &[ExcludedFolderEntry],
@@ -10149,6 +10192,8 @@ pub fn run() {
             track_details::track_details_read_image,
             track_details::track_details_export_cover,
             track_details::track_details_reveal,
+            track_details::track_details_clipboard_has_image,
+            track_details::track_details_read_clipboard_image,
             track_details::track_spectrogram,
             track_details::spectrogram_render_file,
             track_details::spectrogram_pick_file,

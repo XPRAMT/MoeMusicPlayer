@@ -2349,7 +2349,7 @@
     sourceError = null;
     try {
       sources = await invokeCommand('library_list_sources', {});
-      if (capabilities?.platform === 'windows') {
+      if (capabilities?.platform === 'windows' || capabilities?.platform === 'android') {
         excludedFolders = await invokeCommand('library_list_excluded_folders', {});
       } else {
         excludedFolders = [];
@@ -2510,7 +2510,7 @@
   }
 
   async function pickExcludedFolder(): Promise<void> {
-    if (!sourceSyncReady || isUpdatingSource || capabilities?.platform !== 'windows') return;
+    if (!sourceSyncReady || isUpdatingSource || (capabilities?.platform !== 'windows' && capabilities?.platform !== 'android')) return;
     isUpdatingSource = true;
     sourceError = null;
     try {
@@ -3926,13 +3926,13 @@
               {/if}
             </div>
 
-            {#if capabilities?.platform === 'windows'}
+            {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
               <div class="source-action-row source-action-buttons source-folder-picker excluded-folder-picker">
                 <button
                   class="soft-button"
                   type="button"
                   onclick={() => void pickExcludedFolder()}
-                  disabled={!sourceSyncReady || isUpdatingSource}
+                  disabled={!sourceSyncReady || isUpdatingSource || (capabilities?.platform === 'android' && allFilesAccess?.granted !== true)}
                 >
                   {isUpdatingSource ? '處理中' : '選擇排除資料夾'}
                 </button>
@@ -4724,7 +4724,8 @@
 
 <UpdateCenter
   bind:this={updateCenter}
-  enabled={capabilities?.platform === 'windows'}
+  enabled={capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
+  platform={capabilities?.platform ?? 'unsupported'}
   bind:updateState
   surfaceOpacityPercent={themePreferences.quickSettingsOpacityPercent}
   surfaceBlurPx={themePreferences.quickSettingsBlurPx}

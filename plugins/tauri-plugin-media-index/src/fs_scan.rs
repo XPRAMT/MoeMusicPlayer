@@ -86,8 +86,11 @@ fn unavailable(source_id: SourceId, reason: impl Into<String>) -> SourceScan {
 /// Walk a folder source. Hidden entries, symlinks, `.nomedia` folders (MediaStore parity), and a
 /// storage volume's `Android/` tree are skipped. An unreadable root is `Unavailable` and any
 /// unreadable subfolder makes the scan `Incomplete`, so neither ever deletes library mappings.
+/// Folders in `excluded` (canonical real paths, 「排除資料夾」) and everything below them are
+/// skipped like the Windows scanner, so their tracks leave the library on a complete scan.
 pub fn scan_directory(
     root: &LibraryRoot,
+    excluded: &[PathBuf],
     progress: &mut dyn FnMut(MediaScanProgress),
     cancellation: &SyncCancellation,
 ) -> SourceScan {
@@ -167,7 +170,7 @@ pub fn scan_directory(
                 continue;
             }
             if file_type.is_dir() {
-                if !(skip_android_tree && name == "Android") {
+                if !(skip_android_tree && name == "Android") && !is_excluded(&path, excluded) {
                     directories.push(path);
                 }
                 continue;
@@ -242,6 +245,11 @@ pub fn scan_paths(source_id: SourceId, paths: &[PathBuf]) -> SourceScan {
 }
 
 /// Sibling file with the same stem and a different extension (e.g. `song.lrc` for `song.flac`).
+/// True when `path` is an excluded folder or lies under one (component-wise prefix).
+pub fn is_excluded(path: &Path, excluded: &[PathBuf]) -> bool {
+    excluded.iter().any(|folder| path.starts_with(folder))
+}
+
 pub fn sibling_with_extension(path: &Path, extension: &str) -> Option<PathBuf> {
     let candidate = path.with_extension(extension);
     candidate.is_file().then_some(candidate)
@@ -291,7 +299,7 @@ mod tests {
         fs::write(dir.join("Private/.nomedia"), b"").unwrap();
         fs::write(dir.join("Private/b.mp3"), b"x").unwrap();
         let root = root_for(&dir);
-        let scan = scan_directory(&root, &mut |_| {}, &SyncCancellation::default());
+        let scan = scan_directory(&root, &[], &mut |_| {}, &SyncCancellation::default());
         assert_eq!(scan.state, SourceScanState::Complete);
         assert_eq!(scan.tracks.len(), 1);
         let track = &scan.tracks[0];
@@ -308,9 +316,38 @@ mod tests {
     }
 
     #[test]
+    fn excluded_folders_and_their_subfolders_are_skipped() {
+        let dir = temp_dir("excluded");
+        fs::create_dir_all(dir.join("Keep")).unwrap();
+        fs::create_dir_all(dir.join("Skip/Deeper")).unwrap();
+        fs::create_dir_all(dir.join("SkipNot")).unwrap();
+        fs::write(dir.join("Keep/a.mp3"), b"x").unwrap();
+        fs::write(dir.join("Skip/b.mp3"), b"x").unwrap();
+        fs::write(dir.join("Skip/Deeper/c.mp3"), b"x").unwrap();
+        fs::write(dir.join("SkipNot/d.mp3"), b"x").unwrap();
+        let root = root_for(&dir);
+        let excluded = vec![dir.join("Skip")];
+        let scan = scan_directory(&root, &excluded, &mut |_| {}, &SyncCancellation::default());
+        assert_eq!(scan.state, SourceScanState::Complete);
+        let mut names = scan
+            .tracks
+            .iter()
+            .map(|track| match &track.locator {
+                MediaLocator::FileSystem(path) => path.file_name().unwrap().to_string_lossy().into_owned(),
+                MediaLocator::ContentUri(uri) => uri.clone(),
+            })
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["a.mp3".to_owned(), "d.mp3".to_owned()]);
+        assert!(is_excluded(&dir.join("Skip/Deeper"), &excluded));
+        assert!(!is_excluded(&dir.join("SkipNot"), &excluded));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn missing_root_is_unavailable_and_never_complete() {
         let root = root_for(Path::new("/definitely/not/here"));
-        let scan = scan_directory(&root, &mut |_| {}, &SyncCancellation::default());
+        let scan = scan_directory(&root, &[], &mut |_| {}, &SyncCancellation::default());
         assert!(matches!(scan.state, SourceScanState::Unavailable { .. }));
     }
 

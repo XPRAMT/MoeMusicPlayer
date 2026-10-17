@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Android 13+: the Media3 media notification (shade + lock screen) needs this runtime grant. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- In-app update (ADR 0015): hand a downloaded, SHA-256-verified APK to the system installer. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application>
         <service
@@ -18,5 +20,15 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+        <!-- Own subclass so the merged manifest never collides with another androidx FileProvider. -->
+        <provider
+            android:name=".MoeUpdateFileProvider"
+            android:authorities="${applicationId}.moe.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/moe_update_paths" />
+        </provider>
     </application>
 </manifest>

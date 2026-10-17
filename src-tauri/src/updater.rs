@@ -1,5 +1,5 @@
-//! Portable Windows update metadata and staging. All locations are owned by
-//! this service; the renderer can select timing, never a URL or filesystem path.
+//! Portable Windows update metadata and staging, and the Android APK update (ADR 0015). All
+//! locations are owned by this service; the renderer can select timing, never a URL or path.
 pub use moe_update::{FileIdentity, PendingUpdate, ReleaseManifest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,6 +18,10 @@ const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
 const MANIFEST_NAME: &str = "moemusicplayer-update.json";
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Android assets in the same GitHub Release as the Windows pair (ADR 0015).
+const ANDROID_MANIFEST_NAME: &str = "moemusicplayer-android-update.json";
+const ANDROID_APK_NAME: &str = "moemusicplayer-android-arm64.apk";
+const ANDROID_ARCHITECTURE: &str = "android-arm64";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,7 +83,28 @@ struct Asset {
     browser_download_url: String,
 }
 
+/// `moemusicplayer-android-update.json`: same build identity fields as the Windows manifest, one
+/// APK. A separate asset keeps older Windows clients (strict `deny_unknown_fields`) unaffected.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AndroidReleaseManifest {
+    pub schema_version: u32,
+    pub version: String,
+    pub build_timestamp_utc: String,
+    pub git_commit: String,
+    pub architecture: String,
+    pub apk: FileIdentity,
+}
+
 #[derive(Clone)]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+struct AvailableAndroidRelease {
+    manifest: AndroidReleaseManifest,
+    apk: Asset,
+}
+
+#[derive(Clone)]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 struct AvailableRelease {
     manifest: ReleaseManifest,
     executable: Asset,
@@ -92,6 +117,10 @@ struct AvailableRelease {
 pub struct UpdateService {
     state: Mutex<UpdateState>,
     available: Mutex<Option<AvailableRelease>>,
+    android_available: Mutex<Option<AvailableAndroidRelease>>,
+    /// Verified APK already downloaded for `android_available` (retry after the install prompt).
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    android_apk: Mutex<Option<PathBuf>>,
     operation: tokio::sync::Mutex<()>,
 }
 
@@ -107,6 +136,8 @@ impl Default for UpdateService {
                 error: None,
             }),
             available: Mutex::new(None),
+            android_available: Mutex::new(None),
+            android_apk: Mutex::new(None),
             operation: tokio::sync::Mutex::new(()),
         }
     }
@@ -281,6 +312,26 @@ fn validate_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_android_manifest(manifest: &AndroidReleaseManifest) -> Result<(), String> {
+    if manifest.schema_version != 1 || manifest.architecture != ANDROID_ARCHITECTURE {
+        return Err("此 Android 更新版本或架構不受支援。".into());
+    }
+    if !valid_utc(&manifest.build_timestamp_utc)
+        || manifest.git_commit.len() != 40
+        || !manifest
+            .git_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("更新建置識別無效。".into());
+    }
+    let apk = &manifest.apk;
+    if apk.name != ANDROID_APK_NAME || !valid_hash(&apk.sha256) || apk.size == 0 || apk.size > MAX_DOWNLOAD {
+        return Err("Android 更新檔案清單無效。".into());
+    }
+    Ok(())
+}
+
 fn valid_utc(value: &str) -> bool {
     let bytes = value.as_bytes();
     let syntax = bytes.len() == 24
@@ -332,8 +383,8 @@ fn matching_asset(release: &Release, file: &FileIdentity) -> Result<Asset, Strin
     Ok(found[0].clone())
 }
 
-async fn check_release() -> Result<Option<AvailableRelease>, String> {
-    let client = client()?;
+/// The fixed repository's public latest Release, or None when nothing is published.
+async fn latest_release(client: &reqwest::Client) -> Result<Option<Release>, String> {
     let response = client
         .get(RELEASE_API)
         .timeout(Duration::from_secs(15))
@@ -360,11 +411,14 @@ async fn check_release() -> Result<Option<AvailableRelease>, String> {
     {
         return Err("Release 來源無效。".into());
     }
-    let asset = release
-        .assets
-        .iter()
-        .find(|asset| asset.name == MANIFEST_NAME)
-        .ok_or("Release 缺少可驗證的更新清單。")?;
+    Ok(Some(release))
+}
+
+/// Download a manifest asset and verify it against GitHub's SHA-256 asset digest.
+async fn verified_manifest_bytes(
+    client: &reqwest::Client,
+    asset: &Asset,
+) -> Result<Vec<u8>, String> {
     if !trusted_download_url(&asset.browser_download_url) {
         return Err("更新清單來源無效。".into());
     }
@@ -374,10 +428,24 @@ async fn check_release() -> Result<Option<AvailableRelease>, String> {
         .and_then(|digest| digest.strip_prefix("sha256:"))
         .filter(|hash| valid_hash(hash))
         .ok_or("GitHub 未提供更新清單 SHA-256 digest；為保護完整性，無法自動更新。")?;
-    let bytes = bounded_bytes(&client, &asset.browser_download_url, 64 * 1024).await?;
+    let bytes = bounded_bytes(client, &asset.browser_download_url, 64 * 1024).await?;
     if bytes.len() as u64 != asset.size || sha256(&bytes) != hash.to_ascii_lowercase() {
         return Err("更新清單 SHA-256 驗證失敗。".into());
     }
+    Ok(bytes)
+}
+
+async fn check_release() -> Result<Option<AvailableRelease>, String> {
+    let client = client()?;
+    let Some(release) = latest_release(&client).await? else {
+        return Ok(None);
+    };
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == MANIFEST_NAME)
+        .ok_or("Release 缺少可驗證的更新清單。")?;
+    let bytes = verified_manifest_bytes(&client, asset).await?;
     let manifest: ReleaseManifest =
         serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
     validate_manifest(&manifest)?;
@@ -393,6 +461,72 @@ async fn check_release() -> Result<Option<AvailableRelease>, String> {
     }))
 }
 
+/// Android: the latest Release's APK manifest. A Release without Android assets is "unpublished"
+/// for Android (Windows-only releases stay valid).
+async fn check_android_release() -> Result<Option<(AvailableAndroidRelease, String, String)>, String> {
+    let client = client()?;
+    let Some(release) = latest_release(&client).await? else {
+        return Ok(None);
+    };
+    let Some(asset) = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == ANDROID_MANIFEST_NAME)
+    else {
+        return Ok(None);
+    };
+    let bytes = verified_manifest_bytes(&client, asset).await?;
+    let manifest: AndroidReleaseManifest =
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    validate_android_manifest(&manifest)?;
+    let apk = matching_asset(&release, &manifest.apk)?;
+    Ok(Some((
+        AvailableAndroidRelease { manifest, apk },
+        release.published_at,
+        release.body.unwrap_or_default(),
+    )))
+}
+
+async fn update_check_android(app: &AppHandle, service: &UpdateService) -> UpdateState {
+    publish(app, service, |state| {
+        state.status = "checking".into();
+        state.error = None;
+    });
+    *service
+        .android_available
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    match check_android_release().await {
+        Ok(None) => publish(app, service, |state| {
+            state.status = "unpublished".into();
+            state.latest = None;
+        }),
+        Ok(Some((release, published_at, notes))) => {
+            let is_new =
+                release.manifest.build_timestamp_utc.as_str() > env!("MOE_BUILD_TIMESTAMP_UTC");
+            let state = publish(app, service, |state| {
+                state.status = if is_new { "available" } else { "current" }.into();
+                state.latest = Some(LatestBuild {
+                    build_id: format!(
+                        "{}@{}",
+                        release.manifest.build_timestamp_utc, release.manifest.git_commit
+                    ),
+                    version: release.manifest.version.clone(),
+                    published_at,
+                    notes,
+                    download_bytes: release.manifest.apk.size,
+                });
+            });
+            *service
+                .android_available
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(release);
+            state
+        }
+        Err(error) => failed(app, service, error),
+    }
+}
+
 #[tauri::command]
 pub async fn update_check(
     app: AppHandle,
@@ -405,10 +539,13 @@ pub async fn update_check(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone());
     };
+    if cfg!(all(target_os = "android", target_arch = "aarch64")) {
+        return Ok(update_check_android(&app, &service).await);
+    }
     if !cfg!(all(target_os = "windows", target_arch = "x86_64")) {
         return Ok(publish(&app, &service, |state| {
             state.status = "unsupported".into();
-            state.error = Some("自動更新目前僅支援 Windows x64 便攜版。".into());
+            state.error = Some("自動更新目前僅支援 Windows x64 便攜版與 Android arm64。".into());
         }));
     }
     publish(&app, &service, |state| {
@@ -662,6 +799,17 @@ pub async fn update_download(
     let Ok(_operation) = service.operation.try_lock() else {
         return Err("更新作業已在執行。".into());
     };
+    #[cfg(target_os = "android")]
+    {
+        // One flow on Android: download + verify, then the system installer (mode is ignored).
+        let _ = mode;
+        Ok(match android_download_and_install(&app, &service).await {
+            Ok(state) => state,
+            Err(error) => failed(&app, &service, error),
+        })
+    }
+    #[cfg(not(target_os = "android"))]
+    {
     let release = service
         .available
         .lock()
@@ -714,6 +862,107 @@ pub async fn update_download(
         Ok(state) => Ok(state),
         Err(error) => Ok(failed(&app, &service, error)),
     }
+    }
+}
+
+/// Download the APK into the app-private `cache/updates` (exposed only to the system installer
+/// through the plugin's FileProvider), verify size + SHA-256 against the manifest, then hand it to
+/// the installer. Without "install unknown apps" the settings page opens instead
+/// (`installPermission`); pressing the button again reuses the verified download.
+#[cfg(target_os = "android")]
+async fn android_download_and_install(
+    app: &AppHandle,
+    service: &UpdateService,
+) -> Result<UpdateState, String> {
+    use tauri_plugin_media_index::MediaIndexExt;
+
+    let release = service
+        .android_available
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .ok_or("請先檢查更新。")?;
+    if release.manifest.build_timestamp_utc.as_str() <= env!("MOE_BUILD_TIMESTAMP_UTC") {
+        return Err("此版本不比目前建置新。".into());
+    }
+    let cached = service
+        .android_apk
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .filter(|path| {
+            std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == release.manifest.apk.size)
+        });
+    let path = match cached {
+        Some(path) => path,
+        None => {
+            publish(app, service, |state| {
+                state.status = "downloading".into();
+                state.downloaded_bytes = 0;
+                state.total_bytes = Some(release.manifest.apk.size);
+                state.error = None;
+            });
+            let directory_app = app.clone();
+            let directory = tauri::async_runtime::spawn_blocking(move || {
+                directory_app.media_index().update_download_directory()
+            })
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+            // Only APKs this service downloaded live here; drop stale ones before a new download.
+            if let Ok(entries) = std::fs::read_dir(&directory) {
+                for entry in entries.flatten() {
+                    if entry.path().extension().is_some_and(|extension| extension == "apk") {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+            let path = directory.join(format!(
+                "{}-{ANDROID_APK_NAME}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            let client = client()?;
+            let downloaded = tokio::time::timeout(
+                DOWNLOAD_TOTAL_TIMEOUT,
+                download_file(
+                    Some(app),
+                    service,
+                    &client,
+                    &release.apk,
+                    &release.manifest.apk,
+                    &path,
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| Err("更新下載已超過 30 分鐘總上限，請稍後重試。".into()));
+            if let Err(error) = downloaded {
+                let _ = std::fs::remove_file(&path);
+                return Err(error);
+            }
+            *service
+                .android_apk
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(path.clone());
+            path
+        }
+    };
+    let install_app = app.clone();
+    let apk_path = path.to_string_lossy().into_owned();
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        install_app.media_index().install_apk(&apk_path)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| format!("無法開啟系統安裝程式：{error}"))?;
+    Ok(publish(app, service, |state| {
+        state.status = if status == "permission" {
+            "installPermission"
+        } else {
+            "installing"
+        }
+        .into();
+        state.error = None;
+    }))
 }
 
 #[cfg(target_os = "windows")]
@@ -947,6 +1196,32 @@ mod tests {
         ] {
             assert!(!trusted_download_url(url), "{url}");
         }
+    }
+    #[test]
+    fn android_manifest_requires_the_fixed_apk_identity() {
+        let valid = AndroidReleaseManifest {
+            schema_version: 1,
+            version: "2026.10.17".into(),
+            build_timestamp_utc: "2026-10-17T07:00:00.000Z".into(),
+            git_commit: "a".repeat(40),
+            architecture: ANDROID_ARCHITECTURE.into(),
+            apk: FileIdentity {
+                name: ANDROID_APK_NAME.into(),
+                sha256: "b".repeat(64),
+                size: 1024,
+            },
+        };
+        assert!(validate_android_manifest(&valid).is_ok());
+        let mut wrong_name = valid.clone();
+        wrong_name.apk.name = "other.apk".into();
+        assert!(validate_android_manifest(&wrong_name).is_err());
+        let mut wrong_arch = valid.clone();
+        wrong_arch.architecture = "windows-x86_64".into();
+        assert!(validate_android_manifest(&wrong_arch).is_err());
+        let json = serde_json::to_string(&valid).unwrap();
+        assert!(json.contains("\"buildTimestampUtc\"") && json.contains("\"apk\""));
+        let extra = json.replacen('{', "{\"extra\":1,", 1);
+        assert!(serde_json::from_str::<AndroidReleaseManifest>(&extra).is_err());
     }
     #[test]
     fn build_order_retains_same_day_precision_and_utc_requirement() {

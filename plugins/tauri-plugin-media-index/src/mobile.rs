@@ -43,12 +43,13 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Ok(Self(Arc::new(handle)))
     }
 
-    pub(crate) fn scan(&self, root: &LibraryRoot) -> SourceScan {
+    pub(crate) fn scan(&self, root: &LibraryRoot, excluded: &[PathBuf]) -> SourceScan {
         match (&root.kind, &root.locator) {
             (MediaSourceKind::AndroidFilesystem, MediaLocator::FileSystem(_)) => {
                 match self.all_files_access_status() {
                     Ok(status) if status.granted => crate::fs_scan::scan_directory(
                         root,
+                        excluded,
                         &mut |_| {},
                         &player_core::SyncCancellation::default(),
                     ),
@@ -188,6 +189,37 @@ impl<R: Runtime> PlatformMediaIndex<R> {
     }
 
     /// Folder picker that only yields a real path; no persisted SAF grant is kept (ADR 0014).
+    pub(crate) fn clipboard_has_image(&self) -> Result<bool> {
+        let value: serde_json::Value = self.0.run_mobile_plugin("clipboardImageStatus", json!({}))?;
+        Ok(value.get("hasImage").and_then(serde_json::Value::as_bool).unwrap_or(false))
+    }
+
+    pub(crate) fn read_clipboard_image(&self) -> Result<Option<String>> {
+        let value: serde_json::Value = self.0.run_mobile_plugin("readClipboardImage", json!({}))?;
+        Ok(value.get("path").and_then(|path| path.as_str()).map(str::to_owned))
+    }
+
+    pub(crate) fn open_folder_in_file_manager(&self, path: &str) -> Result<bool> {
+        let value: serde_json::Value = self
+            .0
+            .run_mobile_plugin("openFolderInFileManager", json!({ "path": path }))?;
+        Ok(value.get("opened").and_then(serde_json::Value::as_bool).unwrap_or(false))
+    }
+
+    pub(crate) fn update_download_directory(&self) -> Result<PathBuf> {
+        let value: serde_json::Value = self.0.run_mobile_plugin("updateDownloadDirectory", json!({}))?;
+        value
+            .get("path")
+            .and_then(|path| path.as_str())
+            .map(PathBuf::from)
+            .ok_or_else(|| crate::Error::Response("no update directory".into()))
+    }
+
+    pub(crate) fn install_apk(&self, path: &str) -> Result<String> {
+        let value: serde_json::Value = self.0.run_mobile_plugin("installApk", json!({ "path": path }))?;
+        Ok(value.get("status").and_then(|status| status.as_str()).unwrap_or("started").to_owned())
+    }
+
     pub(crate) fn pick_directory_path(&self) -> Result<Option<String>> {
         let value: serde_json::Value = self.0.run_mobile_plugin("pickDirectoryPath", json!({}))?;
         Ok(value.get("path").and_then(|path| path.as_str()).map(str::to_owned))

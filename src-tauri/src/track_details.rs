@@ -651,14 +651,17 @@ pub async fn track_details_export_cover(
     }
 }
 
-/// Reveal the file in Explorer with it selected.
+/// Reveal the file in Explorer with it selected. Android: 「用檔案管理員開啟」 shows the
+/// containing folder in a file manager (best effort; no app selects the file itself).
 #[tauri::command]
 pub async fn track_details_reveal(
+    app: AppHandle,
     state: State<'_, AppState>,
     track_id: String,
 ) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        let _ = app;
         let path = track_path(&state, &track_id)?;
         if !path.exists() {
             return Err(format!("找不到檔案：{}", path.display()));
@@ -667,10 +670,79 @@ pub async fn track_details_reveal(
         // need no command-line quoting (explorer.exe "/select," parsing breaks on those).
         blocking(move || reveal_in_explorer(&path)).await
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
     {
-        let _ = (state, track_id);
+        use tauri_plugin_media_index::MediaIndexExt;
+        let TrackSource::File(path) = track_source(&state, &track_id)? else {
+            return Err("此曲目沒有實體路徑，請開啟「所有檔案存取權」後重新同步。".to_owned());
+        };
+        let folder = path
+            .parent()
+            .ok_or_else(|| "找不到曲目所在資料夾。".to_owned())?
+            .to_string_lossy()
+            .into_owned();
+        let opened = blocking(move || {
+            app.media_index()
+                .open_folder_in_file_manager(&folder)
+                .map_err(|error| error.to_string())
+        })
+        .await?;
+        if opened {
+            Ok(())
+        } else {
+            Err("找不到可開啟資料夾的檔案管理員；可用「複製路徑」後在檔案管理員中前往。".to_owned())
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = (app, state, track_id);
         Err("此平台不支援".to_owned())
+    }
+}
+
+/// Android: whether the clipboard holds an image. Android WebView rejects
+/// `navigator.clipboard.read()` for images, so the cover paste uses ClipboardManager natively.
+#[tauri::command]
+pub async fn track_details_clipboard_has_image(app: AppHandle) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_media_index::MediaIndexExt;
+        blocking(move || app.media_index().clipboard_has_image().map_err(|error| error.to_string()))
+            .await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(false)
+    }
+}
+
+/// Android: the clipboard image bytes (copied to the app cache by the native side first), or an
+/// empty response when the clipboard holds no image.
+#[tauri::command]
+pub async fn track_details_read_clipboard_image(app: AppHandle) -> Result<Response, String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_media_index::MediaIndexExt;
+        let bytes = blocking(move || {
+            let Some(path) = app
+                .media_index()
+                .read_clipboard_image()
+                .map_err(|error| error.to_string())?
+            else {
+                return Ok(Vec::new());
+            };
+            let result = read_image_source(&app, &path);
+            let _ = std::fs::remove_file(&path);
+            result
+        })
+        .await?;
+        Ok(Response::new(bytes))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("此平台使用 WebView 剪貼簿".to_owned())
     }
 }
 

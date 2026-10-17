@@ -47,7 +47,7 @@ export interface UpdateRelease {
 }
 
 export interface UpdateState {
-  status: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'ready' | 'deferred' | 'restarting' | 'unpublished' | 'unsupported' | 'error';
+  status: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'ready' | 'deferred' | 'restarting' | 'installPermission' | 'installing' | 'unpublished' | 'unsupported' | 'error';
   currentBuildId: string;
   latest: UpdateRelease | null;
   downloadedBytes: number;

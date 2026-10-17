@@ -9,6 +9,9 @@ export interface UpdateControllerPorts {
   onChange: (state: UpdateState, visible: boolean) => void;
 }
 
+/** Statuses from which 下載／安裝 may start (Android retries the installer after the prompt). */
+export const UPDATE_DOWNLOADABLE_STATUSES: readonly UpdateState['status'][] = ['available', 'error', 'installPermission', 'installing'];
+
 export const EMPTY_UPDATE_STATE: UpdateState = {
   status: 'idle', currentBuildId: '', latest: null,
   downloadedBytes: 0, totalBytes: null, error: null,
@@ -71,12 +74,12 @@ export function createUpdateController(ports: UpdateControllerPorts) {
     if (!active && !['downloading', 'ready', 'deferred', 'restarting'].includes(state.status)) await operate(ports.ignore);
   }
   async function download(mode: UpdateInstallMode) {
-    if (!state.latest || !['available', 'error'].includes(state.status)) return;
+    if (!state.latest || !UPDATE_DOWNLOADABLE_STATUSES.includes(state.status)) return;
     visible = true;
     await operate(() => ports.download(mode));
   }
   function show() {
-    if (state.latest && ['available', 'error', 'downloading', 'ready', 'deferred'].includes(state.status)) {
+    if (state.latest && ['available', 'error', 'downloading', 'ready', 'deferred', 'installPermission', 'installing'].includes(state.status)) {
       visible = true;
       publish();
     }
@@ -104,8 +107,10 @@ export function updateStatusText(state: UpdateState): string {
     case 'ready': return '下載完成，正在驗證更新…';
     case 'deferred': return '更新已準備完成，下次啟動會完成更新。';
     case 'restarting': return '更新已準備完成，正在重新啟動播放器…';
+    case 'installPermission': return '請在剛開啟的系統設定中允許本程式「安裝不明應用程式」，返回後再按「下載並安裝」。';
+    case 'installing': return '已交給系統安裝程式；請依畫面確認安裝。安裝完成後重新開啟播放器。';
     case 'unpublished': return '目前沒有可用的已發布版本。';
-    case 'unsupported': return '目前平台不適用 Windows 自動更新。';
+    case 'unsupported': return '目前平台不支援自動更新。';
     case 'error': return state.error || '更新失敗，請重試。';
     default: return '尚未檢查更新。';
   }

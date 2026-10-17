@@ -135,7 +135,7 @@ impl<R: Runtime> MediaIndex<R> {
     }
     /// Enumerate a configured source. Only `SourceScanState::Complete` authorizes reconciliation.
     pub fn scan(&self, root: &LibraryRoot) -> SourceScan {
-        self.platform.scan(root)
+        self.platform.scan(root, &[])
     }
 
     /// Read metadata from a content URI when source-indexed metadata is insufficient.
@@ -148,7 +148,17 @@ impl<R: Runtime> MediaIndex<R> {
 
     /// Let existing Core orchestration consume this adapter through its platform trait.
     pub fn with_adapter<T>(&self, operation: impl FnOnce(&mut dyn CoreMediaIndex) -> T) -> T {
-        operation(&mut Adapter { index: self })
+        self.with_adapter_excluding(&[], operation)
+    }
+
+    /// Like [`Self::with_adapter`], but folder scans skip `excluded` real-path folders
+    /// (「排除資料夾」) and everything under them.
+    pub fn with_adapter_excluding<T>(
+        &self,
+        excluded: &[std::path::PathBuf],
+        operation: impl FnOnce(&mut dyn CoreMediaIndex) -> T,
+    ) -> T {
+        operation(&mut Adapter { index: self, excluded })
     }
 
     /// MANAGE_EXTERNAL_STORAGE ("All files access") state.
@@ -173,6 +183,37 @@ impl<R: Runtime> MediaIndex<R> {
     #[cfg(target_os = "android")]
     pub fn resolve_direct_paths(&self, uris: &[String]) -> Result<Vec<Option<String>>> {
         self.platform.resolve_direct_paths(uris)
+    }
+
+    /// Whether the clipboard holds an image (clip description only; no data is read).
+    #[cfg(target_os = "android")]
+    pub fn clipboard_has_image(&self) -> Result<bool> {
+        self.platform.clipboard_has_image()
+    }
+
+    /// Copy the clipboard image into the app cache; returns its path, or None without an image.
+    #[cfg(target_os = "android")]
+    pub fn read_clipboard_image(&self) -> Result<Option<String>> {
+        self.platform.read_clipboard_image()
+    }
+
+    /// Best-effort: show a real-path folder in a file manager. False when no app accepted it.
+    #[cfg(target_os = "android")]
+    pub fn open_folder_in_file_manager(&self, path: &str) -> Result<bool> {
+        self.platform.open_folder_in_file_manager(path)
+    }
+
+    /// App-private folder for update APK downloads (exposed to the installer via FileProvider).
+    #[cfg(target_os = "android")]
+    pub fn update_download_directory(&self) -> Result<std::path::PathBuf> {
+        self.platform.update_download_directory()
+    }
+
+    /// Hand an APK under [`Self::update_download_directory`] to the system installer.
+    /// Returns `started`, or `permission` after opening the "install unknown apps" page.
+    #[cfg(target_os = "android")]
+    pub fn install_apk(&self, path: &str) -> Result<String> {
+        self.platform.install_apk(path)
     }
 
     /// Folder picker yielding a real path; the picker grant is not persisted (ADR 0014).
@@ -279,11 +320,12 @@ impl<R: Runtime> MediaIndex<R> {
 
 struct Adapter<'a, R: Runtime> {
     index: &'a MediaIndex<R>,
+    excluded: &'a [std::path::PathBuf],
 }
 
 impl<R: Runtime> CoreMediaIndex for Adapter<'_, R> {
     fn scan(&mut self, root: &LibraryRoot) -> SourceScan {
-        self.index.scan(root)
+        self.index.platform.scan(root, self.excluded)
     }
 
     fn read_metadata(

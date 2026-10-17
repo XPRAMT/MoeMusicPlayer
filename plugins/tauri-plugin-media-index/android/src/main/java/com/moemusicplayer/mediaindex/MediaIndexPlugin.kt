@@ -4,7 +4,9 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.WallpaperManager
+import android.content.ClipboardManager
 import android.content.ContentResolver
+import android.content.Context
 import android.content.Intent
 import android.database.Cursor
 import android.graphics.Bitmap
@@ -30,6 +32,7 @@ import androidx.activity.result.ActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import app.tauri.PermissionState
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
@@ -131,6 +134,135 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.resolve(JSObject())
             } catch (error: Exception) {
                 invoke.reject("Could not open browser: ${error.message}")
+            }
+        }
+    }
+
+    /**
+     * Whether the clipboard currently holds an image. Only the clip description is read, so this
+     * neither copies data nor triggers Android 12+'s "pasted from" notice. Android WebView rejects
+     * navigator.clipboard.read() for images, so the cover paste goes through ClipboardManager.
+     */
+    @Command
+    fun clipboardImageStatus(invoke: Invoke) {
+        activity.runOnUiThread {
+            val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            val description = try { clipboard?.primaryClipDescription } catch (_: Exception) { null }
+            invoke.resolve(JSObject().put("hasImage", description?.hasMimeType("image/*") == true))
+        }
+    }
+
+    /**
+     * Copy the first image item of the clipboard into the app cache and return its path (the
+     * clip's temporary URI grant ends with the clip). `path` is null when there is no image.
+     */
+    @Command
+    fun readClipboardImage(invoke: Invoke) {
+        activity.runOnUiThread {
+            val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            val clip = try { clipboard?.primaryClip } catch (_: Exception) { null }
+            val uri = clip?.let { data ->
+                (0 until data.itemCount).firstNotNullOfOrNull { index ->
+                    data.getItemAt(index).uri?.takeIf { candidate ->
+                        resolver.getType(candidate)?.startsWith("image/") == true ||
+                            data.description.hasMimeType("image/*")
+                    }
+                }
+            }
+            if (uri == null) {
+                invoke.resolve(JSObject().put("path", JSONObject.NULL))
+                return@runOnUiThread
+            }
+            io.execute {
+                try {
+                    val directory = File(appContext.cacheDir, "clipboard").apply { mkdirs() }
+                    directory.listFiles()?.forEach { it.delete() }
+                    val target = File(directory, "clipboard-${UUID.randomUUID()}")
+                    val bytes = resolver.openInputStream(uri)?.use { readBounded(it, MAX_ARTWORK_BYTES) }
+                        ?: throw IOException("clipboard image is not readable")
+                    FileOutputStream(target).use { it.write(bytes) }
+                    invoke.resolve(JSObject().put("path", target.absolutePath).put("mimeType", resolver.getType(uri)))
+                } catch (error: Exception) {
+                    invoke.reject("Could not read the clipboard image: ${error.message}")
+                }
+            }
+        }
+    }
+
+    /**
+     * Best-effort "open containing folder": show the folder in the system Files app (DocumentsUI)
+     * via its ExternalStorageProvider document URI, then any app that views directories.
+     */
+    @Command
+    fun openFolderInFileManager(invoke: Invoke) {
+        val path = invoke.parseArgs(FilePathArgs::class.java).path
+        val documentId = path?.let(::externalStorageDocumentIdFor)
+        if (documentId == null) {
+            invoke.reject("This folder is not on device storage")
+            return
+        }
+        val uri = DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTHORITY, documentId)
+        val candidates = listOf(
+            Intent(Intent.ACTION_VIEW).setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR),
+            Intent(Intent.ACTION_VIEW).setDataAndType(uri, "resource/folder"),
+            Intent(Intent.ACTION_VIEW, uri),
+        ).map { intent ->
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        activity.runOnUiThread {
+            for (intent in candidates) {
+                try {
+                    activity.startActivity(intent)
+                    invoke.resolve(JSObject().put("opened", true))
+                    return@runOnUiThread
+                } catch (_: Exception) {
+                    // Try the next form; file managers differ in what they accept.
+                }
+            }
+            invoke.resolve(JSObject().put("opened", false))
+        }
+    }
+
+    /** Private cache folder for downloaded update APKs (shared with the FileProvider paths). */
+    @Command
+    fun updateDownloadDirectory(invoke: Invoke) {
+        val directory = File(appContext.cacheDir, "updates").apply { mkdirs() }
+        invoke.resolve(JSObject().put("path", directory.absolutePath))
+    }
+
+    /**
+     * Hand a verified update APK to the system package installer. Without "install unknown apps"
+     * for this app (Android 8+), open that settings page instead and report `permission`; the user
+     * allows it there and retries. The system installer always asks the user to confirm.
+     */
+    @Command
+    fun installApk(invoke: Invoke) {
+        val path = invoke.parseArgs(FilePathArgs::class.java).path
+        val file = path?.let(::File)
+        val updates = File(appContext.cacheDir, "updates").canonicalFile
+        if (file == null || !file.isFile || !file.canonicalPath.startsWith(updates.path + File.separator)) {
+            invoke.reject("Update APK is missing")
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) {
+                    activity.startActivity(
+                        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                            .setData(Uri.parse("package:${activity.packageName}")),
+                    )
+                    invoke.resolve(JSObject().put("status", "permission"))
+                    return@runOnUiThread
+                }
+                val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.moe.updates", file)
+                activity.startActivity(
+                    Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(uri, "application/vnd.android.package-archive")
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+                invoke.resolve(JSObject().put("status", "started"))
+            } catch (error: Exception) {
+                invoke.reject("Could not open the system installer: ${error.message}")
             }
         }
     }
@@ -1139,6 +1271,19 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         internal const val MAX_SLIDESHOW_IMAGES = 10_000
 
         /** "primary:Music/a.flac" -> /storage/emulated/0/Music/a.flac; "1A2B-3C4D:x" -> /storage/1A2B-3C4D/x. */
+        private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
+
+        /** Inverse of [externalStoragePathFor]: `/storage/emulated/0/Music` -> `primary:Music`. */
+        internal fun externalStorageDocumentIdFor(path: String): String? {
+            val normalized = path.trimEnd('/')
+            if (normalized.split('/').any { it == ".." }) return null
+            val primary = "/storage/emulated/0"
+            if (normalized == primary) return "primary:"
+            if (normalized.startsWith("$primary/")) return "primary:" + normalized.removePrefix("$primary/")
+            val match = Regex("^/storage/([0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})(/(.*))?$").matchEntire(normalized) ?: return null
+            return match.groupValues[1] + ":" + match.groupValues[3]
+        }
+
         internal fun externalStoragePathFor(documentId: String): String? {
             val colon = documentId.indexOf(':')
             if (colon <= 0) return null
