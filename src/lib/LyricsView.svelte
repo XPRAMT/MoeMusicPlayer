@@ -622,7 +622,7 @@
   function handleTimingPanelOutsidePointerDown(event: PointerEvent): void {
     if (!timingPanelOpen || !(event.target instanceof Node)) return;
     if (timingPanelElement?.contains(event.target)) return;
-    if (event.target instanceof Element && event.target.closest(tr('[aria-label="同步歌詞延遲調整"]'))) return;
+    if (event.target instanceof Element && event.target.closest(`[aria-label="${tr('同步歌詞延遲調整')}"]`)) return;
     timingPanelOpen = false;
   }
 </script>

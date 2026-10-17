@@ -546,6 +546,8 @@
   let dsdSettingsError = $state<string | null>(null);
   let dsdSettingsRevision = 0;
   let dsdSettingsQueue: Promise<void> = Promise.resolve();
+  // Each language is named in itself, whatever the interface language is.
+  const LANGUAGE_NAMES: Record<string, string> = { 'zh-TW': '繁體中文', 'zh-CN': '简体中文', ja: '日本語', en: 'English' };
   let languageChoice = $state<LanguageChoice>(getLanguageChoice());
   let languageError = $state<string | null>(null);
   let taskbarLyricsSettings = $state<TaskbarLyricsSettings>({ ...DEFAULT_TASKBAR_LYRICS_SETTINGS });
@@ -3766,11 +3768,11 @@
                   <p class="source-muted-note">{tr("背景會跟隨目前播放歌曲的專輯封面；沒有可用封面時暫時顯示純色。")}</p>
                 {:else if themePreferences.mainBackgroundMode === 'systemWallpaper'}
                   {#if capabilities?.platform === 'android' && androidWallpaperHasImage}
-                    <p class="source-muted-note">{tr("已透過「所有檔案存取權」讀取目前的系統桌布，並每分鐘檢查是否已變更，下次檢查")} {systemWallpaperNextInSeconds ?? 60}s。</p>
+                    <p class="source-muted-note">{tr("已透過「所有檔案存取權」讀取目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {0}s。", [systemWallpaperNextInSeconds ?? 60])}</p>
                   {:else if capabilities?.platform === 'android'}
                     <p class="source-muted-note">{allFilesAccess?.supported && !allFilesAccess.granted ? tr('Android 13 以上須開啟「音樂來源」中的「所有檔案存取權」才能讀取系統桌布；未授權時顯示純色背景。') : tr('無法讀取系統桌布（動態桌布沒有可讀取的圖片），目前顯示純色背景。')}</p>
                   {:else}
-                    <p class="source-muted-note">{tr("讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更，下次檢查")} {systemWallpaperNextInSeconds ?? 60}s。</p>
+                    <p class="source-muted-note">{tr("讀取 Windows 目前的系統桌布，並每分鐘檢查是否已變更，下次檢查 {0}s。", [systemWallpaperNextInSeconds ?? 60])}</p>
                   {/if}
                 {/if}
                 {#if themePreferences.mainBackgroundMode !== 'solid'}
@@ -3810,7 +3812,7 @@
                         aria-pressed={languageChoice === choice}
                         class:chosen={languageChoice === choice}
                         onclick={() => void chooseLanguage(choice as LanguageChoice)}
-                      >{choice === 'system' ? tr("跟隨系統") : choice === 'zh-TW' ? '繁體中文' : '简体中文'}</button>
+                      >{choice === 'system' ? tr("跟隨系統") : LANGUAGE_NAMES[choice]}</button>
                     {/each}
                   </div>
                 </div>

@@ -60,6 +60,19 @@ function serialize(catalog) {
   return `${JSON.stringify(catalog, null, 2)}\n`;
 }
 
+/** Hand-written catalogs (Japanese, English) must cover every source string and keep its placeholders. */
+export const HAND_WRITTEN_LANGUAGES = ['ja', 'en'];
+
+/** @param {string} language @returns {{ missing: string[], extra: string[] }} */
+export function translationGaps(language) {
+  const keys = extractKeys();
+  const catalog = readJson(path.join(catalogDir, `${language}.json`));
+  return {
+    missing: keys.filter((key) => !Object.hasOwn(catalog, key)),
+    extra: Object.keys(catalog).filter((key) => !keys.includes(key)),
+  };
+}
+
 export function catalogUpToDate() {
   const expected = serialize(buildSimplified(extractKeys()));
   const file = path.join(catalogDir, 'zh-CN.json');
@@ -69,7 +82,14 @@ export function catalogUpToDate() {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { upToDate, expected } = catalogUpToDate();
-  if (process.argv.includes('--check')) {
+  if (process.argv.includes('--missing')) {
+    for (const language of HAND_WRITTEN_LANGUAGES) {
+      const { missing, extra } = translationGaps(language);
+      console.log(`${language}: ${missing.length} missing, ${extra.length} no longer used`);
+      for (const key of missing) console.log(`  + ${JSON.stringify(key)}`);
+      for (const key of extra) console.log(`  - ${JSON.stringify(key)}`);
+    }
+  } else if (process.argv.includes('--check')) {
     if (!upToDate) {
       console.error('src/lib/i18n/zh-CN.json is out of date: run `node scripts/i18n-catalog.mjs`.');
       process.exit(1);

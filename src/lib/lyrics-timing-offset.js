@@ -57,5 +57,5 @@ export function saveLyricsTimingOffsetSec(trackId, delaySec) {
 export function formatLyricsTimingOffsetSec(delaySec) {
   const value = clampLyricsTimingOffsetSec(delaySec);
   const sign = value > 0 ? '+' : '';
-  return sign + value.toFixed(1) + tr(' 秒');
+  return tr('{0} 秒', [sign + value.toFixed(1)]);
 }

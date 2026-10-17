@@ -407,7 +407,7 @@
           <label>{tr("短邊")} <input type="number" min="64" max="10000" step="10" disabled={!coverOptions.autoResize} value={coverOptions.shortEdgePx} onchange={(event) => updateCoverOptions({ shortEdgePx: Math.max(64, Number(event.currentTarget.value) || 2160) })} /> {tr("px（保持長寬比）")}</label>
           {#if shownCover}
             <p>{shownCover.width}×{shownCover.height} · {shownCover.mime.replace('image/', '').toUpperCase()} · {formatBytes(shownCover.bytes)}{#if pendingCoverPath}{tr("（未儲存）")}{/if}</p>
-            {#if pendingCoverPath && savedPlan?.reencode}<p class="track-details-cover-plan">{tr("儲存時：{0}×{1} JPG（品質", [savedPlan.width, savedPlan.height])} {coverOptions.jpegQuality}%）</p>{/if}
+            {#if pendingCoverPath && savedPlan?.reencode}<p class="track-details-cover-plan">{tr("儲存時：{0}×{1} JPG（品質 {2}%）", [savedPlan.width, savedPlan.height, coverOptions.jpegQuality])}</p>{/if}
           {/if}
         </div>
       </section>

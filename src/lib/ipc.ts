@@ -135,7 +135,7 @@ export interface DsdPlaybackSettings {
 }
 
 /** Interface language choice (ADR 0019). */
-export type LanguageChoice = 'system' | 'zh-TW' | 'zh-CN';
+export type LanguageChoice = 'system' | 'zh-TW' | 'zh-CN' | 'ja' | 'en';
 
 /** Lyrics drawn on the free part of the Windows taskbar (ADR 0018). */
 export interface TaskbarLyricsSettings {

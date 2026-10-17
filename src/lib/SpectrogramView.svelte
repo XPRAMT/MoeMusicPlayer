@@ -374,7 +374,7 @@
         {#if p > 0}{@const top = toViewTop(panelWorldY(p, 1))}{#if top > 0 && top < 1}<i class="sg-divider" style:top={`${top * 100}%`}></i>{/if}{/if}
       {/each}
       {#if dropSide && loading[dropSide]}<span class="sg-badge">{tr("計算中…")}</span>{/if}
-      {#if dropSide && !loaded[dropSide] && !loading[dropSide]}<span class="sg-empty">{tr("拖放檔案或按「開啟")} {dropSide}」</span>{/if}
+      {#if dropSide && !loaded[dropSide] && !loading[dropSide]}<span class="sg-empty">{tr("拖放檔案或按「開啟 {0}」", [dropSide])}</span>{/if}
       {#if content === 'overlay' && !diffUrl}<span class="sg-badge">{showB ? tr("B 透明度 {0}%", [Math.round(prefs.opacityB * 100)]) : tr('只顯示 A')}{tr("（Space 切換）")}</span>{/if}
       {#if info}
         <div class="sg-crosshair" style:left={`${toViewX(hover!.wx) * 100}%`}></div>

@@ -756,6 +756,10 @@ pub enum UiLanguage {
     ZhTw,
     #[serde(rename = "zh-CN")]
     ZhCn,
+    #[serde(rename = "ja")]
+    Ja,
+    #[serde(rename = "en")]
+    En,
 }
 
 /// An unknown or malformed value falls back to following the system.
@@ -2291,6 +2295,8 @@ mod tests {
         assert_eq!(UiLanguage::default(), UiLanguage::System);
         assert_eq!(lenient_language(Some(serde_json::json!("zh-CN"))), UiLanguage::ZhCn);
         assert_eq!(lenient_language(Some(serde_json::json!("zh-TW"))), UiLanguage::ZhTw);
+        assert_eq!(lenient_language(Some(serde_json::json!("ja"))), UiLanguage::Ja);
+        assert_eq!(lenient_language(Some(serde_json::json!("en"))), UiLanguage::En);
         assert_eq!(lenient_language(Some(serde_json::json!("fr"))), UiLanguage::System);
         assert_eq!(lenient_language(Some(serde_json::json!(3))), UiLanguage::System);
         assert_eq!(lenient_language(None), UiLanguage::System);
