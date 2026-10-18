@@ -90,7 +90,6 @@
   /** WASAPI exclusive mode: one device, bit-perfect, no mixing with other programs. */
   let exclusive = $state(false);
   let loading = $state(true);
-  let refreshing = $state(false);
   let failure = $state<string | null>(null);
 
   let rows = $derived(buildDeviceRows(entries, devices));
@@ -203,7 +202,7 @@
 
   /** Read the device list again without any visible busy state; redraws only when something changed. */
   async function pollDevices(): Promise<void> {
-    if (!isTauri() || refreshing || loading) return;
+    if (!isTauri() || loading) return;
     try {
       const next = await invokeCommand('audio_list_output_devices', {});
       if (!disposed && !sameDeviceList(next, devices)) {
@@ -224,23 +223,6 @@
       void pollDevices();
       void refreshStatus();
     }, DEVICE_EVENT_DEBOUNCE_MS);
-  }
-
-  async function refreshDevices(): Promise<void> {
-    refreshing = true;
-    try {
-      const next = await invokeCommand('audio_list_output_devices', {});
-      if (!disposed) {
-        devices = next;
-        failure = null;
-      }
-      watchVolumes();
-      void refreshVolumes();
-    } catch (error) {
-      if (!disposed) failure = tr('無法列出播放裝置：{0}', [getErrorText(error)]);
-    } finally {
-      refreshing = false;
-    }
   }
 
   async function load(): Promise<void> {
@@ -594,7 +576,6 @@
       ? tr("獨佔模式只能選一台裝置。選好之後播放時，這台裝置會被播放器獨佔。")
       : tr("勾選要輸出的裝置，可以同時輸出到多台。音量是 Windows 裝置本身的音量，延遲與聲道映射由播放器處理。同步輸出使用 Windows 共享模式，不是 bit-perfect。")}</p>
   </div>
-  <button type="button" class="soft-button" disabled={refreshing || loading} onclick={() => void refreshDevices()}>{tr("重新整理")}</button>
 </div>
 
 <div class="output-mode" role="group" aria-label={tr('輸出模式')}>

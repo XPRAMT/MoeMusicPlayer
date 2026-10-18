@@ -481,7 +481,6 @@
   "描邊": "Outline",
   "提交": "Commit",
   "減少 {0} 毫秒": "Decrease by {0} ms",
-  "無法列出播放裝置：{0}": "Could not list the playback devices: {0}",
   "無法保存外觀設定：{0}": "Cannot save appearance settings: {0}",
   "無法保存正在播放外觀：{0}": "Cannot save the Now Playing appearance: {0}",
   "無法保存正在播放版面設定：{0}": "Cannot save the Now Playing layout settings: {0}",
