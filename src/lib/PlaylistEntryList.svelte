@@ -26,6 +26,7 @@
 <script lang="ts">
   import { tr } from './i18n.js';
 import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistListSort, type PlaylistPage, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
+import { appTooltip } from './app-tooltip.js';
 import { formatDuration } from './format';
 import { formatListOrder } from './list-order.js';
 import {
@@ -175,6 +176,54 @@ import { PagedListController } from './track-list-data.js';
     onTotalCount?.(snapshot.totalCount);
   });
 
+  let scrollToIndexRequest = $state<{ index: number; token: number } | null>(null);
+  let scrollRequestToken = 0;
+  let locating = $state(false);
+  /** Whether this playlist holds the playing track; the locate button only exists then. */
+  let containsCurrent = $state(false);
+  let containsGeneration = 0;
+
+  $effect(() => {
+    const trackId = currentTrackId;
+    const id = playlistId;
+    const currentSort = sort;
+    void resetKey;
+    void snapshot.totalCount;
+    const generation = ++containsGeneration;
+    if (!trackId || !snapshot.totalCount) {
+      containsCurrent = false;
+      return;
+    }
+    void invokeCommand('playlist_get_track_position', { playlistId: id, sort: currentSort, trackId })
+      .then((index) => {
+        if (generation === containsGeneration) containsCurrent = index !== null;
+      })
+      .catch(() => {
+        if (generation === containsGeneration) containsCurrent = false;
+      });
+  });
+
+  /** Scroll to the playing track: ask the backend where it is in the sorted list, load that page, scroll. */
+  async function locateCurrentTrack(): Promise<void> {
+    if (locating || !currentTrackId || !snapshot.totalCount) return;
+    locating = true;
+    try {
+      const index = await invokeCommand('playlist_get_track_position', { playlistId, sort, trackId: currentTrackId });
+      if (index === null) {
+        containsCurrent = false;
+        return;
+      }
+      const start = Math.max(0, index - 250);
+      await entries.ensureRange(start, start + 500);
+      scrollRequestToken += 1;
+      scrollToIndexRequest = { index, token: scrollRequestToken };
+    } catch (error) {
+      console.error(getErrorText(error));
+    } finally {
+      locating = false;
+    }
+  }
+
   function itemAt(index: number): PlaylistEntrySummary | null {
     return entries.itemAt(index);
   }
@@ -203,7 +252,7 @@ import { PagedListController } from './track-list-data.js';
   }
 </script>
 
-<div class="track-list-shell">
+<div class="track-list-shell" class:has-locate={containsCurrent}>
 {#if snapshot.errors.length > 0}
   <div class="track-list-error" role="alert">
     <span>{getErrorText(snapshot.errors[0]?.message)}</span>
@@ -241,6 +290,7 @@ import { PagedListController } from './track-list-data.js';
     scrollRestoreReady={snapshot.scope === JSON.stringify({ playlistId, sort }) && snapshot.totalCount !== null && snapshot.pendingPageCount === 0}
     rowClassName="track-row virtual-track-row configurable-track-grid playlist-entry-row"
     listName={tr("播放清單")}
+    {scrollToIndexRequest}
     onRange={handleRange}
     onPlay={(entry) => playEntry(entry)}
   >
@@ -279,6 +329,16 @@ import { PagedListController } from './track-list-data.js';
       {/if}
     {/snippet}
   </PagedVirtualList>
+  {#if containsCurrent}
+    <button
+      type="button"
+      class="locate-fab"
+      aria-label={tr("定位到目前播放曲目")}
+      use:appTooltip={tr('定位到目前播放曲目')}
+      disabled={locating}
+      onclick={() => void locateCurrentTrack()}
+    ><span class="locate-fab-dot" aria-hidden="true"></span></button>
+  {/if}
 {/if}
 </div>
 
@@ -289,5 +349,9 @@ import { PagedListController } from './track-list-data.js';
     min-height: 0;
     flex: 1 1 auto;
     flex-direction: column;
+  }
+
+  .track-list-shell.has-locate {
+    position: relative;
   }
 </style>

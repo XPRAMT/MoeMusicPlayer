@@ -4320,6 +4320,30 @@ fn playlist_get_page(
         .ok_or_else(|| "找不到這份播放清單，請重新載入清單。".to_owned())
 }
 
+/// Where `track_id` is in the playlist as the sorted page lists it (0-based), or `None` when the playlist does not
+/// contain it. The playlist page's "locate the playing track" button shows only when this is not `None`.
+#[tauri::command]
+fn playlist_get_track_position(
+    state: State<'_, AppState>,
+    playlist_id: String,
+    sort: Option<PlaylistListSort>,
+    track_id: String,
+) -> Result<Option<u64>, String> {
+    let _database_work = enter_database_work(&state)?;
+    let playlist_id = PlaylistId::parse(&playlist_id)
+        .map_err(|_| "播放清單識別碼無效，請重新載入清單。".to_owned())?;
+    let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    database
+        .playlist_track_position(playlist_id, sort.unwrap_or_default(), track_id)
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FavoritePlaylistDto {
@@ -10996,6 +11020,7 @@ pub fn run() {
             get_runtime_capabilities,
             library_get_page,
             library_get_track_position,
+            playlist_get_track_position,
             library_create_artist_index_snapshot,
             library_get_artist_index_snapshot_page,
             library_resolve_artist_index_entry,

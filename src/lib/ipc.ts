@@ -1012,6 +1012,11 @@ interface IpcContract {
     args: { playlistId: string; sort?: PlaylistListSort; offset: number; limit: number };
     result: PlaylistPage;
   };
+  /** Where the track is in the playlist as the sorted pages list it (0-based), or null when the playlist lacks it. */
+  playlist_get_track_position: {
+    args: { playlistId: string; sort?: PlaylistListSort; trackId: string };
+    result: number | null;
+  };
   playlist_import_m3u: {
     args: Record<string, never>;
     result: PlaylistImportResult | null;

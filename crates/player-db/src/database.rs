@@ -3518,6 +3518,46 @@ impl Database {
         self.get_playlist_page_sorted(playlist_id, offset, limit, PlaylistListSort::default())
     }
 
+    /// Where `track_id` is in the playlist as the sorted pages list it (0-based; the first entry when the track
+    /// appears several times), or `None` when the playlist does not contain it. One statement with the same entry
+    /// resolution and ordering as the pages, numbered with `ROW_NUMBER()`.
+    pub fn playlist_track_position(
+        &self,
+        playlist_id: PlaylistId,
+        sort: PlaylistListSort,
+        track_id: TrackId,
+    ) -> Result<Option<u64>, DatabaseError> {
+        let mut connection = self.lock()?;
+        reconcile_unmatched_playlist_entries(&mut connection, playlist_id)?;
+        let direction = match sort.direction {
+            PlaylistSortDirection::Asc => "ASC",
+            PlaylistSortDirection::Desc => "DESC",
+        };
+        let order_by = playlist_order_by(sort, direction);
+        let (resolve, select_from) = PLAYLIST_PAGE_SQL
+            .split_once("SELECT e.position, e.track_id,")
+            .and_then(|(resolve, rest)| {
+                rest.find("FROM resolved_entries e")
+                    .map(|start| (resolve, &rest[start..]))
+            })
+            .ok_or_else(|| {
+                DatabaseError::CorruptData("playlist page query changed shape".to_owned())
+            })?;
+        let sql = format!(
+            "{resolve} SELECT idx FROM (
+                 SELECT e.track_id AS tid, ROW_NUMBER() OVER (ORDER BY {order_by}) - 1 AS idx {select_from}
+             ) WHERE tid = ?2 ORDER BY idx LIMIT 1"
+        );
+        let position = connection
+            .query_row(
+                &sql,
+                params![playlist_id.to_string(), track_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        Ok(position.and_then(|value| u64::try_from(value).ok()))
+    }
+
     pub fn get_playlist_page_sorted(
         &self,
         playlist_id: PlaylistId,
@@ -9550,6 +9590,72 @@ mod tests {
                 " 對手戲 Duodrama",
             ],
             "padding spaces must not move later Bopomofo initials ahead of the ㄅ group",
+        );
+    }
+
+    #[test]
+    fn playlist_track_position_matches_the_sorted_page_order() {
+        let path = std::env::temp_dir().join(format!(
+            "moemusic-playlist-position-{}.sqlite3",
+            TrackId::new()
+        ));
+        let mut db = Database::open(&path).expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "playlist-position");
+        let records: Vec<_> = ["delta", "alpha", "charlie", "bravo", "echo"]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| record(&root, name, name, name, 100 + index as u64, 1_000 + index as i64))
+            .collect();
+        apply(&mut db, &root, SourceScanState::Complete, &records, &records, 2_000);
+        let tracks = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 100,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            })
+            .expect("tracks")
+            .items;
+        // The playlist holds every track but the last one, in reverse order, and the first one twice.
+        let mut playlist = Playlist::new("positions");
+        let members: Vec<_> = tracks.iter().take(tracks.len() - 1).rev().collect();
+        for track in members.iter().copied().chain(std::iter::once(members[members.len() - 1])) {
+            playlist.entries.push(PlaylistEntry {
+                track_id: Some(track.id),
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\{}.flac", track.title.clone().unwrap_or_default()))),
+                title: None,
+                duration_ms: None,
+            });
+        }
+        db.save_playlist(&playlist).expect("save playlist");
+
+        for field in [PlaylistSortField::Position, PlaylistSortField::Title, PlaylistSortField::Artist] {
+            for direction in [PlaylistSortDirection::Asc, PlaylistSortDirection::Desc] {
+                let sort = PlaylistListSort { field, direction };
+                let page = db
+                    .get_playlist_page_sorted(playlist.id, 0, 100, sort)
+                    .expect("page")
+                    .expect("playlist exists");
+                for track in &members {
+                    let first = page
+                        .items
+                        .iter()
+                        .position(|item| item.track_id == Some(track.id))
+                        .expect("in the page") as u64;
+                    assert_eq!(
+                        db.playlist_track_position(playlist.id, sort, track.id).expect("position"),
+                        Some(first),
+                        "{field:?} {direction:?}: {:?}",
+                        track.title
+                    );
+                }
+            }
+        }
+        let outside = tracks.last().expect("a track outside the playlist").id;
+        assert_eq!(
+            db.playlist_track_position(playlist.id, PlaylistListSort::default(), outside).unwrap(),
+            None
         );
     }
 
