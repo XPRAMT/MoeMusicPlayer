@@ -4,6 +4,7 @@
 
 ## UI 共用規則
 
+- **設定頁與快速設定抽屜必須完全一樣**：App.svelte 的 `settingsPanels` snippet 同時渲染在兩處，所以 App 層的狀態天然共用；但被兩處各掛載一份的子元件（`OutputDevicesSettings`、`AboutPage` 等）不得持有自己的實例狀態——凡是畫面顯示或編輯的資料、開關、載入結果、提示訊息都放在 `<script module>` 的共用 `$state`，只做一次的工作（讀取、輪詢、回應 Windows 事件）由最先掛載的那一份執行。新增子元件到 `settingsPanels` 時照做。需要「隨時生效」的邏輯（例如音量同步）一律放後端，不得依賴設定介面是否開著。
 - **所有使用者看得到的文字都用 `tr('繁體中文原文')`**（`src/lib/i18n.js`，ADR 0019）：繁體原文就是 key，帶值用 `{0}`、`{1}` 位置佔位符（`tr('共 {0} 首', [n])`），不要用字串相加或在 `tr` 外組句子。新增或修改文字後執行 `node scripts/i18n-catalog.mjs` 重新產生 `src/lib/i18n/zh-CN.json`，再執行 `node scripts/i18n-catalog.mjs --missing` 看 `ja.json`、`en.json` 缺哪些句子並手寫補上（`tests/i18n-catalog.test.mjs` 會檢查三份字典都涵蓋、佔位符一致）；不要把句子拆成「文字 + 值 + 文字」，要整句一個 key 加 `{0}`，各語言語序才能不同；簡體用詞不對時改 `zh-CN.overrides.json`（逐句）或 `zh-CN.terms.json`（全域用詞），不要手改 `zh-CN.json`。語言在頁面載入時決定，切換語言會重新載入視窗，所以模組層級常數也可以呼叫 `tr()`。使用者資料（曲名、歌詞、播放清單名稱）與後端回傳的訊息不翻譯。讀原始碼比對中文字面值的測試要先 `import './helpers/untr-fs.mjs'`。
 - 重用既有元件、CSS token 與共用樣式，不另造相同用途的按鈕／浮板／列表。字級使用既有 token；不得任意新增數值字級。
 - 所有 App 內提示用 `appTooltip` action 與 `.app-tooltip.floating-surface`；不要新增原生 HTML `title`。保留 hover／focus 語意與 ARIA 描述。

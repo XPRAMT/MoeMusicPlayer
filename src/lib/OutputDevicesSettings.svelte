@@ -1,21 +1,38 @@
 <script module lang="ts">
-  // The settings page and the quick-settings drawer each mount this list. What must be the same in both lives here:
-  // the volume-link switch (one switch, not one per copy), the moment each device's volume was last set by the player
-  // (so one copy's own writes are not taken for outside changes by the other), and which copy reacts to changes made
-  // outside the player (only one, or the link would move the other devices twice).
-  const SYNC_KEY = 'moe.outputVolumeSync';
+  // The settings page and the quick-settings drawer each mount this list, and the two must always be the same list:
+  // everything the list shows or edits lives here, once, and each mounted copy only draws it. Work that must happen
+  // once (reading devices, reacting to Windows) is done by the copy that was mounted first.
+  import type {
+    AudioOutputDevice,
+    AudioOutputDeviceStatus,
+    OutputDeviceEntry,
+  } from './ipc';
 
-  function readSyncPreference(): boolean {
-    try {
-      return localStorage.getItem(SYNC_KEY) === '1';
-    } catch {
-      return false;
-    }
-  }
+  /** Where the volume-link switch used to be kept (now `settings.json`; read once to carry the choice over). */
+  const LEGACY_SYNC_KEY = 'moe.outputVolumeSync';
+  const PRESET_SLOTS = 5;
 
-  const shared = $state({ volumeSync: readSyncPreference() });
+  const s = $state({
+    /** "音量同步", kept and applied by the backend (it works with no settings UI open). */
+    volumeSync: false,
+    devices: [] as AudioOutputDevice[],
+    entries: [] as OutputDeviceEntry[],
+    statuses: [] as AudioOutputDeviceStatus[],
+    presets: Array.from({ length: PRESET_SLOTS }, () => null) as (OutputDeviceEntry[] | null)[],
+    selectedSlot: 0,
+    /** The real Windows volume (0 to 100) and mute state of each device, by device id. */
+    volumes: {} as Record<string, { percent: number; muted: boolean }>,
+    /** WASAPI exclusive mode: one device, bit-perfect, no mixing with other programs. */
+    exclusive: false,
+    loading: true,
+    loaded: false,
+    failure: null as string | null,
+  });
   const volumeEdited = new Map<string, number>();
   const liveInstances = new Set<symbol>();
+  // Saving is one queue for both copies, so an older answer never overwrites a newer edit.
+  let saveRevision = 0;
+  let saveQueue: Promise<void> = Promise.resolve();
 </script>
 
 <script lang="ts">
@@ -25,13 +42,7 @@
   import { appTooltip } from './app-tooltip.js';
   import { getErrorText, invokeCommand } from './ipc';
   import { tr } from './i18n.js';
-  import type {
-    AudioOutputDevice,
-    AudioOutputDeviceStatus,
-    DeviceVolumeChanged,
-    OutputDeviceEntry,
-    PlaybackOutputFormat,
-  } from './ipc';
+  import type { DeviceVolumeChanged, PlaybackOutputFormat } from './ipc';
   import {
     describeExclusive,
     describeExclusiveFallback,
@@ -64,7 +75,6 @@
     toggleCell,
     volumeDeviceId,
   } from './output-devices.js';
-  import { pruneScales, syncVolumes } from './volume-sync.js';
 
   interface Props {
     /** The player's current sample-rate path (the main stream's). */
@@ -75,7 +85,6 @@
 
   let { outputFormat = null, onExclusiveChange = () => {} }: Props = $props();
 
-  const SHARED_EVENT = 'moe-output-devices-saved';
   const instance = Symbol('output-devices');
   const SAVE_DELAY_MS = 250;
   const STATUS_POLL_MS = 2000;
@@ -90,7 +99,6 @@
   /** A volume the user just changed is not overwritten by a poll for this long. */
   const VOLUME_HOLD_MS = 1500;
   const DELAY_STEP_MS = 10;
-  const PRESET_SLOTS = 5;
   /** Matrix cells are this wide; the first column of each device is this much wider so the gap sits inside the
    *  column (a margin on the cell would narrow it). */
   const MATRIX_CELL_PX = 38;
@@ -98,25 +106,14 @@
   /** The column with the source-channel names (FL, FR, ...). */
   const MATRIX_LABEL_PX = 32;
 
-  let devices = $state<AudioOutputDevice[]>([]);
-  let entries = $state<OutputDeviceEntry[]>([]);
-  let statuses = $state<AudioOutputDeviceStatus[]>([]);
-  let presets = $state<(OutputDeviceEntry[] | null)[]>(Array.from({ length: PRESET_SLOTS }, () => null));
-  let selectedSlot = $state(0);
-  /** The real Windows volume (0–100) and mute state of each device, by device id. */
-  let volumes = $state<Record<string, { percent: number; muted: boolean }>>({});
-  /** WASAPI exclusive mode: one device, bit-perfect, no mixing with other programs. */
-  let exclusive = $state(false);
-  let loading = $state(true);
-  let failure = $state<string | null>(null);
 
-  let rows = $derived(buildDeviceRows(entries, devices));
+  let rows = $derived(buildDeviceRows(s.entries, s.devices));
   /** The delay lines devices up with each other, so it only applies (and shows) with two or more chosen devices. */
   let delayApplies = $derived(rows.filter((_, index) => rowEnabled(rows, index)).length > 1);
   let playingRows = $derived(rows.map((row, index) => ({ row, index })).filter(({ index }) => rowEnabled(rows, index) && rows[index].connected));
   /** The row that carries on playing because a chosen device disconnected (the new system default). */
   let takeover = $derived(takeoverRow(rows));
-  let defaultDeviceName = $derived(devices.find((device) => device.isDefault)?.name ?? null);
+  let defaultDeviceName = $derived(s.devices.find((device) => device.isDefault)?.name ?? null);
   const sourceLabels = channelLabels(OUTPUT_MAX_SOURCE_CHANNELS);
   /** How many source-channel rows the shared matrix shows: as many as the widest playing device has output channels
    *  (at least the stereo pair), or more when a map already uses a higher source. */
@@ -132,8 +129,6 @@
   );
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let saveRevision = 0;
-  let saveQueue: Promise<void> = Promise.resolve();
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let volumeTimer: ReturnType<typeof setInterval> | null = null;
   let deviceTimer: ReturnType<typeof setInterval> | null = null;
@@ -144,51 +139,51 @@
 
   const volumePending = new Map<string, number>();
   const volumeSendTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const syncScales = new Map<string, number>();
 
-  function setVolumeSync(on: boolean): void {
-    shared.volumeSync = on;
-    syncScales.clear();
+  async function setVolumeSync(on: boolean): Promise<void> {
+    s.volumeSync = on;
+    if (!isTauri()) return;
     try {
-      localStorage.setItem(SYNC_KEY, on ? '1' : '0');
-    } catch {
-      // The preference just is not remembered.
+      s.volumeSync = await invokeCommand('settings_set_output_volume_sync', { enabled: on });
+    } catch (error) {
+      s.volumeSync = !on;
+      s.failure = getErrorText(error);
     }
+  }
+
+  /** The switch used to live in the browser's storage; carry a choice made there over, once. */
+  async function adoptLegacySyncChoice(saved: boolean): Promise<boolean> {
+    let legacy: string | null = null;
+    try {
+      legacy = localStorage.getItem(LEGACY_SYNC_KEY);
+      localStorage.removeItem(LEGACY_SYNC_KEY);
+    } catch {
+      return saved;
+    }
+    if (legacy === '1' && !saved) return invokeCommand('settings_set_output_volume_sync', { enabled: true });
+    return saved;
   }
 
   async function refreshStatus(): Promise<void> {
     try {
       const next = await invokeCommand('audio_output_device_status', {});
-      if (!disposed) statuses = next;
+      if (!disposed) s.statuses = next;
     } catch {
       // The status is a hint only.
     }
   }
 
-  /** Ask Windows to report volume changes of the listed devices (replaces the earlier list). */
-  function watchVolumes(): void {
-    if (!isTauri() || disposed) return;
-    void invokeCommand('audio_watch_device_volumes', { ids: devices.map((device) => device.id) }).catch(() => undefined);
-  }
-
   /** Windows reported a volume or mute change of a device. */
   function onVolumeChanged(change: DeviceVolumeChanged): void {
+    if (!isPrimary()) return;
     const percent = Math.round(change.volumePercent);
     // Our own writes (and the slider the user is dragging) come back as events too; they are already shown.
     if (Date.now() - (volumeEdited.get(change.id) ?? 0) < VOLUME_HOLD_MS) return;
-    const previous = volumes[change.id];
+    const previous = s.volumes[change.id];
     if (previous && previous.percent === percent && previous.muted === change.muted) return;
-    const before = new Map(Object.entries(volumes).map(([key, value]) => [key, value.percent]));
-    volumes = { ...volumes, [change.id]: { percent, muted: change.muted } };
-    // With the volume link on, the other playing devices follow a change made outside the player too (the Windows
-    // mixer, a headset button), in their original proportion. Their own events are ignored through the same hold.
-    if (!shared.volumeSync || liveInstances.values().next().value !== instance || !previous || previous.percent === percent) return;
-    const ids = playingRows.map(({ row }) => volumeDeviceId(row, devices)).filter((value): value is string => value !== null);
-    if (!ids.includes(change.id)) return;
-    pruneScales(syncScales, ids);
-    for (const [other, value] of syncVolumes({ changedId: change.id, next: percent, volumes: before, ids, scales: syncScales })) {
-      queueVolume(other, value);
-    }
+    // Only shows it: when the volume link is on, the backend moves the other devices (and their changes arrive here
+    // the same way), whether or not this list is open.
+    s.volumes = { ...s.volumes, [change.id]: { percent, muted: change.muted } };
   }
 
   async function refreshVolumes(): Promise<void> {
@@ -197,13 +192,13 @@
       const listed = await invokeCommand('audio_get_device_volumes', {});
       if (disposed) return;
       const now = Date.now();
-      const next = { ...volumes };
+      const next = { ...s.volumes };
       for (const item of listed) {
         // Keep what the user is dragging; take everything else (the real volume moves from outside too).
         if (now - (volumeEdited.get(item.id) ?? 0) < VOLUME_HOLD_MS) continue;
         next[item.id] = { percent: Math.round(item.volumePercent), muted: item.muted };
       }
-      volumes = next;
+      s.volumes = next;
     } catch {
       // Devices come and go; the next poll tries again.
     }
@@ -211,12 +206,11 @@
 
   /** Read the device list again without any visible busy state; redraws only when something changed. */
   async function pollDevices(): Promise<void> {
-    if (!isTauri() || loading) return;
+    if (!isTauri() || s.loading) return;
     try {
       const next = await invokeCommand('audio_list_output_devices', {});
-      if (!disposed && !sameDeviceList(next, devices)) {
-        devices = next;
-        watchVolumes();
+      if (!disposed && !sameDeviceList(next, s.devices)) {
+        s.devices = next;
         void refreshVolumes();
         void refreshStatus();
       }
@@ -226,6 +220,7 @@
   }
 
   function onDevicesChanged(): void {
+    if (!isPrimary()) return;
     if (deviceEventTimer) clearTimeout(deviceEventTimer);
     deviceEventTimer = setTimeout(() => {
       deviceEventTimer = null;
@@ -234,56 +229,62 @@
     }, DEVICE_EVENT_DEBOUNCE_MS);
   }
 
+  $effect(() => {
+    onExclusiveChange(s.exclusive);
+  });
+
   async function load(): Promise<void> {
+    if (!s.loaded) s.loading = true;
     if (!isTauri()) {
-      loading = false;
-      failure = tr('瀏覽器預覽不會列出播放裝置。');
+      s.loading = false;
+      s.failure = tr('瀏覽器預覽不會列出播放裝置。');
       return;
     }
     try {
-      const [saved, listed, savedPresets, savedExclusive] = await Promise.all([
+      const [saved, listed, savedPresets, savedExclusive, savedSync] = await Promise.all([
         invokeCommand('settings_get_output_devices', {}),
         invokeCommand('audio_list_output_devices', {}),
         invokeCommand('settings_get_output_presets', {}),
         invokeCommand('settings_get_output_exclusive', {}),
+        invokeCommand('settings_get_output_volume_sync', {}),
       ]);
+      const volumeSync = await adoptLegacySyncChoice(savedSync);
       if (disposed) return;
-      exclusive = savedExclusive;
-      onExclusiveChange(savedExclusive);
-      entries = saved;
-      devices = listed;
-      presets = savedPresets;
-      selectedSlot = Math.max(0, savedPresets.findIndex((slot) => slot && sameDevices(slot, saved)));
-      failure = null;
+      s.exclusive = savedExclusive;
+      s.volumeSync = volumeSync;
+      s.entries = saved;
+      s.devices = listed;
+      s.presets = savedPresets;
+      s.selectedSlot = Math.max(0, savedPresets.findIndex((slot) => slot && sameDevices(slot, saved)));
+      s.failure = null;
+      s.loaded = true;
     } catch (error) {
-      if (!disposed) failure = tr('無法讀取播放裝置設定：{0}', [getErrorText(error)]);
+      if (!disposed) s.failure = tr('無法讀取播放裝置設定：{0}', [getErrorText(error)]);
     } finally {
-      loading = false;
+      s.loading = false;
     }
     void refreshStatus();
-    watchVolumes();
     void refreshVolumes();
   }
 
-  function broadcast(saved: OutputDeviceEntry[]): void {
-    // The quick-settings drawer and the settings page each mount this list; keep them in step.
-    window.dispatchEvent(new CustomEvent(SHARED_EVENT, { detail: { source: instance, entries: saved } }));
+  /** The copy that mounted first does the work that must happen once. */
+  function isPrimary(): boolean {
+    return liveInstances.values().next().value === instance;
   }
 
   function save(): void {
     if (!isTauri()) return;
     const revision = ++saveRevision;
-    const toSave = entries;
+    const toSave = s.entries;
     saveQueue = saveQueue.catch(() => undefined).then(async () => {
       if (disposed || revision !== saveRevision) return;
       try {
         const saved = await invokeCommand('settings_set_output_devices', { devices: toSave });
         if (disposed || revision !== saveRevision) return;
-        entries = saved;
-        failure = null;
-        broadcast(saved);
+        s.entries = saved;
+        s.failure = null;
       } catch (error) {
-        if (!disposed && revision === saveRevision) failure = getErrorText(error);
+        if (!disposed && revision === saveRevision) s.failure = getErrorText(error);
       }
       // Mirrors open in the background; look again once they had a chance to.
       setTimeout(() => void refreshStatus(), 800);
@@ -304,12 +305,12 @@
   }
 
   function update(index: number, patch: Partial<OutputDeviceEntry>, immediate = false): void {
-    entries = entriesFromRows(patchRow(rows, index, patch));
+    s.entries = entriesFromRows(patchRow(rows, index, patch));
     scheduleSave(immediate);
   }
 
   async function setExclusive(value: boolean): Promise<void> {
-    if (!isTauri() || value === exclusive) return;
+    if (!isTauri() || value === s.exclusive) return;
     try {
       // Settle pending edits first; turning exclusive on keeps only the first chosen device.
       if (saveTimer) {
@@ -318,31 +319,28 @@
         save();
       }
       await saveQueue;
-      exclusive = await invokeCommand('settings_set_output_exclusive', { exclusive: value });
-      onExclusiveChange(exclusive);
-      entries = await invokeCommand('settings_get_output_devices', {});
-      failure = null;
-      broadcast(entries);
+      s.exclusive = await invokeCommand('settings_set_output_exclusive', { exclusive: value });
+      s.entries = await invokeCommand('settings_get_output_devices', {});
+      s.failure = null;
       setTimeout(() => void refreshStatus(), 800);
     } catch (error) {
-      failure = getErrorText(error);
+      s.failure = getErrorText(error);
     }
   }
 
   function toggle(index: number, enabled: boolean): void {
-    if (exclusive && enabled) {
-      entries = entriesFromRows(selectOnly(rows, index));
+    if (s.exclusive && enabled) {
+      s.entries = entriesFromRows(selectOnly(rows, index));
       scheduleSave(true);
       return;
     }
-    entries = entriesFromRows(setRowEnabled(rows, index, enabled));
-    syncScales.clear();
+    s.entries = entriesFromRows(setRowEnabled(rows, index, enabled));
     scheduleSave(true);
   }
 
   function removeSaved(index: number): void {
     const id = rows[index].id;
-    entries = entries.filter((entry) => entry.id !== id);
+    s.entries = s.entries.filter((entry) => entry.id !== id);
     scheduleSave(true);
   }
 
@@ -358,8 +356,8 @@
   // ---- real device volume -------------------------------------------------------------------------------------
 
   function volumeOf(index: number): { percent: number; muted: boolean } | null {
-    const id = volumeDeviceId(rows[index], devices);
-    return id ? (volumes[id] ?? null) : null;
+    const id = volumeDeviceId(rows[index], s.devices);
+    return id ? (s.volumes[id] ?? null) : null;
   }
 
   function sendVolume(id: string): void {
@@ -368,29 +366,23 @@
     if (percent === undefined) return;
     volumePending.delete(id);
     void invokeCommand('audio_set_device_volume', { id, volumePercent: percent }).catch((error) => {
-      failure = getErrorText(error);
+      s.failure = getErrorText(error);
     });
   }
 
   function queueVolume(id: string, percent: number): void {
     const muted = percent <= 0;
-    volumes = { ...volumes, [id]: { percent, muted } };
+    s.volumes = { ...s.volumes, [id]: { percent, muted } };
     volumeEdited.set(id, Date.now());
     volumePending.set(id, percent);
     if (!volumeSendTimers.has(id)) volumeSendTimers.set(id, setTimeout(() => sendVolume(id), VOLUME_SEND_MS));
   }
 
   function setVolume(index: number, percent: number): void {
-    const id = volumeDeviceId(rows[index], devices);
+    const id = volumeDeviceId(rows[index], s.devices);
     if (!id) return;
-    const before = new Map(Object.entries(volumes).map(([key, value]) => [key, value.percent]));
+    // With the volume link on, the backend moves the other devices once this one is set.
     queueVolume(id, percent);
-    if (!shared.volumeSync) return;
-    const ids = playingRows.map(({ row }) => volumeDeviceId(row, devices)).filter((value): value is string => value !== null);
-    pruneScales(syncScales, ids);
-    for (const [other, value] of syncVolumes({ changedId: id, next: percent, volumes: before, ids, scales: syncScales })) {
-      queueVolume(other, value);
-    }
   }
 
   // ---- channel map (one matrix for every playing device) -----------------------------------------------------------
@@ -447,7 +439,7 @@
     const row = rows[index];
     if (disconnectedPlayingRows(rows).includes(index)) {
       // The device is gone: Windows moved on to the next one and the player followed it.
-      const reason = exclusive ? outputFormat?.exclusiveFallback : null;
+      const reason = s.exclusive ? outputFormat?.exclusiveFallback : null;
       return {
         text: defaultDeviceName
           ? tr('已中斷連線，目前改由 {0} 播放', [defaultDeviceName])
@@ -462,7 +454,7 @@
         : row.connected ? '' : tr('裝置未連線');
       return { text: format, note: null, tone: 'idle' };
     }
-    if (exclusive) {
+    if (s.exclusive) {
       // Exclusive mode opens the device when a track plays; what it opened is in the playback format.
       const fallback = describeExclusiveFallback(outputFormat);
       if (fallback) return { text: fallback.text, note: fallback.notice, tone: 'error' };
@@ -470,13 +462,13 @@
       if (!described) return { text: tr('獨佔模式：播放時才會開啟這個裝置'), note: null, tone: 'idle' };
       return { text: described.text, note: described.notice, tone: described.notice ? 'warn' : 'ok' };
     }
-    const status = statusFor(statuses, row.id);
+    const status = statusFor(s.statuses, row.id);
     if (!status || status.state === 'opening') return { text: tr('正在開啟…'), note: null, tone: 'warn' };
     if (status.state === 'lost') {
       return { text: tr('已中斷，每 5 秒重試'), note: status.message, tone: 'error' };
     }
     const channels = status.channels ? tr('{0} 聲道', [status.channels]) : '';
-    if (isMainStream(statuses, row.id)) {
+    if (isMainStream(s.statuses, row.id)) {
       const described = describeOutputFormat(outputFormat);
       return {
         text: [described.text, channels].filter(Boolean).join('．'),
@@ -492,16 +484,15 @@
   }
 
   async function applyPreset(slot: number): Promise<void> {
-    selectedSlot = slot;
-    if (!presets[slot] || !isTauri()) return;
+    s.selectedSlot = slot;
+    if (!s.presets[slot] || !isTauri()) return;
     try {
       const saved = await invokeCommand('settings_apply_output_preset', { slot });
-      entries = saved;
-      failure = null;
-      broadcast(saved);
+      s.entries = saved;
+      s.failure = null;
       setTimeout(() => void refreshStatus(), 800);
     } catch (error) {
-      failure = getErrorText(error);
+      s.failure = getErrorText(error);
     }
   }
 
@@ -515,31 +506,26 @@
     }
     await saveQueue;
     try {
-      presets = await invokeCommand('settings_save_output_preset', { slot: selectedSlot });
-      failure = null;
+      s.presets = await invokeCommand('settings_save_output_preset', { slot: s.selectedSlot });
+      s.failure = null;
     } catch (error) {
-      failure = getErrorText(error);
+      s.failure = getErrorText(error);
     }
   }
 
   async function clearPreset(): Promise<void> {
     if (!isTauri()) return;
     try {
-      presets = await invokeCommand('settings_clear_output_preset', { slot: selectedSlot });
-      failure = null;
+      s.presets = await invokeCommand('settings_clear_output_preset', { slot: s.selectedSlot });
+      s.failure = null;
     } catch (error) {
-      failure = getErrorText(error);
+      s.failure = getErrorText(error);
     }
   }
 
-  function adoptShared(event: Event): void {
-    const detail = (event as CustomEvent<{ source: symbol; entries: OutputDeviceEntry[] }>).detail;
-    if (detail.source !== instance && !saveTimer) entries = detail.entries;
-  }
-
   onMount(() => {
+    const alone = liveInstances.size === 0;
     liveInstances.add(instance);
-    window.addEventListener(SHARED_EVENT, adoptShared);
     if (isTauri()) {
       void listen<DeviceVolumeChanged>('device-volume-changed', (event) => onVolumeChanged(event.payload)).then((unlisten) => {
         if (disposed) unlisten();
@@ -552,16 +538,16 @@
         else unlistenDevices = unlisten;
       });
     }
-    void load();
-    pollTimer = setInterval(() => void refreshStatus(), STATUS_POLL_MS);
-    deviceTimer = setInterval(() => void pollDevices(), DEVICE_POLL_MS);
-    volumeTimer = setInterval(() => void refreshVolumes(), VOLUME_POLL_MS);
+    // Another copy already read everything and keeps it current; a copy that is alone reads it afresh.
+    if (alone || !s.loaded) void load();
+    pollTimer = setInterval(() => isPrimary() && void refreshStatus(), STATUS_POLL_MS);
+    deviceTimer = setInterval(() => isPrimary() && void pollDevices(), DEVICE_POLL_MS);
+    volumeTimer = setInterval(() => isPrimary() && void refreshVolumes(), VOLUME_POLL_MS);
   });
 
   onDestroy(() => {
     disposed = true;
     liveInstances.delete(instance);
-    window.removeEventListener(SHARED_EVENT, adoptShared);
     unlistenVolume?.();
     unlistenDevices?.();
     if (deviceEventTimer) clearTimeout(deviceEventTimer);
@@ -583,7 +569,7 @@
 <div class="settings-panel-header">
   <div>
     <h3>{tr("播放裝置")}</h3>
-    <p>{exclusive
+    <p>{s.exclusive
       ? tr("獨佔模式只能選一台裝置。選好之後播放時，這台裝置會被播放器獨佔。")
       : tr("勾選要輸出的裝置，可以同時輸出到多台。音量是 Windows 裝置本身的音量，延遲與聲道映射由播放器處理。同步輸出使用 Windows 共享模式，不是 bit-perfect。")}</p>
   </div>
@@ -593,8 +579,8 @@
   <button
     type="button"
     class="layout-choice-button"
-    class:chosen={!exclusive}
-    aria-pressed={!exclusive}
+    class:chosen={!s.exclusive}
+    aria-pressed={!s.exclusive}
     onclick={() => void setExclusive(false)}
   >
     <strong>{tr('共享')}</strong>
@@ -603,8 +589,8 @@
   <button
     type="button"
     class="layout-choice-button"
-    class:chosen={exclusive}
-    aria-pressed={exclusive}
+    class:chosen={s.exclusive}
+    aria-pressed={s.exclusive}
     onclick={() => void setExclusive(true)}
   >
     <strong>{tr('獨佔')}</strong>
@@ -612,26 +598,26 @@
   </button>
 </div>
 
-{#if !exclusive}
+{#if !s.exclusive}
 <div class="output-presets" role="group" aria-label={tr('方案')}>
   <span class="output-presets-label">{tr('方案')}</span>
-  {#each presets as slot, index (index)}
+  {#each s.presets as slot, index (index)}
     <button
       type="button"
       class="soft-button output-preset"
-      class:is-active={slot !== null && sameDevices(slot, entries)}
-      class:is-selected={selectedSlot === index}
+      class:is-active={slot !== null && sameDevices(slot, s.entries)}
+      class:is-selected={s.selectedSlot === index}
       class:is-empty={slot === null}
-      aria-pressed={selectedSlot === index}
+      aria-pressed={s.selectedSlot === index}
       use:appTooltip={slot === null ? tr('空的方案') : tr('{0} 台裝置', [slot.filter((entry) => entry.enabled).length])}
       onclick={() => void applyPreset(index)}
     >{index + 1}</button>
   {/each}
   <button type="button" class="soft-button" use:appTooltip={tr('把目前的設定存到選取的方案（不含音量）')} onclick={() => void savePreset()}>{tr('存入')}</button>
-  <button type="button" class="soft-button" disabled={presets[selectedSlot] === null} use:appTooltip={tr('清除選取的方案')} onclick={() => void clearPreset()}>{tr('清除')}</button>
+  <button type="button" class="soft-button" disabled={s.presets[s.selectedSlot] === null} use:appTooltip={tr('清除選取的方案')} onclick={() => void clearPreset()}>{tr('清除')}</button>
   {#if playingRows.length > 1}
     <label class="output-sync">
-      <input type="checkbox" checked={shared.volumeSync} onchange={(event) => setVolumeSync(event.currentTarget.checked)} />
+      <input type="checkbox" checked={s.volumeSync} onchange={(event) => void setVolumeSync(event.currentTarget.checked)} />
       <span use:appTooltip={tr('調整其中一台的音量時，其他裝置依原本的比例跟著調整')}>{tr('音量同步')}</span>
     </label>
   {/if}
@@ -639,9 +625,9 @@
 
 {/if}
 
-{#if failure}<p class="source-error-message" role="alert">{failure}</p>{/if}
+{#if s.failure}<p class="source-error-message" role="alert">{s.failure}</p>{/if}
 
-<div class="output-device-list" role="list" aria-busy={loading}>
+<div class="output-device-list" role="list" aria-busy={s.loading}>
   {#each rows as row, index (row.key)}
     {@const playing = rowEnabled(rows, index)}
     {@const lastPlaying = isLastPlaying(rows, index)}
@@ -692,7 +678,7 @@
             />
             <output>{volume ? `${volume.percent}%` : '—'}{#if volume?.muted && volume.percent > 0}<small> {tr('靜音')}</small>{/if}</output>
           </label>
-          {#if !exclusive && delayApplies}
+          {#if !s.exclusive && delayApplies}
           <div class="output-delay" role="group" aria-label={tr('延遲')}>
             <span>{tr('延遲')}</span>
             <button type="button" class="soft-button icon-step" aria-label={tr('減少 {0} 毫秒', [DELAY_STEP_MS])} onclick={() => setDelay(index, (entry?.delayMs ?? 0) - DELAY_STEP_MS)}>−</button>
@@ -724,7 +710,7 @@
   {/each}
 </div>
 
-{#if playingRows.length > 0 && !exclusive}
+{#if playingRows.length > 0 && !s.exclusive}
   {@const rowsShown = matrixRows}
   <section class="channel-matrix-panel" aria-label={tr('聲道映射')}>
     <div class="settings-panel-header">

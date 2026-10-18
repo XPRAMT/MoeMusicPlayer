@@ -54,6 +54,7 @@ use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImpo
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 mod sleep_timer;
+mod volume_sync;
 #[cfg(target_os = "windows")]
 mod taskbar_lyrics;
 mod track_details;
@@ -6214,46 +6215,6 @@ struct AudioDeviceVolume {
     muted: bool,
 }
 
-/// Sent whenever Windows reports a volume or mute change of a watched playback device.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-struct DeviceVolumeEvent {
-    id: String,
-    /// 0 to 100.
-    volume_percent: f32,
-    muted: bool,
-}
-
-#[cfg(target_os = "windows")]
-static DEVICE_VOLUME_WATCHER: std::sync::OnceLock<player_platform_windows::endpoint_volume::VolumeWatcher> =
-    std::sync::OnceLock::new();
-
-/// Watch exactly these playback devices (ids as `audio_list_output_devices` reports them): every volume or mute
-/// change Windows reports for them arrives as a `device-volume-changed` event, so the settings page does not have to
-/// poll. Calling it again replaces the list; devices that could not be watched (not plugged in) are retried then.
-#[tauri::command]
-fn audio_watch_device_volumes(app: AppHandle, ids: Vec<String>) {
-    #[cfg(target_os = "windows")]
-    {
-        let watcher = DEVICE_VOLUME_WATCHER.get_or_init(|| {
-            player_platform_windows::endpoint_volume::VolumeWatcher::start(move |change| {
-                let _ = app.emit(
-                    "device-volume-changed",
-                    DeviceVolumeEvent {
-                        id: change.id,
-                        volume_percent: change.volume * 100.0,
-                        muted: change.muted,
-                    },
-                );
-            })
-        });
-        watcher.watch(ids);
-    }
-    #[cfg(not(target_os = "windows"))]
-    let _ = (app, ids);
-}
-
 /// The real volume of every playback device Windows lists right now.
 #[tauri::command]
 async fn audio_get_device_volumes() -> Result<Vec<AudioDeviceVolume>, String> {
@@ -6289,7 +6250,10 @@ async fn audio_set_device_volume(id: String, volume_percent: f32) -> Result<(), 
             use player_platform_windows::endpoint_volume::{set_endpoint_muted, set_endpoint_volume};
             let volume = (volume_percent / 100.0).clamp(0.0, 1.0);
             set_endpoint_volume(Some(&id), volume)?;
-            set_endpoint_muted(Some(&id), volume <= 0.0)
+            set_endpoint_muted(Some(&id), volume <= 0.0)?;
+            // With the volume link on, the other chosen devices follow (the backend keeps their proportions).
+            volume_sync::service::local_change(id, (volume * 100.0).round() as u8);
+            Ok(())
         })
         .await
         .map_err(|error| error.to_string())?
@@ -6448,6 +6412,33 @@ async fn settings_apply_output_preset(
         .flatten()
         .ok_or_else(|| "這個方案是空的。".to_owned())?;
     store_and_apply_output_devices(&state, preset).await
+}
+
+#[tauri::command]
+fn settings_get_output_volume_sync(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.output_volume_sync)
+        .map_err(|error| error.to_string())
+}
+
+/// Switch "音量同步" on or off. It takes effect at once and keeps working with no settings UI open.
+#[tauri::command]
+fn settings_set_output_volume_sync(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<bool, String> {
+    let saved = state
+        .settings
+        .update(|settings| {
+            settings.output_volume_sync = enabled;
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    volume_sync::service::set_enabled(saved.output_volume_sync);
+    Ok(saved.output_volume_sync)
 }
 
 #[tauri::command]
@@ -11015,11 +11006,12 @@ pub fn run() {
             audio_list_output_devices,
             audio_output_device_status,
             audio_get_device_volumes,
-            audio_watch_device_volumes,
             audio_set_device_volume,
             settings_get_output_devices,
             settings_set_output_devices,
             settings_get_output_exclusive,
+            settings_get_output_volume_sync,
+            settings_set_output_volume_sync,
             settings_set_output_exclusive,
             settings_get_output_presets,
             settings_save_output_preset,
@@ -11113,6 +11105,7 @@ pub fn run() {
                 let handle = app.handle().clone();
                 player_audio_windows::device_notify::set_device_change_sink(move || {
                     let _ = handle.emit("audio-devices-changed", ());
+                    volume_sync::service::refresh();
                 });
                 player_audio_windows::device_notify::start_device_watch();
             }
@@ -11163,6 +11156,12 @@ pub fn run() {
             let initial_settings = settings
                 .snapshot()
                 .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
+            #[cfg(target_os = "windows")]
+            volume_sync::service::start(
+                app.handle().clone(),
+                Arc::clone(&settings),
+                initial_settings.output_volume_sync,
+            );
             #[cfg(target_os = "android")]
             let initial_settings = settings
                 .snapshot()

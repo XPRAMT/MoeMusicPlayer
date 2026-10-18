@@ -1502,6 +1502,9 @@ pub struct AppSettings {
     /// output is off while it is on (ADR 0020).
     #[serde(default)]
     pub output_exclusive: bool,
+    /// "音量同步": the chosen playback devices' real volumes move together in proportion (works all the time, in the
+    /// backend, whether or not a settings UI is open).
+    pub output_volume_sync: bool,
     /// Now Playing cover size remembered across restarts (shrunk only; see `CoverZoomSettings`).
     #[serde(default)]
     pub cover_zoom: CoverZoomSettings,
@@ -1539,6 +1542,7 @@ impl Default for AppSettings {
             output_devices: Vec::new(),
             output_presets: default_output_presets(),
             output_exclusive: false,
+            output_volume_sync: false,
             cover_zoom: CoverZoomSettings::default(),
             taskbar_lyrics: TaskbarLyricsSettings::default(),
             language: UiLanguage::default(),
@@ -1983,6 +1987,7 @@ struct RawSettings {
     output_devices: Option<serde_json::Value>,
     output_presets: Option<serde_json::Value>,
     output_exclusive: Option<bool>,
+    output_volume_sync: Option<bool>,
     cover_zoom: Option<serde_json::Value>,
     taskbar_lyrics: Option<serde_json::Value>,
     language: Option<serde_json::Value>,
@@ -2037,6 +2042,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         output_devices: lenient_output_devices(raw.output_devices),
         output_presets: lenient_output_presets(raw.output_presets),
         output_exclusive: raw.output_exclusive.unwrap_or(false),
+        output_volume_sync: raw.output_volume_sync.unwrap_or(false),
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
         language: lenient_language(raw.language),
@@ -2420,6 +2426,24 @@ mod tests {
         assert_eq!(persisted["dsd"]["gainDb"], 5.0);
         assert_eq!(persisted["dsd"]["outputRateHz"], 352_800);
         assert_eq!(persisted["dsd"]["dop"], false);
+    }
+
+    #[test]
+    fn the_volume_link_is_off_by_default_and_survives_restart() {
+        let directory = test_directory("volume-sync");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        assert!(!store.snapshot().unwrap().output_volume_sync);
+        store
+            .update(|settings| {
+                settings.output_volume_sync = true;
+                Ok(())
+            })
+            .expect("persist");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert!(reopened.snapshot().unwrap().output_volume_sync);
+        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["outputVolumeSync"], true);
     }
 
     #[test]

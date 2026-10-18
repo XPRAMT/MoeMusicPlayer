@@ -803,9 +803,13 @@ interface IpcContract {
     args: Record<string, never>;
     result: AudioOutputDeviceStatus[];
   };
-  audio_watch_device_volumes: {
-    args: { ids: string[] };
-    result: void;
+  settings_get_output_volume_sync: {
+    args: Record<string, never>;
+    result: boolean;
+  };
+  settings_set_output_volume_sync: {
+    args: { enabled: boolean };
+    result: boolean;
   };
   audio_get_device_volumes: {
     args: Record<string, never>;
