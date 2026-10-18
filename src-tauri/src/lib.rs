@@ -11063,6 +11063,16 @@ pub fn run() {
             lyrics_service::lyrics_clear_track,
         ])
         .setup(move |app| {
+            // Windows reports playback devices coming, going or becoming the default: the settings panel re-reads
+            // its list from this event instead of polling.
+            #[cfg(target_os = "windows")]
+            {
+                let handle = app.handle().clone();
+                player_audio_windows::device_notify::set_device_change_sink(move || {
+                    let _ = handle.emit("audio-devices-changed", ());
+                });
+                player_audio_windows::device_notify::start_device_watch();
+            }
             #[cfg(target_os = "windows")]
             let app_data_dir = windows_data_directory::user_data_dir_for_executable(
                 &std::env::current_exe().map_err(|error| error.to_string())?,

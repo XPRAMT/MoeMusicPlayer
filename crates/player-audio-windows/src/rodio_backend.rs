@@ -62,7 +62,8 @@ use crate::{
 /// Activate/Initialize must not take the worker with it.
 const OUTPUT_OPEN_TIMEOUT: Duration = Duration::from_secs(3);
 /// How often the worker compares the opened endpoint with the system default.
-pub(crate) const DEFAULT_DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Device notifications (`device_notify`) trigger the check at once; this slow poll only covers a missed one.
+pub(crate) const DEFAULT_DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// A running shared-mode stream pulls the mixer every few milliseconds; no
 /// pull for this long means the render thread is gone without an error.
 const OUTPUT_STALL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -76,6 +77,7 @@ pub(super) struct RodioBackend {
     output: Option<OpenOutput>,
     track: TrackPlayer,
     last_device_check: Instant,
+    seen_device_generation: u64,
     last_heartbeat: (u64, Instant),
     /// Shared with the backend factory so a rebuilt output starts in the
     /// current mode and, in Windows-builtin mode, at the current track's rate.
@@ -276,6 +278,7 @@ impl RodioBackend {
             output: Some(output),
             track,
             last_device_check: now,
+            seen_device_generation: crate::device_notify::device_change_generation(),
             last_heartbeat: (0, now),
             config: Arc::clone(&config),
             mode,
@@ -869,7 +872,11 @@ impl AudioBackend for RodioBackend {
             return OutputStatus::Lost("output stream stopped requesting audio".to_owned());
         }
 
-        if now.duration_since(self.last_device_check) >= DEFAULT_DEVICE_POLL_INTERVAL {
+        let generation = crate::device_notify::device_change_generation();
+        if generation != self.seen_device_generation
+            || now.duration_since(self.last_device_check) >= DEFAULT_DEVICE_POLL_INTERVAL
+        {
+            self.seen_device_generation = generation;
             self.last_device_check = now;
             if let (Some(opened), Some(default), true) = (
                 output.device_id.as_deref(),

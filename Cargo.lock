@@ -3184,6 +3184,7 @@ dependencies = [
  "symphonia",
  "wasapi",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

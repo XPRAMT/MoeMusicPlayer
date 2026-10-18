@@ -14,6 +14,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
+pub mod device_notify;
+#[cfg(windows)]
 mod dsd;
 #[cfg(windows)]
 mod dsee;

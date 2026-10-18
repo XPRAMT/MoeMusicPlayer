@@ -62,7 +62,10 @@
   /** Windows tells us about volume changes (an event per change); this slow read only catches what that missed. */
   const VOLUME_POLL_MS = 5000;
   /** How often the list of playback devices is read again, so a device that disconnects shows up. */
-  const DEVICE_POLL_MS = 3000;
+  /** Windows reports device changes as an event; this slow list read only covers a missed one. */
+  const DEVICE_POLL_MS = 5000;
+  /** Notifications come in bursts (a device appearing fires several); read the list once per burst. */
+  const DEVICE_EVENT_DEBOUNCE_MS = 150;
   const VOLUME_SEND_MS = 60;
   /** A volume the user just changed is not overwritten by a poll for this long. */
   const VOLUME_HOLD_MS = 1500;
@@ -117,6 +120,8 @@
   let deviceTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
   let unlistenVolume: (() => void) | null = null;
+  let unlistenDevices: (() => void) | null = null;
+  let deviceEventTimer: ReturnType<typeof setTimeout> | null = null;
 
   const volumeEdited = new Map<string, number>();
   const volumePending = new Map<string, number>();
@@ -208,6 +213,15 @@
     } catch {
       // Keep the list that is shown.
     }
+  }
+
+  function onDevicesChanged(): void {
+    if (deviceEventTimer) clearTimeout(deviceEventTimer);
+    deviceEventTimer = setTimeout(() => {
+      deviceEventTimer = null;
+      void pollDevices();
+      void refreshStatus();
+    }, DEVICE_EVENT_DEBOUNCE_MS);
   }
 
   async function refreshDevices(): Promise<void> {
@@ -538,6 +552,12 @@
         else unlistenVolume = unlisten;
       });
     }
+    if (isTauri()) {
+      void listen('audio-devices-changed', onDevicesChanged).then((unlisten) => {
+        if (disposed) unlisten();
+        else unlistenDevices = unlisten;
+      });
+    }
     void load();
     pollTimer = setInterval(() => void refreshStatus(), STATUS_POLL_MS);
     deviceTimer = setInterval(() => void pollDevices(), DEVICE_POLL_MS);
@@ -548,6 +568,8 @@
     disposed = true;
     window.removeEventListener(SHARED_EVENT, adoptShared);
     unlistenVolume?.();
+    unlistenDevices?.();
+    if (deviceEventTimer) clearTimeout(deviceEventTimer);
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;

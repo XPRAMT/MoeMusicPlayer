@@ -83,6 +83,7 @@ pub(crate) struct ExclusiveBackend {
     /// The default endpoint when the stream was opened; only kept while the backend follows the system default.
     opened_default: Option<String>,
     last_default_check: Instant,
+    seen_device_generation: u64,
     default_poll: Duration,
     volume: f32,
     paused: bool,
@@ -126,6 +127,7 @@ impl ExclusiveBackend {
             default_probe: Arc::new(default_output_device_id),
             opened_default: None,
             last_default_check: Instant::now(),
+            seen_device_generation: crate::device_notify::device_change_generation(),
             default_poll: DEFAULT_DEVICE_POLL_INTERVAL,
             volume: 1.0,
             paused: true,
@@ -502,7 +504,11 @@ impl AudioBackend for ExclusiveBackend {
         // shared-mode backend does the same; an exclusive stream is bound to the endpoint it opened).
         if self.device.is_none() && self.session.is_some() {
             let now = Instant::now();
-            if now.duration_since(self.last_default_check) >= self.default_poll {
+            let generation = crate::device_notify::device_change_generation();
+            if generation != self.seen_device_generation
+                || now.duration_since(self.last_default_check) >= self.default_poll
+            {
+                self.seen_device_generation = generation;
                 self.last_default_check = now;
                 if let (Some(opened), Some(current)) =
                     (self.opened_default.as_ref(), (self.default_probe)())
