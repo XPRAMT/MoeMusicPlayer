@@ -1541,14 +1541,6 @@ impl WindowsPlaybackService {
 }
 
 #[cfg(target_os = "windows")]
-fn audio_resampling_mode(mode: ResamplingMode) -> AudioResamplingMode {
-    match mode {
-        ResamplingMode::WindowsBuiltin => AudioResamplingMode::WindowsBuiltin,
-        ResamplingMode::HighQuality => AudioResamplingMode::HighQuality,
-    }
-}
-
-#[cfg(target_os = "windows")]
 fn playback_output_format(info: &ResamplingInfo) -> PlaybackOutputFormat {
     PlaybackOutputFormat {
         mode: match info.mode {
@@ -2550,6 +2542,8 @@ mod playback_queue_ipc_tests {
                 "dseeHx": "off",
                 "dseeNotice": null,
                 "dseeOutputRateHz": null,
+                "exclusive": null,
+                "exclusiveFallback": null,
             })
         );
         for key in [
@@ -6044,44 +6038,6 @@ fn settings_set_now_playing_layout(
         })
         .map(|settings| settings.now_playing_layout)
         .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn settings_get_resampling_mode(state: State<'_, AppState>) -> Result<ResamplingMode, String> {
-    state
-        .settings
-        .snapshot()
-        .map(|settings| settings.resampling_mode)
-        .map_err(|error| error.to_string())
-}
-
-/// Persist the mode, then switch the running player. The track continues from
-/// its position; a failure after saving is reported but the choice is kept.
-#[tauri::command]
-async fn settings_set_resampling_mode(
-    state: State<'_, AppState>,
-    mode: ResamplingMode,
-) -> Result<ResamplingMode, String> {
-    let saved = state
-        .settings
-        .update(|settings| {
-            settings.resampling_mode = mode;
-            Ok(())
-        })
-        .map(|settings| settings.resampling_mode)
-        .map_err(|error| error.to_string())?;
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(service) = state.playback.as_ref() {
-            let applied = match set_playback_resampling(service, saved) {
-                // Reopening the output can take up to two bounded device opens.
-                Ok(ticket) => await_playback_ack_within(ticket, Duration::from_secs(10)).await,
-                Err(error) => Err(error),
-            };
-            applied.map_err(|error| format!("設定已保存，但套用到播放器失敗：{error}"))?;
-        }
-    }
-    Ok(saved)
 }
 
 #[tauri::command]
@@ -9999,21 +9955,6 @@ fn set_playback_volume(
 }
 
 #[cfg(target_os = "windows")]
-fn set_playback_resampling(
-    service: &WindowsPlaybackService,
-    mode: ResamplingMode,
-) -> Result<CommandTicket, String> {
-    let _gate = service
-        .command_gate
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    service
-        .player
-        .request_set_resampling(audio_resampling_mode(mode))
-        .map_err(|error| playback_audio_error_message(&error))
-}
-
-#[cfg(target_os = "windows")]
 fn output_device_settings(
     entries: &[settings::OutputDeviceEntry],
 ) -> Vec<player_audio_windows::output_devices::OutputDeviceSetting> {
@@ -10986,8 +10927,6 @@ pub fn run() {
             settings_set_album_detail_sort,
             settings_get_now_playing_layout,
             settings_set_now_playing_layout,
-            settings_get_resampling_mode,
-            settings_set_resampling_mode,
             settings_get_dsee_hx,
             settings_set_dsee_hx,
             settings_get_dsd,
@@ -11138,7 +11077,8 @@ pub fn run() {
             android_dsd::set_gain_db(initial_settings.dsd.gain_db);
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::with_output_options(
-                audio_resampling_mode(initial_settings.resampling_mode),
+                // Sample-rate conversion is always the rubato FFT resampler (the setting was removed).
+                AudioResamplingMode::HighQuality,
                 initial_settings.dsee_hx,
                 output_device_settings(&initial_settings.output_devices),
                 initial_settings.output_exclusive,

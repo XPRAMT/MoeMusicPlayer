@@ -63,7 +63,6 @@
     type PlaybackQueuePageItem,
     type PlaybackSnapshot,
     type PlaybackQueueSource,
-    type ResamplingMode,
     type RuntimeCapabilities,
     type BackdropOpacityCalculation,
     type ThemePreferences,
@@ -541,9 +540,6 @@
   let nowPlayingLayout = $state<NowPlayingLayout>('a');
   let nowPlayingLayoutState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let nowPlayingLayoutError = $state<string | null>(null);
-  let resamplingMode = $state<ResamplingMode>('highQuality');
-  let resamplingModeState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
-  let resamplingModeError = $state<string | null>(null);
   let dseeHx = $state(false);
   /** WASAPI exclusive output is on (the output settings page reports it). */
   let outputExclusive = $state(false);
@@ -674,8 +670,6 @@
   let themeRevision = 0;
   let trackColumnSettingsRevision = 0;
   let nowPlayingLayoutRevision = 0;
-  let resamplingModeRevision = 0;
-  let resamplingModeQueue: Promise<void> = Promise.resolve();
   let dseeHxRevision = 0;
   let dseeHxQueue: Promise<void> = Promise.resolve();
   let nowPlayingAppearanceRevision = 0;
@@ -1311,7 +1305,6 @@
       themeSaveState = 'preview';
       trackColumnSettingsState = 'preview';
       nowPlayingLayoutState = 'preview';
-      resamplingModeState = 'preview';
       nowPlayingAppearanceState = 'preview';
       lyricsPreferencesState = 'preview';
       void loadCapabilities();
@@ -1355,7 +1348,6 @@
         loadSettingsRecoveryWarning(),
         loadTrackColumnSettings(),
         loadNowPlayingLayout(),
-        loadResamplingMode(),
         loadDseeHx(),
         loadDsdSettings(),
         loadTaskbarLyricsSettings(),
@@ -1932,49 +1924,6 @@
         nowPlayingLayoutState = 'error';
         nowPlayingLayoutError = tr("無法保存正在播放版面設定：{0}", [getErrorText(error)]);
       }
-    });
-  }
-
-  async function loadResamplingMode(): Promise<void> {
-    const revision = resamplingModeRevision;
-    try {
-      const stored = await invokeCommand('settings_get_resampling_mode', {});
-      if (revision !== resamplingModeRevision) return;
-      resamplingMode = stored === 'windowsBuiltin' ? 'windowsBuiltin' : 'highQuality';
-      resamplingModeState = 'saved';
-      resamplingModeError = null;
-    } catch (error) {
-      if (revision !== resamplingModeRevision) return;
-      resamplingModeState = 'error';
-      resamplingModeError = tr("無法讀取取樣率轉換設定：{0}", [getErrorText(error)]);
-    }
-  }
-
-  function setResamplingMode(mode: ResamplingMode): void {
-    resamplingMode = mode;
-    resamplingModeError = null;
-    const revision = ++resamplingModeRevision;
-    if (!isTauri()) {
-      resamplingModeState = 'preview';
-      resamplingModeError = tr('瀏覽器預覽不會保存取樣率轉換設定。');
-      return;
-    }
-
-    resamplingModeState = 'saving';
-    resamplingModeQueue = resamplingModeQueue.catch(() => undefined).then(async () => {
-      if (revision !== resamplingModeRevision) return;
-      try {
-        const saved = await invokeCommand('settings_set_resampling_mode', { mode });
-        if (revision !== resamplingModeRevision) return;
-        resamplingMode = saved;
-        resamplingModeState = 'saved';
-        resamplingModeError = null;
-      } catch (error) {
-        if (revision !== resamplingModeRevision) return;
-        resamplingModeState = 'error';
-        resamplingModeError = getErrorText(error);
-      }
-      void loadPlaybackSnapshot(false);
     });
   }
 
@@ -3977,35 +3926,10 @@
                 <div class="resampling-section" class:is-inactive={outputExclusive} inert={outputExclusive}>
                 <div class="settings-panel-header">
                   <div>
-                    <h3>{tr("取樣率轉換")}</h3>
-                    <p>{tr("曲目的取樣率與輸出裝置不同時的轉換方式。兩種方式都使用 Windows 共享模式輸出，並非 bit-perfect；取樣率相同時不做任何轉換。")}</p>
+                    <h3>{tr("DSEE HX")}</h3>
                   </div>
                 </div>
-                <div class="resampling-stack" role="group" aria-label={tr("取樣率轉換與 DSEE HX")}>
-                  <button
-                    type="button"
-                    class="layout-choice-button"
-                    aria-label={tr("高品質取樣率轉換")}
-                    aria-pressed={resamplingMode === 'highQuality'}
-                    class:chosen={resamplingMode === 'highQuality'}
-                    disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
-                    onclick={() => setResamplingMode('highQuality')}
-                  >
-                    <strong>{tr("高品質")}</strong>
-                    <span>{tr("輸出維持在裝置的混音取樣率，由 rubato 的 FFT 進行取樣率轉換（區塊大小 2048）。濾波範圍依來源與輸出取樣率自動調整；取樣率相同時直接輸出。切換不同取樣率的曲目時不必重新開啟輸出。")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="layout-choice-button"
-                    aria-label={tr("Windows 內建取樣率轉換")}
-                    aria-pressed={resamplingMode === 'windowsBuiltin'}
-                    class:chosen={resamplingMode === 'windowsBuiltin'}
-                    disabled={resamplingModeState === 'loading' || resamplingModeState === 'saving'}
-                    onclick={() => setResamplingMode('windowsBuiltin')}
-                  >
-                    <strong>{tr("Windows 內建")}</strong>
-                    <span>{tr("以曲目的取樣率開啟輸出，交由 Windows 音訊引擎轉換為裝置格式。前後曲目取樣率不同時需重新開啟輸出，換曲時可能短暫停頓；裝置無法以該取樣率開啟時會自動改用高品質轉換。")}</span>
-                  </button>
+                <div class="resampling-stack" role="group" aria-label={tr("DSEE HX")}>
                   <label class="resampling-option">
                     <input
                       type="checkbox"
@@ -4021,7 +3945,7 @@
                 </div>
                 </div>
                 {#if outputExclusive}
-                  <p class="dsd-setting-hint">{tr("獨佔模式不使用上面的取樣率轉換與 DSEE HX；裝置不接受檔案的取樣率時，播放器會自動轉換成裝置接受的最接近取樣率。")}</p>
+                  <p class="dsd-setting-hint">{tr("獨佔模式不使用 DSEE HX；裝置不接受檔案的取樣率時，播放器會自動轉換成裝置接受的最接近取樣率。")}</p>
                 {/if}
                 {/if}
                 <div class="settings-panel-header">

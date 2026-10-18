@@ -542,7 +542,7 @@
     onclick={() => void setExclusive(false)}
   >
     <strong>{tr('共享')}</strong>
-    <span>{tr('與其他程式一起播放，可以同時輸出到多台裝置，由 Windows 混音。')}</span>
+    <span>{tr('與其他程式一起播放，可以同時輸出到多台裝置，由 Windows 混音。取樣率與裝置不同時，由播放器以 rubato 的 FFT 轉換。')}</span>
   </button>
   <button
     type="button"

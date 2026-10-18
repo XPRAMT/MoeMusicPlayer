@@ -754,14 +754,6 @@ interface IpcContract {
     args: { layout: NowPlayingLayout };
     result: NowPlayingLayout;
   };
-  settings_get_resampling_mode: {
-    args: Record<string, never>;
-    result: ResamplingMode;
-  };
-  settings_set_resampling_mode: {
-    args: { mode: ResamplingMode };
-    result: ResamplingMode;
-  };
   settings_get_dsee_hx: {
     args: Record<string, never>;
     result: boolean;
