@@ -4712,12 +4712,12 @@ input:focus-visible {
   .lyrics-preference-grid { grid-template-columns: minmax(0, 1fr); }
   .appearance-color-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-tab { flex: 1 1 auto; }
-  /* Narrow screens: settings categories sit four to a row. */
-  .settings-tabs:not(.quick-settings-drawer-nav .settings-tabs) {
+  /* Narrow screens: settings categories sit four to a row, on the settings page and in the quick-settings drawer alike. */
+  .settings-tabs {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
-  .settings-tabs:not(.quick-settings-drawer-nav .settings-tabs) .settings-tab {
+  .settings-tabs .settings-tab {
     min-width: 0;
     padding: 0 4px;
     white-space: nowrap;
