@@ -41,6 +41,8 @@ test('the time axis ticks every 10 seconds, coarser for a long track and finer w
   // A 3:45 track over 1700 px: 10 seconds are 75 px apart.
   assert.equal(timeTickStep(225, 1700), 10);
   assert.equal(timeTickStep(120, 1200), 10);
+  // The narrow spectrogram window (about 950 px) with a 3-minute track: 10 seconds are 53 px apart, still enough room.
+  assert.equal(timeTickStep(178, 950), 10);
   // An hour over 1700 px: 10 seconds would be 4.7 px apart, so the step grows until the labels fit.
   assert.equal(timeTickStep(3600, 1700), 120);
   // Zoomed far in: 10 seconds would be 1000 px apart.

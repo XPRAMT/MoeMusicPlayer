@@ -55,8 +55,8 @@ export function zoomView(view, axis, anchor, factor) {
 const TIME_TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200];
 /** The time axis ticks every 10 seconds when the labels fit. */
 export const PREFERRED_TIME_TICK_SECONDS = 10;
-/** Closest two time labels may stand, in px ("10:00" is about 36 px wide). */
-export const MIN_TIME_TICK_SPACING_PX = 56;
+/** Closest two time labels may stand, in px ("59:50", the widest, is about 33 px wide at the axis font). */
+export const MIN_TIME_TICK_SPACING_PX = 40;
 /** Beyond this spacing (a zoomed-in view) the axis gets finer steps than 10 seconds. */
 const MAX_TIME_TICK_SPACING_PX = 400;
 
