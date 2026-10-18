@@ -620,7 +620,7 @@
         {/if}
       </div>
 
-      {#if playing && row.connected && !exclusive}
+      {#if playing && row.connected}
         <div class="output-device-controls">
           <label class="output-volume">
             <span>{tr('音量')}</span>
@@ -636,6 +636,7 @@
             />
             <output>{volume ? `${volume.percent}%` : '—'}{#if volume?.muted && volume.percent > 0}<small> {tr('靜音')}</small>{/if}</output>
           </label>
+          {#if !exclusive}
           <div class="output-delay" role="group" aria-label={tr('延遲')}>
             <span>{tr('延遲')}</span>
             <button type="button" class="soft-button icon-step" aria-label={tr('減少 {0} 毫秒', [DELAY_STEP_MS])} onclick={() => setDelay(index, (entry?.delayMs ?? 0) - DELAY_STEP_MS)}>−</button>
@@ -654,6 +655,7 @@
             <span class="output-delay-unit">ms</span>
             <button type="button" class="soft-button icon-step" aria-label={tr('增加 {0} 毫秒', [DELAY_STEP_MS])} onclick={() => setDelay(index, (entry?.delayMs ?? 0) + DELAY_STEP_MS)}>＋</button>
           </div>
+          {/if}
         </div>
       {/if}
 
