@@ -67,6 +67,10 @@
   const VOLUME_HOLD_MS = 1500;
   const DELAY_STEP_MS = 10;
   const PRESET_SLOTS = 3;
+  /** Matrix cells are this wide; the first column of each device is this much wider so the gap sits inside the
+   *  column (a margin on the cell would narrow it). */
+  const MATRIX_CELL_PX = 38;
+  const MATRIX_GROUP_GAP_PX = 10;
   const SYNC_KEY = 'moe.outputVolumeSync';
 
   let devices = $state<AudioOutputDevice[]>([]);
@@ -669,7 +673,7 @@
     <div class="channel-matrix-scroll">
       <div
         class="channel-matrix-grid"
-        style="grid-template-columns: 44px {playingRows.map(({ index }) => `repeat(${channelCount(index)}, 38px)`).join(' ')};"
+        style="grid-template-columns: 44px {playingRows.map(({ index }) => Array.from({ length: channelCount(index) }, (_, channel) => (channel === 0 ? `${MATRIX_CELL_PX + MATRIX_GROUP_GAP_PX}px` : `${MATRIX_CELL_PX}px`)).join(' ')).join(' ')};"
       >
         <span class="channel-matrix-corner"></span>
         {#each playingRows as { index } (index)}
@@ -938,6 +942,7 @@
 
   .channel-matrix-device {
     overflow: hidden;
+    margin-left: 10px;
     padding: 2px 4px;
     border-bottom: var(--divider-width, 1px) solid var(--divider-color, var(--line));
     font-size: var(--font-caption);
