@@ -123,7 +123,7 @@ const COUNT_FIELD_FILTER_SQL: &str = "SELECT COUNT(DISTINCT t.track_id) FROM tra
       AND (?3 IS NULL OR EXISTS (SELECT 1 FROM json_each(?3) requested_artist
           WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = requested_artist.value COLLATE BINARY
              OR instr('|' || replace(replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), '&', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || requested_artist.value || '|') > 0))
-      AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?4 COLLATE BINARY)";
+      AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) IN (SELECT value FROM json_each(?4)))";
 const TRACKS_PAGE_SELECT_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist),
@@ -145,7 +145,7 @@ const TRACKS_PAGE_SELECT_SQL: &str = "SELECT t.track_id,
    AND (?5 IS NULL OR EXISTS (SELECT 1 FROM json_each(?5) requested_artist
        WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = requested_artist.value COLLATE BINARY
           OR instr('|' || replace(replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), '&', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || requested_artist.value || '|') > 0))
-   AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)";
+   AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) IN (SELECT value FROM json_each(?6)))";
 
 /// Default title order retained for EXPLAIN QUERY PLAN coverage.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -168,7 +168,7 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE))
    AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?4 COLLATE BINARY)
    AND (CASE WHEN ?5 IS NULL THEN 1 WHEN COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = ?5 COLLATE BINARY THEN 1 WHEN instr('|' || replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || ?5 || '|') > 0 THEN 1 ELSE 0 END) = 1
-   AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)
+   AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) IN (SELECT value FROM json_each(?6)))
  ORDER BY t.sort_title COLLATE MUSIC_LOCALE_NATURAL, t.track_id
  LIMIT ?2 OFFSET ?3";
 const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
@@ -925,7 +925,10 @@ pub fn year_group_label(value: Option<&str>) -> String {
     let valid = digits.len() == 4
         && digits.bytes().all(|byte| byte.is_ascii_digit())
         && digits != "0000"
-        && !value.chars().nth(4).is_some_and(|next| next.is_ascii_digit());
+        && !value
+            .chars()
+            .nth(4)
+            .is_some_and(|next| next.is_ascii_digit());
     if valid {
         digits
     } else {
@@ -968,7 +971,9 @@ impl QuickIndexKind {
         match self {
             Self::Text => format!("{MUSIC_QUICK_INDEX_FUNCTION}({value})"),
             Self::Year => format!("{MUSIC_YEAR_FUNCTION}({value})"),
-            Self::AddedYear => added_year_label_sql(&format!("CAST(NULLIF({value}, '') AS INTEGER)")),
+            Self::AddedYear => {
+                added_year_label_sql(&format!("CAST(NULLIF({value}, '') AS INTEGER)"))
+            }
             Self::Format => format!("{MUSIC_FORMAT_FUNCTION}({value})"),
         }
     }
@@ -2303,7 +2308,7 @@ impl Database {
                   AND (?5 IS NULL OR EXISTS (SELECT 1 FROM json_each(?5) requested_artist
                        WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = requested_artist.value COLLATE BINARY
                           OR instr('|' || replace(replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), '&', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || requested_artist.value || '|') > 0))
-                  AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?6 COLLATE BINARY)
+                  AND (?6 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) IN (SELECT value FROM json_each(?6)))
              ), transitions AS (
                 SELECT position, group_label, total_count,
                        LAG(group_label) OVER (ORDER BY position) AS previous_label
@@ -4297,7 +4302,7 @@ impl Database {
                AND (?3 IS NULL OR EXISTS (SELECT 1 FROM json_each(?3) requested_artist
                    WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = requested_artist.value COLLATE BINARY
                       OR instr('|' || replace(replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), '&', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || requested_artist.value || '|') > 0))
-               AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) = ?4 COLLATE BINARY)
+               AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) IN (SELECT value FROM json_each(?4)))
              ORDER BY {}",
             tracks_order_by_sql(sort)
         );
@@ -6018,6 +6023,18 @@ fn search_terms_json(
 
 type FieldFilterSqlValues = (Option<String>, Option<String>, Option<String>);
 
+/// The album filter value as a JSON list: the album detail view merges albums whose names differ only in 繁簡 spelling and
+/// sends the names joined with `|`; a track matches any of them (or the whole text, for a name that contains `|`).
+fn album_names_json(value: &str) -> Result<String, DatabaseError> {
+    let mut names = vec![value.to_string()];
+    for part in value.split('|') {
+        if !part.is_empty() && !names.iter().any(|name| name == part) {
+            names.push(part.to_string());
+        }
+    }
+    serde_json::to_string(&names).map_err(|error| DatabaseError::CorruptData(error.to_string()))
+}
+
 fn field_filter_values(
     filter: Option<&TrackFieldFilter>,
 ) -> Result<FieldFilterSqlValues, DatabaseError> {
@@ -6040,7 +6057,7 @@ fn field_filter_values(
         Some(TrackFieldFilter {
             field: TrackField::Album,
             value,
-        }) => (None, None, Some(value.clone())),
+        }) => (None, None, Some(album_names_json(value)?)),
         None => (None, None, None),
     })
 }
@@ -9822,8 +9839,21 @@ mod tests {
         assert_eq!(year_group_label(Some("2024")), "2024");
         assert_eq!(year_group_label(Some("2024-03")), "2024");
         assert_eq!(year_group_label(Some(" 1999-05-06 ")), "1999");
-        for unknown in [None, Some(""), Some("  "), Some("0000"), Some("abcd"), Some("12"), Some("20245"), Some("2024x")] {
-            let expected = if unknown == Some("2024x") { "2024" } else { "未知" };
+        for unknown in [
+            None,
+            Some(""),
+            Some("  "),
+            Some("0000"),
+            Some("abcd"),
+            Some("12"),
+            Some("20245"),
+            Some("2024x"),
+        ] {
+            let expected = if unknown == Some("2024x") {
+                "2024"
+            } else {
+                "未知"
+            };
             assert_eq!(year_group_label(unknown), expected, "{unknown:?}");
         }
         assert_eq!(format_group_label(Some("DSD64")), "DSD");
@@ -9868,7 +9898,14 @@ mod tests {
                 item
             })
             .collect();
-        apply(&mut db, &root, SourceScanState::Complete, &records, &records, 2_000);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2_000,
+        );
         // The ids in the order the tracks were given (the scan stores them by title "title N").
         let page = db
             .list_tracks_page(ListTracksQuery {
@@ -9900,7 +9937,9 @@ mod tests {
     }
 
     fn group_names(list: &[(&str, u64)]) -> Vec<(String, u64)> {
-        list.iter().map(|(label, index)| ((*label).to_owned(), *index)).collect()
+        list.iter()
+            .map(|(label, index)| ((*label).to_owned(), *index))
+            .collect()
     }
 
     #[test]
@@ -9922,7 +9961,10 @@ mod tests {
                 limit: 100,
                 query: None,
                 field_filter: None,
-                sort: TrackListSort { field: TrackSortField::Year, direction },
+                sort: TrackListSort {
+                    field: TrackSortField::Year,
+                    direction,
+                },
             };
             let page = db.list_tracks_page(request.clone()).expect("page");
             let years: Vec<_> = page
@@ -9930,7 +9972,11 @@ mod tests {
                 .iter()
                 .map(|track| year_group_label(track.release_date.as_deref().or(None)))
                 .collect();
-            (years, db.quick_index_for_tracks(&request, &[]).expect("quick index"))
+            (
+                years,
+                db.quick_index_for_tracks(&request, &[])
+                    .expect("quick index"),
+            )
         };
         let (years, ascending) = library(TrackSortDirection::Asc);
         assert_eq!(years, ["未知", "未知", "1999", "2025", "2025", "2026"]);
@@ -9957,11 +10003,23 @@ mod tests {
             })
             .collect();
         for (direction, expected) in [
-            (TrackSortDirection::Asc, ["未知", "未知", "1999", "2025", "2025", "2026"]),
-            (TrackSortDirection::Desc, ["2026", "2025", "2025", "1999", "未知", "未知"]),
+            (
+                TrackSortDirection::Asc,
+                ["未知", "未知", "1999", "2025", "2025", "2026"],
+            ),
+            (
+                TrackSortDirection::Desc,
+                ["2026", "2025", "2025", "1999", "未知", "未知"],
+            ),
         ] {
             let order = db
-                .sort_queue_candidates(&candidates, TrackListSort { field: TrackSortField::Year, direction })
+                .sort_queue_candidates(
+                    &candidates,
+                    TrackListSort {
+                        field: TrackSortField::Year,
+                        direction,
+                    },
+                )
                 .expect("sort queue");
             let keys: Vec<String> = order
                 .iter()
@@ -9980,7 +10038,14 @@ mod tests {
             let snapshot = db
                 .quick_index_for_ordered_keys(QuickIndexKind::Year, &keys)
                 .expect("ordered keys");
-            assert_eq!(snapshot.groups.len(), if direction == TrackSortDirection::Asc { 4 } else { 4 });
+            assert_eq!(
+                snapshot.groups.len(),
+                if direction == TrackSortDirection::Asc {
+                    4
+                } else {
+                    4
+                }
+            );
         }
 
         // A playlist of the same tracks groups the same way.
@@ -9988,17 +10053,28 @@ mod tests {
         for (index, id) in ids.iter().enumerate() {
             playlist.entries.push(PlaylistEntry {
                 track_id: Some(*id),
-                locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\year-groups-{index}.flac"))),
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(
+                    r"C:\Music\year-groups-{index}.flac"
+                ))),
                 title: None,
                 duration_ms: None,
             });
         }
         db.save_playlist(&playlist).expect("save playlist");
         for (direction, expected) in [
-            (PlaylistSortDirection::Asc, group_names(&[("未知", 0), ("1999", 2), ("2025", 3), ("2026", 5)])),
-            (PlaylistSortDirection::Desc, group_names(&[("2026", 0), ("2025", 1), ("1999", 3), ("未知", 4)])),
+            (
+                PlaylistSortDirection::Asc,
+                group_names(&[("未知", 0), ("1999", 2), ("2025", 3), ("2026", 5)]),
+            ),
+            (
+                PlaylistSortDirection::Desc,
+                group_names(&[("2026", 0), ("2025", 1), ("1999", 3), ("未知", 4)]),
+            ),
         ] {
-            let sort = PlaylistListSort { field: PlaylistSortField::Year, direction };
+            let sort = PlaylistListSort {
+                field: PlaylistSortField::Year,
+                direction,
+            };
             let snapshot = db
                 .quick_index_for_playlist(playlist.id, sort)
                 .expect("playlist quick index")
@@ -10013,7 +10089,11 @@ mod tests {
                 .iter()
                 .map(|item| year_group_label(item.release_date.as_deref()))
                 .collect();
-            let first = if direction == PlaylistSortDirection::Asc { "未知" } else { "2026" };
+            let first = if direction == PlaylistSortDirection::Asc {
+                "未知"
+            } else {
+                "2026"
+            };
             assert_eq!(years.first().map(String::as_str), Some(first));
         }
     }
@@ -10033,34 +10113,55 @@ mod tests {
             Some("Flac"),
             Some("M4A"),
         ];
-        let tracks: Vec<_> = codecs.iter().map(|codec| (Some("2001"), Some(2001), *codec, None)).collect();
+        let tracks: Vec<_> = codecs
+            .iter()
+            .map(|codec| (Some("2001"), Some(2001), *codec, None))
+            .collect();
         let (db, ids) = grouping_library("format-groups", &tracks);
         let request = |direction| ListTracksQuery {
             offset: 0,
             limit: 100,
             query: None,
             field_filter: None,
-            sort: TrackListSort { field: TrackSortField::AudioFormat, direction },
+            sort: TrackListSort {
+                field: TrackSortField::AudioFormat,
+                direction,
+            },
         };
         let ascending = db
             .quick_index_for_tracks(&request(TrackSortDirection::Asc), &[])
             .expect("ascending");
         // Quality order: unknown, MP3, MPEG-4 (M4A and AAC are MP4 too), FLAC, WAV (WAV and WAVE together), DSD.
-        assert_eq!(ascending.labels, ["未知", "MP3", "MP4", "FLAC", "WAV", "DSD"]);
+        assert_eq!(
+            ascending.labels,
+            ["未知", "MP3", "MP4", "FLAC", "WAV", "DSD"]
+        );
         assert_eq!(
             groups(&ascending),
-            group_names(&[("未知", 0), ("MP3", 1), ("MP4", 2), ("FLAC", 5), ("WAV", 7), ("DSD", 9)])
+            group_names(&[
+                ("未知", 0),
+                ("MP3", 1),
+                ("MP4", 2),
+                ("FLAC", 5),
+                ("WAV", 7),
+                ("DSD", 9)
+            ])
         );
         let descending = db
             .quick_index_for_tracks(&request(TrackSortDirection::Desc), &[])
             .expect("descending");
-        assert_eq!(descending.labels, ["DSD", "WAV", "FLAC", "MP4", "MP3", "未知"]);
+        assert_eq!(
+            descending.labels,
+            ["DSD", "WAV", "FLAC", "MP4", "MP3", "未知"]
+        );
 
         let mut playlist = Playlist::new("formats");
         for (index, id) in ids.iter().enumerate() {
             playlist.entries.push(PlaylistEntry {
                 track_id: Some(*id),
-                locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\format-groups-{index}.flac"))),
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(
+                    r"C:\Music\format-groups-{index}.flac"
+                ))),
                 title: None,
                 duration_ms: None,
             });
@@ -10069,7 +10170,10 @@ mod tests {
         let snapshot = db
             .quick_index_for_playlist(
                 playlist.id,
-                PlaylistListSort { field: PlaylistSortField::AudioFormat, direction: PlaylistSortDirection::Asc },
+                PlaylistListSort {
+                    field: PlaylistSortField::AudioFormat,
+                    direction: PlaylistSortDirection::Asc,
+                },
             )
             .expect("playlist")
             .expect("exists");
@@ -10095,12 +10199,22 @@ mod tests {
             limit: 100,
             query: None,
             field_filter: None,
-            sort: TrackListSort { field: TrackSortField::CreatedAt, direction },
+            sort: TrackListSort {
+                field: TrackSortField::CreatedAt,
+                direction,
+            },
         };
-        let ascending = db.quick_index_for_tracks(&request(TrackSortDirection::Asc), &[]).expect("asc");
+        let ascending = db
+            .quick_index_for_tracks(&request(TrackSortDirection::Asc), &[])
+            .expect("asc");
         assert_eq!(groups(&ascending), group_names(&[("2020", 0), ("2021", 1)]));
-        let descending = db.quick_index_for_tracks(&request(TrackSortDirection::Desc), &[]).expect("desc");
-        assert_eq!(groups(&descending), group_names(&[("2021", 0), ("2020", 2)]));
+        let descending = db
+            .quick_index_for_tracks(&request(TrackSortDirection::Desc), &[])
+            .expect("desc");
+        assert_eq!(
+            groups(&descending),
+            group_names(&[("2021", 0), ("2020", 2)])
+        );
         let keys = [july_2021.to_string(), july_2020.to_string(), String::new()];
         let ordered = db
             .quick_index_for_ordered_keys(QuickIndexKind::AddedYear, &keys)
@@ -10119,9 +10233,25 @@ mod tests {
         let records: Vec<_> = ["delta", "alpha", "charlie", "bravo", "echo"]
             .iter()
             .enumerate()
-            .map(|(index, name)| record(&root, name, name, name, 100 + index as u64, 1_000 + index as i64))
+            .map(|(index, name)| {
+                record(
+                    &root,
+                    name,
+                    name,
+                    name,
+                    100 + index as u64,
+                    1_000 + index as i64,
+                )
+            })
             .collect();
-        apply(&mut db, &root, SourceScanState::Complete, &records, &records, 2_000);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            &records,
+            &records,
+            2_000,
+        );
         let tracks = db
             .list_tracks_page(ListTracksQuery {
                 offset: 0,
@@ -10135,17 +10265,28 @@ mod tests {
         // The playlist holds every track but the last one, in reverse order, and the first one twice.
         let mut playlist = Playlist::new("positions");
         let members: Vec<_> = tracks.iter().take(tracks.len() - 1).rev().collect();
-        for track in members.iter().copied().chain(std::iter::once(members[members.len() - 1])) {
+        for track in members
+            .iter()
+            .copied()
+            .chain(std::iter::once(members[members.len() - 1]))
+        {
             playlist.entries.push(PlaylistEntry {
                 track_id: Some(track.id),
-                locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\{}.flac", track.title.clone().unwrap_or_default()))),
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(
+                    r"C:\Music\{}.flac",
+                    track.title.clone().unwrap_or_default()
+                ))),
                 title: None,
                 duration_ms: None,
             });
         }
         db.save_playlist(&playlist).expect("save playlist");
 
-        for field in [PlaylistSortField::Position, PlaylistSortField::Title, PlaylistSortField::Artist] {
+        for field in [
+            PlaylistSortField::Position,
+            PlaylistSortField::Title,
+            PlaylistSortField::Artist,
+        ] {
             for direction in [PlaylistSortDirection::Asc, PlaylistSortDirection::Desc] {
                 let sort = PlaylistListSort { field, direction };
                 let page = db
@@ -10159,7 +10300,8 @@ mod tests {
                         .position(|item| item.track_id == Some(track.id))
                         .expect("in the page") as u64;
                     assert_eq!(
-                        db.playlist_track_position(playlist.id, sort, track.id).expect("position"),
+                        db.playlist_track_position(playlist.id, sort, track.id)
+                            .expect("position"),
                         Some(first),
                         "{field:?} {direction:?}: {:?}",
                         track.title
@@ -10169,7 +10311,8 @@ mod tests {
         }
         let outside = tracks.last().expect("a track outside the playlist").id;
         assert_eq!(
-            db.playlist_track_position(playlist.id, PlaylistListSort::default(), outside).unwrap(),
+            db.playlist_track_position(playlist.id, PlaylistListSort::default(), outside)
+                .unwrap(),
             None
         );
     }
@@ -12615,6 +12758,14 @@ mod tests {
                 TrackFieldFilter {
                     field: TrackField::Album,
                     value: "雨夜・專輯".to_owned(),
+                },
+                vec![third_id, first_id],
+            ),
+            // The album detail view sends every spelling of a merged album joined with `|`.
+            (
+                TrackFieldFilter {
+                    field: TrackField::Album,
+                    value: "雨夜・专辑|雨夜・專輯".to_owned(),
                 },
                 vec![third_id, first_id],
             ),
