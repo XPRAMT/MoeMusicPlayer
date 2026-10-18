@@ -10,7 +10,13 @@
     OutputDeviceEntry,
     PlaybackOutputFormat,
   } from './ipc';
-  import { describeExclusive, describeMirrorPath, describeOutputFormat, formatSampleRate } from './output-format.js';
+  import {
+    describeExclusive,
+    describeExclusiveFallback,
+    describeMirrorPath,
+    describeOutputFormat,
+    formatSampleRate,
+  } from './output-format.js';
   import {
     OUTPUT_DELAY_MAX_MS,
     OUTPUT_MAX_SOURCE_CHANNELS,
@@ -374,6 +380,8 @@
     }
     if (exclusive) {
       // Exclusive mode opens the device when a track plays; what it opened is in the playback format.
+      const fallback = describeExclusiveFallback(outputFormat);
+      if (fallback) return { text: fallback.text, note: fallback.notice, tone: 'error' };
       const described = describeExclusive(outputFormat);
       if (!described) return { text: tr('獨佔模式：播放時才會開啟這個裝置'), note: null, tone: 'idle' };
       return { text: described.text, note: described.notice, tone: described.notice ? 'warn' : 'ok' };

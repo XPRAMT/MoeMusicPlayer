@@ -541,6 +541,8 @@ export interface PlaybackOutputFormat {
   dseeOutputRateHz: number | null;
   /** Set while the output is WASAPI exclusive mode. */
   exclusive?: ExclusiveOutput | null;
+  /** Exclusive mode is on but could not play this track; it plays in shared mode, and this says why. */
+  exclusiveFallback?: string | null;
 }
 
 /** The exclusive-mode stream as opened for the current track. */

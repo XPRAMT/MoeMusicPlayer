@@ -11,6 +11,7 @@
  *   dseeNotice: string | null,
  *   dseeOutputRateHz: number | null,
  *   exclusive?: { bits: number, channels: number, sourceChannels: number, bitPerfect: boolean, volumeApplied: boolean, underruns: number } | null,
+ *   exclusiveFallback?: string | null,
  * }} OutputFormat
  */
 /** @typedef {{ text: string, notice: string | null }} OutputFormatStatus */
@@ -133,4 +134,18 @@ export function describeExclusive(format) {
     reasons.push(tr('播放器音量低於 100%，已套用軟體音量；調到 100% 才會原樣送出'));
   }
   return { text: head, notice: reasons.length ? `${reasons.join('；')}（${tr('不是位元完美')}）` : null };
+}
+
+/**
+ * Describe an output that is in exclusive mode but plays the current track in shared mode, and why.
+ * @param {OutputFormat | null | undefined} format
+ * @returns {OutputFormatStatus | null}  null when exclusive mode played the track itself
+ */
+export function describeExclusiveFallback(format) {
+  if (!format?.exclusiveFallback) return null;
+  const shared = describeOutputFormat(format);
+  return {
+    text: tr("已改用共享模式：{0}", [shared.text]),
+    notice: tr("獨佔模式無法播放這首：{0}", [format.exclusiveFallback]),
+  };
 }

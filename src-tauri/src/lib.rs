@@ -1581,6 +1581,7 @@ fn playback_output_format(info: &ResamplingInfo) -> PlaybackOutputFormat {
             volume_applied: exclusive.volume_applied,
             underruns: exclusive.underruns,
         }),
+        exclusive_fallback: info.exclusive_fallback.clone(),
     }
 }
 
@@ -2361,6 +2362,8 @@ struct PlaybackOutputFormat {
     dsee_output_rate_hz: Option<u32>,
     /// Set while the output is WASAPI exclusive mode.
     exclusive: Option<ExclusiveOutput>,
+    /// Exclusive mode is on but could not play this track; it plays in shared mode, and this says why.
+    exclusive_fallback: Option<String>,
 }
 
 /// The exclusive-mode stream as opened for the current track.
@@ -2531,6 +2534,7 @@ mod playback_queue_ipc_tests {
                 dsee_notice: None,
                 dsee_output_rate_hz: None,
                 exclusive: None,
+                exclusive_fallback: None,
             }),
         };
         let value = serde_json::to_value(snapshot).expect("serialize playback snapshot");

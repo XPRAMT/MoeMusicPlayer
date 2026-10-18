@@ -1,11 +1,18 @@
 //! `ExclusiveBackend`: the `AudioBackend` for WASAPI exclusive mode. One track at a time goes from the decoder (rodio,
 //! DSD, Opus) through an optional channel remix and rate conversion into a [`Session`]; at 100 % volume with a rate
 //! and channel count the device takes, the samples reach it unchanged.
+//!
+//! Two things keep exclusive mode from getting in the way:
+//! - A track the device cannot take (in use, exclusive control not allowed, a Bluetooth endpoint, no usable format)
+//!   plays through a shared-mode `RodioBackend` instead, and the reason is reported next to the output status. The
+//!   next track tries exclusive mode again.
+//! - A stream that has been paused or has run out of tracks for [`IDLE_RELEASE`] is closed, so other programs can use
+//!   the device. Playing again reopens it at the position it was left at.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rodio::{SampleRate, Source};
 
@@ -17,12 +24,18 @@ use crate::output_devices::ChannelMixer;
 use crate::resample::Resampled;
 use crate::rodio_backend::{open_decoder_with, AudioDecoder};
 use crate::{
-    AudioBackend, AudioError, DseeHxState, ExclusiveInfo, OutputStatus, ResamplingConfig,
-    ResamplingConversion, ResamplingInfo, ResamplingMode,
+    AudioBackend, AudioError, DsdSettings, DseeHxState, ExclusiveInfo, OutputStatus,
+    ResamplingConfig, ResamplingConversion, ResamplingInfo, ResamplingMode,
 };
 
 /// Builds the endpoint on the render thread (WASAPI objects must stay on the thread that made them).
 pub(crate) type EndpointFactory = Arc<dyn Fn() -> Result<Box<dyn Endpoint>, String> + Send + Sync>;
+/// Builds the shared-mode backend that plays a track exclusive mode could not.
+pub(crate) type FallbackFactory =
+    Arc<dyn Fn() -> Result<Box<dyn AudioBackend>, AudioError> + Send + Sync>;
+
+/// How long a paused (or finished) exclusive stream is kept before the device is let go.
+pub(crate) const IDLE_RELEASE: Duration = Duration::from_secs(10);
 
 struct Track {
     path: PathBuf,
@@ -34,13 +47,35 @@ struct Track {
     played_at_start: u64,
 }
 
+/// The stream was closed while idle; this is where the track was.
+struct Released {
+    position: Duration,
+    /// The track had played to its end.
+    finished: bool,
+}
+
+/// Why opening a track in exclusive mode failed.
+enum LoadError {
+    /// The device or its format negotiation (worth falling back to shared mode).
+    Device(String),
+    /// The file or the conversion (shared mode would fail the same way).
+    Audio(AudioError),
+}
+
 pub(crate) struct ExclusiveBackend {
     config: Arc<ResamplingConfig>,
     factory: EndpointFactory,
+    fallback_factory: FallbackFactory,
     /// The device the backend was built for; a different chosen device makes the worker rebuild it.
     device: Option<String>,
     session: Option<Session>,
     track: Option<Track>,
+    released: Option<Released>,
+    /// The shared-mode backend playing the current track, and why exclusive mode could not.
+    fallback: Option<Box<dyn AudioBackend>>,
+    fallback_reason: Option<String>,
+    idle_since: Option<Instant>,
+    idle_release: Duration,
     volume: f32,
     paused: bool,
 }
@@ -54,20 +89,32 @@ impl ExclusiveBackend {
             super::endpoint::WasapiEndpoint::new(endpoint_id.as_deref())
                 .map(|endpoint| Box::new(endpoint) as Box<dyn Endpoint>)
         });
-        Self::with_factory(config, factory, device)
+        let fallback_config = Arc::clone(&config);
+        let fallback_factory: FallbackFactory = Arc::new(move || {
+            crate::rodio_backend::RodioBackend::new_fallback(Arc::clone(&fallback_config))
+                .map(|backend| Box::new(backend) as Box<dyn AudioBackend>)
+        });
+        Self::with_factories(config, factory, fallback_factory, device)
     }
 
-    pub(crate) fn with_factory(
+    pub(crate) fn with_factories(
         config: Arc<ResamplingConfig>,
         factory: EndpointFactory,
+        fallback_factory: FallbackFactory,
         device: Option<String>,
     ) -> Self {
         Self {
             config,
             factory,
+            fallback_factory,
             device,
             session: None,
             track: None,
+            released: None,
+            fallback: None,
+            fallback_reason: None,
+            idle_since: None,
+            idle_release: IDLE_RELEASE,
             volume: 1.0,
             paused: true,
         }
@@ -107,16 +154,18 @@ impl ExclusiveBackend {
             session.close();
         }
     }
-}
 
-impl AudioBackend for ExclusiveBackend {
-    fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
-        let decoder = open_decoder_with(path, &self.config.dsd)?;
+    /// Open `path` in exclusive mode at `position`, paused.
+    fn open_exclusive(
+        &mut self,
+        path: &Path,
+        position: Duration,
+    ) -> Result<Option<Duration>, LoadError> {
+        let mut decoder = open_decoder_with(path, &self.config.dsd).map_err(LoadError::Audio)?;
         let source_rate = decoder.sample_rate().get();
         let source_channels = decoder.channels().get();
         let duration = decoder.total_duration();
-        self.paused = true;
-        self.track = None;
+        let target = duration.map_or(position, |duration| position.min(duration));
         // The same format as the last track keeps the stream open (no re-open click); anything else reopens it.
         let reusable = self.session.as_ref().is_some_and(|session| {
             session.negotiated.source_rate == source_rate
@@ -133,33 +182,122 @@ impl AudioBackend for ExclusiveBackend {
                 self.volume,
                 true,
             )
-            .map_err(AudioError::Backend)?;
+            .map_err(LoadError::Device)?;
             self.session = Some(session);
         }
         let session = self.session.as_ref().expect("session was just opened");
         session.control.paused.store(true, Ordering::Release);
-        let chain = Self::chain(decoder, &session.negotiated)?;
+        if !target.is_zero() {
+            decoder
+                .try_seek(target)
+                .map_err(|error| LoadError::Audio(AudioError::Seek(error.to_string())))?;
+        }
+        let chain = Self::chain(decoder, &session.negotiated).map_err(LoadError::Audio)?;
         let played_at_start = session.play_source(chain);
         self.track = Some(Track {
             path: path.to_path_buf(),
             source_rate,
             duration,
-            base: Duration::ZERO,
+            base: target,
             played_at_start,
         });
         Ok(duration)
     }
 
+    /// Play the track through the shared-mode backend because exclusive mode could not.
+    fn use_fallback(
+        &mut self,
+        path: &Path,
+        position: Duration,
+        reason: String,
+    ) -> Result<Option<Duration>, AudioError> {
+        self.close_session();
+        let mut backend = (self.fallback_factory)()?;
+        backend.set_volume(self.volume)?;
+        let duration = if position.is_zero() {
+            backend.load(path)?
+        } else {
+            backend.load_at(path, position)?.0
+        };
+        self.fallback = Some(backend);
+        self.fallback_reason = Some(reason);
+        Ok(duration)
+    }
+
+    /// Load (or reopen) a track: exclusive mode first, the shared fallback when the device cannot take it.
+    fn open(&mut self, path: &Path, position: Duration) -> Result<Option<Duration>, AudioError> {
+        match self.open_exclusive(path, position) {
+            Ok(duration) => Ok(duration),
+            Err(LoadError::Audio(error)) => Err(error),
+            Err(LoadError::Device(reason)) => self.use_fallback(path, position, reason),
+        }
+    }
+
+    /// Let the device go; the track stays where it is.
+    fn release(&mut self) {
+        let position = self.position();
+        let finished = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.ring.finished());
+        self.close_session();
+        self.released = Some(Released { position, finished });
+        self.idle_since = None;
+    }
+
+    fn reset_for_load(&mut self) {
+        self.fallback = None;
+        self.fallback_reason = None;
+        self.released = None;
+        self.idle_since = None;
+        self.track = None;
+        self.paused = true;
+    }
+}
+
+impl AudioBackend for ExclusiveBackend {
+    fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
+        self.reset_for_load();
+        self.open(path, Duration::ZERO)
+    }
+
+    fn load_at(
+        &mut self,
+        path: &Path,
+        position: Duration,
+    ) -> Result<(Option<Duration>, Duration), AudioError> {
+        self.reset_for_load();
+        let duration = self.open(path, position)?;
+        let target = duration.map_or(position, |duration| position.min(duration));
+        Ok((duration, target))
+    }
+
     fn play(&mut self) -> Result<(), AudioError> {
+        if let Some(backend) = self.fallback.as_mut() {
+            return backend.play();
+        }
+        if let Some(released) = self.released.take() {
+            let Some(path) = self.track.as_ref().map(|track| track.path.clone()) else {
+                return Err(AudioError::NoTrackLoaded);
+            };
+            self.open(&path, released.position)?;
+            if let Some(backend) = self.fallback.as_mut() {
+                return backend.play();
+            }
+        }
         let (Some(session), Some(_)) = (self.session.as_ref(), self.track.as_ref()) else {
             return Err(AudioError::NoTrackLoaded);
         };
         self.paused = false;
+        self.idle_since = None;
         session.control.paused.store(false, Ordering::Release);
         Ok(())
     }
 
     fn pause(&mut self) -> Result<(), AudioError> {
+        if let Some(backend) = self.fallback.as_mut() {
+            return backend.pause();
+        }
         self.paused = true;
         if let Some(session) = self.session.as_ref() {
             session.control.paused.store(true, Ordering::Release);
@@ -168,7 +306,12 @@ impl AudioBackend for ExclusiveBackend {
     }
 
     fn stop(&mut self) -> Result<(), AudioError> {
+        if let Some(mut backend) = self.fallback.take() {
+            let _ = backend.stop();
+        }
         // Stopping gives the device back to other programs.
+        self.fallback_reason = None;
+        self.released = None;
         self.track = None;
         self.paused = true;
         self.close_session();
@@ -176,12 +319,24 @@ impl AudioBackend for ExclusiveBackend {
     }
 
     fn seek(&mut self, position: Duration) -> Result<Duration, AudioError> {
-        let (Some(session), Some(track)) = (self.session.as_ref(), self.track.as_mut()) else {
+        if let Some(backend) = self.fallback.as_mut() {
+            return backend.seek(position);
+        }
+        let Some(track) = self.track.as_mut() else {
             return Err(AudioError::NoTrackLoaded);
         };
         let target = track
             .duration
             .map_or(position, |duration| position.min(duration));
+        if let Some(released) = self.released.as_mut() {
+            // The stream is closed: the new position is used when it opens again.
+            released.position = target;
+            released.finished = false;
+            return Ok(target);
+        }
+        let Some(session) = self.session.as_ref() else {
+            return Err(AudioError::NoTrackLoaded);
+        };
         let decoder = {
             let mut decoder = open_decoder_with(&track.path, &self.config.dsd)?;
             if !target.is_zero() {
@@ -197,20 +352,6 @@ impl AudioBackend for ExclusiveBackend {
         Ok(target)
     }
 
-    fn load_at(
-        &mut self,
-        path: &Path,
-        position: Duration,
-    ) -> Result<(Option<Duration>, Duration), AudioError> {
-        let duration = self.load(path)?;
-        let target = duration.map_or(position, |duration| position.min(duration));
-        if target.is_zero() {
-            return Ok((duration, Duration::ZERO));
-        }
-        let actual = self.seek(target)?;
-        Ok((duration, actual))
-    }
-
     fn set_volume(&mut self, volume: f32) -> Result<(), AudioError> {
         self.volume = volume;
         if let Some(session) = self.session.as_ref() {
@@ -219,10 +360,40 @@ impl AudioBackend for ExclusiveBackend {
                 .volume
                 .store(volume.to_bits(), Ordering::Relaxed);
         }
+        if let Some(backend) = self.fallback.as_mut() {
+            backend.set_volume(volume)?;
+        }
         Ok(())
     }
 
+    fn set_resampling_mode(&mut self, mode: ResamplingMode) -> Result<(), AudioError> {
+        match self.fallback.as_mut() {
+            Some(backend) => backend.set_resampling_mode(mode),
+            None => Ok(()),
+        }
+    }
+
+    fn set_dsee_hx(&mut self, enabled: bool) -> Result<(), AudioError> {
+        match self.fallback.as_mut() {
+            Some(backend) => backend.set_dsee_hx(enabled),
+            None => Ok(()),
+        }
+    }
+
+    fn set_dsd_settings(&mut self, settings: DsdSettings) -> Result<(), AudioError> {
+        match self.fallback.as_mut() {
+            Some(backend) => backend.set_dsd_settings(settings),
+            None => Ok(()),
+        }
+    }
+
     fn position(&self) -> Duration {
+        if let Some(backend) = self.fallback.as_ref() {
+            return backend.position();
+        }
+        if let Some(released) = self.released.as_ref() {
+            return released.position;
+        }
         let (Some(session), Some(track)) = (self.session.as_ref(), self.track.as_ref()) else {
             return Duration::ZERO;
         };
@@ -240,6 +411,12 @@ impl AudioBackend for ExclusiveBackend {
     }
 
     fn is_empty(&self) -> bool {
+        if let Some(backend) = self.fallback.as_ref() {
+            return backend.is_empty();
+        }
+        if let Some(released) = self.released.as_ref() {
+            return released.finished;
+        }
         match (self.session.as_ref(), self.track.as_ref()) {
             (Some(session), Some(_)) => session.ring.finished(),
             _ => true,
@@ -247,6 +424,11 @@ impl AudioBackend for ExclusiveBackend {
     }
 
     fn resampling_info(&self) -> Option<ResamplingInfo> {
+        if let Some(backend) = self.fallback.as_ref() {
+            let mut info = backend.resampling_info()?;
+            info.exclusive_fallback = self.fallback_reason.clone();
+            return Some(info);
+        }
         let session = self.session.as_ref()?;
         let negotiated = &session.negotiated;
         let format = negotiated.format;
@@ -273,6 +455,7 @@ impl AudioBackend for ExclusiveBackend {
                 volume_applied,
                 underruns: session.control.underruns.load(Ordering::Relaxed),
             }),
+            exclusive_fallback: None,
         })
     }
 
@@ -281,12 +464,30 @@ impl AudioBackend for ExclusiveBackend {
         if !self.config.exclusive() || self.config.primary_device() != self.device {
             return OutputStatus::DefaultDeviceChanged;
         }
+        if let Some(backend) = self.fallback.as_mut() {
+            return backend.output_status();
+        }
         if let Some(reason) = self
             .session
             .as_ref()
             .and_then(|session| session.control.failure())
         {
             return OutputStatus::Lost(reason);
+        }
+        // Paused, or out of audio at the end of the queue: after a while the device is let go.
+        let idle = self.track.is_some()
+            && self
+                .session
+                .as_ref()
+                .is_some_and(|session| self.paused || session.ring.finished());
+        if idle {
+            let now = Instant::now();
+            let since = *self.idle_since.get_or_insert(now);
+            if now.duration_since(since) >= self.idle_release {
+                self.release();
+            }
+        } else {
+            self.idle_since = None;
         }
         OutputStatus::Healthy
     }
@@ -313,23 +514,108 @@ mod tests {
         }
     }
 
-    fn fake_backend(accepts: Vec<StreamFormat>) -> (ExclusiveBackend, Arc<Capture>) {
+    /// What the fake shared-mode fallback was asked to do.
+    #[derive(Default)]
+    struct SharedLog {
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    struct FakeShared {
+        log: Arc<SharedLog>,
+    }
+
+    impl AudioBackend for FakeShared {
+        fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
+            self.log
+                .calls
+                .lock()
+                .unwrap()
+                .push(format!("load {}", path.display()));
+            Ok(Some(Duration::from_secs(1)))
+        }
+        fn play(&mut self) -> Result<(), AudioError> {
+            self.log.calls.lock().unwrap().push("play".to_owned());
+            Ok(())
+        }
+        fn pause(&mut self) -> Result<(), AudioError> {
+            self.log.calls.lock().unwrap().push("pause".to_owned());
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<(), AudioError> {
+            self.log.calls.lock().unwrap().push("stop".to_owned());
+            Ok(())
+        }
+        fn seek(&mut self, position: Duration) -> Result<Duration, AudioError> {
+            self.log.calls.lock().unwrap().push("seek".to_owned());
+            Ok(position)
+        }
+        fn set_volume(&mut self, _volume: f32) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn position(&self) -> Duration {
+            Duration::from_secs(5)
+        }
+        fn is_empty(&self) -> bool {
+            false
+        }
+        fn resampling_info(&self) -> Option<ResamplingInfo> {
+            Some(ResamplingInfo {
+                mode: ResamplingMode::HighQuality,
+                source_rate: Some(44_100),
+                output_rate: 96_000,
+                device_rate: 96_000,
+                conversion: ResamplingConversion::HighQuality,
+                fallback_reason: None,
+                dsee_hx: DseeHxState::Off,
+                dsee_notice: None,
+                dsee_output_rate: None,
+                exclusive: None,
+                exclusive_fallback: None,
+            })
+        }
+    }
+
+    struct Rig {
+        backend: ExclusiveBackend,
+        capture: Arc<Capture>,
+        /// The formats the fake device takes right now (change it to make the device refuse or accept).
+        accepts: Arc<std::sync::Mutex<Vec<StreamFormat>>>,
+        shared: Arc<SharedLog>,
+    }
+
+    fn rig(accepts: Vec<StreamFormat>) -> Rig {
         let capture = Arc::new(Capture::default());
+        let accepts = Arc::new(std::sync::Mutex::new(accepts));
+        let shared = Arc::new(SharedLog::default());
         let device_capture = Arc::clone(&capture);
+        let device_accepts = Arc::clone(&accepts);
         let factory: EndpointFactory = Arc::new(move || {
             Ok(Box::new(FakeEndpoint {
-                accepts: accepts.clone(),
+                accepts: device_accepts.lock().unwrap().clone(),
                 capture: Arc::clone(&device_capture),
                 period_frames: 256,
                 tick: Duration::from_micros(300),
             }) as Box<dyn Endpoint>)
         });
+        let shared_log = Arc::clone(&shared);
+        let fallback: FallbackFactory = Arc::new(move || {
+            Ok(Box::new(FakeShared {
+                log: Arc::clone(&shared_log),
+            }) as Box<dyn AudioBackend>)
+        });
         let config = Arc::new(ResamplingConfig::new(ResamplingMode::HighQuality, false));
         config.set_exclusive(true);
-        (
-            ExclusiveBackend::with_factory(config, factory, None),
+        Rig {
+            backend: ExclusiveBackend::with_factories(config, factory, fallback, None),
             capture,
-        )
+            accepts,
+            shared,
+        }
+    }
+
+    fn fake_backend(accepts: Vec<StreamFormat>) -> (ExclusiveBackend, Arc<Capture>) {
+        let rig = rig(accepts);
+        (rig.backend, rig.capture)
     }
 
     /// A 16-bit stereo WAV whose samples are known (left rises, right falls), so the bytes the device receives can be
@@ -602,10 +888,135 @@ mod tests {
     }
 
     #[test]
-    fn a_device_that_takes_no_format_reports_why_the_track_cannot_play() {
+    fn a_device_that_takes_no_format_plays_the_track_in_shared_mode_and_says_why() {
         let (path, _) = write_wav("refused", 44_100, 1_000);
-        let (mut backend, _) = fake_backend(Vec::new());
-        let error = backend.load(&path).unwrap_err();
-        assert!(error.to_string().contains("格式"), "{error}");
+        let mut rig = rig(Vec::new());
+        let duration = rig.backend.load(&path).unwrap();
+        assert_eq!(
+            duration,
+            Some(Duration::from_secs(1)),
+            "the shared backend loaded it"
+        );
+        let info = rig.backend.resampling_info().unwrap();
+        assert!(info.exclusive.is_none());
+        assert!(
+            info.exclusive_fallback.as_deref().unwrap().contains("格式"),
+            "{:?}",
+            info.exclusive_fallback
+        );
+        rig.backend.play().unwrap();
+        rig.backend.pause().unwrap();
+        assert_eq!(
+            rig.backend.seek(Duration::from_secs(3)).unwrap(),
+            Duration::from_secs(3)
+        );
+        assert_eq!(
+            rig.backend.position(),
+            Duration::from_secs(5),
+            "the shared backend reports the position"
+        );
+        let calls = rig.shared.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 4);
+        assert!(calls[0].starts_with("load"));
+        assert_eq!(&calls[1..], ["play", "pause", "seek"]);
+    }
+
+    #[test]
+    fn the_next_track_tries_exclusive_mode_again_and_drops_the_shared_fallback() {
+        let (first, _) = write_wav("again-a", 44_100, 2_000);
+        let (second, _) = write_wav("again-b", 44_100, 2_000);
+        let mut rig = rig(Vec::new());
+        rig.backend.load(&first).unwrap();
+        assert!(rig
+            .backend
+            .resampling_info()
+            .unwrap()
+            .exclusive_fallback
+            .is_some());
+        // The device is free now (for example the other program let go of it).
+        *rig.accepts.lock().unwrap() = vec![format(44_100, 2, Container::Int24In32)];
+        rig.backend.load(&second).unwrap();
+        let info = rig.backend.resampling_info().unwrap();
+        assert!(info.exclusive.is_some() && info.exclusive_fallback.is_none());
+        assert!(rig.backend.fallback.is_none());
+        assert_eq!(rig.capture.opened.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_opened_is_an_error_not_a_reason_to_fall_back() {
+        let mut rig = rig(Vec::new());
+        let error = rig
+            .backend
+            .load(Path::new("Z:/no/such/file.flac"))
+            .unwrap_err();
+        assert!(rig.backend.fallback.is_none(), "{error}");
+        assert!(rig.shared.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_device_is_released_after_the_idle_time_and_playing_reopens_it_where_it_was() {
+        let (path, _) = write_wav("idle", 44_100, 441_000);
+        let mut rig = rig(vec![format(44_100, 2, Container::Int24In32)]);
+        rig.backend.idle_release = Duration::from_millis(200);
+        rig.backend.load(&path).unwrap();
+        rig.backend.play().unwrap();
+        wait_until("playback to start", || {
+            rig.backend.position() > Duration::from_millis(300)
+        });
+        // Playing is not idle, however long it takes.
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(rig.backend.output_status(), OutputStatus::Healthy);
+        assert!(rig.backend.session.is_some());
+        rig.backend.pause().unwrap();
+        let paused_at = rig.backend.position();
+        wait_until("the device to be released", || {
+            rig.backend.output_status();
+            rig.backend.session.is_none()
+        });
+        assert!(rig.backend.resampling_info().is_none());
+        assert_eq!(rig.backend.position(), paused_at, "the position is kept");
+        assert!(!rig.backend.is_empty(), "the track has not ended");
+        // A seek while released only moves the position.
+        let target = rig.backend.seek(Duration::from_millis(5_000)).unwrap();
+        assert_eq!(target, Duration::from_millis(5_000));
+        assert!(rig.backend.session.is_none());
+        rig.backend.play().unwrap();
+        assert_eq!(
+            rig.capture.opened.lock().unwrap().len(),
+            2,
+            "the device was opened again"
+        );
+        assert!(rig.backend.position() >= Duration::from_millis(5_000));
+        wait_until("playing to continue", || {
+            rig.backend.position() > Duration::from_millis(5_300)
+        });
+    }
+
+    #[test]
+    fn a_track_that_ended_is_released_too_and_still_counts_as_ended() {
+        let (path, _) = write_wav("idle-end", 44_100, 4_410);
+        let mut rig = rig(vec![format(44_100, 2, Container::Int24In32)]);
+        rig.backend.idle_release = Duration::from_millis(150);
+        rig.backend.load(&path).unwrap();
+        rig.backend.play().unwrap();
+        wait_until("the track to end", || rig.backend.is_empty());
+        wait_until("the device to be released", || {
+            rig.backend.output_status();
+            rig.backend.session.is_none()
+        });
+        assert!(rig.backend.is_empty());
+    }
+
+    #[test]
+    fn a_track_that_is_loaded_but_never_played_is_released_after_the_idle_time() {
+        let (path, _) = write_wav("idle-loaded", 44_100, 44_100);
+        let mut rig = rig(vec![format(44_100, 2, Container::Int24In32)]);
+        rig.backend.idle_release = Duration::from_millis(150);
+        rig.backend.load(&path).unwrap();
+        wait_until("the device to be released", || {
+            rig.backend.output_status();
+            rig.backend.session.is_none()
+        });
+        assert_eq!(rig.backend.position(), Duration::ZERO);
     }
 }

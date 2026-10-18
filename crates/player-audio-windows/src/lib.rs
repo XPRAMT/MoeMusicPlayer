@@ -184,6 +184,9 @@ pub struct ResamplingInfo {
     pub dsee_output_rate: Option<u32>,
     /// Set when the output is WASAPI exclusive mode: what the opened stream looks like.
     pub exclusive: Option<ExclusiveInfo>,
+    /// Exclusive mode is on but could not play this track (the device is in use, does not allow exclusive control,
+    /// takes no usable format); it plays in shared mode instead, and this says why.
+    pub exclusive_fallback: Option<String>,
 }
 
 /// The exclusive-mode stream as opened for the current track (ADR 0020).
@@ -2768,6 +2771,7 @@ mod tests {
                 dsee_notice: None,
                 dsee_output_rate: None,
                 exclusive: None,
+                exclusive_fallback: None,
             })
         }
         fn output_status(&mut self) -> OutputStatus {

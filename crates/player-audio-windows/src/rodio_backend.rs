@@ -94,6 +94,8 @@ pub(super) struct RodioBackend {
     failed: Vec<(OutputDeviceSetting, String, Instant)>,
     master_volume: f32,
     reported_status: Vec<OutputDeviceStatus>,
+    /// Plays the tracks exclusive mode could not: it must not ask for a rebuild because exclusive mode is on.
+    as_fallback: bool,
 }
 
 /// A device that plays a copy of the track next to the main output.
@@ -286,8 +288,16 @@ impl RodioBackend {
             failed: Vec::new(),
             master_volume: 1.0,
             reported_status: Vec::new(),
+            as_fallback: false,
         };
         let _ = backend.apply_devices();
+        Ok(backend)
+    }
+
+    /// The shared-mode backend that plays a track while exclusive mode is on but could not take it.
+    pub(super) fn new_fallback(config: Arc<ResamplingConfig>) -> Result<Self, AudioError> {
+        let mut backend = Self::new(config)?;
+        backend.as_fallback = true;
         Ok(backend)
     }
 
@@ -810,6 +820,7 @@ impl AudioBackend for RodioBackend {
             dsee_hx: self.track.dsee_state,
             dsee_notice: self.track.dsee_notice.clone(),
             exclusive: None,
+            exclusive_fallback: None,
             dsee_output_rate: (self.track.dsee_state == DseeHxState::Active)
                 .then(|| self.track.playback_rate.map(SampleRate::get))
                 .flatten(),
@@ -835,7 +846,7 @@ impl AudioBackend for RodioBackend {
 
     fn output_status(&mut self) -> OutputStatus {
         // Exclusive mode was switched on: the worker rebuilds the backend as an exclusive one.
-        if self.config.exclusive() {
+        if self.config.exclusive() && !self.as_fallback {
             return OutputStatus::DefaultDeviceChanged;
         }
         self.poll_mirrors();

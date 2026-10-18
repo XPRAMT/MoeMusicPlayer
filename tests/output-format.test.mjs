@@ -110,3 +110,11 @@ test('the exclusive stream says bit-perfect, or what changed the samples', async
   assert.match(volume.notice, /軟體音量/);
   assert.equal(describeExclusive(format({})), null, 'a shared-mode output has no exclusive stream');
 });
+
+test('a track exclusive mode could not take says it plays in shared mode and why', async () => {
+  const { describeExclusiveFallback } = await import('../src/lib/output-format.js');
+  assert.equal(describeExclusiveFallback(format({})), null);
+  const described = describeExclusiveFallback(format({ conversion: 'none', outputRateHz: 44_100, exclusiveFallback: '這個裝置正被其他程式使用。' }));
+  assert.equal(described.text, '已改用共享模式：原生 44.1 kHz（未轉換）');
+  assert.equal(described.notice, '獨佔模式無法播放這首：這個裝置正被其他程式使用。');
+});
