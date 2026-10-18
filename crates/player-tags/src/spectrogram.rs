@@ -108,15 +108,44 @@ pub struct Spectrogram {
 
 type Stops = &'static [(f32, [f32; 3])];
 
+/// The "Spek" palette, the spectrum colours of the Spek analyser (which describes them as a modified version of Dan Bruton's
+/// wavelength-to-colour algorithm): from the floor violet, blue, cyan, green, yellow, orange, red, with the quietest tenth
+/// fading to black. Written here as colour stops (positions are fractions of the ramp, which spans the lower 66.25 % of
+/// the scale) plus that fade, not copied from Spek's code (Spek is GPL; this project cannot use GPL code).
+const SPEK_RAMP_END: f32 = 0.6625;
+/// Where the fade to black ends on the 0 to 1 scale: the quietest tenth of the ramp.
+const SPEK_FADE_END: f32 = 0.1 / SPEK_RAMP_END;
 const SPEK: Stops = &[
-    (0.0, [0.0, 0.0, 0.0]),
-    (0.15, [0.0, 0.0, 120.0]),
-    (0.3, [100.0, 0.0, 160.0]),
-    (0.45, [200.0, 0.0, 100.0]),
-    (0.6, [250.0, 60.0, 0.0]),
-    (0.8, [255.0, 200.0, 0.0]),
-    (1.0, [255.0, 255.0, 255.0]),
+    (0.0, [170.0, 0.0, 255.0]),
+    (0.15 / SPEK_RAMP_END, [0.0, 0.0, 255.0]),
+    (0.275 / SPEK_RAMP_END, [0.0, 255.0, 255.0]),
+    (0.325 / SPEK_RAMP_END, [0.0, 255.0, 0.0]),
+    (0.5 / SPEK_RAMP_END, [255.0, 255.0, 0.0]),
+    (1.0, [255.0, 0.0, 0.0]),
 ];
+
+/// The colour for a level (0 = floor, 1 = ceiling).
+fn spek_color(level: f32) -> [u8; 3] {
+    let level = level.clamp(0.0, 1.0);
+    let colour = interpolate(SPEK, level);
+    let fade = if level < SPEK_FADE_END {
+        level / SPEK_FADE_END
+    } else {
+        1.0
+    };
+    colour.map(|channel| (channel * fade).round().clamp(0.0, 255.0) as u8)
+}
+
+/// Piecewise-linear colour between stops (positions ascending from 0 to 1), channels 0 to 255.
+fn interpolate(stops: Stops, t: f32) -> [f32; 3] {
+    let pair = stops
+        .windows(2)
+        .find(|pair| t <= pair[1].0)
+        .unwrap_or(&stops[stops.len() - 2..]);
+    let ((a, ca), (b, cb)) = (pair[0], pair[1]);
+    let k = ((t - a) / (b - a)).clamp(0.0, 1.0);
+    std::array::from_fn(|c| ca[c] + (cb[c] - ca[c]) * k)
+}
 const MAGMA: Stops = &[
     (0.0, [0.0, 0.0, 4.0]),
     (0.2, [59.0, 15.0, 112.0]),
@@ -144,7 +173,8 @@ const GRAY: Stops = &[(0.0, [0.0, 0.0, 0.0]), (1.0, [255.0, 255.0, 255.0])];
 
 fn stops(map: Colormap) -> Stops {
     match map {
-        Colormap::Spek => SPEK,
+        // Spek is computed (see `spek_color`); the other maps interpolate between stops.
+        Colormap::Spek => GRAY,
         Colormap::Magma => MAGMA,
         Colormap::Inferno => INFERNO,
         Colormap::Viridis => VIRIDIS,
@@ -201,17 +231,14 @@ pub fn channel_labels(
 
 /// 256-entry lookup table for a colormap.
 pub fn colormap_lut(map: Colormap) -> Vec<[u8; 3]> {
+    if map == Colormap::Spek {
+        return (0..256).map(|i| spek_color(i as f32 / 255.0)).collect();
+    }
     let stops = stops(map);
     (0..256)
         .map(|i| {
             let t = i as f32 / 255.0;
-            let pair = stops
-                .windows(2)
-                .find(|pair| t <= pair[1].0)
-                .unwrap_or(&stops[stops.len() - 2..]);
-            let ((a, ca), (b, cb)) = (pair[0], pair[1]);
-            let k = ((t - a) / (b - a)).clamp(0.0, 1.0);
-            std::array::from_fn(|c| (ca[c] + (cb[c] - ca[c]) * k).round() as u8)
+            interpolate(stops, t).map(|channel| channel.round() as u8)
         })
         .collect()
 }
@@ -588,7 +615,53 @@ mod tests {
         assert_eq!(gray[0], [0, 0, 0]);
         assert_eq!(gray[255], [255, 255, 255]);
         assert_eq!(colormap_lut(Colormap::Magma)[0], [0, 0, 4]);
-        assert_eq!(colormap_lut(Colormap::Spek)[255], [255, 255, 255]);
+    }
+
+    #[test]
+    fn the_spek_palette_runs_black_violet_blue_cyan_green_yellow_orange_red() {
+        let lut = colormap_lut(Colormap::Spek);
+        assert_eq!(lut[0], [0, 0, 0], "the floor is black");
+        assert_eq!(lut[255], [255, 0, 0], "the ceiling is red");
+        // The dB scale of the Spek colour bar is -120 dB (floor) to 0 dB (ceiling): level = (dB + 120) / 120.
+        let at = |db: f32| lut[(((db + 120.0) / 120.0) * 255.0).round() as usize];
+        let [r, g, b] = at(-110.0);
+        assert!(
+            b > r && g == 0 && b > 60,
+            "violet at -110 dB: {:?}",
+            at(-110.0)
+        );
+        let [r, g, b] = at(-90.0);
+        assert!(
+            b == 255 && g > 0 && g < 100 && r == 0,
+            "blue at -90 dB: {:?}",
+            at(-90.0)
+        );
+        let [r, g, b] = at(-70.0);
+        assert!(
+            r == 0 && g > 200 && b > 200,
+            "cyan at -70 dB: {:?}",
+            at(-70.0)
+        );
+        let [r, g, b] = at(-55.0);
+        assert!(
+            g == 255 && r < 140 && b == 0,
+            "green at -55 dB: {:?}",
+            at(-55.0)
+        );
+        let [r, g, b] = at(-30.0);
+        assert!(
+            r > 230 && g == 255 && b == 0,
+            "yellow at -30 dB: {:?}",
+            at(-30.0)
+        );
+        let [r, g, b] = at(-10.0);
+        assert!(
+            r == 255 && g > 40 && g < 160 && b == 0,
+            "orange at -10 dB: {:?}",
+            at(-10.0)
+        );
+        // Brightness never drops once past the quietest tenth, and the quiet end only gets darker towards the floor.
+        assert!(lut.windows(2).take(25).all(|pair| pair[1][2] >= pair[0][2]));
     }
 
     #[test]

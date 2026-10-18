@@ -12,9 +12,9 @@ export const WINDOW_FUNCTIONS = [
   { value: 'blackmanHarris', label: 'Blackman-Harris' },
   { value: 'rectangular', label: tr('矩形（無窗）') },
 ];
-/** CSS gradients mirror the Rust colormap stops (crates/player-tags/src/spectrogram.rs). */
+/** CSS gradients mirror the Rust colormaps (crates/player-tags/src/spectrogram.rs; Spek's is computed there, sampled here). */
 export const COLORMAPS = [
-  { value: 'spek', label: 'Spek', gradient: 'linear-gradient(90deg,#000,#000078 15%,#6400a0 30%,#c80064 45%,#fa3c00 60%,#ffc800 80%,#fff)' },
+  { value: 'spek', label: 'Spek', gradient: 'linear-gradient(90deg,#000000 0%,#3a0087 8%,#3200ff 16%,#0020ff 25%,#008cff 33%,#00ffee 42%,#09ff00 50%,#56ff00 58%,#adff00 67%,#faff00 75%,#ffb100 83%,#ff0000 100%)' },
   { value: 'magma', label: 'Magma', gradient: 'linear-gradient(90deg,#000004,#3b0f70 20%,#8c2981 40%,#de4968 60%,#fe9f6d 80%,#fcfdbf)' },
   { value: 'inferno', label: 'Inferno', gradient: 'linear-gradient(90deg,#000004,#420a68 20%,#932667 40%,#dd513a 60%,#fca50a 80%,#fcffa4)' },
   { value: 'viridis', label: 'Viridis', gradient: 'linear-gradient(90deg,#440154,#3b528b 25%,#21918c 50%,#5ec962 75%,#fde725)' },
