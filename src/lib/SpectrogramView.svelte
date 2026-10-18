@@ -149,7 +149,7 @@
     return {
       levels: item.levels, columns: item.data.columns, height: item.data.height,
       widthFraction: item.data.durationMs / durationMax,
-      heightFraction: layerHeightFraction(item.data.maxFrequencyHz, sharedMaxHz, settings.logFrequency),
+      heightFraction: layerHeightFraction(item.data.maxFrequencyHz, sharedMaxHz, false),
     };
   }
 
@@ -169,9 +169,11 @@
     diffUrl = canvas.toDataURL('image/png');
   });
 
-  const ticks = $derived(frequencyTicks(sharedMaxHz, settings.logFrequency));
+  const ticks = $derived(frequencyTicks(sharedMaxHz, false));
   /** Width of one plot in px (a side-by-side layout halves it), for the time axis step. */
   let plotWidthPx = $state(1200);
+  /** The window is taller than wide: the colour bar lies below the plot instead of at its right. */
+  let portrait = $state(false);
   const timeTicks = $derived.by(() => {
     const total = durationMax / 1000;
     const visible = total * (view.x1 - view.x0);
@@ -204,7 +206,7 @@
     const [a, b] = values;
     return {
       time: fmtTime((wx * durationMax) / 1000),
-      freq: fmtHz(fractionToFrequency(axisFraction, sharedMaxHz, settings.logFrequency)),
+      freq: fmtHz(fractionToFrequency(axisFraction, sharedMaxHz, false)),
       channel: panels > 1 ? channelName(p) : '',
       values,
       delta: a?.db != null && b?.db != null ? b.db - a.db : null,
@@ -280,7 +282,11 @@
   const channelOptions = $derived(Array.from({ length: channelCount }, (_, i) => i));
   const colormapGradient = $derived(COLORMAPS.find((c) => c.value === settings.colormap)?.gradient ?? '');
   /** The colour bar stands at the right of the plot like Spek's: the loudest level at the top, the quietest at the bottom. */
-  const colorBarGradient = $derived(diffUrl ? 'linear-gradient(0deg,#00f,#fff,#f00)' : colormapGradient.replace('90deg', '0deg'));
+  const colorBarGradient = $derived(
+    portrait
+      ? (diffUrl ? 'linear-gradient(90deg,#00f,#fff,#f00)' : colormapGradient)
+      : (diffUrl ? 'linear-gradient(0deg,#00f,#fff,#f00)' : colormapGradient.replace('90deg', '0deg')),
+  );
   /** Tick labels of the colour bar: every 10 dB (every 20 dB for a very wide range), or the difference scale in diff mode. */
   const colorBarTicks = $derived.by(() => {
     if (diffUrl) {
@@ -291,7 +297,10 @@
         { top: 100, label: `−${half.toFixed(0)} dB` },
       ];
     }
-    const step = range > 130 ? 20 : 10;
+    // Below the plot the labels stand side by side: use the finest step that keeps them about 50 px apart.
+    const step = portrait
+      ? ([10, 20, 30, 50, 100].find((s) => (s / range) * plotWidthPx >= 50) ?? 100)
+      : (range > 130 ? 20 : 10);
     const ticks = [];
     for (let db = Math.floor(settings.dbCeiling / step) * step; db >= settings.dbFloor; db -= step) {
       ticks.push({ top: ((settings.dbCeiling - db) / range) * 100, label: `${db} dB` });
@@ -320,6 +329,7 @@
         // The axis column is 46 px; a left-right layout gives each plot half of what is left.
         const cells = compareActive && prefs.mode === 'sideH' ? 2 : 1;
         plotWidthPx = Math.max(1, (sizer!.clientWidth - (cells - 1) * 10) / cells - 46);
+        portrait = window.innerWidth < window.innerHeight;
       };
       measure();
       resizeObserver = new ResizeObserver(() => { measure(); scheduleRender(400); });
@@ -356,7 +366,7 @@
       <div class="sg-world" style:left={`${world.left}%`} style:width={`${world.width}%`} style:bottom={`${world.bottom}%`} style:height={`${world.height}%`}>
         <img src={`data:image/png;base64,${item.data.pngBase64}`} alt="" draggable="false" style:opacity={opacity}
           style:width={`${(item.data.durationMs / durationMax) * 100}%`}
-          style:height={`${layerHeightFraction(item.data.maxFrequencyHz, sharedMaxHz, settings.logFrequency) * 100}%`} />
+          style:height={`${layerHeightFraction(item.data.maxFrequencyHz, sharedMaxHz, false) * 100}%`} />
       </div>
     </div>
   {/if}
@@ -368,7 +378,7 @@
     <div class="sg-yaxis">
       {#each Array.from({ length: panels }, (_, p) => p) as p (p)}
         {#each ticks as f (f)}
-          {@const top = toViewTop(panelWorldY(p, frequencyToFraction(f, sharedMaxHz, settings.logFrequency)))}
+          {@const top = toViewTop(panelWorldY(p, frequencyToFraction(f, sharedMaxHz, false)))}
           {#if top >= -0.001 && top <= 1.001}<span style:top={`${top * 100}%`}>{fmtFreq(f)}</span>{/if}
         {/each}
         {#if panels > 1}
@@ -397,7 +407,7 @@
       {/if}
       {#each Array.from({ length: panels }, (_, p) => p) as p (p)}
         {#each ticks as f (f)}
-          {@const top = toViewTop(panelWorldY(p, frequencyToFraction(f, sharedMaxHz, settings.logFrequency)))}
+          {@const top = toViewTop(panelWorldY(p, frequencyToFraction(f, sharedMaxHz, false)))}
           {#if top > 0 && top < 1}<i class="sg-grid" style:top={`${top * 100}%`}></i>{/if}
         {/each}
         {#if p > 0}{@const top = toViewTop(panelWorldY(p, 1))}{#if top > 0 && top < 1}<i class="sg-divider" style:top={`${top * 100}%`}></i>{/if}{/if}
@@ -466,11 +476,6 @@
           {#each WINDOW_FUNCTIONS as w (w.value)}<option value={w.value}>{w.label}</option>{/each}
         </select>
       </label>
-      <label>{tr("頻率軸")}
-        <select value={settings.logFrequency ? 'log' : 'linear'} onchange={(e) => updateSettings({ logFrequency: e.currentTarget.value === 'log' })}>
-          <option value="linear">{tr("線性")}</option><option value="log">{tr("對數")}</option>
-        </select>
-      </label>
       <label>{tr("聲道")}
         <select value={channelValue()} onchange={(e) => setChannel(e.currentTarget.value)}>
           <option value="mix">{tr("混合（全部聲道）")}</option>
@@ -515,10 +520,17 @@
       <div class="sg-plot-cell">{@render plotBox('A', 'A')}</div>
     {/if}
   </div>
-  <div class="sg-colorbar" aria-hidden="true">
+  <div class="sg-colorbar" class:is-horizontal={portrait} aria-hidden="true">
     <div class="sg-colorbar-strip" style:background={colorBarGradient}></div>
     <div class="sg-colorbar-ticks">
-      {#each colorBarTicks as tick (tick.top)}<span style:top={`${tick.top}%`}>{tick.label}</span>{/each}
+      {#each colorBarTicks as tick (tick.top)}
+        {#if portrait}
+          {@const at = 100 - tick.top}
+          <span style:left={`${at}%`} style:translate={at < 3 ? '0 0' : at > 97 ? '-100% 0' : '-50% 0'}>{tick.label}</span>
+        {:else}
+          <span style:top={`${tick.top}%`}>{tick.label}</span>
+        {/if}
+      {/each}
     </div>
   </div>
   </div>
@@ -554,11 +566,17 @@
   .sg-error { color: #ff7a7a; opacity: 1 !important; }
   /* A little room above the plot: the top frequency label (centred on the top edge) would sit on the file info row. */
   .sg-main { flex: 1; min-height: 0; display: flex; gap: 6px; padding-top: 9px; }
+  .sg-main:has(.sg-colorbar.is-horizontal) { flex-direction: column; }
   /* The colour bar at the right, as tall as the plot (the bottom padding is the time axis row below it). */
   .sg-colorbar { flex: 0 0 auto; display: flex; gap: 5px; padding-bottom: 18px; font-size: 11px; opacity: 0.9; }
   .sg-colorbar-strip { width: 14px; border-radius: 2px; }
   .sg-colorbar-ticks { position: relative; width: 50px; }
   .sg-colorbar-ticks span { position: absolute; left: 0; translate: 0 -50%; white-space: nowrap; }
+  /* A tall window: the bar lies under the plot, as wide as the plot, the quietest level at the left. */
+  .sg-colorbar.is-horizontal { flex-direction: column; padding-bottom: 0; margin-left: 46px; }
+  .sg-colorbar.is-horizontal .sg-colorbar-strip { width: auto; height: 14px; }
+  .sg-colorbar.is-horizontal .sg-colorbar-ticks { width: auto; height: 16px; }
+  .sg-colorbar.is-horizontal .sg-colorbar-ticks span { top: 0; translate: -50% 0; }
   .sg-plots { flex: 1; min-width: 0; min-height: 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 10px; }
   .sg-plots.is-vertical { grid-auto-flow: row; grid-auto-rows: 1fr; grid-auto-columns: auto; }
   .sg-plot-cell { min-width: 0; min-height: 0; display: flex; }

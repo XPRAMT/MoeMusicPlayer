@@ -2,7 +2,9 @@ import { tr } from './i18n.js';
 // Spectrogram window settings (ADR 0013): persisted per device in localStorage and sent
 // to the Rust renderer as `SpectrogramOptions`.
 
-const KEY = 'moe.spectrogramSettings';
+const KEY = 'moe.spectrogramSettings.v2';
+/** The first version of the stored settings: its colour map, window and dB range carry over; FFT size, channel and axis are reset to the new defaults. */
+const LEGACY_KEY = 'moe.spectrogramSettings';
 
 export const FFT_SIZES = [1024, 2048, 4096, 8192, 16384];
 export const WINDOW_FUNCTIONS = [
@@ -25,18 +27,17 @@ export const COLORMAPS = [
 /**
  * @typedef {{ mode: 'mix' } | { mode: 'separate' } | { mode: 'channel', index: number }} ChannelSelect
  * @typedef {{ fftSize: number, window: string, colormap: string, channel: ChannelSelect,
- *   dbFloor: number, dbCeiling: number, logFrequency: boolean, maxFrequencyHz: number | null }} SpectrogramSettings
+ *   dbFloor: number, dbCeiling: number, maxFrequencyHz: number | null }} SpectrogramSettings
  */
 
 /** @type {SpectrogramSettings} */
 export const DEFAULT_SPECTROGRAM_SETTINGS = {
-  fftSize: 2048,
+  fftSize: 4096,
   window: 'hann',
   colormap: 'spek',
-  channel: { mode: 'mix' },
+  channel: { mode: 'channel', index: 0 },
   dbFloor: -120,
   dbCeiling: 0,
-  logFrequency: false,
   maxFrequencyHz: null,
 };
 
@@ -53,7 +54,8 @@ export function normalizeSpectrogramSettings(value) {
   if (dbCeiling <= dbFloor) dbCeiling = Math.min(20, dbFloor + 10);
   const channel = raw.channel?.mode === 'separate' ? { mode: 'separate' }
     : raw.channel?.mode === 'channel' && Number.isInteger(raw.channel.index) && raw.channel.index >= 0 ? { mode: 'channel', index: raw.channel.index }
-    : { mode: 'mix' };
+    : raw.channel?.mode === 'mix' ? { mode: 'mix' }
+    : { mode: 'channel', index: 0 };
   const maxFrequencyHz = raw.maxFrequencyHz == null ? null : num(raw.maxFrequencyHz, 0, 100, 400000) || null;
   return {
     fftSize: FFT_SIZES.includes(Number(raw.fftSize)) ? Number(raw.fftSize) : d.fftSize,
@@ -62,7 +64,6 @@ export function normalizeSpectrogramSettings(value) {
     channel: /** @type {ChannelSelect} */ (channel),
     dbFloor,
     dbCeiling,
-    logFrequency: raw.logFrequency === true,
     maxFrequencyHz,
   };
 }
@@ -70,7 +71,14 @@ export function normalizeSpectrogramSettings(value) {
 /** @returns {SpectrogramSettings} */
 export function loadSpectrogramSettings() {
   try {
-    return normalizeSpectrogramSettings(JSON.parse(localStorage.getItem(KEY) ?? 'null'));
+    const current = localStorage.getItem(KEY);
+    if (current !== null) return normalizeSpectrogramSettings(JSON.parse(current));
+    const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY) ?? 'null');
+    if (legacy && typeof legacy === 'object') {
+      const { fftSize: _fft, channel: _channel, logFrequency: _log, ...kept } = legacy;
+      return normalizeSpectrogramSettings(kept);
+    }
+    return normalizeSpectrogramSettings(null);
   } catch {
     return { ...DEFAULT_SPECTROGRAM_SETTINGS };
   }
@@ -99,7 +107,8 @@ export function toRenderOptions(settings, columns, height) {
     channel: settings.channel,
     dbFloor: settings.dbFloor,
     dbCeiling: settings.dbCeiling,
-    logFrequency: settings.logFrequency,
+    // The frequency axis is always linear.
+    logFrequency: false,
     maxFrequencyHz: settings.maxFrequencyHz,
     minLogFrequencyHz: 20,
   };
