@@ -436,9 +436,8 @@
 
 <div class="spectrogram-page" class:is-drag-over={dragOver} use:portalToShell>
   <header class="spectrogram-toolbar">
-    {#if onClose}<button type="button" class="sg-button" onclick={onClose}>{tr("返回")}</button>{/if}
-    <button type="button" class="sg-button" onclick={() => void pickFile('A')}>{tr("開啟 A…")}</button>
-    <button type="button" class="sg-button" onclick={() => void pickFile('B')}>{tr("開啟 B…")}</button>
+    <button type="button" class="sg-button" onclick={() => void pickFile('A')}>{tr("開啟 A")}</button>
+    <button type="button" class="sg-button" onclick={() => void pickFile('B')}>{tr("開啟 B")}</button>
     {#if loaded.B}
       <button type="button" class="sg-button" onclick={swap} title={tr("交換 A／B")}>⇄</button>
       <button type="button" class="sg-button" onclick={clearB}>{tr("關閉 B")}</button>

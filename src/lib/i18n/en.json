@@ -318,7 +318,6 @@
   "版本": "Version",
   "空白鍵": "Space",
   "空的方案": "Empty preset",
-  "返回": "Back",
   "返回專輯首頁": "Back to albums",
   "返回演出者首頁": "Back to artists",
   "返回播放前頁面": "Back to the page before playback",
@@ -540,8 +539,6 @@
   "等待桌面服務": "Waiting for the desktop service",
   "貼上": "Paste",
   "貼上封面": "Paste cover",
-  "開啟 A…": "Open A…",
-  "開啟 B…": "Open B…",
   "開啟 Windows 預設應用程式設定": "Open Windows default apps settings",
   "開啟「{0}」字首索引": "Open the “{0}” initial index",
   "開啟正在播放：{0}": "Open Now Playing: {0}",
@@ -778,5 +775,7 @@
   "px（保持長寬比）": "px (keep aspect ratio)",
   "QQ 音樂": "QQ Music",
   "Windows 音樂資料夾": "Windows Music folder",
-  "Windows 無法以 {0} 開啟共享模式輸出，已改用 {1} 並以高品質轉換。": "Windows could not open shared-mode output at {0}, so {1} is used with high-quality conversion."
+  "Windows 無法以 {0} 開啟共享模式輸出，已改用 {1} 並以高品質轉換。": "Windows could not open shared-mode output at {0}, so {1} is used with high-quality conversion.",
+  "開啟 A": "Open A",
+  "開啟 B": "Open B"
 }
