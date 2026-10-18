@@ -3,9 +3,9 @@
 // area is squeezed by the cover instead of scaling with it (see --np-cover-zoom in app.css). Pure math is exported
 // for tests; `coverZoom` is the Svelte action that wires the events.
 
-export const COVER_ZOOM_MIN = 0.4;
+export const COVER_ZOOM_MIN = 0.5;
 export const COVER_ZOOM_REST = 1;
-export const COVER_ZOOM_MAX = 4;
+export const COVER_ZOOM_MAX = 10;
 export const COVER_ZOOM_WHEEL_STEP = 0.0015;
 export const COVER_DOUBLE_TAP_MS = 300;
 export const COVER_DOUBLE_TAP_SLOP_PX = 24;

@@ -2223,6 +2223,8 @@ input:focus-visible {
 }
 
 .now-playing-lyrics {
+  /* Horizontal swipes change the track (swipeDismiss on this section); vertical scrolling stays native. */
+  touch-action: pan-y;
   display: flex;
   min-width: 0;
   min-height: 0;

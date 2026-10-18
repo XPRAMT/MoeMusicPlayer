@@ -695,7 +695,7 @@ pub enum ResamplingMode {
 
 /// An unknown or malformed stored value falls back to the default instead of
 /// rejecting the whole settings file.
-/// Now Playing cover size remembered across restarts. Only a **shrunk** cover is remembered (0.4 to 1, 1 = original
+/// Now Playing cover size remembered across restarts. Only a **shrunk** cover is remembered (0.5 to 1, 1 = original
 /// size): an enlarged cover, and any pan, is not saved, so the next start begins at the original size. Within a run the
 /// zoom (enlarged or shrunk) stays until the user double-clicks the cover.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -705,7 +705,7 @@ pub struct CoverZoomSettings {
 }
 
 impl CoverZoomSettings {
-    pub const SCALE_RANGE: (f32, f32) = (0.4, 1.0);
+    pub const SCALE_RANGE: (f32, f32) = (0.5, 1.0);
 
     /// A scale above 1 (an enlarged cover) or a non-finite one is not remembered: it becomes 1.
     pub fn normalized(self) -> Self {
@@ -2481,7 +2481,7 @@ mod tests {
     fn only_a_shrunk_cover_is_remembered() {
         assert_eq!(CoverZoomSettings::default().scale, 1.0);
         assert_eq!(CoverZoomSettings { scale: 0.6 }.normalized().scale, 0.6);
-        assert_eq!(CoverZoomSettings { scale: 0.1 }.normalized().scale, 0.4, "the minimum is 0.4");
+        assert_eq!(CoverZoomSettings { scale: 0.1 }.normalized().scale, 0.5, "the minimum is 0.5");
         assert_eq!(CoverZoomSettings { scale: 2.5 }.normalized().scale, 1.0, "an enlarged cover is not remembered");
         assert_eq!(CoverZoomSettings { scale: f32::NAN }.normalized().scale, 1.0);
 

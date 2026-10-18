@@ -11,8 +11,9 @@ export const SWIPE_IGNORE_SELECTOR = 'input, select, textarea, [role="slider"], 
 /** @typedef {{ x: number, y: number, t: number }} SwipeSample */
 /**
  * Either one dismiss direction (`direction` + `onDismiss`) or several (`actions`). `follow: false` keeps the
- * element still: nothing moves while dragging and the action fires only on release.
- * @typedef {{ direction?: SwipeDirection, onDismiss?: () => void, actions?: Partial<Record<SwipeDirection, () => void>>, follow?: boolean, damped?: boolean, enabled?: boolean }} SwipeDismissOptions
+ * element still: nothing moves while dragging and the action fires only on release. `feedbackTarget` makes the
+ * `damped` rubber-band effect play on another element (the lyrics area swipe moves the cover).
+ * @typedef {{ direction?: SwipeDirection, onDismiss?: () => void, actions?: Partial<Record<SwipeDirection, () => void>>, follow?: boolean, damped?: boolean, enabled?: boolean, feedbackTarget?: () => HTMLElement | null }} SwipeDismissOptions
  */
 
 /** @type {Record<SwipeDirection, 'x' | 'y'>} */
@@ -104,15 +105,18 @@ export function swipeDismiss(node, params) {
   let suppressClick = false;
   const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const follows = () => options.follow !== false;
+  /** The element the rubber-band feedback plays on (the node itself unless `feedbackTarget` names another). */
+  const fxNode = () => options.feedbackTarget?.() ?? node;
   const damped = () => options.follow === false && options.damped === true && !reduced();
 
   /** @param {boolean} animate */
   function reset(animate) {
-    node.style.transition = animate && !reduced() ? `translate ${SWIPE_SETTLE_MS}ms ease, scale ${SWIPE_SETTLE_MS}ms ease, opacity ${SWIPE_SETTLE_MS}ms ease` : '';
-    node.style.translate = '';
-    node.style.scale = '';
-    node.style.opacity = '';
-    if (animate && !reduced()) setTimeout(() => { if (!start) node.style.transition = ''; }, SWIPE_SETTLE_MS);
+    const fx = fxNode();
+    fx.style.transition = animate && !reduced() ? `translate ${SWIPE_SETTLE_MS}ms ease, scale ${SWIPE_SETTLE_MS}ms ease, opacity ${SWIPE_SETTLE_MS}ms ease` : '';
+    fx.style.translate = '';
+    fx.style.scale = '';
+    fx.style.opacity = '';
+    if (animate && !reduced()) setTimeout(() => { if (!start) fx.style.transition = ''; }, SWIPE_SETTLE_MS);
   }
 
   /** @param {PointerEvent} event */
@@ -136,7 +140,8 @@ export function swipeDismiss(node, params) {
       if (!getSwipeActions(options)[resolved]) { start = null; return; }
       direction = resolved;
       try { node.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
-      if (follows() || damped()) node.style.transition = 'none';
+      if (follows()) node.style.transition = 'none';
+      else if (damped()) fxNode().style.transition = 'none';
       // Promote to its own compositor layer only while dragging (see .is-swiping in app.css).
       if (follows()) node.classList.add('is-swiping');
     }
@@ -146,9 +151,10 @@ export function swipeDismiss(node, params) {
     else if (damped()) {
       const d = getDampedSwipeOffset(getSwipeOffset(direction, dx, dy));
       const k = d / SWIPE_DAMPED_MAX_PX;
-      node.style.translate = translateFor(direction, d);
-      node.style.scale = String(1 - 0.03 * k);
-      node.style.opacity = String(1 - 0.15 * k);
+      const fx = fxNode();
+      fx.style.translate = translateFor(direction, d);
+      fx.style.scale = String(1 - 0.03 * k);
+      fx.style.opacity = String(1 - 0.15 * k);
     }
     if (event.cancelable) event.preventDefault();
   }

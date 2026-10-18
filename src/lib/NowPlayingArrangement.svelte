@@ -1,6 +1,7 @@
 ﻿<script lang="ts">
   import type { Snippet } from 'svelte';
   import type { NowPlayingLayout } from './ipc';
+  import { swipeDismiss } from './swipe-dismiss.js';
 
   interface Props {
     layout: NowPlayingLayout;
@@ -8,9 +9,11 @@
     artworkVisible?: boolean;
     artwork: Snippet;
     lyrics: Snippet;
+    /** Swipe actions of the lyrics area (left/right = next/previous track); vertical scrolling stays native. */
+    lyricsSwipe?: Parameters<typeof swipeDismiss>[1];
   }
 
-  let { layout, lyricsVisible = true, artworkVisible = true, artwork, lyrics }: Props = $props();
+  let { layout, lyricsVisible = true, artworkVisible = true, artwork, lyrics, lyricsSwipe = {} }: Props = $props();
   let paneOrder = $derived(layout === 'b' ? ['lyrics', 'artwork'] : ['artwork', 'lyrics']);
 </script>
 
@@ -23,7 +26,7 @@
         </div>
       {/if}
     {:else}
-      <section class="now-playing-lyrics" data-layout-pane="lyrics" aria-hidden={!lyricsVisible} aria-labelledby="lyrics-heading">
+      <section class="now-playing-lyrics" data-layout-pane="lyrics" use:swipeDismiss={lyricsSwipe} aria-hidden={!lyricsVisible} aria-labelledby="lyrics-heading">
         {@render lyrics()}
       </section>
     {/if}

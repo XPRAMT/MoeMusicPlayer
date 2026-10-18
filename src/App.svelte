@@ -630,7 +630,7 @@
   // The cover zoom of this run (scale, and pan as fractions of the cover size): it stays across tracks and closing the
   // page; a double click resets it, and an enlarged cover also returns to the original size when the track changes
   // (a shrunk cover stays). Across restarts only a shrunk cover is remembered
-  // (settings.json `coverZoom.scale`, 0.4 to 1); an enlarged cover and its pan are not saved.
+  // (settings.json `coverZoom.scale`, 0.5 to 1); an enlarged cover and its pan are not saved.
   let coverZoomPersisted = $state.raw<{ scale: number; offsetX: number; offsetY: number }>({ scale: 1, offsetX: 0, offsetY: 0 });
   let coverZoomScale = $derived(coverZoomPersisted.scale);
   // The base cover frame is measured at zoom 1 first; until it exists the layout ignores the saved zoom.
@@ -4914,7 +4914,7 @@
             style:--np-lyr-col-a={`${(1 + 1 * (1 - coverShrinkShare)).toFixed(4)}fr`}
             style:--np-lyr-col-b={`${(1 + 1 * (1 - coverShrinkShare)).toFixed(4)}fr`}
             style:--np-lyr-row={`${(0.9 + 1.1 * (1 - coverShrinkShare)).toFixed(4)}fr`}>
-            <NowPlayingArrangement layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved} artworkVisible={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
+            <NowPlayingArrangement lyricsSwipe={{ follow: false, damped: true, feedbackTarget: () => coverStageElement ?? null, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous') } }} layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved} artworkVisible={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
               {#snippet artwork()}
                 <div
                   bind:this={coverStageElement}
