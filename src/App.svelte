@@ -4907,12 +4907,12 @@
           <section class="now-playing-view" aria-label={tr("正在播放")} style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}
             style:--np-cover-width={coverFrame ? `${coverFrame.width}px` : undefined}
             style:--np-cover-zoom={coverLayoutScale}
-            style:--np-art-col-a={`${(1.05 * coverShrinkShare).toFixed(4)}fr`}
-            style:--np-art-col-b={`${(0.95 * coverShrinkShare).toFixed(4)}fr`}
-            style:--np-art-row={`${(1.18 * coverShrinkShare).toFixed(4)}fr`}
-            style:--np-lyr-col-a={`${(0.95 + 1.05 * (1 - coverShrinkShare)).toFixed(4)}fr`}
-            style:--np-lyr-col-b={`${(1.05 + 0.95 * (1 - coverShrinkShare)).toFixed(4)}fr`}
-            style:--np-lyr-row={`${(0.82 + 1.18 * (1 - coverShrinkShare)).toFixed(4)}fr`}>
+            style:--np-art-col-a={`${(1 * coverShrinkShare).toFixed(4)}fr`}
+            style:--np-art-col-b={`${(1 * coverShrinkShare).toFixed(4)}fr`}
+            style:--np-art-row={`${(1 * coverShrinkShare).toFixed(4)}fr`}
+            style:--np-lyr-col-a={`${(1 + 1 * (1 - coverShrinkShare)).toFixed(4)}fr`}
+            style:--np-lyr-col-b={`${(1 + 1 * (1 - coverShrinkShare)).toFixed(4)}fr`}
+            style:--np-lyr-row={`${(1 + 1 * (1 - coverShrinkShare)).toFixed(4)}fr`}>
             <NowPlayingArrangement layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved} artworkVisible={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
               {#snippet artwork()}
                 <div
