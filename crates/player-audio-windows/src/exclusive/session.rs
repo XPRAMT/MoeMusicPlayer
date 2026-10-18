@@ -682,7 +682,7 @@ mod tests {
                     return None;
                 }
                 self.0 -= 1;
-                if self.0 % 2_000 == 0 {
+                if self.0.is_multiple_of(2_000) {
                     thread::sleep(Duration::from_millis(20));
                 }
                 Some(0.1)
