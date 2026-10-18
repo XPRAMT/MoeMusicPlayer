@@ -45,10 +45,6 @@ mod real {
     const AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED: u32 = 0x8889_000E;
     const AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED: u32 = 0x8889_0019;
     const AUDCLNT_E_DEVICE_INVALIDATED: u32 = 0x8889_0004;
-    /// Devices that follow the Intel High Definition Audio specification want buffers in multiples of 128 bytes.
-    const BUFFER_ALIGN_BYTES: u32 = 128;
-    /// Period asked for: 10 ms (the device may force more).
-    const DESIRED_PERIOD_HNS: i64 = 100_000;
 
     /// A message the user can act on.
     pub(crate) fn error_text(error: &WasapiError) -> String {
@@ -147,7 +143,16 @@ mod real {
                 Some(accepted) => accepted.clone(),
                 None => wave_format(format, None),
             };
-            let mut period = self.probe_client_period(&wave)?;
+            // The period is the device's own default, exactly as it reports it. Do not round it to a "nice" buffer
+            // size: some drivers (the Bluetooth one) raise the event every period however many frames the buffer
+            // holds, so a buffer shorter than the period makes playback run slow by that ratio (measured: 384 frames
+            // for a 10 ms period at 44.1 kHz played at 87 % speed). Drivers that need an aligned buffer (HD Audio)
+            // say so with AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED and give the size to use, handled below.
+            let (default_period, min_period) = self
+                .probe_client
+                .get_device_period()
+                .map_err(|error| error_text(&error))?;
+            let mut period = default_period.max(min_period);
             // A failed Initialize leaves the client unusable, so every attempt takes a fresh one.
             for attempt in 0..2 {
                 let mut client = self
@@ -176,14 +181,6 @@ mod real {
                 }
             }
             Err("無法以對齊的緩衝區開啟裝置。".to_owned())
-        }
-    }
-
-    impl WasapiEndpoint {
-        fn probe_client_period(&self, wave: &WaveFormat) -> Result<i64, String> {
-            self.probe_client
-                .calculate_aligned_period_near(DESIRED_PERIOD_HNS, Some(BUFFER_ALIGN_BYTES), wave)
-                .map_err(|error| error_text(&error))
         }
     }
 

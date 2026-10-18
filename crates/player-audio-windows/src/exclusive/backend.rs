@@ -860,6 +860,10 @@ mod tests {
             .split(',')
             .filter_map(|rate| rate.trim().parse().ok())
             .collect();
+        let seconds: usize = std::env::var("MOE_EXCLUSIVE_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1);
         let devices = list_output_devices();
         let device = devices
             .iter()
@@ -873,11 +877,18 @@ mod tests {
         }]);
         let mut backend = ExclusiveBackend::new(Arc::clone(&config));
         backend.set_volume(0.0).unwrap();
-        println!("device: {}", device.name);
+        println!("device: {}, {seconds} s per rate", device.name);
         for rate in rates {
-            let (path, _) = write_wav(&format!("real-{rate}"), rate, rate as usize);
+            let (path, _) = write_wav(&format!("real-{rate}"), rate, rate as usize * seconds);
             let started = Instant::now();
             let duration = backend.load(&path).unwrap();
+            if let Some(session) = backend.session.as_ref() {
+                let frames = session.control.latency_frames.load(Ordering::Relaxed);
+                println!(
+                    "    buffer {frames} frames = {:.3} ms at {rate} Hz",
+                    frames as f64 * 1000.0 / f64::from(rate)
+                );
+            }
             let opened = started.elapsed();
             backend.play().unwrap();
             let playing_since = Instant::now();
@@ -888,7 +899,28 @@ mod tests {
                     info.exclusive_fallback
                 );
             };
-            wait_until("the second of audio to play", || backend.is_empty());
+            let mut next_report = 5;
+            while !backend.is_empty() {
+                assert!(
+                    playing_since.elapsed() < Duration::from_secs(seconds as u64 + 20),
+                    "timed out playing {rate} Hz"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+                if playing_since.elapsed().as_secs() >= next_report {
+                    println!(
+                        "    {:>2} s: position {:>7.3} s, underruns {}",
+                        next_report,
+                        backend.position().as_secs_f64(),
+                        backend
+                            .resampling_info()
+                            .unwrap()
+                            .exclusive
+                            .unwrap()
+                            .underruns
+                    );
+                    next_report += 5;
+                }
+            }
             let played_for = playing_since.elapsed();
             let after = backend.resampling_info().unwrap().exclusive.unwrap();
             println!(
