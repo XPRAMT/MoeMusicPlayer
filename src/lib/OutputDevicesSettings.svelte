@@ -1,3 +1,23 @@
+<script module lang="ts">
+  // The settings page and the quick-settings drawer each mount this list. What must be the same in both lives here:
+  // the volume-link switch (one switch, not one per copy), the moment each device's volume was last set by the player
+  // (so one copy's own writes are not taken for outside changes by the other), and which copy reacts to changes made
+  // outside the player (only one, or the link would move the other devices twice).
+  const SYNC_KEY = 'moe.outputVolumeSync';
+
+  function readSyncPreference(): boolean {
+    try {
+      return localStorage.getItem(SYNC_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  const shared = $state({ volumeSync: readSyncPreference() });
+  const volumeEdited = new Map<string, number>();
+  const liveInstances = new Set<symbol>();
+</script>
+
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { isTauri } from '@tauri-apps/api/core';
@@ -77,7 +97,6 @@
   const MATRIX_GROUP_GAP_PX = 10;
   /** The column with the source-channel names (FL, FR, ...). */
   const MATRIX_LABEL_PX = 32;
-  const SYNC_KEY = 'moe.outputVolumeSync';
 
   let devices = $state<AudioOutputDevice[]>([]);
   let entries = $state<OutputDeviceEntry[]>([]);
@@ -86,7 +105,6 @@
   let selectedSlot = $state(0);
   /** The real Windows volume (0–100) and mute state of each device, by device id. */
   let volumes = $state<Record<string, { percent: number; muted: boolean }>>({});
-  let volumeSync = $state(readSyncPreference());
   /** WASAPI exclusive mode: one device, bit-perfect, no mixing with other programs. */
   let exclusive = $state(false);
   let loading = $state(true);
@@ -124,21 +142,12 @@
   let unlistenDevices: (() => void) | null = null;
   let deviceEventTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const volumeEdited = new Map<string, number>();
   const volumePending = new Map<string, number>();
   const volumeSendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const syncScales = new Map<string, number>();
 
-  function readSyncPreference(): boolean {
-    try {
-      return localStorage.getItem(SYNC_KEY) === '1';
-    } catch {
-      return false;
-    }
-  }
-
   function setVolumeSync(on: boolean): void {
-    volumeSync = on;
+    shared.volumeSync = on;
     syncScales.clear();
     try {
       localStorage.setItem(SYNC_KEY, on ? '1' : '0');
@@ -173,7 +182,7 @@
     volumes = { ...volumes, [change.id]: { percent, muted: change.muted } };
     // With the volume link on, the other playing devices follow a change made outside the player too (the Windows
     // mixer, a headset button), in their original proportion. Their own events are ignored through the same hold.
-    if (!volumeSync || !previous || previous.percent === percent) return;
+    if (!shared.volumeSync || liveInstances.values().next().value !== instance || !previous || previous.percent === percent) return;
     const ids = playingRows.map(({ row }) => volumeDeviceId(row, devices)).filter((value): value is string => value !== null);
     if (!ids.includes(change.id)) return;
     pruneScales(syncScales, ids);
@@ -376,7 +385,7 @@
     if (!id) return;
     const before = new Map(Object.entries(volumes).map(([key, value]) => [key, value.percent]));
     queueVolume(id, percent);
-    if (!volumeSync) return;
+    if (!shared.volumeSync) return;
     const ids = playingRows.map(({ row }) => volumeDeviceId(row, devices)).filter((value): value is string => value !== null);
     pruneScales(syncScales, ids);
     for (const [other, value] of syncVolumes({ changedId: id, next: percent, volumes: before, ids, scales: syncScales })) {
@@ -529,6 +538,7 @@
   }
 
   onMount(() => {
+    liveInstances.add(instance);
     window.addEventListener(SHARED_EVENT, adoptShared);
     if (isTauri()) {
       void listen<DeviceVolumeChanged>('device-volume-changed', (event) => onVolumeChanged(event.payload)).then((unlisten) => {
@@ -550,6 +560,7 @@
 
   onDestroy(() => {
     disposed = true;
+    liveInstances.delete(instance);
     window.removeEventListener(SHARED_EVENT, adoptShared);
     unlistenVolume?.();
     unlistenDevices?.();
@@ -620,7 +631,7 @@
   <button type="button" class="soft-button" disabled={presets[selectedSlot] === null} use:appTooltip={tr('清除選取的方案')} onclick={() => void clearPreset()}>{tr('清除')}</button>
   {#if playingRows.length > 1}
     <label class="output-sync">
-      <input type="checkbox" checked={volumeSync} onchange={(event) => setVolumeSync(event.currentTarget.checked)} />
+      <input type="checkbox" checked={shared.volumeSync} onchange={(event) => setVolumeSync(event.currentTarget.checked)} />
       <span use:appTooltip={tr('調整其中一台的音量時，其他裝置依原本的比例跟著調整')}>{tr('音量同步')}</span>
     </label>
   {/if}
