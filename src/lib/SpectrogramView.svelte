@@ -20,7 +20,7 @@
   } from './spectrogram-settings.js';
   import {
     COMPARE_MODES, FULL_VIEW, differenceImage, dropAssignment, layerHeightFraction, levelToDb,
-    loadComparePrefs, panView, sampleLevel, saveComparePrefs, worldStyle, zoomView,
+    loadComparePrefs, panView, sampleLevel, saveComparePrefs, timeTickStep, timeTickValues, worldStyle, zoomView,
     type ComparePrefs, type View,
   } from './spectrogram-compare.js';
 
@@ -170,14 +170,15 @@
   });
 
   const ticks = $derived(frequencyTicks(sharedMaxHz, settings.logFrequency));
+  /** Width of one plot in px (a side-by-side layout halves it), for the time axis step. */
+  let plotWidthPx = $state(1200);
   const timeTicks = $derived.by(() => {
     const total = durationMax / 1000;
     const visible = total * (view.x1 - view.x0);
-    const step = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300].find((s) => visible / s <= 12) ?? 600;
-    const out: number[] = [];
-    for (let t = Math.ceil((view.x0 * total) / step) * step; t <= view.x1 * total + 1e-9; t += step) out.push(t);
-    return out;
+    return timeTickValues(view.x0 * total, view.x1 * total, timeTickStep(visible, plotWidthPx));
   });
+  /** A label at the very left or right edge of the axis stays inside it (centred there it would be cut off). */
+  const timeLabelShift = (fraction: number) => (fraction < 0.03 ? '0 0' : fraction > 0.97 ? '-100% 0' : '-50% 0');
   const toViewX = (worldX: number) => (worldX - view.x0) / (view.x1 - view.x0);
   const toViewTop = (worldY: number) => 1 - (worldY - view.y0) / (view.y1 - view.y0);
   const panelWorldY = (p: number, axisFraction: number) => (panels - 1 - p + axisFraction) / panels;
@@ -240,7 +241,10 @@
     const host = event.currentTarget as HTMLElement;
     const { vx, vy } = worldAt(event, host);
     const factor = Math.exp((event.deltaY || event.deltaX) * 0.0015);
-    view = event.shiftKey ? zoomView(view, 'y', vy, factor) : zoomView(view, 'x', vx, factor);
+    // The wheel zooms time and frequency together around the pointer; Shift keeps it to frequency, Ctrl to time.
+    if (event.shiftKey) view = zoomView(view, 'y', vy, factor);
+    else if (event.ctrlKey) view = zoomView(view, 'x', vx, factor);
+    else view = zoomView(zoomView(view, 'x', vx, factor), 'y', vy, factor);
   }
 
   let wipeDragging = false;
@@ -312,7 +316,13 @@
     if (initialTrackId) setSource('A', { kind: 'track', id: initialTrackId });
     window.addEventListener('keydown', onKeydown);
     if (sizer) {
-      resizeObserver = new ResizeObserver(() => scheduleRender(400));
+      const measure = () => {
+        // The axis column is 46 px; a left-right layout gives each plot half of what is left.
+        const cells = compareActive && prefs.mode === 'sideH' ? 2 : 1;
+        plotWidthPx = Math.max(1, (sizer!.clientWidth - (cells - 1) * 10) / cells - 46);
+      };
+      measure();
+      resizeObserver = new ResizeObserver(() => { measure(); scheduleRender(400); });
       resizeObserver.observe(sizer);
     }
     try {
@@ -406,7 +416,10 @@
     </div>
     <div></div>
     <div class="sg-xaxis">
-      {#each timeTicks as t (t)}<span style:left={`${toViewX((t * 1000) / durationMax) * 100}%`}>{fmtTime(t)}</span>{/each}
+      {#each timeTicks as t (t)}
+        {@const at = toViewX((t * 1000) / durationMax)}
+        <span style:left={`${at * 100}%`} style:translate={timeLabelShift(at)}>{fmtTime(t)}</span>
+      {/each}
     </div>
   </div>
 {/snippet}
@@ -513,7 +526,7 @@
     {#if diffUrl}
       <span>{tr("B 較弱 −")}{(range / 2).toFixed(0)} dB</span><span>{tr("B 較強 +")}{(range / 2).toFixed(0)} dB</span>
     {/if}
-    <span class="sg-hint">{tr("滾輪：縮放時間 · Shift+滾輪：縮放頻率 · 拖曳：平移 · 雙擊：重置 · 拖放檔案開啟（兩個檔案＝A＋B）")}</span>
+    <span class="sg-hint">{tr("滾輪：縮放（時間與頻率） · Shift+滾輪：只縮放頻率 · Ctrl+滾輪：只縮放時間 · 拖曳：平移 · 雙擊：重置 · 拖放檔案開啟（兩個檔案＝A＋B）")}</span>
   </div>
   {#if dragOver}<div class="sg-drop-hint">{tr("放開以開啟（兩個檔案＝A 與 B）")}</div>{/if}
 </div>
@@ -539,7 +552,8 @@
   .sg-tag { background: var(--accent, #8a7dff); color: var(--accent-foreground, #0b0b10); border-radius: 3px; padding: 0 5px; }
   .sg-cutoff { color: #ffcf6b; opacity: 1 !important; }
   .sg-error { color: #ff7a7a; opacity: 1 !important; }
-  .sg-main { flex: 1; min-height: 0; display: flex; gap: 6px; }
+  /* A little room above the plot: the top frequency label (centred on the top edge) would sit on the file info row. */
+  .sg-main { flex: 1; min-height: 0; display: flex; gap: 6px; padding-top: 9px; }
   /* The colour bar at the right, as tall as the plot (the bottom padding is the time axis row below it). */
   .sg-colorbar { flex: 0 0 auto; display: flex; gap: 5px; padding-bottom: 18px; font-size: 11px; opacity: 0.9; }
   .sg-colorbar-strip { width: 14px; border-radius: 2px; }
@@ -549,7 +563,7 @@
   .sg-plots.is-vertical { grid-auto-flow: row; grid-auto-rows: 1fr; grid-auto-columns: auto; }
   .sg-plot-cell { min-width: 0; min-height: 0; display: flex; }
   .sg-plot-area { flex: 1; min-height: 0; min-width: 0; display: grid; grid-template-columns: 46px 1fr; grid-template-rows: 1fr 18px; }
-  .sg-yaxis, .sg-xaxis { position: relative; font-size: 11px; opacity: 0.8; overflow: hidden; }
+  .sg-yaxis, .sg-xaxis { position: relative; font-size: 11px; opacity: 0.8; overflow: visible; }
   .sg-yaxis span { position: absolute; right: 5px; translate: 0 -50%; white-space: nowrap; }
   .sg-yaxis em { position: absolute; left: 0; translate: 0 -50%; font-style: normal; font-weight: 600; color: #8a7dff; }
   .sg-xaxis span { position: absolute; top: 2px; translate: -50% 0; white-space: nowrap; }

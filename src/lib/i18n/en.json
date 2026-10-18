@@ -607,7 +607,7 @@
   "歌詞描邊": "Lyrics outline",
   "歌詞資料與目前播放曲目不一致。": "The lyrics data does not match the track that is playing.",
   "歌詞顯示": "Lyrics display",
-  "滾輪：縮放時間 · Shift+滾輪：縮放頻率 · 拖曳：平移 · 雙擊：重置 · 拖放檔案開啟（兩個檔案＝A＋B）": "Wheel: zoom time · Shift+wheel: zoom frequency · Drag: pan · Double-click: reset · Drop files to open (two files = A + B)",
+  "滾輪：縮放（時間與頻率） · Shift+滾輪：只縮放頻率 · Ctrl+滾輪：只縮放時間 · 拖曳：平移 · 雙擊：重置 · 拖放檔案開啟（兩個檔案＝A＋B）": "Wheel: zoom (time and frequency) · Shift+wheel: frequency only · Ctrl+wheel: time only · Drag: pan · Double-click: reset · Drop files to open (two files = A + B)",
   "滾輪向上": "Wheel up",
   "滾輪向下": "Wheel down",
   "演出者": "Artists",

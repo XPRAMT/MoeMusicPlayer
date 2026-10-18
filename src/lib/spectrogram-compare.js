@@ -51,6 +51,42 @@ export function zoomView(view, axis, anchor, factor) {
   return axis === 'x' ? { ...view, x0: lo, x1: lo + span } : { ...view, y0: lo, y1: lo + span };
 }
 
+/** The tick steps (seconds) the time axis picks from. */
+const TIME_TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200];
+/** The time axis ticks every 10 seconds when the labels fit. */
+export const PREFERRED_TIME_TICK_SECONDS = 10;
+/** Closest two time labels may stand, in px ("10:00" is about 36 px wide). */
+export const MIN_TIME_TICK_SPACING_PX = 56;
+/** Beyond this spacing (a zoomed-in view) the axis gets finer steps than 10 seconds. */
+const MAX_TIME_TICK_SPACING_PX = 400;
+
+/**
+ * The time axis step in seconds: one tick every 10 seconds, coarser when that would crowd the labels (a long track) and
+ * finer when the view is zoomed far in (the labels would be a long way apart).
+ * @param {number} visibleSeconds time span on screen  @param {number} widthPx width of the plot
+ */
+export function timeTickStep(visibleSeconds, widthPx) {
+  if (!(visibleSeconds > 0) || !(widthPx > 0)) return PREFERRED_TIME_TICK_SECONDS;
+  const spacing = (/** @type {number} */ step) => (widthPx * step) / visibleSeconds;
+  const preferred = spacing(PREFERRED_TIME_TICK_SECONDS);
+  if (preferred >= MIN_TIME_TICK_SPACING_PX && preferred <= MAX_TIME_TICK_SPACING_PX) return PREFERRED_TIME_TICK_SECONDS;
+  if (preferred < MIN_TIME_TICK_SPACING_PX) {
+    return TIME_TICK_STEPS.find((step) => step > PREFERRED_TIME_TICK_SECONDS && spacing(step) >= MIN_TIME_TICK_SPACING_PX) ?? TIME_TICK_STEPS[TIME_TICK_STEPS.length - 1];
+  }
+  // Zoomed in: the largest finer step whose labels are no more than 400 px apart.
+  const finer = TIME_TICK_STEPS.filter((step) => step < PREFERRED_TIME_TICK_SECONDS && spacing(step) <= MAX_TIME_TICK_SPACING_PX);
+  return finer.length > 0 ? finer[finer.length - 1] : TIME_TICK_STEPS[0];
+}
+
+/** The tick times (seconds) from `from` to `to`, multiples of `step`. @param {number} from @param {number} to @param {number} step */
+export function timeTickValues(from, to, step) {
+  /** @type {number[]} */
+  const ticks = [];
+  if (!(step > 0) || !(to >= from)) return ticks;
+  for (let index = Math.ceil(from / step - 1e-9); index * step <= to + 1e-9; index += 1) ticks.push(Number((index * step).toFixed(6)));
+  return ticks;
+}
+
 /** Pan by a delta in view fractions (positive dx moves content left). @param {View} view @param {number} dx @param {number} dy */
 export function panView(view, dx, dy) {
   const sx = view.x1 - view.x0;
