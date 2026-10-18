@@ -1489,6 +1489,10 @@ pub struct AppSettings {
     /// Three saved sets of output devices the settings page switches between (`None`: an empty slot).
     #[serde(default = "default_output_presets")]
     pub output_presets: Vec<Option<Vec<OutputDeviceEntry>>>,
+    /// WASAPI exclusive output (Windows): one device, bit-perfect, no mixing with other programs; the multi-device
+    /// output is off while it is on (ADR 0020).
+    #[serde(default)]
+    pub output_exclusive: bool,
     /// Now Playing cover size remembered across restarts (shrunk only; see `CoverZoomSettings`).
     #[serde(default)]
     pub cover_zoom: CoverZoomSettings,
@@ -1525,6 +1529,7 @@ impl Default for AppSettings {
             dsd: DsdPlaybackSettings::default(),
             output_devices: Vec::new(),
             output_presets: default_output_presets(),
+            output_exclusive: false,
             cover_zoom: CoverZoomSettings::default(),
             taskbar_lyrics: TaskbarLyricsSettings::default(),
             language: UiLanguage::default(),
@@ -1968,6 +1973,7 @@ struct RawSettings {
     dsd: Option<serde_json::Value>,
     output_devices: Option<serde_json::Value>,
     output_presets: Option<serde_json::Value>,
+    output_exclusive: Option<bool>,
     cover_zoom: Option<serde_json::Value>,
     taskbar_lyrics: Option<serde_json::Value>,
     language: Option<serde_json::Value>,
@@ -2021,6 +2027,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         dsd: lenient_dsd_settings(raw.dsd),
         output_devices: lenient_output_devices(raw.output_devices),
         output_presets: lenient_output_presets(raw.output_presets),
+        output_exclusive: raw.output_exclusive.unwrap_or(false),
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
         language: lenient_language(raw.language),
@@ -2468,6 +2475,24 @@ mod tests {
         assert_eq!(persisted["outputDevices"][1]["name"], "Speakers");
         assert_eq!(persisted["outputDevices"][1]["channelMap"][0]["source"], 1);
         assert!(persisted["outputDevices"][0]["id"].is_null());
+    }
+
+    #[test]
+    fn the_exclusive_output_flag_defaults_off_and_survives_restart() {
+        let directory = test_directory("output-exclusive");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).unwrap();
+        assert!(!store.snapshot().unwrap().output_exclusive);
+        store
+            .update(|settings| {
+                settings.output_exclusive = true;
+                Ok(())
+            })
+            .unwrap();
+        let reopened = SettingsStore::open(&path, AppSettings::default()).unwrap();
+        assert!(reopened.snapshot().unwrap().output_exclusive);
+        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["outputExclusive"], true);
     }
 
     #[test]

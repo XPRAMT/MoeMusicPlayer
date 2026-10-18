@@ -1573,6 +1573,14 @@ fn playback_output_format(info: &ResamplingInfo) -> PlaybackOutputFormat {
         },
         dsee_notice: info.dsee_notice.clone(),
         dsee_output_rate_hz: info.dsee_output_rate,
+        exclusive: info.exclusive.as_ref().map(|exclusive| ExclusiveOutput {
+            bits: exclusive.bits,
+            channels: exclusive.channels,
+            source_channels: exclusive.source_channels,
+            bit_perfect: exclusive.bit_perfect,
+            volume_applied: exclusive.volume_applied,
+            underruns: exclusive.underruns,
+        }),
     }
 }
 
@@ -2351,6 +2359,21 @@ struct PlaybackOutputFormat {
     dsee_hx: DseeHxActivity,
     dsee_notice: Option<String>,
     dsee_output_rate_hz: Option<u32>,
+    /// Set while the output is WASAPI exclusive mode.
+    exclusive: Option<ExclusiveOutput>,
+}
+
+/// The exclusive-mode stream as opened for the current track.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+struct ExclusiveOutput {
+    bits: u16,
+    channels: u16,
+    source_channels: u16,
+    bit_perfect: bool,
+    volume_applied: bool,
+    underruns: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2507,6 +2530,7 @@ mod playback_queue_ipc_tests {
                 dsee_hx: DseeHxActivity::Off,
                 dsee_notice: None,
                 dsee_output_rate_hz: None,
+                exclusive: None,
             }),
         };
         let value = serde_json::to_value(snapshot).expect("serialize playback snapshot");
@@ -6397,6 +6421,60 @@ async fn settings_apply_output_preset(
 }
 
 #[tauri::command]
+fn settings_get_output_exclusive(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.output_exclusive)
+        .map_err(|error| error.to_string())
+}
+
+/// Switch WASAPI exclusive output on or off. Exclusive mode plays on one device, so turning it on keeps only the
+/// first chosen device; the player rebuilds its output and the current track carries on from where it was.
+#[tauri::command]
+async fn settings_set_output_exclusive(
+    state: State<'_, AppState>,
+    exclusive: bool,
+) -> Result<bool, String> {
+    let saved = state
+        .settings
+        .update(|settings| {
+            settings.output_exclusive = exclusive;
+            if exclusive {
+                let mut seen_enabled = false;
+                for entry in settings.output_devices.iter_mut() {
+                    if entry.enabled {
+                        if seen_enabled {
+                            entry.enabled = false;
+                        }
+                        seen_enabled = true;
+                    }
+                }
+            }
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(service) = state.playback.as_ref() {
+            let applied = match set_playback_output_devices(service, &saved.output_devices) {
+                Ok(ticket) => await_playback_ack_within(ticket, Duration::from_secs(15)).await,
+                Err(error) => Err(error),
+            };
+            let applied = match applied {
+                Ok(_) => match set_playback_exclusive(service, exclusive) {
+                    Ok(ticket) => await_playback_ack_within(ticket, Duration::from_secs(15)).await,
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            };
+            applied.map_err(|error| format!("設定已保存，但套用到播放器失敗：{error}"))?;
+        }
+    }
+    Ok(saved.output_exclusive)
+}
+
+#[tauri::command]
 fn settings_get_dsd(state: State<'_, AppState>) -> Result<settings::DsdPlaybackSettings, String> {
     state
         .settings
@@ -9955,6 +10033,21 @@ fn output_device_settings(
 }
 
 #[cfg(target_os = "windows")]
+fn set_playback_exclusive(
+    service: &WindowsPlaybackService,
+    exclusive: bool,
+) -> Result<CommandTicket, String> {
+    let _gate = service
+        .command_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    service
+        .player
+        .request_set_exclusive(exclusive)
+        .map_err(|error| playback_audio_error_message(&error))
+}
+
+#[cfg(target_os = "windows")]
 fn set_playback_output_devices(
     service: &WindowsPlaybackService,
     entries: &[settings::OutputDeviceEntry],
@@ -10900,6 +10993,8 @@ pub fn run() {
             audio_set_device_volume,
             settings_get_output_devices,
             settings_set_output_devices,
+            settings_get_output_exclusive,
+            settings_set_output_exclusive,
             settings_get_output_presets,
             settings_save_output_preset,
             settings_clear_output_preset,
@@ -11038,10 +11133,11 @@ pub fn run() {
             #[cfg(target_os = "android")]
             android_dsd::set_gain_db(initial_settings.dsd.gain_db);
             #[cfg(target_os = "windows")]
-            let (playback, playback_error) = match PlayerHandle::with_output_devices(
+            let (playback, playback_error) = match PlayerHandle::with_output_options(
                 audio_resampling_mode(initial_settings.resampling_mode),
                 initial_settings.dsee_hx,
                 output_device_settings(&initial_settings.output_devices),
+                initial_settings.output_exclusive,
             ) {
                 Ok(player) => {
                     player.configure_dsd(player_audio_windows::DsdSettings {
