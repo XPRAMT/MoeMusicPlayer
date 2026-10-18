@@ -2031,6 +2031,115 @@ mod tests {
         assert_eq!(backend.output_status(), OutputStatus::Healthy);
     }
 
+    /// Measures how fast the named real devices really consume audio (muted): one silent counting source per device
+    /// on its own mixer, frames pulled divided by wall-clock time. `MOE_CLOCK_DEVICES` is a comma-separated list of
+    /// name fragments; `MOE_CLOCK_SECONDS` the length (default 120).
+    #[test]
+    #[ignore = "opens real output devices for minutes (silent); run manually"]
+    fn measure_real_device_clocks() {
+        struct Counter {
+            channels: ChannelCount,
+            rate: SampleRate,
+            samples: Arc<AtomicU64>,
+            pending: u64,
+        }
+        impl Iterator for Counter {
+            type Item = Sample;
+            fn next(&mut self) -> Option<Sample> {
+                self.pending += 1;
+                if self.pending >= 256 {
+                    self.samples.fetch_add(self.pending, Ordering::Relaxed);
+                    self.pending = 0;
+                }
+                Some(0.0)
+            }
+        }
+        impl Source for Counter {
+            fn current_span_len(&self) -> Option<usize> {
+                None
+            }
+            fn channels(&self) -> ChannelCount {
+                self.channels
+            }
+            fn sample_rate(&self) -> SampleRate {
+                self.rate
+            }
+            fn total_duration(&self) -> Option<Duration> {
+                None
+            }
+        }
+        let wanted = std::env::var("MOE_CLOCK_DEVICES").unwrap_or_default();
+        let seconds: u64 = std::env::var("MOE_CLOCK_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(120);
+        let listed = crate::output_devices::list_output_devices();
+        let mut sinks = Vec::new();
+        for fragment in wanted
+            .split(',')
+            .map(str::trim)
+            .filter(|fragment| !fragment.is_empty())
+        {
+            let device = listed
+                .iter()
+                .find(|device| device.name.contains(fragment))
+                .unwrap_or_else(|| panic!("no device named like {fragment:?}: {listed:?}"));
+            let found = find_output_device(&device.id).expect("device");
+            let sink = DeviceSinkBuilder::from_device(found)
+                .unwrap()
+                .open_sink_or_fallback()
+                .unwrap();
+            let samples = Arc::new(AtomicU64::new(0));
+            let channels = sink.config().channel_count();
+            let rate = sink.config().sample_rate();
+            sink.mixer().add(Counter {
+                channels,
+                rate,
+                samples: Arc::clone(&samples),
+                pending: 0,
+            });
+            println!(
+                "{}: opened at {} Hz, {} ch",
+                device.name,
+                rate.get(),
+                channels.get()
+            );
+            sinks.push((
+                device.name.clone(),
+                sink,
+                samples,
+                rate.get(),
+                u64::from(channels.get()),
+            ));
+        }
+        thread::sleep(Duration::from_secs(5));
+        let started = Instant::now();
+        let base: Vec<u64> = sinks
+            .iter()
+            .map(|sink| sink.2.load(Ordering::Relaxed))
+            .collect();
+        let mut elapsed_seconds = 0;
+        while elapsed_seconds < seconds {
+            thread::sleep(Duration::from_secs(10));
+            elapsed_seconds += 10;
+            let elapsed = started.elapsed().as_secs_f64();
+            let mut rates = Vec::new();
+            for (index, (name, _, samples, nominal, channels)) in sinks.iter().enumerate() {
+                let frames = (samples.load(Ordering::Relaxed) - base[index]) / channels;
+                let rate = frames as f64 / elapsed;
+                let ppm = (rate / f64::from(*nominal) - 1.0) * 1e6;
+                println!("t={elapsed:6.1}s  {name}: {rate:.3} Hz ({ppm:+.1} ppm vs {nominal} Hz)");
+                rates.push(rate / f64::from(*nominal));
+            }
+            if rates.len() == 2 {
+                println!(
+                    "           relative drift between the two: {:+.1} ppm",
+                    (rates[0] / rates[1] - 1.0) * 1e6
+                );
+            }
+        }
+    }
+
     /// Plays silent 44.1 kHz and 96 kHz tones in both modes on the real
     /// default device and checks the stream rate and conversion path.
     #[test]
