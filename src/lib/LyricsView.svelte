@@ -938,8 +938,17 @@
   .lyrics-view[data-text-effect='stroke'] .lyric-translation,
   .lyrics-view[data-text-effect='stroke'] .lyric-romanization {
     text-shadow: none;
-    -webkit-text-stroke: 0.08em rgba(var(--text-inverse-rgb), 0.7);
+    -webkit-text-stroke: 0.08em rgba(var(--text-inverse-rgb), 0.5);
     paint-order: stroke fill;
+  }
+
+  /* The primary line is clipped to 2 lines at the measured ink height, with no room beyond the descenders; the outline
+     reaches half its width (0.04em) past the glyphs and the bottoms of y, j, g and q were cut. Give the clip box that
+     room as padding and take it back with a negative margin, so the layout does not move. */
+  .lyrics-view[data-text-effect='stroke'] .lyric-primary {
+    padding-block: 0.06em;
+    margin-block: -0.06em;
+    max-height: calc(var(--lyric-primary-font-size, 14px) * var(--lyric-primary-line-height, 1.35) * 2 + 0.12em);
   }
 
   .lyrics-view[data-text-effect='none'] .lyric-primary,

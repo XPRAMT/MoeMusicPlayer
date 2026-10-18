@@ -232,8 +232,16 @@
       drop-shadow(0 0 var(--taskbar-lyrics-glow-blur) rgba(var(--taskbar-lyrics-effect-rgb), 0.38));
   }
 
+  /* The lines are clipped (for the scrolling); the outline reaches 0.04em past the glyphs, so give the clip room above and
+     below for it (a negative margin takes it back, the layout does not move). */
+  .taskbar-lyrics[data-text-effect='stroke'] .taskbar-lyrics-main,
+  .taskbar-lyrics[data-text-effect='stroke'] .taskbar-lyrics-translation {
+    padding-block: 0.06em;
+    margin-block: -0.06em;
+  }
+
   .taskbar-lyrics[data-text-effect='stroke'] .taskbar-lyrics-track {
-    -webkit-text-stroke: 0.08em rgba(var(--taskbar-lyrics-effect-rgb), 0.7);
+    -webkit-text-stroke: 0.08em rgba(var(--taskbar-lyrics-effect-rgb), 0.5);
     paint-order: stroke fill;
   }
 </style>
