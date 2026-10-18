@@ -3244,6 +3244,7 @@ dependencies = [
  "player-formats",
  "symphonia",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

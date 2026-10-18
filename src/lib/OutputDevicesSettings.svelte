@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { isTauri } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import { appTooltip } from './app-tooltip.js';
   import { getErrorText, invokeCommand } from './ipc';
   import { tr } from './i18n.js';
   import type {
     AudioOutputDevice,
     AudioOutputDeviceStatus,
+    DeviceVolumeChanged,
     OutputDeviceEntry,
     PlaybackOutputFormat,
   } from './ipc';
@@ -57,7 +59,8 @@
   const instance = Symbol('output-devices');
   const SAVE_DELAY_MS = 250;
   const STATUS_POLL_MS = 2000;
-  const VOLUME_POLL_MS = 1000;
+  /** Windows tells us about volume changes (an event per change); this slow read only catches what that missed. */
+  const VOLUME_POLL_MS = 5000;
   /** How often the list of playback devices is read again, so a device that disconnects shows up. */
   const DEVICE_POLL_MS = 3000;
   const VOLUME_SEND_MS = 60;
@@ -113,6 +116,7 @@
   let volumeTimer: ReturnType<typeof setInterval> | null = null;
   let deviceTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
+  let unlistenVolume: (() => void) | null = null;
 
   const volumeEdited = new Map<string, number>();
   const volumePending = new Map<string, number>();
@@ -146,6 +150,32 @@
     }
   }
 
+  /** Ask Windows to report volume changes of the listed devices (replaces the earlier list). */
+  function watchVolumes(): void {
+    if (!isTauri() || disposed) return;
+    void invokeCommand('audio_watch_device_volumes', { ids: devices.map((device) => device.id) }).catch(() => undefined);
+  }
+
+  /** Windows reported a volume or mute change of a device. */
+  function onVolumeChanged(change: DeviceVolumeChanged): void {
+    const percent = Math.round(change.volumePercent);
+    // Our own writes (and the slider the user is dragging) come back as events too; they are already shown.
+    if (Date.now() - (volumeEdited.get(change.id) ?? 0) < VOLUME_HOLD_MS) return;
+    const previous = volumes[change.id];
+    if (previous && previous.percent === percent && previous.muted === change.muted) return;
+    const before = new Map(Object.entries(volumes).map(([key, value]) => [key, value.percent]));
+    volumes = { ...volumes, [change.id]: { percent, muted: change.muted } };
+    // With the volume link on, the other playing devices follow a change made outside the player too (the Windows
+    // mixer, a headset button), in their original proportion. Their own events are ignored through the same hold.
+    if (!volumeSync || !previous || previous.percent === percent) return;
+    const ids = playingRows.map(({ row }) => volumeDeviceId(row, devices)).filter((value): value is string => value !== null);
+    if (!ids.includes(change.id)) return;
+    pruneScales(syncScales, ids);
+    for (const [other, value] of syncVolumes({ changedId: change.id, next: percent, volumes: before, ids, scales: syncScales })) {
+      queueVolume(other, value);
+    }
+  }
+
   async function refreshVolumes(): Promise<void> {
     if (!isTauri()) return;
     try {
@@ -171,6 +201,7 @@
       const next = await invokeCommand('audio_list_output_devices', {});
       if (!disposed && !sameDeviceList(next, devices)) {
         devices = next;
+        watchVolumes();
         void refreshVolumes();
         void refreshStatus();
       }
@@ -187,6 +218,7 @@
         devices = next;
         failure = null;
       }
+      watchVolumes();
       void refreshVolumes();
     } catch (error) {
       if (!disposed) failure = tr('無法列出播放裝置：{0}', [getErrorText(error)]);
@@ -222,6 +254,7 @@
       loading = false;
     }
     void refreshStatus();
+    watchVolumes();
     void refreshVolumes();
   }
 
@@ -499,6 +532,12 @@
 
   onMount(() => {
     window.addEventListener(SHARED_EVENT, adoptShared);
+    if (isTauri()) {
+      void listen<DeviceVolumeChanged>('device-volume-changed', (event) => onVolumeChanged(event.payload)).then((unlisten) => {
+        if (disposed) unlisten();
+        else unlistenVolume = unlisten;
+      });
+    }
     void load();
     pollTimer = setInterval(() => void refreshStatus(), STATUS_POLL_MS);
     deviceTimer = setInterval(() => void pollDevices(), DEVICE_POLL_MS);
@@ -508,6 +547,7 @@
   onDestroy(() => {
     disposed = true;
     window.removeEventListener(SHARED_EVENT, adoptShared);
+    unlistenVolume?.();
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;

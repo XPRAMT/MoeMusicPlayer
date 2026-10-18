@@ -13,6 +13,8 @@ matroska = "=0.30.1"
 symphonia = { version = "=0.5.5", default-features = false, features = ["mkv"] }
 
 [target.'cfg(windows)'.dependencies]
+# The `#[implement]` macro (COM callback objects) names this crate; same version the `windows` crate uses.
+windows-core = "=0.62.2"
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

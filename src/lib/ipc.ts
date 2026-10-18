@@ -167,6 +167,13 @@ export interface AudioDeviceVolume {
   muted: boolean;
 }
 
+/** Payload of the `device-volume-changed` event: Windows reported a volume or mute change. */
+export interface DeviceVolumeChanged {
+  id: string;
+  volumePercent: number;
+  muted: boolean;
+}
+
 /** What a chosen playback device is doing right now (id null is the system default). */
 export interface AudioOutputDeviceStatus {
   id: string | null;
@@ -789,6 +796,10 @@ interface IpcContract {
   audio_output_device_status: {
     args: Record<string, never>;
     result: AudioOutputDeviceStatus[];
+  };
+  audio_watch_device_volumes: {
+    args: { ids: string[] };
+    result: void;
   };
   audio_get_device_volumes: {
     args: Record<string, never>;
