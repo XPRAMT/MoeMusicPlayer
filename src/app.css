@@ -2202,11 +2202,11 @@ input:focus-visible {
    shrinks, its fr share fades to 0 (--np-art-*) and the lyrics share (--np-lyr-*) grows by the same amount, so the
    column collapses to the cover and the lyrics area expands. */
 .now-playing-card:not(.lyrics-hidden):not(.artwork-hidden) {
-  grid-template-columns: minmax(calc(var(--np-cover-width, 0px) * var(--np-cover-zoom, 1)), var(--np-art-col-a, 1fr)) minmax(0, var(--np-lyr-col-a, 1fr));
+  grid-template-columns: minmax(calc(var(--np-cover-width, 0px) * var(--np-cover-reserve, 0)), var(--np-art-col-a, 1fr)) minmax(0, var(--np-lyr-col-a, 1fr));
 }
 
 .now-playing-card.layout-b:not(.lyrics-hidden):not(.artwork-hidden) {
-  grid-template-columns: minmax(0, var(--np-lyr-col-b, 1fr)) minmax(calc(var(--np-cover-width, 0px) * var(--np-cover-zoom, 1)), var(--np-art-col-b, 1fr));
+  grid-template-columns: minmax(0, var(--np-lyr-col-b, 1fr)) minmax(calc(var(--np-cover-width, 0px) * var(--np-cover-reserve, 0)), var(--np-art-col-b, 1fr));
 }
 
 .now-playing-artwork {
@@ -4763,12 +4763,12 @@ input:focus-visible {
   /* Stacked: the zoomed cover squeezes the lyrics vertically instead of sideways. */
   .now-playing-view .now-playing-card:not(.lyrics-hidden):not(.artwork-hidden) {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(calc(var(--np-cover-height, 0px) * var(--np-cover-zoom, 1)), var(--np-art-row, 1fr)) minmax(0, var(--np-lyr-row, 1fr));
+    grid-template-rows: minmax(calc(var(--np-cover-height, 0px) * var(--np-cover-reserve, 0)), var(--np-art-row, 1fr)) minmax(0, var(--np-lyr-row, 1fr));
   }
 
   .now-playing-view .now-playing-card.layout-b:not(.lyrics-hidden):not(.artwork-hidden) {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, var(--np-lyr-row, 1fr)) minmax(calc(var(--np-cover-height, 0px) * var(--np-cover-zoom, 1)), var(--np-art-row, 1fr));
+    grid-template-rows: minmax(0, var(--np-lyr-row, 1fr)) minmax(calc(var(--np-cover-height, 0px) * var(--np-cover-reserve, 0)), var(--np-art-row, 1fr));
   }
 
   .now-playing-view .now-playing-card.lyrics-hidden {

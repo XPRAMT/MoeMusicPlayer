@@ -4907,6 +4907,7 @@
           <section class="now-playing-view" aria-label={tr("正在播放")} style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}
             style:--np-cover-width={coverFrame ? `${coverFrame.width}px` : undefined}
             style:--np-cover-zoom={coverLayoutScale}
+            style:--np-cover-reserve={coverLayoutScale === 1 ? 0 : coverLayoutScale}
             style:--np-art-col-a={`${(1 * coverShrinkShare).toFixed(4)}fr`}
             style:--np-art-col-b={`${(1 * coverShrinkShare).toFixed(4)}fr`}
             style:--np-art-row={`${(1 * coverShrinkShare).toFixed(4)}fr`}
