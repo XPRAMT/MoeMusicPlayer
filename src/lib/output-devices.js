@@ -388,3 +388,36 @@ export function selectOnly(rows, index) {
   }
   return next;
 }
+
+/**
+ * Rows that are meant to play but whose device is gone (a Bluetooth device that disconnected, an unplugged DAC).
+ * @param {DeviceRow[]} rows
+ * @returns {number[]}
+ */
+export function disconnectedPlayingRows(rows) {
+  return rows.map((_, index) => index).filter((index) => !rows[index].connected && rowEnabled(rows, index));
+}
+
+/**
+ * The row of the device that carries on when a playing device is gone: Windows moves the default to the next
+ * device, and the player follows it. -1 when nothing is missing or no connected default exists.
+ * @param {DeviceRow[]} rows
+ * @returns {number}
+ */
+export function takeoverRow(rows) {
+  if (disconnectedPlayingRows(rows).length === 0) return -1;
+  return rows.findIndex((row) => row.id !== null && row.connected && row.isDefault);
+}
+
+/**
+ * Whether two device lists are the same (so a poll that found nothing new does not redraw the page).
+ * @param {AudioOutputDevice[]} a
+ * @param {AudioOutputDevice[]} b
+ */
+export function sameDeviceList(a, b) {
+  return a.length === b.length && a.every((device, index) => {
+    const other = b[index];
+    return device.id === other.id && device.name === other.name && device.isDefault === other.isDefault
+      && device.channels === other.channels && device.sampleRate === other.sampleRate;
+  });
+}

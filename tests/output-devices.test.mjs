@@ -6,6 +6,9 @@ import {
   buildDeviceRows,
   channelLabels,
   defaultEntry,
+  disconnectedPlayingRows,
+  sameDeviceList,
+  takeoverRow,
   entriesFromRows,
   isLastPlaying,
   isMainStream,
@@ -161,4 +164,27 @@ test('exclusive mode keeps exactly one device playing', () => {
   assert.deepEqual(single.map((_, index) => rowEnabled(single, index)), [false, false, true]);
   const first = selectOnly(single, 0);
   assert.deepEqual(first.map((_, index) => rowEnabled(first, index)), [true, false, false]);
+});
+
+test('a playing device that disappeared is found, and the new default takes over', () => {
+  const saved = [{ ...defaultEntry(earbuds.id, 'Earbuds'), enabled: true }, { ...defaultEntry(null, ''), enabled: false }];
+  // The earbuds are connected and playing.
+  let rows = buildDeviceRows(saved, [speakers, earbuds]);
+  assert.deepEqual(disconnectedPlayingRows(rows), []);
+  assert.equal(takeoverRow(rows), -1);
+  // They disconnect; Windows makes the speakers the default.
+  rows = buildDeviceRows(saved, [speakers]);
+  const missing = disconnectedPlayingRows(rows);
+  assert.equal(missing.length, 1);
+  assert.equal(rows[missing[0]].id, earbuds.id);
+  assert.equal(rows[takeoverRow(rows)].id, speakers.id);
+  // A saved device that is not meant to play does not count.
+  const idle = [{ ...defaultEntry(earbuds.id, 'Earbuds'), enabled: false }, { ...defaultEntry(null, ''), enabled: true }];
+  assert.deepEqual(disconnectedPlayingRows(buildDeviceRows(idle, [speakers])), []);
+});
+
+test('a device poll that found nothing new is recognised as the same list', () => {
+  assert.equal(sameDeviceList([speakers, earbuds], [{ ...speakers }, { ...earbuds }]), true);
+  assert.equal(sameDeviceList([speakers, earbuds], [speakers]), false);
+  assert.equal(sameDeviceList([speakers], [{ ...speakers, isDefault: false }]), false);
 });

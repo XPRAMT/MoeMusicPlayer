@@ -505,9 +505,7 @@ impl RodioBackend {
             status.push(OutputDeviceStatus {
                 id: wanted_primary.clone(),
                 state: DeviceState::Playing,
-                message: missing.then(|| {
-                    "the device was not found; the system default is playing instead".to_owned()
-                }),
+                message: missing.then(|| "找不到這個裝置，目前改由系統預設裝置播放。".to_owned()),
                 device_rate: Some(output.device_rate.get()),
                 channels: Some(output.sink.config().channel_count().get()),
                 converted: false,

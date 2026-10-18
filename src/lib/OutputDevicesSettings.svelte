@@ -23,6 +23,7 @@
     activePreset,
     buildDeviceRows,
     channelLabels,
+    disconnectedPlayingRows,
     entriesFromRows,
     formatDelay,
     isLastPlaying,
@@ -31,6 +32,7 @@
     patchRow,
     rowEnabled,
     routePresets,
+    sameDeviceList,
     sameDevices,
     selectOnly,
     setRowEnabled,
@@ -38,6 +40,7 @@
     sourceRowCount,
     standardRoutes,
     statusFor,
+    takeoverRow,
     toggleCell,
     volumeDeviceId,
   } from './output-devices.js';
@@ -57,6 +60,8 @@
   const SAVE_DELAY_MS = 250;
   const STATUS_POLL_MS = 2000;
   const VOLUME_POLL_MS = 1000;
+  /** How often the list of playback devices is read again, so a device that disconnects shows up. */
+  const DEVICE_POLL_MS = 3000;
   const VOLUME_SEND_MS = 60;
   /** A volume the user just changed is not overwritten by a poll for this long. */
   const VOLUME_HOLD_MS = 1500;
@@ -80,7 +85,10 @@
   let failure = $state<string | null>(null);
 
   let rows = $derived(buildDeviceRows(entries, devices));
-  let playingRows = $derived(rows.map((row, index) => ({ row, index })).filter(({ index }) => rowEnabled(rows, index)));
+  let playingRows = $derived(rows.map((row, index) => ({ row, index })).filter(({ index }) => rowEnabled(rows, index) && rows[index].connected));
+  /** The row that carries on playing because a chosen device disconnected (the new system default). */
+  let takeover = $derived(takeoverRow(rows));
+  let defaultDeviceName = $derived(devices.find((device) => device.isDefault)?.name ?? null);
   const sourceLabels = channelLabels(OUTPUT_MAX_SOURCE_CHANNELS);
   /** How many source-channel rows the shared matrix shows: enough for every playing device's map. */
   let matrixRows = $derived(
@@ -95,6 +103,7 @@
   let saveQueue: Promise<void> = Promise.resolve();
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let volumeTimer: ReturnType<typeof setInterval> | null = null;
+  let deviceTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
 
   const volumeEdited = new Map<string, number>();
@@ -144,6 +153,21 @@
       volumes = next;
     } catch {
       // Devices come and go; the next poll tries again.
+    }
+  }
+
+  /** Read the device list again without any visible busy state; redraws only when something changed. */
+  async function pollDevices(): Promise<void> {
+    if (!isTauri() || refreshing || loading) return;
+    try {
+      const next = await invokeCommand('audio_list_output_devices', {});
+      if (!disposed && !sameDeviceList(next, devices)) {
+        devices = next;
+        void refreshVolumes();
+        void refreshStatus();
+      }
+    } catch {
+      // Keep the list that is shown.
     }
   }
 
@@ -372,6 +396,17 @@
   /** What a card says about its device's current output path. */
   function pathInfo(index: number): PathInfo {
     const row = rows[index];
+    if (disconnectedPlayingRows(rows).includes(index)) {
+      // The device is gone: Windows moved on to the next one and the player followed it.
+      const reason = exclusive ? outputFormat?.exclusiveFallback : null;
+      return {
+        text: defaultDeviceName
+          ? tr('已中斷連線，目前改由 {0} 播放', [defaultDeviceName])
+          : tr('已中斷連線'),
+        note: reason ? tr('獨佔模式無法播放這首：{0}', [reason]) : null,
+        tone: 'error',
+      };
+    }
     if (!rowEnabled(rows, index)) {
       const format = row.connected && row.sampleRate
         ? tr('預設格式 {0}．{1} 聲道', [formatSampleRate(row.sampleRate), row.channels])
@@ -457,6 +492,7 @@
     window.addEventListener(SHARED_EVENT, adoptShared);
     void load();
     pollTimer = setInterval(() => void refreshStatus(), STATUS_POLL_MS);
+    deviceTimer = setInterval(() => void pollDevices(), DEVICE_POLL_MS);
     volumeTimer = setInterval(() => void refreshVolumes(), VOLUME_POLL_MS);
   });
 
@@ -474,6 +510,7 @@
     }
     if (pollTimer) clearInterval(pollTimer);
     if (volumeTimer) clearInterval(volumeTimer);
+    if (deviceTimer) clearInterval(deviceTimer);
   });
 </script>
 
@@ -562,6 +599,8 @@
             <strong>{label}</strong>
             {#if row.id === null}
               <small>{row.name ? tr('目前是：{0}', [row.name]) : tr('跟隨 Windows 的預設播放裝置')}</small>
+            {:else if index === takeover}
+              <small class="output-device-takeover">{tr('目前由這台播放（原裝置已中斷）')}</small>
             {:else if row.isDefault}
               <small>{tr('目前的系統預設')}</small>
             {/if}
@@ -572,7 +611,7 @@
         {/if}
       </div>
 
-      {#if playing && !exclusive}
+      {#if playing && row.connected && !exclusive}
         <div class="output-device-controls">
           <label class="output-volume">
             <span>{tr('音量')}</span>
@@ -779,6 +818,10 @@
     height: 8px;
     border-radius: 50%;
     background: var(--line);
+  }
+
+  .output-device-name small.output-device-takeover {
+    color: var(--status-warning);
   }
 
   .output-device-dot.is-ok { background: var(--status-success); }
