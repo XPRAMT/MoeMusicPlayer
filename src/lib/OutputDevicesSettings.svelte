@@ -763,7 +763,7 @@
   }
 
   .output-preset.is-selected {
-    outline: 1px solid color-mix(in srgb, var(--accent-text) 55%, transparent);
+    border-color: rgba(var(--accent-rgb), 0.64);
   }
 
   .output-sync {
@@ -783,14 +783,16 @@
   .output-device {
     display: grid;
     gap: 8px;
-    padding: 10px 12px;
+    padding: 12px;
     border: 1px solid var(--line);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--panel) 70%, transparent);
+    border-radius: 8px;
+    background: rgba(var(--text-rgb), 0.025);
   }
 
+  /* The same look as a chosen option elsewhere in the settings (.layout-choice-button.chosen). */
   .output-device.is-playing {
-    border-color: color-mix(in srgb, var(--accent-text) 45%, var(--line));
+    border-color: rgba(var(--accent-rgb), 0.64);
+    background: rgba(var(--accent-rgb), 0.09);
   }
 
   .output-device.is-missing .output-device-name {
@@ -955,19 +957,19 @@
     border: 1px solid var(--line);
     border-radius: 6px;
     color: var(--text-soft);
-    background: transparent;
+    background: rgba(var(--text-rgb), 0.025);
     font-size: var(--font-caption);
     cursor: pointer;
   }
 
   .channel-cell:hover {
-    border-color: color-mix(in srgb, var(--accent-text) 55%, var(--line));
+    border-color: rgba(var(--accent-rgb), 0.64);
   }
 
   .channel-cell.is-on {
-    border-color: color-mix(in srgb, var(--accent-text) 60%, var(--line));
+    border-color: rgba(var(--accent-rgb), 0.64);
     color: var(--accent-text);
-    background: color-mix(in srgb, var(--accent-text) 14%, transparent);
+    background: rgba(var(--accent-rgb), 0.09);
   }
 
   .channel-cell.is-auto.is-on {
