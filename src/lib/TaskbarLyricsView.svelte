@@ -17,6 +17,7 @@
     fitTaskbarLyricsFontSize,
     getLyricScrollProgress,
     getTaskbarLyricsColor,
+    getTaskbarLyricsEffectRgb,
     normalizeTaskbarLyricsSettings,
   } from './taskbar-lyrics-settings.js';
 
@@ -61,6 +62,7 @@
   let translation = $derived(settings.showTranslation ? (activeLine?.translation?.trim() ?? '') : '');
   let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, viewportHeight, translation !== '' ? settings.translationScalePercent : 0));
   let color = $derived(getTaskbarLyricsColor(settings, taskbarIsLight));
+  let effectRgb = $derived(getTaskbarLyricsEffectRgb(settings, taskbarIsLight));
   let alignItems = $derived(settings.align === 'center' ? 'center' : settings.align === 'right' ? 'flex-end' : 'flex-start');
 
   // Measure how far each line reaches past the window (after the text, the font size or the window size changed).
@@ -142,6 +144,8 @@
   style:align-items={alignItems}
   style:text-align={settings.align}
   style:color
+  data-text-effect={settings.textEffect}
+  style:--taskbar-lyrics-effect-rgb={effectRgb}
   style:--taskbar-lyrics-size={`${fontPx}px`}
   style:--taskbar-lyrics-translation-scale={settings.translationScalePercent / 100}
 >
@@ -212,5 +216,24 @@
   .taskbar-lyrics-translation {
     font-size: calc(var(--taskbar-lyrics-translation-scale, 0.75) * 1em);
     opacity: 0.8;
+  }
+
+  /* The same two looks as the Now Playing lyrics (a tight shadow plus a wider glow, or a thin outline), in the colour
+     opposite to the text. The clipped lines get the shadow as a filter: a text-shadow would be cut by the clip. */
+  .taskbar-lyrics {
+    --taskbar-lyrics-shadow-blur: 0.19em;
+    --taskbar-lyrics-glow-blur: 0.5em;
+  }
+
+  .taskbar-lyrics[data-text-effect='shadow'] .taskbar-lyrics-main,
+  .taskbar-lyrics[data-text-effect='shadow'] .taskbar-lyrics-translation {
+    filter:
+      drop-shadow(0 0 var(--taskbar-lyrics-shadow-blur) rgba(var(--taskbar-lyrics-effect-rgb), 0.6))
+      drop-shadow(0 0 var(--taskbar-lyrics-glow-blur) rgba(var(--taskbar-lyrics-effect-rgb), 0.38));
+  }
+
+  .taskbar-lyrics[data-text-effect='stroke'] .taskbar-lyrics-track {
+    -webkit-text-stroke: 0.85px rgba(var(--taskbar-lyrics-effect-rgb), 0.88);
+    paint-order: stroke fill;
   }
 </style>

@@ -4114,6 +4114,20 @@
                         oninput={(event) => setTaskbarLyricsSettings({ customColor: event.currentTarget.value })}
                       />
                     </label>
+                    <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-effect-label">
+                      <span id="{scope}taskbar-lyrics-effect-label" class="cover-corner-setting-label"><strong>{tr("歌詞外觀")}</strong></span>
+                      <div class="layout-choice-row lyrics-text-effect-row">
+                        {#each [['shadow', tr('陰影'), tr('歌詞陰影')], ['stroke', tr('描邊'), tr('歌詞描邊')], ['none', tr('關閉'), tr('關閉歌詞外觀')]] as [value, label, description] (value)}
+                          <button
+                            type="button"
+                            aria-label={description}
+                            aria-pressed={taskbarLyricsSettings.textEffect === value}
+                            class:chosen={taskbarLyricsSettings.textEffect === value}
+                            onclick={() => setTaskbarLyricsSettings({ textEffect: value as TaskbarLyricsSettings['textEffect'] })}
+                          >{label}</button>
+                        {/each}
+                      </div>
+                    </div>
                     <label class="lyrics-preference-toggle">
                       <input type="checkbox" checked={taskbarLyricsSettings.showTranslation} onchange={(event) => setTaskbarLyricsSettings({ showTranslation: event.currentTarget.checked })} />
                       <span><strong>{tr("顯示譯文")}</strong><small>{tr("歌詞有翻譯時，在原文下方多顯示一行較小的譯文")}</small></span>

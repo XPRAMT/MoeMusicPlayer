@@ -201,6 +201,8 @@ export interface TaskbarLyricsSettings {
   /** `#rrggbb` */
   customColor: string;
   showTranslation: boolean;
+  /** The same shadow / outline / off choice as the lyrics on the Now Playing page. */
+  textEffect: LyricsTextEffect;
 }
 
 /** Now Playing cover size remembered across restarts (shrunk only). */

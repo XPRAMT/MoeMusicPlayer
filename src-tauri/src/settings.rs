@@ -785,6 +785,10 @@ pub struct TaskbarLyricsSettings {
     pub custom_color: String,
     /// A second, smaller line with the translation when the lyrics have one.
     pub show_translation: bool,
+    /// Shadow, outline or nothing, the same choices as the lyrics on the Now Playing page. The effect colour is the
+    /// opposite of the text colour (black behind light text, white behind dark text). Default none: the text as it was.
+    #[serde(default = "default_taskbar_lyrics_text_effect")]
+    pub text_effect: LyricsTextEffect,
 }
 
 impl TaskbarLyricsSettings {
@@ -820,8 +824,13 @@ impl Default for TaskbarLyricsSettings {
             use_custom_color: false,
             custom_color: Self::DEFAULT_CUSTOM_COLOR.to_owned(),
             show_translation: false,
+            text_effect: default_taskbar_lyrics_text_effect(),
         }
     }
+}
+
+fn default_taskbar_lyrics_text_effect() -> LyricsTextEffect {
+    LyricsTextEffect::None
 }
 
 fn is_hex_color(value: &str) -> bool {
@@ -859,6 +868,9 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
         show_translation: field("showTranslation")
             .and_then(|value| value.as_bool())
             .unwrap_or(defaults.show_translation),
+        text_effect: field("textEffect")
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or(defaults.text_effect),
     }
     .normalized()
 }
@@ -2666,6 +2678,7 @@ mod tests {
             use_custom_color: true,
             custom_color: "#112233".into(),
             show_translation: true,
+            text_effect: LyricsTextEffect::Stroke,
         };
         store
             .update(|settings| {
@@ -2678,6 +2691,11 @@ mod tests {
         let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(persisted["taskbarLyrics"].get("area").is_none());
         assert_eq!(persisted["taskbarLyrics"]["fontSizePx"], 20);
+        assert_eq!(persisted["taskbarLyrics"]["textEffect"], "stroke");
+        // An old file has no effect: the text stays as it was. Junk falls back the same way.
+        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"enabled": true}))).text_effect, LyricsTextEffect::None);
+        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "glow"}))).text_effect, LyricsTextEffect::None);
+        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "shadow"}))).text_effect, LyricsTextEffect::Shadow);
     }
 
     #[test]

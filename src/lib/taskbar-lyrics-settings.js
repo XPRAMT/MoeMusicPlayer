@@ -7,7 +7,9 @@ export const TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT = Object.freeze({ min: 1, 
 export const TASKBAR_LYRICS_ALIGNMENTS = Object.freeze(['left', 'center', 'right']);
 export const TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR = '#ffffff';
 
-/** @typedef {{ enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean }} TaskbarLyricsSettings */
+export const TASKBAR_LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);
+
+/** @typedef {{ enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none' }} TaskbarLyricsSettings */
 
 /** @type {Readonly<TaskbarLyricsSettings>} */
 export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
@@ -18,6 +20,7 @@ export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
   useCustomColor: false,
   customColor: TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR,
   showTranslation: false,
+  textEffect: 'none',
 });
 
 /** @param {unknown} value */
@@ -50,6 +53,9 @@ export function normalizeTaskbarLyricsSettings(value) {
     useCustomColor: typeof source.useCustomColor === 'boolean' ? source.useCustomColor : defaults.useCustomColor,
     customColor: isHexColor(source.customColor) ? /** @type {string} */ (source.customColor).toLowerCase() : defaults.customColor,
     showTranslation: typeof source.showTranslation === 'boolean' ? source.showTranslation : defaults.showTranslation,
+    textEffect: TASKBAR_LYRICS_TEXT_EFFECTS.includes(/** @type {string} */ (source.textEffect))
+      ? /** @type {'shadow'|'stroke'|'none'} */ (source.textEffect)
+      : defaults.textEffect,
   };
 }
 
@@ -61,6 +67,23 @@ export function normalizeTaskbarLyricsSettings(value) {
 export function getTaskbarLyricsColor(settings, taskbarIsLight) {
   if (settings.useCustomColor) return settings.customColor;
   return taskbarIsLight ? '#000000' : '#ffffff';
+}
+
+/**
+ * The colour of the shadow or outline, as `r, g, b`: the opposite of the text, so it separates the text from whatever
+ * is behind it (black behind light text, white behind dark text; the same idea as the Now Playing lyrics, which use
+ * the inverse of the text colour).
+ * @param {TaskbarLyricsSettings} settings
+ * @param {boolean} taskbarIsLight
+ */
+export function getTaskbarLyricsEffectRgb(settings, taskbarIsLight) {
+  const text = getTaskbarLyricsColor(settings, taskbarIsLight);
+  const red = parseInt(text.slice(1, 3), 16);
+  const green = parseInt(text.slice(3, 5), 16);
+  const blue = parseInt(text.slice(5, 7), 16);
+  // Perceived brightness (Rec. 601 weights); light text gets a dark effect and the other way round.
+  const brightness = 0.299 * red + 0.587 * green + 0.114 * blue;
+  return brightness >= 128 ? '0, 0, 0' : '255, 255, 255';
 }
 
 /**

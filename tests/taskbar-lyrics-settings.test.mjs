@@ -5,6 +5,7 @@ import {
   fitTaskbarLyricsFontSize,
   getLyricScrollProgress,
   getTaskbarLyricsColor,
+  getTaskbarLyricsEffectRgb,
   normalizeTaskbarLyricsSettings,
 } from '../src/lib/taskbar-lyrics-settings.js';
 
@@ -12,7 +13,7 @@ test('taskbar lyrics settings are repaired field by field', () => {
   assert.deepEqual(normalizeTaskbarLyricsSettings(null), DEFAULT_TASKBAR_LYRICS_SETTINGS);
   assert.deepEqual(normalizeTaskbarLyricsSettings({
     enabled: true, align: 'center', fontSizePx: 20.4, translationScalePercent: 60.4, useCustomColor: true, customColor: '#ABCDEF', showTranslation: true,
-  }), { enabled: true, align: 'center', fontSizePx: 20, translationScalePercent: 60, useCustomColor: true, customColor: '#abcdef', showTranslation: true });
+  }), { enabled: true, align: 'center', fontSizePx: 20, translationScalePercent: 60, useCustomColor: true, customColor: '#abcdef', showTranslation: true, textEffect: 'none' });
   const repaired = normalizeTaskbarLyricsSettings({ enabled: 'yes', area: 'up', align: 3, fontSizePx: 99, customColor: 'red', showTranslation: 1 });
   assert.deepEqual(repaired, { ...DEFAULT_TASKBAR_LYRICS_SETTINGS, fontSizePx: 50 });
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 1 }).fontSizePx, 1);
@@ -49,4 +50,19 @@ test('a line wider than the window scrolls over the time it is shown and rests a
   assert.equal(getLyricScrollProgress(-50, 4000), 0);
   assert.equal(getLyricScrollProgress(500, 0), 0, 'no duration, no scroll');
   assert.equal(getLyricScrollProgress(Number.NaN, 4000), 0);
+});
+
+test('the text effect is one of shadow, stroke and none (default none), and its colour is the opposite of the text', () => {
+  assert.equal(DEFAULT_TASKBAR_LYRICS_SETTINGS.textEffect, 'none');
+  for (const effect of ['shadow', 'stroke', 'none']) {
+    assert.equal(normalizeTaskbarLyricsSettings({ textEffect: effect }).textEffect, effect);
+  }
+  assert.equal(normalizeTaskbarLyricsSettings({ textEffect: 'glow' }).textEffect, 'none');
+  assert.equal(normalizeTaskbarLyricsSettings({ textEffect: 3 }).textEffect, 'none');
+  // White text on a dark taskbar gets a dark effect; black text on a light taskbar gets a light one.
+  assert.equal(getTaskbarLyricsEffectRgb(DEFAULT_TASKBAR_LYRICS_SETTINGS, false), '0, 0, 0');
+  assert.equal(getTaskbarLyricsEffectRgb(DEFAULT_TASKBAR_LYRICS_SETTINGS, true), '255, 255, 255');
+  const custom = (customColor) => ({ ...DEFAULT_TASKBAR_LYRICS_SETTINGS, useCustomColor: true, customColor });
+  assert.equal(getTaskbarLyricsEffectRgb(custom('#ffee88'), true), '0, 0, 0', 'a light custom colour gets a dark effect');
+  assert.equal(getTaskbarLyricsEffectRgb(custom('#223366'), false), '255, 255, 255', 'a dark custom colour gets a light effect');
 });
