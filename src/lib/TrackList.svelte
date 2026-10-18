@@ -1,5 +1,6 @@
 ﻿<script lang="ts">
   import { tr } from './i18n.js';
+  import { isGroupedSortField } from './grouped-sorts.js';
   import {
     getErrorText,
     invokeCommand,
@@ -183,7 +184,7 @@
     const currentFieldFilter = fieldFilter ?? null;
     const activeSort = visibleSortIndicator;
     const shouldGroup = groupingEnabled && sortable && activeSort
-      && ['title', 'artist', 'album'].includes(activeSort.field);
+      && isGroupedSortField(activeSort.field);
     const cacheKey = getQuickIndexBuildKey({
       listId,
       resetKey,

@@ -3095,6 +3095,66 @@ async fn library_get_track_position(
     .await
 }
 
+/// What kind of quick-index groups a sort makes, and the text key of `track` that the group label is made from; `None`
+/// for sorts that are not grouped (length, play count).
+fn quick_index_key(
+    field: TrackSortField,
+    track: Option<&TrackSummary>,
+) -> Option<(player_db::QuickIndexKind, String)> {
+    use player_db::QuickIndexKind;
+    Some(match field {
+        TrackSortField::Title => (
+            QuickIndexKind::Text,
+            track
+                .and_then(|track| {
+                    player_core::display_track_title(
+                        track.title.as_deref(),
+                        track.file_name.as_deref(),
+                    )
+                })
+                .unwrap_or_default(),
+        ),
+        TrackSortField::Artist => (
+            QuickIndexKind::Text,
+            track
+                .and_then(|track| track.artist.clone())
+                .unwrap_or_default(),
+        ),
+        TrackSortField::Album => (
+            QuickIndexKind::Text,
+            track
+                .and_then(|track| track.album.clone())
+                .unwrap_or_default(),
+        ),
+        TrackSortField::Year => (
+            QuickIndexKind::Year,
+            track
+                .and_then(|track| {
+                    track
+                        .release_date
+                        .clone()
+                        .filter(|date| !date.trim().is_empty())
+                        .or_else(|| track.year.map(|year| year.to_string()))
+                })
+                .unwrap_or_default(),
+        ),
+        TrackSortField::CreatedAt => (
+            QuickIndexKind::AddedYear,
+            track
+                .and_then(|track| track.created_at_utc_ms)
+                .map(|milliseconds| milliseconds.to_string())
+                .unwrap_or_default(),
+        ),
+        TrackSortField::AudioFormat => (
+            QuickIndexKind::Format,
+            track
+                .and_then(|track| track.codec.clone())
+                .unwrap_or_default(),
+        ),
+        TrackSortField::Duration | TrackSortField::PlayCount => return None,
+    })
+}
+
 #[tauri::command]
 async fn library_get_quick_index_for_tracks(
     app: AppHandle,
@@ -3143,22 +3203,20 @@ async fn library_get_quick_index_for_tracks(
                 },
                 &alternates,
             )?;
-            let names = page
+            let Some((kind, _)) = quick_index_key(request.sort.field, None) else {
+                return Ok(player_db::QuickIndexSnapshot::default());
+            };
+            let keys = page
                 .items
-                .into_iter()
-                .map(|track| match request.sort.field {
-                    TrackSortField::Title => player_core::display_track_title(
-                        track.title.as_deref(),
-                        track.file_name.as_deref(),
-                    )
-                    .unwrap_or_default(),
-                    TrackSortField::Artist => track.artist.unwrap_or_default(),
-                    TrackSortField::Album => track.album.unwrap_or_default(),
-                    _ => String::new(),
+                .iter()
+                .map(|track| {
+                    quick_index_key(request.sort.field, Some(track))
+                        .map(|(_, key)| key)
+                        .unwrap_or_default()
                 })
                 .collect::<Vec<_>>();
             return database
-                .quick_index_for_ordered_values(&names)
+                .quick_index_for_ordered_keys(kind, &keys)
                 .map_err(|error| error.to_string());
         }
         database
@@ -3952,17 +4010,34 @@ fn compare_track_summaries(
         TrackSortField::Year => {
             let left_date = left.release_date.as_deref().unwrap_or_default();
             let right_date = right.release_date.as_deref().unwrap_or_default();
-            match (left_date.is_empty(), right_date.is_empty()) {
-                (false, true) => Ordering::Less,
-                (true, false) => Ordering::Greater,
-                _ => compare_direction(left_date.cmp(right_date))
-                    .then_with(|| compare_direction(left.year.cmp(&right.year))),
+            // No usable year is the unknown group: last in ascending order, first in descending order.
+            let unknown = |track: &TrackSummary| {
+                player_db::year_group_label(
+                    track
+                        .release_date
+                        .as_deref()
+                        .filter(|date| !date.trim().is_empty())
+                        .or(None)
+                        .map(str::to_owned)
+                        .or_else(|| track.year.map(|year| year.to_string()))
+                        .as_deref(),
+                ) == "未知"
+            };
+            match (unknown(left), unknown(right)) {
+                (false, true) => compare_direction(Ordering::Less),
+                (true, false) => compare_direction(Ordering::Greater),
+                _ => match (left_date.is_empty(), right_date.is_empty()) {
+                    (false, true) => Ordering::Less,
+                    (true, false) => Ordering::Greater,
+                    _ => compare_direction(left_date.cmp(right_date))
+                        .then_with(|| compare_direction(left.year.cmp(&right.year))),
+                },
             }
         }
         TrackSortField::CreatedAt => match (left.created_at_utc_ms, right.created_at_utc_ms) {
             (Some(a), Some(b)) => compare_direction(a.cmp(&b)),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
+            (Some(_), None) => compare_direction(Ordering::Less),
+            (None, Some(_)) => compare_direction(Ordering::Greater),
             (None, None) => Ordering::Equal,
         },
         TrackSortField::AudioFormat => {
@@ -4004,6 +4079,13 @@ fn compare_track_summaries(
             compare_direction(
                 codec_rank(left.codec.as_deref()).cmp(&codec_rank(right.codec.as_deref())),
             )
+            .then_with(|| {
+                // One format name together inside a quality rank, as the SQL ordering does (the groups need it).
+                compare_direction(
+                    player_db::format_group_label(left.codec.as_deref())
+                        .cmp(&player_db::format_group_label(right.codec.as_deref())),
+                )
+            })
             .then_with(|| {
                 compare_direction(
                     left.sample_rate_hz
@@ -8029,12 +8111,9 @@ fn playback_get_queue_quick_index_groupings(
     field: TrackSortField,
 ) -> Result<player_db::QuickIndexSnapshot, String> {
     let _database_work = enter_database_work(&state)?;
-    if !matches!(
-        field,
-        TrackSortField::Title | TrackSortField::Artist | TrackSortField::Album
-    ) {
+    let Some((kind, _)) = quick_index_key(field, None) else {
         return Ok(player_db::QuickIndexSnapshot::default());
-    }
+    };
     let database = state.database.as_ref().ok_or_else(|| {
         state
             .database_error
@@ -8112,33 +8191,18 @@ fn playback_get_queue_quick_index_groupings(
                 .or_insert_with(|| external.summary.clone());
         }
     }
-    let names = queue
+    let keys = queue
         .play_order
         .iter()
         .filter_map(|entry_index| queue.entries.get(*entry_index))
         .map(|entry| {
-            let track = summaries.get(&entry.track_id);
-            match field {
-                TrackSortField::Title => track
-                    .and_then(|track| {
-                        player_core::display_track_title(
-                            track.title.as_deref(),
-                            track.file_name.as_deref(),
-                        )
-                    })
-                    .unwrap_or_default(),
-                TrackSortField::Artist => track
-                    .and_then(|track| track.artist.clone())
-                    .unwrap_or_default(),
-                TrackSortField::Album => track
-                    .and_then(|track| track.album.clone())
-                    .unwrap_or_default(),
-                _ => String::new(),
-            }
+            quick_index_key(field, summaries.get(&entry.track_id))
+                .map(|(_, key)| key)
+                .unwrap_or_default()
         })
         .collect::<Vec<_>>();
     database
-        .quick_index_for_ordered_values(&names)
+        .quick_index_for_ordered_keys(kind, &keys)
         .map_err(|error| error.to_string())
 }
 

@@ -40,6 +40,10 @@ use crate::locator;
 const SCHEMA_VERSION: i64 = 15;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
+const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
+const MUSIC_FORMAT_FUNCTION: &str = "music_format_label";
+/// The group of items whose key is missing (the same label the text groups use).
+const UNKNOWN_GROUP_LABEL: &str = "未知";
 const MUSIC_SPLIT_ARTISTS_FUNCTION: &str = "music_split_artists_json";
 const MUSIC_TRIM_FUNCTION: &str = "music_trim_whitespace";
 const MUSIC_IDENTITY_KEY_FUNCTION: &str = "music_identity_key";
@@ -279,6 +283,16 @@ fn playlist_order_by(sort: PlaylistListSort, direction: &str) -> String {
     }
 
     let expression = playlist_sort_expression(sort.field);
+    // No usable date: the unknown group, last in ascending order and first in descending order.
+    if sort.field == PlaylistSortField::Year {
+        return format!(
+            "{} {direction}, {expression} {direction}, e.position ASC",
+            year_unknown_sql("t")
+        );
+    }
+    if sort.field == PlaylistSortField::CreatedAt {
+        return format!("({expression} IS NULL) {direction}, {expression} {direction}, e.position ASC");
+    }
     if matches!(
         sort.field,
         PlaylistSortField::Title | PlaylistSortField::Artist | PlaylistSortField::Album
@@ -298,6 +312,7 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
          WHEN 'WAV' THEN 6 WHEN 'WAVE' THEN 6 WHEN 'FLAC' THEN 5 WHEN 'VORBIS' THEN 4 WHEN 'OGG VORBIS' THEN 4 \
          WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 2 WHEN 'M4A' THEN 2 WHEN 'AAC' THEN 2 WHEN 'MP4A' THEN 2 WHEN 'MP3' THEN 1 \
          ELSE CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) LIKE 'DSD%' THEN 7 ELSE 0 END END {direction}, \
+         {MUSIC_FORMAT_FUNCTION}(t.codec) {direction}, \
          COALESCE(t.sample_rate_hz, 0) {direction}, \
          CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) IN ('WAV','WAVE','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','PCM','TAK','TTA') \
               THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction}, \
@@ -899,6 +914,76 @@ fn localized_rank(kind: LeadingKind, collators: &MusicCollators) -> u8 {
     }
 }
 
+/// The year group of a release date (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`...) or a bare year: its four digits; items with no
+/// usable year share the unknown group.
+pub fn year_group_label(value: Option<&str>) -> String {
+    let value = value.unwrap_or_default().trim();
+    let digits: String = value.chars().take(4).collect();
+    let valid = digits.len() == 4
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && digits != "0000"
+        && !value.chars().nth(4).is_some_and(|next| next.is_ascii_digit());
+    if valid {
+        digits
+    } else {
+        UNKNOWN_GROUP_LABEL.to_owned()
+    }
+}
+
+/// The format group of a codec name, as the list's "音訊格式" column spells it (upper case): every DSD rate is one group
+/// (`DSD`), `WAVE` is `WAV`, `OGG VORBIS` is `VORBIS`; a track with no codec is in the unknown group.
+pub fn format_group_label(codec: Option<&str>) -> String {
+    let name = codec.unwrap_or_default().trim().to_ascii_uppercase();
+    match name.as_str() {
+        "" => UNKNOWN_GROUP_LABEL.to_owned(),
+        "WAVE" => "WAV".to_owned(),
+        "OGG VORBIS" => "VORBIS".to_owned(),
+        _ if name.starts_with("DSD") => "DSD".to_owned(),
+        _ => name,
+    }
+}
+
+/// What a quick-index grouping is made of: the first character of a name, a year, the year an item was added or the
+/// audio format. Decides the SQL that turns one sort key into its group label.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuickIndexKind {
+    /// A name: the label is its first character (title, artist, album).
+    Text,
+    /// The key is a release date or a year.
+    Year,
+    /// The key is the time the track was added, in milliseconds since the Unix epoch.
+    AddedYear,
+    /// The key is the codec name.
+    Format,
+}
+
+impl QuickIndexKind {
+    /// The SQL that turns the text of `value` (a column or expression) into the group label.
+    fn label_sql(self, value: &str) -> String {
+        match self {
+            Self::Text => format!("{MUSIC_QUICK_INDEX_FUNCTION}({value})"),
+            Self::Year => format!("{MUSIC_YEAR_FUNCTION}({value})"),
+            Self::AddedYear => added_year_label_sql(&format!("CAST(NULLIF({value}, '') AS INTEGER)")),
+            Self::Format => format!("{MUSIC_FORMAT_FUNCTION}({value})"),
+        }
+    }
+}
+
+/// SQL that is true for a track with no usable year (the unknown group), from the columns of the table `alias`. The
+/// unknown group sorts last in ascending order and first in descending order, like the unknown group of the names.
+fn year_unknown_sql(alias: &str) -> String {
+    format!(
+        "({MUSIC_YEAR_FUNCTION}(COALESCE(NULLIF(trim({alias}.release_date), ''), CAST({alias}.year AS TEXT))) = '{UNKNOWN_GROUP_LABEL}')"
+    )
+}
+
+/// The calendar year (local time) of a time in milliseconds since the Unix epoch, or the unknown group.
+fn added_year_label_sql(milliseconds: &str) -> String {
+    format!(
+        "COALESCE(strftime('%Y', ({milliseconds}) / 1000, 'unixepoch', 'localtime'), '{UNKNOWN_GROUP_LABEL}')"
+    )
+}
+
 fn quick_index_label(collators: &MusicCollators, value: &str) -> String {
     let Some(character) = leading_char(value) else {
         return "未知".to_owned();
@@ -1046,6 +1131,24 @@ fn register_music_collation(
         move |context| {
             let value = context.get::<String>(0)?;
             Ok(quick_index_label(&collators, &value))
+        },
+    )?;
+    connection.create_scalar_function(
+        MUSIC_YEAR_FUNCTION,
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let value = context.get::<Option<String>>(0)?;
+            Ok(year_group_label(value.as_deref()))
+        },
+    )?;
+    connection.create_scalar_function(
+        MUSIC_FORMAT_FUNCTION,
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let value = context.get::<Option<String>>(0)?;
+            Ok(format_group_label(value.as_deref()))
         },
     )?;
     connection.create_scalar_function(
@@ -1844,6 +1947,17 @@ impl Database {
         &self,
         values: &[String],
     ) -> Result<QuickIndexSnapshot, DatabaseError> {
+        self.quick_index_for_ordered_keys(QuickIndexKind::Text, values)
+    }
+
+    /// Group boundaries for an already sorted sequence of sort keys of any kind (a name, a release date or year, the
+    /// time added in milliseconds, a codec name).
+    pub fn quick_index_for_ordered_keys(
+        &self,
+        kind: QuickIndexKind,
+        values: &[String],
+    ) -> Result<QuickIndexSnapshot, DatabaseError> {
+        let label = kind.label_sql("value");
         let mut connection = self.lock()?;
         let tx = connection.transaction()?;
         tx.execute("DELETE FROM index_ordered_values", [])?;
@@ -1854,9 +1968,9 @@ impl Database {
                 insert.execute(params![i64::try_from(position).unwrap_or(i64::MAX), value])?;
             }
         }
-        let mut statement = tx.prepare(
+        let mut statement = tx.prepare(&format!(
             "WITH labels AS (
-                SELECT position, music_quick_index_label(value) AS group_label,
+                SELECT position, {label} AS group_label,
                        COUNT(*) OVER () AS total_count
                 FROM index_ordered_values
              ), transitions AS (
@@ -1866,8 +1980,8 @@ impl Database {
              )
              SELECT position, group_label, total_count FROM transitions
              WHERE previous_label IS NULL OR previous_label <> group_label
-             ORDER BY position",
-        )?;
+             ORDER BY position"
+        ))?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, i64>(0)?.max(0) as u64,
@@ -2136,7 +2250,12 @@ impl Database {
     ) -> Result<QuickIndexSnapshot, DatabaseError> {
         if !matches!(
             request.sort.field,
-            TrackSortField::Title | TrackSortField::Artist | TrackSortField::Album
+            TrackSortField::Title
+                | TrackSortField::Artist
+                | TrackSortField::Album
+                | TrackSortField::Year
+                | TrackSortField::CreatedAt
+                | TrackSortField::AudioFormat
         ) {
             return Ok(QuickIndexSnapshot::default());
         }
@@ -2149,19 +2268,22 @@ impl Database {
         let (title_filter, artist_filter, album_filter) =
             field_filter_values(request.field_filter.as_ref())?;
         let order_by = tracks_order_by_sql(request.sort);
-        let value_sql = match request.sort.field {
+        let label_sql = match request.sort.field {
             // `sort_title` is backfilled from the same displayed file stem when the title tag is
             // missing, so grouping and sorting share one persisted key without decoding locators
             // or materializing TrackSummary rows in Rust.
-            TrackSortField::Title => "t.sort_title",
-            TrackSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '')",
-            TrackSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')",
-            _ => unreachable!("non-text sort returned above"),
+            TrackSortField::Title => QuickIndexKind::Text.label_sql("t.sort_title"),
+            TrackSortField::Artist => QuickIndexKind::Text.label_sql("COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '')"),
+            TrackSortField::Album => QuickIndexKind::Text.label_sql("COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')"),
+            TrackSortField::Year => QuickIndexKind::Year.label_sql("COALESCE(NULLIF(trim(t.release_date), ''), CAST(t.year AS TEXT))"),
+            TrackSortField::CreatedAt => added_year_label_sql("(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)"),
+            TrackSortField::AudioFormat => QuickIndexKind::Format.label_sql("t.codec"),
+            _ => unreachable!("only grouped sorts reach here"),
         };
         let sql = format!(
             "WITH ordered AS (
                 SELECT ROW_NUMBER() OVER (ORDER BY {order_by}) - 1 AS position,
-                       {MUSIC_QUICK_INDEX_FUNCTION}({value_sql}) AS group_label,
+                       {label_sql} AS group_label,
                        COUNT(*) OVER () AS total_count
                 FROM tracks t
                 WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
@@ -3711,12 +3833,17 @@ impl Database {
     ) -> Result<Option<QuickIndexSnapshot>, DatabaseError> {
         if !matches!(
             sort.field,
-            PlaylistSortField::Title | PlaylistSortField::Artist | PlaylistSortField::Album
+            PlaylistSortField::Title
+                | PlaylistSortField::Artist
+                | PlaylistSortField::Album
+                | PlaylistSortField::Year
+                | PlaylistSortField::CreatedAt
+                | PlaylistSortField::AudioFormat
         ) {
             return Ok(Some(QuickIndexSnapshot::default()));
         }
 
-        let connection = self.lock()?;
+        let mut connection = self.lock()?;
         let exists: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM playlists WHERE playlist_id=?1)",
             [playlist_id.to_string()],
@@ -3724,6 +3851,15 @@ impl Database {
         )?;
         if !exists {
             return Ok(None);
+        }
+        if matches!(
+            sort.field,
+            PlaylistSortField::Year | PlaylistSortField::CreatedAt | PlaylistSortField::AudioFormat
+        ) {
+            reconcile_unmatched_playlist_entries(&mut connection, playlist_id)?;
+            return self
+                .playlist_key_quick_index(&connection, playlist_id, sort)
+                .map(Some);
         }
 
         let field = match sort.field {
@@ -3773,6 +3909,72 @@ impl Database {
             });
         }
         Ok(Some(snapshot))
+    }
+
+    /// Year, added-year and format groups of a playlist: the same entry resolution and ordering as its pages, with the
+    /// group label made from the track's own columns.
+    fn playlist_key_quick_index(
+        &self,
+        connection: &Connection,
+        playlist_id: PlaylistId,
+        sort: PlaylistListSort,
+    ) -> Result<QuickIndexSnapshot, DatabaseError> {
+        let direction = match sort.direction {
+            PlaylistSortDirection::Asc => "ASC",
+            PlaylistSortDirection::Desc => "DESC",
+        };
+        let order_by = playlist_order_by(sort, direction);
+        let label_sql = match sort.field {
+            PlaylistSortField::Year => QuickIndexKind::Year
+                .label_sql("COALESCE(NULLIF(trim(t.release_date), ''), CAST(t.year AS TEXT))"),
+            PlaylistSortField::CreatedAt => added_year_label_sql(
+                "(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
+            ),
+            PlaylistSortField::AudioFormat => QuickIndexKind::Format.label_sql("t.codec"),
+            _ => unreachable!("only year, added and format groups come here"),
+        };
+        let (resolve, select_from) = PLAYLIST_PAGE_SQL
+            .split_once("SELECT e.position, e.track_id,")
+            .and_then(|(resolve, rest)| {
+                rest.find("FROM resolved_entries e")
+                    .map(|start| (resolve, &rest[start..]))
+            })
+            .ok_or_else(|| {
+                DatabaseError::CorruptData("playlist page query changed shape".to_owned())
+            })?;
+        let sql = format!(
+            "{resolve}, ordered AS (
+                 SELECT ROW_NUMBER() OVER (ORDER BY {order_by}) - 1 AS position,
+                        {label_sql} AS group_label,
+                        COUNT(*) OVER () AS total_count
+                 {select_from}
+             ), transitions AS (
+                 SELECT position, group_label, total_count,
+                        LAG(group_label) OVER (ORDER BY position) AS previous_label
+                 FROM ordered
+             )
+             SELECT position, group_label, total_count FROM transitions
+             WHERE previous_label IS NULL OR previous_label <> group_label
+             ORDER BY position"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map([playlist_id.to_string()], |row| {
+            Ok((
+                row.get::<_, i64>(0)?.max(0) as u64,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?.max(0) as u64,
+            ))
+        })?;
+        let mut snapshot = QuickIndexSnapshot::default();
+        for row in rows {
+            let (before_index, label, total_count) = row?;
+            snapshot.total_count = total_count;
+            snapshot.push_group(QuickIndexGroup {
+                label,
+                before_index,
+            });
+        }
+        Ok(snapshot)
     }
 
     pub fn delete_playlist(&self, playlist_id: PlaylistId) -> Result<bool, DatabaseError> {
@@ -5637,16 +5839,22 @@ fn tracks_order_by_sql(sort: TrackListSort) -> String {
              COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
         }
         (TrackSortField::Year, true) => {
-            "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date ASC, (t.year IS NULL) ASC, t.year ASC, t.track_id ASC"
+            return format!(
+                "{} ASC, (t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date ASC, (t.year IS NULL) ASC, t.year ASC, t.track_id ASC",
+                year_unknown_sql("t")
+            );
         }
         (TrackSortField::Year, false) => {
-            "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date DESC, (t.year IS NULL) ASC, t.year DESC, t.track_id DESC"
+            return format!(
+                "{} DESC, (t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date DESC, (t.year IS NULL) ASC, t.year DESC, t.track_id DESC",
+                year_unknown_sql("t")
+            );
         }
         (TrackSortField::CreatedAt, true) => {
             "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) ASC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) ASC, t.track_id ASC"
         }
         (TrackSortField::CreatedAt, false) => {
-            "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) ASC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) DESC, t.track_id DESC"
+            "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) DESC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) DESC, t.track_id DESC"
         }
         (TrackSortField::AudioFormat, true) => {
             return audio_format_order_by("ASC", "t.track_id");
@@ -5697,11 +5905,12 @@ fn queue_sort_order_by(sort: TrackListSort) -> String {
              COALESCE(t.album, '') COLLATE MUSIC_LOCALE_NATURAL {direction}, t.track_id {direction}"
         ),
         TrackSortField::Year => format!(
-            "(t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, \
-             t.release_date {direction}, (t.year IS NULL) ASC, t.year {direction}, t.track_id {direction}"
+            "{} {direction}, (t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, \
+             t.release_date {direction}, (t.year IS NULL) ASC, t.year {direction}, t.track_id {direction}",
+            year_unknown_sql("t")
         ),
         TrackSortField::CreatedAt => format!(
-            "(t.created_at_utc_ms IS NULL) ASC, t.created_at_utc_ms {direction}, t.track_id {direction}"
+            "(t.created_at_utc_ms IS NULL) {direction}, t.created_at_utc_ms {direction}, t.track_id {direction}"
         ),
         TrackSortField::AudioFormat => audio_format_order_by(direction, "t.track_id"),
         TrackSortField::Duration => format!(
@@ -6470,7 +6679,10 @@ fn to_sql_i64(value: u64, field: &'static str) -> Result<i64, DatabaseError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AlbumDiscCount, AlbumIndexEntry, ArtistIndexEntry, QuickIndexGroup};
+    use super::{
+        format_group_label, year_group_label, AlbumDiscCount, AlbumIndexEntry, ArtistIndexEntry,
+        QuickIndexGroup, QuickIndexKind, QuickIndexSnapshot,
+    };
     use std::{
         fs,
         io::{Seek, SeekFrom, Write},
@@ -9594,6 +9806,294 @@ mod tests {
     }
 
     #[test]
+    fn the_year_and_format_group_labels_follow_the_list_column() {
+        assert_eq!(year_group_label(Some("2024")), "2024");
+        assert_eq!(year_group_label(Some("2024-03")), "2024");
+        assert_eq!(year_group_label(Some(" 1999-05-06 ")), "1999");
+        for unknown in [None, Some(""), Some("  "), Some("0000"), Some("abcd"), Some("12"), Some("20245"), Some("2024x")] {
+            let expected = if unknown == Some("2024x") { "2024" } else { "未知" };
+            assert_eq!(year_group_label(unknown), expected, "{unknown:?}");
+        }
+        assert_eq!(format_group_label(Some("DSD64")), "DSD");
+        assert_eq!(format_group_label(Some("dsd512")), "DSD");
+        assert_eq!(format_group_label(Some("Wave")), "WAV");
+        assert_eq!(format_group_label(Some("Wav")), "WAV");
+        assert_eq!(format_group_label(Some("Flac")), "FLAC");
+        assert_eq!(format_group_label(Some("OGG Vorbis")), "VORBIS");
+        assert_eq!(format_group_label(Some(" m4a ")), "M4A");
+        assert_eq!(format_group_label(None), "未知");
+        assert_eq!(format_group_label(Some("")), "未知");
+    }
+
+    /// Tracks with the given (release date, year, codec, added-at) in a fresh library; returns the database and the
+    /// track ids in the order given.
+    fn grouping_library(
+        name: &str,
+        tracks: &[(Option<&str>, Option<u16>, Option<&str>, Option<i64>)],
+    ) -> (Database, Vec<TrackId>) {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, name);
+        let records: Vec<_> = tracks
+            .iter()
+            .enumerate()
+            .map(|(index, (release_date, year, codec, added))| {
+                let mut item = record(
+                    &root,
+                    &format!("{name}-{index}"),
+                    &format!("{name}-{index}"),
+                    &format!("title {index}"),
+                    100 + index as u64,
+                    1_000 + index as i64,
+                );
+                let metadata = item.metadata.as_mut().expect("metadata");
+                metadata.release_date = release_date.map(str::to_owned);
+                metadata.year = *year;
+                metadata.codec = codec.map(str::to_owned);
+                item.fingerprint.created_at_utc_ms = *added;
+                item
+            })
+            .collect();
+        apply(&mut db, &root, SourceScanState::Complete, &records, &records, 2_000);
+        // The ids in the order the tracks were given (the scan stores them by title "title N").
+        let page = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 100,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            })
+            .expect("tracks");
+        let ids = (0..tracks.len())
+            .map(|index| {
+                page.items
+                    .iter()
+                    .find(|track| track.title.as_deref() == Some(format!("title {index}").as_str()))
+                    .expect("track")
+                    .id
+            })
+            .collect();
+        (db, ids)
+    }
+
+    fn groups(snapshot: &QuickIndexSnapshot) -> Vec<(String, u64)> {
+        snapshot
+            .groups
+            .iter()
+            .map(|group| (group.label.clone(), group.before_index))
+            .collect()
+    }
+
+    fn group_names(list: &[(&str, u64)]) -> Vec<(String, u64)> {
+        list.iter().map(|(label, index)| ((*label).to_owned(), *index)).collect()
+    }
+
+    #[test]
+    fn year_groups_put_the_unknown_group_last_ascending_and_first_descending() {
+        let (db, ids) = grouping_library(
+            "year-groups",
+            &[
+                (Some("2026-01-02"), Some(2026), None, None),
+                (Some("2025"), Some(2025), None, None),
+                (Some("1999-05"), Some(1999), None, None),
+                (None, None, None, None),
+                (Some("2025-07-01"), Some(2025), None, None),
+                (Some(""), None, None, None),
+            ],
+        );
+        let library = |direction| {
+            let request = ListTracksQuery {
+                offset: 0,
+                limit: 100,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort { field: TrackSortField::Year, direction },
+            };
+            let page = db.list_tracks_page(request.clone()).expect("page");
+            let years: Vec<_> = page
+                .items
+                .iter()
+                .map(|track| year_group_label(track.release_date.as_deref().or(None)))
+                .collect();
+            (years, db.quick_index_for_tracks(&request, &[]).expect("quick index"))
+        };
+        let (years, ascending) = library(TrackSortDirection::Asc);
+        assert_eq!(years, ["1999", "2025", "2025", "2026", "未知", "未知"]);
+        assert_eq!(
+            groups(&ascending),
+            group_names(&[("1999", 0), ("2025", 1), ("2026", 3), ("未知", 4)])
+        );
+        assert_eq!(ascending.total_count, 6);
+        assert_eq!(ascending.labels, ["1999", "2025", "2026", "未知"]);
+        let (years, descending) = library(TrackSortDirection::Desc);
+        assert_eq!(years, ["未知", "未知", "2026", "2025", "2025", "1999"]);
+        assert_eq!(
+            groups(&descending),
+            group_names(&[("未知", 0), ("2026", 2), ("2025", 3), ("1999", 5)])
+        );
+
+        // The queue sorts the same way and groups the same labels.
+        let candidates: Vec<_> = ids
+            .iter()
+            .enumerate()
+            .map(|(entry_index, id)| QueueSortCandidate {
+                entry_index,
+                summary: db.get_track_summaries(&[*id]).expect("summary").remove(0),
+            })
+            .collect();
+        for (direction, expected) in [
+            (TrackSortDirection::Asc, ["1999", "2025", "2025", "2026", "未知", "未知"]),
+            (TrackSortDirection::Desc, ["未知", "未知", "2026", "2025", "2025", "1999"]),
+        ] {
+            let order = db
+                .sort_queue_candidates(&candidates, TrackListSort { field: TrackSortField::Year, direction })
+                .expect("sort queue");
+            let keys: Vec<String> = order
+                .iter()
+                .map(|index| {
+                    let summary = candidates[*index].summary.as_ref().expect("summary");
+                    summary
+                        .release_date
+                        .clone()
+                        .filter(|date| !date.trim().is_empty())
+                        .or_else(|| summary.year.map(|year| year.to_string()))
+                        .unwrap_or_default()
+                })
+                .collect();
+            let labels: Vec<_> = keys.iter().map(|key| year_group_label(Some(key))).collect();
+            assert_eq!(labels, expected, "queue {direction:?}");
+            let snapshot = db
+                .quick_index_for_ordered_keys(QuickIndexKind::Year, &keys)
+                .expect("ordered keys");
+            assert_eq!(snapshot.groups.len(), if direction == TrackSortDirection::Asc { 4 } else { 4 });
+        }
+
+        // A playlist of the same tracks groups the same way.
+        let mut playlist = Playlist::new("years");
+        for (index, id) in ids.iter().enumerate() {
+            playlist.entries.push(PlaylistEntry {
+                track_id: Some(*id),
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\year-groups-{index}.flac"))),
+                title: None,
+                duration_ms: None,
+            });
+        }
+        db.save_playlist(&playlist).expect("save playlist");
+        for (direction, expected) in [
+            (PlaylistSortDirection::Asc, group_names(&[("1999", 0), ("2025", 1), ("2026", 3), ("未知", 4)])),
+            (PlaylistSortDirection::Desc, group_names(&[("未知", 0), ("2026", 2), ("2025", 3), ("1999", 5)])),
+        ] {
+            let sort = PlaylistListSort { field: PlaylistSortField::Year, direction };
+            let snapshot = db
+                .quick_index_for_playlist(playlist.id, sort)
+                .expect("playlist quick index")
+                .expect("playlist exists");
+            assert_eq!(groups(&snapshot), expected, "playlist {direction:?}");
+            let page = db
+                .get_playlist_page_sorted(playlist.id, 0, 100, sort)
+                .expect("page")
+                .expect("playlist exists");
+            let years: Vec<_> = page
+                .items
+                .iter()
+                .map(|item| year_group_label(item.release_date.as_deref()))
+                .collect();
+            let first = if direction == PlaylistSortDirection::Asc { "1999" } else { "未知" };
+            assert_eq!(years.first().map(String::as_str), Some(first));
+        }
+    }
+
+    #[test]
+    fn format_groups_are_one_per_format_name_inside_the_quality_order() {
+        let codecs = [
+            Some("DSD64"),
+            Some("Wav"),
+            Some("FLAC"),
+            Some("Wave"),
+            Some("MP3"),
+            Some("M4A"),
+            Some("AAC"),
+            Some("DSD128"),
+            None,
+            Some("Flac"),
+            Some("M4A"),
+        ];
+        let tracks: Vec<_> = codecs.iter().map(|codec| (Some("2001"), Some(2001), *codec, None)).collect();
+        let (db, ids) = grouping_library("format-groups", &tracks);
+        let request = |direction| ListTracksQuery {
+            offset: 0,
+            limit: 100,
+            query: None,
+            field_filter: None,
+            sort: TrackListSort { field: TrackSortField::AudioFormat, direction },
+        };
+        let ascending = db
+            .quick_index_for_tracks(&request(TrackSortDirection::Asc), &[])
+            .expect("ascending");
+        // Quality order: unknown, MP3, the AAC family (one group per name), FLAC, WAV (WAV and WAVE together), DSD.
+        assert_eq!(ascending.labels, ["未知", "MP3", "AAC", "M4A", "FLAC", "WAV", "DSD"]);
+        assert_eq!(
+            groups(&ascending),
+            group_names(&[("未知", 0), ("MP3", 1), ("AAC", 2), ("M4A", 3), ("FLAC", 5), ("WAV", 7), ("DSD", 9)])
+        );
+        let descending = db
+            .quick_index_for_tracks(&request(TrackSortDirection::Desc), &[])
+            .expect("descending");
+        assert_eq!(descending.labels, ["DSD", "WAV", "FLAC", "M4A", "AAC", "MP3", "未知"]);
+
+        let mut playlist = Playlist::new("formats");
+        for (index, id) in ids.iter().enumerate() {
+            playlist.entries.push(PlaylistEntry {
+                track_id: Some(*id),
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\format-groups-{index}.flac"))),
+                title: None,
+                duration_ms: None,
+            });
+        }
+        db.save_playlist(&playlist).expect("save playlist");
+        let snapshot = db
+            .quick_index_for_playlist(
+                playlist.id,
+                PlaylistListSort { field: PlaylistSortField::AudioFormat, direction: PlaylistSortDirection::Asc },
+            )
+            .expect("playlist")
+            .expect("exists");
+        assert_eq!(snapshot.labels, ascending.labels);
+        assert_eq!(groups(&snapshot), groups(&ascending));
+    }
+
+    #[test]
+    fn added_year_groups_use_the_calendar_year_the_track_was_added() {
+        // Mid-year instants, so the local time zone cannot move them to another year.
+        let july_2020 = 1_593_604_800_000_i64;
+        let july_2021 = 1_625_140_800_000_i64;
+        let (db, _) = grouping_library(
+            "added-groups",
+            &[
+                (Some("2001"), Some(2001), None, Some(july_2021)),
+                (Some("2001"), Some(2001), None, Some(july_2020)),
+                (Some("2001"), Some(2001), None, Some(july_2021 + 86_400_000)),
+            ],
+        );
+        let request = |direction| ListTracksQuery {
+            offset: 0,
+            limit: 100,
+            query: None,
+            field_filter: None,
+            sort: TrackListSort { field: TrackSortField::CreatedAt, direction },
+        };
+        let ascending = db.quick_index_for_tracks(&request(TrackSortDirection::Asc), &[]).expect("asc");
+        assert_eq!(groups(&ascending), group_names(&[("2020", 0), ("2021", 1)]));
+        let descending = db.quick_index_for_tracks(&request(TrackSortDirection::Desc), &[]).expect("desc");
+        assert_eq!(groups(&descending), group_names(&[("2021", 0), ("2020", 2)]));
+        let keys = [july_2021.to_string(), july_2020.to_string(), String::new()];
+        let ordered = db
+            .quick_index_for_ordered_keys(QuickIndexKind::AddedYear, &keys)
+            .expect("ordered");
+        assert_eq!(ordered.labels, ["2021", "2020", "未知"]);
+    }
+
+    #[test]
     fn playlist_track_position_matches_the_sorted_page_order() {
         let path = std::env::temp_dir().join(format!(
             "moemusic-playlist-position-{}.sqlite3",
@@ -11783,8 +12283,8 @@ mod tests {
                 .iter()
                 .map(|track| track.title.as_deref())
                 .collect::<Vec<_>>(),
-            [Some("Late"), Some("Early"), Some("Unknown")],
-            "missing creation dates stay last in either sort direction",
+            [Some("Unknown"), Some("Late"), Some("Early")],
+            "missing creation dates are the unknown group: last ascending, first descending",
         );
     }
 

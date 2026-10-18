@@ -382,7 +382,7 @@ test('grouping mode setting persists and reaches all sortable list views', async
     assert.match(source, /groupingEnabled/);
   }
   assert.match(trackList, /groupingEnabled\s*&&\s*sortable/);
-  assert.match(playlist, /groupingEnabled\s*&&\s*\['title', 'artist', 'album'\]/);
+  assert.match(playlist, /groupingEnabled\s*&&\s*isGroupedSortField\(currentSort\.field\)/);
   assert.match(queue, /groupingEnabled\s*&&\s*currentSort/);
   assert.match(app, /<AlbumIndex[\s\S]*?\{groupingEnabled\}/);
   assert.match(albumIndex, /groupingEnabled: shouldGroupAlbumIndex\(\{ sortField, groupingEnabled \}\)/);

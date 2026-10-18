@@ -25,6 +25,7 @@
 
 <script lang="ts">
   import { tr } from './i18n.js';
+  import { isGroupedSortField } from './grouped-sorts.js';
 import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistListSort, type PlaylistPage, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
 import { appTooltip } from './app-tooltip.js';
 import { formatDuration } from './format';
@@ -141,7 +142,7 @@ import { PagedListController } from './track-list-data.js';
     const count = snapshot.totalCount;
     const currentPlaylistId = playlistId;
     const currentSort = sort;
-    const enabled = groupingEnabled && ['title', 'artist', 'album'].includes(currentSort.field);
+    const enabled = groupingEnabled && isGroupedSortField(currentSort.field);
     const generation = ++quickIndexGeneration;
     quickIndex = null;
     quickIndexReady = !enabled || count === 0;

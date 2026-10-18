@@ -185,6 +185,38 @@ export function getQuickIndexCellSizePx(fontSizePx) {
   return font * QUICK_INDEX_LABEL_SIZE_EM;
 }
 
+/** Horizontal padding of a label cell, in em, on top of its text (a one-character label stays 2 em wide). */
+export const QUICK_INDEX_LABEL_PADDING_EM = 1;
+/** A character this wide or wider is counted as a full em (CJK, kana, fullwidth forms); the rest as narrower text. */
+const QUICK_INDEX_NARROW_CHARACTER_EM = 0.62;
+
+/**
+ * Estimated width of a label's text in em: a wide character counts 1 em, anything else about 0.6 em ("2024" is
+ * roughly 2.5 em, "FLAC" 2.5 em, a single kana or kanji 1 em).
+ * @param {string} text
+ */
+export function estimateQuickIndexTextWidthEm(text) {
+  let width = 0;
+  for (const character of String(text ?? '')) {
+    const code = character.codePointAt(0) ?? 0;
+    const wide = code >= 0x1100 && (code <= 0x115f || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3)
+      || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe30 && code <= 0xfe6f) || (code >= 0xff00 && code <= 0xff60) || (code >= 0xffe0 && code <= 0xffe6));
+    width += wide ? 1 : QUICK_INDEX_NARROW_CHARACTER_EM;
+  }
+  return width;
+}
+
+/**
+ * Width in em of the widest cell of a label grid. A cell is never narrower than the 2 em square a one-character
+ * label gets, and grows with its text, so labels such as "2024" or "FLAC" are not squeezed into one character's room.
+ * @param {string[]} labels the labels as shown (after `getQuickIndexDisplayLabel`)
+ */
+export function getQuickIndexCellWidthEm(labels) {
+  let widest = 0;
+  for (const label of labels) widest = Math.max(widest, estimateQuickIndexTextWidthEm(label));
+  return Math.max(QUICK_INDEX_LABEL_SIZE_EM, widest + QUICK_INDEX_LABEL_PADDING_EM);
+}
+
 /** The quick-find panel uses a compact marker for the Unknown group. */
 /** @param {string} label */
 export function getQuickIndexDisplayLabel(label) {

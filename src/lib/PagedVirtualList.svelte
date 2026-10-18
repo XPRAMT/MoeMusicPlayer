@@ -44,7 +44,7 @@
     getNextActiveIndex,
     type VirtualRange,
   } from './track-list-data.js';
-  import { buildPagedVirtualRows, dataIndexToVisualIndex, getGroupedVirtualRange, getQuickIndexAvailableWidth, getQuickIndexCellSizePx, getQuickIndexColumnCount, getQuickIndexDisplayLabel, getRestoredListScrollTop, getVirtualRowTop, getVirtualRowsHeight, getVisualIndexAtOffset, reportPagedRange, shouldAdjustGroupAnchor, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
+  import { buildPagedVirtualRows, dataIndexToVisualIndex, getGroupedVirtualRange, getQuickIndexAvailableWidth, getQuickIndexCellSizePx, getQuickIndexCellWidthEm, getQuickIndexColumnCount, getQuickIndexDisplayLabel, getRestoredListScrollTop, getVirtualRowTop, getVirtualRowsHeight, getVisualIndexAtOffset, reportPagedRange, shouldAdjustGroupAnchor, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
@@ -604,7 +604,9 @@
     quickIndexCenterX = rect.left + rect.width / 2;
     quickIndexCenterY = rect.top + rect.height / 2;
     quickIndexMaxWidth = getQuickIndexAvailableWidth(rect.width, window.innerWidth);
-    quickIndexCellSizePx = getQuickIndexCellSizePx(Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--font-title')));
+    const quickIndexFontPx = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--font-title'));
+    // The widest label sets the cell width the columns are counted with (labels like "2024" or "FLAC" are wider than one character).
+    quickIndexCellSizePx = quickIndexFontPx * getQuickIndexCellWidthEm(quickIndexLabels.map(getQuickIndexDisplayLabel));
     quickIndexMaxHeight = Math.max(0, rect.height - 24);
     quickIndexTrigger = event.currentTarget as HTMLButtonElement;
     quickIndexOpen = true;
@@ -1126,15 +1128,18 @@
 
   .quick-index-label-grid {
     display: grid;
-    grid-template-columns: repeat(var(--quick-index-columns), 2em);
+    /* Each column is as wide as its widest label (never under 2em), so a label is not limited to one character. */
+    grid-template-columns: repeat(var(--quick-index-columns), auto);
     gap: 4px;
     font-size: var(--font-title);
   }
 
   .quick-index-label {
     display: grid;
-    width: 2em;
+    min-width: 2em;
     height: 2em;
+    padding: 0 0.5em;
+    white-space: nowrap;
     box-sizing: border-box;
     min-height: 0;
     place-items: center;
@@ -1153,8 +1158,6 @@
 
   .quick-index-label.wide-label {
     grid-column: span 2;
-    width: auto;
-    white-space: nowrap;
   }
 
   .quick-index-label:disabled,

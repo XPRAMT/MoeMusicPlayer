@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tr } from './i18n.js';
+  import { isGroupedSortField } from './grouped-sorts.js';
   import { appTooltip } from './app-tooltip.js';
   import { getErrorText, invokeCommand, type LibraryListSort, type PlaybackQueuePage, type PlaybackQueuePageItem, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
   import { formatDuration } from './format';
@@ -132,7 +133,7 @@
   $effect(() => {
     const count = snapshot.totalCount;
     const currentSort = normalizedSort;
-    const enabled = groupingEnabled && currentSort !== null && ['title', 'artist', 'album'].includes(currentSort.field);
+    const enabled = groupingEnabled && currentSort !== null && isGroupedSortField(currentSort.field);
     const generation = ++quickIndexGeneration;
     quickIndex = null;
     quickIndexReady = !enabled || count === 0;

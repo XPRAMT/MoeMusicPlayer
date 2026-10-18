@@ -11,7 +11,9 @@ import {
   shouldAdjustGroupAnchor,
   dataIndexToVisualIndex,
   getQuickIndexAvailableWidth,
+  estimateQuickIndexTextWidthEm,
   getQuickIndexCellSizePx,
+  getQuickIndexCellWidthEm,
   getQuickIndexColumnCount,
   getQuickIndexMaxFittingColumns,
   getQuickIndexDisplayLabel,
@@ -273,4 +275,26 @@ test('quick-find available width is capped by the window and cell size follows t
   assert.equal(getQuickIndexCellSizePx(20), 40);
   assert.equal(getQuickIndexCellSizePx(Number.NaN), 32);
   assert.equal(getQuickIndexMaxFittingColumns({}), null);
+});
+
+test('a label cell is at least the 2 em square and grows with the label, so years and formats are not squeezed', () => {
+  assert.equal(getQuickIndexCellWidthEm(['A', 'B', '#', '？']), 2, 'one-character labels keep the 2 em square');
+  assert.equal(getQuickIndexCellWidthEm([]), 2);
+  assert.equal(getQuickIndexCellWidthEm(['漢字']), 3, 'two wide characters are 2 em of text plus the padding');
+  const years = getQuickIndexCellWidthEm(['1999', '2025', '2026', '？']);
+  const formats = getQuickIndexCellWidthEm(['？', 'MP3', 'AAC', 'FLAC', 'WAV', 'DSD']);
+  assert.ok(years > 3 && years < 4, `${years}`);
+  assert.ok(formats > 3 && formats < 4, `${formats}`);
+  assert.ok(estimateQuickIndexTextWidthEm('FLAC') > estimateQuickIndexTextWidthEm('F'));
+  assert.equal(estimateQuickIndexTextWidthEm('あ'), 1);
+  assert.equal(estimateQuickIndexTextWidthEm(''), 0);
+});
+
+test('wider cells mean fewer columns in the same width', () => {
+  const font = 16;
+  const oneCharacter = getQuickIndexColumnCount(30, { availableWidthPx: 400, cellSizePx: font * getQuickIndexCellWidthEm(['A']) });
+  const years = getQuickIndexColumnCount(30, { availableWidthPx: 400, cellSizePx: font * getQuickIndexCellWidthEm(['2024']) });
+  assert.ok(years <= oneCharacter);
+  // 4 columns of "2024" cells (about 3.5 em = 56 px) plus gaps fit 400 px, but 8 would not.
+  assert.equal(getQuickIndexColumnCount(64, { availableWidthPx: 400, cellSizePx: 56 }), 6);
 });
