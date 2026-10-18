@@ -132,6 +132,8 @@ export type NowPlayingLayout = 'a' | 'b';
 export interface DsdPlaybackSettings {
   gainDb: number;
   outputRateHz: number;
+  /** Send DSD to the device as DoP in exclusive mode instead of converting it to PCM. */
+  dop: boolean;
 }
 
 /** Where one output channel of a device takes its sound from (`source` is 0-based; null is silence). */
@@ -560,6 +562,10 @@ export interface ExclusiveOutput {
   bitPerfect: boolean;
   volumeApplied: boolean;
   underruns: number;
+  /** The 1-bit rate of the DSD file when the stream carries it as DoP. */
+  dopDsdRateHz?: number | null;
+  /** DoP is on but this track plays as converted PCM, and why. */
+  dopFallback?: string | null;
 }
 
 export interface LyricLine {
@@ -846,7 +852,7 @@ interface IpcContract {
     result: DsdPlaybackSettings;
   };
   settings_set_dsd: {
-    args: { gainDb: number; outputRateHz: number };
+    args: { gainDb: number; outputRateHz: number; dop?: boolean };
     result: DsdPlaybackSettings;
   };
   settings_get_cover_zoom: {

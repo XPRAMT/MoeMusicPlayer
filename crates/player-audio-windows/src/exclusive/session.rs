@@ -10,7 +10,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use super::endpoint::{Endpoint, RenderStream};
-use super::format::{encode, negotiate, silence, Negotiated, StreamFormat};
+use super::format::{
+    dop_idle_sample, encode, encode_dop, negotiate, negotiate_dop, silence, Negotiated,
+    StreamFormat,
+};
 
 /// How much audio the ring holds (the decode thread stays this far ahead of the device).
 const RING_SECONDS: f64 = 0.4;
@@ -206,6 +209,15 @@ pub(crate) struct DecodeJob {
     pub(crate) source: SampleSource,
 }
 
+/// What a session is opened for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Route {
+    /// A PCM track at `rate` with `channels`; the format is negotiated, converting what the device refuses.
+    Pcm { rate: u32, channels: u16 },
+    /// DSD carried as DoP at exactly `rate` (DSD rate / 16), stereo; nothing may touch the samples.
+    Dop { rate: u32 },
+}
+
 pub(crate) struct Session {
     pub(crate) negotiated: Negotiated,
     pub(crate) ring: Arc<SampleRing>,
@@ -225,6 +237,23 @@ impl Session {
         volume: f32,
         paused: bool,
     ) -> Result<Session, String> {
+        Self::start_route(
+            make_endpoint,
+            Route::Pcm {
+                rate: source_rate,
+                channels: source_channels,
+            },
+            volume,
+            paused,
+        )
+    }
+
+    pub(crate) fn start_route(
+        make_endpoint: impl FnOnce() -> Result<Box<dyn Endpoint>, String> + Send + 'static,
+        route: Route,
+        volume: f32,
+        paused: bool,
+    ) -> Result<Session, String> {
         let control = Arc::new(RenderControl::new(volume, paused));
         let stop = Arc::new(AtomicBool::new(false));
         let (opened_tx, opened_rx) =
@@ -237,8 +266,15 @@ impl Session {
                 let _boost = super::boost_render_thread();
                 let opened = (|| {
                     let mut endpoint = make_endpoint()?;
-                    let negotiated = negotiate(&mut *endpoint, source_rate, source_channels)
-                        .ok_or_else(|| "這個裝置不接受任何可用的格式。".to_owned())?;
+                    let negotiated = match route {
+                        Route::Pcm { rate, channels } => negotiate(&mut *endpoint, rate, channels)
+                            .ok_or_else(|| "這個裝置不接受任何可用的格式。".to_owned())?,
+                        Route::Dop { rate } => {
+                            negotiate_dop(&mut *endpoint, rate).ok_or_else(|| {
+                                format!("這個裝置不接受 24-bit {rate} Hz 的 DoP 格式。")
+                            })?
+                        }
+                    };
                     let stream = endpoint.open(&negotiated.format)?;
                     Ok::<_, String>((endpoint, negotiated, stream))
                 })();
@@ -259,6 +295,7 @@ impl Session {
                     &ring,
                     &render_control,
                     &render_stop,
+                    negotiated.dop,
                 ) {
                     render_control.fail(reason);
                 }
@@ -398,13 +435,28 @@ fn render_loop(
     ring: &SampleRing,
     control: &RenderControl,
     stop: &AtomicBool,
+    dop: bool,
 ) -> Result<(), String> {
     let channels = usize::from(format.channels).max(1);
     let mut samples: Vec<f32> = Vec::new();
     let mut bytes: Vec<u8> = Vec::new();
-    // Fill the buffer with silence before starting, as event-driven streams require.
+    // The DoP marker alternates once per frame over everything written to the device, including the idle fill.
+    let mut marker_phase = 0_usize;
+    // Fill the buffer with silence before starting, as event-driven streams require. In DoP the silence is the DSD idle
+    // pattern in marker framing; PCM zeros would break the DAC out of DSD.
     let free = stream.free_frames()?;
-    silence(format, free, &mut bytes);
+    if dop {
+        samples.resize(free * channels, dop_idle_sample());
+        encode_dop(
+            &samples,
+            channels,
+            format.container,
+            &mut marker_phase,
+            &mut bytes,
+        );
+    } else {
+        silence(format, free, &mut bytes);
+    }
     stream.write(free, &bytes)?;
     control
         .latency_frames
@@ -420,13 +472,26 @@ fn render_loop(
             continue;
         }
         samples.clear();
-        samples.resize(free * channels, 0.0);
+        samples.resize(free * channels, if dop { dop_idle_sample() } else { 0.0 });
         let mut got = 0;
         if !control.paused.load(Ordering::Acquire) {
             got = ring.pop_into(&mut samples);
             if got < samples.len() && ring.expecting_audio() {
                 control.underruns.fetch_add(1, Ordering::Relaxed);
             }
+        }
+        if dop {
+            // DoP is the DSD bits themselves: no gain, no volume.
+            bytes.clear();
+            encode_dop(
+                &samples,
+                channels,
+                format.container,
+                &mut marker_phase,
+                &mut bytes,
+            );
+            stream.write(free, &bytes)?;
+            continue;
         }
         let target = f32::from_bits(control.volume.load(Ordering::Relaxed));
         // At full volume the samples pass through untouched, so what reaches the device is what the file holds.

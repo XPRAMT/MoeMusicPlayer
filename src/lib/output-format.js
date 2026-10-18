@@ -1,4 +1,5 @@
 ﻿import { tr } from './i18n.js';
+import { formatDsdName } from './dsd-settings.js';
 /**
  * @typedef {{
  *   mode: 'windowsBuiltin' | 'highQuality',
@@ -10,7 +11,7 @@
  *   dseeHx: 'off' | 'active' | 'bypassed' | 'unavailable',
  *   dseeNotice: string | null,
  *   dseeOutputRateHz: number | null,
- *   exclusive?: { bits: number, channels: number, sourceChannels: number, bitPerfect: boolean, volumeApplied: boolean, underruns: number } | null,
+ *   exclusive?: { bits: number, channels: number, sourceChannels: number, bitPerfect: boolean, volumeApplied: boolean, underruns: number, dopDsdRateHz?: number | null, dopFallback?: string | null } | null,
  *   exclusiveFallback?: string | null,
  * }} OutputFormat
  */
@@ -120,8 +121,14 @@ export function describeExclusive(format) {
   const exclusive = format?.exclusive;
   if (!format || !exclusive) return null;
   const rate = formatSampleRate(format.outputRateHz);
+  if (exclusive.dopDsdRateHz) {
+    // DSD as DoP: every bit of the file goes to the DAC; the player's gain and volume do not apply.
+    return { text: tr("獨佔．DoP．{0} → {1}", [formatDsdName(exclusive.dopDsdRateHz), rate]), notice: null };
+  }
+  const fallbackNote = exclusive.dopFallback ? tr("DoP 無法使用，已轉成 PCM：{0}", [exclusive.dopFallback]) : null;
+  const withNote = (/** @type {string | null} */ notice) => [notice, fallbackNote].filter(Boolean).join('；') || null;
   const head = tr("獨佔．{0}-bit {1}", [exclusive.bits, rate]);
-  if (exclusive.bitPerfect) return { text: `${head}．${tr('位元完美')}`, notice: null };
+  if (exclusive.bitPerfect) return { text: `${head}．${tr('位元完美')}`, notice: withNote(null) };
   /** @type {string[]} */
   const reasons = [];
   if (format.sourceRateHz != null && format.sourceRateHz !== format.outputRateHz) {
@@ -133,7 +140,7 @@ export function describeExclusive(format) {
   if (exclusive.volumeApplied) {
     reasons.push(tr('播放器音量低於 100%，已套用軟體音量；調到 100% 才會原樣送出'));
   }
-  return { text: head, notice: reasons.length ? `${reasons.join('；')}（${tr('不是位元完美')}）` : null };
+  return { text: head, notice: withNote(reasons.length ? `${reasons.join('；')}（${tr('不是位元完美')}）` : null) };
 }
 
 /**

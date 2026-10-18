@@ -8,7 +8,7 @@ export const DSD_DEFAULT_GAIN_DB = 3;
 export const DSD_OUTPUT_RATES_HZ = Object.freeze([176_400, 352_800]);
 export const DSD_DEFAULT_OUTPUT_RATE_HZ = 176_400;
 
-/** @typedef {{ gainDb: number, outputRateHz: number }} DsdSettings */
+/** @typedef {{ gainDb: number, outputRateHz: number, dop: boolean }} DsdSettings */
 
 /**
  * Repair a settings object: the gain is clamped to 0 to 6 dB (a non-number becomes 3 dB), an unsupported rate becomes
@@ -24,7 +24,13 @@ export function normalizeDsdSettings(value) {
   const rate = DSD_OUTPUT_RATES_HZ.includes(/** @type {number} */ (source.outputRateHz))
     ? /** @type {number} */ (source.outputRateHz)
     : DSD_DEFAULT_OUTPUT_RATE_HZ;
-  return { gainDb: gain, outputRateHz: rate };
+  return { gainDb: gain, outputRateHz: rate, dop: source.dop === true };
+}
+
+/** "DSD64", "DSD128" for a 1-bit rate that is a multiple of 44.1 kHz. @param {number} dsdRateHz */
+export function formatDsdName(dsdRateHz) {
+  const multiple = Math.round(dsdRateHz / 44_100);
+  return multiple > 0 ? `DSD${multiple}` : `${(dsdRateHz / 1e6).toFixed(1)} MHz DSD`;
 }
 
 /** "+3 dB", "0 dB" @param {number} gainDb */

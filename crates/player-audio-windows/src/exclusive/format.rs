@@ -117,6 +117,8 @@ pub(crate) struct Negotiated {
     pub(crate) format: StreamFormat,
     pub(crate) source_rate: u32,
     pub(crate) source_channels: u16,
+    /// The stream carries DSD as DoP words (rate = DSD rate / 16, stereo, nothing may touch the samples).
+    pub(crate) dop: bool,
 }
 
 impl Negotiated {
@@ -156,12 +158,80 @@ pub(crate) fn negotiate(
                         format,
                         source_rate,
                         source_channels,
+                        dop: false,
                     });
                 }
             }
         }
     }
     None
+}
+
+/// The containers a DoP stream is tried in: 24 valid bits left-justified in 32 first (what DACs expect), then packed 24,
+/// then a full 32-bit container with the 24 bits at the top. Never 16 bit: the marker byte would be lost.
+pub(crate) const DOP_CONTAINERS: [Container; 3] = [
+    Container::Int24In32,
+    Container::Int24Packed,
+    Container::Int32,
+];
+
+/// Find the format for DoP at exactly `rate` (the DSD rate / 16): stereo, the first accepted container. DoP cannot be
+/// resampled, so a refused rate means no DoP.
+pub(crate) fn negotiate_dop(
+    probe: &mut (impl FormatProbe + ?Sized),
+    rate: u32,
+) -> Option<Negotiated> {
+    DOP_CONTAINERS.into_iter().find_map(|container| {
+        let format = StreamFormat {
+            rate,
+            channels: 2,
+            container,
+        };
+        probe.supports(&format).then_some(Negotiated {
+            format,
+            source_rate: rate,
+            source_channels: 2,
+            dop: true,
+        })
+    })
+}
+
+/// Scale between a 24-bit integer and the `f32` the sample pipeline carries it as.
+const INT24_SCALE: f32 = 8_388_608.0;
+
+/// The `f32` that carries a 24-bit DoP word through the sample ring (exact: 24 bits fit the mantissa).
+pub(crate) fn dop_word_to_sample(word: u32) -> f32 {
+    ((word << 8) as i32 >> 8) as f32 / INT24_SCALE
+}
+
+/// The `f32` for the DoP idle pattern (the marker is stamped by [`encode_dop`]).
+pub(crate) fn dop_idle_sample() -> f32 {
+    f32::from(player_dsd::dop::DOP_IDLE_BITS) / INT24_SCALE
+}
+
+/// Append DoP frames to `out`: the 16 DSD bits of every sample (the low 16 bits of the carried word) under a marker
+/// that alternates frame by frame. The marker comes from `phase`, which the render thread owns, so it stays unbroken
+/// across seeks, track changes, pauses and idle fill, whatever markers the sources wrote.
+pub(crate) fn encode_dop(
+    samples: &[f32],
+    channels: usize,
+    container: Container,
+    phase: &mut usize,
+    out: &mut Vec<u8>,
+) {
+    out.reserve(samples.len() * container.bytes_per_sample());
+    for frame in samples.chunks(channels.max(1)) {
+        let marker = u32::from(player_dsd::dop::DOP_MARKERS[*phase & 1]);
+        for &sample in frame {
+            let bits = ((sample * INT24_SCALE).round() as i32 as u32) & 0xFFFF;
+            let word = (marker << 16) | bits;
+            match container {
+                Container::Int24Packed => out.extend_from_slice(&word.to_le_bytes()[..3]),
+                _ => out.extend_from_slice(&(word << 8).to_le_bytes()),
+            }
+        }
+        *phase ^= 1;
+    }
 }
 
 /// Append `samples` (interleaved `f32`, -1.0 to 1.0) to `out` as the container's little-endian integers, rounded to
@@ -221,6 +291,74 @@ mod tests {
             channels,
             container,
         }
+    }
+
+    #[test]
+    fn dop_negotiates_the_exact_rate_with_24_bit_containers_in_order_and_never_resamples() {
+        let all = [
+            format(176_400, 2, Container::Int16),
+            format(176_400, 2, Container::Int32),
+            format(176_400, 2, Container::Int24Packed),
+            format(176_400, 2, Container::Int24In32),
+        ];
+        let negotiated = negotiate_dop(&mut Accepts(all.to_vec()), 176_400).unwrap();
+        assert_eq!(negotiated.format, format(176_400, 2, Container::Int24In32));
+        assert!(negotiated.dop && !negotiated.resampled() && !negotiated.remixed());
+        let packed = negotiate_dop(&mut Accepts(all[..3].to_vec()), 176_400).unwrap();
+        assert_eq!(packed.format.container, Container::Int24Packed);
+        let wide = negotiate_dop(&mut Accepts(all[..2].to_vec()), 176_400).unwrap();
+        assert_eq!(wide.format.container, Container::Int32);
+        assert_eq!(
+            negotiate_dop(&mut Accepts(all[..1].to_vec()), 176_400),
+            None,
+            "16 bit cannot carry DoP"
+        );
+        assert_eq!(
+            negotiate_dop(
+                &mut Accepts(vec![format(352_800, 2, Container::Int24In32)]),
+                176_400
+            ),
+            None,
+            "another rate is no DoP"
+        );
+    }
+
+    #[test]
+    fn dop_words_survive_the_f32_ring_and_get_the_render_threads_marker() {
+        // The source carries any marker; encoding replaces it with the unbroken alternation and keeps the 16 bits.
+        let words = [0x05_1234_u32, 0xFA_9ABC, 0x05_0000, 0xFA_FFFF];
+        let samples: Vec<f32> = words.iter().map(|&word| dop_word_to_sample(word)).collect();
+        let mut phase = 1; // the previous frame ended on 0x05, so this one must be 0xFA
+        let mut out = Vec::new();
+        encode_dop(&samples, 2, Container::Int24In32, &mut phase, &mut out);
+        let decoded: Vec<i32> = out
+            .chunks(4)
+            .map(|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) >> 8)
+            .collect();
+        assert_eq!(
+            decoded,
+            [
+                0xFA_1234_u32 as i32 - 0x0100_0000,
+                0xFA_9ABC_u32 as i32 - 0x0100_0000,
+                0x05_0000,
+                0x05_FFFF
+            ]
+        );
+        assert_eq!(phase, 1);
+    }
+
+    #[test]
+    fn dop_encoding_fits_every_container() {
+        let samples = [dop_word_to_sample(0x05_ABCD), dop_word_to_sample(0x05_1357)];
+        let mut phase = 0;
+        let mut packed = Vec::new();
+        encode_dop(&samples, 2, Container::Int24Packed, &mut phase, &mut packed);
+        assert_eq!(packed, [0xCD, 0xAB, 0x05, 0x57, 0x13, 0x05]);
+        let mut phase = 0;
+        let mut wide = Vec::new();
+        encode_dop(&samples, 2, Container::Int32, &mut phase, &mut wide);
+        assert_eq!(wide, [0x00, 0xCD, 0xAB, 0x05, 0x00, 0x57, 0x13, 0x05]);
+        assert!((dop_idle_sample() * 8_388_608.0).round() as u32 == 0x6969);
     }
 
     #[test]

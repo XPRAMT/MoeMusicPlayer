@@ -111,6 +111,18 @@ test('the exclusive stream says bit-perfect, or what changed the samples', async
   assert.equal(describeExclusive(format({})), null, 'a shared-mode output has no exclusive stream');
 });
 
+test('DSD as DoP names the DSD rate and the PCM rate that carries it; a refused DoP says why the track was converted', async () => {
+  const { describeExclusive } = await import('../src/lib/output-format.js');
+  const exclusive = { bits: 24, channels: 2, sourceChannels: 2, bitPerfect: true, volumeApplied: false, underruns: 0 };
+  assert.deepEqual(
+    describeExclusive(format({ sourceRateHz: 176_400, outputRateHz: 176_400, exclusive: { ...exclusive, dopDsdRateHz: 2_822_400 } })),
+    { text: '獨佔．DoP．DSD64 → 176.4 kHz', notice: null },
+  );
+  const refused = describeExclusive(format({ sourceRateHz: 176_400, outputRateHz: 176_400, exclusive: { ...exclusive, dopFallback: '這個裝置不接受 24-bit 176400 Hz 的 DoP 格式。' } }));
+  assert.equal(refused.text, '獨佔．24-bit 176.4 kHz．位元完美');
+  assert.equal(refused.notice, 'DoP 無法使用，已轉成 PCM：這個裝置不接受 24-bit 176400 Hz 的 DoP 格式。');
+});
+
 test('a track exclusive mode could not take says it plays in shared mode and why', async () => {
   const { describeExclusiveFallback } = await import('../src/lib/output-format.js');
   assert.equal(describeExclusiveFallback(format({})), null);

@@ -206,6 +206,11 @@ pub struct ExclusiveInfo {
     pub volume_applied: bool,
     /// Times the device asked for audio the player did not have ready.
     pub underruns: u64,
+    /// The 1-bit rate of the DSD file when the stream carries it as DoP (the PCM rate is that divided by 16).
+    pub dop_dsd_rate: Option<u32>,
+    /// DoP is switched on but this track plays as converted PCM instead, and why (the device does not accept the DoP
+    /// format, the file's rate or channel count has no DoP form).
+    pub dop_fallback: Option<String>,
 }
 
 /// DSD→PCM playback settings (settings → output, ADR 0016).
@@ -215,6 +220,9 @@ pub struct DsdSettings {
     pub gain_db: f32,
     /// PCM rate the DSD is converted to: 176 400 or 352 800 Hz. A change reloads the playing track.
     pub output_rate: u32,
+    /// Send DSD to the device as DoP in exclusive mode (no conversion; the gain and rate above do not apply). A change
+    /// reloads the playing DSD track.
+    pub dop: bool,
 }
 
 /// DSD output rates the converter offers.
@@ -230,6 +238,7 @@ impl Default for DsdSettings {
         Self {
             gain_db: DSD_DEFAULT_GAIN_DB,
             output_rate: DSD_OUTPUT_RATES[0],
+            dop: false,
         }
     }
 }
@@ -250,6 +259,7 @@ impl DsdSettings {
         Self {
             gain_db,
             output_rate,
+            dop: self.dop,
         }
     }
 }
@@ -259,6 +269,7 @@ impl DsdSettings {
 #[derive(Debug)]
 pub(crate) struct DsdOptions {
     output_rate: AtomicU32,
+    dop: AtomicBool,
     /// Gain in dB as `f32` bits.
     gain_db_bits: Arc<AtomicU32>,
 }
@@ -268,6 +279,7 @@ impl Default for DsdOptions {
         let defaults = DsdSettings::default();
         Self {
             output_rate: AtomicU32::new(defaults.output_rate),
+            dop: AtomicBool::new(defaults.dop),
             gain_db_bits: Arc::new(AtomicU32::new(defaults.gain_db.to_bits())),
         }
     }
@@ -279,6 +291,7 @@ impl DsdOptions {
         DsdSettings {
             gain_db: f32::from_bits(self.gain_db_bits.load(AtomicOrdering::Relaxed)),
             output_rate: self.output_rate.load(AtomicOrdering::Relaxed),
+            dop: self.dop.load(AtomicOrdering::Relaxed),
         }
     }
 
@@ -286,6 +299,7 @@ impl DsdOptions {
         let settings = settings.normalized();
         self.output_rate
             .store(settings.output_rate, AtomicOrdering::Relaxed);
+        self.dop.store(settings.dop, AtomicOrdering::Relaxed);
         self.gain_db_bits
             .store(settings.gain_db.to_bits(), AtomicOrdering::Relaxed);
     }
@@ -2164,22 +2178,26 @@ mod dsd_settings_tests {
     fn settings_are_normalised_and_shared_through_the_options() {
         assert_eq!(DsdSettings::default().gain_db, 3.0);
         assert_eq!(DsdSettings::default().output_rate, 176_400);
+        assert!(!DsdSettings::default().dop, "DoP is off until chosen");
         let odd = DsdSettings {
             gain_db: 99.0,
             output_rate: 192_000,
+            dop: false,
         }
         .normalized();
         assert_eq!(
             odd,
             DsdSettings {
                 gain_db: 6.0,
-                output_rate: 176_400
+                output_rate: 176_400,
+                dop: false,
             }
         );
         assert_eq!(
             DsdSettings {
                 gain_db: -4.0,
-                output_rate: 352_800
+                output_rate: 352_800,
+                dop: false,
             }
             .normalized()
             .gain_db,
@@ -2188,23 +2206,35 @@ mod dsd_settings_tests {
         assert_eq!(
             DsdSettings {
                 gain_db: f32::NAN,
-                output_rate: 352_800
+                output_rate: 352_800,
+                dop: false,
             }
             .normalized()
             .gain_db,
             3.0
+        );
+        assert!(
+            DsdSettings {
+                dop: true,
+                ..Default::default()
+            }
+            .normalized()
+            .dop,
+            "normalising keeps the DoP choice"
         );
         let options = DsdOptions::default();
         let handle = options.gain_handle();
         options.set(DsdSettings {
             gain_db: 5.0,
             output_rate: 352_800,
+            dop: false,
         });
         assert_eq!(
             options.settings(),
             DsdSettings {
                 gain_db: 5.0,
-                output_rate: 352_800
+                output_rate: 352_800,
+                dop: false,
             }
         );
         assert_eq!(

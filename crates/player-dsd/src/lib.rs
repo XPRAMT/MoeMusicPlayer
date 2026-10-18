@@ -5,10 +5,11 @@
 //! - [`convert`]: the DSD→PCM conversion core (table-lookup decimation plus halfband stages).
 //! - [`reader`]: the seekable, delay-compensated PCM reader on top of it; [`wav`] serves it as a float WAV file.
 //!
-//! The rodio source built on top lives in `player-audio-windows`; DoP, when it exists, is another consumer of
-//! [`stream::DsdStream`].
+//! The rodio source built on top lives in `player-audio-windows`; [`dop`] packs the same stream into DoP words for
+//! exclusive-mode output.
 
 pub mod convert;
+pub mod dop;
 pub mod dsf;
 pub(crate) mod filters;
 #[cfg(feature = "id3")]

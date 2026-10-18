@@ -870,6 +870,10 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
 pub struct DsdPlaybackSettings {
     pub gain_db: f32,
     pub output_rate_hz: u32,
+    /// Send DSD to the device as DoP in exclusive mode instead of converting it to PCM (the gain and the rate above
+    /// then do not apply). Default off.
+    #[serde(default)]
+    pub dop: bool,
 }
 
 impl DsdPlaybackSettings {
@@ -889,7 +893,7 @@ impl DsdPlaybackSettings {
         } else {
             Self::OUTPUT_RATES_HZ[0]
         };
-        Self { gain_db, output_rate_hz }
+        Self { gain_db, output_rate_hz, dop: self.dop }
     }
 }
 
@@ -898,6 +902,7 @@ impl Default for DsdPlaybackSettings {
         Self {
             gain_db: Self::DEFAULT_GAIN_DB,
             output_rate_hz: Self::OUTPUT_RATES_HZ[0],
+            dop: false,
         }
     }
 }
@@ -918,6 +923,10 @@ fn lenient_dsd_settings(value: Option<serde_json::Value>) -> DsdPlaybackSettings
             .and_then(serde_json::Value::as_u64)
             .and_then(|rate| u32::try_from(rate).ok())
             .unwrap_or(defaults.output_rate_hz),
+        dop: object
+            .get("dop")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(defaults.dop),
     }
     .normalized()
 }
@@ -2390,10 +2399,10 @@ mod tests {
     fn dsd_settings_default_normalise_and_roundtrip() {
         let defaults = DsdPlaybackSettings::default();
         assert_eq!((defaults.gain_db, defaults.output_rate_hz), (3.0, 176_400));
-        let odd = DsdPlaybackSettings { gain_db: 40.0, output_rate_hz: 192_000 }.normalized();
+        let odd = DsdPlaybackSettings { gain_db: 40.0, output_rate_hz: 192_000, dop: false }.normalized();
         assert_eq!((odd.gain_db, odd.output_rate_hz), (6.0, 176_400));
-        assert_eq!(DsdPlaybackSettings { gain_db: -0.2, output_rate_hz: 352_800 }.normalized().gain_db, 0.0);
-        assert_eq!(DsdPlaybackSettings { gain_db: f32::NAN, output_rate_hz: 352_800 }.normalized().gain_db, 3.0);
+        assert_eq!(DsdPlaybackSettings { gain_db: -0.2, output_rate_hz: 352_800, dop: false }.normalized().gain_db, 0.0);
+        assert_eq!(DsdPlaybackSettings { gain_db: f32::NAN, output_rate_hz: 352_800, dop: false }.normalized().gain_db, 3.0);
 
         let directory = test_directory("dsd-settings");
         let path = directory.join("settings.json");
@@ -2401,15 +2410,35 @@ mod tests {
         assert_eq!(store.snapshot().unwrap().dsd, defaults);
         store
             .update(|settings| {
-                settings.dsd = DsdPlaybackSettings { gain_db: 5.0, output_rate_hz: 352_800 };
+                settings.dsd = DsdPlaybackSettings { gain_db: 5.0, output_rate_hz: 352_800, dop: false };
                 Ok(())
             })
             .expect("persist DSD settings");
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
-        assert_eq!(reopened.snapshot().unwrap().dsd, DsdPlaybackSettings { gain_db: 5.0, output_rate_hz: 352_800 });
+        assert_eq!(reopened.snapshot().unwrap().dsd, DsdPlaybackSettings { gain_db: 5.0, output_rate_hz: 352_800, dop: false });
         let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(persisted["dsd"]["gainDb"], 5.0);
         assert_eq!(persisted["dsd"]["outputRateHz"], 352_800);
+        assert_eq!(persisted["dsd"]["dop"], false);
+    }
+
+    #[test]
+    fn dop_is_off_by_default_and_survives_restart() {
+        assert!(!DsdPlaybackSettings::default().dop);
+        assert!(!lenient_dsd_settings(Some(serde_json::json!({"gainDb": 3}))).dop, "an old file has no dop key");
+        assert!(lenient_dsd_settings(Some(serde_json::json!({"dop": true}))).dop);
+        assert!(!lenient_dsd_settings(Some(serde_json::json!({"dop": "yes"}))).dop, "junk is off");
+        let directory = test_directory("dsd-dop");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        store
+            .update(|settings| {
+                settings.dsd.dop = true;
+                Ok(())
+            })
+            .expect("persist");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert!(reopened.snapshot().unwrap().dsd.dop);
     }
 
     #[test]

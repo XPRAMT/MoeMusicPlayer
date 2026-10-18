@@ -1,6 +1,6 @@
 # WASAPI exclusive output and DoP (plan)
 
-Status: P0 (device selection, extended to several devices at once) and P1 (exclusive PCM) are built; P2 (DoP) is still a plan
+Status: P0 (device selection, extended to several devices at once) and P1 (exclusive PCM) are built; P2 (DoP) is built and unit-tested but has not been heard on a DAC (none available)
 
 Decision date: 2026-10-18, Asia/Taipei (UTC+08:00)
 

@@ -16,9 +16,10 @@ use std::time::{Duration, Instant};
 
 use rodio::{SampleRate, Source};
 
+use super::dop::{DopOpenError, DopSource, DopTrackInfo};
 use super::endpoint::Endpoint;
 use super::format::Negotiated;
-use super::session::{SampleSource, Session};
+use super::session::{Route, SampleSource, Session};
 use crate::mirror::MixSource;
 use crate::output_devices::ChannelMixer;
 use crate::resample::Resampled;
@@ -47,6 +48,8 @@ struct Track {
     base: Duration,
     /// Frames the device had played when the current source started.
     played_at_start: u64,
+    /// The track plays as DoP (DSD bits straight to the device); `None` is the PCM route.
+    dop: Option<DopTrackInfo>,
 }
 
 /// The stream was closed while idle; this is where the track was.
@@ -76,6 +79,8 @@ pub(crate) struct ExclusiveBackend {
     /// The shared-mode backend playing the current track, and why exclusive mode could not.
     fallback: Option<Box<dyn AudioBackend>>,
     fallback_reason: Option<String>,
+    /// DoP is on but the current DSD track plays as converted PCM, and why.
+    dop_fallback: Option<String>,
     idle_since: Option<Instant>,
     idle_release: Duration,
     /// Asks Windows which endpoint is the default right now (replaceable in tests).
@@ -122,6 +127,7 @@ impl ExclusiveBackend {
             released: None,
             fallback: None,
             fallback_reason: None,
+            dop_fallback: None,
             idle_since: None,
             idle_release: IDLE_RELEASE,
             default_probe: Arc::new(default_output_device_id),
@@ -169,12 +175,79 @@ impl ExclusiveBackend {
         }
     }
 
+    /// Try to open `path` as DoP at `position`, paused. `Ok(None)` means DoP cannot carry this track on this device
+    /// (the reason is kept in `dop_fallback`) and the PCM route should be tried.
+    fn open_dop(
+        &mut self,
+        path: &Path,
+        position: Duration,
+    ) -> Result<Option<Option<Duration>>, LoadError> {
+        let (mut source, info) = match DopSource::open(path, 0) {
+            Ok(opened) => opened,
+            Err(DopOpenError::Unsupported(reason)) => {
+                self.dop_fallback = Some(reason);
+                return Ok(None);
+            }
+            Err(DopOpenError::Audio(error)) => return Err(LoadError::Audio(error)),
+        };
+        let frame = info.frame_at(position);
+        if frame > 0 {
+            source.seek_to_frame(frame).map_err(LoadError::Audio)?;
+        }
+        let reusable = self.session.as_ref().is_some_and(|session| {
+            session.negotiated.dop
+                && session.negotiated.format.rate == info.transport_rate
+                && session.control.failure().is_none()
+        });
+        if !reusable {
+            self.close_session();
+            self.opened_default = if self.device.is_none() {
+                (self.default_probe)()
+            } else {
+                None
+            };
+            let factory = Arc::clone(&self.factory);
+            match Session::start_route(
+                move || factory(),
+                Route::Dop {
+                    rate: info.transport_rate,
+                },
+                self.volume,
+                true,
+            ) {
+                Ok(session) => self.session = Some(session),
+                Err(reason) => {
+                    self.dop_fallback = Some(reason);
+                    return Ok(None);
+                }
+            }
+        }
+        let session = self.session.as_ref().expect("session was just opened");
+        session.control.paused.store(true, Ordering::Release);
+        let played_at_start = session.play_source(Box::new(source));
+        self.track = Some(Track {
+            path: path.to_path_buf(),
+            source_rate: info.transport_rate,
+            duration: Some(info.duration()),
+            base: info.time_of(frame),
+            played_at_start,
+            dop: Some(info),
+        });
+        Ok(Some(Some(info.duration())))
+    }
+
     /// Open `path` in exclusive mode at `position`, paused.
     fn open_exclusive(
         &mut self,
         path: &Path,
         position: Duration,
     ) -> Result<Option<Duration>, LoadError> {
+        self.dop_fallback = None;
+        if self.config.dsd.settings().dop && crate::dsd::is_dsd_path(path) {
+            if let Some(duration) = self.open_dop(path, position)? {
+                return Ok(duration);
+            }
+        }
         let mut decoder = open_decoder_with(path, &self.config.dsd).map_err(LoadError::Audio)?;
         let source_rate = decoder.sample_rate().get();
         let source_channels = decoder.channels().get();
@@ -182,7 +255,8 @@ impl ExclusiveBackend {
         let target = duration.map_or(position, |duration| position.min(duration));
         // The same format as the last track keeps the stream open (no re-open click); anything else reopens it.
         let reusable = self.session.as_ref().is_some_and(|session| {
-            session.negotiated.source_rate == source_rate
+            !session.negotiated.dop
+                && session.negotiated.source_rate == source_rate
                 && session.negotiated.source_channels == source_channels
                 && session.control.failure().is_none()
         });
@@ -220,6 +294,7 @@ impl ExclusiveBackend {
             duration,
             base: target,
             played_at_start,
+            dop: None,
         });
         Ok(duration)
     }
@@ -274,6 +349,7 @@ impl ExclusiveBackend {
     fn reset_for_load(&mut self) {
         self.fallback = None;
         self.fallback_reason = None;
+        self.dop_fallback = None;
         self.released = None;
         self.idle_since = None;
         self.track = None;
@@ -367,6 +443,17 @@ impl AudioBackend for ExclusiveBackend {
         let Some(session) = self.session.as_ref() else {
             return Err(AudioError::NoTrackLoaded);
         };
+        if let Some(info) = track.dop {
+            // DSD has no filter state: the new source starts at exactly this frame.
+            let frame = info.frame_at(target);
+            let (source, _) = DopSource::open(&track.path, frame).map_err(|error| match error {
+                DopOpenError::Audio(error) => error,
+                DopOpenError::Unsupported(reason) => AudioError::Backend(reason),
+            })?;
+            track.played_at_start = session.play_source(Box::new(source));
+            track.base = info.time_of(frame);
+            return Ok(track.base);
+        }
         let decoder = {
             let mut decoder = open_decoder_with(&track.path, &self.config.dsd)?;
             if !target.is_zero() {
@@ -411,10 +498,34 @@ impl AudioBackend for ExclusiveBackend {
     }
 
     fn set_dsd_settings(&mut self, settings: DsdSettings) -> Result<(), AudioError> {
-        match self.fallback.as_mut() {
-            Some(backend) => backend.set_dsd_settings(settings),
-            None => Ok(()),
+        let before = self.config.dsd.settings();
+        self.config.dsd.set(settings);
+        if let Some(backend) = self.fallback.as_mut() {
+            return backend.set_dsd_settings(settings);
         }
+        // The gain is followed live by the PCM sources; DoP on or off, or another PCM output rate, needs the current
+        // DSD track opened again (where it is, in the state it is in).
+        let after = self.config.dsd.settings();
+        let route_changed =
+            before.dop != after.dop || (!after.dop && before.output_rate != after.output_rate);
+        if !route_changed || self.released.is_some() {
+            return Ok(());
+        }
+        let Some(path) = self
+            .track
+            .as_ref()
+            .map(|track| track.path.clone())
+            .filter(|path| crate::dsd::is_dsd_path(path))
+        else {
+            return Ok(());
+        };
+        let position = self.position();
+        let was_playing = !self.paused;
+        self.open(&path, position)?;
+        if was_playing {
+            self.play()?;
+        }
+        Ok(())
     }
 
     fn position(&self) -> Duration {
@@ -462,7 +573,9 @@ impl AudioBackend for ExclusiveBackend {
         let session = self.session.as_ref()?;
         let negotiated = &session.negotiated;
         let format = negotiated.format;
-        let volume_applied = self.volume < 0.9999;
+        let dop = self.track.as_ref().and_then(|track| track.dop);
+        // DoP is the file's own bits: the player's volume does not touch them.
+        let volume_applied = dop.is_none() && self.volume < 0.9999;
         Some(ResamplingInfo {
             mode: ResamplingMode::HighQuality,
             source_rate: self.track.as_ref().map(|track| track.source_rate),
@@ -484,6 +597,8 @@ impl AudioBackend for ExclusiveBackend {
                 bit_perfect: !negotiated.resampled() && !negotiated.remixed() && !volume_applied,
                 volume_applied,
                 underruns: session.control.underruns.load(Ordering::Relaxed),
+                dop_dsd_rate: dop.map(|info| info.dsd_rate),
+                dop_fallback: self.dop_fallback.clone(),
             }),
             exclusive_fallback: None,
         })
@@ -711,6 +826,176 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+
+    /// A stereo DSD64 DSF of `bytes` bytes per channel with a deterministic bit pattern; returns the file and the
+    /// per-channel bytes (MSB-first, as the stream hands them out).
+    fn write_dsf(name: &str, bytes: usize) -> (PathBuf, Vec<u8>, Vec<u8>) {
+        let left: Vec<u8> = (0..bytes).map(|i| (i * 37 + 11) as u8).collect();
+        let right: Vec<u8> = (0..bytes).map(|i| (i * 91 + 5) as u8).collect();
+        let image = player_dsd::testing::build_dsf(
+            2_822_400,
+            bytes as u64 * 8,
+            4096,
+            false,
+            &[left.clone(), right.clone()],
+        );
+        let path =
+            std::env::temp_dir().join(format!("moe-exclusive-{}-{name}.dsf", std::process::id()));
+        std::fs::write(&path, image).unwrap();
+        (path, left, right)
+    }
+
+    /// The 24-in-32 words the fake device received, as (marker, left bits, right bits) per frame.
+    fn dop_frames(bytes: &[u8]) -> Vec<(u8, u16, u16)> {
+        let words: Vec<i32> = bytes
+            .chunks(4)
+            .filter(|chunk| chunk.len() == 4)
+            .map(|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) >> 8)
+            .collect();
+        words
+            .chunks(2)
+            .filter(|frame| frame.len() == 2)
+            .map(|frame| ((frame[0] >> 16) as u8, frame[0] as u16, frame[1] as u16))
+            .collect()
+    }
+
+    fn dop_on(rig: &Rig) {
+        rig.backend.config.dsd.set(crate::DsdSettings {
+            dop: true,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn dop_reaches_the_device_as_the_dsd_bits_under_unbroken_alternating_markers() {
+        let (path, left, right) = write_dsf("dop-bits", 8000);
+        let mut rig = rig(vec![format(176_400, 2, Container::Int24In32)]);
+        dop_on(&rig);
+        rig.backend.load(&path).unwrap();
+        rig.backend.play().unwrap();
+        wait_until("the track to end", || rig.backend.is_empty());
+        // Idle frames keep flowing after the last audio.
+        std::thread::sleep(Duration::from_millis(40));
+        let info = rig.backend.resampling_info().expect("info");
+        let exclusive = info.exclusive.expect("exclusive info");
+        assert_eq!(exclusive.dop_dsd_rate, Some(2_822_400));
+        assert_eq!(exclusive.bits, 24);
+        assert!(exclusive.bit_perfect && !exclusive.volume_applied);
+        assert_eq!(exclusive.dop_fallback, None);
+        assert_eq!(
+            rig.capture.opened.lock().unwrap().as_slice(),
+            [format(176_400, 2, Container::Int24In32)]
+        );
+
+        let frames = dop_frames(&rig.capture.bytes.lock().unwrap());
+        for (index, frame) in frames.iter().enumerate() {
+            assert_eq!(
+                frame.0,
+                player_dsd::dop::DOP_MARKERS[index & 1],
+                "the marker breaks at frame {index} (idle fill included)"
+            );
+        }
+        let first = u16::from_be_bytes([left[0], left[1]]);
+        let start = frames
+            .iter()
+            .position(|frame| frame.1 == first)
+            .expect("the first audio frame");
+        assert!(start > 0, "idle frames come before the audio");
+        assert!(frames[..start]
+            .iter()
+            .all(|frame| frame.1 == 0x6969 && frame.2 == 0x6969));
+        for index in 0..4000 {
+            let expected_left = u16::from_be_bytes([left[index * 2], left[index * 2 + 1]]);
+            let expected_right = u16::from_be_bytes([right[index * 2], right[index * 2 + 1]]);
+            assert_eq!(
+                (frames[start + index].1, frames[start + index].2),
+                (expected_left, expected_right),
+                "DSD bits at frame {index}"
+            );
+        }
+        assert!(
+            frames[start + 4000..]
+                .iter()
+                .rev()
+                .take(20)
+                .all(|frame| frame.1 == 0x6969),
+            "idle pattern after the last audio"
+        );
+    }
+
+    #[test]
+    fn dop_ignores_the_player_volume() {
+        let (path, left, _) = write_dsf("dop-volume", 4000);
+        let mut rig = rig(vec![format(176_400, 2, Container::Int24In32)]);
+        dop_on(&rig);
+        rig.backend.set_volume(0.3).unwrap();
+        rig.backend.load(&path).unwrap();
+        rig.backend.play().unwrap();
+        wait_until("the track to end", || rig.backend.is_empty());
+        let frames = dop_frames(&rig.capture.bytes.lock().unwrap());
+        let first = u16::from_be_bytes([left[0], left[1]]);
+        assert!(
+            frames.iter().any(|frame| frame.1 == first),
+            "the bits are untouched at volume 30 %"
+        );
+        let exclusive = rig.backend.resampling_info().unwrap().exclusive.unwrap();
+        assert!(exclusive.bit_perfect && !exclusive.volume_applied);
+    }
+
+    #[test]
+    fn a_device_that_refuses_dop_plays_the_track_as_converted_pcm_and_says_why() {
+        let (path, _, _) = write_dsf("dop-refused", 30_000);
+        // Only 16-bit PCM at 176.4 kHz: DoP needs 24 bits, the converted PCM route takes 16.
+        let mut rig = rig(vec![format(176_400, 2, Container::Int16)]);
+        dop_on(&rig);
+        rig.backend.load(&path).unwrap();
+        let exclusive = rig.backend.resampling_info().unwrap().exclusive.unwrap();
+        assert_eq!(exclusive.dop_dsd_rate, None);
+        assert!(exclusive.dop_fallback.is_some(), "the reason is reported");
+        assert_eq!(
+            rig.capture.opened.lock().unwrap().as_slice(),
+            [format(176_400, 2, Container::Int16)]
+        );
+    }
+
+    #[test]
+    fn dop_is_not_used_when_the_setting_is_off() {
+        let (path, _, _) = write_dsf("dop-off", 30_000);
+        let mut rig = rig(vec![
+            format(176_400, 2, Container::Int24In32),
+            format(176_400, 2, Container::Int16),
+        ]);
+        rig.backend.load(&path).unwrap();
+        let exclusive = rig.backend.resampling_info().unwrap().exclusive.unwrap();
+        assert_eq!(exclusive.dop_dsd_rate, None);
+        assert_eq!(exclusive.dop_fallback, None);
+    }
+
+    #[test]
+    fn seeking_a_dop_track_lands_on_a_frame_and_keeps_the_markers_unbroken() {
+        let (path, left, _) = write_dsf("dop-seek", 40_000);
+        let mut rig = rig(vec![format(176_400, 2, Container::Int24In32)]);
+        dop_on(&rig);
+        rig.backend.load(&path).unwrap();
+        rig.backend.play().unwrap();
+        let landed = rig.backend.seek(Duration::from_millis(50)).unwrap();
+        let frame = (0.050_f64 * 176_400.0) as u64;
+        assert_eq!(landed, Duration::from_secs_f64(frame as f64 / 176_400.0));
+        wait_until("the track to end", || rig.backend.is_empty());
+        let frames = dop_frames(&rig.capture.bytes.lock().unwrap());
+        for (index, frame) in frames.iter().enumerate() {
+            assert_eq!(
+                frame.0,
+                player_dsd::dop::DOP_MARKERS[index & 1],
+                "frame {index}"
+            );
+        }
+        let at_seek = u16::from_be_bytes([left[frame as usize * 2], left[frame as usize * 2 + 1]]);
+        assert!(
+            frames.iter().any(|f| f.1 == at_seek),
+            "the seek target's bits reach the device"
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
-//! WASAPI exclusive output (ADR 0020, phase 1): bit-perfect PCM straight to one endpoint.
+//! WASAPI exclusive output (ADR 0020): bit-perfect PCM, or DSD as DoP, straight to one endpoint.
 
 pub(crate) mod backend;
+pub(crate) mod dop;
 pub(crate) mod endpoint;
 pub(crate) mod format;
 pub(crate) mod session;

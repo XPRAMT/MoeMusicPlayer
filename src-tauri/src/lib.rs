@@ -1572,6 +1572,8 @@ fn playback_output_format(info: &ResamplingInfo) -> PlaybackOutputFormat {
             bit_perfect: exclusive.bit_perfect,
             volume_applied: exclusive.volume_applied,
             underruns: exclusive.underruns,
+            dop_dsd_rate_hz: exclusive.dop_dsd_rate,
+            dop_fallback: exclusive.dop_fallback.clone(),
         }),
         exclusive_fallback: info.exclusive_fallback.clone(),
     }
@@ -2369,6 +2371,10 @@ struct ExclusiveOutput {
     bit_perfect: bool,
     volume_applied: bool,
     underruns: u64,
+    /// The 1-bit rate of the DSD file when the stream carries it as DoP.
+    dop_dsd_rate_hz: Option<u32>,
+    /// DoP is on but this track plays as converted PCM, and why.
+    dop_fallback: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -6586,8 +6592,19 @@ async fn settings_set_dsd(
     state: State<'_, AppState>,
     gain_db: f32,
     output_rate_hz: u32,
+    dop: Option<bool>,
 ) -> Result<settings::DsdPlaybackSettings, String> {
-    let requested = settings::DsdPlaybackSettings { gain_db, output_rate_hz }.normalized();
+    let current = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .dsd;
+    let requested = settings::DsdPlaybackSettings {
+        gain_db,
+        output_rate_hz,
+        dop: dop.unwrap_or(current.dop),
+    }
+    .normalized();
     let saved = state
         .settings
         .update(|settings| {
@@ -10085,6 +10102,7 @@ fn set_playback_dsd(
         .request_set_dsd_settings(player_audio_windows::DsdSettings {
             gain_db: saved.gain_db,
             output_rate: saved.output_rate_hz,
+            dop: saved.dop,
         })
         .map_err(|error| playback_audio_error_message(&error))
 }
@@ -11163,6 +11181,7 @@ pub fn run() {
                     player.configure_dsd(player_audio_windows::DsdSettings {
                         gain_db: initial_settings.dsd.gain_db,
                         output_rate: initial_settings.dsd.output_rate_hz,
+                        dop: initial_settings.dsd.dop,
                     });
                     let service = WindowsPlaybackService::with_modes(
                         player,
