@@ -233,7 +233,7 @@
   }
 
   .taskbar-lyrics[data-text-effect='stroke'] .taskbar-lyrics-track {
-    -webkit-text-stroke: 0.1em rgba(var(--taskbar-lyrics-effect-rgb), 0.88);
+    -webkit-text-stroke: 0.05em rgba(var(--taskbar-lyrics-effect-rgb), 0.88);
     paint-order: stroke fill;
   }
 </style>
