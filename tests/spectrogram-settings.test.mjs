@@ -12,7 +12,7 @@ import {
 test('normalize falls back to defaults and repairs ranges', () => {
   assert.deepEqual(normalizeSpectrogramSettings(null), DEFAULT_SPECTROGRAM_SETTINGS);
   const s = normalizeSpectrogramSettings({ fftSize: 3000, window: 'x', dbFloor: -60, dbCeiling: -80, channel: { mode: 'channel', index: 1 }, colormap: 'viridis' });
-  assert.equal(s.fftSize, 4096);
+  assert.equal(s.fftSize, 2048, 'an unknown size falls back to the default, 2048 as in Spek');
   assert.equal(s.window, 'hann');
   assert.equal(s.dbCeiling, -50);
   assert.deepEqual(s.channel, { mode: 'channel', index: 1 });

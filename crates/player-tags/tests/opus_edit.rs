@@ -9,7 +9,8 @@ use player_opus::OpusReader;
 use player_tags::{read_details, write_edit, TagEdit};
 
 fn temp_dir(label: &str) -> PathBuf {
-    let directory = std::env::temp_dir().join(format!("moe-opus-tags-{label}-{}", std::process::id()));
+    let directory =
+        std::env::temp_dir().join(format!("moe-opus-tags-{label}-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     directory
 }
@@ -17,7 +18,10 @@ fn temp_dir(label: &str) -> PathBuf {
 fn tiny_png() -> Vec<u8> {
     let mut bytes = Vec::new();
     image::DynamicImage::new_rgb8(4, 4)
-        .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
         .unwrap();
     bytes
 }
@@ -40,7 +44,10 @@ fn opus_details_are_editable_and_the_audio_survives_an_edit() {
     assert!(!details.read_only);
     assert_eq!(details.format, "OPUS");
     assert_eq!(details.properties.channels, Some(2));
-    assert_eq!(details.fields.title, "", "the synthetic file carries an empty TITLE");
+    assert_eq!(
+        details.fields.title, "",
+        "the synthetic file carries an empty TITLE"
+    );
     assert_eq!(decoded_frames(&path), 48_000);
 
     let mut edit = TagEdit {
@@ -59,7 +66,11 @@ fn opus_details_are_editable_and_the_audio_survives_an_edit() {
     assert_eq!(details.fields.album, "Opus 專輯");
     assert_eq!(details.fields.lyrics, "[00:01.00]Opus 歌詞");
     assert!(details.cover.is_some());
-    assert_eq!(decoded_frames(&path), 48_000, "the audio decodes to the same length after the tag edit");
+    assert_eq!(
+        decoded_frames(&path),
+        48_000,
+        "the audio decodes to the same length after the tag edit"
+    );
 
     // Grow the tag much larger (the Ogg pages are rewritten) and clear a field again.
     let mut edit = TagEdit {

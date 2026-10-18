@@ -33,6 +33,8 @@ pub enum WindowFunction {
 pub enum Colormap {
     #[default]
     Spek,
+    /// Black, deep blue, violet, crimson, orange, yellow, white: the palette the "Spek" choice used to be.
+    Fire,
     Magma,
     Inferno,
     Viridis,
@@ -73,7 +75,7 @@ impl Default for SpectrogramOptions {
         Self {
             columns: 1600,
             height: 512,
-            fft_size: 4096,
+            fft_size: 2048,
             window: WindowFunction::Hann,
             colormap: Colormap::Spek,
             channel: ChannelSelect::Mix,
@@ -146,6 +148,15 @@ fn interpolate(stops: Stops, t: f32) -> [f32; 3] {
     let k = ((t - a) / (b - a)).clamp(0.0, 1.0);
     std::array::from_fn(|c| ca[c] + (cb[c] - ca[c]) * k)
 }
+const FIRE: Stops = &[
+    (0.0, [0.0, 0.0, 0.0]),
+    (0.15, [0.0, 0.0, 120.0]),
+    (0.3, [100.0, 0.0, 160.0]),
+    (0.45, [200.0, 0.0, 100.0]),
+    (0.6, [250.0, 60.0, 0.0]),
+    (0.8, [255.0, 200.0, 0.0]),
+    (1.0, [255.0, 255.0, 255.0]),
+];
 const MAGMA: Stops = &[
     (0.0, [0.0, 0.0, 4.0]),
     (0.2, [59.0, 15.0, 112.0]),
@@ -175,6 +186,7 @@ fn stops(map: Colormap) -> Stops {
     match map {
         // Spek is computed (see `spek_color`); the other maps interpolate between stops.
         Colormap::Spek => GRAY,
+        Colormap::Fire => FIRE,
         Colormap::Magma => MAGMA,
         Colormap::Inferno => INFERNO,
         Colormap::Viridis => VIRIDIS,
@@ -275,8 +287,9 @@ impl Analyzer {
     fn new(n: usize, kind: WindowFunction) -> Self {
         let fft = RealFftPlanner::<f32>::new().plan_fft_forward(n);
         let window = window_coefficients(kind, n);
-        // Coherent gain so a full-scale sine reads ~0 dBFS regardless of window.
-        let norm = window.iter().sum::<f32>() / 2.0;
+        // The level is 20 log10(|X| / N), as Spek reads it: only the window is applied, with no compensation for its gain, so
+        // a full-scale sine reads -12 dB with the Hann window (|X| = N / 4) and the same noise reads as it does in Spek.
+        let norm = n as f32;
         Self {
             input: fft.make_input_vec(),
             output: fft.make_output_vec(),
@@ -425,15 +438,33 @@ pub fn render_spectrogram(
     };
 
     let mut analyzer = Analyzer::new(n, options.window);
+    let bins = n / 2 + 1;
     let mut rings: Vec<VecDeque<f32>> = (0..streams).map(|_| VecDeque::with_capacity(n)).collect();
     let mut collected: Vec<Vec<f32>> = vec![Vec::new(); streams];
     let mut spectra: Vec<Vec<Vec<f32>>> = vec![Vec::with_capacity(cols); streams];
-    let column_end = |c: usize, total: u64| -> u64 {
-        let total = total.max(n as u64);
-        (total - n as u64) * c as u64 / (cols as u64 - 1).max(1) + n as u64 - 1
-    };
+    // Like Spek, a column is the average (of the dB values) of the FFTs that tile its time span, one after the other
+    // without overlap; a span shorter than one FFT uses the last FFT-length of audio before its end.
+    let interval_end = |c: usize, total: u64| -> u64 { (c as u64 + 1) * total / cols as u64 };
+    let mut sums: Vec<Vec<f32>> = vec![vec![0.0; bins]; streams];
+    let mut counted = 0usize;
+    let mut interval_frames = 0u64;
     let mut next_col = 0usize;
     let mut index: u64 = 0;
+    // Analyse the audio each stream last saw (zero-padded before the start) into the running sums.
+    let accumulate = |analyzer: &mut Analyzer,
+                      rings: &[VecDeque<f32>],
+                      sums: &mut [Vec<f32>],
+                      counted: &mut usize| {
+        for (sum, ring) in sums.iter_mut().zip(rings) {
+            let pad = n - ring.len();
+            let column =
+                analyzer.analyse(std::iter::repeat_n(0.0, pad).chain(ring.iter().copied()));
+            for (total, level) in sum.iter_mut().zip(&column) {
+                *total += level;
+            }
+        }
+        *counted += 1;
+    };
     // One decoded frame (all channels) from either decoder.
     let mut feed = |frame: &[f32]| {
         match known_frames {
@@ -444,11 +475,20 @@ pub fn render_spectrogram(
                     }
                     ring.push_back(select(frame, s));
                 }
-                while next_col < cols && index == column_end(next_col, total) {
-                    for (s, ring) in rings.iter().enumerate() {
-                        let column = analyzer.analyse(ring.iter().copied());
-                        spectra[s].push(column);
+                interval_frames += 1;
+                if interval_frames.is_multiple_of(n as u64) {
+                    accumulate(&mut analyzer, &rings, &mut sums, &mut counted);
+                }
+                while next_col < cols && index + 1 >= interval_end(next_col, total) {
+                    if counted == 0 {
+                        accumulate(&mut analyzer, &rings, &mut sums, &mut counted);
                     }
+                    for (s, sum) in sums.iter_mut().enumerate() {
+                        spectra[s].push(sum.iter().map(|total| total / counted as f32).collect());
+                        sum.fill(0.0);
+                    }
+                    counted = 0;
+                    interval_frames = 0;
                     next_col += 1;
                 }
             }
@@ -512,12 +552,33 @@ pub fn render_spectrogram(
     let total = known_frames.map(|t| t.min(index)).unwrap_or(index);
     if known_frames.is_none() {
         for (s, store) in collected.iter().enumerate() {
+            let length = store.len() as u64;
             for c in 0..cols {
-                let end = column_end(c, store.len() as u64) as usize;
-                let start = end + 1 - n;
-                let column =
-                    analyzer.analyse((start..=end).map(|i| store.get(i).copied().unwrap_or(0.0)));
-                spectra[s].push(column);
+                let start = c as u64 * length / cols as u64;
+                let end = interval_end(c, length).max(start);
+                let mut ends: Vec<u64> = (1..)
+                    .map(|k| start + k * n as u64)
+                    .take_while(|block_end| *block_end <= end)
+                    .collect();
+                if ends.is_empty() {
+                    ends.push(end);
+                }
+                let mut sum = vec![0.0_f32; bins];
+                for block_end in &ends {
+                    let block_end = *block_end as usize;
+                    let first = block_end as i64 - n as i64;
+                    let level = analyzer.analyse((first..block_end as i64).map(|i| {
+                        usize::try_from(i)
+                            .ok()
+                            .and_then(|i| store.get(i))
+                            .copied()
+                            .unwrap_or(0.0)
+                    }));
+                    for (total, value) in sum.iter_mut().zip(&level) {
+                        *total += value;
+                    }
+                }
+                spectra[s].push(sum.iter().map(|total| total / ends.len() as f32).collect());
             }
         }
     }
@@ -561,7 +622,8 @@ pub fn render_spectrogram(
     for (s, panel) in spectra.iter().enumerate() {
         for (x, column) in panel.iter().enumerate() {
             for (y, &(lo, hi)) in row_bins.iter().enumerate() {
-                let db = column[lo..hi].iter().copied().fold(f32::MIN, f32::max);
+                // A row that covers several bins shows their average (Spek draws one row per bin and scales the image).
+                let db = column[lo..hi].iter().sum::<f32>() / (hi - lo) as f32;
                 let t = ((db - floor) / range).clamp(0.0, 1.0);
                 let level = (t * 255.0).round() as u8;
                 let row = s as u32 * panel_height + y as u32;
@@ -589,7 +651,10 @@ pub fn render_spectrogram(
     })
 }
 
-/// Highest bin whose median level across columns is above -100 dB, reported only when
+const CUTOFF_FLOOR_DB: f32 = -112.0;
+
+/// Highest bin whose median level across columns is above -112 dB (the old -100 dB, a full-scale sine reading 0 dB then,
+/// -12 dB now), reported only when
 /// clearly below Nyquist (a hint of lossy origin, not a verdict).
 fn estimate_cutoff(spectra: &[Vec<f32>], sample_rate: u32, n: usize) -> Option<u32> {
     let bins = spectra.first()?.len();
@@ -597,7 +662,7 @@ fn estimate_cutoff(spectra: &[Vec<f32>], sample_rate: u32, n: usize) -> Option<u
     for b in 0..bins {
         let mut levels: Vec<f32> = spectra.iter().map(|c| c[b]).collect();
         levels.sort_by(|a, b| a.total_cmp(b));
-        if levels[levels.len() / 2] > -100.0 {
+        if levels[levels.len() / 2] > CUTOFF_FLOOR_DB {
             top = b;
         }
     }
@@ -615,6 +680,7 @@ mod tests {
         assert_eq!(gray[0], [0, 0, 0]);
         assert_eq!(gray[255], [255, 255, 255]);
         assert_eq!(colormap_lut(Colormap::Magma)[0], [0, 0, 4]);
+        assert_eq!(colormap_lut(Colormap::Fire)[255], [255, 255, 255]);
     }
 
     #[test]
@@ -674,14 +740,86 @@ mod tests {
     }
 
     #[test]
-    fn full_scale_sine_reads_near_zero_db() {
-        let n = 4096;
-        let mut analyzer = Analyzer::new(n, WindowFunction::Hann);
-        let bin = 100.0;
-        let column = analyzer.analyse(
-            (0..n).map(|i| (2.0 * std::f32::consts::PI * bin * i as f32 / n as f32).sin()),
+    fn a_full_scale_sine_reads_minus_12_db_with_the_hann_window_as_in_spek() {
+        // The level is 20 log10(|X| / N) with the window applied and not compensated: |X| = N / 4 for a full-scale sine.
+        for n in [2048, 4096] {
+            let mut analyzer = Analyzer::new(n, WindowFunction::Hann);
+            let bin = 100.0;
+            let column = analyzer.analyse(
+                (0..n).map(|i| (2.0 * std::f32::consts::PI * bin * i as f32 / n as f32).sin()),
+            );
+            assert!((column[100] + 12.04).abs() < 0.1, "{n}: {}", column[100]);
+        }
+    }
+
+    /// A 16-bit mono WAV file of `seconds` of a sine (`amplitude` of full scale) at `frequency`.
+    fn write_sine_wav(
+        name: &str,
+        frequency: f32,
+        amplitude: f32,
+        seconds: u32,
+    ) -> std::path::PathBuf {
+        let rate = 44_100_u32;
+        let frames = rate * seconds;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + frames * 2).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&rate.to_le_bytes());
+        bytes.extend_from_slice(&(rate * 2).to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&16_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(frames * 2).to_le_bytes());
+        for i in 0..frames {
+            let value = (amplitude
+                * (2.0 * std::f32::consts::PI * frequency * i as f32 / rate as f32).sin()
+                * 32_767.0) as i16;
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let path =
+            std::env::temp_dir().join(format!("moe-spectrogram-{}-{name}.wav", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_rendered_column_averages_the_ffts_of_its_span_and_reads_levels_like_spek() {
+        // Half scale is 6 dB below full scale: -12 - 6 = -18 dB at the sine's frequency.
+        let path = write_sine_wav("level", 5_512.5, 0.5, 4);
+        let options = SpectrogramOptions {
+            columns: 200,
+            height: 1024,
+            fft_size: 2048,
+            ..SpectrogramOptions::default()
+        };
+        let rendered = render_spectrogram(&path, options, &AtomicBool::new(false)).expect("render");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(rendered.columns, 200);
+        // The row of 5.5125 kHz (a quarter of Nyquist: a quarter of the way up from the bottom).
+        let panel_height = rendered.height as usize;
+        let row = panel_height - panel_height / 4;
+        let columns = rendered.columns as usize;
+        let level = |x: usize, y: usize| {
+            f32::from(rendered.levels[y * columns + x]) / 255.0 * 120.0 - 120.0
+        };
+        let peak_of = |x: usize| {
+            (row.saturating_sub(8)..row + 8)
+                .map(|y| level(x, y))
+                .fold(f32::MIN, f32::max)
+        };
+        let peak = peak_of(100);
+        assert!((peak + 18.0).abs() < 2.5, "peak {peak} dB");
+        // Far from the tone only the window's leakage remains, far below it.
+        assert!(level(100, panel_height / 10) < -90.0);
+        // Every column shows the same steady tone (each is an average over its own span).
+        assert!(
+            (1..columns - 1).all(|x| (peak_of(x) - peak).abs() < 3.0),
+            "columns differ"
         );
-        assert!(column[100] > -1.0 && column[100] < 1.0, "{}", column[100]);
     }
 
     #[test]
