@@ -854,6 +854,12 @@ mod tests {
         use crate::output_devices::{list_output_devices, OutputDeviceSetting};
         let fragment =
             std::env::var("MOE_EXCLUSIVE_DEVICE").unwrap_or_else(|_| "Realtek Digital".to_owned());
+        // Rates to play (Hz, comma separated); each plays a one-second tone.
+        let rates: Vec<u32> = std::env::var("MOE_EXCLUSIVE_RATES")
+            .unwrap_or_else(|_| "44100,96000".to_owned())
+            .split(',')
+            .filter_map(|rate| rate.trim().parse().ok())
+            .collect();
         let devices = list_output_devices();
         let device = devices
             .iter()
@@ -867,26 +873,34 @@ mod tests {
         }]);
         let mut backend = ExclusiveBackend::new(Arc::clone(&config));
         backend.set_volume(0.0).unwrap();
-        for (name, rate) in [("real-44k", 44_100_u32), ("real-96k", 96_000)] {
-            let (path, _) = write_wav(name, rate, rate as usize);
+        println!("device: {}", device.name);
+        for rate in rates {
+            let (path, _) = write_wav(&format!("real-{rate}"), rate, rate as usize);
+            let started = Instant::now();
             let duration = backend.load(&path).unwrap();
+            let opened = started.elapsed();
             backend.play().unwrap();
+            let playing_since = Instant::now();
             let info = backend.resampling_info().unwrap();
-            println!("{name}: {info:?} duration {duration:?}");
+            let Some(exclusive) = info.exclusive.clone() else {
+                panic!(
+                    "{rate} Hz fell back to shared mode: {:?}",
+                    info.exclusive_fallback
+                );
+            };
             wait_until("the second of audio to play", || backend.is_empty());
-            let exclusive = info.exclusive.unwrap();
+            let played_for = playing_since.elapsed();
+            let after = backend.resampling_info().unwrap().exclusive.unwrap();
             println!(
-                "  opened {} bit {} ch at {} Hz (track {} Hz), underruns {}",
+                "{rate:>6} Hz -> opened {} bit {} ch at {} Hz ({}), open {:>4} ms, played {:>5} ms of {:?}, underruns {}",
                 exclusive.bits,
                 exclusive.channels,
                 info.output_rate,
-                rate,
-                backend
-                    .resampling_info()
-                    .unwrap()
-                    .exclusive
-                    .unwrap()
-                    .underruns
+                if info.output_rate == rate { "no conversion" } else { "converted" },
+                opened.as_millis(),
+                played_for.as_millis(),
+                duration,
+                after.underruns
             );
             assert_eq!(backend.output_status(), OutputStatus::Healthy);
         }
