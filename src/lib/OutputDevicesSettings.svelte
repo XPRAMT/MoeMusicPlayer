@@ -20,7 +20,6 @@
   import {
     OUTPUT_DELAY_MAX_MS,
     OUTPUT_MAX_SOURCE_CHANNELS,
-    activePreset,
     buildDeviceRows,
     channelLabels,
     disconnectedPlayingRows,
@@ -31,7 +30,6 @@
     nudgeCell,
     patchRow,
     rowEnabled,
-    routePresets,
     sameDeviceList,
     sameDevices,
     selectOnly,
@@ -71,6 +69,8 @@
    *  column (a margin on the cell would narrow it). */
   const MATRIX_CELL_PX = 38;
   const MATRIX_GROUP_GAP_PX = 10;
+  /** The column with the source-channel names (FL, FR, ...). */
+  const MATRIX_LABEL_PX = 32;
   const SYNC_KEY = 'moe.outputVolumeSync';
 
   let devices = $state<AudioOutputDevice[]>([]);
@@ -81,7 +81,6 @@
   /** The real Windows volume (0–100) and mute state of each device, by device id. */
   let volumes = $state<Record<string, { percent: number; muted: boolean }>>({});
   let volumeSync = $state(readSyncPreference());
-  let allSources = $state(false);
   /** WASAPI exclusive mode: one device, bit-perfect, no mixing with other programs. */
   let exclusive = $state(false);
   let loading = $state(true);
@@ -94,11 +93,16 @@
   let takeover = $derived(takeoverRow(rows));
   let defaultDeviceName = $derived(devices.find((device) => device.isDefault)?.name ?? null);
   const sourceLabels = channelLabels(OUTPUT_MAX_SOURCE_CHANNELS);
-  /** How many source-channel rows the shared matrix shows: enough for every playing device's map. */
+  /** How many source-channel rows the shared matrix shows: as many as the widest playing device has output channels
+   *  (at least the stereo pair), or more when a map already uses a higher source. */
   let matrixRows = $derived(
-    sourceRowCount(
-      playingRows.flatMap(({ index }) => rows[index].entry?.channelMap ?? []),
-      allSources,
+    Math.min(
+      OUTPUT_MAX_SOURCE_CHANNELS,
+      Math.max(
+        2,
+        ...playingRows.map(({ index }) => channelCount(index)),
+        sourceRowCount(playingRows.flatMap(({ index }) => rows[index].entry?.channelMap ?? []), false),
+      ),
     ),
   );
 
@@ -382,13 +386,14 @@
     update(index, { channelMap: map }, true);
   }
 
-  function presetLabel(id: string): string {
-    switch (id) {
-      case 'swap': return tr('左右對調');
-      case 'left': return tr('只用左聲道');
-      case 'right': return tr('只用右聲道');
-      default: return tr('標準');
-    }
+  /** The grid columns: the source names, then each device's channels (a gap before every device but the first). */
+  function matrixColumns(): string {
+    const groups = playingRows.map(({ index }, position) =>
+      Array.from({ length: channelCount(index) }, (_, channel) =>
+        channel === 0 && position > 0 ? `${MATRIX_CELL_PX + MATRIX_GROUP_GAP_PX}px` : `${MATRIX_CELL_PX}px`,
+      ).join(' '),
+    );
+    return `${MATRIX_LABEL_PX}px ${groups.join(' ')}`;
   }
 
   interface PathInfo {
@@ -667,28 +672,35 @@
     <div class="settings-panel-header">
       <div>
         <h3>{tr('聲道映射')}</h3>
-        <p>{tr('所有裝置共用一張表：縱向是曲目的來源聲道，橫向是各裝置的輸出聲道。點格子選擇輸出聲道的來源，滾輪調增益，右鍵讓該輸出靜音；自動的裝置依聲道數混縮或補齊。')}</p>
+        <p>{tr('所有裝置共用一張表：縱向是曲目的來源聲道，橫向是各裝置的輸出聲道。點格子選擇輸出聲道的來源，滾輪調增益，右鍵讓該輸出靜音；點表頭的裝置名稱恢復自動（依聲道數混縮或補齊）。')}</p>
       </div>
     </div>
     <div class="channel-matrix-scroll">
       <div
         class="channel-matrix-grid"
-        style="grid-template-columns: 44px {playingRows.map(({ index }) => Array.from({ length: channelCount(index) }, (_, channel) => (channel === 0 ? `${MATRIX_CELL_PX + MATRIX_GROUP_GAP_PX}px` : `${MATRIX_CELL_PX}px`)).join(' ')).join(' ')};"
+        style="grid-template-columns: {matrixColumns()};"
       >
         <span class="channel-matrix-corner"></span>
-        {#each playingRows as { index } (index)}
-          <span class="channel-matrix-device" style="grid-column: span {channelCount(index)};" use:appTooltip={deviceLabel(index)}>{shortDeviceName(deviceLabel(index))}</span>
+        {#each playingRows as { index }, position (index)}
+          <button
+            type="button"
+            class="channel-matrix-device"
+            class:group-start={position > 0}
+            style="grid-column: span {channelCount(index)};"
+            use:appTooltip={currentMap(index) ? tr('{0}：點一下恢復自動（依聲道數混縮或補齊）', [deviceLabel(index)]) : deviceLabel(index)}
+            onclick={() => update(index, { channelMap: null }, true)}
+          >{shortDeviceName(deviceLabel(index))}</button>
         {/each}
         <span class="channel-matrix-corner" use:appTooltip={tr('縱向是來源聲道（input），橫向是這個裝置的輸出聲道（output）')}>i＼o</span>
-        {#each playingRows as { index } (index)}
+        {#each playingRows as { index }, position (index)}
           {@const outputLabels = channelLabels(channelCount(index))}
           {#each Array.from({ length: channelCount(index) }, (_, output) => output) as output (output)}
-            <span class="channel-matrix-head" class:group-start={output === 0}>{outputLabels[output] || output + 1}</span>
+            <span class="channel-matrix-head" class:group-start={output === 0 && position > 0}>{outputLabels[output] || output + 1}</span>
           {/each}
         {/each}
         {#each Array.from({ length: rowsShown }, (_, source) => source) as source (source)}
           <span class="channel-matrix-side">{sourceLabels[source]}</span>
-          {#each playingRows as { index } (index)}
+          {#each playingRows as { index }, position (index)}
             {@const map = currentMap(index)}
             {@const shown = map ?? standardRoutes(channelCount(index))}
             {@const outputLabels = channelLabels(channelCount(index))}
@@ -699,7 +711,7 @@
                 class="channel-cell"
                 class:is-on={on}
                 class:is-auto={map === null}
-                class:group-start={output === 0}
+                class:group-start={output === 0 && position > 0}
                 aria-pressed={on}
                 aria-label={tr('來源 {0} → {1} 的 {2}', [sourceLabels[source], shortDeviceName(deviceLabel(index)), outputLabels[output] || output + 1])}
                 onclick={() => clickCell(index, source, output)}
@@ -710,28 +722,6 @@
           {/each}
         {/each}
       </div>
-    </div>
-    <div class="channel-matrix-actions">
-      {#each playingRows as { index } (index)}
-        {@const map = currentMap(index)}
-        {@const channels = channelCount(index)}
-        <div class="channel-matrix-device-actions">
-          <span class="channel-matrix-device-name" use:appTooltip={deviceLabel(index)}>{shortDeviceName(deviceLabel(index))}</span>
-          <button type="button" class="soft-button" class:is-active={map === null} aria-pressed={map === null} onclick={() => update(index, { channelMap: null }, true)}>{tr('自動')}</button>
-          {#each routePresets(channels) as preset (preset.id)}
-            <button
-              type="button"
-              class="soft-button"
-              class:is-active={activePreset(channels, map) === preset.id}
-              aria-pressed={activePreset(channels, map) === preset.id}
-              onclick={() => update(index, { channelMap: preset.routes.map((route) => ({ ...route })) }, true)}
-            >{presetLabel(preset.id)}</button>
-          {/each}
-        </div>
-      {/each}
-      <button type="button" class="soft-button" onclick={() => (allSources = !allSources)}>
-        {allSources ? tr('只顯示前幾個來源聲道') : tr('顯示全部來源聲道')}
-      </button>
     </div>
   </section>
 {/if}
@@ -942,14 +932,22 @@
 
   .channel-matrix-device {
     overflow: hidden;
-    margin-left: 10px;
     padding: 2px 4px;
+    border: 0;
     border-bottom: var(--divider-width, 1px) solid var(--divider-color, var(--line));
+    color: inherit;
+    background: transparent;
+    font: inherit;
     font-size: var(--font-caption);
     font-weight: 600;
     text-align: center;
     text-overflow: ellipsis;
     white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .channel-matrix-device:hover {
+    color: var(--accent-text);
   }
 
   .group-start {
@@ -980,29 +978,6 @@
   .channel-cell.is-auto.is-on {
     border-style: dashed;
     opacity: 0.7;
-  }
-
-  .channel-matrix-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 18px;
-  }
-
-  .channel-matrix-device-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .channel-matrix-device-name {
-    max-width: 160px;
-    overflow: hidden;
-    color: var(--text-soft);
-    font-size: var(--font-caption);
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   @media (max-width: 520px) {
