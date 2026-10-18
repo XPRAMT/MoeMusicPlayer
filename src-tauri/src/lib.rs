@@ -6236,6 +6236,13 @@ async fn settings_set_output_devices(
     state: State<'_, AppState>,
     devices: Vec<settings::OutputDeviceEntry>,
 ) -> Result<Vec<settings::OutputDeviceEntry>, String> {
+    store_and_apply_output_devices(&state, devices).await
+}
+
+async fn store_and_apply_output_devices(
+    state: &AppState,
+    devices: Vec<settings::OutputDeviceEntry>,
+) -> Result<Vec<settings::OutputDeviceEntry>, String> {
     let requested = settings::normalize_output_devices(devices);
     let saved = state
         .settings
@@ -6256,6 +6263,80 @@ async fn settings_set_output_devices(
         }
     }
     Ok(saved)
+}
+
+/// The three output-device presets (`null`: an empty slot).
+#[tauri::command]
+fn settings_get_output_presets(
+    state: State<'_, AppState>,
+) -> Result<Vec<Option<Vec<settings::OutputDeviceEntry>>>, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.output_presets)
+        .map_err(|error| error.to_string())
+}
+
+fn output_preset_slot(slot: usize) -> Result<usize, String> {
+    if slot < settings::OUTPUT_PRESET_SLOTS {
+        Ok(slot)
+    } else {
+        Err("方案編號無效。".to_owned())
+    }
+}
+
+/// Save the devices that are chosen right now into a preset slot.
+#[tauri::command]
+fn settings_save_output_preset(
+    state: State<'_, AppState>,
+    slot: usize,
+) -> Result<Vec<Option<Vec<settings::OutputDeviceEntry>>>, String> {
+    let slot = output_preset_slot(slot)?;
+    state
+        .settings
+        .update(|settings| {
+            let current = settings.output_devices.clone();
+            settings.output_presets[slot] = Some(current).filter(|devices| !devices.is_empty());
+            Ok(())
+        })
+        .map(|settings| settings.output_presets)
+        .map_err(|error| error.to_string())
+}
+
+/// Empty a preset slot.
+#[tauri::command]
+fn settings_clear_output_preset(
+    state: State<'_, AppState>,
+    slot: usize,
+) -> Result<Vec<Option<Vec<settings::OutputDeviceEntry>>>, String> {
+    let slot = output_preset_slot(slot)?;
+    state
+        .settings
+        .update(|settings| {
+            settings.output_presets[slot] = None;
+            Ok(())
+        })
+        .map(|settings| settings.output_presets)
+        .map_err(|error| error.to_string())
+}
+
+/// Switch to a preset: its devices become the chosen devices and are applied to the player.
+#[tauri::command]
+async fn settings_apply_output_preset(
+    state: State<'_, AppState>,
+    slot: usize,
+) -> Result<Vec<settings::OutputDeviceEntry>, String> {
+    let slot = output_preset_slot(slot)?;
+    let preset = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .output_presets
+        .get(slot)
+        .cloned()
+        .flatten()
+        .ok_or_else(|| "這個方案是空的。".to_owned())?;
+    store_and_apply_output_devices(&state, preset).await
 }
 
 #[tauri::command]
@@ -10761,6 +10842,10 @@ pub fn run() {
             audio_output_device_status,
             settings_get_output_devices,
             settings_set_output_devices,
+            settings_get_output_presets,
+            settings_save_output_preset,
+            settings_clear_output_preset,
+            settings_apply_output_preset,
             settings_get_language,
             settings_set_language,
             settings_get_taskbar_lyrics,

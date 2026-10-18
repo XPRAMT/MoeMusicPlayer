@@ -1023,6 +1023,39 @@ fn lenient_output_devices(value: Option<serde_json::Value>) -> Vec<OutputDeviceE
     normalize_output_devices(devices)
 }
 
+/// The output-device presets: always three slots, each empty or a saved set of devices.
+pub const OUTPUT_PRESET_SLOTS: usize = 3;
+
+pub fn normalize_output_presets(
+    presets: Vec<Option<Vec<OutputDeviceEntry>>>,
+) -> Vec<Option<Vec<OutputDeviceEntry>>> {
+    let mut slots: Vec<Option<Vec<OutputDeviceEntry>>> = presets
+        .into_iter()
+        .take(OUTPUT_PRESET_SLOTS)
+        .map(|slot| slot.map(normalize_output_devices).filter(|devices| !devices.is_empty()))
+        .collect();
+    slots.resize(OUTPUT_PRESET_SLOTS, None);
+    slots
+}
+
+fn default_output_presets() -> Vec<Option<Vec<OutputDeviceEntry>>> {
+    vec![None; OUTPUT_PRESET_SLOTS]
+}
+
+fn lenient_output_presets(value: Option<serde_json::Value>) -> Vec<Option<Vec<OutputDeviceEntry>>> {
+    let slots = value
+        .as_ref()
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| item.is_array().then(|| lenient_output_devices(Some(item.clone()))))
+                .collect()
+        })
+        .unwrap_or_default();
+    normalize_output_presets(slots)
+}
+
 fn lenient_resampling_mode(value: Option<serde_json::Value>) -> ResamplingMode {
     value
         .and_then(|value| serde_json::from_value(value).ok())
@@ -1459,6 +1492,9 @@ pub struct AppSettings {
     /// The chosen output devices (Settings -> output); empty is the system default alone.
     #[serde(default)]
     pub output_devices: Vec<OutputDeviceEntry>,
+    /// Three saved sets of output devices the settings page switches between (`None`: an empty slot).
+    #[serde(default = "default_output_presets")]
+    pub output_presets: Vec<Option<Vec<OutputDeviceEntry>>>,
     /// Now Playing cover size remembered across restarts (shrunk only; see `CoverZoomSettings`).
     #[serde(default)]
     pub cover_zoom: CoverZoomSettings,
@@ -1494,6 +1530,7 @@ impl Default for AppSettings {
             resume_playback: false,
             dsd: DsdPlaybackSettings::default(),
             output_devices: Vec::new(),
+            output_presets: default_output_presets(),
             cover_zoom: CoverZoomSettings::default(),
             taskbar_lyrics: TaskbarLyricsSettings::default(),
             language: UiLanguage::default(),
@@ -1936,6 +1973,7 @@ struct RawSettings {
     resume_playback: Option<bool>,
     dsd: Option<serde_json::Value>,
     output_devices: Option<serde_json::Value>,
+    output_presets: Option<serde_json::Value>,
     cover_zoom: Option<serde_json::Value>,
     taskbar_lyrics: Option<serde_json::Value>,
     language: Option<serde_json::Value>,
@@ -1988,6 +2026,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         resume_playback: raw.resume_playback.unwrap_or(false),
         dsd: lenient_dsd_settings(raw.dsd),
         output_devices: lenient_output_devices(raw.output_devices),
+        output_presets: lenient_output_presets(raw.output_presets),
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
         language: lenient_language(raw.language),
@@ -2436,6 +2475,39 @@ mod tests {
         assert_eq!(persisted["outputDevices"][1]["name"], "Speakers");
         assert_eq!(persisted["outputDevices"][1]["channelMap"][0]["source"], 1);
         assert!(persisted["outputDevices"][0]["id"].is_null());
+    }
+
+    #[test]
+    fn output_presets_are_three_slots_that_survive_restart_and_repair_themselves() {
+        let directory = test_directory("output-presets");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).unwrap();
+        assert_eq!(store.snapshot().unwrap().output_presets, vec![None, None, None]);
+        let saved = vec![OutputDeviceEntry {
+            id: Some("wasapi:{a}".to_owned()),
+            name: "A".to_owned(),
+            enabled: true,
+            volume_percent: 70,
+            delay_ms: 120,
+            channel_map: None,
+        }];
+        store
+            .update(|settings| {
+                settings.output_presets = vec![None, Some(saved.clone())];
+                Ok(())
+            })
+            .unwrap();
+        let reopened = SettingsStore::open(&path, AppSettings::default()).unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().output_presets,
+            vec![None, Some(saved.clone()), None]
+        );
+        let parsed = lenient_output_presets(Some(serde_json::json!([[], "x", [{"id": "b"}], [{"id": "c"}]])));
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0], None, "an empty slot stays empty");
+        assert_eq!(parsed[1], None, "junk is an empty slot");
+        assert_eq!(parsed[2].as_ref().map(|slot| slot[0].id.clone()), Some(Some("b".to_owned())));
+        assert_eq!(lenient_output_presets(None), vec![None, None, None]);
     }
 
     #[test]
