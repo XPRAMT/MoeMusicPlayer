@@ -22,7 +22,9 @@ use super::session::{SampleSource, Session};
 use crate::mirror::MixSource;
 use crate::output_devices::ChannelMixer;
 use crate::resample::Resampled;
-use crate::rodio_backend::{open_decoder_with, AudioDecoder};
+use crate::rodio_backend::{
+    default_output_device_id, open_decoder_with, AudioDecoder, DEFAULT_DEVICE_POLL_INTERVAL,
+};
 use crate::{
     AudioBackend, AudioError, DsdSettings, DseeHxState, ExclusiveInfo, OutputStatus,
     ResamplingConfig, ResamplingConversion, ResamplingInfo, ResamplingMode,
@@ -76,6 +78,12 @@ pub(crate) struct ExclusiveBackend {
     fallback_reason: Option<String>,
     idle_since: Option<Instant>,
     idle_release: Duration,
+    /// Asks Windows which endpoint is the default right now (replaceable in tests).
+    default_probe: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    /// The default endpoint when the stream was opened; only kept while the backend follows the system default.
+    opened_default: Option<String>,
+    last_default_check: Instant,
+    default_poll: Duration,
     volume: f32,
     paused: bool,
 }
@@ -115,6 +123,10 @@ impl ExclusiveBackend {
             fallback_reason: None,
             idle_since: None,
             idle_release: IDLE_RELEASE,
+            default_probe: Arc::new(default_output_device_id),
+            opened_default: None,
+            last_default_check: Instant::now(),
+            default_poll: DEFAULT_DEVICE_POLL_INTERVAL,
             volume: 1.0,
             paused: true,
         }
@@ -174,6 +186,12 @@ impl ExclusiveBackend {
         });
         if !reusable {
             self.close_session();
+            // Following the system default: remember which endpoint it is now, to notice when Windows moves it.
+            self.opened_default = if self.device.is_none() {
+                (self.default_probe)()
+            } else {
+                None
+            };
             let factory = Arc::clone(&self.factory);
             let session = Session::start(
                 move || factory(),
@@ -480,6 +498,21 @@ impl AudioBackend for ExclusiveBackend {
         {
             return OutputStatus::Lost(reason);
         }
+        // Following the system default and Windows moved it: the worker rebuilds the backend on the new default (the
+        // shared-mode backend does the same; an exclusive stream is bound to the endpoint it opened).
+        if self.device.is_none() && self.session.is_some() {
+            let now = Instant::now();
+            if now.duration_since(self.last_default_check) >= self.default_poll {
+                self.last_default_check = now;
+                if let (Some(opened), Some(current)) =
+                    (self.opened_default.as_ref(), (self.default_probe)())
+                {
+                    if *opened != current {
+                        return OutputStatus::DefaultDeviceChanged;
+                    }
+                }
+            }
+        }
         // Paused, or out of audio at the end of the queue: after a while the device is let go.
         let idle = self.track.is_some()
             && self
@@ -611,8 +644,11 @@ mod tests {
         });
         let config = Arc::new(ResamplingConfig::new(ResamplingMode::HighQuality, false));
         config.set_exclusive(true);
+        let mut backend = ExclusiveBackend::with_factories(config, factory, fallback, None);
+        // No real device lookups in unit tests (the tests run in parallel threads).
+        backend.default_probe = Arc::new(|| None);
         Rig {
-            backend: ExclusiveBackend::with_factories(config, factory, fallback, None),
+            backend,
             capture,
             accepts,
             shared,
@@ -939,6 +975,34 @@ mod tests {
         backend.stop().unwrap();
     }
 
+    /// Follows the real system default endpoint: opens it exclusively, remembers which endpoint that was, and stays
+    /// healthy while Windows keeps it as the default (silent; switch the default by hand during the wait to see
+    /// `DefaultDeviceChanged`, `MOE_DEFAULT_WAIT_SECONDS` sets the wait).
+    #[test]
+    #[ignore = "takes the real default output device exclusively for a few seconds (silent); run manually"]
+    fn real_default_device_is_followed() {
+        let wait: u64 = std::env::var("MOE_DEFAULT_WAIT_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(3);
+        let config = Arc::new(ResamplingConfig::new(ResamplingMode::HighQuality, false));
+        config.set_exclusive(true);
+        let mut backend = ExclusiveBackend::new(Arc::clone(&config));
+        backend.set_volume(0.0).unwrap();
+        let (path, _) = write_wav("real-default", 44_100, 44_100 * 3);
+        backend.load(&path).unwrap();
+        backend.play().unwrap();
+        println!("opened default: {:?}", backend.opened_default);
+        assert!(backend.opened_default.is_some());
+        let started = Instant::now();
+        let mut status = OutputStatus::Healthy;
+        while started.elapsed() < Duration::from_secs(wait) && status == OutputStatus::Healthy {
+            std::thread::sleep(Duration::from_millis(200));
+            status = backend.output_status();
+        }
+        println!("after {:?}: {status:?}", started.elapsed());
+    }
+
     /// One backend holds a real device exclusively; a second one asked for the same device must say the device is in
     /// use (through the fallback reason, or in the error when shared mode cannot open the device either).
     #[test]
@@ -1056,6 +1120,7 @@ mod tests {
         let config = Arc::new(ResamplingConfig::new(ResamplingMode::HighQuality, false));
         config.set_exclusive(true);
         let mut backend = ExclusiveBackend::with_factories(config, factory, fallback, None);
+        backend.default_probe = Arc::new(|| None);
         let message = backend.load(&path).unwrap_err().to_string();
         assert!(message.contains("獨佔模式無法使用"), "{message}");
         assert!(message.contains("格式"), "the exclusive reason: {message}");
@@ -1113,6 +1178,51 @@ mod tests {
         wait_until("playing to continue", || {
             rig.backend.position() > Duration::from_millis(5_300)
         });
+    }
+
+    #[test]
+    fn following_the_system_default_a_change_of_the_default_asks_for_a_rebuild() {
+        let (path, _) = write_wav("default-follow", 44_100, 441_000);
+        let mut rig = rig(vec![format(44_100, 2, Container::Int24In32)]);
+        let default = Arc::new(std::sync::Mutex::new(Some("endpoint-A".to_owned())));
+        let probe_default = Arc::clone(&default);
+        rig.backend.default_probe = Arc::new(move || probe_default.lock().unwrap().clone());
+        rig.backend.default_poll = Duration::from_millis(50);
+        rig.backend.load(&path).unwrap();
+        rig.backend.play().unwrap();
+        assert_eq!(rig.backend.opened_default.as_deref(), Some("endpoint-A"));
+        std::thread::sleep(Duration::from_millis(120));
+        assert_eq!(
+            rig.backend.output_status(),
+            OutputStatus::Healthy,
+            "the default did not move"
+        );
+        // Windows makes another device the default.
+        *default.lock().unwrap() = Some("endpoint-B".to_owned());
+        wait_until("the change to be noticed", || {
+            rig.backend.output_status() == OutputStatus::DefaultDeviceChanged
+        });
+    }
+
+    #[test]
+    fn a_chosen_device_does_not_follow_the_system_default() {
+        let (path, _) = write_wav("default-chosen", 44_100, 441_000);
+        let mut rig = rig(vec![format(44_100, 2, Container::Int24In32)]);
+        rig.backend.device = Some("chosen-endpoint".to_owned());
+        rig.backend
+            .config
+            .set_devices(vec![crate::output_devices::OutputDeviceSetting {
+                id: Some("chosen-endpoint".to_owned()),
+                ..Default::default()
+            }]);
+        let default = Arc::new(std::sync::Mutex::new(Some("endpoint-A".to_owned())));
+        let probe_default = Arc::clone(&default);
+        rig.backend.default_probe = Arc::new(move || probe_default.lock().unwrap().clone());
+        rig.backend.default_poll = Duration::from_millis(20);
+        rig.backend.load(&path).unwrap();
+        *default.lock().unwrap() = Some("endpoint-B".to_owned());
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(rig.backend.output_status(), OutputStatus::Healthy);
     }
 
     #[test]

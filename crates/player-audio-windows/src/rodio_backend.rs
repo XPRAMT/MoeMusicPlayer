@@ -62,7 +62,7 @@ use crate::{
 /// Activate/Initialize must not take the worker with it.
 const OUTPUT_OPEN_TIMEOUT: Duration = Duration::from_secs(3);
 /// How often the worker compares the opened endpoint with the system default.
-const DEFAULT_DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+pub(crate) const DEFAULT_DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// A running shared-mode stream pulls the mixer every few milliseconds; no
 /// pull for this long means the render thread is gone without an error.
 const OUTPUT_STALL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -885,7 +885,7 @@ impl AudioBackend for RodioBackend {
     }
 }
 
-fn default_output_device_id() -> Option<String> {
+pub(crate) fn default_output_device_id() -> Option<String> {
     rodio::cpal::default_host()
         .default_output_device()?
         .id()
