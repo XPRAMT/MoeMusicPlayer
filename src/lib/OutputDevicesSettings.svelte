@@ -70,7 +70,7 @@
   /** A volume the user just changed is not overwritten by a poll for this long. */
   const VOLUME_HOLD_MS = 1500;
   const DELAY_STEP_MS = 10;
-  const PRESET_SLOTS = 3;
+  const PRESET_SLOTS = 5;
   /** Matrix cells are this wide; the first column of each device is this much wider so the gap sits inside the
    *  column (a margin on the cell would narrow it). */
   const MATRIX_CELL_PX = 38;

@@ -1017,8 +1017,8 @@ fn lenient_output_devices(value: Option<serde_json::Value>) -> Vec<OutputDeviceE
     normalize_output_devices(devices)
 }
 
-/// The output-device presets: always three slots, each empty or a saved set of devices.
-pub const OUTPUT_PRESET_SLOTS: usize = 3;
+/// The output-device presets: always five slots, each empty or a saved set of devices.
+pub const OUTPUT_PRESET_SLOTS: usize = 5;
 
 pub fn normalize_output_presets(
     presets: Vec<Option<Vec<OutputDeviceEntry>>>,
@@ -2496,11 +2496,11 @@ mod tests {
     }
 
     #[test]
-    fn output_presets_are_three_slots_that_survive_restart_and_repair_themselves() {
+    fn output_presets_are_five_slots_that_survive_restart_and_repair_themselves() {
         let directory = test_directory("output-presets");
         let path = directory.join("settings.json");
         let store = SettingsStore::open(&path, AppSettings::default()).unwrap();
-        assert_eq!(store.snapshot().unwrap().output_presets, vec![None, None, None]);
+        assert_eq!(store.snapshot().unwrap().output_presets, vec![None; 5]);
         let saved = vec![OutputDeviceEntry {
             id: Some("wasapi:{a}".to_owned()),
             name: "A".to_owned(),
@@ -2517,14 +2517,14 @@ mod tests {
         let reopened = SettingsStore::open(&path, AppSettings::default()).unwrap();
         assert_eq!(
             reopened.snapshot().unwrap().output_presets,
-            vec![None, Some(saved.clone()), None]
+            vec![None, Some(saved.clone()), None, None, None]
         );
         let parsed = lenient_output_presets(Some(serde_json::json!([[], "x", [{"id": "b"}], [{"id": "c"}]])));
-        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed.len(), 5);
         assert_eq!(parsed[0], None, "an empty slot stays empty");
         assert_eq!(parsed[1], None, "junk is an empty slot");
         assert_eq!(parsed[2].as_ref().map(|slot| slot[0].id.clone()), Some(Some("b".to_owned())));
-        assert_eq!(lenient_output_presets(None), vec![None, None, None]);
+        assert_eq!(lenient_output_presets(None), vec![None; 5]);
     }
 
     #[test]

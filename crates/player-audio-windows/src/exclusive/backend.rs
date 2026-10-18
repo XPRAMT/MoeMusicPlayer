@@ -328,6 +328,10 @@ impl AudioBackend for ExclusiveBackend {
         if let Some(session) = self.session.as_ref() {
             session.control.paused.store(true, Ordering::Release);
         }
+        // Pausing gives the device back at once; `play()` opens it again where the track was.
+        if self.session.is_some() && self.track.is_some() {
+            self.release();
+        }
         Ok(())
     }
 
