@@ -4751,24 +4751,24 @@ input:focus-visible {
 @container (max-width: 720px) {
   .now-playing-view .now-playing-card {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1.1fr) minmax(0, 0.9fr);
     gap: clamp(6px, 1.2cqi, 10px);
     padding: clamp(7px, 2cqi, 12px);
   }
 
   .now-playing-view .now-playing-card.layout-b {
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 0.9fr) minmax(0, 1.1fr);
   }
 
   /* Stacked: the zoomed cover squeezes the lyrics vertically instead of sideways. */
   .now-playing-view .now-playing-card:not(.lyrics-hidden):not(.artwork-hidden) {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(min(calc(var(--np-cover-height, 0px) * var(--np-cover-reserve, 0)), 65%), var(--np-art-row, 1fr)) minmax(0, var(--np-lyr-row, 1fr));
+    grid-template-rows: minmax(min(calc(var(--np-cover-height, 0px) * var(--np-cover-reserve, 0)), 65%), var(--np-art-row, 1.1fr)) minmax(0, var(--np-lyr-row, 0.9fr));
   }
 
   .now-playing-view .now-playing-card.layout-b:not(.lyrics-hidden):not(.artwork-hidden) {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, var(--np-lyr-row, 1fr)) minmax(min(calc(var(--np-cover-height, 0px) * var(--np-cover-reserve, 0)), 65%), var(--np-art-row, 1fr));
+    grid-template-rows: minmax(0, var(--np-lyr-row, 0.9fr)) minmax(min(calc(var(--np-cover-height, 0px) * var(--np-cover-reserve, 0)), 65%), var(--np-art-row, 1.1fr));
   }
 
   .now-playing-view .now-playing-card.lyrics-hidden {

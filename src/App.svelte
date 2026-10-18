@@ -4910,10 +4910,10 @@
             style:--np-cover-reserve={coverLayoutScale === 1 ? 0 : coverLayoutScale}
             style:--np-art-col-a={`${(1 * coverShrinkShare).toFixed(4)}fr`}
             style:--np-art-col-b={`${(1 * coverShrinkShare).toFixed(4)}fr`}
-            style:--np-art-row={`${(1 * coverShrinkShare).toFixed(4)}fr`}
+            style:--np-art-row={`${(1.1 * coverShrinkShare).toFixed(4)}fr`}
             style:--np-lyr-col-a={`${(1 + 1 * (1 - coverShrinkShare)).toFixed(4)}fr`}
             style:--np-lyr-col-b={`${(1 + 1 * (1 - coverShrinkShare)).toFixed(4)}fr`}
-            style:--np-lyr-row={`${(1 + 1 * (1 - coverShrinkShare)).toFixed(4)}fr`}>
+            style:--np-lyr-row={`${(0.9 + 1.1 * (1 - coverShrinkShare)).toFixed(4)}fr`}>
             <NowPlayingArrangement layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved} artworkVisible={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
               {#snippet artwork()}
                 <div
