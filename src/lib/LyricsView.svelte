@@ -938,7 +938,7 @@
   .lyrics-view[data-text-effect='stroke'] .lyric-translation,
   .lyrics-view[data-text-effect='stroke'] .lyric-romanization {
     text-shadow: none;
-    -webkit-text-stroke: 0.08em rgba(var(--text-inverse-rgb), 0.88);
+    -webkit-text-stroke: 0.08em rgba(var(--text-inverse-rgb), 0.7);
     paint-order: stroke fill;
   }
 
