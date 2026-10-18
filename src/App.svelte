@@ -35,7 +35,10 @@
   IconAlarm,
   IconInfoCircle,
     IconUsers,
+    IconVolume,
     IconVolume2,
+    IconVolume4,
+    IconVolumeOff,
     IconX,
   } from '@tabler/icons-svelte-runes';
   import { emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -192,6 +195,7 @@
     type ActiveArtworkState,
   } from './lib/active-track-artwork';
   import { createVolumeCommandQueue } from './lib/volume-command-queue';
+  import { getVolumeIconLevel } from './lib/volume-icon.js';
   import {
     createNowPlayingAppearanceWriter,
     DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES,
@@ -661,6 +665,8 @@
   let volumeCommandGeneration = 0;
   let volumeSettledGeneration = 0;
   let confirmedVolume = $state<number | null>(null);
+  /** The speaker icon of the bottom bar follows the volume shown (also while the slider is dragged). */
+  let volumeIconLevel = $derived(getVolumeIconLevel(volumeDraft ?? playback?.volume ?? confirmedVolume ?? 0));
   let volumeExpanded = $state(false);
   let volumePanelElement = $state<HTMLElement | null>(null);
   let volumePopoverElement = $state<HTMLElement | null>(null);
@@ -5083,7 +5089,15 @@
             disabled={!playbackReady}
             onclick={toggleVolumeExpanded}
           >
-            <IconVolume2 size={23} stroke={1.6} aria-hidden="true" />
+            {#if volumeIconLevel === 'off'}
+              <IconVolumeOff size={23} stroke={1.6} aria-hidden="true" />
+            {:else if volumeIconLevel === 'low'}
+              <IconVolume4 size={23} stroke={1.6} aria-hidden="true" />
+            {:else if volumeIconLevel === 'medium'}
+              <IconVolume2 size={23} stroke={1.6} aria-hidden="true" />
+            {:else}
+              <IconVolume size={23} stroke={1.6} aria-hidden="true" />
+            {/if}
           </button>
           <div
             class="volume-popover floating-surface"
