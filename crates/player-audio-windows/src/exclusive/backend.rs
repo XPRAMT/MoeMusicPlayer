@@ -212,12 +212,18 @@ impl ExclusiveBackend {
         reason: String,
     ) -> Result<Option<Duration>, AudioError> {
         self.close_session();
-        let mut backend = (self.fallback_factory)()?;
-        backend.set_volume(self.volume)?;
+        // If the shared fallback fails too, the message carries both reasons.
+        let both = |error: AudioError| {
+            AudioError::Backend(format!(
+                "獨佔模式無法使用：{reason}；改用共享模式也失敗：{error}"
+            ))
+        };
+        let mut backend = (self.fallback_factory)().map_err(both)?;
+        backend.set_volume(self.volume).map_err(both)?;
         let duration = if position.is_zero() {
-            backend.load(path)?
+            backend.load(path).map_err(both)?
         } else {
-            backend.load_at(path, position)?.0
+            backend.load_at(path, position).map_err(both)?.0
         };
         self.fallback = Some(backend);
         self.fallback_reason = Some(reason);
@@ -887,6 +893,48 @@ mod tests {
         backend.stop().unwrap();
     }
 
+    /// One backend holds a real device exclusively; a second one asked for the same device must say the device is in
+    /// use (through the fallback reason, or in the error when shared mode cannot open the device either).
+    #[test]
+    #[ignore = "takes a real output device exclusively for a few seconds (silent); run manually"]
+    fn real_device_in_use_is_reported_with_its_reason() {
+        use crate::output_devices::{list_output_devices, OutputDeviceSetting};
+        let fragment =
+            std::env::var("MOE_EXCLUSIVE_DEVICE").unwrap_or_else(|_| "Realtek Digital".to_owned());
+        let devices = list_output_devices();
+        let device = devices
+            .iter()
+            .find(|device| device.name.contains(&fragment))
+            .unwrap_or_else(|| panic!("no device named like {fragment:?}: {devices:?}"));
+        let make = || {
+            let config = Arc::new(ResamplingConfig::new(ResamplingMode::HighQuality, false));
+            config.set_exclusive(true);
+            config.set_devices(vec![OutputDeviceSetting {
+                id: Some(device.id.clone()),
+                ..OutputDeviceSetting::default()
+            }]);
+            ExclusiveBackend::new(config)
+        };
+        let (path, _) = write_wav("in-use", 44_100, 44_100);
+        let mut holder = make();
+        holder.set_volume(0.0).unwrap();
+        holder.load(&path).unwrap();
+        assert!(holder.resampling_info().unwrap().exclusive.is_some());
+        let mut second = make();
+        second.set_volume(0.0).unwrap();
+        match second.load(&path) {
+            Ok(_) => {
+                let reason = second.resampling_info().unwrap().exclusive_fallback;
+                println!("fell back to shared mode: {reason:?}");
+                assert!(reason.unwrap().contains("使用"));
+            }
+            Err(error) => {
+                println!("error: {error}");
+                assert!(error.to_string().contains("使用"), "{error}");
+            }
+        }
+    }
+
     #[test]
     fn a_device_that_takes_no_format_plays_the_track_in_shared_mode_and_says_why() {
         let (path, _) = write_wav("refused", 44_100, 1_000);
@@ -940,6 +988,35 @@ mod tests {
         assert!(info.exclusive.is_some() && info.exclusive_fallback.is_none());
         assert!(rig.backend.fallback.is_none());
         assert_eq!(rig.capture.opened.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn when_the_shared_fallback_fails_too_the_error_names_both_reasons() {
+        let (path, _) = write_wav("both", 44_100, 1_000);
+        let capture = Arc::new(Capture::default());
+        let factory: EndpointFactory = Arc::new(move || {
+            Ok(Box::new(FakeEndpoint {
+                accepts: Vec::new(),
+                capture: Arc::clone(&capture),
+                period_frames: 256,
+                tick: Duration::from_micros(300),
+            }) as Box<dyn Endpoint>)
+        });
+        let fallback: FallbackFactory = Arc::new(|| {
+            Err(AudioError::OutputDevice(
+                "shared mode is busy too".to_owned(),
+            ))
+        });
+        let config = Arc::new(ResamplingConfig::new(ResamplingMode::HighQuality, false));
+        config.set_exclusive(true);
+        let mut backend = ExclusiveBackend::with_factories(config, factory, fallback, None);
+        let message = backend.load(&path).unwrap_err().to_string();
+        assert!(message.contains("獨佔模式無法使用"), "{message}");
+        assert!(message.contains("格式"), "the exclusive reason: {message}");
+        assert!(
+            message.contains("shared mode is busy too"),
+            "the shared reason: {message}"
+        );
     }
 
     #[test]
