@@ -94,6 +94,8 @@
   let failure = $state<string | null>(null);
 
   let rows = $derived(buildDeviceRows(entries, devices));
+  /** The delay lines devices up with each other, so it only applies (and shows) with two or more chosen devices. */
+  let delayApplies = $derived(rows.filter((_, index) => rowEnabled(rows, index)).length > 1);
   let playingRows = $derived(rows.map((row, index) => ({ row, index })).filter(({ index }) => rowEnabled(rows, index) && rows[index].connected));
   /** The row that carries on playing because a chosen device disconnected (the new system default). */
   let takeover = $derived(takeoverRow(rows));
@@ -698,7 +700,7 @@
             />
             <output>{volume ? `${volume.percent}%` : '—'}{#if volume?.muted && volume.percent > 0}<small> {tr('靜音')}</small>{/if}</output>
           </label>
-          {#if !exclusive}
+          {#if !exclusive && delayApplies}
           <div class="output-delay" role="group" aria-label={tr('延遲')}>
             <span>{tr('延遲')}</span>
             <button type="button" class="soft-button icon-step" aria-label={tr('減少 {0} 毫秒', [DELAY_STEP_MS])} onclick={() => setDelay(index, (entry?.delayMs ?? 0) - DELAY_STEP_MS)}>−</button>

@@ -313,9 +313,11 @@ impl RodioBackend {
         };
         let mirrors_wanted = active.len() > 1;
         let margin = if mirrors_wanted { JITTER_MARGIN_MS } else { 0 };
+        // The delay only exists to line devices up with each other; a lone device plays without it.
+        let primary_delay = if mirrors_wanted { primary.delay_ms } else { 0 };
         self.track
             .delay_ms
-            .store(margin + primary.delay_ms, Ordering::Relaxed);
+            .store(margin + primary_delay, Ordering::Relaxed);
         let map_changed = self.track.map != primary.channel_map;
         self.track.map = primary.channel_map.clone();
 
