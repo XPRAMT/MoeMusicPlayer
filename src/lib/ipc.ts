@@ -161,6 +161,17 @@ export interface AudioOutputDevice {
   sampleRate: number;
 }
 
+/** What a chosen playback device is doing right now (id null is the system default). */
+export interface AudioOutputDeviceStatus {
+  id: string | null;
+  state: 'playing' | 'opening' | 'lost';
+  message: string | null;
+  deviceRateHz: number | null;
+  channels: number | null;
+  /** The device's rate differs from the track's, so its copy is converted. */
+  converted: boolean;
+}
+
 /** Interface language choice (ADR 0019). */
 export type LanguageChoice = 'system' | 'zh-TW' | 'zh-CN' | 'ja' | 'en';
 
@@ -763,9 +774,25 @@ interface IpcContract {
     args: Record<string, never>;
     result: AudioOutputDevice[];
   };
-  audio_output_device_errors: {
+  audio_output_device_status: {
     args: Record<string, never>;
-    result: { id: string | null; message: string }[];
+    result: AudioOutputDeviceStatus[];
+  };
+  settings_get_output_presets: {
+    args: Record<string, never>;
+    result: (OutputDeviceEntry[] | null)[];
+  };
+  settings_save_output_preset: {
+    args: { slot: number };
+    result: (OutputDeviceEntry[] | null)[];
+  };
+  settings_clear_output_preset: {
+    args: { slot: number };
+    result: (OutputDeviceEntry[] | null)[];
+  };
+  settings_apply_output_preset: {
+    args: { slot: number };
+    result: OutputDeviceEntry[];
   };
   settings_get_output_devices: {
     args: Record<string, never>;

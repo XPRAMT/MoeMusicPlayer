@@ -89,7 +89,6 @@
   import { readDetailNavigationRoute, withDetailNavigationRoute } from './lib/detail-navigation-history.js';
   import { hideWrappedTrailingTrackSeparators } from './lib/track-field-separators.js';
   import { formatVolume } from './lib/format';
-  import { describeOutputFormat } from './lib/output-format.js';
   import hiResBadgeUrl from './assets/hi-res-badge.svg';
   import { calculateArtworkFrame } from './lib/artwork-frame.js';
   import FavoritePopover from './lib/FavoritePopover.svelte';
@@ -3970,17 +3969,9 @@
                 </ol>
               </div>
             {:else if settingsSection === 'playback'}
-              {@const outputStatus = describeOutputFormat(playback?.outputFormat)}
               <div id="{scope}playback-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}playback-tab" tabindex="0">
                 {#if capabilities?.platform === 'windows'}
-                <OutputDevicesSettings />
-                <div class="resampling-status" role="status">
-                  <span>{tr("目前輸出")}</span>
-                  <strong>{outputStatus.text}</strong>
-                  {#if outputStatus.notice}
-                    <p use:appTooltip={playback?.outputFormat?.fallbackReason ?? undefined}>{outputStatus.notice}</p>
-                  {/if}
-                </div>
+                <OutputDevicesSettings outputFormat={playback?.outputFormat ?? null} />
                 <div class="settings-panel-header">
                   <div>
                     <h3>{tr("取樣率轉換")}</h3>

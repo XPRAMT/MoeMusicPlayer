@@ -11,7 +11,7 @@ export const OUTPUT_MAX_SOURCE_CHANNELS = 8;
  * @typedef {{ source: number | null, gainPercent: number }} ChannelRoute
  * @typedef {{ id: string | null, name: string, enabled: boolean, volumePercent: number, delayMs: number, channelMap: ChannelRoute[] | null }} OutputDeviceEntry
  * @typedef {{ id: string, name: string, isDefault: boolean, channels: number, sampleRate: number }} AudioOutputDevice
- * @typedef {{ key: string, id: string | null, name: string, connected: boolean, isDefault: boolean, channels: number, entry: OutputDeviceEntry | null }} DeviceRow
+ * @typedef {{ key: string, id: string | null, name: string, connected: boolean, isDefault: boolean, channels: number, sampleRate: number, entry: OutputDeviceEntry | null }} DeviceRow
  */
 
 const LABELS = Object.freeze({
@@ -95,6 +95,7 @@ export function buildDeviceRows(entries, devices) {
     connected: true,
     isDefault: true,
     channels: current?.channels ?? 2,
+    sampleRate: current?.sampleRate ?? 0,
     entry: saved.get(null) ?? null,
   }];
   for (const device of devices) {
@@ -105,6 +106,7 @@ export function buildDeviceRows(entries, devices) {
       connected: true,
       isDefault: device.isDefault,
       channels: device.channels,
+      sampleRate: device.sampleRate,
       entry: saved.get(device.id) ?? null,
     });
   }
@@ -117,6 +119,7 @@ export function buildDeviceRows(entries, devices) {
         connected: false,
         isDefault: false,
         channels: entry.channelMap?.length || 2,
+        sampleRate: 0,
         entry,
       });
     }
@@ -267,4 +270,87 @@ export function activePreset(channels, map) {
 /** "250 ms" @param {number} delayMs */
 export function formatDelay(delayMs) {
   return `${Math.round(delayMs)} ms`;
+}
+
+/**
+ * @typedef {{ id: string | null, state: 'playing' | 'opening' | 'lost', message: string | null, deviceRateHz: number | null, channels: number | null, converted: boolean }} DeviceStatus
+ */
+
+/**
+ * The map after clicking the matrix cell (source channel `source`, output channel `output`): the cell turns on
+ * (that output takes that source) or, when it was on, the output goes silent.
+ * @param {ChannelRoute[] | null} map
+ * @param {number} channels
+ * @param {number} source
+ * @param {number} output
+ * @returns {ChannelRoute[]}
+ */
+export function toggleCell(map, channels, source, output) {
+  const next = (map ?? standardRoutes(channels)).map((route) => ({ ...route }));
+  while (next.length < channels) next.push({ source: null, gainPercent: 100 });
+  next[output] = next[output].source === source
+    ? { source: null, gainPercent: next[output].gainPercent }
+    : { source, gainPercent: next[output].source === null ? 100 : next[output].gainPercent };
+  return next;
+}
+
+/**
+ * The map after changing the gain of an active cell by `delta` percent; null when the cell is off.
+ * @param {ChannelRoute[] | null} map
+ * @param {number} channels
+ * @param {number} source
+ * @param {number} output
+ * @param {number} delta
+ * @returns {ChannelRoute[] | null}
+ */
+export function nudgeCell(map, channels, source, output, delta) {
+  const base = map ?? standardRoutes(channels);
+  if (base[output]?.source !== source) return null;
+  const next = base.map((route) => ({ ...route }));
+  next[output].gainPercent = Math.min(100, Math.max(0, next[output].gainPercent + delta));
+  return next;
+}
+
+/**
+ * How many source-channel rows the matrix shows: the stereo pair, more when the map uses higher channels, all eight
+ * when expanded.
+ * @param {ChannelRoute[] | null} map
+ * @param {boolean} expanded
+ */
+export function sourceRowCount(map, expanded) {
+  if (expanded) return OUTPUT_MAX_SOURCE_CHANNELS;
+  const highest = (map ?? []).reduce((most, route) => (route.source === null ? most : Math.max(most, route.source)), 1);
+  return Math.min(OUTPUT_MAX_SOURCE_CHANNELS, highest + 1);
+}
+
+/**
+ * Whether two device lists are the same choice (names are only a display cache and do not count).
+ * @param {OutputDeviceEntry[] | null} a
+ * @param {OutputDeviceEntry[] | null} b
+ */
+export function sameDevices(a, b) {
+  if (a === null || b === null) return a === b;
+  const key = (/** @type {OutputDeviceEntry} */ entry) => JSON.stringify([entry.id, entry.enabled, entry.volumePercent, entry.delayMs, entry.channelMap]);
+  const left = a.map(key).sort();
+  const right = b.map(key).sort();
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/**
+ * The status entry of a device, if the player reported one.
+ * @param {DeviceStatus[]} statuses
+ * @param {string | null} id
+ * @returns {DeviceStatus | null}
+ */
+export function statusFor(statuses, id) {
+  return statuses.find((status) => status.id === id) ?? null;
+}
+
+/**
+ * The player reports the device behind its main stream first; that stream carries the track's own sample-rate path.
+ * @param {DeviceStatus[]} statuses
+ * @param {string | null} id
+ */
+export function isMainStream(statuses, id) {
+  return statuses.length > 0 && statuses[0].state === 'playing' && statuses[0].id === id;
 }

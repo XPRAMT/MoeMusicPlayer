@@ -8,6 +8,12 @@ import {
   defaultEntry,
   entriesFromRows,
   isLastPlaying,
+  isMainStream,
+  nudgeCell,
+  sameDevices,
+  sourceRowCount,
+  statusFor,
+  toggleCell,
   mainRowIndex,
   normalizeEntry,
   patchRow,
@@ -87,4 +93,45 @@ test('choosing a device turns the system default off and choosing the default tu
   assert.deepEqual(rows.map((_, index) => rowEnabled(rows, index)), [false, true, true]);
   rows = setRowEnabled(rows, 0, true);
   assert.deepEqual(rows.map((_, index) => rowEnabled(rows, index)), [true, false, false]);
+});
+
+test('matrix cells toggle one source per output channel and the gain only moves active cells', () => {
+  let map = toggleCell(null, 2, 1, 0);
+  assert.deepEqual(map, [{ source: 1, gainPercent: 100 }, { source: 1, gainPercent: 100 }]);
+  map = toggleCell(map, 2, 1, 0);
+  assert.deepEqual(map[0], { source: null, gainPercent: 100 });
+  map = toggleCell(map, 2, 0, 0);
+  assert.deepEqual(map[0], { source: 0, gainPercent: 100 });
+  assert.equal(nudgeCell(map, 2, 1, 0, -5), null, 'a cell that is off does not change');
+  assert.equal(nudgeCell(map, 2, 0, 0, -30)[0].gainPercent, 70);
+  assert.equal(nudgeCell(map, 2, 0, 0, 500)[0].gainPercent, 100);
+  assert.equal(nudgeCell(map, 2, 0, 0, -500)[0].gainPercent, 0);
+});
+
+test('the matrix shows the stereo pair, more when the map needs them, all eight when expanded', () => {
+  assert.equal(sourceRowCount(null, false), 2);
+  assert.equal(sourceRowCount([{ source: 0, gainPercent: 100 }], false), 2);
+  assert.equal(sourceRowCount([{ source: 4, gainPercent: 100 }], false), 5);
+  assert.equal(sourceRowCount(null, true), 8);
+});
+
+test('presets match the current choice ignoring remembered names and order', () => {
+  const a = { ...defaultEntry('x', 'Old name'), delayMs: 100 };
+  const b = defaultEntry(null, '');
+  assert.equal(sameDevices([a, b], [b, { ...a, name: 'New name' }]), true);
+  assert.equal(sameDevices([a], [{ ...a, delayMs: 110 }]), false);
+  assert.equal(sameDevices(null, null), true);
+  assert.equal(sameDevices(null, [a]), false);
+});
+
+test('the main stream is the first reported device', () => {
+  const statuses = [
+    { id: null, state: 'playing', message: null, deviceRateHz: 96000, channels: 2, converted: false },
+    { id: 'x', state: 'lost', message: 'gone', deviceRateHz: null, channels: null, converted: false },
+  ];
+  assert.equal(isMainStream(statuses, null), true);
+  assert.equal(isMainStream(statuses, 'x'), false);
+  assert.equal(statusFor(statuses, 'x').message, 'gone');
+  assert.equal(statusFor(statuses, 'y'), null);
+  assert.equal(isMainStream([], null), false);
 });

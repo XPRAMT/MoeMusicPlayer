@@ -82,3 +82,29 @@ function describeSampleRatePath(format, source, output, device) {
       return { text: tr("原生 {0}（未轉換）", [source]), notice: null };
   }
 }
+
+/**
+ * The sample-rate path of a synced (non-main) device: the track's path up to the rate the stream carries, then the
+ * rate conversion for this device when its rate differs.
+ * @param {OutputFormat | null | undefined} format  the main stream's format (the track's path)
+ * @param {number | null} deviceRateHz  the rate this device runs at
+ * @param {boolean} converted  the device's rate differs from the stream's
+ * @returns {string}
+ */
+export function describeMirrorPath(format, deviceRateHz, converted) {
+  const device = deviceRateHz == null ? null : formatSampleRate(deviceRateHz);
+  if (!format || format.sourceRateHz == null) {
+    return device ? tr("尚未載入曲目（輸出 {0}）", [device]) : tr('尚未載入曲目');
+  }
+  const steps = [formatSampleRate(format.sourceRateHz)];
+  if (format.dseeHx === 'active') {
+    steps.push(`${formatSampleRate(format.dseeOutputRateHz ?? 96_000)}（DSEE HX）`);
+  }
+  const carried = format.dseeHx === 'active' ? (format.dseeOutputRateHz ?? 96_000) : format.sourceRateHz;
+  if ((format.conversion === 'highQuality' || format.conversion === 'basic') && format.outputRateHz !== carried) {
+    steps.push(`${formatSampleRate(format.outputRateHz)}（${tr('高品質')}）`);
+  }
+  if (converted && device) steps.push(`${device}（${tr('簡易轉換')}）`);
+  if (steps.length === 1) return tr("原生 {0}（未轉換）", [steps[0]]);
+  return steps.join(' → ');
+}

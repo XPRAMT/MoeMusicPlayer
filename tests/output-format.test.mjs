@@ -83,3 +83,15 @@ test('missing output or track has a neutral status', () => {
     notice: null,
   });
 });
+
+test('a synced device shows the track path plus its own conversion', async () => {
+  const { describeMirrorPath } = await import('../src/lib/output-format.js');
+  assert.equal(describeMirrorPath(format({ conversion: 'none', outputRateHz: 44_100 }), 44_100, false), '原生 44.1 kHz（未轉換）');
+  assert.equal(describeMirrorPath(format({}), 96_000, false), '44.1 kHz → 96 kHz（高品質）');
+  assert.equal(describeMirrorPath(format({}), 48_000, true), '44.1 kHz → 96 kHz（高品質） → 48 kHz（簡易轉換）');
+  assert.equal(
+    describeMirrorPath(format({ sourceRateHz: 48_000, dseeHx: 'active', dseeOutputRateHz: 96_000, outputRateHz: 96_000 }), 96_000, false),
+    '48 kHz → 96 kHz（DSEE HX）',
+  );
+  assert.equal(describeMirrorPath(null, 96_000, false), '尚未載入曲目（輸出 96 kHz）');
+});
