@@ -412,7 +412,7 @@
         {/each}
         {#if p > 0}{@const top = toViewTop(panelWorldY(p, 1))}{#if top > 0 && top < 1}<i class="sg-divider" style:top={`${top * 100}%`}></i>{/if}{/if}
       {/each}
-      {#if dropSide && loading[dropSide]}<span class="sg-badge">{tr("計算中…")}</span>{/if}
+      {#if dropSide ? loading[dropSide] : (loading.A || loading.B)}<span class="sg-badge">{tr("計算中…")}</span>{/if}
       {#if dropSide && !loaded[dropSide] && !loading[dropSide]}<span class="sg-empty">{tr("拖放檔案或按「開啟 {0}」", [dropSide])}</span>{/if}
       {#if content === 'overlay' && !diffUrl}<span class="sg-badge">{showB ? tr("B 透明度 {0}%", [Math.round(prefs.opacityB * 100)]) : tr('只顯示 A')}{tr("（Space 切換）")}</span>{/if}
       {#if info}
@@ -500,7 +500,6 @@
           <span>{item.data.sampleRate} Hz · {item.data.channels} ch · {Math.floor(item.data.durationMs / 60000)}:{String(Math.floor((item.data.durationMs / 1000) % 60)).padStart(2, '0')}</span>
           {#if item.data.cutoffHz}<span class="sg-cutoff">{tr("約 {0} kHz 以上幾乎無能量（僅供參考）", [(item.data.cutoffHz / 1000).toFixed(1)])}</span>{/if}
         {/if}
-        {#if loading[side]}<span>{tr("計算中…")}</span>{/if}
         {#if errors[side]}<span class="sg-error">{errors[side]}</span>{/if}
       </div>
     {/each}
@@ -543,17 +542,17 @@
 </div>
 
 <style>
-  .spectrogram-page { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(10px + var(--android-safe-top, 0px)) calc(14px + var(--android-safe-right, 0px)) calc(10px + var(--android-safe-bottom, 0px)) calc(14px + var(--android-safe-left, 0px)); background: var(--page, #0b0b10); color: var(--text, #e8e8ee); font-size: 13px; z-index: 1100; }
+  .spectrogram-page { --sg-surface: color-mix(in srgb, var(--text, #e8e8ee) 10%, transparent); --sg-field: color-mix(in srgb, var(--text, #e8e8ee) 6%, transparent); position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(10px + var(--android-safe-top, 0px)) calc(14px + var(--android-safe-right, 0px)) calc(10px + var(--android-safe-bottom, 0px)) calc(14px + var(--android-safe-left, 0px)); background: var(--page, #0b0b10); color: var(--text, #e8e8ee); font-size: 13px; z-index: 1100; }
   .spectrogram-page.is-drag-over { outline: 3px dashed #8a7dff; outline-offset: -6px; }
   .spectrogram-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .sg-spacer { flex: 1; }
-  .sg-button { background: var(--panel-soft, #22222c); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  .sg-button { background: var(--sg-surface); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
   .sg-button:hover { background: rgba(var(--accent-rgb, 138, 125, 255), 0.18); }
   .sg-button.is-active { border-color: #8a7dff; }
   .sg-button:disabled { opacity: 0.5; cursor: default; }
   .sg-inline { display: flex; align-items: center; gap: 5px; }
-  .sg-inline select, .sg-settings select, .sg-settings input { background: var(--panel, #0f0f15); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 4px; padding: 2px 4px; font: inherit; }
-  .sg-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 10px; background: var(--panel, #15151c); border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.16); border-radius: 6px; }
+  .sg-inline select, .sg-settings select, .sg-settings input { background: var(--sg-field); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 4px; padding: 2px 4px; font: inherit; }
+  .sg-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 10px; background: var(--sg-field); border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.16); border-radius: 6px; }
   .sg-settings label { display: flex; align-items: center; gap: 6px; }
   .sg-settings input[type='number'] { width: 70px; }
   .sg-info-row { display: flex; gap: 18px; flex-wrap: wrap; }
