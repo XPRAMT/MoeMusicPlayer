@@ -934,13 +934,15 @@ pub fn year_group_label(value: Option<&str>) -> String {
 }
 
 /// The format group of a codec name, as the list's "音訊格式" column spells it (upper case): every DSD rate is one group
-/// (`DSD`), `WAVE` is `WAV`, `OGG VORBIS` is `VORBIS`; a track with no codec is in the unknown group.
+/// (`DSD`), `WAVE` is `WAV`, `OGG VORBIS` is `VORBIS`, and `M4A`, `AAC` and `MP4A` (all MPEG-4 audio, one quality tier) are
+/// `MP4`, the name the scanner writes; a track with no codec is in the unknown group.
 pub fn format_group_label(codec: Option<&str>) -> String {
     let name = codec.unwrap_or_default().trim().to_ascii_uppercase();
     match name.as_str() {
         "" => UNKNOWN_GROUP_LABEL.to_owned(),
         "WAVE" => "WAV".to_owned(),
         "OGG VORBIS" => "VORBIS".to_owned(),
+        "M4A" | "AAC" | "MP4A" => "MP4".to_owned(),
         _ if name.starts_with("DSD") => "DSD".to_owned(),
         _ => name,
     }
@@ -9830,7 +9832,10 @@ mod tests {
         assert_eq!(format_group_label(Some("Wav")), "WAV");
         assert_eq!(format_group_label(Some("Flac")), "FLAC");
         assert_eq!(format_group_label(Some("OGG Vorbis")), "VORBIS");
-        assert_eq!(format_group_label(Some(" m4a ")), "M4A");
+        assert_eq!(format_group_label(Some(" m4a ")), "MP4");
+        assert_eq!(format_group_label(Some("AAC")), "MP4");
+        assert_eq!(format_group_label(Some("Mp4a")), "MP4");
+        assert_eq!(format_group_label(Some("Mp4")), "MP4");
         assert_eq!(format_group_label(None), "未知");
         assert_eq!(format_group_label(Some("")), "未知");
     }
@@ -10040,16 +10045,16 @@ mod tests {
         let ascending = db
             .quick_index_for_tracks(&request(TrackSortDirection::Asc), &[])
             .expect("ascending");
-        // Quality order: unknown, MP3, the AAC family (one group per name), FLAC, WAV (WAV and WAVE together), DSD.
-        assert_eq!(ascending.labels, ["未知", "MP3", "AAC", "M4A", "FLAC", "WAV", "DSD"]);
+        // Quality order: unknown, MP3, MPEG-4 (M4A and AAC are MP4 too), FLAC, WAV (WAV and WAVE together), DSD.
+        assert_eq!(ascending.labels, ["未知", "MP3", "MP4", "FLAC", "WAV", "DSD"]);
         assert_eq!(
             groups(&ascending),
-            group_names(&[("未知", 0), ("MP3", 1), ("AAC", 2), ("M4A", 3), ("FLAC", 5), ("WAV", 7), ("DSD", 9)])
+            group_names(&[("未知", 0), ("MP3", 1), ("MP4", 2), ("FLAC", 5), ("WAV", 7), ("DSD", 9)])
         );
         let descending = db
             .quick_index_for_tracks(&request(TrackSortDirection::Desc), &[])
             .expect("descending");
-        assert_eq!(descending.labels, ["DSD", "WAV", "FLAC", "M4A", "AAC", "MP3", "未知"]);
+        assert_eq!(descending.labels, ["DSD", "WAV", "FLAC", "MP4", "MP3", "未知"]);
 
         let mut playlist = Playlist::new("formats");
         for (index, id) in ids.iter().enumerate() {
