@@ -21,6 +21,7 @@ use std::time::Duration;
 use rodio::{ChannelCount, Sample, SampleRate, Source};
 
 use crate::output_devices::ChannelMixer;
+use crate::resample::Resampled;
 
 /// Samples (all channels) one ring holds: about 5 s of stereo at 96 kHz, 2.7 s at 192 kHz.
 pub(crate) const RING_SAMPLES: usize = 1 << 20;
@@ -28,8 +29,6 @@ pub(crate) const RING_SAMPLES: usize = 1 << 20;
 pub(crate) const MAX_CHANNELS: usize = 8;
 /// Audio a mirror keeps buffered to ride out scheduling jitter of the two device callbacks.
 pub(crate) const JITTER_MARGIN_MS: u32 = 60;
-/// Largest relative change of the resampling ratio the drift correction applies.
-const MAX_RATIO_ADJUST: f64 = 0.005;
 
 /// One producer, one consumer ring of interleaved samples. The producer is the primary device's render callback and
 /// must never wait; the consumer is a mirror device's callback.
@@ -79,6 +78,7 @@ impl Ring {
 pub(crate) struct RingReader {
     ring: Arc<Ring>,
     read: u64,
+    #[cfg_attr(not(test), allow(dead_code))]
     epoch: u64,
 }
 
@@ -90,6 +90,7 @@ impl RingReader {
     }
 
     /// Notice a flush or a new format: discard what is buffered. Returns true when that happened.
+    #[cfg(test)]
     fn sync(&mut self) -> bool {
         let epoch = self.ring.epoch.load(Ordering::Acquire);
         if epoch == self.epoch {
@@ -568,25 +569,206 @@ impl MirrorControl {
     }
 }
 
-/// The audio of one mirror device: reads the ring at the device's rate with a drift-correcting ratio, mixes the
-/// channels and applies the gain.
-pub(crate) struct MirrorSource {
+/// Frames between two looks at the ring's fill level (about 10 ms).
+const DRIFT_CHECK_FRAMES: u32 = 512;
+/// How far the average fill may stray from its target before a frame is dropped or repeated.
+const DRIFT_TOLERANCE_SECONDS: f64 = 0.008;
+/// A gap this large (the delay was changed, or the stream stalled) is closed at once instead of frame by frame.
+const DRIFT_JUMP_SECONDS: f64 = 0.25;
+/// Source-rate frames the rate converter reads ahead of what it has played; the fill target leaves room for them.
+const CONVERTER_READ_AHEAD_FRAMES: usize = 1024;
+
+/// The ring as a source at the track's own format. It keeps the ring's fill level at "jitter margin plus the device's
+/// delay": a frame is dropped when the level creeps up and repeated when it sinks (the two device clocks do not run
+/// at exactly the same speed), and a big gap is closed at once. While the ring is empty or still filling it plays
+/// silence.
+struct FeedSource {
     reader: RingReader,
+    control: Arc<MirrorControl>,
+    channels: usize,
+    rate: u32,
+    read_ahead_frames: usize,
+    buffering: bool,
+    repeat_next: bool,
+    fill_average: f64,
+    frames_until_check: u32,
+    held: [f32; MAX_CHANNELS],
+    frame: [f32; MAX_CHANNELS],
+    pos: usize,
+}
+
+impl FeedSource {
+    fn new(reader: RingReader, control: Arc<MirrorControl>, read_ahead_frames: usize) -> Self {
+        let channels = reader.channels();
+        let rate = reader.rate();
+        Self {
+            reader,
+            control,
+            channels,
+            rate,
+            read_ahead_frames,
+            buffering: true,
+            repeat_next: false,
+            fill_average: 0.0,
+            frames_until_check: 0,
+            held: [0.0; MAX_CHANNELS],
+            frame: [0.0; MAX_CHANNELS],
+            pos: channels,
+        }
+    }
+
+    fn target_frames(&self) -> usize {
+        let milliseconds =
+            u64::from(JITTER_MARGIN_MS) + u64::from(self.control.delay_ms.load(Ordering::Relaxed));
+        let wanted = (milliseconds * u64::from(self.rate) / 1000) as usize;
+        wanted
+            .saturating_sub(self.read_ahead_frames)
+            .clamp(4, RING_SAMPLES / self.channels.max(1) / 2)
+    }
+
+    #[cfg(test)]
+    fn buffered_frames(&mut self) -> usize {
+        self.reader.available_frames()
+    }
+
+    fn correct(&mut self) {
+        let available = self.reader.available_frames();
+        self.fill_average += 0.05 * (available as f64 - self.fill_average);
+        let target = self.target_frames();
+        let error = self.fill_average - target as f64;
+        let rate = f64::from(self.rate);
+        if error.abs() / rate > DRIFT_JUMP_SECONDS {
+            if available > target {
+                self.reader.skip_frames(available - target);
+                self.fill_average = target as f64;
+            } else {
+                self.buffering = true;
+            }
+            return;
+        }
+        let tolerance = rate * DRIFT_TOLERANCE_SECONDS;
+        if error > tolerance {
+            self.reader.skip_frames(1);
+        } else if error < -tolerance {
+            self.repeat_next = true;
+        }
+    }
+
+    fn advance(&mut self) {
+        if self.buffering {
+            self.frame = [0.0; MAX_CHANNELS];
+            let available = self.reader.available_frames();
+            if available >= self.target_frames() {
+                self.buffering = false;
+                self.fill_average = available as f64;
+                self.frames_until_check = 0;
+            }
+            return;
+        }
+        if self.frames_until_check == 0 {
+            self.frames_until_check = DRIFT_CHECK_FRAMES;
+            self.correct();
+            if self.buffering {
+                self.frame = [0.0; MAX_CHANNELS];
+                return;
+            }
+        }
+        self.frames_until_check -= 1;
+        if self.repeat_next {
+            self.repeat_next = false;
+            self.frame = self.held;
+            return;
+        }
+        let mut frame = [0.0; MAX_CHANNELS];
+        if !self.reader.pop_frame(&mut frame) {
+            // Ran dry: the producer paused or stalled. Play silence and fill up again.
+            self.control.underruns.fetch_add(1, Ordering::Relaxed);
+            self.buffering = true;
+            self.frame = [0.0; MAX_CHANNELS];
+            return;
+        }
+        self.control.consumed.fetch_add(1, Ordering::Relaxed);
+        self.held = frame;
+        self.frame = frame;
+    }
+}
+
+impl Iterator for FeedSource {
+    type Item = Sample;
+
+    fn next(&mut self) -> Option<Sample> {
+        if self.pos >= self.channels {
+            self.advance();
+            self.pos = 0;
+        }
+        let sample = self.frame[self.pos];
+        self.pos += 1;
+        Some(sample)
+    }
+}
+
+impl Source for FeedSource {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> ChannelCount {
+        ChannelCount::new(self.channels as u16).unwrap_or(ChannelCount::MIN)
+    }
+
+    fn sample_rate(&self) -> SampleRate {
+        SampleRate::new(self.rate).unwrap_or(SampleRate::MIN)
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
+/// How a mirror gets from the ring's format to its device's rate.
+enum Pipeline {
+    /// The converter could not be built; the device plays silence.
+    Silent,
+    /// The ring's rate is the device's rate: no conversion.
+    Direct(FeedSource),
+    /// rubato's FFT resampler (the same one the main output uses) converts the ring's rate to the device's.
+    Converted(Box<Resampled<FeedSource>>),
+}
+
+impl Pipeline {
+    fn next_sample(&mut self) -> f32 {
+        match self {
+            Pipeline::Silent => 0.0,
+            Pipeline::Direct(feed) => feed.next().unwrap_or(0.0),
+            Pipeline::Converted(converted) => converted.next().unwrap_or(0.0),
+        }
+    }
+
+    #[cfg(test)]
+    fn buffered_frames(&mut self) -> usize {
+        match self {
+            Pipeline::Silent => 0,
+            Pipeline::Direct(feed) => feed.buffered_frames(),
+            Pipeline::Converted(converted) => converted.inner_mut().buffered_frames(),
+        }
+    }
+}
+
+/// The audio of one mirror device: the ring read at the track's rate (`FeedSource`), converted to the device's rate
+/// with rubato's FFT resampler when the rates differ, then mixed into the device's channels and scaled by the gain.
+/// A new track, a seek or a pause rebuilds the pipeline.
+pub(crate) struct MirrorSource {
+    ring: Arc<Ring>,
     control: Arc<MirrorControl>,
     device_channels: usize,
     device_rate: u32,
     map: Option<Vec<crate::output_devices::ChannelRoute>>,
     map_seen: u64,
     mixer: ChannelMixer,
-    source_rate: u32,
     source_channels: usize,
-    /// Four most recent source frames for the cubic interpolation (`history[2]` is the one just before `phase`).
-    history: [[f32; MAX_CHANNELS]; 4],
-    phase: f64,
-    ratio: f64,
-    buffering: bool,
-    fill_average: f64,
-    frames_until_check: u32,
+    built_epoch: u64,
+    pipeline: Pipeline,
+    frames_until_map_check: u32,
     out: [Sample; MAX_CHANNELS],
     out_pos: usize,
     gain_now: f32,
@@ -601,113 +783,72 @@ impl MirrorSource {
         map: Option<Vec<crate::output_devices::ChannelRoute>>,
     ) -> Self {
         let device_channels = device_channels.clamp(1, MAX_CHANNELS);
-        let reader = RingReader::new(ring);
-        let source_channels = reader.channels();
-        let source_rate = reader.rate();
-        let mixer = ChannelMixer::new(map.as_deref(), source_channels, device_channels);
         let gain_now = f32::from_bits(control.gain.load(Ordering::Relaxed));
         let map_seen = control.map_version.load(Ordering::Acquire);
-        Self {
-            reader,
+        let mut source = Self {
+            ring,
             control,
             device_channels,
             device_rate: device_rate.max(1),
             map,
             map_seen,
-            mixer,
-            source_rate,
-            source_channels,
-            history: [[0.0; MAX_CHANNELS]; 4],
-            phase: 0.0,
-            ratio: f64::from(source_rate) / f64::from(device_rate.max(1)),
-            buffering: true,
-            fill_average: 0.0,
-            frames_until_check: 0,
+            mixer: ChannelMixer::new(None, 2, device_channels),
+            source_channels: 2,
+            built_epoch: 0,
+            pipeline: Pipeline::Silent,
+            frames_until_map_check: 0,
             out: [0.0; MAX_CHANNELS],
             out_pos: device_channels,
             gain_now,
-        }
+        };
+        source.rebuild();
+        source
     }
 
-    fn target_frames(&self) -> usize {
-        let milliseconds =
-            u64::from(JITTER_MARGIN_MS) + u64::from(self.control.delay_ms.load(Ordering::Relaxed));
-        let wanted = (milliseconds * u64::from(self.source_rate) / 1000) as usize;
-        // Never ask for more than the ring can hold.
-        wanted.min(RING_SAMPLES / self.source_channels.max(1) / 2)
-    }
-
-    fn base_ratio(&self) -> f64 {
-        f64::from(self.source_rate) / f64::from(self.device_rate)
-    }
-
-    fn reconfigure(&mut self) {
-        self.source_channels = self.reader.channels();
-        self.source_rate = self.reader.rate();
+    /// Start over from the ring's current format and position.
+    fn rebuild(&mut self) {
+        self.built_epoch = self.ring.epoch.load(Ordering::Acquire);
+        let reader = RingReader::new(Arc::clone(&self.ring));
+        self.source_channels = reader.channels();
         self.mixer = ChannelMixer::new(
             self.map.as_deref(),
             self.source_channels,
             self.device_channels,
         );
-        self.history = [[0.0; MAX_CHANNELS]; 4];
-        self.phase = 0.0;
-        self.ratio = self.base_ratio();
-        self.buffering = true;
-        self.fill_average = 0.0;
+        let rate = reader.rate();
+        self.pipeline = if rate == self.device_rate {
+            Pipeline::Direct(FeedSource::new(reader, Arc::clone(&self.control), 0))
+        } else {
+            let feed = FeedSource::new(
+                reader,
+                Arc::clone(&self.control),
+                CONVERTER_READ_AHEAD_FRAMES,
+            );
+            let target = SampleRate::new(self.device_rate).unwrap_or(SampleRate::MIN);
+            match Resampled::new(feed, target) {
+                Ok(converted) => Pipeline::Converted(Box::new(converted)),
+                Err(rejected) => {
+                    eprintln!(
+                        "[audio] a synced device cannot convert {} Hz to {} Hz: {}",
+                        rate, self.device_rate, rejected.error
+                    );
+                    Pipeline::Silent
+                }
+            }
+        };
     }
 
-    fn start_playing(&mut self) {
-        // Prime the interpolation window with the first frames.
-        for slot in 0..4 {
-            let mut frame = [0.0; MAX_CHANNELS];
-            if !self.reader.pop_frame(&mut frame) {
-                self.buffering = true;
-                return;
-            }
-            self.history[slot] = frame;
-        }
-        self.phase = 0.0;
-        self.buffering = false;
-        self.fill_average = self.reader.available_frames() as f64;
-        self.frames_until_check = 0;
-    }
-
-    /// Keep the ring's fill level at the target: a few tenths of a percent faster or slower, more only while the
-    /// user is moving the delay.
-    fn correct_drift(&mut self) {
-        let available = self.reader.available_frames() as f64;
-        self.fill_average += 0.1 * (available - self.fill_average);
-        let target = self.target_frames() as f64;
-        let error_seconds = (self.fill_average - target) / f64::from(self.source_rate);
-        // A big gap (the delay was changed): jump instead of waiting for the slow correction.
-        if error_seconds.abs() > 0.25 {
-            let available = self.reader.available_frames();
-            if available as f64 > target {
-                self.reader.skip_frames(available - target as usize);
-                self.fill_average = target;
-            } else {
-                self.buffering = true;
-            }
-            return;
-        }
-        let adjust = (error_seconds * 0.2).clamp(-MAX_RATIO_ADJUST, MAX_RATIO_ADJUST);
-        self.ratio = self.base_ratio() * (1.0 + adjust);
+    #[cfg(test)]
+    fn buffered_frames(&mut self) -> usize {
+        self.pipeline.buffered_frames()
     }
 
     fn next_frame(&mut self) {
-        let channels = self.source_channels;
-        if self.reader.sync() {
-            self.reconfigure();
+        if self.ring.epoch.load(Ordering::Acquire) != self.built_epoch {
+            self.rebuild();
         }
-        if self.buffering {
-            self.out[..self.device_channels].fill(0.0);
-            if self.reader.available_frames() >= self.target_frames().max(4) {
-                self.start_playing();
-            }
-            return;
-        }
-        if self.frames_until_check == 0 {
-            self.frames_until_check = 512;
+        if self.frames_until_map_check == 0 {
+            self.frames_until_map_check = DRIFT_CHECK_FRAMES;
             let map_version = self.control.map_version.load(Ordering::Acquire);
             if map_version != self.map_seen {
                 self.map_seen = map_version;
@@ -723,39 +864,11 @@ impl MirrorSource {
                     self.device_channels,
                 );
             }
-            self.correct_drift();
-            if self.buffering {
-                self.out[..self.device_channels].fill(0.0);
-                return;
-            }
         }
-        self.frames_until_check -= 1;
-        // Advance the source position by `ratio` frames.
-        self.phase += self.ratio;
-        while self.phase >= 1.0 {
-            let mut frame = [0.0; MAX_CHANNELS];
-            if !self.reader.pop_frame(&mut frame) {
-                // Ran dry: the producer paused or stalled. Output silence and re-buffer.
-                self.control.underruns.fetch_add(1, Ordering::Relaxed);
-                self.buffering = true;
-                self.out[..self.device_channels].fill(0.0);
-                return;
-            }
-            self.history.rotate_left(1);
-            self.history[3] = frame;
-            self.phase -= 1.0;
-            self.control.consumed.fetch_add(1, Ordering::Relaxed);
-        }
-        let fraction = self.phase as f32;
+        self.frames_until_map_check -= 1;
         let mut source = [0.0f32; MAX_CHANNELS];
-        for (channel, slot) in source.iter_mut().enumerate().take(channels) {
-            *slot = hermite(
-                self.history[0][channel],
-                self.history[1][channel],
-                self.history[2][channel],
-                self.history[3][channel],
-                fraction,
-            );
+        for slot in source.iter_mut().take(self.source_channels) {
+            *slot = self.pipeline.next_sample();
         }
         let target_gain = f32::from_bits(self.control.gain.load(Ordering::Relaxed));
         self.gain_now += (target_gain - self.gain_now) * 0.002;
@@ -765,21 +878,14 @@ impl MirrorSource {
             self.gain_now
         };
         self.gain_now = gain;
-        self.mixer
-            .mix(&source[..channels], &mut self.out[..self.device_channels]);
+        self.mixer.mix(
+            &source[..self.source_channels],
+            &mut self.out[..self.device_channels],
+        );
         for sample in &mut self.out[..self.device_channels] {
             *sample *= gain;
         }
     }
-}
-
-/// Four-point cubic Hermite interpolation between `y1` and `y2` at `t` in [0, 1).
-fn hermite(y0: f32, y1: f32, y2: f32, y3: f32, t: f32) -> f32 {
-    let c0 = y1;
-    let c1 = 0.5 * (y2 - y0);
-    let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
-    let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
-    ((c3 * t + c2) * t + c1) * t + c0
 }
 
 impl Iterator for MirrorSource {
@@ -1023,7 +1129,7 @@ mod tests {
     {
         for error in [0.0003, -0.0003, 0.002] {
             let (_, control, mut mirror) = run_mirror(48_000, 48_000, 0, error, 30);
-            let fill_ms = mirror.reader.available_frames() as f64 * 1000.0 / 48_000.0;
+            let fill_ms = mirror.buffered_frames() as f64 * 1000.0 / 48_000.0;
             assert!(
                 (fill_ms - f64::from(JITTER_MARGIN_MS)).abs() < 25.0,
                 "error {error}: fill {fill_ms} ms"
@@ -1034,6 +1140,17 @@ mod tests {
                 control.underruns.load(Ordering::Relaxed)
             );
         }
+    }
+
+    #[test]
+    fn a_converting_mirror_also_follows_a_fast_producer_clock() {
+        let (output, control, mut mirror) = run_mirror(44_100, 48_000, 0, 0.001, 20);
+        let fill_ms = mirror.buffered_frames() as f64 * 1000.0 / 44_100.0;
+        assert!((10.0..120.0).contains(&fill_ms), "fill {fill_ms} ms");
+        assert!(control.underruns.load(Ordering::Relaxed) <= 1);
+        let tail = &output[output.len() - 24_000..];
+        let frequency = dominant_frequency(tail, 48_000);
+        assert!((frequency - 440.0).abs() < 3.0, "{frequency}");
     }
 
     #[test]
@@ -1052,8 +1169,8 @@ mod tests {
             (difference_ms - 200.0).abs() < 15.0,
             "delayed by {difference_ms} ms"
         );
-        let fill_zero = mirror_zero.reader.available_frames();
-        let fill_delay = mirror_delay.reader.available_frames();
+        let fill_zero = mirror_zero.buffered_frames();
+        let fill_delay = mirror_delay.buffered_frames();
         assert!(
             fill_delay > fill_zero + 8_000,
             "the ring holds the delay: {fill_zero} vs {fill_delay}"

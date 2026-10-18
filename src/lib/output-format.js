@@ -104,7 +104,7 @@ export function describeMirrorPath(format, deviceRateHz, converted) {
   if ((format.conversion === 'highQuality' || format.conversion === 'basic') && format.outputRateHz !== carried) {
     steps.push(`${formatSampleRate(format.outputRateHz)}（${tr('高品質')}）`);
   }
-  if (converted && device) steps.push(`${device}（${tr('簡易轉換')}）`);
+  if (converted && device) steps.push(`${device}（${tr('高品質')}）`);
   if (steps.length === 1) return tr("原生 {0}（未轉換）", [steps[0]]);
   return steps.join(' → ');
 }

@@ -2032,16 +2032,15 @@ mod tests {
     fn real_two_devices_play_together() {
         let devices = crate::output_devices::list_output_devices();
         assert!(devices.len() >= 2, "needs two output devices: {devices:?}");
-        let second = devices
-            .iter()
-            .find(|device| !device.is_default)
-            .expect("a second device");
+        // Two chosen devices (the system default and chosen devices exclude each other).
+        let first = &devices[0];
+        let second = &devices[1];
         let mut backend = backend(ResamplingMode::HighQuality);
         backend.set_volume(0.0).unwrap();
         backend.load(&fixture("seek-tone.wav")).unwrap();
         let both = vec![
             OutputDeviceSetting {
-                id: None,
+                id: Some(first.id.clone()),
                 enabled: true,
                 volume_percent: 100,
                 delay_ms: 300,

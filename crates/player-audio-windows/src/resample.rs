@@ -156,6 +156,12 @@ impl<S: Source> Resampled<S> {
         Ok(resampled)
     }
 
+    /// The wrapped source, for owners that need to look at it between samples.
+    #[cfg(test)]
+    pub(crate) fn inner_mut(&mut self) -> &mut S {
+        &mut self.inner
+    }
+
     /// Algorithmic delay of the current segment in output frames (trimmed).
     #[cfg(test)]
     pub(crate) fn output_delay_frames(&self) -> usize {
