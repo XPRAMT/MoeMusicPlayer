@@ -679,7 +679,7 @@
         {#each playingRows as { index } (index)}
           <span class="channel-matrix-device" style="grid-column: span {channelCount(index)};" use:appTooltip={deviceLabel(index)}>{shortDeviceName(deviceLabel(index))}</span>
         {/each}
-        <span class="channel-matrix-corner"></span>
+        <span class="channel-matrix-corner" use:appTooltip={tr('縱向是來源聲道（input），橫向是這個裝置的輸出聲道（output）')}>i＼o</span>
         {#each playingRows as { index } (index)}
           {@const outputLabels = channelLabels(channelCount(index))}
           {#each Array.from({ length: channelCount(index) }, (_, output) => output) as output (output)}
