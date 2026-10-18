@@ -692,6 +692,16 @@ input:focus-visible {
   border-bottom: var(--divider-width) solid var(--divider-color);
 }
 .quick-settings-drawer-nav .settings-tabs { margin: 0; }
+/* The drawer is a narrow panel at any window size: its categories sit four to a row (two rows of four). */
+.quick-settings-drawer-nav .settings-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.quick-settings-drawer-nav .settings-tabs .settings-tab {
+  min-width: 0;
+  padding: 0 4px;
+  white-space: nowrap;
+}
 
 .quick-settings-nav { display: flex; flex: 0 0 auto; gap: 7px; padding: 10px 20px; border-bottom: var(--divider-width) solid var(--divider-color); }
 .quick-settings-nav button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--text-soft); background: transparent; font-size: var(--font-caption); cursor: pointer; }
