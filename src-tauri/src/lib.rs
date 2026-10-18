@@ -4023,9 +4023,10 @@ fn compare_track_summaries(
                         .as_deref(),
                 ) == "未知"
             };
+            // The unknown group is the smallest value: first ascending, last descending.
             match (unknown(left), unknown(right)) {
-                (false, true) => compare_direction(Ordering::Less),
-                (true, false) => compare_direction(Ordering::Greater),
+                (false, true) => compare_direction(Ordering::Greater),
+                (true, false) => compare_direction(Ordering::Less),
                 _ => match (left_date.is_empty(), right_date.is_empty()) {
                     (false, true) => Ordering::Less,
                     (true, false) => Ordering::Greater,
@@ -4036,8 +4037,8 @@ fn compare_track_summaries(
         }
         TrackSortField::CreatedAt => match (left.created_at_utc_ms, right.created_at_utc_ms) {
             (Some(a), Some(b)) => compare_direction(a.cmp(&b)),
-            (Some(_), None) => compare_direction(Ordering::Less),
-            (None, Some(_)) => compare_direction(Ordering::Greater),
+            (Some(_), None) => compare_direction(Ordering::Greater),
+            (None, Some(_)) => compare_direction(Ordering::Less),
             (None, None) => Ordering::Equal,
         },
         TrackSortField::AudioFormat => {

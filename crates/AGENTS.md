@@ -7,7 +7,7 @@
 - SQLite 負責歌曲、artist／album 快照、搜尋、欄位過濾、計數、排序、分組與快速索引邊界。大型快照在資料庫端完成聚合、正規化和排序，前端以固定 1,000 筆 offset/limit 讀頁；不得把全量原始 facet 傳到 renderer，也不得以多頁迴圈重做全量聚合。
 - 排序、分組、快速索引要使用同一個完整 SQL 排序順序；文字 collation 共用 `MUSIC_LOCALE_NATURAL` ICU4X。Windows locale 來自 `GetUserDefaultLocaleName`，Android 來自 `Locale.getDefault()`，台灣採 Zhuyin。符號、數字、英文字母先於地區文字；未知是獨立組，正反序依整體順序反轉。平台原生索引 API 不參與分類。
 - 演出者／專輯的 identity 正規化、代表顯示名稱、統計和 aliases 必須由 SQLite 函數與 SQL snapshot 一起產生。未標籤項目以獨立 unknown identity 保存，不與真正叫「未知」的標籤合併；未知依所選排序值與方向排序。
-- 分組不限名稱：`QuickIndexKind`（`Text`／`Year`／`AddedYear`／`Format`）決定怎麼從排序鍵得到群組標籤，曲庫、播放清單與播放佇列（`quick_index_for_ordered_keys`）共用同一份標籤邏輯（SQLite 函式 `music_year_label`、`music_format_label` 與 Rust 的 `year_group_label`、`format_group_label` 是同一組純函式）。年份標籤是發行日期或年份的四位數字，沒有可用年份歸「未知」，未知組正序最後、倒序最前；新增時間以本地時區的曆年分組。音訊格式排序在每個品質等級內再依格式名稱排，使同名格式連在一起、每種格式只有一個群組。
+- 分組不限名稱：`QuickIndexKind`（`Text`／`Year`／`AddedYear`／`Format`）決定怎麼從排序鍵得到群組標籤，曲庫、播放清單與播放佇列（`quick_index_for_ordered_keys`）共用同一份標籤邏輯（SQLite 函式 `music_year_label`、`music_format_label` 與 Rust 的 `year_group_label`、`format_group_label` 是同一組純函式）。年份標籤是發行日期或年份的四位數字，沒有可用年份歸「未知」，未知組視為最小值，正序（舊到新）最前、倒序（新到舊）最後；新增時間以本地時區的曆年分組。音訊格式排序在每個品質等級內再依格式名稱排，使同名格式連在一起、每種格式只有一個群組。
 - 播放清單重複項按原始 position 保留；播放佇列保留重複 queue entry、traversal 次序與目前 entry identity。對佇列排序回傳 entry index，由播放服務更新 traversal，不以 track ID 去重。
 - 正式曲庫與 Windows 外部佇列暫存曲庫可能同時查詢；兩庫各自 SQL 篩選，locator 批次去重，跨庫排序／分組在 SQLite 中完成。暫存曲庫以記憶體 SQLite 運作，生命週期屬於當次外部佇列。
 

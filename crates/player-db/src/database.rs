@@ -283,15 +283,18 @@ fn playlist_order_by(sort: PlaylistListSort, direction: &str) -> String {
     }
 
     let expression = playlist_sort_expression(sort.field);
-    // No usable date: the unknown group, last in ascending order and first in descending order.
+    // No usable date: the unknown group is the smallest value, first ascending and last descending.
+    let unknown_direction = if direction == "ASC" { "DESC" } else { "ASC" };
     if sort.field == PlaylistSortField::Year {
         return format!(
-            "{} {direction}, {expression} {direction}, e.position ASC",
+            "{} {unknown_direction}, {expression} {direction}, e.position ASC",
             year_unknown_sql("t")
         );
     }
     if sort.field == PlaylistSortField::CreatedAt {
-        return format!("({expression} IS NULL) {direction}, {expression} {direction}, e.position ASC");
+        return format!(
+            "({expression} IS NULL) {unknown_direction}, {expression} {direction}, e.position ASC"
+        );
     }
     if matches!(
         sort.field,
@@ -970,7 +973,8 @@ impl QuickIndexKind {
 }
 
 /// SQL that is true for a track with no usable year (the unknown group), from the columns of the table `alias`. The
-/// unknown group sorts last in ascending order and first in descending order, like the unknown group of the names.
+/// unknown group counts as the smallest value: first when the list runs from old to new (ascending), last when it runs
+/// from new to old (descending).
 fn year_unknown_sql(alias: &str) -> String {
     format!(
         "({MUSIC_YEAR_FUNCTION}(COALESCE(NULLIF(trim({alias}.release_date), ''), CAST({alias}.year AS TEXT))) = '{UNKNOWN_GROUP_LABEL}')"
@@ -5840,21 +5844,21 @@ fn tracks_order_by_sql(sort: TrackListSort) -> String {
         }
         (TrackSortField::Year, true) => {
             return format!(
-                "{} ASC, (t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date ASC, (t.year IS NULL) ASC, t.year ASC, t.track_id ASC",
+                "{} DESC, (t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date ASC, (t.year IS NULL) ASC, t.year ASC, t.track_id ASC",
                 year_unknown_sql("t")
             );
         }
         (TrackSortField::Year, false) => {
             return format!(
-                "{} DESC, (t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date DESC, (t.year IS NULL) ASC, t.year DESC, t.track_id DESC",
+                "{} ASC, (t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, t.release_date DESC, (t.year IS NULL) ASC, t.year DESC, t.track_id DESC",
                 year_unknown_sql("t")
             );
         }
         (TrackSortField::CreatedAt, true) => {
-            "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) ASC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) ASC, t.track_id ASC"
+            "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) DESC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) ASC, t.track_id ASC"
         }
         (TrackSortField::CreatedAt, false) => {
-            "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) DESC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) DESC, t.track_id DESC"
+            "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) ASC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) DESC, t.track_id DESC"
         }
         (TrackSortField::AudioFormat, true) => {
             return audio_format_order_by("ASC", "t.track_id");
@@ -5891,6 +5895,12 @@ fn queue_sort_order_by(sort: TrackListSort) -> String {
     } else {
         "DESC"
     };
+    // The unknown group is the smallest value: first ascending, last descending.
+    let unknown_direction = if sort.direction == TrackSortDirection::Asc {
+        "DESC"
+    } else {
+        "ASC"
+    };
     match sort.field {
         TrackSortField::Title => format!(
             "(length(trim(COALESCE(t.sort_title, ''))) = 0) {direction}, \
@@ -5905,12 +5915,12 @@ fn queue_sort_order_by(sort: TrackListSort) -> String {
              COALESCE(t.album, '') COLLATE MUSIC_LOCALE_NATURAL {direction}, t.track_id {direction}"
         ),
         TrackSortField::Year => format!(
-            "{} {direction}, (t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, \
+            "{} {unknown_direction}, (t.release_date IS NULL OR length(trim(t.release_date))=0) ASC, \
              t.release_date {direction}, (t.year IS NULL) ASC, t.year {direction}, t.track_id {direction}",
             year_unknown_sql("t")
         ),
         TrackSortField::CreatedAt => format!(
-            "(t.created_at_utc_ms IS NULL) {direction}, t.created_at_utc_ms {direction}, t.track_id {direction}"
+            "(t.created_at_utc_ms IS NULL) {unknown_direction}, t.created_at_utc_ms {direction}, t.track_id {direction}"
         ),
         TrackSortField::AudioFormat => audio_format_order_by(direction, "t.track_id"),
         TrackSortField::Duration => format!(
@@ -9889,7 +9899,7 @@ mod tests {
     }
 
     #[test]
-    fn year_groups_put_the_unknown_group_last_ascending_and_first_descending() {
+    fn year_groups_treat_the_unknown_group_as_the_smallest_value() {
         let (db, ids) = grouping_library(
             "year-groups",
             &[
@@ -9918,18 +9928,18 @@ mod tests {
             (years, db.quick_index_for_tracks(&request, &[]).expect("quick index"))
         };
         let (years, ascending) = library(TrackSortDirection::Asc);
-        assert_eq!(years, ["1999", "2025", "2025", "2026", "未知", "未知"]);
+        assert_eq!(years, ["未知", "未知", "1999", "2025", "2025", "2026"]);
         assert_eq!(
             groups(&ascending),
-            group_names(&[("1999", 0), ("2025", 1), ("2026", 3), ("未知", 4)])
+            group_names(&[("未知", 0), ("1999", 2), ("2025", 3), ("2026", 5)])
         );
         assert_eq!(ascending.total_count, 6);
-        assert_eq!(ascending.labels, ["1999", "2025", "2026", "未知"]);
+        assert_eq!(ascending.labels, ["未知", "1999", "2025", "2026"]);
         let (years, descending) = library(TrackSortDirection::Desc);
-        assert_eq!(years, ["未知", "未知", "2026", "2025", "2025", "1999"]);
+        assert_eq!(years, ["2026", "2025", "2025", "1999", "未知", "未知"]);
         assert_eq!(
             groups(&descending),
-            group_names(&[("未知", 0), ("2026", 2), ("2025", 3), ("1999", 5)])
+            group_names(&[("2026", 0), ("2025", 1), ("1999", 3), ("未知", 4)])
         );
 
         // The queue sorts the same way and groups the same labels.
@@ -9942,8 +9952,8 @@ mod tests {
             })
             .collect();
         for (direction, expected) in [
-            (TrackSortDirection::Asc, ["1999", "2025", "2025", "2026", "未知", "未知"]),
-            (TrackSortDirection::Desc, ["未知", "未知", "2026", "2025", "2025", "1999"]),
+            (TrackSortDirection::Asc, ["未知", "未知", "1999", "2025", "2025", "2026"]),
+            (TrackSortDirection::Desc, ["2026", "2025", "2025", "1999", "未知", "未知"]),
         ] {
             let order = db
                 .sort_queue_candidates(&candidates, TrackListSort { field: TrackSortField::Year, direction })
@@ -9980,8 +9990,8 @@ mod tests {
         }
         db.save_playlist(&playlist).expect("save playlist");
         for (direction, expected) in [
-            (PlaylistSortDirection::Asc, group_names(&[("1999", 0), ("2025", 1), ("2026", 3), ("未知", 4)])),
-            (PlaylistSortDirection::Desc, group_names(&[("未知", 0), ("2026", 2), ("2025", 3), ("1999", 5)])),
+            (PlaylistSortDirection::Asc, group_names(&[("未知", 0), ("1999", 2), ("2025", 3), ("2026", 5)])),
+            (PlaylistSortDirection::Desc, group_names(&[("2026", 0), ("2025", 1), ("1999", 3), ("未知", 4)])),
         ] {
             let sort = PlaylistListSort { field: PlaylistSortField::Year, direction };
             let snapshot = db
@@ -9998,7 +10008,7 @@ mod tests {
                 .iter()
                 .map(|item| year_group_label(item.release_date.as_deref()))
                 .collect();
-            let first = if direction == PlaylistSortDirection::Asc { "1999" } else { "未知" };
+            let first = if direction == PlaylistSortDirection::Asc { "未知" } else { "2026" };
             assert_eq!(years.first().map(String::as_str), Some(first));
         }
     }
@@ -12253,17 +12263,17 @@ mod tests {
                 .iter()
                 .map(|track| track.title.as_deref())
                 .collect::<Vec<_>>(),
-            [Some("Early"), Some("Late"), Some("Unknown")],
+            [Some("Unknown"), Some("Early"), Some("Late")],
         );
+        assert_eq!(ascending.items[0].created_at_utc_ms, None);
         assert_eq!(
-            ascending.items[0].created_at_utc_ms,
+            ascending.items[1].created_at_utc_ms,
             Some(1_798_013_925_123)
         );
         assert_eq!(
-            ascending.items[1].created_at_utc_ms,
+            ascending.items[2].created_at_utc_ms,
             Some(1_798_013_925_321)
         );
-        assert_eq!(ascending.items[2].created_at_utc_ms, None);
 
         let descending = db
             .list_tracks_page(ListTracksQuery {
@@ -12283,8 +12293,8 @@ mod tests {
                 .iter()
                 .map(|track| track.title.as_deref())
                 .collect::<Vec<_>>(),
-            [Some("Unknown"), Some("Late"), Some("Early")],
-            "missing creation dates are the unknown group: last ascending, first descending",
+            [Some("Late"), Some("Early"), Some("Unknown")],
+            "missing creation dates are the unknown group, the smallest value: first ascending, last descending",
         );
     }
 
