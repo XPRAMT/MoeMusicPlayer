@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { filterLyricsCandidates, getCandidatePresentation } from '../src/lib/lyrics-candidate-preview.js';
+import { effectiveCandidateFilter, filterLyricsCandidates, getCandidatePresentation } from '../src/lib/lyrics-candidate-preview.js';
 
 /** @returns {import('../src/lib/ipc').LyricsCandidate} */
 function candidate(partial) {
@@ -81,4 +81,21 @@ test('getCandidatePresentation distinguishes word-timed, line-timed, plain, and 
   }));
   assert.equal(undecodedQrc.formatLabel, '逐字歌詞');
   assert.equal(undecodedQrc.previewNotice, '原始 QRC 尚未解碼，目前無法預覽；仍可使用「選擇」保存。');
+});
+
+test('the text of the search that produced the results does not filter them again', () => {
+  // The providers answer "1 2 FanClub" with titles that spell it differently; filtering by the literal text hid them all.
+  const answers = [
+    candidate({ id: 'a', title: '1,2, Fanclub', artist: 'x', previewLines: [], reasons: [] }),
+    candidate({ id: 'b', title: '12fanclub', artist: 'y', previewLines: [], reasons: [] }),
+    candidate({ id: 'c', title: 'いーあるふぁんくらぶ', artist: 'z', previewLines: [], reasons: [] }),
+  ];
+  assert.equal(filterLyricsCandidates(answers, '1 2 FanClub').length, 0, 'the old behaviour hid everything');
+  assert.equal(effectiveCandidateFilter('1 2 FanClub', '1 2 FanClub'), '');
+  assert.equal(filterLyricsCandidates(answers, effectiveCandidateFilter(' 1 2 FanClub ', '1 2 FanClub')).length, 3);
+  // Typing more (or something else) after the search filters the shown results again.
+  assert.equal(effectiveCandidateFilter('1 2 FanClub gumi', '1 2 FanClub'), '1 2 FanClub gumi');
+  assert.equal(effectiveCandidateFilter('gumi', ''), 'gumi', 'before any search the typed text filters as before');
+  assert.equal(effectiveCandidateFilter('', ''), '');
+  assert.equal(effectiveCandidateFilter(undefined, undefined), '');
 });

@@ -13,7 +13,7 @@
   } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
   import { convertTrackLyrics } from './lyrics-traditional.js';
-  import { filterLyricsCandidates, getCandidatePresentation } from './lyrics-candidate-preview.js';
+  import { effectiveCandidateFilter, filterLyricsCandidates, getCandidatePresentation } from './lyrics-candidate-preview.js';
   import {
     DEFAULT_LYRICS_PREFERENCES,
     getDisplayActiveLyricIndex,
@@ -167,6 +167,8 @@
   let timingPanelOpen = $state(false);
   let timingPanelElement = $state<HTMLDivElement | null>(null);
   let candidateQuery = $state('');
+  /** The text of the search whose results are on screen (typed text equal to it is not filtered again). */
+  let submittedQuery = $state('');
 
   // svelte-ignore state_referenced_locally
   const controller = sharedController ?? createLyricsController({
@@ -262,7 +264,9 @@
       || viewState.phase === 'candidates'
       || viewState.phase === 'searching',
   );
-  let filteredCandidates = $derived(filterLyricsCandidates(viewState.candidates, candidateQuery));
+  let filteredCandidates = $derived(
+    filterLyricsCandidates(viewState.candidates, effectiveCandidateFilter(candidateQuery, submittedQuery)),
+  );
   let showCandidatePicker = $derived(
     !viewState.pickerClosed
       && !viewState.isSearching
@@ -418,6 +422,7 @@
     if (timedViewport) timedViewport.scrollTop = 0;
     timingPanelOpen = false;
     candidateQuery = '';
+    submittedQuery = '';
     timingOffsetSec = loadLyricsTimingOffsetSec(nextTrackId);
     if (!sharedController) void controller.setTrack(nextTrackId, { title: trackTitle, artist: trackArtist });
   });
@@ -567,7 +572,9 @@
 
   function submitCandidateSearch(event?: Event): void {
     event?.preventDefault?.();
-    // Typed text filters current results; submitting re-queries providers (optional query override).
+    // Typed text filters current results; submitting re-queries providers (optional query override), and the results
+    // that come back are that query's answer, so the same text no longer filters them.
+    submittedQuery = candidateQuery.trim();
     void controller.searchAgain({ query: candidateQuery.trim() || undefined });
   }
 
@@ -582,11 +589,13 @@
 
   function dismissSelection(): void {
     candidateQuery = '';
+    submittedQuery = '';
     controller.dismissSelection();
   }
 
   function removeLyrics(): void {
     candidateQuery = '';
+    submittedQuery = '';
     void controller.removeLyrics();
   }
 
