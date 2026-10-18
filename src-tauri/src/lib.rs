@@ -6152,12 +6152,18 @@ struct AudioOutputDevice {
     sample_rate: u32,
 }
 
-/// Why a chosen device is not playing (`id` is `None` for the system default).
+/// What a chosen device is doing right now (`id` is `None` for the system default).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AudioOutputDeviceError {
+struct AudioOutputDeviceStatus {
     id: Option<String>,
-    message: String,
+    /// `playing`, `opening` or `lost`.
+    state: &'static str,
+    message: Option<String>,
+    device_rate_hz: Option<u32>,
+    channels: Option<u16>,
+    /// A device whose rate differs from the track's gets a converted copy.
+    converted: bool,
 }
 
 /// The playback devices Windows offers right now, the system default first. Android has no device choice.
@@ -6185,14 +6191,26 @@ async fn audio_list_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
 }
 
 #[tauri::command]
-fn audio_output_device_errors(state: State<'_, AppState>) -> Vec<AudioOutputDeviceError> {
+fn audio_output_device_status(state: State<'_, AppState>) -> Vec<AudioOutputDeviceStatus> {
     #[cfg(target_os = "windows")]
     if let Some(service) = state.playback.as_ref() {
+        use player_audio_windows::output_devices::DeviceState;
         return service
             .player
-            .output_device_errors()
+            .output_device_status()
             .into_iter()
-            .map(|(id, message)| AudioOutputDeviceError { id, message })
+            .map(|status| AudioOutputDeviceStatus {
+                id: status.id,
+                state: match status.state {
+                    DeviceState::Playing => "playing",
+                    DeviceState::Opening => "opening",
+                    DeviceState::Lost => "lost",
+                },
+                message: status.message,
+                device_rate_hz: status.device_rate,
+                channels: status.channels,
+                converted: status.converted,
+            })
             .collect();
     }
     #[cfg(not(target_os = "windows"))]
@@ -10740,7 +10758,7 @@ pub fn run() {
             settings_set_dsee_hx,
             settings_get_dsd,
             audio_list_output_devices,
-            audio_output_device_errors,
+            audio_output_device_status,
             settings_get_output_devices,
             settings_set_output_devices,
             settings_get_language,

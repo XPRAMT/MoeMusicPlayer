@@ -20,6 +20,30 @@ pub struct OutputDeviceInfo {
     pub sample_rate: u32,
 }
 
+/// What a chosen device is doing right now.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceState {
+    Playing,
+    /// Being opened (or reopened after it dropped out).
+    Opening,
+    /// Could not be opened or stopped responding; opening is retried every few seconds.
+    Lost,
+}
+
+/// The settings page's view of one chosen device (`id: None` is the system default).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutputDeviceStatus {
+    pub id: Option<String>,
+    pub state: DeviceState,
+    /// Why the device is not playing, or a note about it.
+    pub message: Option<String>,
+    /// The rate and channel count the device's stream runs at.
+    pub device_rate: Option<u32>,
+    pub channels: Option<u16>,
+    /// A mirror device whose rate differs from the track's (the rate is converted for it).
+    pub converted: bool,
+}
+
 /// Where one output channel of a device takes its sound from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ChannelRoute {

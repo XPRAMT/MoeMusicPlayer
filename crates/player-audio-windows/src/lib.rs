@@ -283,8 +283,8 @@ pub(crate) struct ResamplingConfig {
     pub(crate) dsd: Arc<DsdOptions>,
     /// The output devices the user chose (empty: the system default). Shared so a rebuilt backend opens the same ones.
     devices: RwLock<Vec<output_devices::OutputDeviceSetting>>,
-    /// Why a chosen device is not playing (`None` is the system default), for the settings page.
-    device_errors: Mutex<Vec<(Option<String>, String)>>,
+    /// What every chosen device is doing right now, for the settings page.
+    device_status: Mutex<Vec<output_devices::OutputDeviceStatus>>,
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -296,7 +296,7 @@ impl ResamplingConfig {
             dsee_hx: AtomicBool::new(dsee_hx),
             dsd: Arc::new(DsdOptions::default()),
             devices: RwLock::new(Vec::new()),
-            device_errors: Mutex::new(Vec::new()),
+            device_status: Mutex::new(Vec::new()),
         }
     }
 
@@ -322,11 +322,11 @@ impl ResamplingConfig {
             .and_then(|device| device.id)
     }
 
-    pub(crate) fn set_device_errors(&self, errors: Vec<(Option<String>, String)>) {
+    pub(crate) fn set_device_status(&self, status: Vec<output_devices::OutputDeviceStatus>) {
         *self
-            .device_errors
+            .device_status
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = errors;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = status;
     }
 
     fn encode(mode: ResamplingMode) -> u8 {
@@ -864,14 +864,14 @@ impl PlayerHandle {
         self.enqueue_with_ack(Command::SetOutputDevices(devices))
     }
 
-    /// Chosen devices that are not playing right now, each with the reason (`None` is the system default).
-    pub fn output_device_errors(&self) -> Vec<(Option<String>, String)> {
+    /// What every chosen device is doing right now (playing, opening, lost and why).
+    pub fn output_device_status(&self) -> Vec<output_devices::OutputDeviceStatus> {
         self.inner
             .resampling
             .as_ref()
             .map_or_else(Vec::new, |config| {
                 config
-                    .device_errors
+                    .device_status
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone()

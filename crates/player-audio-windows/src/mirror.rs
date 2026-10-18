@@ -141,6 +141,37 @@ impl RingReader {
     }
 }
 
+/// Notices a stream that stops pulling audio without reporting an error (a Bluetooth device that powered off): the
+/// heartbeat counter of its mixer stops moving.
+pub(crate) struct StallWatch {
+    beats: u64,
+    since: std::time::Instant,
+}
+
+impl StallWatch {
+    pub(crate) fn new(now: std::time::Instant) -> Self {
+        Self {
+            beats: 0,
+            since: now,
+        }
+    }
+
+    /// Feed the current heartbeat count; true once it has not moved for `timeout`.
+    pub(crate) fn observe(
+        &mut self,
+        beats: u64,
+        now: std::time::Instant,
+        timeout: Duration,
+    ) -> bool {
+        if beats != self.beats {
+            self.beats = beats;
+            self.since = now;
+            return false;
+        }
+        now.duration_since(self.since) >= timeout
+    }
+}
+
 /// Where the tee copies the track to. Shared by the backend (which adds and removes mirrors) and the tee.
 pub(crate) struct MirrorHub {
     rings: RwLock<Arc<Vec<Arc<Ring>>>>,
@@ -158,6 +189,14 @@ impl MirrorHub {
             flushes: AtomicU64::new(0),
             format: Mutex::new((2, 48_000)),
         })
+    }
+
+    /// Channels and rate of the track the mirrors currently get.
+    pub(crate) fn format(&self) -> (usize, u32) {
+        *self
+            .format
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub(crate) fn add_ring(&self) -> Arc<Ring> {
@@ -862,6 +901,22 @@ mod tests {
         let mut expected = vec![0.0; 10];
         expected.extend((1..=20).map(|value| value as f32));
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn a_stream_whose_heartbeat_stops_is_reported_after_the_timeout() {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(3);
+        let mut watch = StallWatch::new(start);
+        assert!(!watch.observe(10, start + Duration::from_secs(1), timeout));
+        assert!(!watch.observe(20, start + Duration::from_secs(2), timeout));
+        // The count stops moving.
+        assert!(!watch.observe(20, start + Duration::from_secs(4), timeout));
+        assert!(watch.observe(20, start + Duration::from_secs(5), timeout));
+        // It starts again: healthy at once.
+        assert!(!watch.observe(30, start + Duration::from_secs(6), timeout));
+        assert!(!watch.observe(30, start + Duration::from_secs(8), timeout));
+        assert!(watch.observe(30, start + Duration::from_secs(9), timeout));
     }
 
     #[test]

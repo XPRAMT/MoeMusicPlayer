@@ -45,10 +45,12 @@ use rodio::{
 };
 
 use crate::mirror::{
-    DelayLine, MirrorControl, MirrorHub, MirrorSource, MixSource, Ring, Tee, JITTER_MARGIN_MS,
+    DelayLine, MirrorControl, MirrorHub, MirrorSource, MixSource, Ring, StallWatch, Tee,
+    JITTER_MARGIN_MS,
 };
 use crate::output_devices::{
-    active_devices, find_output_device, ChannelMixer, ChannelRoute, OutputDeviceSetting,
+    active_devices, find_output_device, ChannelMixer, ChannelRoute, DeviceState,
+    OutputDeviceSetting, OutputDeviceStatus,
 };
 use crate::resample::{needs_resampling, Resampled};
 use crate::{
@@ -91,7 +93,7 @@ pub(super) struct RodioBackend {
     /// Devices that failed to open or died, with the reason and when to try again.
     failed: Vec<(OutputDeviceSetting, String, Instant)>,
     master_volume: f32,
-    reported_errors: Vec<(Option<String>, String)>,
+    reported_status: Vec<OutputDeviceStatus>,
 }
 
 /// A device that plays a copy of the track next to the main output.
@@ -103,6 +105,10 @@ struct MirrorOutput {
     hub: Arc<MirrorHub>,
     control: Arc<MirrorControl>,
     signals: Arc<OutputSignals>,
+    /// Notices a stream that stops pulling audio without an error (a Bluetooth device that powered off).
+    watch: StallWatch,
+    rate_hz: u32,
+    channels: u16,
 }
 
 impl Drop for MirrorOutput {
@@ -116,6 +122,8 @@ struct PendingMirror {
     result: mpsc::Receiver<Result<MirrorOutput, String>>,
 }
 
+/// A mirror stream that pulled nothing for this long is treated as gone.
+const MIRROR_STALL_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long a device that failed to open waits before the next attempt.
 const MIRROR_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -277,7 +285,7 @@ impl RodioBackend {
             pending: Vec::new(),
             failed: Vec::new(),
             master_volume: 1.0,
-            reported_errors: Vec::new(),
+            reported_status: Vec::new(),
         };
         let _ = backend.apply_devices();
         Ok(backend)
@@ -385,7 +393,7 @@ impl RodioBackend {
             }
             self.start_mirror(setting.clone());
         }
-        self.report_errors();
+        self.publish_status();
         Ok(())
     }
 
@@ -444,6 +452,20 @@ impl RodioBackend {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
+            let stalled = failure.is_none() && {
+                let beats = self.mirrors[index]
+                    .signals
+                    .heartbeat
+                    .load(Ordering::Relaxed);
+                self.mirrors[index]
+                    .watch
+                    .observe(beats, Instant::now(), MIRROR_STALL_TIMEOUT)
+            };
+            let failure = failure.or_else(|| {
+                stalled.then(|| {
+                    "the device stopped requesting audio (powered off or out of range?)".to_owned()
+                })
+            });
             match failure {
                 Some(reason) => {
                     let mirror = self.mirrors.remove(index);
@@ -464,27 +486,62 @@ impl RodioBackend {
             self.failed.retain(|(failed, _, _)| failed.id != setting.id);
             self.start_mirror(setting);
         }
-        self.report_errors();
+        self.publish_status();
     }
 
-    /// Publish which chosen devices are not playing, for the settings page.
-    fn report_errors(&mut self) {
-        let mut errors: Vec<(Option<String>, String)> = self
-            .failed
-            .iter()
-            .map(|(setting, reason, _)| (setting.id.clone(), reason.clone()))
-            .collect();
-        if let (Some(wanted), Some(output)) = (self.config.primary_device(), self.output.as_ref()) {
-            if output.device_id.as_deref() != Some(wanted.as_str()) {
-                errors.push((
-                    Some(wanted),
-                    "the device was not found; the system default is playing instead".to_owned(),
-                ));
-            }
+    /// Publish what every chosen device is doing, for the settings page.
+    fn publish_status(&mut self) {
+        let mut status: Vec<OutputDeviceStatus> = Vec::new();
+        let wanted_primary = self.config.primary_device();
+        if let Some(output) = self.output.as_ref() {
+            let missing = wanted_primary
+                .as_deref()
+                .is_some_and(|wanted| output.device_id.as_deref() != Some(wanted));
+            status.push(OutputDeviceStatus {
+                id: wanted_primary.clone(),
+                state: DeviceState::Playing,
+                message: missing.then(|| {
+                    "the device was not found; the system default is playing instead".to_owned()
+                }),
+                device_rate: Some(output.device_rate.get()),
+                channels: Some(output.sink.config().channel_count().get()),
+                converted: false,
+            });
         }
-        if errors != self.reported_errors {
-            self.config.set_device_errors(errors.clone());
-            self.reported_errors = errors;
+        let (_, track_rate) = self.hub.format();
+        for mirror in &self.mirrors {
+            status.push(OutputDeviceStatus {
+                id: mirror.setting.id.clone(),
+                state: DeviceState::Playing,
+                message: None,
+                device_rate: Some(mirror.rate_hz),
+                channels: Some(mirror.channels),
+                converted: mirror.rate_hz != track_rate,
+            });
+        }
+        for pending in &self.pending {
+            status.push(OutputDeviceStatus {
+                id: pending.setting.id.clone(),
+                state: DeviceState::Opening,
+                message: None,
+                device_rate: None,
+                channels: None,
+                converted: false,
+            });
+        }
+        for (setting, reason, _) in &self.failed {
+            status.push(OutputDeviceStatus {
+                id: setting.id.clone(),
+                state: DeviceState::Lost,
+                message: Some(reason.clone()),
+                device_rate: None,
+                channels: None,
+                converted: false,
+            });
+        }
+        if status != self.reported_status {
+            self.config.set_device_status(status.clone());
+            self.reported_status = status;
         }
     }
 
@@ -971,6 +1028,9 @@ fn open_mirror(
         hub,
         control,
         signals,
+        watch: StallWatch::new(Instant::now()),
+        rate_hz: rate,
+        channels: channels as u16,
     })
 }
 
@@ -2006,7 +2066,7 @@ mod tests {
             backend.mirrors.len(),
             1,
             "errors: {:?}",
-            backend.reported_errors
+            backend.reported_status
         );
         thread::sleep(Duration::from_millis(1_500));
         assert_eq!(backend.output_status(), OutputStatus::Healthy);
@@ -2119,6 +2179,7 @@ mod tests {
             .map(|sink| sink.2.load(Ordering::Relaxed))
             .collect();
         let mut elapsed_seconds = 0;
+        let mut last_frames = vec![0_u64; sinks.len()];
         while elapsed_seconds < seconds {
             thread::sleep(Duration::from_secs(10));
             elapsed_seconds += 10;
@@ -2128,7 +2189,12 @@ mod tests {
                 let frames = (samples.load(Ordering::Relaxed) - base[index]) / channels;
                 let rate = frames as f64 / elapsed;
                 let ppm = (rate / f64::from(*nominal) - 1.0) * 1e6;
-                println!("t={elapsed:6.1}s  {name}: {rate:.3} Hz ({ppm:+.1} ppm vs {nominal} Hz)");
+                let recent = (frames - last_frames[index]) as f64 / 10.0;
+                last_frames[index] = frames;
+                println!(
+                    "t={elapsed:6.1}s  {name}: {rate:.3} Hz ({ppm:+.1} ppm vs {nominal} Hz), last 10 s: {recent:.0} Hz{}",
+                    if recent < f64::from(*nominal) * 0.5 { "  <-- STALLED" } else { "" }
+                );
                 rates.push(rate / f64::from(*nominal));
             }
             if rates.len() == 2 {
