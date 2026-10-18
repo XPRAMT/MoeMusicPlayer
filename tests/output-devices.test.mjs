@@ -13,7 +13,9 @@ import {
   sameDevices,
   sourceRowCount,
   statusFor,
+  shortDeviceName,
   toggleCell,
+  volumeDeviceId,
   mainRowIndex,
   normalizeEntry,
   patchRow,
@@ -65,7 +67,7 @@ test('a saved device that is unplugged stays in the list under its remembered na
 test('entries are repaired like the backend does', () => {
   const entry = normalizeEntry({ id: '', volumePercent: 900, delayMs: -4, channelMap: [{ source: 300, gainPercent: 250 }, { source: 1 }] });
   assert.equal(entry.id, null);
-  assert.equal(entry.volumePercent, 100);
+  assert.equal('volumePercent' in entry, false, 'the software volume is gone; the device volume is the real one');
   assert.equal(entry.delayMs, 0);
   assert.deepEqual(entry.channelMap, [{ source: null, gainPercent: 100 }, { source: 1, gainPercent: 100 }]);
   assert.equal(normalizeEntry(null).enabled, true);
@@ -134,4 +136,17 @@ test('the main stream is the first reported device', () => {
   assert.equal(statusFor(statuses, 'x').message, 'gone');
   assert.equal(statusFor(statuses, 'y'), null);
   assert.equal(isMainStream([], null), false);
+});
+
+test('short device names use the text in the last parentheses', () => {
+  assert.equal(shortDeviceName('Headphones (WF-1000XM6)'), 'WF-1000XM6');
+  assert.equal(shortDeviceName('Realtek Digital Output (Realtek(R) Audio)'), 'Realtek Digital Output (Realtek(R) Audio)', 'nested parentheses keep the whole name');
+  assert.equal(shortDeviceName('Plain name'), 'Plain name');
+});
+
+test('the system default row reads the volume of the device that is the default now', () => {
+  const rows = buildDeviceRows([], [speakers, earbuds]);
+  assert.equal(volumeDeviceId(rows[0], [speakers, earbuds]), speakers.id);
+  assert.equal(volumeDeviceId(rows[2], [speakers, earbuds]), earbuds.id);
+  assert.equal(volumeDeviceId(rows[0], [earbuds]), null);
 });

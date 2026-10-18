@@ -3,13 +3,12 @@
 
 export const OUTPUT_DELAY_MAX_MS = 2000;
 export const OUTPUT_DELAY_STEP_MS = 5;
-export const OUTPUT_VOLUME_MAX_PERCENT = 100;
 /** Channels of the widest layout the channel map names (7.1). */
 export const OUTPUT_MAX_SOURCE_CHANNELS = 8;
 
 /**
  * @typedef {{ source: number | null, gainPercent: number }} ChannelRoute
- * @typedef {{ id: string | null, name: string, enabled: boolean, volumePercent: number, delayMs: number, channelMap: ChannelRoute[] | null }} OutputDeviceEntry
+ * @typedef {{ id: string | null, name: string, enabled: boolean, delayMs: number, channelMap: ChannelRoute[] | null }} OutputDeviceEntry
  * @typedef {{ id: string, name: string, isDefault: boolean, channels: number, sampleRate: number }} AudioOutputDevice
  * @typedef {{ key: string, id: string | null, name: string, connected: boolean, isDefault: boolean, channels: number, sampleRate: number, entry: OutputDeviceEntry | null }} DeviceRow
  */
@@ -43,7 +42,7 @@ export function channelLabels(count) {
  * @returns {OutputDeviceEntry}
  */
 export function defaultEntry(id = null, name = '') {
-  return { id, name, enabled: true, volumePercent: 100, delayMs: 0, channelMap: null };
+  return { id, name, enabled: true, delayMs: 0, channelMap: null };
 }
 
 /** @param {unknown} value @param {number} min @param {number} max @param {number} fallback */
@@ -70,7 +69,6 @@ export function normalizeEntry(value) {
     id: typeof source.id === 'string' && source.id.trim() ? source.id : null,
     name: typeof source.name === 'string' ? source.name : '',
     enabled: source.enabled !== false,
-    volumePercent: clampNumber(source.volumePercent, 0, OUTPUT_VOLUME_MAX_PERCENT, 100),
     delayMs: clampNumber(source.delayMs, 0, OUTPUT_DELAY_MAX_MS, 0),
     channelMap: map,
   };
@@ -330,7 +328,7 @@ export function sourceRowCount(map, expanded) {
  */
 export function sameDevices(a, b) {
   if (a === null || b === null) return a === b;
-  const key = (/** @type {OutputDeviceEntry} */ entry) => JSON.stringify([entry.id, entry.enabled, entry.volumePercent, entry.delayMs, entry.channelMap]);
+  const key = (/** @type {OutputDeviceEntry} */ entry) => JSON.stringify([entry.id, entry.enabled, entry.delayMs, entry.channelMap]);
   const left = a.map(key).sort();
   const right = b.map(key).sort();
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -353,4 +351,26 @@ export function statusFor(statuses, id) {
  */
 export function isMainStream(statuses, id) {
   return statuses.length > 0 && statuses[0].state === 'playing' && statuses[0].id === id;
+}
+
+/**
+ * The short form of a device name for tight places (matrix headers): the text in the last pair of parentheses
+ * ("Headphones (WF-1000XM6)" -> "WF-1000XM6"), or the whole name.
+ * @param {string} name
+ */
+export function shortDeviceName(name) {
+  const match = /\(([^()]+)\)\s*$/.exec(name);
+  return match ? match[1].trim() : name;
+}
+
+/**
+ * The id the player reports volumes under for a row: the device itself, or for the system default row the device
+ * that is the default right now.
+ * @param {DeviceRow} row
+ * @param {AudioOutputDevice[]} devices
+ * @returns {string | null}
+ */
+export function volumeDeviceId(row, devices) {
+  if (row.id !== null) return row.id;
+  return devices.find((device) => device.isDefault)?.id ?? null;
 }

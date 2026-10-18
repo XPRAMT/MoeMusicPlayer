@@ -27,11 +27,14 @@
     routePresets,
     sameDevices,
     setRowEnabled,
+    shortDeviceName,
     sourceRowCount,
     standardRoutes,
     statusFor,
     toggleCell,
+    volumeDeviceId,
   } from './output-devices.js';
+  import { pruneScales, syncVolumes } from './volume-sync.js';
 
   interface Props {
     /** The player's current sample-rate path (the main stream's). */
@@ -44,28 +47,67 @@
   const instance = Symbol('output-devices');
   const SAVE_DELAY_MS = 250;
   const STATUS_POLL_MS = 2000;
+  const VOLUME_POLL_MS = 1000;
+  const VOLUME_SEND_MS = 60;
+  /** A volume the user just changed is not overwritten by a poll for this long. */
+  const VOLUME_HOLD_MS = 1500;
   const DELAY_STEP_MS = 10;
   const PRESET_SLOTS = 3;
+  const SYNC_KEY = 'moe.outputVolumeSync';
 
   let devices = $state<AudioOutputDevice[]>([]);
   let entries = $state<OutputDeviceEntry[]>([]);
   let statuses = $state<AudioOutputDeviceStatus[]>([]);
   let presets = $state<(OutputDeviceEntry[] | null)[]>(Array.from({ length: PRESET_SLOTS }, () => null));
   let selectedSlot = $state(0);
-  let matrixOpen = $state<Set<string>>(new Set());
-  let allSources = $state<Set<string>>(new Set());
+  /** The real Windows volume (0–100) and mute state of each device, by device id. */
+  let volumes = $state<Record<string, { percent: number; muted: boolean }>>({});
+  let volumeSync = $state(readSyncPreference());
+  let allSources = $state(false);
   let loading = $state(true);
   let refreshing = $state(false);
   let failure = $state<string | null>(null);
 
   let rows = $derived(buildDeviceRows(entries, devices));
+  let playingRows = $derived(rows.map((row, index) => ({ row, index })).filter(({ index }) => rowEnabled(rows, index)));
   const sourceLabels = channelLabels(OUTPUT_MAX_SOURCE_CHANNELS);
+  /** How many source-channel rows the shared matrix shows: enough for every playing device's map. */
+  let matrixRows = $derived(
+    sourceRowCount(
+      playingRows.flatMap(({ index }) => rows[index].entry?.channelMap ?? []),
+      allSources,
+    ),
+  );
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let saveRevision = 0;
   let saveQueue: Promise<void> = Promise.resolve();
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let volumeTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
+
+  const volumeEdited = new Map<string, number>();
+  const volumePending = new Map<string, number>();
+  const volumeSendTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const syncScales = new Map<string, number>();
+
+  function readSyncPreference(): boolean {
+    try {
+      return localStorage.getItem(SYNC_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function setVolumeSync(on: boolean): void {
+    volumeSync = on;
+    syncScales.clear();
+    try {
+      localStorage.setItem(SYNC_KEY, on ? '1' : '0');
+    } catch {
+      // The preference just is not remembered.
+    }
+  }
 
   async function refreshStatus(): Promise<void> {
     try {
@@ -73,6 +115,24 @@
       if (!disposed) statuses = next;
     } catch {
       // The status is a hint only.
+    }
+  }
+
+  async function refreshVolumes(): Promise<void> {
+    if (!isTauri()) return;
+    try {
+      const listed = await invokeCommand('audio_get_device_volumes', {});
+      if (disposed) return;
+      const now = Date.now();
+      const next = { ...volumes };
+      for (const item of listed) {
+        // Keep what the user is dragging; take everything else (the real volume moves from outside too).
+        if (now - (volumeEdited.get(item.id) ?? 0) < VOLUME_HOLD_MS) continue;
+        next[item.id] = { percent: Math.round(item.volumePercent), muted: item.muted };
+      }
+      volumes = next;
+    } catch {
+      // Devices come and go; the next poll tries again.
     }
   }
 
@@ -84,6 +144,7 @@
         devices = next;
         failure = null;
       }
+      void refreshVolumes();
     } catch (error) {
       if (!disposed) failure = tr('無法列出播放裝置：{0}', [getErrorText(error)]);
     } finally {
@@ -115,6 +176,7 @@
       loading = false;
     }
     void refreshStatus();
+    void refreshVolumes();
   }
 
   function broadcast(saved: OutputDeviceEntry[]): void {
@@ -162,6 +224,7 @@
 
   function toggle(index: number, enabled: boolean): void {
     entries = entriesFromRows(setRowEnabled(rows, index, enabled));
+    syncScales.clear();
     scheduleSave(true);
   }
 
@@ -180,12 +243,57 @@
     return (event.deltaY < 0 ? 1 : -1) * (event.shiftKey ? 1 : step);
   }
 
+  // ---- real device volume -------------------------------------------------------------------------------------
+
+  function volumeOf(index: number): { percent: number; muted: boolean } | null {
+    const id = volumeDeviceId(rows[index], devices);
+    return id ? (volumes[id] ?? null) : null;
+  }
+
+  function sendVolume(id: string): void {
+    const percent = volumePending.get(id);
+    volumeSendTimers.delete(id);
+    if (percent === undefined) return;
+    volumePending.delete(id);
+    void invokeCommand('audio_set_device_volume', { id, volumePercent: percent }).catch((error) => {
+      failure = getErrorText(error);
+    });
+  }
+
+  function queueVolume(id: string, percent: number): void {
+    const muted = percent <= 0;
+    volumes = { ...volumes, [id]: { percent, muted } };
+    volumeEdited.set(id, Date.now());
+    volumePending.set(id, percent);
+    if (!volumeSendTimers.has(id)) volumeSendTimers.set(id, setTimeout(() => sendVolume(id), VOLUME_SEND_MS));
+  }
+
+  function setVolume(index: number, percent: number): void {
+    const id = volumeDeviceId(rows[index], devices);
+    if (!id) return;
+    const before = new Map(Object.entries(volumes).map(([key, value]) => [key, value.percent]));
+    queueVolume(id, percent);
+    if (!volumeSync) return;
+    const ids = playingRows.map(({ row }) => volumeDeviceId(row, devices)).filter((value): value is string => value !== null);
+    pruneScales(syncScales, ids);
+    for (const [other, value] of syncVolumes({ changedId: id, next: percent, volumes: before, ids, scales: syncScales })) {
+      queueVolume(other, value);
+    }
+  }
+
+  // ---- channel map (one matrix for every playing device) -----------------------------------------------------------
+
   function currentMap(index: number) {
     return rows[index].entry?.channelMap ?? null;
   }
 
   function channelCount(index: number): number {
     return Math.max(1, rows[index].channels);
+  }
+
+  function deviceLabel(index: number): string {
+    const row = rows[index];
+    return row.id === null ? (row.name || tr('系統預設')) : row.name || tr('未知的裝置');
   }
 
   function clickCell(index: number, source: number, output: number): void {
@@ -204,13 +312,6 @@
     const map = (currentMap(index) ?? standardRoutes(channelCount(index))).map((route) => ({ ...route }));
     map[output] = { ...map[output], source: null };
     update(index, { channelMap: map }, true);
-  }
-
-  function setMember(set: Set<string>, key: string, on: boolean): Set<string> {
-    const next = new Set(set);
-    if (on) next.add(key);
-    else next.delete(key);
-    return next;
   }
 
   function presetLabel(id: string): string {
@@ -308,6 +409,7 @@
     window.addEventListener(SHARED_EVENT, adoptShared);
     void load();
     pollTimer = setInterval(() => void refreshStatus(), STATUS_POLL_MS);
+    volumeTimer = setInterval(() => void refreshVolumes(), VOLUME_POLL_MS);
   });
 
   onDestroy(() => {
@@ -318,14 +420,19 @@
       saveTimer = null;
       save();
     }
+    for (const [id, timer] of volumeSendTimers) {
+      clearTimeout(timer);
+      sendVolume(id);
+    }
     if (pollTimer) clearInterval(pollTimer);
+    if (volumeTimer) clearInterval(volumeTimer);
   });
 </script>
 
 <div class="settings-panel-header">
   <div>
     <h3>{tr("播放裝置")}</h3>
-    <p>{tr("勾選要輸出的裝置，可以同時輸出到多台，每台各自有音量、延遲與聲道設定。同步輸出使用 Windows 共享模式，不是 bit-perfect。")}</p>
+    <p>{tr("勾選要輸出的裝置，可以同時輸出到多台。音量是 Windows 裝置本身的音量，延遲與聲道映射由播放器處理。同步輸出使用 Windows 共享模式，不是 bit-perfect。")}</p>
   </div>
   <button type="button" class="soft-button" disabled={refreshing || loading} onclick={() => void refreshDevices()}>{tr("重新整理")}</button>
 </div>
@@ -344,8 +451,14 @@
       onclick={() => void applyPreset(index)}
     >{index + 1}</button>
   {/each}
-  <button type="button" class="soft-button" use:appTooltip={tr('把目前的設定存到選取的方案')} onclick={() => void savePreset()}>{tr('存入')}</button>
+  <button type="button" class="soft-button" use:appTooltip={tr('把目前的設定存到選取的方案（不含音量）')} onclick={() => void savePreset()}>{tr('存入')}</button>
   <button type="button" class="soft-button" disabled={presets[selectedSlot] === null} use:appTooltip={tr('清除選取的方案')} onclick={() => void clearPreset()}>{tr('清除')}</button>
+  {#if playingRows.length > 1}
+    <label class="output-sync">
+      <input type="checkbox" checked={volumeSync} onchange={(event) => setVolumeSync(event.currentTarget.checked)} />
+      <span use:appTooltip={tr('調整其中一台的音量時，其他裝置依原本的比例跟著調整')}>{tr('音量同步')}</span>
+    </label>
+  {/if}
 </div>
 
 {#if failure}<p class="source-error-message" role="alert">{failure}</p>{/if}
@@ -356,9 +469,7 @@
     {@const lastPlaying = isLastPlaying(rows, index)}
     {@const entry = row.entry}
     {@const path = pathInfo(index)}
-    {@const channels = channelCount(index)}
-    {@const map = currentMap(index)}
-    {@const matrix = matrixOpen.has(row.key)}
+    {@const volume = volumeOf(index)}
     {@const label = row.id === null ? tr('系統預設') : row.name || tr('未知的裝置')}
     <div class="output-device" class:is-playing={playing} class:is-missing={!row.connected} role="listitem">
       <div class="output-device-head">
@@ -394,12 +505,12 @@
               min="0"
               max="100"
               step="1"
-              value={entry?.volumePercent ?? 100}
-              aria-label={tr('音量')}
-              oninput={(event) => update(index, { volumePercent: Number(event.currentTarget.value) })}
-              ondblclick={() => update(index, { volumePercent: 100 })}
+              value={volume?.percent ?? 0}
+              disabled={volume === null}
+              aria-label={tr('裝置音量')}
+              oninput={(event) => setVolume(index, Number(event.currentTarget.value))}
             />
-            <output>{entry?.volumePercent ?? 100}%</output>
+            <output>{volume ? `${volume.percent}%` : '—'}{#if volume?.muted && volume.percent > 0}<small> {tr('靜音')}</small>{/if}</output>
           </label>
           <div class="output-delay" role="group" aria-label={tr('延遲')}>
             <span>{tr('延遲')}</span>
@@ -419,13 +530,6 @@
             <span class="output-delay-unit">ms</span>
             <button type="button" class="soft-button icon-step" aria-label={tr('增加 {0} 毫秒', [DELAY_STEP_MS])} onclick={() => setDelay(index, (entry?.delayMs ?? 0) + DELAY_STEP_MS)}>＋</button>
           </div>
-          <button
-            type="button"
-            class="soft-button"
-            class:is-active={matrix}
-            aria-expanded={matrix}
-            onclick={() => (matrixOpen = setMember(matrixOpen, row.key, !matrix))}
-          >{map ? tr('聲道：自訂') : tr('聲道：自動')}</button>
         </div>
       {/if}
 
@@ -434,57 +538,84 @@
           {path.text}{#if path.note}<span class="output-device-note"> — {path.note}</span>{/if}
         </p>
       {/if}
-
-      {#if playing && matrix}
-        {@const shown = map ?? standardRoutes(channels)}
-        {@const rowsShown = sourceRowCount(map, allSources.has(row.key))}
-        {@const outputLabels = channelLabels(channels)}
-        <div class="channel-matrix" class:is-auto={map === null} role="group" aria-label={tr('聲道映射')}>
-          <div class="channel-matrix-grid" style="grid-template-columns: 44px repeat({channels}, 38px);">
-            <span class="channel-matrix-corner" use:appTooltip={tr('縱向是來源聲道，橫向是這個裝置的輸出聲道')}>↓ →</span>
-            {#each shown as _, output (output)}
-              <span class="channel-matrix-head">{outputLabels[output] || output + 1}</span>
-            {/each}
-            {#each Array.from({ length: rowsShown }, (_, source) => source) as source (source)}
-              <span class="channel-matrix-side">{sourceLabels[source]}</span>
-              {#each shown as route, output (output)}
-                {@const on = route.source === source}
-                <button
-                  type="button"
-                  class="channel-cell"
-                  class:is-on={on}
-                  aria-pressed={on}
-                  aria-label={tr('來源 {0} → 輸出 {1}', [sourceLabels[source], outputLabels[output] || output + 1])}
-                  onclick={() => clickCell(index, source, output)}
-                  onwheel={(event) => wheelCell(event, index, source, output)}
-                  oncontextmenu={(event) => silenceOutput(event, index, output)}
-                >{on ? (route.gainPercent === 100 ? '●' : route.gainPercent) : ''}</button>
-              {/each}
-            {/each}
-          </div>
-          <div class="channel-matrix-actions">
-            <button type="button" class="soft-button" class:is-active={map === null} aria-pressed={map === null} onclick={() => update(index, { channelMap: null }, true)}>{tr('自動')}</button>
-            {#each routePresets(channels) as preset (preset.id)}
-              <button
-                type="button"
-                class="soft-button"
-                class:is-active={activePreset(channels, map) === preset.id}
-                aria-pressed={activePreset(channels, map) === preset.id}
-                onclick={() => update(index, { channelMap: preset.routes.map((route) => ({ ...route })) }, true)}
-              >{presetLabel(preset.id)}</button>
-            {/each}
-            <button type="button" class="soft-button" onclick={() => (allSources = setMember(allSources, row.key, !allSources.has(row.key)))}>
-              {allSources.has(row.key) ? tr('只顯示前幾個來源聲道') : tr('顯示全部來源聲道')}
-            </button>
-          </div>
-          <p class="channel-matrix-hint">{map === null
-            ? tr('目前是自動：依裝置的聲道數混縮或補齊。點一格就改成自訂。')
-            : tr('點格子選擇來源，滾輪調增益，右鍵讓該輸出靜音。')}</p>
-        </div>
-      {/if}
     </div>
   {/each}
 </div>
+
+{#if playingRows.length > 0}
+  {@const rowsShown = matrixRows}
+  <section class="channel-matrix-panel" aria-label={tr('聲道映射')}>
+    <div class="settings-panel-header">
+      <div>
+        <h3>{tr('聲道映射')}</h3>
+        <p>{tr('所有裝置共用一張表：縱向是曲目的來源聲道，橫向是各裝置的輸出聲道。點格子選擇輸出聲道的來源，滾輪調增益，右鍵讓該輸出靜音；自動的裝置依聲道數混縮或補齊。')}</p>
+      </div>
+    </div>
+    <div class="channel-matrix-scroll">
+      <div
+        class="channel-matrix-grid"
+        style="grid-template-columns: 44px {playingRows.map(({ index }) => `repeat(${channelCount(index)}, 38px)`).join(' ')};"
+      >
+        <span class="channel-matrix-corner"></span>
+        {#each playingRows as { index } (index)}
+          <span class="channel-matrix-device" style="grid-column: span {channelCount(index)};" use:appTooltip={deviceLabel(index)}>{shortDeviceName(deviceLabel(index))}</span>
+        {/each}
+        <span class="channel-matrix-corner"></span>
+        {#each playingRows as { index } (index)}
+          {@const outputLabels = channelLabels(channelCount(index))}
+          {#each Array.from({ length: channelCount(index) }, (_, output) => output) as output (output)}
+            <span class="channel-matrix-head" class:group-start={output === 0}>{outputLabels[output] || output + 1}</span>
+          {/each}
+        {/each}
+        {#each Array.from({ length: rowsShown }, (_, source) => source) as source (source)}
+          <span class="channel-matrix-side">{sourceLabels[source]}</span>
+          {#each playingRows as { index } (index)}
+            {@const map = currentMap(index)}
+            {@const shown = map ?? standardRoutes(channelCount(index))}
+            {@const outputLabels = channelLabels(channelCount(index))}
+            {#each shown as route, output (output)}
+              {@const on = route.source === source}
+              <button
+                type="button"
+                class="channel-cell"
+                class:is-on={on}
+                class:is-auto={map === null}
+                class:group-start={output === 0}
+                aria-pressed={on}
+                aria-label={tr('來源 {0} → {1} 的 {2}', [sourceLabels[source], shortDeviceName(deviceLabel(index)), outputLabels[output] || output + 1])}
+                onclick={() => clickCell(index, source, output)}
+                onwheel={(event) => wheelCell(event, index, source, output)}
+                oncontextmenu={(event) => silenceOutput(event, index, output)}
+              >{on ? (route.gainPercent === 100 ? '●' : route.gainPercent) : ''}</button>
+            {/each}
+          {/each}
+        {/each}
+      </div>
+    </div>
+    <div class="channel-matrix-actions">
+      {#each playingRows as { index } (index)}
+        {@const map = currentMap(index)}
+        {@const channels = channelCount(index)}
+        <div class="channel-matrix-device-actions">
+          <span class="channel-matrix-device-name" use:appTooltip={deviceLabel(index)}>{shortDeviceName(deviceLabel(index))}</span>
+          <button type="button" class="soft-button" class:is-active={map === null} aria-pressed={map === null} onclick={() => update(index, { channelMap: null }, true)}>{tr('自動')}</button>
+          {#each routePresets(channels) as preset (preset.id)}
+            <button
+              type="button"
+              class="soft-button"
+              class:is-active={activePreset(channels, map) === preset.id}
+              aria-pressed={activePreset(channels, map) === preset.id}
+              onclick={() => update(index, { channelMap: preset.routes.map((route) => ({ ...route })) }, true)}
+            >{presetLabel(preset.id)}</button>
+          {/each}
+        </div>
+      {/each}
+      <button type="button" class="soft-button" onclick={() => (allSources = !allSources)}>
+        {allSources ? tr('只顯示前幾個來源聲道') : tr('顯示全部來源聲道')}
+      </button>
+    </div>
+  </section>
+{/if}
 
 <style>
   .output-presets {
@@ -511,6 +642,15 @@
 
   .output-preset.is-selected {
     outline: 1px solid color-mix(in srgb, var(--accent-text) 55%, transparent);
+  }
+
+  .output-sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    font-size: var(--font-caption);
+    cursor: pointer;
   }
 
   .output-device-list {
@@ -601,7 +741,7 @@
   }
 
   .output-volume output {
-    min-width: 40px;
+    min-width: 48px;
     color: var(--text-soft);
     font-variant-numeric: tabular-nums;
     text-align: right;
@@ -643,12 +783,14 @@
     opacity: 0.9;
   }
 
-  .channel-matrix {
+  .channel-matrix-panel {
     display: grid;
-    gap: 8px;
-    margin-left: 28px;
-    padding-top: 8px;
-    border-top: var(--divider-width, 1px) solid var(--divider-color, var(--line));
+    gap: 10px;
+    margin-top: 18px;
+  }
+
+  .channel-matrix-scroll {
+    overflow-x: auto;
   }
 
   .channel-matrix-grid {
@@ -656,7 +798,6 @@
     gap: 4px;
     align-items: center;
     justify-content: start;
-    overflow-x: auto;
   }
 
   .channel-matrix-corner,
@@ -665,6 +806,21 @@
     color: var(--text-soft);
     font-size: var(--font-caption);
     text-align: center;
+  }
+
+  .channel-matrix-device {
+    overflow: hidden;
+    padding: 2px 4px;
+    border-bottom: var(--divider-width, 1px) solid var(--divider-color, var(--line));
+    font-size: var(--font-caption);
+    font-weight: 600;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .group-start {
+    margin-left: 10px;
   }
 
   .channel-cell {
@@ -688,7 +844,7 @@
     background: color-mix(in srgb, var(--accent-text) 14%, transparent);
   }
 
-  .channel-matrix.is-auto .channel-cell.is-on {
+  .channel-cell.is-auto.is-on {
     border-style: dashed;
     opacity: 0.7;
   }
@@ -696,21 +852,30 @@
   .channel-matrix-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    align-items: center;
+    gap: 8px 18px;
   }
 
-  .channel-matrix-hint {
-    margin: 0;
+  .channel-matrix-device-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .channel-matrix-device-name {
+    max-width: 160px;
+    overflow: hidden;
     color: var(--text-soft);
     font-size: var(--font-caption);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   @media (max-width: 520px) {
     .output-device-controls,
-    .output-device-path,
-    .channel-matrix {
+    .output-device-path {
       padding-left: 0;
-      margin-left: 0;
     }
   }
 </style>

@@ -146,7 +146,6 @@ export interface OutputDeviceEntry {
   /** The device's name when it was last seen. */
   name: string;
   enabled: boolean;
-  volumePercent: number;
   delayMs: number;
   /** One route per output channel of the device; null is automatic. */
   channelMap: ChannelRouteEntry[] | null;
@@ -159,6 +158,13 @@ export interface AudioOutputDevice {
   isDefault: boolean;
   channels: number;
   sampleRate: number;
+}
+
+/** A playback device's real Windows volume (what Windows' volume mixer shows). */
+export interface AudioDeviceVolume {
+  id: string;
+  volumePercent: number;
+  muted: boolean;
 }
 
 /** What a chosen playback device is doing right now (id null is the system default). */
@@ -777,6 +783,14 @@ interface IpcContract {
   audio_output_device_status: {
     args: Record<string, never>;
     result: AudioOutputDeviceStatus[];
+  };
+  audio_get_device_volumes: {
+    args: Record<string, never>;
+    result: AudioDeviceVolume[];
+  };
+  audio_set_device_volume: {
+    args: { id: string; volumePercent: number };
+    result: void;
   };
   settings_get_output_presets: {
     args: Record<string, never>;
