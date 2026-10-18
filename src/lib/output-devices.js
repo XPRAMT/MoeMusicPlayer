@@ -374,3 +374,17 @@ export function volumeDeviceId(row, devices) {
   if (row.id !== null) return row.id;
   return devices.find((device) => device.isDefault)?.id ?? null;
 }
+
+/**
+ * Exclusive mode plays on one device: the row becomes the only one that plays.
+ * @param {DeviceRow[]} rows
+ * @param {number} index
+ * @returns {DeviceRow[]}
+ */
+export function selectOnly(rows, index) {
+  let next = setRowEnabled(rows, index, true);
+  for (let other = 0; other < next.length; other += 1) {
+    if (other !== index && rowEnabled(next, other)) next = patchRow(next, other, { enabled: false });
+  }
+  return next;
+}

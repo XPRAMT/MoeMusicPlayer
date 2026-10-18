@@ -600,16 +600,14 @@ mod tests {
             1.0,
             false,
         );
-        let old: Vec<f32> = std::iter::repeat([0.25f32, 0.25])
-            .take(100_000)
+        let old: Vec<f32> = std::iter::repeat_n([0.25f32, 0.25], 100_000)
             .flatten()
             .collect();
         session.play_source(Box::new(old.into_iter()));
         wait_for("old audio to play", || {
             capture.bytes.lock().unwrap().iter().any(|&byte| byte != 0)
         });
-        let new: Vec<f32> = std::iter::repeat([-0.5f32, -0.5])
-            .take(2_000)
+        let new: Vec<f32> = std::iter::repeat_n([-0.5f32, -0.5], 2_000)
             .flatten()
             .collect();
         session.play_source(Box::new(new.into_iter()));
@@ -643,8 +641,7 @@ mod tests {
             false,
         );
         // The gain eases in from the starting volume, which is already 0.5, so it is steady from the first sample.
-        let source: Vec<f32> = std::iter::repeat([0.5f32, 0.5])
-            .take(3_000)
+        let source: Vec<f32> = std::iter::repeat_n([0.5f32, 0.5], 3_000)
             .flatten()
             .collect();
         session.play_source(Box::new(source.into_iter()));

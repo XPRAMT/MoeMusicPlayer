@@ -4954,6 +4954,10 @@ input:focus-visible {
   gap: 8px;
 }
 
+.resampling-section.is-inactive {
+  opacity: 0.45;
+}
+
 .dsd-setting-hint {
   margin: 0;
   color: var(--text-soft);

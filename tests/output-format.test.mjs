@@ -95,3 +95,18 @@ test('a synced device shows the track path plus its own conversion', async () =>
   );
   assert.equal(describeMirrorPath(null, 96_000, false), '尚未載入曲目（輸出 96 kHz）');
 });
+
+test('the exclusive stream says bit-perfect, or what changed the samples', async () => {
+  const { describeExclusive } = await import('../src/lib/output-format.js');
+  const exclusive = { bits: 24, channels: 2, sourceChannels: 2, bitPerfect: true, volumeApplied: false, underruns: 0 };
+  assert.deepEqual(describeExclusive(format({ sourceRateHz: 96_000, outputRateHz: 96_000, exclusive })), {
+    text: '獨佔．24-bit 96 kHz．位元完美',
+    notice: null,
+  });
+  const converted = describeExclusive(format({ sourceRateHz: 44_100, outputRateHz: 96_000, exclusive: { ...exclusive, bitPerfect: false } }));
+  assert.equal(converted.text, '獨佔．24-bit 96 kHz');
+  assert.equal(converted.notice, '裝置不接受 44.1 kHz，已轉換為 96 kHz（不是位元完美）');
+  const volume = describeExclusive(format({ sourceRateHz: 96_000, outputRateHz: 96_000, exclusive: { ...exclusive, bitPerfect: false, volumeApplied: true } }));
+  assert.match(volume.notice, /軟體音量/);
+  assert.equal(describeExclusive(format({})), null, 'a shared-mode output has no exclusive stream');
+});

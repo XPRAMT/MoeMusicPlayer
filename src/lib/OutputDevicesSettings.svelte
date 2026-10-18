@@ -10,7 +10,7 @@
     OutputDeviceEntry,
     PlaybackOutputFormat,
   } from './ipc';
-  import { describeMirrorPath, describeOutputFormat, formatSampleRate } from './output-format.js';
+  import { describeExclusive, describeMirrorPath, describeOutputFormat, formatSampleRate } from './output-format.js';
   import {
     OUTPUT_DELAY_MAX_MS,
     OUTPUT_MAX_SOURCE_CHANNELS,
@@ -26,6 +26,7 @@
     rowEnabled,
     routePresets,
     sameDevices,
+    selectOnly,
     setRowEnabled,
     shortDeviceName,
     sourceRowCount,
@@ -39,9 +40,11 @@
   interface Props {
     /** The player's current sample-rate path (the main stream's). */
     outputFormat?: PlaybackOutputFormat | null;
+    /** Told when the exclusive-mode setting is read or changed (other parts of the settings page depend on it). */
+    onExclusiveChange?: (exclusive: boolean) => void;
   }
 
-  let { outputFormat = null }: Props = $props();
+  let { outputFormat = null, onExclusiveChange = () => {} }: Props = $props();
 
   const SHARED_EVENT = 'moe-output-devices-saved';
   const instance = Symbol('output-devices');
@@ -64,6 +67,8 @@
   let volumes = $state<Record<string, { percent: number; muted: boolean }>>({});
   let volumeSync = $state(readSyncPreference());
   let allSources = $state(false);
+  /** WASAPI exclusive mode: one device, bit-perfect, no mixing with other programs. */
+  let exclusive = $state(false);
   let loading = $state(true);
   let refreshing = $state(false);
   let failure = $state<string | null>(null);
@@ -159,12 +164,15 @@
       return;
     }
     try {
-      const [saved, listed, savedPresets] = await Promise.all([
+      const [saved, listed, savedPresets, savedExclusive] = await Promise.all([
         invokeCommand('settings_get_output_devices', {}),
         invokeCommand('audio_list_output_devices', {}),
         invokeCommand('settings_get_output_presets', {}),
+        invokeCommand('settings_get_output_exclusive', {}),
       ]);
       if (disposed) return;
+      exclusive = savedExclusive;
+      onExclusiveChange(savedExclusive);
       entries = saved;
       devices = listed;
       presets = savedPresets;
@@ -222,7 +230,33 @@
     scheduleSave(immediate);
   }
 
+  async function setExclusive(value: boolean): Promise<void> {
+    if (!isTauri() || value === exclusive) return;
+    try {
+      // Settle pending edits first; turning exclusive on keeps only the first chosen device.
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        save();
+      }
+      await saveQueue;
+      exclusive = await invokeCommand('settings_set_output_exclusive', { exclusive: value });
+      onExclusiveChange(exclusive);
+      entries = await invokeCommand('settings_get_output_devices', {});
+      failure = null;
+      broadcast(entries);
+      setTimeout(() => void refreshStatus(), 800);
+    } catch (error) {
+      failure = getErrorText(error);
+    }
+  }
+
   function toggle(index: number, enabled: boolean): void {
+    if (exclusive && enabled) {
+      entries = entriesFromRows(selectOnly(rows, index));
+      scheduleSave(true);
+      return;
+    }
     entries = entriesFromRows(setRowEnabled(rows, index, enabled));
     syncScales.clear();
     scheduleSave(true);
@@ -338,6 +372,12 @@
         : row.connected ? '' : tr('裝置未連線');
       return { text: format, note: null, tone: 'idle' };
     }
+    if (exclusive) {
+      // Exclusive mode opens the device when a track plays; what it opened is in the playback format.
+      const described = describeExclusive(outputFormat);
+      if (!described) return { text: tr('獨佔模式：播放時才會開啟這個裝置'), note: null, tone: 'idle' };
+      return { text: described.text, note: described.notice, tone: described.notice ? 'warn' : 'ok' };
+    }
     const status = statusFor(statuses, row.id);
     if (!status || status.state === 'opening') return { text: tr('正在開啟…'), note: null, tone: 'warn' };
     if (status.state === 'lost') {
@@ -432,11 +472,37 @@
 <div class="settings-panel-header">
   <div>
     <h3>{tr("播放裝置")}</h3>
-    <p>{tr("勾選要輸出的裝置，可以同時輸出到多台。音量是 Windows 裝置本身的音量，延遲與聲道映射由播放器處理。同步輸出使用 Windows 共享模式，不是 bit-perfect。")}</p>
+    <p>{exclusive
+      ? tr("獨佔模式只能選一台裝置。選好之後播放時，這台裝置會被播放器獨佔。")
+      : tr("勾選要輸出的裝置，可以同時輸出到多台。音量是 Windows 裝置本身的音量，延遲與聲道映射由播放器處理。同步輸出使用 Windows 共享模式，不是 bit-perfect。")}</p>
   </div>
   <button type="button" class="soft-button" disabled={refreshing || loading} onclick={() => void refreshDevices()}>{tr("重新整理")}</button>
 </div>
 
+<div class="output-mode" role="group" aria-label={tr('輸出模式')}>
+  <button
+    type="button"
+    class="layout-choice-button"
+    class:chosen={!exclusive}
+    aria-pressed={!exclusive}
+    onclick={() => void setExclusive(false)}
+  >
+    <strong>{tr('共享')}</strong>
+    <span>{tr('與其他程式一起播放，可以同時輸出到多台裝置，由 Windows 混音。')}</span>
+  </button>
+  <button
+    type="button"
+    class="layout-choice-button"
+    class:chosen={exclusive}
+    aria-pressed={exclusive}
+    onclick={() => void setExclusive(true)}
+  >
+    <strong>{tr('獨佔')}</strong>
+    <span>{tr('獨佔一台裝置，音訊不經 Windows 混音，取樣率與位元深度照檔案原樣送出（位元完美）。其他程式在這台裝置上暫時沒有聲音，也不能同時輸出到多台；藍牙裝置通常不支援。')}</span>
+  </button>
+</div>
+
+{#if !exclusive}
 <div class="output-presets" role="group" aria-label={tr('方案')}>
   <span class="output-presets-label">{tr('方案')}</span>
   {#each presets as slot, index (index)}
@@ -460,6 +526,8 @@
     </label>
   {/if}
 </div>
+
+{/if}
 
 {#if failure}<p class="source-error-message" role="alert">{failure}</p>{/if}
 
@@ -496,7 +564,7 @@
         {/if}
       </div>
 
-      {#if playing}
+      {#if playing && !exclusive}
         <div class="output-device-controls">
           <label class="output-volume">
             <span>{tr('音量')}</span>
@@ -542,7 +610,7 @@
   {/each}
 </div>
 
-{#if playingRows.length > 0}
+{#if playingRows.length > 0 && !exclusive}
   {@const rowsShown = matrixRows}
   <section class="channel-matrix-panel" aria-label={tr('聲道映射')}>
     <div class="settings-panel-header">
@@ -618,6 +686,13 @@
 {/if}
 
 <style>
+  .output-mode {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 8px;
+    margin: 0 0 14px;
+  }
+
   .output-presets {
     display: flex;
     flex-wrap: wrap;

@@ -22,6 +22,7 @@ import {
   playingCount,
   rowEnabled,
   routePresets,
+  selectOnly,
   setRowEnabled,
   standardRoutes,
 } from '../src/lib/output-devices.js';
@@ -149,4 +150,15 @@ test('the system default row reads the volume of the device that is the default 
   assert.equal(volumeDeviceId(rows[0], [speakers, earbuds]), speakers.id);
   assert.equal(volumeDeviceId(rows[2], [speakers, earbuds]), earbuds.id);
   assert.equal(volumeDeviceId(rows[0], [earbuds]), null);
+});
+
+test('exclusive mode keeps exactly one device playing', () => {
+  let rows = buildDeviceRows([], [speakers, earbuds]);
+  rows = setRowEnabled(rows, 1, true);
+  rows = setRowEnabled(rows, 2, true);
+  assert.equal(playingCount(rows), 2);
+  const single = selectOnly(rows, 2);
+  assert.deepEqual(single.map((_, index) => rowEnabled(single, index)), [false, false, true]);
+  const first = selectOnly(single, 0);
+  assert.deepEqual(first.map((_, index) => rowEnabled(first, index)), [true, false, false]);
 });

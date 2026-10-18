@@ -1,6 +1,6 @@
 # WASAPI exclusive output and DoP (plan)
 
-Status: Proposed (planning only, nothing implemented)
+Status: P0 (device selection, extended to several devices at once) and P1 (exclusive PCM) are built; P2 (DoP) is still a plan
 
 Decision date: 2026-10-18, Asia/Taipei (UTC+08:00)
 
@@ -86,10 +86,22 @@ P0 grew from "pick one device" into "play on any number of devices at once" (sha
 - **Disconnects.** A mirror's stream carries a silent heartbeat; when it stops counting for 3 s (a Bluetooth device powered off without an error) the mirror is dropped and reopened every 5 s. Measured clocks (shared mode, four real devices): no steady drift between devices (the audio engine paces them together), only occasional bursts of a few hundred milliseconds, so the ring's resync (jump when more than 250 ms off) matters more than drift correction.
 - **Not done / limits.** A mirror's hardware latency is not measured; the user aligns Bluetooth devices with the delay slider. Mirrors run in shared mode at the endpoint's mix format. Mirrors do not follow DSEE HX (they get the same processed stream). No hot-plug event: the list refreshes with its button and when the page opens.
 
+## P1 as built (2026-10-18): exclusive PCM
+
+Exclusive mode is a switch in Settings → Output ("shared" / "exclusive", `settings.json` `outputExclusive`). **Exclusive plays on one device only**: turning it on keeps the first chosen device, the multi-device list, delay, channel matrix and presets are hidden, and the shared-mode resampling choices and DSEE HX are greyed out (the DSD gain and rate settings still apply, DSD goes the PCM route).
+
+- **Where it plugs in.** `ResamplingConfig` carries the flag; the worker's backend factory builds an `ExclusiveBackend` instead of a `RodioBackend` while it is set. Switching is done by the existing recovery path: `request_set_exclusive` sets the flag, `output_status` of the running backend reports `DefaultDeviceChanged`, the worker rebuilds the backend and restores track, position, volume and play state. Choosing another device in exclusive mode does the same. No `RoutingBackend` was needed; a track the device cannot take fails with a readable reason instead of falling back to shared mode (the device's refusal is rare, because a refused rate is converted).
+- **Layers** (`crates/player-audio-windows/src/exclusive/`): `format.rs` (containers, the order formats are tried in, candidate rates, `f32` to integer encoding, all pure and unit-tested; 16- and 24-bit samples round-trip exactly), `endpoint.rs` (the `Endpoint`/`RenderStream` traits, the real `WasapiEndpoint` on the `wasapi` 0.26.0 crate, and a fake for tests), `session.rs` (a sample ring with generations, a decode thread, an MMCSS "Pro Audio" render thread; pause plays silence, seek or a new track replaces the queue without racing), `backend.rs` (`ExclusiveBackend`).
+- **Negotiation** (`negotiate`): the track's channel count then stereo; per rate, the containers 24-in-32, packed 24, 32, 16. Rates: the track's own, integer multiples in the same family, the other family above the native rate, then lower rates. A refused rate is converted with the same rubato FFT resampler the shared path uses; a channel count the device refuses is mixed with the automatic downmix rules. The stream opens event-driven with a 10 ms period aligned to 128 bytes and one retry when the driver asks for another buffer size. `AUDCLNT_E_DEVICE_IN_USE`, `EXCLUSIVE_MODE_NOT_ALLOWED` and the others become readable messages.
+- **Volume** (the answer to open question 2): the player volume is a software gain applied only below 100 %; at 100 % the samples are not touched at all. The device's own volume (`IAudioEndpointVolume`) is not used in exclusive mode.
+- **Status.** `PlaybackOutputFormat.exclusive` carries bits, channels, bit-perfect, whether a software volume applies and the underrun count. The card shows "Exclusive . 24-bit 96 kHz . bit-perfect", or the same line with what changed the samples (converted rate, remixed channels, software volume).
+- **Same format keeps the stream open**; another rate or channel count closes it (waiting up to 1.5 s for the device to be released, which a new exclusive stream needs) and opens a new one. Stop closes the stream so other programs can use the device. A "release when idle" timer is not built.
+- **Tested.** Unit tests with the fake endpoint (negotiation, bit-exact delivery of a real decoded WAV to a 16-bit and a 24-in-32 device, conversion, seek, pause, same-format reuse, device loss) and `real_device_opens_exclusive_and_plays` (ignored) on this machine's `Realtek Digital Output`: opened 24-bit stereo at 44.1 kHz and 96 kHz, no underruns. Not verified by ear: no DAC is attached.
+
 ## Open questions for the user
 Resolved: a sample-rate mismatch resamples automatically (see above). Still open:
 1. **Is there a DoP-capable DAC to test with** (model, USB or S/PDIF)? Without one, P2 can be built and unit-tested but not heard; the Realtek digital output could carry DSD64 DoP (176.4 kHz) to an S/PDIF DAC.
-2. **Volume policy** in exclusive PCM: software gain below 100% (proposed) or no volume at all.
+2. ~~**Volume policy** in exclusive PCM~~: built as proposed (software gain only below 100 %).
 3. **Do P0 (device selection) first?** Proposed: yes, it is needed for P1 anyway.
 4. Should **release when idle** default to on (for example 30 s) or off?
 5. May **DSEE HX** be disabled while exclusive mode is on? (It cannot be bit-perfect.)

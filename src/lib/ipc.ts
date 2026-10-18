@@ -539,6 +539,18 @@ export interface PlaybackOutputFormat {
   dseeHx: 'off' | 'active' | 'bypassed' | 'unavailable';
   dseeNotice: string | null;
   dseeOutputRateHz: number | null;
+  /** Set while the output is WASAPI exclusive mode. */
+  exclusive?: ExclusiveOutput | null;
+}
+
+/** The exclusive-mode stream as opened for the current track. */
+export interface ExclusiveOutput {
+  bits: number;
+  channels: number;
+  sourceChannels: number;
+  bitPerfect: boolean;
+  volumeApplied: boolean;
+  underruns: number;
 }
 
 export interface LyricLine {
@@ -791,6 +803,14 @@ interface IpcContract {
   audio_set_device_volume: {
     args: { id: string; volumePercent: number };
     result: void;
+  };
+  settings_get_output_exclusive: {
+    args: Record<string, never>;
+    result: boolean;
+  };
+  settings_set_output_exclusive: {
+    args: { exclusive: boolean };
+    result: boolean;
   };
   settings_get_output_presets: {
     args: Record<string, never>;

@@ -10,6 +10,7 @@
  *   dseeHx: 'off' | 'active' | 'bypassed' | 'unavailable',
  *   dseeNotice: string | null,
  *   dseeOutputRateHz: number | null,
+ *   exclusive?: { bits: number, channels: number, sourceChannels: number, bitPerfect: boolean, volumeApplied: boolean, underruns: number } | null,
  * }} OutputFormat
  */
 /** @typedef {{ text: string, notice: string | null }} OutputFormatStatus */
@@ -107,4 +108,29 @@ export function describeMirrorPath(format, deviceRateHz, converted) {
   if (converted && device) steps.push(`${device}（${tr('高品質')}）`);
   if (steps.length === 1) return tr("原生 {0}（未轉換）", [steps[0]]);
   return steps.join(' → ');
+}
+
+/**
+ * Describe the exclusive-mode stream (one device, the samples as the file has them when nothing had to change).
+ * @param {OutputFormat | null | undefined} format
+ * @returns {OutputFormatStatus | null}  null when the output is not in exclusive mode
+ */
+export function describeExclusive(format) {
+  const exclusive = format?.exclusive;
+  if (!format || !exclusive) return null;
+  const rate = formatSampleRate(format.outputRateHz);
+  const head = tr("獨佔．{0}-bit {1}", [exclusive.bits, rate]);
+  if (exclusive.bitPerfect) return { text: `${head}．${tr('位元完美')}`, notice: null };
+  /** @type {string[]} */
+  const reasons = [];
+  if (format.sourceRateHz != null && format.sourceRateHz !== format.outputRateHz) {
+    reasons.push(tr("裝置不接受 {0}，已轉換為 {1}", [formatSampleRate(format.sourceRateHz), rate]));
+  }
+  if (exclusive.sourceChannels !== exclusive.channels) {
+    reasons.push(tr("裝置不接受 {0} 聲道，已混成 {1} 聲道", [exclusive.sourceChannels, exclusive.channels]));
+  }
+  if (exclusive.volumeApplied) {
+    reasons.push(tr('播放器音量低於 100%，已套用軟體音量；調到 100% 才會原樣送出'));
+  }
+  return { text: head, notice: reasons.length ? `${reasons.join('；')}（${tr('不是位元完美')}）` : null };
 }

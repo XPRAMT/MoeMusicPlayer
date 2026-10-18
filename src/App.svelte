@@ -545,6 +545,8 @@
   let resamplingModeState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let resamplingModeError = $state<string | null>(null);
   let dseeHx = $state(false);
+  /** WASAPI exclusive output is on (the output settings page reports it). */
+  let outputExclusive = $state(false);
   let dseeHxState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let dsdSettings = $state<DsdPlaybackSettings>({ gainDb: 3, outputRateHz: 176_400 });
   let dsdSettingsState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
@@ -3971,7 +3973,8 @@
             {:else if settingsSection === 'playback'}
               <div id="{scope}playback-panel" class="settings-panel" role="tabpanel" aria-labelledby="{scope}playback-tab" tabindex="0">
                 {#if capabilities?.platform === 'windows'}
-                <OutputDevicesSettings outputFormat={playback?.outputFormat ?? null} />
+                <OutputDevicesSettings outputFormat={playback?.outputFormat ?? null} onExclusiveChange={(value) => (outputExclusive = value)} />
+                <div class="resampling-section" class:is-inactive={outputExclusive} inert={outputExclusive}>
                 <div class="settings-panel-header">
                   <div>
                     <h3>{tr("取樣率轉換")}</h3>
@@ -4016,6 +4019,10 @@
                     </span>
                   </label>
                 </div>
+                </div>
+                {#if outputExclusive}
+                  <p class="dsd-setting-hint">{tr("獨佔模式不使用上面的取樣率轉換與 DSEE HX；裝置不接受檔案的取樣率時，播放器會自動轉換成裝置接受的最接近取樣率。")}</p>
+                {/if}
                 {/if}
                 <div class="settings-panel-header">
                   <div>
