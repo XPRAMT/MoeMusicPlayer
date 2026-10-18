@@ -303,7 +303,6 @@ impl RodioBackend {
         self.track
             .delay_ms
             .store(margin + primary.delay_ms, Ordering::Relaxed);
-        self.track.set_device_volume(primary.volume());
         let map_changed = self.track.map != primary.channel_map;
         self.track.map = primary.channel_map.clone();
 
@@ -367,9 +366,7 @@ impl RodioBackend {
                     .delay_ms
                     .store(setting.delay_ms, Ordering::Relaxed);
                 mirror.control.set_map(setting.channel_map.clone());
-                mirror
-                    .control
-                    .set_gain(self.master_volume * setting.volume());
+                mirror.control.set_gain(self.master_volume);
                 mirror.setting = setting.clone();
                 continue;
             }
@@ -400,7 +397,7 @@ impl RodioBackend {
     fn start_mirror(&mut self, setting: OutputDeviceSetting) {
         let (tx, rx) = mpsc::sync_channel(1);
         let hub = Arc::clone(&self.hub);
-        let gain = self.master_volume * setting.volume();
+        let gain = self.master_volume;
         let opening = setting.clone();
         let spawned = thread::Builder::new()
             .name("moe-audio-mirror-open".to_owned())
@@ -436,9 +433,7 @@ impl RodioBackend {
             let pending = self.pending.remove(index);
             match outcome {
                 Ok(mirror) => {
-                    mirror
-                        .control
-                        .set_gain(self.master_volume * mirror.setting.volume());
+                    mirror.control.set_gain(self.master_volume);
                     self.mirrors.push(mirror);
                 }
                 Err(reason) => self.failed.push((pending.setting, reason, Instant::now())),
@@ -824,7 +819,7 @@ impl AudioBackend for RodioBackend {
         self.master_volume = volume;
         self.track.set_volume(volume);
         for mirror in &self.mirrors {
-            mirror.control.set_gain(volume * mirror.setting.volume());
+            mirror.control.set_gain(volume);
         }
         Ok(())
     }
@@ -1130,7 +1125,6 @@ struct TrackPlayer {
     delay_ms: Arc<AtomicU32>,
     map: Option<Vec<ChannelRoute>>,
     device_channels: usize,
-    device_volume: f32,
     /// Samples of delay-line silence the current player has played, and samples per second of the chain.
     silence: Arc<AtomicU64>,
     silence_rate: f64,
@@ -1143,7 +1137,6 @@ impl TrackPlayer {
             delay_ms: Arc::new(AtomicU32::new(0)),
             map: None,
             device_channels: 2,
-            device_volume: 1.0,
             silence: Arc::new(AtomicU64::new(0)),
             silence_rate: 0.0,
             dsd: Arc::new(DsdOptions::default()),
@@ -1340,14 +1333,7 @@ impl TrackPlayer {
     fn set_volume(&mut self, volume: f32) {
         self.volume = volume;
         if let Some(player) = self.player.as_ref() {
-            player.set_volume(volume * self.device_volume);
-        }
-    }
-
-    fn set_device_volume(&mut self, volume: f32) {
-        self.device_volume = volume;
-        if let Some(player) = self.player.as_ref() {
-            player.set_volume(self.volume * volume);
+            player.set_volume(volume);
         }
     }
 
@@ -1421,7 +1407,7 @@ impl TrackPlayer {
         let playback_rate = playback.sample_rate();
         self.playback_rate = Some(playback_rate);
         let player = Player::connect_new(&self.mixer);
-        player.set_volume(self.volume * self.device_volume);
+        player.set_volume(self.volume);
         if self.paused {
             player.pause();
         }
@@ -2042,14 +2028,12 @@ mod tests {
             OutputDeviceSetting {
                 id: Some(first.id.clone()),
                 enabled: true,
-                volume_percent: 100,
                 delay_ms: 300,
                 channel_map: None,
             },
             OutputDeviceSetting {
                 id: Some(second.id.clone()),
                 enabled: true,
-                volume_percent: 100,
                 delay_ms: 0,
                 channel_map: None,
             },
@@ -2081,7 +2065,6 @@ mod tests {
         let single = vec![OutputDeviceSetting {
             id: None,
             enabled: true,
-            volume_percent: 100,
             delay_ms: 0,
             channel_map: None,
         }];

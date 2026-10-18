@@ -941,7 +941,6 @@ pub struct OutputDeviceEntry {
     #[serde(default)]
     pub name: String,
     pub enabled: bool,
-    pub volume_percent: u8,
     pub delay_ms: u32,
     /// One route per output channel of the device; `None` is automatic.
     pub channel_map: Option<Vec<ChannelRouteEntry>>,
@@ -955,7 +954,6 @@ impl OutputDeviceEntry {
     pub fn normalized(mut self) -> Self {
         self.id = self.id.filter(|id| !id.trim().is_empty());
         self.name = self.name.trim().chars().take(200).collect();
-        self.volume_percent = self.volume_percent.min(100);
         self.delay_ms = self.delay_ms.min(Self::MAX_DELAY_MS);
         if let Some(routes) = self.channel_map.as_mut() {
             routes.truncate(Self::MAX_CHANNELS);
@@ -995,10 +993,6 @@ fn lenient_output_devices(value: Option<serde_json::Value>) -> Vec<OutputDeviceE
                 .unwrap_or_default()
                 .to_owned(),
             enabled: object.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true),
-            volume_percent: object
-                .get("volumePercent")
-                .and_then(serde_json::Value::as_u64)
-                .map_or(100, |value| value.min(100) as u8),
             delay_ms: object
                 .get("delayMs")
                 .and_then(serde_json::Value::as_u64)
@@ -2448,12 +2442,11 @@ mod tests {
         let store = SettingsStore::open(&path, AppSettings::default()).unwrap();
         assert!(store.snapshot().unwrap().output_devices.is_empty());
         let chosen = vec![
-            OutputDeviceEntry { id: None, name: String::new(), enabled: true, volume_percent: 80, delay_ms: 0, channel_map: None },
+            OutputDeviceEntry { id: None, name: String::new(), enabled: true, delay_ms: 0, channel_map: None },
             OutputDeviceEntry {
                 id: Some("wasapi:{abc}".to_owned()),
                 name: "Speakers".to_owned(),
                 enabled: false,
-                volume_percent: 50,
                 delay_ms: 250,
                 channel_map: Some(vec![
                     ChannelRouteEntry { source: Some(1), gain_percent: 100 },
@@ -2487,7 +2480,6 @@ mod tests {
             id: Some("wasapi:{a}".to_owned()),
             name: "A".to_owned(),
             enabled: true,
-            volume_percent: 70,
             delay_ms: 120,
             channel_map: None,
         }];
@@ -2519,10 +2511,9 @@ mod tests {
             {"enabled": "yes"},
         ])));
         assert_eq!(parsed.len(), 2, "the repeated device and the junk entry are dropped: {parsed:?}");
-        assert_eq!(parsed[0].volume_percent, 100);
         assert_eq!(parsed[0].delay_ms, 2000);
         assert_eq!(parsed[0].channel_map, Some(vec![ChannelRouteEntry { source: None, gain_percent: 100 }]));
-        assert_eq!(parsed[1], OutputDeviceEntry { id: None, name: String::new(), enabled: true, volume_percent: 100, delay_ms: 0, channel_map: None });
+        assert_eq!(parsed[1], OutputDeviceEntry { id: None, name: String::new(), enabled: true, delay_ms: 0, channel_map: None });
         assert!(lenient_output_devices(Some(serde_json::json!(7))).is_empty());
         assert!(lenient_output_devices(None).is_empty());
     }

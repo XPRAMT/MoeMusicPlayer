@@ -6190,6 +6190,63 @@ async fn audio_list_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
     Ok(Vec::new())
 }
 
+/// A playback device's real Windows volume (the one Windows' volume mixer shows).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioDeviceVolume {
+    id: String,
+    /// 0 to 100.
+    volume_percent: f32,
+    muted: bool,
+}
+
+/// The real volume of every playback device Windows lists right now.
+#[tauri::command]
+async fn audio_get_device_volumes() -> Result<Vec<AudioDeviceVolume>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            player_audio_windows::output_devices::list_output_devices()
+                .into_iter()
+                .filter_map(|device| {
+                    let volume =
+                        player_platform_windows::endpoint_volume::read_endpoint_volume(Some(&device.id)).ok()?;
+                    Some(AudioDeviceVolume {
+                        id: device.id,
+                        volume_percent: volume.volume * 100.0,
+                        muted: volume.muted,
+                    })
+                })
+                .collect()
+        })
+        .await
+        .map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    Ok(Vec::new())
+}
+
+/// Set a playback device's real volume. Like the reference mapper, volume 0 also mutes and anything above unmutes.
+#[tauri::command]
+async fn audio_set_device_volume(id: String, volume_percent: f32) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            use player_platform_windows::endpoint_volume::{set_endpoint_muted, set_endpoint_volume};
+            let volume = (volume_percent / 100.0).clamp(0.0, 1.0);
+            set_endpoint_volume(Some(&id), volume)?;
+            set_endpoint_muted(Some(&id), volume <= 0.0)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (id, volume_percent);
+        Err("只有 Windows 能調整裝置音量。".to_owned())
+    }
+}
+
 #[tauri::command]
 fn audio_output_device_status(state: State<'_, AppState>) -> Vec<AudioOutputDeviceStatus> {
     #[cfg(target_os = "windows")]
@@ -9883,7 +9940,6 @@ fn output_device_settings(
         .map(|entry| player_audio_windows::output_devices::OutputDeviceSetting {
             id: entry.id.clone(),
             enabled: entry.enabled,
-            volume_percent: entry.volume_percent,
             delay_ms: entry.delay_ms,
             channel_map: entry.channel_map.as_ref().map(|routes| {
                 routes
@@ -10840,6 +10896,8 @@ pub fn run() {
             settings_get_dsd,
             audio_list_output_devices,
             audio_output_device_status,
+            audio_get_device_volumes,
+            audio_set_device_volume,
             settings_get_output_devices,
             settings_set_output_devices,
             settings_get_output_presets,

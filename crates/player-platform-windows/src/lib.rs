@@ -16,6 +16,7 @@ mod lyrics;
 #[cfg(windows)]
 mod system_index;
 
+pub mod endpoint_volume;
 pub mod taskbar;
 
 #[cfg(windows)]

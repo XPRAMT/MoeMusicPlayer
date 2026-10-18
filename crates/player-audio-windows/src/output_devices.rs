@@ -4,8 +4,6 @@
 
 /// Longest delay a device can be given (the user aligns Bluetooth earbuds, a few hundred milliseconds at most).
 pub const MAX_DELAY_MS: u32 = 2000;
-/// Largest per-device volume.
-pub const MAX_VOLUME_PERCENT: u8 = 100;
 
 /// One available output endpoint as the settings page lists it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,7 +57,6 @@ pub struct OutputDeviceSetting {
     /// `None` is "the system default": it follows whichever endpoint Windows has as default.
     pub id: Option<String>,
     pub enabled: bool,
-    pub volume_percent: u8,
     pub delay_ms: u32,
     /// `None` is automatic (a sensible downmix or upmix); otherwise one route per output channel of the device.
     pub channel_map: Option<Vec<ChannelRoute>>,
@@ -70,7 +67,6 @@ impl Default for OutputDeviceSetting {
         Self {
             id: None,
             enabled: true,
-            volume_percent: MAX_VOLUME_PERCENT,
             delay_ms: 0,
             channel_map: None,
         }
@@ -79,7 +75,6 @@ impl Default for OutputDeviceSetting {
 
 impl OutputDeviceSetting {
     pub fn normalized(mut self) -> Self {
-        self.volume_percent = self.volume_percent.min(MAX_VOLUME_PERCENT);
         self.delay_ms = self.delay_ms.min(MAX_DELAY_MS);
         if let Some(routes) = self.channel_map.as_mut() {
             routes.truncate(32);
@@ -88,10 +83,6 @@ impl OutputDeviceSetting {
             }
         }
         self
-    }
-
-    pub fn volume(&self) -> f32 {
-        f32::from(self.volume_percent.min(MAX_VOLUME_PERCENT)) / 100.0
     }
 }
 
@@ -339,7 +330,6 @@ mod tests {
         };
         let two = OutputDeviceSetting {
             id: Some("b".into()),
-            volume_percent: 40,
             delay_ms: 120,
             ..OutputDeviceSetting::default()
         };
@@ -354,16 +344,12 @@ mod tests {
     #[test]
     fn settings_are_clamped() {
         let setting = OutputDeviceSetting {
-            volume_percent: 250,
             delay_ms: 99_999,
             channel_map: Some(vec![route(Some(0), 200)]),
             ..OutputDeviceSetting::default()
         }
         .normalized();
-        assert_eq!(
-            (setting.volume_percent, setting.delay_ms),
-            (100, MAX_DELAY_MS)
-        );
+        assert_eq!(setting.delay_ms, MAX_DELAY_MS);
         assert_eq!(setting.channel_map.unwrap()[0].gain_percent, 100);
     }
 
