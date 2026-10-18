@@ -275,6 +275,25 @@
   const channelCount = $derived(Math.max(loaded.A?.data.channels ?? 0, loaded.B?.data.channels ?? 0) || 2);
   const channelOptions = $derived(Array.from({ length: channelCount }, (_, i) => i));
   const colormapGradient = $derived(COLORMAPS.find((c) => c.value === settings.colormap)?.gradient ?? '');
+  /** The colour bar stands at the right of the plot like Spek's: the loudest level at the top, the quietest at the bottom. */
+  const colorBarGradient = $derived(diffUrl ? 'linear-gradient(0deg,#00f,#fff,#f00)' : colormapGradient.replace('90deg', '0deg'));
+  /** Tick labels of the colour bar: every 10 dB (every 20 dB for a very wide range), or the difference scale in diff mode. */
+  const colorBarTicks = $derived.by(() => {
+    if (diffUrl) {
+      const half = range / 2;
+      return [
+        { top: 0, label: `+${half.toFixed(0)} dB` },
+        { top: 50, label: '0 dB' },
+        { top: 100, label: `−${half.toFixed(0)} dB` },
+      ];
+    }
+    const step = range > 130 ? 20 : 10;
+    const ticks = [];
+    for (let db = Math.floor(settings.dbCeiling / step) * step; db >= settings.dbFloor; db -= step) {
+      ticks.push({ top: ((settings.dbCeiling - db) / range) * 100, label: `${db} dB` });
+    }
+    return ticks;
+  });
 
   // Drag and drop (required): two files → A and B; one file → hovered side.
   function handleDrop(paths: string[], clientX: number, clientY: number) {
@@ -470,6 +489,7 @@
     {/each}
   </div>
 
+  <div class="sg-main">
   <div class="sg-plots" class:is-vertical={compareActive && prefs.mode === 'sideV'} bind:this={sizer}>
     {#if compareActive && (prefs.mode === 'sideH' || prefs.mode === 'sideV')}
       <div class="sg-plot-cell">{@render plotBox('A', 'A')}</div>
@@ -482,11 +502,16 @@
       <div class="sg-plot-cell">{@render plotBox('A', 'A')}</div>
     {/if}
   </div>
+  <div class="sg-colorbar" aria-hidden="true">
+    <div class="sg-colorbar-strip" style:background={colorBarGradient}></div>
+    <div class="sg-colorbar-ticks">
+      {#each colorBarTicks as tick (tick.top)}<span style:top={`${tick.top}%`}>{tick.label}</span>{/each}
+    </div>
+  </div>
+  </div>
   <div class="sg-legend">
     {#if diffUrl}
-      <span>{tr("B 較弱 −")}{(range / 2).toFixed(0)} dB</span><i style:background="linear-gradient(90deg,#00f,#fff,#f00)"></i><span>{tr("B 較強 +")}{(range / 2).toFixed(0)} dB</span>
-    {:else}
-      <span>{settings.dbFloor} dB</span><i style:background={colormapGradient}></i><span>{settings.dbCeiling} dB</span>
+      <span>{tr("B 較弱 −")}{(range / 2).toFixed(0)} dB</span><span>{tr("B 較強 +")}{(range / 2).toFixed(0)} dB</span>
     {/if}
     <span class="sg-hint">{tr("滾輪：縮放時間 · Shift+滾輪：縮放頻率 · 拖曳：平移 · 雙擊：重置 · 拖放檔案開啟（兩個檔案＝A＋B）")}</span>
   </div>
@@ -514,7 +539,13 @@
   .sg-tag { background: var(--accent, #8a7dff); color: var(--accent-foreground, #0b0b10); border-radius: 3px; padding: 0 5px; }
   .sg-cutoff { color: #ffcf6b; opacity: 1 !important; }
   .sg-error { color: #ff7a7a; opacity: 1 !important; }
-  .sg-plots { flex: 1; min-height: 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 10px; }
+  .sg-main { flex: 1; min-height: 0; display: flex; gap: 6px; }
+  /* The colour bar at the right, as tall as the plot (the bottom padding is the time axis row below it). */
+  .sg-colorbar { flex: 0 0 auto; display: flex; gap: 5px; padding-bottom: 18px; font-size: 11px; opacity: 0.9; }
+  .sg-colorbar-strip { width: 14px; border-radius: 2px; }
+  .sg-colorbar-ticks { position: relative; width: 50px; }
+  .sg-colorbar-ticks span { position: absolute; left: 0; translate: 0 -50%; white-space: nowrap; }
+  .sg-plots { flex: 1; min-width: 0; min-height: 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 10px; }
   .sg-plots.is-vertical { grid-auto-flow: row; grid-auto-rows: 1fr; grid-auto-columns: auto; }
   .sg-plot-cell { min-width: 0; min-height: 0; display: flex; }
   .sg-plot-area { flex: 1; min-height: 0; min-width: 0; display: grid; grid-template-columns: 46px 1fr; grid-template-rows: 1fr 18px; }
@@ -536,7 +567,6 @@
   .sg-wipe::before { content: ''; width: 2px; height: 100%; background: #fff; box-shadow: 0 0 4px #000; }
   .sg-wipe span { position: absolute; top: 50%; translate: 0 -50%; background: #fff; color: #000; font-size: 11px; padding: 1px 4px; border-radius: 3px; white-space: nowrap; }
   .sg-legend { display: flex; align-items: center; gap: 8px; margin-left: 46px; font-size: 11px; opacity: 0.85; flex-wrap: wrap; }
-  .sg-legend i { width: 200px; height: 8px; border-radius: 2px; }
   .sg-hint { margin-left: auto; opacity: 0.6; }
   .sg-drop-hint { position: absolute; inset: 0; display: grid; place-items: center; font-size: 18px; background: rgb(20 16 40 / 0.55); pointer-events: none; }
 </style>
