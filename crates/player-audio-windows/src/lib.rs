@@ -18,6 +18,8 @@ mod dsd;
 #[cfg(windows)]
 mod dsee;
 #[cfg(windows)]
+mod exclusive;
+#[cfg(windows)]
 mod mirror;
 #[cfg(windows)]
 mod opus;
@@ -180,6 +182,25 @@ pub struct ResamplingInfo {
     pub dsee_notice: Option<String>,
     /// Sample rate leaving the DSEE HX filter when it is active.
     pub dsee_output_rate: Option<u32>,
+    /// Set when the output is WASAPI exclusive mode: what the opened stream looks like.
+    pub exclusive: Option<ExclusiveInfo>,
+}
+
+/// The exclusive-mode stream as opened for the current track (ADR 0020).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExclusiveInfo {
+    /// Valid bits per sample of the format the device was opened with.
+    pub bits: u16,
+    /// Channels of the opened stream (and of the track).
+    pub channels: u16,
+    pub source_channels: u16,
+    /// Nothing between the file and the device changed the samples: no rate conversion, no channel change and
+    /// the volume is at 100 %.
+    pub bit_perfect: bool,
+    /// A software volume below 100 % is applied.
+    pub volume_applied: bool,
+    /// Times the device asked for audio the player did not have ready.
+    pub underruns: u64,
 }
 
 /// DSD→PCM playback settings (settings → output, ADR 0016).
@@ -280,6 +301,8 @@ pub(crate) struct ResamplingConfig {
     /// Rate of the most recently loaded track; 0 when unknown.
     track_rate_hint: AtomicU32,
     dsee_hx: AtomicBool,
+    /// WASAPI exclusive output (one device, bit-perfect) instead of the shared-mode mixer.
+    exclusive: AtomicBool,
     pub(crate) dsd: Arc<DsdOptions>,
     /// The output devices the user chose (empty: the system default). Shared so a rebuilt backend opens the same ones.
     devices: RwLock<Vec<output_devices::OutputDeviceSetting>>,
@@ -294,6 +317,7 @@ impl ResamplingConfig {
             mode: AtomicU8::new(Self::encode(mode)),
             track_rate_hint: AtomicU32::new(0),
             dsee_hx: AtomicBool::new(dsee_hx),
+            exclusive: AtomicBool::new(false),
             dsd: Arc::new(DsdOptions::default()),
             devices: RwLock::new(Vec::new()),
             device_status: Mutex::new(Vec::new()),
@@ -360,6 +384,14 @@ impl ResamplingConfig {
 
     pub(crate) fn dsee_hx(&self) -> bool {
         self.dsee_hx.load(AtomicOrdering::Relaxed)
+    }
+
+    pub(crate) fn exclusive(&self) -> bool {
+        self.exclusive.load(AtomicOrdering::Relaxed)
+    }
+
+    pub(crate) fn set_exclusive(&self, enabled: bool) {
+        self.exclusive.store(enabled, AtomicOrdering::Relaxed);
     }
 
     pub(crate) fn set_dsee_hx(&self, enabled: bool) {
@@ -582,6 +614,7 @@ enum Command {
     SetDseeHx(bool),
     SetDsdSettings(DsdSettings),
     SetOutputDevices(Vec<output_devices::OutputDeviceSetting>),
+    SetOutputMode,
     CheckpointAccounting,
     Shutdown,
 }
@@ -626,13 +659,32 @@ impl PlayerHandle {
         dsee_hx: bool,
         devices: Vec<output_devices::OutputDeviceSetting>,
     ) -> Result<Self, AudioError> {
+        Self::with_output_options(mode, dsee_hx, devices, false)
+    }
+
+    /// Like [`with_output_devices`](Self::with_output_devices), starting in WASAPI exclusive mode when `exclusive`.
+    pub fn with_output_options(
+        mode: ResamplingMode,
+        dsee_hx: bool,
+        devices: Vec<output_devices::OutputDeviceSetting>,
+        exclusive: bool,
+    ) -> Result<Self, AudioError> {
         #[cfg(windows)]
         {
             let config = Arc::new(ResamplingConfig::new(mode, dsee_hx));
             config.set_devices(devices);
+            config.set_exclusive(exclusive);
             let factory_config = Arc::clone(&config);
             Self::spawn(
                 BackendSource::recoverable(move || {
+                    // Exclusive mode (one device, bit-perfect) or the shared-mode mixer, as the setting says now.
+                    if factory_config.exclusive() {
+                        return Ok(
+                            Box::new(exclusive::backend::ExclusiveBackend::new(Arc::clone(
+                                &factory_config,
+                            ))) as Box<dyn AudioBackend>,
+                        );
+                    }
                     Ok(Box::new(rodio_backend::RodioBackend::new(Arc::clone(
                         &factory_config,
                     ))?) as Box<dyn AudioBackend>)
@@ -643,7 +695,7 @@ impl PlayerHandle {
 
         #[cfg(not(windows))]
         {
-            let _ = (mode, dsee_hx, devices);
+            let _ = (mode, dsee_hx, devices, exclusive);
             Err(AudioError::UnsupportedPlatform)
         }
     }
@@ -862,6 +914,15 @@ impl PlayerHandle {
             config.set_devices(devices.clone());
         }
         self.enqueue_with_ack(Command::SetOutputDevices(devices))
+    }
+
+    /// Switch between WASAPI exclusive mode and the shared-mode mixer. The worker rebuilds its backend, and the
+    /// current track, position, volume and play state carry over.
+    pub fn request_set_exclusive(&self, exclusive: bool) -> Result<CommandTicket, AudioError> {
+        if let Some(config) = self.inner.resampling.as_ref() {
+            config.set_exclusive(exclusive);
+        }
+        self.enqueue_with_ack(Command::SetOutputMode)
     }
 
     /// What every chosen device is doing right now (playing, opening, lost and why).
@@ -1471,7 +1532,8 @@ fn handle_command_during_recovery(
         Command::SetResampling(_)
         | Command::SetDseeHx(_)
         | Command::SetDsdSettings(_)
-        | Command::SetOutputDevices(_) => Ok(()),
+        | Command::SetOutputDevices(_)
+        | Command::SetOutputMode => Ok(()),
         Command::CheckpointAccounting => {
             meter.request_flush();
             Ok(())
@@ -1803,6 +1865,9 @@ fn handle_command(
                 meter.reset_anchor(state, position);
             }
         }
+        // The preference is already in the shared config; the supervisor notices it through `output_status` and
+        // rebuilds the backend.
+        Command::SetOutputMode => {}
         Command::CheckpointAccounting => meter.request_flush(),
         Command::Shutdown => {}
     }
@@ -2702,6 +2767,7 @@ mod tests {
                 dsee_hx: DseeHxState::Off,
                 dsee_notice: None,
                 dsee_output_rate: None,
+                exclusive: None,
             })
         }
         fn output_status(&mut self) -> OutputStatus {

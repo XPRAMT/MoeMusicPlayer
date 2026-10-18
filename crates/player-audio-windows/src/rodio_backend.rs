@@ -809,6 +809,7 @@ impl AudioBackend for RodioBackend {
             fallback_reason: fallback,
             dsee_hx: self.track.dsee_state,
             dsee_notice: self.track.dsee_notice.clone(),
+            exclusive: None,
             dsee_output_rate: (self.track.dsee_state == DseeHxState::Active)
                 .then(|| self.track.playback_rate.map(SampleRate::get))
                 .flatten(),
@@ -833,6 +834,10 @@ impl AudioBackend for RodioBackend {
     }
 
     fn output_status(&mut self) -> OutputStatus {
+        // Exclusive mode was switched on: the worker rebuilds the backend as an exclusive one.
+        if self.config.exclusive() {
+            return OutputStatus::DefaultDeviceChanged;
+        }
         self.poll_mirrors();
         let Some(output) = self.output.as_ref() else {
             return OutputStatus::Lost("output stream is closed".to_owned());
@@ -1487,7 +1492,7 @@ type FileDecoder = AudioDecoder;
 
 /// Whatever decodes the current file: rodio/Symphonia for most formats, the DSD→PCM converter for DSF and libopus for
 /// Opus (`player_formats::decode_engine`).
-enum AudioDecoder {
+pub(crate) enum AudioDecoder {
     Rodio(Decoder<BufReader<File>>),
     /// Boxed: the converter state is several times larger than a rodio decoder.
     Dsd(Box<crate::dsd::DsfPcmSource>),
@@ -1639,7 +1644,7 @@ fn open_decoder(path: &Path) -> Result<AudioDecoder, AudioError> {
     open_decoder_with(path, &DsdOptions::default())
 }
 
-fn open_decoder_with(path: &Path, dsd: &DsdOptions) -> Result<AudioDecoder, AudioError> {
+pub(crate) fn open_decoder_with(path: &Path, dsd: &DsdOptions) -> Result<AudioDecoder, AudioError> {
     match player_formats::decode_engine(path) {
         player_formats::DecodeEngine::Dsd => {
             return crate::dsd::open_dsf(path, dsd)

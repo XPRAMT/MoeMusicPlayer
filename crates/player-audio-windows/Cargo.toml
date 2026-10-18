@@ -37,6 +37,8 @@ symphonia = { version = "=0.5.5", default-features = false, features = [
     "mkv",
     "pcm",
 ] }
+# WASAPI exclusive mode (ADR 0020); MIT, built on the same windows crate version.
+wasapi = "=0.26.0"
 windows = { version = "=0.62.2", features = [
     "Media",
     "Media_Control",
