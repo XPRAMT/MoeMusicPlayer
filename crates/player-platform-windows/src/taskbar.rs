@@ -29,6 +29,16 @@ pub enum AreaChoice {
     Rightmost,
 }
 
+impl Rect {
+    /// `self` reaches over all of `inner` (equal edges count).
+    pub fn covers(&self, inner: Rect) -> bool {
+        self.left <= inner.left
+            && self.top <= inner.top
+            && self.right >= inner.right
+            && self.bottom >= inner.bottom
+    }
+}
+
 /// The stretches of `bounds` along the x axis that `occupied` (x intervals) leaves free, left to right. Each is
 /// shrunk by `margin` on both sides and dropped when it is then narrower than `min_width`.
 pub fn free_stretches(
@@ -110,6 +120,9 @@ pub use imp::{taskbar_uses_light_theme, TaskbarProber};
 mod imp {
     use windows::core::w;
     use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
@@ -125,7 +138,8 @@ mod imp {
         QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowExW, FindWindowW, GetWindowRect, IsWindowVisible,
+        FindWindowExW, FindWindowW, GetClassNameW, GetForegroundWindow, GetWindowRect, IsIconic,
+        IsWindowVisible,
     };
 
     use super::{Rect, TaskbarProbe};
@@ -168,10 +182,14 @@ mod imp {
             };
             let auto_hide =
                 unsafe { SHAppBarMessage(ABM_GETSTATE, &mut state) } & (ABS_AUTOHIDE as usize) != 0;
-            let covered = matches!(
-                unsafe { SHQueryUserNotificationState() },
-                Ok(QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE)
-            );
+            let covered = match unsafe { SHQueryUserNotificationState() } {
+                Ok(QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE) => true,
+                // "Busy" is also reported for a maximized window on another monitor, or right after another window
+                // took over (the player was minimized): believe it only when a window really covers the taskbar's
+                // own monitor.
+                Ok(QUNS_BUSY) => foreground_covers_monitor_of(tray),
+                _ => false,
+            };
             let visible = unsafe { IsWindowVisible(tray) }.as_bool();
             let vertical = bounds.height() > bounds.width();
 
@@ -228,6 +246,40 @@ mod imp {
         }
     }
 
+    /// The foreground window is a real window (not the desktop or the taskbar itself) that reaches over the whole
+    /// monitor the taskbar is on, taskbar area included: a full-screen video, a game, a borderless presentation. A
+    /// maximized window stops at the work area and does not count.
+    fn foreground_covers_monitor_of(tray: HWND) -> bool {
+        let foreground = unsafe { GetForegroundWindow() };
+        if foreground.0.is_null() || foreground == tray || unsafe { IsIconic(foreground) }.as_bool() {
+            return false;
+        }
+        let mut class = [0_u16; 64];
+        let length = unsafe { GetClassNameW(foreground, &mut class) }.max(0) as usize;
+        let class = String::from_utf16_lossy(&class[..length.min(class.len())]);
+        if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
+            return false;
+        }
+        let monitor_rect = |window: HWND| {
+            let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            unsafe { GetMonitorInfoW(monitor, &mut info) }
+                .as_bool()
+                .then(|| rect_of(info.rcMonitor))
+        };
+        let (Some(taskbar_monitor), Some(window_monitor)) = (monitor_rect(tray), monitor_rect(foreground)) else {
+            return false;
+        };
+        if taskbar_monitor != window_monitor {
+            return false;
+        }
+        let mut raw = RECT::default();
+        unsafe { GetWindowRect(foreground, &mut raw) }.is_ok() && rect_of(raw).covers(taskbar_monitor)
+    }
+
     /// The taskbar follows `SystemUsesLightTheme`, not the apps theme.
     pub fn taskbar_uses_light_theme() -> bool {
         let mut value = 0_u32;
@@ -259,6 +311,16 @@ mod tests {
         bottom: 2160,
     };
     const OCCUPIED: [(i32, i32); 4] = [(15, 395), (1506, 1584), (1584, 2334), (3105, 3840)];
+
+    #[test]
+    fn a_window_covers_a_monitor_only_when_it_reaches_over_all_of_it() {
+        let monitor = Rect { left: 0, top: 0, right: 1920, bottom: 1080 };
+        let work_area = Rect { left: -8, top: -8, right: 1928, bottom: 1040 };
+        assert!(!work_area.covers(monitor), "a maximized window stops above the taskbar");
+        assert!(Rect { left: 0, top: 0, right: 1920, bottom: 1080 }.covers(monitor), "full screen");
+        assert!(Rect { left: -8, top: -8, right: 1928, bottom: 1088 }.covers(monitor), "borderless, a little over");
+        assert!(!Rect { left: 0, top: 0, right: 1919, bottom: 1080 }.covers(monitor));
+    }
 
     #[test]
     fn the_measured_taskbar_has_a_stretch_on_each_side_of_the_tasks() {
