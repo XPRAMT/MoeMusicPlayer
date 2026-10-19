@@ -783,5 +783,8 @@
   "匯出失敗：{0}": "Export failed: {0}",
   "匯出設定與曲庫（不含專輯封面）成一個壓縮檔；匯入時可以選這個壓縮檔，或其中的單一檔案。匯入會在重新啟動後套用，原本的資料會保留在 before-import 資料夾。": "Exports the settings and the library (without album covers) into one zip. To import, choose that zip or a single file from it. An import is applied after a restart, and the previous data is kept in the before-import folder.",
   "清空": "Clear",
-  "清空歌詞欄位（儲存後才會從檔案移除內嵌歌詞）": "Empty the lyrics field (the embedded lyrics are removed from the file when you save)"
+  "清空歌詞欄位（儲存後才會從檔案移除內嵌歌詞）": "Empty the lyrics field (the embedded lyrics are removed from the file when you save)",
+  "按下「前往授權」後，系統會開啟設定頁；請開啟「允許存取所有檔案」，再返回本程式。": "After you press \"Go to permission\", the system settings page opens. Turn on \"Allow access to all files\", then come back to this app.",
+  "需要「所有檔案存取權」": "\"All files access\" is needed",
+  "MoeMusicPlayer 需要這個權限才能：掃描你的音樂資料夾與播放清單、把修改的歌曲資訊直接寫回音樂檔案，以及讀取系統桌布作為背景。沒有授權時，曲庫和這些功能無法使用。": "MoeMusicPlayer needs this permission to scan your music folders and playlists, to write edited song information straight back into the music files, and to read the system wallpaper for the background. Without it the library and these features cannot be used."
 }

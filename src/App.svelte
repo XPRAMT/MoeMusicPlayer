@@ -844,8 +844,24 @@
   let androidWallpaperHasImage = $state(false);
   let allFilesAccess = $state<AndroidAllFilesAccessStatus | null>(null);
   let allFilesAccessBusy = $state(false);
-  /** The system permission panel is opened by itself once per app start; the button in Music Sources stays. */
+  /** The panel that explains the permission is shown by itself once per app start; the button in Music Sources stays. */
   let allFilesAccessAutoPrompted = false;
+  let allFilesPromptOpen = $state(false);
+  let allFilesPromptDialog = $state<HTMLDialogElement>();
+
+  function closeAllFilesPrompt(): void {
+    allFilesPromptOpen = false;
+  }
+  function confirmAllFilesPrompt(): void {
+    allFilesPromptOpen = false;
+    void requestAllFilesAccess();
+  }
+  $effect(() => {
+    const dialog = allFilesPromptDialog;
+    if (!dialog) return;
+    if (allFilesPromptOpen && !dialog.open) dialog.showModal();
+    else if (!allFilesPromptOpen && dialog.open) dialog.close();
+  });
 
   async function refreshAllFilesAccess(): Promise<void> {
     if (!isTauri() || capabilities?.platform !== 'android') return;
@@ -854,9 +870,10 @@
       allFilesAccess = await invokeCommand('android_all_files_access_status', {});
       if (!allFilesAccessAutoPrompted && allFilesAccess?.supported && !allFilesAccess.granted && document.visibilityState === 'visible') {
         allFilesAccessAutoPrompted = true;
-        // A moment after the start, so it does not collide with the notification permission prompt.
-        window.setTimeout(() => { if (!allFilesAccessBusy) void requestAllFilesAccess(); }, 1500);
+        // Explain first, a moment after the start so it does not collide with the notification permission prompt.
+        window.setTimeout(() => { if (allFilesAccess?.granted === false && !allFilesAccessBusy) allFilesPromptOpen = true; }, 1500);
       }
+      if (allFilesAccess?.granted) allFilesPromptOpen = false;
       if (previous !== undefined && previous !== allFilesAccess?.granted && themePreferences.mainBackgroundMode === 'systemWallpaper') {
         await loadMainBackground();
       }
@@ -3163,6 +3180,7 @@
   });
 
   function handleAndroidBack(): boolean {
+    if (allFilesPromptOpen) { allFilesPromptOpen = false; return true; }
     if (androidSpectrogramTrackId) { androidSpectrogramTrackId = null; return true; }
     if (trackDetailsTrackId) { window.dispatchEvent(new CustomEvent('moe:track-details-request-close')); return true; }
     if (isSleepTimerOpen) { closeSleepTimerPopover(false); return true; }
@@ -5148,6 +5166,27 @@
     <div class="dock-spacer" aria-hidden="true"></div>
   </footer>
 </div>
+
+{#if runtimePlatform === 'android'}
+  <dialog
+    bind:this={allFilesPromptDialog}
+    class="update-dialog floating-surface"
+    style={`--quick-settings-opacity:${themePreferences.quickSettingsOpacityPercent}%;--quick-settings-blur:${themePreferences.quickSettingsBlurPx}px`}
+    aria-labelledby="all-files-prompt-title"
+    aria-describedby="all-files-prompt-description"
+    oncancel={(event) => { event.preventDefault(); closeAllFilesPrompt(); }}
+  >
+    <div class="update-dialog-content">
+      <h2 id="all-files-prompt-title">{tr("需要「所有檔案存取權」")}</h2>
+      <p id="all-files-prompt-description">{tr("MoeMusicPlayer 需要這個權限才能：掃描你的音樂資料夾與播放清單、把修改的歌曲資訊直接寫回音樂檔案，以及讀取系統桌布作為背景。沒有授權時，曲庫和這些功能無法使用。")}</p>
+      <p>{tr("按下「前往授權」後，系統會開啟設定頁；請開啟「允許存取所有檔案」，再返回本程式。")}</p>
+      <div class="update-dialog-actions">
+        <button class="soft-button" type="button" onclick={closeAllFilesPrompt}>{tr("取消")}</button>
+        <button class="soft-button" type="button" onclick={confirmAllFilesPrompt}>{tr("前往授權")}</button>
+      </div>
+    </div>
+  </dialog>
+{/if}
 
 <UpdateCenter
   bind:this={updateCenter}
