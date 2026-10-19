@@ -872,6 +872,9 @@ input:focus-visible {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* The same thin scrollbar as the page content on the right. */
+  scrollbar-color: rgba(var(--text-rgb), 0.2) transparent;
+  scrollbar-width: thin;
 }
 
 .primary-nav {
