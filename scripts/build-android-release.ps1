@@ -9,6 +9,8 @@ repository:
   MOE_ANDROID_KEY_ALIAS           default "anime theme key"
   MOE_ANDROID_KEYSTORE_PASSWORD   default: the "Password" line of C:\APP\@Android\Play KEY.txt
   MOE_ANDROID_KEY_PASSWORD        default: the keystore password
+MOE_ANDROID_DEBUG_KEY=1 signs with the debug key instead (the key of the apps installed before ADR 0023, so the result
+updates them in place); its files get a "-debugkey" suffix and never overwrite the release-key ones.
 Without a keystore the build falls back to the debug key (a build anyone can make; it cannot update an app that was
 installed with the release key, and Google Play rejects it).
 
@@ -49,12 +51,16 @@ try {
     [System.IO.File]::WriteAllText($configPath, (@{ version = $version; bundle = @{ android = @{ versionCode = $versionCode } } } | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
 
     # ---- signing key from the environment (or the maintainer's defaults)
-    if ([string]::IsNullOrWhiteSpace($env:MOE_ANDROID_KEYSTORE)) {
+    $suffix = ''
+    if ($env:MOE_ANDROID_DEBUG_KEY -eq '1') { $suffix = '-debugkey' }
+    if ($suffix -ne '') { Write-Output 'Signing with the debug key (MOE_ANDROID_DEBUG_KEY=1).' }
+    elseif ([string]::IsNullOrWhiteSpace($env:MOE_ANDROID_KEYSTORE)) {
         $defaultKeystore = 'C:\APP\@Android\Play KEY.jks'
         if (Test-Path -LiteralPath $defaultKeystore -PathType Leaf) { $overrides['MOE_ANDROID_KEYSTORE'] = $defaultKeystore }
     }
     else { $overrides['MOE_ANDROID_KEYSTORE'] = $env:MOE_ANDROID_KEYSTORE }
-    if ($overrides.Contains('MOE_ANDROID_KEYSTORE')) {
+    if ($suffix -ne '') { $overrides['MOE_ANDROID_KEYSTORE'] = '' }  # no release key: Gradle falls back to the debug key
+    elseif ($overrides.Contains('MOE_ANDROID_KEYSTORE')) {
         $overrides['MOE_ANDROID_KEY_ALIAS'] = if ($env:MOE_ANDROID_KEY_ALIAS) { $env:MOE_ANDROID_KEY_ALIAS } else { 'anime theme key' }
         $password = if ($env:MOE_ANDROID_KEYSTORE_PASSWORD) { $env:MOE_ANDROID_KEYSTORE_PASSWORD } else { Get-NotesPassword 'C:\APP\@Android\Play KEY.txt' }
         if ([string]::IsNullOrEmpty($password)) { throw 'No keystore password: set MOE_ANDROID_KEYSTORE_PASSWORD.' }
@@ -72,14 +78,14 @@ try {
     $outputs = Join-Path $repoRoot 'src-tauri\gen\android\app\build\outputs'
     $apk = Join-Path $outputs 'apk\universal\release\app-universal-release.apk'
     if (-not (Test-Path -LiteralPath $apk -PathType Leaf)) { throw "Missing APK: $apk" }
-    Copy-Item -LiteralPath $apk -Destination (Join-Path $repoRoot 'release\moemusicplayer-android-arm64-release.apk') -Force
+    Copy-Item -LiteralPath $apk -Destination (Join-Path $repoRoot "release\moemusicplayer-android-arm64-release$suffix.apk") -Force
     $aab = Get-ChildItem -LiteralPath (Join-Path $outputs 'bundle') -Recurse -Filter '*.aab' -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($null -eq $aab) { throw 'Missing AAB under src-tauri\gen\android\app\build\outputs\bundle.' }
-    Copy-Item -LiteralPath $aab.FullName -Destination (Join-Path $repoRoot 'release\moemusicplayer-android-arm64-release.aab') -Force
+    Copy-Item -LiteralPath $aab.FullName -Destination (Join-Path $repoRoot "release\moemusicplayer-android-arm64-release$suffix.aab") -Force
     Write-Output "Version $version, version code $versionCode"
-    Write-Output 'APK: release\moemusicplayer-android-arm64-release.apk'
-    Write-Output 'AAB: release\moemusicplayer-android-arm64-release.aab'
+    Write-Output "APK: release\moemusicplayer-android-arm64-release$suffix.apk"
+    Write-Output "AAB: release\moemusicplayer-android-arm64-release$suffix.aab"
 }
 finally {
     foreach ($name in $overrides.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
