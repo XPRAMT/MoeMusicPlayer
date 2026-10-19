@@ -486,7 +486,6 @@
     <span class="sg-spacer"></span>
     <button type="button" class="sg-button" onclick={() => { view = { ...FULL_VIEW }; }} title={tr("重置縮放（雙擊圖面或按 0）")}>{tr("重置縮放")}</button>
     <button type="button" class="sg-button" class:is-active={showSettings} aria-expanded={showSettings} onclick={() => (showSettings = !showSettings)}>{tr("設定")}</button>
-    <button type="button" class="sg-button" disabled={loading.A || loading.B} onclick={() => renderAll(true)}>{tr("重新繪製")}</button>
   </header>
 
   {#if showSettings}
@@ -563,12 +562,11 @@
     </div>
   </div>
   </div>
-  <div class="sg-legend">
-    {#if diffUrl}
+  {#if diffUrl}
+    <div class="sg-legend">
       <span>{tr("B 較弱 −")}{(range / 2).toFixed(0)} dB</span><span>{tr("B 較強 +")}{(range / 2).toFixed(0)} dB</span>
-    {/if}
-    <span class="sg-hint">{tr("滾輪：縮放（時間與頻率） · Shift+滾輪：只縮放頻率 · Ctrl+滾輪：只縮放時間 · 拖曳：平移 · 雙擊：重置 · 拖放檔案開啟（兩個檔案＝A＋B）")}</span>
-  </div>
+    </div>
+  {/if}
   {#if dragOver}<div class="sg-drop-hint">{tr("放開以開啟（兩個檔案＝A 與 B）")}</div>{/if}
 </div>
 
@@ -628,6 +626,5 @@
   .sg-wipe::before { content: ''; width: 2px; height: 100%; background: #fff; box-shadow: 0 0 4px #000; }
   .sg-wipe span { position: absolute; top: 50%; translate: 0 -50%; background: #fff; color: #000; font-size: 11px; padding: 1px 4px; border-radius: 3px; white-space: nowrap; }
   .sg-legend { display: flex; align-items: center; gap: 8px; margin-left: 46px; font-size: 11px; opacity: 0.85; flex-wrap: wrap; }
-  .sg-hint { margin-left: auto; opacity: 0.6; }
   .sg-drop-hint { position: absolute; inset: 0; display: grid; place-items: center; font-size: 18px; background: rgb(20 16 40 / 0.55); pointer-events: none; }
 </style>
