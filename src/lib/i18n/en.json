@@ -226,7 +226,6 @@
   "此檔案為唯讀": "This file is read-only",
   "灰階": "Grayscale",
   "自訂顏色": "Custom color",
-  "自動": "Auto",
   "自動切換文字顏色閥值": "Auto text color switch threshold",
   "自動文字顏色": "Automatic text color",
   "自動更新適用於 Windows 桌面程式。": "Automatic updates are available for the Windows desktop app.",
@@ -359,8 +358,6 @@
   "重新整理": "Refresh",
   "重新整理音樂來源": "Refresh music sources",
   "重新讀取": "Reload",
-  "重置縮放": "Reset zoom",
-  "重置縮放（雙擊圖面或按 0）": "Reset zoom (double-click the chart or press 0)",
   "重試": "Retry",
   "重試指定": "Retry choosing",
   "重試搜尋": "Retry search",
@@ -439,7 +436,6 @@
   "啟用 DSEE HX": "Enable DSEE HX",
   "啟用分組模式": "Enable grouping",
   "啟用後可能增加載入時間": "Enabling it may increase loading time",
-  "混合（全部聲道）": "Mix (all channels)",
   "清除": "Clear",
   "清除選取的方案": "Clear the selected preset",
   "清晰度": "Clarity",
@@ -465,7 +461,6 @@
   "這份歌詞沒有可顯示的文字。": "These lyrics have no displayable text.",
   "陰影": "Shadow",
   "最近一次同步摘要": "Latest sync summary",
-  "最高頻率 (kHz)": "Maximum frequency (kHz)",
   "剩餘 {0}": "{0} left",
   "單張": "Single",
   "單圖": "Single image",
@@ -688,7 +683,6 @@
   "靜音": "Muted",
   "頻譜圖": "Spectrogram",
   "頻譜圖 — {0}": "Spectrogram — {0}",
-  "頻譜圖設定": "Spectrogram settings",
   "儲存": "Save",
   "儲存中…": "Saving…",
   "儲存時：{0}×{1} JPG（品質 {2}%）": "When saved: {0}×{1} JPG (quality {2}%)",
@@ -776,5 +770,6 @@
   "選擇更新方式。下載期間可繼續播放；下載並驗證成功後，會把目前的程式檔改名並換上新版。": "Choose how to update. You can keep playing while downloading; once the download is verified, the current program file is renamed and the new version takes its place.",
   "更新已安裝，下次啟動時生效。": "The update is installed and takes effect on the next launch.",
   "更新已安裝，正在重新啟動播放器…": "The update is installed. Restarting the player…",
-  "已忽略新版本 {0}；按「檢查更新」可再次顯示。": "Version {0} is ignored. Use \"Check for updates\" to show it again."
+  "已忽略新版本 {0}；按「檢查更新」可再次顯示。": "Version {0} is ignored. Use \"Check for updates\" to show it again.",
+  "混合": "Mix"
 }

@@ -41,7 +41,6 @@
   let errors = $state<Record<Side, string | null>>({ A: null, B: null });
   let settings = $state<SpectrogramSettings>(loadSpectrogramSettings());
   let prefs = $state<ComparePrefs>(loadComparePrefs());
-  let showSettings = $state(false);
   let showB = $state(true);
   let view = $state<View>({ ...FULL_VIEW });
   let hover = $state<{ x: number; y: number; wx: number; wy: number; host: HTMLElement } | null>(null);
@@ -410,7 +409,8 @@
       {#each Array.from({ length: panels }, (_, p) => p) as p (p)}
         {#each ticks as f (f)}
           {@const top = toViewTop(panelWorldY(p, frequencyToFraction(f, sharedMaxHz, false)))}
-          {#if top >= -0.001 && top <= 1.001}<span style:top={`${top * 100}%`}>{fmtFreq(f)}</span>{/if}
+          {@const frac = frequencyToFraction(f, sharedMaxHz, false)}
+          {#if top >= -0.001 && top <= 1.001}<span style:top={`${top * 100}%`} style:translate={panels > 1 ? (frac < 0.06 ? '0 -100%' : frac > 0.94 ? '0 0' : undefined) : undefined}>{fmtFreq(f)}</span>{/if}
         {/each}
         {#if panels > 1}
           {@const mid = toViewTop(panelWorldY(p, 0.5))}
@@ -483,42 +483,31 @@
       <label class="sg-inline">{tr("B 透明度")} <input type="range" min="0" max="1" step="0.05" value={prefs.opacityB} disabled={prefs.difference} oninput={(e) => updatePrefs({ opacityB: Number(e.currentTarget.value) })} /></label>
       <label class="sg-inline"><input type="checkbox" checked={prefs.difference} onchange={(e) => updatePrefs({ difference: e.currentTarget.checked })} /> {tr("差異圖（B − A）")}</label>
     {/if}
-    <span class="sg-spacer"></span>
-    <button type="button" class="sg-button" onclick={() => { view = { ...FULL_VIEW }; }} title={tr("重置縮放（雙擊圖面或按 0）")}>{tr("重置縮放")}</button>
-    <button type="button" class="sg-button" class:is-active={showSettings} aria-expanded={showSettings} onclick={() => (showSettings = !showSettings)}>{tr("設定")}</button>
-  </header>
-
-  {#if showSettings}
-    <section class="sg-settings" aria-label={tr("頻譜圖設定")}>
-      <label>{tr("配色")}
+    <label class="sg-inline">{tr("配色")}
         <select value={settings.colormap} onchange={(e) => updateSettings({ colormap: e.currentTarget.value })}>
           {#each COLORMAPS as c (c.value)}<option value={c.value}>{c.label}</option>{/each}
         </select>
       </label>
-      <label>{tr("FFT 大小")}
+    <label class="sg-inline">{tr("FFT 大小")}
         <select value={String(settings.fftSize)} onchange={(e) => updateSettings({ fftSize: Number(e.currentTarget.value) })}>
           {#each FFT_SIZES as size (size)}<option value={String(size)}>{size}</option>{/each}
         </select>
       </label>
-      <label>{tr("窗函數")}
+    <label class="sg-inline">{tr("窗函數")}
         <select value={settings.window} onchange={(e) => updateSettings({ window: e.currentTarget.value })}>
           {#each WINDOW_FUNCTIONS as w (w.value)}<option value={w.value}>{w.label}</option>{/each}
         </select>
       </label>
-      <label>{tr("聲道")}
+    <label class="sg-inline">{tr("聲道")}
         <select value={channelValue()} onchange={(e) => setChannel(e.currentTarget.value)}>
-          <option value="mix">{tr("混合（全部聲道）")}</option>
+          <option value="mix">{tr("混合")}</option>
           {#each channelOptions as i (i)}<option value={`channel:${i}`}>{channelName(i)}</option>{/each}
           <option value="separate">{tr("各聲道分開")}</option>
         </select>
       </label>
-      <label>{tr("dB 下限")} <input type="number" step="5" min="-200" max="-1" value={settings.dbFloor} onchange={(e) => updateSettings({ dbFloor: Number(e.currentTarget.value) })} /></label>
-      <label>{tr("dB 上限")} <input type="number" step="5" min="-199" max="20" value={settings.dbCeiling} onchange={(e) => updateSettings({ dbCeiling: Number(e.currentTarget.value) })} /></label>
-      <label>{tr("最高頻率 (kHz)")}
-        <input type="number" step="1" min="0.1" placeholder={tr("自動")} value={settings.maxFrequencyHz ? settings.maxFrequencyHz / 1000 : ''} onchange={(e) => { const v = Number(e.currentTarget.value); updateSettings({ maxFrequencyHz: e.currentTarget.value && v > 0 ? Math.round(v * 1000) : null }); }} />
-      </label>
-    </section>
-  {/if}
+    <label class="sg-inline">{tr("dB 下限")} <input type="number" step="5" min="-200" max="-1" value={settings.dbFloor} onchange={(e) => updateSettings({ dbFloor: Number(e.currentTarget.value) })} /></label>
+    <label class="sg-inline">{tr("dB 上限")} <input type="number" step="5" min="-199" max="20" value={settings.dbCeiling} onchange={(e) => updateSettings({ dbCeiling: Number(e.currentTarget.value) })} /></label>
+  </header>
 
   <div class="sg-info-row">
     {#each (['A', 'B'] as Side[]).filter((s) => s === 'A' || sources.B) as side (side)}
@@ -574,19 +563,16 @@
   .spectrogram-page { color-scheme: var(--color-scheme, dark); --sg-surface: color-mix(in srgb, var(--text, #e8e8ee) 10%, transparent); --sg-field: color-mix(in srgb, var(--text, #e8e8ee) 6%, transparent); position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(10px + var(--android-safe-top, 0px)) calc(14px + var(--android-safe-right, 0px)) calc(10px + var(--android-safe-bottom, 0px)) calc(14px + var(--android-safe-left, 0px)); background: var(--page, #0b0b10); color: var(--text, #e8e8ee); font-size: 13px; z-index: 1100; }
   .spectrogram-page.is-drag-over { outline: 3px dashed #8a7dff; outline-offset: -6px; }
   .spectrogram-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .sg-spacer { flex: 1; }
   .sg-button { background: var(--sg-surface); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
   .sg-button:hover { background: rgba(var(--accent-rgb, 138, 125, 255), 0.18); }
   .sg-button.is-active { border-color: #8a7dff; }
   .sg-button:disabled { opacity: 0.5; cursor: default; }
   .sg-inline { display: flex; align-items: center; gap: 5px; }
-  .sg-inline select, .sg-settings select, .sg-settings input { background: var(--sg-field); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 4px; padding: 2px 4px; font: inherit; }
+  .sg-inline input[type='number'] { width: 70px; }
+  .sg-inline select, .sg-inline input[type='number'] { background: var(--sg-field); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 4px; padding: 2px 4px; font: inherit; }
   /* The opened list of a drop-down is drawn by the system with the page's light text; give it an opaque background of its own
      (the field colour is translucent, which leaves the list white) so the entries can be read. */
-  .sg-inline select option, .sg-settings select option { background-color: var(--page, #0b0b10); color: var(--text, #e8e8ee); }
-  .sg-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 10px; background: var(--sg-field); border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.16); border-radius: 6px; }
-  .sg-settings label { display: flex; align-items: center; gap: 6px; }
-  .sg-settings input[type='number'] { width: 70px; }
+  .sg-inline select option { background-color: var(--page, #0b0b10); color: var(--text, #e8e8ee); }
   .sg-info-row { display: flex; gap: 18px; flex-wrap: wrap; }
   .sg-info { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; min-width: 0; }
   .sg-info strong { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

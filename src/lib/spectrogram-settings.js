@@ -27,7 +27,7 @@ export const COLORMAPS = [
 /**
  * @typedef {{ mode: 'mix' } | { mode: 'separate' } | { mode: 'channel', index: number }} ChannelSelect
  * @typedef {{ fftSize: number, window: string, colormap: string, channel: ChannelSelect,
- *   dbFloor: number, dbCeiling: number, maxFrequencyHz: number | null }} SpectrogramSettings
+ *   dbFloor: number, dbCeiling: number }} SpectrogramSettings
  */
 
 /** @type {SpectrogramSettings} */
@@ -38,7 +38,6 @@ export const DEFAULT_SPECTROGRAM_SETTINGS = {
   channel: { mode: 'channel', index: 0 },
   dbFloor: -120,
   dbCeiling: 0,
-  maxFrequencyHz: null,
 };
 
 /** @param {unknown} value @returns {SpectrogramSettings} */
@@ -56,7 +55,6 @@ export function normalizeSpectrogramSettings(value) {
     : raw.channel?.mode === 'channel' && Number.isInteger(raw.channel.index) && raw.channel.index >= 0 ? { mode: 'channel', index: raw.channel.index }
     : raw.channel?.mode === 'mix' ? { mode: 'mix' }
     : { mode: 'channel', index: 0 };
-  const maxFrequencyHz = raw.maxFrequencyHz == null ? null : num(raw.maxFrequencyHz, 0, 100, 400000) || null;
   return {
     fftSize: FFT_SIZES.includes(Number(raw.fftSize)) ? Number(raw.fftSize) : d.fftSize,
     window: WINDOW_FUNCTIONS.some((w) => w.value === raw.window) ? raw.window : d.window,
@@ -64,7 +62,6 @@ export function normalizeSpectrogramSettings(value) {
     channel: /** @type {ChannelSelect} */ (channel),
     dbFloor,
     dbCeiling,
-    maxFrequencyHz,
   };
 }
 
@@ -109,7 +106,8 @@ export function toRenderOptions(settings, columns, height) {
     dbCeiling: settings.dbCeiling,
     // The frequency axis is always linear.
     logFrequency: false,
-    maxFrequencyHz: settings.maxFrequencyHz,
+    // The axis always reaches the file's Nyquist frequency.
+    maxFrequencyHz: null,
     minLogFrequencyHz: 20,
   };
 }
