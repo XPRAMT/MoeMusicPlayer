@@ -2671,7 +2671,6 @@ input:focus-visible {
 @media (max-width: 520px) {
   .about-credits li { grid-template-columns: minmax(110px, 1fr) minmax(0, 1fr); gap: 4px 12px; }
   .about-credits li > span:last-child { grid-column: 2; }
-  .update-dialog-actions { justify-content: flex-start; }
 }
 
 .lyrics-preference-grid {
