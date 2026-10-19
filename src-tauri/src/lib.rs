@@ -24,7 +24,7 @@ use player_core::{
     MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, PlaybackQueue, PlaybackQueueContext,
     PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId, PlaylistListSort, PlaylistPage,
     PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId, SourceScanState,
-    SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
+    SyncCancellation, SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
     TrackMetadata, TrackMetadataError, TrackSortDirection, TrackSortField, TrackSummary,
 };
 use player_db::natural_title_cmp;
@@ -473,6 +473,8 @@ struct AppState {
     database_error: Option<String>,
     database_work: database_lifecycle::DatabaseWorkGate,
     queue_display_sort_cache: std::sync::Mutex<Option<QueueDisplaySortCache>>,
+    /// The library sync in progress, so closing the program can stop its reading and save what it has read.
+    active_sync: std::sync::Mutex<Option<SyncCancellation>>,
     #[cfg(target_os = "windows")]
     shutdown: database_lifecycle::ShutdownCoordinator,
     settings: Arc<SettingsStore>,
@@ -7334,6 +7336,11 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
     let progress_run_id = run_id.clone();
     let sync_app = app.clone();
     let event_app = app.clone();
+    let cancellation = SyncCancellation::default();
+    *state
+        .active_sync
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cancellation.clone());
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _database_work = database_work;
         let mut database = Database::open(database_path).map_err(|error| error.to_string())?;
@@ -7374,15 +7381,35 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
             &source_settings.sources,
             &excluded_folders,
             source_registry_authoritative,
+            &cancellation,
             &mut on_progress,
         )
     })
     .await
     .map_err(|error| format!("曲庫同步工作失敗：{error}"))
     .and_then(|result| result);
+    *event_app
+        .state::<AppState>()
+        .active_sync
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     let finished = library_sync_finished_event(run_id, &result);
     let _ = event_app.emit(LIBRARY_SYNC_FINISHED_EVENT, finished);
     result
+}
+
+/// Stops the library sync in progress, if any: its reading stops and what it has read so far is saved (the next sync
+/// continues from there). Closing the program calls this, then waits for the saving to finish.
+#[cfg(target_os = "windows")]
+fn cancel_library_sync(state: &AppState) {
+    if let Some(cancellation) = state
+        .active_sync
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+    {
+        cancellation.cancel();
+    }
 }
 
 fn sync_configured_sources<F>(
@@ -7391,6 +7418,7 @@ fn sync_configured_sources<F>(
     configured_sources: &[SourceEntry],
     excluded_folders: &[std::path::PathBuf],
     source_registry_authoritative: bool,
+    cancellation: &SyncCancellation,
     on_progress: &mut F,
 ) -> Result<LibrarySyncResult, String>
 where
@@ -7399,14 +7427,17 @@ where
     if !source_registry_authoritative {
         return Err("設定來源清單尚未確認；為保護現有曲庫，本次已略過所有來源同步。".to_owned());
     }
+    #[cfg(not(target_os = "windows"))]
+    let _ = cancellation;
     #[cfg(target_os = "windows")]
     {
         let _ = app;
-        sync_windows_configured_sources(
+        sync_windows_configured_sources_cancellable(
             database,
             configured_sources,
             excluded_folders,
             source_registry_authoritative,
+            cancellation,
             on_progress,
         )
     }
@@ -7638,12 +7669,34 @@ fn resolve_orphan_playlist_file_id(
     })
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", test))]
 fn sync_windows_configured_sources<F>(
     database: &mut Database,
     configured_sources: &[SourceEntry],
     excluded_folders: &[std::path::PathBuf],
     source_registry_authoritative: bool,
+    on_progress: &mut F,
+) -> Result<LibrarySyncResult, String>
+where
+    F: FnMut(&LibraryRoot, usize, usize, SyncProgress),
+{
+    sync_windows_configured_sources_cancellable(
+        database,
+        configured_sources,
+        excluded_folders,
+        source_registry_authoritative,
+        &SyncCancellation::default(),
+        on_progress,
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn sync_windows_configured_sources_cancellable<F>(
+    database: &mut Database,
+    configured_sources: &[SourceEntry],
+    excluded_folders: &[std::path::PathBuf],
+    source_registry_authoritative: bool,
+    cancellation: &SyncCancellation,
     on_progress: &mut F,
 ) -> Result<LibrarySyncResult, String>
 where
@@ -7709,6 +7762,10 @@ where
     let mut results = Vec::new();
     let mut index = WindowsMediaIndex::with_excluded_folders(excluded_folders.iter().cloned());
     for (source_index, source) in sources.iter().enumerate() {
+        // Closing the program stops the sync: the source being read saves what it has, the others are left for next time.
+        if cancellation.is_cancelled() {
+            break;
+        }
         match &source.kind {
             SourceEntryKind::Folder { .. } => {
                 let root = source
@@ -7718,11 +7775,12 @@ where
                 database
                     .save_library_root(&root)
                     .map_err(|error| error.to_string())?;
-                let report = SyncEngine::sync_with_progress(
+                let report = SyncEngine::sync_cancellable_with_progress(
                     &root,
                     &mut index,
                     database,
                     synced_at_utc_ms,
+                    cancellation,
                     |progress| on_progress(&root, source_index, source_count, progress),
                 )
                 .map_err(|error| error.to_string())?;
@@ -10454,6 +10512,8 @@ pub(crate) fn install_downloaded_update(
     if state.shutdown.request() != database_lifecycle::ShutdownRequest::Start {
         return Err("程式正在關閉，無法開始更新。".into());
     }
+    // The update restarts the program: a library sync in progress saves what it has read and stops.
+    cancel_library_sync(&state);
     let was_playing = state
         .playback
         .as_ref()
@@ -11051,6 +11111,7 @@ pub fn run() {
                         persist_main_window_geometry(window);
                         let app = window.app_handle().clone();
                         let state = app.state::<AppState>();
+                        cancel_library_sync(&state);
                         let request = state.shutdown.request();
                         if request != database_lifecycle::ShutdownRequest::Ready {
                             api.prevent_close();
@@ -11398,6 +11459,7 @@ pub fn run() {
                 database_error,
                 database_work: database_lifecycle::DatabaseWorkGate::default(),
                 queue_display_sort_cache: std::sync::Mutex::new(None),
+                active_sync: std::sync::Mutex::new(None),
                 #[cfg(target_os = "windows")]
                 shutdown: database_lifecycle::ShutdownCoordinator::default(),
                 settings,
@@ -11477,6 +11539,7 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 let state = app_handle.state::<AppState>();
+                cancel_library_sync(&state);
                 let request = state.shutdown.request();
                 if request != database_lifecycle::ShutdownRequest::Ready {
                     api.prevent_exit();

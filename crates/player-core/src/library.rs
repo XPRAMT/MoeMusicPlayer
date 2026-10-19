@@ -324,6 +324,18 @@ pub trait MediaIndex {
         &mut self,
         track: &MediaTrackRecord,
     ) -> Result<TrackMetadata, TrackMetadataError>;
+
+    /// A metadata reader that may run on several threads at once, for adapters whose file parsing keeps no exclusive
+    /// state. The sync engine reads the tracks that need parsing with it on `METADATA_READ_THREADS` threads; adapters
+    /// without one (None) are read one track at a time through `read_metadata`.
+    fn parallel_metadata_reader(&self) -> Option<&dyn MetadataReader> {
+        None
+    }
+}
+
+/// Parses one track's metadata; shared between threads (see `MediaIndex::parallel_metadata_reader`).
+pub trait MetadataReader: Sync {
+    fn read(&self, track: &MediaTrackRecord) -> Result<TrackMetadata, TrackMetadataError>;
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]

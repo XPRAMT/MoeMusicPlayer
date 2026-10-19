@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     error::Error,
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
 
@@ -8,8 +9,8 @@ use serde::Serialize;
 
 use crate::library::{
     FileFingerprint, LibraryRoot, MediaIndex, MediaScanProgress, MediaScanProgressUnit,
-    MediaSourceError, MediaTrackRecord, SourceId, SourceScanState, SyncCancellation, TrackIdentity,
-    TrackMetadataError, TRACK_METADATA_VERSION,
+    MediaSourceError, MediaTrackRecord, MetadataReader, SourceId, SourceScanState,
+    SyncCancellation, TrackIdentity, TrackMetadata, TrackMetadataError, TRACK_METADATA_VERSION,
 };
 
 const METADATA_BACKFILL_BATCH_SIZE: usize = 128;
@@ -345,8 +346,10 @@ impl SyncEngine {
             true,
         );
 
-        let mut metadata_processed = 0;
-        for mut track in scan.tracks {
+        // Pass 1: decide what every track needs. Only database lookups happen here, no file is parsed.
+        let mut entries: Vec<Entry> = Vec::with_capacity(scan.tracks.len());
+        let mut metadata_processed: u64 = 0;
+        for track in scan.tracks {
             if cancellation.is_cancelled() {
                 report.cancelled = true;
                 effective_state = SourceScanState::Incomplete {
@@ -354,7 +357,6 @@ impl SyncEngine {
                 };
                 break;
             }
-            metadata_processed += 1;
             if track.identity.source_id != root.id {
                 report.source_errors.push(MediaSourceError {
                     source_item_id: Some(track.identity.source_item_id.clone()),
@@ -363,6 +365,7 @@ impl SyncEngine {
                 effective_state = SourceScanState::Incomplete {
                     reason: "adapter returned an item belonging to a different source".to_owned(),
                 };
+                metadata_processed += 1;
                 emit_metadata_progress(progress, metadata_processed, metadata_total, &report);
                 continue;
             }
@@ -374,6 +377,7 @@ impl SyncEngine {
                 effective_state = SourceScanState::Incomplete {
                     reason: "adapter returned duplicate source items".to_owned(),
                 };
+                metadata_processed += 1;
                 emit_metadata_progress(progress, metadata_processed, metadata_total, &report);
                 continue;
             }
@@ -395,23 +399,124 @@ impl SyncEngine {
                 })
             {
                 report.unchanged += 1;
-                seen.push(track);
+                entries.push(Entry {
+                    track,
+                    kind: EntryKind::Unchanged,
+                    needs_read: false,
+                    read: None,
+                });
+                metadata_processed += 1;
                 emit_metadata_progress(progress, metadata_processed, metadata_total, &report);
                 continue;
             }
+            // Metadata the adapter already supplied needs no parsing.
+            let needs_read = track.metadata.is_none();
+            if !needs_read {
+                metadata_processed += 1;
+                emit_metadata_progress(progress, metadata_processed, metadata_total, &report);
+            }
+            entries.push(Entry {
+                track,
+                kind: if legacy_metadata {
+                    EntryKind::Legacy
+                } else {
+                    EntryKind::Changed
+                },
+                needs_read,
+                read: None,
+            });
+        }
 
-            if legacy_metadata {
-                let metadata_result = match track.metadata.take() {
-                    Some(metadata) => Ok(metadata),
-                    None => {
+        // Pass 2: parse the tracks that need it, on METADATA_READ_THREADS threads when the adapter allows it.
+        // Cancellation stops the reading; what is already parsed is kept.
+        let todo: Vec<usize> = entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.needs_read)
+            .map(|(index, _)| index)
+            .collect();
+        let mut results: Vec<Option<Result<TrackMetadata, TrackMetadataError>>> =
+            (0..todo.len()).map(|_| None).collect();
+        if !todo.is_empty() && !cancellation.is_cancelled() {
+            let tracks: Vec<&MediaTrackRecord> =
+                todo.iter().map(|&index| &entries[index].track).collect();
+            let reader = index
+                .parallel_metadata_reader()
+                .filter(|_| tracks.len() > 1);
+            match reader {
+                Some(reader) => {
+                    let next = AtomicUsize::new(0);
+                    let (sender, receiver) = std::sync::mpsc::channel();
+                    std::thread::scope(|scope| {
+                        for _ in 0..METADATA_READ_THREADS.min(tracks.len()) {
+                            let sender = sender.clone();
+                            let (next, tracks) = (&next, &tracks);
+                            scope.spawn(move || loop {
+                                if cancellation.is_cancelled() {
+                                    break;
+                                }
+                                let n = next.fetch_add(1, Ordering::Relaxed);
+                                let Some(track) = tracks.get(n) else {
+                                    break;
+                                };
+                                if sender.send((n, read_guarded(reader, track))).is_err() {
+                                    break;
+                                }
+                            });
+                        }
+                        drop(sender);
+                        for (n, result) in receiver {
+                            results[n] = Some(result);
+                            report.metadata_reads += 1;
+                            metadata_processed += 1;
+                            emit_metadata_progress(
+                                progress,
+                                metadata_processed,
+                                metadata_total,
+                                &report,
+                            );
+                        }
+                    });
+                }
+                None => {
+                    for (n, track) in tracks.iter().enumerate() {
+                        if cancellation.is_cancelled() {
+                            break;
+                        }
+                        results[n] = Some(index.read_metadata(track));
                         report.metadata_reads += 1;
-                        index.read_metadata(&track)
+                        metadata_processed += 1;
+                        emit_metadata_progress(
+                            progress,
+                            metadata_processed,
+                            metadata_total,
+                            &report,
+                        );
                     }
-                };
-                match metadata_result {
-                    Ok(metadata) => {
-                        track.metadata = Some(metadata);
-                        metadata_backfill_batch.push(track.clone());
+                }
+            }
+        }
+        for (slot, &entry_index) in todo.iter().enumerate() {
+            entries[entry_index].read = results[slot].take();
+        }
+
+        // Pass 3: in track order, turn the results into the sets the repository applies. A track whose parsing was
+        // stopped by cancellation is left out; it is read again by the next sync.
+        for mut entry in entries {
+            if entry.needs_read {
+                match entry.read.take() {
+                    None => continue,
+                    Some(Ok(metadata)) => entry.track.metadata = Some(metadata),
+                    Some(Err(error)) => report
+                        .metadata_errors
+                        .push((entry.track.identity.source_item_id.clone(), error)),
+                }
+            }
+            match entry.kind {
+                EntryKind::Unchanged => seen.push(entry.track),
+                EntryKind::Legacy => {
+                    if entry.track.metadata.is_some() {
+                        metadata_backfill_batch.push(entry.track.clone());
                         if metadata_backfill_batch.len() == METADATA_BACKFILL_BATCH_SIZE {
                             repository
                                 .apply_metadata_backfill_batch(&metadata_backfill_batch)
@@ -420,27 +525,13 @@ impl SyncEngine {
                             std::thread::yield_now();
                         }
                     }
-                    Err(error) => report
-                        .metadata_errors
-                        .push((track.identity.source_item_id.clone(), error)),
+                    seen.push(entry.track);
                 }
-                seen.push(track);
-                emit_metadata_progress(progress, metadata_processed, metadata_total, &report);
-                continue;
-            }
-
-            if track.metadata.is_none() {
-                report.metadata_reads += 1;
-                match index.read_metadata(&track) {
-                    Ok(metadata) => track.metadata = Some(metadata),
-                    Err(error) => report
-                        .metadata_errors
-                        .push((track.identity.source_item_id.clone(), error)),
+                EntryKind::Changed => {
+                    seen.push(entry.track.clone());
+                    changed.push(entry.track);
                 }
             }
-            seen.push(track.clone());
-            changed.push(track);
-            emit_metadata_progress(progress, metadata_processed, metadata_total, &report);
         }
 
         if !metadata_backfill_batch.is_empty() {
@@ -450,7 +541,7 @@ impl SyncEngine {
             std::thread::yield_now();
         }
 
-        if cancellation.is_cancelled() {
+        if cancellation.is_cancelled() && !report.cancelled {
             report.cancelled = true;
             effective_state = SourceScanState::Incomplete {
                 reason: "sync cancelled before persistence".to_owned(),
@@ -468,9 +559,19 @@ impl SyncEngine {
                 }),
         );
         report.state = Some(effective_state.clone());
-        if report.cancelled {
+        // A cancelled run still saves what it read: the tracks handled so far are written with an incomplete scan
+        // state (no reconciliation, nothing is removed), so the next sync continues from there instead of reading
+        // everything again. With nothing handled there is nothing to save.
+        let cancelled = report.cancelled;
+        if cancelled && seen.is_empty() {
             return Ok(report);
         }
+        let partial_save = SyncCancellation::default();
+        let persist_cancellation = if cancelled {
+            &partial_save
+        } else {
+            cancellation
+        };
 
         progress.emit(
             SyncProgressStage::Persisting,
@@ -508,18 +609,49 @@ impl SyncEngine {
                         false,
                     );
                 },
-                cancellation,
+                persist_cancellation,
             )
             .map_err(SyncError::Repository)?;
         report.applied = apply.stats;
-        report.cancelled = apply.cancelled;
-        if report.cancelled {
+        report.cancelled = cancelled || apply.cancelled;
+        if apply.cancelled {
             report.state = Some(SourceScanState::Incomplete {
                 reason: "sync cancelled during database persistence".to_owned(),
             });
         }
         Ok(report)
     }
+}
+
+/// How many tracks are parsed at once when the adapter offers a parallel reader.
+pub const METADATA_READ_THREADS: usize = 4;
+
+enum EntryKind {
+    Unchanged,
+    /// Unchanged file whose stored metadata predates the current metadata version.
+    Legacy,
+    Changed,
+}
+
+struct Entry {
+    track: MediaTrackRecord,
+    kind: EntryKind,
+    needs_read: bool,
+    read: Option<Result<TrackMetadata, TrackMetadataError>>,
+}
+
+/// One parse; a parser that panics on a damaged file counts as a failed read, not a failed sync.
+fn read_guarded(
+    reader: &dyn MetadataReader,
+    track: &MediaTrackRecord,
+) -> Result<TrackMetadata, TrackMetadataError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reader.read(track))).unwrap_or_else(
+        |_| {
+            Err(TrackMetadataError {
+                message: "the metadata parser failed on this file".to_owned(),
+            })
+        },
+    )
 }
 
 struct ProgressReporter<'a> {
@@ -1310,5 +1442,195 @@ mod tests {
         ));
         assert!(!repository.applied_state.unwrap().allows_reconciliation());
         assert!(repository.observed.is_empty());
+    }
+
+    mod parallel_reading {
+        use std::{
+            collections::HashSet,
+            sync::{atomic::AtomicUsize, Mutex},
+            thread::ThreadId,
+            time::Duration,
+        };
+
+        use super::*;
+        use crate::library::MetadataReader;
+        use crate::sync::METADATA_READ_THREADS;
+
+        struct SharedReader {
+            threads: Mutex<HashSet<ThreadId>>,
+            reads: AtomicUsize,
+            cancel_after: Option<(usize, SyncCancellation)>,
+            failing: Vec<String>,
+        }
+
+        impl MetadataReader for SharedReader {
+            fn read(&self, track: &MediaTrackRecord) -> Result<TrackMetadata, TrackMetadataError> {
+                std::thread::sleep(Duration::from_millis(3));
+                self.threads
+                    .lock()
+                    .unwrap()
+                    .insert(std::thread::current().id());
+                let count = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
+                if let Some((after, cancellation)) = &self.cancel_after {
+                    if count == *after {
+                        cancellation.cancel();
+                    }
+                }
+                if self.failing.contains(&track.identity.source_item_id) {
+                    return Err(TrackMetadataError {
+                        message: "bad tag block".to_owned(),
+                    });
+                }
+                Ok(TrackMetadata {
+                    title: Some(format!("title:{}", track.identity.source_item_id)),
+                    ..TrackMetadata::default()
+                })
+            }
+        }
+
+        struct ParallelIndex {
+            scan: Option<SourceScan>,
+            reader: SharedReader,
+        }
+
+        impl MediaIndex for ParallelIndex {
+            fn scan(&mut self, _root: &LibraryRoot) -> SourceScan {
+                self.scan.take().expect("one scan result")
+            }
+
+            fn read_metadata(
+                &mut self,
+                _track: &MediaTrackRecord,
+            ) -> Result<TrackMetadata, TrackMetadataError> {
+                panic!("the shared reader reads every track when there is one");
+            }
+
+            fn parallel_metadata_reader(&self) -> Option<&dyn MetadataReader> {
+                Some(&self.reader)
+            }
+        }
+
+        fn parallel_index(
+            root: &LibraryRoot,
+            count: usize,
+            failing: Vec<String>,
+            cancel_after: Option<(usize, SyncCancellation)>,
+        ) -> ParallelIndex {
+            ParallelIndex {
+                scan: Some(SourceScan {
+                    source_id: root.id,
+                    state: SourceScanState::Complete,
+                    tracks: (0..count)
+                        .map(|number| record(root.id, &format!("track-{number:03}"), 100, None))
+                        .collect(),
+                    errors: Vec::new(),
+                }),
+                reader: SharedReader {
+                    threads: Mutex::new(HashSet::new()),
+                    reads: AtomicUsize::new(0),
+                    cancel_after,
+                    failing,
+                },
+            }
+        }
+
+        #[test]
+        fn tracks_are_read_on_up_to_four_threads_and_applied_in_track_order() {
+            let root = root();
+            let mut index = parallel_index(&root, 40, vec!["track-007".to_owned()], None);
+            let mut repository = FakeRepository::default();
+            let report = SyncEngine::sync_cancellable_with_progress(
+                &root,
+                &mut index,
+                &mut repository,
+                1,
+                &SyncCancellation::default(),
+                |_| {},
+            )
+            .expect("sync");
+            assert_eq!(report.observed, 40);
+            assert_eq!(report.metadata_reads, 40);
+            assert!(!report.cancelled);
+            assert!(matches!(report.state, Some(SourceScanState::Complete)));
+            let expected: Vec<String> =
+                (0..40).map(|number| format!("track-{number:03}")).collect();
+            assert_eq!(
+                repository.observed, expected,
+                "applied in track order, whichever thread finished first"
+            );
+            assert_eq!(repository.changed, expected);
+            assert_eq!(
+                report
+                    .metadata_errors
+                    .iter()
+                    .map(|(item, _)| item.as_str())
+                    .collect::<Vec<_>>(),
+                ["track-007"]
+            );
+            let threads = index.reader.threads.lock().unwrap().len();
+            assert!(
+                threads > 1 && threads <= METADATA_READ_THREADS,
+                "read on {threads} threads, expected 2 to {METADATA_READ_THREADS}"
+            );
+        }
+
+        #[test]
+        fn cancelling_stops_reading_and_saves_what_was_read_without_removing_anything() {
+            let root = root();
+            let cancellation = SyncCancellation::default();
+            let mut index = parallel_index(&root, 60, Vec::new(), Some((10, cancellation.clone())));
+            let mut repository = FakeRepository::default();
+            let report = SyncEngine::sync_cancellable_with_progress(
+                &root,
+                &mut index,
+                &mut repository,
+                1,
+                &cancellation,
+                |_| {},
+            )
+            .expect("sync");
+            assert!(report.cancelled);
+            let saved = repository.observed.len();
+            assert!(
+                (10..60).contains(&saved),
+                "the tracks read before the cancellation are saved, not all 60 and not none: {saved}"
+            );
+            assert_eq!(
+                repository.changed.len(),
+                saved,
+                "every saved track carries its metadata"
+            );
+            assert_eq!(report.applied.inserted_or_updated, saved as u64);
+            let state = repository.applied_state.expect("progress was written");
+            assert!(
+                !state.allows_reconciliation(),
+                "an interrupted scan never removes tracks"
+            );
+            assert!(
+                index.reader.reads.load(Ordering::SeqCst) < 60,
+                "reading stopped early"
+            );
+        }
+
+        #[test]
+        fn a_cancellation_before_any_read_saves_nothing() {
+            let root = root();
+            let cancellation = SyncCancellation::default();
+            cancellation.cancel();
+            let mut index = parallel_index(&root, 20, Vec::new(), None);
+            let mut repository = FakeRepository::default();
+            let report = SyncEngine::sync_cancellable_with_progress(
+                &root,
+                &mut index,
+                &mut repository,
+                1,
+                &cancellation,
+                |_| {},
+            )
+            .expect("sync");
+            assert!(report.cancelled);
+            assert!(repository.applied_state.is_none());
+            assert_eq!(index.reader.reads.load(Ordering::SeqCst), 0);
+        }
     }
 }

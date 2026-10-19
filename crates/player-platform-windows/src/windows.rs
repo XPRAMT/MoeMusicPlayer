@@ -17,8 +17,8 @@ use lofty::{
 };
 use player_core::{
     windows_locator_key, FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
-    MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, SourceId,
-    SourceScan, SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata,
+    MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, MetadataReader,
+    SourceId, SourceScan, SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata,
     TrackMetadataError,
 };
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -192,7 +192,18 @@ pub fn read_standalone_audio_metadata(path: &Path) -> Result<TrackMetadata, Trac
     WindowsMediaIndex::new().read_metadata(&record)
 }
 
+/// Parsing a file keeps no state in the index, so tracks can be parsed on several threads at once.
+impl MetadataReader for WindowsMediaIndex {
+    fn read(&self, track: &MediaTrackRecord) -> Result<TrackMetadata, TrackMetadataError> {
+        WindowsMediaIndex::new().read_metadata(track)
+    }
+}
+
 impl MediaIndex for WindowsMediaIndex {
+    fn parallel_metadata_reader(&self) -> Option<&dyn MetadataReader> {
+        Some(self)
+    }
+
     fn scan(&mut self, root: &LibraryRoot) -> SourceScan {
         self.scan_with_progress(root, &mut |_| {}, &SyncCancellation::default())
     }
