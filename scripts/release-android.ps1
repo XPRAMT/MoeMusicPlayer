@@ -1,5 +1,5 @@
 <#
-Builds the Android arm64 APK with a pinned build identity and packages the in-app update assets
+Builds the smallest Android arm64 release APK (npm run android:build:arm64:release) with a pinned build identity and packages the in-app update assets
 (ADR 0015) into release/update-assets:
   moemusicplayer-android-arm64.apk
   moemusicplayer-android-update.json   (schemaVersion 1, architecture android-arm64)
@@ -29,7 +29,7 @@ function Get-PackageSha256([string]$Path) {
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path $repoRoot 'release\update-assets' }
 if ([string]::IsNullOrWhiteSpace($Apk)) {
-    $Apk = Join-Path $repoRoot 'src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk'
+    $Apk = Join-Path $repoRoot 'src-tauri\gen\android\app\build\outputs\apk\universal\release\app-universal-release.apk'
 }
 $identityPath = Join-Path $repoRoot 'release\android-build-identity.json'
 
@@ -42,7 +42,7 @@ try {
         # build.rs embeds this exact UTC string; the app compares it with the manifest.
         $env:MOE_BUILD_TIMESTAMP_UTC = [DateTimeOffset]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
         $npmPath = (@(Get-Command 'npm.cmd' -CommandType Application -ErrorAction Stop))[0].Source
-        & $npmPath run android:build:arm64
+        & $npmPath run android:build:arm64:release
         if ($LASTEXITCODE -ne 0) { throw "Android build failed with exit code $LASTEXITCODE." }
         $identity = [ordered]@{ buildTimestampUtc = $env:MOE_BUILD_TIMESTAMP_UTC; gitCommit = $gitCommit }
         New-Item -Path (Split-Path $identityPath) -ItemType Directory -Force | Out-Null
