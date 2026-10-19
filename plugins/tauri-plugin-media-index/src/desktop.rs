@@ -83,4 +83,17 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Err(Error::Unsupported("Android SAF playlist export"))
     }
 
+    pub(crate) fn copy_file_to_uri(&self, _source: &std::path::Path, _destination_uri: &str) -> Result<()> {
+        Err(Error::Unsupported("Android document export"))
+    }
+
+    pub(crate) fn copy_uri_to_file(
+        &self,
+        _source_uri: &str,
+        _destination: &std::path::Path,
+        _max_bytes: u64,
+    ) -> Result<u64> {
+        Err(Error::Unsupported("Android document import"))
+    }
+
 }

@@ -1651,6 +1651,18 @@ impl Database {
         Self::from_connection_with_collation(connection, MusicCollationSpec::system_default())
     }
 
+    /// A consistent copy of the whole database in `target` (a file that does not exist yet), made with `VACUUM INTO`:
+    /// it is read through this connection, so it includes what is still in the WAL, and the running player is not
+    /// disturbed. Used by the backup export.
+    pub fn snapshot_to(&self, target: &Path) -> Result<(), DatabaseError> {
+        let target = target.to_str().ok_or_else(|| {
+            DatabaseError::CorruptData("snapshot path is not valid UTF-8".to_owned())
+        })?;
+        let connection = self.lock()?;
+        connection.execute("VACUUM INTO ?1", [target])?;
+        Ok(())
+    }
+
     /// Checkpoint pending WAL pages after callers have stopped and joined their writers.
     pub fn checkpoint_wal(&self) -> Result<(), DatabaseError> {
         let connection = self.lock()?;

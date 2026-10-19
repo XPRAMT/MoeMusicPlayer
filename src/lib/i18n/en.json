@@ -771,5 +771,15 @@
   "更新已安裝，下次啟動時生效。": "The update is installed and takes effect on the next launch.",
   "更新已安裝，正在重新啟動播放器…": "The update is installed. Restarting the player…",
   "已忽略新版本 {0}；按「檢查更新」可再次顯示。": "Version {0} is ignored. Use \"Check for updates\" to show it again.",
-  "混合": "Mix"
+  "混合": "Mix",
+  "、": ", ",
+  "已匯出 {0}（{1} MiB）。": "Exported {0} ({1} MiB).",
+  "已準備匯入：{0}。請完全關閉並重新開啟程式以套用。": "Ready to import: {0}. Close the app completely and open it again to apply.",
+  "我的最愛": "Favourites",
+  "背景圖片": "Background image",
+  "備份與還原": "Backup and restore",
+  "匯入": "Import",
+  "匯入失敗：{0}": "Import failed: {0}",
+  "匯出失敗：{0}": "Export failed: {0}",
+  "匯出設定與曲庫（不含專輯封面）成一個壓縮檔；匯入時可以選這個壓縮檔，或其中的單一檔案。匯入會在重新啟動後套用，原本的資料會保留在 before-import 資料夾。": "Exports the settings and the library (without album covers) into one zip. To import, choose that zip or a single file from it. An import is applied after a restart, and the previous data is kept in the before-import folder."
 }

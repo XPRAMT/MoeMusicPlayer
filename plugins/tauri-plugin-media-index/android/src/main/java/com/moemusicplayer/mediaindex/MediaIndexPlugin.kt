@@ -105,6 +105,19 @@ class WriteLeaseArgs {
     var destinationUri: String? = null
 }
 
+@InvokeArg
+class CopyFileToUriArgs {
+    var sourcePath: String? = null
+    var destinationUri: String? = null
+}
+
+@InvokeArg
+class CopyUriToFileArgs {
+    var sourceUri: String? = null
+    var destinationPath: String? = null
+    var maxBytes: Long = 0
+}
+
 @TauriPlugin(
     permissions = [
         // Android 10 and older only (maxSdkVersion 29). Android 11+ uses All files access (ADR 0014).
@@ -437,6 +450,71 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             writeContentCacheLease(token, Uri.parse(destination))
             JSObject()
         }
+    }
+
+    /** Streams a file of the app's cache folder into a document the user picked (backup export; no size cap). */
+    @Command
+    fun copyFileToUri(invoke: Invoke) {
+        val args = invoke.parseArgs(CopyFileToUriArgs::class.java)
+        val sourcePath = args.sourcePath
+        val destination = args.destinationUri
+        if (sourcePath.isNullOrBlank() || destination.isNullOrBlank()) {
+            invoke.reject("sourcePath and destinationUri are required")
+            return
+        }
+        async(invoke) {
+            val source = cacheFile(sourcePath)
+            if (!source.isFile) throw IOException("The backup file is missing")
+            val output = resolver.openOutputStream(Uri.parse(destination), "wt")
+                ?: throw IOException("Could not open the selected destination")
+            source.inputStream().use { input -> output.use { input.copyTo(it, COPY_BUFFER_SIZE) } }
+            JSObject()
+        }
+    }
+
+    /** Copies a document the user picked into the app's cache folder (backup import), at most `maxBytes`. */
+    @Command
+    fun copyUriToFile(invoke: Invoke) {
+        val args = invoke.parseArgs(CopyUriToFileArgs::class.java)
+        val sourceUri = args.sourceUri
+        val destinationPath = args.destinationPath
+        if (sourceUri.isNullOrBlank() || destinationPath.isNullOrBlank() || args.maxBytes <= 0L) {
+            invoke.reject("sourceUri, destinationPath and maxBytes are required")
+            return
+        }
+        async(invoke) {
+            val destination = cacheFile(destinationPath)
+            destination.parentFile?.mkdirs()
+            var copied = 0L
+            try {
+                val input = resolver.openInputStream(Uri.parse(sourceUri))
+                    ?: throw IOException("Could not open the selected file")
+                input.use { source ->
+                    destination.outputStream().use { target ->
+                        val buffer = ByteArray(COPY_BUFFER_SIZE)
+                        while (true) {
+                            val read = source.read(buffer)
+                            if (read < 0) break
+                            copied += read
+                            if (copied > args.maxBytes) throw IOException("The selected file is too large")
+                            target.write(buffer, 0, read)
+                        }
+                    }
+                }
+            } catch (error: Exception) {
+                destination.delete()
+                throw error
+            }
+            JSObject().apply { put("size", copied) }
+        }
+    }
+
+    /** A path that must lie inside the app's cache folder (the plugin never touches other private files). */
+    private fun cacheFile(path: String): File {
+        val root = appContext.cacheDir.canonicalFile
+        val file = File(path).canonicalFile
+        if (!file.path.startsWith(root.path + File.separator)) throw IOException("Path is outside the cache folder")
+        return file
     }
 
     @Command

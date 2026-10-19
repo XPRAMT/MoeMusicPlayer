@@ -350,6 +350,33 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         self.content_cache_lease(response, 0)
     }
 
+    /// Streams a file of the app cache folder into a document the user picked (no size cap).
+    pub(crate) fn copy_file_to_uri(&self, source: &std::path::Path, destination_uri: &str) -> Result<()> {
+        let _: serde_json::Value = self.0.run_mobile_plugin(
+            "copyFileToUri",
+            json!({ "sourcePath": source.to_string_lossy(), "destinationUri": destination_uri }),
+        )?;
+        Ok(())
+    }
+
+    /// Copies a document the user picked into a file of the app cache folder, refusing more than `max_bytes`.
+    pub(crate) fn copy_uri_to_file(
+        &self,
+        source_uri: &str,
+        destination: &std::path::Path,
+        max_bytes: u64,
+    ) -> Result<u64> {
+        let response: serde_json::Value = self.0.run_mobile_plugin(
+            "copyUriToFile",
+            json!({
+                "sourceUri": source_uri,
+                "destinationPath": destination.to_string_lossy(),
+                "maxBytes": max_bytes,
+            }),
+        )?;
+        Ok(response.get("size").and_then(serde_json::Value::as_u64).unwrap_or(0))
+    }
+
     pub(crate) fn write_content_cache_lease(
         &self,
         lease: &ContentCacheLease,

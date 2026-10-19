@@ -296,6 +296,21 @@ impl<R: Runtime> MediaIndex<R> {
         self.platform.create_cache_lease()
     }
 
+    /// Stream a file of the app cache folder into a user-selected document (backup export).
+    pub fn copy_file_to_uri(&self, source: &std::path::Path, destination_uri: &str) -> Result<()> {
+        self.platform.copy_file_to_uri(source, destination_uri)
+    }
+
+    /// Copy a user-selected document into a file of the app cache folder (backup import).
+    pub fn copy_uri_to_file(
+        &self,
+        source_uri: &str,
+        destination: &std::path::Path,
+        max_bytes: u64,
+    ) -> Result<u64> {
+        self.platform.copy_uri_to_file(source_uri, destination, max_bytes)
+    }
+
     /// Stream a Rust-generated cache lease into a user-selected SAF document.
     pub fn write_content_cache_lease(
         &self,

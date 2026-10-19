@@ -2621,6 +2621,7 @@ input:focus-visible {
 
 .about-page,
 .about-updates,
+.about-backup,
 .about-file-associations,
 .about-credits {
   display: flex;
@@ -2631,6 +2632,7 @@ input:focus-visible {
 }
 
 .about-updates,
+.about-backup,
 .about-file-associations,
 .about-credits { margin-top: 16px; }
 .about-page p { margin: 0; line-height: 1.6; }

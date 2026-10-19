@@ -2097,6 +2097,11 @@ struct RawSettings {
     language: Option<serde_json::Value>,
 }
 
+/// Whether a settings file can be read as it is (the backup import checks a file before it is ever used).
+pub fn check_settings_file(path: &Path) -> Result<(), SettingsError> {
+    read_settings(path).map(|_| ())
+}
+
 fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
     let mut input = String::new();
     File::open(path)?.read_to_string(&mut input)?;

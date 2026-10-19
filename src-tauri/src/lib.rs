@@ -52,6 +52,7 @@ mod windows_file_associations;
 use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImportResult};
 #[cfg(any(target_os = "windows", target_os = "android"))]
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
+mod backup;
 mod settings;
 mod sleep_timer;
 #[cfg(target_os = "windows")]
@@ -11123,6 +11124,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            backup::backup_export,
+            backup::backup_import,
+            backup::backup_pending,
             track_details::track_details_get,
             track_details::track_details_cover,
             track_details::track_details_save,
@@ -11289,6 +11293,12 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|error| error.to_string())?;
+            // A backup imported in the last run is put in place now, before the settings and the database are opened.
+            match backup::apply_pending_import(&app_data_dir) {
+                Ok(parts) if !parts.is_empty() => eprintln!("已套用匯入的備份：{}", parts.join("、")),
+                Ok(_) => {}
+                Err(error) => eprintln!("無法套用匯入的備份，沿用目前的資料：{error}"),
+            }
             let database_path = app_data_dir.join("moemusicplayer.sqlite3");
             let settings_path = database_path.with_file_name("settings.json");
             let database_result =

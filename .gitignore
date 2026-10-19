@@ -34,3 +34,6 @@
 .DS_Store
 Thumbs.db
 *.log
+
+# Gradle caches of the Android plugin build
+/plugins/*/android/.gradle/

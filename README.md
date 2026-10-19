@@ -23,6 +23,7 @@
 - **Spectrogram:** an FFT spectrogram with selectable palette, window function, FFT size and dB range; pinch or scroll to zoom. Windows opens it in its own window, Android as a full-screen page.
 - **DSD:** `.dsf` files are converted to 176.4 kHz PCM with an adjustable gain. Windows adds a 352.8 kHz output and DoP (see below).
 - **Appearance and language:** background and accent color; five main-background modes: solid color, single image, slideshow, album cover and the system wallpaper (on Android the wallpaper needs **All files access**); automatic text color or automatic image transparency. The interface is available in Traditional Chinese, Simplified Chinese, Japanese and English (Settings → Main → Language).
+- **Backup and restore:** Settings → About → Backup and restore exports the settings and the library (without album covers) into one zip, and imports that zip or a single file from it (`settings.json`, the library database, `MyLove.m3u8`). An import is applied the next time the app starts, and the previous data is kept in a `before-import` folder.
 - **Updates:** the player checks the latest GitHub Release and offers the new version (see [Install](#install)). Settings → About shows the build and the open-source packages used.
 
 ## Windows and Android differences

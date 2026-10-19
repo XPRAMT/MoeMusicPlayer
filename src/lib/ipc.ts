@@ -58,6 +58,17 @@ export interface UpdateState {
 
 export type UpdateInstallMode = 'restartNow' | 'nextLaunch';
 
+export interface BackupExportResult {
+  fileName: string;
+  sizeBytes: number;
+}
+
+/** The parts of a backup: settings, library (database), favourites (MyLove.m3u8), main background image. */
+export interface BackupImportResult {
+  imported: string[];
+  pending: string[];
+}
+
 export interface ThemePreferences {
   backgroundHex: string;
   accentHex: string;
@@ -676,6 +687,9 @@ interface IpcContract {
   update_get_state: { args: Record<string, never>; result: UpdateState };
   update_check: { args: { manual?: boolean }; result: UpdateState };
   update_ignore: { args: Record<string, never>; result: UpdateState };
+  backup_export: { args: Record<string, never>; result: BackupExportResult | null };
+  backup_import: { args: Record<string, never>; result: BackupImportResult | null };
+  backup_pending: { args: Record<string, never>; result: string[] };
   update_download: { args: { mode: UpdateInstallMode }; result: UpdateState };
   settings_get_recovery_warning: {
     args: Record<string, never>;
