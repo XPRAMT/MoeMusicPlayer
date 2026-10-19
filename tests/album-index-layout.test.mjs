@@ -151,11 +151,11 @@ test('album card grid adds a narrower column instead of leaving a trailing gap',
   // Exactly five full-width cards fit without extra columns.
   assert.deepEqual(getAlbumCardGrid(5 * 180 + 4 * 18, 180, 18), { columns: 5, cardWidth: 180 });
   assert.deepEqual(getAlbumCardGrid(0, 180, 18), { columns: 1, cardWidth: 180 });
-  assert.deepEqual(getAlbumCardGrid(Number.NaN, Number.NaN, Number.NaN), { columns: 1, cardWidth: 180 });
+  assert.deepEqual(getAlbumCardGrid(Number.NaN, Number.NaN, Number.NaN), { columns: 1, cardWidth: 200 }, 'the default card width');
 });
 
 test('album card maximum width normalizes persisted values', () => {
-  assert.equal(normalizeAlbumCardMaxWidthPx(undefined), 180);
+  assert.equal(normalizeAlbumCardMaxWidthPx(undefined), 200);
   assert.equal(normalizeAlbumCardMaxWidthPx(10), 100);
   assert.equal(normalizeAlbumCardMaxWidthPx(999), 500);
   assert.equal(normalizeAlbumCardMaxWidthPx(200.4), 200);

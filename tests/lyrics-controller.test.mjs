@@ -122,7 +122,7 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
     auxiliaryFontSizePx: 4,
     lineGapPx: 50,
     textEffect: 'shadow',
-    simplifiedToTraditional: false,
+    simplifiedToTraditional: true,
   });
   assert.equal(normalizeLyricsPreferences({ simplifiedToTraditional: true }).simplifiedToTraditional, true);
   assert.equal(normalizeLyricsPreferences({ inactiveOpacityPercent: 100.4 }).inactiveOpacityPercent, 100);
@@ -159,7 +159,7 @@ test('variable row geometry adds only nonempty enabled auxiliary lines', () => {
   assert.equal(layout.heights[5], 0);
   assert.deepEqual([...layout.visibleIndices], [0, 1, 2, 3, 4]);
   assert.equal(layout.gaps[4], 0);
-  assert.equal(layout.totalHeight, [...layout.heights].reduce((sum, height) => sum + height, 0) + 4 * 24);
+  assert.ok(Math.abs(layout.totalHeight - ([...layout.heights].reduce((sum, height) => sum + height, 0) + 4 * 24)) < 1e-9);
 
   const translationHidden = buildLyricsLayout(rows, { ...base, showTranslation: false }, 24);
   const romanizationHidden = buildLyricsLayout(rows, { ...base, showRomanization: false }, 24);

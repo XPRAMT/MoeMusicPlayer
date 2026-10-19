@@ -39,10 +39,10 @@ pub struct ThemeSettings {
     #[serde(default)]
     pub background_opacity_text_color: BackgroundOpacityTextColor,
     /// Main-window target clarity for automatic image opacity (0–100).
-    #[serde(default)]
+    #[serde(default = "default_main_background_clarity_percent")]
     pub main_background_clarity_percent: u8,
     /// Now Playing cover target clarity for automatic image opacity (0–100).
-    #[serde(default)]
+    #[serde(default = "default_cover_background_clarity_percent")]
     pub cover_background_clarity_percent: u8,
     #[serde(default = "default_quick_settings_opacity_percent")]
     pub quick_settings_opacity_percent: u8,
@@ -77,8 +77,8 @@ pub struct ThemeSettings {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ThemeColorMode {
-    #[default]
     AutoTextColor,
+    #[default]
     AutoBackgroundOpacity,
 }
 
@@ -114,24 +114,32 @@ pub enum SlideshowOrder {
     Random,
 }
 
+fn default_main_background_clarity_percent() -> u8 {
+    65
+}
+
+fn default_cover_background_clarity_percent() -> u8 {
+    50
+}
+
 fn default_slideshow_interval_minutes() -> u8 {
-    10
+    2
 }
 
 fn default_quick_settings_opacity_percent() -> u8 {
-    70
-}
-
-fn default_quick_settings_blur_px() -> u8 {
-    12
-}
-
-fn default_main_background_blur_px() -> u8 {
     20
 }
 
+fn default_quick_settings_blur_px() -> u8 {
+    5
+}
+
+fn default_main_background_blur_px() -> u8 {
+    5
+}
+
 fn default_main_background_opacity_percent() -> u8 {
-    40
+    60
 }
 
 fn default_auto_text_color_threshold_percent() -> u8 {
@@ -139,24 +147,24 @@ fn default_auto_text_color_threshold_percent() -> u8 {
 }
 
 fn default_border_opacity_percent() -> u8 {
-    100
+    10
 }
 
 fn default_divider_opacity_percent() -> u8 {
-    100
+    10
 }
 
 impl Default for ThemeSettings {
     fn default() -> Self {
         Self {
             background_hex: "#000000".to_owned(),
-            accent_hex: "#55D9FF".to_owned(),
+            accent_hex: "#A9C3FE".to_owned(),
             border_opacity_percent: default_border_opacity_percent(),
             divider_opacity_percent: default_divider_opacity_percent(),
             color_mode: ThemeColorMode::default(),
             background_opacity_text_color: BackgroundOpacityTextColor::default(),
-            main_background_clarity_percent: 0,
-            cover_background_clarity_percent: 0,
+            main_background_clarity_percent: default_main_background_clarity_percent(),
+            cover_background_clarity_percent: default_cover_background_clarity_percent(),
             quick_settings_opacity_percent: default_quick_settings_opacity_percent(),
             quick_settings_blur_px: default_quick_settings_blur_px(),
             main_background_blur_px: default_main_background_blur_px(),
@@ -183,25 +191,29 @@ pub struct LyricsPreferences {
     #[serde(default = "default_lyrics_text_effect")]
     pub text_effect: LyricsTextEffect,
     /// Display-only Simplified-to-Traditional conversion. Not written into lyric files.
-    #[serde(default)]
+    #[serde(default = "default_simplified_to_traditional")]
     pub simplified_to_traditional: bool,
 }
 
+fn default_simplified_to_traditional() -> bool {
+    true
+}
+
 fn default_line_gap_px() -> u8 {
-    24
+    10
 }
 
 impl Default for LyricsPreferences {
     fn default() -> Self {
         Self {
-            show_translation: false,
+            show_translation: true,
             show_romanization: false,
-            inactive_opacity_percent: 70,
-            primary_font_size_px: 14,
-            auxiliary_font_size_px: 10,
+            inactive_opacity_percent: 50,
+            primary_font_size_px: 20,
+            auxiliary_font_size_px: 18,
             line_gap_px: default_line_gap_px(),
             text_effect: default_lyrics_text_effect(),
-            simplified_to_traditional: false,
+            simplified_to_traditional: default_simplified_to_traditional(),
         }
     }
 }
@@ -296,14 +308,14 @@ pub struct NowPlayingAppearancePreferences {
 }
 
 fn default_background_opacity_percent() -> u8 {
-    40
+    80
 }
 
 impl Default for NowPlayingAppearancePreferences {
     fn default() -> Self {
         Self {
-            background_blur_px: 20,
-            background_opacity_percent: 40,
+            background_blur_px: 10,
+            background_opacity_percent: default_background_opacity_percent(),
             cover_corner_style: CoverCornerStyle::Rounded,
             timeline_style: TimelineStyle::Edge,
         }
@@ -358,9 +370,9 @@ pub struct TrackListFlexibleWidths {
 impl Default for TrackListFlexibleWidths {
     fn default() -> Self {
         Self {
-            title: 220,
-            artist: 150,
-            album: 160,
+            title: 184,
+            artist: 144,
+            album: 257,
         }
     }
 }
@@ -395,7 +407,7 @@ pub struct LibraryListSort {
 impl Default for LibraryListSort {
     fn default() -> Self {
         Self {
-            field: TrackListColumnId::Title,
+            field: TrackListColumnId::CreatedAt,
             direction: LibrarySortDirection::Asc,
         }
     }
@@ -524,7 +536,7 @@ pub(crate) const MIN_ALBUM_CARD_MAX_WIDTH_PX: u16 = 100;
 pub(crate) const MAX_ALBUM_CARD_MAX_WIDTH_PX: u16 = 500;
 
 fn default_album_card_max_width_px() -> u16 {
-    180
+    200
 }
 
 pub(crate) fn clamp_album_card_max_width_px(value: u16) -> u16 {
@@ -536,14 +548,14 @@ fn default_grouping_enabled() -> bool {
 }
 
 fn default_track_text_overflow_mode() -> TrackTextOverflowMode {
-    TrackTextOverflowMode::Middle
+    TrackTextOverflowMode::End
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TrackTextOverflowMode {
-    #[default]
     Middle,
+    #[default]
     End,
 }
 
@@ -556,8 +568,8 @@ impl Default for TrackListColumnSettings {
                 TrackListColumnId::Album,
                 TrackListColumnId::Year,
                 TrackListColumnId::CreatedAt,
-                TrackListColumnId::AudioFormat,
                 TrackListColumnId::Duration,
+                TrackListColumnId::AudioFormat,
                 TrackListColumnId::PlayCount,
             ]
             .into_iter()
@@ -740,8 +752,8 @@ fn lenient_cover_zoom(value: Option<serde_json::Value>) -> CoverZoomSettings {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskbarLyricsAlign {
-    #[default]
     Left,
+    #[default]
     Center,
     Right,
 }
@@ -793,10 +805,10 @@ pub struct TaskbarLyricsSettings {
 
 impl TaskbarLyricsSettings {
     pub const FONT_SIZE_RANGE_PX: (u8, u8) = (1, 50);
-    pub const DEFAULT_FONT_SIZE_PX: u8 = 16;
+    pub const DEFAULT_FONT_SIZE_PX: u8 = 20;
     pub const TRANSLATION_SCALE_RANGE_PERCENT: (u8, u8) = (1, 100);
-    pub const DEFAULT_TRANSLATION_SCALE_PERCENT: u8 = 75;
-    pub const DEFAULT_CUSTOM_COLOR: &'static str = "#ffffff";
+    pub const DEFAULT_TRANSLATION_SCALE_PERCENT: u8 = 100;
+    pub const DEFAULT_CUSTOM_COLOR: &'static str = "#00e1ff";
 
     pub fn normalized(mut self) -> Self {
         self.font_size_px = self
@@ -817,7 +829,7 @@ impl TaskbarLyricsSettings {
 impl Default for TaskbarLyricsSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             align: TaskbarLyricsAlign::default(),
             font_size_px: Self::DEFAULT_FONT_SIZE_PX,
             translation_scale_percent: Self::DEFAULT_TRANSLATION_SCALE_PERCENT,
@@ -830,7 +842,7 @@ impl Default for TaskbarLyricsSettings {
 }
 
 fn default_taskbar_lyrics_text_effect() -> LyricsTextEffect {
-    LyricsTextEffect::None
+    LyricsTextEffect::Shadow
 }
 
 fn is_hex_color(value: &str) -> bool {
@@ -1342,9 +1354,9 @@ fn keyboard_binding(code: &str) -> ShortcutBinding {
     }
 }
 
-fn mouse_binding(code: &str) -> ShortcutBinding {
+fn gamepad_binding(code: &str) -> ShortcutBinding {
     ShortcutBinding {
-        device: ShortcutDevice::Mouse,
+        device: ShortcutDevice::Gamepad,
         code: code.to_owned(),
     }
 }
@@ -1352,12 +1364,28 @@ fn mouse_binding(code: &str) -> ShortcutBinding {
 impl Default for ShortcutSettings {
     fn default() -> Self {
         Self {
-            fullscreen: vec![keyboard_binding("F11")],
-            play_pause: vec![keyboard_binding("Space")],
-            seek_back: vec![keyboard_binding("ArrowLeft"), mouse_binding("wheelDown")],
-            seek_forward: vec![keyboard_binding("ArrowRight"), mouse_binding("wheelUp")],
-            previous: vec![keyboard_binding("PageUp"), mouse_binding("back")],
-            next: vec![keyboard_binding("PageDown"), mouse_binding("forward")],
+            fullscreen: vec![keyboard_binding("F11"), gamepad_binding("button6")],
+            play_pause: vec![keyboard_binding("Space"), gamepad_binding("button9")],
+            seek_back: vec![
+                keyboard_binding("ArrowLeft"),
+                gamepad_binding("button14"),
+                gamepad_binding("stickLeftXMinus"),
+            ],
+            seek_forward: vec![
+                keyboard_binding("ArrowRight"),
+                gamepad_binding("button15"),
+                gamepad_binding("stickLeftXPlus"),
+            ],
+            previous: vec![
+                gamepad_binding("button2"),
+                gamepad_binding("stickRightXMinus"),
+                keyboard_binding("PageUp"),
+            ],
+            next: vec![
+                gamepad_binding("button1"),
+                gamepad_binding("stickRightXPlus"),
+                keyboard_binding("PageDown"),
+            ],
         }
     }
 }
@@ -1559,7 +1587,7 @@ impl Default for AppSettings {
             output_devices: Vec::new(),
             output_presets: default_output_presets(),
             output_exclusive: false,
-            output_volume_sync: false,
+            output_volume_sync: true,
             cover_zoom: CoverZoomSettings::default(),
             taskbar_lyrics: TaskbarLyricsSettings::default(),
             language: UiLanguage::default(),
@@ -2061,7 +2089,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         output_devices: lenient_output_devices(raw.output_devices),
         output_presets: lenient_output_presets(raw.output_presets),
         output_exclusive: raw.output_exclusive.unwrap_or(false),
-        output_volume_sync: raw.output_volume_sync.unwrap_or(false),
+        output_volume_sync: raw.output_volume_sync.unwrap_or(true),
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
         language: lenient_language(raw.language),
@@ -2448,21 +2476,21 @@ mod tests {
     }
 
     #[test]
-    fn the_volume_link_is_off_by_default_and_survives_restart() {
+    fn the_volume_link_is_on_by_default_and_survives_restart() {
         let directory = test_directory("volume-sync");
         let path = directory.join("settings.json");
         let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
-        assert!(!store.snapshot().unwrap().output_volume_sync);
+        assert!(store.snapshot().unwrap().output_volume_sync);
         store
             .update(|settings| {
-                settings.output_volume_sync = true;
+                settings.output_volume_sync = false;
                 Ok(())
             })
             .expect("persist");
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
-        assert!(reopened.snapshot().unwrap().output_volume_sync);
+        assert!(!reopened.snapshot().unwrap().output_volume_sync);
         let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted["outputVolumeSync"], true);
+        assert_eq!(persisted["outputVolumeSync"], false);
     }
 
     #[test]
@@ -2654,19 +2682,19 @@ mod tests {
     #[test]
     fn taskbar_lyrics_settings_repair_field_by_field_and_roundtrip() {
         let defaults = TaskbarLyricsSettings::default();
-        assert!(!defaults.enabled);
+        assert!(defaults.enabled, "the taskbar lyrics are on by default");
         let parsed = lenient_taskbar_lyrics(Some(serde_json::json!({
             "enabled": true, "area": "right", "align": "sideways", "fontSizePx": 99,
             "useCustomColor": true, "customColor": "#ABCDEF", "showTranslation": "yes"
         })));
         assert!(parsed.enabled);
-        assert_eq!(parsed.align, TaskbarLyricsAlign::Left);
+        assert_eq!(parsed.align, TaskbarLyricsAlign::Center, "an unknown alignment is the default, centred");
         assert_eq!(parsed.font_size_px, 50);
-        assert_eq!(parsed.translation_scale_percent, 75, "a missing scale is the default");
+        assert_eq!(parsed.translation_scale_percent, 100, "a missing scale is the default");
         assert_eq!(parsed.custom_color, "#abcdef");
         assert!(!parsed.show_translation);
         let bad = lenient_taskbar_lyrics(Some(serde_json::json!({"fontSizePx": 2, "customColor": "red"})));
-        assert_eq!((bad.font_size_px, bad.custom_color.as_str()), (2, "#ffffff"));
+        assert_eq!((bad.font_size_px, bad.custom_color.as_str()), (2, "#00e1ff"));
         let tiny = lenient_taskbar_lyrics(Some(serde_json::json!({"fontSizePx": 0, "translationScalePercent": 0})));
         assert_eq!((tiny.font_size_px, tiny.translation_scale_percent), (1, 1));
         let big = lenient_taskbar_lyrics(Some(serde_json::json!({"translationScalePercent": 250})));
@@ -2699,9 +2727,9 @@ mod tests {
         assert!(persisted["taskbarLyrics"].get("area").is_none());
         assert_eq!(persisted["taskbarLyrics"]["fontSizePx"], 20);
         assert_eq!(persisted["taskbarLyrics"]["textEffect"], "stroke");
-        // An old file has no effect: the text stays as it was. Junk falls back the same way.
-        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"enabled": true}))).text_effect, LyricsTextEffect::None);
-        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "glow"}))).text_effect, LyricsTextEffect::None);
+        // An old file has no effect, and junk is no effect either: both fall back to the default, a shadow.
+        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"enabled": true}))).text_effect, LyricsTextEffect::Shadow);
+        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "glow"}))).text_effect, LyricsTextEffect::Shadow);
         assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "shadow"}))).text_effect, LyricsTextEffect::Shadow);
     }
 
@@ -3095,8 +3123,8 @@ mod tests {
                 TrackListColumnId::Album,
                 TrackListColumnId::Year,
                 TrackListColumnId::CreatedAt,
-                TrackListColumnId::AudioFormat,
                 TrackListColumnId::Duration,
+                TrackListColumnId::AudioFormat,
                 TrackListColumnId::PlayCount,
             ]
             .map(|id| (id, true))
@@ -3107,7 +3135,8 @@ mod tests {
         assert_eq!(value["nowPlayingLayout"], "a");
         assert_eq!(serde_json::to_value(NowPlayingLayout::B).unwrap(), "b");
         assert_eq!(value["trackListColumns"]["columns"][4]["id"], "createdAt");
-        assert_eq!(value["trackListColumns"]["columns"][5]["id"], "audioFormat");
+        assert_eq!(value["trackListColumns"]["columns"][5]["id"], "duration");
+        assert_eq!(value["trackListColumns"]["columns"][6]["id"], "audioFormat");
         assert_eq!(value["trackListColumns"]["columns"][5]["visible"], true);
         assert_eq!(value["trackListColumns"]["rowHeightPx"], 50);
         assert_eq!(value["trackListColumns"]["groupingEnabled"], true);
@@ -3120,26 +3149,26 @@ mod tests {
         assert_eq!(
             preferences,
             LyricsPreferences {
-                show_translation: false,
+                show_translation: true,
                 show_romanization: false,
-                inactive_opacity_percent: 70,
-                primary_font_size_px: 14,
-                auxiliary_font_size_px: 10,
-                line_gap_px: 24,
+                inactive_opacity_percent: 50,
+                primary_font_size_px: 20,
+                auxiliary_font_size_px: 18,
+                line_gap_px: 10,
                 text_effect: LyricsTextEffect::Shadow,
-                simplified_to_traditional: false,
+                simplified_to_traditional: true,
             }
         );
 
         let value = serde_json::to_value(preferences).expect("serialize lyric preferences");
-        assert_eq!(value["showTranslation"], false);
+        assert_eq!(value["showTranslation"], true);
         assert_eq!(value["showRomanization"], false);
-        assert_eq!(value["inactiveOpacityPercent"], 70);
-        assert_eq!(value["primaryFontSizePx"], 14);
-        assert_eq!(value["auxiliaryFontSizePx"], 10);
-        assert_eq!(value["lineGapPx"], 24);
+        assert_eq!(value["inactiveOpacityPercent"], 50);
+        assert_eq!(value["primaryFontSizePx"], 20);
+        assert_eq!(value["auxiliaryFontSizePx"], 18);
+        assert_eq!(value["lineGapPx"], 10);
         assert_eq!(value["textEffect"], "shadow");
-        assert_eq!(value["simplifiedToTraditional"], false);
+        assert_eq!(value["simplifiedToTraditional"], true);
         assert!(value.get("show_translation").is_none());
         let mut without_conversion = value.clone();
         without_conversion
@@ -3147,9 +3176,10 @@ mod tests {
             .unwrap()
             .remove("simplifiedToTraditional");
         assert!(
-            !serde_json::from_value::<LyricsPreferences>(without_conversion)
+            serde_json::from_value::<LyricsPreferences>(without_conversion)
                 .unwrap()
-                .simplified_to_traditional
+                .simplified_to_traditional,
+            "a file without the key gets the default, on"
         );
         assert_eq!(
             serde_json::from_value::<LyricsPreferences>(value).unwrap(),
@@ -3256,7 +3286,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&json).unwrap()).expect("write old schema four JSON");
 
         let store = SettingsStore::open(&path, AppSettings::default()).expect("read old settings");
-        assert_eq!(store.snapshot().unwrap().lyrics_preferences.line_gap_px, 24);
+        assert_eq!(store.snapshot().unwrap().lyrics_preferences.line_gap_px, 10);
 
         store
             .update(|settings| {
@@ -3288,7 +3318,7 @@ mod tests {
         });
 
         assert!(result.is_err());
-        assert_eq!(store.snapshot().unwrap().lyrics_preferences.line_gap_px, 24);
+        assert_eq!(store.snapshot().unwrap().lyrics_preferences.line_gap_px, 10);
         assert_eq!(fs::read(path).unwrap(), original);
     }
 
@@ -3343,11 +3373,11 @@ mod tests {
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(persisted["schemaVersion"], SETTINGS_SCHEMA_VERSION);
-        assert_eq!(persisted["lyricsPreferences"]["showTranslation"], false);
+        assert_eq!(persisted["lyricsPreferences"]["showTranslation"], true);
         assert_eq!(persisted["lyricsPreferences"]["showRomanization"], false);
-        assert_eq!(persisted["lyricsPreferences"]["inactiveOpacityPercent"], 70);
-        assert_eq!(persisted["lyricsPreferences"]["primaryFontSizePx"], 14);
-        assert_eq!(persisted["lyricsPreferences"]["auxiliaryFontSizePx"], 10);
+        assert_eq!(persisted["lyricsPreferences"]["inactiveOpacityPercent"], 50);
+        assert_eq!(persisted["lyricsPreferences"]["primaryFontSizePx"], 20);
+        assert_eq!(persisted["lyricsPreferences"]["auxiliaryFontSizePx"], 18);
         assert_eq!(persisted["sourceRegistryAuthoritative"], false);
     }
 
@@ -3482,7 +3512,7 @@ mod tests {
         .expect("old track list settings remain readable");
         assert_eq!(old.row_height_px, 50);
         assert!(old.grouping_enabled);
-        assert_eq!(old.text_overflow_mode, TrackTextOverflowMode::Middle);
+        assert_eq!(old.text_overflow_mode, TrackTextOverflowMode::End);
 
         let end_elision: TrackListColumnSettings = serde_json::from_value(serde_json::json!({
             "columns": TrackListColumnSettings::default().columns,
@@ -3522,9 +3552,9 @@ mod tests {
             "columns": TrackListColumnSettings::default().columns,
         }))
         .expect("old track list settings remain readable");
-        assert_eq!(old.album_card_max_width_px, 180);
+        assert_eq!(old.album_card_max_width_px, 200);
         let encoded = serde_json::to_value(&old).unwrap();
-        assert_eq!(encoded["albumCardMaxWidthPx"], 180);
+        assert_eq!(encoded["albumCardMaxWidthPx"], 200);
 
         let narrow = TrackListColumnSettings {
             album_card_max_width_px: 10,
@@ -3722,11 +3752,11 @@ mod tests {
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(
             persisted["nowPlayingAppearancePreferences"]["backgroundBlurPx"],
-            20
+            10
         );
         assert_eq!(
             persisted["nowPlayingAppearancePreferences"]["backgroundOpacityPercent"],
-            40
+            80
         );
         assert_eq!(
             persisted["nowPlayingAppearancePreferences"]["coverCornerStyle"],
@@ -3983,7 +4013,7 @@ mod tests {
                 migrated
                     .now_playing_appearance_preferences
                     .background_opacity_percent,
-                40
+                80
             );
             assert!(migrated.shuffle);
             assert_eq!(migrated.sources.len(), 1);
@@ -3996,7 +4026,7 @@ mod tests {
                 serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
             assert_eq!(
                 persisted["nowPlayingAppearancePreferences"]["backgroundOpacityPercent"],
-                40
+                80
             );
             assert!(
                 persisted["nowPlayingAppearancePreferences"]["surfaceTransparencyPercent"]
@@ -4042,15 +4072,15 @@ mod tests {
             "accentHex": "#55D9FF"
         }))
         .expect("deserialize old theme settings");
-        assert_eq!(old.color_mode, ThemeColorMode::AutoTextColor);
+        assert_eq!(old.color_mode, ThemeColorMode::AutoBackgroundOpacity);
         assert_eq!(
             old.background_opacity_text_color,
             BackgroundOpacityTextColor::White
         );
-        assert_eq!(old.main_background_clarity_percent, 0);
-        assert_eq!(old.cover_background_clarity_percent, 0);
-        assert_eq!(old.border_opacity_percent, 100);
-        assert_eq!(old.divider_opacity_percent, 100);
+        assert_eq!(old.main_background_clarity_percent, 65);
+        assert_eq!(old.cover_background_clarity_percent, 50);
+        assert_eq!(old.border_opacity_percent, 10);
+        assert_eq!(old.divider_opacity_percent, 10);
 
         let selected = ThemeSettings {
             border_opacity_percent: 63,
@@ -4137,7 +4167,7 @@ mod tests {
                 SettingsStore::open(&path, AppSettings::default()).expect("open v8 settings");
             let migrated = store.snapshot().expect("snapshot migrated settings");
             assert_eq!(migrated.theme.main_background_mode, expected_mode);
-            assert_eq!(migrated.theme.slideshow_interval_minutes, 10);
+            assert_eq!(migrated.theme.slideshow_interval_minutes, 2);
             assert_eq!(migrated.theme.slideshow_order, SlideshowOrder::Sequential);
             let persisted: serde_json::Value =
                 serde_json::from_slice(&fs::read(&path).expect("read migrated settings"))

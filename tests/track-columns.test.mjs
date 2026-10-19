@@ -83,7 +83,7 @@ test('numeric list columns are centered while text columns keep their left align
 test('audio format column is fixed at 163 CSS pixels', () => {
   const column = TRACK_COLUMN_DEFINITIONS.find(({ id }) => id === 'audioFormat');
   assert.deepEqual({ min: column?.min, minPx: column?.minPx }, { min: '163px', minPx: 163 });
-  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ')[6], '163px');
+  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ')[7], '163px');
 });
 
 test('list headers use only the shared bottom boundary and sort buttons fill their cells', async () => {
@@ -125,11 +125,11 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
 
 test('default list columns are shared and keep the index as the only fixed column', () => {
   assert.deepEqual(DEFAULT_TRACK_COLUMN_PREFERENCES.map(({ id }) => id), [
-    'title', 'artist', 'album', 'year', 'createdAt', 'audioFormat', 'duration', 'playCount',
+    'title', 'artist', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount',
   ]);
   assert.equal(trackListColumnCount(DEFAULT_TRACK_COLUMN_PREFERENCES), 9);
   assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ').length, 9);
-  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES, DEFAULT_TRACK_COLUMN_WIDTHS).split(' ')[1], '220px');
+  assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES, DEFAULT_TRACK_COLUMN_WIDTHS).split(' ')[1], '184px');
 });
 
 test('flexible column widths clamp and feed the shared grid template', () => {
@@ -152,7 +152,7 @@ test('date, duration, and play count columns use the requested fixed fullwidth-c
 test('settings columns can move directly to the long-press drag destination', () => {
   const moved = moveTrackColumnTo(DEFAULT_TRACK_COLUMN_PREFERENCES, 'year', 6);
   assert.deepEqual(moved.map(({ id }) => id), [
-    'title', 'artist', 'album', 'createdAt', 'audioFormat', 'duration', 'year', 'playCount',
+    'title', 'artist', 'album', 'createdAt', 'duration', 'audioFormat', 'year', 'playCount',
   ]);
   assert.deepEqual(moveTrackColumnTo(moved, 'year', -1), moved);
 });
@@ -220,14 +220,14 @@ test('playlist sort includes the original entry position and toggles direction',
 test('column order can move the first and last information columns without moving the index', () => {
   const movedFirst = moveTrackColumn(DEFAULT_TRACK_COLUMN_PREFERENCES, 'title', 'down');
   assert.deepEqual(movedFirst.map(({ id }) => id), [
-    'artist', 'title', 'album', 'year', 'createdAt', 'audioFormat', 'duration', 'playCount',
+    'artist', 'title', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount',
   ]);
   const movedLast = moveTrackColumn(movedFirst, 'playCount', 'up');
   assert.deepEqual(movedLast.map(({ id }) => id), [
-    'artist', 'title', 'album', 'year', 'createdAt', 'audioFormat', 'playCount', 'duration',
+    'artist', 'title', 'album', 'year', 'createdAt', 'duration', 'playCount', 'audioFormat',
   ]);
   assert.deepEqual(moveTrackColumn(movedLast, 'artist', 'up'), movedLast);
-  assert.deepEqual(moveTrackColumn(movedLast, 'duration', 'down'), movedLast);
+  assert.deepEqual(moveTrackColumn(movedLast, 'audioFormat', 'down'), movedLast);
   assert.equal(trackListGridTemplate(movedLast).split(' ').at(0), '26px');
   assert.notEqual(trackListGridTemplate(movedLast).split(' ').at(-1), '42px');
 });

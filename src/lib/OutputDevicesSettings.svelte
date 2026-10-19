@@ -14,7 +14,7 @@
 
   const s = $state({
     /** "音量同步", kept and applied by the backend (it works with no settings UI open). */
-    volumeSync: false,
+    volumeSync: true,
     devices: [] as AudioOutputDevice[],
     entries: [] as OutputDeviceEntry[],
     statuses: [] as AudioOutputDeviceStatus[],

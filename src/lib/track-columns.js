@@ -35,13 +35,13 @@ export function isNumericListColumn(id) {
 }
 
 /** @type {TrackColumnPreference[]} */
-export const DEFAULT_TRACK_COLUMN_PREFERENCES = TRACK_COLUMN_DEFINITIONS.map(({ id }) => ({ id, visible: true }));
+export const DEFAULT_TRACK_COLUMN_PREFERENCES = ['title', 'artist', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount'].map((id) => ({ id: /** @type {TrackColumnId} */ (id), visible: true }));
 
 /** @type {TrackColumnWidths} */
 export const DEFAULT_TRACK_COLUMN_WIDTHS = Object.freeze({
-  title: 220,
-  artist: 150,
-  album: 160,
+  title: 184,
+  artist: 144,
+  album: 257,
 });
 
 export const DEFAULT_TRACK_ROW_HEIGHT_PX = 50;
@@ -55,7 +55,7 @@ export function normalizeTrackRowHeightPx(value) {
 }
 
 /** @type {LibraryListSort} */
-export const DEFAULT_LIBRARY_SORT = Object.freeze({ field: 'title', direction: 'asc' });
+export const DEFAULT_LIBRARY_SORT = Object.freeze({ field: 'createdAt', direction: 'asc' });
 
 /** @type {ReadonlySet<TrackColumnId>} */
 export const RESIZABLE_TRACK_COLUMN_IDS = Object.freeze(new Set(/** @type {TrackColumnId[]} */ (['title', 'artist', 'album'])));

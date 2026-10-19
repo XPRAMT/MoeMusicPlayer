@@ -1,14 +1,14 @@
 ﻿/** @typedef {import('./ipc').LyricsPreferences} LyricsPreferences */
 
 export const DEFAULT_LYRICS_PREFERENCES = Object.freeze({
-  showTranslation: false,
+  showTranslation: true,
   showRomanization: false,
-  inactiveOpacityPercent: 70,
-  primaryFontSizePx: 14,
-  auxiliaryFontSizePx: 10,
-  lineGapPx: 24,
+  inactiveOpacityPercent: 50,
+  primaryFontSizePx: 20,
+  auxiliaryFontSizePx: 18,
+  lineGapPx: 10,
   textEffect: 'shadow',
-  simplifiedToTraditional: false,
+  simplifiedToTraditional: true,
 });
 
 export const LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);

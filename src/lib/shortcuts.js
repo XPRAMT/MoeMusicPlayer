@@ -65,23 +65,33 @@ const KEY_LABELS = {
 /** @returns {ShortcutSettings} */
 export function defaultShortcutSettings() {
   return {
-    fullscreen: [{ device: 'keyboard', code: 'F11' }],
-    playPause: [{ device: 'keyboard', code: 'Space' }],
+    fullscreen: [
+      { device: 'keyboard', code: 'F11' },
+      { device: 'gamepad', code: 'button6' },
+    ],
+    playPause: [
+      { device: 'keyboard', code: 'Space' },
+      { device: 'gamepad', code: 'button9' },
+    ],
     seekBack: [
       { device: 'keyboard', code: 'ArrowLeft' },
-      { device: 'mouse', code: 'wheelDown' },
+      { device: 'gamepad', code: 'button14' },
+      { device: 'gamepad', code: 'stickLeftXMinus' },
     ],
     seekForward: [
       { device: 'keyboard', code: 'ArrowRight' },
-      { device: 'mouse', code: 'wheelUp' },
+      { device: 'gamepad', code: 'button15' },
+      { device: 'gamepad', code: 'stickLeftXPlus' },
     ],
     previous: [
+      { device: 'gamepad', code: 'button2' },
+      { device: 'gamepad', code: 'stickRightXMinus' },
       { device: 'keyboard', code: 'PageUp' },
-      { device: 'mouse', code: 'back' },
     ],
     next: [
+      { device: 'gamepad', code: 'button1' },
+      { device: 'gamepad', code: 'stickRightXPlus' },
       { device: 'keyboard', code: 'PageDown' },
-      { device: 'mouse', code: 'forward' },
     ],
   };
 }

@@ -1,11 +1,11 @@
 // Settings of the lyrics drawn on the Windows taskbar (ADR 0018). The backend (settings.rs `TaskbarLyricsSettings`)
 // enforces the same ranges.
 
-export const TASKBAR_LYRICS_FONT_SIZE_PX = Object.freeze({ min: 1, max: 50, default: 16 });
+export const TASKBAR_LYRICS_FONT_SIZE_PX = Object.freeze({ min: 1, max: 50, default: 20 });
 /** The translation line as a percentage of the main line (100 = the same size). */
-export const TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT = Object.freeze({ min: 1, max: 100, default: 75 });
+export const TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT = Object.freeze({ min: 1, max: 100, default: 100 });
 export const TASKBAR_LYRICS_ALIGNMENTS = Object.freeze(['left', 'center', 'right']);
-export const TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR = '#ffffff';
+export const TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR = '#00e1ff';
 
 export const TASKBAR_LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);
 
@@ -13,14 +13,14 @@ export const TASKBAR_LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'n
 
 /** @type {Readonly<TaskbarLyricsSettings>} */
 export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
-  enabled: false,
-  align: 'left',
+  enabled: true,
+  align: 'center',
   fontSizePx: TASKBAR_LYRICS_FONT_SIZE_PX.default,
   translationScalePercent: TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT.default,
   useCustomColor: false,
   customColor: TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR,
   showTranslation: false,
-  textEffect: 'none',
+  textEffect: 'shadow',
 });
 
 /** @param {unknown} value */

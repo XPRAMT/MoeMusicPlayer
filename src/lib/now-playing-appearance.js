@@ -2,8 +2,8 @@
 /** @typedef {'loading' | 'saved' | 'saving' | 'error' | 'preview'} SettingsState */
 
 export const DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES = Object.freeze({
-  backgroundBlurPx: 20,
-  backgroundOpacityPercent: 40,
+  backgroundBlurPx: 10,
+  backgroundOpacityPercent: 80,
   coverCornerStyle: /** @type {const} */ ('rounded'),
   timelineStyle: /** @type {const} */ ('edge'),
 });

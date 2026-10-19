@@ -26,11 +26,11 @@
   --text-soft: rgba(245, 251, 255, 0.84);
   --muted: rgba(245, 251, 255, 0.72);
   --quiet: rgba(245, 251, 255, 0.6);
-  --accent: #55d9ff;
-  --accent-rgb: 85, 217, 255;
-  --accent-bright: #74e1ff;
-  --accent-text: #55d9ff;
-  --accent-foreground: #00141c;
+  --accent: #a9c3fe;
+  --accent-rgb: 169, 195, 254;
+  --accent-bright: #b8cefe;
+  --accent-text: #a9c3fe;
+  --accent-foreground: #000000;
   --status-danger: #a61b1b;
   --status-success: #1f6b4f;
   --status-warning: #805500;

@@ -8,8 +8,8 @@ import {
 
 test('appearance preferences default and clamp to supported ranges', () => {
   assert.deepEqual(normalizeNowPlayingAppearancePreferences(), {
-    backgroundBlurPx: 20,
-    backgroundOpacityPercent: 40,
+    backgroundBlurPx: 10,
+    backgroundOpacityPercent: 80,
     coverCornerStyle: 'rounded',
     timelineStyle: 'edge',
   });
@@ -39,12 +39,12 @@ test('appearance preferences default and clamp to supported ranges', () => {
   for (const legacy of ['line', 'bar', 'minimal']) {
     assert.deepEqual(normalizeNowPlayingAppearancePreferences({
       backgroundBlurPx: 10,
-      backgroundOpacityPercent: 40,
+      backgroundOpacityPercent: 80,
       coverCornerStyle: 'rounded',
       timelineStyle: legacy,
     }), {
       backgroundBlurPx: 10,
-      backgroundOpacityPercent: 40,
+      backgroundOpacityPercent: 80,
       coverCornerStyle: 'rounded',
       timelineStyle: 'edge',
     });
@@ -57,7 +57,7 @@ test('appearance preferences default and clamp to supported ranges', () => {
     assert.deepEqual(normalizeNowPlayingAppearancePreferences({
       backgroundBlurPx: 27,
       surfaceTransparencyPercent: legacySurface,
-    }), { backgroundBlurPx: 27, backgroundOpacityPercent: 40, coverCornerStyle: 'rounded', timelineStyle: 'edge' });
+    }), { backgroundBlurPx: 27, backgroundOpacityPercent: 80, coverCornerStyle: 'rounded', timelineStyle: 'edge' });
   }
   assert.equal(
     normalizeNowPlayingAppearancePreferences({ backgroundBrightnessPercent: 55 }).backgroundOpacityPercent,

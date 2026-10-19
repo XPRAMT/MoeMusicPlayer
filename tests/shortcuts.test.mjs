@@ -9,34 +9,38 @@ import {
   shortcutBindingLabel,
 } from '../src/lib/shortcuts.js';
 
-test('shortcut defaults bind keyboard and mouse the way the player starts', () => {
+test('shortcut defaults bind the keyboard and the gamepad the way the player starts', () => {
   const shortcuts = defaultShortcutSettings();
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'F11'), 'fullscreen');
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'Space'), 'playPause');
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'ArrowLeft'), 'seekBack');
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'ArrowRight'), 'seekForward');
-  assert.equal(shortcutActionFor(shortcuts, 'mouse', 'wheelUp'), 'seekForward');
-  assert.equal(shortcutActionFor(shortcuts, 'mouse', 'wheelDown'), 'seekBack');
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'PageUp'), 'previous');
   assert.equal(shortcutActionFor(shortcuts, 'keyboard', 'PageDown'), 'next');
-  assert.equal(shortcutActionFor(shortcuts, 'mouse', 'back'), 'previous');
-  assert.equal(shortcutActionFor(shortcuts, 'mouse', 'forward'), 'next');
+  assert.equal(shortcutActionFor(shortcuts, 'gamepad', 'button6'), 'fullscreen');
+  assert.equal(shortcutActionFor(shortcuts, 'gamepad', 'button9'), 'playPause');
+  assert.equal(shortcutActionFor(shortcuts, 'gamepad', 'button14'), 'seekBack');
+  assert.equal(shortcutActionFor(shortcuts, 'gamepad', 'stickLeftXMinus'), 'seekBack');
+  assert.equal(shortcutActionFor(shortcuts, 'gamepad', 'button15'), 'seekForward');
+  assert.equal(shortcutActionFor(shortcuts, 'gamepad', 'stickLeftXPlus'), 'seekForward');
+  assert.equal(shortcutActionFor(shortcuts, 'gamepad', 'button2'), 'previous');
+  assert.equal(shortcutActionFor(shortcuts, 'gamepad', 'stickRightXMinus'), 'previous');
+  assert.equal(shortcutActionFor(shortcuts, 'gamepad', 'button1'), 'next');
+  assert.equal(shortcutActionFor(shortcuts, 'gamepad', 'stickRightXPlus'), 'next');
+  assert.equal(Object.values(shortcuts).flat().some((binding) => binding.device === 'mouse'), false, 'no mouse bindings by default');
   assert.equal(shortcutBindingLabel(shortcuts.playPause[0]), '空白鍵');
-  assert.equal(shortcutBindingLabel(shortcuts.previous[1]), '滑鼠上頁');
 });
 
-test('gamepad buttons can be bound and are absent from the defaults', () => {
+test('more gamepad buttons and sticks can be bound on top of the defaults', () => {
   const defaults = defaultShortcutSettings();
-  const boundDevices = Object.values(defaults).flat().map((binding) => binding.device);
-  assert.equal(boundDevices.includes('gamepad'), false);
   const bound = addShortcutBinding(defaults, 'playPause', { device: 'gamepad', code: 'button0' });
   assert.equal(shortcutActionFor(bound, 'gamepad', 'button0'), 'playPause');
   assert.equal(shortcutActionFor(bound, 'keyboard', 'Space'), 'playPause');
-  assert.equal(shortcutBindingLabel(bound.playPause.find((binding) => binding.device === 'gamepad')), '手柄 A');
-  const stick = addShortcutBinding(defaults, 'seekForward', { device: 'gamepad', code: 'stickLeftXPlus' });
-  assert.equal(shortcutActionFor(stick, 'gamepad', 'stickLeftXPlus'), 'seekForward');
+  assert.equal(shortcutBindingLabel(bound.playPause.find((binding) => binding.code === 'button0')), '手柄 A');
+  const stick = addShortcutBinding(defaults, 'seekForward', { device: 'gamepad', code: 'stickLeftYPlus' });
+  assert.equal(shortcutActionFor(stick, 'gamepad', 'stickLeftYPlus'), 'seekForward');
   assert.equal(shortcutBindingLabel({ device: 'gamepad', code: 'stickLeftYMinus' }), '左搖桿上');
-  assert.equal(Object.values(defaults).flat().some((binding) => binding.code.startsWith('stick')), false);
+  assert.equal(shortcutActionFor(defaults, 'gamepad', 'stickLeftYMinus'), null, 'the vertical sticks are free');
   const rejected = normalizeShortcutSettings({ playPause: [{ device: 'gamepad', code: 'button99' }] });
   assert.equal(shortcutActionFor(rejected, 'gamepad', 'button99'), null);
 });

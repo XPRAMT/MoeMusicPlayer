@@ -3,20 +3,20 @@
 /** @type {Readonly<ThemePreferences>} */
 export const DEFAULT_THEME_PREFERENCES = Object.freeze({
   backgroundHex: '#000000',
-  accentHex: '#55D9FF',
-  borderOpacityPercent: 100,
-  dividerOpacityPercent: 100,
-  colorMode: 'autoTextColor',
+  accentHex: '#A9C3FE',
+  borderOpacityPercent: 10,
+  dividerOpacityPercent: 10,
+  colorMode: 'autoBackgroundOpacity',
   backgroundOpacityTextColor: 'white',
-  mainBackgroundClarityPercent: 0,
-  coverBackgroundClarityPercent: 0,
-  quickSettingsOpacityPercent: 70,
-  quickSettingsBlurPx: 12,
-  mainBackgroundBlurPx: 20,
-  mainBackgroundOpacityPercent: 40,
+  mainBackgroundClarityPercent: 65,
+  coverBackgroundClarityPercent: 50,
+  quickSettingsOpacityPercent: 20,
+  quickSettingsBlurPx: 5,
+  mainBackgroundBlurPx: 5,
+  mainBackgroundOpacityPercent: 60,
   mainBackgroundMode: 'solid',
   slideshowFolder: null,
-  slideshowIntervalMinutes: 10,
+  slideshowIntervalMinutes: 2,
   slideshowOrder: 'sequential',
   autoTextColorThresholdPercent: 50,
 });
@@ -62,8 +62,8 @@ export function normalizeThemePreferences(value) {
       100,
       DEFAULT_THEME_PREFERENCES.dividerOpacityPercent,
     ),
-    colorMode: candidate.colorMode === 'autoBackgroundOpacity'
-      ? 'autoBackgroundOpacity'
+    colorMode: candidate.colorMode === 'autoBackgroundOpacity' || candidate.colorMode === 'autoTextColor'
+      ? candidate.colorMode
       : DEFAULT_THEME_PREFERENCES.colorMode,
     backgroundOpacityTextColor: candidate.backgroundOpacityTextColor === 'black'
       ? 'black'

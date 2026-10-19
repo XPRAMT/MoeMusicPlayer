@@ -61,7 +61,7 @@
   }: Props = $props();
 
   const textOverflowStore = getContext<TrackTextOverflowStore | undefined>(TRACK_TEXT_OVERFLOW_CONTEXT)
-    ?? readable<TrackTextOverflowMode>('middle');
+    ?? readable<TrackTextOverflowMode>('end');
 
   let resizeSession: {
     id: string;

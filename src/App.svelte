@@ -206,7 +206,7 @@
     normalizeLyricsPreferences,
   } from './lib/lyrics-preferences.js';
 
-  const trackTextOverflowStore = writable<TrackTextOverflowMode>('middle');
+  const trackTextOverflowStore = writable<TrackTextOverflowMode>('end');
   setContext(TRACK_TEXT_OVERFLOW_CONTEXT, trackTextOverflowStore);
 
   type AndroidWindowInsets = {
@@ -532,7 +532,7 @@
   let trackRowHeightPx = $state(DEFAULT_TRACK_ROW_HEIGHT_PX);
   let albumCardMaxWidthPx = $state(DEFAULT_ALBUM_CARD_MAX_WIDTH_PX);
   let groupingEnabled = $state(true);
-  let trackTextOverflowMode = $state<TrackTextOverflowMode>('middle');
+  let trackTextOverflowMode = $state<TrackTextOverflowMode>('end');
   let librarySort = $state<LibraryListSort>({ ...DEFAULT_LIBRARY_SORT });
   let queueSort = $state<LibraryListSort | null>(null);
   let queueSortBusy = false;
@@ -1655,7 +1655,7 @@
       trackRowHeightPx = normalizeTrackRowHeightPx(stored.rowHeightPx);
       albumCardMaxWidthPx = normalizeAlbumCardMaxWidthPx(stored.albumCardMaxWidthPx);
       groupingEnabled = stored.groupingEnabled !== false;
-      trackTextOverflowMode = stored.textOverflowMode === 'end' ? 'end' : 'middle';
+      trackTextOverflowMode = stored.textOverflowMode === 'middle' ? 'middle' : 'end';
       trackTextOverflowStore.set(trackTextOverflowMode);
       librarySort = normalizeLibrarySort(stored.librarySort);
       trackColumnSettingsState = 'saved';
@@ -1727,7 +1727,7 @@
         trackRowHeightPx = normalizeTrackRowHeightPx(saved.rowHeightPx);
         albumCardMaxWidthPx = normalizeAlbumCardMaxWidthPx(saved.albumCardMaxWidthPx);
         groupingEnabled = saved.groupingEnabled !== false;
-        trackTextOverflowMode = saved.textOverflowMode === 'end' ? 'end' : 'middle';
+        trackTextOverflowMode = saved.textOverflowMode === 'middle' ? 'middle' : 'end';
         trackTextOverflowStore.set(trackTextOverflowMode);
         librarySort = normalizeLibrarySort(saved.librarySort);
         trackColumnSettingsState = 'saved';

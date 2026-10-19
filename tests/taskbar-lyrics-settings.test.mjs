@@ -13,7 +13,7 @@ test('taskbar lyrics settings are repaired field by field', () => {
   assert.deepEqual(normalizeTaskbarLyricsSettings(null), DEFAULT_TASKBAR_LYRICS_SETTINGS);
   assert.deepEqual(normalizeTaskbarLyricsSettings({
     enabled: true, align: 'center', fontSizePx: 20.4, translationScalePercent: 60.4, useCustomColor: true, customColor: '#ABCDEF', showTranslation: true,
-  }), { enabled: true, align: 'center', fontSizePx: 20, translationScalePercent: 60, useCustomColor: true, customColor: '#abcdef', showTranslation: true, textEffect: 'none' });
+  }), { enabled: true, align: 'center', fontSizePx: 20, translationScalePercent: 60, useCustomColor: true, customColor: '#abcdef', showTranslation: true, textEffect: 'shadow' });
   const repaired = normalizeTaskbarLyricsSettings({ enabled: 'yes', area: 'up', align: 3, fontSizePx: 99, customColor: 'red', showTranslation: 1 });
   assert.deepEqual(repaired, { ...DEFAULT_TASKBAR_LYRICS_SETTINGS, fontSizePx: 50 });
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 1 }).fontSizePx, 1);
@@ -22,8 +22,8 @@ test('taskbar lyrics settings are repaired field by field', () => {
   assert.equal(normalizeTaskbarLyricsSettings({ translationScalePercent: 0 }).translationScalePercent, 1);
   assert.equal(normalizeTaskbarLyricsSettings({ translationScalePercent: 100 }).translationScalePercent, 100);
   assert.equal(normalizeTaskbarLyricsSettings({ translationScalePercent: 400 }).translationScalePercent, 100);
-  assert.equal(normalizeTaskbarLyricsSettings({ translationScalePercent: 'half' }).translationScalePercent, 75);
-  assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 'big' }).fontSizePx, 16);
+  assert.equal(normalizeTaskbarLyricsSettings({ translationScalePercent: 'half' }).translationScalePercent, 100);
+  assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 'big' }).fontSizePx, 20);
 });
 
 test('colour follows the taskbar theme unless a custom colour is chosen', () => {
@@ -52,13 +52,13 @@ test('a line wider than the window scrolls over the time it is shown and rests a
   assert.equal(getLyricScrollProgress(Number.NaN, 4000), 0);
 });
 
-test('the text effect is one of shadow, stroke and none (default none), and its colour is the opposite of the text', () => {
-  assert.equal(DEFAULT_TASKBAR_LYRICS_SETTINGS.textEffect, 'none');
+test('the text effect is one of shadow, stroke and none (default shadow), and its colour is the opposite of the text', () => {
+  assert.equal(DEFAULT_TASKBAR_LYRICS_SETTINGS.textEffect, 'shadow');
   for (const effect of ['shadow', 'stroke', 'none']) {
     assert.equal(normalizeTaskbarLyricsSettings({ textEffect: effect }).textEffect, effect);
   }
-  assert.equal(normalizeTaskbarLyricsSettings({ textEffect: 'glow' }).textEffect, 'none');
-  assert.equal(normalizeTaskbarLyricsSettings({ textEffect: 3 }).textEffect, 'none');
+  assert.equal(normalizeTaskbarLyricsSettings({ textEffect: 'glow' }).textEffect, 'shadow');
+  assert.equal(normalizeTaskbarLyricsSettings({ textEffect: 3 }).textEffect, 'shadow');
   // White text on a dark taskbar gets a dark effect; black text on a light taskbar gets a light one.
   assert.equal(getTaskbarLyricsEffectRgb(DEFAULT_TASKBAR_LYRICS_SETTINGS, false), '0, 0, 0');
   assert.equal(getTaskbarLyricsEffectRgb(DEFAULT_TASKBAR_LYRICS_SETTINGS, true), '255, 255, 255');

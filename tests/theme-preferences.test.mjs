@@ -1,7 +1,7 @@
 ﻿import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  DEFAULT_THEME_PREFERENCES,
+  DEFAULT_THEME_PREFERENCES as SHIPPED_DEFAULTS,
   compositeBackgroundHex,
   contrastRatio,
   contrastingTextColor,
@@ -11,8 +11,8 @@ import {
   applyTheme,
 } from '../src/lib/theme.js';
 
-test('default appearance uses pure black and a water-blue accent', () => {
-  assert.deepEqual(DEFAULT_THEME_PREFERENCES, {
+/** A plain black, white-text baseline for the colour tests; the shipped defaults are checked separately. */
+const DEFAULT_THEME_PREFERENCES = Object.freeze({
     backgroundHex: '#000000',
     accentHex: '#55D9FF',
     borderOpacityPercent: 100,
@@ -28,6 +28,27 @@ test('default appearance uses pure black and a water-blue accent', () => {
     mainBackgroundMode: 'solid',
     slideshowFolder: null,
     slideshowIntervalMinutes: 10,
+    slideshowOrder: 'sequential',
+    autoTextColorThresholdPercent: 50,
+  });
+
+test('default appearance is the maintainer chosen look: black page, pale-blue accent, automatic background opacity', () => {
+  assert.deepEqual(SHIPPED_DEFAULTS, {
+    backgroundHex: '#000000',
+    accentHex: '#A9C3FE',
+    borderOpacityPercent: 10,
+    dividerOpacityPercent: 10,
+    colorMode: 'autoBackgroundOpacity',
+    backgroundOpacityTextColor: 'white',
+    mainBackgroundClarityPercent: 65,
+    coverBackgroundClarityPercent: 50,
+    quickSettingsOpacityPercent: 20,
+    quickSettingsBlurPx: 5,
+    mainBackgroundBlurPx: 5,
+    mainBackgroundOpacityPercent: 60,
+    mainBackgroundMode: 'solid',
+    slideshowFolder: null,
+    slideshowIntervalMinutes: 2,
     slideshowOrder: 'sequential',
     autoTextColorThresholdPercent: 50,
   });
@@ -48,7 +69,7 @@ test('text color follows relative-luminance Y against the threshold', () => {
 });
 
 test('theme variables follow both selected colors and derive coordinated surfaces', () => {
-  const variables = createThemeCssVariables({ backgroundHex: '#18283A', accentHex: '#D84A9A' });
+  const variables = createThemeCssVariables({ ...DEFAULT_THEME_PREFERENCES, backgroundHex: '#18283A', accentHex: '#D84A9A' });
   assert.equal(variables['--page'], '#18283A');
   assert.equal(variables['--accent'], '#D84A9A');
   assert.equal(variables['--text'], '#FFFFFF');
@@ -112,7 +133,7 @@ test('composite background mixes page color with image average by opacity', () =
 
 test('contrast background can flip text while keeping the solid page color', () => {
   const variables = createThemeCssVariables(
-    { backgroundHex: '#000000', accentHex: '#55D9FF' },
+    { ...DEFAULT_THEME_PREFERENCES, backgroundHex: '#000000', accentHex: '#55D9FF' },
     { contrastBackgroundHex: '#E8E8E8' },
   );
   assert.equal(variables['--page'], '#000000');
@@ -124,16 +145,17 @@ test('contrast background can flip text while keeping the solid page color', () 
 });
 
 test('text inverse is always the opposite of the chosen text color', () => {
-  const dark = createThemeCssVariables({ backgroundHex: '#000000', accentHex: '#55D9FF' });
+  const dark = createThemeCssVariables({ ...DEFAULT_THEME_PREFERENCES, backgroundHex: '#000000', accentHex: '#55D9FF' });
   assert.equal(dark['--text'], '#FFFFFF');
   assert.equal(dark['--text-inverse'], '#000000');
-  const light = createThemeCssVariables({ backgroundHex: '#FFFFFF', accentHex: '#55D9FF' });
+  const light = createThemeCssVariables({ ...DEFAULT_THEME_PREFERENCES, backgroundHex: '#FFFFFF', accentHex: '#55D9FF' });
   assert.equal(light['--text'], '#000000');
   assert.equal(light['--text-inverse'], '#FFFFFF');
 });
 
 test('threshold preference switches text without using contrast comparison', () => {
   const low = createThemeCssVariables({
+    ...DEFAULT_THEME_PREFERENCES,
     backgroundHex: '#808080',
     accentHex: '#55D9FF',
     autoTextColorThresholdPercent: 10,
@@ -141,6 +163,7 @@ test('threshold preference switches text without using contrast comparison', () 
   assert.equal(low['--text'], '#000000');
   assert.equal(low['--color-scheme'], 'light');
   const high = createThemeCssVariables({
+    ...DEFAULT_THEME_PREFERENCES,
     backgroundHex: '#808080',
     accentHex: '#55D9FF',
     autoTextColorThresholdPercent: 50,
@@ -153,7 +176,7 @@ test('color scheme follows the Y threshold for every gray background', () => {
   for (let channel = 0; channel <= 255; channel += 1) {
     const value = channel.toString(16).padStart(2, '0');
     const backgroundHex = `#${value}${value}${value}`;
-    const variables = createThemeCssVariables({ backgroundHex, accentHex: '#55D9FF' });
+    const variables = createThemeCssVariables({ ...DEFAULT_THEME_PREFERENCES, backgroundHex, accentHex: '#55D9FF' });
     const expectedText = relativeLuminance(backgroundHex)
       >= DEFAULT_THEME_PREFERENCES.autoTextColorThresholdPercent / 100
       ? '#000000'
@@ -166,7 +189,7 @@ test('color scheme follows the Y threshold for every gray background', () => {
 
 test('low-luminance accents keep filled-control text on the threshold rule', () => {
   for (const accentHex of ['#000000', '#03060B', '#171717', '#FFFFFF', '#55D9FF', '#D84A9A']) {
-    const variables = createThemeCssVariables({ backgroundHex: '#000000', accentHex });
+    const variables = createThemeCssVariables({ ...DEFAULT_THEME_PREFERENCES, backgroundHex: '#000000', accentHex });
     assert.equal(
       variables['--accent-foreground'],
       contrastingTextColor(accentHex, DEFAULT_THEME_PREFERENCES.autoTextColorThresholdPercent),
@@ -177,7 +200,7 @@ test('low-luminance accents keep filled-control text on the threshold rule', () 
 test('applyTheme writes every computed preference to the document root', () => {
   const written = new Map();
   const root = { style: { setProperty: (name, value) => written.set(name, value) } };
-  const variables = applyTheme(root, { backgroundHex: '#FFFFFF', accentHex: '#03060B' });
+  const variables = applyTheme(root, { ...DEFAULT_THEME_PREFERENCES, backgroundHex: '#FFFFFF', accentHex: '#03060B' });
   assert.equal(written.get('--page'), '#FFFFFF');
   assert.equal(written.get('--color-scheme'), 'light');
   assert.equal(written.get('--accent'), '#03060B');
@@ -187,20 +210,20 @@ test('applyTheme writes every computed preference to the document root', () => {
 test('invalid persisted values fall back to safe defaults', () => {
   assert.deepEqual(normalizeThemePreferences({ backgroundHex: 'red', accentHex: '#fff' }), {
     backgroundHex: '#000000',
-    accentHex: '#55D9FF',
-    borderOpacityPercent: 100,
-    dividerOpacityPercent: 100,
-    colorMode: 'autoTextColor',
+    accentHex: '#A9C3FE',
+    borderOpacityPercent: 10,
+    dividerOpacityPercent: 10,
+    colorMode: 'autoBackgroundOpacity',
     backgroundOpacityTextColor: 'white',
-    mainBackgroundClarityPercent: 0,
-    coverBackgroundClarityPercent: 0,
-    quickSettingsOpacityPercent: 70,
-    quickSettingsBlurPx: 12,
-    mainBackgroundBlurPx: 20,
-    mainBackgroundOpacityPercent: 40,
+    mainBackgroundClarityPercent: 65,
+    coverBackgroundClarityPercent: 50,
+    quickSettingsOpacityPercent: 20,
+    quickSettingsBlurPx: 5,
+    mainBackgroundBlurPx: 5,
+    mainBackgroundOpacityPercent: 60,
     mainBackgroundMode: 'solid',
     slideshowFolder: null,
-    slideshowIntervalMinutes: 10,
+    slideshowIntervalMinutes: 2,
     slideshowOrder: 'sequential',
     autoTextColorThresholdPercent: 50,
   });
@@ -229,12 +252,12 @@ test('invalid persisted values fall back to safe defaults', () => {
   assert.equal(normalizeThemePreferences({ coverBackgroundClarityPercent: 145 }).coverBackgroundClarityPercent, 100);
   assert.equal(normalizeThemePreferences({ coverBackgroundClarityPercent: -2 }).coverBackgroundClarityPercent, 0);
   assert.deepEqual(normalizeThemePreferences({ backgroundClarityPercent: 64 }), {
-    ...DEFAULT_THEME_PREFERENCES,
+    ...SHIPPED_DEFAULTS,
     mainBackgroundClarityPercent: 64,
     coverBackgroundClarityPercent: 64,
   });
   assert.deepEqual(normalizeThemePreferences({ mainBackgroundClarityPercent: 22, coverBackgroundClarityPercent: 78 }), {
-    ...DEFAULT_THEME_PREFERENCES,
+    ...SHIPPED_DEFAULTS,
     mainBackgroundClarityPercent: 22,
     coverBackgroundClarityPercent: 78,
   });

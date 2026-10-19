@@ -124,7 +124,7 @@ export function buildAlbumIndexRenderRows(rows, itemAt, revision, refreshKey = 0
   });
 }
 
-export const DEFAULT_ALBUM_CARD_MAX_WIDTH_PX = 180;
+export const DEFAULT_ALBUM_CARD_MAX_WIDTH_PX = 200;
 export const MIN_ALBUM_CARD_MAX_WIDTH_PX = 100;
 export const MAX_ALBUM_CARD_MAX_WIDTH_PX = 500;
 
