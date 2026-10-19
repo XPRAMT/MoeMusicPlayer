@@ -781,5 +781,7 @@
   "匯入": "Import",
   "匯入失敗：{0}": "Import failed: {0}",
   "匯出失敗：{0}": "Export failed: {0}",
-  "匯出設定與曲庫（不含專輯封面）成一個壓縮檔；匯入時可以選這個壓縮檔，或其中的單一檔案。匯入會在重新啟動後套用，原本的資料會保留在 before-import 資料夾。": "Exports the settings and the library (without album covers) into one zip. To import, choose that zip or a single file from it. An import is applied after a restart, and the previous data is kept in the before-import folder."
+  "匯出設定與曲庫（不含專輯封面）成一個壓縮檔；匯入時可以選這個壓縮檔，或其中的單一檔案。匯入會在重新啟動後套用，原本的資料會保留在 before-import 資料夾。": "Exports the settings and the library (without album covers) into one zip. To import, choose that zip or a single file from it. An import is applied after a restart, and the previous data is kept in the before-import folder.",
+  "清空": "Clear",
+  "清空歌詞欄位（儲存後才會從檔案移除內嵌歌詞）": "Empty the lyrics field (the embedded lyrics are removed from the file when you save)"
 }

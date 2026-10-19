@@ -149,6 +149,11 @@
     if (draft && onlineLyricsText !== null) draft.lyrics = onlineLyricsText;
   }
 
+  /** Empties the lyrics field; like every other field it reaches the file only when 儲存 is pressed. */
+  function clearLyrics() {
+    if (draft) draft.lyrics = '';
+  }
+
   function resetField(key: keyof TagFields) { if (draft && original) draft[key] = original[key]; }
   function resetAll() {
     if (original) draft = { ...original };
@@ -430,6 +435,7 @@
           <span class="track-details-lyrics-label">
             {tr("歌詞（內嵌）")}
             <button type="button" class="soft-button" disabled={details.readOnly || onlineLyricsText === null || onlineLyricsText === draft.lyrics} title={onlineLyricsText === null ? tr('此曲目目前沒有使用中的歌詞') : onlineLyricsText === draft.lyrics ? tr('內嵌歌詞已與使用中歌詞相同') : tr('以播放器目前使用的歌詞取代（線上、.lrc、手動選擇等；同步時間戳保留為 LRC，儲存後才寫入）')} onclick={importOnlineLyrics}>{tr("導入使用中歌詞")}</button>
+            <button type="button" class="soft-button" disabled={details.readOnly || draft.lyrics === ''} title={tr('清空歌詞欄位（儲存後才會從檔案移除內嵌歌詞）')} onclick={clearLyrics}>{tr("清空")}</button>
             {#if isDirty('lyrics')}<button type="button" class="track-details-reset" aria-label={tr("還原歌詞")} title={tr("還原")} onclick={() => resetField('lyrics')}>↺</button>{/if}
           </span>
           <textarea rows="30" bind:value={draft.lyrics} readonly={details.readOnly} aria-label={tr("歌詞")}></textarea>
