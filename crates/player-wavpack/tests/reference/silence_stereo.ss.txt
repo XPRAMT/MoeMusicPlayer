@@ -1,0 +1,17 @@
+
+file name:         silence_stereo.wv
+file size:         212 bytes
+source:            16-bit ints at 48000 Hz
+channels:          2 (stereo)
+duration:          0:00:00.10
+modalities:        lossless
+compression:       98.90%
+ave bitrate:       17 kbps
+encoder version:   5
+original md5:      281d1df6a4cae29b127dd617fe461ce4
+source format:     Microsoft RIFF with 'wav' extension
+file wrapper:      80 byte RIFF header
+
+ WVUNPACK  Hybrid Lossless Audio Decompressor  Win64 Version 5.9.0
+ Copyright (c) 1998 - 2026 David Bryant.  All Rights Reserved.
+

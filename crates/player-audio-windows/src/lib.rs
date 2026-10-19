@@ -30,6 +30,8 @@ pub mod output_devices;
 mod resample;
 #[cfg(windows)]
 mod rodio_backend;
+#[cfg(windows)]
+mod wavpack;
 
 #[cfg(windows)]
 pub mod system_media;

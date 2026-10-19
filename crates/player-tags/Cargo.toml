@@ -26,6 +26,8 @@ serde = { version = "1", features = ["derive"] }
 
 # libopus is built with cmake, which the Android build does not have; Android plays Opus with Media3 and has no
 # Opus spectrogram.
+player-wavpack = { path = "../player-wavpack" }
+
 [target.'cfg(not(target_os = "android"))'.dependencies]
 player-opus = { path = "../player-opus" }
 

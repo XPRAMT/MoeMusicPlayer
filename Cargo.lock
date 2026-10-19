@@ -3190,6 +3190,7 @@ dependencies = [
  "player-dsd",
  "player-formats",
  "player-opus",
+ "player-wavpack",
  "rodio",
  "rubato",
  "symphonia",
@@ -3254,6 +3255,7 @@ dependencies = [
  "player-db",
  "player-dsd",
  "player-formats",
+ "player-tags",
  "symphonia",
  "windows",
  "windows-core",
@@ -3268,10 +3270,18 @@ dependencies = [
  "player-dsd",
  "player-formats",
  "player-opus",
+ "player-wavpack",
  "realfft",
  "serde",
  "serde_json",
  "symphonia",
+]
+
+[[package]]
+name = "player-wavpack"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

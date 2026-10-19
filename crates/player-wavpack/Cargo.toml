@@ -1,0 +1,9 @@
+[package]
+name = "player-wavpack"
+version = "0.1.0"
+edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
+description = "WavPack decoding: a safe reader over the vendored decoder half of libwavpack 5.6.0 (BSD-3-Clause, see vendor/COPYING)"
+
+[build-dependencies]
+cc = "1"

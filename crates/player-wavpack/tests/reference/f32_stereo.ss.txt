@@ -1,0 +1,17 @@
+
+file name:         f32_stereo.wv
+file size:         20284 bytes
+source:            32-bit floats at 48000 Hz
+channels:          2 (stereo)
+duration:          0:00:00.10
+modalities:        lossless
+compression:       47.18%
+ave bitrate:       1623 kbps
+encoder version:   5
+original md5:      8f02ce5747af52a9be7b70b0e55ff417
+source format:     Microsoft RIFF with 'wav' extension
+file wrapper:      80 byte RIFF header
+
+ WVUNPACK  Hybrid Lossless Audio Decompressor  Win64 Version 5.9.0
+ Copyright (c) 1998 - 2026 David Bryant.  All Rights Reserved.
+

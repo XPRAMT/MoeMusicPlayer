@@ -201,5 +201,12 @@
     "license": "BSD-3-Clause",
     "repositoryUrl": "https://opus-codec.org",
     "purpose": "Opus 編解碼器（隨程式靜態連結）"
+  },
+  {
+    "name": "libwavpack",
+    "version": "5.6.0",
+    "license": "BSD-3-Clause",
+    "repositoryUrl": "https://www.wavpack.com",
+    "purpose": "WavPack 解碼器（原始碼隨專案附上、靜態連結；Copyright (c) 1998 - 2022 David Bryant）"
   }
 ]

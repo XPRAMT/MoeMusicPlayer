@@ -5,6 +5,7 @@ members = [
     "crates/player-dsd",
     "crates/player-formats",
     "crates/player-opus",
+    "crates/player-wavpack",
     "crates/player-db",
     "crates/player-platform-windows",
     "crates/player-audio-windows",

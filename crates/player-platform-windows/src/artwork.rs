@@ -74,6 +74,7 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
 }
 
 fn embedded_artwork(path: &Path, oversized: &mut bool) -> Option<ArtworkImage> {
+    use std::io::Seek;
     let native_path = to_extended_path(path).ok()?;
     let file = open_regular_file_without_following_reparse_points(&native_path)?;
     // DSF is not a lofty format: its cover lives in the ID3v2 tag at the end of the file.
@@ -86,12 +87,25 @@ fn embedded_artwork(path: &Path, oversized: &mut bool) -> Option<ArtworkImage> {
             &dsd_tags
         } else {
             let options = ParseOptions::new().read_properties(false);
-            let reader = std::io::BufReader::new(file);
-            let probe = match FileType::from_path(path) {
-                Some(file_type) => Probe::with_file_type(reader, file_type),
-                None => Probe::new(reader).guess_file_type().ok()?,
+            let mut reader = std::io::BufReader::new(file);
+            let file_type = match FileType::from_path(path) {
+                Some(file_type) => file_type,
+                None => Probe::new(&mut reader)
+                    .guess_file_type()
+                    .ok()?
+                    .file_type()?,
             };
-            tagged_file = probe.options(options).read().ok()?;
+            // WavPack and Monkey's Audio keep their covers as APEv2 items that lofty's generic tag does not carry.
+            if player_tags::ape_cover::is_ape_family(file_type) {
+                reader.rewind().ok()?;
+                let picture = player_tags::ape_cover::ape_front_cover(&mut reader, file_type)?;
+                return image_from_raw_bytes(picture.data(), oversized);
+            }
+            reader.rewind().ok()?;
+            tagged_file = Probe::with_file_type(reader, file_type)
+                .options(options)
+                .read()
+                .ok()?;
             tagged_file.tags()
         };
 

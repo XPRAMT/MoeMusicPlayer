@@ -7,9 +7,10 @@ use lofty::config::WriteOptions;
 use lofty::file::{AudioFile, FileType, TaggedFileExt};
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::{ItemKey, TagExt};
-use lofty::tag::{Tag, TagType};
+use lofty::tag::{MergeTag, SplitTag, Tag, TagType};
 use serde::{Deserialize, Serialize};
 
+use crate::ape_cover::{ape_front_cover_of_path, is_ape_family, read_ape_tag};
 use crate::cover::{prepare_cover, CoverOptions, PreparedCover};
 
 /// Common editable fields. Empty string means "absent".
@@ -201,7 +202,12 @@ pub fn read_cover(path: &Path) -> Result<Option<(Vec<u8>, String)>, String> {
         file = lofty::read_from_path(path).map_err(|e| format!("讀取標籤失敗：{e}"))?;
         file.primary_tag().or_else(|| file.first_tag())
     };
-    Ok(tag.and_then(front_cover).map(|p| {
+    let ape_cover = match tag.and_then(front_cover) {
+        Some(_) => None,
+        None => ape_front_cover_of_path(path),
+    };
+    let cover = tag.and_then(front_cover).or(ape_cover.as_ref());
+    Ok(cover.map(|p| {
         let mime = p
             .mime_type()
             .map(|m| m.as_str().to_owned())
@@ -347,7 +353,12 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
                 *get_mut(&mut details.fields) = value.to_owned();
             }
         }
-        if let Some(pic) = front_cover(tag) {
+        let ape_cover = match front_cover(tag) {
+            Some(_) => None,
+            None => ape_front_cover_of_path(path),
+        };
+        let cover = front_cover(tag).or(ape_cover.as_ref());
+        if let Some(pic) = cover {
             let (width, height) = image::load_from_memory(pic.data())
                 .map(|i| (i.width(), i.height()))
                 .unwrap_or((0, 0));
@@ -390,6 +401,12 @@ pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
             return write_dsf_edit(path, &temp, edit, cover.as_ref());
         }
         fs::copy(path, &temp).map_err(|e| format!("建立暫存檔失敗：{e}"))?;
+        if let Some(file_type) = FileType::from_path(&temp).filter(|t| is_ape_family(*t)) {
+            write_ape_edit(&temp, file_type, edit, cover.as_ref())?;
+            lofty::read_from_path(&temp).map_err(|e| format!("寫入後驗證失敗：{e}"))?;
+            fs::rename(&temp, path).map_err(|e| format!("取代原檔失敗（檔案可能被占用）：{e}"))?;
+            return Ok(());
+        }
         let mut file = lofty::read_from_path(&temp).map_err(|e| format!("讀取標籤失敗：{e}"))?;
         let tag_type = target_tag_type(&file);
         if file.tag(tag_type).is_none() {
@@ -410,6 +427,31 @@ pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
     }
     result?;
     read_details(path)
+}
+
+/// WavPack and Monkey's Audio: edit the file's own `ApeTag`. lofty's generic `Tag` neither carries the covers of an
+/// APEv2 tag nor writes pictures back, so the existing cover items stay in the `ApeTag` (and are dropped only when the
+/// edit replaces or removes the cover) and the new cover is added as a `Cover Art (Front)` item.
+fn write_ape_edit(
+    temp: &Path,
+    file_type: FileType,
+    edit: &TagEdit,
+    cover: Option<&PreparedCover>,
+) -> Result<(), String> {
+    let mut ape = {
+        let mut file = fs::File::open(temp).map_err(|e| format!("讀取標籤失敗：{e}"))?;
+        read_ape_tag(&mut std::io::BufReader::new(&mut file), file_type).unwrap_or_default()
+    };
+    if edit.remove_cover || cover.is_some() {
+        ape.remove("Cover Art (Front)");
+        ape.remove("Cover Art (Other)");
+    }
+    let (remainder, mut tag) = ape.split_tag();
+    apply_edit_to_tag(&mut tag, TagType::Ape, edit, cover)?;
+    remainder
+        .merge_tag(tag)
+        .save_to_path(temp, WriteOptions::default())
+        .map_err(|e| format!("寫入標籤失敗：{e}"))
 }
 
 /// Apply the staged field and cover changes to a tag (shared by every format).

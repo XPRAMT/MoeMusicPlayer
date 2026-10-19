@@ -1,0 +1,17 @@
+
+file name:         int24_stereo.wv
+file size:         18640 bytes
+source:            24-bit ints at 48000 Hz
+channels:          2 (stereo)
+duration:          0:00:00.10
+modalities:        lossless
+compression:       35.28%
+ave bitrate:       1491 kbps
+encoder version:   5
+original md5:      bc4a5c3f62ff92764bbe29337d814474
+source format:     Microsoft RIFF with 'wav' extension
+file wrapper:      80 byte RIFF header
+
+ WVUNPACK  Hybrid Lossless Audio Decompressor  Win64 Version 5.9.0
+ Copyright (c) 1998 - 2026 David Bryant.  All Rights Reserved.
+

@@ -1515,6 +1515,7 @@ pub(crate) enum AudioDecoder {
     /// Boxed: the converter state is several times larger than a rodio decoder.
     Dsd(Box<crate::dsd::DsfPcmSource>),
     Opus(Box<crate::opus::OpusFileSource>),
+    WavPack(Box<crate::wavpack::WavPackSource>),
 }
 
 impl Iterator for AudioDecoder {
@@ -1525,6 +1526,7 @@ impl Iterator for AudioDecoder {
             Self::Rodio(source) => source.next(),
             Self::Dsd(source) => source.next(),
             Self::Opus(source) => source.next(),
+            Self::WavPack(source) => source.next(),
         }
     }
 }
@@ -1535,6 +1537,7 @@ impl Source for AudioDecoder {
             Self::Rodio(source) => source.current_span_len(),
             Self::Dsd(source) => source.current_span_len(),
             Self::Opus(source) => source.current_span_len(),
+            Self::WavPack(source) => source.current_span_len(),
         }
     }
 
@@ -1543,6 +1546,7 @@ impl Source for AudioDecoder {
             Self::Rodio(source) => source.channels(),
             Self::Dsd(source) => source.channels(),
             Self::Opus(source) => source.channels(),
+            Self::WavPack(source) => source.channels(),
         }
     }
 
@@ -1551,6 +1555,7 @@ impl Source for AudioDecoder {
             Self::Rodio(source) => source.sample_rate(),
             Self::Dsd(source) => source.sample_rate(),
             Self::Opus(source) => source.sample_rate(),
+            Self::WavPack(source) => source.sample_rate(),
         }
     }
 
@@ -1559,6 +1564,7 @@ impl Source for AudioDecoder {
             Self::Rodio(source) => source.total_duration(),
             Self::Dsd(source) => source.total_duration(),
             Self::Opus(source) => source.total_duration(),
+            Self::WavPack(source) => source.total_duration(),
         }
     }
 
@@ -1567,6 +1573,7 @@ impl Source for AudioDecoder {
             Self::Rodio(source) => source.try_seek(position),
             Self::Dsd(source) => source.try_seek(position),
             Self::Opus(source) => source.try_seek(position),
+            Self::WavPack(source) => source.try_seek(position),
         }
     }
 }
@@ -1671,6 +1678,10 @@ pub(crate) fn open_decoder_with(path: &Path, dsd: &DsdOptions) -> Result<AudioDe
         player_formats::DecodeEngine::Opus => {
             return crate::opus::open_opus(path).map(|source| AudioDecoder::Opus(Box::new(source)));
         }
+        player_formats::DecodeEngine::WavPack => {
+            return crate::wavpack::open_wavpack(path)
+                .map(|source| AudioDecoder::WavPack(Box::new(source)));
+        }
         player_formats::DecodeEngine::Rodio => {}
     }
     // Ogg files may hold Vorbis (rodio) or Opus: look at the first packet.
@@ -1757,6 +1768,16 @@ mod tests {
         decoder.try_seek(Duration::from_millis(50)).expect("seek");
         assert_eq!(decoder.by_ref().count(), (frames - 8_820) * 2);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn wavpack_files_are_routed_to_the_wavpack_decoder() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../player-wavpack/tests/fixtures/s24.wv");
+        let decoder = open_decoder(&path).expect("WavPack opens");
+        assert!(matches!(decoder, AudioDecoder::WavPack(_)));
+        assert_eq!(decoder.sample_rate().get(), 96_000);
+        assert_eq!(decoder.channels().get(), 2);
     }
 
     #[test]
@@ -2032,6 +2053,53 @@ mod tests {
         let dropping = Instant::now();
         drop(backend);
         assert!(dropping.elapsed() < Duration::from_millis(200));
+    }
+
+    /// Plays WavPack files (`MOE_WV_PLAY`, `;`-separated) through the real playback engine on the default output device
+    /// (muted): the position must advance in real time, seeking must land where asked, and the end of the file must
+    /// be reached and reported as an empty player.
+    #[test]
+    #[ignore = "opens the real default output device (muted); needs MOE_WV_PLAY"]
+    fn real_wavpack_files_play_seek_and_finish_on_the_real_device() {
+        let files = std::env::var("MOE_WV_PLAY").expect("MOE_WV_PLAY");
+        for file in files.split(';').filter(|file| !file.is_empty()) {
+            let path = PathBuf::from(file);
+            let mut backend = backend(ResamplingMode::HighQuality);
+            backend.set_volume(0.0).unwrap();
+            let duration = backend.load(&path).unwrap().expect("duration");
+            backend.play().unwrap();
+            let started = Instant::now();
+            thread::sleep(Duration::from_millis(1_500));
+            assert_eq!(backend.output_status(), OutputStatus::Healthy);
+            let played = backend.position();
+            let wall = started.elapsed();
+            assert!(
+                played + Duration::from_millis(300) > wall
+                    && played < wall + Duration::from_millis(100),
+                "{path:?}: position {played:?} after {wall:?}"
+            );
+            let info = backend.resampling_info().unwrap();
+            let middle = duration / 2;
+            let landed = backend.seek(middle).unwrap();
+            assert!(
+                landed >= middle.saturating_sub(Duration::from_millis(50))
+                    && landed <= middle + Duration::from_millis(150),
+                "{path:?}: seek to {middle:?} landed at {landed:?}"
+            );
+            thread::sleep(Duration::from_millis(500));
+            assert!(backend.position() > middle + Duration::from_millis(300));
+            let near_end = duration.saturating_sub(Duration::from_millis(1_500));
+            backend.seek(near_end).unwrap();
+            let waiting = Instant::now();
+            while !backend.is_empty() && waiting.elapsed() < Duration::from_secs(6) {
+                thread::sleep(Duration::from_millis(50));
+            }
+            assert!(backend.is_empty(), "{path:?}: playback did not finish");
+            println!(
+                "{path:?}: {duration:?}, source {:?} Hz → device {} Hz ({:?}), real-time position ok, seek ok, finished",
+                info.source_rate, info.device_rate, info.conversion
+            );
+        }
     }
 
     /// The system default plus a second real device at once (muted): the mirror opens, consumes audio, the main

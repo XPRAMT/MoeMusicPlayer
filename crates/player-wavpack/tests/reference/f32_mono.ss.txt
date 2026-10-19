@@ -1,0 +1,17 @@
+
+file name:         f32_mono.wv
+file size:         11160 bytes
+source:            32-bit floats at 48000 Hz
+channels:          1 (mono)
+duration:          0:00:00.10
+modalities:        lossless
+compression:       41.87%
+ave bitrate:       893 kbps
+encoder version:   5
+original md5:      4de37b23f6b09a4c8a947a3ae65a7af7
+source format:     Microsoft RIFF with 'wav' extension
+file wrapper:      80 byte RIFF header
+
+ WVUNPACK  Hybrid Lossless Audio Decompressor  Win64 Version 5.9.0
+ Copyright (c) 1998 - 2026 David Bryant.  All Rights Reserved.
+

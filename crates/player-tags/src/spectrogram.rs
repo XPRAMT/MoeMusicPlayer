@@ -362,6 +362,41 @@ mod opus_input {
     }
 }
 
+/// WavPack input (ADR 0025): libwavpack decodes it, Symphonia has no WavPack codec.
+mod wavpack_input {
+    use std::fs::File;
+    use std::io::BufReader;
+    use std::path::{Path, PathBuf};
+
+    pub type Reader = player_wavpack::WavPackReader;
+
+    pub fn is_wavpack(path: &Path) -> bool {
+        player_formats::decode_engine(path) == player_formats::DecodeEngine::WavPack
+    }
+
+    /// The reader with its sample rate, channel count and exact length in frames.
+    pub fn open(path: &Path, file: File) -> Result<(Reader, u32, usize, Option<u64>), String> {
+        let mut correction_name = path.as_os_str().to_owned();
+        correction_name.push("c");
+        let correction = File::open(PathBuf::from(correction_name))
+            .ok()
+            .map(|file| Box::new(BufReader::new(file)) as Box<dyn player_wavpack::ReadSeek>);
+        let reader = player_wavpack::WavPackReader::open(BufReader::new(file), correction)
+            .map_err(|e| e.to_string())?;
+        let info = reader.info();
+        Ok((
+            reader,
+            info.sample_rate,
+            usize::from(info.channels).max(1),
+            info.total_frames,
+        ))
+    }
+
+    pub fn read(reader: &mut Reader, out: &mut Vec<f32>) -> Result<usize, String> {
+        reader.read_frames(out).map_err(|e| e.to_string())
+    }
+}
+
 /// Render a spectrogram PNG for `path`.
 pub fn render_spectrogram(
     path: &Path,
@@ -378,11 +413,17 @@ pub fn render_spectrogram(
     let file = File::open(path).map_err(|e| format!("無法開啟檔案：{e}"))?;
     // Opus has its own decoder (ADR 0017); everything else goes through Symphonia.
     let use_opus = opus_input::is_opus(path);
+    let use_wavpack = !use_opus && wavpack_input::is_wavpack(path);
     let mut opus_reader = None;
+    let mut wavpack_reader = None;
     let mut symphonia_input = None;
     let (sample_rate, channel_count, known_frames, channel_layout) = if use_opus {
         let (reader, rate, channels, frames) = opus_input::open(file)?;
         opus_reader = Some(reader);
+        (rate, channels, frames, None)
+    } else if use_wavpack {
+        let (reader, rate, channels, frames) = wavpack_input::open(path, file)?;
+        wavpack_reader = Some(reader);
         (rate, channels, frames, None)
     } else {
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -509,6 +550,21 @@ pub fn render_spectrogram(
             }
             buffer.clear();
             let frames = opus_input::read(&mut reader, &mut buffer)?;
+            if frames == 0 {
+                break;
+            }
+            for frame in buffer.chunks(channel_count) {
+                feed(frame);
+            }
+        }
+    } else if let Some(mut reader) = wavpack_reader {
+        let mut buffer = Vec::new();
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("已取消".into());
+            }
+            buffer.clear();
+            let frames = wavpack_input::read(&mut reader, &mut buffer)?;
             if frames == 0 {
                 break;
             }

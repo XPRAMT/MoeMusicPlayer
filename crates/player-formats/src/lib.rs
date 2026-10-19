@@ -45,6 +45,8 @@ pub enum DecodeEngine {
     /// libopus over our Ogg reader (ADR 0017). `.ogg`/`.oga` files are routed here only when their first packet is
     /// `OpusHead` (the caller sniffs the content).
     Opus,
+    /// libwavpack (ADR 0025).
+    WavPack,
 }
 
 /// What the player can do with a format.
@@ -66,6 +68,7 @@ impl FormatInfo {
         match self.id {
             FormatId::Dsf => DecodeEngine::Dsd,
             FormatId::Opus => DecodeEngine::Opus,
+            FormatId::WavPack => DecodeEngine::WavPack,
             _ => DecodeEngine::Rodio,
         }
     }
@@ -233,7 +236,7 @@ const EXTENSIONS: &[ExtensionEntry] = &[
     video("mkv", Matroska, true),
     video("webm", Matroska, true),
     ext("ape", Ape, true, true, false),
-    ext("wv", WavPack, true, false, false),
+    ext("wv", WavPack, true, false, true),
     ext("mpc", Mpc, true, false, false),
     ext("mp+", Mpc, true, false, false),
     ext("mpp", Mpc, true, false, false),
@@ -430,7 +433,7 @@ mod tests {
     fn open_dialog_set_is_unchanged() {
         let expected = [
             "mp3", "flac", "m4a", "mp4", "aac", "alac", "ogg", "oga", "wav", "wave", "aif", "aiff",
-            "mka", "mkv", "webm", "caf", "dsf",
+            "mka", "mkv", "webm", "caf", "dsf", "wv",
         ];
         assert_eq!(set(open_dialog_extensions()), set(expected));
     }

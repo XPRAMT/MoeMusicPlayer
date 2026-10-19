@@ -1,0 +1,17 @@
+
+file name:         int32_shifted_mono.wv
+file size:         14630 bytes
+source:            32-bit ints at 48000 Hz
+channels:          1 (mono)
+duration:          0:00:00.10
+modalities:        lossless
+compression:       23.80%
+ave bitrate:       1170 kbps
+encoder version:   5
+original md5:      c4539e1ee25c60132e668facdbe7471d
+source format:     Microsoft RIFF with 'wav' extension
+file wrapper:      80 byte RIFF header
+
+ WVUNPACK  Hybrid Lossless Audio Decompressor  Win64 Version 5.9.0
+ Copyright (c) 1998 - 2026 David Bryant.  All Rights Reserved.
+
