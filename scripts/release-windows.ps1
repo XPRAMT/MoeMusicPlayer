@@ -1,4 +1,8 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# -Fast: for everyday small changes. Opt-level 1, 256 codegen units and incremental compilation in its own target
+# folder (targetast, so it never disturbs the full build's cache), and no update zip. The full optimized build is
+# the default and is what gets uploaded.
+param([switch]$Fast)
+$ErrorActionPreference = 'Stop'
 
 function Get-Sha256Hex([string]$Path) {
     $stream = [System.IO.File]::OpenRead($Path)
@@ -20,6 +24,8 @@ function Get-Sha256Hex([string]$Path) {
 $scriptDirectory = (Resolve-Path -LiteralPath $PSScriptRoot).ProviderPath
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
 $targetRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot 'target'))
+if ($Fast) { $targetRoot = Join-Path $targetRoot 'fast' }
+$fastOverrides = @{ CARGO_PROFILE_RELEASE_OPT_LEVEL = '1'; CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '256'; CARGO_PROFILE_RELEASE_INCREMENTAL = 'true' }
 $hadCargoTargetDir = $null -ne (Get-Item -LiteralPath 'Env:CARGO_TARGET_DIR' -ErrorAction SilentlyContinue)
 $previousCargoTargetDir = if ($hadCargoTargetDir) { $env:CARGO_TARGET_DIR } else { $null }
 $previousBuildTimestamp = $env:MOE_BUILD_TIMESTAMP_UTC
@@ -33,6 +39,7 @@ try {
     # Pin the build output directory so the source EXE is deterministic even when the caller
     # has an external or relative CARGO_TARGET_DIR. Restore the caller's process environment below.
     $env:CARGO_TARGET_DIR = $targetRoot
+    if ($Fast) { foreach ($name in $fastOverrides.Keys) { [Environment]::SetEnvironmentVariable($name, $fastOverrides[$name]) } }
     $env:MOE_BUILD_TIMESTAMP_UTC = [DateTimeOffset]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
     $npmCommands = @(Get-Command 'npm.cmd' -CommandType Application -ErrorAction Stop)
     if ($npmCommands.Count -eq 0) {
@@ -135,9 +142,10 @@ try {
     }
     Write-Output "Updated: $outputExe"
     Write-Output "SHA256:  $outputHash"
-    & (Join-Path $scriptDirectory 'package-windows-update.ps1') -Executable $outputExe
+    if (-not $Fast) { & (Join-Path $scriptDirectory 'package-windows-update.ps1') -Executable $outputExe }
 }
 finally {
+    foreach ($name in $fastOverrides.Keys) { [Environment]::SetEnvironmentVariable($name, $null) }
     if ($null -ne $previousBuildTimestamp) {
         $env:MOE_BUILD_TIMESTAMP_UTC = $previousBuildTimestamp
     }
