@@ -870,7 +870,9 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
             .map_or(defaults.font_size_px, |size| size.min(255) as u8),
         translation_scale_percent: field("translationScalePercent")
             .and_then(|value| value.as_u64())
-            .map_or(defaults.translation_scale_percent, |scale| scale.min(255) as u8),
+            .map_or(defaults.translation_scale_percent, |scale| {
+                scale.min(255) as u8
+            }),
         use_custom_color: field("useCustomColor")
             .and_then(|value| value.as_bool())
             .unwrap_or(defaults.use_custom_color),
@@ -908,7 +910,8 @@ impl DsdPlaybackSettings {
     /// A gain outside the range is clamped (a non-finite one becomes the default); an unsupported rate becomes 176.4 kHz.
     pub fn normalized(self) -> Self {
         let gain_db = if self.gain_db.is_finite() {
-            self.gain_db.clamp(Self::GAIN_RANGE_DB.0, Self::GAIN_RANGE_DB.1)
+            self.gain_db
+                .clamp(Self::GAIN_RANGE_DB.0, Self::GAIN_RANGE_DB.1)
         } else {
             Self::DEFAULT_GAIN_DB
         };
@@ -917,7 +920,11 @@ impl DsdPlaybackSettings {
         } else {
             Self::OUTPUT_RATES_HZ[0]
         };
-        Self { gain_db, output_rate_hz, dop: self.dop }
+        Self {
+            gain_db,
+            output_rate_hz,
+            dop: self.dop,
+        }
     }
 }
 
@@ -1003,7 +1010,9 @@ pub fn normalize_output_devices(devices: Vec<OutputDeviceEntry>) -> Vec<OutputDe
     let mut result: Vec<OutputDeviceEntry> = Vec::new();
     for device in devices {
         let device = device.normalized();
-        if result.iter().all(|existing| existing.id != device.id) && result.len() < OutputDeviceEntry::MAX_ENTRIES {
+        if result.iter().all(|existing| existing.id != device.id)
+            && result.len() < OutputDeviceEntry::MAX_ENTRIES
+        {
             result.push(device);
         }
     }
@@ -1019,32 +1028,43 @@ fn lenient_output_devices(value: Option<serde_json::Value>) -> Vec<OutputDeviceE
         .iter()
         .filter_map(serde_json::Value::as_object)
         .map(|object| OutputDeviceEntry {
-            id: object.get("id").and_then(serde_json::Value::as_str).map(str::to_owned),
+            id: object
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
             name: object
                 .get("name")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_owned(),
-            enabled: object.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true),
+            enabled: object
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
             delay_ms: object
                 .get("delayMs")
                 .and_then(serde_json::Value::as_u64)
-                .map_or(0, |value| value.min(u64::from(OutputDeviceEntry::MAX_DELAY_MS)) as u32),
-            channel_map: object.get("channelMap").and_then(serde_json::Value::as_array).map(|routes| {
-                routes
-                    .iter()
-                    .map(|route| ChannelRouteEntry {
-                        source: route
-                            .get("source")
-                            .and_then(serde_json::Value::as_u64)
-                            .and_then(|source| u8::try_from(source).ok()),
-                        gain_percent: route
-                            .get("gainPercent")
-                            .and_then(serde_json::Value::as_u64)
-                            .map_or(100, |gain| gain.min(100) as u8),
-                    })
-                    .collect()
-            }),
+                .map_or(0, |value| {
+                    value.min(u64::from(OutputDeviceEntry::MAX_DELAY_MS)) as u32
+                }),
+            channel_map: object
+                .get("channelMap")
+                .and_then(serde_json::Value::as_array)
+                .map(|routes| {
+                    routes
+                        .iter()
+                        .map(|route| ChannelRouteEntry {
+                            source: route
+                                .get("source")
+                                .and_then(serde_json::Value::as_u64)
+                                .and_then(|source| u8::try_from(source).ok()),
+                            gain_percent: route
+                                .get("gainPercent")
+                                .and_then(serde_json::Value::as_u64)
+                                .map_or(100, |gain| gain.min(100) as u8),
+                        })
+                        .collect()
+                }),
         })
         .collect();
     normalize_output_devices(devices)
@@ -1059,7 +1079,10 @@ pub fn normalize_output_presets(
     let mut slots: Vec<Option<Vec<OutputDeviceEntry>>> = presets
         .into_iter()
         .take(OUTPUT_PRESET_SLOTS)
-        .map(|slot| slot.map(normalize_output_devices).filter(|devices| !devices.is_empty()))
+        .map(|slot| {
+            slot.map(normalize_output_devices)
+                .filter(|devices| !devices.is_empty())
+        })
         .collect();
     slots.resize(OUTPUT_PRESET_SLOTS, None);
     slots
@@ -1076,7 +1099,10 @@ fn lenient_output_presets(value: Option<serde_json::Value>) -> Vec<Option<Vec<Ou
         .map(|items| {
             items
                 .iter()
-                .map(|item| item.is_array().then(|| lenient_output_devices(Some(item.clone()))))
+                .map(|item| {
+                    item.is_array()
+                        .then(|| lenient_output_devices(Some(item.clone())))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -1596,22 +1622,54 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    /// Settings rebuilt from the SQLite rows of an older version (or after `settings.json` was lost). `playlist_ids`
+    /// maps a playlist-file source to the playlist it feeds (SQLite keeps that in `playlist_file_sync_state`); a
+    /// playlist source without one cannot be rebuilt and is left out, a folder source is kept as it is.
     pub fn from_legacy(
         theme: player_db::ThemePreferences,
         roots: Vec<LibraryRoot>,
+        playlist_ids: &[(SourceId, PlaylistId)],
     ) -> Result<Self, SettingsError> {
+        // The old row holds the old defaults until someone changes them: a look nobody chose gives way to the current
+        // defaults instead of carrying the old ones over.
+        let untouched = theme.background_hex.eq_ignore_ascii_case("#000000")
+            && theme.accent_hex.eq_ignore_ascii_case("#55D9FF");
         let mut settings = Self {
-            theme: ThemeSettings {
-                background_hex: theme.background_hex,
-                accent_hex: theme.accent_hex,
-                ..ThemeSettings::default()
+            theme: if untouched {
+                ThemeSettings::default()
+            } else {
+                ThemeSettings {
+                    background_hex: theme.background_hex,
+                    accent_hex: theme.accent_hex,
+                    ..ThemeSettings::default()
+                }
             },
             ..Self::default()
         };
-        settings.sources = roots
-            .iter()
-            .map(SourceEntry::from_library_root)
-            .collect::<Result<_, _>>()?;
+        for root in &roots {
+            if root.kind == MediaSourceKind::PlaylistFile {
+                let Some((_, playlist_id)) = playlist_ids.iter().find(|(id, _)| *id == root.id)
+                else {
+                    eprintln!(
+                        "舊版播放清單來源 {} 沒有對應的播放清單，未還原。",
+                        root.display_name
+                    );
+                    continue;
+                };
+                settings.sources.push(SourceEntry {
+                    id: root.id,
+                    display_name: root.display_name.clone(),
+                    enabled: root.enabled,
+                    kind: SourceEntryKind::PlaylistFile {
+                        playlist_id: *playlist_id,
+                        path: StoredPath::from_locator(&root.locator)?,
+                        tree_uri: None,
+                    },
+                });
+            } else {
+                settings.sources.push(SourceEntry::from_library_root(root)?);
+            }
+        }
         settings.validate()?;
         Ok(settings)
     }
@@ -2084,7 +2142,9 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         window_geometry: raw.window_geometry,
         shortcuts: lenient_shortcuts(raw.shortcuts),
         resume_playback: raw.resume_playback.unwrap_or(false),
-        ignored_update_version: raw.ignored_update_version.filter(|version| !version.is_empty()),
+        ignored_update_version: raw
+            .ignored_update_version
+            .filter(|version| !version.is_empty()),
         dsd: lenient_dsd_settings(raw.dsd),
         output_devices: lenient_output_devices(raw.output_devices),
         output_presets: lenient_output_presets(raw.output_presets),
@@ -2099,8 +2159,10 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         settings.lyrics_preferences.line_gap_px = 50;
     }
     // The font sizes used to start at 0; they now start at 1.
-    settings.lyrics_preferences.primary_font_size_px = settings.lyrics_preferences.primary_font_size_px.max(1);
-    settings.lyrics_preferences.auxiliary_font_size_px = settings.lyrics_preferences.auxiliary_font_size_px.max(1);
+    settings.lyrics_preferences.primary_font_size_px =
+        settings.lyrics_preferences.primary_font_size_px.max(1);
+    settings.lyrics_preferences.auxiliary_font_size_px =
+        settings.lyrics_preferences.auxiliary_font_size_px.max(1);
     settings.validate()?;
     Ok((
         settings,
@@ -2374,6 +2436,7 @@ mod tests {
                 accent_hex: "#ABCDEF".into(),
             },
             vec![root.clone()],
+            &[],
         )
         .expect("convert legacy data");
         let store = SettingsStore::open(&path, legacy).expect("migrate settings");
@@ -2407,6 +2470,7 @@ mod tests {
         let legacy = AppSettings::from_legacy(
             database.get_theme_preferences().expect("read legacy theme"),
             database.library_roots().expect("read legacy roots"),
+            &[],
         )
         .expect("convert SQLite settings");
         let settings_path = directory.join("settings.json");
@@ -2424,10 +2488,76 @@ mod tests {
                 accent_hex: "#55D9FF".into(),
             },
             vec![root],
+            &[],
         )
         .expect("legacy still contains source");
         let reopened = SettingsStore::open(&settings_path, later_legacy).expect("reopen JSON");
         assert_eq!(reopened.snapshot().unwrap(), migrated);
+    }
+
+    #[test]
+    fn legacy_playlist_sources_come_back_as_playlist_sources_and_an_untouched_look_takes_the_current_defaults(
+    ) {
+        let root = |kind, name: &str, path: &str| LibraryRoot {
+            id: SourceId::new(),
+            kind,
+            display_name: name.to_owned(),
+            locator: MediaLocator::FileSystem(PathBuf::from(path)),
+            enabled: true,
+        };
+        let playlist = root(
+            MediaSourceKind::PlaylistFile,
+            "我的最愛",
+            r"C:\UserData\MyLove.m3u8",
+        );
+        let orphan = root(
+            MediaSourceKind::PlaylistFile,
+            "沒有播放清單",
+            r"C:\UserData\Orphan.m3u8",
+        );
+        let folder = root(MediaSourceKind::WindowsFilesystem, "Music", r"D:\Music");
+        let playlist_id = PlaylistId::new();
+        let rebuilt = AppSettings::from_legacy(
+            player_db::ThemePreferences {
+                background_hex: "#000000".into(),
+                accent_hex: "#55D9FF".into(),
+            },
+            vec![playlist.clone(), orphan, folder.clone()],
+            &[(playlist.id, playlist_id)],
+        )
+        .expect("convert SQLite settings");
+        assert_eq!(
+            rebuilt.sources.len(),
+            2,
+            "a playlist source with no playlist cannot be rebuilt"
+        );
+        assert!(matches!(
+            &rebuilt.sources[0].kind,
+            SourceEntryKind::PlaylistFile { playlist_id: id, .. } if *id == playlist_id
+        ));
+        assert_eq!(rebuilt.sources[0].id, playlist.id);
+        assert!(matches!(
+            rebuilt.sources[1].kind,
+            SourceEntryKind::Folder { .. }
+        ));
+        assert_eq!(
+            rebuilt.theme.accent_hex,
+            ThemeSettings::default().accent_hex,
+            "the old default look is not carried over"
+        );
+        let chosen = AppSettings::from_legacy(
+            player_db::ThemePreferences {
+                background_hex: "#314159".into(),
+                accent_hex: "#26A69A".into(),
+            },
+            vec![folder],
+            &[],
+        )
+        .expect("convert SQLite settings");
+        assert_eq!(
+            chosen.theme.accent_hex, "#26A69A",
+            "a look somebody chose is kept"
+        );
     }
 
     #[test]
@@ -2452,10 +2582,33 @@ mod tests {
     fn dsd_settings_default_normalise_and_roundtrip() {
         let defaults = DsdPlaybackSettings::default();
         assert_eq!((defaults.gain_db, defaults.output_rate_hz), (3.0, 176_400));
-        let odd = DsdPlaybackSettings { gain_db: 40.0, output_rate_hz: 192_000, dop: false }.normalized();
+        let odd = DsdPlaybackSettings {
+            gain_db: 40.0,
+            output_rate_hz: 192_000,
+            dop: false,
+        }
+        .normalized();
         assert_eq!((odd.gain_db, odd.output_rate_hz), (6.0, 176_400));
-        assert_eq!(DsdPlaybackSettings { gain_db: -0.2, output_rate_hz: 352_800, dop: false }.normalized().gain_db, 0.0);
-        assert_eq!(DsdPlaybackSettings { gain_db: f32::NAN, output_rate_hz: 352_800, dop: false }.normalized().gain_db, 3.0);
+        assert_eq!(
+            DsdPlaybackSettings {
+                gain_db: -0.2,
+                output_rate_hz: 352_800,
+                dop: false
+            }
+            .normalized()
+            .gain_db,
+            0.0
+        );
+        assert_eq!(
+            DsdPlaybackSettings {
+                gain_db: f32::NAN,
+                output_rate_hz: 352_800,
+                dop: false
+            }
+            .normalized()
+            .gain_db,
+            3.0
+        );
 
         let directory = test_directory("dsd-settings");
         let path = directory.join("settings.json");
@@ -2463,13 +2616,25 @@ mod tests {
         assert_eq!(store.snapshot().unwrap().dsd, defaults);
         store
             .update(|settings| {
-                settings.dsd = DsdPlaybackSettings { gain_db: 5.0, output_rate_hz: 352_800, dop: false };
+                settings.dsd = DsdPlaybackSettings {
+                    gain_db: 5.0,
+                    output_rate_hz: 352_800,
+                    dop: false,
+                };
                 Ok(())
             })
             .expect("persist DSD settings");
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
-        assert_eq!(reopened.snapshot().unwrap().dsd, DsdPlaybackSettings { gain_db: 5.0, output_rate_hz: 352_800, dop: false });
-        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().dsd,
+            DsdPlaybackSettings {
+                gain_db: 5.0,
+                output_rate_hz: 352_800,
+                dop: false
+            }
+        );
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(persisted["dsd"]["gainDb"], 5.0);
         assert_eq!(persisted["dsd"]["outputRateHz"], 352_800);
         assert_eq!(persisted["dsd"]["dop"], false);
@@ -2489,16 +2654,23 @@ mod tests {
             .expect("persist");
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
         assert!(!reopened.snapshot().unwrap().output_volume_sync);
-        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(persisted["outputVolumeSync"], false);
     }
 
     #[test]
     fn dop_is_off_by_default_and_survives_restart() {
         assert!(!DsdPlaybackSettings::default().dop);
-        assert!(!lenient_dsd_settings(Some(serde_json::json!({"gainDb": 3}))).dop, "an old file has no dop key");
+        assert!(
+            !lenient_dsd_settings(Some(serde_json::json!({"gainDb": 3}))).dop,
+            "an old file has no dop key"
+        );
         assert!(lenient_dsd_settings(Some(serde_json::json!({"dop": true}))).dop);
-        assert!(!lenient_dsd_settings(Some(serde_json::json!({"dop": "yes"}))).dop, "junk is off");
+        assert!(
+            !lenient_dsd_settings(Some(serde_json::json!({"dop": "yes"}))).dop,
+            "junk is off"
+        );
         let directory = test_directory("dsd-dop");
         let path = directory.join("settings.json");
         let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
@@ -2516,14 +2688,28 @@ mod tests {
     fn only_a_shrunk_cover_is_remembered() {
         assert_eq!(CoverZoomSettings::default().scale, 1.0);
         assert_eq!(CoverZoomSettings { scale: 0.6 }.normalized().scale, 0.6);
-        assert_eq!(CoverZoomSettings { scale: 0.1 }.normalized().scale, 0.5, "the minimum is 0.5");
-        assert_eq!(CoverZoomSettings { scale: 2.5 }.normalized().scale, 1.0, "an enlarged cover is not remembered");
-        assert_eq!(CoverZoomSettings { scale: f32::NAN }.normalized().scale, 1.0);
+        assert_eq!(
+            CoverZoomSettings { scale: 0.1 }.normalized().scale,
+            0.5,
+            "the minimum is 0.5"
+        );
+        assert_eq!(
+            CoverZoomSettings { scale: 2.5 }.normalized().scale,
+            1.0,
+            "an enlarged cover is not remembered"
+        );
+        assert_eq!(
+            CoverZoomSettings { scale: f32::NAN }.normalized().scale,
+            1.0
+        );
 
         let directory = test_directory("cover-zoom");
         let path = directory.join("settings.json");
         let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
-        assert_eq!(store.snapshot().unwrap().cover_zoom, CoverZoomSettings::default());
+        assert_eq!(
+            store.snapshot().unwrap().cover_zoom,
+            CoverZoomSettings::default()
+        );
         store
             .update(|settings| {
                 settings.cover_zoom = CoverZoomSettings { scale: 0.55 };
@@ -2531,14 +2717,26 @@ mod tests {
             })
             .expect("persist cover zoom");
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
-        assert_eq!(reopened.snapshot().unwrap().cover_zoom, CoverZoomSettings { scale: 0.55 });
+        assert_eq!(
+            reopened.snapshot().unwrap().cover_zoom,
+            CoverZoomSettings { scale: 0.55 }
+        );
         // A value written by the earlier build (with a pan) is read as its scale, repaired.
         assert_eq!(
-            lenient_cover_zoom(Some(serde_json::json!({"scale": 2.0, "offsetX": 0.3, "offsetY": 0.1}))).scale,
+            lenient_cover_zoom(Some(
+                serde_json::json!({"scale": 2.0, "offsetX": 0.3, "offsetY": 0.1})
+            ))
+            .scale,
             1.0
         );
-        assert_eq!(lenient_cover_zoom(Some(serde_json::json!({"scale": 0.7, "offsetX": 0.3}))).scale, 0.7);
-        assert_eq!(lenient_cover_zoom(Some(serde_json::json!({"scale": "big"}))), CoverZoomSettings::default());
+        assert_eq!(
+            lenient_cover_zoom(Some(serde_json::json!({"scale": 0.7, "offsetX": 0.3}))).scale,
+            0.7
+        );
+        assert_eq!(
+            lenient_cover_zoom(Some(serde_json::json!({"scale": "big"}))),
+            CoverZoomSettings::default()
+        );
         assert_eq!(lenient_cover_zoom(None), CoverZoomSettings::default());
     }
 
@@ -2549,15 +2747,27 @@ mod tests {
         let store = SettingsStore::open(&path, AppSettings::default()).unwrap();
         assert!(store.snapshot().unwrap().output_devices.is_empty());
         let chosen = vec![
-            OutputDeviceEntry { id: None, name: String::new(), enabled: true, delay_ms: 0, channel_map: None },
+            OutputDeviceEntry {
+                id: None,
+                name: String::new(),
+                enabled: true,
+                delay_ms: 0,
+                channel_map: None,
+            },
             OutputDeviceEntry {
                 id: Some("wasapi:{abc}".to_owned()),
                 name: "Speakers".to_owned(),
                 enabled: false,
                 delay_ms: 250,
                 channel_map: Some(vec![
-                    ChannelRouteEntry { source: Some(1), gain_percent: 100 },
-                    ChannelRouteEntry { source: None, gain_percent: 40 },
+                    ChannelRouteEntry {
+                        source: Some(1),
+                        gain_percent: 100,
+                    },
+                    ChannelRouteEntry {
+                        source: None,
+                        gain_percent: 40,
+                    },
                 ]),
             },
         ];
@@ -2591,7 +2801,8 @@ mod tests {
             .unwrap();
         let reopened = SettingsStore::open(&path, AppSettings::default()).unwrap();
         assert!(reopened.snapshot().unwrap().output_exclusive);
-        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(persisted["outputExclusive"], true);
     }
 
@@ -2619,11 +2830,16 @@ mod tests {
             reopened.snapshot().unwrap().output_presets,
             vec![None, Some(saved.clone()), None, None, None]
         );
-        let parsed = lenient_output_presets(Some(serde_json::json!([[], "x", [{"id": "b"}], [{"id": "c"}]])));
+        let parsed = lenient_output_presets(Some(
+            serde_json::json!([[], "x", [{"id": "b"}], [{"id": "c"}]]),
+        ));
         assert_eq!(parsed.len(), 5);
         assert_eq!(parsed[0], None, "an empty slot stays empty");
         assert_eq!(parsed[1], None, "junk is an empty slot");
-        assert_eq!(parsed[2].as_ref().map(|slot| slot[0].id.clone()), Some(Some("b".to_owned())));
+        assert_eq!(
+            parsed[2].as_ref().map(|slot| slot[0].id.clone()),
+            Some(Some("b".to_owned()))
+        );
         assert_eq!(lenient_output_presets(None), vec![None; 5]);
     }
 
@@ -2635,33 +2851,77 @@ mod tests {
             {"id": "a", "enabled": false},
             {"enabled": "yes"},
         ])));
-        assert_eq!(parsed.len(), 2, "the repeated device and the junk entry are dropped: {parsed:?}");
+        assert_eq!(
+            parsed.len(),
+            2,
+            "the repeated device and the junk entry are dropped: {parsed:?}"
+        );
         assert_eq!(parsed[0].delay_ms, 2000);
-        assert_eq!(parsed[0].channel_map, Some(vec![ChannelRouteEntry { source: None, gain_percent: 100 }]));
-        assert_eq!(parsed[1], OutputDeviceEntry { id: None, name: String::new(), enabled: true, delay_ms: 0, channel_map: None });
+        assert_eq!(
+            parsed[0].channel_map,
+            Some(vec![ChannelRouteEntry {
+                source: None,
+                gain_percent: 100
+            }])
+        );
+        assert_eq!(
+            parsed[1],
+            OutputDeviceEntry {
+                id: None,
+                name: String::new(),
+                enabled: true,
+                delay_ms: 0,
+                channel_map: None
+            }
+        );
         assert!(lenient_output_devices(Some(serde_json::json!(7))).is_empty());
         assert!(lenient_output_devices(None).is_empty());
     }
 
     #[test]
     fn malformed_dsd_settings_fall_back_field_by_field() {
-        let parsed = lenient_dsd_settings(Some(serde_json::json!({"gainDb": "loud", "outputRateHz": 352_800})));
+        let parsed = lenient_dsd_settings(Some(
+            serde_json::json!({"gainDb": "loud", "outputRateHz": 352_800}),
+        ));
         assert_eq!((parsed.gain_db, parsed.output_rate_hz), (3.0, 352_800));
-        let parsed = lenient_dsd_settings(Some(serde_json::json!({"gainDb": 99, "outputRateHz": 44_100})));
+        let parsed = lenient_dsd_settings(Some(
+            serde_json::json!({"gainDb": 99, "outputRateHz": 44_100}),
+        ));
         assert_eq!((parsed.gain_db, parsed.output_rate_hz), (6.0, 176_400));
-        assert_eq!(lenient_dsd_settings(Some(serde_json::json!(7))), DsdPlaybackSettings::default());
+        assert_eq!(
+            lenient_dsd_settings(Some(serde_json::json!(7))),
+            DsdPlaybackSettings::default()
+        );
         assert_eq!(lenient_dsd_settings(None), DsdPlaybackSettings::default());
     }
 
     #[test]
     fn the_interface_language_defaults_to_system_and_survives_restart() {
         assert_eq!(UiLanguage::default(), UiLanguage::System);
-        assert_eq!(lenient_language(Some(serde_json::json!("zh-CN"))), UiLanguage::ZhCn);
-        assert_eq!(lenient_language(Some(serde_json::json!("zh-TW"))), UiLanguage::ZhTw);
-        assert_eq!(lenient_language(Some(serde_json::json!("ja"))), UiLanguage::Ja);
-        assert_eq!(lenient_language(Some(serde_json::json!("en"))), UiLanguage::En);
-        assert_eq!(lenient_language(Some(serde_json::json!("fr"))), UiLanguage::System);
-        assert_eq!(lenient_language(Some(serde_json::json!(3))), UiLanguage::System);
+        assert_eq!(
+            lenient_language(Some(serde_json::json!("zh-CN"))),
+            UiLanguage::ZhCn
+        );
+        assert_eq!(
+            lenient_language(Some(serde_json::json!("zh-TW"))),
+            UiLanguage::ZhTw
+        );
+        assert_eq!(
+            lenient_language(Some(serde_json::json!("ja"))),
+            UiLanguage::Ja
+        );
+        assert_eq!(
+            lenient_language(Some(serde_json::json!("en"))),
+            UiLanguage::En
+        );
+        assert_eq!(
+            lenient_language(Some(serde_json::json!("fr"))),
+            UiLanguage::System
+        );
+        assert_eq!(
+            lenient_language(Some(serde_json::json!(3))),
+            UiLanguage::System
+        );
         assert_eq!(lenient_language(None), UiLanguage::System);
 
         let directory = test_directory("language");
@@ -2675,7 +2935,8 @@ mod tests {
             .expect("save");
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen");
         assert_eq!(reopened.snapshot().unwrap().language, UiLanguage::ZhCn);
-        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(persisted["language"], "zh-CN");
     }
 
@@ -2688,14 +2949,28 @@ mod tests {
             "useCustomColor": true, "customColor": "#ABCDEF", "showTranslation": "yes"
         })));
         assert!(parsed.enabled);
-        assert_eq!(parsed.align, TaskbarLyricsAlign::Center, "an unknown alignment is the default, centred");
+        assert_eq!(
+            parsed.align,
+            TaskbarLyricsAlign::Center,
+            "an unknown alignment is the default, centred"
+        );
         assert_eq!(parsed.font_size_px, 50);
-        assert_eq!(parsed.translation_scale_percent, 100, "a missing scale is the default");
+        assert_eq!(
+            parsed.translation_scale_percent, 100,
+            "a missing scale is the default"
+        );
         assert_eq!(parsed.custom_color, "#abcdef");
         assert!(!parsed.show_translation);
-        let bad = lenient_taskbar_lyrics(Some(serde_json::json!({"fontSizePx": 2, "customColor": "red"})));
-        assert_eq!((bad.font_size_px, bad.custom_color.as_str()), (2, "#00e1ff"));
-        let tiny = lenient_taskbar_lyrics(Some(serde_json::json!({"fontSizePx": 0, "translationScalePercent": 0})));
+        let bad = lenient_taskbar_lyrics(Some(
+            serde_json::json!({"fontSizePx": 2, "customColor": "red"}),
+        ));
+        assert_eq!(
+            (bad.font_size_px, bad.custom_color.as_str()),
+            (2, "#00e1ff")
+        );
+        let tiny = lenient_taskbar_lyrics(Some(
+            serde_json::json!({"fontSizePx": 0, "translationScalePercent": 0}),
+        ));
         assert_eq!((tiny.font_size_px, tiny.translation_scale_percent), (1, 1));
         let big = lenient_taskbar_lyrics(Some(serde_json::json!({"translationScalePercent": 250})));
         assert_eq!(big.translation_scale_percent, 100);
@@ -2723,14 +2998,24 @@ mod tests {
             .expect("save");
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen");
         assert_eq!(reopened.snapshot().unwrap().taskbar_lyrics, chosen);
-        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(persisted["taskbarLyrics"].get("area").is_none());
         assert_eq!(persisted["taskbarLyrics"]["fontSizePx"], 20);
         assert_eq!(persisted["taskbarLyrics"]["textEffect"], "stroke");
         // An old file has no effect, and junk is no effect either: both fall back to the default, a shadow.
-        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"enabled": true}))).text_effect, LyricsTextEffect::Shadow);
-        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "glow"}))).text_effect, LyricsTextEffect::Shadow);
-        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "shadow"}))).text_effect, LyricsTextEffect::Shadow);
+        assert_eq!(
+            lenient_taskbar_lyrics(Some(serde_json::json!({"enabled": true}))).text_effect,
+            LyricsTextEffect::Shadow
+        );
+        assert_eq!(
+            lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "glow"}))).text_effect,
+            LyricsTextEffect::Shadow
+        );
+        assert_eq!(
+            lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "shadow"}))).text_effect,
+            LyricsTextEffect::Shadow
+        );
     }
 
     #[test]
@@ -2747,7 +3032,11 @@ mod tests {
             .expect("persist version");
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
         assert_eq!(
-            reopened.snapshot().unwrap().ignored_update_version.as_deref(),
+            reopened
+                .snapshot()
+                .unwrap()
+                .ignored_update_version
+                .as_deref(),
             Some("26.10.20")
         );
     }
@@ -3241,13 +3530,21 @@ mod tests {
         let path = directory.join("settings.json");
         let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
         drop(store);
-        let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         value["lyricsPreferences"]["primaryFontSizePx"] = serde_json::json!(0);
         value["lyricsPreferences"]["auxiliaryFontSizePx"] = serde_json::json!(0);
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("old file still loads");
+        let reopened =
+            SettingsStore::open(&path, AppSettings::default()).expect("old file still loads");
         let preferences = reopened.snapshot().unwrap().lyrics_preferences;
-        assert_eq!((preferences.primary_font_size_px, preferences.auxiliary_font_size_px), (1, 1));
+        assert_eq!(
+            (
+                preferences.primary_font_size_px,
+                preferences.auxiliary_font_size_px
+            ),
+            (1, 1)
+        );
     }
 
     #[test]

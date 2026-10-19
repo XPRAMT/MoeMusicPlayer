@@ -4931,6 +4931,7 @@ fn ensure_windows_my_love_source(
         .iter()
         .find(|source| {
             is_my_love_source(source)
+                && matches!(source.kind, SourceEntryKind::PlaylistFile { .. })
                 && source.path().to_path_buf().ok().as_deref() == Some(path.as_path())
         })
         .cloned()
@@ -4957,7 +4958,7 @@ fn ensure_windows_my_love_source(
         }
         let playlist_id = match &source.kind {
             SourceEntryKind::PlaylistFile { playlist_id, .. } => *playlist_id,
-            _ => unreachable!(),
+            SourceEntryKind::Folder { .. } => return Err("我的最愛來源型態無效。".to_owned()),
         };
         if database
             .get_playlist(playlist_id)
@@ -4976,6 +4977,12 @@ fn ensure_windows_my_love_source(
                 .map_err(|error| error.to_string())?;
         }
         return Ok(source);
+    }
+    // An entry for this file that is not a playlist source (settings rebuilt by an older version) is replaced.
+    for stale in settings.sources.iter().filter(|source| {
+        is_my_love_source(source) && matches!(source.kind, SourceEntryKind::Folder { .. })
+    }) {
+        let _ = state.settings.remove_source(stale.id);
     }
     let source_id = SourceId::new();
     let playlist_id = PlaylistId::new();
@@ -11237,7 +11244,19 @@ pub fn run() {
                     let roots = database
                         .library_roots()
                         .map_err(|error| format!("讀取舊版音樂來源失敗：{error}"))?;
-                    AppSettings::from_legacy(theme, roots)
+                    // A playlist-file source is rebuilt with the playlist it feeds (kept in SQLite).
+                    let playlist_ids = roots
+                        .iter()
+                        .filter(|root| root.kind == MediaSourceKind::PlaylistFile)
+                        .filter_map(|root| {
+                            database
+                                .playlist_file_sync_state(root.id)
+                                .ok()
+                                .flatten()
+                                .map(|state| (root.id, state.playlist_id))
+                        })
+                        .collect::<Vec<_>>();
+                    AppSettings::from_legacy(theme, roots, &playlist_ids)
                         .map_err(|error| format!("轉換舊版設定失敗：{error}"))?
                 } else {
                     AppSettings::default()
