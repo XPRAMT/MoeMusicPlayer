@@ -1314,6 +1314,15 @@ input:focus-visible {
   padding: 0 12px;
 }
 
+/* Every scrollable area uses the same thin scrollbar. An area that wants its own colour (the lyrics) sets it itself. */
+:root {
+  scrollbar-color: rgba(var(--text-rgb), 0.2) transparent;
+}
+
+* {
+  scrollbar-width: thin;
+}
+
 .page-scroll {
   min-width: 0;
   min-height: 0;
