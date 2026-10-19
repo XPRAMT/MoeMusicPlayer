@@ -2,33 +2,68 @@
 
 # MoeMusicPlayer
 
-A local-first music player and library for Windows and Android. Add music folders or M3U/M3U8 playlists, browse and search your collection, and keep playback preferences and music data on your device.
+**A simple, fast and professional local music player for Windows and Android.** Your music stays on your device: add folders or M3U/M3U8 playlists, and MoeMusicPlayer builds a searchable library without any online account.
 
 > **Source-available, not open source.** The source code is public and you may use and modify it for noncommercial purposes, but commercial use is not permitted. See [License](#license).
 
-## Features
+## Highlights
 
-- **Music library:** Windows scans folders and playlist files in the background. Android scans folders and playlist files by their real paths after you turn on **All files access**. On both platforms you can exclude folders; their tracks are skipped by scans. Scans keep previously indexed tracks when a source is unavailable or incomplete. Video files are excluded.
-- **Lists and playlists:** Browse large collections with paginated lists, search, sortable columns, and configurable column order and visibility. Track names use natural numeric sorting, so Track 2 appears before Track 10. Playlist sorting does not change the playlist's saved order. Click a row to play it; drag a queue row to reorder the queue. The Hi-Res badge appears for audio at 48 kHz or higher and 24-bit or higher. The artist index shows distinct track and album counts plus accumulated listening time; select an artist to browse their songs.
-- **Playback:** Use shuffle, previous/next, and repeat off/all/one. Listening time is saved and informs the order of newly generated shuffle queues. Windows also supports system media controls; Android playback can continue in the background through its media notification.
-- **Now Playing and lyrics:** Choose layout A (cover left, lyrics right) or B (lyrics left, cover right). View embedded artwork and read local LRC or embedded lyrics. Search NetEase and QQ lyric candidates, choose a match, and use synchronized line scrolling when timing is available. Translation, romanization, lyric appearance, and sync delay can be adjusted in Settings or Quick Settings. On Windows, **taskbar lyrics** (Settings → Lyrics) draw the current synchronized line in the free space of the taskbar. Artist names split by `|`, `\`, `/`, `;`, or `,` can be clicked to filter the library; spaces remain part of a name.
-- **Interface language:** Settings → Main → Language: follow the system, Traditional Chinese, Simplified Chinese, Japanese or English.
-- **Song details (Windows and Android):** The info button in the Now Playing top bar opens the current track's details: full path, audio properties, and editable title, artist, album, album artist, composer, genre, date, track/disc numbers, embedded lyrics, and one front cover (replace, export, or remove; optional JPG quality and short-edge resize). Changes are written only when you press **Save** (MP3 is saved as ID3v2.4). **Import** copies the online lyrics currently in use into the lyrics field. **Spectrogram** opens a separate window with an FFT spectrogram (a full-screen page on Android). **Paste** uses a clipboard image as the new cover; Android reads the clipboard natively. **Show in folder** (Windows) or **Open in file manager** (Android) shows the track's folder.
-- **Appearance:** Choose a background and accent color. The main background can use a solid color, image, slideshow, current album cover, or (Windows only) the current Windows wallpaper. Slideshows include subfolders, play in order or randomly, and switch every 1–120 minutes. Choose automatic text color, which adapts to the background, or automatic image transparency. In transparency mode, select white or black text and set clarity; the player calculates image opacity to meet the corresponding brightness target. Main-interface and Now Playing cover appearance are configured separately. Android currently supports solid-color and album-cover backgrounds.
-- **Audio options (Windows):** Play WAV, MP3, FLAC, AAC/M4A, Ogg Vorbis (`.ogg`/`.oga`), Ogg Opus (`.opus`, or Opus inside `.ogg`; mono and stereo), DSD (`.dsf`, stereo or mono, converted to 176.4 kHz PCM; DSD64 to DSD512), and Matroska audio (`.mka`, depending on its audio codec). Tags of DSF and Opus files can be edited in the song details panel. `.mp4` and `.mkv` video are not included in the library. In **Settings → Output**, sample-rate conversion always uses the rubato FFT resampler, and you can play on several output devices at once (each with its own volume, delay and channel mapping; shared mode), or switch to WASAPI exclusive mode: one device to itself, with the sample rate and bit depth sent as the file has them (bit-perfect). Optional DSEE HX requires Sony Music Center; its proprietary filter is not included with this project.
-- **Updates and credits:** **Settings → About** shows author [XPRAMT](https://github.com/XPRAMT), build information, and open-source packages with their versions, licenses, and official links. Windows x64 checks for updates at startup and offers **Ignore** (this notification only), **Automatically restart**, or **Complete the update on next launch**. Updates preserve `UserData`. Android arm64 checks the same GitHub Release for an APK; **Download and install** verifies it, then hands it to the system installer. Android first asks you to allow this app to install unknown apps.
+- **Simple:** add a folder, press play. Lists, search, sorting and playlists work the way you expect, the Now Playing page shows the cover and the lyrics side by side, and every setting is in one place.
+- **Fast:** large libraries are browsed through paginated, virtualized lists, so thousands of songs scroll smoothly. Scanning reads tags on several threads: a 5,400-song library was built from nothing in about 5 seconds (files already in the system cache; the first read from a cold disk depends on your drive). Closing the window during a scan saves what was read, and the next scan continues from there.
+- **Professional:** edit tags and cover art in place, view a spectrogram, play DSD, and on Windows send the sound bit-perfect through WASAPI exclusive mode or to several devices at once.
+- **Automatic lyrics:** the player finds lyrics for you. It reads a local `.lrc` file or embedded lyrics first; if there is none, it searches NetEase and QQ and applies a result by itself only when the title matches closely, the length differs by at most 2 seconds and the lyrics are synchronized. You can always search, pick another result or reload by hand, and a lyric you picked is never overwritten by an automatic one.
 
-## Run on Windows
+## Features on both Windows and Android
 
-The interface currently uses Traditional Chinese; the menu names below include the visible labels where useful.
+- **Music library:** add folders and M3U/M3U8 playlists, exclude folders from scans, and keep previously indexed tracks when a source is unavailable or a scan is incomplete. Video files are not added.
+- **Lists and playlists:** paginated lists with search, sortable columns, configurable column order and visibility, natural number sorting (Track 2 before Track 10), and group headings with a quick index. Click a row to play; drag a queue row to reorder the queue. Artist and album indexes show track counts and accumulated listening time. The Hi-Res badge appears for 48 kHz / 24-bit or better.
+- **Playback:** shuffle (weighted by your listening time), previous/next, repeat off/all/one, resume after a restart, a sleep timer, and swipe gestures on touch screens (swipe the cover or the lyrics for the next or previous song).
+- **Now Playing:** layout A (cover left, lyrics right) or B; zoom the cover from 0.5× to 10×; adjust lyric size, spacing, shadow or outline, translation and romanization, Traditional-Chinese display of Simplified lyrics, and the sync delay of each song.
+- **Song details and tag editing:** open the info button in the Now Playing top bar to see the path and audio properties and to edit title, artist, album, album artist, composer, genre, date, track/disc numbers, embedded lyrics and one front cover (replace, paste, export, copy or remove). Changes are written only when you press **Save**. **Import** puts the lyrics in use into the file.
+- **Spectrogram:** an FFT spectrogram with selectable palette, window function, FFT size and dB range; pinch or scroll to zoom. Windows opens it in its own window, Android as a full-screen page.
+- **DSD:** `.dsf` files are converted to 176.4 kHz PCM with an adjustable gain. Windows adds a 352.8 kHz output and DoP (see below).
+- **Appearance and language:** background and accent color, solid or album-cover backgrounds, automatic text color or automatic image transparency. The interface is available in Traditional Chinese, Simplified Chinese, Japanese and English (Settings → Main → Language).
+- **Updates:** the player checks the latest GitHub Release and offers the new version (see [Install](#install)). Settings → About shows the build and the open-source packages used.
 
-1. Download and extract the [latest Windows release](https://github.com/XPRAMT/MoeMusicPlayer/releases/latest) (`moemusicplayer-windows-x86_64.zip`, one `moemusicplayer.exe`). The player updates itself from the same page.
-2. Start the player and open **Settings → Music Sources** (`設定 → 音樂來源`) to add a folder or playlist.
-3. To open audio files from File Explorer, register the supported formats in **Settings → About** (`設定 → 關於`, **登錄音訊格式**), then choose MoeMusicPlayer in Windows **Default apps**. Opening a file replaces the current queue with supported audio files from the same folder; subfolders are not scanned.
+## Windows and Android differences
 
-The Windows portable build stores `settings.json` and the SQLite library in a `UserData` folder beside the executable. Keep that folder with the two executables. Moving the executables to a different folder uses a different data folder. Android stores data in its platform-managed app directory.
+| | Windows (x64) | Android (arm64) |
+|---|---|---|
+| Formats | WAV, MP3, FLAC, AAC/M4A, Ogg Vorbis, Ogg Opus, DSD (`.dsf`), Matroska audio (`.mka`) | What Android's media framework plays: the common formats above and DSD (`.dsf`) |
+| Output | Shared mode, **WASAPI exclusive mode** (bit-perfect), **DoP** for DSD, **several output devices at once** with per-device volume, delay and channel mapping | The system audio output |
+| DSEE HX upscaling | Optional (needs Sony Music Center; its filter is not included) | No |
+| Lyrics display | Lyrics page **and taskbar lyrics** | Lyrics page |
+| System integration | System media controls, open files from File Explorer, play from the default-app list | Media notification and lock screen controls, background playback |
+| Music sources | Folders and playlists anywhere; background scanning | Folders and playlists by real path after you turn on **All files access** |
+| Backgrounds | Solid, image, slideshow, album cover, Windows wallpaper | Solid and album cover |
+| Spectrogram | Separate window with A/B comparison of two files | Full-screen page |
+| Data location | `UserData` folder beside the program (portable) | The app's private data folder |
+| Updates | Ignore, install automatically (next launch) or install and restart | Download and install through the system installer |
 
-For a diagnostic report that can be shared with Codex, run `moemusicplayer.exe --diagnostics-json` from a terminal. The JSON includes build and process information, startup database/audio status, file sizes, and recent panic records. It does not include music metadata, settings contents, or SQLite records. It does include local executable and data paths, so review the report before sharing it.
+## Install
+
+### Windows
+
+Requires 64-bit Windows 10 or 11 with the Microsoft Edge WebView2 Runtime (built into Windows 11 and most up-to-date Windows 10 installations).
+
+1. Download `moemusicplayer-windows-x86_64.zip` from the [latest release](https://github.com/XPRAMT/MoeMusicPlayer/releases/latest).
+2. Extract `moemusicplayer.exe` into any folder you own (for example `D:\MoeMusicPlayer`) and run it. The program is portable: it keeps `settings.json` and the library in a `UserData` folder next to the executable, so moving the executable to another folder starts a fresh data set.
+3. Open **Settings → Music Sources** (`設定 → 音樂來源`) and add a folder or a playlist. The library is built in the background.
+4. Optional: to open audio files from File Explorer, register the formats in **Settings → About** (`設定 → 關於`, **登錄音訊格式**) and choose MoeMusicPlayer in Windows **Default apps**.
+
+Updates: at startup the player checks the latest release and offers **Ignore** (the same version is not offered again unless you check by hand in Settings → About), **Install automatically** (the new program takes effect the next time you start it) or **Install and restart**. `UserData` is never touched.
+
+### Android
+
+Requires Android 7.0 or later on a 64-bit (arm64) phone or tablet.
+
+1. Download `moemusicplayer-android-arm64.apk` from the [latest release](https://github.com/XPRAMT/MoeMusicPlayer/releases/latest) and open it. Android asks you to allow your browser or file manager to install unknown apps; allow it once and confirm the installation.
+2. Open the app, go to **Settings → Music Sources**, turn on **All files access** for MoeMusicPlayer (Android takes you to the system page), then add a folder or a playlist.
+3. On Android 13 or later, allow notifications so the media notification and lock-screen controls can appear.
+
+Updates: the app checks the same release. **Download and install** verifies the file and hands it to the system installer; the first time, Android asks you to allow MoeMusicPlayer to install unknown apps.
+
+For a diagnostic report that can be shared with Codex, run `moemusicplayer.exe --diagnostics-json` from a terminal on Windows. The JSON includes build and process information, startup database/audio status, file sizes, and recent panic records. It does not include music metadata, settings contents, or SQLite records. It does include local executable and data paths, so review the report before sharing it.
 
 ## Develop on Windows
 
@@ -39,7 +74,7 @@ npm install
 npm run tauri -- dev
 ```
 
-Build the portable Windows executables with:
+Build the portable Windows executable with:
 
 ```sh
 npm run release:windows
@@ -55,10 +90,10 @@ Install the Android SDK, NDK, and Java 21, then run:
 
 ```sh
 npm install
-npm run android:build:arm64
+npm run android:build:arm64:release
 ```
 
-The debug APK is written to `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`. Turn on **All files access** in **Settings → Music Sources**, then add a folder or playlist. `npm run release:android` builds the APK with a fixed build identity. It also writes the in-app update assets (`moemusicplayer-android-arm64.apk`, `moemusicplayer-android-update.json`) to `release/update-assets/`. It publishes only with `-Upload -ReleaseTag <tag>`. The APK must be signed with the same key as the installed app.
+This builds the smallest release APK (about 26 MB) and copies it to `release/moemusicplayer-android-arm64-release.apk`; it is signed with the debug key, which is the key the installed app must have been signed with for an in-place update. `npm run android:build:arm64` builds a larger debug APK that can be inspected with WebView debugging. Turn on **All files access** in **Settings → Music Sources**, then add a folder or playlist. `npm run release:android` writes `release/update-assets/moemusicplayer-android-arm64.apk` and publishes only with `-Upload -ReleaseTag <tag>`.
 
 ## License
 
@@ -67,5 +102,3 @@ MoeMusicPlayer is **source-available software, not open source**, licensed under
 - You may use it and modify it for noncommercial purposes (personal use, hobby projects, research, education, and similar).
 - You may redistribute it, with or without changes, under the same license. When you do, include the license text (or its URL) and the `Required Notice:` line from [NOTICE](NOTICE) so recipients can find the original source.
 - Commercial use is not permitted.
-
-Artwork: `icon/SilverWolfIcon.png`, `icon/DefaultCover.jpg` and `src/assets/hi-res-badge.svg` are unofficial illustrations made or redrawn with AI by the author and are provided under this license; no rights are granted to the character (Silver Wolf) or the Hi-Res Audio logo and trademark they depict, which belong to their owners (see [NOTICE](NOTICE)). Third-party software the project depends on keeps its own license; **Settings → About** and `licenses/credits.json` list them with versions and links.
