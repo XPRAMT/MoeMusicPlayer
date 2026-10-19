@@ -20,7 +20,7 @@
   } from './spectrogram-settings.js';
   import {
     COMPARE_MODES, FULL_VIEW, differenceImage, dropAssignment, layerHeightFraction, levelToDb,
-    loadComparePrefs, panView, sampleLevel, saveComparePrefs, timeTickStep, timeTickValues, worldStyle, zoomView,
+    loadComparePrefs, panView, pinchView, sampleLevel, saveComparePrefs, timeTickStep, timeTickValues, worldStyle, zoomView,
     type ComparePrefs, type View,
   } from './spectrogram-compare.js';
 
@@ -53,6 +53,15 @@
   const unlisteners: UnlistenFn[] = [];
   let renderTimer: ReturnType<typeof setTimeout> | null = null;
   let panStart: { x: number; y: number; view: View; rect: DOMRect } | null = null;
+  /** The fingers (and the mouse) currently down on a plot; two fingers pinch-zoom and pan. */
+  const pointers = new Map<number, { x: number; y: number }>();
+  let pinchPrev: { x: number; y: number; dist: number } | null = null;
+
+  function pinchState(host: HTMLElement) {
+    const [a, b] = [...pointers.values()];
+    const rect = host.getBoundingClientRect();
+    return { x: (a.x + b.x) / 2 - rect.left, y: (a.y + b.y) / 2 - rect.top, dist: Math.hypot(a.x - b.x, a.y - b.y), width: rect.width, height: rect.height };
+  }
 
   const compareActive = $derived(prefs.mode !== 'single' && !!loaded.B);
   const sides = $derived<Side[]>(compareActive ? ['A', 'B'] : ['A']);
@@ -222,6 +231,14 @@
 
   function onPointerMove(event: PointerEvent) {
     const host = event.currentTarget as HTMLElement;
+    if (pointers.has(event.pointerId)) pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size === 2) {
+      const next = pinchState(host);
+      if (pinchPrev) view = pinchView(view, pinchPrev, next, next.width, next.height);
+      pinchPrev = { x: next.x, y: next.y, dist: next.dist };
+      hover = null;
+      return;
+    }
     if (panStart) {
       const dx = -(event.clientX - panStart.x) / panStart.rect.width;
       const dy = (event.clientY - panStart.y) / panStart.rect.height;
@@ -235,9 +252,23 @@
     if (event.button !== 0) return;
     const host = event.currentTarget as HTMLElement;
     host.setPointerCapture(event.pointerId);
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size === 2) {
+      // The second finger turns the drag into a pinch.
+      panStart = null;
+      const state = pinchState(host);
+      pinchPrev = { x: state.x, y: state.y, dist: state.dist };
+      return;
+    }
     panStart = { x: event.clientX, y: event.clientY, view: { ...view }, rect: host.getBoundingClientRect() };
   }
-  function onPointerUp() { panStart = null; }
+  function onPointerUp(event: PointerEvent) {
+    pointers.delete(event.pointerId);
+    pinchPrev = null;
+    // One finger left after a pinch: keep dragging from where it is, without a jump.
+    const rest = pointers.size === 1 ? [...pointers.values()][0] : null;
+    panStart = rest ? { x: rest.x, y: rest.y, view: { ...view }, rect: (event.currentTarget as HTMLElement).getBoundingClientRect() } : null;
+  }
   function onWheel(event: WheelEvent) {
     event.preventDefault();
     const host = event.currentTarget as HTMLElement;

@@ -96,6 +96,27 @@ export function panView(view, dx, dy) {
   return { x0, x1: x0 + sx, y0, y1: y0 + sy };
 }
 
+/**
+ * A two-finger gesture step: zoom both axes by the change of the distance between the fingers around where their
+ * midpoint was, then pan by the movement of the midpoint. Positions are in px inside the plot, `dist` is the distance
+ * between the fingers.
+ * @param {View} view
+ * @param {{ x: number, y: number, dist: number }} prev @param {{ x: number, y: number, dist: number }} next
+ * @param {number} width @param {number} height
+ * @returns {View}
+ */
+export function pinchView(view, prev, next, width, height) {
+  if (!(width > 0) || !(height > 0)) return view;
+  let result = view;
+  if (prev.dist > 0 && next.dist > 0) {
+    const factor = prev.dist / next.dist;
+    const vx = prev.x / width;
+    const vy = 1 - prev.y / height;
+    result = zoomView(zoomView(result, 'x', vx, factor), 'y', vy, factor);
+  }
+  return panView(result, -(next.x - prev.x) / width, (next.y - prev.y) / height);
+}
+
 /** CSS box (percent) placing the world inside the viewport. @param {View} view */
 export function worldStyle(view) {
   const sx = view.x1 - view.x0;

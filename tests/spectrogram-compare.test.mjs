@@ -68,3 +68,19 @@ test('zooming both axes around one pointer position keeps that position fixed on
   assert.ok(Math.abs((both.x0 + (both.x1 - both.x0) * 0.3) - 0.3) < 1e-9);
   assert.ok(Math.abs((both.y0 + (both.y1 - both.y0) * 0.7) - 0.7) < 1e-9);
 });
+
+test('a pinch zooms around the midpoint and the midpoint drags the view', async () => {
+  const { pinchView } = await import('../src/lib/spectrogram-compare.js');
+  const full = { x0: 0, x1: 1, y0: 0, y1: 1 };
+  // Fingers move apart (distance 100 -> 200) around the centre: the view halves around the centre.
+  const zoomed = pinchView(full, { x: 400, y: 300, dist: 100 }, { x: 400, y: 300, dist: 200 }, 800, 600);
+  assert.ok(Math.abs(zoomed.x1 - zoomed.x0 - 0.5) < 1e-9 && Math.abs(zoomed.y1 - zoomed.y0 - 0.5) < 1e-9);
+  assert.ok(Math.abs(zoomed.x0 - 0.25) < 1e-9 && Math.abs(zoomed.y0 - 0.25) < 1e-9);
+  // Same distance, midpoint moves 80 px right and 60 px down: the content follows the fingers.
+  const panned = pinchView(zoomed, { x: 400, y: 300, dist: 200 }, { x: 480, y: 360, dist: 200 }, 800, 600);
+  assert.ok(panned.x0 < zoomed.x0, 'content moved right = the view moves left');
+  assert.ok(panned.y0 > zoomed.y0, 'content moved down = the view moves up (y grows upward)');
+  // Fingers closing zoom out, clamped to the full view.
+  const out = pinchView(full, { x: 400, y: 300, dist: 200 }, { x: 400, y: 300, dist: 100 }, 800, 600);
+  assert.deepEqual(out, full);
+});
