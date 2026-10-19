@@ -22,7 +22,7 @@
 - **Song details and tag editing:** open the info button in the Now Playing top bar to see the path and audio properties and to edit title, artist, album, album artist, composer, genre, date, track/disc numbers, embedded lyrics and one front cover (replace, paste, export, copy or remove). Changes are written only when you press **Save**. **Import** puts the lyrics in use into the file.
 - **Spectrogram:** an FFT spectrogram with selectable palette, window function, FFT size and dB range; pinch or scroll to zoom. Windows opens it in its own window, Android as a full-screen page.
 - **DSD:** `.dsf` files are converted to 176.4 kHz PCM with an adjustable gain. Windows adds a 352.8 kHz output and DoP (see below).
-- **Appearance and language:** background and accent color, solid or album-cover backgrounds, automatic text color or automatic image transparency. The interface is available in Traditional Chinese, Simplified Chinese, Japanese and English (Settings → Main → Language).
+- **Appearance and language:** background and accent color; five main-background modes: solid color, single image, slideshow, album cover and the system wallpaper (on Android the wallpaper needs **All files access**); automatic text color or automatic image transparency. The interface is available in Traditional Chinese, Simplified Chinese, Japanese and English (Settings → Main → Language).
 - **Updates:** the player checks the latest GitHub Release and offers the new version (see [Install](#install)). Settings → About shows the build and the open-source packages used.
 
 ## Windows and Android differences
@@ -35,7 +35,6 @@
 | Lyrics display | Lyrics page **and taskbar lyrics** | Lyrics page |
 | System integration | System media controls, open files from File Explorer, play from the default-app list | Media notification and lock screen controls, background playback |
 | Music sources | Folders and playlists anywhere; background scanning | Folders and playlists by real path after you turn on **All files access** |
-| Backgrounds | Solid, image, slideshow, album cover, Windows wallpaper | Solid and album cover |
 | Spectrogram | Separate window with A/B comparison of two files | Full-screen page |
 | Data location | `UserData` folder beside the program (portable) | The app's private data folder |
 | Updates | Ignore, install automatically (next launch) or install and restart | Download and install through the system installer |
