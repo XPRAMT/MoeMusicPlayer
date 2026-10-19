@@ -571,7 +571,7 @@
 </div>
 
 <style>
-  .spectrogram-page { --sg-surface: color-mix(in srgb, var(--text, #e8e8ee) 10%, transparent); --sg-field: color-mix(in srgb, var(--text, #e8e8ee) 6%, transparent); position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(10px + var(--android-safe-top, 0px)) calc(14px + var(--android-safe-right, 0px)) calc(10px + var(--android-safe-bottom, 0px)) calc(14px + var(--android-safe-left, 0px)); background: var(--page, #0b0b10); color: var(--text, #e8e8ee); font-size: 13px; z-index: 1100; }
+  .spectrogram-page { color-scheme: var(--color-scheme, dark); --sg-surface: color-mix(in srgb, var(--text, #e8e8ee) 10%, transparent); --sg-field: color-mix(in srgb, var(--text, #e8e8ee) 6%, transparent); position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(10px + var(--android-safe-top, 0px)) calc(14px + var(--android-safe-right, 0px)) calc(10px + var(--android-safe-bottom, 0px)) calc(14px + var(--android-safe-left, 0px)); background: var(--page, #0b0b10); color: var(--text, #e8e8ee); font-size: 13px; z-index: 1100; }
   .spectrogram-page.is-drag-over { outline: 3px dashed #8a7dff; outline-offset: -6px; }
   .spectrogram-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .sg-spacer { flex: 1; }
@@ -581,6 +581,9 @@
   .sg-button:disabled { opacity: 0.5; cursor: default; }
   .sg-inline { display: flex; align-items: center; gap: 5px; }
   .sg-inline select, .sg-settings select, .sg-settings input { background: var(--sg-field); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 4px; padding: 2px 4px; font: inherit; }
+  /* The opened list of a drop-down is drawn by the system with the page's light text; give it an opaque background of its own
+     (the field colour is translucent, which leaves the list white) so the entries can be read. */
+  .sg-inline select option, .sg-settings select option { background-color: var(--page, #0b0b10); color: var(--text, #e8e8ee); }
   .sg-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 10px; background: var(--sg-field); border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.16); border-radius: 6px; }
   .sg-settings label { display: flex; align-items: center; gap: 6px; }
   .sg-settings input[type='number'] { width: 70px; }
