@@ -870,8 +870,8 @@
       allFilesAccess = await invokeCommand('android_all_files_access_status', {});
       if (!allFilesAccessAutoPrompted && allFilesAccess?.supported && !allFilesAccess.granted && document.visibilityState === 'visible') {
         allFilesAccessAutoPrompted = true;
-        // Explain first, a moment after the start so it does not collide with the notification permission prompt.
-        window.setTimeout(() => { if (allFilesAccess?.granted === false && !allFilesAccessBusy) allFilesPromptOpen = true; }, 1500);
+        // Explain first, right away.
+        if (!allFilesAccessBusy) allFilesPromptOpen = true;
       }
       if (allFilesAccess?.granted) allFilesPromptOpen = false;
       if (previous !== undefined && previous !== allFilesAccess?.granted && themePreferences.mainBackgroundMode === 'systemWallpaper') {
