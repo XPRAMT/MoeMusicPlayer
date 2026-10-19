@@ -80,7 +80,7 @@
     {#if platform === 'android'}
       <p id="update-description">{tr("下載期間可繼續播放；APK 下載並通過 SHA-256 驗證後交給系統安裝程式，由你確認安裝。")}</p>
     {:else}
-      <p id="update-description">{tr("選擇更新方式。下載期間可繼續播放；下載並驗證成功後才會依選擇完成更新。")}</p>
+      <p id="update-description">{tr("選擇更新方式。下載期間可繼續播放；下載並驗證成功後，會把目前的程式檔改名並換上新版。")}</p>
     {/if}
     {#if updateState.latest}
       <p>{tr("發布時間：")}{formatBuildTime(updateState.latest.publishedAt)}</p>
@@ -96,8 +96,8 @@
       {#if platform === 'android'}
         <button class="soft-button" type="button" disabled={!canDownload} onclick={() => download('restartNow')}>{tr("下載並安裝")}</button>
       {:else}
-        <button class="soft-button" type="button" disabled={!canDownload} onclick={() => download('restartNow')}>{tr("自動重新啟動")}</button>
-        <button class="soft-button" type="button" disabled={!canDownload} onclick={() => download('nextLaunch')}>{tr("下次啟動完成更新")}</button>
+        <button class="soft-button" type="button" disabled={!canDownload} onclick={() => download('nextLaunch')}>{tr("自動安裝")}</button>
+        <button class="soft-button" type="button" disabled={!canDownload} onclick={() => download('restartNow')}>{tr("自動安裝並重啟")}</button>
       {/if}
     </div>
   </div>

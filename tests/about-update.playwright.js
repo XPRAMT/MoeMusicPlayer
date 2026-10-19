@@ -14,7 +14,7 @@
   assert(await modal.getByRole('button').count() === 3, 'the notification has three choices');
   assert(await page.evaluate(() => document.activeElement.textContent === '忽略'), 'ignore gets initial focus');
   await page.keyboard.press('Shift+Tab');
-  assert(await page.evaluate(() => document.activeElement.textContent === '下次啟動完成更新'), 'native modal traps backwards focus');
+  assert(await page.evaluate(() => document.activeElement.textContent === '自動安裝'), 'native modal traps backwards focus');
   await page.keyboard.press('Tab');
   assert(await page.evaluate(() => document.activeElement.textContent === '忽略'), 'native modal traps forward focus');
   await page.keyboard.press('Escape');
@@ -22,12 +22,12 @@
   assert(await page.evaluate(() => document.activeElement.textContent.includes('檢查更新')), 'dismiss restores check-button focus');
   await updates.getByRole('button', { name: '檢查更新', exact: true }).click();
   await page.evaluate(() => { window.__updateHarness.failDownload = true; });
-  await modal.getByRole('button', { name: '下次啟動完成更新' }).click();
+  await modal.getByRole('button', { name: '自動安裝' }).click();
   await modal.getByText('下載中斷，請重試。', { exact: true }).waitFor();
-  await modal.getByRole('button', { name: '下次啟動完成更新' }).click();
+  await modal.getByRole('button', { name: '自動安裝' }).click();
   await page.evaluate(() => window.__updateHarness.emit('downloading', { downloadedBytes: 43, totalBytes: 100 }));
   await page.waitForFunction(() => document.querySelector('dialog progress')?.value === 43);
-  assert(await modal.getByRole('button', { name: '自動重新啟動' }).isDisabled(), 'installation cannot be requested twice');
+  assert(await modal.getByRole('button', { name: '自動安裝並重啟' }).isDisabled(), 'installation cannot be requested twice');
   await page.setViewportSize({ width: 360, height: 800 });
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= 360), 'about and modal fit a narrow viewport');
   await modal.getByRole('button', { name: '忽略' }).click();
@@ -36,6 +36,6 @@
   await modal.waitFor({ state: 'visible' });
   await page.evaluate(() => window.__updateHarness.finish());
   await modal.waitFor({ state: 'hidden' });
-  await updates.getByText('更新已準備完成，下次啟動會完成更新。', { exact: true }).waitFor();
+  await updates.getByText('更新已安裝，下次啟動時生效。', { exact: true }).waitFor();
   return { passed: true, scenarios: ['no release', 'author link', 'three choices', 'keyboard focus', 'ignore and recheck', 'failed download retry', 'progress', 'narrow viewport', 'defer without close'] };
 }

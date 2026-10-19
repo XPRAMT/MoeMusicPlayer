@@ -126,6 +126,19 @@ pub fn wait_for_parent(
     }
 }
 
+/// Waits until the process `pid` has exited: true when it has (or cannot be opened any more), false on timeout.
+pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
+    let Ok(handle) = process(pid) else {
+        return true;
+    };
+    unsafe {
+        WaitForSingleObject(
+            handle.0,
+            timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32,
+        ) == 0
+    }
+}
+
 fn replace(target: &Path, replacement: &Path) -> Result<(), String> {
     let target_wide = wide(target);
     let replacement_wide = wide(replacement);

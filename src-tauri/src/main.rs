@@ -46,22 +46,13 @@ fn main() {
             }
             return;
         }
-        let mut arguments = std::env::args_os().skip(1);
-        if arguments.next().as_deref() == Some(std::ffi::OsStr::new("--update-launched")) {
-            let result = arguments
-                .next()
-                .ok_or_else(|| "缺少更新交接目錄。".to_owned())
-                .and_then(|stage| {
-                    moemusicplayer_lib::updater::acknowledge_updated_launch(std::path::Path::new(
-                        &stage,
-                    ))
-                });
-            if let Err(error) = result {
-                eprintln!("{error}");
-                return;
+        // A freshly installed version started by the old one waits for it to exit before it starts up.
+        let mut arguments = std::env::args();
+        arguments.next();
+        if arguments.next().as_deref() == Some("--update-relaunch") {
+            if let Some(pid) = arguments.next() {
+                moemusicplayer_lib::updater::wait_for_relaunch_parent(&pid);
             }
-        } else if moemusicplayer_lib::updater::finish_pending_before_app() {
-            return;
         }
     }
     #[cfg(target_os = "windows")]

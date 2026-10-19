@@ -106,8 +106,8 @@ export function updateStatusText(state: UpdateState): string {
     case 'available': return tr('發現新版本 {0}', [state.latest?.version ?? '']).trim();
     case 'downloading': return tr('正在下載更新…');
     case 'ready': return tr('下載完成，正在驗證更新…');
-    case 'deferred': return tr('更新已準備完成，下次啟動會完成更新。');
-    case 'restarting': return tr('更新已準備完成，正在重新啟動播放器…');
+    case 'deferred': return tr('更新已安裝，下次啟動時生效。');
+    case 'restarting': return tr('更新已安裝，正在重新啟動播放器…');
     case 'installPermission': return tr('請在剛開啟的系統設定中允許本程式「安裝不明應用程式」，返回後再按「下載並安裝」。');
     case 'installing': return tr('已交給系統安裝程式；請依畫面確認安裝。安裝完成後重新開啟播放器。');
     case 'unpublished': return tr('目前沒有可用的已發布版本。');

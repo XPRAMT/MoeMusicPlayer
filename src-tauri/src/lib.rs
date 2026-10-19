@@ -54,11 +54,11 @@ use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImpo
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
 mod settings;
 mod sleep_timer;
-mod volume_sync;
 #[cfg(target_os = "windows")]
 mod taskbar_lyrics;
 mod track_details;
 pub mod updater;
+mod volume_sync;
 use settings::{
     clamp_window_geometry_to_monitors, AlbumDetailSort, AlbumIndexSort, AppSettings,
     ArtistListSort, BackgroundOpacityTextColor, ExcludedFolderEntry, LyricsPreferences,
@@ -72,11 +72,11 @@ mod album_artwork_cache;
 mod android_artwork;
 #[cfg(any(target_os = "android", test))]
 mod android_dsd;
+#[cfg(target_os = "android")]
+mod android_path_migration;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod android_playback;
-#[cfg(target_os = "android")]
-mod android_path_migration;
 mod favorites;
 mod lyrics_provider;
 mod lyrics_service;
@@ -3080,8 +3080,9 @@ async fn library_get_track_position(
             })
         {
             // The page query merges the Explorer-opened tracks into the library list: find the track in that merge.
-            let page = merged_library_page(database, &temporary_database, request, &query_alternates)
-                .map_err(|error| error.to_string())?;
+            let page =
+                merged_library_page(database, &temporary_database, request, &query_alternates)
+                    .map_err(|error| error.to_string())?;
             return Ok(page
                 .items
                 .iter()
@@ -4681,7 +4682,8 @@ async fn favorites_create_my_love(
                 .settings
                 .snapshot()
                 .map_err(|error| error.to_string())?;
-            let stored = settings::StoredPath::from_path(&path).map_err(|error| error.to_string())?;
+            let stored =
+                settings::StoredPath::from_path(&path).map_err(|error| error.to_string())?;
             let source = match settings
                 .sources
                 .iter()
@@ -5842,8 +5844,13 @@ async fn appearance_next_slideshow_background(app: AppHandle) -> Result<Response
 }
 
 #[cfg(target_os = "android")]
-const ANDROID_BACKGROUND_IMAGE_MIME_TYPES: [&str; 5] =
-    ["image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"];
+const ANDROID_BACKGROUND_IMAGE_MIME_TYPES: [&str; 5] = [
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+];
 
 /// Advance the slideshow and read the next image from the folder's real path.
 fn next_slideshow_bytes(
@@ -6214,7 +6221,9 @@ async fn settings_set_dsee_hx(state: State<'_, AppState>, enabled: bool) -> Resu
 }
 
 #[tauri::command]
-fn settings_get_cover_zoom(state: State<'_, AppState>) -> Result<settings::CoverZoomSettings, String> {
+fn settings_get_cover_zoom(
+    state: State<'_, AppState>,
+) -> Result<settings::CoverZoomSettings, String> {
     state
         .settings
         .snapshot()
@@ -6307,8 +6316,10 @@ async fn audio_get_device_volumes() -> Result<Vec<AudioDeviceVolume>, String> {
             player_audio_windows::output_devices::list_output_devices()
                 .into_iter()
                 .filter_map(|device| {
-                    let volume =
-                        player_platform_windows::endpoint_volume::read_endpoint_volume(Some(&device.id)).ok()?;
+                    let volume = player_platform_windows::endpoint_volume::read_endpoint_volume(
+                        Some(&device.id),
+                    )
+                    .ok()?;
                     Some(AudioDeviceVolume {
                         id: device.id,
                         volume_percent: volume.volume * 100.0,
@@ -6330,7 +6341,9 @@ async fn audio_set_device_volume(id: String, volume_percent: f32) -> Result<(), 
     #[cfg(target_os = "windows")]
     {
         tauri::async_runtime::spawn_blocking(move || {
-            use player_platform_windows::endpoint_volume::{set_endpoint_muted, set_endpoint_volume};
+            use player_platform_windows::endpoint_volume::{
+                set_endpoint_muted, set_endpoint_volume,
+            };
             let volume = (volume_percent / 100.0).clamp(0.0, 1.0);
             set_endpoint_volume(Some(&id), volume)?;
             set_endpoint_muted(Some(&id), volume <= 0.0)?;
@@ -7175,13 +7188,16 @@ async fn android_pick_folder_source(app: AppHandle) -> Result<Option<LibrarySour
         let Some(path) = picked else {
             return Ok(None);
         };
-        let path = std::fs::canonicalize(&path)
-            .map_err(|error| format!("無法開啟指定資料夾：{error}"))?;
+        let path =
+            std::fs::canonicalize(&path).map_err(|error| format!("無法開啟指定資料夾：{error}"))?;
         if !path.is_dir() {
             return Err("指定路徑不是資料夾。".to_owned());
         }
         let state = app.state::<AppState>();
-        let current = state.settings.snapshot().map_err(|error| error.to_string())?;
+        let current = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?;
         validate_source_folder_not_excluded(&path, &current.excluded_folders)?;
         let database = state.database.as_ref().ok_or_else(|| {
             state
@@ -7417,8 +7433,9 @@ where
                 ));
             }
         }
-        app.media_index()
-            .with_adapter_excluding(excluded_folders, |index| -> Result<(), String> {
+        app.media_index().with_adapter_excluding(
+            excluded_folders,
+            |index| -> Result<(), String> {
                 for (source_index, root) in folder_roots.iter().enumerate() {
                     let report = SyncEngine::sync_with_progress(
                         root,
@@ -7433,7 +7450,8 @@ where
                     sources.push(sync_summary(root, report));
                 }
                 Ok(())
-            })?;
+            },
+        )?;
         let mut reader = AndroidPlaylistReader { app };
         for source in playlist_sources {
             let root = source
@@ -8296,7 +8314,9 @@ fn find_android_artwork(
         .iter()
         .filter_map(|locator| match locator {
             MediaLocator::ContentUri(uri) if uri.starts_with("content://") => Some(uri.clone()),
-            MediaLocator::FileSystem(path) if path.is_file() => player_core::file_uri_for_path(path),
+            MediaLocator::FileSystem(path) if path.is_file() => {
+                player_core::file_uri_for_path(path)
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -8498,7 +8518,10 @@ async fn playback_refresh_current_track(
     };
     let _ = app.emit(
         CURRENT_TRACK_REFRESHED_EVENT,
-        snapshot.current_track.as_ref().map(|track| track.id.to_string()),
+        snapshot
+            .current_track
+            .as_ref()
+            .map(|track| track.id.to_string()),
     );
     Ok(snapshot)
 }
@@ -10097,20 +10120,22 @@ fn output_device_settings(
 ) -> Vec<player_audio_windows::output_devices::OutputDeviceSetting> {
     entries
         .iter()
-        .map(|entry| player_audio_windows::output_devices::OutputDeviceSetting {
-            id: entry.id.clone(),
-            enabled: entry.enabled,
-            delay_ms: entry.delay_ms,
-            channel_map: entry.channel_map.as_ref().map(|routes| {
-                routes
-                    .iter()
-                    .map(|route| player_audio_windows::output_devices::ChannelRoute {
-                        source: route.source,
-                        gain_percent: route.gain_percent,
-                    })
-                    .collect()
-            }),
-        })
+        .map(
+            |entry| player_audio_windows::output_devices::OutputDeviceSetting {
+                id: entry.id.clone(),
+                enabled: entry.enabled,
+                delay_ms: entry.delay_ms,
+                channel_map: entry.channel_map.as_ref().map(|routes| {
+                    routes
+                        .iter()
+                        .map(|route| player_audio_windows::output_devices::ChannelRoute {
+                            source: route.source,
+                            gain_percent: route.gain_percent,
+                        })
+                        .collect()
+                }),
+            },
+        )
         .collect()
 }
 
@@ -10402,12 +10427,22 @@ fn apply_saved_window_geometry(window: &WebviewWindow, geometry: WindowGeometry)
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn apply_downloaded_update(
+pub(crate) fn install_downloaded_update(
     app: &AppHandle,
     pending: &updater::PendingUpdate,
+    restart: bool,
 ) -> Result<updater::UpdateState, String> {
     // Validate executable/helper and paths while playback is still running.
     updater::validate_for_apply(pending)?;
+    let service = app.state::<updater::UpdateService>();
+    if !restart {
+        // Rename the running files and put the new ones in place now; the new version starts on the next launch and
+        // playback is not touched.
+        updater::install_in_place(pending)?;
+        return Ok(updater::publish(app, &service, |state| {
+            state.status = "deferred".into();
+        }));
+    }
     let state = app.state::<AppState>();
     if state.shutdown.request() != database_lifecycle::ShutdownRequest::Start {
         return Err("程式正在關閉，無法開始更新。".into());
@@ -10471,9 +10506,10 @@ pub(crate) fn apply_downloaded_update(
             Ok(())
         },
     );
+    // Strictly saved: replace the files, then start the new executable (it waits for this process to exit).
     let result = result.and_then(|()| {
-        let plan = updater::launch_helper(pending)?;
-        updater::grant_permit(&plan)
+        updater::install_in_place(pending)?;
+        updater::spawn_relaunch(&pending.target)
     });
     if let Err(error) = result {
         database_lifecycle::abort_update_shutdown(&state.shutdown, &state.database_work);
@@ -10485,10 +10521,8 @@ pub(crate) fn apply_downloaded_update(
         }
         return Err(error);
     }
-    let service = app.state::<updater::UpdateService>();
     let result = updater::publish(app, &service, |state| state.status = "restarting".into());
-    // ExitRequested observes READY and allows normal process teardown. The
-    // helper independently waits for this exact process object before writing.
+    // Normal process teardown; the new executable is already waiting for this process to exit.
     app.exit(0);
     Ok(result)
 }
@@ -10606,7 +10640,10 @@ fn resume_playback_if_marked(settings: &SettingsStore, service: &WindowsPlayback
         .request_play()
         .and_then(|ticket| ticket.wait(Duration::from_secs(2)))
     {
-        eprintln!("無法接續上次的播放：{}", playback_audio_error_message(&error));
+        eprintln!(
+            "無法接續上次的播放：{}",
+            playback_audio_error_message(&error)
+        );
     }
 }
 

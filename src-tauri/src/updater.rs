@@ -326,7 +326,11 @@ fn validate_android_manifest(manifest: &AndroidReleaseManifest) -> Result<(), St
         return Err("更新建置識別無效。".into());
     }
     let apk = &manifest.apk;
-    if apk.name != ANDROID_APK_NAME || !valid_hash(&apk.sha256) || apk.size == 0 || apk.size > MAX_DOWNLOAD {
+    if apk.name != ANDROID_APK_NAME
+        || !valid_hash(&apk.sha256)
+        || apk.size == 0
+        || apk.size > MAX_DOWNLOAD
+    {
         return Err("Android 更新檔案清單無效。".into());
     }
     Ok(())
@@ -463,7 +467,8 @@ async fn check_release() -> Result<Option<AvailableRelease>, String> {
 
 /// Android: the latest Release's APK manifest. A Release without Android assets is "unpublished"
 /// for Android (Windows-only releases stay valid).
-async fn check_android_release() -> Result<Option<(AvailableAndroidRelease, String, String)>, String> {
+async fn check_android_release() -> Result<Option<(AvailableAndroidRelease, String, String)>, String>
+{
     let client = client()?;
     let Some(release) = latest_release(&client).await? else {
         return Ok(None);
@@ -731,7 +736,6 @@ async fn stage_release(
             target: std::env::current_exe().map_err(|error| error.to_string())?,
         };
         validate_for_apply(&pending)?;
-        save_pending(&directory, &pending)?;
         Ok(pending)
     })
     .await
@@ -810,58 +814,46 @@ pub async fn update_download(
     }
     #[cfg(not(target_os = "android"))]
     {
-    let release = service
-        .available
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-        .ok_or("請先檢查更新。")?;
-    if release.manifest.build_timestamp_utc.as_str() <= env!("MOE_BUILD_TIMESTAMP_UTC") {
-        return Err("此版本不比目前建置新。".into());
-    }
-    publish(&app, &service, |state| {
-        state.status = "downloading".into();
-        state.downloaded_bytes = 0;
-        state.total_bytes = Some(release.manifest.executable.size + release.manifest.helper.size);
-        state.error = None;
-    });
-    #[cfg(target_os = "windows")]
-    let result = async {
-        let pending = stage_release(Some(&app), &service, release).await?;
-        match mode {
-            UpdateMode::NextLaunch => Ok(publish(&app, &service, |state| {
-                state.status = "deferred".into()
-            })),
-            UpdateMode::RestartNow => {
-                let app = app.clone();
-                let result = tauri::async_runtime::spawn_blocking(move || {
-                    crate::apply_downloaded_update(&app, &pending)
-                })
-                .await
-                .map_err(|error| error.to_string())?;
-                if result.is_err() {
-                    let directory = updates_directory()?;
-                    let journal = directory.join("pending.json");
-                    // The operation mutex still owns this attempt. A failed
-                    // strict save must not silently turn into next-start apply.
-                    if journal.exists() {
-                        std::fs::remove_file(journal).map_err(|error| error.to_string())?;
-                    }
-                }
-                result
-            }
+        let release = service
+            .available
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .ok_or("請先檢查更新。")?;
+        if release.manifest.build_timestamp_utc.as_str() <= env!("MOE_BUILD_TIMESTAMP_UTC") {
+            return Err("此版本不比目前建置新。".into());
         }
-    }
-    .await;
-    #[cfg(not(target_os = "windows"))]
-    let result: Result<UpdateState, String> = {
-        let _ = mode;
-        Err("此平台不支援自動更新。".into())
-    };
-    match result {
-        Ok(state) => Ok(state),
-        Err(error) => Ok(failed(&app, &service, error)),
-    }
+        publish(&app, &service, |state| {
+            state.status = "downloading".into();
+            state.downloaded_bytes = 0;
+            state.total_bytes =
+                Some(release.manifest.executable.size + release.manifest.helper.size);
+            state.error = None;
+        });
+        #[cfg(target_os = "windows")]
+        let result = async {
+            let pending = stage_release(Some(&app), &service, release).await?;
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                crate::install_downloaded_update(
+                    &app,
+                    &pending,
+                    matches!(mode, UpdateMode::RestartNow),
+                )
+            })
+            .await
+            .map_err(|error| error.to_string())?
+        }
+        .await;
+        #[cfg(not(target_os = "windows"))]
+        let result: Result<UpdateState, String> = {
+            let _ = mode;
+            Err("此平台不支援自動更新。".into())
+        };
+        match result {
+            Ok(state) => Ok(state),
+            Err(error) => Ok(failed(&app, &service, error)),
+        }
     }
 }
 
@@ -891,7 +883,8 @@ async fn android_download_and_install(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
         .filter(|path| {
-            std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == release.manifest.apk.size)
+            std::fs::metadata(path)
+                .is_ok_and(|metadata| metadata.len() == release.manifest.apk.size)
         });
     let path = match cached {
         Some(path) => path,
@@ -912,7 +905,11 @@ async fn android_download_and_install(
             // Only APKs this service downloaded live here; drop stale ones before a new download.
             if let Ok(entries) = std::fs::read_dir(&directory) {
                 for entry in entries.flatten() {
-                    if entry.path().extension().is_some_and(|extension| extension == "apk") {
+                    if entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "apk")
+                    {
                         let _ = std::fs::remove_file(entry.path());
                     }
                 }
@@ -966,16 +963,6 @@ async fn android_download_and_install(
 }
 
 #[cfg(target_os = "windows")]
-pub fn save_pending(directory: &Path, pending: &PendingUpdate) -> Result<(), String> {
-    let temporary = directory.join("pending.tmp");
-    let mut file = std::fs::File::create(&temporary).map_err(|error| error.to_string())?;
-    file.write_all(&serde_json::to_vec(pending).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
-    file.sync_all().map_err(|error| error.to_string())?;
-    std::fs::rename(temporary, directory.join("pending.json")).map_err(|error| error.to_string())
-}
-
-#[cfg(target_os = "windows")]
 pub(crate) fn validate_for_apply(pending: &PendingUpdate) -> Result<(), String> {
     validate_manifest(&pending.manifest)?;
     moe_update::validate_pending(
@@ -984,117 +971,133 @@ pub(crate) fn validate_for_apply(pending: &PendingUpdate) -> Result<(), String> 
     )
 }
 
+/// Installs a staged, verified release by renaming: each running image keeps its (renamed) file and the new file takes
+/// the original name, so the new version starts on the next launch. A backup of the previous file stays beside it
+/// (`.moemusicplayer.previous.<id>.bak`, the same naming the release script uses); only the newest one is kept.
+/// Nothing is replaced unless every file was copied and verified, and a failure puts the original names back.
 #[cfg(target_os = "windows")]
-pub(crate) fn launch_helper(pending: &PendingUpdate) -> Result<moe_update::ApplyPlan, String> {
-    use std::io::BufRead;
-    use std::os::windows::process::CommandExt;
+pub(crate) fn install_in_place(pending: &PendingUpdate) -> Result<(), String> {
     validate_for_apply(pending)?;
-    let plan = moe_update::ApplyPlan {
-        pending: pending.clone(),
-        parent_pid: std::process::id(),
-        parent_started: moe_update::windows::process_started(std::process::id())?,
-        original_sha256: moe_update::file_sha256(&pending.target)?,
-        nonce: uuid::Uuid::new_v4().simple().to_string(),
-        wait_seconds: 60,
-    };
-    let stage = &pending.stage_directory;
-    let plan_path = stage.join("apply-plan.json");
-    moe_update::write_json(&plan_path, &plan)?;
-    let running_helper = stage.join("running-helper.exe");
-    std::fs::copy(stage.join(&pending.manifest.helper.name), &running_helper)
-        .map_err(|error| error.to_string())?;
-    moe_update::verify_file(&running_helper, &pending.manifest.helper)?;
-    let mut child = std::process::Command::new(running_helper)
-        .arg(plan_path)
-        .creation_flags(0x0800_0000)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|error| format!("無法啟動更新輔助程式：{error}"))?;
-    let output = child.stdout.take().ok_or("更新輔助程式無法建立交接。")?;
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut line = String::new();
-        let result = std::io::BufReader::new(output)
-            .read_line(&mut line)
-            .map(|_| line);
-        let _ = sender.send(result);
-    });
-    let line = receiver
-        .recv_timeout(Duration::from_secs(5))
-        .map_err(|_| "更新輔助程式未及時確認；已取消更新。")?
-        .map_err(|error| error.to_string())?;
-    if line.trim() != "READY" {
-        return Err("更新輔助程式未確認父程序身分；已取消更新。".into());
-    }
-    Ok(plan)
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn grant_permit(plan: &moe_update::ApplyPlan) -> Result<(), String> {
-    let mut permit = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(plan.pending.stage_directory.join("permit"))
-        .map_err(|error| error.to_string())?;
-    permit
-        .write_all(plan.nonce.as_bytes())
-        .map_err(|error| error.to_string())?;
-    permit.sync_all().map_err(|error| error.to_string())
-}
-
-/// Called by main before Tauri, settings, or SQLite initialize.
-#[cfg(target_os = "windows")]
-pub fn finish_pending_before_app() -> bool {
-    let result = (|| -> Result<bool, String> {
-        let directory = updates_directory()?;
-        let path = directory.join("pending.json");
-        if !path.exists() {
-            return Ok(false);
-        }
-        let pending: PendingUpdate = moe_update::read_json(&path)?;
-        validate_for_apply(&pending)?;
-        let plan = launch_helper(&pending)?;
-        grant_permit(&plan)?;
-        Ok(true)
-    })();
-    match result {
-        Ok(should_exit) => should_exit,
-        Err(error) => {
-            eprintln!("下次啟動更新未套用：{error}");
-            false
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-pub fn acknowledge_updated_launch(stage: &Path) -> Result<(), String> {
-    let actual = std::env::current_exe().map_err(|error| error.to_string())?;
-    let directory = updates_directory()?;
-    let stage = stage.canonicalize().map_err(|error| error.to_string())?;
-    if stage.parent() != Some(directory.as_path()) {
-        return Err("更新交接目錄無效。".into());
-    }
-    let plan: moe_update::ApplyPlan = moe_update::read_json(&stage.join("apply-plan.json"))?;
-    if plan
-        .pending
+    let directory = pending
         .target
-        .canonicalize()
-        .map_err(|error| error.to_string())?
-        != actual.canonicalize().map_err(|error| error.to_string())?
-    {
-        return Err("更新交接目標不符。".into());
+        .parent()
+        .ok_or("更新目標缺少目錄。")?
+        .to_path_buf();
+    let files = [
+        (&pending.manifest.executable, pending.target.clone()),
+        (
+            &pending.manifest.helper,
+            directory.join(&pending.manifest.helper.name),
+        ),
+    ];
+    install_files(&pending.stage_directory, &directory, &files)?;
+    // The stage only held the downloads; it is not needed any more.
+    let _ = std::fs::remove_dir_all(&pending.stage_directory);
+    Ok(())
+}
+
+/// The rename swap itself: `files` are (identity of the staged file in `stage`, the path it replaces in `directory`).
+#[cfg(target_os = "windows")]
+fn install_files(
+    stage: &Path,
+    directory: &Path,
+    files: &[(&moe_update::FileIdentity, PathBuf)],
+) -> Result<(), String> {
+    // Older backups and copies from an interrupted attempt go first (the running version's backup may be locked).
+    remove_previous_backups(directory);
+    // Copy and verify everything first, under names nothing else uses.
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let mut incoming = Vec::new();
+    for (identity, target) in files {
+        let copy = directory.join(format!(".{}.incoming.{id}.tmp", file_stem(target)));
+        let result = std::fs::copy(stage.join(&identity.name), &copy)
+            .map_err(|error| error.to_string())
+            .and_then(|_| moe_update::verify_file(&copy, identity));
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&copy);
+            for (path, _) in &incoming {
+                let _ = std::fs::remove_file(path);
+            }
+            return Err(error);
+        }
+        incoming.push((copy, target.clone()));
     }
-    moe_update::verify_file(&actual, &plan.pending.manifest.executable)?;
-    let mut ready = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(stage.join("launch-ready"))
-        .map_err(|error| error.to_string())?;
-    ready
-        .write_all(plan.nonce.as_bytes())
-        .map_err(|error| error.to_string())?;
-    ready.sync_all().map_err(|error| error.to_string())
+    // Rename the old files away, then the new ones into place.
+    let mut backups: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut swap = || -> Result<(), String> {
+        for (copy, target) in &incoming {
+            if target.exists() {
+                let backup = directory.join(format!(".{}.previous.{id}.bak", file_stem(target)));
+                std::fs::rename(target, &backup)
+                    .map_err(|error| format!("無法將目前的 {} 改名：{error}", file_stem(target)))?;
+                backups.push((target.clone(), backup));
+            }
+            std::fs::rename(copy, target).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    };
+    if let Err(error) = swap() {
+        // Put the original names back (a target that already got its new file is removed first).
+        for (target, backup) in backups.iter().rev() {
+            let _ = std::fs::remove_file(target);
+            let _ = std::fs::rename(backup, target);
+        }
+        for (copy, _) in &incoming {
+            let _ = std::fs::remove_file(copy);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn file_stem(path: &Path) -> String {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Older backups of the previous versions (the one currently running may still be locked; it stays until next time).
+#[cfg(target_os = "windows")]
+fn remove_previous_backups(directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let backup = (name.starts_with(".moemusicplayer.previous.")
+            || name.starts_with(".moemusicplayer-updater.previous."))
+            && name.ends_with(".bak");
+        let leftover = name.contains(".incoming.")
+            && name.ends_with(".tmp")
+            && name.starts_with(".moemusicplayer");
+        if backup || leftover {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Starts the freshly installed executable; it waits for this process to exit before it starts up
+/// (`--update-relaunch <pid>`, see `wait_for_relaunch_parent`), so the single-instance check does not see us.
+#[cfg(target_os = "windows")]
+pub(crate) fn spawn_relaunch(target: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new(target)
+        .arg("--update-relaunch")
+        .arg(std::process::id().to_string())
+        .current_dir(target.parent().unwrap_or_else(|| Path::new(".")))
+        .creation_flags(0x0000_0008 | 0x0000_0200)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("無法啟動新版：{error}"))
+}
+
+/// First thing in `main` for `--update-relaunch <pid>`: wait (at most a minute) for the old process to exit.
+#[cfg(target_os = "windows")]
+pub fn wait_for_relaunch_parent(pid: &str) {
+    if let Ok(pid) = pid.parse::<u32>() {
+        moe_update::windows::wait_for_exit(pid, Duration::from_secs(60));
+    }
 }
 
 #[tauri::command]
@@ -1239,5 +1242,163 @@ mod tests {
             .iter()
             .any(|credit| credit.name == "AndroidX Media3"));
         assert!(!credits.iter().any(|credit| credit.name.contains("Sony")));
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod install_tests {
+    use super::*;
+
+    /// A scratch directory under the system temp directory, removed on drop.
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "moe-install-test-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn identity(name: &str, bytes: &[u8]) -> moe_update::FileIdentity {
+        moe_update::FileIdentity {
+            name: name.into(),
+            sha256: sha256(bytes),
+            size: bytes.len() as u64,
+        }
+    }
+
+    fn setup(old: &[u8]) -> (TempDir, PathBuf, PathBuf) {
+        let root = TempDir::new();
+        let directory = root.0.join("app");
+        let stage = directory.join("UserData").join("updates").join("stage");
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(directory.join("moemusicplayer.exe"), old).unwrap();
+        std::fs::write(directory.join("moemusicplayer-updater.exe"), b"old helper").unwrap();
+        (root, directory, stage)
+    }
+
+    fn backups(directory: &Path, prefix: &str) -> Vec<PathBuf> {
+        std::fs::read_dir(directory)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(prefix)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rename_swap_installs_new_files_and_keeps_one_backup() {
+        let (_root, directory, stage) = setup(b"old exe");
+        std::fs::write(stage.join("moemusicplayer.exe"), b"new exe").unwrap();
+        std::fs::write(stage.join("moemusicplayer-updater.exe"), b"new helper").unwrap();
+        let exe = identity("moemusicplayer.exe", b"new exe");
+        let helper = identity("moemusicplayer-updater.exe", b"new helper");
+        let files = [
+            (&exe, directory.join("moemusicplayer.exe")),
+            (&helper, directory.join("moemusicplayer-updater.exe")),
+        ];
+        install_files(&stage, &directory, &files).unwrap();
+        assert_eq!(
+            std::fs::read(directory.join("moemusicplayer.exe")).unwrap(),
+            b"new exe"
+        );
+        assert_eq!(
+            std::fs::read(directory.join("moemusicplayer-updater.exe")).unwrap(),
+            b"new helper"
+        );
+        let exe_backups = backups(&directory, ".moemusicplayer.previous.");
+        assert_eq!(exe_backups.len(), 1);
+        assert_eq!(std::fs::read(&exe_backups[0]).unwrap(), b"old exe");
+        assert!(
+            backups(&directory, ".moemusicplayer.incoming.").is_empty(),
+            "no copy is left behind"
+        );
+        // A second update drops the older backup and keeps only the previous version.
+        std::fs::write(stage.join("moemusicplayer.exe"), b"newer exe").unwrap();
+        std::fs::write(stage.join("moemusicplayer-updater.exe"), b"newer helper").unwrap();
+        let exe2 = identity("moemusicplayer.exe", b"newer exe");
+        let helper2 = identity("moemusicplayer-updater.exe", b"newer helper");
+        let files = [
+            (&exe2, directory.join("moemusicplayer.exe")),
+            (&helper2, directory.join("moemusicplayer-updater.exe")),
+        ];
+        install_files(&stage, &directory, &files).unwrap();
+        let exe_backups = backups(&directory, ".moemusicplayer.previous.");
+        assert_eq!(exe_backups.len(), 1);
+        assert_eq!(std::fs::read(&exe_backups[0]).unwrap(), b"new exe");
+    }
+
+    #[test]
+    fn a_failed_verification_replaces_nothing() {
+        let (_root, directory, stage) = setup(b"old exe");
+        std::fs::write(stage.join("moemusicplayer.exe"), b"corrupted").unwrap();
+        std::fs::write(stage.join("moemusicplayer-updater.exe"), b"new helper").unwrap();
+        let exe = identity("moemusicplayer.exe", b"new exe");
+        let helper = identity("moemusicplayer-updater.exe", b"new helper");
+        let files = [
+            (&exe, directory.join("moemusicplayer.exe")),
+            (&helper, directory.join("moemusicplayer-updater.exe")),
+        ];
+        assert!(install_files(&stage, &directory, &files).is_err());
+        assert_eq!(
+            std::fs::read(directory.join("moemusicplayer.exe")).unwrap(),
+            b"old exe"
+        );
+        assert_eq!(
+            std::fs::read(directory.join("moemusicplayer-updater.exe")).unwrap(),
+            b"old helper"
+        );
+        assert!(
+            backups(&directory, ".").is_empty(),
+            "no temporary copy or backup remains"
+        );
+    }
+
+    #[test]
+    fn a_running_image_can_be_renamed_away() {
+        // The point of the rename swap: Windows lets a running executable be renamed even though it cannot be
+        // overwritten or deleted. Use a copy of the test binary as the "running" file.
+        let current = std::env::current_exe().unwrap();
+        let directory = TempDir::new();
+        let copy = directory.0.join("running.exe");
+        std::fs::copy(&current, &copy).unwrap();
+        let mut child = std::process::Command::new(&copy)
+            .args([
+                "--exact",
+                "updater::install_tests::sleep_helper",
+                "--ignored",
+                "--nocapture",
+            ])
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(
+            std::fs::remove_file(&copy).is_err(),
+            "a running image cannot be deleted"
+        );
+        let moved = directory.0.join("running.exe.bak");
+        std::fs::rename(&copy, &moved).expect("a running image can be renamed");
+        std::fs::write(&copy, b"new").unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    #[ignore = "helper process for a_running_image_can_be_renamed_away"]
+    fn sleep_helper() {
+        std::thread::sleep(Duration::from_secs(5));
     }
 }
