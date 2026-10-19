@@ -15,6 +15,10 @@ members = [
 default-members = ["src-tauri"]
 resolver = "2"
 
+# The Android APK is a dev-profile build: without this its native library carries ~380 MB of Rust debug info.
+[profile.dev]
+debug = false
+
 # Heavy DSP/decoder deps (symphonia, rustfft, png, lofty) are 10-30x slower unoptimized; the
 # Android APK is a debug build, so optimize dependencies + player-tags even in the dev profile.
 [profile.dev.package."*"]
