@@ -193,10 +193,55 @@ fn failed(app: &AppHandle, service: &UpdateService, error: String) -> UpdateStat
     })
 }
 
+/// The update version the user chose Ignore for (settings.json), if any.
+fn ignored_update_version(app: &AppHandle) -> Option<String> {
+    app.try_state::<crate::AppState>()?
+        .settings
+        .snapshot()
+        .ok()?
+        .ignored_update_version
+}
+
+fn remember_ignored_update_version(app: &AppHandle, version: &str) {
+    let Some(state) = app.try_state::<crate::AppState>() else {
+        return;
+    };
+    if let Err(error) = state.settings.update(|settings| {
+        settings.ignored_update_version = Some(version.to_owned());
+        Ok(())
+    }) {
+        eprintln!("無法記錄已忽略的更新版本：{error}");
+    }
+}
+
+/// The status of a finished check: a newer version is `available`, unless the user chose Ignore for exactly this
+/// version and the check was not asked for by hand (`ignored`: no prompt, shown only in Settings → About).
+fn check_status(is_new: bool, ignored: bool, manual: bool) -> &'static str {
+    if !is_new {
+        "current"
+    } else if ignored && !manual {
+        "ignored"
+    } else {
+        "available"
+    }
+}
+
 #[tauri::command]
 pub fn update_ignore(app: AppHandle, service: State<'_, UpdateService>) -> UpdateState {
-    // Ignore this notification only. A manual/next-start check can notify again.
-    publish(&app, &service, |state| state.status = "idle".into())
+    // Ignore this version: it is not offered again on startup, only when the user checks for updates by hand.
+    let version = service
+        .available
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .map(|release| release.version.clone());
+    match version {
+        Some(version) => {
+            remember_ignored_update_version(&app, &version);
+            publish(&app, &service, |state| state.status = "ignored".into())
+        }
+        None => publish(&app, &service, |state| state.status = "idle".into()),
+    }
 }
 
 fn trusted_download_url(url: &str) -> bool {
@@ -361,7 +406,9 @@ async fn check_release(asset_name: &str) -> Result<Option<AvailableRelease>, Str
 pub async fn update_check(
     app: AppHandle,
     service: State<'_, UpdateService>,
+    manual: Option<bool>,
 ) -> Result<UpdateState, String> {
+    let manual = manual.unwrap_or(false);
     let Ok(_operation) = service.operation.try_lock() else {
         return Ok(service
             .state
@@ -394,8 +441,9 @@ pub async fn update_check(
         })),
         Ok(Some(release)) => {
             let is_new = is_newer_version(&release.version, env!("MOE_BUILD_VERSION"));
+            let ignored = ignored_update_version(&app).as_deref() == Some(release.version.as_str());
             let state = publish(&app, &service, |state| {
-                state.status = if is_new { "available" } else { "current" }.into();
+                state.status = check_status(is_new, ignored, manual).into();
                 state.latest = Some(LatestBuild {
                     build_id: release.version.clone(),
                     version: release.version.clone(),
@@ -1167,6 +1215,15 @@ mod version_tests {
         );
         assert!(!is_newer_version("v26.10.9", "26.10.19"));
         assert!(!is_newer_version("garbage", "26.10.19"));
+    }
+
+    #[test]
+    fn an_ignored_version_is_offered_again_only_by_hand() {
+        assert_eq!(check_status(true, false, false), "available");
+        assert_eq!(check_status(true, true, false), "ignored", "startup check: no prompt for an ignored version");
+        assert_eq!(check_status(true, true, true), "available", "a manual check offers it again");
+        assert_eq!(check_status(false, true, false), "current");
+        assert_eq!(check_status(false, false, true), "current");
     }
 
     #[test]

@@ -97,7 +97,7 @@
         <progress aria-label={tr("更新下載進度")} max="100" value={progress ?? undefined}></progress>
         <p>{progress == null ? tr('正在下載') : `${progress}%`} · {(updateState.downloadedBytes / 1048576).toFixed(1)} MiB{updateState.totalBytes ? ` / ${(updateState.totalBytes / 1048576).toFixed(1)} MiB` : ''}</p>
       {/if}
-      {#if updateState.latest && ['available', 'error', 'downloading', 'ready', 'deferred', 'installPermission', 'installing'].includes(updateState.status)}<button class="soft-button" type="button" onclick={showUpdate}>{tr("查看更新")}</button>{/if}
+      {#if updateState.latest && ['available', 'ignored', 'error', 'downloading', 'ready', 'deferred', 'installPermission', 'installing'].includes(updateState.status)}<button class="soft-button" type="button" onclick={showUpdate}>{tr("查看更新")}</button>{/if}
     {:else}<p>{tr("自動更新適用於 Windows 桌面程式。")}</p>{/if}
   </section>
   {#if about.info}

@@ -775,5 +775,6 @@
   "自動安裝並重啟": "Install and restart",
   "選擇更新方式。下載期間可繼續播放；下載並驗證成功後，會把目前的程式檔改名並換上新版。": "Choose how to update. You can keep playing while downloading; once the download is verified, the current program file is renamed and the new version takes its place.",
   "更新已安裝，下次啟動時生效。": "The update is installed and takes effect on the next launch.",
-  "更新已安裝，正在重新啟動播放器…": "The update is installed. Restarting the player…"
+  "更新已安裝，正在重新啟動播放器…": "The update is installed. Restarting the player…",
+  "已忽略新版本 {0}；按「檢查更新」可再次顯示。": "Version {0} is ignored. Use \"Check for updates\" to show it again."
 }

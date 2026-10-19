@@ -11,7 +11,7 @@ function fixture(overrides = {}) {
   const controller = createUpdateController({
     subscribe: async (callback) => { calls.push('subscribe'); receive = callback; return () => calls.push('unsubscribe'); },
     getState: async () => { calls.push('get'); return state('idle'); },
-    check: async () => { calls.push('check'); return state('available'); },
+    check: async (manual) => { calls.push(manual ? 'check:manual' : 'check'); return state('available'); },
     ignore: async () => { calls.push('ignore'); return state('idle'); },
     download: async (mode) => { calls.push(mode); return state('deferred'); },
     onChange: (next, visible) => { view = { state: next, visible }; },
@@ -27,10 +27,21 @@ test('startup subscribes before checking, runs once and manual check shows ignor
   assert.equal(f.view().visible, true);
   await f.controller.ignore();
   assert.equal(f.view().visible, false);
-  await f.controller.check();
+  await f.controller.check(true);
+  assert.equal(f.calls.at(-1), 'check:manual', 'a check by hand tells the backend it is manual');
   assert.equal(f.view().visible, true);
   f.controller.dispose();
   assert.equal(f.calls.at(-1), 'unsubscribe');
+});
+
+test('an ignored version stays hidden after a startup check and Settings still reports it', async () => {
+  const f = fixture({ check: async () => state('ignored') });
+  await f.controller.start();
+  assert.equal(f.view().visible, false, 'no prompt for a version the user ignored');
+  assert.equal(f.view().state.status, 'ignored');
+  f.controller.show();
+  assert.equal(f.view().visible, true, 'the About page can still open the notification');
+  f.controller.dispose();
 });
 
 test('no published release and check failures do not open an install notification', async () => {

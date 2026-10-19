@@ -4,7 +4,8 @@ import { getActiveLanguage, tr } from './i18n.js';
 export interface UpdateControllerPorts {
   subscribe: (receive: (state: UpdateState) => void) => Promise<() => void>;
   getState: () => Promise<UpdateState>;
-  check: () => Promise<UpdateState>;
+  /** `manual`: the user asked (Settings → About); a version the user ignored is offered again then. */
+  check: (manual: boolean) => Promise<UpdateState>;
   ignore: () => Promise<UpdateState>;
   download: (mode: UpdateInstallMode) => Promise<UpdateState>;
   onChange: (state: UpdateState, visible: boolean) => void;
@@ -35,7 +36,7 @@ export function createUpdateController(ports: UpdateControllerPorts) {
     if (disposed) return;
     state = next;
     if (next.status === 'available') visible = true;
-    if (next.status === 'deferred' || next.status === 'current' || next.status === 'unpublished') visible = false;
+    if (next.status === 'deferred' || next.status === 'current' || next.status === 'unpublished' || next.status === 'ignored') visible = false;
     publish();
   }
   function fail(error: unknown) {
@@ -49,9 +50,9 @@ export function createUpdateController(ports: UpdateControllerPorts) {
     try { receive(await operation()); } catch (error) { fail(error); }
     finally { active = false; }
   }
-  async function check() {
+  async function check(manual = false) {
     if (active || disposed || ['downloading', 'ready', 'deferred', 'restarting'].includes(state.status)) return;
-    await operate(ports.check);
+    await operate(() => ports.check(manual));
   }
   function start() {
     startPromise ??= (async () => {
@@ -80,7 +81,7 @@ export function createUpdateController(ports: UpdateControllerPorts) {
     await operate(() => ports.download(mode));
   }
   function show() {
-    if (state.latest && ['available', 'error', 'downloading', 'ready', 'deferred', 'installPermission', 'installing'].includes(state.status)) {
+    if (state.latest && ['available', 'ignored', 'error', 'downloading', 'ready', 'deferred', 'installPermission', 'installing'].includes(state.status)) {
       visible = true;
       publish();
     }
@@ -104,6 +105,7 @@ export function updateStatusText(state: UpdateState): string {
     case 'checking': return tr('正在檢查更新…');
     case 'current': return tr('目前已是最新版本。');
     case 'available': return tr('發現新版本 {0}', [state.latest?.version ?? '']).trim();
+    case 'ignored': return tr('已忽略新版本 {0}；按「檢查更新」可再次顯示。', [state.latest?.version ?? '']).trim();
     case 'downloading': return tr('正在下載更新…');
     case 'ready': return tr('下載完成，正在驗證更新…');
     case 'deferred': return tr('更新已安裝，下次啟動時生效。');

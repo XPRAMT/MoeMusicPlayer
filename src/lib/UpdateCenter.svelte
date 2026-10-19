@@ -30,12 +30,13 @@
   const controller = createUpdateController({
     subscribe: (receive) => listen<UpdateState>('update-state-changed', (event) => receive(event.payload)),
     getState: () => invokeCommand('update_get_state', {}),
-    check: () => invokeCommand('update_check', {}),
+    check: (manual) => invokeCommand('update_check', { manual }),
     ignore: () => invokeCommand('update_ignore', {}),
     download: (mode) => invokeCommand('update_download', { mode }),
     onChange: (next, show) => { updateState = next; visible = show; },
   });
-  export function check() { void controller.check(); }
+  /** Settings → About: a version the user ignored is offered again. */
+  export function check() { void controller.check(true); }
   export function show() { controller.show(); }
   function download(mode: UpdateInstallMode) { void controller.download(mode); }
   function dismiss(event?: Event) { event?.preventDefault(); void controller.ignore(); }

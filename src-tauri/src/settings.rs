@@ -1501,6 +1501,10 @@ pub struct AppSettings {
     /// shutdown, consumed (reset to false) on the next launch to resume playback. Windows only.
     #[serde(default)]
     pub resume_playback: bool,
+    /// The update version the user chose Ignore for: the same version is not offered again on startup, only when the
+    /// user checks for updates by hand.
+    #[serde(default)]
+    pub ignored_update_version: Option<String>,
     /// DSD→PCM gain and output rate (Settings → output).
     #[serde(default)]
     pub dsd: DsdPlaybackSettings,
@@ -1550,6 +1554,7 @@ impl Default for AppSettings {
             window_geometry: None,
             shortcuts: ShortcutSettings::default(),
             resume_playback: false,
+            ignored_update_version: None,
             dsd: DsdPlaybackSettings::default(),
             output_devices: Vec::new(),
             output_presets: default_output_presets(),
@@ -1995,6 +2000,7 @@ struct RawSettings {
     window_geometry: Option<WindowGeometry>,
     shortcuts: Option<serde_json::Value>,
     resume_playback: Option<bool>,
+    ignored_update_version: Option<String>,
     dsd: Option<serde_json::Value>,
     output_devices: Option<serde_json::Value>,
     output_presets: Option<serde_json::Value>,
@@ -2050,6 +2056,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         window_geometry: raw.window_geometry,
         shortcuts: lenient_shortcuts(raw.shortcuts),
         resume_playback: raw.resume_playback.unwrap_or(false),
+        ignored_update_version: raw.ignored_update_version.filter(|version| !version.is_empty()),
         dsd: lenient_dsd_settings(raw.dsd),
         output_devices: lenient_output_devices(raw.output_devices),
         output_presets: lenient_output_presets(raw.output_presets),
@@ -2696,6 +2703,25 @@ mod tests {
         assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"enabled": true}))).text_effect, LyricsTextEffect::None);
         assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "glow"}))).text_effect, LyricsTextEffect::None);
         assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({"textEffect": "shadow"}))).text_effect, LyricsTextEffect::Shadow);
+    }
+
+    #[test]
+    fn ignored_update_version_defaults_to_none_and_survives_restart() {
+        let directory = test_directory("ignored-update");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        assert_eq!(store.snapshot().unwrap().ignored_update_version, None);
+        store
+            .update(|settings| {
+                settings.ignored_update_version = Some("26.10.20".into());
+                Ok(())
+            })
+            .expect("persist version");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert_eq!(
+            reopened.snapshot().unwrap().ignored_update_version.as_deref(),
+            Some("26.10.20")
+        );
     }
 
     #[test]
