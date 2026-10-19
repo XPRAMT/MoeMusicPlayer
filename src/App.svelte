@@ -844,12 +844,19 @@
   let androidWallpaperHasImage = $state(false);
   let allFilesAccess = $state<AndroidAllFilesAccessStatus | null>(null);
   let allFilesAccessBusy = $state(false);
+  /** The system permission panel is opened by itself once per app start; the button in Music Sources stays. */
+  let allFilesAccessAutoPrompted = false;
 
   async function refreshAllFilesAccess(): Promise<void> {
     if (!isTauri() || capabilities?.platform !== 'android') return;
     try {
       const previous = allFilesAccess?.granted;
       allFilesAccess = await invokeCommand('android_all_files_access_status', {});
+      if (!allFilesAccessAutoPrompted && allFilesAccess?.supported && !allFilesAccess.granted && document.visibilityState === 'visible') {
+        allFilesAccessAutoPrompted = true;
+        // A moment after the start, so it does not collide with the notification permission prompt.
+        window.setTimeout(() => { if (!allFilesAccessBusy) void requestAllFilesAccess(); }, 1500);
+      }
       if (previous !== undefined && previous !== allFilesAccess?.granted && themePreferences.mainBackgroundMode === 'systemWallpaper') {
         await loadMainBackground();
       }
