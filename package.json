@@ -13,6 +13,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "android:build:arm64": "tauri android build --debug --target aarch64 --apk --ci",
     "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1",
+    "android:build:arm64:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -Fast",
     "android:build:arm64:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1",
     "release:android": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-android.ps1",
     "tauri": "tauri"

@@ -18,7 +18,11 @@ The version name is the build version (src-tauri\build-version.txt, for example 
 date as a number (26.10.19 becomes 261019), so every day's upload to Google Play has a higher version code. Output:
   release\moemusicplayer-android-arm64-release.apk
   release\moemusicplayer-android-arm64-release.aab   (uploaded to Google Play by hand)
+-Fast: the same signed APK without the slow size optimizations (no LTO, 16 codegen units; still stripped and
+opt-level s), only the APK (no AAB), written as release\moemusicplayer-android-arm64-fast.apk. For everyday small
+changes; it installs over the full build because the signing key is the same.
 #>
+param([switch]$Fast)
 $ErrorActionPreference = 'Stop'
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 
@@ -40,6 +44,7 @@ $overrides = [ordered]@{
     CARGO_PROFILE_RELEASE_STRIP = 'true'
     CARGO_PROFILE_RELEASE_OPT_LEVEL = 's'
 }
+if ($Fast) { $overrides['CARGO_PROFILE_RELEASE_LTO'] = 'false'; $overrides['CARGO_PROFILE_RELEASE_CODEGEN_UNITS'] = '16' }
 $configPath = $null
 $saved = @{}
 try {
@@ -72,12 +77,19 @@ try {
 
     foreach ($name in $overrides.Keys) { $saved[$name] = [Environment]::GetEnvironmentVariable($name); [Environment]::SetEnvironmentVariable($name, [string]$overrides[$name]) }
     $npx = (@(Get-Command 'npx.cmd' -CommandType Application -ErrorAction Stop))[0].Source
-    & $npx tauri android build --target aarch64 --apk --aab --ci --config $configPath
+    if ($Fast) { & $npx tauri android build --target aarch64 --apk --ci --config $configPath }
+    else { & $npx tauri android build --target aarch64 --apk --aab --ci --config $configPath }
     if ($LASTEXITCODE -ne 0) { throw "Android release build failed with exit code $LASTEXITCODE." }
 
     $outputs = Join-Path $repoRoot 'src-tauri\gen\android\app\build\outputs'
     $apk = Join-Path $outputs 'apk\universal\release\app-universal-release.apk'
     if (-not (Test-Path -LiteralPath $apk -PathType Leaf)) { throw "Missing APK: $apk" }
+    if ($Fast) {
+        Copy-Item -LiteralPath $apk -Destination (Join-Path $repoRoot "release\moemusicplayer-android-arm64-fast$suffix.apk") -Force
+        Write-Output "Version $version, version code $versionCode"
+        Write-Output "APK: release\moemusicplayer-android-arm64-fast$suffix.apk"
+        return
+    }
     Copy-Item -LiteralPath $apk -Destination (Join-Path $repoRoot "release\moemusicplayer-android-arm64-release$suffix.apk") -Force
     $aab = Get-ChildItem -LiteralPath (Join-Path $outputs 'bundle') -Recurse -Filter '*.aab' -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
