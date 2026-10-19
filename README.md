@@ -92,7 +92,7 @@ npm install
 npm run android:build:arm64:release
 ```
 
-This builds the smallest release APK (about 26 MB) and copies it to `release/moemusicplayer-android-arm64-release.apk`; it is signed with the debug key, which is the key the installed app must have been signed with for an in-place update. `npm run android:build:arm64` builds a larger debug APK that can be inspected with WebView debugging. Turn on **All files access** in **Settings → Music Sources**, then add a folder or playlist. `npm run release:android` writes `release/update-assets/moemusicplayer-android-arm64.apk` and publishes only with `-Upload -ReleaseTag <tag>`.
+This builds the smallest release APK (about 26 MB) and an AAB for Google Play, and copies them to `release/moemusicplayer-android-arm64-release.apk` and `.aab`. Both are signed with the release key taken from the `MOE_ANDROID_KEYSTORE`, `MOE_ANDROID_KEY_ALIAS` and `MOE_ANDROID_KEYSTORE_PASSWORD` environment variables (without a keystore the debug key is used); the version code is the build date as a number. `npm run android:build:arm64` builds a larger debug APK that can be inspected with WebView debugging. Turn on **All files access** in **Settings → Music Sources**, then add a folder or playlist. `npm run release:android` writes `release/update-assets/moemusicplayer-android-arm64.apk` and publishes only with `-Upload -ReleaseTag <tag>`.
 
 ## License
 

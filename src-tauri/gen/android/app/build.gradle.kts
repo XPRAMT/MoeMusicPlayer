@@ -25,6 +25,19 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    // The release key comes from the environment (scripts/build-android-release.ps1 sets it); nothing secret is stored in
+    // the repository. Without it the release build falls back to the debug key, so anyone can still build.
+    signingConfigs {
+        val releaseKeystore = System.getenv("MOE_ANDROID_KEYSTORE")
+        if (!releaseKeystore.isNullOrBlank()) {
+            create("moeRelease") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("MOE_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("MOE_ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("MOE_ANDROID_KEY_PASSWORD") ?: System.getenv("MOE_ANDROID_KEYSTORE_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -39,9 +52,8 @@ android {
             }
         }
         getByName("release") {
-            // Sideloaded for its owner: sign with the same debug key as the installed debug build, so the release APK
-            // updates it in place (ADR 0015).
-            signingConfig = signingConfigs.getByName("debug")
+            // The release key when the environment provides one (ADR 0023), the debug key otherwise.
+            signingConfig = signingConfigs.findByName("moeRelease") ?: signingConfigs.getByName("debug")
             optimization {
                enable = true
             }

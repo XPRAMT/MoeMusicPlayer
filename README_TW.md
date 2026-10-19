@@ -92,7 +92,7 @@ npm install
 npm run android:build:arm64:release
 ```
 
-這會建置最小的 release APK（約 26 MB）並複製到 `release/moemusicplayer-android-arm64-release.apk`；它以 debug 金鑰簽章，已安裝的程式必須用同一把金鑰簽章才能原地更新。`npm run android:build:arm64` 會建置較大的 debug APK，可用 WebView 偵錯檢視。安裝後到「設定 → 音樂來源」開啟「所有檔案存取權」，再加入資料夾或播放清單。`npm run release:android` 會輸出 `release/update-assets/moemusicplayer-android-arm64.apk`，只有加上 `-Upload -ReleaseTag <tag>` 才會發布。
+這會建置最小的 release APK（約 26 MB）與給 Google Play 的 AAB，並複製到 `release/moemusicplayer-android-arm64-release.apk` 與 `.aab`。兩者都以環境變數 `MOE_ANDROID_KEYSTORE`、`MOE_ANDROID_KEY_ALIAS`、`MOE_ANDROID_KEYSTORE_PASSWORD` 指定的 release 金鑰簽章（沒有金鑰時使用 debug 金鑰）；版本碼為建置日期的數字。`npm run android:build:arm64` 會建置較大的 debug APK，可用 WebView 偵錯檢視。安裝後到「設定 → 音樂來源」開啟「所有檔案存取權」，再加入資料夾或播放清單。`npm run release:android` 會輸出 `release/update-assets/moemusicplayer-android-arm64.apk`，只有加上 `-Upload -ReleaseTag <tag>` 才會發布。
 
 ## 授權
 
