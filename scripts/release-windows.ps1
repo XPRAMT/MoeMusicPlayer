@@ -25,8 +25,6 @@ $previousCargoTargetDir = if ($hadCargoTargetDir) { $env:CARGO_TARGET_DIR } else
 $previousBuildTimestamp = $env:MOE_BUILD_TIMESTAMP_UTC
 $stagingExe = $null
 $backupExe = $null
-$stagingHelper = $null
-$backupHelper = $null
 $locationPushed = $false
 
 Push-Location -LiteralPath $repoRoot
@@ -36,10 +34,6 @@ try {
     # has an external or relative CARGO_TARGET_DIR. Restore the caller's process environment below.
     $env:CARGO_TARGET_DIR = $targetRoot
     $env:MOE_BUILD_TIMESTAMP_UTC = [DateTimeOffset]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
-    $helperBuildArguments = @('build', '--release', '-p', 'moemusicplayer-updater', '--bin', 'moemusicplayer-updater', '--locked')
-    & cargo @helperBuildArguments
-    if ($LASTEXITCODE -ne 0) { throw "Updater helper build failed with exit code $LASTEXITCODE." }
-
     $npmCommands = @(Get-Command 'npm.cmd' -CommandType Application -ErrorAction Stop)
     if ($npmCommands.Count -eq 0) {
         throw "npm.cmd was not found on PATH. Existing release executable was left unchanged."
@@ -72,14 +66,7 @@ try {
     }
     $outputExe = Join-Path $outputDirectory 'moemusicplayer.exe'
     $stagingExe = Join-Path $outputDirectory ('.moemusicplayer.' + [Guid]::NewGuid().ToString('N') + '.tmp')
-    $sourceHelper = Join-Path $releaseDirectory 'moemusicplayer-updater.exe'
-    $outputHelper = Join-Path $outputDirectory 'moemusicplayer-updater.exe'
     $hadOutputMain = Test-Path -LiteralPath $outputExe -PathType Leaf
-    $hadOutputHelper = Test-Path -LiteralPath $outputHelper -PathType Leaf
-    if (-not (Test-Path -LiteralPath $sourceHelper -PathType Leaf)) { throw "Updater helper output missing: $sourceHelper" }
-    $stagingHelper = Join-Path $outputDirectory ('.moemusicplayer-updater.' + [Guid]::NewGuid().ToString('N') + '.tmp')
-    [System.IO.File]::Copy($sourceHelper, $stagingHelper, $false)
-    if ((Get-Sha256Hex -Path $sourceHelper) -ne (Get-Sha256Hex -Path $stagingHelper)) { throw 'Updater helper staging failed SHA-256 verification. Existing release was left unchanged.' }
 
     [System.IO.File]::Copy($sourceExe, $stagingExe, $false)
     $stagingInfo = Get-Item -LiteralPath $stagingExe
@@ -125,32 +112,6 @@ try {
     if ($outputHash -ne $sourceHash) {
         throw "Updated executable hash does not match the build output: '$outputExe'."
     }
-    try {
-        if (Test-Path -LiteralPath $outputHelper -PathType Leaf) {
-            $backupHelper = Join-Path $outputDirectory ('.moemusicplayer-updater.previous.' + [Guid]::NewGuid().ToString('N') + '.bak')
-            [System.IO.File]::Replace($stagingHelper, $outputHelper, $backupHelper)
-        }
-        else { [System.IO.File]::Move($stagingHelper, $outputHelper) }
-        $stagingHelper = $null
-        if ((Get-Sha256Hex -Path $sourceHelper) -ne (Get-Sha256Hex -Path $outputHelper)) { throw 'Updater helper output failed SHA-256 verification.' }
-    }
-    catch {
-        # A failure of the second file must not leave a partially published pair.
-        if ($null -ne $backupExe -and (Test-Path -LiteralPath $backupExe -PathType Leaf)) {
-            $mainRollback = Join-Path $outputDirectory ('.main-rollback.' + [Guid]::NewGuid().ToString('N') + '.tmp')
-            [System.IO.File]::Copy($backupExe, $mainRollback, $false)
-            [System.IO.File]::Replace($mainRollback, $outputExe, $null)
-        }
-        elseif (-not $hadOutputMain -and (Test-Path -LiteralPath $outputExe -PathType Leaf)) { Remove-Item -LiteralPath $outputExe -Force }
-        if ($null -ne $backupHelper -and (Test-Path -LiteralPath $backupHelper -PathType Leaf)) {
-            $helperRollback = Join-Path $outputDirectory ('.updater-rollback.' + [Guid]::NewGuid().ToString('N') + '.tmp')
-            [System.IO.File]::Copy($backupHelper, $helperRollback, $false)
-            if (Test-Path -LiteralPath $outputHelper -PathType Leaf) { [System.IO.File]::Replace($helperRollback, $outputHelper, $null) }
-            else { [System.IO.File]::Move($helperRollback, $outputHelper) }
-        }
-        elseif (-not $hadOutputHelper -and (Test-Path -LiteralPath $outputHelper -PathType Leaf)) { Remove-Item -LiteralPath $outputHelper -Force }
-        throw
-    }
     if ($null -ne $backupExe -and (Test-Path -LiteralPath $backupExe -PathType Leaf)) {
         try {
             Remove-Item -LiteralPath $backupExe -Force -ErrorAction Stop
@@ -174,8 +135,7 @@ try {
     }
     Write-Output "Updated: $outputExe"
     Write-Output "SHA256:  $outputHash"
-    if ($null -ne $backupHelper -and (Test-Path -LiteralPath $backupHelper -PathType Leaf)) { Remove-Item -LiteralPath $backupHelper -Force }
-    & (Join-Path $scriptDirectory 'package-windows-update.ps1') -Executable $outputExe -Helper $outputHelper
+    & (Join-Path $scriptDirectory 'package-windows-update.ps1') -Executable $outputExe
 }
 finally {
     if ($null -ne $previousBuildTimestamp) {
@@ -187,7 +147,6 @@ finally {
     if ($null -ne $stagingExe -and (Test-Path -LiteralPath $stagingExe -PathType Leaf)) {
         Remove-Item -LiteralPath $stagingExe -Force -ErrorAction SilentlyContinue
     }
-    if ($null -ne $stagingHelper -and (Test-Path -LiteralPath $stagingHelper -PathType Leaf)) { Remove-Item -LiteralPath $stagingHelper -Force -ErrorAction SilentlyContinue }
     if ($hadCargoTargetDir) {
         $env:CARGO_TARGET_DIR = $previousCargoTargetDir
     }

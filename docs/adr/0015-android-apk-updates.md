@@ -1,6 +1,6 @@
 ﻿# Android APK updates from the Windows release feed
 
-Status: Accepted
+Status: Accepted (the separate Android manifest was removed by ADR 0022: the APK is identified by the Release tag and verified by GitHub's asset digest)
 
 Decision date: 2026-10-17, Asia/Taipei (UTC+08:00)
 

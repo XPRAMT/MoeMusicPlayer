@@ -10429,16 +10429,16 @@ fn apply_saved_window_geometry(window: &WebviewWindow, geometry: WindowGeometry)
 #[cfg(target_os = "windows")]
 pub(crate) fn install_downloaded_update(
     app: &AppHandle,
-    pending: &updater::PendingUpdate,
+    staged: &updater::StagedUpdate,
     restart: bool,
 ) -> Result<updater::UpdateState, String> {
     // Validate executable/helper and paths while playback is still running.
-    updater::validate_for_apply(pending)?;
+    updater::validate_for_apply(staged)?;
     let service = app.state::<updater::UpdateService>();
     if !restart {
         // Rename the running files and put the new ones in place now; the new version starts on the next launch and
         // playback is not touched.
-        updater::install_in_place(pending)?;
+        updater::install_in_place(staged)?;
         return Ok(updater::publish(app, &service, |state| {
             state.status = "deferred".into();
         }));
@@ -10508,8 +10508,8 @@ pub(crate) fn install_downloaded_update(
     );
     // Strictly saved: replace the files, then start the new executable (it waits for this process to exit).
     let result = result.and_then(|()| {
-        updater::install_in_place(pending)?;
-        updater::spawn_relaunch(&pending.target)
+        updater::install_in_place(staged)?;
+        updater::spawn_relaunch(&staged.target)
     });
     if let Err(error) = result {
         database_lifecycle::abort_update_shutdown(&state.shutdown, &state.database_work);

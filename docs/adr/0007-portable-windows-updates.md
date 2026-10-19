@@ -1,6 +1,6 @@
 ﻿# Portable Windows updates
 
-Status: Accepted
+Status: Accepted (the manifest, the helper process and the executable-pair packaging described below were replaced by ADR 0021 and ADR 0022)
 
 Decision date: 2026-10-09, Asia/Taipei (UTC+08:00)
 

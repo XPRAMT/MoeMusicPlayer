@@ -1,6 +1,6 @@
 # Windows updates install by renaming the running executable
 
-Status: Accepted (supersedes the helper-process part of ADR 0007)
+Status: Accepted (supersedes the helper-process part of ADR 0007; the manifest and helper executable it mentions were removed again by ADR 0022)
 
 Decision date: 2026-10-19, Asia/Taipei (UTC+08:00)
 

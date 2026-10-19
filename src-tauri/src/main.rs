@@ -21,20 +21,13 @@ fn main() {
     }
     #[cfg(target_os = "windows")]
     {
-        let diagnostic = std::env::args().find(|argument| {
-            matches!(
-                argument.as_str(),
-                "--update-check-json" | "--update-stage-next-launch"
-            )
-        });
-        if let Some(diagnostic) = diagnostic {
+        let diagnostic = std::env::args().find(|argument| argument == "--update-check-json");
+        if diagnostic.is_some() {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("diagnostic runtime");
-            match runtime.block_on(moemusicplayer_lib::updater::diagnostic_check(
-                diagnostic == "--update-stage-next-launch",
-            )) {
+            match runtime.block_on(moemusicplayer_lib::updater::diagnostic_check()) {
                 Ok(state) => println!(
                     "{}",
                     serde_json::to_string(&state).expect("update state serializes")

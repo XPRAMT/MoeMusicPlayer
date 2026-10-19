@@ -20,7 +20,7 @@ MoeMusicPlayer 是適用於 Windows 與 Android 的本機優先音樂播放器�
 
 ## 在 Windows 使用
 
-1. 下載並解壓縮[最新版 Windows 版本](https://github.com/XPRAMT/MoeMusicPlayer/releases/latest)，將 `moemusicplayer.exe` 與 `moemusicplayer-updater.exe` 放在一起。
+1. 下載並解壓縮[最新版 Windows 版本](https://github.com/XPRAMT/MoeMusicPlayer/releases/latest)（`moemusicplayer-windows-x86_64.zip`，內含一個 `moemusicplayer.exe`）。播放器之後會自己從同一頁更新。
 2. 啟動播放器，到「設定 → 音樂來源」加入資料夾或播放清單。
 3. 若要從檔案總管開啟音樂檔，先在「設定 → 關於」登錄支援的音訊格式，再到 Windows「預設應用程式」選擇 MoeMusicPlayer。開啟音檔會以同資料夾的支援音訊檔取代目前佇列，不會掃描子資料夾。
 
@@ -45,7 +45,7 @@ npm run release:windows
 
 執行前端檢查與 Rust 工作區測試：`npm run check`、`cargo test --workspace --locked --offline`。
 
-固定輸出為 `release/moemusicplayer.exe` 與 `release/moemusicplayer-updater.exe`，請與 `release/UserData/` 放在一起。更新用檔案會打包到 `release/update-assets/`；打包不會發布版本。
+固定輸出為 `release/moemusicplayer.exe`，請與 `release/UserData/` 放在一起。發布用 zip 會打包到 `release/update-assets/`；打包不會發布版本。更新只用版本號（建置日期，tag 例如 `v26.10.19`）辨識，所以一天最多發布一版。
 
 ## 建置 Android 版
 

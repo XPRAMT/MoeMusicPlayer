@@ -1,6 +1,7 @@
-//! Portable Windows update metadata and staging, and the Android APK update (ADR 0015). All
-//! locations are owned by this service; the renderer can select timing, never a URL or path.
-pub use moe_update::{FileIdentity, PendingUpdate, ReleaseManifest};
+//! Windows and Android updates from the latest GitHub Release (ADR 0022). An update is identified only by the
+//! version in the Release tag (`v26.10.19`, the build date); the file is verified against the SHA-256 digest GitHub
+//! reports for the asset. All locations are owned by this service; the renderer can select timing, never a URL or
+//! path.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -15,13 +16,14 @@ const REPOSITORY: &str = "https://github.com/XPRAMT/MoeMusicPlayer";
 const AUTHOR: &str = "https://github.com/XPRAMT";
 const RELEASE_API: &str = "https://api.github.com/repos/XPRAMT/MoeMusicPlayer/releases/latest";
 const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
-const MANIFEST_NAME: &str = "moemusicplayer-update.json";
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-/// Android assets in the same GitHub Release as the Windows pair (ADR 0015).
-const ANDROID_MANIFEST_NAME: &str = "moemusicplayer-android-update.json";
+/// The two assets of a Release: the Windows package (a zip holding `moemusicplayer.exe`) and the Android APK.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const WINDOWS_ZIP_NAME: &str = "moemusicplayer-windows-x86_64.zip";
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const WINDOWS_EXE_NAME: &str = "moemusicplayer.exe";
 const ANDROID_APK_NAME: &str = "moemusicplayer-android-arm64.apk";
-const ANDROID_ARCHITECTURE: &str = "android-arm64";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,6 +72,7 @@ pub struct UpdateState {
 
 #[derive(Clone, Deserialize)]
 struct Release {
+    tag_name: String,
     html_url: String,
     published_at: String,
     body: Option<String>,
@@ -83,32 +86,20 @@ struct Asset {
     browser_download_url: String,
 }
 
-/// `moemusicplayer-android-update.json`: same build identity fields as the Windows manifest, one
-/// APK. A separate asset keeps older Windows clients (strict `deny_unknown_fields`) unaffected.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AndroidReleaseManifest {
-    pub schema_version: u32,
-    pub version: String,
-    pub build_timestamp_utc: String,
-    pub git_commit: String,
-    pub architecture: String,
-    pub apk: FileIdentity,
+/// A file of a Release: its name, GitHub's SHA-256 digest and its size.
+#[derive(Clone, Debug)]
+pub struct FileIdentity {
+    pub name: String,
+    pub sha256: String,
+    pub size: u64,
 }
 
+/// The latest Release's file for this platform.
 #[derive(Clone)]
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
-struct AvailableAndroidRelease {
-    manifest: AndroidReleaseManifest,
-    apk: Asset,
-}
-
-#[derive(Clone)]
-#[cfg_attr(target_os = "android", allow(dead_code))]
 struct AvailableRelease {
-    manifest: ReleaseManifest,
-    executable: Asset,
-    helper: Asset,
+    version: String,
+    asset: Asset,
+    identity: FileIdentity,
     release_url: String,
     published_at: String,
     notes: String,
@@ -117,8 +108,7 @@ struct AvailableRelease {
 pub struct UpdateService {
     state: Mutex<UpdateState>,
     available: Mutex<Option<AvailableRelease>>,
-    android_available: Mutex<Option<AvailableAndroidRelease>>,
-    /// Verified APK already downloaded for `android_available` (retry after the install prompt).
+    /// Verified APK already downloaded for `available` (retry after the install prompt).
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     android_apk: Mutex<Option<PathBuf>>,
     operation: tokio::sync::Mutex<()>,
@@ -136,7 +126,6 @@ impl Default for UpdateService {
                 error: None,
             }),
             available: Mutex::new(None),
-            android_available: Mutex::new(None),
             android_apk: Mutex::new(None),
             operation: tokio::sync::Mutex::new(()),
         }
@@ -255,136 +244,78 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|error| error.to_string())
 }
 
-async fn bounded_bytes(client: &reqwest::Client, url: &str, limit: u64) -> Result<Vec<u8>, String> {
-    let mut response = client
-        .get(url)
-        .timeout(Duration::from_secs(15))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
-    if response.content_length().is_some_and(|size| size > limit) {
-        return Err("更新回應超過大小上限。".into());
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
-        if bytes.len() as u64 + chunk.len() as u64 > limit {
-            return Err("更新回應超過大小上限。".into());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
 fn valid_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn validate_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
-    if manifest.schema_version != 1 || manifest.architecture != "windows-x86_64" {
-        return Err("此更新版本或架構不受支援。".into());
-    }
-    if !valid_utc(&manifest.build_timestamp_utc)
-        || manifest.git_commit.len() != 40
-        || !manifest
-            .git_commit
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err("更新建置識別無效。".into());
-    }
-    for (file, name, limit) in [
-        (&manifest.executable, "moemusicplayer.exe", MAX_DOWNLOAD),
-        (
-            &manifest.helper,
-            "moemusicplayer-updater.exe",
-            16 * 1024 * 1024,
-        ),
-    ] {
-        if file.name != name || !valid_hash(&file.sha256) || file.size == 0 || file.size > limit {
-            return Err("更新檔案清單無效。".into());
+/// `v26.10.19` or `26.10.19` (the build date) -> (26, 10, 19).
+fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = text.strip_prefix('v').unwrap_or(text).split('.');
+    let mut next = || -> Option<u32> {
+        let part = parts.next()?;
+        if part.is_empty() || part.len() > 4 || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
         }
-    }
-    Ok(())
-}
-
-fn validate_android_manifest(manifest: &AndroidReleaseManifest) -> Result<(), String> {
-    if manifest.schema_version != 1 || manifest.architecture != ANDROID_ARCHITECTURE {
-        return Err("此 Android 更新版本或架構不受支援。".into());
-    }
-    if !valid_utc(&manifest.build_timestamp_utc)
-        || manifest.git_commit.len() != 40
-        || !manifest
-            .git_commit
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err("更新建置識別無效。".into());
-    }
-    let apk = &manifest.apk;
-    if apk.name != ANDROID_APK_NAME
-        || !valid_hash(&apk.sha256)
-        || apk.size == 0
-        || apk.size > MAX_DOWNLOAD
-    {
-        return Err("Android 更新檔案清單無效。".into());
-    }
-    Ok(())
-}
-
-fn valid_utc(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let syntax = bytes.len() == 24
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes[10] == b'T'
-        && bytes[13] == b':'
-        && bytes[16] == b':'
-        && bytes[19] == b'.'
-        && bytes[23] == b'Z'
-        && bytes.iter().enumerate().all(|(index, byte)| {
-            matches!(index, 4 | 7 | 10 | 13 | 16 | 19 | 23) || byte.is_ascii_digit()
-        });
-    if !syntax {
-        return false;
-    }
-    let number = |range: std::ops::Range<usize>| value[range].parse::<u32>().unwrap_or(0);
-    let year = number(0..4);
-    let month = number(5..7);
-    let day = number(8..10);
-    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
-    let month_days = match month {
-        2 if leap => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        _ => 0,
+        part.parse().ok()
     };
-    year >= 1970
-        && day != 0
-        && day <= month_days
-        && number(11..13) < 24
-        && number(14..16) < 60
-        && number(17..19) < 60
+    let version = (next()?, next()?, next()?);
+    parts.next().is_none().then_some(version)
 }
 
-fn matching_asset(release: &Release, file: &FileIdentity) -> Result<Asset, String> {
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    matches!(
+        (parse_version(latest), parse_version(current)),
+        (Some(latest), Some(current)) if latest > current
+    )
+}
+
+/// The Release's file named `asset_name`, or None when this Release has no file for the platform. GitHub's SHA-256
+/// digest of the asset is the integrity check, so a Release without it cannot be installed automatically.
+fn available_release(
+    release: Release,
+    asset_name: &str,
+) -> Result<Option<AvailableRelease>, String> {
+    let version = release
+        .tag_name
+        .strip_prefix('v')
+        .filter(|version| parse_version(version).is_some())
+        .ok_or("Release 版本標籤無效。")?
+        .to_owned();
     let found: Vec<_> = release
         .assets
         .iter()
-        .filter(|asset| asset.name == file.name)
+        .filter(|asset| asset.name == asset_name)
         .collect();
-    if found.len() != 1
-        || found[0].size != file.size
-        || !trusted_download_url(&found[0].browser_download_url)
+    let asset = match found.as_slice() {
+        [] => return Ok(None),
+        [asset] => (*asset).clone(),
+        _ => return Err("GitHub 更新資產重複。".into()),
+    };
+    if asset.size == 0
+        || asset.size > MAX_DOWNLOAD
+        || !trusted_download_url(&asset.browser_download_url)
     {
-        return Err("GitHub 更新資產不符合清單。".into());
+        return Err("GitHub 更新資產無效。".into());
     }
-    Ok(found[0].clone())
+    let sha256 = asset
+        .digest
+        .as_deref()
+        .and_then(|digest| digest.strip_prefix("sha256:"))
+        .filter(|hash| valid_hash(hash))
+        .ok_or("GitHub 未提供更新檔案 SHA-256 digest；為保護完整性，無法自動更新。")?
+        .to_ascii_lowercase();
+    Ok(Some(AvailableRelease {
+        version,
+        identity: FileIdentity {
+            name: asset.name.clone(),
+            sha256,
+            size: asset.size,
+        },
+        asset,
+        release_url: release.html_url,
+        published_at: release.published_at,
+        notes: release.body.unwrap_or_default(),
+    }))
 }
 
 /// The fixed repository's public latest Release, or None when nothing is published.
@@ -418,117 +349,11 @@ async fn latest_release(client: &reqwest::Client) -> Result<Option<Release>, Str
     Ok(Some(release))
 }
 
-/// Download a manifest asset and verify it against GitHub's SHA-256 asset digest.
-async fn verified_manifest_bytes(
-    client: &reqwest::Client,
-    asset: &Asset,
-) -> Result<Vec<u8>, String> {
-    if !trusted_download_url(&asset.browser_download_url) {
-        return Err("更新清單來源無效。".into());
-    }
-    let hash = asset
-        .digest
-        .as_deref()
-        .and_then(|digest| digest.strip_prefix("sha256:"))
-        .filter(|hash| valid_hash(hash))
-        .ok_or("GitHub 未提供更新清單 SHA-256 digest；為保護完整性，無法自動更新。")?;
-    let bytes = bounded_bytes(client, &asset.browser_download_url, 64 * 1024).await?;
-    if bytes.len() as u64 != asset.size || sha256(&bytes) != hash.to_ascii_lowercase() {
-        return Err("更新清單 SHA-256 驗證失敗。".into());
-    }
-    Ok(bytes)
-}
-
-async fn check_release() -> Result<Option<AvailableRelease>, String> {
+async fn check_release(asset_name: &str) -> Result<Option<AvailableRelease>, String> {
     let client = client()?;
-    let Some(release) = latest_release(&client).await? else {
-        return Ok(None);
-    };
-    let asset = release
-        .assets
-        .iter()
-        .find(|asset| asset.name == MANIFEST_NAME)
-        .ok_or("Release 缺少可驗證的更新清單。")?;
-    let bytes = verified_manifest_bytes(&client, asset).await?;
-    let manifest: ReleaseManifest =
-        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-    validate_manifest(&manifest)?;
-    let executable = matching_asset(&release, &manifest.executable)?;
-    let helper = matching_asset(&release, &manifest.helper)?;
-    Ok(Some(AvailableRelease {
-        manifest,
-        executable,
-        helper,
-        release_url: release.html_url,
-        published_at: release.published_at,
-        notes: release.body.unwrap_or_default(),
-    }))
-}
-
-/// Android: the latest Release's APK manifest. A Release without Android assets is "unpublished"
-/// for Android (Windows-only releases stay valid).
-async fn check_android_release() -> Result<Option<(AvailableAndroidRelease, String, String)>, String>
-{
-    let client = client()?;
-    let Some(release) = latest_release(&client).await? else {
-        return Ok(None);
-    };
-    let Some(asset) = release
-        .assets
-        .iter()
-        .find(|asset| asset.name == ANDROID_MANIFEST_NAME)
-    else {
-        return Ok(None);
-    };
-    let bytes = verified_manifest_bytes(&client, asset).await?;
-    let manifest: AndroidReleaseManifest =
-        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-    validate_android_manifest(&manifest)?;
-    let apk = matching_asset(&release, &manifest.apk)?;
-    Ok(Some((
-        AvailableAndroidRelease { manifest, apk },
-        release.published_at,
-        release.body.unwrap_or_default(),
-    )))
-}
-
-async fn update_check_android(app: &AppHandle, service: &UpdateService) -> UpdateState {
-    publish(app, service, |state| {
-        state.status = "checking".into();
-        state.error = None;
-    });
-    *service
-        .android_available
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-    match check_android_release().await {
-        Ok(None) => publish(app, service, |state| {
-            state.status = "unpublished".into();
-            state.latest = None;
-        }),
-        Ok(Some((release, published_at, notes))) => {
-            let is_new =
-                release.manifest.build_timestamp_utc.as_str() > env!("MOE_BUILD_TIMESTAMP_UTC");
-            let state = publish(app, service, |state| {
-                state.status = if is_new { "available" } else { "current" }.into();
-                state.latest = Some(LatestBuild {
-                    build_id: format!(
-                        "{}@{}",
-                        release.manifest.build_timestamp_utc, release.manifest.git_commit
-                    ),
-                    version: release.manifest.version.clone(),
-                    published_at,
-                    notes,
-                    download_bytes: release.manifest.apk.size,
-                });
-            });
-            *service
-                .android_available
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(release);
-            state
-        }
-        Err(error) => failed(app, service, error),
+    match latest_release(&client).await? {
+        Some(release) => available_release(release, asset_name),
+        None => Ok(None),
     }
 }
 
@@ -544,15 +369,16 @@ pub async fn update_check(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone());
     };
-    if cfg!(all(target_os = "android", target_arch = "aarch64")) {
-        return Ok(update_check_android(&app, &service).await);
-    }
-    if !cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+    let asset_name = if cfg!(all(target_os = "android", target_arch = "aarch64")) {
+        ANDROID_APK_NAME
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        WINDOWS_ZIP_NAME
+    } else {
         return Ok(publish(&app, &service, |state| {
             state.status = "unsupported".into();
             state.error = Some("自動更新目前僅支援 Windows x64 便攜版與 Android arm64。".into());
         }));
-    }
+    };
     publish(&app, &service, |state| {
         state.status = "checking".into();
         state.error = None;
@@ -561,25 +387,21 @@ pub async fn update_check(
         .available
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-    match check_release().await {
+    match check_release(asset_name).await {
         Ok(None) => Ok(publish(&app, &service, |state| {
             state.status = "unpublished".into();
             state.latest = None;
         })),
         Ok(Some(release)) => {
-            let is_new =
-                release.manifest.build_timestamp_utc.as_str() > env!("MOE_BUILD_TIMESTAMP_UTC");
+            let is_new = is_newer_version(&release.version, env!("MOE_BUILD_VERSION"));
             let state = publish(&app, &service, |state| {
                 state.status = if is_new { "available" } else { "current" }.into();
                 state.latest = Some(LatestBuild {
-                    build_id: format!(
-                        "{}@{}",
-                        release.manifest.build_timestamp_utc, release.manifest.git_commit
-                    ),
-                    version: release.manifest.version.clone(),
+                    build_id: release.version.clone(),
+                    version: release.version.clone(),
                     published_at: release.published_at.clone(),
                     notes: release.notes.clone(),
-                    download_bytes: release.manifest.executable.size + release.manifest.helper.size,
+                    download_bytes: release.identity.size,
                 });
             });
             *service
@@ -657,7 +479,7 @@ async fn download_file(
     {
         size += chunk.len() as u64;
         if size > identity.size {
-            return Err("更新下載超過清單大小。".into());
+            return Err("更新下載超過預期大小。".into());
         }
         hash.update(&chunk);
         file.write_all(&chunk).map_err(|error| error.to_string())?;
@@ -701,42 +523,45 @@ fn download_error(error: reqwest::Error) -> String {
     }
 }
 
+/// A downloaded release: the verified zip is unpacked into the update stage, ready to be installed over `target`.
+#[cfg(target_os = "windows")]
+#[derive(Clone)]
+pub struct StagedUpdate {
+    pub stage_directory: PathBuf,
+    pub executable: PathBuf,
+    pub target: PathBuf,
+}
+
 #[cfg(target_os = "windows")]
 async fn stage_release(
     app: Option<&AppHandle>,
     service: &UpdateService,
     release: AvailableRelease,
-) -> Result<PendingUpdate, String> {
+) -> Result<StagedUpdate, String> {
     let directory = updates_directory()?;
     let stage_directory = directory.join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir(&stage_directory).map_err(|error| error.to_string())?;
     let result = tokio::time::timeout(DOWNLOAD_TOTAL_TIMEOUT, async {
         let client = client()?;
+        let archive = stage_directory.join(WINDOWS_ZIP_NAME);
         download_file(
             app,
             service,
             &client,
-            &release.executable,
-            &release.manifest.executable,
-            &stage_directory.join(&release.manifest.executable.name),
+            &release.asset,
+            &release.identity,
+            &archive,
         )
         .await?;
-        download_file(
-            app,
-            service,
-            &client,
-            &release.helper,
-            &release.manifest.helper,
-            &stage_directory.join(&release.manifest.helper.name),
-        )
-        .await?;
-        let pending = PendingUpdate {
-            manifest: release.manifest,
+        let executable = stage_directory.join(WINDOWS_EXE_NAME);
+        extract_executable(&archive, &executable)?;
+        let staged = StagedUpdate {
             stage_directory: stage_directory.clone(),
+            executable,
             target: std::env::current_exe().map_err(|error| error.to_string())?,
         };
-        validate_for_apply(&pending)?;
-        Ok(pending)
+        validate_for_apply(&staged)?;
+        Ok(staged)
     })
     .await
     .unwrap_or_else(|_| Err("更新下載已超過 30 分鐘總上限，請稍後重試。".into()));
@@ -748,49 +573,58 @@ async fn stage_release(
     result
 }
 
-/// Diagnostic CLI uses exactly the same trusted Release metadata and staging
-/// paths as the UI. There is deliberately no configurable server or URL.
+/// Unpacks `moemusicplayer.exe` from the (digest-verified) release zip: that one entry by exact name, bounded in size.
 #[cfg(target_os = "windows")]
-pub async fn diagnostic_check(stage_for_next_launch: bool) -> Result<UpdateState, String> {
-    let service = UpdateService::default();
-    let Some(release) = check_release().await? else {
-        let mut state = service
-            .state
-            .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.status = "unpublished".into();
-        return Ok(state);
-    };
-    let latest = LatestBuild {
-        build_id: format!(
-            "{}@{}",
-            release.manifest.build_timestamp_utc, release.manifest.git_commit
-        ),
-        version: release.manifest.version.clone(),
-        published_at: release.published_at.clone(),
-        notes: release.notes.clone(),
-        download_bytes: release.manifest.executable.size + release.manifest.helper.size,
-    };
-    let newer = release.manifest.build_timestamp_utc.as_str() > env!("MOE_BUILD_TIMESTAMP_UTC");
-    if stage_for_next_launch {
-        if !newer {
-            return Err("此版本不比目前建置新。".into());
-        }
-        stage_release(None, &service, release).await?;
+fn extract_executable(archive: &Path, output: &Path) -> Result<(), String> {
+    use std::io::Read;
+    let file = std::fs::File::open(archive).map_err(|error| error.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|error| format!("更新壓縮檔無效：{error}"))?;
+    let mut entry = zip
+        .by_name(WINDOWS_EXE_NAME)
+        .map_err(|_| "更新壓縮檔缺少 moemusicplayer.exe。".to_owned())?;
+    let size = entry.size();
+    if size == 0 || size > MAX_DOWNLOAD {
+        return Err("更新壓縮檔內的 moemusicplayer.exe 大小無效。".into());
     }
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .map_err(|error| error.to_string())?;
+    let copied = std::io::copy(&mut entry.by_ref().take(size + 1), &mut out)
+        .map_err(|error| error.to_string())?;
+    if copied != size {
+        return Err("更新壓縮檔解壓縮長度不符。".into());
+    }
+    out.sync_all().map_err(|error| error.to_string())
+}
+
+/// Diagnostic CLI uses exactly the same trusted Release metadata as the UI. There is deliberately no configurable
+/// server or URL.
+#[cfg(target_os = "windows")]
+pub async fn diagnostic_check() -> Result<UpdateState, String> {
+    let service = UpdateService::default();
     let mut state = service
         .state
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    state.status = if stage_for_next_launch {
-        "deferred"
-    } else if newer {
+    let Some(release) = check_release(WINDOWS_ZIP_NAME).await? else {
+        state.status = "unpublished".into();
+        return Ok(state);
+    };
+    state.status = if is_newer_version(&release.version, env!("MOE_BUILD_VERSION")) {
         "available"
     } else {
         "current"
     }
     .into();
-    state.latest = Some(latest);
+    state.latest = Some(LatestBuild {
+        build_id: release.version.clone(),
+        version: release.version,
+        published_at: release.published_at,
+        notes: release.notes,
+        download_bytes: release.identity.size,
+    });
     Ok(state)
 }
 
@@ -820,24 +654,23 @@ pub async fn update_download(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .ok_or("請先檢查更新。")?;
-        if release.manifest.build_timestamp_utc.as_str() <= env!("MOE_BUILD_TIMESTAMP_UTC") {
-            return Err("此版本不比目前建置新。".into());
+        if !is_newer_version(&release.version, env!("MOE_BUILD_VERSION")) {
+            return Err("此版本不比目前版本新。".into());
         }
         publish(&app, &service, |state| {
             state.status = "downloading".into();
             state.downloaded_bytes = 0;
-            state.total_bytes =
-                Some(release.manifest.executable.size + release.manifest.helper.size);
+            state.total_bytes = Some(release.identity.size);
             state.error = None;
         });
         #[cfg(target_os = "windows")]
         let result = async {
-            let pending = stage_release(Some(&app), &service, release).await?;
+            let staged = stage_release(Some(&app), &service, release).await?;
             let app = app.clone();
             tauri::async_runtime::spawn_blocking(move || {
                 crate::install_downloaded_update(
                     &app,
-                    &pending,
+                    &staged,
                     matches!(mode, UpdateMode::RestartNow),
                 )
             })
@@ -869,13 +702,13 @@ async fn android_download_and_install(
     use tauri_plugin_media_index::MediaIndexExt;
 
     let release = service
-        .android_available
+        .available
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
         .ok_or("請先檢查更新。")?;
-    if release.manifest.build_timestamp_utc.as_str() <= env!("MOE_BUILD_TIMESTAMP_UTC") {
-        return Err("此版本不比目前建置新。".into());
+    if !is_newer_version(&release.version, env!("MOE_BUILD_VERSION")) {
+        return Err("此版本不比目前版本新。".into());
     }
     let cached = service
         .android_apk
@@ -883,8 +716,7 @@ async fn android_download_and_install(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
         .filter(|path| {
-            std::fs::metadata(path)
-                .is_ok_and(|metadata| metadata.len() == release.manifest.apk.size)
+            std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == release.identity.size)
         });
     let path = match cached {
         Some(path) => path,
@@ -892,7 +724,7 @@ async fn android_download_and_install(
             publish(app, service, |state| {
                 state.status = "downloading".into();
                 state.downloaded_bytes = 0;
-                state.total_bytes = Some(release.manifest.apk.size);
+                state.total_bytes = Some(release.identity.size);
                 state.error = None;
             });
             let directory_app = app.clone();
@@ -925,8 +757,8 @@ async fn android_download_and_install(
                     Some(app),
                     service,
                     &client,
-                    &release.apk,
-                    &release.manifest.apk,
+                    &release.asset,
+                    &release.identity,
                     &path,
                 ),
             )
@@ -963,56 +795,110 @@ async fn android_download_and_install(
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn validate_for_apply(pending: &PendingUpdate) -> Result<(), String> {
-    validate_manifest(&pending.manifest)?;
-    moe_update::validate_pending(
-        pending,
-        &std::env::current_exe().map_err(|error| error.to_string())?,
+pub(crate) fn validate_for_apply(staged: &StagedUpdate) -> Result<(), String> {
+    let actual = std::env::current_exe().map_err(|error| error.to_string())?;
+    let target = staged
+        .target
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if target != actual.canonicalize().map_err(|error| error.to_string())?
+        || target.file_name().and_then(|name| name.to_str()) != Some(WINDOWS_EXE_NAME)
+    {
+        return Err("更新目標必須是目前的 moemusicplayer.exe。".into());
+    }
+    let parent = target.parent().ok_or("更新目標缺少目錄。")?;
+    let updates = parent
+        .join("UserData")
+        .join("updates")
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if updates.parent().and_then(Path::parent) != Some(parent) {
+        return Err("更新資料目錄不可指向應用程式目錄之外。".into());
+    }
+    let stage = staged
+        .stage_directory
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if stage.parent() != Some(updates.as_path()) {
+        return Err("更新暫存必須直接位於 UserData/updates。".into());
+    }
+    let executable = staged
+        .executable
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if executable.parent() != Some(stage.as_path()) {
+        return Err("更新檔案不可使用外部連結。".into());
+    }
+    let mut header = [0u8; 2];
+    std::io::Read::read_exact(
+        &mut std::fs::File::open(&executable).map_err(|error| error.to_string())?,
+        &mut header,
     )
+    .map_err(|error| error.to_string())?;
+    if &header != b"MZ" {
+        return Err("更新的 moemusicplayer.exe 不是有效的執行檔。".into());
+    }
+    Ok(())
 }
 
-/// Installs a staged, verified release by renaming: each running image keeps its (renamed) file and the new file takes
-/// the original name, so the new version starts on the next launch. A backup of the previous file stays beside it
-/// (`.moemusicplayer.previous.<id>.bak`, the same naming the release script uses); only the newest one is kept.
-/// Nothing is replaced unless every file was copied and verified, and a failure puts the original names back.
+/// Installs a staged release by renaming: the running image keeps its (renamed) file and the new file takes the
+/// original name, so the new version starts on the next launch. A backup of the previous file stays beside it
+/// (`.moemusicplayer.previous.<id>.bak`); only the newest one is kept. Nothing is replaced unless the copy was verified,
+/// and a failure puts the original name back.
 #[cfg(target_os = "windows")]
-pub(crate) fn install_in_place(pending: &PendingUpdate) -> Result<(), String> {
-    validate_for_apply(pending)?;
-    let directory = pending
+pub(crate) fn install_in_place(staged: &StagedUpdate) -> Result<(), String> {
+    validate_for_apply(staged)?;
+    let directory = staged
         .target
         .parent()
         .ok_or("更新目標缺少目錄。")?
         .to_path_buf();
-    let files = [
-        (&pending.manifest.executable, pending.target.clone()),
-        (
-            &pending.manifest.helper,
-            directory.join(&pending.manifest.helper.name),
-        ),
-    ];
-    install_files(&pending.stage_directory, &directory, &files)?;
-    // The stage only held the downloads; it is not needed any more.
-    let _ = std::fs::remove_dir_all(&pending.stage_directory);
+    install_files(
+        &[(staged.executable.clone(), staged.target.clone())],
+        &directory,
+    )?;
+    // Older installs carried a separate updater executable; nothing uses it any more.
+    let _ = std::fs::remove_file(directory.join("moemusicplayer-updater.exe"));
+    // The stage only held the download; it is not needed any more.
+    let _ = std::fs::remove_dir_all(&staged.stage_directory);
     Ok(())
 }
 
-/// The rename swap itself: `files` are (identity of the staged file in `stage`, the path it replaces in `directory`).
 #[cfg(target_os = "windows")]
-fn install_files(
-    stage: &Path,
-    directory: &Path,
-    files: &[(&moe_update::FileIdentity, PathBuf)],
-) -> Result<(), String> {
+fn file_sha256(path: &Path) -> Result<String, String> {
+    let mut input = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count =
+            std::io::Read::read(&mut input, &mut buffer).map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+/// The rename swap itself: `files` are (the new file, the path it replaces in `directory`).
+#[cfg(target_os = "windows")]
+fn install_files(files: &[(PathBuf, PathBuf)], directory: &Path) -> Result<(), String> {
     // Older backups and copies from an interrupted attempt go first (the running version's backup may be locked).
     remove_previous_backups(directory);
     // Copy and verify everything first, under names nothing else uses.
     let id = uuid::Uuid::new_v4().simple().to_string();
     let mut incoming = Vec::new();
-    for (identity, target) in files {
+    for (source, target) in files {
         let copy = directory.join(format!(".{}.incoming.{id}.tmp", file_stem(target)));
-        let result = std::fs::copy(stage.join(&identity.name), &copy)
+        let result = std::fs::copy(source, &copy)
             .map_err(|error| error.to_string())
-            .and_then(|_| moe_update::verify_file(&copy, identity));
+            .and_then(|_| {
+                if file_sha256(&copy)? == file_sha256(source)? {
+                    Ok(())
+                } else {
+                    Err("更新檔案複製後驗證失敗。".to_owned())
+                }
+            });
         if let Err(error) = result {
             let _ = std::fs::remove_file(&copy);
             for (path, _) in &incoming {
@@ -1095,8 +981,23 @@ pub(crate) fn spawn_relaunch(target: &Path) -> Result<(), String> {
 /// First thing in `main` for `--update-relaunch <pid>`: wait (at most a minute) for the old process to exit.
 #[cfg(target_os = "windows")]
 pub fn wait_for_relaunch_parent(pid: &str) {
-    if let Ok(pid) = pid.parse::<u32>() {
-        moe_update::windows::wait_for_exit(pid, Duration::from_secs(60));
+    use std::ffi::c_void;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+        fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
+    }
+    let Ok(pid) = pid.parse::<u32>() else {
+        return;
+    };
+    // SYNCHRONIZE: wait on the process object; a process that is gone cannot be opened and needs no wait.
+    unsafe {
+        let handle = OpenProcess(0x0010_0000, 0, pid);
+        if !handle.is_null() {
+            WaitForSingleObject(handle, 60_000);
+            CloseHandle(handle);
+        }
     }
 }
 
@@ -1201,38 +1102,6 @@ mod tests {
         }
     }
     #[test]
-    fn android_manifest_requires_the_fixed_apk_identity() {
-        let valid = AndroidReleaseManifest {
-            schema_version: 1,
-            version: "2026.10.17".into(),
-            build_timestamp_utc: "2026-10-17T07:00:00.000Z".into(),
-            git_commit: "a".repeat(40),
-            architecture: ANDROID_ARCHITECTURE.into(),
-            apk: FileIdentity {
-                name: ANDROID_APK_NAME.into(),
-                sha256: "b".repeat(64),
-                size: 1024,
-            },
-        };
-        assert!(validate_android_manifest(&valid).is_ok());
-        let mut wrong_name = valid.clone();
-        wrong_name.apk.name = "other.apk".into();
-        assert!(validate_android_manifest(&wrong_name).is_err());
-        let mut wrong_arch = valid.clone();
-        wrong_arch.architecture = "windows-x86_64".into();
-        assert!(validate_android_manifest(&wrong_arch).is_err());
-        let json = serde_json::to_string(&valid).unwrap();
-        assert!(json.contains("\"buildTimestampUtc\"") && json.contains("\"apk\""));
-        let extra = json.replacen('{', "{\"extra\":1,", 1);
-        assert!(serde_json::from_str::<AndroidReleaseManifest>(&extra).is_err());
-    }
-    #[test]
-    fn build_order_retains_same_day_precision_and_utc_requirement() {
-        assert!(valid_utc("2026-10-09T01:02:03.456Z"));
-        assert!(!valid_utc("2026-10-09T01:02:03"));
-        assert!("2026-10-09T01:02:03.457Z" > "2026-10-09T01:02:03.456Z");
-    }
-    #[test]
     fn credits_are_embedded_actual_dependencies_and_exclude_proprietary_filter() {
         let credits = credits();
         assert!(credits
@@ -1242,6 +1111,113 @@ mod tests {
             .iter()
             .any(|credit| credit.name == "AndroidX Media3"));
         assert!(!credits.iter().any(|credit| credit.name.contains("Sony")));
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    fn asset(name: &str, digest: Option<&str>) -> Asset {
+        Asset {
+            name: name.into(),
+            size: 1234,
+            digest: digest.map(str::to_owned),
+            browser_download_url: format!(
+                "https://github.com/XPRAMT/MoeMusicPlayer/releases/download/v26.10.19/{name}"
+            ),
+        }
+    }
+
+    fn release(tag: &str, assets: Vec<Asset>) -> Release {
+        Release {
+            tag_name: tag.into(),
+            html_url: format!("{REPOSITORY}/releases/tag/{tag}"),
+            published_at: "2026-10-19T00:00:00Z".into(),
+            body: Some("notes".into()),
+            assets,
+        }
+    }
+
+    const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn versions_are_dates_compared_as_numbers() {
+        assert_eq!(parse_version("v26.10.19"), Some((26, 10, 19)));
+        assert_eq!(parse_version("26.10.9"), Some((26, 10, 9)));
+        for bad in [
+            "",
+            "v26.10",
+            "26.10.19.1",
+            "26.10.x",
+            "v26..19",
+            "latest",
+            "26.10.19-1",
+        ] {
+            assert_eq!(parse_version(bad), None, "{bad}");
+        }
+        assert!(
+            is_newer_version("v26.10.19", "26.10.9"),
+            "19 is newer than 9, not older as text"
+        );
+        assert!(is_newer_version("27.1.1", "26.12.31"));
+        assert!(
+            !is_newer_version("v26.10.19", "26.10.19"),
+            "the same day is not an update"
+        );
+        assert!(!is_newer_version("v26.10.9", "26.10.19"));
+        assert!(!is_newer_version("garbage", "26.10.19"));
+    }
+
+    #[test]
+    fn the_platform_asset_needs_a_version_tag_and_a_digest() {
+        let ok = available_release(
+            release(
+                "v26.10.19",
+                vec![
+                    asset(WINDOWS_ZIP_NAME, Some(DIGEST)),
+                    asset(ANDROID_APK_NAME, Some(DIGEST)),
+                ],
+            ),
+            WINDOWS_ZIP_NAME,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(ok.version, "26.10.19");
+        assert_eq!(ok.identity.size, 1234);
+        assert_eq!(ok.identity.sha256.len(), 64);
+        // A Release without this platform's file is simply not published for it.
+        assert!(available_release(
+            release("v26.10.19", vec![asset(WINDOWS_ZIP_NAME, Some(DIGEST))]),
+            ANDROID_APK_NAME
+        )
+        .unwrap()
+        .is_none());
+        // Not a version tag, no digest, duplicated asset: refused.
+        assert!(available_release(
+            release(
+                "v26.10.19-20261019T042347Z",
+                vec![asset(WINDOWS_ZIP_NAME, Some(DIGEST))]
+            ),
+            WINDOWS_ZIP_NAME
+        )
+        .is_err());
+        assert!(available_release(
+            release("v26.10.19", vec![asset(WINDOWS_ZIP_NAME, None)]),
+            WINDOWS_ZIP_NAME
+        )
+        .is_err());
+        assert!(available_release(
+            release(
+                "v26.10.19",
+                vec![
+                    asset(WINDOWS_ZIP_NAME, Some(DIGEST)),
+                    asset(WINDOWS_ZIP_NAME, Some(DIGEST))
+                ]
+            ),
+            WINDOWS_ZIP_NAME
+        )
+        .is_err());
     }
 }
 
@@ -1267,24 +1243,6 @@ mod install_tests {
         }
     }
 
-    fn identity(name: &str, bytes: &[u8]) -> moe_update::FileIdentity {
-        moe_update::FileIdentity {
-            name: name.into(),
-            sha256: sha256(bytes),
-            size: bytes.len() as u64,
-        }
-    }
-
-    fn setup(old: &[u8]) -> (TempDir, PathBuf, PathBuf) {
-        let root = TempDir::new();
-        let directory = root.0.join("app");
-        let stage = directory.join("UserData").join("updates").join("stage");
-        std::fs::create_dir_all(&stage).unwrap();
-        std::fs::write(directory.join("moemusicplayer.exe"), old).unwrap();
-        std::fs::write(directory.join("moemusicplayer-updater.exe"), b"old helper").unwrap();
-        (root, directory, stage)
-    }
-
     fn backups(directory: &Path, prefix: &str) -> Vec<PathBuf> {
         std::fs::read_dir(directory)
             .unwrap()
@@ -1300,71 +1258,77 @@ mod install_tests {
     }
 
     #[test]
-    fn rename_swap_installs_new_files_and_keeps_one_backup() {
-        let (_root, directory, stage) = setup(b"old exe");
-        std::fs::write(stage.join("moemusicplayer.exe"), b"new exe").unwrap();
-        std::fs::write(stage.join("moemusicplayer-updater.exe"), b"new helper").unwrap();
-        let exe = identity("moemusicplayer.exe", b"new exe");
-        let helper = identity("moemusicplayer-updater.exe", b"new helper");
-        let files = [
-            (&exe, directory.join("moemusicplayer.exe")),
-            (&helper, directory.join("moemusicplayer-updater.exe")),
-        ];
-        install_files(&stage, &directory, &files).unwrap();
-        assert_eq!(
-            std::fs::read(directory.join("moemusicplayer.exe")).unwrap(),
-            b"new exe"
-        );
-        assert_eq!(
-            std::fs::read(directory.join("moemusicplayer-updater.exe")).unwrap(),
-            b"new helper"
-        );
-        let exe_backups = backups(&directory, ".moemusicplayer.previous.");
-        assert_eq!(exe_backups.len(), 1);
-        assert_eq!(std::fs::read(&exe_backups[0]).unwrap(), b"old exe");
+    fn rename_swap_installs_the_new_file_and_keeps_one_backup() {
+        let root = TempDir::new();
+        let directory = root.0.join("app");
+        std::fs::create_dir_all(&directory).unwrap();
+        let target = directory.join("moemusicplayer.exe");
+        std::fs::write(&target, b"old exe").unwrap();
+        let source = root.0.join("new.exe");
+        std::fs::write(&source, b"new exe").unwrap();
+        install_files(&[(source.clone(), target.clone())], &directory).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new exe");
+        let kept = backups(&directory, ".moemusicplayer.previous.");
+        assert_eq!(kept.len(), 1);
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), b"old exe");
         assert!(
             backups(&directory, ".moemusicplayer.incoming.").is_empty(),
             "no copy is left behind"
         );
         // A second update drops the older backup and keeps only the previous version.
-        std::fs::write(stage.join("moemusicplayer.exe"), b"newer exe").unwrap();
-        std::fs::write(stage.join("moemusicplayer-updater.exe"), b"newer helper").unwrap();
-        let exe2 = identity("moemusicplayer.exe", b"newer exe");
-        let helper2 = identity("moemusicplayer-updater.exe", b"newer helper");
-        let files = [
-            (&exe2, directory.join("moemusicplayer.exe")),
-            (&helper2, directory.join("moemusicplayer-updater.exe")),
-        ];
-        install_files(&stage, &directory, &files).unwrap();
-        let exe_backups = backups(&directory, ".moemusicplayer.previous.");
-        assert_eq!(exe_backups.len(), 1);
-        assert_eq!(std::fs::read(&exe_backups[0]).unwrap(), b"new exe");
+        std::fs::write(&source, b"newer exe").unwrap();
+        install_files(&[(source, target.clone())], &directory).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"newer exe");
+        let kept = backups(&directory, ".moemusicplayer.previous.");
+        assert_eq!(kept.len(), 1);
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), b"new exe");
     }
 
     #[test]
-    fn a_failed_verification_replaces_nothing() {
-        let (_root, directory, stage) = setup(b"old exe");
-        std::fs::write(stage.join("moemusicplayer.exe"), b"corrupted").unwrap();
-        std::fs::write(stage.join("moemusicplayer-updater.exe"), b"new helper").unwrap();
-        let exe = identity("moemusicplayer.exe", b"new exe");
-        let helper = identity("moemusicplayer-updater.exe", b"new helper");
-        let files = [
-            (&exe, directory.join("moemusicplayer.exe")),
-            (&helper, directory.join("moemusicplayer-updater.exe")),
-        ];
-        assert!(install_files(&stage, &directory, &files).is_err());
-        assert_eq!(
-            std::fs::read(directory.join("moemusicplayer.exe")).unwrap(),
-            b"old exe"
+    fn a_missing_source_replaces_nothing() {
+        let root = TempDir::new();
+        let directory = root.0.join("app");
+        std::fs::create_dir_all(&directory).unwrap();
+        let target = directory.join("moemusicplayer.exe");
+        std::fs::write(&target, b"old exe").unwrap();
+        assert!(
+            install_files(&[(root.0.join("missing.exe"), target.clone())], &directory).is_err()
         );
-        assert_eq!(
-            std::fs::read(directory.join("moemusicplayer-updater.exe")).unwrap(),
-            b"old helper"
-        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"old exe");
         assert!(
             backups(&directory, ".").is_empty(),
             "no temporary copy or backup remains"
         );
+    }
+
+    #[test]
+    fn the_executable_comes_out_of_the_release_zip() {
+        use std::io::Write;
+        let root = TempDir::new();
+        let archive = root.0.join("release.zip");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("moemusicplayer.exe", options).unwrap();
+            zip.write_all(b"MZ pretend executable").unwrap();
+            zip.start_file("readme.txt", options).unwrap();
+            zip.write_all(b"ignored").unwrap();
+            zip.finish().unwrap();
+        }
+        let output = root.0.join("out.exe");
+        extract_executable(&archive, &output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"MZ pretend executable");
+        // A zip without the executable is refused.
+        let other = root.0.join("other.zip");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&other).unwrap());
+            zip.start_file("readme.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"x").unwrap();
+            zip.finish().unwrap();
+        }
+        assert!(extract_executable(&other, &root.0.join("never.exe")).is_err());
     }
 
     #[test]

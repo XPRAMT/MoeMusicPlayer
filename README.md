@@ -22,7 +22,7 @@ A local-first music player and library for Windows and Android. Add music folder
 
 The interface currently uses Traditional Chinese; the menu names below include the visible labels where useful.
 
-1. Download and extract the [latest Windows release](https://github.com/XPRAMT/MoeMusicPlayer/releases/latest). Keep `moemusicplayer.exe` and `moemusicplayer-updater.exe` together.
+1. Download and extract the [latest Windows release](https://github.com/XPRAMT/MoeMusicPlayer/releases/latest) (`moemusicplayer-windows-x86_64.zip`, one `moemusicplayer.exe`). The player updates itself from the same page.
 2. Start the player and open **Settings → Music Sources** (`設定 → 音樂來源`) to add a folder or playlist.
 3. To open audio files from File Explorer, register the supported formats in **Settings → About** (`設定 → 關於`, **登錄音訊格式**), then choose MoeMusicPlayer in Windows **Default apps**. Opening a file replaces the current queue with supported audio files from the same folder; subfolders are not scanned.
 
@@ -47,7 +47,7 @@ npm run release:windows
 
 Run the frontend checks and Rust workspace tests with `npm run check` and `cargo test --workspace --locked --offline`.
 
-The fixed output is `release/moemusicplayer.exe` and `release/moemusicplayer-updater.exe`. Keep both beside `release/UserData/`. Update assets are packaged under `release/update-assets/`; packaging does not publish a release.
+The fixed output is `release/moemusicplayer.exe`; keep it beside `release/UserData/`. The release zip is packaged under `release/update-assets/`; packaging does not publish a release. An update is identified only by the version (the build date, tag `v26.10.19`), so publish at most one release a day.
 
 ## Build for Android
 
