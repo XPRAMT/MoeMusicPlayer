@@ -39,6 +39,9 @@ android {
             }
         }
         getByName("release") {
+            // Sideloaded for its owner: sign with the same debug key as the installed debug build, so the release APK
+            // updates it in place (ADR 0015).
+            signingConfig = signingConfigs.getByName("debug")
             optimization {
                enable = true
             }
