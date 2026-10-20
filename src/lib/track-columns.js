@@ -1,5 +1,5 @@
 import { tr } from './i18n.js';
-/** @typedef {'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'audioFormat' | 'duration' | 'playCount'} TrackColumnId */
+/** @typedef {'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'audioFormat' | 'duration' | 'playCount' | 'source'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
 /** @typedef {{ title: number, artist: number, album: number }} TrackColumnWidths */
 /** @typedef {'asc' | 'desc'} LibrarySortDirection */
@@ -21,6 +21,7 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'audioFormat', label: tr('音訊格式'), min: '163px', minPx: 163 },
   { id: 'duration', label: tr('長度'), min: '4em', minPx: 52 },
   { id: 'playCount', label: tr('播放次數'), min: '5em', minPx: 65 },
+  { id: 'source', label: tr('來源'), min: 'minmax(110px,0.9fr)', minPx: 110 },
 ]);
 
 /** Column values rendered as dates, counts, or durations use centered alignment. */
@@ -35,7 +36,7 @@ export function isNumericListColumn(id) {
 }
 
 /** @type {TrackColumnPreference[]} */
-export const DEFAULT_TRACK_COLUMN_PREFERENCES = ['title', 'artist', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount'].map((id) => ({ id: /** @type {TrackColumnId} */ (id), visible: true }));
+export const DEFAULT_TRACK_COLUMN_PREFERENCES = ['title', 'artist', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount', 'source'].map((id) => ({ id: /** @type {TrackColumnId} */ (id), visible: id !== 'source' }));
 
 /** @type {TrackColumnWidths} */
 export const DEFAULT_TRACK_COLUMN_WIDTHS = Object.freeze({
@@ -207,10 +208,21 @@ export function normalizeTrackColumnPreferences(value) {
     const audioIndex = migrated.findIndex((column) => column.id === 'audioFormat');
     migrated.splice(audioIndex < 0 ? migrated.length : audioIndex, 0, { id: 'createdAt', visible: true });
   }
+  // The source column is the newest: preferences saved without it get it, hidden, at the end.
+  if (!seen.has('source')) migrated.push({ id: 'source', visible: false });
   if (migrated.length !== TRACK_COLUMN_DEFINITIONS.length) {
     return DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column }));
   }
   return migrated;
+}
+
+/**
+ * The source column belongs to the library lists; playlists, the queue and album pages do not carry the source of a
+ * track, so they show the other columns only.
+ * @param {TrackColumnPreference[]} preferences
+ */
+export function withoutSourceColumn(preferences) {
+  return preferences.filter((column) => column.id !== 'source');
 }
 
 /** @param {TrackColumnPreference[]} preferences */
@@ -466,7 +478,7 @@ export function displayTrackTitle(item, fallback = '') {
 
 /**
  * @param {TrackColumnId} id
- * @param {{ title?: string | null, fileName?: string | null, artist?: string | null, album?: string | null, releaseDate?: string | null, year?: number | string | null, createdAtUtcMs?: number | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null }} item
+ * @param {{ title?: string | null, fileName?: string | null, artist?: string | null, album?: string | null, releaseDate?: string | null, year?: number | string | null, createdAtUtcMs?: number | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null, sourceName?: string | null }} item
  * @param {(durationMs: number | null | undefined) => string} formatDuration
  * @param {string} titleFallback
  */
@@ -490,6 +502,8 @@ export function formatTrackColumnValue(id, item, formatDuration, titleFallback =
         : formatDuration(item.durationMs);
     case 'playCount':
       return formatPlayCount(item.playedMs, item.durationMs);
+    case 'source':
+      return typeof item.sourceName === 'string' && item.sourceName.trim() ? item.sourceName.trim() : '—';
   }
 }
 

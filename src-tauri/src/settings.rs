@@ -350,6 +350,8 @@ pub enum TrackListColumnId {
     AudioFormat,
     Duration,
     PlayCount,
+    /// The library source (folder or server) of a track; hidden unless the user turns it on.
+    Source,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -574,6 +576,10 @@ impl Default for TrackListColumnSettings {
             ]
             .into_iter()
             .map(|id| TrackListColumnPreference { id, visible: true })
+            .chain(std::iter::once(TrackListColumnPreference {
+                id: TrackListColumnId::Source,
+                visible: false,
+            }))
             .collect(),
             widths: TrackListFlexibleWidths::default(),
             library_sort: LibraryListSort::default(),
@@ -586,12 +592,34 @@ impl Default for TrackListColumnSettings {
 }
 
 impl TrackListColumnSettings {
-    fn validate(&self) -> Result<(), SettingsError> {
+    /// The eight columns that existed before the source column, each exactly once.
+    fn validate_core(&self) -> Result<(), SettingsError> {
         use TrackListColumnId::{
             Album, Artist, AudioFormat, CreatedAt, Duration, PlayCount, Title, Year,
         };
-
         const REQUIRED: [TrackListColumnId; 8] = [
+            Title, Artist, Album, Year, CreatedAt, AudioFormat, Duration, PlayCount,
+        ];
+        let actual = self
+            .columns
+            .iter()
+            .map(|column| column.id)
+            .collect::<std::collections::HashSet<_>>();
+        if self.columns.len() != REQUIRED.len()
+            || actual.len() != REQUIRED.len()
+            || REQUIRED.iter().any(|id| !actual.contains(id))
+        {
+            return Err(SettingsError::InvalidData("track list columns are not the original eight".into()));
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), SettingsError> {
+        use TrackListColumnId::{
+            Album, Artist, AudioFormat, CreatedAt, Duration, PlayCount, Source, Title, Year,
+        };
+
+        const REQUIRED: [TrackListColumnId; 9] = [
             Title,
             Artist,
             Album,
@@ -600,6 +628,7 @@ impl TrackListColumnSettings {
             AudioFormat,
             Duration,
             PlayCount,
+            Source,
         ];
         let actual = self
             .columns
@@ -611,7 +640,7 @@ impl TrackListColumnSettings {
             || REQUIRED.iter().any(|id| !actual.contains(id))
         {
             return Err(SettingsError::InvalidData(
-                "track list columns must contain title, artist, album, year, createdAt, audioFormat, duration, and playCount exactly once".into(),
+                "track list columns must contain title, artist, album, year, createdAt, audioFormat, duration, playCount, and source exactly once".into(),
             ));
         }
         Ok(())
@@ -625,14 +654,37 @@ impl TrackListColumnSettings {
     }
 }
 
-/// Accept persisted preferences that predate the createdAt column.
+/// Accept persisted preferences that predate the createdAt column or the source column. The source column is the
+/// newest: a file without it gets it (hidden) at the end, and the rest is repaired exactly as before.
 fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColumnSettings {
+    let source = settings
+        .columns
+        .iter()
+        .find(|column| column.id == TrackListColumnId::Source)
+        .cloned()
+        .unwrap_or(TrackListColumnPreference {
+            id: TrackListColumnId::Source,
+            visible: false,
+        });
+    let mut core = settings;
+    core.columns
+        .retain(|column| column.id != TrackListColumnId::Source);
+    let mut repaired = repair_core_track_list_columns(core);
+    repaired
+        .columns
+        .retain(|column| column.id != TrackListColumnId::Source);
+    repaired.columns.push(source);
+    repaired.normalize()
+}
+
+/// The repair of the eight columns that existed before the source column.
+fn repair_core_track_list_columns(settings: TrackListColumnSettings) -> TrackListColumnSettings {
     use TrackListColumnId::{
         Album, Artist, AudioFormat, CreatedAt, Duration, PlayCount, Title, Year,
     };
 
-    if settings.validate().is_ok() {
-        return settings.normalize();
+    if settings.validate_core().is_ok() {
+        return settings;
     }
 
     const LEGACY_WITH_PLAY_COUNT: [TrackListColumnId; 7] =
@@ -3500,6 +3552,10 @@ mod tests {
                 TrackListColumnId::PlayCount,
             ]
             .map(|id| (id, true))
+            .into_iter()
+            // The source column exists but starts hidden, so the list looks the same until it is turned on.
+            .chain([(TrackListColumnId::Source, false)])
+            .collect::<Vec<_>>()
         );
 
         let value = serde_json::to_value(defaults).expect("serialize defaults");
@@ -3845,7 +3901,9 @@ mod tests {
             store.snapshot().unwrap().track_list_columns.row_height_px,
             50
         );
-        assert_eq!(columns.len(), 8);
+        assert_eq!(columns.len(), 9);
+        assert_eq!(columns[8].id, TrackListColumnId::Source);
+        assert!(!columns[8].visible, "the source column is new and starts hidden");
         assert_eq!(columns[1].id, TrackListColumnId::Artist);
         assert!(!columns[1].visible);
         assert_eq!(columns[4].id, TrackListColumnId::CreatedAt);

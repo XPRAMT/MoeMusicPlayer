@@ -110,7 +110,7 @@ export interface BackdropOpacityCalculation {
   displayText: string;
 }
 
-export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'audioFormat' | 'duration' | 'playCount';
+export type TrackListColumnId = 'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'audioFormat' | 'duration' | 'playCount' | 'source';
 
 export interface TrackListColumnPreference {
   id: TrackListColumnId;
@@ -324,6 +324,8 @@ export interface TrackSummary {
   year?: number | null;
   /** Filesystem creation time as UTC Unix milliseconds; display is local YYYY-MM-DD. */
   createdAtUtcMs?: number | null;
+  /** The library source (folder or server) the track comes from; lists of the library only. */
+  sourceName?: string | null;
   bitDepth?: number | null;
   /** Cumulative credited listening time in milliseconds. */
   playedMs?: number | null;

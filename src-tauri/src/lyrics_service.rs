@@ -1997,6 +1997,7 @@ mod tests {
             bit_depth: None,
             played_ms: 0,
             file_name: None,
+            source_name: None,
         }
     }
 

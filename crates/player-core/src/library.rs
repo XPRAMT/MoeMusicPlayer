@@ -364,6 +364,8 @@ pub enum TrackSortField {
     AudioFormat,
     Duration,
     PlayCount,
+    /// The library source (folder or server) a track comes from.
+    Source,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
@@ -448,6 +450,10 @@ pub struct TrackSummary {
     /// File stem used when `title` is missing. Never a directory, full path, or URI query.
     #[serde(default)]
     pub file_name: Option<String>,
+    /// The display name of the library source the track comes from (a local folder, or `server / folder` for a remote
+    /// one); filled by the database for lists.
+    #[serde(default)]
+    pub source_name: Option<String>,
 }
 
 /// Title shown in lists and playback chrome. A blank tag is missing; artist and album are not used.

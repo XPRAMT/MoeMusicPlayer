@@ -838,5 +838,6 @@
   "選擇排除遠端資料夾": "Choose remote folder to exclude",
   "音樂來源分頁": "Music source tabs",
   "本地": "Local",
-  "可加入 SMB（網路芳鄰）與 WebDAV 伺服器上的音樂資料夾：按上方的「＋」新增遠端伺服器。": "Add music folders from SMB (network share) and WebDAV servers: press \"＋\" above to add a remote server."
+  "可加入 SMB（網路芳鄰）與 WebDAV 伺服器上的音樂資料夾：按上方的「＋」新增遠端伺服器。": "Add music folders from SMB (network share) and WebDAV servers: press \"＋\" above to add a remote server.",
+  "來源": "Source"
 }

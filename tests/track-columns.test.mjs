@@ -140,7 +140,7 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
 
 test('default list columns are shared and keep the index as the only fixed column', () => {
   assert.deepEqual(DEFAULT_TRACK_COLUMN_PREFERENCES.map(({ id }) => id), [
-    'title', 'artist', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount',
+    'title', 'artist', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount', 'source',
   ]);
   assert.equal(trackListColumnCount(DEFAULT_TRACK_COLUMN_PREFERENCES), 9);
   assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ').length, 9);
@@ -167,7 +167,7 @@ test('date, duration, and play count columns use the requested fixed fullwidth-c
 test('settings columns can move directly to the long-press drag destination', () => {
   const moved = moveTrackColumnTo(DEFAULT_TRACK_COLUMN_PREFERENCES, 'year', 6);
   assert.deepEqual(moved.map(({ id }) => id), [
-    'title', 'artist', 'album', 'createdAt', 'duration', 'audioFormat', 'year', 'playCount',
+    'title', 'artist', 'album', 'createdAt', 'duration', 'audioFormat', 'year', 'playCount', 'source',
   ]);
   assert.deepEqual(moveTrackColumnTo(moved, 'year', -1), moved);
 });
@@ -235,14 +235,14 @@ test('playlist sort includes the original entry position and toggles direction',
 test('column order can move the first and last information columns without moving the index', () => {
   const movedFirst = moveTrackColumn(DEFAULT_TRACK_COLUMN_PREFERENCES, 'title', 'down');
   assert.deepEqual(movedFirst.map(({ id }) => id), [
-    'artist', 'title', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount',
+    'artist', 'title', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount', 'source',
   ]);
   const movedLast = moveTrackColumn(movedFirst, 'playCount', 'up');
   assert.deepEqual(movedLast.map(({ id }) => id), [
-    'artist', 'title', 'album', 'year', 'createdAt', 'duration', 'playCount', 'audioFormat',
+    'artist', 'title', 'album', 'year', 'createdAt', 'duration', 'playCount', 'audioFormat', 'source',
   ]);
   assert.deepEqual(moveTrackColumn(movedLast, 'artist', 'up'), movedLast);
-  assert.deepEqual(moveTrackColumn(movedLast, 'audioFormat', 'down'), movedLast);
+  assert.deepEqual(moveTrackColumn(movedLast, 'source', 'down'), movedLast);
   assert.equal(trackListGridTemplate(movedLast).split(' ').at(0), '26px');
   assert.notEqual(trackListGridTemplate(movedLast).split(' ').at(-1), '42px');
 });
@@ -305,6 +305,8 @@ test('created date shows local YYYY-MM-DD only and legacy column preferences kee
     { id: 'audioFormat', visible: false },
     { id: 'duration', visible: true },
     { id: 'playCount', visible: true },
+    // Preferences saved before the source column gain it, hidden, at the end.
+    { id: 'source', visible: false },
   ]);
 });
 

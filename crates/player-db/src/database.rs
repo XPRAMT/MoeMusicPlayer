@@ -964,6 +964,8 @@ pub enum QuickIndexKind {
     AddedYear,
     /// The key is the codec name.
     Format,
+    /// The key is already the label (a source name); only an empty one is the unknown group.
+    Exact,
 }
 
 impl QuickIndexKind {
@@ -976,9 +978,13 @@ impl QuickIndexKind {
                 added_year_label_sql(&format!("CAST(NULLIF({value}, '') AS INTEGER)"))
             }
             Self::Format => format!("{MUSIC_FORMAT_FUNCTION}({value})"),
+            Self::Exact => format!("COALESCE(NULLIF(trim({value}), ''), '{UNKNOWN_GROUP_LABEL}')"),
         }
     }
 }
+
+/// SQL for the display name of the (first enabled) library source a track of the table `t` comes from.
+const TRACK_SOURCE_NAME_SQL: &str = "(SELECT r.display_name FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1 ORDER BY r.display_name LIMIT 1)";
 
 /// SQL that is true for a track with no usable year (the unknown group), from the columns of the table `alias`. The
 /// unknown group counts as the smallest value: first when the list runs from old to new (ascending), last when it runs
@@ -2280,6 +2286,7 @@ impl Database {
                 | TrackSortField::Year
                 | TrackSortField::CreatedAt
                 | TrackSortField::AudioFormat
+                | TrackSortField::Source
         ) {
             return Ok(QuickIndexSnapshot::default());
         }
@@ -2302,6 +2309,7 @@ impl Database {
             TrackSortField::Year => QuickIndexKind::Year.label_sql("COALESCE(NULLIF(trim(t.release_date), ''), CAST(t.year AS TEXT))"),
             TrackSortField::CreatedAt => added_year_label_sql("(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)"),
             TrackSortField::AudioFormat => QuickIndexKind::Format.label_sql("t.codec"),
+            TrackSortField::Source => QuickIndexKind::Exact.label_sql(TRACK_SOURCE_NAME_SQL),
             _ => unreachable!("only grouped sorts reach here"),
         };
         let sql = format!(
@@ -5904,6 +5912,16 @@ fn tracks_order_by_sql(sort: TrackListSort) -> String {
         (TrackSortField::CreatedAt, false) => {
             "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) ASC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) DESC, t.track_id DESC"
         }
+        (TrackSortField::Source, true) => {
+            return format!(
+                "({TRACK_SOURCE_NAME_SQL} IS NULL) ASC, {TRACK_SOURCE_NAME_SQL} COLLATE MUSIC_LOCALE_NATURAL ASC, t.sort_title COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
+            );
+        }
+        (TrackSortField::Source, false) => {
+            return format!(
+                "({TRACK_SOURCE_NAME_SQL} IS NULL) ASC, {TRACK_SOURCE_NAME_SQL} COLLATE MUSIC_LOCALE_NATURAL DESC, t.sort_title COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC"
+            );
+        }
         (TrackSortField::AudioFormat, true) => {
             return audio_format_order_by("ASC", "t.track_id");
         }
@@ -5965,6 +5983,9 @@ fn queue_sort_order_by(sort: TrackListSort) -> String {
         ),
         TrackSortField::CreatedAt => format!(
             "(t.created_at_utc_ms IS NULL) {unknown_direction}, t.created_at_utc_ms {direction}, t.track_id {direction}"
+        ),
+        TrackSortField::Source => format!(
+            "({TRACK_SOURCE_NAME_SQL} IS NULL) ASC, {TRACK_SOURCE_NAME_SQL} COLLATE MUSIC_LOCALE_NATURAL {direction},              t.sort_title COLLATE MUSIC_LOCALE_NATURAL {direction}, t.track_id {direction}"
         ),
         TrackSortField::AudioFormat => audio_format_order_by(direction, "t.track_id"),
         TrackSortField::Duration => format!(
@@ -6146,6 +6167,7 @@ fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummar
             .filter(|value| *value > 0),
         played_ms: row.get::<_, i64>(14)?.max(0) as u64,
         file_name: None,
+        source_name: None,
     })
 }
 
@@ -6162,10 +6184,39 @@ fn attach_file_names(
     }
     let ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
     let names = file_names_for_tracks(connection, &ids)?;
+    let sources = source_names_for_tracks(connection, &ids)?;
     for item in items {
         item.file_name = names.get(&item.id).cloned();
+        item.source_name = sources.get(&item.id).cloned();
     }
     Ok(())
+}
+
+/// The display name of the first enabled library source of each track (the same one the source sort and grouping use).
+fn source_names_for_tracks(
+    connection: &Connection,
+    track_ids: &[TrackId],
+) -> Result<HashMap<TrackId, String>, DatabaseError> {
+    if track_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let ids = track_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let ids_json = serde_json::to_string(&ids)
+        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+    let mut names = HashMap::new();
+    let mut statement = connection.prepare(
+        "SELECT m.track_id, r.display_name
+         FROM source_mappings m
+         JOIN library_roots r ON r.source_id = m.source_id AND r.enabled = 1
+         WHERE m.track_id IN (SELECT value FROM json_each(?1))
+         ORDER BY m.track_id, r.display_name",
+    )?;
+    let mut rows = statement.query([ids_json])?;
+    while let Some(row) = rows.next()? {
+        let id = parse_track_id(&row.get::<_, String>(0)?)?;
+        names.entry(id).or_insert(row.get::<_, String>(1)?);
+    }
+    Ok(names)
 }
 
 fn file_names_for_tracks(
@@ -10175,6 +10226,56 @@ mod tests {
             ascending.labels,
             ["MP3", "WVL", "MP4", "FLAC", "WVLL", "WAV", "WVDSD", "DSD"]
         );
+    }
+
+    #[test]
+    fn tracks_know_their_source_and_sort_and_group_by_it() {
+        let mut db = Database::open_in_memory().expect("database");
+        let zeta = add_root(&db, MediaSourceKind::WindowsFilesystem, "Zeta");
+        let alpha = add_root(&db, MediaSourceKind::WindowsFilesystem, "Alpha");
+        for (root, count, base) in [(&zeta, 2_usize, "z"), (&alpha, 3, "a")] {
+            let records: Vec<_> = (0..count)
+                .map(|index| {
+                    record(
+                        root,
+                        &format!("{base}-{index}"),
+                        &format!("{base}-{index}"),
+                        &format!("{base} title {index}"),
+                        100,
+                        1_000,
+                    )
+                })
+                .collect();
+            apply(&mut db, root, SourceScanState::Complete, &records, &records, 2_000);
+        }
+        let query = |direction| ListTracksQuery {
+            offset: 0,
+            limit: 100,
+            query: None,
+            field_filter: None,
+            sort: TrackListSort {
+                field: TrackSortField::Source,
+                direction,
+            },
+        };
+        let ascending = db.list_tracks_page(query(TrackSortDirection::Asc)).expect("ascending");
+        let sources: Vec<_> = ascending
+            .items
+            .iter()
+            .map(|track| track.source_name.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(sources, ["Alpha", "Alpha", "Alpha", "Zeta", "Zeta"]);
+        // Inside a source the tracks keep their title order.
+        assert_eq!(ascending.items[0].title.as_deref(), Some("a title 0"));
+        assert_eq!(ascending.items[3].title.as_deref(), Some("z title 0"));
+        let descending = db.list_tracks_page(query(TrackSortDirection::Desc)).expect("descending");
+        assert_eq!(descending.items[0].source_name.as_deref(), Some("Zeta"));
+        assert_eq!(descending.items[4].source_name.as_deref(), Some("Alpha"));
+
+        let groups = db
+            .quick_index_for_tracks(&query(TrackSortDirection::Asc), &[])
+            .expect("groups");
+        assert_eq!(groups.labels, ["Alpha", "Zeta"]);
     }
 
     #[test]

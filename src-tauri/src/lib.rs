@@ -2822,6 +2822,7 @@ mod playback_queue_ipc_tests {
                     bit_depth: None,
                     played_ms: 0,
                     file_name: None,
+                    source_name: None,
                 })
                 .collect::<Vec<_>>();
             summaries.sort_by(|left, right| {
@@ -3166,6 +3167,12 @@ fn quick_index_key(
             QuickIndexKind::Format,
             track
                 .and_then(|track| track.codec.clone())
+                .unwrap_or_default(),
+        ),
+        TrackSortField::Source => (
+            QuickIndexKind::Exact,
+            track
+                .and_then(|track| track.source_name.clone())
                 .unwrap_or_default(),
         ),
         TrackSortField::Duration | TrackSortField::PlayCount => return None,
@@ -4015,6 +4022,10 @@ fn compare_track_summaries(
                 .as_deref()
                 .or(right.file_name.as_deref())
                 .unwrap_or_default(),
+        ),
+        TrackSortField::Source => compare_directional_text(
+            left.source_name.as_deref().unwrap_or_default(),
+            right.source_name.as_deref().unwrap_or_default(),
         ),
         TrackSortField::Artist => compare_directional_text(
             left.artist.as_deref().unwrap_or_default(),
@@ -9738,6 +9749,8 @@ fn external_track_summary(path: &std::path::Path, id: TrackId) -> TrackSummary {
         bit_depth: metadata.bit_depth,
         played_ms: 0,
         file_name,
+        // A file opened from outside the library has no library source.
+        source_name: None,
     }
 }
 
@@ -12747,6 +12760,7 @@ mod windows_library_integration_tests {
             bit_depth: None,
             played_ms: 0,
             file_name: None,
+            source_name: None,
         });
         let before_playback = serde_json::to_value(service.snapshot())
             .expect("serialize playback snapshot before query");
@@ -12864,6 +12878,7 @@ mod windows_library_integration_tests {
                 bit_depth: None,
                 played_ms: 0,
                 file_name: None,
+                source_name: None,
             };
         let summaries = HashMap::from([
             (first_track, make_summary(first_track, "Zebra", Some(200))),
@@ -12966,6 +12981,7 @@ mod windows_library_integration_tests {
             bit_depth: None,
             played_ms: 0,
             file_name: None,
+            source_name: None,
         };
         let summaries = HashMap::from([
             (ids[0], make_summary(ids[0], None)),
