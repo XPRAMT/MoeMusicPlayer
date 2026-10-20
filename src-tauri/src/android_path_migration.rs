@@ -253,6 +253,7 @@ fn migrate_source(
             playlist_id: *playlist_id,
             path: stored,
             tree_uri: None,
+            remote_account: None,
         },
     };
     let root = LibraryRoot {

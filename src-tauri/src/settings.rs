@@ -1329,6 +1329,10 @@ pub enum SourceEntryKind {
         /// `None` preserves compatibility with Windows filesystem playlist sources.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tree_uri: Option<String>,
+        /// A playlist file on a remote server (ADR 0026): the account (`remoteAccounts[].id`) that holds it. The
+        /// file is `path`, a `moeremote://` text form of its remote locator (relative to the account's root).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_account: Option<String>,
     },
 }
 
@@ -1807,6 +1811,7 @@ impl AppSettings {
                         playlist_id: *playlist_id,
                         path: StoredPath::from_locator(&root.locator)?,
                         tree_uri: None,
+                        remote_account: None,
                     },
                 });
             } else {
@@ -2435,6 +2440,7 @@ mod tests {
                 playlist_id: PlaylistId::new(),
                 path,
                 tree_uri: None,
+                remote_account: None,
             },
         }
     }
@@ -3452,6 +3458,7 @@ mod tests {
                 playlist_id,
                 path: StoredPath::Utf8("C:/music.m3u8".into()),
                 tree_uri: None,
+                remote_account: None,
             },
         });
         let json = serde_json::to_value(&settings).expect("serialize settings");

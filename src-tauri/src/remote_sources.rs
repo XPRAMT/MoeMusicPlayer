@@ -123,10 +123,14 @@ pub(crate) fn refresh_source_labels(
     settings: &crate::settings::AppSettings,
 ) -> Result<(), String> {
     for source in &settings.sources {
-        let SourceEntryKind::Folder {
+        let (SourceEntryKind::Folder {
             remote_account: Some(account_id),
             ..
-        } = &source.kind
+        }
+        | SourceEntryKind::PlaylistFile {
+            remote_account: Some(account_id),
+            ..
+        }) = &source.kind
         else {
             continue;
         };
@@ -359,6 +363,159 @@ pub(crate) async fn remote_browse(
     })
     .await
     .map_err(|error| format!("無法讀取遠端資料夾：{error}"))?
+}
+
+/// The folders and the playlist files (`.m3u`, `.m3u8`) of one folder of a server, for choosing a playlist.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemotePlaylistBrowseView {
+    pub folders: Vec<RemoteFolderView>,
+    pub files: Vec<RemoteFolderView>,
+}
+
+fn is_playlist_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".m3u") || lower.ends_with(".m3u8")
+}
+
+fn playlists_of(
+    fs: &dyn player_remote::fs::RemoteFs,
+    dir: &str,
+) -> Result<RemotePlaylistBrowseView, String> {
+    let entries = fs.list(dir).map_err(|error| error.to_string())?;
+    let join = |name: &str| {
+        if dir.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{dir}/{name}")
+        }
+    };
+    let mut folders = Vec::new();
+    let mut files = Vec::new();
+    for entry in entries {
+        if entry.name.starts_with('.') {
+            continue;
+        }
+        let view = RemoteFolderView {
+            path: join(&entry.name),
+            name: entry.name.clone(),
+        };
+        if entry.is_dir {
+            folders.push(view);
+        } else if is_playlist_name(&entry.name) {
+            files.push(view);
+        }
+    }
+    let by_name = |left: &RemoteFolderView, right: &RemoteFolderView| natural_title_cmp(&left.name, &right.name);
+    folders.sort_by(by_name);
+    files.sort_by(by_name);
+    Ok(RemotePlaylistBrowseView { folders, files })
+}
+
+/// The sub-folders and playlist files of `path` (relative to the account's root) on a saved account's server.
+#[tauri::command]
+pub(crate) async fn remote_browse_playlists(
+    app: AppHandle,
+    account_id: String,
+    path: String,
+) -> Result<RemotePlaylistBrowseView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let data_dir = crate::user_data_directory(&state)?;
+        let account = account_of_id(&state, &account_id)?;
+        let fs = state
+            .remote_connections
+            .connect(&data_dir, &account)
+            .map_err(|error| {
+                state.remote_connections.forget(&account.id);
+                error.to_string()
+            })?;
+        playlists_of(fs.as_ref(), &normalize_folder(&path))
+    })
+    .await
+    .map_err(|error| format!("無法讀取遠端資料夾：{error}"))?
+}
+
+/// Add a playlist file (`.m3u`, `.m3u8`) of a saved account's server as a source. The songs it lists are read from the
+/// same server; the next library sync registers them and the playlist.
+#[tauri::command]
+pub(crate) async fn remote_playlist_add(
+    app: AppHandle,
+    account_id: String,
+    path: String,
+) -> Result<LibrarySource, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let account = account_of_id(&state, &account_id)?;
+        let file = normalize_folder(&path);
+        if !is_playlist_name(file.rsplit('/').next().unwrap_or("")) {
+            return Err("請選擇 .m3u 或 .m3u8 播放清單檔案。".to_owned());
+        }
+        let settings = state.settings.snapshot().map_err(|error| error.to_string())?;
+        let duplicate = settings.sources.iter().any(|source| {
+            matches!(
+                &source.kind,
+                SourceEntryKind::PlaylistFile { remote_account: Some(existing), path: stored, .. }
+                    if *existing == account.id
+                        && matches!(
+                            stored.to_media_locator(),
+                            Ok(MediaLocator::Remote { path: existing_path, .. }) if existing_path == file
+                        )
+            )
+        });
+        if duplicate {
+            return Err("這個播放清單已經加入。".to_owned());
+        }
+        let database = state.database.as_ref().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?;
+        let _database_work = crate::enter_database_work(&state)?;
+        let id = SourceId::new();
+        let display_name = file
+            .rsplit('/')
+            .next()
+            .and_then(|name| name.rsplit_once('.').map(|(stem, _)| stem))
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or("播放清單")
+            .to_owned();
+        let locator = MediaLocator::Remote {
+            source_id: id,
+            path: file,
+        };
+        let entry = SourceEntry {
+            id,
+            display_name: display_name.clone(),
+            enabled: true,
+            kind: SourceEntryKind::PlaylistFile {
+                playlist_id: player_core::PlaylistId::new(),
+                path: StoredPath::from_locator(&locator).map_err(|error| error.to_string())?,
+                tree_uri: None,
+                remote_account: Some(account.id.clone()),
+            },
+        };
+        state
+            .settings
+            .upsert_source(entry.clone())
+            .map_err(|error| error.to_string())?;
+        database
+            .save_library_root(&LibraryRoot {
+                id,
+                kind: MediaSourceKind::PlaylistFile,
+                display_name,
+                locator,
+                enabled: true,
+            })
+            .map_err(|error| error.to_string())?;
+        database
+            .set_source_label(id, Some(&account.name))
+            .map_err(|error| error.to_string())?;
+        crate::source_entry_summary_with(Some(database), &entry, std::slice::from_ref(&account))
+    })
+    .await
+    .map_err(|error| format!("無法加入遠端播放清單：{error}"))?
 }
 
 /// Add a folder of a saved account as a library source.

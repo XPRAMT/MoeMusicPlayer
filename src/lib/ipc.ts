@@ -797,6 +797,14 @@ interface IpcContract {
     args: { accountId: string; path: string };
     result: RemoteFolderView[];
   };
+  remote_browse_playlists: {
+    args: { accountId: string; path: string };
+    result: RemotePlaylistBrowseView;
+  };
+  remote_playlist_add: {
+    args: { accountId: string; path: string };
+    result: LibrarySource;
+  };
   remote_source_add: {
     args: { accountId: string; path: string; displayName: string | null };
     result: LibrarySource;
@@ -1287,6 +1295,9 @@ export type RemoteExcludedView = { id: string; accountId: string; accountName: s
 
 /** A folder on a remote server; `path` is relative to the account's root, `/`-separated. */
 export type RemoteFolderView = { name: string; path: string };
+
+/** The folders and the playlist files (.m3u, .m3u8) of one folder of a server. */
+export type RemotePlaylistBrowseView = { folders: RemoteFolderView[]; files: RemoteFolderView[] };
 
 /** What a connection test reached: the folders at the top of the account. */
 export type RemoteTestView = { folders: string[] };

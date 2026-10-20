@@ -75,6 +75,7 @@ mod android_artwork;
 mod android_dsd;
 mod android_folder_browser;
 mod remote_accounts;
+mod remote_playlist_sync;
 mod remote_connections;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
@@ -4352,6 +4353,7 @@ mod playlist_source_visibility_tests {
                 playlist_id,
                 path: settings::StoredPath::Uri("content://fixture/playlist".to_owned()),
                 tree_uri: None,
+                remote_account: None,
             },
         }
     }
@@ -4512,10 +4514,15 @@ fn favorites_get_playlists(
             playlist_id,
             path,
             tree_uri,
+            remote_account,
         } = &source.kind
         else {
             continue;
         };
+        if remote_account.is_some() {
+            // A playlist on a remote server is read-only here: nothing is written back to it.
+            continue;
+        }
         let _ = (path, tree_uri);
         let is_my_love = source.display_name == "我的最愛" || is_my_love_path(path);
         let favorite = database
@@ -4584,10 +4591,14 @@ async fn favorites_set_membership(
             playlist_id,
             path,
             tree_uri,
+            remote_account,
         } = &source.kind
         else {
             return Err("只能收藏到播放清單檔案來源。".to_owned());
         };
+        if remote_account.is_some() {
+            return Err("遠端伺服器上的播放清單是唯讀的，無法收藏到其中。".to_owned());
+        }
         let _ = (path, tree_uri);
         let target_locators = favorite_track_locators(&state, database, track_id)?;
         let target_locator = target_locators
@@ -4742,6 +4753,7 @@ async fn favorites_create_my_love(
                         playlist_id: PlaylistId::new(),
                         path: stored,
                         tree_uri: None,
+                        remote_account: None,
                     },
                 },
             };
@@ -4912,6 +4924,7 @@ async fn favorites_create_playlist(
                     path: settings::StoredPath::from_path(&path)
                         .map_err(|error| error.to_string())?,
                     tree_uri: None,
+                    remote_account: None,
                 },
             })
             .map_err(|error| error.to_string())?;
@@ -5024,6 +5037,7 @@ fn ensure_windows_my_love_source(
             playlist_id,
             path: stored,
             tree_uri: None,
+            remote_account: None,
         },
     };
     state
@@ -5291,6 +5305,7 @@ async fn playlist_import_m3u(
                     path: settings::StoredPath::from_path(&path)
                         .map_err(|error| error.to_string())?,
                     tree_uri: None,
+                    remote_account: None,
                 },
             })
             .map_err(|error| error.to_string())?;
@@ -7170,8 +7185,8 @@ fn source_entry_summary_with(
     accounts: &[player_remote::account::RemoteAccount],
 ) -> Result<LibrarySource, String> {
     let remote_account_id = match &source.kind {
-        SourceEntryKind::Folder { remote_account, .. } => remote_account.clone(),
-        SourceEntryKind::PlaylistFile { .. } => None,
+        SourceEntryKind::Folder { remote_account, .. }
+        | SourceEntryKind::PlaylistFile { remote_account, .. } => remote_account.clone(),
     };
     let (kind, location) = match &source.kind {
         SourceEntryKind::Folder {
@@ -7187,6 +7202,14 @@ fn source_entry_summary_with(
         } => (
             source_kind_name(*media_kind).to_owned(),
             path.display_lossy(),
+        ),
+        SourceEntryKind::PlaylistFile {
+            path,
+            remote_account: Some(_),
+            ..
+        } => (
+            "playlist_file".to_owned(),
+            remote_source_location(path, remote_account_id.as_ref(), accounts),
         ),
         SourceEntryKind::PlaylistFile { path, .. } => {
             ("playlist_file".to_owned(), path.display_lossy())
@@ -7578,7 +7601,8 @@ where
                 Ok(())
             },
         )?;
-        let mut remote_index = player_remote::index::RemoteMediaIndex::new(remote_resolver);
+        let mut remote_index =
+        player_remote::index::RemoteMediaIndex::new(Arc::clone(&remote_resolver));
         for (remote_index_number, root) in remote_roots.iter().enumerate() {
             let report = SyncEngine::sync_cancellable_with_progress(
                 root,
@@ -7603,6 +7627,32 @@ where
             let root = source
                 .database_projection()
                 .map_err(|error| error.to_string())?;
+            if matches!(
+                &source.kind,
+                SourceEntryKind::PlaylistFile {
+                    remote_account: Some(_),
+                    ..
+                }
+            ) {
+                match remote_playlist_sync::sync_remote_playlist_source(
+                    database,
+                    &source,
+                    configured_sources,
+                    Arc::clone(&remote_resolver),
+                    synced_at_utc_ms,
+                ) {
+                    Ok(Some(report)) => sources.push(sync_summary(&root, report)),
+                    Ok(None) => sources.push(unavailable_source_summary(
+                        &root,
+                        "無法讀取伺服器上的播放清單檔案；請確認連線與檔案存在。",
+                    )),
+                    Err(error) => sources.push(unavailable_source_summary(
+                        &root,
+                        format!("播放清單同步失敗：{error}"),
+                    )),
+                }
+                continue;
+            }
             if matches!(source.path(), settings::StoredPath::Uri(_)) {
                 sources.push(unavailable_source_summary(
                     &root,
@@ -7873,7 +7923,8 @@ where
     let source_count = sources.len();
     let mut results = Vec::new();
     let mut index = WindowsMediaIndex::with_excluded_folders(excluded_folders.iter().cloned());
-    let mut remote_index = player_remote::index::RemoteMediaIndex::new(remote_resolver);
+    let mut remote_index =
+        player_remote::index::RemoteMediaIndex::new(Arc::clone(&remote_resolver));
     for (source_index, source) in sources.iter().enumerate() {
         // Closing the program stops the sync: the source being read saves what it has, the others are left for next time.
         if cancellation.is_cancelled() {
@@ -7924,12 +7975,29 @@ where
                 database
                     .save_library_root(&root)
                     .map_err(|error| error.to_string())?;
-                if let Some(report) = playlist_source_sync::sync_playlist_file_source(
-                    database,
-                    source,
-                    excluded_folders,
-                    synced_at_utc_ms,
-                )? {
+                let report = if matches!(
+                    &source.kind,
+                    SourceEntryKind::PlaylistFile {
+                        remote_account: Some(_),
+                        ..
+                    }
+                ) {
+                    remote_playlist_sync::sync_remote_playlist_source(
+                        database,
+                        source,
+                        configured_sources,
+                        Arc::clone(&remote_resolver),
+                        synced_at_utc_ms,
+                    )?
+                } else {
+                    playlist_source_sync::sync_playlist_file_source(
+                        database,
+                        source,
+                        excluded_folders,
+                        synced_at_utc_ms,
+                    )?
+                };
+                if let Some(report) = report {
                     on_progress(
                         &root,
                         source_index,
@@ -11410,6 +11478,8 @@ pub fn run() {
             remote_sources::remote_account_test,
             remote_sources::remote_smb_shares,
             remote_sources::remote_browse,
+            remote_sources::remote_browse_playlists,
+            remote_sources::remote_playlist_add,
             remote_sources::remote_cache_get,
             remote_sources::remote_cache_set_limit,
             remote_sources::remote_cache_clear,
@@ -11956,6 +12026,7 @@ mod windows_library_integration_tests {
                 path: super::settings::StoredPath::from_path(&playlist_path)
                     .expect("store native playlist path"),
                 tree_uri: None,
+                remote_account: None,
             },
         };
         let mut database = Database::open_in_memory().expect("database");
@@ -12011,6 +12082,7 @@ mod windows_library_integration_tests {
                 path: super::settings::StoredPath::from_path(&playlist_path)
                     .expect("store native playlist path"),
                 tree_uri: None,
+                remote_account: None,
             },
         };
         let mut database = Database::open_in_memory().expect("database");
@@ -12082,6 +12154,7 @@ mod windows_library_integration_tests {
                 path: super::settings::StoredPath::from_path(&playlist_path)
                     .expect("store native playlist path"),
                 tree_uri: None,
+                remote_account: None,
             },
         };
         let mut database = Database::open_in_memory().expect("database");

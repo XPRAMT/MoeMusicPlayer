@@ -392,6 +392,7 @@ mod tests {
                 playlist_id,
                 path: StoredPath::from_path(path).expect("store Unicode playlist path"),
                 tree_uri: None,
+                remote_account: None,
             },
         }
     }

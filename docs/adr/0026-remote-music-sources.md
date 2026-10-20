@@ -118,3 +118,5 @@ Real songs from the library are served by loopback servers (a WebDAV server, an 
   - Interface: settings -> music sources -> "Remote servers" (add / edit / delete a server, list SMB shares, test the connection, browse and add folders, export / import accounts), in all four languages.
   - A real-server test of the app-side chain (account with a sealed password -> source -> sync of 2,668 tracks -> playback path -> engine reader -> streaming pace) is `src-tauri/src/remote_connections.rs` `real_server_tests` (skipped unless `MOE_SMB_*` is set).
 - Not done: Release GUI (CDP) and on-device (NX809J) acceptance; FTP; the "Buffering" state and automatic retry when the link drops during playback (the track fails today); the track details panel, spectrogram and tag editing for remote tracks (read-only message); DSEE HX is not applied to remote tracks. Decision 3 below (the first release is read-only) stands.
+
+- Playlist files on a server (2026-10-20): a source of kind PlaylistFile with `remote_account`; the songs it names are read from the same account, and songs a remote folder source already holds are not scanned twice. See `src-tauri/src/remote_playlist_sync.rs`.

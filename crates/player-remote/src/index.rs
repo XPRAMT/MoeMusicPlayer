@@ -82,6 +82,95 @@ impl RemoteMediaIndex {
     }
 }
 
+impl RemoteMediaIndex {
+    /// Scan the files a playlist names instead of a folder tree. `paths` are relative to the source's base folder; the
+    /// result keeps the order of `paths`. A file that cannot be reached is an error of the scan, not of the playlist.
+    pub fn scan_paths(&self, source_id: SourceId, paths: &[String]) -> SourceScan {
+        let mut scan = SourceScan {
+            source_id,
+            state: SourceScanState::Unavailable {
+                reason: "scan did not start".to_owned(),
+            },
+            tracks: Vec::new(),
+            errors: Vec::new(),
+        };
+        let resolved = match self.resolver.resolve(source_id) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                scan.state = unavailable(&error);
+                return scan;
+            }
+        };
+        let wanted: Vec<&String> = paths
+            .iter()
+            .filter(|path| {
+                let name = path.rsplit('/').next().unwrap_or("");
+                !name.starts_with('.')
+                    && is_remote_library_audio(name)
+                    && !is_excluded(&join_path(&resolved.base_path, path), &resolved.excluded)
+            })
+            .collect();
+        let results = Mutex::new(vec![None; wanted.len()]);
+        let next = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..LIST_WORKERS.min(wanted.len()) {
+                scope.spawn(|| loop {
+                    let index = next.fetch_add(1, Ordering::SeqCst);
+                    let Some(path) = wanted.get(index) else {
+                        return;
+                    };
+                    let outcome = resolved
+                        .fs
+                        .stat(&join_path(&resolved.base_path, path));
+                    results.lock().unwrap_or_else(PoisonError::into_inner)[index] =
+                        Some(outcome);
+                });
+            }
+        });
+        let results = results.into_inner().unwrap_or_else(PoisonError::into_inner);
+        let mut seen = std::collections::HashSet::new();
+        for (path, outcome) in wanted.into_iter().zip(results) {
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            match outcome {
+                Some(Ok(entry)) if !entry.is_dir => scan.tracks.push(MediaTrackRecord {
+                    identity: TrackIdentity {
+                        source_id,
+                        source_item_id: path.clone(),
+                        locator_key: Some(format!("remote:{source_id}:{path}")),
+                    },
+                    locator: MediaLocator::Remote {
+                        source_id,
+                        path: path.clone(),
+                    },
+                    fingerprint: FileFingerprint {
+                        size_bytes: entry.size,
+                        modified_at_utc_ms: entry.modified_ms,
+                        created_at_utc_ms: None,
+                    },
+                    metadata: None,
+                }),
+                Some(Ok(_)) => {}
+                Some(Err(error)) => scan.errors.push(MediaSourceError {
+                    source_item_id: Some(path.clone()),
+                    message: error.to_string(),
+                }),
+                None => {}
+            }
+        }
+        // A file that could not be reached may only be a bad moment on the link: nothing is removed for it.
+        scan.state = if scan.errors.is_empty() {
+            SourceScanState::Complete
+        } else {
+            SourceScanState::Incomplete {
+                reason: "some files of the playlist could not be reached".to_owned(),
+            }
+        };
+        scan
+    }
+}
+
 /// One remote file as the tag reader's byte source.
 struct RemoteByteSource {
     fs: Arc<dyn RemoteFs>,

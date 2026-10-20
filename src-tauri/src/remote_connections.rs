@@ -77,15 +77,22 @@ impl RemoteConnections {
                 .push(folder.path.clone());
         }
         for source in &settings.sources {
-            let SourceEntryKind::Folder {
-                path,
-                remote_account: Some(account_id),
-                ..
-            } = &source.kind
-            else {
-                continue;
+            let (path, account_id, is_playlist) = match &source.kind {
+                SourceEntryKind::Folder {
+                    path,
+                    remote_account: Some(account_id),
+                    ..
+                } => (path, account_id, false),
+                SourceEntryKind::PlaylistFile {
+                    path,
+                    remote_account: Some(account_id),
+                    ..
+                } => (path, account_id, true),
+                _ => continue,
             };
             let base = match path.to_media_locator() {
+                // The songs of a playlist are named from the account's root, whatever folder the list is in.
+                Ok(MediaLocator::Remote { .. }) if is_playlist => String::new(),
                 Ok(MediaLocator::Remote { path, .. }) => path,
                 _ => continue,
             };

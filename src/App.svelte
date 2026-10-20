@@ -653,9 +653,9 @@
   // 1 at original size or larger, fading to 0 as the cover shrinks to the minimum: the artwork pane's fr share.
   let coverShrinkShare = $derived(Math.min(1, Math.max(0, (coverLayoutScale - COVER_ZOOM_MIN) / (1 - COVER_ZOOM_MIN))));
   let sources = $state<LibrarySource[]>([]);
-  /** Folders and playlists on this device; remote folders are listed with the remote servers. */
-  const localSources = $derived(sources.filter((source) => source.kind !== 'remote'));
-  const remoteSources = $derived(sources.filter((source) => source.kind === 'remote'));
+  /** Folders and playlists on this device; remote folders and playlists are listed with the remote servers. */
+  const localSources = $derived(sources.filter((source) => !source.remoteAccountId));
+  const remoteSources = $derived(sources.filter((source) => Boolean(source.remoteAccountId)));
   let excludedFolders = $state<ExcludedFolder[]>([]);
   let sourceError = $state<string | null>(null);
   let sourceSyncSummary = $state<string | null>(null);

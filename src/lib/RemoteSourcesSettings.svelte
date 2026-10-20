@@ -283,7 +283,9 @@
 
   // ---- the folder browser: pick a server (when there are several), then a folder on it ----
   let browseDialog = $state<HTMLDialogElement>();
-  let browseMode = $state<'add' | 'exclude'>('add');
+  let browseMode = $state<'add' | 'exclude' | 'playlist'>('add');
+  /** The playlist files of the folder being browsed (the 'playlist' mode lists them with the folders). */
+  let playlistFiles = $state<RemoteFolderView[]>([]);
   let browseAccount = $state<RemoteAccountView | null>(null);
   let browsePath = $state('');
   let folders = $state<RemoteFolderView[]>([]);
@@ -298,9 +300,17 @@
     browseLoading = true;
     browseError = null;
     try {
-      const result = await invokeCommand('remote_browse', { accountId: account.id, path });
-      if (serial !== browseSerial) return;
-      folders = result;
+      if (browseMode === 'playlist') {
+        const result = await invokeCommand('remote_browse_playlists', { accountId: account.id, path });
+        if (serial !== browseSerial) return;
+        folders = result.folders;
+        playlistFiles = result.files;
+      } else {
+        const result = await invokeCommand('remote_browse', { accountId: account.id, path });
+        if (serial !== browseSerial) return;
+        folders = result;
+        playlistFiles = [];
+      }
       browsePath = path;
     } catch (cause) {
       if (serial === browseSerial) browseError = getErrorText(cause);
@@ -309,11 +319,12 @@
     }
   }
 
-  function startBrowse(mode: 'add' | 'exclude', account: RemoteAccountView): void {
+  function startBrowse(mode: 'add' | 'exclude' | 'playlist', account: RemoteAccountView): void {
     browseMode = mode;
     browseAccount = account;
     browsePath = '';
     folders = [];
+    playlistFiles = [];
     browseError = null;
     browseDialog?.showModal();
     void loadFolders('');
@@ -345,6 +356,24 @@
         closeBrowser();
         message = tr('已排除這個遠端資料夾；下次同步會略過它，並從曲庫移除其中的曲目。');
       }
+    } catch (cause) {
+      browseError = getErrorText(cause);
+    } finally {
+      browseLoading = false;
+    }
+  }
+
+  /** Add the playlist file picked in the browser. */
+  async function pickPlaylist(file: RemoteFolderView): Promise<void> {
+    const account = browseAccount;
+    if (!account || browseLoading) return;
+    browseLoading = true;
+    browseError = null;
+    try {
+      await invokeCommand('remote_playlist_add', { accountId: account.id, path: file.path });
+      closeBrowser();
+      message = tr('已加入遠端播放清單，開始同步。');
+      await onSourceAdded();
     } catch (cause) {
       browseError = getErrorText(cause);
     } finally {
@@ -441,7 +470,8 @@
   </div>
 {:else if activeAccount}
   {@const account = activeAccount}
-  {@const folderList = remoteSources.filter((source) => source.remoteAccountId === account.id)}
+  {@const folderList = remoteSources.filter((source) => source.remoteAccountId === account.id && source.kind !== 'playlist_file')}
+  {@const playlistList = remoteSources.filter((source) => source.remoteAccountId === account.id && source.kind === 'playlist_file')}
   {@const excludedList = excluded.filter((entry) => entry.accountId === account.id)}
   <div class="remote-sources source-pane" role="tabpanel" aria-label={account.name}>
     <div class="configured-source remote-server-head">
@@ -465,6 +495,26 @@
         <p class="source-muted-note">{tr("尚未加入資料夾。加入後會自動開始同步。")}</p>
       {:else}
         {#each folderList as source (source.id)}
+          <div class="configured-source">
+            <div class="configured-source-copy"><strong>{source.displayName}</strong><small class="configured-source-location" title={source.location}>{source.location}</small></div>
+            <div class="configured-source-actions">
+              <label><input type="checkbox" checked={source.enabled} {disabled} onchange={(event) => onToggleSource(source, event.currentTarget.checked)} />{tr("啟用")}</label>
+              <button class="text-button" type="button" {disabled} onclick={() => onRemoveSource(source)}>{tr("移除")}</button>
+            </div>
+          </div>
+        {/each}
+      {/if}
+    </div>
+
+    <div class="source-action-row source-action-buttons source-folder-picker">
+      <button class="soft-button" type="button" {disabled} onclick={() => startBrowse('playlist', account)}>{tr("選擇播放清單")}</button>
+    </div>
+    <div class="configured-sources" aria-live="polite">
+      <div class="configured-sources-heading"><strong>{tr("播放清單")}</strong><span>{playlistList.length}</span></div>
+      {#if playlistList.length === 0}
+        <p class="source-muted-note">{tr("尚未加入播放清單。可選擇伺服器上的 .m3u 或 .m3u8 檔案，清單內的歌曲會從同一台伺服器讀取。")}</p>
+      {:else}
+        {#each playlistList as source (source.id)}
           <div class="configured-source">
             <div class="configured-source-copy"><strong>{source.displayName}</strong><small class="configured-source-location" title={source.location}>{source.location}</small></div>
             <div class="configured-source-actions">
@@ -593,7 +643,7 @@
 
 <dialog bind:this={browseDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-browse-title" oncancel={(event) => { event.preventDefault(); closeBrowser(); }}>
   <div class="update-dialog-content">
-    <h2 id="remote-browse-title">{browseMode === 'add' ? tr('選擇遠端資料夾') : tr('選擇排除遠端資料夾')}</h2>
+    <h2 id="remote-browse-title">{browseMode === 'add' ? tr('選擇遠端資料夾') : browseMode === 'playlist' ? tr('選擇遠端播放清單') : tr('選擇排除遠端資料夾')}</h2>
     {#if browseAccount}
       <div class="folder-browser-path" title={browsePath}>{browseAccount.name} / {browsePath || '…'}</div>
       {#if browseError}<p class="error-text" role="alert">{browseError}</p>{/if}
@@ -608,13 +658,20 @@
             <span aria-hidden="true">📁</span><span>{folder.name}</span>
           </button>
         {/each}
-        {#if folders.length === 0 && !browseLoading && !browseError}
-          <p class="folder-browser-empty">{tr("這個資料夾沒有子資料夾")}</p>
+        {#each playlistFiles as file (file.path)}
+          <button class="folder-browser-entry" type="button" disabled={browseLoading} onclick={() => void pickPlaylist(file)}>
+            <span aria-hidden="true">🎵</span><span>{file.name}</span>
+          </button>
+        {/each}
+        {#if folders.length === 0 && playlistFiles.length === 0 && !browseLoading && !browseError}
+          <p class="folder-browser-empty">{browseMode === 'playlist' ? tr('這個資料夾沒有子資料夾或播放清單') : tr('這個資料夾沒有子資料夾')}</p>
         {/if}
       </div>
       <div class="update-dialog-actions">
         <button class="soft-button" type="button" onclick={closeBrowser}>{tr("取消")}</button>
-        <button class="soft-button" type="button" disabled={browseLoading || (browseMode === 'exclude' && browsePath === '')} onclick={() => void confirmFolder()}>{browseMode === 'add' ? tr('使用這個資料夾') : tr('排除這個資料夾')}</button>
+        {#if browseMode !== 'playlist'}
+          <button class="soft-button" type="button" disabled={browseLoading || (browseMode === 'exclude' && browsePath === '')} onclick={() => void confirmFolder()}>{browseMode === 'add' ? tr('使用這個資料夾') : tr('排除這個資料夾')}</button>
+        {/if}
       </div>
     {/if}
   </div>
