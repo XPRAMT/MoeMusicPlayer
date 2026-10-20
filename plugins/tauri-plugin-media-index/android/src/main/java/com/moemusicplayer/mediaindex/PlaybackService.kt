@@ -403,6 +403,13 @@ class PlaybackService : MediaSessionService() {
             executeCommand(raw)
             return
         }
+        if (contentUri.startsWith("$REMOTE_URI_SCHEME:")) {
+            // A track on a server starts at once; its cover is fetched afterwards (a round trip or several) and put on the
+            // item when it arrives, so a slow server never delays the load.
+            executeCommand(raw)
+            fetchRemoteArtwork(contentUri, command.optString("trackId"))
+            return
+        }
         artworkPreparationCommandId = commandId
         artworkPreparationRequestId = requestId
         mainHandler.removeCallbacks(artworkPreparationTimeout)
@@ -433,6 +440,37 @@ class PlaybackService : MediaSessionService() {
                 put("snapshot", snapshot(exoPlayer))
             })
             commandInFlight.set(false)
+        }
+    }
+
+    /** Put the cover of the remote track [trackId] on the playing item once Rust has read it (see [dispatchCommand]). */
+    private fun fetchRemoteArtwork(contentUri: String, trackId: String) {
+        try {
+            artworkExecutor.submit {
+                val bytes = try {
+                    DsdBridge.nativeRemoteCover(contentUri)?.takeIf { it.size <= MAX_NOTIFICATION_SOURCE_BYTES }
+                        ?.let { createNotificationArtwork(it) }
+                } catch (_: Throwable) {
+                    null
+                }
+                if (bytes == null) return@submit
+                mainHandler.post {
+                    if (serviceDestroyed) return@post
+                    val player = exoPlayer ?: return@post
+                    val item = player.currentMediaItem ?: return@post
+                    if (item.mediaId != trackId) return@post
+                    val updated = item.buildUpon()
+                        .setMediaMetadata(
+                            item.mediaMetadata.buildUpon()
+                                .setArtworkData(bytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                                .build(),
+                        )
+                        .build()
+                    player.replaceMediaItem(player.currentMediaItemIndex, updated)
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            // The next track's cover will be tried again; this one stays without a picture.
         }
     }
 

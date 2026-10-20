@@ -27,6 +27,9 @@ object DsdBridge {
     @JvmStatic external fun nativeRead(handle: Long, position: Long, buffer: ByteArray, offset: Int, length: Int): Int
 
     @JvmStatic external fun nativeClose(handle: Long)
+
+    /** The cover picture bytes of a `moeremote://` track, or null. Blocks on the server: call it from a worker thread. */
+    @JvmStatic external fun nativeRemoteCover(uri: String): ByteArray?
 }
 
 const val DSD_URI_SCHEME = "moedsd"

@@ -169,12 +169,9 @@ fn ape_cover_base64(locators: &[MediaLocator]) -> Option<String> {
             (picture.data().len() <= MAX_NOTIFICATION_COVER_BYTES)
                 .then(|| base64::engine::general_purpose::STANDARD.encode(picture.data()))
         }
-        // A remote track (ADR 0026): Android's retriever cannot open it, so the cover is read through the remote reader.
-        MediaLocator::Remote { source_id, path } => {
-            let bytes = crate::remote_media::remote_cover_bytes(*source_id, path)?;
-            (bytes.len() <= MAX_NOTIFICATION_COVER_BYTES)
-                .then(|| base64::engine::general_purpose::STANDARD.encode(bytes))
-        }
+        // A remote track (ADR 0026): its cover is fetched by the service after the track has started (`nativeRemoteCover`),
+        // so a slow server never delays the load.
+        MediaLocator::Remote { .. } => None,
         MediaLocator::ContentUri(_) => None,
     })
 }

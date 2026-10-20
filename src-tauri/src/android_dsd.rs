@@ -265,8 +265,10 @@ impl std::io::Seek for RemoteStreamAdapter {
 /// Open a DSF or WavPack file (or a remote track); the handle (never 0) is used with the other functions until `close`.
 pub(crate) fn open(path: &Path) -> Result<i64, String> {
     if path.to_str().is_some_and(|text| text.starts_with("moeremote://")) {
-        let served = open_remote(path.to_str().unwrap_or_default())?;
-        return Ok(register(served));
+        let started = std::time::Instant::now();
+        let served = open_remote(path.to_str().unwrap_or_default());
+        eprintln!("[remote] open {:?} took {} ms (ok: {})", path.file_name(), started.elapsed().as_millis(), served.is_ok());
+        return Ok(register(served?));
     }
     let served = match player_formats::decode_engine(path) {
         player_formats::DecodeEngine::Dsd => open_dsf(path)?,
@@ -303,7 +305,12 @@ pub(crate) fn read(handle: i64, position: u64, out: &mut [u8]) -> Result<usize, 
     let mut stream = stream
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    stream.read_at(position, out)
+    let started = std::time::Instant::now();
+    let result = stream.read_at(position, out);
+    if started.elapsed().as_millis() >= 150 {
+        eprintln!("[remote] slow read at {position} ({} bytes) took {} ms", out.len(), started.elapsed().as_millis());
+    }
+    result
 }
 
 pub(crate) fn close(handle: i64) {
@@ -337,6 +344,36 @@ mod jni_exports {
                 eprintln!("[dsd] open failed: {error}");
                 0
             }
+        }
+    }
+
+    /// The cover of a remote track (`moeremote://…`) as the file's own picture bytes, or null. Blocks on the server, so
+    /// the service calls it from a worker thread after the track has started.
+    #[no_mangle]
+    pub extern "system" fn Java_com_moemusicplayer_mediaindex_DsdBridge_nativeRemoteCover<'local>(
+        mut env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        uri: JString<'local>,
+    ) -> jni::sys::jbyteArray {
+        let Ok(uri) = env.get_string(&uri) else {
+            return std::ptr::null_mut();
+        };
+        let uri: String = uri.into();
+        let Some(player_core::MediaLocator::Remote { source_id, path }) =
+            player_core::parse_remote_locator_uri(&uri)
+        else {
+            return std::ptr::null_mut();
+        };
+        let started = std::time::Instant::now();
+        let bytes = crate::remote_media::remote_cover_bytes(source_id, &path);
+        eprintln!(
+            "[remote] cover lookup took {} ms (found: {})",
+            started.elapsed().as_millis(),
+            bytes.is_some()
+        );
+        match bytes.and_then(|bytes| env.byte_array_from_slice(&bytes).ok()) {
+            Some(array) => array.into_raw(),
+            None => std::ptr::null_mut(),
         }
     }
 
