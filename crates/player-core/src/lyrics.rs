@@ -1039,12 +1039,10 @@ mod tests {
     #[test]
     fn automatic_selection_requires_title_and_duration_gates_not_score() {
         let local = gate_local();
-        let mut low_score_but_close =
-            candidate("close", "Song", "Other Artist", None, Some(181_500));
+        let mut low_score_but_close = candidate("close", "Song", "Other Artist", None, Some(181_500));
         low_score_but_close.score = 0.1;
         assert_eq!(
-            auto_lyric_candidate(&local, &[low_score_but_close])
-                .map(|item| item.candidate_id.as_str()),
+            auto_lyric_candidate(&local, &[low_score_but_close]).map(|item| item.candidate_id.as_str()),
             Some("close")
         );
 
@@ -1090,10 +1088,7 @@ mod tests {
     #[test]
     fn title_and_artist_similarity_ignore_simplified_traditional_differences() {
         assert_eq!(text_similarity("愛的戀歌", "爱的恋歌"), 1.0);
-        assert_eq!(
-            text_similarity("戀愛サーキュレーション", "恋爱サーキュレーション"),
-            1.0
-        );
+        assert_eq!(text_similarity("戀愛サーキュレーション", "恋爱サーキュレーション"), 1.0);
         assert_eq!(text_similarity("張學友", "张学友"), 1.0);
         let local = LyricsTrackMetadata {
             title: Some("愛".into()),

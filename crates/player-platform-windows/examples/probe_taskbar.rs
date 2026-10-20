@@ -15,13 +15,7 @@ fn main() {
         let scale = |css: i32| css * probe.dpi.max(96) as i32 / 96;
         println!(
             "area={:?}",
-            pick_free_area(
-                probe.bounds,
-                &probe.occupied,
-                AreaChoice::Widest,
-                scale(8),
-                scale(120)
-            )
+            pick_free_area(probe.bounds, &probe.occupied, AreaChoice::Widest, scale(8), scale(120))
         );
     }
 }

@@ -70,10 +70,7 @@ mod tests {
     #[test]
     fn file_uri_percent_encodes_reserved_and_non_ascii_bytes() {
         let uri = file_uri_for_path(Path::new("/storage/emulated/0/Music/a #1?é.mp3")).unwrap();
-        assert_eq!(
-            uri,
-            "file:///storage/emulated/0/Music/a%20%231%3F%C3%A9.mp3"
-        );
+        assert_eq!(uri, "file:///storage/emulated/0/Music/a%20%231%3F%C3%A9.mp3");
         assert_eq!(file_uri_for_path(Path::new("relative.mp3")), None);
     }
 }

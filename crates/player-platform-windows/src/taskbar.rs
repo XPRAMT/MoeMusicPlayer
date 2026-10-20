@@ -251,17 +251,13 @@ mod imp {
     /// maximized window stops at the work area and does not count.
     fn foreground_covers_monitor_of(tray: HWND) -> bool {
         let foreground = unsafe { GetForegroundWindow() };
-        if foreground.0.is_null() || foreground == tray || unsafe { IsIconic(foreground) }.as_bool()
-        {
+        if foreground.0.is_null() || foreground == tray || unsafe { IsIconic(foreground) }.as_bool() {
             return false;
         }
         let mut class = [0_u16; 64];
         let length = unsafe { GetClassNameW(foreground, &mut class) }.max(0) as usize;
         let class = String::from_utf16_lossy(&class[..length.min(class.len())]);
-        if matches!(
-            class.as_str(),
-            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
-        ) {
+        if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
             return false;
         }
         let monitor_rect = |window: HWND| {
@@ -274,17 +270,14 @@ mod imp {
                 .as_bool()
                 .then(|| rect_of(info.rcMonitor))
         };
-        let (Some(taskbar_monitor), Some(window_monitor)) =
-            (monitor_rect(tray), monitor_rect(foreground))
-        else {
+        let (Some(taskbar_monitor), Some(window_monitor)) = (monitor_rect(tray), monitor_rect(foreground)) else {
             return false;
         };
         if taskbar_monitor != window_monitor {
             return false;
         }
         let mut raw = RECT::default();
-        unsafe { GetWindowRect(foreground, &mut raw) }.is_ok()
-            && rect_of(raw).covers(taskbar_monitor)
+        unsafe { GetWindowRect(foreground, &mut raw) }.is_ok() && rect_of(raw).covers(taskbar_monitor)
     }
 
     /// The taskbar follows `SystemUsesLightTheme`, not the apps theme.
@@ -321,49 +314,12 @@ mod tests {
 
     #[test]
     fn a_window_covers_a_monitor_only_when_it_reaches_over_all_of_it() {
-        let monitor = Rect {
-            left: 0,
-            top: 0,
-            right: 1920,
-            bottom: 1080,
-        };
-        let work_area = Rect {
-            left: -8,
-            top: -8,
-            right: 1928,
-            bottom: 1040,
-        };
-        assert!(
-            !work_area.covers(monitor),
-            "a maximized window stops above the taskbar"
-        );
-        assert!(
-            Rect {
-                left: 0,
-                top: 0,
-                right: 1920,
-                bottom: 1080
-            }
-            .covers(monitor),
-            "full screen"
-        );
-        assert!(
-            Rect {
-                left: -8,
-                top: -8,
-                right: 1928,
-                bottom: 1088
-            }
-            .covers(monitor),
-            "borderless, a little over"
-        );
-        assert!(!Rect {
-            left: 0,
-            top: 0,
-            right: 1919,
-            bottom: 1080
-        }
-        .covers(monitor));
+        let monitor = Rect { left: 0, top: 0, right: 1920, bottom: 1080 };
+        let work_area = Rect { left: -8, top: -8, right: 1928, bottom: 1040 };
+        assert!(!work_area.covers(monitor), "a maximized window stops above the taskbar");
+        assert!(Rect { left: 0, top: 0, right: 1920, bottom: 1080 }.covers(monitor), "full screen");
+        assert!(Rect { left: -8, top: -8, right: 1928, bottom: 1088 }.covers(monitor), "borderless, a little over");
+        assert!(!Rect { left: 0, top: 0, right: 1919, bottom: 1080 }.covers(monitor));
     }
 
     #[test]
