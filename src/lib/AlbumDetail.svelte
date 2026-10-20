@@ -163,25 +163,36 @@
     return urls;
   }
 
+  /**
+   * What the track list and the heading need (the quick index, the track count, the artists). Each is asked for and shown on
+   * its own: none of it waits for the other, and none of it waits for the covers, which are looked through in the
+   * background (`scanCovers`).
+   */
+  function loadDetailData(current: number): void {
+    void invokeCommand('library_get_album_detail_facets', { albumNames: album.aliases })
+      .then((facets) => {
+        if (current !== revision) return;
+        albumDiscQuickIndices = {
+          ascending: facets.quickIndexAscending,
+          descending: facets.quickIndexDescending,
+        };
+        onTotalCount(facets.trackCount);
+      })
+      .catch((error) => { if (current === revision) scanError = getErrorText(error); });
+    void invokeCommand('library_get_album_detail_artists', { albumNames: album.aliases })
+      .then((resolvedArtists) => { if (current === revision) artists = resolvedArtists; })
+      .catch(() => undefined);
+  }
+
   async function scanCovers(): Promise<void> {
     const current = ++revision;
     scanning = true;
     scanError = null;
     artists = [];
     albumDiscQuickIndices = null;
+    loadDetailData(current);
     try {
       const key = await selectionKey();
-      const facets = await invokeCommand('library_get_album_detail_facets', { albumNames: album.aliases });
-      const resolvedArtists = await invokeCommand('library_get_album_detail_artists', {
-        albumNames: album.aliases,
-      });
-      if (current !== revision) return;
-      artists = resolvedArtists;
-      albumDiscQuickIndices = {
-        ascending: facets.quickIndexAscending,
-        descending: facets.quickIndexDescending,
-      };
-      onTotalCount(facets.trackCount);
 
       // First the cover of the album card (its first readable cover, usually already cached): the page shows something at once
       // while the whole album is looked through for the representative covers below.
