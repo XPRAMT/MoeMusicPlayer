@@ -183,6 +183,28 @@
       };
       onTotalCount(facets.trackCount);
 
+      // First the cover of the album card (its first readable cover, usually already cached): the page shows something at once
+      // while the whole album is looked through for the representative covers below.
+      if (!coverScanResolved && coverUrls.length === 0) {
+        try {
+          const quick = await invokeCommand('album_artwork_selection_ensure', {
+            key: await sha256Hex(copyToArrayBuffer(new TextEncoder().encode(`${album.key} ${album.trackCount}`))),
+            albumNames: album.aliases, trackCount: album.trackCount,
+            representative: false, forceRebuild: false,
+          });
+          if (current !== revision) return;
+          const quickUrls = await loadThumbnails(quick?.trackIds.slice(0, 1) ?? [], current);
+          if (current !== revision) { quickUrls.forEach((url) => URL.revokeObjectURL(url)); return; }
+          if (quickUrls.length > 0 && coverUrls.length === 0) {
+            for (const url of ownedCoverUrls) URL.revokeObjectURL(url);
+            ownedCoverUrls = quickUrls;
+            coverUrls = quickUrls;
+          } else {
+            quickUrls.forEach((url) => URL.revokeObjectURL(url));
+          }
+        } catch { /* the full scan below still runs */ }
+      }
+
       let selection = await invokeCommand('album_artwork_selection_ensure', {
         key, albumNames: album.aliases, trackCount: album.trackCount,
         representative: true, forceRebuild: false,

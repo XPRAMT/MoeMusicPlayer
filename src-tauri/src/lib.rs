@@ -3683,6 +3683,7 @@ async fn album_artwork_selection_ensure(
         track_ids: selected_ids,
         representative,
     };
+    eprintln!("[art] ensure {} representative={} -> {} covers (scanned)", &key[..key.len().min(8)], representative, selection.track_ids.len());
     album_artwork_cache::put_selection(&directory, &key, &selection)?;
     Ok(Some(selection))
 }
@@ -3770,6 +3771,7 @@ async fn album_artwork_cache_get_for_track(
             return Ok(Response::new(Vec::new()));
         };
         let cached = album_artwork_cache::get_for_track(&directory, &identity)?;
+        eprintln!("[art] get_for_track {} -> {} bytes", &track_id[..track_id.len().min(8)], cached.len());
         // "Missing" remembered for a track on a server may be left from before such tracks were told apart from covers the
         // server failed to deliver: it is not trusted, the cover is read again.
         if cached.as_slice() == [0] && track_may_be_unreachable_on_a_server(state, &track_id) {
@@ -3800,8 +3802,10 @@ async fn album_artwork_cache_put_for_track(
     run_database_work(app, move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         let Some(identity) = album_artwork_track_identity(state, &track_id)? else {
+            eprintln!("[art] put_for_track {} has no identity: nothing stored", &track_id[..track_id.len().min(8)]);
             return Ok(());
         };
+        eprintln!("[art] put_for_track {} stored", &track_id[..track_id.len().min(8)]);
         album_artwork_cache::put(&directory, &sha256, &data_base64)?;
         album_artwork_cache::put_track_reference(&directory, &identity, Some(&sha256))
     })
@@ -3823,8 +3827,10 @@ async fn album_artwork_cache_mark_missing_for_track(
         // A track on a server is never remembered as without a cover from here: the page cannot tell "no cover" from "the
         // server did not answer", and a wrong "missing" would hide a cover for good.
         if !definitive.unwrap_or(false) && track_may_be_unreachable_on_a_server(state, &track_id) {
+            eprintln!("[art] mark_missing {} skipped (server unreachable)", &track_id[..track_id.len().min(8)]);
             return Ok(());
         }
+        eprintln!("[art] mark_missing {} definitive={:?}", &track_id[..track_id.len().min(8)], definitive);
         album_artwork_cache::put_track_reference(&directory, &identity, None)
     })
     .await
@@ -8650,6 +8656,7 @@ async fn library_get_track_artwork(
         })
         .await
         .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
+        eprintln!("[art] track_artwork {} -> {}", &track_id[..track_id.len().min(8)], match &artwork { Ok(image) => format!("{} bytes", image.bytes().len()), Err(error) => format!("{error:?}") });
         match artwork {
             Ok(image) => Ok(Response::new(image.into_bytes())),
             Err(android_artwork::ArtworkError::Missing) => {
