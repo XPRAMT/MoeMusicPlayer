@@ -9,6 +9,7 @@
   import { formatDurationHours } from './format';
   import { detectArtworkMimeType } from './active-track-artwork';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
+  import MiddleEllipsis from './MiddleEllipsis.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
 
   interface Props { album: AlbumEntry; active: boolean; refreshKey: number; sortField: AlbumIndexSortField; onSelect: (album: AlbumEntry, coverSources: string[]) => void }
@@ -201,14 +202,14 @@
   <span class="album-card-art" aria-hidden="true">
     <AlbumArtworkMosaic sources={displayedImageUrls} />
   </span>
-  <span class="album-card-name">{displayUnknown(album.displayName)}</span>
-  <span class="album-card-summary">{summary}</span>
+  <span class="album-card-name"><MiddleEllipsis text={displayUnknown(album.displayName)} mode="end" /></span>
+  <span class="album-card-summary"><MiddleEllipsis text={summary} mode="end" /></span>
 </button>
 
 <style>
   .album-card { display:flex; width:var(--album-card-width); height:calc(var(--album-card-width) + var(--album-card-text-height)); min-width:var(--album-card-width); flex:0 0 var(--album-card-width); flex-direction:column; gap:4px; padding:0; border:0; color:var(--text); background:transparent; text-align:left; cursor:pointer; }
   .album-card-art { display:block; width:var(--album-card-width); height:var(--album-card-width); flex:0 0 var(--album-card-width); box-sizing:border-box; overflow:hidden; border-radius:10px; background:#000; }
-  .album-card-name { overflow:hidden; font-size:var(--font-body); line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
-  .album-card-summary { overflow:hidden; color:var(--text-muted); font-size:var(--font-caption); line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
+  .album-card-name { overflow:hidden; font-size:var(--font-body); line-height:1.4; white-space:nowrap; }
+  .album-card-summary { overflow:hidden; color:var(--text-muted); font-size:var(--font-caption); line-height:1.4; white-space:nowrap; }
   .album-card:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:10px; }
 </style>

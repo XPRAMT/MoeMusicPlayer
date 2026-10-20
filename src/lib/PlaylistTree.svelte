@@ -3,6 +3,7 @@
   import { IconPlaylist } from '@tabler/icons-svelte-runes';
   import type { PlaylistSummary } from './ipc';
   import { appTooltip } from './app-tooltip.js';
+  import MiddleEllipsis from './MiddleEllipsis.svelte';
 
   interface Props {
     playlists: PlaylistSummary[];
@@ -40,7 +41,7 @@
         >
           <IconPlaylist size={17} stroke={1.6} aria-hidden="true" />
           <span class="playlist-tree-copy">
-            <strong>{playlist.name.trim() || tr('未命名播放清單')}</strong>
+            <strong><MiddleEllipsis text={playlist.name.trim() || tr('未命名播放清單')} mode="end" /></strong>
             <small>{playlist.entryCount.toLocaleString()} {tr("個項目")}</small>
           </span>
         </button>
