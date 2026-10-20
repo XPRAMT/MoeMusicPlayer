@@ -523,7 +523,7 @@
   ] as item (item.kind)}
     {@const kind = item.kind as CacheKind}
     {@const view = caches[kind]}
-    <div class="configured-sources-heading"><strong>{item.title}</strong><span>{view ? usedText(view.usedBytes) : ''}</span></div>
+    <div class="source-action-heading"><strong>{item.title}</strong><span>{view ? usedText(view.usedBytes) : ''}</span></div>
     <label class="lyrics-preference-range">
       <span><strong>{tr("快取容量上限")}</strong><output>{gigabytes(cacheLimitsMb[kind])}</output></span>
       <input
