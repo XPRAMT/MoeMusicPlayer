@@ -538,15 +538,7 @@
         <label class="remote-field remote-grow"><span>{tr("主機")}</span><input type="text" bind:value={form.host} placeholder="192.168.0.10" autocapitalize="off" autocorrect="off" spellcheck="false" /></label>
         <label class="remote-field remote-port"><span>{tr("連接埠")}</span><input type="text" inputmode="numeric" bind:value={form.port} placeholder={form.protocol === 'smb' ? '445' : '443'} /></label>
       </div>
-      {#if form.protocol === 'smb'}
-        <div class="remote-field">
-          <span>{tr("根目錄")}</span>
-          <div class="remote-row">
-            <div class="remote-picked" class:is-empty={form.path === ''} title={form.path}>{form.path || tr('尚未選擇')}</div>
-            <button class="soft-button" type="button" disabled={form.host.trim() === ''} onclick={openSharePicker}>{tr('選擇資料夾')}</button>
-          </div>
-        </div>
-      {:else}
+      {#if form.protocol === 'webdav'}
         <label class="remote-field"><span>{tr("WebDAV 路徑")}</span><input type="text" bind:value={form.path} placeholder="/remote.php/dav/files/me" autocapitalize="off" spellcheck="false" /></label>
         <label class="remote-check"><input type="checkbox" bind:checked={form.useHttp} /><span>{tr("使用未加密的 http（不建議）")}</span></label>
       {/if}
@@ -557,6 +549,15 @@
       </label>
       {#if form.hasPassword}
         <label class="remote-check"><input type="checkbox" bind:checked={form.clearPassword} /><span>{tr("移除已儲存的密碼")}</span></label>
+      {/if}
+      {#if form.protocol === 'smb'}
+        <div class="remote-field">
+          <span>{tr("根目錄")}</span>
+          <div class="remote-row">
+            <div class="remote-picked" class:is-empty={form.path === ''} title={form.path}>{form.path || tr('尚未選擇')}</div>
+            <button class="soft-button" type="button" disabled={form.host.trim() === ''} onclick={openSharePicker}>{tr('選擇資料夾')}</button>
+          </div>
+        </div>
       {/if}
       {#if testResult}<p class="remote-ok" role="status">{testResult}</p>{/if}
       {#if formError}<p class="error-text" role="alert">{formError}</p>{/if}
