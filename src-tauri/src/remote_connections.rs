@@ -167,6 +167,8 @@ pub(crate) fn none() -> Arc<dyn RemoteResolver> {
 pub(crate) struct RemoteFiles {
     pub(crate) connections: Arc<RemoteConnections>,
     pub(crate) settings: Arc<crate::settings::SettingsStore>,
+    /// The disk cache of played remote files (`None` when its folder could not be made).
+    pub(crate) cache: Option<Arc<player_remote::cache::DiskCache>>,
 }
 
 impl RemoteFiles {
@@ -218,7 +220,27 @@ impl player_core::RemoteContent for RemoteFiles {
         path: &str,
     ) -> std::io::Result<player_core::RemoteFileHandle> {
         let (fs, full) = self.locate(source_id, path)?;
-        let reader = player_remote::prefetch::PrefetchReader::new(fs.open(&full)?);
+        let file = fs.open(&full)?;
+        // Chunks that were played are kept on disk (first in, first out), so the same song played again does not go back
+        // to the server. The key includes the size and modified time, so an edited file is not served stale.
+        let file: Box<dyn player_remote::fs::RemoteFile> = match &self.cache {
+            Some(cache) => {
+                let modified = fs.stat(&full).ok().and_then(|entry| entry.modified_ms);
+                let key = player_remote::cache::cache_key(
+                    &source_id.to_string(),
+                    &full,
+                    file.len(),
+                    modified,
+                );
+                Box::new(player_remote::cache::CachedFile::new(
+                    file,
+                    Arc::clone(cache),
+                    key,
+                ))
+            }
+            None => file,
+        };
+        let reader = player_remote::prefetch::PrefetchReader::new(file);
         let len = reader.len();
         Ok(player_core::RemoteFileHandle {
             reader: Box::new(reader),
@@ -340,7 +362,7 @@ mod real_server_tests {
         let path = database.resolve_playable_filesystem_locator(track.id).unwrap();
         let text = path.to_string_lossy().into_owned();
         assert!(text.starts_with("moeremote://"), "{text}");
-        let opener = RemoteFiles { connections: Arc::clone(&connections), settings: Arc::clone(&settings) };
+        let opener = RemoteFiles { connections: Arc::clone(&connections), settings: Arc::clone(&settings), cache: Some(Arc::new(player_remote::cache::DiskCache::open(data_dir.join("remote-cache"), 200_000_000).unwrap())) };
         let Some(MediaLocator::Remote { source_id, path: relative }) =
             player_core::parse_remote_locator_uri(&text)
         else {
@@ -380,6 +402,22 @@ mod real_server_tests {
             worst
         );
         assert!(worst < std::time::Duration::from_millis(100), "a read waited {worst:?}");
+        drop(stream);
+
+        // 6. The disk cache: what was streamed is on disk now, and the same song played again is read from there.
+        let used = opener.cache.as_ref().unwrap().used();
+        println!("cache holds {} MB", used / 1_000_000);
+        assert!(used >= 1_000_000, "nothing was cached");
+        let started = std::time::Instant::now();
+        let mut again = opener
+            .open_streaming(source_id, &relative)
+            .expect("the streaming opener again");
+        let mut total_again = 0usize;
+        while total_again < 6 * 1024 * 1024 {
+            again.reader.read_exact(&mut chunk).unwrap();
+            total_again += chunk.len();
+        }
+        println!("6 MiB again from the cache in {:?}", started.elapsed());
 
         let _ = std::fs::remove_dir_all(&data_dir);
     }

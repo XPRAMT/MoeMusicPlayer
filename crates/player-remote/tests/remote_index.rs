@@ -313,7 +313,10 @@ fn excluded_folders_and_everything_under_them_are_skipped() {
     // The exclusion is relative to the account's root, also when the source is rooted in a folder.
     let mut index = index_excluding(Arc::new(DirFs::new(&tree)), "Artist", &["Artist/Album Two"]);
     let scan = index.scan(&root_for("Artist"));
-    assert_eq!(paths(&scan), vec!["Album One/01 s16.wv", "Album One/02 s24.wv"]);
+    assert_eq!(
+        paths(&scan),
+        vec!["Album One/01 s16.wv", "Album One/02 s24.wv"]
+    );
 
     // A source inside an excluded folder scans nothing and is complete (what was in it is removed).
     let mut index = index_excluding(Arc::new(DirFs::new(&tree)), "Artist/Album One", &["Artist"]);

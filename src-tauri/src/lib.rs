@@ -492,6 +492,8 @@ struct AppState {
     lyrics_service: lyrics_service::LyricsService,
     /// Open connections to remote servers (ADR 0026), shared by scanning, tag reads and playback.
     remote_connections: Arc<remote_connections::RemoteConnections>,
+    /// The disk cache of played remote files (first in, first out).
+    remote_cache: Option<Arc<player_remote::cache::DiskCache>>,
     #[cfg(target_os = "windows")]
     playback: Option<WindowsPlaybackService>,
     #[cfg(target_os = "windows")]
@@ -11408,6 +11410,9 @@ pub fn run() {
             remote_sources::remote_account_test,
             remote_sources::remote_smb_shares,
             remote_sources::remote_browse,
+            remote_sources::remote_cache_get,
+            remote_sources::remote_cache_set_limit,
+            remote_sources::remote_cache_clear,
             remote_sources::remote_excluded_list,
             remote_sources::remote_excluded_add,
             remote_sources::remote_excluded_remove,
@@ -11638,9 +11643,18 @@ pub fn run() {
             app.manage(updater::UpdateService::default());
             app.manage(sleep_timer::SleepTimer::default());
             // Every reader of remote files (engine, covers, lyrics) goes through this one provider.
+            let remote_cache = settings.data_directory().and_then(|dir| {
+                player_remote::cache::DiskCache::open(
+                    dir.join("remote-cache"),
+                    u64::from(initial_settings.remote_cache_limit_mb) * 1_000_000,
+                )
+                .ok()
+                .map(Arc::new)
+            });
             player_core::set_remote_content(Arc::new(remote_connections::RemoteFiles {
                 connections: Arc::clone(&remote_connections),
                 settings: Arc::clone(&settings),
+                cache: remote_cache.clone(),
             }));
             app.manage(AppState {
                 database,
@@ -11666,6 +11680,7 @@ pub fn run() {
                 }),
                 lyrics_service: lyrics_service::LyricsService::default(),
                 remote_connections,
+                remote_cache,
                 #[cfg(target_os = "windows")]
                 playback,
                 #[cfg(target_os = "windows")]

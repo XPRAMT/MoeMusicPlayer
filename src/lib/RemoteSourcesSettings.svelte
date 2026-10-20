@@ -8,6 +8,7 @@
     type RemoteAccountInput,
     type LibrarySource,
     type RemoteAccountView,
+    type RemoteCacheView,
     type RemoteExcludedView,
     type RemoteFolderView,
   } from './ipc';
@@ -48,6 +49,58 @@
     if (tab !== 'local' && !accounts.some((account) => account.id === tab)) tab = 'local';
   });
 
+  // ---- the disk cache of played remote files ----
+  let cache = $state<RemoteCacheView | null>(null);
+  /** The slider while it is dragged (the setting is saved when it is released). */
+  let cacheLimitMb = $state(1000);
+  let cacheBusy = $state(false);
+
+  async function loadCache(): Promise<void> {
+    try {
+      cache = await invokeCommand('remote_cache_get', {});
+      cacheLimitMb = cache.limitMb;
+    } catch (cause) {
+      error = getErrorText(cause);
+    }
+  }
+
+  async function saveCacheLimit(): Promise<void> {
+    if (cacheBusy) return;
+    cacheBusy = true;
+    try {
+      cache = await invokeCommand('remote_cache_set_limit', { limitMb: cacheLimitMb });
+      cacheLimitMb = cache.limitMb;
+    } catch (cause) {
+      error = getErrorText(cause);
+    } finally {
+      cacheBusy = false;
+    }
+  }
+
+  async function clearCache(): Promise<void> {
+    if (cacheBusy) return;
+    cacheBusy = true;
+    try {
+      cache = await invokeCommand('remote_cache_clear', {});
+    } catch (cause) {
+      error = getErrorText(cause);
+    } finally {
+      cacheBusy = false;
+    }
+  }
+
+  /** `0.5 GB`, `1.0 GB`: the limit in decimal gigabytes. */
+  function gigabytes(megabytes: number): string {
+    return `${(megabytes / 1000).toFixed(1)} GB`;
+  }
+
+  /** What the cache holds, in a unit that reads well. */
+  function usedText(bytes: number): string {
+    if (bytes < 1_000_000) return '0 MB';
+    if (bytes < 1_000_000_000) return `${Math.round(bytes / 1_000_000)} MB`;
+    return `${(bytes / 1_000_000_000).toFixed(2)} GB`;
+  }
+
   let excluded = $state<RemoteExcludedView[]>([]);
 
   async function loadExcluded(): Promise<void> {
@@ -58,7 +111,7 @@
     }
   }
 
-  onMount(() => { void loadAccounts(); void loadExcluded(); });
+  onMount(() => { void loadAccounts(); void loadExcluded(); void loadCache(); });
 
   // ---- the account form ----
   type Form = {
@@ -445,6 +498,27 @@
     {#if message}<div class="source-result-message" role="status">{message}</div>{/if}
   </div>
 {/if}
+
+<section class="remote-sources remote-cache" aria-labelledby="remote-cache-heading">
+  <div class="configured-sources-heading"><strong id="remote-cache-heading">{tr("遠端快取")}</strong><span>{cache ? usedText(cache.usedBytes) : ''}</span></div>
+  <label class="lyrics-preference-range">
+    <span><strong>{tr("快取容量上限")}</strong><output>{gigabytes(cacheLimitMb)}</output></span>
+    <input
+      type="range"
+      min="100"
+      max="5000"
+      step="100"
+      value={cacheLimitMb}
+      aria-label={tr("快取容量上限")}
+      oninput={(event) => (cacheLimitMb = Number(event.currentTarget.value))}
+      onchange={() => void saveCacheLimit()}
+    />
+  </label>
+  <p class="source-muted-note">{tr("播放過的遠端歌曲會暫存在本機；同一首再播放或拖回播過的位置時，不必再向伺服器讀取。超過上限時，先刪除最早存入的內容（先進先出）。")}</p>
+  <div class="source-action-row source-action-buttons source-folder-picker">
+    <button class="soft-button" type="button" disabled={cacheBusy || !cache || cache.usedBytes === 0} onclick={() => void clearCache()}>{tr("清除快取")}</button>
+  </div>
+</section>
 
 <dialog bind:this={formDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-form-title" oncancel={(event) => { event.preventDefault(); closeForm(); }}>
   {#if form}

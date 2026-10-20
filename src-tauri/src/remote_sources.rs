@@ -142,6 +142,57 @@ pub(crate) fn refresh_source_labels(
     Ok(())
 }
 
+/// The disk cache of played remote files as the page sees it.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemoteCacheView {
+    /// The limit in MB (decimal), 100 to 5,000 in steps of 100.
+    pub limit_mb: u32,
+    pub used_bytes: u64,
+}
+
+fn cache_view(state: &AppState) -> Result<RemoteCacheView, String> {
+    let settings = state.settings.snapshot().map_err(|error| error.to_string())?;
+    Ok(RemoteCacheView {
+        limit_mb: settings.remote_cache_limit_mb,
+        used_bytes: state.remote_cache.as_ref().map_or(0, |cache| cache.used()),
+    })
+}
+
+#[tauri::command]
+pub(crate) fn remote_cache_get(state: tauri::State<'_, AppState>) -> Result<RemoteCacheView, String> {
+    cache_view(&state)
+}
+
+/// Change the size limit of the cache: stored in the settings, applied at once (a smaller limit deletes the oldest
+/// chunks).
+#[tauri::command]
+pub(crate) fn remote_cache_set_limit(
+    state: tauri::State<'_, AppState>,
+    limit_mb: u32,
+) -> Result<RemoteCacheView, String> {
+    let limit_mb = crate::settings::clamp_remote_cache_limit_mb(limit_mb);
+    state
+        .settings
+        .update(|settings| {
+            settings.remote_cache_limit_mb = limit_mb;
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
+    if let Some(cache) = state.remote_cache.as_ref() {
+        cache.set_limit(u64::from(limit_mb) * 1_000_000);
+    }
+    cache_view(&state)
+}
+
+#[tauri::command]
+pub(crate) fn remote_cache_clear(state: tauri::State<'_, AppState>) -> Result<RemoteCacheView, String> {
+    if let Some(cache) = state.remote_cache.as_ref() {
+        cache.clear();
+    }
+    cache_view(&state)
+}
+
 /// An excluded remote folder as the page sees it.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

@@ -781,6 +781,18 @@ interface IpcContract {
     args: { id: string };
     result: RemoteExcludedView[];
   };
+  remote_cache_get: {
+    args: Record<string, never>;
+    result: RemoteCacheView;
+  };
+  remote_cache_set_limit: {
+    args: { limitMb: number };
+    result: RemoteCacheView;
+  };
+  remote_cache_clear: {
+    args: Record<string, never>;
+    result: RemoteCacheView;
+  };
   remote_browse: {
     args: { accountId: string; path: string };
     result: RemoteFolderView[];
@@ -1266,6 +1278,9 @@ export type RemoteAccountInput = {
 };
 
 export type RemoteAccountsImportResult = { added: number; updated: number };
+
+/** The disk cache of played remote files: its limit (MB, 100 to 5,000 in steps of 100) and what it holds now. */
+export type RemoteCacheView = { limitMb: number; usedBytes: number };
 
 /** A folder of a remote server that library scans skip. */
 export type RemoteExcludedView = { id: string; accountId: string; accountName: string; path: string };

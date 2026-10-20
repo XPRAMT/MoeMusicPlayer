@@ -1071,6 +1071,18 @@ pub fn normalize_output_devices(devices: Vec<OutputDeviceEntry>) -> Vec<OutputDe
     result
 }
 
+pub const REMOTE_CACHE_MIN_MB: u32 = 100;
+pub const REMOTE_CACHE_MAX_MB: u32 = 5_000;
+
+pub fn default_remote_cache_limit_mb() -> u32 {
+    1_000
+}
+
+/// 100 to 5,000 MB, in steps of 100.
+pub fn clamp_remote_cache_limit_mb(value: u32) -> u32 {
+    (value.clamp(REMOTE_CACHE_MIN_MB, REMOTE_CACHE_MAX_MB) + 50) / 100 * 100
+}
+
 /// A folder of a remote server that library scans skip (the remote counterpart of [`ExcludedFolderEntry`]).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1669,6 +1681,10 @@ pub struct AppSettings {
     /// Folders of remote servers that scans skip.
     #[serde(default)]
     pub remote_excluded_folders: Vec<RemoteExcludedFolder>,
+    /// How much of the remote files that were played the disk cache keeps, in MB (decimal; the page shows GB). First in,
+    /// first out. 100 to 5,000, in steps of 100; the default is 1 GB.
+    #[serde(default = "default_remote_cache_limit_mb")]
+    pub remote_cache_limit_mb: u32,
     /// Last main-window outer position / inner size / maximized flag (desktop).
     #[serde(default)]
     pub window_geometry: Option<WindowGeometry>,
@@ -1731,6 +1747,7 @@ impl Default for AppSettings {
             excluded_folders: Vec::new(),
             remote_accounts: Vec::new(),
             remote_excluded_folders: Vec::new(),
+            remote_cache_limit_mb: default_remote_cache_limit_mb(),
             window_geometry: None,
             shortcuts: ShortcutSettings::default(),
             resume_playback: false,
@@ -2211,6 +2228,7 @@ struct RawSettings {
     excluded_folders: Option<Vec<ExcludedFolderEntry>>,
     remote_accounts: Option<serde_json::Value>,
     remote_excluded_folders: Option<serde_json::Value>,
+    remote_cache_limit_mb: Option<u32>,
     window_geometry: Option<WindowGeometry>,
     shortcuts: Option<serde_json::Value>,
     resume_playback: Option<bool>,
@@ -2274,6 +2292,10 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         excluded_folders: raw.excluded_folders.unwrap_or_default(),
         remote_accounts: lenient_remote_accounts(raw.remote_accounts),
         remote_excluded_folders: lenient_remote_excluded(raw.remote_excluded_folders),
+        remote_cache_limit_mb: clamp_remote_cache_limit_mb(
+            raw.remote_cache_limit_mb
+                .unwrap_or_else(default_remote_cache_limit_mb),
+        ),
         window_geometry: raw.window_geometry,
         shortcuts: lenient_shortcuts(raw.shortcuts),
         resume_playback: raw.resume_playback.unwrap_or(false),
@@ -4698,5 +4720,19 @@ mod tests {
             ..valid_negative_monitor_position
         };
         assert!(!too_small.is_valid_restore_snapshot());
+    }
+
+    #[test]
+    fn remote_cache_limit_is_a_tenth_of_a_gigabyte_step_between_0_1_and_5_gb() {
+        assert_eq!(AppSettings::default().remote_cache_limit_mb, 1_000);
+        assert_eq!(clamp_remote_cache_limit_mb(0), 100);
+        assert_eq!(clamp_remote_cache_limit_mb(60_000), 5_000);
+        assert_eq!(clamp_remote_cache_limit_mb(1_000), 1_000);
+        assert_eq!(clamp_remote_cache_limit_mb(1_049), 1_000);
+        assert_eq!(clamp_remote_cache_limit_mb(1_050), 1_100);
+        // A settings file without the field gets the default; one with a wild value is clamped.
+        let loaded: serde_json::Value = serde_json::json!({ "remoteCacheLimitMb": 99_999 });
+        let restored = clamp_remote_cache_limit_mb(loaded["remoteCacheLimitMb"].as_u64().unwrap() as u32);
+        assert_eq!(restored, 5_000);
     }
 }
