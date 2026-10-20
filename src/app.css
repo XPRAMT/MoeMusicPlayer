@@ -4833,6 +4833,70 @@ input:focus-visible {
 
 }
 
+/* The stacked Now Playing layout (cover above lyrics) is used when the view is narrow (above) and also whenever the window is
+   portrait: a tablet held upright is only ~770 CSS px wide, too wide for the container rule, yet far taller than wide. The two
+   blocks are the same rules; keep them in sync. */
+@media (orientation: portrait) {
+  .now-playing-view .now-playing-card {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1.1fr) minmax(0, 0.9fr);
+    gap: clamp(6px, 1.2cqi, 10px);
+    padding: clamp(7px, 2cqi, 12px);
+  }
+
+  .now-playing-view .now-playing-card.layout-b {
+    grid-template-rows: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  }
+
+  /* Stacked: the zoomed cover squeezes the lyrics vertically instead of sideways. */
+  .now-playing-view .now-playing-card:not(.lyrics-hidden):not(.artwork-hidden) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(min(calc(var(--np-cover-height, 0px) * var(--np-cover-reserve, 0)), 65%), var(--np-art-row, 1.1fr)) minmax(0, var(--np-lyr-row, 0.9fr));
+  }
+
+  .now-playing-view .now-playing-card.layout-b:not(.lyrics-hidden):not(.artwork-hidden) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, var(--np-lyr-row, 0.9fr)) minmax(min(calc(var(--np-cover-height, 0px) * var(--np-cover-reserve, 0)), 65%), var(--np-art-row, 1.1fr));
+  }
+
+  .now-playing-view .now-playing-card.lyrics-hidden {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .now-playing-view .now-playing-card.artwork-hidden {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .now-playing-view .now-playing-artwork {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .now-playing-view .cover-stage {
+    width: min(100%, 40vh);
+    height: auto;
+    max-width: 100%;
+  }
+
+  .now-playing-view .now-playing-lyrics {
+    min-height: 0;
+    padding: clamp(7px, 1.7cqi, 12px);
+  }
+
+  .now-playing-view .lyrics-view {
+    gap: clamp(5px, 1.2cqi, 9px);
+  }
+
+  /* Stacked: the lyrics row follows the cover (squeezed when it grows, expanded when it shrinks). */
+  .now-playing-view .now-playing-lyrics .lyrics-view {
+    height: 100%;
+  }
+
+}
+
 @media (max-width: 620px) {
   .layout-choice-row:not(.lyrics-text-effect-row) {
     grid-template-columns: minmax(0, 1fr);
