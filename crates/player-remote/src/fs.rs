@@ -99,6 +99,8 @@ pub struct RangeReader {
     next_sequential: u64,
     /// Number of requests made to the server (for tests and diagnostics).
     requests: u64,
+    /// Blocks fetched per request by a sequential reader.
+    read_ahead: u64,
 }
 
 impl RangeReader {
@@ -118,7 +120,16 @@ impl RangeReader {
             order: VecDeque::new(),
             next_sequential: 0,
             requests: 0,
+            read_ahead: READ_AHEAD_BLOCKS,
         }
+    }
+
+    /// Fetch `blocks` blocks per request when reading sequentially. A link with a long round trip (a server on the
+    /// internet) needs bigger requests to keep its throughput; the cache grows so a fetch always fits twice.
+    pub fn with_read_ahead(mut self, blocks: u64) -> Self {
+        self.read_ahead = blocks.max(1);
+        self.capacity = self.capacity.max(self.read_ahead as usize * 2);
+        self
     }
 
     pub fn len(&self) -> u64 {
@@ -145,7 +156,7 @@ impl RangeReader {
         }
         let last_block = self.len.saturating_sub(1) / self.block_size as u64;
         let sequential = block * self.block_size as u64 == self.next_sequential && block > 0;
-        let count = if sequential { READ_AHEAD_BLOCKS } else { 1 };
+        let count = if sequential { self.read_ahead } else { 1 };
         let count = count.min(last_block + 1 - block);
         let start = block * self.block_size as u64;
         let wanted = (0..count)
