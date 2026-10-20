@@ -3569,6 +3569,9 @@ async fn album_artwork_cache_put(
     .await
 }
 
+/// How many songs of an album with songs on a server an album card looks at for a cover (a network read each).
+const CARD_REMOTE_COVER_CANDIDATES: usize = 10;
+
 #[tauri::command]
 async fn album_artwork_selection_ensure(
     app: AppHandle,
@@ -3633,15 +3636,20 @@ async fn album_artwork_selection_ensure(
     let mut candidate_list = candidates.unwrap_or_default();
     // An album card takes the first cover that can be read and stops; the page of an album (representative) looks through every
     // song to choose from. A card of an album none of whose songs has a cover would still go through all of them, which for
-    // songs on a server is a network read each: a card stops after the first few.
+    // songs on a server is a network read each: a card stops after the first few. When it stopped there with songs unread,
+    // "no cover" is only what the first few said, not what the album has: it is not remembered (see below), and the page of
+    // the album, which looks through every song, will update the card when it finds a cover.
+    let mut stopped_early = false;
     if !representative
         && candidate_list.iter().any(|(_, locators)| {
             locators
                 .iter()
                 .any(|locator| matches!(locator, MediaLocator::Remote { .. }))
         })
+        && candidate_list.len() > CARD_REMOTE_COVER_CANDIDATES
     {
-        candidate_list.truncate(8);
+        candidate_list.truncate(CARD_REMOTE_COVER_CANDIDATES);
+        stopped_early = true;
     }
     let app_for_scan = app.clone();
     let (selected_ids, may_have_failed) = tauri::async_runtime::spawn_blocking(move || {
@@ -3678,8 +3686,9 @@ async fn album_artwork_selection_ensure(
             representative,
         };
         // No cover was found. Remember that only when it is certain: a track on a server that could not be read (the server was
-        // busy, the link was down) says nothing about the album, and the next look must try again.
-        if !may_have_failed {
+        // busy, the link was down) says nothing about the album, and the next look must try again. The same when only the first
+        // few songs of a longer album were looked at.
+        if !may_have_failed && !stopped_early {
             album_artwork_cache::put_selection(&directory, &key, &selection)?;
         }
         return Ok(Some(selection));
