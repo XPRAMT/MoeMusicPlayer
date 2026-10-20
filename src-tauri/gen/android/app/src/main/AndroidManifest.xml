@@ -30,15 +30,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Starts the app in a fresh process when the old one can no longer show a window (see ProcessRestartActivity). -->
-        <activity
-            android:name=".ProcessRestartActivity"
-            android:process=":restart"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
-
         <provider
           android:name="androidx.core.content.FileProvider"
           android:authorities="${applicationId}.fileprovider"

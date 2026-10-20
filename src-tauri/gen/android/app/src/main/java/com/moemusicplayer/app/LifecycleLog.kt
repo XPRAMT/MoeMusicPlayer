@@ -1,23 +1,19 @@
 package com.moemusicplayer.app
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import java.io.File
 
 /**
- * When a new [MainActivity] needs a fresh process: the process already ran an activity whose window the Rust runtime has
- * destroyed (the activity was destroyed for a reason other than a configuration change: the system reclaimed it in the
- * background, or the user removed the app from the recent list while the playback service kept the process alive).
+ * A tiny lifecycle journal (`files/diagnostics/lifecycle.log`, bounded) for black-screen reports. It only writes in
+ * debuggable builds, and it is a temporary aid: remove it (and its calls in [MainActivity]) if the problem does not come
+ * back.
  */
-object ProcessRestartPolicy {
-  fun shouldRestart(processHadActivity: Boolean, previousDestroyedForReal: Boolean): Boolean =
-    processHadActivity && previousDestroyedForReal
-}
-
-/** A tiny lifecycle journal (`files/diagnostics/lifecycle.log`, bounded) to explain a black screen after the fact. */
 object LifecycleLog {
   private const val MAX_BYTES = 64 * 1024
 
   fun write(context: Context, event: String) {
+    if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
     try {
       val file = File(context.filesDir, "diagnostics/lifecycle.log")
       file.parentFile?.mkdirs()

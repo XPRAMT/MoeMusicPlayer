@@ -31,22 +31,27 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * After a long time in the background the WebView can come back with its page alive (the accessibility tree shows
-   * every element) but without drawing a frame, so the window stays an empty dark colour until something invalidates
-   * it (pressing Back changes the DOM and does). Ask for a frame now and again shortly after; a tiny alpha change
-   * makes the compositor produce one even when nothing in the page changed.
+   * After time in the background the WebView can come back with its page alive (the accessibility tree lists every
+   * element and frames keep being produced) but showing only the page background colour: the content layers were
+   * dropped and nothing asks to draw them again until the DOM changes (pressing Back does, so does reading the
+   * accessibility tree). Do the same from here: a throw-away style change on the root element forces the renderer to
+   * rebuild and raster its layers. Repeated a few times because the renderer can still be thawing right after resume.
    */
   private fun nudgeWebViewPaint() {
     val webView = appWebView ?: return
     webView.post {
       webView.onResume()
       webView.invalidate()
-      webView.requestLayout()
     }
-    webView.postDelayed({
-      webView.alpha = 0.999f
-      webView.postDelayed({ webView.alpha = 1f }, 32)
-    }, 150)
+    for (delayMs in longArrayOf(0L, 250L, 1000L, 2500L)) {
+      webView.postDelayed({
+        webView.evaluateJavascript(
+          "(function(){var r=document.documentElement;r.style.willChange='transform';r.style.transform='translateZ(0)';" +
+            "void r.offsetHeight;requestAnimationFrame(function(){r.style.transform='';r.style.willChange='';});})()",
+          null,
+        )
+      }, delayMs)
+    }
   }
 
   /**
@@ -64,19 +69,9 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    // A process that already ran an activity whose window is gone cannot host a new one (see ProcessRestartActivity).
-    val restart = ProcessRestartPolicy.shouldRestart(processHadActivity, previousActivityDestroyedForReal)
-    if (!restart) {
-      processHadActivity = true
-      previousActivityDestroyedForReal = false
-      enableEdgeToEdge()
-    }
+    enableEdgeToEdge()
     super.onCreate(savedInstanceState)
-    LifecycleLog.write(this, "onCreate restart=$restart savedState=${savedInstanceState != null}")
-    if (restart) {
-      restartProcess()
-      return
-    }
+    LifecycleLog.write(this, "onCreate savedState=${savedInstanceState != null}")
     // Transparent navigation bar for 3-button and gesture navigation alike: content draws
     // behind it and pads by the native bottom inset (--android-safe-bottom).
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -139,27 +134,7 @@ class MainActivity : TauriActivity() {
     requestNotificationPermissionIfNeeded()
   }
 
-  /** Hand over to [ProcessRestartActivity] (another process) and end this one so the app starts clean. */
-  private fun restartProcess() {
-    val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-      addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
-    }
-    if (launch == null) {
-      finish()
-      return
-    }
-    val restart = android.content.Intent(this, ProcessRestartActivity::class.java).apply {
-      addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-      putExtra(ProcessRestartActivity.EXTRA_TARGET, launch)
-    }
-    startActivity(restart)
-    finish()
-    Runtime.getRuntime().exit(0)
-  }
-
   override fun onDestroy() {
-    // A configuration change keeps the Rust window; anything else destroys it.
-    if (!isChangingConfigurations) previousActivityDestroyedForReal = true
     LifecycleLog.write(this, "onDestroy changingConfigurations=$isChangingConfigurations finishing=$isFinishing")
     super.onDestroy()
   }
@@ -176,10 +151,6 @@ class MainActivity : TauriActivity() {
   private companion object {
     const val NOTIFICATION_PERMISSION_REQUEST = 4107
     @Volatile var notificationPermissionAsked = false
-    /** This process already created a MainActivity. */
-    @Volatile var processHadActivity = false
-    /** The previous MainActivity was destroyed and the Rust runtime dropped its window with it. */
-    @Volatile var previousActivityDestroyedForReal = false
   }
 
   override fun onWebViewCreate(webView: WebView) {
