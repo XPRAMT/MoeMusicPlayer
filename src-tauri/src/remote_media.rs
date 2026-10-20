@@ -18,19 +18,69 @@ const SIDECAR_COVERS: [&str; 2] = ["cover.jpg", "folder.jpg"];
 
 /// The raw bytes of a cover for a remote track: the picture embedded in the file (the front cover first), else the
 /// `cover.jpg` / `folder.jpg` beside it. The caller checks that the bytes are a supported image.
+/// How many covers are looked up on servers at the same time. Many at once on one connection only make every one of them
+/// slow (a page of albums asks for dozens), so the rest wait their turn.
+const MAX_CONCURRENT_COVER_LOOKUPS: usize = 3;
+
+static COVER_LOOKUPS: (std::sync::Mutex<usize>, std::sync::Condvar) =
+    (std::sync::Mutex::new(0), std::sync::Condvar::new());
+
+struct CoverLookupTurn;
+
+impl CoverLookupTurn {
+    fn wait() -> Self {
+        let (count, turn) = &COVER_LOOKUPS;
+        let mut running = count.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *running >= MAX_CONCURRENT_COVER_LOOKUPS {
+            running = turn.wait(running).unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *running += 1;
+        Self
+    }
+}
+
+impl Drop for CoverLookupTurn {
+    fn drop(&mut self) {
+        let (count, turn) = &COVER_LOOKUPS;
+        *count.lock().unwrap_or_else(std::sync::PoisonError::into_inner) -= 1;
+        turn.notify_one();
+    }
+}
+
 pub(crate) fn remote_cover_bytes(source_id: SourceId, path: &str) -> Option<Vec<u8>> {
     let content = remote_content()?;
-    if let Ok(handle) = content.open(source_id, path) {
-        if let Some(bytes) = embedded_cover(handle.reader, path) {
+    let _turn = CoverLookupTurn::wait();
+    let started = std::time::Instant::now();
+    let opened = content.open(source_id, path);
+    let opened_in = started.elapsed().as_millis();
+    if let Ok(handle) = opened {
+        let len = handle.len;
+        let read_started = std::time::Instant::now();
+        let found = embedded_cover(handle.reader, path);
+        eprintln!(
+            "[remote] cover stages: open {opened_in} ms, tags of {len} bytes {} ms (embedded: {})",
+            read_started.elapsed().as_millis(),
+            found.is_some()
+        );
+        if let Some(bytes) = found {
             return Some(bytes);
         }
+    } else {
+        eprintln!("[remote] cover stages: open failed after {opened_in} ms");
     }
     SIDECAR_COVERS.iter().find_map(|name| {
-        read_remote_file_capped(
+        let sidecar_started = std::time::Instant::now();
+        let bytes = read_remote_file_capped(
             source_id,
             &remote_sibling(path, name),
             MAX_ARTWORK_BYTES as u64,
-        )
+        );
+        eprintln!(
+            "[remote] cover stages: {name} {} ms (found: {})",
+            sidecar_started.elapsed().as_millis(),
+            bytes.is_some()
+        );
+        bytes
     })
 }
 
