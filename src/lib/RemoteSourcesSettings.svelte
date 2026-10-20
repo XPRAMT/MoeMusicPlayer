@@ -6,15 +6,20 @@
     getErrorText,
     invokeCommand,
     type RemoteAccountInput,
+    type LibrarySource,
     type RemoteAccountView,
     type RemoteFolderView,
   } from './ipc';
   import { tr } from './i18n.js';
 
-  let { disabled = false, onSourceAdded }: {
+  let { disabled = false, remoteSources = [], onSourceAdded, onToggleSource, onRemoveSource }: {
     disabled?: boolean;
+    /** The remote folders already in the library (shown in their own list). */
+    remoteSources?: LibrarySource[];
     /** Called after a folder was added, so the list of sources reloads and the library syncs. */
     onSourceAdded: () => Promise<void> | void;
+    onToggleSource: (source: LibrarySource, enabled: boolean) => void;
+    onRemoveSource: (source: LibrarySource) => void;
   } = $props();
 
   let accounts = $state<RemoteAccountView[]>([]);
@@ -354,6 +359,30 @@
   </div>
   {#if error}<div class="source-error-message" role="status">{error}</div>{/if}
   {#if message}<div class="source-result-message" role="status">{message}</div>{/if}
+</section>
+
+<section class="remote-sources" aria-labelledby="remote-folders-heading">
+  <div class="configured-sources-heading">
+    <strong id="remote-folders-heading">{tr("遠端資料夾")}</strong><span>{remoteSources.length}</span>
+  </div>
+  <div class="remote-account-list" aria-live="polite">
+    {#if remoteSources.length === 0}
+      <p class="source-muted-note">{tr("尚未加入遠端資料夾。請在上方的伺服器按「加入資料夾」。")}</p>
+    {:else}
+      {#each remoteSources as source (source.id)}
+        <div class="configured-source">
+          <div class="configured-source-copy">
+            <strong>{source.displayName}</strong>
+            <small class="configured-source-location" title={source.location}>{source.location}</small>
+          </div>
+          <div class="configured-source-actions">
+            <label><input type="checkbox" checked={source.enabled} {disabled} onchange={(event) => onToggleSource(source, event.currentTarget.checked)} />{tr("啟用")}</label>
+            <button class="text-button" type="button" {disabled} onclick={() => onRemoveSource(source)}>{tr("移除")}</button>
+          </div>
+        </div>
+      {/each}
+    {/if}
+  </div>
 </section>
 
 <dialog bind:this={formDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-form-title" oncancel={(event) => { event.preventDefault(); closeForm(); }}>

@@ -652,6 +652,9 @@
   // 1 at original size or larger, fading to 0 as the cover shrinks to the minimum: the artwork pane's fr share.
   let coverShrinkShare = $derived(Math.min(1, Math.max(0, (coverLayoutScale - COVER_ZOOM_MIN) / (1 - COVER_ZOOM_MIN))));
   let sources = $state<LibrarySource[]>([]);
+  /** Folders and playlists on this device; remote folders are listed with the remote servers. */
+  const localSources = $derived(sources.filter((source) => source.kind !== 'remote'));
+  const remoteSources = $derived(sources.filter((source) => source.kind === 'remote'));
   let excludedFolders = $state<ExcludedFolder[]>([]);
   let sourceError = $state<string | null>(null);
   let sourceSyncSummary = $state<string | null>(null);
@@ -4352,13 +4355,13 @@
             {/if}
 
             <div class="configured-sources" aria-live="polite">
-              <div class="configured-sources-heading"><strong>{tr("已加入的來源")}</strong><span>{sources.length}</span></div>
+              <div class="configured-sources-heading"><strong>{tr("本機音樂來源")}</strong><span>{localSources.length}</span></div>
               {#if isLoadingSources && sources.length === 0}
                 <p class="source-muted-note">{tr("正在讀取來源…")}</p>
-              {:else if sources.length === 0}
+              {:else if localSources.length === 0}
                 <p class="source-muted-note">{tr("尚未加入來源。加入後會自動開始同步。")}</p>
               {:else}
-                {#each sources as source (source.id)}
+                {#each localSources as source (source.id)}
                   <div class="configured-source">
                     <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{sourceKindLabel(source.kind)}</small><small class="configured-source-location" use:appTooltip={source.location}>{source.location}</small></div>
                     <div class="configured-source-actions">
@@ -4369,13 +4372,6 @@
                 {/each}
               {/if}
             </div>
-
-            {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
-              <RemoteSourcesSettings
-                disabled={!sourceSyncReady || isUpdatingSource}
-                onSourceAdded={async () => { await loadSources(); await syncLibrary(); }}
-              />
-            {/if}
 
             {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
               <div class="source-action-row source-action-buttons source-folder-picker excluded-folder-picker">
@@ -4405,6 +4401,16 @@
                   {/each}
                 {/if}
               </div>
+            {/if}
+
+            {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
+              <RemoteSourcesSettings
+                disabled={!sourceSyncReady || isUpdatingSource}
+                {remoteSources}
+                onSourceAdded={async () => { await loadSources(); await syncLibrary(); }}
+                onToggleSource={(source, enabled) => void setSourceEnabled(source, enabled)}
+                onRemoveSource={(source) => void removeSource(source)}
+              />
             {/if}
                 </section>
               </div>

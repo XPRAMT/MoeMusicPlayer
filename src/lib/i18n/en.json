@@ -45,7 +45,6 @@
   "已中斷，每 5 秒重試": "Disconnected, retrying every 5 s",
   "已中斷連線": "Disconnected",
   "已中斷連線，目前改由 {0} 播放": "Disconnected; now playing on {0}",
-  "已加入的來源": "Added sources",
   "已加入播放清單「{0}」。": "Added to playlist “{0}”.",
   "已交給系統安裝程式；請依畫面確認安裝。安裝完成後重新開啟播放器。": "Handed to the system installer. Confirm the installation on screen, then reopen the player after it finishes.",
   "已改用共享模式：{0}": "Switched to shared mode: {0}",
@@ -834,5 +833,8 @@
   "檔案密碼（至少 8 個字元）": "File password (at least 8 characters)",
   "WebDAV 路徑": "WebDAV path",
   "選擇共用資料夾": "Choose a share",
-  "尚未選擇": "Not chosen yet"
+  "尚未選擇": "Not chosen yet",
+  "本機音樂來源": "Folders on this device",
+  "遠端資料夾": "Remote folders",
+  "尚未加入遠端資料夾。請在上方的伺服器按「加入資料夾」。": "No remote folders yet. Press \"Add folder\" on a server above."
 }
