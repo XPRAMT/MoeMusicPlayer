@@ -50,6 +50,9 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    // DIAGNOSIS (2026-10-21, temporary): lets `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>` reach the
+    // WebView's DevTools protocol, to trace why the page is sometimes not drawn after coming back. Remove with the diagnosis.
+    WebView.setWebContentsDebuggingEnabled(true)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     LifecycleLog.write(this, "onCreate savedState=${savedInstanceState != null}")
