@@ -802,8 +802,6 @@
   "未設定密碼": "no password",
   "正在讀取遠端伺服器…": "Loading remote servers…",
   "共用資料夾": "Shares",
-  "共用資料夾名稱": "Share name",
-  "列出共用資料夾": "List shares",
   "名稱": "Name",
   "伺服器沒有提供可用的共用資料夾。": "The server offers no shares this account can use.",
   "刪除": "Delete",
@@ -836,5 +834,7 @@
   "選擇遠端資料夾": "Choose a remote folder",
   "檔案密碼（至少 8 個字元）": "File password (at least 8 characters)",
   "讀取中": "Loading",
-  "WebDAV 路徑": "WebDAV path"
+  "WebDAV 路徑": "WebDAV path",
+  "選擇共用資料夾": "Choose a share",
+  "尚未選擇": "Not chosen yet"
 }

@@ -129,7 +129,10 @@
     }
   }
 
-  async function listShares(): Promise<void> {
+  // ---- the share picker (a folder picker whose folders are the server's shares) ----
+  let shareDialog = $state<HTMLDialogElement>();
+
+  async function openSharePicker(): Promise<void> {
     if (!form || sharesBusy) return;
     const input = inputOf(form);
     if (typeof input === 'string') { formError = input; return; }
@@ -140,11 +143,17 @@
     try {
       shares = await invokeCommand('remote_smb_shares', { input });
       if (shares.length === 0) formError = tr('伺服器沒有提供可用的共用資料夾。');
+      else shareDialog?.showModal();
     } catch (cause) {
       formError = getErrorText(cause);
     } finally {
       sharesBusy = false;
     }
+  }
+
+  function pickShare(share: string): void {
+    if (form) form.path = share;
+    shareDialog?.close();
   }
 
   async function saveForm(): Promise<void> {
@@ -345,20 +354,13 @@
         <label class="remote-field remote-port"><span>{tr("連接埠")}</span><input type="text" inputmode="numeric" bind:value={form.port} placeholder={form.protocol === 'smb' ? '445' : '443'} /></label>
       </div>
       {#if form.protocol === 'smb'}
-        <label class="remote-field">
-          <span>{tr("共用資料夾名稱")}</span>
+        <div class="remote-field">
+          <span>{tr("共用資料夾")}</span>
           <div class="remote-row">
-            <input class="remote-grow" type="text" bind:value={form.path} placeholder="Music" autocapitalize="off" spellcheck="false" />
-            <button class="soft-button" type="button" disabled={sharesBusy || form.host.trim() === ''} onclick={() => void listShares()}>{sharesBusy ? tr('讀取中') : tr('列出共用資料夾')}</button>
+            <div class="remote-picked" class:is-empty={form.path === ''} title={form.path}>{form.path || tr('尚未選擇')}</div>
+            <button class="soft-button" type="button" disabled={sharesBusy || form.host.trim() === ''} onclick={() => void openSharePicker()}>{sharesBusy ? tr('讀取中') : tr('選擇資料夾')}</button>
           </div>
-        </label>
-        {#if shares && shares.length > 0}
-          <div class="remote-share-list" role="listbox" aria-label={tr("共用資料夾")}>
-            {#each shares as share (share)}
-              <button class="remote-share" type="button" role="option" aria-selected={form.path === share} onclick={() => { if (form) form.path = share; }}>{share}</button>
-            {/each}
-          </div>
-        {/if}
+        </div>
       {:else}
         <label class="remote-field"><span>{tr("WebDAV 路徑")}</span><input type="text" bind:value={form.path} placeholder="/remote.php/dav/files/me" autocapitalize="off" spellcheck="false" /></label>
         <label class="remote-check"><input type="checkbox" bind:checked={form.useHttp} /><span>{tr("使用未加密的 http（不建議）")}</span></label>
@@ -380,6 +382,23 @@
       </div>
     </div>
   {/if}
+</dialog>
+
+<dialog bind:this={shareDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-share-title" oncancel={(event) => { event.preventDefault(); shareDialog?.close(); }}>
+  <div class="update-dialog-content">
+    <h2 id="remote-share-title">{tr("選擇共用資料夾")}</h2>
+    <div class="folder-browser-path">{form?.host ?? ''}</div>
+    <div class="folder-browser-list">
+      {#each shares ?? [] as share (share)}
+        <button class="folder-browser-entry" type="button" onclick={() => pickShare(share)}>
+          <span aria-hidden="true">📁</span><span>{share}</span>
+        </button>
+      {/each}
+    </div>
+    <div class="update-dialog-actions">
+      <button class="soft-button" type="button" onclick={() => shareDialog?.close()}>{tr("取消")}</button>
+    </div>
+  </div>
 </dialog>
 
 <dialog bind:this={browseDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-browse-title" oncancel={(event) => { event.preventDefault(); closeBrowser(); }}>
@@ -443,8 +462,7 @@
   .remote-port { flex: 0 0 96px; }
   .remote-protocol { display: flex; gap: 8px; }
   .remote-check { display: flex; align-items: center; gap: 8px; font-size: 0.9em; }
-  .remote-share-list { display: flex; flex-wrap: wrap; gap: 6px; }
-  .remote-share { padding: 5px 10px; border-radius: 999px; border: 1px solid rgb(127 127 127 / 0.4); background: transparent; color: inherit; font: inherit; cursor: pointer; }
-  .remote-share[aria-selected='true'] { background: color-mix(in srgb, var(--accent) 28%, transparent); border-color: var(--accent); }
+  .remote-picked { flex: 1 1 auto; min-width: 0; padding: 7px 10px; border-radius: 8px; border: 1px solid rgb(127 127 127 / 0.4); background: rgb(127 127 127 / 0.1); overflow-wrap: anywhere; }
+  .remote-picked.is-empty { opacity: 0.55; }
   .remote-ok { color: var(--status-success, #5fcf8f); }
 </style>
