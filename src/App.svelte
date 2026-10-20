@@ -12,6 +12,7 @@
   import TrackDetailsDialog from './lib/TrackDetailsDialog.svelte';
   import SpectrogramView from './lib/SpectrogramView.svelte';
   import FolderBrowserDialog from './lib/FolderBrowserDialog.svelte';
+  import RemoteSourcesSettings from './lib/RemoteSourcesSettings.svelte';
   import { getPopoverHorizontalShiftPx, getVolumePopoverLeftShiftPx } from './lib/volume-popover-position.js';
   import {
     IconAlertCircle,
@@ -2866,6 +2867,7 @@
   function sourceKindLabel(kind: string): string {
     switch (kind) {
       case 'playlist_file': return tr('播放清單檔案');
+      case 'remote': return tr('遠端資料夾（SMB／WebDAV）');
       case 'androidFilesystem':
       case 'android_filesystem': return tr('Android 音樂資料夾');
       case 'androidMediaStore':
@@ -4367,6 +4369,13 @@
                 {/each}
               {/if}
             </div>
+
+            {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
+              <RemoteSourcesSettings
+                disabled={!sourceSyncReady || isUpdatingSource}
+                onSourceAdded={async () => { await loadSources(); await syncLibrary(); }}
+              />
+            {/if}
 
             {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
               <div class="source-action-row source-action-buttons source-folder-picker excluded-folder-picker">

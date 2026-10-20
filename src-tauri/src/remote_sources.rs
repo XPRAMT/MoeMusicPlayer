@@ -186,6 +186,7 @@ pub(crate) async fn remote_source_add(
                     format!("{} / {folder}", account.name)
                 }
             });
+        let base_for_summary = base.clone();
         let root = LibraryRoot {
             id,
             kind: MediaSourceKind::Remote,
@@ -213,7 +214,13 @@ pub(crate) async fn remote_source_add(
         database
             .save_library_root(&root)
             .map_err(|error| error.to_string())?;
-        crate::source_summary(database, &root)
+        let mut summary = crate::source_summary(database, &root)?;
+        summary.location = if base_for_summary.is_empty() {
+            account.name.clone()
+        } else {
+            format!("{} / {base_for_summary}", account.name)
+        };
+        Ok(summary)
     })
     .await
     .map_err(|error| format!("無法加入遠端來源：{error}"))?

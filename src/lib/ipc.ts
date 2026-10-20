@@ -753,6 +753,22 @@ interface IpcContract {
     args: { id: string };
     result: boolean;
   };
+  remote_account_test: {
+    args: { input: RemoteAccountInput };
+    result: RemoteTestView;
+  };
+  remote_smb_shares: {
+    args: { input: RemoteAccountInput };
+    result: string[];
+  };
+  remote_browse: {
+    args: { accountId: string; path: string };
+    result: RemoteFolderView[];
+  };
+  remote_source_add: {
+    args: { accountId: string; path: string; displayName: string | null };
+    result: LibrarySource;
+  };
   remote_accounts_export: {
     args: { passphrase: string };
     result: string | null;
@@ -1230,6 +1246,12 @@ export type RemoteAccountInput = {
 };
 
 export type RemoteAccountsImportResult = { added: number; updated: number };
+
+/** A folder on a remote server; `path` is relative to the account's root, `/`-separated. */
+export type RemoteFolderView = { name: string; path: string };
+
+/** What a connection test reached: the folders at the top of the account. */
+export type RemoteTestView = { folders: string[] };
 
 /** The sub-folders of a folder, for the Android folder dialog. */
 export type DirectoryListing = {

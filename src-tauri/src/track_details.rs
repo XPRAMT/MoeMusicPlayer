@@ -61,6 +61,9 @@ fn track_path_raw(state: &AppState, track_id: &str) -> Result<std::path::PathBuf
     let locators = database
         .track_locators(id)
         .map_err(|error| error.to_string())?;
+    let has_remote = locators
+        .iter()
+        .any(|locator| matches!(locator, MediaLocator::Remote { .. }));
     let mut fallback = None;
     for locator in locators {
         if let MediaLocator::FileSystem(path) = locator {
@@ -70,7 +73,12 @@ fn track_path_raw(state: &AppState, track_id: &str) -> Result<std::path::PathBuf
             fallback.get_or_insert(path);
         }
     }
-    fallback.ok_or_else(|| "找不到此曲目的檔案路徑".to_owned())
+    match fallback {
+        Some(path) => Ok(path),
+        // ADR 0026: remote tracks are read-only in the first release, and the details panel works on a local file.
+        None if has_remote => Err("遠端曲目目前無法檢視或編輯歌曲資訊（遠端來源為唯讀）。".to_owned()),
+        None => Err("找不到此曲目的檔案路徑".to_owned()),
+    }
 }
 
 /// Where a track's bytes live.

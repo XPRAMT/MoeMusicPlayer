@@ -5461,7 +5461,9 @@ fn library_list_sources(state: State<'_, AppState>) -> Result<Vec<LibrarySource>
     settings
         .sources
         .iter()
-        .map(|source| source_entry_summary(state.database.as_ref(), source))
+        .map(|source| {
+            source_entry_summary_with(state.database.as_ref(), source, &settings.remote_accounts)
+        })
         .collect()
 }
 
@@ -7109,7 +7111,9 @@ fn library_set_source_enabled(
     settings
         .sources
         .iter()
-        .map(|source| source_entry_summary(state.database.as_ref(), source))
+        .map(|source| {
+            source_entry_summary_with(state.database.as_ref(), source, &settings.remote_accounts)
+        })
         .collect()
 }
 
@@ -7117,7 +7121,43 @@ fn source_entry_summary(
     database: Option<&Database>,
     source: &SourceEntry,
 ) -> Result<LibrarySource, String> {
+    source_entry_summary_with(database, source, &[])
+}
+
+/// The place a remote source points at, for the list of sources: the account's name and the folder under it.
+fn remote_source_location(
+    path: &settings::StoredPath,
+    account: Option<&String>,
+    accounts: &[player_remote::account::RemoteAccount],
+) -> String {
+    let folder = match path.to_media_locator() {
+        Ok(MediaLocator::Remote { path, .. }) => path,
+        _ => String::new(),
+    };
+    let name = account
+        .and_then(|id| accounts.iter().find(|candidate| &candidate.id == id))
+        .map(|candidate| candidate.name.as_str());
+    match (name, folder.is_empty()) {
+        (Some(name), true) => name.to_owned(),
+        (Some(name), false) => format!("{name} / {folder}"),
+        (None, _) => folder,
+    }
+}
+
+fn source_entry_summary_with(
+    database: Option<&Database>,
+    source: &SourceEntry,
+    accounts: &[player_remote::account::RemoteAccount],
+) -> Result<LibrarySource, String> {
     let (kind, location) = match &source.kind {
+        SourceEntryKind::Folder {
+            media_kind,
+            path,
+            remote_account,
+        } if *media_kind == MediaSourceKind::Remote => (
+            source_kind_name(*media_kind).to_owned(),
+            remote_source_location(path, remote_account.as_ref(), accounts),
+        ),
         SourceEntryKind::Folder {
             media_kind, path, ..
         } => (
@@ -7181,7 +7221,9 @@ fn library_remove_source(
     settings
         .sources
         .iter()
-        .map(|source| source_entry_summary(state.database.as_ref(), source))
+        .map(|source| {
+            source_entry_summary_with(state.database.as_ref(), source, &settings.remote_accounts)
+        })
         .collect()
 }
 
