@@ -25,14 +25,22 @@ class MainActivity : TauriActivity() {
     ensurePlaybackService()
   }
 
+  /**
+   * Coming back to the front (the screen was off, the lock screen was up) can leave the WebView showing only the window's
+   * background colour: the window's surface is made again, empty, and the WebView's compositor, which believes its last
+   * frame is still current, submits nothing and never asks Android to draw it (traced 2026-10-21: no `PostInvalidate`, no
+   * draw call, no frame completed until the WebView's visibility changed). Pausing and resuming the WebView changes that
+   * visibility, which makes the compositor submit a frame, so it is done the moment the window has the focus. Changing
+   * the page's style, or hiding and showing the view, does not do it.
+   */
   override fun onWindowFocusChanged(hasFocus: Boolean) {
     super.onWindowFocusChanged(hasFocus)
-    if (hasFocus) ResumeDiagnostics.onWindowFocus(this) { appWebView }
-  }
-
-  override fun onResume() {
-    super.onResume()
-    ResumeDiagnostics.log(this, "onResume: window=${appWebView?.windowVisibility}")
+    if (hasFocus) {
+      appWebView?.let {
+        it.onPause()
+        it.onResume()
+      }
+    }
   }
 
   /**
@@ -50,9 +58,6 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    // DIAGNOSIS (2026-10-21, temporary): lets `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>` reach the
-    // WebView's DevTools protocol, to trace why the page is sometimes not drawn after coming back. Remove with the diagnosis.
-    WebView.setWebContentsDebuggingEnabled(true)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     LifecycleLog.write(this, "onCreate savedState=${savedInstanceState != null}")
