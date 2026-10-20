@@ -516,7 +516,7 @@
 {/if}
 
 <section class="remote-sources remote-cache" aria-labelledby="cache-heading">
-  <div class="configured-sources-heading cache-section-heading"><strong id="cache-heading">{tr("快取")}</strong></div>
+  <div class="settings-panel-header"><h3 id="cache-heading">{tr("快取")}</h3></div>
   {#each [
     { kind: 'remote', title: tr("遠端快取"), note: tr("播放過的遠端歌曲會暫存在本機；同一首再播放或拖回播過的位置時，不必再向伺服器讀取。超過上限時，先刪除最早存入的內容（先進先出）。") },
     { kind: 'cover', title: tr("專輯封面快取"), note: tr("專輯卡片與專輯頁的封面縮圖會暫存起來加快顯示。超過上限時，先刪除最早存入的內容；清除後，封面會在顯示時依檔案重新產生。") },
