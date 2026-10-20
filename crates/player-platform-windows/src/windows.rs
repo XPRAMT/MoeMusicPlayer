@@ -555,6 +555,8 @@ impl MediaIndex for WindowsMediaIndex {
             year,
             bit_depth: if file_type == FileType::Wav {
                 read_lossless_wav_bit_depth(path)
+            } else if file_type == FileType::WavPack {
+                read_wavpack_bit_depth(path)
             } else {
                 reliable_source_bit_depth(file_type, properties.bit_depth())
             },
@@ -702,6 +704,18 @@ fn reliable_source_bit_depth(file_type: FileType, bit_depth: Option<u8>) -> Opti
         return None;
     }
     bit_depth.filter(|depth| (8..=32).contains(depth))
+}
+
+/// WavPack: lofty does not report a bit depth, and a hybrid file without its correction file is lossy, so ask the
+/// decoder: the depth of the encoded samples (32 for floating point), only when the file decodes losslessly.
+fn read_wavpack_bit_depth(path: &Path) -> Option<u8> {
+    let file = fs::File::open(path).ok()?;
+    let reader = player_wavpack::WavPackReader::open(std::io::BufReader::new(file), None).ok()?;
+    let info = reader.info();
+    let depth = if info.float { 32 } else { info.bits_per_sample };
+    u8::try_from(depth)
+        .ok()
+        .filter(|depth| info.lossless && (8..=32).contains(depth))
 }
 
 /// WAV is a container and may carry lossy codecs such as ADPCM or companded audio. Verify its
@@ -1059,7 +1073,7 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 mod tests {
     use super::{
         is_supported_audio_file, mpeg_codec_name, read_lossless_wav_bit_depth,
-        reliable_source_bit_depth, supported_audio_extensions, to_extended_path,
+        read_wavpack_bit_depth, reliable_source_bit_depth, supported_audio_extensions, to_extended_path,
         windows_locator_key, WindowsMediaIndex,
     };
     use lofty::file::FileType;
@@ -1684,6 +1698,22 @@ mod tests {
         assert_eq!(reliable_source_bit_depth(FileType::WavPack, Some(24)), None);
         assert_eq!(reliable_source_bit_depth(FileType::Mp4, Some(24)), None);
         assert_eq!(reliable_source_bit_depth(FileType::Flac, Some(4)), None);
+    }
+
+    /// WavPack depths come from the decoder; a lossy hybrid file has none.
+    #[test]
+    fn wavpack_bit_depth_comes_from_the_decoder() {
+        let reference = |name: &str| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../player-wavpack/tests/reference")
+                .join(name)
+        };
+        assert_eq!(read_wavpack_bit_depth(&reference("int16_stereo.wv")), Some(16));
+        assert_eq!(read_wavpack_bit_depth(&reference("int24_stereo.wv")), Some(24));
+        assert_eq!(read_wavpack_bit_depth(&reference("int32_stereo.wv")), Some(32));
+        assert_eq!(read_wavpack_bit_depth(&reference("f32_stereo.wv")), Some(32));
+        assert_eq!(read_wavpack_bit_depth(&reference("hybrid_lossy_int16_stereo.wv")), None);
+        assert_eq!(read_wavpack_bit_depth(&reference("missing.wv")), None);
     }
 
     fn write_wav_with_format(path: &Path, format: &[u8]) {

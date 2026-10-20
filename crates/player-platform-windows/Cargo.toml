@@ -10,6 +10,7 @@ player-formats = { path = "../player-formats" }
 player-dsd = { path = "../player-dsd", features = ["id3"] }
 lofty = "0.25.4"
 player-tags = { path = "../player-tags" }
+player-wavpack = { path = "../player-wavpack" }
 matroska = "=0.30.1"
 symphonia = { version = "=0.5.5", default-features = false, features = ["mkv"] }
 
