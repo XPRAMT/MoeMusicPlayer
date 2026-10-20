@@ -56,6 +56,7 @@ impl From<RemoteError> for io::Error {
 
 /// An open remote file: its length and ranged reads. One value belongs to one reader (a protocol client may keep a
 /// connection inside it); it is moved between threads, never shared.
+#[allow(clippy::len_without_is_empty)]
 pub trait RemoteFile: Send {
     fn len(&self) -> u64;
 
