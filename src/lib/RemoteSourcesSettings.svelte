@@ -13,6 +13,7 @@
     type RemoteFolderView,
   } from './ipc';
   import { tr } from './i18n.js';
+  import SourceSections from './SourceSections.svelte';
 
   let { disabled = false, remoteSources = [], localPane, onSourceAdded, onToggleSource, onRemoveSource }: {
     disabled?: boolean;
@@ -486,64 +487,21 @@
       </div>
     </div>
 
-    <div class="source-action-row source-action-buttons source-folder-picker">
-      <button class="soft-button" type="button" {disabled} onclick={() => startBrowse('add', account)}>{tr("選擇資料夾")}</button>
-    </div>
-    <div class="configured-sources" aria-live="polite">
-      <div class="configured-sources-heading"><strong>{tr("資料夾")}</strong><span>{folderList.length}</span></div>
-      {#if folderList.length === 0}
-        <p class="source-muted-note">{tr("尚未加入資料夾。加入後會自動開始同步。")}</p>
-      {:else}
-        {#each folderList as source (source.id)}
-          <div class="configured-source">
-            <div class="configured-source-copy"><strong>{source.displayName}</strong><small class="configured-source-location" title={source.location}>{source.location}</small></div>
-            <div class="configured-source-actions">
-              <label><input type="checkbox" checked={source.enabled} {disabled} onchange={(event) => onToggleSource(source, event.currentTarget.checked)} />{tr("啟用")}</label>
-              <button class="text-button" type="button" {disabled} onclick={() => onRemoveSource(source)}>{tr("移除")}</button>
-            </div>
-          </div>
-        {/each}
-      {/if}
-    </div>
-
-    <div class="source-action-row source-action-buttons source-folder-picker">
-      <button class="soft-button" type="button" {disabled} onclick={() => startBrowse('playlist', account)}>{tr("選擇播放清單")}</button>
-    </div>
-    <div class="configured-sources" aria-live="polite">
-      <div class="configured-sources-heading"><strong>{tr("播放清單")}</strong><span>{playlistList.length}</span></div>
-      {#if playlistList.length === 0}
-        <p class="source-muted-note">{tr("尚未加入播放清單。可選擇伺服器上的 .m3u 或 .m3u8 檔案，清單內的歌曲會從同一台伺服器讀取。")}</p>
-      {:else}
-        {#each playlistList as source (source.id)}
-          <div class="configured-source">
-            <div class="configured-source-copy"><strong>{source.displayName}</strong><small class="configured-source-location" title={source.location}>{source.location}</small></div>
-            <div class="configured-source-actions">
-              <label><input type="checkbox" checked={source.enabled} {disabled} onchange={(event) => onToggleSource(source, event.currentTarget.checked)} />{tr("啟用")}</label>
-              <button class="text-button" type="button" {disabled} onclick={() => onRemoveSource(source)}>{tr("移除")}</button>
-            </div>
-          </div>
-        {/each}
-      {/if}
-    </div>
-
-    <div class="source-action-row source-action-buttons source-folder-picker excluded-folder-picker">
-      <button class="soft-button" type="button" {disabled} onclick={() => startBrowse('exclude', account)}>{tr("選擇排除資料夾")}</button>
-    </div>
-    <div class="configured-sources excluded-folders" aria-live="polite">
-      <div class="configured-sources-heading"><strong>{tr("已排除的來源")}</strong><span>{excludedList.length}</span></div>
-      {#if excludedList.length === 0}
-        <p class="source-muted-note">{tr("尚未排除資料夾。排除後，同步會略過該資料夾內的曲目。")}</p>
-      {:else}
-        {#each excludedList as entry (entry.id)}
-          <div class="configured-source">
-            <div class="configured-source-copy"><strong>{entry.path.split('/').pop()}</strong><small class="configured-source-location" title={entry.path}>{entry.path}</small></div>
-            <div class="configured-source-actions">
-              <button class="text-button" type="button" {disabled} onclick={() => void removeExcluded(entry)}>{tr("移除")}</button>
-            </div>
-          </div>
-        {/each}
-      {/if}
-    </div>
+    <SourceSections
+      folders={folderList}
+      playlists={playlistList}
+      excluded={excludedList.map((entry) => ({ id: entry.id, displayName: entry.path.split('/').pop() ?? entry.path, location: entry.path }))}
+      {disabled}
+      pickFolderDisabled={disabled}
+      pickPlaylistDisabled={disabled}
+      pickExcludedDisabled={disabled}
+      onPickFolder={() => startBrowse('add', account)}
+      onPickPlaylist={() => startBrowse('playlist', account)}
+      onPickExcluded={() => startBrowse('exclude', account)}
+      onToggle={(row, enabled) => { const source = remoteSources.find((item) => item.id === row.id); if (source) onToggleSource(source, enabled); }}
+      onRemove={(row) => { const source = remoteSources.find((item) => item.id === row.id); if (source) onRemoveSource(source); }}
+      onRemoveExcluded={(row) => { const entry = excludedList.find((item) => item.id === row.id); if (entry) void removeExcluded(entry); }}
+    />
     {#if error}<div class="source-error-message" role="status">{error}</div>{/if}
     {#if message}<div class="source-result-message" role="status">{message}</div>{/if}
   </div>

@@ -130,6 +130,7 @@
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
   import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
   import { appTooltip } from './lib/app-tooltip.js';
+  import SourceSections from './lib/SourceSections.svelte';
   import { TRACK_TEXT_OVERFLOW_CONTEXT, type TrackTextOverflowMode } from './lib/track-text-overflow-context';
   import { QUEUE_REORDER_LONG_PRESS_MS, QUEUE_REORDER_MOVE_CANCEL_PX } from './lib/queue-reorder.js';
   import { exceedsLongPressSlop, longPressDragGuard } from './lib/long-press-reorder.js';
@@ -655,6 +656,8 @@
   let sources = $state<LibrarySource[]>([]);
   /** Folders and playlists on this device; remote folders and playlists are listed with the remote servers. */
   const localSources = $derived(sources.filter((source) => !source.remoteAccountId));
+  const localFolderSources = $derived(localSources.filter((source) => source.kind !== 'playlist_file'));
+  const localPlaylistSources = $derived(localSources.filter((source) => source.kind === 'playlist_file'));
   const remoteSources = $derived(sources.filter((source) => Boolean(source.remoteAccountId)));
   let excludedFolders = $state<ExcludedFolder[]>([]);
   let sourceError = $state<string | null>(null);
@@ -4302,107 +4305,36 @@
               </section>
             {/if}
             {#snippet localPane()}
-            {#if capabilities?.platform === 'windows'}
-              <div class="source-action-row source-action-buttons source-folder-picker">
-                <button
-                  class="soft-button"
-                  type="button"
-                  onclick={() => void pickWindowsFolder()}
-                  disabled={!sourceSyncReady || isUpdatingSource}
-                >
-                  {isUpdatingSource ? tr('處理中') : tr('選擇資料夾')}
-                </button>
-                <button
-                  class="soft-button"
-                  type="button"
-                  onclick={() => void pickWindowsPlaylistSource()}
-                  disabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation}
-                  use:appTooltip={showCapabilityDetail(capabilities?.playlistExchange)}
-                >
-                  {isUpdatingSource ? tr('處理中') : tr('選擇播放清單')}
-                </button>
-              </div>
-            {:else if capabilities?.platform === 'android'}
-              <div class="source-action-row source-action-buttons source-folder-picker">
-                <button
-                  class="soft-button"
-                  type="button"
-                  onclick={() => void pickAndroidFolderSource()}
-                  disabled={!sourceSyncReady || isUpdatingSource || allFilesAccess?.granted !== true}
-                >
-                  {isUpdatingSource ? tr('處理中') : tr('選擇資料夾')}
-                </button>
-                <button
-                  class="soft-button"
-                  type="button"
-                  onclick={() => void pickWindowsPlaylistSource()}
-                  disabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation || allFilesAccess?.granted !== true}
-                  use:appTooltip={showCapabilityDetail(capabilities?.playlistExchange)}
-                >
-                  {isUpdatingSource ? tr('處理中') : tr('選擇播放清單')}
-                </button>
-              </div>
+            {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
+              {@const androidBlocked = capabilities?.platform === 'android' && allFilesAccess?.granted !== true}
+              {#if sourceError}
+                <div class="source-error-message" role="status">{sourceError}</div>
+              {/if}
+              {#if sourceSyncSummary && sourceSyncSummary !== syncProgress?.summary}
+                <div class="source-result-message" role="status">{sourceSyncSummary}</div>
+              {/if}
+              {#if !syncProgress}
+                <SyncErrorDetails results={sourceSyncResults} sources={sources} />
+              {/if}
+              <SourceSections
+                folders={localFolderSources}
+                playlists={localPlaylistSources}
+                excluded={excludedFolders}
+                loading={isLoadingSources}
+                disabled={isUpdatingSource}
+                pickFolderDisabled={!sourceSyncReady || isUpdatingSource || androidBlocked}
+                pickPlaylistDisabled={!playlistExchangeReady || !sourceSyncReady || isUpdatingSource || isPlaylistOperation || androidBlocked}
+                pickExcludedDisabled={!sourceSyncReady || isUpdatingSource || androidBlocked}
+                playlistTooltip={showCapabilityDetail(capabilities?.playlistExchange)}
+                onPickFolder={() => void (capabilities?.platform === 'android' ? pickAndroidFolderSource() : pickWindowsFolder())}
+                onPickPlaylist={() => void pickWindowsPlaylistSource()}
+                onPickExcluded={() => void pickExcludedFolder()}
+                onToggle={(row, enabled) => { const source = sources.find((item) => item.id === row.id); if (source) void setSourceEnabled(source, enabled); }}
+                onRemove={(row) => { const source = sources.find((item) => item.id === row.id); if (source) void removeSource(source); }}
+                onRemoveExcluded={(row) => { const entry = excludedFolders.find((item) => item.id === row.id); if (entry) void removeExcludedFolder(entry); }}
+              />
             {:else}
               <div class="source-action-card"><p>{showCapabilityDetail(capabilities?.sourceSync)}</p></div>
-            {/if}
-
-            {#if sourceError}
-              <div class="source-error-message" role="status">{sourceError}</div>
-            {/if}
-            {#if sourceSyncSummary && sourceSyncSummary !== syncProgress?.summary}
-              <div class="source-result-message" role="status">{sourceSyncSummary}</div>
-            {/if}
-            {#if !syncProgress}
-              <SyncErrorDetails results={sourceSyncResults} sources={sources} />
-            {/if}
-
-            <div class="configured-sources" aria-live="polite">
-              <div class="configured-sources-heading"><strong>{tr("本機音樂來源")}</strong><span>{localSources.length}</span></div>
-              {#if isLoadingSources && sources.length === 0}
-                <p class="source-muted-note">{tr("正在讀取來源…")}</p>
-              {:else if localSources.length === 0}
-                <p class="source-muted-note">{tr("尚未加入來源。加入後會自動開始同步。")}</p>
-              {:else}
-                {#each localSources as source (source.id)}
-                  <div class="configured-source">
-                    <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{sourceKindLabel(source.kind)}</small><small class="configured-source-location" use:appTooltip={source.location}>{source.location}</small></div>
-                    <div class="configured-source-actions">
-                      <label><input type="checkbox" checked={source.enabled} disabled={isUpdatingSource} onchange={(event) => void setSourceEnabled(source, event.currentTarget.checked)} />{tr("啟用")}</label>
-                      <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeSource(source)}>{tr("移除")}</button>
-                    </div>
-                  </div>
-                {/each}
-              {/if}
-            </div>
-
-            {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
-              <div class="source-action-row source-action-buttons source-folder-picker excluded-folder-picker">
-                <button
-                  class="soft-button"
-                  type="button"
-                  onclick={() => void pickExcludedFolder()}
-                  disabled={!sourceSyncReady || isUpdatingSource || (capabilities?.platform === 'android' && allFilesAccess?.granted !== true)}
-                >
-                  {isUpdatingSource ? tr('處理中') : tr('選擇排除資料夾')}
-                </button>
-              </div>
-              <div class="configured-sources excluded-folders" aria-live="polite">
-                <div class="configured-sources-heading"><strong>{tr("已排除的來源")}</strong><span>{excludedFolders.length}</span></div>
-                {#if isLoadingSources && excludedFolders.length === 0}
-                  <p class="source-muted-note">{tr("正在讀取排除清單…")}</p>
-                {:else if excludedFolders.length === 0}
-                  <p class="source-muted-note">{tr("尚未排除資料夾。排除後，同步會略過該資料夾內的曲目。")}</p>
-                {:else}
-                  {#each excludedFolders as excluded (excluded.id)}
-                    <div class="configured-source">
-                      <div class="configured-source-copy"><strong>{excluded.displayName}</strong><small class="configured-source-location" use:appTooltip={excluded.location}>{excluded.location}</small></div>
-                      <div class="configured-source-actions">
-                        <button class="text-button" type="button" disabled={isUpdatingSource} onclick={() => void removeExcludedFolder(excluded)}>{tr("移除")}</button>
-                      </div>
-                    </div>
-                  {/each}
-                {/if}
-              </div>
             {/if}
             {/snippet}
 
