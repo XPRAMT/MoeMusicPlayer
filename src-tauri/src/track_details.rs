@@ -195,8 +195,10 @@ fn fetch_remote(
     use std::io::{Read, Seek, SeekFrom, Write};
 
     let content = player_core::remote_content().ok_or_else(|| "遠端來源尚未就緒。".to_owned())?;
+    // The reader of the player: the disk cache of played songs answers what it holds (a song played before is opened and read
+    // without asking the server anything), and what it fetches is kept for the next play.
     let mut handle = content
-        .open(source_id, path)
+        .open_streaming(source_id, path)
         .map_err(|error| format!("無法讀取遠端檔案：{error}"))?;
     let length = handle.len;
     if whole && length > REMOTE_WHOLE_LIMIT {
