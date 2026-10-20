@@ -61,6 +61,17 @@ object ResumeDiagnostics {
     log(activity, "$reason: ${viewState(activity, view)}${if (visible) "" else " (window not visible yet: no check)"}")
     if (!visible) return
     val mine = ++generation
+    // Seen on a phone (2026-10-21): the page is alive and producing frames but the compositor shows none of it, and telling
+    // the WebView to pause and resume brings the content back. Do that at once instead of waiting to find the screen blank.
+    handler.postDelayed({
+      if (mine == generation) {
+        webView()?.let {
+          it.onPause()
+          it.onResume()
+          log(activity, "WebView onPause + onResume after the window got the focus")
+        }
+      }
+    }, 300L)
     handler.postDelayed({
       if (mine == generation) check(activity, webView(), mine)
     }, 1500L)
@@ -100,6 +111,10 @@ object ResumeDiagnostics {
   /** One remedy at a time, each followed by a sample 1.5 s later; stops at the first that brings the content back. */
   private fun runRemedies(activity: Activity, webView: WebView, mine: Int) {
     val remedies = listOf<Pair<String, () -> Unit>>(
+      "WebView onPause + onResume" to {
+        webView.onPause()
+        webView.onResume()
+      },
       "style nudge on the page root" to {
         webView.evaluateJavascript(
           "(function(){var r=document.documentElement;r.style.willChange='transform';r.style.transform='translateZ(0)';" +
@@ -111,10 +126,6 @@ object ResumeDiagnostics {
       "toggle WebView visibility" to {
         webView.visibility = View.INVISIBLE
         webView.visibility = View.VISIBLE
-      },
-      "WebView onPause + onResume" to {
-        webView.onPause()
-        webView.onResume()
       },
       "switch the layer type to software and back" to {
         val type = webView.layerType
