@@ -9,7 +9,7 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::time::Instant;
 
-use player_remote::fs::{RangeReader, RemoteError, RemoteFs};
+use player_remote::fs::{FileStamp, RangeReader, RemoteError, RemoteFs};
 use player_remote::smb::{SmbFs, SmbSettings};
 use zeroize::Zeroizing;
 
@@ -301,4 +301,55 @@ fn scans_a_real_share_through_the_sync_engine() {
         .items
         .iter()
         .all(|item| item.duration_ms.unwrap_or(0) > 0));
+}
+
+/// Writes one small scratch file in the account's folder, replaces it, refuses a stale replacement and deletes it. It
+/// touches no other file. Set `MOE_SMB_WRITE_TEST=1` to run it (it writes to the server).
+#[test]
+fn a_scratch_file_is_replaced_through_a_temporary_file_and_removed() {
+    let Some(settings) = settings() else {
+        eprintln!("skipped: MOE_SMB_* is not set");
+        return;
+    };
+    if std::env::var("MOE_SMB_WRITE_TEST").as_deref() != Ok("1") {
+        eprintln!("skipped: MOE_SMB_WRITE_TEST is not 1 (the test writes to the server)");
+        return;
+    }
+    let fs = SmbFs::connect(settings).expect("connect");
+    let name = format!("moe-write-test-{}.bin", std::process::id());
+    let temp = format!(".moetmp-{name}");
+    let cleanup = |fs: &SmbFs| {
+        let _ = fs.remove_file(&name);
+        let _ = fs.remove_file(&temp);
+    };
+    cleanup(&fs);
+    let first: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+    let created = fs
+        .replace_file(&name, &mut first.as_slice(), first.len() as u64, None)
+        .expect("create through a temporary file");
+    assert_eq!(created.size, first.len() as u64);
+    let stamp = FileStamp::of(&created);
+
+    // Replaced by a different, shorter content when nothing changed meanwhile.
+    let second: Vec<u8> = (0..1_000_000u32).map(|i| (i % 7) as u8).collect();
+    let replaced = fs
+        .replace_file(&name, &mut second.as_slice(), second.len() as u64, Some(stamp))
+        .expect("replace");
+    assert_eq!(replaced.size, second.len() as u64);
+    let mut reader = RangeReader::new(fs.open(&name).expect("open"));
+    let mut read_back = Vec::new();
+    reader.read_to_end(&mut read_back).unwrap();
+    assert_eq!(read_back, second);
+
+    // A replacement based on the old stamp is refused and changes nothing.
+    let stale = fs.replace_file(&name, &mut &b"late"[..], 4, Some(stamp));
+    assert_eq!(stale, Err(RemoteError::Changed));
+    assert_eq!(fs.stat(&name).unwrap().size, second.len() as u64);
+
+    // Nothing is left behind.
+    let leftovers = fs.list("").unwrap().into_iter().filter(|e| e.name == temp).count();
+    assert_eq!(leftovers, 0);
+    fs.remove_file(&name).expect("remove");
+    assert!(matches!(fs.stat(&name), Err(RemoteError::NotFound)));
+    cleanup(&fs);
 }

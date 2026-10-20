@@ -291,6 +291,56 @@ fn handle(
                 false,
             );
         }
+        "PUT" => {
+            let existed = path.exists();
+            match std::fs::write(&path, &body) {
+                Ok(()) => respond(
+                    &mut stream,
+                    if existed { "204 No Content" } else { "201 Created" },
+                    &[],
+                    b"",
+                    false,
+                ),
+                Err(_) => respond(&mut stream, "409 Conflict", &[], b"", false),
+            }
+        }
+        "DELETE" => {
+            let status = match std::fs::remove_file(&path) {
+                Ok(()) => "204 No Content",
+                Err(_) => "404 Not Found",
+            };
+            respond(&mut stream, status, &[], b"", false);
+        }
+        "MOVE" => {
+            // `Destination` is the full address; what follows the host is the path under the same root.
+            let destination = headers
+                .get("destination")
+                .map(|value| {
+                    let without_scheme = value.split_once("://").map_or(value.as_str(), |(_, rest)| rest);
+                    let path_only = without_scheme.split_once('/').map_or("", |(_, rest)| rest);
+                    percent_decode(path_only.split('?').next().unwrap_or_default())
+                })
+                .unwrap_or_default();
+            let destination = root.join(destination.trim_matches('/'));
+            let overwrite = headers.get("overwrite").map_or(true, |value| value != "F");
+            if !path.exists() {
+                respond(&mut stream, "404 Not Found", &[], b"", false);
+            } else if destination.exists() && !overwrite {
+                respond(&mut stream, "412 Precondition Failed", &[], b"", false);
+            } else {
+                let existed = destination.exists();
+                match std::fs::rename(&path, &destination) {
+                    Ok(()) => respond(
+                        &mut stream,
+                        if existed { "204 No Content" } else { "201 Created" },
+                        &[],
+                        b"",
+                        false,
+                    ),
+                    Err(_) => respond(&mut stream, "409 Conflict", &[], b"", false),
+                }
+            }
+        }
         "GET" | "HEAD" => {
             let Ok(mut file) = std::fs::File::open(&path)
                 .and_then(|file| file.metadata().map(|meta| (file, meta)))

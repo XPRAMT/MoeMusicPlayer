@@ -5,6 +5,7 @@
 //! a Digest server must not be handed the password with Basic first). The first request therefore costs one extra round
 //! trip; the scheme the server chose is remembered and used from then on, with a rising nonce counter for Digest.
 
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,7 +18,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::account::{RemoteAccount, TlsMode};
-use crate::fs::{RemoteEntry, RemoteError, RemoteFile, RemoteFs};
+use crate::fs::{replacement_temp_path, FileStamp, RemoteEntry, RemoteError, RemoteFile, RemoteFs};
 
 /// Everything but unreserved characters and `/` is percent-encoded in a path.
 const PATH_SET: &AsciiSet = &NON_ALPHANUMERIC
@@ -256,6 +257,50 @@ impl WebDavClient {
         }
     }
 
+    /// Send a request with a body of bytes, answering one authentication challenge (the body is sent again after it).
+    fn send_bytes(
+        &self,
+        method: Method,
+        path: &str,
+        headers: &[(&str, String)],
+        body: &[u8],
+    ) -> Result<Response, RemoteError> {
+        let url = self.url(path);
+        let request_target = url.strip_prefix(&self.origin).unwrap_or(&url).to_owned();
+        for attempt in 0..2 {
+            let mut builder = self.http.request(method.clone(), &url);
+            for (name, value) in headers {
+                builder = builder.header(*name, value);
+            }
+            builder = builder.body(body.to_vec());
+            let response = self
+                .authorize(builder, method.as_str(), &request_target)
+                .send()
+                .map_err(network)?;
+            if response.status() != StatusCode::UNAUTHORIZED {
+                return Ok(response);
+            }
+            if attempt == 1 || self.password.is_none() && self.user.is_empty() {
+                return Err(RemoteError::Auth);
+            }
+            match read_challenge(&response) {
+                Some(state) => {
+                    *self
+                        .auth
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = state
+                }
+                None => return Err(RemoteError::Auth),
+            }
+        }
+        Err(RemoteError::Auth)
+    }
+
+    /// The address of a path as a `Destination` header names it.
+    fn destination(&self, path: &str) -> String {
+        self.url(path)
+    }
+
     /// Send a request, answering one authentication challenge.
     fn send(
         &self,
@@ -421,6 +466,86 @@ impl RemoteFs for WebDavFs {
             .next()
             .map(|raw| raw.entry)
             .ok_or(RemoteError::NotFound)
+    }
+
+    fn replace_file(
+        &self,
+        path: &str,
+        source: &mut dyn Read,
+        len: u64,
+        expected: Option<FileStamp>,
+    ) -> Result<RemoteEntry, RemoteError> {
+        // The most a song may be to be sent in one request from memory.
+        const LARGEST: u64 = 512 * 1024 * 1024;
+        // This also signs in, so the request that carries the file does not have to be answered with a challenge.
+        let current = self.stat(path)?;
+        if let Some(expected) = expected {
+            if FileStamp::of(&current) != expected {
+                return Err(RemoteError::Changed);
+            }
+        }
+        if len > LARGEST {
+            return Err(RemoteError::Unsupported("檔案太大，WebDAV 目前一次最多傳 512 MiB".to_owned()));
+        }
+        let mut data = Vec::with_capacity(len as usize);
+        source
+            .take(len)
+            .read_to_end(&mut data)
+            .map_err(|error| RemoteError::Protocol(format!("could not read the file to send: {error}")))?;
+        if data.len() as u64 != len {
+            return Err(RemoteError::Protocol(format!("only {} of {len} bytes were sent", data.len())));
+        }
+        let temp = replacement_temp_path(path);
+        let result = (|| {
+            let put = self.client.send_bytes(
+                Method::PUT,
+                &temp,
+                &[("Content-Type", "application/octet-stream".to_owned())],
+                &data,
+            )?;
+            match put.status().as_u16() {
+                200 | 201 | 204 => {}
+                401 | 403 => return Err(RemoteError::Auth),
+                507 => return Err(RemoteError::Protocol("伺服器空間不足".to_owned())),
+                status => return Err(RemoteError::Protocol(format!("PUT 回應 {status}"))),
+            }
+            // All of it must have arrived before it takes the place of the original.
+            let held = self.stat(&temp)?;
+            if held.size != len {
+                return Err(RemoteError::Protocol(format!("the server holds {} of {len} bytes", held.size)));
+            }
+            let method = Method::from_bytes(b"MOVE").expect("a valid method");
+            let moved = self.client.send(
+                method,
+                &temp,
+                &[
+                    ("Destination", self.client.destination(path)),
+                    ("Overwrite", "T".to_owned()),
+                ],
+                None,
+            )?;
+            match moved.status().as_u16() {
+                200 | 201 | 204 => Ok(()),
+                401 | 403 => Err(RemoteError::Auth),
+                404 => Err(RemoteError::NotFound),
+                status => Err(RemoteError::Protocol(format!("MOVE 回應 {status}"))),
+            }
+        })();
+        if result.is_err() {
+            let _ = self.remove_file(&temp);
+        }
+        result?;
+        self.stat(path)
+    }
+
+    fn remove_file(&self, path: &str) -> Result<(), RemoteError> {
+        let response = self.client.send(Method::DELETE, path.trim_matches('/'), &[], None)?;
+        match response.status().as_u16() {
+            200 | 204 => Ok(()),
+            404 => Err(RemoteError::NotFound),
+            401 | 403 => Err(RemoteError::Auth),
+            status => Err(RemoteError::Protocol(format!("DELETE 回應 {status}"))),
+        }
     }
 
     fn open(&self, path: &str) -> Result<Box<dyn RemoteFile>, RemoteError> {
@@ -621,6 +746,30 @@ mod tests {
             server.count("GET")
         );
         assert!(fs.open("專輯 A").is_err(), "a folder is not a file");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_file_is_replaced_through_a_temporary_file_with_digest_authentication() {
+        let dir = music_folder("replace");
+        let server = TestWebDav::serve(&dir, Auth::Digest { user: "me".into(), password: "s3cret".into() });
+        let fs = fs_for(&server, Some("s3cret"));
+        let path = "專輯 A/01 歌 (live) & more.flac";
+        let before = FileStamp::of(&fs.stat(path).unwrap());
+        let new = vec![9_u8; 1_234_567];
+        let entry = fs
+            .replace_file(path, &mut new.as_slice(), new.len() as u64, Some(before))
+            .unwrap();
+        assert_eq!(entry.size, new.len() as u64);
+        assert_eq!(std::fs::read(dir.join("專輯 A").join("01 歌 (live) & more.flac")).unwrap(), new);
+        let leftovers = std::fs::read_dir(dir.join("專輯 A"))
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".moetmp-"))
+            .count();
+        assert_eq!(leftovers, 0);
+        // The file changed since it was read: it is not overwritten.
+        let stale = fs.replace_file(path, &mut &b"x"[..], 1, Some(before));
+        assert_eq!(stale, Err(RemoteError::Changed));
         let _ = std::fs::remove_dir_all(dir);
     }
 

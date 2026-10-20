@@ -22,6 +22,10 @@ pub enum RemoteError {
     NotFound,
     /// The server could not be reached or the link broke (a retry may help).
     Network(String),
+    /// The file is not what it was when it was read: it was changed (or replaced) on the server meanwhile.
+    Changed,
+    /// This protocol or server cannot write.
+    Unsupported(String),
     /// The certificate is not trusted.
     Tls(String),
     /// The server answered something this client does not understand.
@@ -34,6 +38,8 @@ impl fmt::Display for RemoteError {
             Self::Auth => write!(f, "帳號或密碼不正確，或沒有權限。"),
             Self::NotFound => write!(f, "找不到這個檔案或資料夾。"),
             Self::Network(message) => write!(f, "無法連線到伺服器：{message}"),
+            Self::Changed => write!(f, "檔案在伺服器上已被改動，請重新開啟後再試。"),
+            Self::Unsupported(message) => write!(f, "伺服器不支援這個操作：{message}"),
             Self::Tls(message) => write!(f, "憑證不受信任：{message}"),
             Self::Protocol(message) => write!(f, "伺服器的回應無法理解：{message}"),
         }
@@ -48,11 +54,43 @@ impl From<RemoteError> for io::Error {
             RemoteError::Auth => io::ErrorKind::PermissionDenied,
             RemoteError::NotFound => io::ErrorKind::NotFound,
             RemoteError::Network(_) => io::ErrorKind::ConnectionAborted,
+            RemoteError::Changed => io::ErrorKind::InvalidInput,
+            RemoteError::Unsupported(_) => io::ErrorKind::Unsupported,
             RemoteError::Tls(_) | RemoteError::Protocol(_) => io::ErrorKind::InvalidData,
         };
         io::Error::new(kind, error)
     }
 }
+
+/// What a file looked like when it was read: its size and the server's modified time. Writing back checks it first, so
+/// a file that someone else changed meanwhile is never overwritten.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileStamp {
+    pub len: u64,
+    pub modified_ms: Option<i64>,
+}
+
+impl FileStamp {
+    pub fn of(entry: &RemoteEntry) -> Self {
+        Self {
+            len: entry.size,
+            modified_ms: entry.modified_ms,
+        }
+    }
+}
+
+/// The name of the temporary file a replacement is written to before it takes the place of the original (beside it, so
+/// the rename stays inside one folder).
+pub fn replacement_temp_path(path: &str) -> String {
+    let path = path.trim_matches('/');
+    match path.rsplit_once('/') {
+        Some((folder, name)) => format!("{folder}/.moetmp-{name}"),
+        None => format!(".moetmp-{path}"),
+    }
+}
+
+/// How many bytes are written per request when a file is sent.
+pub const WRITE_CHUNK: usize = 1024 * 1024;
 
 /// An open remote file: its length and ranged reads. One value belongs to one reader (a protocol client may keep a
 /// connection inside it); it is moved between threads, never shared.
@@ -70,6 +108,27 @@ pub trait RemoteFs: Send + Sync {
     fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>, RemoteError>;
     fn stat(&self, path: &str) -> Result<RemoteEntry, RemoteError>;
     fn open(&self, path: &str) -> Result<Box<dyn RemoteFile>, RemoteError>;
+
+    /// Replace the file at `path` with the `len` bytes `source` yields. The bytes are written to a temporary file beside it
+    /// first and take the place of the original only when all of them arrived (their count is checked); the original is
+    /// untouched by a failure. With `expected`, nothing is written when the file on the server is not as it was read
+    /// ([`RemoteError::Changed`]). Returns what the file looks like afterwards.
+    fn replace_file(
+        &self,
+        path: &str,
+        source: &mut dyn Read,
+        len: u64,
+        expected: Option<FileStamp>,
+    ) -> Result<RemoteEntry, RemoteError> {
+        let _ = (path, source, len, expected);
+        Err(RemoteError::Unsupported("這個協定目前不能寫入".to_owned()))
+    }
+
+    /// Delete a file (used to remove what a failed write left behind).
+    fn remove_file(&self, path: &str) -> Result<(), RemoteError> {
+        let _ = path;
+        Err(RemoteError::Unsupported("這個協定目前不能刪除".to_owned()))
+    }
 
     /// Blocks a sequential reader should fetch per request on this protocol (see [`RangeReader::with_read_ahead`]).
     fn read_ahead_blocks(&self) -> u64 {
