@@ -76,7 +76,7 @@ fn track_path_raw(state: &AppState, track_id: &str) -> Result<std::path::PathBuf
     match fallback {
         Some(path) => Ok(path),
         // ADR 0026: remote tracks are read-only in the first release, and the details panel works on a local file.
-        None if has_remote => Err("遠端曲目目前無法檢視或編輯歌曲資訊（遠端來源為唯讀）。".to_owned()),
+        None if has_remote => Err("遠端曲目沒有本機檔案位置。".to_owned()),
         None => Err("找不到此曲目的檔案路徑".to_owned()),
     }
 }
@@ -84,13 +84,33 @@ fn track_path_raw(state: &AppState, track_id: &str) -> Result<std::path::PathBuf
 /// Where a track's bytes live.
 enum TrackSource {
     File(std::path::PathBuf),
+    /// A file on a remote server (SMB, WebDAV): viewed, never written.
+    Remote {
+        source_id: player_core::SourceId,
+        path: String,
+    },
     #[cfg(target_os = "android")]
     Content(String),
 }
 
+/// The file of a track on a remote server, when it has one.
+fn remote_source(state: &AppState, track_id: &str) -> Option<TrackSource> {
+    use player_core::{MediaLocator, TrackId};
+
+    let id = TrackId::parse(track_id).ok()?;
+    let locators = state.database.as_ref()?.track_locators(id).ok()?;
+    locators.into_iter().find_map(|locator| match locator {
+        MediaLocator::Remote { source_id, path } => Some(TrackSource::Remote { source_id, path }),
+        _ => None,
+    })
+}
+
 #[cfg(target_os = "windows")]
 fn track_source(state: &AppState, track_id: &str) -> Result<TrackSource, String> {
-    track_path(state, track_id).map(TrackSource::File)
+    match track_path(state, track_id) {
+        Ok(path) => Ok(TrackSource::File(path)),
+        Err(error) => remote_source(state, track_id).ok_or(error),
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -119,6 +139,7 @@ fn track_source(state: &AppState, track_id: &str) -> Result<TrackSource, String>
     }
     content
         .map(TrackSource::Content)
+        .or_else(|| remote_source(state, track_id))
         .ok_or_else(|| "找不到此曲目的檔案位置".to_owned())
 }
 
@@ -142,13 +163,131 @@ fn source_from_string(value: &str) -> Result<TrackSource, String> {
 
 /// Run a read-only operation on a local path for the source (Android: a private work copy).
 /// Also returns the user-facing file name and location string.
+/// How much of each end of a remote file is fetched to read its tags (they sit at the start of most formats, at the end of
+/// some: ID3v1, APEv2, DSF). A file up to twice this is fetched whole.
+const REMOTE_END_BYTES: u64 = 16 * 1024 * 1024;
+/// The largest remote file fetched whole when its two ends were not enough.
+const REMOTE_WHOLE_LIMIT: u64 = 1024 * 1024 * 1024;
+
+/// A local scratch copy of a remote file (the same name, so the format is recognised), removed when dropped.
+struct RemoteScratch {
+    directory: std::path::PathBuf,
+    file: std::path::PathBuf,
+}
+
+impl Drop for RemoteScratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+fn remote_file_name(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).to_owned()
+}
+
+/// Fetch a remote file into a scratch file: both ends (`whole` false; the middle stays zeros and the length is right) or all
+/// of it. Returns the scratch and the real length.
+fn fetch_remote(
+    source_id: player_core::SourceId,
+    path: &str,
+    whole: bool,
+) -> Result<(RemoteScratch, u64), String> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let content = player_core::remote_content().ok_or_else(|| "遠端來源尚未就緒。".to_owned())?;
+    let mut handle = content
+        .open(source_id, path)
+        .map_err(|error| format!("無法讀取遠端檔案：{error}"))?;
+    let length = handle.len;
+    if whole && length > REMOTE_WHOLE_LIMIT {
+        return Err("遠端檔案太大（超過 1 GiB），無法整首讀取。".to_owned());
+    }
+    let directory =
+        std::env::temp_dir().join(format!("moemusicplayer-remote-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).map_err(|error| format!("建立暫存資料夾失敗：{error}"))?;
+    let name: String = remote_file_name(path)
+        .chars()
+        .map(|c| {
+            if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let scratch = RemoteScratch {
+        file: directory.join(if name.is_empty() { "track".to_owned() } else { name }),
+        directory,
+    };
+    let io_error = |error: std::io::Error| format!("讀取遠端檔案失敗：{error}");
+    let mut out = std::fs::File::create(&scratch.file).map_err(io_error)?;
+    if whole || length <= REMOTE_END_BYTES * 2 {
+        std::io::copy(&mut (&mut handle.reader).take(length), &mut out).map_err(io_error)?;
+    } else {
+        out.set_len(length).map_err(io_error)?;
+        handle.reader.seek(SeekFrom::Start(0)).map_err(io_error)?;
+        std::io::copy(&mut (&mut handle.reader).take(REMOTE_END_BYTES), &mut out)
+            .map_err(io_error)?;
+        let tail_start = length - REMOTE_END_BYTES;
+        handle
+            .reader
+            .seek(SeekFrom::Start(tail_start))
+            .map_err(io_error)?;
+        out.seek(SeekFrom::Start(tail_start)).map_err(io_error)?;
+        std::io::copy(&mut (&mut handle.reader).take(REMOTE_END_BYTES), &mut out)
+            .map_err(io_error)?;
+    }
+    out.flush().map_err(io_error)?;
+    Ok((scratch, length))
+}
+
+/// Run `work` on a scratch copy of a remote file. The two ends are tried first; when the format cannot be read from them (a
+/// cover larger than an end, a layout that keeps its metadata in the middle) the whole file is fetched and `work` runs again.
+fn with_remote_file<T>(
+    source_id: player_core::SourceId,
+    path: &str,
+    mut work: impl FnMut(&std::path::Path) -> Result<T, String>,
+) -> Result<(T, u64), String> {
+    let (partial, length) = fetch_remote(source_id, path, false)?;
+    match work(&partial.file) {
+        Ok(value) => Ok((value, length)),
+        Err(first) if length > REMOTE_END_BYTES * 2 && length <= REMOTE_WHOLE_LIMIT => {
+            drop(partial);
+            let (whole, length) = fetch_remote(source_id, path, true).map_err(|_| first)?;
+            Ok((work(&whole.file)?, length))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn read_remote_details(
+    source_id: player_core::SourceId,
+    path: &str,
+) -> Result<player_tags::TrackDetails, String> {
+    let (mut details, length) = with_remote_file(source_id, path, player_tags::read_details)?;
+    // The facts of the scratch file are not the file's: the real size is known, the times are not.
+    details.file_size = length;
+    details.modified_unix_ms = None;
+    details.created_unix_ms = None;
+    details.file_name = remote_file_name(path);
+    details.path = path.to_owned();
+    details.read_only = true;
+    details.read_only_reason = Some("遠端來源為唯讀，無法儲存修改。".to_owned());
+    details.remote = true;
+    Ok(details)
+}
+
 fn with_readable<T>(
     app: &AppHandle,
     source: &TrackSource,
-    work: impl FnOnce(&std::path::Path) -> Result<T, String>,
+    mut work: impl FnMut(&std::path::Path) -> Result<T, String>,
 ) -> Result<(T, String, String), String> {
     let _ = app;
     match source {
+        TrackSource::Remote { source_id, path } => {
+            let (value, _) = with_remote_file(*source_id, path, work)?;
+            Ok((value, remote_file_name(path), path.clone()))
+        }
         TrackSource::File(path) => {
             let name = path
                 .file_name()
@@ -444,6 +583,9 @@ pub async fn track_details_get(
 ) -> Result<player_tags::TrackDetails, String> {
     let source = track_source(&state, &track_id)?;
     blocking(move || {
+        if let TrackSource::Remote { source_id, path } = &source {
+            return read_remote_details(*source_id, path);
+        }
         let (details, name, location) = with_readable(&app, &source, player_tags::read_details)?;
         Ok(present_details(&app, details, name, location))
     })
@@ -508,6 +650,7 @@ pub async fn track_details_save(
             cover_options: request.cover_options,
         };
         match &source {
+            TrackSource::Remote { .. } => Err("遠端來源為唯讀，無法儲存歌曲資訊。".to_owned()),
             TrackSource::File(path) => player_tags::write_edit(path, &edit),
             #[cfg(target_os = "android")]
             TrackSource::Content(uri) => {
@@ -904,12 +1047,21 @@ fn spectrogram_dto(
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let started = std::time::Instant::now();
     let mut render_ms = 0u64;
-    let (spectrogram, file_name, location) = with_readable(app, source, |path| {
+    let mut render = |path: &std::path::Path| {
         let render_started = std::time::Instant::now();
         let result = player_tags::render_spectrogram(path, options, &cancel);
         render_ms = render_started.elapsed().as_millis() as u64;
         result
-    })?;
+    };
+    let (spectrogram, file_name, location) = match source {
+        // The spectrogram decodes the whole song: a remote file is fetched whole (not only its two ends), and removed after.
+        TrackSource::Remote { source_id, path } => {
+            let (scratch, _) = fetch_remote(*source_id, path, true)?;
+            let value = render(&scratch.file)?;
+            (value, remote_file_name(path), path.clone())
+        }
+        _ => with_readable(app, source, render)?,
+    };
     let prepare_ms = (started.elapsed().as_millis() as u64).saturating_sub(render_ms);
     let encode_started = std::time::Instant::now();
     let engine = base64::engine::general_purpose::STANDARD;

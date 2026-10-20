@@ -17,7 +17,7 @@
   };
   type TrackDetails = {
     path: string; fileName: string; fileSize: number; modifiedUnixMs: number | null; createdUnixMs: number | null; format: string;
-    tagFormat: string; readOnly: boolean; readOnlyReason: string | null; fields: TagFields;
+    tagFormat: string; readOnly: boolean; readOnlyReason: string | null; remote?: boolean; fields: TagFields;
     properties: { durationMs: number; overallBitrateKbps: number | null; audioBitrateKbps: number | null; sampleRate: number | null; bitDepth: number | null; channels: number | null };
     cover: { mime: string; width: number; height: number; bytes: number } | null;
   };
@@ -369,7 +369,7 @@
         <span class="track-details-path-label">{tr("路徑")}</span>
         <code title={details.path}>{details.path}</code>
         <button type="button" class="soft-button" onclick={() => void navigator.clipboard.writeText(details!.path)}>{tr("複製路徑")}</button>
-        <button type="button" class="soft-button" onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>{tr("在資料夾中開啟")}</button>
+        <button type="button" class="soft-button" disabled={details.remote} onclick={() => void invoke('track_details_reveal', { trackId }).catch((cause) => { error = String(cause); })}>{tr("在資料夾中開啟")}</button>
       </div>
 
       <dl class="track-details-props">

@@ -102,6 +102,9 @@ pub struct TrackDetails {
     pub tag_format: String,
     pub read_only: bool,
     pub read_only_reason: Option<String>,
+    /// The file is on a remote server, not on this device (it has no local folder to open).
+    #[serde(default)]
+    pub remote: bool,
     pub fields: TagFields,
     pub properties: AudioProperties,
     pub cover: Option<CoverInfo>,
@@ -312,6 +315,7 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
         tag_format: String::new(),
         read_only: false,
         read_only_reason: None,
+        remote: false,
         fields: TagFields::default(),
         properties: AudioProperties::default(),
         cover: None,
