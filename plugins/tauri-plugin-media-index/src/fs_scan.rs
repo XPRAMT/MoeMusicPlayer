@@ -73,6 +73,54 @@ fn unavailable(source_id: SourceId, reason: impl Into<String>) -> SourceScan {
     }
 }
 
+/// The `.lrc` files the last [`scan_directory`] saw beside audio files, waiting for the sync to take them (syncs run one at a
+/// time, and the sync takes them right after the scan).
+static LAST_SIDECARS: std::sync::Mutex<Vec<player_core::LyricSidecar>> = std::sync::Mutex::new(Vec::new());
+
+/// Hand over (and forget) the sidecars of the last scan.
+pub fn take_sidecars() -> Vec<player_core::LyricSidecar> {
+    std::mem::take(
+        &mut *LAST_SIDECARS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+}
+
+/// Pair every `.lrc` with the audio file of the same name in the same folder (case-insensitive).
+fn pair_sidecars(
+    tracks: &[MediaTrackRecord],
+    lyric_files: &std::collections::HashMap<(PathBuf, String), PathBuf>,
+) -> Vec<player_core::LyricSidecar> {
+    let mut found = Vec::new();
+    for track in tracks {
+        let MediaLocator::FileSystem(path) = &track.locator else {
+            continue;
+        };
+        let (Some(parent), Some(stem)) = (path.parent(), path.file_stem()) else {
+            continue;
+        };
+        let Some(lyric_path) =
+            lyric_files.get(&(parent.to_path_buf(), stem.to_string_lossy().to_lowercase()))
+        else {
+            continue;
+        };
+        let Ok(metadata) = fs::metadata(lyric_path) else {
+            continue;
+        };
+        found.push(player_core::LyricSidecar {
+            track_item_id: track.identity.source_item_id.clone(),
+            locator: MediaLocator::FileSystem(lyric_path.clone()),
+            name: lyric_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            size_bytes: metadata.len(),
+            modified_at_utc_ms: metadata.modified().ok().and_then(utc_ms),
+        });
+    }
+    found
+}
+
 /// Walk a folder source. Hidden entries, symlinks, `.nomedia` folders (MediaStore parity), and a
 /// storage volume's `Android/` tree are skipped. An unreadable root is `Unavailable` and any
 /// unreadable subfolder makes the scan `Incomplete`, so neither ever deletes library mappings.
@@ -104,6 +152,12 @@ pub fn scan_directory(
     let mut directories = vec![canonical_root.clone()];
     let mut complete = true;
     let mut processed = 0_u64;
+    let mut lyric_files: std::collections::HashMap<(PathBuf, String), PathBuf> =
+        std::collections::HashMap::new();
+    LAST_SIDECARS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
     while let Some(directory) = directories.pop() {
         if cancellation.is_cancelled() {
             scan.state = SourceScanState::Incomplete {
@@ -165,6 +219,19 @@ pub fn scan_directory(
                 }
                 continue;
             }
+            if file_type.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("lrc"))
+            {
+                if let (Some(parent), Some(stem)) = (path.parent(), path.file_stem()) {
+                    lyric_files.insert(
+                        (parent.to_path_buf(), stem.to_string_lossy().to_lowercase()),
+                        path.clone(),
+                    );
+                }
+                continue;
+            }
             if !file_type.is_file() || !is_supported_audio_path(&path) {
                 continue;
             }
@@ -188,6 +255,11 @@ pub fn scan_directory(
             reason: "one or more filesystem entries could not be enumerated or fingerprinted"
                 .to_owned(),
         };
+    }
+    if !lyric_files.is_empty() {
+        *LAST_SIDECARS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = pair_sidecars(&scan.tracks, &lyric_files);
     }
     scan
 }

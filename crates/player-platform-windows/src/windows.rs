@@ -20,12 +20,15 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 pub struct WindowsMediaIndex {
     /// Canonical folder paths whose trees are omitted from walks and playlist media scans.
     excluded_folders: Vec<PathBuf>,
+    /// The `.lrc` files the last walk saw beside audio files (see `MediaIndex::take_lyric_sidecars`).
+    sidecars: Vec<player_core::LyricSidecar>,
 }
 
 impl WindowsMediaIndex {
     pub fn new() -> Self {
         Self {
             excluded_folders: Vec::new(),
+            sidecars: Vec::new(),
         }
     }
 
@@ -41,7 +44,10 @@ impl WindowsMediaIndex {
                 excluded_folders.push(canonical);
             }
         }
-        Self { excluded_folders }
+        Self {
+            excluded_folders,
+            sidecars: Vec::new(),
+        }
     }
 
     fn is_excluded(&self, path: &Path) -> bool {
@@ -194,12 +200,23 @@ impl MediaIndex for WindowsMediaIndex {
         self.scan_with_progress(root, &mut |_| {}, &SyncCancellation::default())
     }
 
+    fn take_lyric_sidecars(&mut self) -> Vec<player_core::LyricSidecar> {
+        std::mem::take(&mut self.sidecars)
+    }
+
+    fn scans_lyric_sidecars(&self) -> bool {
+        true
+    }
+
     fn scan_with_progress(
         &mut self,
         root: &LibraryRoot,
         progress: &mut dyn FnMut(MediaScanProgress),
         cancellation: &SyncCancellation,
     ) -> SourceScan {
+        self.sidecars.clear();
+        let mut lyric_files: std::collections::HashMap<(PathBuf, String), PathBuf> =
+            std::collections::HashMap::new();
         let mut scan = empty_scan(root.id);
         if cancellation.is_cancelled() {
             scan.state = SourceScanState::Incomplete {
@@ -375,6 +392,20 @@ impl MediaIndex for WindowsMediaIndex {
                     directories.push(entry_path);
                     continue;
                 }
+                if entry_type.is_file()
+                    && entry_path
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("lrc"))
+                    && !self.is_excluded(&entry_path)
+                {
+                    if let (Some(parent), Some(stem)) = (entry_path.parent(), entry_path.file_stem()) {
+                        lyric_files.insert(
+                            (parent.to_path_buf(), stem.to_string_lossy().to_lowercase()),
+                            entry_path.clone(),
+                        );
+                    }
+                    continue;
+                }
                 if !entry_type.is_file() || !is_supported_audio_file(&entry_path) {
                     continue;
                 }
@@ -430,6 +461,34 @@ impl MediaIndex for WindowsMediaIndex {
                         created_at_utc_ms,
                     },
                     metadata: None,
+                });
+            }
+        }
+
+        // The lyrics beside the songs: a `.lrc` with the song's name in the song's folder, with the fingerprint the sync keeps.
+        if !lyric_files.is_empty() {
+            for track in &scan.tracks {
+                let MediaLocator::FileSystem(path) = &track.locator else {
+                    continue;
+                };
+                let (Some(parent), Some(stem)) = (path.parent(), path.file_stem()) else {
+                    continue;
+                };
+                let Some(lyric_path) = lyric_files.get(&(parent.to_path_buf(), stem.to_string_lossy().to_lowercase())) else {
+                    continue;
+                };
+                let Ok(metadata) = fs::metadata(lyric_path) else {
+                    continue;
+                };
+                self.sidecars.push(player_core::LyricSidecar {
+                    track_item_id: track.identity.source_item_id.clone(),
+                    locator: MediaLocator::FileSystem(lyric_path.clone()),
+                    name: lyric_path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    size_bytes: metadata.len(),
+                    modified_at_utc_ms: metadata.modified().ok().and_then(system_time_to_utc_ms),
                 });
             }
         }
@@ -975,6 +1034,42 @@ mod tests {
         let fingerprint = scan.tracks[0].fingerprint;
         assert!(fingerprint.modified_at_utc_ms.is_some());
         assert!(fingerprint.size_bytes > 0);
+        fs::remove_dir_all(base).expect("cleanup");
+    }
+
+    #[test]
+    fn the_scan_pairs_each_lrc_with_the_song_of_the_same_name_in_its_folder() {
+        let base = temp_path("lrc-pairs");
+        fs::create_dir_all(base.join("sub")).expect("root");
+        fs::write(base.join("Track.FLAC"), b"placeholder").expect("song");
+        fs::write(base.join("track.LRC"), b"[00:01.00]hi\n").expect("sidecar");
+        // A `.lrc` without its song, and a song of another folder with the same name, are not paired.
+        fs::write(base.join("lone.lrc"), b"x").expect("lone");
+        fs::write(base.join("sub").join("track.mp3"), b"placeholder").expect("same name elsewhere");
+
+        let root = LibraryRoot {
+            id: player_core::SourceId::new(),
+            kind: MediaSourceKind::WindowsFilesystem,
+            display_name: "lrc".to_owned(),
+            locator: MediaLocator::FileSystem(base.clone()),
+            enabled: true,
+        };
+        let mut index = WindowsMediaIndex::new();
+        let scan = index.scan(&root);
+        assert_eq!(scan.tracks.len(), 2);
+        let sidecars = index.take_lyric_sidecars();
+        assert_eq!(sidecars.len(), 1);
+        assert_eq!(sidecars[0].name, "track.LRC");
+        assert_eq!(sidecars[0].size_bytes, 13);
+        assert!(sidecars[0].modified_at_utc_ms.is_some());
+        let song = scan
+            .tracks
+            .iter()
+            .find(|track| track.identity.source_item_id == sidecars[0].track_item_id)
+            .expect("the paired song");
+        assert!(matches!(&song.locator, MediaLocator::FileSystem(path) if path.ends_with("Track.FLAC")));
+        // Taken once: the next call has nothing, and a new scan starts clean.
+        assert!(index.take_lyric_sidecars().is_empty());
         fs::remove_dir_all(base).expect("cleanup");
     }
 

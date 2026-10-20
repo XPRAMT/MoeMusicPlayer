@@ -286,8 +286,86 @@ pub struct TrackMetadataError {
 }
 
 /// Platform boundary: enumerate stable source records, then parse metadata on demand.
+/// A `.lrc` file found beside an audio file while a source was scanned (a local folder or a remote server alike).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LyricSidecar {
+    /// The `source_item_id` of the audio file it belongs to.
+    pub track_item_id: String,
+    /// Where the `.lrc` itself is.
+    pub locator: MediaLocator,
+    /// Its file name, as the folder lists it.
+    pub name: String,
+    /// Its fingerprint: the lyrics are read again only when one of these changes.
+    pub size_bytes: u64,
+    pub modified_at_utc_ms: Option<i64>,
+}
+
+/// What the library database remembers of a sidecar: the fingerprint it was read at.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LyricSidecarState {
+    pub name: String,
+    pub size_bytes: u64,
+    pub modified_at_utc_ms: Option<i64>,
+    /// Whether the text was stored (an unreadable file is remembered without it, and tried again when it changes).
+    pub has_text: bool,
+}
+
+/// One sidecar to write into the database: its fingerprint and, when it was read, its text.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LyricSidecarWrite {
+    pub sidecar: LyricSidecar,
+    /// The text read now. `None` with `unchanged` set keeps the stored text.
+    pub text: Option<String>,
+    /// The file is larger than the lyric limit.
+    pub oversized: bool,
+    /// The database already holds this fingerprint (and its text): only "still there" is recorded.
+    pub unchanged: bool,
+}
+
+/// The outcome of reading one sidecar.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LyricSidecarRead {
+    Text(String),
+    Oversized,
+    Unreadable,
+}
+
+/// Read a sidecar (at most [`crate::MAX_LYRIC_PAYLOAD_BYTES`]); a UTF-8 byte order mark is dropped.
+pub fn read_lyric_sidecar(sidecar: &LyricSidecar) -> LyricSidecarRead {
+    let limit = crate::MAX_LYRIC_PAYLOAD_BYTES as u64;
+    if sidecar.size_bytes > limit {
+        return LyricSidecarRead::Oversized;
+    }
+    let bytes = match &sidecar.locator {
+        MediaLocator::FileSystem(path) => std::fs::read(path).ok(),
+        MediaLocator::Remote { source_id, path } => {
+            crate::remote::read_remote_file_capped(*source_id, path, limit)
+        }
+        MediaLocator::ContentUri(_) => None,
+    };
+    match bytes {
+        Some(bytes) if bytes.len() as u64 > limit => LyricSidecarRead::Oversized,
+        Some(bytes) => LyricSidecarRead::Text(
+            String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)).into_owned(),
+        ),
+        None => LyricSidecarRead::Unreadable,
+    }
+}
+
 pub trait MediaIndex {
     fn scan(&mut self, root: &LibraryRoot) -> SourceScan;
+
+    /// The `.lrc` files the last scan saw beside audio files, taken once the scan is over. Adapters that look for them
+    /// keep them while they walk the source (the folders are listed anyway); the default is none.
+    fn take_lyric_sidecars(&mut self) -> Vec<LyricSidecar> {
+        Vec::new()
+    }
+
+    /// Whether this adapter looks for sidecars at all. Only then does a complete scan mean "the songs without one have
+    /// none"; a playlist source, which lists files without walking their folders, must not claim that.
+    fn scans_lyric_sidecars(&self) -> bool {
+        false
+    }
 
     /// Enumerate a source while reporting optional progress. Adapters with a blocking or
     /// incremental API should override this method and check cancellation between work units.

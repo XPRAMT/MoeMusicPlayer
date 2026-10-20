@@ -32,4 +32,4 @@ pub use windows::{
 pub use artwork::{find_artwork, ArtworkLookup};
 
 #[cfg(windows)]
-pub use lyrics::{find_all_lyrics, find_lyrics, FoundLyrics, LyricsLookup};
+pub use lyrics::{find_all_lyrics, find_embedded_lyrics, find_lyrics, FoundLyrics, LyricsLookup};

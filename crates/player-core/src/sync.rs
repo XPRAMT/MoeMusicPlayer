@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     error::Error,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
@@ -8,7 +8,8 @@ use std::{
 use serde::Serialize;
 
 use crate::library::{
-    FileFingerprint, LibraryRoot, MediaIndex, MediaScanProgress, MediaScanProgressUnit,
+    read_lyric_sidecar, FileFingerprint, LibraryRoot, LyricSidecar, LyricSidecarRead,
+    LyricSidecarState, LyricSidecarWrite, MediaIndex, MediaScanProgress, MediaScanProgressUnit,
     MediaSourceError, MediaTrackRecord, MetadataReader, SourceId, SourceScanState,
     SyncCancellation, TrackIdentity, TrackMetadata, TrackMetadataError, TRACK_METADATA_VERSION,
 };
@@ -113,6 +114,25 @@ pub trait LibraryRepository {
         &mut self,
         tracks: &[MediaTrackRecord],
     ) -> Result<(), Self::Error>;
+
+    /// The fingerprints the database holds for the `.lrc` sidecars of a source, by the audio file's `source_item_id`.
+    fn lyric_sidecar_states(
+        &self,
+        _source_id: SourceId,
+    ) -> Result<HashMap<String, LyricSidecarState>, Self::Error> {
+        Ok(HashMap::new())
+    }
+
+    /// Record the sidecars a scan found. `complete` says the scan saw the whole source: then sidecars it did not see
+    /// are forgotten and the source is marked as scanned for lyrics (so a track without a record has no sidecar).
+    fn save_lyric_sidecars(
+        &mut self,
+        _source_id: SourceId,
+        _writes: &[LyricSidecarWrite],
+        _complete: bool,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
     /// Apply one source result atomically where possible. A repository may report progress while
     /// it persists records. If it cannot cancel inside its transaction, it should finish that
@@ -315,6 +335,9 @@ impl SyncEngine {
             },
             cancellation,
         );
+        let lyric_sidecars = index.take_lyric_sidecars();
+        let scans_lyric_sidecars = index.scans_lyric_sidecars();
+        let lyric_threads = index.metadata_read_threads().max(1);
         if scan.source_id != root.id {
             return Err(SyncError::SourceMismatch {
                 expected: root.id,
@@ -619,8 +642,100 @@ impl SyncEngine {
                 reason: "sync cancelled during database persistence".to_owned(),
             });
         }
+        if !report.cancelled
+            && scans_lyric_sidecars
+            && matches!(
+                effective_state,
+                SourceScanState::Complete | SourceScanState::Incomplete { .. }
+            )
+        {
+            // The lyrics beside the songs are part of the library: read when new or changed, never searched for at play
+            // time. A failure here costs the lyrics, not the sync.
+            let _ = sync_lyric_sidecars(
+                root,
+                repository,
+                lyric_sidecars,
+                lyric_threads,
+                matches!(effective_state, SourceScanState::Complete),
+                cancellation,
+            );
+        }
         Ok(report)
     }
+}
+
+/// Bring the stored `.lrc` sidecars of a source up to date with what the scan found: a sidecar whose name, size and
+/// modified time are what the database holds is left alone, a new or changed one is read (on several threads: for a remote
+/// source each read is a round trip) and stored with its fingerprint.
+fn sync_lyric_sidecars<R: LibraryRepository>(
+    root: &LibraryRoot,
+    repository: &mut R,
+    found: Vec<LyricSidecar>,
+    threads: usize,
+    complete: bool,
+    cancellation: &SyncCancellation,
+) -> Result<(), R::Error> {
+    let stored = repository.lyric_sidecar_states(root.id)?;
+    let mut writes: Vec<Option<LyricSidecarWrite>> = (0..found.len()).map(|_| None).collect();
+    let mut todo = Vec::new();
+    for (index, sidecar) in found.iter().enumerate() {
+        let unchanged = stored.get(&sidecar.track_item_id).is_some_and(|state| {
+            state.name == sidecar.name
+                && state.size_bytes == sidecar.size_bytes
+                && state.modified_at_utc_ms == sidecar.modified_at_utc_ms
+                && state.has_text
+        });
+        if unchanged {
+            writes[index] = Some(LyricSidecarWrite {
+                sidecar: sidecar.clone(),
+                text: None,
+                oversized: false,
+                unchanged: true,
+            });
+        } else {
+            todo.push(index);
+        }
+    }
+    let next = AtomicUsize::new(0);
+    let reads: std::sync::Mutex<Vec<(usize, LyricSidecarRead)>> = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..threads.min(todo.len().max(1)) {
+            scope.spawn(|| loop {
+                if cancellation.is_cancelled() {
+                    break;
+                }
+                let n = next.fetch_add(1, Ordering::Relaxed);
+                let Some(&index) = todo.get(n) else { break };
+                let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    read_lyric_sidecar(&found[index])
+                }))
+                .unwrap_or(LyricSidecarRead::Unreadable);
+                reads
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((index, read));
+            });
+        }
+    });
+    if cancellation.is_cancelled() {
+        return Ok(());
+    }
+    for (index, read) in reads.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner) {
+        let (text, oversized) = match read {
+            LyricSidecarRead::Text(text) => (Some(text), false),
+            LyricSidecarRead::Oversized => (None, true),
+            // Remembered without text and read again at the next sync.
+            LyricSidecarRead::Unreadable => (None, false),
+        };
+        writes[index] = Some(LyricSidecarWrite {
+            sidecar: found[index].clone(),
+            text,
+            oversized,
+            unchanged: false,
+        });
+    }
+    let writes: Vec<LyricSidecarWrite> = writes.into_iter().flatten().collect();
+    repository.save_lyric_sidecars(root.id, &writes, complete)
 }
 
 /// How many tracks are parsed at once when the adapter offers a parallel reader.

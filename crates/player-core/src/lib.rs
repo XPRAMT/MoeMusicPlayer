@@ -16,6 +16,7 @@ pub use filesystem_key::unix_path_from_key;
 pub use filesystem_key::{file_uri_for_path, unix_path_key};
 pub mod remote;
 pub use library::{
+    read_lyric_sidecar, LyricSidecar, LyricSidecarRead, LyricSidecarState, LyricSidecarWrite,
     display_track_title, locator_display_file_stem, parse_recording_date, parse_remote_locator_uri,
     recording_date_year, remote_locator_uri, FileFingerprint, LibraryRoot, ListTracksQuery,
     MediaIndex, MediaLocator, MediaScanProgress, MediaScanProgressUnit, MediaSourceError,

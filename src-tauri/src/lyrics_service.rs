@@ -36,7 +36,7 @@ const MAX_PROVIDER_SEARCH_DURATION: Duration = Duration::from_secs(20);
 const QQ_MISSING_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 #[cfg(target_os = "windows")]
-use player_platform_windows::{find_all_lyrics, find_lyrics, LyricsLookup};
+use player_platform_windows::{find_all_lyrics, find_embedded_lyrics, find_lyrics, LyricsLookup};
 
 const LOCAL_SIDECAR_CANDIDATE_ID: &str = "local:sidecar";
 const LOCAL_EMBEDDED_CANDIDATE_ID: &str = "local:embedded";
@@ -1415,6 +1415,7 @@ async fn raw_local_lyrics(
     _app: Option<&AppHandle>,
     database: &Database,
     track_id: TrackId,
+    embedded_only: bool,
 ) -> Result<RawLocalLyrics, String> {
     let locators = database
         .track_locators(track_id)
@@ -1422,7 +1423,13 @@ async fn raw_local_lyrics(
     if locators.is_empty() {
         return Ok(RawLocalLyrics::Missing);
     }
-    let lookup = tauri::async_runtime::spawn_blocking(move || find_lyrics(&locators))
+    let lookup = tauri::async_runtime::spawn_blocking(move || {
+        if embedded_only {
+            find_embedded_lyrics(&locators)
+        } else {
+            find_lyrics(&locators)
+        }
+    })
         .await
         .map_err(|error| format!("讀取本機歌詞工作失敗：{error}"))?;
     Ok(match lookup {
@@ -1435,9 +1442,13 @@ async fn raw_local_lyrics(
     })
 }
 
-/// The lyrics beside and inside the track's file. A track on a remote server is a network round trip or several (the `.lrc`
-/// beside it, then the tags in the file), so what was found is kept in the library database next to the size and modified
-/// time of the file it was read for; the next play of the same file reads it from there.
+/// The lyrics beside and inside the track's file.
+///
+/// The `.lrc` beside a track is a library fact the sync keeps (found while the source is scanned, stored with its
+/// fingerprint and text), so playing a track never looks for it in a folder or on a server. Only a source that was never
+/// scanned for sidecars (a library from before this existed, until its next sync) is still searched. What the file itself
+/// holds (embedded lyrics) is read from the file; for a track on a remote server that is a network round trip or several, so
+/// what was found is kept in the database next to the size and modified time of the file it was read for.
 async fn local_lyrics_for_track(
     app: Option<&AppHandle>,
     _sources: &[super::settings::SourceEntry],
@@ -1446,6 +1457,37 @@ async fn local_lyrics_for_track(
     track: &TrackSummary,
 ) -> Result<LocalLyricsLookup, String> {
     let started = std::time::Instant::now();
+    let mut embedded_only = false;
+    let mut sidecar_oversized = false;
+    match database
+        .track_lyric_sidecar(track_id)
+        .map_err(|error| error.to_string())?
+    {
+        player_db::LyricSidecarLookup::Present { text: Some(text), .. } => {
+            if let Ok(lyrics) = parse_lrc(&text) {
+                if !lyrics.lines.is_empty() {
+                    return Ok(LocalLyricsLookup::Found(track_lyrics_dto(
+                        track.id,
+                        track,
+                        LyricProvider::Sidecar,
+                        false,
+                        &lyrics,
+                    )));
+                }
+            }
+            // A sidecar without usable lines: the embedded lyrics are next.
+            embedded_only = true;
+        }
+        player_db::LyricSidecarLookup::Present { text: None, oversized: true } => {
+            embedded_only = true;
+            sidecar_oversized = true;
+        }
+        // Remembered without its text (it could not be read at the sync): look for it the old way.
+        player_db::LyricSidecarLookup::Present { text: None, oversized: false } => {}
+        player_db::LyricSidecarLookup::Absent => embedded_only = true,
+        player_db::LyricSidecarLookup::NotScanned => {}
+    }
+
     let fingerprint = database
         .remote_file_fingerprint(track_id)
         .map_err(|error| error.to_string())?;
@@ -1453,14 +1495,19 @@ async fn local_lyrics_for_track(
         Some((size, modified)) => database
             .get_remote_lyric_cache(track_id, size, modified)
             .map_err(|error| error.to_string())?
-            .and_then(|json| serde_json::from_str::<RawLocalLyrics>(&json).ok()),
+            .and_then(|json| serde_json::from_str::<RawLocalLyrics>(&json).ok())
+            // A result from before the sync knew the sidecars may name a `.lrc` that is gone.
+            .filter(|raw| {
+                !(embedded_only
+                    && matches!(raw, RawLocalLyrics::Found { provider: LyricProvider::Sidecar, .. }))
+            }),
         None => None,
     };
     let from_database = cached.is_some();
     let raw = match cached {
         Some(raw) => raw,
         None => {
-            let raw = raw_local_lyrics(app, database, track_id).await?;
+            let raw = raw_local_lyrics(app, database, track_id, embedded_only).await?;
             if let (Some((size, modified)), Ok(json)) = (fingerprint, serde_json::to_string(&raw)) {
                 if remote_lookup_is_definitive(database, track_id, &raw).await {
                     let _ = database.save_remote_lyric_cache(track_id, size, modified, &json);
@@ -1480,6 +1527,7 @@ async fn local_lyrics_for_track(
         RawLocalLyrics::Found { provider, lyrics } => {
             LocalLyricsLookup::Found(track_lyrics_dto(track.id, track, provider, false, &lyrics))
         }
+        RawLocalLyrics::Missing if sidecar_oversized => LocalLyricsLookup::Oversized,
         RawLocalLyrics::Missing => LocalLyricsLookup::Missing,
         RawLocalLyrics::Oversized => LocalLyricsLookup::Oversized,
     })
@@ -1531,7 +1579,7 @@ async fn local_source_candidates(
             .track_locators(track_id)
             .map_err(|error| error.to_string())?;
         let (found, _) = tauri::async_runtime::spawn_blocking(move || {
-            android_find_all_lyrics(None, &locators, false)
+            android_find_all_lyrics(None, &locators, false, true)
         })
         .await
         .map_err(|error| format!("讀取本機歌詞工作失敗：{error}"))?;
@@ -1646,7 +1694,7 @@ fn read_local_lyric_source(
     let locators = database
         .track_locators(track_id)
         .map_err(|error| error.to_string())?;
-    android_find_all_lyrics(None, &locators, false)
+    android_find_all_lyrics(None, &locators, false, true)
         .0
         .into_iter()
         .find(|item| item.provider == provider)
@@ -1669,6 +1717,7 @@ async fn raw_local_lyrics(
     _app: Option<&AppHandle>,
     _database: &Database,
     _track_id: TrackId,
+    _embedded_only: bool,
 ) -> Result<RawLocalLyrics, String> {
     Ok(RawLocalLyrics::Missing)
 }
@@ -1678,6 +1727,7 @@ async fn raw_local_lyrics(
     app: Option<&AppHandle>,
     database: &Database,
     track_id: TrackId,
+    embedded_only: bool,
 ) -> Result<RawLocalLyrics, String> {
     let Some(app) = app else {
         return Ok(RawLocalLyrics::Missing);
@@ -1690,7 +1740,7 @@ async fn raw_local_lyrics(
     }
     let app = app.clone();
     let (found, oversized) = tauri::async_runtime::spawn_blocking(move || {
-        android_find_all_lyrics(Some(&app), &locators, true)
+        android_find_all_lyrics(Some(&app), &locators, true, !embedded_only)
     })
     .await
     .map_err(|error| format!("讀取 Android 本機歌詞工作失敗：{error}"))?;
@@ -1719,6 +1769,7 @@ fn android_find_all_lyrics(
     app: Option<&AppHandle>,
     locators: &[player_core::MediaLocator],
     first_only: bool,
+    with_sidecar: bool,
 ) -> (Vec<AndroidFoundLyrics>, bool) {
     use lofty::{config::ParseOptions, prelude::TaggedFileExt, probe::Probe, tag::ItemKey};
     use player_core::MAX_LYRIC_PAYLOAD_BYTES;
@@ -1737,6 +1788,7 @@ fn android_find_all_lyrics(
 
     if let Some(sidecar) = audio_path
         .as_deref()
+        .filter(|_| with_sidecar)
         .and_then(|path| tauri_plugin_media_index::fs_scan::sibling_with_extension(path, "lrc"))
     {
         match std::fs::read(sidecar) {
@@ -1765,9 +1817,10 @@ fn android_find_all_lyrics(
         player_core::MediaLocator::Remote { source_id, path } => Some((*source_id, path.clone())),
         _ => None,
     }) {
-        let (sidecar, embedded, remote_oversized) = crate::remote_media::remote_lyric_texts(source_id, &remote_path);
+        let (sidecar, embedded, remote_oversized) =
+            crate::remote_media::remote_lyric_texts(source_id, &remote_path, with_sidecar);
         oversized |= remote_oversized;
-        if let Some(text) = sidecar {
+        if let Some(text) = sidecar.filter(|_| with_sidecar) {
             if let Ok(lyrics) = parse_lrc(&text) {
                 if !lyrics.lines.is_empty() {
                     found.push(AndroidFoundLyrics { provider: LyricProvider::Sidecar, lyrics });

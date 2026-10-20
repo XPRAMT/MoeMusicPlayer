@@ -82,15 +82,18 @@ fn embedded_cover(reader: Box<dyn RemoteStream>, path: &str) -> Option<Vec<u8>> 
 pub(crate) fn remote_lyric_texts(
     source_id: SourceId,
     path: &str,
+    with_sidecar: bool,
 ) -> (Option<String>, Vec<String>, bool) {
     let mut oversized = false;
     let sidecar_path = remote_with_extension(path, "lrc");
-    let sidecar = read_remote_file_capped(source_id, &sidecar_path, MAX_LYRIC_PAYLOAD_BYTES as u64)
+    let sidecar = with_sidecar
+        .then(|| read_remote_file_capped(source_id, &sidecar_path, MAX_LYRIC_PAYLOAD_BYTES as u64))
+        .flatten()
         .map(|bytes| {
             String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
                 .into_owned()
         });
-    if sidecar.is_none() {
+    if with_sidecar && sidecar.is_none() {
         if let Some(handle) = remote_content().and_then(|c| c.open(source_id, &sidecar_path).ok()) {
             oversized |= handle.len > MAX_LYRIC_PAYLOAD_BYTES as u64;
         }
@@ -153,7 +156,7 @@ mod tests {
         let source = SourceId::new();
         player_core::set_remote_content(Arc::new(Folder(root.clone(), source)));
 
-        let (sidecar, embedded, oversized) = remote_lyric_texts(source, "a/song.wv");
+        let (sidecar, embedded, oversized) = remote_lyric_texts(source, "a/song.wv", true);
         assert_eq!(
             sidecar.as_deref(),
             Some("[00:01.00]line\n"),
@@ -170,7 +173,7 @@ mod tests {
             remote_cover_bytes(source, "a/missing.wv"),
             Some(b"not really a jpeg".to_vec())
         );
-        let (none, empty, _) = remote_lyric_texts(source, "a/missing.wv");
+        let (none, empty, _) = remote_lyric_texts(source, "a/missing.wv", true);
         assert!(none.is_none());
         assert!(empty.is_empty());
         let _ = std::fs::remove_dir_all(root);

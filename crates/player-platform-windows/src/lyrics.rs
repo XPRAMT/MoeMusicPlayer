@@ -80,6 +80,41 @@ pub fn find_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
     }
 }
 
+/// The lyrics embedded in the tags of a track (local or remote), without looking for a `.lrc` beside it: for tracks whose
+/// sidecars the library sync already recorded.
+pub fn find_embedded_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
+    let paths = locators
+        .iter()
+        .filter_map(|locator| match locator {
+            MediaLocator::FileSystem(path) => Some(path),
+            MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    let remote = remote_tracks(locators);
+    let mut oversized = false;
+    for path in &paths {
+        if let Some(lyrics) = embedded_lyrics(path, &mut oversized) {
+            return LyricsLookup::Found(FoundLyrics {
+                provider: LyricProvider::Embedded,
+                lyrics,
+            });
+        }
+    }
+    for (source_id, path) in &remote {
+        if let Some(lyrics) = remote_embedded_lyrics(*source_id, path, &mut oversized) {
+            return LyricsLookup::Found(FoundLyrics {
+                provider: LyricProvider::Embedded,
+                lyrics,
+            });
+        }
+    }
+    if oversized {
+        LyricsLookup::Oversized
+    } else {
+        LyricsLookup::Missing
+    }
+}
+
 /// Sidecar and embedded lyrics for the same track, when both exist. Playback lookup still uses
 /// [`find_lyrics`], which returns only the sidecar when one is present.
 pub fn find_all_lyrics(locators: &[MediaLocator]) -> Vec<FoundLyrics> {

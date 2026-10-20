@@ -325,3 +325,66 @@ fn excluded_folders_and_everything_under_them_are_skipped() {
     assert!(scan.tracks.is_empty());
     let _ = fs::remove_dir_all(tree);
 }
+
+/// The remote content provider over a folder, so the sync can read the `.lrc` files it found.
+struct FolderContent(Arc<dyn RemoteFs>);
+
+impl player_core::RemoteContent for FolderContent {
+    fn open(&self, _: SourceId, path: &str) -> std::io::Result<player_core::RemoteFileHandle> {
+        let reader = player_remote::fs::open_reader(self.0.as_ref(), path)?;
+        let len = reader.len();
+        Ok(player_core::RemoteFileHandle {
+            reader: Box::new(reader),
+            len,
+        })
+    }
+}
+
+#[test]
+fn the_sync_stores_the_lrc_beside_a_song_with_its_fingerprint_and_follows_changes() {
+    use player_db::LyricSidecarLookup;
+
+    let tree = make_tree("lrc");
+    fs::write(tree.join("Artist/Album One/01 s16.lrc"), "\u{feff}[00:01.00]hello\n").unwrap();
+    // The name matches whatever the case of the extension and the name.
+    fs::write(tree.join("Other/F32.LRC"), "[00:02.00]loud\n").unwrap();
+    let fs_tree: Arc<dyn RemoteFs> = Arc::new(DirFs::new(&tree));
+    player_core::set_remote_content(Arc::new(FolderContent(Arc::clone(&fs_tree))));
+    let mut db = Database::open_in_memory().expect("database");
+    let root = root_for("");
+    db.save_library_root(&root).expect("save the root");
+    let mut index = index_over(Arc::clone(&fs_tree), "");
+    SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_000_000).expect("sync");
+
+    let lookup = |db: &Database, path: &str| {
+        let id = db
+            .resolve_track_id_for_locator(&MediaLocator::Remote {
+                source_id: root.id,
+                path: path.to_owned(),
+            })
+            .expect("resolve")
+            .expect("the track is in the library");
+        db.track_lyric_sidecar(id).expect("lookup")
+    };
+    assert_eq!(
+        lookup(&db, "Artist/Album One/01 s16.wv"),
+        LyricSidecarLookup::Present { text: Some("[00:01.00]hello\n".to_owned()), oversized: false },
+        "the BOM is dropped"
+    );
+    assert!(matches!(lookup(&db, "Other/f32.wv"), LyricSidecarLookup::Present { text: Some(_), .. }));
+    // A song of a source that was scanned and has no `.lrc` is known to have none.
+    assert_eq!(lookup(&db, "Artist/Album One/02 s24.wv"), LyricSidecarLookup::Absent);
+
+    // An edited `.lrc` is read again (its size changed); an unchanged one is not touched.
+    fs::write(tree.join("Artist/Album One/01 s16.lrc"), "[00:01.00]hello again\n").unwrap();
+    SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_100_000).expect("sync again");
+    assert_eq!(
+        lookup(&db, "Artist/Album One/01 s16.wv"),
+        LyricSidecarLookup::Present { text: Some("[00:01.00]hello again\n".to_owned()), oversized: false }
+    );
+    // A removed `.lrc` is forgotten at the next complete scan.
+    fs::remove_file(tree.join("Artist/Album One/01 s16.lrc")).unwrap();
+    SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_200_000).expect("sync a third time");
+    assert_eq!(lookup(&db, "Artist/Album One/01 s16.wv"), LyricSidecarLookup::Absent);
+    let _ = fs::remove_dir_all(tree);
+}

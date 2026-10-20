@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use player_core::{
-    FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
+    FileFingerprint, LibraryRoot, LyricSidecar, MediaIndex, MediaLocator, MediaScanProgress,
     MediaScanProgressUnit, MediaSourceError, MediaTrackRecord, MetadataReader, SourceId,
     SourceScan, SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata,
     TrackMetadataError,
@@ -74,11 +74,16 @@ pub fn is_remote_library_audio(name: &str) -> bool {
 
 pub struct RemoteMediaIndex {
     resolver: Arc<dyn RemoteResolver>,
+    /// The `.lrc` files the last scan saw beside audio files (see `MediaIndex::take_lyric_sidecars`).
+    sidecars: Vec<LyricSidecar>,
 }
 
 impl RemoteMediaIndex {
     pub fn new(resolver: Arc<dyn RemoteResolver>) -> Self {
-        Self { resolver }
+        Self {
+            resolver,
+            sidecars: Vec::new(),
+        }
     }
 }
 
@@ -237,6 +242,8 @@ struct Walk {
     cancelled: AtomicBool,
     /// Entries seen (files and folders), for progress.
     seen: AtomicU64,
+    /// `.lrc` files found beside audio files, from the folder listings.
+    sidecars: Mutex<Vec<LyricSidecar>>,
 }
 
 impl MediaIndex for RemoteMediaIndex {
@@ -250,6 +257,14 @@ impl MediaIndex for RemoteMediaIndex {
 
     fn scan(&mut self, root: &LibraryRoot) -> SourceScan {
         self.scan_with_progress(root, &mut |_| {}, &SyncCancellation::default())
+    }
+
+    fn take_lyric_sidecars(&mut self) -> Vec<LyricSidecar> {
+        std::mem::take(&mut self.sidecars)
+    }
+
+    fn scans_lyric_sidecars(&self) -> bool {
+        true
     }
 
     fn scan_with_progress(
@@ -315,6 +330,7 @@ impl MediaIndex for RemoteMediaIndex {
             incomplete: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
             seen: AtomicU64::new(0),
+            sidecars: Mutex::new(Vec::new()),
         };
         handle_entries(&walk, root.id, "", first, &base, &resolved.excluded);
 
@@ -354,6 +370,10 @@ impl MediaIndex for RemoteMediaIndex {
                 .cmp(&right.identity.source_item_id)
         });
         scan.tracks = tracks;
+        self.sidecars = walk
+            .sidecars
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner);
         scan.errors = walk
             .errors
             .into_inner()
@@ -451,6 +471,10 @@ fn handle_entries(
     walk.seen.fetch_add(entries.len() as u64, Ordering::Relaxed);
     let mut folders = Vec::new();
     let mut files = Vec::new();
+    // `.lrc` files of this folder by the lower-cased name without the extension, and the audio files by the same key.
+    let mut lyrics: std::collections::HashMap<String, (String, u64, Option<i64>)> =
+        std::collections::HashMap::new();
+    let mut audio: Vec<(String, String)> = Vec::new();
     for entry in entries {
         if entry.name.is_empty() || entry.name.starts_with('.') {
             continue;
@@ -464,7 +488,16 @@ fn handle_entries(
             if !is_excluded(&join_path(base, &relative), excluded) {
                 folders.push(relative);
             }
+        } else if entry.name.to_ascii_lowercase().ends_with(".lrc") {
+            let stem = entry.name[..entry.name.len() - 4].to_lowercase();
+            lyrics.insert(stem, (entry.name.clone(), entry.size, entry.modified_ms));
         } else if is_remote_library_audio(&entry.name) {
+            let stem = entry
+                .name
+                .rsplit_once('.')
+                .map_or(entry.name.as_str(), |(stem, _)| stem)
+                .to_lowercase();
+            audio.push((stem, relative.clone()));
             files.push(MediaTrackRecord {
                 identity: TrackIdentity {
                     source_id,
@@ -489,6 +522,32 @@ fn handle_entries(
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .extend(folders);
+    }
+    if !lyrics.is_empty() {
+        let mut found = Vec::new();
+        for (stem, track_item_id) in audio {
+            let Some((name, size, modified)) = lyrics.get(&stem) else {
+                continue;
+            };
+            let path = if directory.is_empty() {
+                name.clone()
+            } else {
+                format!("{directory}/{name}")
+            };
+            found.push(LyricSidecar {
+                track_item_id,
+                locator: MediaLocator::Remote { source_id, path },
+                name: name.clone(),
+                size_bytes: *size,
+                modified_at_utc_ms: *modified,
+            });
+        }
+        if !found.is_empty() {
+            walk.sidecars
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend(found);
+        }
     }
     if !files.is_empty() {
         walk.tracks

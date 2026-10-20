@@ -363,6 +363,21 @@ impl<R: Runtime> CoreMediaIndex for Adapter<'_, R> {
     ) -> std::result::Result<TrackMetadata, TrackMetadataError> {
         self.index.read_metadata(track)
     }
+
+    fn scans_lyric_sidecars(&self) -> bool {
+        cfg!(target_os = "android")
+    }
+
+    fn take_lyric_sidecars(&mut self) -> Vec<player_core::LyricSidecar> {
+        #[cfg(target_os = "android")]
+        {
+            fs_scan::take_sidecars()
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Vec::new()
+        }
+    }
 }
 
 /// Initializes the media-index plugin. Android behavior is provided by MediaStore and SAF.
