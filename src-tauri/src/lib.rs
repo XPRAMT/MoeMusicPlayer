@@ -7288,6 +7288,7 @@ fn source_summary(database: &Database, root: &LibraryRoot) -> Result<LibrarySour
         location: match &root.locator {
             MediaLocator::FileSystem(path) => path.to_string_lossy().into_owned(),
             MediaLocator::ContentUri(uri) => uri.clone(),
+            MediaLocator::Remote { path, .. } => path.clone(),
         },
         enabled: root.enabled,
         sync_state: sync.as_ref().map(|state| state.state.clone()),
@@ -7306,6 +7307,7 @@ fn source_kind_name(kind: MediaSourceKind) -> &'static str {
         MediaSourceKind::AndroidMediaStore => "androidMediaStore",
         MediaSourceKind::AndroidSaf => "androidSaf",
         MediaSourceKind::AndroidFilesystem => "androidFilesystem",
+        MediaSourceKind::Remote => "remote",
         MediaSourceKind::Other => "other",
     }
 }

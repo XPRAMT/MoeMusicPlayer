@@ -1416,6 +1416,8 @@ impl AndroidActor {
                     MediaLocator::FileSystem(path) => player_core::file_uri_for_path(&path),
                     #[cfg(not(unix))]
                     MediaLocator::FileSystem(_) => None,
+                    // A remote track's cover comes through the remote reader, not a Media3 URI.
+                    MediaLocator::Remote { .. } => None,
                 })
             });
         let artwork_data_base64 = self

@@ -285,6 +285,9 @@ pub fn write_m3u8(
                 }
             }
             MediaLocator::ContentUri(uri) => std::borrow::Cow::Borrowed(uri.as_str()),
+            MediaLocator::Remote { source_id, path } => {
+                std::borrow::Cow::Owned(crate::library::remote_locator_uri(*source_id, path))
+            }
         };
         let reference = reference.as_ref();
         if reference.is_empty() || contains_line_break(reference) || reference.contains('\0') {
@@ -459,6 +462,9 @@ fn parse_m3u_text(text: &str, playlist_file: &Path) -> Result<Playlist, Playlist
 }
 
 fn parse_locator(value: &str, base_dir: &Path) -> MediaLocator {
+    if let Some(remote) = crate::library::parse_remote_locator_uri(value) {
+        return remote;
+    }
     if is_uri_reference(value) {
         return MediaLocator::ContentUri(value.to_owned());
     }
@@ -670,7 +676,9 @@ mod tests {
             MediaLocator::FileSystem(path) => {
                 path.to_str().expect("Unicode path").encode_utf16().count()
             }
-            MediaLocator::ContentUri(_) => unreachable!("test entry is a filesystem path"),
+            MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => {
+                unreachable!("test entry is a filesystem path")
+            }
         };
         assert!(encoded_path_length > 260);
         let bytes = write_m3u8(
@@ -829,5 +837,35 @@ mod tests {
             ),
             Err(PlaylistError::UnrepresentablePath { entry_index: 0 })
         ));
+    }
+
+    #[test]
+    fn remote_locator_round_trips_through_an_exported_playlist() {
+        let source_id = crate::SourceId::new();
+        let remote = MediaLocator::Remote {
+            source_id,
+            path: "音樂/專輯 #1/曲目 (01).flac".to_owned(),
+        };
+        let playlist = Playlist {
+            id: crate::PlaylistId::new(),
+            name: "遠端".to_owned(),
+            entries: vec![PlaylistEntry {
+                track_id: None,
+                locator: remote.clone(),
+                title: None,
+                duration_ms: None,
+            }],
+        };
+        let bytes = write_m3u8(
+            &playlist,
+            Path::new("C:/lists/a.m3u8"),
+            &M3uExportOptions::default(),
+        )
+        .unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(text.contains("moeremote://"));
+        assert!(!text.contains(' '), "the line is percent-encoded: {text}");
+        let parsed = parse_m3u8(&bytes, Path::new("C:/lists/a.m3u8")).unwrap();
+        assert_eq!(parsed.entries[0].locator, remote);
     }
 }

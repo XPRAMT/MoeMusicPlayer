@@ -27,7 +27,9 @@ pub(crate) fn set_playlist_membership(
             }
             // Keep the existing Android/content-URI behavior unchanged. Content URIs do not
             // consistently expose a filesystem parent path.
-            MediaLocator::ContentUri(_) => locator_insertion_position(&playlist.entries, &locator),
+            MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => {
+                locator_insertion_position(&playlist.entries, &locator)
+            }
         };
         playlist.entries.insert(
             insertion,
@@ -52,6 +54,9 @@ fn locator_sort_key(locator: &MediaLocator) -> String {
     match locator {
         MediaLocator::FileSystem(path) => windows_path_sort_key(path),
         MediaLocator::ContentUri(uri) => uri.clone(),
+        MediaLocator::Remote { source_id, path } => {
+            player_core::remote_locator_uri(*source_id, path)
+        }
     }
 }
 
@@ -347,7 +352,9 @@ mod tests {
             .iter()
             .map(|entry| match &entry.locator {
                 MediaLocator::FileSystem(path) => path.to_string_lossy(),
-                MediaLocator::ContentUri(_) => panic!("expected filesystem path"),
+                MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => {
+                    panic!("expected filesystem path")
+                }
             })
             .collect::<Vec<_>>();
         assert_eq!(

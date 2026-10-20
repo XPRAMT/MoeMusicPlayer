@@ -34,7 +34,8 @@ pub fn find_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
         .iter()
         .filter_map(|locator| match locator {
             MediaLocator::FileSystem(path) => Some(path),
-            MediaLocator::ContentUri(_) => None,
+            // Remote tracks read their cover and lyrics through the remote reader, not a local path.
+            MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
         })
         .collect::<Vec<_>>();
 
@@ -69,7 +70,8 @@ pub fn find_all_lyrics(locators: &[MediaLocator]) -> Vec<FoundLyrics> {
         .iter()
         .filter_map(|locator| match locator {
             MediaLocator::FileSystem(path) => Some(path),
-            MediaLocator::ContentUri(_) => None,
+            // Remote tracks read their cover and lyrics through the remote reader, not a local path.
+            MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
         })
         .collect::<Vec<_>>();
 

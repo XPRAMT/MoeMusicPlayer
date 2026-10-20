@@ -141,6 +141,8 @@ pub enum MediaSourceKind {
     AndroidSaf,
     /// Android folder scanned through its real path under All files access (ADR 0014).
     AndroidFilesystem,
+    /// A folder on an SMB or WebDAV server (ADR 0026).
+    Remote,
     Other,
 }
 
@@ -150,6 +152,12 @@ pub enum MediaSourceKind {
 pub enum MediaLocator {
     FileSystem(PathBuf),
     ContentUri(String),
+    /// A file on a remote server (ADR 0026): the source it belongs to and its path relative to that source's root,
+    /// `/`-separated and NFC-normalized. The server address and the credentials are not part of the locator.
+    Remote {
+        source_id: SourceId,
+        path: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -452,8 +460,43 @@ pub fn locator_display_file_stem(locator: &MediaLocator) -> Option<String> {
     match locator {
         MediaLocator::FileSystem(path) => file_stem_from_path(path),
         MediaLocator::ContentUri(uri) => file_stem_from_content_uri(uri),
+        MediaLocator::Remote { path, .. } => {
+            let name = path.rsplit('/').find(|part| !part.trim().is_empty())?;
+            let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+            non_blank(Some(stem)).map(str::to_owned)
+        }
     }
 }
+
+/// The text form of a remote locator, used where a locator has to be a line of text (an exported playlist):
+/// `moeremote://<source id>/<percent-encoded path>`. The server address and the credentials are never in it.
+pub fn remote_locator_uri(source_id: SourceId, path: &str) -> String {
+    let mut out = format!("{REMOTE_URI_SCHEME}{source_id}/");
+    for (index, segment) in path.split('/').enumerate() {
+        if index > 0 {
+            out.push('/');
+        }
+        for byte in segment.bytes() {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                out.push(char::from(byte));
+            } else {
+                out.push_str(&format!("%{byte:02X}"));
+            }
+        }
+    }
+    out
+}
+
+/// The inverse of [`remote_locator_uri`]; `None` for anything that is not one.
+pub fn parse_remote_locator_uri(value: &str) -> Option<MediaLocator> {
+    let rest = value.strip_prefix(REMOTE_URI_SCHEME)?;
+    let (id, encoded) = rest.split_once('/')?;
+    let source_id = SourceId::parse(id).ok()?;
+    let path = percent_decode(encoded)?;
+    Some(MediaLocator::Remote { source_id, path })
+}
+
+const REMOTE_URI_SCHEME: &str = "moeremote://";
 
 fn file_stem_from_path(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_string_lossy();

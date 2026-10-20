@@ -47,7 +47,8 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
         .iter()
         .filter_map(|locator| match locator {
             MediaLocator::FileSystem(path) => Some(path),
-            MediaLocator::ContentUri(_) => None,
+            // Remote tracks read their cover and lyrics through the remote reader, not a local path.
+            MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
         })
         .collect::<Vec<_>>();
 

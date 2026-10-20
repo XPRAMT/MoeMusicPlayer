@@ -463,7 +463,19 @@ pub struct WavPackSummary {
 /// The codec label, source sample rate and bit depth of a WavPack file on disk (a `.wvc` next to it is used, which
 /// makes a hybrid file lossless). A hybrid file without its correction file is lossy and has no meaningful depth.
 pub fn summarize(path: &std::path::Path) -> Option<WavPackSummary> {
-    let info = WavPackReader::open_path(path).ok()?.info();
+    summarize_info(WavPackReader::open_path(path).ok()?.info())
+}
+
+/// As [`summarize`], for a stream that is not a file on disk (a remote file), with its correction stream if there is
+/// one.
+pub fn summarize_from(
+    main: impl ReadSeek + 'static,
+    correction: Option<Box<dyn ReadSeek>>,
+) -> Option<WavPackSummary> {
+    summarize_info(WavPackReader::open(main, correction).ok()?.info())
+}
+
+fn summarize_info(info: WavPackInfo) -> Option<WavPackSummary> {
     if info.dsd {
         return Some(WavPackSummary {
             codec: "WVDSD",

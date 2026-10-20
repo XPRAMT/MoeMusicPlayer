@@ -4194,6 +4194,7 @@ dependencies = [
  "player-dsd",
  "player-formats",
  "player-tags",
+ "player-track-metadata",
  "player-wavpack",
  "symphonia",
  "windows",
@@ -4234,6 +4235,19 @@ dependencies = [
  "realfft",
  "serde",
  "serde_json",
+ "symphonia",
+]
+
+[[package]]
+name = "player-track-metadata"
+version = "0.1.0"
+dependencies = [
+ "lofty",
+ "matroska",
+ "player-core",
+ "player-dsd",
+ "player-formats",
+ "player-wavpack",
  "symphonia",
 ]
 

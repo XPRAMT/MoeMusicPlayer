@@ -18,6 +18,13 @@ pub(crate) fn encode(locator: &MediaLocator) -> StoredLocator {
             data: uri.as_bytes().to_vec(),
         },
         MediaLocator::FileSystem(path) => encode_path(path),
+        MediaLocator::Remote { source_id, path } => StoredLocator {
+            kind: "remote",
+            encoding: "json_utf8",
+            data: serde_json::json!({ "source": source_id.to_string(), "path": path })
+                .to_string()
+                .into_bytes(),
+        },
     }
 }
 
@@ -73,6 +80,22 @@ pub(crate) fn decode(
         return String::from_utf8(data.to_vec())
             .map(MediaLocator::ContentUri)
             .map_err(|_| DatabaseError::CorruptData("stored content URI is not UTF-8".to_owned()));
+    }
+    if kind == "remote" {
+        let corrupt =
+            || DatabaseError::CorruptData("stored remote locator is not valid".to_owned());
+        let value: serde_json::Value = serde_json::from_slice(data).map_err(|_| corrupt())?;
+        let source_id = value
+            .get("source")
+            .and_then(|source| source.as_str())
+            .and_then(|source| player_core::SourceId::parse(source).ok())
+            .ok_or_else(corrupt)?;
+        let path = value
+            .get("path")
+            .and_then(|path| path.as_str())
+            .ok_or_else(corrupt)?
+            .to_owned();
+        return Ok(MediaLocator::Remote { source_id, path });
     }
     if kind != "filesystem_path" {
         return Err(DatabaseError::CorruptData(format!(
@@ -132,6 +155,22 @@ mod tests {
     use super::{decode, encode};
     use player_core::MediaLocator;
     use std::path::PathBuf;
+
+    #[test]
+    fn remote_locator_round_trips_with_unicode_and_quotes() {
+        let locator = MediaLocator::Remote {
+            source_id: player_core::SourceId::new(),
+            path: "音樂/專輯 \"1\"/曲目 01.flac".to_owned(),
+        };
+        let stored = encode(&locator);
+        assert_eq!(stored.kind, "remote");
+        assert_eq!(
+            decode(stored.kind, stored.encoding, &stored.data).unwrap(),
+            locator
+        );
+        assert!(decode("remote", "json_utf8", b"{not json").is_err());
+        assert!(decode("remote", "json_utf8", br#"{"source":"nope","path":"a"}"#).is_err());
+    }
 
     #[test]
     fn unicode_filesystem_path_round_trips_without_display_string_conversion() {

@@ -4819,6 +4819,9 @@ impl Database {
                 MediaLocator::ContentUri(_) => Err(DatabaseError::CorruptData(
                     "filesystem locator row decoded as content URI".to_owned(),
                 )),
+                MediaLocator::Remote { .. } => Err(DatabaseError::CorruptData(
+                    "filesystem locator row decoded as a remote locator".to_owned(),
+                )),
             }
         })
         .collect()
@@ -4910,6 +4913,8 @@ impl Database {
                 }
                 #[cfg(not(unix))]
                 MediaLocator::FileSystem(_) => {}
+                // A remote file has no content URI or local file to hand to the platform.
+                MediaLocator::Remote { .. } => {}
             }
         }
         file_uri.ok_or(DatabaseError::NonContentUriTrackLocator(track_id))
@@ -6599,6 +6604,7 @@ fn source_kind_name(kind: MediaSourceKind) -> &'static str {
         MediaSourceKind::AndroidMediaStore => "android_media_store",
         MediaSourceKind::AndroidSaf => "android_saf",
         MediaSourceKind::AndroidFilesystem => "android_filesystem",
+        MediaSourceKind::Remote => "remote",
         MediaSourceKind::Other => "other",
     }
 }
@@ -6611,6 +6617,7 @@ fn parse_source_kind(value: &str) -> Result<MediaSourceKind, DatabaseError> {
         "android_media_store" => Ok(MediaSourceKind::AndroidMediaStore),
         "android_saf" => Ok(MediaSourceKind::AndroidSaf),
         "android_filesystem" => Ok(MediaSourceKind::AndroidFilesystem),
+        "remote" => Ok(MediaSourceKind::Remote),
         "other" => Ok(MediaSourceKind::Other),
         _ => Err(DatabaseError::CorruptData(format!(
             "unknown media source kind: {value}"

@@ -1164,6 +1164,9 @@ impl StoredPath {
         match locator {
             MediaLocator::FileSystem(path) => Self::from_path(path),
             MediaLocator::ContentUri(uri) => Ok(Self::Uri(uri.clone())),
+            MediaLocator::Remote { source_id, path } => {
+                Ok(Self::Uri(player_core::remote_locator_uri(*source_id, path)))
+            }
         }
     }
 
@@ -1193,7 +1196,8 @@ impl StoredPath {
 
     pub fn to_media_locator(&self) -> Result<MediaLocator, SettingsError> {
         match self {
-            Self::Uri(uri) => Ok(MediaLocator::ContentUri(uri.clone())),
+            Self::Uri(uri) => Ok(player_core::parse_remote_locator_uri(uri)
+                .unwrap_or_else(|| MediaLocator::ContentUri(uri.clone()))),
             _ => Ok(MediaLocator::FileSystem(self.to_path_buf()?)),
         }
     }

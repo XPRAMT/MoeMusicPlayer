@@ -7,6 +7,7 @@ members = [
     "crates/player-opus",
     "crates/player-wavpack",
     "crates/player-remote",
+    "crates/player-track-metadata",
     "crates/player-db",
     "crates/player-platform-windows",
     "crates/player-audio-windows",

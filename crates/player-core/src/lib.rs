@@ -15,12 +15,13 @@ pub use filesystem_key::unix_path_from_key;
 #[cfg(unix)]
 pub use filesystem_key::{file_uri_for_path, unix_path_key};
 pub use library::{
-    display_track_title, locator_display_file_stem, parse_recording_date, recording_date_year,
-    FileFingerprint, LibraryRoot, ListTracksQuery, MediaIndex, MediaLocator, MediaScanProgress,
-    MediaScanProgressUnit, MediaSourceError, MediaSourceKind, MediaTrackRecord, MetadataReader,
-    Page, SourceId, SourceScan, SourceScanState, SyncCancellation, TrackField, TrackFieldFilter,
-    TrackId, TrackIdentity, TrackListSort, TrackMetadata, TrackMetadataError, TrackSortDirection,
-    TrackSortField, TrackSummary, UserMetadataField, TRACK_METADATA_VERSION,
+    display_track_title, locator_display_file_stem, parse_recording_date, parse_remote_locator_uri,
+    recording_date_year, remote_locator_uri, FileFingerprint, LibraryRoot, ListTracksQuery,
+    MediaIndex, MediaLocator, MediaScanProgress, MediaScanProgressUnit, MediaSourceError,
+    MediaSourceKind, MediaTrackRecord, MetadataReader, Page, SourceId, SourceScan, SourceScanState,
+    SyncCancellation, TrackField, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
+    TrackMetadata, TrackMetadataError, TrackSortDirection, TrackSortField, TrackSummary,
+    UserMetadataField, TRACK_METADATA_VERSION,
 };
 pub use lyrics::{
     auto_lyric_candidate, explain_lyric_candidate_match, merge_lrc_auxiliary,

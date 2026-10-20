@@ -194,7 +194,8 @@ pub fn sync_playlist_file_source_with(
         .iter()
         .filter_map(|entry| match &entry.locator {
             MediaLocator::FileSystem(path) => Some(path.clone()),
-            MediaLocator::ContentUri(_) => None,
+            // A playlist file lists local files; a remote track in it is not scanned here.
+            MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
         })
         .collect::<Vec<_>>();
     let scan = reader.scan_paths(source.id, &media_paths);
