@@ -1,0 +1,370 @@
+//! Scanning and tag reading for remote sources (ADR 0026): [`RemoteMediaIndex`] is the `MediaIndex` of every remote
+//! root, whatever the protocol, because it only talks to the [`RemoteFs`] trait.
+
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use player_core::{
+    FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaScanProgress,
+    MediaScanProgressUnit, MediaSourceError, MediaTrackRecord, MetadataReader, SourceId,
+    SourceScan, SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata,
+    TrackMetadataError,
+};
+use player_track_metadata::{ByteSource, ReadSeek};
+
+use crate::fs::{RangeReader, RemoteError, RemoteFs};
+
+/// Directories listed at the same time. A listing costs a round trip, so a few at once make a scan several times
+/// faster on a distant server without loading it.
+const LIST_WORKERS: usize = 4;
+
+/// Tracks whose tags are read at the same time. Each read is a few round trips, so many at once keep a long link busy.
+pub const METADATA_READ_THREADS: usize = 16;
+
+/// A remote source's file tree and the folder inside it that the source is rooted at.
+#[derive(Clone)]
+pub struct ResolvedSource {
+    pub fs: Arc<dyn RemoteFs>,
+    /// `/`-separated, relative to the account's root; `""` is the account's whole tree.
+    pub base_path: String,
+}
+
+/// Finds the file tree of a source. The app implements it over the accounts it holds; tests over a folder.
+pub trait RemoteResolver: Send + Sync {
+    fn resolve(&self, source_id: SourceId) -> Result<ResolvedSource, RemoteError>;
+}
+
+/// `a` + `b` as one `/`-separated path without empty pieces.
+pub fn join_path(base: &str, relative: &str) -> String {
+    let mut parts = Vec::new();
+    for piece in base.split('/').chain(relative.split('/')) {
+        if !piece.is_empty() {
+            parts.push(piece);
+        }
+    }
+    parts.join("/")
+}
+
+/// Whether the library accepts a file with this name on this platform.
+pub fn is_remote_library_audio(name: &str) -> bool {
+    let path = Path::new(name);
+    if cfg!(target_os = "android") {
+        player_formats::is_android_library_audio(path)
+    } else {
+        player_formats::is_windows_library_audio(path)
+    }
+}
+
+pub struct RemoteMediaIndex {
+    resolver: Arc<dyn RemoteResolver>,
+}
+
+impl RemoteMediaIndex {
+    pub fn new(resolver: Arc<dyn RemoteResolver>) -> Self {
+        Self { resolver }
+    }
+}
+
+/// One remote file as the tag reader's byte source.
+struct RemoteByteSource {
+    fs: Arc<dyn RemoteFs>,
+    /// Relative to the account's root.
+    path: String,
+}
+
+impl ByteSource for RemoteByteSource {
+    fn file_name(&self) -> String {
+        self.path.rsplit('/').next().unwrap_or("").to_owned()
+    }
+
+    fn open(&self) -> std::io::Result<Box<dyn ReadSeek>> {
+        let file = self.fs.open(&self.path)?;
+        // Tags are at the start (or the end) of a file; a small read-ahead keeps a scan from pulling megabytes per
+        // track.
+        Ok(Box::new(RangeReader::new(file)))
+    }
+
+    fn open_correction(&self) -> Option<Box<dyn ReadSeek>> {
+        let correction = format!("{}c", self.path);
+        let file = self.fs.open(&correction).ok()?;
+        Some(Box::new(RangeReader::new(file)))
+    }
+}
+
+impl MetadataReader for RemoteMediaIndex {
+    fn read(&self, track: &MediaTrackRecord) -> Result<TrackMetadata, TrackMetadataError> {
+        let MediaLocator::Remote { source_id, path } = &track.locator else {
+            return Err(TrackMetadataError {
+                message: "the remote reader needs a remote locator".to_owned(),
+            });
+        };
+        let resolved = self
+            .resolver
+            .resolve(*source_id)
+            .map_err(|error| TrackMetadataError {
+                message: error.to_string(),
+            })?;
+        let source = RemoteByteSource {
+            fs: resolved.fs,
+            path: join_path(&resolved.base_path, path),
+        };
+        player_track_metadata::read_track_metadata(&source)
+    }
+}
+
+/// What the listing workers share.
+struct Walk {
+    queue: Mutex<Vec<String>>,
+    /// Directories taken from the queue and not yet finished: the walk is over when this is 0 and the queue is empty.
+    in_flight: AtomicUsize,
+    tracks: Mutex<Vec<MediaTrackRecord>>,
+    errors: Mutex<Vec<MediaSourceError>>,
+    incomplete: AtomicBool,
+    cancelled: AtomicBool,
+    /// Entries seen (files and folders), for progress.
+    seen: AtomicU64,
+}
+
+impl MediaIndex for RemoteMediaIndex {
+    fn parallel_metadata_reader(&self) -> Option<&dyn MetadataReader> {
+        Some(self)
+    }
+
+    fn metadata_read_threads(&self) -> usize {
+        METADATA_READ_THREADS
+    }
+
+    fn scan(&mut self, root: &LibraryRoot) -> SourceScan {
+        self.scan_with_progress(root, &mut |_| {}, &SyncCancellation::default())
+    }
+
+    fn scan_with_progress(
+        &mut self,
+        root: &LibraryRoot,
+        progress: &mut dyn FnMut(MediaScanProgress),
+        cancellation: &SyncCancellation,
+    ) -> SourceScan {
+        let mut scan = SourceScan {
+            source_id: root.id,
+            state: SourceScanState::Unavailable {
+                reason: "scan did not start".to_owned(),
+            },
+            tracks: Vec::new(),
+            errors: Vec::new(),
+        };
+        if cancellation.is_cancelled() {
+            scan.state = SourceScanState::Incomplete {
+                reason: "remote scan cancelled before it started".to_owned(),
+            };
+            return scan;
+        }
+        if !root.enabled {
+            scan.state = SourceScanState::Unavailable {
+                reason: "library root is disabled".to_owned(),
+            };
+            return scan;
+        }
+        let MediaLocator::Remote { .. } = &root.locator else {
+            scan.state = SourceScanState::Unavailable {
+                reason: "a remote library root needs a remote locator".to_owned(),
+            };
+            return scan;
+        };
+        let resolved = match self.resolver.resolve(root.id) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                scan.state = unavailable(&error);
+                return scan;
+            }
+        };
+
+        // The root must be listable, or the source is unreachable and nothing may be removed from the library.
+        let base = resolved.base_path.clone();
+        let first = match resolved.fs.list(&base) {
+            Ok(entries) => entries,
+            Err(error) => {
+                scan.state = unavailable(&error);
+                return scan;
+            }
+        };
+
+        let walk = Walk {
+            queue: Mutex::new(Vec::new()),
+            in_flight: AtomicUsize::new(0),
+            tracks: Mutex::new(Vec::new()),
+            errors: Mutex::new(Vec::new()),
+            incomplete: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
+            seen: AtomicU64::new(0),
+        };
+        handle_entries(&walk, root.id, "", first);
+
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..LIST_WORKERS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        list_worker(&walk, root.id, resolved.fs.as_ref(), &base, cancellation)
+                    })
+                })
+                .collect();
+            while !workers.iter().all(|worker| worker.is_finished()) {
+                progress(MediaScanProgress {
+                    processed: walk.seen.load(Ordering::Relaxed),
+                    total: None,
+                    unit: MediaScanProgressUnit::FilesystemEntries,
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+
+        let mut tracks = walk
+            .tracks
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner);
+        // The workers finish in any order; a stable order keeps a scan reproducible.
+        tracks.sort_by(|left, right| {
+            left.identity
+                .source_item_id
+                .cmp(&right.identity.source_item_id)
+        });
+        scan.tracks = tracks;
+        scan.errors = walk
+            .errors
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner);
+        scan.state = if walk.cancelled.load(Ordering::Relaxed) || cancellation.is_cancelled() {
+            SourceScanState::Incomplete {
+                reason: "remote scan cancelled before the whole tree was listed".to_owned(),
+            }
+        } else if walk.incomplete.load(Ordering::Relaxed) {
+            SourceScanState::Incomplete {
+                reason: "one or more remote folders could not be listed".to_owned(),
+            }
+        } else {
+            SourceScanState::Complete
+        };
+        scan
+    }
+
+    fn read_metadata(
+        &mut self,
+        track: &MediaTrackRecord,
+    ) -> Result<TrackMetadata, TrackMetadataError> {
+        MetadataReader::read(self, track)
+    }
+}
+
+fn unavailable(error: &RemoteError) -> SourceScanState {
+    match error {
+        RemoteError::Auth => SourceScanState::PermissionRevoked {
+            reason: error.to_string(),
+        },
+        _ => SourceScanState::Unavailable {
+            reason: error.to_string(),
+        },
+    }
+}
+
+/// Take directories off the queue and list them until the whole tree is done.
+fn list_worker(
+    walk: &Walk,
+    source_id: SourceId,
+    fs: &dyn RemoteFs,
+    base: &str,
+    cancellation: &SyncCancellation,
+) {
+    loop {
+        if cancellation.is_cancelled() {
+            walk.cancelled.store(true, Ordering::Relaxed);
+            return;
+        }
+        let next = {
+            let mut queue = walk.queue.lock().unwrap_or_else(PoisonError::into_inner);
+            let next = queue.pop();
+            if next.is_some() {
+                // Counted while the queue is locked, so another worker never sees an empty queue with nothing in
+                // flight while this directory is being taken.
+                walk.in_flight.fetch_add(1, Ordering::SeqCst);
+            }
+            next
+        };
+        let Some(directory) = next else {
+            if walk.in_flight.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        };
+        match fs.list(&join_path(base, &directory)) {
+            Ok(entries) => handle_entries(walk, source_id, &directory, entries),
+            Err(error) => {
+                walk.incomplete.store(true, Ordering::Relaxed);
+                walk.errors
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(MediaSourceError {
+                        source_item_id: Some(directory.clone()),
+                        message: error.to_string(),
+                    });
+            }
+        }
+        walk.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Queue the folders of a listing and record its audio files. `directory` is relative to the source root.
+fn handle_entries(
+    walk: &Walk,
+    source_id: SourceId,
+    directory: &str,
+    entries: Vec<crate::fs::RemoteEntry>,
+) {
+    walk.seen.fetch_add(entries.len() as u64, Ordering::Relaxed);
+    let mut folders = Vec::new();
+    let mut files = Vec::new();
+    for entry in entries {
+        if entry.name.is_empty() || entry.name.starts_with('.') {
+            continue;
+        }
+        let relative = if directory.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{directory}/{}", entry.name)
+        };
+        if entry.is_dir {
+            folders.push(relative);
+        } else if is_remote_library_audio(&entry.name) {
+            files.push(MediaTrackRecord {
+                identity: TrackIdentity {
+                    source_id,
+                    source_item_id: relative.clone(),
+                    locator_key: Some(format!("remote:{source_id}:{relative}")),
+                },
+                locator: MediaLocator::Remote {
+                    source_id,
+                    path: relative,
+                },
+                fingerprint: FileFingerprint {
+                    size_bytes: entry.size,
+                    modified_at_utc_ms: entry.modified_ms,
+                    created_at_utc_ms: None,
+                },
+                metadata: None,
+            });
+        }
+    }
+    if !folders.is_empty() {
+        walk.queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(folders);
+    }
+    if !files.is_empty() {
+        walk.tracks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(files);
+    }
+}

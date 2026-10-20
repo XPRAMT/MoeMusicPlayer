@@ -339,6 +339,12 @@ pub trait MediaIndex {
     fn parallel_metadata_reader(&self) -> Option<&dyn MetadataReader> {
         None
     }
+
+    /// How many tracks the parallel reader parses at once. A reader that waits on a network (a remote source) gains
+    /// from many more than one that waits on a disk.
+    fn metadata_read_threads(&self) -> usize {
+        crate::sync::METADATA_READ_THREADS
+    }
 }
 
 /// Parses one track's metadata; shared between threads (see `MediaIndex::parallel_metadata_reader`).

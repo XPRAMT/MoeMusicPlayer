@@ -219,3 +219,85 @@ fn four_threads_read_through_one_connection() {
         started.elapsed()
     );
 }
+
+/// The library scan of a real share: every audio file under `MOE_SMB_DIR`, tags and all, into an in-memory library.
+#[test]
+fn scans_a_real_share_through_the_sync_engine() {
+    use player_core::{
+        LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, SourceId, SyncEngine,
+    };
+    use player_db::Database;
+    use player_remote::index::{RemoteMediaIndex, RemoteResolver, ResolvedSource};
+
+    let Some(mut settings) = settings() else {
+        eprintln!("skipped: MOE_SMB_* is not set");
+        return;
+    };
+    let base = std::mem::take(&mut settings.base_path);
+    let fs = std::sync::Arc::new(SmbFs::connect(settings).expect("connect"));
+
+    struct Resolver(std::sync::Arc<SmbFs>, String);
+    impl RemoteResolver for Resolver {
+        fn resolve(&self, _: SourceId) -> Result<ResolvedSource, RemoteError> {
+            Ok(ResolvedSource {
+                fs: self.0.clone(),
+                base_path: self.1.clone(),
+            })
+        }
+    }
+    let mut index = RemoteMediaIndex::new(std::sync::Arc::new(Resolver(fs, base.clone())));
+
+    let mut db = Database::open_in_memory().expect("database");
+    let id = SourceId::new();
+    let root = LibraryRoot {
+        id,
+        kind: MediaSourceKind::Remote,
+        display_name: "smb".to_owned(),
+        locator: MediaLocator::Remote {
+            source_id: id,
+            path: base,
+        },
+        enabled: true,
+    };
+    db.save_library_root(&root).unwrap();
+
+    let started = Instant::now();
+    let report = SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_000_000).expect("sync");
+    let elapsed = started.elapsed();
+    println!(
+        "observed {} tracks, {} tag reads, {} tag errors, state {:?}, {:.1}s",
+        report.observed,
+        report.metadata_reads,
+        report.metadata_errors.len(),
+        report.state,
+        elapsed.as_secs_f64()
+    );
+    for (item, error) in report.metadata_errors.iter().take(5) {
+        println!("tag error: {item}: {}", error.message);
+    }
+    assert!(report.observed > 0);
+    let page = db
+        .list_tracks_page(ListTracksQuery {
+            offset: 0,
+            limit: 5,
+            query: None,
+            field_filter: None,
+            sort: Default::default(),
+        })
+        .unwrap();
+    for item in &page.items {
+        println!(
+            "{:?} | {:?} | {:?} | {:?} Hz | {:?} bit | {:?} ms",
+            item.title,
+            item.artist,
+            item.codec,
+            item.sample_rate_hz,
+            item.bit_depth,
+            item.duration_ms
+        );
+    }
+    assert!(page
+        .items
+        .iter()
+        .all(|item| item.duration_ms.unwrap_or(0) > 0));
+}

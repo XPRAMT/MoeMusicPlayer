@@ -448,7 +448,7 @@ impl SyncEngine {
                     let next = AtomicUsize::new(0);
                     let (sender, receiver) = std::sync::mpsc::channel();
                     std::thread::scope(|scope| {
-                        for _ in 0..METADATA_READ_THREADS.min(tracks.len()) {
+                        for _ in 0..index.metadata_read_threads().max(1).min(tracks.len()) {
                             let sender = sender.clone();
                             let (next, tracks) = (&next, &tracks);
                             scope.spawn(move || loop {

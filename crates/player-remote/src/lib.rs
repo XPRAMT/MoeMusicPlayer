@@ -1,5 +1,7 @@
 pub mod account;
 pub mod fs;
+pub mod index;
+pub mod local;
 pub mod secret;
 pub mod smb;
 #[cfg(any(test, feature = "testing"))]
