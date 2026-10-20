@@ -287,9 +287,10 @@ class PlaybackService : MediaSessionService() {
                     // remaining legacy tracks may still be content:// URIs.
                     require(
                         uri.startsWith("file:///") || uri.startsWith("content://") ||
-                            uri.startsWith("$DSD_URI_SCHEME:///") || uri.startsWith("$WAVPACK_URI_SCHEME:///"),
+                            uri.startsWith("$DSD_URI_SCHEME:///") || uri.startsWith("$WAVPACK_URI_SCHEME:///") ||
+                            uri.startsWith("$REMOTE_URI_SCHEME://"),
                     ) {
-                        "Android playback requires a file://, content://, $DSD_URI_SCHEME:// or $WAVPACK_URI_SCHEME:// URI"
+                        "Android playback requires a file://, content://, $DSD_URI_SCHEME://, $WAVPACK_URI_SCHEME:// or $REMOTE_URI_SCHEME:// URI"
                     }
                     require(trackId.isNotBlank()) { "trackId is required" }
                     val metadata = command.optJSONObject("metadata") ?: JSONObject()
@@ -310,7 +311,7 @@ class PlaybackService : MediaSessionService() {
                         .setUri(Uri.parse(uri))
                         .setMediaMetadata(mediaMetadata)
                     // Both are served as a WAV stream, so the extractor is chosen by MIME type, not by the extension.
-                    if (uri.startsWith("$DSD_URI_SCHEME:") || uri.startsWith("$WAVPACK_URI_SCHEME:")) {
+                    if (isConvertedUri(uri)) {
                         mediaItemBuilder.setMimeType("audio/wav")
                     }
                     val mediaItem = mediaItemBuilder.build()

@@ -1658,7 +1658,7 @@ fn android_find_all_lyrics(
     });
     let audio_uri = locators.iter().find_map(|locator| match locator {
         player_core::MediaLocator::ContentUri(uri) => Some(uri.clone()),
-        player_core::MediaLocator::FileSystem(_) => None,
+        player_core::MediaLocator::FileSystem(_) | player_core::MediaLocator::Remote { .. } => None,
     });
     let mut found = Vec::new();
     let mut oversized = false;
@@ -1686,6 +1686,35 @@ fn android_find_all_lyrics(
             }
             Err(_) => {}
         }
+    }
+
+    // A remote track (ADR 0026): the `.lrc` beside it, then its embedded lyrics, both read through the remote reader.
+    if let Some((source_id, remote_path)) = locators.iter().find_map(|locator| match locator {
+        player_core::MediaLocator::Remote { source_id, path } => Some((*source_id, path.clone())),
+        _ => None,
+    }) {
+        let (sidecar, embedded, remote_oversized) = crate::remote_media::remote_lyric_texts(source_id, &remote_path);
+        oversized |= remote_oversized;
+        if let Some(text) = sidecar {
+            if let Ok(lyrics) = parse_lrc(&text) {
+                if !lyrics.lines.is_empty() {
+                    found.push(AndroidFoundLyrics { provider: LyricProvider::Sidecar, lyrics });
+                    if first_only {
+                        return (found, oversized);
+                    }
+                }
+            }
+        }
+        for raw in &embedded {
+            let parsed = if looks_like_yrc(raw) { parse_yrc(raw) } else { parse_lrc(raw) };
+            if let Ok(lyrics) = parsed {
+                if !lyrics.lines.is_empty() {
+                    found.push(AndroidFoundLyrics { provider: LyricProvider::Embedded, lyrics });
+                    break;
+                }
+            }
+        }
+        return (found, oversized);
     }
 
     let (path, _lease) = match (audio_path, audio_uri, app) {

@@ -34,7 +34,21 @@ const val DSD_URI_SCHEME = "moedsd"
 /** Scheme of a WavPack (`.wv`) track: `moewv:///path/to/file.wv`, served by the same data source as DSD. */
 const val WAVPACK_URI_SCHEME = "moewv"
 
-/** Reads a `moedsd:///path/to/file.dsf` or `moewv:///path/to/file.wv` URI as a float WAV stream produced by Rust. */
+/**
+ * Scheme of a track on a remote server (ADR 0026): `moeremote://<source id>/<path>`. Rust reads it through the shared remote
+ * provider: DSF and WavPack are converted to float WAV like local files, every other format is passed through byte for
+ * byte for Media3 to decode.
+ */
+const val REMOTE_URI_SCHEME = "moeremote"
+
+/** Whether a track served by Rust is a WAV stream (converted) and not the file's own bytes. */
+fun isConvertedUri(uri: String): Boolean {
+    val lower = uri.lowercase()
+    return lower.startsWith("$DSD_URI_SCHEME:") || lower.startsWith("$WAVPACK_URI_SCHEME:") ||
+        (lower.startsWith("$REMOTE_URI_SCHEME:") && (lower.endsWith(".dsf") || lower.endsWith(".wv")))
+}
+
+/** Reads a `moedsd:///path/to/file.dsf`, `moewv:///path/to/file.wv` or `moeremote://…` URI served by Rust. */
 @UnstableApi
 class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
     private var uri: Uri? = null
@@ -46,7 +60,12 @@ class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
     override fun open(dataSpec: DataSpec): Long {
         uri = dataSpec.uri
         transferInitializing(dataSpec)
-        val path = dataSpec.uri.path ?: throw IOException("Converted-media URI has no path")
+        // A remote location is handed over whole (the source id is its host); the others are plain paths.
+        val path = if (dataSpec.uri.scheme == REMOTE_URI_SCHEME) {
+            dataSpec.uri.toString()
+        } else {
+            dataSpec.uri.path ?: throw IOException("Converted-media URI has no path")
+        }
         handle = DsdBridge.nativeOpen(path)
         if (handle == 0L) throw IOException("Cannot open DSD file: $path")
         val total = DsdBridge.nativeLength(handle)
@@ -111,7 +130,7 @@ private class RoutingDataSource(private val base: DataSource, private val dsd: D
 
     override fun open(dataSpec: DataSpec): Long {
         val scheme = dataSpec.uri.scheme
-        active = if (scheme == DSD_URI_SCHEME || scheme == WAVPACK_URI_SCHEME) dsd else base
+        active = if (scheme == DSD_URI_SCHEME || scheme == WAVPACK_URI_SCHEME || scheme == REMOTE_URI_SCHEME) dsd else base
         return active.open(dataSpec)
     }
 

@@ -76,6 +76,9 @@ mod android_dsd;
 mod android_folder_browser;
 mod remote_accounts;
 mod remote_connections;
+#[cfg(any(target_os = "android", test))]
+#[cfg_attr(test, allow(dead_code))]
+mod remote_media;
 mod remote_sources;
 #[cfg(target_os = "android")]
 mod android_path_migration;
@@ -8483,6 +8486,20 @@ fn find_android_artwork(
         })
         .collect::<Vec<_>>();
     let mut oversized = false;
+    // A remote track's cover comes through the remote reader (ADR 0026).
+    for locator in locators {
+        let MediaLocator::Remote { source_id, path } = locator else {
+            continue;
+        };
+        let Some(bytes) = remote_media::remote_cover_bytes(*source_id, path) else {
+            continue;
+        };
+        match android_artwork::image_from_bytes(&bytes, None) {
+            Ok(image) => return Ok(image),
+            Err(android_artwork::ArtworkError::Oversized) => oversized = true,
+            Err(_) => {}
+        }
+    }
     // WavPack keeps its cover in an APEv2 item that Android's MediaMetadataRetriever cannot read (ADR 0025).
     for locator in locators {
         let MediaLocator::FileSystem(path) = locator else {

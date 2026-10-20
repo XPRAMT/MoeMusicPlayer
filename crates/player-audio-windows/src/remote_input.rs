@@ -56,12 +56,12 @@ pub(crate) fn open(path: &Path) -> Result<RemoteInput, AudioError> {
         return Err(failed("not a remote location".to_owned()));
     };
     let main = content
-        .open(source_id, &relative)
+        .open_streaming(source_id, &relative)
         .map_err(|error| failed(error.to_string()))?;
     // A hybrid WavPack file is lossless with its `.wvc` correction file next to it.
     let correction = if relative.to_ascii_lowercase().ends_with(".wv") {
         content
-            .open(source_id, &format!("{relative}c"))
+            .open_streaming(source_id, &format!("{relative}c"))
             .ok()
             .map(|file| Box::new(Stream(file.reader)) as Box<dyn ReadSeek>)
     } else {

@@ -160,7 +160,7 @@ fn resolve_item_paths(
             .iter()
             .filter_map(|index| match &items[*index].1 {
                 MediaLocator::ContentUri(uri) => Some(uri.clone()),
-                MediaLocator::FileSystem(_) => None,
+                MediaLocator::FileSystem(_) | MediaLocator::Remote { .. } => None,
             })
             .collect::<Vec<_>>();
         let resolved = app
@@ -192,15 +192,19 @@ fn migrate_source(
         SourceEntryKind::Folder {
             media_kind: MediaSourceKind::AndroidMediaStore,
             path: StoredPath::Uri(uri),
+            ..
         } => (media_store_volume_path(uri), MediaSourceKind::AndroidFilesystem),
         SourceEntryKind::Folder {
             media_kind: MediaSourceKind::AndroidSaf,
             path: StoredPath::Uri(uri),
+            ..
         } => (
             storage_paths::external_storage_path_for_uri(uri),
             MediaSourceKind::AndroidFilesystem,
         ),
-        SourceEntryKind::Folder { media_kind, path } => {
+        SourceEntryKind::Folder {
+            media_kind, path, ..
+        } => {
             // Settings already carry a path; only the kind is legacy.
             (path.to_path_buf().ok(), {
                 let _ = media_kind;
@@ -243,6 +247,7 @@ fn migrate_source(
         SourceEntryKind::Folder { .. } => SourceEntryKind::Folder {
             media_kind: kind,
             path: stored,
+            remote_account: None,
         },
         SourceEntryKind::PlaylistFile { playlist_id, .. } => SourceEntryKind::PlaylistFile {
             playlist_id: *playlist_id,

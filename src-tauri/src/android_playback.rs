@@ -163,13 +163,19 @@ const MAX_NOTIFICATION_COVER_BYTES: usize = 2 * 1024 * 1024;
 /// The APEv2 cover of a WavPack / Monkey's Audio file (base64), which Android's media retriever cannot read.
 fn ape_cover_base64(locators: &[MediaLocator]) -> Option<String> {
     use base64::Engine as _;
-    locators.iter().find_map(|locator| {
-        let MediaLocator::FileSystem(path) = locator else {
-            return None;
-        };
-        let picture = player_tags::ape_cover::ape_front_cover_of_path(path)?;
-        (picture.data().len() <= MAX_NOTIFICATION_COVER_BYTES)
-            .then(|| base64::engine::general_purpose::STANDARD.encode(picture.data()))
+    locators.iter().find_map(|locator| match locator {
+        MediaLocator::FileSystem(path) => {
+            let picture = player_tags::ape_cover::ape_front_cover_of_path(path)?;
+            (picture.data().len() <= MAX_NOTIFICATION_COVER_BYTES)
+                .then(|| base64::engine::general_purpose::STANDARD.encode(picture.data()))
+        }
+        // A remote track (ADR 0026): Android's retriever cannot open it, so the cover is read through the remote reader.
+        MediaLocator::Remote { source_id, path } => {
+            let bytes = crate::remote_media::remote_cover_bytes(*source_id, path)?;
+            (bytes.len() <= MAX_NOTIFICATION_COVER_BYTES)
+                .then(|| base64::engine::general_purpose::STANDARD.encode(bytes))
+        }
+        MediaLocator::ContentUri(_) => None,
     })
 }
 

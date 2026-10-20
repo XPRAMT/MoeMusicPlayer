@@ -27,23 +27,62 @@ use player_wavpack::wav::WavPackWavStream;
 pub(crate) const DSD_URI_SCHEME: &str = "moedsd";
 /// URI scheme of a WavPack track handed to the Kotlin data source.
 pub(crate) const WAVPACK_URI_SCHEME: &str = "moewv";
+/// URI scheme of a remote track (ADR 0026): `moeremote://<source id>/<path>`, the text form of its locator.
+pub(crate) const REMOTE_URI_SCHEME: &str = "moeremote";
 /// `AudioTrack` tops out at 192 kHz (a PCM WavPack file above that cannot be played; DSD is converted to 176.4 kHz).
 const ANDROID_MAX_SAMPLE_RATE: u32 = 192_000;
 /// The only PCM rate DSD is converted to on Android.
 pub(crate) const ANDROID_DSD_OUTPUT_RATE: u32 = 176_400;
 
-/// A file served to Media3 as a float WAV.
+/// A file served to Media3 as a float WAV, or, for a remote file Media3 can decode itself, as the file's own bytes.
 enum Served {
     Dsd(Box<DsdWavStream<DsfReader<BufReader<File>>>>),
+    /// A remote DSF file, converted like a local one.
+    DsdRemote(Box<DsdWavStream<DsfReader<BufReader<Box<dyn player_wavpack::ReadSeek>>>>>),
+    /// A remote file passed through unchanged (FLAC, MP3, AAC, Opus…): Media3 reads and seeks it like a local file.
+    Raw(RawRemote),
     /// DSD inside WavPack, converted like a DSF file.
     DsdWavPack(Box<DsdWavStream<Box<dyn player_dsd::stream::DsdStream>>>),
     WavPack(Box<WavPackWavStream>),
+}
+
+/// A remote file served byte for byte.
+struct RawRemote {
+    reader: Box<dyn player_core::RemoteStream>,
+    len: u64,
+}
+
+impl RawRemote {
+    fn read_at(&mut self, position: u64, out: &mut [u8]) -> Result<usize, String> {
+        use std::io::{Read, Seek, SeekFrom};
+        if position >= self.len || out.is_empty() {
+            return Ok(0);
+        }
+        self.reader
+            .seek(SeekFrom::Start(position))
+            .map_err(|error| error.to_string())?;
+        let wanted = ((self.len - position).min(out.len() as u64)) as usize;
+        let mut done = 0;
+        while done < wanted {
+            let read = self
+                .reader
+                .read(&mut out[done..wanted])
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                break;
+            }
+            done += read;
+        }
+        Ok(done)
+    }
 }
 
 impl Served {
     fn total_len(&self) -> u64 {
         match self {
             Self::Dsd(stream) => stream.total_len(),
+            Self::DsdRemote(stream) => stream.total_len(),
+            Self::Raw(file) => file.len,
             Self::DsdWavPack(stream) => stream.total_len(),
             Self::WavPack(stream) => stream.total_len(),
         }
@@ -52,6 +91,8 @@ impl Served {
     fn read_at(&mut self, position: u64, out: &mut [u8]) -> Result<usize, String> {
         match self {
             Self::Dsd(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
+            Self::DsdRemote(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
+            Self::Raw(file) => file.read_at(position, out),
             Self::DsdWavPack(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
             Self::WavPack(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
         }
@@ -148,13 +189,94 @@ fn open_wavpack(path: &Path) -> Result<Served, String> {
     Ok(Served::WavPack(Box::new(stream)))
 }
 
-/// Open a DSF or WavPack file; the handle (never 0) is used with the other functions until `close`.
+/// Open a remote file through the shared provider (ADR 0026). DSF and WavPack are converted like local files; any
+/// other format is passed through for Media3 to decode.
+fn open_remote(uri: &str) -> Result<Served, String> {
+    let Some(player_core::MediaLocator::Remote { source_id, path }) =
+        player_core::parse_remote_locator_uri(uri)
+    else {
+        return Err("不是遠端曲目的位置".to_owned());
+    };
+    let content = player_core::remote_content().ok_or_else(|| "遠端播放尚未就緒".to_owned())?;
+    let file = content
+        .open_streaming(source_id, &path)
+        .map_err(|error| format!("無法開啟遠端檔案：{error}"))?;
+    let name = Path::new(&path);
+    match player_formats::decode_engine(name) {
+        player_formats::DecodeEngine::Dsd => {
+            let dsf = DsfReader::open(BufReader::with_capacity(
+                256 * 1024,
+                Box::new(RemoteStreamAdapter(file.reader)) as Box<dyn player_wavpack::ReadSeek>,
+            ))
+            .map_err(|error| error.to_string())?;
+            let reader = DsdPcmReader::new(dsf, ANDROID_DSD_OUTPUT_RATE, Arc::clone(gain()))
+                .map_err(|error| error.to_string())?;
+            Ok(Served::DsdRemote(Box::new(DsdWavStream::new(reader))))
+        }
+        player_formats::DecodeEngine::WavPack => {
+            // A hybrid file is lossless with its `.wvc` correction file next to it.
+            let correction = content
+                .open_streaming(source_id, &format!("{path}c"))
+                .ok()
+                .map(|handle| Box::new(RemoteStreamAdapter(handle.reader)) as Box<dyn player_wavpack::ReadSeek>);
+            let main = RemoteStreamAdapter(file.reader);
+            let probe_main = content.open(source_id, &path).map_err(|error| error.to_string())?;
+            if player_wavpack::is_dsd_from(RemoteStreamAdapter(probe_main.reader)) {
+                let stream = player_wavpack::dsd::WavPackDsdStream::open(main, correction)
+                    .map_err(|error| error.to_string())?;
+                let reader = DsdPcmReader::new(
+                    Box::new(stream) as Box<dyn player_dsd::stream::DsdStream>,
+                    ANDROID_DSD_OUTPUT_RATE,
+                    Arc::clone(gain()),
+                )
+                .map_err(|error| error.to_string())?;
+                return Ok(Served::DsdWavPack(Box::new(DsdWavStream::new(reader))));
+            }
+            let reader = player_wavpack::WavPackReader::open(main, correction).map_err(|error| error.to_string())?;
+            let rate = reader.info().sample_rate;
+            if rate > ANDROID_MAX_SAMPLE_RATE {
+                return Err(format!("取樣率 {rate} Hz 超過 Android 的上限 {ANDROID_MAX_SAMPLE_RATE} Hz"));
+            }
+            let stream = WavPackWavStream::new(reader).map_err(|error| error.to_string())?;
+            Ok(Served::WavPack(Box::new(stream)))
+        }
+        _ => Ok(Served::Raw(RawRemote {
+            reader: file.reader,
+            len: file.len,
+        })),
+    }
+}
+
+/// A provider stream as the `Read + Seek + Send` the converters take.
+struct RemoteStreamAdapter(Box<dyn player_core::RemoteStream>);
+
+impl std::io::Read for RemoteStreamAdapter {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl std::io::Seek for RemoteStreamAdapter {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.0.seek(position)
+    }
+}
+
+/// Open a DSF or WavPack file (or a remote track); the handle (never 0) is used with the other functions until `close`.
 pub(crate) fn open(path: &Path) -> Result<i64, String> {
+    if path.to_str().is_some_and(|text| text.starts_with("moeremote://")) {
+        let served = open_remote(path.to_str().unwrap_or_default())?;
+        return Ok(register(served));
+    }
     let served = match player_formats::decode_engine(path) {
         player_formats::DecodeEngine::Dsd => open_dsf(path)?,
         player_formats::DecodeEngine::WavPack => open_wavpack(path)?,
         _ => return Err(format!("不是 DSD 或 WavPack 檔案：{}", path.display())),
     };
+    Ok(register(served))
+}
+
+fn register(served: Served) -> i64 {
     let mut registry = registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -163,7 +285,7 @@ pub(crate) fn open(path: &Path) -> Result<i64, String> {
     registry
         .streams
         .insert(handle, Arc::new(Mutex::new(served)));
-    Ok(handle)
+    handle
 }
 
 /// Length in bytes of the virtual WAV file.

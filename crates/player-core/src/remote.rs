@@ -22,6 +22,12 @@ pub trait RemoteContent: Send + Sync {
     /// Open `path` (relative to the root of `source_id`, `/`-separated) for reading, cached and tuned for the
     /// protocol. `NotFound` when the file or the source does not exist.
     fn open(&self, source_id: SourceId, path: &str) -> io::Result<RemoteFileHandle>;
+
+    /// As [`open`](Self::open), for a reader that plays the file from start to end (the audio engine): the provider
+    /// keeps reading ahead in the background so the player never waits for the network. Defaults to `open`.
+    fn open_streaming(&self, source_id: SourceId, path: &str) -> io::Result<RemoteFileHandle> {
+        self.open(source_id, path)
+    }
 }
 
 static CONTENT: RwLock<Option<Arc<dyn RemoteContent>>> = RwLock::new(None);

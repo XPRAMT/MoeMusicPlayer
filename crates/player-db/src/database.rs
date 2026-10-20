@@ -4915,6 +4915,7 @@ impl Database {
         }
         #[cfg_attr(not(unix), allow(unused_mut))]
         let mut file_uri = None;
+        let mut remote_uri = None;
         for locator in locators {
             match locator {
                 MediaLocator::ContentUri(uri) => return Ok(uri),
@@ -4926,11 +4927,16 @@ impl Database {
                 }
                 #[cfg(not(unix))]
                 MediaLocator::FileSystem(_) => {}
-                // A remote file has no content URI or local file to hand to the platform.
-                MediaLocator::Remote { .. } => {}
+                // A remote file has no content URI or local file; the player reads it through the remote bridge, which
+                // takes the `moeremote://<source id>/<path>` text form (ADR 0026). A local file is preferred.
+                MediaLocator::Remote { source_id, path } => {
+                    remote_uri.get_or_insert_with(|| player_core::remote_locator_uri(source_id, &path));
+                }
             }
         }
-        file_uri.ok_or(DatabaseError::NonContentUriTrackLocator(track_id))
+        file_uri
+            .or(remote_uri)
+            .ok_or(DatabaseError::NonContentUriTrackLocator(track_id))
     }
 
     pub fn set_user_override(

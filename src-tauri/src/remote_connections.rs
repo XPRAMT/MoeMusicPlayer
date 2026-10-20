@@ -158,13 +158,13 @@ pub(crate) struct RemoteFiles {
     pub(crate) settings: Arc<crate::settings::SettingsStore>,
 }
 
-impl player_core::RemoteContent for RemoteFiles {
-    fn open(
+impl RemoteFiles {
+    /// The file `path` of a source: its server connection and the full path under the account's root.
+    fn locate(
         &self,
         source_id: SourceId,
         path: &str,
-    ) -> std::io::Result<player_core::RemoteFileHandle> {
-        use player_remote::fs::open_reader;
+    ) -> std::io::Result<(std::sync::Arc<dyn player_remote::fs::RemoteFs>, String)> {
         use player_remote::index::join_path;
         use std::io::{Error, ErrorKind};
 
@@ -181,7 +181,33 @@ impl player_core::RemoteContent for RemoteFiles {
             .connections
             .resolver(data_dir, &settings)
             .resolve(source_id)?;
-        let reader = open_reader(resolved.fs.as_ref(), &join_path(&resolved.base_path, path))?;
+        let full = join_path(&resolved.base_path, path);
+        Ok((resolved.fs, full))
+    }
+}
+
+impl player_core::RemoteContent for RemoteFiles {
+    fn open(
+        &self,
+        source_id: SourceId,
+        path: &str,
+    ) -> std::io::Result<player_core::RemoteFileHandle> {
+        let (fs, full) = self.locate(source_id, path)?;
+        let reader = player_remote::fs::open_reader(fs.as_ref(), &full)?;
+        let len = reader.len();
+        Ok(player_core::RemoteFileHandle {
+            reader: Box::new(reader),
+            len,
+        })
+    }
+
+    fn open_streaming(
+        &self,
+        source_id: SourceId,
+        path: &str,
+    ) -> std::io::Result<player_core::RemoteFileHandle> {
+        let (fs, full) = self.locate(source_id, path)?;
+        let reader = player_remote::prefetch::PrefetchReader::new(fs.open(&full)?);
         let len = reader.len();
         Ok(player_core::RemoteFileHandle {
             reader: Box::new(reader),
@@ -318,6 +344,31 @@ mod real_server_tests {
         input.reader.read_to_end(&mut tail).unwrap();
         println!("{:?} {} bytes, head {:?}", track.title, input.len, head);
         assert_eq!(tail.len(), 16);
+
+        // 5. The playback stream: read at roughly lossless-playback pace (about 1 MB/s) and see how long the slowest
+        // read waits once it has started (the audio thread must never wait for the network).
+        let mut stream = opener
+            .open_streaming(source_id, &relative)
+            .expect("the streaming opener");
+        let mut chunk = vec![0u8; 32 * 1024];
+        stream.reader.read_exact(&mut chunk).unwrap();
+        let mut worst = std::time::Duration::ZERO;
+        let mut total = 0usize;
+        let started = std::time::Instant::now();
+        while total < 12 * 1024 * 1024 && total < stream.len as usize - chunk.len() {
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            let before = std::time::Instant::now();
+            stream.reader.read_exact(&mut chunk).unwrap();
+            worst = worst.max(before.elapsed());
+            total += chunk.len();
+        }
+        println!(
+            "streamed {} MiB in {:.1}s, slowest read {:?}",
+            total / (1024 * 1024),
+            started.elapsed().as_secs_f64(),
+            worst
+        );
+        assert!(worst < std::time::Duration::from_millis(100), "a read waited {worst:?}");
 
         let _ = std::fs::remove_dir_all(&data_dir);
     }

@@ -75,6 +75,12 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         let uri = match &record.locator {
             MediaLocator::ContentUri(uri) => uri.clone(),
             MediaLocator::FileSystem(path) => return self.read_path_metadata(path),
+            // Remote tracks are read by the remote index (ADR 0026), never by the device's own adapter.
+            MediaLocator::Remote { .. } => {
+                return Err(TrackMetadataError {
+                    message: "a remote track is read through its remote source".to_owned(),
+                })
+            }
         };
         let uri = &uri;
         let lease = self
