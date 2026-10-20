@@ -9,5 +9,11 @@ export const BACKEND_UNKNOWN_LABEL = '未知';
  * @param {string} name
  */
 export function displayUnknown(name) {
-  return name === BACKEND_UNKNOWN_LABEL ? tr('未知') : name;
+  if (name === BACKEND_UNKNOWN_LABEL) return tr('未知');
+  // The source of a track on this device is "本地" (a fixed word from the backend); a server shows its own name.
+  if (name === BACKEND_LOCAL_SOURCE_LABEL) return tr('本地');
+  return name;
 }
+
+/** The backend's name for tracks in folders on this device (the "source" column and its groups). */
+export const BACKEND_LOCAL_SOURCE_LABEL = '本地';

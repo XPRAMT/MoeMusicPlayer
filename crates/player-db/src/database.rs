@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
@@ -565,6 +565,14 @@ CREATE TABLE music_collation_metadata (
 );
 "#;
 
+/// A short name for the place a source is (the name of a remote server); sources without one are "本地".
+const SCHEMA_V16: &str = r#"
+CREATE TABLE source_labels (
+    source_id TEXT PRIMARY KEY NOT NULL,
+    label TEXT NOT NULL
+);
+"#;
+
 const MUSIC_COLLATION_COMPARATOR_VERSION: u8 = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -983,8 +991,9 @@ impl QuickIndexKind {
     }
 }
 
-/// SQL for the display name of the (first enabled) library source a track of the table `t` comes from.
-const TRACK_SOURCE_NAME_SQL: &str = "(SELECT r.display_name FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1 ORDER BY r.display_name LIMIT 1)";
+/// SQL for the name of the place a track of the table `t` comes from: the label of its source (a remote server's name) or
+/// "本地" for folders on this device.
+const TRACK_SOURCE_NAME_SQL: &str = "(SELECT COALESCE(sl.label, CASE WHEN r.source_kind = 'remote' THEN r.display_name ELSE '本地' END) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id LEFT JOIN source_labels sl ON sl.source_id=r.source_id WHERE m.track_id=t.track_id AND r.enabled=1 ORDER BY 1 LIMIT 1)";
 
 /// SQL that is true for a track with no usable year (the unknown group), from the columns of the table `alias`. The
 /// unknown group counts as the smallest value: first when the list runs from old to new (ascending), last when it runs
@@ -1864,6 +1873,13 @@ impl Database {
             tx.execute_batch(SCHEMA_V15)?;
             tx.pragma_update(None, "user_version", 15)?;
             tx.commit()?;
+            version = 15;
+        }
+        if version == 15 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V16)?;
+            tx.pragma_update(None, "user_version", 16)?;
+            tx.commit()?;
         }
         connection.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS sync_seen_items (
@@ -2451,6 +2467,23 @@ impl Database {
         };
         self.save_library_root(&root)?;
         Ok(root)
+    }
+
+    /// Name the place a source is (the name of its remote server). `None` removes the name: the source is "本地" again.
+    pub fn set_source_label(&self, source_id: SourceId, label: Option<&str>) -> Result<(), DatabaseError> {
+        let connection = self.lock()?;
+        match label.map(str::trim).filter(|text| !text.is_empty()) {
+            Some(label) => connection.execute(
+                "INSERT INTO source_labels (source_id, label) VALUES (?1, ?2)
+                 ON CONFLICT(source_id) DO UPDATE SET label=excluded.label",
+                params![source_id.to_string(), label],
+            )?,
+            None => connection.execute(
+                "DELETE FROM source_labels WHERE source_id=?1",
+                params![source_id.to_string()],
+            )?,
+        };
+        Ok(())
     }
 
     pub fn save_library_root(&self, root: &LibraryRoot) -> Result<(), DatabaseError> {
@@ -6192,7 +6225,7 @@ fn attach_file_names(
     Ok(())
 }
 
-/// The display name of the first enabled library source of each track (the same one the source sort and grouping use).
+/// The name of the place each track comes from (the same one the source sort and grouping use).
 fn source_names_for_tracks(
     connection: &Connection,
     track_ids: &[TrackId],
@@ -6204,17 +6237,17 @@ fn source_names_for_tracks(
     let ids_json = serde_json::to_string(&ids)
         .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
     let mut names = HashMap::new();
-    let mut statement = connection.prepare(
-        "SELECT m.track_id, r.display_name
-         FROM source_mappings m
-         JOIN library_roots r ON r.source_id = m.source_id AND r.enabled = 1
-         WHERE m.track_id IN (SELECT value FROM json_each(?1))
-         ORDER BY m.track_id, r.display_name",
-    )?;
+    let mut statement = connection.prepare(&format!(
+        "SELECT t.track_id, {TRACK_SOURCE_NAME_SQL} AS source_name
+         FROM tracks t
+         WHERE t.track_id IN (SELECT value FROM json_each(?1))"
+    ))?;
     let mut rows = statement.query([ids_json])?;
     while let Some(row) = rows.next()? {
         let id = parse_track_id(&row.get::<_, String>(0)?)?;
-        names.entry(id).or_insert(row.get::<_, String>(1)?);
+        if let Some(name) = row.get::<_, Option<String>>(1)? {
+            names.insert(id, name);
+        }
     }
     Ok(names)
 }
@@ -8424,7 +8457,7 @@ mod tests {
                 .expect("connection")
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("schema version");
-            assert_eq!(version, 15);
+            assert_eq!(version, super::SCHEMA_VERSION);
         }
         {
             let db = Database::open_checked(&path).expect("read-only validate migrated database");
@@ -8468,7 +8501,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("current schema version");
-        assert_eq!(current_version, 15);
+        assert_eq!(current_version, super::SCHEMA_VERSION);
         let preserved_roots: i64 = db
             .lock()
             .expect("connection")
@@ -8527,7 +8560,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 15);
+        assert_eq!(version, super::SCHEMA_VERSION);
         assert_eq!(
             db.get_theme_preferences().expect("theme preferences"),
             ThemePreferences::default()
@@ -8567,7 +8600,7 @@ mod tests {
                     .expect("reconciliation index lookup"),
             )
         };
-        assert_eq!(version, 15);
+        assert_eq!(version, super::SCHEMA_VERSION);
         assert_eq!(index.as_deref(), Some("playlist_entries_unmatched"));
     }
 
@@ -8607,7 +8640,7 @@ mod tests {
                     .expect("sync-state table lookup"),
             )
         };
-        assert_eq!(version, 15);
+        assert_eq!(version, super::SCHEMA_VERSION);
         assert_eq!(table.as_deref(), Some("playlist_file_sync_state"));
     }
 
@@ -8783,7 +8816,7 @@ mod tests {
                     .expect("lyric candidates table"),
             )
         };
-        assert_eq!(version, 15);
+        assert_eq!(version, super::SCHEMA_VERSION);
         assert_eq!(lyric_table, "track_lyrics");
         assert_eq!(candidate_table, "lyric_candidates");
         assert_eq!(
@@ -8820,7 +8853,7 @@ mod tests {
             [],
             |row| row.get(0),
         ).expect("playback session tables");
-        assert_eq!(version, 15);
+        assert_eq!(version, super::SCHEMA_VERSION);
         assert_eq!(tables, 2);
     }
 
@@ -10231,9 +10264,13 @@ mod tests {
     #[test]
     fn tracks_know_their_source_and_sort_and_group_by_it() {
         let mut db = Database::open_in_memory().expect("database");
-        let zeta = add_root(&db, MediaSourceKind::WindowsFilesystem, "Zeta");
-        let alpha = add_root(&db, MediaSourceKind::WindowsFilesystem, "Alpha");
-        for (root, count, base) in [(&zeta, 2_usize, "z"), (&alpha, 3, "a")] {
+        let nas = add_root(&db, MediaSourceKind::Remote, "XPRAMT-PC / DSD");
+        let local = add_root(&db, MediaSourceKind::WindowsFilesystem, "Music");
+        let other = add_root(&db, MediaSourceKind::Remote, "Other / Folder");
+        // The remote sources carry the name of their server, not of the folder.
+        db.set_source_label(nas.id, Some("smb1")).expect("label");
+        db.set_source_label(other.id, Some("我的smb")).expect("label");
+        for (root, count, base) in [(&nas, 2_usize, "n"), (&local, 3, "l"), (&other, 1, "o")] {
             let records: Vec<_> = (0..count)
                 .map(|index| {
                     record(
@@ -10264,18 +10301,29 @@ mod tests {
             .iter()
             .map(|track| track.source_name.clone().unwrap_or_default())
             .collect();
-        assert_eq!(sources, ["Alpha", "Alpha", "Alpha", "Zeta", "Zeta"]);
-        // Inside a source the tracks keep their title order.
-        assert_eq!(ascending.items[0].title.as_deref(), Some("a title 0"));
-        assert_eq!(ascending.items[3].title.as_deref(), Some("z title 0"));
-        let descending = db.list_tracks_page(query(TrackSortDirection::Desc)).expect("descending");
-        assert_eq!(descending.items[0].source_name.as_deref(), Some("Zeta"));
-        assert_eq!(descending.items[4].source_name.as_deref(), Some("Alpha"));
-
+        // Folders on this device are all "本地", whatever their folder is called.
+        assert_eq!(sources.iter().filter(|name| *name == "本地").count(), 3);
+        assert_eq!(sources.iter().filter(|name| *name == "smb1").count(), 2);
+        assert_eq!(sources.iter().filter(|name| *name == "我的smb").count(), 1);
+        // One group per name, in one run each.
         let groups = db
             .quick_index_for_tracks(&query(TrackSortDirection::Asc), &[])
             .expect("groups");
-        assert_eq!(groups.labels, ["Alpha", "Zeta"]);
+        assert_eq!(groups.labels.len(), 3, "{:?}", groups.labels);
+        // Inside a source the tracks keep their title order.
+        let first_local = ascending.items.iter().position(|t| t.source_name.as_deref() == Some("本地")).unwrap();
+        assert_eq!(ascending.items[first_local].title.as_deref(), Some("l title 0"));
+        let descending = db.list_tracks_page(query(TrackSortDirection::Desc)).expect("descending");
+        assert_eq!(
+            descending.items.first().map(|t| t.source_name.clone()),
+            ascending.items.last().map(|t| t.source_name.clone())
+        );
+
+        // Renaming the server renames the group; removing the label makes the source a local one.
+        db.set_source_label(nas.id, Some("renamed")).expect("rename");
+        let renamed = db.list_tracks_page(query(TrackSortDirection::Asc)).expect("renamed");
+        assert!(renamed.items.iter().any(|t| t.source_name.as_deref() == Some("renamed")));
+        db.set_source_label(nas.id, None).expect("clear");
     }
 
     #[test]
@@ -13950,7 +13998,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 15);
+        assert_eq!(version, super::SCHEMA_VERSION);
         let table_count: i64 = db
             .lock()
             .expect("connection")

@@ -1,4 +1,5 @@
 import { tr } from './i18n.js';
+import { displayUnknown } from './unknown-label.js';
 /** @typedef {'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'audioFormat' | 'duration' | 'playCount' | 'source'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
 /** @typedef {{ title: number, artist: number, album: number }} TrackColumnWidths */
@@ -503,7 +504,7 @@ export function formatTrackColumnValue(id, item, formatDuration, titleFallback =
     case 'playCount':
       return formatPlayCount(item.playedMs, item.durationMs);
     case 'source':
-      return typeof item.sourceName === 'string' && item.sourceName.trim() ? item.sourceName.trim() : '—';
+      return typeof item.sourceName === 'string' && item.sourceName.trim() ? displayUnknown(item.sourceName.trim()) : '—';
   }
 }
 

@@ -7417,6 +7417,7 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _database_work = database_work;
         let mut database = Database::open(database_path).map_err(|error| error.to_string())?;
+        let _ = remote_sources::refresh_source_labels(&database, &source_settings);
         // Legacy MediaStore/SAF sources become real-path sources before syncing (ADR 0014).
         #[cfg(target_os = "android")]
         let source_settings = {

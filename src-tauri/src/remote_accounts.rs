@@ -280,6 +280,10 @@ pub(crate) fn remote_account_save(
     let view = save_account(&state.settings, &vault(&data_dir)?, input)?;
     // A changed account must not keep using the old, signed-in connection.
     state.remote_connections.forget(&view.id);
+    // A renamed server renames its group in the library.
+    if let (Some(database), Ok(settings)) = (state.database.as_ref(), state.settings.snapshot()) {
+        let _ = crate::remote_sources::refresh_source_labels(database, &settings);
+    }
     Ok(view)
 }
 

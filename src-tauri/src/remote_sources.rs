@@ -116,6 +116,32 @@ pub(crate) async fn remote_smb_shares(
     .map_err(|error| format!("無法取得共用資料夾：{error}"))?
 }
 
+/// Name every remote source after its server (the library's "source" column and groups show `smb1`, not the folder).
+/// Sources of a server that no longer exists lose the name.
+pub(crate) fn refresh_source_labels(
+    database: &player_db::Database,
+    settings: &crate::settings::AppSettings,
+) -> Result<(), String> {
+    for source in &settings.sources {
+        let SourceEntryKind::Folder {
+            remote_account: Some(account_id),
+            ..
+        } = &source.kind
+        else {
+            continue;
+        };
+        let name = settings
+            .remote_accounts
+            .iter()
+            .find(|account| &account.id == account_id)
+            .map(|account| account.name.as_str());
+        database
+            .set_source_label(source.id, name)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// An excluded remote folder as the page sees it.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -357,6 +383,9 @@ pub(crate) async fn remote_source_add(
             .map_err(|error| error.to_string())?;
         database
             .save_library_root(&root)
+            .map_err(|error| error.to_string())?;
+        database
+            .set_source_label(id, Some(&account.name))
             .map_err(|error| error.to_string())?;
         let mut summary = crate::source_summary(database, &root)?;
         summary.remote_account_id = Some(account.id.clone());
