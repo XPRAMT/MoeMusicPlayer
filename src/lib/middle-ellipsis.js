@@ -1,4 +1,5 @@
-const ELLIPSIS = '···';
+// Three ASCII dots: the middle dot (U+00B7) is drawn full-width by the CJK fonts of Android, which wastes a column of space.
+const ELLIPSIS = '...';
 
 /**
  * Keep the start and end of text that does not fit, hiding the middle.
