@@ -176,3 +176,61 @@ fn summaries_label_lossless_lossy_and_dsd_files() {
     );
     assert_eq!(summary("missing.wv"), None);
 }
+
+/// The DSF the `dsd64.wv` fixture was made from (see `tests/make_dsd_fixture.rs`), as planar MSB-first bytes.
+fn synthetic_dsf_bytes() -> (Vec<Vec<u8>>, u32) {
+    use player_dsd::dsf::DsfReader;
+    use player_dsd::stream::DsdStream;
+    use player_dsd::testing::{build_dsf, modulate, tone};
+    let rate = 2_822_400_u32;
+    let samples = rate as usize / 5 / 16 * 16;
+    let lsb = |bytes: Vec<u8>| bytes.into_iter().map(u8::reverse_bits).collect::<Vec<u8>>();
+    let left = lsb(modulate(samples, tone(rate, 1_000.0, 0.25)));
+    let right = lsb(modulate(samples, tone(rate, 2_000.0, 0.25)));
+    let file = build_dsf(rate, samples as u64, 4096, true, &[left, right]);
+    let mut dsf = DsfReader::open(std::io::Cursor::new(file)).unwrap();
+    let mut planar = vec![Vec::new(), Vec::new()];
+    let mut chunk = vec![Vec::new(), Vec::new()];
+    while dsf.read(8192, &mut chunk).unwrap() > 0 {
+        for (all, part) in planar.iter_mut().zip(&chunk) {
+            all.extend_from_slice(part);
+        }
+    }
+    (planar, rate)
+}
+
+#[test]
+fn native_dsd_bytes_equal_the_dsf_stream_bit_for_bit_and_seek_exactly() {
+    use crate::dsd::WavPackDsdStream;
+    use player_dsd::stream::DsdStream;
+    let (expected, rate) = synthetic_dsf_bytes();
+    let mut stream = WavPackDsdStream::open_path(&fixture("dsd64.wv")).unwrap();
+    let info = stream.info();
+    assert_eq!((info.channels, info.sample_rate), (2, rate));
+    assert_eq!(info.bytes_per_channel(), expected[0].len() as u64);
+    let mut planar = vec![Vec::new(), Vec::new()];
+    let mut chunk = vec![Vec::new(), Vec::new()];
+    while stream.read(5_000, &mut chunk).unwrap() > 0 {
+        for (all, part) in planar.iter_mut().zip(&chunk) {
+            all.extend_from_slice(part);
+        }
+    }
+    assert_eq!(planar, expected, "the 1-bit data is the DSF's");
+    for byte in [0_u64, 1, 4_095, 4_096, 20_000, expected[0].len() as u64 - 1] {
+        stream.seek_to_byte(byte).unwrap();
+        assert_eq!(stream.position_bytes(), byte);
+        stream.read(1_000, &mut chunk).unwrap();
+        for (channel, part) in chunk.iter().enumerate() {
+            let start = byte as usize;
+            assert_eq!(
+                part[..],
+                expected[channel][start..start + part.len()],
+                "seek {byte}"
+            );
+        }
+    }
+    assert!(
+        WavPackDsdStream::open_path(&fixture("s16.wv")).is_err(),
+        "PCM files are refused"
+    );
+}

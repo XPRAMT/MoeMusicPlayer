@@ -408,7 +408,10 @@ class PlaybackService : MediaSessionService() {
         mainHandler.postDelayed(artworkPreparationTimeout, ARTWORK_PREPARATION_TIMEOUT_MS)
         try {
             artworkPreparationFuture = artworkExecutor.submit {
-                val bytes = loadArtwork(contentUri, metadata.optStringOrNull("artworkUri"))
+                val coverFromRust = metadata.optStringOrNull("artworkDataBase64")?.let {
+                    try { android.util.Base64.decode(it, android.util.Base64.DEFAULT) } catch (_: IllegalArgumentException) { null }
+                }
+                val bytes = loadArtwork(contentUri, metadata.optStringOrNull("artworkUri"), coverFromRust)
                 mainHandler.post {
                     if (serviceDestroyed || artworkPreparationCommandId != commandId) return@post
                     mainHandler.removeCallbacks(artworkPreparationTimeout)
@@ -448,7 +451,12 @@ class PlaybackService : MediaSessionService() {
         })
     }
 
-    private fun loadArtwork(loadUri: String, artworkUri: String?): ByteArray? {
+    /**
+     * The cover for the notification: the picture the platform retriever finds in the file, else [coverFromRust] (a
+     * cover the Rust side read itself, for formats such as WavPack whose APEv2 cover the retriever cannot see), else
+     * the image at [artworkUri].
+     */
+    private fun loadArtwork(loadUri: String, artworkUri: String?, coverFromRust: ByteArray? = null): ByteArray? {
         // A DSD track is loaded as moedsd:// and a WavPack track as moewv://; the file (and embedded picture) is the
         // same path as file://.
         val contentUri = when {
@@ -469,6 +477,9 @@ class PlaybackService : MediaSessionService() {
         }
         if (embedded != null && embedded.size <= MAX_NOTIFICATION_SOURCE_BYTES) {
             createNotificationArtwork(embedded)?.let { return it }
+        }
+        if (coverFromRust != null && coverFromRust.size <= MAX_NOTIFICATION_SOURCE_BYTES) {
+            createNotificationArtwork(coverFromRust)?.let { return it }
         }
         if (artworkUri.isNullOrBlank()) return null
         return try {

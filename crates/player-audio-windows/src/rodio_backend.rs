@@ -1513,7 +1513,7 @@ type FileDecoder = AudioDecoder;
 pub(crate) enum AudioDecoder {
     Rodio(Decoder<BufReader<File>>),
     /// Boxed: the converter state is several times larger than a rodio decoder.
-    Dsd(Box<crate::dsd::DsfPcmSource>),
+    Dsd(Box<crate::dsd::DsdFileSource>),
     Opus(Box<crate::opus::OpusFileSource>),
     WavPack(Box<crate::wavpack::WavPackSource>),
 }
@@ -1679,6 +1679,11 @@ pub(crate) fn open_decoder_with(path: &Path, dsd: &DsdOptions) -> Result<AudioDe
             return crate::opus::open_opus(path).map(|source| AudioDecoder::Opus(Box::new(source)));
         }
         player_formats::DecodeEngine::WavPack => {
+            // DSD inside WavPack goes to the DSD converter like a DSF file (ADR 0025).
+            if player_wavpack::is_dsd(path) {
+                return crate::dsd::open_wavpack_dsd(path, dsd)
+                    .map(|source| AudioDecoder::Dsd(Box::new(source)));
+            }
             return crate::wavpack::open_wavpack(path)
                 .map(|source| AudioDecoder::WavPack(Box::new(source)));
         }
@@ -1768,6 +1773,31 @@ mod tests {
         decoder.try_seek(Duration::from_millis(50)).expect("seek");
         assert_eq!(decoder.by_ref().count(), (frames - 8_820) * 2);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn dsd_inside_wavpack_plays_through_the_dsd_converter_at_176_4_khz() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../player-wavpack/tests/fixtures/dsd64.wv");
+        let mut decoder = open_decoder(&path).expect("DSD WavPack opens");
+        assert!(matches!(decoder, AudioDecoder::Dsd(_)));
+        assert_eq!(decoder.sample_rate().get(), 176_400);
+        assert_eq!(decoder.channels().get(), 2);
+        // 0.2 s of DSD64: 2 822 400 / 5 bits per channel, 16 bits per output frame.
+        let frames = 2_822_400 / 5 / 16;
+        assert_eq!(
+            decoder.total_duration().unwrap(),
+            Duration::from_secs_f64(frames as f64 / 176_400.0)
+        );
+        let samples: Vec<f32> = decoder.by_ref().collect();
+        assert_eq!(samples.len(), frames * 2);
+        assert!(samples.iter().all(|sample| sample.is_finite()));
+        assert!(
+            samples.iter().any(|sample| sample.abs() > 0.1),
+            "the tones are there"
+        );
+        decoder.try_seek(Duration::from_millis(50)).expect("seek");
+        assert_eq!(decoder.by_ref().count(), (frames - 8_820) * 2);
     }
 
     #[test]

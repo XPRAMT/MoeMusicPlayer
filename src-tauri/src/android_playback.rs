@@ -157,6 +157,22 @@ struct NativeCommand {
     can_previous: Option<bool>,
 }
 
+/// Covers larger than this are not sent to the service (the notification shows a small picture anyway).
+const MAX_NOTIFICATION_COVER_BYTES: usize = 2 * 1024 * 1024;
+
+/// The APEv2 cover of a WavPack / Monkey's Audio file (base64), which Android's media retriever cannot read.
+fn ape_cover_base64(locators: &[MediaLocator]) -> Option<String> {
+    use base64::Engine as _;
+    locators.iter().find_map(|locator| {
+        let MediaLocator::FileSystem(path) = locator else {
+            return None;
+        };
+        let picture = player_tags::ape_cover::ape_front_cover_of_path(path)?;
+        (picture.data().len() <= MAX_NOTIFICATION_COVER_BYTES)
+            .then(|| base64::engine::general_purpose::STANDARD.encode(picture.data()))
+    })
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeTrackMetadata {
@@ -166,6 +182,10 @@ struct NativeTrackMetadata {
     duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     artwork_uri: Option<String>,
+    /// The embedded cover read by us (base64), for files whose cover Android's retriever cannot read: the cover of a
+    /// WavPack or Monkey's Audio file is an APEv2 item (ADR 0025).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artwork_data_base64: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1398,12 +1418,18 @@ impl AndroidActor {
                     MediaLocator::FileSystem(_) => None,
                 })
             });
+        let artwork_data_base64 = self
+            .database
+            .track_locators(track.id)
+            .ok()
+            .and_then(|locators| ape_cover_base64(&locators));
         NativeTrackMetadata {
             title: display_track_title(track.title.as_deref(), track.file_name.as_deref()),
             artist: track.artist.clone(),
             album: track.album.clone(),
             duration_ms: track.duration_ms,
             artwork_uri,
+            artwork_data_base64,
         }
     }
 
@@ -1816,6 +1842,7 @@ mod tests {
                 album: None,
                 duration_ms: Some(1000),
                 artwork_uri: Some("content://media/external/audio/albumart/123".into()),
+                artwork_data_base64: None,
             }),
             position_ms: Some(400),
             volume: None,

@@ -5,6 +5,7 @@
 //! integer samples are divided by `2^(bits - 1)` (exact up to 24 bits), floating point files are normalized by the
 //! library, and DSD-in-WavPack files are decimated by the library to 24-bit PCM (rate ÷ 8).
 
+pub mod dsd;
 pub mod wav;
 
 use std::ffi::{c_char, c_int, c_void};
@@ -35,6 +36,7 @@ mod ffi {
 
     pub const OPEN_WVC: c_int = 0x1;
     pub const OPEN_NORMALIZE: c_int = 0x10;
+    pub const OPEN_DSD_NATIVE: c_int = 0x100;
     pub const OPEN_DSD_AS_PCM: c_int = 0x200;
     pub const OPEN_ALT_TYPES: c_int = 0x400;
 
@@ -254,6 +256,10 @@ unsafe impl Send for WavPackReader {}
 impl WavPackReader {
     /// Open a `.wv` file on disk, with the `.wvc` correction file next to it when there is one (the pair is lossless).
     pub fn open_path(path: &std::path::Path) -> Result<Self, WavPackError> {
+        Self::open_path_with(path, false)
+    }
+
+    fn open_path_with(path: &std::path::Path, native_dsd: bool) -> Result<Self, WavPackError> {
         let file =
             std::fs::File::open(path).map_err(|error| WavPackError::Open(error.to_string()))?;
         let mut correction_name = path.as_os_str().to_owned();
@@ -261,9 +267,10 @@ impl WavPackReader {
         let correction = std::fs::File::open(std::path::PathBuf::from(correction_name))
             .ok()
             .map(|file| Box::new(std::io::BufReader::new(file)) as Box<dyn ReadSeek>);
-        Self::open(
+        Self::open_with(
             std::io::BufReader::with_capacity(256 * 1024, file),
             correction,
+            native_dsd,
         )
     }
 
@@ -272,12 +279,27 @@ impl WavPackReader {
         main: impl ReadSeek + 'static,
         correction: Option<Box<dyn ReadSeek>>,
     ) -> Result<Self, WavPackError> {
+        Self::open_with(main, correction, false)
+    }
+
+    /// As [`open`](Self::open); with `native_dsd` a DSD file is read as its 1-bit stream (one byte per channel per
+    /// "sample", see [`dsd::WavPackDsdStream`]) instead of the library's 24-bit PCM decimation.
+    fn open_with(
+        main: impl ReadSeek + 'static,
+        correction: Option<Box<dyn ReadSeek>>,
+        native_dsd: bool,
+    ) -> Result<Self, WavPackError> {
         let mut main = stream_state(Box::new(main))?;
         let mut correction = match correction {
             Some(stream) => Some(stream_state(stream)?),
             None => None,
         };
-        let mut flags = ffi::OPEN_NORMALIZE | ffi::OPEN_DSD_AS_PCM | ffi::OPEN_ALT_TYPES;
+        let dsd_flag = if native_dsd {
+            ffi::OPEN_DSD_NATIVE
+        } else {
+            ffi::OPEN_DSD_AS_PCM
+        };
+        let mut flags = ffi::OPEN_NORMALIZE | dsd_flag | ffi::OPEN_ALT_TYPES;
         if correction.is_some() {
             flags |= ffi::OPEN_WVC;
         }
@@ -458,6 +480,11 @@ pub fn summarize(path: &std::path::Path) -> Option<WavPackSummary> {
         sample_rate_hz: info.sample_rate,
         bit_depth: depth,
     })
+}
+
+/// Whether the WavPack file on disk holds DSD audio.
+pub fn is_dsd(path: &std::path::Path) -> bool {
+    WavPackReader::open_path(path).is_ok_and(|reader| reader.info().dsd)
 }
 
 /// Whether `bytes` (the start of a file) is a WavPack block: `wvpk`.

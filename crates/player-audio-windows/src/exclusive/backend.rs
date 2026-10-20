@@ -243,7 +243,7 @@ impl ExclusiveBackend {
         position: Duration,
     ) -> Result<Option<Duration>, LoadError> {
         self.dop_fallback = None;
-        if self.config.dsd.settings().dop && crate::dsd::is_dsd_path(path) {
+        if self.config.dsd.settings().dop && crate::dsd::is_dsf_path(path) {
             if let Some(duration) = self.open_dop(path, position)? {
                 return Ok(duration);
             }

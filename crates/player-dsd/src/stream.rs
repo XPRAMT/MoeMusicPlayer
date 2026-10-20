@@ -80,6 +80,25 @@ impl DsdInfo {
     }
 }
 
+/// A boxed stream is a stream, so a converter can play any container behind one type.
+impl DsdStream for Box<dyn DsdStream> {
+    fn info(&self) -> DsdInfo {
+        (**self).info()
+    }
+
+    fn read(&mut self, max_bytes: usize, out: &mut [Vec<u8>]) -> Result<usize, DsdError> {
+        (**self).read(max_bytes, out)
+    }
+
+    fn seek_to_byte(&mut self, byte_index: u64) -> Result<(), DsdError> {
+        (**self).seek_to_byte(byte_index)
+    }
+
+    fn position_bytes(&self) -> u64 {
+        (**self).position_bytes()
+    }
+}
+
 /// A seekable source of raw DSD.
 pub trait DsdStream: Send {
     fn info(&self) -> DsdInfo;

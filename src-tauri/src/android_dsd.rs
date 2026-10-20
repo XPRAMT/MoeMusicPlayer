@@ -27,7 +27,7 @@ use player_wavpack::wav::WavPackWavStream;
 pub(crate) const DSD_URI_SCHEME: &str = "moedsd";
 /// URI scheme of a WavPack track handed to the Kotlin data source.
 pub(crate) const WAVPACK_URI_SCHEME: &str = "moewv";
-/// `AudioTrack` tops out at 192 kHz (DSD-in-WavPack files decimate to 352.8 kHz and cannot be played).
+/// `AudioTrack` tops out at 192 kHz (a PCM WavPack file above that cannot be played; DSD is converted to 176.4 kHz).
 const ANDROID_MAX_SAMPLE_RATE: u32 = 192_000;
 /// The only PCM rate DSD is converted to on Android.
 pub(crate) const ANDROID_DSD_OUTPUT_RATE: u32 = 176_400;
@@ -35,6 +35,8 @@ pub(crate) const ANDROID_DSD_OUTPUT_RATE: u32 = 176_400;
 /// A file served to Media3 as a float WAV.
 enum Served {
     Dsd(Box<DsdWavStream<DsfReader<BufReader<File>>>>),
+    /// DSD inside WavPack, converted like a DSF file.
+    DsdWavPack(Box<DsdWavStream<Box<dyn player_dsd::stream::DsdStream>>>),
     WavPack(Box<WavPackWavStream>),
 }
 
@@ -42,6 +44,7 @@ impl Served {
     fn total_len(&self) -> u64 {
         match self {
             Self::Dsd(stream) => stream.total_len(),
+            Self::DsdWavPack(stream) => stream.total_len(),
             Self::WavPack(stream) => stream.total_len(),
         }
     }
@@ -49,6 +52,7 @@ impl Served {
     fn read_at(&mut self, position: u64, out: &mut [u8]) -> Result<usize, String> {
         match self {
             Self::Dsd(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
+            Self::DsdWavPack(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
             Self::WavPack(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
         }
     }
@@ -122,6 +126,18 @@ fn open_dsf(path: &Path) -> Result<Served, String> {
 }
 
 fn open_wavpack(path: &Path) -> Result<Served, String> {
+    // DSD inside WavPack goes through the DSD converter at 176.4 kHz, like a DSF file (ADR 0025).
+    if player_wavpack::is_dsd(path) {
+        let stream = player_wavpack::dsd::WavPackDsdStream::open_path(path)
+            .map_err(|error| error.to_string())?;
+        let reader = DsdPcmReader::new(
+            Box::new(stream) as Box<dyn player_dsd::stream::DsdStream>,
+            ANDROID_DSD_OUTPUT_RATE,
+            Arc::clone(gain()),
+        )
+        .map_err(|error| error.to_string())?;
+        return Ok(Served::DsdWavPack(Box::new(DsdWavStream::new(reader))));
+    }
     // The `.wvc` correction file next to a hybrid `.wv` is used too, as on Windows.
     let reader = player_wavpack::WavPackReader::open_path(path).map_err(|error| error.to_string())?;
     let rate = reader.info().sample_rate;
@@ -354,6 +370,25 @@ mod tests {
         assert_eq!(read(handle, total, &mut buffer).unwrap(), 0);
         close(handle);
         assert!(length(handle).is_none());
+    }
+
+    #[test]
+    fn dsd_inside_wavpack_is_served_at_176_4_khz_by_the_dsd_converter() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../crates/player-wavpack/tests/fixtures/dsd64.wv");
+        let handle = open(&path).unwrap();
+        let total = length(handle).unwrap();
+        let mut header = [0_u8; 44];
+        assert_eq!(read(handle, 0, &mut header).unwrap(), 44);
+        assert_eq!(u32::from_le_bytes(header[24..28].try_into().unwrap()), 176_400);
+        // 0.2 s of DSD64 at 176.4 kHz: 35 280 frames of 8 bytes.
+        assert_eq!(total, 44 + 35_280 * 8);
+        let mut buffer = vec![0_u8; 8_192];
+        assert_eq!(read(handle, 44 + 10_000 * 8, &mut buffer).unwrap(), 8_192);
+        assert!(buffer
+            .chunks_exact(4)
+            .any(|b| f32::from_le_bytes(b.try_into().unwrap()).abs() > 0.05));
+        close(handle);
     }
 
     #[test]
