@@ -209,6 +209,7 @@ pub(crate) fn delete_account(settings: &SettingsStore, id: &str) -> Result<bool,
         .update(|settings| {
             let before = settings.remote_accounts.len();
             settings.remote_accounts.retain(|account| account.id != id);
+            settings.remote_excluded_folders.retain(|folder| folder.account_id != id);
             removed = settings.remote_accounts.len() != before;
             Ok(())
         })

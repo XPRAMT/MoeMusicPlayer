@@ -242,6 +242,7 @@ fn scans_a_real_share_through_the_sync_engine() {
             Ok(ResolvedSource {
                 fs: self.0.clone(),
                 base_path: self.1.clone(),
+                excluded: Vec::new(),
             })
         }
     }

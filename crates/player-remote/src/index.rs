@@ -29,6 +29,21 @@ pub struct ResolvedSource {
     pub fs: Arc<dyn RemoteFs>,
     /// `/`-separated, relative to the account's root; `""` is the account's whole tree.
     pub base_path: String,
+    /// Folders (relative to the account's root) the user excluded: neither they nor anything under them is scanned.
+    pub excluded: Vec<String>,
+}
+
+/// Whether `path` is `excluded` or lies under it (both relative to the same root, `/`-separated).
+pub fn is_excluded(path: &str, excluded: &[String]) -> bool {
+    let path = path.trim_matches('/');
+    excluded.iter().any(|folder| {
+        let folder = folder.trim_matches('/');
+        !folder.is_empty()
+            && (path == folder
+                || path
+                    .strip_prefix(folder)
+                    .is_some_and(|rest| rest.starts_with('/')))
+    })
 }
 
 /// Finds the file tree of a source. The app implements it over the accounts it holds; tests over a folder.
@@ -188,8 +203,13 @@ impl MediaIndex for RemoteMediaIndex {
             }
         };
 
-        // The root must be listable, or the source is unreachable and nothing may be removed from the library.
         let base = resolved.base_path.clone();
+        if is_excluded(&base, &resolved.excluded) {
+            // The whole source lies in an excluded folder: nothing to scan, nothing of it stays.
+            scan.state = SourceScanState::Complete;
+            return scan;
+        }
+        // The root must be listable, or the source is unreachable and nothing may be removed from the library.
         let first = match resolved.fs.list(&base) {
             Ok(entries) => entries,
             Err(error) => {
@@ -207,13 +227,20 @@ impl MediaIndex for RemoteMediaIndex {
             cancelled: AtomicBool::new(false),
             seen: AtomicU64::new(0),
         };
-        handle_entries(&walk, root.id, "", first);
+        handle_entries(&walk, root.id, "", first, &base, &resolved.excluded);
 
         std::thread::scope(|scope| {
             let workers: Vec<_> = (0..LIST_WORKERS)
                 .map(|_| {
                     scope.spawn(|| {
-                        list_worker(&walk, root.id, resolved.fs.as_ref(), &base, cancellation)
+                        list_worker(
+                            &walk,
+                            root.id,
+                            resolved.fs.as_ref(),
+                            &base,
+                            &resolved.excluded,
+                            cancellation,
+                        )
                     })
                 })
                 .collect();
@@ -281,6 +308,7 @@ fn list_worker(
     source_id: SourceId,
     fs: &dyn RemoteFs,
     base: &str,
+    excluded: &[String],
     cancellation: &SyncCancellation,
 ) {
     loop {
@@ -306,7 +334,7 @@ fn list_worker(
             continue;
         };
         match fs.list(&join_path(base, &directory)) {
-            Ok(entries) => handle_entries(walk, source_id, &directory, entries),
+            Ok(entries) => handle_entries(walk, source_id, &directory, entries, base, excluded),
             Err(error) => {
                 walk.incomplete.store(true, Ordering::Relaxed);
                 walk.errors
@@ -328,6 +356,8 @@ fn handle_entries(
     source_id: SourceId,
     directory: &str,
     entries: Vec<crate::fs::RemoteEntry>,
+    base: &str,
+    excluded: &[String],
 ) {
     walk.seen.fetch_add(entries.len() as u64, Ordering::Relaxed);
     let mut folders = Vec::new();
@@ -342,7 +372,9 @@ fn handle_entries(
             format!("{directory}/{}", entry.name)
         };
         if entry.is_dir {
-            folders.push(relative);
+            if !is_excluded(&join_path(base, &relative), excluded) {
+                folders.push(relative);
+            }
         } else if is_remote_library_audio(&entry.name) {
             files.push(MediaTrackRecord {
                 identity: TrackIdentity {

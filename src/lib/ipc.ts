@@ -765,6 +765,18 @@ interface IpcContract {
     args: { input: RemoteAccountInput; path: string };
     result: RemoteFolderView[];
   };
+  remote_excluded_list: {
+    args: Record<string, never>;
+    result: RemoteExcludedView[];
+  };
+  remote_excluded_add: {
+    args: { accountId: string; path: string };
+    result: RemoteExcludedView[];
+  };
+  remote_excluded_remove: {
+    args: { id: string };
+    result: RemoteExcludedView[];
+  };
   remote_browse: {
     args: { accountId: string; path: string };
     result: RemoteFolderView[];
@@ -1250,6 +1262,9 @@ export type RemoteAccountInput = {
 };
 
 export type RemoteAccountsImportResult = { added: number; updated: number };
+
+/** A folder of a remote server that library scans skip. */
+export type RemoteExcludedView = { id: string; accountId: string; accountName: string; path: string };
 
 /** A folder on a remote server; `path` is relative to the account's root, `/`-separated. */
 export type RemoteFolderView = { name: string; path: string };

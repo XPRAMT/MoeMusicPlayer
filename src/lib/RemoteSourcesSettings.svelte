@@ -8,6 +8,7 @@
     type RemoteAccountInput,
     type LibrarySource,
     type RemoteAccountView,
+    type RemoteExcludedView,
     type RemoteFolderView,
   } from './ipc';
   import { tr } from './i18n.js';
@@ -37,7 +38,17 @@
     }
   }
 
-  onMount(() => { void loadAccounts(); });
+  let excluded = $state<RemoteExcludedView[]>([]);
+
+  async function loadExcluded(): Promise<void> {
+    try {
+      excluded = await invokeCommand('remote_excluded_list', {});
+    } catch (cause) {
+      error = getErrorText(cause);
+    }
+  }
+
+  onMount(() => { void loadAccounts(); void loadExcluded(); });
 
   // ---- the account form ----
   type Form = {
@@ -200,13 +211,15 @@
     try {
       await invokeCommand('remote_account_delete', { id: account.id });
       await loadAccounts();
+      await loadExcluded();
     } catch (cause) {
       error = getErrorText(cause);
     }
   }
 
-  // ---- the folder browser ----
+  // ---- the folder browser: pick a server (when there are several), then a folder on it ----
   let browseDialog = $state<HTMLDialogElement>();
+  let browseMode = $state<'add' | 'exclude'>('add');
   let browseAccount = $state<RemoteAccountView | null>(null);
   let browsePath = $state('');
   let folders = $state<RemoteFolderView[]>([]);
@@ -232,13 +245,23 @@
     }
   }
 
-  function openBrowser(account: RemoteAccountView): void {
+  function chooseAccount(account: RemoteAccountView): void {
     browseAccount = account;
     browsePath = '';
     folders = [];
     browseError = null;
-    browseDialog?.showModal();
     void loadFolders('');
+  }
+
+  function startBrowse(mode: 'add' | 'exclude'): void {
+    browseMode = mode;
+    browseAccount = null;
+    browsePath = '';
+    folders = [];
+    browseError = null;
+    // With one server there is nothing to choose.
+    if (accounts.length === 1) chooseAccount(accounts[0]);
+    browseDialog?.showModal();
   }
 
   function closeBrowser(): void {
@@ -251,20 +274,35 @@
     return index < 0 ? '' : path.slice(0, index);
   }
 
-  async function addCurrentFolder(): Promise<void> {
+  async function confirmFolder(): Promise<void> {
     const account = browseAccount;
     if (!account || browseLoading) return;
     browseLoading = true;
     browseError = null;
     try {
-      await invokeCommand('remote_source_add', { accountId: account.id, path: browsePath, displayName: null });
-      closeBrowser();
-      message = tr('已加入遠端資料夾，開始同步。');
-      await onSourceAdded();
+      if (browseMode === 'add') {
+        await invokeCommand('remote_source_add', { accountId: account.id, path: browsePath, displayName: null });
+        closeBrowser();
+        message = tr('已加入遠端資料夾，開始同步。');
+        await onSourceAdded();
+      } else {
+        excluded = await invokeCommand('remote_excluded_add', { accountId: account.id, path: browsePath });
+        closeBrowser();
+        message = tr('已排除這個遠端資料夾；下次同步會略過它，並從曲庫移除其中的曲目。');
+      }
     } catch (cause) {
       browseError = getErrorText(cause);
     } finally {
       browseLoading = false;
+    }
+  }
+
+  async function removeExcluded(entry: RemoteExcludedView): Promise<void> {
+    error = null;
+    try {
+      excluded = await invokeCommand('remote_excluded_remove', { id: entry.id });
+    } catch (cause) {
+      error = getErrorText(cause);
     }
   }
 
@@ -324,12 +362,16 @@
 </script>
 
 <section class="remote-sources" aria-labelledby="remote-sources-heading">
-  <div class="configured-sources-heading">
-    <strong id="remote-sources-heading">{tr("遠端伺服器")}</strong><span>{accounts.length}</span>
-  </div>
   <p class="source-muted-note">{tr("可加入 SMB（網路芳鄰）與 WebDAV 伺服器上的音樂資料夾。密碼由 MoeMusicPlayer 加密後存放在本機設定檔，不會以明文儲存。")}</p>
 
-  <div class="remote-account-list" aria-live="polite">
+  <div class="source-action-row source-action-buttons source-folder-picker">
+    <button class="soft-button" type="button" {disabled} onclick={() => openForm(null)}>{tr("新增遠端伺服器")}</button>
+    <button class="soft-button" type="button" disabled={disabled || accounts.length === 0} onclick={() => openPassphrase('export')}>{tr("匯出帳號")}</button>
+    <button class="soft-button" type="button" {disabled} onclick={() => openPassphrase('import')}>{tr("匯入帳號")}</button>
+  </div>
+
+  <div class="configured-sources" aria-live="polite">
+    <div class="configured-sources-heading"><strong id="remote-sources-heading">{tr("遠端伺服器")}</strong><span>{accounts.length}</span></div>
     {#if loading}
       <p class="source-muted-note">{tr("正在讀取遠端伺服器…")}</p>
     {:else if accounts.length === 0}
@@ -343,7 +385,6 @@
             <small class="configured-source-location">{locationOf(account)}</small>
           </div>
           <div class="configured-source-actions">
-            <button class="soft-button" type="button" {disabled} onclick={() => openBrowser(account)}>{tr("加入資料夾")}</button>
             <button class="text-button" type="button" {disabled} onclick={() => openForm(account)}>{tr("編輯")}</button>
             <button class="text-button" type="button" {disabled} onclick={() => void deleteAccount(account)}>{tr("刪除")}</button>
           </div>
@@ -351,33 +392,46 @@
       {/each}
     {/if}
   </div>
-
-  <div class="source-action-row source-action-buttons">
-    <button class="soft-button" type="button" {disabled} onclick={() => openForm(null)}>{tr("新增遠端伺服器")}</button>
-    <button class="soft-button" type="button" disabled={disabled || accounts.length === 0} onclick={() => openPassphrase('export')}>{tr("匯出帳號")}</button>
-    <button class="soft-button" type="button" {disabled} onclick={() => openPassphrase('import')}>{tr("匯入帳號")}</button>
-  </div>
   {#if error}<div class="source-error-message" role="status">{error}</div>{/if}
   {#if message}<div class="source-result-message" role="status">{message}</div>{/if}
 </section>
 
 <section class="remote-sources" aria-labelledby="remote-folders-heading">
-  <div class="configured-sources-heading">
-    <strong id="remote-folders-heading">{tr("遠端資料夾")}</strong><span>{remoteSources.length}</span>
+  <div class="source-action-row source-action-buttons source-folder-picker">
+    <button class="soft-button" type="button" disabled={disabled || accounts.length === 0} onclick={() => startBrowse('add')}>{tr("選擇遠端資料夾")}</button>
   </div>
-  <div class="remote-account-list" aria-live="polite">
+  <div class="configured-sources" aria-live="polite">
+    <div class="configured-sources-heading"><strong id="remote-folders-heading">{tr("遠端資料夾")}</strong><span>{remoteSources.length}</span></div>
     {#if remoteSources.length === 0}
-      <p class="source-muted-note">{tr("尚未加入遠端資料夾。請在上方的伺服器按「加入資料夾」。")}</p>
+      <p class="source-muted-note">{tr("尚未加入遠端資料夾。請先新增伺服器，再按「選擇遠端資料夾」。")}</p>
     {:else}
       {#each remoteSources as source (source.id)}
         <div class="configured-source">
-          <div class="configured-source-copy">
-            <strong>{source.displayName}</strong>
-            <small class="configured-source-location" title={source.location}>{source.location}</small>
-          </div>
+          <div class="configured-source-copy"><strong>{source.displayName}</strong><small>{tr("遠端資料夾（SMB／WebDAV）")}</small><small class="configured-source-location" title={source.location}>{source.location}</small></div>
           <div class="configured-source-actions">
             <label><input type="checkbox" checked={source.enabled} {disabled} onchange={(event) => onToggleSource(source, event.currentTarget.checked)} />{tr("啟用")}</label>
             <button class="text-button" type="button" {disabled} onclick={() => onRemoveSource(source)}>{tr("移除")}</button>
+          </div>
+        </div>
+      {/each}
+    {/if}
+  </div>
+</section>
+
+<section class="remote-sources" aria-labelledby="remote-excluded-heading">
+  <div class="source-action-row source-action-buttons source-folder-picker excluded-folder-picker">
+    <button class="soft-button" type="button" disabled={disabled || accounts.length === 0} onclick={() => startBrowse('exclude')}>{tr("選擇排除遠端資料夾")}</button>
+  </div>
+  <div class="configured-sources excluded-folders" aria-live="polite">
+    <div class="configured-sources-heading"><strong id="remote-excluded-heading">{tr("已排除的遠端資料夾")}</strong><span>{excluded.length}</span></div>
+    {#if excluded.length === 0}
+      <p class="source-muted-note">{tr("尚未排除遠端資料夾。排除後，同步會略過該資料夾內的曲目。")}</p>
+    {:else}
+      {#each excluded as entry (entry.id)}
+        <div class="configured-source">
+          <div class="configured-source-copy"><strong>{entry.path.split('/').pop()}</strong><small class="configured-source-location" title={entry.path}>{entry.accountName} / {entry.path}</small></div>
+          <div class="configured-source-actions">
+            <button class="text-button" type="button" {disabled} onclick={() => void removeExcluded(entry)}>{tr("移除")}</button>
           </div>
         </div>
       {/each}
@@ -457,9 +511,21 @@
 </dialog>
 
 <dialog bind:this={browseDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-browse-title" oncancel={(event) => { event.preventDefault(); closeBrowser(); }}>
-  {#if browseAccount}
-    <div class="update-dialog-content">
-      <h2 id="remote-browse-title">{tr("選擇遠端資料夾")}</h2>
+  <div class="update-dialog-content">
+    <h2 id="remote-browse-title">{browseMode === 'add' ? tr('選擇遠端資料夾') : tr('選擇排除遠端資料夾')}</h2>
+    {#if !browseAccount}
+      <div class="folder-browser-path">{tr("請選擇伺服器")}</div>
+      <div class="folder-browser-list">
+        {#each accounts as account (account.id)}
+          <button class="folder-browser-entry" type="button" onclick={() => chooseAccount(account)}>
+            <span aria-hidden="true">🖥</span><span>{account.name}</span>
+          </button>
+        {/each}
+      </div>
+      <div class="update-dialog-actions">
+        <button class="soft-button" type="button" onclick={closeBrowser}>{tr("取消")}</button>
+      </div>
+    {:else}
       <div class="folder-browser-path" title={browsePath}>{browseAccount.name} / {browsePath || '…'}</div>
       {#if browseError}<p class="error-text" role="alert">{browseError}</p>{/if}
       <div class="folder-browser-list" aria-busy={browseLoading}>
@@ -479,10 +545,10 @@
       </div>
       <div class="update-dialog-actions">
         <button class="soft-button" type="button" onclick={closeBrowser}>{tr("取消")}</button>
-        <button class="soft-button" type="button" disabled={browseLoading} onclick={() => void addCurrentFolder()}>{tr("使用這個資料夾")}</button>
+        <button class="soft-button" type="button" disabled={browseLoading || (browseMode === 'exclude' && browsePath === '')} onclick={() => void confirmFolder()}>{browseMode === 'add' ? tr('使用這個資料夾') : tr('排除這個資料夾')}</button>
       </div>
-    </div>
-  {/if}
+    {/if}
+  </div>
 </dialog>
 
 <dialog bind:this={passDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-pass-title" oncancel={(event) => { event.preventDefault(); closePassphrase(); }}>
@@ -504,7 +570,6 @@
 
 <style>
   .remote-sources { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
-  .remote-account-list { display: flex; flex-direction: column; }
   .remote-dialog .remote-field { display: grid; gap: 4px; font-size: 0.9em; }
   .remote-dialog .remote-field > span { opacity: 0.75; }
   .remote-dialog input[type='text'], .remote-dialog input[type='password'] {

@@ -69,6 +69,13 @@ impl RemoteConnections {
         settings: &AppSettings,
     ) -> Arc<dyn RemoteResolver> {
         let mut sources = HashMap::new();
+        let mut excluded: HashMap<String, Vec<String>> = HashMap::new();
+        for folder in &settings.remote_excluded_folders {
+            excluded
+                .entry(folder.account_id.clone())
+                .or_default()
+                .push(folder.path.clone());
+        }
         for source in &settings.sources {
             let SourceEntryKind::Folder {
                 path,
@@ -87,7 +94,8 @@ impl RemoteConnections {
                 .iter()
                 .find(|account| &account.id == account_id)
             {
-                sources.insert(source.id, (account.clone(), base));
+                let excluded = excluded.get(&account.id).cloned().unwrap_or_default();
+                sources.insert(source.id, (account.clone(), base, excluded));
             }
         }
         Arc::new(SourceResolver {
@@ -101,16 +109,18 @@ impl RemoteConnections {
 struct SourceResolver {
     connections: Arc<RemoteConnections>,
     data_dir: PathBuf,
-    sources: HashMap<SourceId, (RemoteAccount, String)>,
+    sources: HashMap<SourceId, (RemoteAccount, String, Vec<String>)>,
 }
 
 impl RemoteResolver for SourceResolver {
     fn resolve(&self, source_id: SourceId) -> Result<ResolvedSource, RemoteError> {
-        let (account, base_path) = self.sources.get(&source_id).ok_or(RemoteError::NotFound)?;
+        let (account, base_path, excluded) =
+            self.sources.get(&source_id).ok_or(RemoteError::NotFound)?;
         let fs = self.connections.connect(&self.data_dir, account)?;
         Ok(ResolvedSource {
             fs,
             base_path: base_path.clone(),
+            excluded: excluded.clone(),
         })
     }
 }

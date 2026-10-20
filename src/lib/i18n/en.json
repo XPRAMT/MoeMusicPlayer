@@ -796,7 +796,6 @@
   "已儲存；留空表示不變": "Saved; leave blank to keep it",
   "已儲存密碼": "password saved",
   "主機": "Host",
-  "加入資料夾": "Add folder",
   "可加入 SMB（網路芳鄰）與 WebDAV 伺服器上的音樂資料夾。密碼由 MoeMusicPlayer 加密後存放在本機設定檔，不會以明文儲存。": "Add music folders from SMB (network share) and WebDAV servers. Passwords are encrypted by MoeMusicPlayer before they are stored in the local settings file, never in plain text.",
   "未設定密碼": "no password",
   "正在讀取遠端伺服器…": "Loading remote servers…",
@@ -829,12 +828,18 @@
   "編輯": "Edit",
   "編輯遠端伺服器": "Edit remote server",
   "請輸入匯出檔案時設定的密碼。匯入後，密碼會改用這台裝置的金鑰加密。": "Enter the password you set when exporting. After the import, the passwords are encrypted again with this device's key.",
-  "選擇遠端資料夾": "Choose a remote folder",
+  "選擇遠端資料夾": "Choose remote folder",
   "檔案密碼（至少 8 個字元）": "File password (at least 8 characters)",
   "WebDAV 路徑": "WebDAV path",
   "選擇共用資料夾": "Choose a share",
   "尚未選擇": "Not chosen yet",
   "本機音樂來源": "Folders on this device",
   "遠端資料夾": "Remote folders",
-  "尚未加入遠端資料夾。請在上方的伺服器按「加入資料夾」。": "No remote folders yet. Press \"Add folder\" on a server above."
+  "已排除這個遠端資料夾；下次同步會略過它，並從曲庫移除其中的曲目。": "Remote folder excluded. The next sync skips it and removes its tracks from the library.",
+  "尚未加入遠端資料夾。請先新增伺服器，再按「選擇遠端資料夾」。": "No remote folders yet. Add a server first, then press \"Choose remote folder\".",
+  "選擇排除遠端資料夾": "Choose remote folder to exclude",
+  "已排除的遠端資料夾": "Excluded remote folders",
+  "尚未排除遠端資料夾。排除後，同步會略過該資料夾內的曲目。": "No remote folders excluded. A sync skips the tracks inside an excluded folder.",
+  "請選擇伺服器": "Choose a server",
+  "排除這個資料夾": "Exclude this folder"
 }

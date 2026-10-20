@@ -46,6 +46,7 @@ fn make_tree(name: &str) -> PathBuf {
 struct Fixed {
     fs: Arc<dyn RemoteFs>,
     base: String,
+    excluded: Vec<String>,
 }
 
 impl RemoteResolver for Fixed {
@@ -53,6 +54,7 @@ impl RemoteResolver for Fixed {
         Ok(ResolvedSource {
             fs: Arc::clone(&self.fs),
             base_path: self.base.clone(),
+            excluded: self.excluded.clone(),
         })
     }
 }
@@ -72,9 +74,14 @@ fn root_for(base: &str) -> LibraryRoot {
 }
 
 fn index_over(fs: Arc<dyn RemoteFs>, base: &str) -> RemoteMediaIndex {
+    index_excluding(fs, base, &[])
+}
+
+fn index_excluding(fs: Arc<dyn RemoteFs>, base: &str, excluded: &[&str]) -> RemoteMediaIndex {
     RemoteMediaIndex::new(Arc::new(Fixed {
         fs,
         base: base.to_owned(),
+        excluded: excluded.iter().map(|folder| (*folder).to_owned()).collect(),
     }))
 }
 
@@ -284,4 +291,34 @@ fn the_sync_engine_stores_remote_tracks_and_leaves_them_when_the_server_is_down(
 
     let _ = fs::remove_dir_all(tree);
     let _: HashMap<(), ()> = HashMap::new();
+}
+
+#[test]
+fn excluded_folders_and_everything_under_them_are_skipped() {
+    let tree = make_tree("excluded");
+    // Under the whole tree: one album and one other folder.
+    let mut index = index_excluding(
+        Arc::new(DirFs::new(&tree)),
+        "",
+        &["Artist/Album One", "Other"],
+    );
+    let scan = index.scan(&root_for(""));
+    assert_eq!(scan.state, SourceScanState::Complete);
+    assert_eq!(paths(&scan), vec!["Artist/Album Two/03 lyrics.wv"]);
+
+    // A name that only starts like an excluded folder is not excluded ("Album" vs "Album One").
+    let mut index = index_excluding(Arc::new(DirFs::new(&tree)), "", &["Artist/Album"]);
+    assert_eq!(index.scan(&root_for("")).tracks.len(), 5);
+
+    // The exclusion is relative to the account's root, also when the source is rooted in a folder.
+    let mut index = index_excluding(Arc::new(DirFs::new(&tree)), "Artist", &["Artist/Album Two"]);
+    let scan = index.scan(&root_for("Artist"));
+    assert_eq!(paths(&scan), vec!["Album One/01 s16.wv", "Album One/02 s24.wv"]);
+
+    // A source inside an excluded folder scans nothing and is complete (what was in it is removed).
+    let mut index = index_excluding(Arc::new(DirFs::new(&tree)), "Artist/Album One", &["Artist"]);
+    let scan = index.scan(&root_for("Artist/Album One"));
+    assert_eq!(scan.state, SourceScanState::Complete);
+    assert!(scan.tracks.is_empty());
+    let _ = fs::remove_dir_all(tree);
 }

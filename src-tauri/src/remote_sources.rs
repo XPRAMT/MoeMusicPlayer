@@ -116,6 +116,91 @@ pub(crate) async fn remote_smb_shares(
     .map_err(|error| format!("無法取得共用資料夾：{error}"))?
 }
 
+/// An excluded remote folder as the page sees it.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemoteExcludedView {
+    pub id: String,
+    pub account_id: String,
+    pub account_name: String,
+    pub path: String,
+}
+
+fn excluded_views(settings: &crate::settings::AppSettings) -> Vec<RemoteExcludedView> {
+    settings
+        .remote_excluded_folders
+        .iter()
+        .map(|folder| RemoteExcludedView {
+            id: folder.id.clone(),
+            account_id: folder.account_id.clone(),
+            account_name: settings
+                .remote_accounts
+                .iter()
+                .find(|account| account.id == folder.account_id)
+                .map_or_else(String::new, |account| account.name.clone()),
+            path: folder.path.clone(),
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub(crate) fn remote_excluded_list(state: tauri::State<'_, AppState>) -> Result<Vec<RemoteExcludedView>, String> {
+    let settings = state.settings.snapshot().map_err(|error| error.to_string())?;
+    Ok(excluded_views(&settings))
+}
+
+/// Exclude a folder of a saved account: library scans skip it and everything under it.
+#[tauri::command]
+pub(crate) fn remote_excluded_add(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    path: String,
+) -> Result<Vec<RemoteExcludedView>, String> {
+    let account = account_of_id(&state, &account_id)?;
+    let path = normalize_folder(&path);
+    if path.is_empty() {
+        return Err("請選擇要排除的資料夾（不能是伺服器的最上層）。".to_owned());
+    }
+    let settings = state
+        .settings
+        .update(|settings| {
+            let covered = settings.remote_excluded_folders.iter().any(|folder| {
+                folder.account_id == account.id
+                    && player_remote::index::is_excluded(&path, std::slice::from_ref(&folder.path))
+            });
+            if !covered {
+                // A folder that contains earlier exclusions replaces them.
+                settings.remote_excluded_folders.retain(|folder| {
+                    folder.account_id != account.id
+                        || !player_remote::index::is_excluded(&folder.path, std::slice::from_ref(&path))
+                });
+                settings.remote_excluded_folders.push(crate::settings::RemoteExcludedFolder {
+                    id: player_remote::account::new_account_id(),
+                    account_id: account.id.clone(),
+                    path: path.clone(),
+                });
+            }
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(excluded_views(&settings))
+}
+
+#[tauri::command]
+pub(crate) fn remote_excluded_remove(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<Vec<RemoteExcludedView>, String> {
+    let settings = state
+        .settings
+        .update(|settings| {
+            settings.remote_excluded_folders.retain(|folder| folder.id != id);
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(excluded_views(&settings))
+}
+
 /// Browse the server the form describes before anything is saved: at the top (`path` empty) the folders are the shares,
 /// below that they are the folders of a share (`path` is `share/folder/...`). Used by the folder picker of the form.
 #[tauri::command]

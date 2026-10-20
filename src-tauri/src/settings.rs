@@ -1019,6 +1019,39 @@ pub fn normalize_output_devices(devices: Vec<OutputDeviceEntry>) -> Vec<OutputDe
     result
 }
 
+/// A folder of a remote server that library scans skip (the remote counterpart of [`ExcludedFolderEntry`]).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteExcludedFolder {
+    pub id: String,
+    /// The account (`remoteAccounts[].id`) whose server holds the folder.
+    pub account_id: String,
+    /// The folder, relative to the account's root, `/`-separated.
+    pub path: String,
+}
+
+/// Remote excluded folders from a possibly hand-edited file: invalid entries and repeated ids are skipped.
+fn lenient_remote_excluded(value: Option<serde_json::Value>) -> Vec<RemoteExcludedFolder> {
+    let Some(items) = value.as_ref().and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let mut folders: Vec<RemoteExcludedFolder> = Vec::new();
+    for item in items {
+        let Ok(folder) = serde_json::from_value::<RemoteExcludedFolder>(item.clone()) else {
+            continue;
+        };
+        if folder.id.trim().is_empty()
+            || folder.account_id.trim().is_empty()
+            || folder.path.trim_matches('/').is_empty()
+            || folders.iter().any(|existing| existing.id == folder.id)
+        {
+            continue;
+        }
+        folders.push(folder);
+    }
+    folders
+}
+
 /// Missing or malformed entries and fields fall back to the defaults one by one.
 /// Remote accounts from a possibly hand-edited file: an invalid entry or a repeated id is skipped, and a stored password
 /// that is not in sealed form is dropped (the account then asks for its password again; plaintext is never kept).
@@ -1581,6 +1614,9 @@ pub struct AppSettings {
     /// Remote accounts (SMB, WebDAV; ADR 0026). Passwords are stored only in sealed form, never as plaintext.
     #[serde(default)]
     pub remote_accounts: Vec<player_remote::account::RemoteAccount>,
+    /// Folders of remote servers that scans skip.
+    #[serde(default)]
+    pub remote_excluded_folders: Vec<RemoteExcludedFolder>,
     /// Last main-window outer position / inner size / maximized flag (desktop).
     #[serde(default)]
     pub window_geometry: Option<WindowGeometry>,
@@ -1642,6 +1678,7 @@ impl Default for AppSettings {
             sources: Vec::new(),
             excluded_folders: Vec::new(),
             remote_accounts: Vec::new(),
+            remote_excluded_folders: Vec::new(),
             window_geometry: None,
             shortcuts: ShortcutSettings::default(),
             resume_playback: false,
@@ -2121,6 +2158,7 @@ struct RawSettings {
     sources: Option<Vec<SourceEntry>>,
     excluded_folders: Option<Vec<ExcludedFolderEntry>>,
     remote_accounts: Option<serde_json::Value>,
+    remote_excluded_folders: Option<serde_json::Value>,
     window_geometry: Option<WindowGeometry>,
     shortcuts: Option<serde_json::Value>,
     resume_playback: Option<bool>,
@@ -2183,6 +2221,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         sources: raw.sources.unwrap_or_default(),
         excluded_folders: raw.excluded_folders.unwrap_or_default(),
         remote_accounts: lenient_remote_accounts(raw.remote_accounts),
+        remote_excluded_folders: lenient_remote_excluded(raw.remote_excluded_folders),
         window_geometry: raw.window_geometry,
         shortcuts: lenient_shortcuts(raw.shortcuts),
         resume_playback: raw.resume_playback.unwrap_or(false),
