@@ -875,6 +875,43 @@
   }
   let allFilesPromptDialog = $state<HTMLDialogElement>();
 
+  // The system wallpaper needs one more permission on some systems (HyperOS wants "read images" besides All files access).
+  // The panel that explains it opens when the user has just chosen the system wallpaper and the read was refused for it.
+  let wallpaperPermissionPromptOpen = $state(false);
+  let wallpaperPermissionPromptDialog = $state<HTMLDialogElement>();
+  /** The user chose the system wallpaper and the first read after that has not been looked at yet. */
+  let wallpaperPromptWanted = false;
+  $effect(() => {
+    const dialog = wallpaperPermissionPromptDialog;
+    if (!dialog) return;
+    if (wallpaperPermissionPromptOpen && !dialog.open) dialog.showModal();
+    else if (!wallpaperPermissionPromptOpen && dialog.open) dialog.close();
+  });
+  function closeWallpaperPermissionPrompt(): void {
+    wallpaperPermissionPromptOpen = false;
+  }
+  async function confirmWallpaperPermissionPrompt(): Promise<void> {
+    wallpaperPermissionPromptOpen = false;
+    try {
+      const result = await invokeCommand('android_request_media_images_permission', {});
+      if (result?.granted) {
+        await loadMainBackground();
+        return;
+      }
+      // The system's prompt answers later, or the settings page was opened: look again when the permission is granted.
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const status = await invokeCommand('android_media_images_permission_status', {});
+        if (status?.granted) {
+          await loadMainBackground();
+          return;
+        }
+      }
+    } catch (error) {
+      mainBackgroundError = tr("無法讀取主介面背景：{0}", [getErrorText(error)]);
+    }
+  }
+
   function closeAllFilesPrompt(): void {
     allFilesPromptOpen = false;
   }
@@ -1461,7 +1498,18 @@
       if (capabilities?.platform === 'android' && themePreferences.mainBackgroundMode === 'systemWallpaper') {
         androidWallpaperHasImage = bytes.byteLength > 0;
         // No readable wallpaper: drop any previous image so the native backdrop shows instead.
-        if (bytes.byteLength === 0) clearMainBackgroundImage();
+        if (bytes.byteLength === 0) {
+          clearMainBackgroundImage();
+          // Just chosen by the user and refused for want of the read-images permission: explain it, once per choice.
+          if (wallpaperPromptWanted) {
+            wallpaperPromptWanted = false;
+            if ((await invokeCommand('android_system_wallpaper_reason', {})) === 'mediaImages') {
+              wallpaperPermissionPromptOpen = true;
+            }
+          }
+        } else {
+          wallpaperPromptWanted = false;
+        }
       }
       await setMainBackgroundBytes(bytes, revision);
       if (revision !== mainBackgroundReadRevision) return;
@@ -1608,6 +1656,7 @@
   async function selectMainBackgroundMode(mode: ThemePreferences['mainBackgroundMode']): Promise<void> {
     if (mode === 'systemWallpaper' && capabilities?.platform !== 'windows' && capabilities?.platform !== 'android') return;
     mainBackgroundReadRevision += 1;
+    wallpaperPromptWanted = mode === 'systemWallpaper' && capabilities?.platform === 'android';
     updateMainBackgroundLook({ mainBackgroundMode: mode });
     if (mode === 'solid') clearMainBackgroundImage();
     saveThemePreferencesNow();
@@ -5160,6 +5209,24 @@
       <div class="update-dialog-actions">
         <button class="soft-button" type="button" onclick={closeAllFilesPrompt}>{tr("取消")}</button>
         <button class="soft-button" type="button" onclick={confirmAllFilesPrompt}>{tr("前往授權")}</button>
+      </div>
+    </div>
+  </dialog>
+  <dialog
+    bind:this={wallpaperPermissionPromptDialog}
+    class="update-dialog floating-surface"
+    style={`--quick-settings-opacity:${themePreferences.quickSettingsOpacityPercent}%;--quick-settings-blur:${themePreferences.quickSettingsBlurPx}px`}
+    aria-labelledby="wallpaper-permission-title"
+    aria-describedby="wallpaper-permission-description"
+    oncancel={(event) => { event.preventDefault(); closeWallpaperPermissionPrompt(); }}
+  >
+    <div class="update-dialog-content">
+      <h2 id="wallpaper-permission-title">{tr("需要「讀取圖片」權限")}</h2>
+      <p id="wallpaper-permission-description">{tr("這個系統要求再多授權「讀取圖片」，才允許 MoeMusicPlayer 讀取系統桌布。沒有授權時，背景會顯示純色。")}</p>
+      <p>{tr("按下「前往授權」後，系統會詢問是否允許；若系統不再詢問，會開啟本程式的設定頁，請在「權限」中允許「照片和影片」或「圖片」，再返回本程式。")}</p>
+      <div class="update-dialog-actions">
+        <button class="soft-button" type="button" onclick={closeWallpaperPermissionPrompt}>{tr("取消")}</button>
+        <button class="soft-button" type="button" onclick={() => void confirmWallpaperPermissionPrompt()}>{tr("前往授權")}</button>
       </div>
     </div>
   </dialog>

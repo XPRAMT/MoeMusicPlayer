@@ -49,7 +49,17 @@ pub struct AllFilesAccessStatus {
     pub granted: bool,
 }
 
-/// Static wallpaper copy (path) or why there is none ("permission" | "live" | "unavailable").
+/// The "read images" permission some systems want before they hand over the wallpaper.
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaImagesPermission {
+    pub granted: bool,
+    /// The system's prompt could not be shown, so the app's settings page was opened instead.
+    #[serde(default)]
+    pub opened_settings: bool,
+}
+
+/// Static wallpaper copy (path) or why there is none ("permission" | "mediaImages" | "live" | "unavailable").
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemWallpaperRead {
@@ -165,6 +175,18 @@ impl<R: Runtime> MediaIndex<R> {
     #[cfg(target_os = "android")]
     pub fn all_files_access_status(&self) -> Result<AllFilesAccessStatus> {
         self.platform.all_files_access_status()
+    }
+
+    /// Whether the "read images" permission is held.
+    #[cfg(target_os = "android")]
+    pub fn media_images_permission_status(&self) -> Result<MediaImagesPermission> {
+        self.platform.media_images_permission_status()
+    }
+
+    /// Ask for the "read images" permission (or open the app's settings when the prompt cannot be shown).
+    #[cfg(target_os = "android")]
+    pub fn request_media_images_permission(&self) -> Result<MediaImagesPermission> {
+        self.platform.request_media_images_permission()
     }
 
     /// Open the system All files access page for this app.

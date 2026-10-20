@@ -125,6 +125,13 @@ class CopyUriToFileArgs {
             strings = [Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE],
             alias = "legacyStorage",
         ),
+        // Reading the system wallpaper: All files access is enough on most Android versions, but some systems (HyperOS)
+        // also demand this one when the wallpaper is read. Asked for only when the user picks the system wallpaper and
+        // the read is refused for it.
+        Permission(
+            strings = [Manifest.permission.READ_MEDIA_IMAGES],
+            alias = "mediaImages",
+        ),
     ],
 )
 class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
@@ -376,6 +383,51 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (error: Exception) {
             invoke.reject("Could not start Android playback service: ${error.message}")
         }
+    }
+
+    private fun mediaImagesGranted(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            activity.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /** Whether the "read images" permission is held (always true before Android 13, where it does not exist). */
+    @Command
+    fun mediaImagesPermissionStatus(invoke: Invoke) {
+        invoke.resolve(JSObject().put("granted", mediaImagesGranted()))
+    }
+
+    /**
+     * Ask for the "read images" permission. When the system will not show its prompt any more (the user refused it
+     * before), the app's settings page is opened instead, where it can be turned on.
+     */
+    @Command
+    fun requestMediaImagesPermission(invoke: Invoke) {
+        if (mediaImagesGranted()) {
+            invoke.resolve(JSObject().put("granted", true).put("openedSettings", false))
+            return
+        }
+        requestPermissionForAlias("mediaImages", invoke, "onMediaImagesPermissionResult")
+    }
+
+    @PermissionCallback
+    private fun onMediaImagesPermissionResult(invoke: Invoke) {
+        val granted = mediaImagesGranted()
+        var openedSettings = false
+        if (!granted && !activity.shouldShowRequestPermissionRationale(Manifest.permission.READ_MEDIA_IMAGES)) {
+            // The prompt did not appear (or was refused with "don't ask again"): only the settings page is left.
+            try {
+                activity.runOnUiThread {
+                    activity.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            .setData(Uri.parse("package:${activity.packageName}")),
+                    )
+                }
+                openedSettings = true
+            } catch (error: Exception) {
+                Log.i(LOG_TAG, "could not open the app settings: $error")
+            }
+        }
+        invoke.resolve(JSObject().put("granted", granted).put("openedSettings", openedSettings))
     }
 
     @PermissionCallback
@@ -890,7 +942,9 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.resolve(response.put("path", output.absolutePath).put("reason", JSONObject.NULL))
             } catch (error: SecurityException) {
                 Log.i(LOG_TAG, "wallpaper: refused: ${error.message}")
-                invoke.resolve(response.put("path", JSONObject.NULL).put("reason", "permission"))
+                // "mediaImages": the system wants the read-images permission for it (HyperOS); anything else is "permission".
+                val reason = if (error.message?.contains("READ_MEDIA_IMAGES") == true) "mediaImages" else "permission"
+                invoke.resolve(response.put("path", JSONObject.NULL).put("reason", reason))
             } catch (error: Exception) {
                 Log.i(LOG_TAG, "wallpaper: failed: $error")
                 invoke.reject("Could not read the system wallpaper: ${error.message}")

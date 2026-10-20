@@ -175,6 +175,18 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Ok(self.0.run_mobile_plugin::<crate::AllFilesAccessStatus>("allFilesAccessStatus", json!({}))?)
     }
 
+    pub(crate) fn media_images_permission_status(&self) -> Result<crate::MediaImagesPermission> {
+        Ok(self
+            .0
+            .run_mobile_plugin::<crate::MediaImagesPermission>("mediaImagesPermissionStatus", json!({}))?)
+    }
+
+    pub(crate) fn request_media_images_permission(&self) -> Result<crate::MediaImagesPermission> {
+        Ok(self
+            .0
+            .run_mobile_plugin::<crate::MediaImagesPermission>("requestMediaImagesPermission", json!({}))?)
+    }
+
     pub(crate) fn request_all_files_access(&self) -> Result<()> {
         self.0.run_mobile_plugin::<serde_json::Value>("requestAllFilesAccess", json!({}))?;
         Ok(())

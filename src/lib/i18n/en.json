@@ -848,5 +848,8 @@
   "沒有可用的根目錄": "No root folder available",
   "專輯封面快取": "Album cover cache",
   "快取": "Cache",
-  "專輯卡片與專輯頁的封面縮圖會暫存起來加快顯示。超過上限時，先刪除最早存入的內容；清除後，封面會在顯示時依檔案重新產生。": "Cover thumbnails of album cards and album pages are kept to show them faster. Over the limit, the oldest are deleted first; after clearing, covers are made again from the files when they are shown."
+  "專輯卡片與專輯頁的封面縮圖會暫存起來加快顯示。超過上限時，先刪除最早存入的內容；清除後，封面會在顯示時依檔案重新產生。": "Cover thumbnails of album cards and album pages are kept to show them faster. Over the limit, the oldest are deleted first; after clearing, covers are made again from the files when they are shown.",
+  "需要「讀取圖片」權限": "\"Read images\" permission needed",
+  "這個系統要求再多授權「讀取圖片」，才允許 MoeMusicPlayer 讀取系統桌布。沒有授權時，背景會顯示純色。": "This system also requires the \"Read images\" permission before MoeMusicPlayer may read the system wallpaper. Without it the background shows a solid colour.",
+  "按下「前往授權」後，系統會詢問是否允許；若系統不再詢問，會開啟本程式的設定頁，請在「權限」中允許「照片和影片」或「圖片」，再返回本程式。": "After you press \"Go to permission\" the system asks whether to allow it. If it no longer asks, the app's settings page opens: allow \"Photos and videos\" or \"Images\" under Permissions, then return to this app."
 }

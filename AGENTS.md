@@ -59,6 +59,8 @@ Android 回前景只有底色與點歌沒反應（2026-10-20／21，已處理）
 
 Android 資料夾選擇（2026-10-20，緊急修正）：系統的資料夾選擇器（`ACTION_OPEN_DOCUMENT_TREE`）從 Android 11 起不讓使用者選內部儲存空間或記憶卡的**根目錄**（「無法使用這個資料夾，為保護你的隱私，請選擇其他資料夾」），即使已有所有檔案存取權也一樣。所以已授權時改用 App 自己的資料夾瀏覽器：後端 `android_folder_browser::pick_directory`（新增來源、排除資料夾、我的最愛資料夾、幻燈片資料夾四個流程共用）對前端發出 `android-folder-picker-request` 事件並等待（最長 15 分鐘），`FolderBrowserDialog.svelte` 以 `android_list_directories` 列出真實目錄（只列子資料夾、略過 `.` 開頭、限 `/storage` 下的內部儲存空間與記憶卡，可切換儲存空間、上一層、「使用這個資料夾」可選任何資料夾含根目錄），答案由 `android_folder_picker_result` 回報；返回鍵等同取消。未授權時仍走系統選擇器。單元測試在 `src-tauri/src/android_folder_browser.rs`。手機實測待做。
 
+Android 系統桌布權限（2026-10-21）：HyperOS 讀系統桌布時除了「所有檔案存取權」還要求 `READ_MEDIA_IMAGES`（`WallpaperManager.getDrawable()` 丟 SecurityException「Op READ_MEDIA_IMAGES ignore」）。外掛 manifest 宣告該權限，Kotlin `mediaImages` 別名與命令 `mediaImagesPermissionStatus`／`requestMediaImagesPermission`（系統不再詢問時改開本程式設定頁）；`readSystemWallpaper` 的 reason 為 `mediaImages`，App 命令 `android_system_wallpaper_reason`／`android_request_media_images_permission`／`android_media_images_permission_status`。只有使用者在「主介面背景」剛選下「系統桌布」且讀取被這個原因拒絕時，`App.svelte` 才跳出說明面板（「前往授權」「取消」；每次選擇一次，每分鐘的重新檢查不會彈出），授權後立即重新讀取。平板 23046RP50C 實測：選系統桌布 → 面板 → 系統授權對話框 → 桌布出現。
+
 Android 與 Windows 對齊（2026-10-17）：
 - 本機歌詞候選：`lyrics_service` 的 `android_find_all_lyrics` 依序讀同名 `.lrc` 與內嵌歌詞，與 Windows `find_all_lyrics` 相同；播放查找只取第一個結果（sidecar 優先），候選清單與「套用本機歌詞」列出全部。
 - 排除資料夾：Android 用 `pickDirectoryPath` 選擇實際路徑，存進 `settings.json` 的 `excluded_folders`（與 Windows 同一欄位）。`fs_scan::scan_directory` 掃描時略過排除路徑及其子資料夾（`with_adapter_excluding`），完整掃描會移除其中的曲目。排除資料夾不能包含來源根目錄，來源也不能加在排除路徑內。

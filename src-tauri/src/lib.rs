@@ -6038,6 +6038,11 @@ async fn appearance_get_main_background(app: AppHandle) -> Result<Response, Stri
     Ok(Response::new(bytes))
 }
 
+/// Why the last read of the Android system wallpaper gave nothing ("mediaImages" when the system wants the read-images
+/// permission for it); the page asks for it when the user has just chosen the system wallpaper.
+#[cfg(target_os = "android")]
+static LAST_WALLPAPER_REASON: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 fn main_background_bytes(app: &AppHandle, state: &AppState) -> Result<Vec<u8>, String> {
     let theme = state
         .settings
@@ -6064,10 +6069,15 @@ fn main_background_bytes(app: &AppHandle, state: &AppState) -> Result<Vec<u8>, S
                 // Windows one. Otherwise (no permission / live wallpaper) return nothing, and the
                 // frontend falls back to FLAG_SHOW_WALLPAPER compositing (ADR 0008).
                 match app.media_index().read_system_wallpaper() {
-                    Ok(read) => match read.path {
-                        Some(path) => Some(std::path::PathBuf::from(path)),
-                        None => return Ok(Vec::new()),
-                    },
+                    Ok(read) => {
+                        *LAST_WALLPAPER_REASON
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = read.reason.clone();
+                        match read.path {
+                            Some(path) => Some(std::path::PathBuf::from(path)),
+                            None => return Ok(Vec::new()),
+                        }
+                    }
                     Err(_) => return Ok(Vec::new()),
                 }
             }
@@ -6148,6 +6158,70 @@ async fn android_all_files_access_status(
         return tauri::async_runtime::spawn_blocking(move || {
             app.media_index()
                 .all_files_access_status()
+                .map(Some)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+/// Why the last read of the system wallpaper gave nothing (Android): "mediaImages", "permission", "live", "unavailable";
+/// `None` when it was read or never asked.
+#[tauri::command]
+fn android_system_wallpaper_reason() -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        LAST_WALLPAPER_REASON
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        None
+    }
+}
+
+/// The "read images" permission some systems want before they hand over the wallpaper: asks for it, or opens the app's
+/// settings when the system will not show its prompt. `None` on other platforms.
+#[tauri::command]
+async fn android_request_media_images_permission(
+    app: AppHandle,
+) -> Result<Option<tauri_plugin_media_index::MediaImagesPermission>, String> {
+    #[cfg(target_os = "android")]
+    {
+        return tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .request_media_images_permission()
+                .map(Some)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+/// Whether the "read images" permission is held (`None` on other platforms).
+#[tauri::command]
+async fn android_media_images_permission_status(
+    app: AppHandle,
+) -> Result<Option<tauri_plugin_media_index::MediaImagesPermission>, String> {
+    #[cfg(target_os = "android")]
+    {
+        return tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .media_images_permission_status()
                 .map(Some)
                 .map_err(|error| error.to_string())
         })
@@ -11639,6 +11713,9 @@ pub fn run() {
             appearance_set_android_wallpaper_backdrop,
             android_all_files_access_status,
             android_request_all_files_access,
+            android_system_wallpaper_reason,
+            android_request_media_images_permission,
+            android_media_images_permission_status,
             settings_get_lyrics_preferences,
             settings_set_lyrics_preferences,
             settings_get_now_playing_appearance_preferences,

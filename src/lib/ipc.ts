@@ -751,6 +751,18 @@ interface IpcContract {
     args: Record<string, never>;
     result: void;
   };
+  android_system_wallpaper_reason: {
+    args: Record<string, never>;
+    result: string | null;
+  };
+  android_request_media_images_permission: {
+    args: Record<string, never>;
+    result: AndroidMediaImagesPermission | null;
+  };
+  android_media_images_permission_status: {
+    args: Record<string, never>;
+    result: AndroidMediaImagesPermission | null;
+  };
   remote_accounts_list: {
     args: Record<string, never>;
     result: RemoteAccountView[];
@@ -1318,6 +1330,12 @@ export type DirectoryListing = {
 };
 
 /** Android MANAGE_EXTERNAL_STORAGE ("All files access") state (ADR 0014). */
+export type AndroidMediaImagesPermission = {
+  granted: boolean;
+  /** The system's prompt could not be shown, so the app's settings page was opened. */
+  openedSettings?: boolean;
+};
+
 export type AndroidAllFilesAccessStatus = {
   supported: boolean;
   /** Android 10 or older: legacy READ/WRITE_EXTERNAL_STORAGE runtime permission. */
