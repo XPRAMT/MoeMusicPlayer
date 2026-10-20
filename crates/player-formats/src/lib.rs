@@ -236,7 +236,7 @@ const EXTENSIONS: &[ExtensionEntry] = &[
     video("mkv", Matroska, true),
     video("webm", Matroska, true),
     ext("ape", Ape, true, true, false),
-    ext("wv", WavPack, true, false, true),
+    ext("wv", WavPack, true, true, true),
     ext("mpc", Mpc, true, false, false),
     ext("mp+", Mpc, true, false, false),
     ext("mpp", Mpc, true, false, false),
@@ -410,12 +410,12 @@ mod tests {
         assert_eq!(set(windows_library_extensions()), set(expected));
     }
 
-    /// Previously `fs_scan::AUDIO_EXTENSIONS`.
+    /// Previously `fs_scan::AUDIO_EXTENSIONS`, plus `wv` since WavPack playback on Android (ADR 0025).
     #[test]
     fn android_library_set_is_unchanged() {
         let expected = [
             "aac", "ac3", "aif", "aiff", "alac", "amr", "ape", "dff", "dsf", "flac", "m4a", "m4b",
-            "mid", "midi", "mka", "mp3", "oga", "ogg", "opus", "spx", "wav", "wave", "wma",
+            "mid", "midi", "mka", "mp3", "oga", "ogg", "opus", "spx", "wav", "wave", "wma", "wv",
         ];
         assert_eq!(set(android_library_extensions()), set(expected));
     }

@@ -118,7 +118,13 @@ impl<R: Runtime> PlatformMediaIndex<R> {
             return read_dsf_metadata(path);
         }
         match parse_lofty_metadata(path, None) {
-            Ok(metadata) => Ok(metadata),
+            Ok(mut metadata) => {
+                // lofty gives no bit depth for WavPack; the decoder knows (lossless files and `.wv` + `.wvc` pairs).
+                if player_formats::decode_engine(path) == player_formats::DecodeEngine::WavPack {
+                    metadata.bit_depth = player_wavpack::lossless_bit_depth(path);
+                }
+                Ok(metadata)
+            }
             Err(lofty_error) => {
                 if let Ok(metadata) = crate::android_metadata::read(path) {
                     if has_useful_metadata(&metadata) {

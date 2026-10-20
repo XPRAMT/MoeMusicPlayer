@@ -100,8 +100,8 @@ class PlaybackService : MediaSessionService() {
         serviceGeneration = SERVICE_GENERATIONS.incrementAndGet()
 
         val extractors = DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)
-        // DSD (.dsf) tracks arrive as moedsd:// URIs and are served as 32-bit float WAV by the Rust converter
-        // (ADR 0016), so float PCM output is enabled for them.
+        // DSD (.dsf) tracks arrive as moedsd:// URIs and WavPack (.wv) tracks as moewv:// URIs; both are served as
+        // 32-bit float WAV by the Rust converters (ADR 0016, ADR 0025), so float PCM output is enabled for them.
         val dataSources = DsdAwareDataSourceFactory(DefaultDataSource.Factory(this))
         val renderers = DefaultRenderersFactory(this).setEnableAudioFloatOutput(true)
         val player = ExoPlayer.Builder(this, renderers)
@@ -285,8 +285,11 @@ class PlaybackService : MediaSessionService() {
                     val trackId = command.optString("trackId")
                     // Library tracks are real paths under All files access (file://, ADR 0014);
                     // remaining legacy tracks may still be content:// URIs.
-                    require(uri.startsWith("file:///") || uri.startsWith("content://") || uri.startsWith("$DSD_URI_SCHEME:///")) {
-                        "Android playback requires a file://, content:// or $DSD_URI_SCHEME:// URI"
+                    require(
+                        uri.startsWith("file:///") || uri.startsWith("content://") ||
+                            uri.startsWith("$DSD_URI_SCHEME:///") || uri.startsWith("$WAVPACK_URI_SCHEME:///"),
+                    ) {
+                        "Android playback requires a file://, content://, $DSD_URI_SCHEME:// or $WAVPACK_URI_SCHEME:// URI"
                     }
                     require(trackId.isNotBlank()) { "trackId is required" }
                     val metadata = command.optJSONObject("metadata") ?: JSONObject()
@@ -306,7 +309,10 @@ class PlaybackService : MediaSessionService() {
                         .setTag(commandId)
                         .setUri(Uri.parse(uri))
                         .setMediaMetadata(mediaMetadata)
-                    if (uri.startsWith("$DSD_URI_SCHEME:")) mediaItemBuilder.setMimeType("audio/wav")
+                    // Both are served as a WAV stream, so the extractor is chosen by MIME type, not by the extension.
+                    if (uri.startsWith("$DSD_URI_SCHEME:") || uri.startsWith("$WAVPACK_URI_SCHEME:")) {
+                        mediaItemBuilder.setMimeType("audio/wav")
+                    }
                     val mediaItem = mediaItemBuilder.build()
                     endedEventLoadInstance = null
                     stopped = false
@@ -443,8 +449,13 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun loadArtwork(loadUri: String, artworkUri: String?): ByteArray? {
-        // A DSD track is loaded as moedsd://; its file (and embedded picture) is the same path as file://.
-        val contentUri = if (loadUri.startsWith("$DSD_URI_SCHEME:")) "file:" + loadUri.removePrefix("$DSD_URI_SCHEME:") else loadUri
+        // A DSD track is loaded as moedsd:// and a WavPack track as moewv://; the file (and embedded picture) is the
+        // same path as file://.
+        val contentUri = when {
+            loadUri.startsWith("$DSD_URI_SCHEME:") -> "file:" + loadUri.removePrefix("$DSD_URI_SCHEME:")
+            loadUri.startsWith("$WAVPACK_URI_SCHEME:") -> "file:" + loadUri.removePrefix("$WAVPACK_URI_SCHEME:")
+            else -> loadUri
+        }
         val embedded = try {
             val retriever = android.media.MediaMetadataRetriever()
             try {

@@ -5,6 +5,8 @@
 //! integer samples are divided by `2^(bits - 1)` (exact up to 24 bits), floating point files are normalized by the
 //! library, and DSD-in-WavPack files are decimated by the library to 24-bit PCM (rate ÷ 8).
 
+pub mod wav;
+
 use std::ffi::{c_char, c_int, c_void};
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
@@ -243,6 +245,21 @@ pub struct WavPackReader {
 unsafe impl Send for WavPackReader {}
 
 impl WavPackReader {
+    /// Open a `.wv` file on disk, with the `.wvc` correction file next to it when there is one (the pair is lossless).
+    pub fn open_path(path: &std::path::Path) -> Result<Self, WavPackError> {
+        let file =
+            std::fs::File::open(path).map_err(|error| WavPackError::Open(error.to_string()))?;
+        let mut correction_name = path.as_os_str().to_owned();
+        correction_name.push("c");
+        let correction = std::fs::File::open(std::path::PathBuf::from(correction_name))
+            .ok()
+            .map(|file| Box::new(std::io::BufReader::new(file)) as Box<dyn ReadSeek>);
+        Self::open(
+            std::io::BufReader::with_capacity(256 * 1024, file),
+            correction,
+        )
+    }
+
     /// Open a `.wv` stream, with its `.wvc` correction stream if there is one.
     pub fn open(
         main: impl ReadSeek + 'static,
@@ -393,6 +410,16 @@ impl Drop for WavPackReader {
     fn drop(&mut self) {
         unsafe { ffi::WavpackCloseFile(self.context) };
     }
+}
+
+/// Bit depth of the encoded samples of a WavPack file on disk (32 for floating point), reported only when the file
+/// decodes losslessly (a hybrid `.wv` without its `.wvc` is lossy and has none that means anything).
+pub fn lossless_bit_depth(path: &std::path::Path) -> Option<u8> {
+    let info = WavPackReader::open_path(path).ok()?.info();
+    let depth = if info.float { 32 } else { info.bits_per_sample };
+    u8::try_from(depth)
+        .ok()
+        .filter(|depth| info.lossless && (8..=32).contains(depth))
 }
 
 /// Whether `bytes` (the start of a file) is a WavPack block: `wvpk`.

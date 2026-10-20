@@ -1492,7 +1492,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         private val AUDIO_EXTENSIONS = setOf(
             "aac", "ac3", "aif", "aiff", "alac", "amr", "ape", "dff", "dsf", "flac",
             "m4a", "m4b", "mid", "midi", "mka", "mp3", "mp4", "oga", "ogg", "opus", "spx",
-            "wav", "wave", "wma",
+            "wav", "wave", "wma", "wv",
         )
 
         private const val MAX_CONTENT_LEASE_BYTES = 512L * 1024 * 1024

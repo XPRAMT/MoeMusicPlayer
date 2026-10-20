@@ -1,6 +1,11 @@
-//! DSD playback on Android (ADR 0016).
+//! DSD and WavPack playback on Android (ADR 0016, ADR 0025).
 //!
-//! Media3 has no DSD decoder, so a `.dsf` track is loaded with a `moedsd:///path/to/file.dsf` URI. The Kotlin
+//! Media3 has neither a DSD nor a WavPack decoder, so a `.dsf` track is loaded with a `moedsd:///path/to/file.dsf`
+//! URI and a `.wv` track with `moewv:///path/to/file.wv` (the same data source serves both; the WavPack file is
+//! decoded at its own sample rate, with its `.wvc` correction file when there is one).
+//! The text below describes the DSD case; the WavPack case is the same except for the converter.
+//!
+//! A DSD URI is served like this. The Kotlin
 //! `DsdDataSource` opens that URI through the JNI exports below and reads it as a WAV file of 32-bit float PCM at
 //! 176.4 kHz, which `player_dsd` converts on demand (the same converter Windows plays through). ExoPlayer seeks by
 //! byte position, and the reader seeks exactly. The gain is shared by every open stream, so changing it in the
@@ -16,25 +21,58 @@ use std::sync::{Arc, Mutex, OnceLock};
 use player_dsd::dsf::DsfReader;
 use player_dsd::reader::DsdPcmReader;
 use player_dsd::wav::DsdWavStream;
+use player_wavpack::wav::WavPackWavStream;
 
 /// URI scheme of a DSD track handed to the Kotlin data source.
 pub(crate) const DSD_URI_SCHEME: &str = "moedsd";
+/// URI scheme of a WavPack track handed to the Kotlin data source.
+pub(crate) const WAVPACK_URI_SCHEME: &str = "moewv";
+/// `AudioTrack` tops out at 192 kHz (DSD-in-WavPack files decimate to 352.8 kHz and cannot be played).
+const ANDROID_MAX_SAMPLE_RATE: u32 = 192_000;
 /// The only PCM rate DSD is converted to on Android.
 pub(crate) const ANDROID_DSD_OUTPUT_RATE: u32 = 176_400;
 
-type DsdStreamHandle = DsdWavStream<DsfReader<BufReader<File>>>;
+/// A file served to Media3 as a float WAV.
+enum Served {
+    Dsd(Box<DsdWavStream<DsfReader<BufReader<File>>>>),
+    WavPack(Box<WavPackWavStream>),
+}
 
-/// `file:///x/y.dsf` becomes `moedsd:///x/y.dsf`; every other URI is returned unchanged.
-pub(crate) fn to_dsd_uri(uri: &str) -> String {
-    match uri.strip_prefix("file://") {
-        Some(rest) if rest.to_ascii_lowercase().ends_with(".dsf") => {
-            format!("{DSD_URI_SCHEME}://{rest}")
+impl Served {
+    fn total_len(&self) -> u64 {
+        match self {
+            Self::Dsd(stream) => stream.total_len(),
+            Self::WavPack(stream) => stream.total_len(),
         }
-        _ => uri.to_owned(),
+    }
+
+    fn read_at(&mut self, position: u64, out: &mut [u8]) -> Result<usize, String> {
+        match self {
+            Self::Dsd(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
+            Self::WavPack(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
+        }
     }
 }
 
-/// The URI the player loads for a track: its file URI, as a `moedsd` URI when it is a DSF file.
+type DsdStreamHandle = Served;
+
+/// `file:///x/y.dsf` becomes `moedsd:///x/y.dsf` and `file:///x/y.wv` becomes `moewv:///x/y.wv`; every other URI is
+/// returned unchanged.
+pub(crate) fn to_dsd_uri(uri: &str) -> String {
+    let Some(rest) = uri.strip_prefix("file://") else {
+        return uri.to_owned();
+    };
+    let lower = rest.to_ascii_lowercase();
+    if lower.ends_with(".dsf") {
+        format!("{DSD_URI_SCHEME}://{rest}")
+    } else if lower.ends_with(".wv") {
+        format!("{WAVPACK_URI_SCHEME}://{rest}")
+    } else {
+        uri.to_owned()
+    }
+}
+
+/// The URI the player loads for a track: its file URI, as a `moedsd` / `moewv` URI when it is a DSF or WavPack file.
 pub(crate) fn playable_uri(
     database: &player_db::Database,
     track_id: player_core::TrackId,
@@ -74,13 +112,33 @@ fn stream(handle: i64) -> Option<Arc<Mutex<DsdStreamHandle>>> {
         .cloned()
 }
 
-/// Open a DSF file; the handle (never 0) is used with the other functions until `close`.
-pub(crate) fn open(path: &Path) -> Result<i64, String> {
+fn open_dsf(path: &Path) -> Result<Served, String> {
     let file = File::open(path).map_err(|error| format!("無法開啟 DSD 檔案：{error}"))?;
     let dsf = DsfReader::open(BufReader::with_capacity(256 * 1024, file))
         .map_err(|error| error.to_string())?;
     let reader = DsdPcmReader::new(dsf, ANDROID_DSD_OUTPUT_RATE, Arc::clone(gain()))
         .map_err(|error| error.to_string())?;
+    Ok(Served::Dsd(Box::new(DsdWavStream::new(reader))))
+}
+
+fn open_wavpack(path: &Path) -> Result<Served, String> {
+    // The `.wvc` correction file next to a hybrid `.wv` is used too, as on Windows.
+    let reader = player_wavpack::WavPackReader::open_path(path).map_err(|error| error.to_string())?;
+    let rate = reader.info().sample_rate;
+    if rate > ANDROID_MAX_SAMPLE_RATE {
+        return Err(format!("取樣率 {rate} Hz 超過 Android 的上限 {ANDROID_MAX_SAMPLE_RATE} Hz"));
+    }
+    let stream = WavPackWavStream::new(reader).map_err(|error| error.to_string())?;
+    Ok(Served::WavPack(Box::new(stream)))
+}
+
+/// Open a DSF or WavPack file; the handle (never 0) is used with the other functions until `close`.
+pub(crate) fn open(path: &Path) -> Result<i64, String> {
+    let served = match player_formats::decode_engine(path) {
+        player_formats::DecodeEngine::Dsd => open_dsf(path)?,
+        player_formats::DecodeEngine::WavPack => open_wavpack(path)?,
+        _ => return Err(format!("不是 DSD 或 WavPack 檔案：{}", path.display())),
+    };
     let mut registry = registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -88,7 +146,7 @@ pub(crate) fn open(path: &Path) -> Result<i64, String> {
     let handle = registry.next;
     registry
         .streams
-        .insert(handle, Arc::new(Mutex::new(DsdWavStream::new(reader))));
+        .insert(handle, Arc::new(Mutex::new(served)));
     Ok(handle)
 }
 
@@ -107,9 +165,7 @@ pub(crate) fn read(handle: i64, position: u64, out: &mut [u8]) -> Result<usize, 
     let mut stream = stream
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    stream
-        .read_at(position, out)
-        .map_err(|error| error.to_string())
+    stream.read_at(position, out)
 }
 
 pub(crate) fn close(handle: i64) {
@@ -257,6 +313,53 @@ mod tests {
         assert!(length(handle).is_none(), "a closed handle is gone");
         assert!(read(handle, 0, &mut buffer).is_err());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn wavpack_file_uris_become_wavpack_uris() {
+        assert_eq!(
+            to_dsd_uri("file:///storage/emulated/0/Music/a.wv"),
+            "moewv:///storage/emulated/0/Music/a.wv"
+        );
+        assert_eq!(to_dsd_uri("file:///x/A%20B.WV"), "moewv:///x/A%20B.WV");
+        assert_eq!(to_dsd_uri("file:///x/a.wvc"), "file:///x/a.wvc");
+        assert_eq!(to_dsd_uri("file:///x/a.wav"), "file:///x/a.wav");
+    }
+
+    fn wavpack_reference(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../crates/player-wavpack/tests/reference")
+            .join(name)
+    }
+
+    #[test]
+    fn a_wavpack_file_is_served_as_a_float_wav_at_its_own_rate_with_random_access() {
+        let handle = open(&wavpack_reference("int24_stereo.wv")).unwrap();
+        assert_ne!(handle, 0);
+        let total = length(handle).unwrap();
+        let mut header = [0_u8; 44];
+        assert_eq!(read(handle, 0, &mut header).unwrap(), 44);
+        assert_eq!(&header[0..4], b"RIFF");
+        assert_eq!(u16::from_le_bytes(header[20..22].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(header[24..28].try_into().unwrap()), 48_000);
+        // 0.1 s of stereo float: 4800 frames x 8 bytes.
+        assert_eq!(total, 44 + 4_800 * 8);
+        let mut buffer = vec![0_u8; 1_024];
+        let middle = 44 + 2_400 * 8;
+        assert_eq!(read(handle, middle, &mut buffer).unwrap(), 1_024);
+        assert!(buffer
+            .chunks_exact(4)
+            .any(|b| f32::from_le_bytes(b.try_into().unwrap()).abs() > 0.01));
+        assert_eq!(read(handle, 100, &mut buffer).unwrap(), 1_024);
+        assert_eq!(read(handle, total, &mut buffer).unwrap(), 0);
+        close(handle);
+        assert!(length(handle).is_none());
+    }
+
+    #[test]
+    fn files_that_are_neither_dsd_nor_wavpack_are_refused() {
+        assert!(open(&wavpack_reference("int24_stereo.ss.txt")).is_err());
+        assert!(open(&wavpack_reference("missing.wv")).is_err());
     }
 
     #[test]

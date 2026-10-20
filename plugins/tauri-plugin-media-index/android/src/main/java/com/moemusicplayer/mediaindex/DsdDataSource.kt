@@ -12,8 +12,9 @@ import androidx.media3.datasource.TransferListener
 import java.io.IOException
 
 /**
- * Natives of the Rust DSD converter (ADR 0016), exported from `moemusicplayer_lib` (`src-tauri/src/android_dsd.rs`).
- * A handle is a DSF file served as a WAV file of 32-bit float PCM, converted on demand.
+ * Natives of the Rust DSD and WavPack converters (ADR 0016, ADR 0025), exported from `moemusicplayer_lib`
+ * (`src-tauri/src/android_dsd.rs`). A handle is a DSF or WavPack file served as a WAV file of 32-bit float PCM,
+ * converted on demand; the Rust side picks the converter from the file extension.
  */
 object DsdBridge {
     /** Opens a DSF file; 0 means it could not be opened or is not supported. */
@@ -30,7 +31,10 @@ object DsdBridge {
 
 const val DSD_URI_SCHEME = "moedsd"
 
-/** Reads a `moedsd:///path/to/file.dsf` URI as a float WAV stream produced by the Rust converter. */
+/** Scheme of a WavPack (`.wv`) track: `moewv:///path/to/file.wv`, served by the same data source as DSD. */
+const val WAVPACK_URI_SCHEME = "moewv"
+
+/** Reads a `moedsd:///path/to/file.dsf` or `moewv:///path/to/file.wv` URI as a float WAV stream produced by Rust. */
 @UnstableApi
 class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
     private var uri: Uri? = null
@@ -42,7 +46,7 @@ class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
     override fun open(dataSpec: DataSpec): Long {
         uri = dataSpec.uri
         transferInitializing(dataSpec)
-        val path = dataSpec.uri.path ?: throw IOException("DSD URI has no path")
+        val path = dataSpec.uri.path ?: throw IOException("Converted-media URI has no path")
         handle = DsdBridge.nativeOpen(path)
         if (handle == 0L) throw IOException("Cannot open DSD file: $path")
         val total = DsdBridge.nativeLength(handle)
@@ -90,7 +94,7 @@ class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
     }
 }
 
-/** Sends `moedsd:` URIs to [DsdDataSource] and everything else to the regular data source. */
+/** Sends `moedsd:` and `moewv:` URIs to [DsdDataSource] and everything else to the regular data source. */
 @UnstableApi
 class DsdAwareDataSourceFactory(private val base: DataSource.Factory) : DataSource.Factory {
     override fun createDataSource(): DataSource = RoutingDataSource(base.createDataSource(), DsdDataSource())
@@ -106,7 +110,8 @@ private class RoutingDataSource(private val base: DataSource, private val dsd: D
     }
 
     override fun open(dataSpec: DataSpec): Long {
-        active = if (dataSpec.uri.scheme == DSD_URI_SCHEME) dsd else base
+        val scheme = dataSpec.uri.scheme
+        active = if (scheme == DSD_URI_SCHEME || scheme == WAVPACK_URI_SCHEME) dsd else base
         return active.open(dataSpec)
     }
 

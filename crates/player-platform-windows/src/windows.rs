@@ -706,23 +706,9 @@ fn reliable_source_bit_depth(file_type: FileType, bit_depth: Option<u8>) -> Opti
     bit_depth.filter(|depth| (8..=32).contains(depth))
 }
 
-/// WavPack: lofty does not report a bit depth, and a hybrid file without its correction file is lossy, so ask the
-/// decoder: the depth of the encoded samples (32 for floating point), only when the file decodes losslessly.
+/// WavPack: lofty does not report a bit depth, so ask the decoder (lossless files and `.wv` + `.wvc` pairs only).
 fn read_wavpack_bit_depth(path: &Path) -> Option<u8> {
-    let file = fs::File::open(path).ok()?;
-    // A `.wvc` correction file next to the `.wv` makes it lossless again, as it does when playing.
-    let mut correction_name = path.as_os_str().to_owned();
-    correction_name.push("c");
-    let correction = fs::File::open(PathBuf::from(correction_name))
-        .ok()
-        .map(|file| Box::new(std::io::BufReader::new(file)) as Box<dyn player_wavpack::ReadSeek>);
-    let reader =
-        player_wavpack::WavPackReader::open(std::io::BufReader::new(file), correction).ok()?;
-    let info = reader.info();
-    let depth = if info.float { 32 } else { info.bits_per_sample };
-    u8::try_from(depth)
-        .ok()
-        .filter(|depth| info.lossless && (8..=32).contains(depth))
+    player_wavpack::lossless_bit_depth(path)
 }
 
 /// WAV is a container and may carry lossy codecs such as ADPCM or companded audio. Verify its
