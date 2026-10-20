@@ -26,3 +26,7 @@ httpdate = "1"
 
 [dev-dependencies]
 lofty = "0.25.4"
+
+[[test]]
+name = "real_music"
+required-features = ["testing"]
