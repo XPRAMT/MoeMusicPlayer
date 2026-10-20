@@ -5927,12 +5927,15 @@ impl LibraryRepository for Database {
                  WHERE source_id=?1 AND source_item_id NOT IN (SELECT value FROM json_each(?2))",
                 params![source, seen],
             )?;
-            tx.execute(
-                "INSERT INTO lyric_sidecar_sources (source_id, scanned_at_utc_ms) VALUES (?1, ?2)
-                 ON CONFLICT(source_id) DO UPDATE SET scanned_at_utc_ms=excluded.scanned_at_utc_ms",
-                params![source, 0_i64],
-            )?;
         }
+        // The source was looked through for sidecars, completely or not. An incomplete scan (a few files timed out, say)
+        // still listed every folder it reports on, and a source that never completes must not stay "unknown" for ever;
+        // only the forgetting of vanished sidecars needs a complete scan.
+        tx.execute(
+            "INSERT INTO lyric_sidecar_sources (source_id, scanned_at_utc_ms) VALUES (?1, ?2)
+             ON CONFLICT(source_id) DO UPDATE SET scanned_at_utc_ms=excluded.scanned_at_utc_ms",
+            params![source, 0_i64],
+        )?;
         tx.commit()?;
         Ok(())
     }

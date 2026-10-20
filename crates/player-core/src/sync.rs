@@ -123,8 +123,8 @@ pub trait LibraryRepository {
         Ok(HashMap::new())
     }
 
-    /// Record the sidecars a scan found. `complete` says the scan saw the whole source: then sidecars it did not see
-    /// are forgotten and the source is marked as scanned for lyrics (so a track without a record has no sidecar).
+    /// Record the sidecars a scan found and mark the source as scanned for lyrics (so a track without a record has no
+    /// sidecar). `complete` says the scan saw the whole source: only then are sidecars it did not see forgotten.
     fn save_lyric_sidecars(
         &mut self,
         _source_id: SourceId,
