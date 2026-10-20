@@ -14,7 +14,7 @@ test('normalize falls back to defaults and repairs ranges', () => {
   const s = normalizeSpectrogramSettings({ fftSize: 3000, window: 'x', dbFloor: -60, dbCeiling: -80, channel: { mode: 'channel', index: 1 }, colormap: 'viridis' });
   assert.equal(s.fftSize, 4096, 'an unknown size falls back to the default, 4096');
   assert.equal(s.window, 'hann');
-  assert.equal(s.dbCeiling, -50);
+  assert.equal(s.dbCeiling, 0, 'legacy upper limits are ignored');
   assert.deepEqual(s.channel, { mode: 'channel', index: 1 });
   assert.equal(s.colormap, 'viridis');
 });
@@ -38,6 +38,7 @@ test('render options clamp size', () => {
   const o = toRenderOptions(DEFAULT_SPECTROGRAM_SETTINGS, 99999, 10);
   assert.equal(o.columns, 8000);
   assert.equal(o.height, 64);
+  assert.equal(toRenderOptions({ ...DEFAULT_SPECTROGRAM_SETTINGS, dbCeiling: 20 }, 100, 100).dbCeiling, 0);
   assert.deepEqual(o.channel, { mode: 'channel', index: 0 }, 'the left channel by default');
   assert.equal(o.logFrequency, false, 'the frequency axis is always linear');
 });

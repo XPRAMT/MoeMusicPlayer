@@ -506,7 +506,6 @@
         </select>
       </label>
     <label class="sg-inline">{tr("dB 下限")} <input type="number" step="5" min="-200" max="-1" value={settings.dbFloor} onchange={(e) => updateSettings({ dbFloor: Number(e.currentTarget.value) })} /></label>
-    <label class="sg-inline">{tr("dB 上限")} <input type="number" step="5" min="-199" max="20" value={settings.dbCeiling} onchange={(e) => updateSettings({ dbCeiling: Number(e.currentTarget.value) })} /></label>
   </header>
 
   <div class="sg-info-row">

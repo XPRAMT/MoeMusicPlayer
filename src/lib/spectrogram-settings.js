@@ -48,9 +48,8 @@ export function normalizeSpectrogramSettings(value) {
     const n = Number(v);
     return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
   };
-  let dbFloor = num(raw.dbFloor, d.dbFloor, -200, -1);
-  let dbCeiling = num(raw.dbCeiling, d.dbCeiling, -199, 20);
-  if (dbCeiling <= dbFloor) dbCeiling = Math.min(20, dbFloor + 10);
+  const dbFloor = num(raw.dbFloor, d.dbFloor, -200, -1);
+  const dbCeiling = 0;
   const channel = raw.channel?.mode === 'separate' ? { mode: 'separate' }
     : raw.channel?.mode === 'channel' && Number.isInteger(raw.channel.index) && raw.channel.index >= 0 ? { mode: 'channel', index: raw.channel.index }
     : raw.channel?.mode === 'mix' ? { mode: 'mix' }
@@ -103,7 +102,7 @@ export function toRenderOptions(settings, columns, height) {
     colormap: settings.colormap,
     channel: settings.channel,
     dbFloor: settings.dbFloor,
-    dbCeiling: settings.dbCeiling,
+    dbCeiling: 0,
     // The frequency axis is always linear.
     logFrequency: false,
     // The axis always reaches the file's Nyquist frequency.

@@ -742,7 +742,6 @@
   "B 透明度 {0}%": "B opacity {0}%",
   "B 較弱 −": "B weaker −",
   "B 較強 +": "B stronger +",
-  "dB 上限": "dB ceiling",
   "dB 下限": "dB floor",
   "DoP 只在獨佔模式下使用；請先在上方「輸出模式」選擇獨佔。": "DoP is only used in exclusive mode; choose exclusive under \"Output mode\" above first.",
   "DoP 無法使用，已轉成 PCM：{0}": "DoP is unavailable, converted to PCM: {0}",
