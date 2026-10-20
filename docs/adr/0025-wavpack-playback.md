@@ -15,6 +15,10 @@ Decision date: 2026-10-20, Asia/Taipei (UTC+08:00)
 - `player-formats`: `DecodeEngine::WavPack` for `.wv`; the open-file dialog now offers `.wv` (Windows scanning and association already did). `player-audio-windows` adds `AudioDecoder::WavPack` over a rodio `Source`. The spectrogram decodes WavPack with the same reader.
 - **Tags and covers.** lofty reads and writes the APEv2 tag of a `.wv`, but its generic `Tag` neither carries the `Cover Art (...)` items nor writes pictures back, so for WavPack and Monkey's Audio the details panel works on the file's own `ApeTag` (`player-tags/src/ape_cover.rs`, `write_ape_edit`): existing cover items survive an edit of another field, a replaced or removed cover drops the old items, and library artwork (`player-platform-windows/src/artwork.rs`) reads the cover from the same place. This also fixes covers of `.ape` files.
 
+## Verification
+
+Besides the reference encoder's small fixtures, 15 whole songs were encoded with the official `wavpack` 5.9.0 (lossless 16/24/32-bit integer and 32-bit float in several compression modes, hybrid lossy at 96–768 kbps, and lossy `.wv` + `.wvc` pairs) and decoded with the official `wvunpack`; the decoder equals `wvunpack` bit for bit in every case (and the original WAV for lossless files), seeks are exact, tags, covers of 0.6–1.1 MB, tag edits (audio unchanged, `.wvc` pairing intact), the library scan columns and shared/exclusive WASAPI playback all pass. `crates/player-wavpack/tests/make_official_test_files.py` rebuilds the set. ffmpeg's WavPack encoder stores 24-bit input in a 32-bit container, so it is not used for bit-depth checks.
+
 ## Consequences
 
 - The decoder is the reference implementation, so every WavPack feature that matters for playback (lossless, hybrid with and without `.wvc`, float, 8–32 bit, multichannel, DSD) is covered; it is verified against the reference encoder's own files (`tests/reference`) and against local music round-tripped through ffmpeg at several compression levels (`tests/real_music.rs`, run by hand).

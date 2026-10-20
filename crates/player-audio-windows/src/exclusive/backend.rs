@@ -1270,6 +1270,85 @@ mod tests {
         backend.stop().unwrap();
     }
 
+    /// Plays WavPack files (`MOE_WV_PLAY`, `;`-separated) through the exclusive WASAPI backend on a real device
+    /// (silent): the stream must open exclusively, the position must advance in real time, a seek must land where
+    /// asked and the end of the file must be reached without underruns.
+    #[test]
+    #[ignore = "takes a real output device exclusively (silent); needs MOE_WV_PLAY"]
+    fn real_device_plays_wavpack_files_exclusively() {
+        use crate::output_devices::{list_output_devices, OutputDeviceSetting};
+        let fragment =
+            std::env::var("MOE_EXCLUSIVE_DEVICE").unwrap_or_else(|_| "Realtek Digital".to_owned());
+        let devices = list_output_devices();
+        let device = devices
+            .iter()
+            .find(|device| device.name.contains(&fragment))
+            .unwrap_or_else(|| panic!("no device named like {fragment:?}: {devices:?}"));
+        let config = Arc::new(ResamplingConfig::new(ResamplingMode::HighQuality, false));
+        config.set_exclusive(true);
+        config.set_devices(vec![OutputDeviceSetting {
+            id: Some(device.id.clone()),
+            ..OutputDeviceSetting::default()
+        }]);
+        let mut backend = ExclusiveBackend::new(Arc::clone(&config));
+        backend.set_volume(0.0).unwrap();
+        let files = std::env::var("MOE_WV_PLAY").expect("MOE_WV_PLAY");
+        for file in files.split(';').filter(|file| !file.is_empty()) {
+            let path = std::path::PathBuf::from(file);
+            let duration = backend.load(&path).unwrap().expect("duration");
+            backend.play().unwrap();
+            let started = Instant::now();
+            std::thread::sleep(Duration::from_millis(1_500));
+            let info = backend.resampling_info().unwrap();
+            let Some(exclusive) = info.exclusive.clone() else {
+                panic!(
+                    "{path:?} fell back to shared mode: {:?}",
+                    info.exclusive_fallback
+                );
+            };
+            let played = backend.position();
+            let wall = started.elapsed();
+            assert!(
+                played + Duration::from_millis(300) > wall
+                    && played < wall + Duration::from_millis(100),
+                "{path:?}: position {played:?} after {wall:?}"
+            );
+            let middle = duration / 2;
+            let landed = backend.seek(middle).unwrap();
+            assert!(
+                landed >= middle.saturating_sub(Duration::from_millis(50))
+                    && landed <= middle + Duration::from_millis(150),
+                "{path:?}: seek to {middle:?} landed at {landed:?}"
+            );
+            std::thread::sleep(Duration::from_millis(500));
+            backend
+                .seek(duration.saturating_sub(Duration::from_millis(1_500)))
+                .unwrap();
+            let waiting = Instant::now();
+            while !backend.is_empty() && waiting.elapsed() < Duration::from_secs(6) {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert!(backend.is_empty(), "{path:?}: playback did not finish");
+            let after = backend.resampling_info().unwrap().exclusive.unwrap();
+            println!(
+                "{path:?}: exclusive {} bit {} ch at {} Hz (source {:?} Hz, {}), underruns {}",
+                exclusive.bits,
+                exclusive.channels,
+                info.output_rate,
+                info.source_rate,
+                if info.output_rate == info.source_rate.unwrap_or(0) {
+                    "no conversion"
+                } else {
+                    "converted"
+                },
+                after.underruns
+            );
+            assert_eq!(after.underruns, 0, "{path:?}: underruns");
+            assert_eq!(backend.output_status(), OutputStatus::Healthy);
+        }
+        backend.stop().unwrap();
+    }
+
     /// Follows the real system default endpoint: opens it exclusively, remembers which endpoint that was, and stays
     /// healthy while Windows keeps it as the default (silent; switch the default by hand during the wait to see
     /// `DefaultDeviceChanged`, `MOE_DEFAULT_WAIT_SECONDS` sets the wait).

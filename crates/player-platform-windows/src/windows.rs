@@ -710,7 +710,14 @@ fn reliable_source_bit_depth(file_type: FileType, bit_depth: Option<u8>) -> Opti
 /// decoder: the depth of the encoded samples (32 for floating point), only when the file decodes losslessly.
 fn read_wavpack_bit_depth(path: &Path) -> Option<u8> {
     let file = fs::File::open(path).ok()?;
-    let reader = player_wavpack::WavPackReader::open(std::io::BufReader::new(file), None).ok()?;
+    // A `.wvc` correction file next to the `.wv` makes it lossless again, as it does when playing.
+    let mut correction_name = path.as_os_str().to_owned();
+    correction_name.push("c");
+    let correction = fs::File::open(PathBuf::from(correction_name))
+        .ok()
+        .map(|file| Box::new(std::io::BufReader::new(file)) as Box<dyn player_wavpack::ReadSeek>);
+    let reader =
+        player_wavpack::WavPackReader::open(std::io::BufReader::new(file), correction).ok()?;
     let info = reader.info();
     let depth = if info.float { 32 } else { info.bits_per_sample };
     u8::try_from(depth)
@@ -1073,8 +1080,8 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 mod tests {
     use super::{
         is_supported_audio_file, mpeg_codec_name, read_lossless_wav_bit_depth,
-        read_wavpack_bit_depth, reliable_source_bit_depth, supported_audio_extensions, to_extended_path,
-        windows_locator_key, WindowsMediaIndex,
+        read_wavpack_bit_depth, reliable_source_bit_depth, supported_audio_extensions,
+        to_extended_path, windows_locator_key, WindowsMediaIndex,
     };
     use lofty::file::FileType;
     use lofty::mpeg::Layer;
@@ -1275,6 +1282,86 @@ mod tests {
         assert!(page.items[0].duration_ms.unwrap_or_default() > 0);
 
         fs::remove_dir_all(to_extended_path(&base).expect("extended root")).expect("cleanup");
+    }
+
+    /// Scans the folder of official-encoder files into an in-memory library (`MOE_WV_MANIFEST` is in it; run by hand
+    /// with `-- --ignored`) and checks every column the list shows: title, artist, album, year, codec, sample rate,
+    /// bit depth and duration.
+    #[test]
+    #[ignore = "needs MOE_WV_MANIFEST"]
+    fn official_encoder_files_scan_into_the_library() {
+        let manifest_path =
+            PathBuf::from(std::env::var("MOE_WV_MANIFEST").unwrap().replace('/', "\\"));
+        let manifest = fs::read_to_string(&manifest_path).unwrap();
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, manifest_path.parent().unwrap().to_path_buf());
+        let mut index = WindowsMediaIndex::new();
+        let report = player_core::SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_000_000)
+            .expect("sync");
+        assert_eq!(report.state, Some(SourceScanState::Complete));
+        assert!(
+            report.metadata_errors.is_empty(),
+            "{:?}",
+            report.metadata_errors
+        );
+        let page = db
+            .list_tracks_page(player_core::ListTracksQuery {
+                offset: 0,
+                limit: 200,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            })
+            .expect("page");
+        for line in manifest.lines().filter(|line| !line.trim().is_empty()) {
+            let cols: Vec<&str> = line.split('\t').collect();
+            let name = cols[0];
+            let track = page
+                .items
+                .iter()
+                .find(|track| track.title.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("{name}: not in the library"));
+            let expected_depth = if cols[5] != "1" {
+                None
+            } else if name.contains("float32") || name.contains("int32") {
+                Some(32)
+            } else if name.starts_with("cd16") {
+                Some(16)
+            } else {
+                Some(24)
+            };
+            let rate = if name.starts_with("cd16") || name.contains("44k") {
+                44_100
+            } else {
+                96_000
+            };
+            assert_eq!(track.artist.as_deref(), Some("MoeTest"), "{name}");
+            assert!(
+                track
+                    .album
+                    .as_deref()
+                    .is_some_and(|album| album.starts_with("WavPack ")),
+                "{name}"
+            );
+            assert_eq!(track.codec.as_deref(), Some("WavPack"), "{name}");
+            assert_eq!(track.sample_rate_hz, Some(rate), "{name}");
+            assert_eq!(track.bit_depth, expected_depth, "{name}: bit depth");
+            assert!(track.duration_ms.unwrap_or_default() > 60_000, "{name}");
+            println!(
+                "{name}: {} / {} — {:?} {} Hz {:?}-bit, {:.1} s, {:?} bps",
+                track.artist.as_deref().unwrap_or(""),
+                track.album.as_deref().unwrap_or(""),
+                track.codec,
+                track.sample_rate_hz.unwrap_or(0),
+                track.bit_depth,
+                track.duration_ms.unwrap_or(0) as f64 / 1000.0,
+                track.bitrate_bps
+            );
+        }
+        // A second scan finds nothing to re-read.
+        let again = player_core::SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_100_000)
+            .expect("second sync");
+        assert!(again.metadata_errors.is_empty());
     }
 
     #[test]
@@ -1708,12 +1795,50 @@ mod tests {
                 .join("../player-wavpack/tests/reference")
                 .join(name)
         };
-        assert_eq!(read_wavpack_bit_depth(&reference("int16_stereo.wv")), Some(16));
-        assert_eq!(read_wavpack_bit_depth(&reference("int24_stereo.wv")), Some(24));
-        assert_eq!(read_wavpack_bit_depth(&reference("int32_stereo.wv")), Some(32));
-        assert_eq!(read_wavpack_bit_depth(&reference("f32_stereo.wv")), Some(32));
-        assert_eq!(read_wavpack_bit_depth(&reference("hybrid_lossy_int16_stereo.wv")), None);
+        assert_eq!(
+            read_wavpack_bit_depth(&reference("int16_stereo.wv")),
+            Some(16)
+        );
+        assert_eq!(
+            read_wavpack_bit_depth(&reference("int24_stereo.wv")),
+            Some(24)
+        );
+        assert_eq!(
+            read_wavpack_bit_depth(&reference("int32_stereo.wv")),
+            Some(32)
+        );
+        assert_eq!(
+            read_wavpack_bit_depth(&reference("f32_stereo.wv")),
+            Some(32)
+        );
+        assert_eq!(
+            read_wavpack_bit_depth(&reference("hybrid_lossy_int16_stereo.wv")),
+            None
+        );
         assert_eq!(read_wavpack_bit_depth(&reference("missing.wv")), None);
+    }
+
+    /// Whole songs from the official encoder (`MOE_WV_MANIFEST`, run by hand with `-- --ignored`).
+    #[test]
+    #[ignore = "needs MOE_WV_MANIFEST"]
+    fn official_encoder_files_report_their_bit_depth() {
+        let manifest = fs::read_to_string(std::env::var("MOE_WV_MANIFEST").unwrap()).unwrap();
+        for line in manifest.lines().filter(|line| !line.trim().is_empty()) {
+            let cols: Vec<&str> = line.split('\t').collect();
+            let (name, lossless_wv) = (cols[0], cols[5] == "1");
+            let expected = if !lossless_wv {
+                None
+            } else if name.contains("float32") || name.contains("int32") {
+                Some(32)
+            } else if name.starts_with("cd16") {
+                Some(16)
+            } else {
+                Some(24)
+            };
+            let depth = read_wavpack_bit_depth(Path::new(cols[1]));
+            println!("{name}: bit depth {depth:?}");
+            assert_eq!(depth, expected, "{name}");
+        }
     }
 
     fn write_wav_with_format(path: &Path, format: &[u8]) {
