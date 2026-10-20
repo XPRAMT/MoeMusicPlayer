@@ -25,6 +25,30 @@ class MainActivity : TauriActivity() {
     ensurePlaybackService()
   }
 
+  override fun onResume() {
+    super.onResume()
+    nudgeWebViewPaint()
+  }
+
+  /**
+   * After a long time in the background the WebView can come back with its page alive (the accessibility tree shows
+   * every element) but without drawing a frame, so the window stays an empty dark colour until something invalidates
+   * it (pressing Back changes the DOM and does). Ask for a frame now and again shortly after; a tiny alpha change
+   * makes the compositor produce one even when nothing in the page changed.
+   */
+  private fun nudgeWebViewPaint() {
+    val webView = appWebView ?: return
+    webView.post {
+      webView.onResume()
+      webView.invalidate()
+      webView.requestLayout()
+    }
+    webView.postDelayed({
+      webView.alpha = 0.999f
+      webView.postDelayed({ webView.alpha = 1f }, 32)
+    }, 150)
+  }
+
   /**
    * The playback service is started once when the app boots, but `onTaskRemoved` (swiping the app away while paused)
    * or the system can stop it while this process lives on; Rust keeps queueing commands nobody polls, so tapping a
