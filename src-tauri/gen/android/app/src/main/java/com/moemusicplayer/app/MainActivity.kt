@@ -28,6 +28,7 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     nudgeWebViewPaint()
+    ResumeDiagnostics.onResume(this, appWebView)
   }
 
   /**
@@ -48,13 +49,13 @@ class MainActivity : TauriActivity() {
       webView.postDelayed({
         webView.evaluateJavascript(
           "(function(){var r=document.documentElement;r.style.willChange='transform';r.style.transform='translateZ(0)';" +
-            "void r.offsetHeight;requestAnimationFrame(function(){r.style.transform='';r.style.willChange='';});" +
+            "void r.offsetHeight;requestAnimationFrame(function(){window.__moeRaf=Date.now();r.style.transform='';r.style.willChange='';});" +
             "return document.visibilityState+' focus='+document.hasFocus();})()",
         ) { result ->
           // Diagnostic (logcat tag MoeResume, also in release builds): how long the renderer took to answer and what the
           // page believes. A page stuck in "hidden" while the activity is resumed draws no frames at all.
           val waited = android.os.SystemClock.elapsedRealtime() - resumedAt
-          android.util.Log.i("MoeResume", "resume+${waited}ms (nudge at ${delayMs}ms) page=$result")
+          ResumeDiagnostics.log(this, "resume+${waited}ms (nudge at ${delayMs}ms) page=$result")
           if (result?.contains("hidden") == true) {
             webView.visibility = View.INVISIBLE
             webView.visibility = View.VISIBLE
