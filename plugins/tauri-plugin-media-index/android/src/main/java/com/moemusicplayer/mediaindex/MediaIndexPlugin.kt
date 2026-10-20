@@ -844,15 +844,22 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             val response = JSObject()
             try {
                 val manager = WallpaperManager.getInstance(appContext)
-                if (manager.wallpaperInfo != null) {
+                val info = manager.wallpaperInfo
+                Log.i(LOG_TAG, "wallpaper: sdk=${Build.VERSION.SDK_INT} info=${info?.component} allFiles=${allFilesAccessGranted()} " +
+                    "isWallpaperSupported=${manager.isWallpaperSupported} isSetWallpaperAllowed=${manager.isSetWallpaperAllowed} " +
+                    "desired=${manager.desiredMinimumWidth}x${manager.desiredMinimumHeight}")
+                if (info != null) {
+                    Log.i(LOG_TAG, "wallpaper: reported as a live wallpaper, no bitmap is read")
                     invoke.resolve(response.put("path", JSONObject.NULL).put("reason", "live"))
                     return@execute
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !allFilesAccessGranted()) {
+                    Log.i(LOG_TAG, "wallpaper: all files access is not granted")
                     invoke.resolve(response.put("path", JSONObject.NULL).put("reason", "permission"))
                     return@execute
                 }
                 val drawable = manager.drawable
+                Log.i(LOG_TAG, "wallpaper: drawable=${drawable?.javaClass?.name} size=${drawable?.intrinsicWidth}x${drawable?.intrinsicHeight}")
                 if (drawable == null) {
                     invoke.resolve(response.put("path", JSONObject.NULL).put("reason", "unavailable"))
                     return@execute
@@ -882,8 +889,10 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                 }
                 invoke.resolve(response.put("path", output.absolutePath).put("reason", JSONObject.NULL))
             } catch (error: SecurityException) {
+                Log.i(LOG_TAG, "wallpaper: refused: ${error.message}")
                 invoke.resolve(response.put("path", JSONObject.NULL).put("reason", "permission"))
             } catch (error: Exception) {
+                Log.i(LOG_TAG, "wallpaper: failed: $error")
                 invoke.reject("Could not read the system wallpaper: ${error.message}")
             }
         }
@@ -1424,6 +1433,8 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     private fun parsePositiveLong(value: String?): Long? = value?.toLongOrNull()?.takeIf { it >= 0L }
 
     companion object {
+        private const val LOG_TAG = "MoeMediaIndex"
+
         internal fun scanStateReason(kind: String, reason: String?, firstErrorMessage: String?): String? {
             if (kind == "complete") return null
             return reason?.takeIf(String::isNotBlank)
