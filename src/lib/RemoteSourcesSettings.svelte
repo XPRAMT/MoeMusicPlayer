@@ -616,7 +616,9 @@
     </div>
     <div class="update-dialog-actions">
       <button class="soft-button" type="button" onclick={() => shareDialog?.close()}>{tr("取消")}</button>
-      <button class="soft-button" type="button" disabled={pickLoading || pickPath === ''} onclick={usePickedFolder}>{tr("使用這個資料夾")}</button>
+      {#if pickPath !== ''}
+        <button class="soft-button" type="button" disabled={pickLoading} onclick={usePickedFolder}>{tr("使用這個資料夾")}</button>
+      {/if}
     </div>
   </div>
 </dialog>
