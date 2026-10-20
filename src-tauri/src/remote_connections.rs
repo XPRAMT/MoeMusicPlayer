@@ -227,29 +227,71 @@ impl player_core::RemoteContent for RemoteFiles {
         path: &str,
     ) -> std::io::Result<player_core::RemoteFileHandle> {
         let (fs, full) = self.locate(source_id, path)?;
-        let file: Box<dyn player_remote::fs::RemoteFile> = Box::new(player_remote::fs::ReopeningFile::new(
-            Arc::clone(&fs),
-            full.clone(),
-            fs.open(&full)?,
-        ));
-        // Chunks that were played are kept on disk (first in, first out), so the same song played again does not go back
-        // to the server. The key includes the size and modified time, so an edited file is not served stale.
-        let file: Box<dyn player_remote::fs::RemoteFile> = match &self.cache {
-            Some(cache) => {
-                let modified = fs.stat(&full).ok().and_then(|entry| entry.modified_ms);
+        let account_key = source_id.to_string();
+        // A file whose size and modified time were learned before (and whose chunks may be on disk) is opened without
+        // asking the server anything: reads that the disk cache can answer never touch the network, and the server is
+        // asked in the background whether the file is still the same. This is what makes a song played before start at
+        // once.
+        let known = self
+            .cache
+            .as_ref()
+            .and_then(|cache| cache.meta(&account_key, &full));
+        let file: Box<dyn player_remote::fs::RemoteFile> = match (&self.cache, known) {
+            (Some(cache), Some(meta)) => {
                 let key = player_remote::cache::cache_key(
-                    &source_id.to_string(),
+                    &account_key,
                     &full,
-                    file.len(),
-                    modified,
+                    meta.len,
+                    meta.modified_ms,
+                );
+                let (check_fs, check_cache, check_key, check_path) =
+                    (Arc::clone(&fs), Arc::clone(cache), account_key.clone(), full.clone());
+                let _ = std::thread::Builder::new()
+                    .name("moe-remote-validate".to_owned())
+                    .spawn(move || {
+                        if let Ok(entry) = check_fs.stat(&check_path) {
+                            let now = player_remote::cache::FileMeta {
+                                len: entry.size,
+                                modified_ms: entry.modified_ms,
+                            };
+                            if now != meta {
+                                // Edited on the server: the next play uses (and fetches) the new version.
+                                check_cache.put_meta(&check_key, &check_path, now);
+                            }
+                        }
+                    });
+                let lazy: Box<dyn player_remote::fs::RemoteFile> = Box::new(
+                    player_remote::fs::ReopeningFile::lazy(Arc::clone(&fs), full.clone(), meta.len),
                 );
                 Box::new(player_remote::cache::CachedFile::new(
-                    file,
+                    lazy,
                     Arc::clone(cache),
                     key,
                 ))
             }
-            None => file,
+            (Some(cache), None) => {
+                let opened: Box<dyn player_remote::fs::RemoteFile> = Box::new(
+                    player_remote::fs::ReopeningFile::new(Arc::clone(&fs), full.clone(), fs.open(&full)?),
+                );
+                // The key includes the size and modified time, so an edited file is not served stale.
+                let modified = fs.stat(&full).ok().and_then(|entry| entry.modified_ms);
+                let meta = player_remote::cache::FileMeta {
+                    len: opened.len(),
+                    modified_ms: modified,
+                };
+                cache.put_meta(&account_key, &full, meta);
+                let key = player_remote::cache::cache_key(&account_key, &full, meta.len, meta.modified_ms);
+                Box::new(player_remote::cache::CachedFile::new(
+                    opened,
+                    Arc::clone(cache),
+                    key,
+                ))
+            }
+            (None, _) => Box::new(player_remote::fs::ReopeningFile::new(
+                Arc::clone(&fs),
+                full.clone(),
+                fs.open(&full)?,
+            )),
         };
         let reader = player_remote::prefetch::PrefetchReader::new(file);
         let len = reader.len();

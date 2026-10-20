@@ -31,6 +31,24 @@ pub fn cache_key(account_id: &str, path: &str, len: u64, modified_ms: Option<i64
         .collect()
 }
 
+/// What the cache remembers of a file between plays: its size and modified time as the server last reported them. With
+/// it a file whose chunks are on disk is opened without asking the server anything (the answer is checked in the
+/// background), so a song played before starts at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileMeta {
+    pub len: u64,
+    pub modified_ms: Option<i64>,
+}
+
+fn path_id(account_id: &str, path: &str) -> String {
+    let text = format!("{account_id}\n{path}");
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 struct Entry {
     name: String,
     size: u64,
@@ -57,7 +75,7 @@ impl DiskCache {
     /// Open (and create) the folder and learn what is already in it, oldest first.
     pub fn open(dir: impl Into<PathBuf>, limit_bytes: u64) -> io::Result<Self> {
         let dir = dir.into();
-        fs::create_dir_all(&dir)?;
+        fs::create_dir_all(dir.join("meta"))?;
         let mut found: Vec<(SystemTime, String, u64)> = Vec::new();
         for item in fs::read_dir(&dir)? {
             let item = item?;
@@ -137,6 +155,33 @@ impl DiskCache {
         }
         index.sizes.clear();
         index.total = 0;
+        if let Ok(items) = fs::read_dir(self.dir.join("meta")) {
+            for item in items.flatten() {
+                let _ = fs::remove_file(item.path());
+            }
+        }
+    }
+
+    /// What was last learned of the file `path` of `account_id` (see [`FileMeta`]).
+    pub fn meta(&self, account_id: &str, path: &str) -> Option<FileMeta> {
+        let text = fs::read_to_string(self.dir.join("meta").join(path_id(account_id, path))).ok()?;
+        let mut lines = text.lines();
+        let len = lines.next()?.trim().parse().ok()?;
+        let modified_ms = match lines.next()?.trim().parse::<i64>().ok()? {
+            -1 => None,
+            value => Some(value),
+        };
+        Some(FileMeta { len, modified_ms })
+    }
+
+    /// Remember the size and modified time of a file. Written to a temporary name and renamed.
+    pub fn put_meta(&self, account_id: &str, path: &str, meta: FileMeta) {
+        let target = self.dir.join("meta").join(path_id(account_id, path));
+        let temporary = target.with_extension("tmp");
+        let text = format!("{}\n{}\n", meta.len, meta.modified_ms.unwrap_or(-1));
+        if fs::write(&temporary, text).is_err() || fs::rename(&temporary, &target).is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
     }
 
     /// The cached chunk, or `None` (not cached, or the file went away).
@@ -182,17 +227,40 @@ pub struct CachedFile {
     inner: Box<dyn RemoteFile>,
     cache: std::sync::Arc<DiskCache>,
     key: String,
+    hits: u32,
+    misses: u32,
+}
+
+impl Drop for CachedFile {
+    fn drop(&mut self) {
+        if self.hits + self.misses > 0 {
+            eprintln!(
+                "[remote] cache {}: {} chunk(s) from disk, {} from the server",
+                &self.key[..self.key.len().min(8)],
+                self.hits,
+                self.misses
+            );
+        }
+    }
 }
 
 impl CachedFile {
     pub fn new(inner: Box<dyn RemoteFile>, cache: std::sync::Arc<DiskCache>, key: String) -> Self {
-        Self { inner, cache, key }
+        Self {
+            inner,
+            cache,
+            key,
+            hits: 0,
+            misses: 0,
+        }
     }
 
     fn chunk(&mut self, index: u64) -> Result<Vec<u8>, RemoteError> {
         if let Some(bytes) = self.cache.get(&self.key, index) {
+            self.hits += 1;
             return Ok(bytes);
         }
+        self.misses += 1;
         let len = self.inner.len();
         let start = index * CACHE_CHUNK as u64;
         let wanted = (len.saturating_sub(start)).min(CACHE_CHUNK as u64) as usize;
@@ -338,7 +406,9 @@ mod tests {
         assert!(cache.get("big", 0).is_none());
         cache.clear();
         assert_eq!(cache.used(), 0);
-        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+        // Only the (empty) folder of remembered file sizes is left.
+        let left: Vec<_> = fs::read_dir(&dir).unwrap().flatten().map(|item| item.file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("meta")]);
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -424,5 +494,31 @@ mod tests {
             cache_key("a", "x", 10, Some(1)),
             cache_key("a", "x", 10, Some(1))
         );
+    }
+}
+
+#[cfg(test)]
+mod meta_tests {
+    use super::*;
+
+    #[test]
+    fn a_files_size_and_time_are_remembered_across_opens() {
+        let dir = std::env::temp_dir().join(format!("moe-cache-meta-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let cache = DiskCache::open(&dir, 1_000_000).unwrap();
+        assert_eq!(cache.meta("a", "x/y.flac"), None);
+        let meta = FileMeta { len: 123, modified_ms: Some(456) };
+        cache.put_meta("a", "x/y.flac", meta);
+        assert_eq!(cache.meta("a", "x/y.flac"), Some(meta));
+        assert_eq!(cache.meta("b", "x/y.flac"), None);
+        cache.put_meta("a", "x/y.flac", FileMeta { len: 5, modified_ms: None });
+        assert_eq!(cache.meta("a", "x/y.flac").unwrap().modified_ms, None);
+        // A new cache over the same folder still knows (and the meta files are not counted as chunks).
+        let again = DiskCache::open(&dir, 1_000_000).unwrap();
+        assert_eq!(again.meta("a", "x/y.flac").unwrap().len, 5);
+        assert_eq!(again.used(), 0);
+        again.clear();
+        assert_eq!(again.meta("a", "x/y.flac"), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

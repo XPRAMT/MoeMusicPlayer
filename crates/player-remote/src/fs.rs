@@ -83,30 +83,46 @@ pub trait RemoteFs: Send + Sync {
 pub struct ReopeningFile {
     fs: std::sync::Arc<dyn RemoteFs>,
     path: String,
-    file: Box<dyn RemoteFile>,
+    /// `None` until the first read that needs the server (see [`ReopeningFile::lazy`]).
+    file: Option<Box<dyn RemoteFile>>,
+    len: u64,
 }
 
 impl ReopeningFile {
     pub fn new(fs: std::sync::Arc<dyn RemoteFs>, path: String, file: Box<dyn RemoteFile>) -> Self {
-        Self { fs, path, file }
+        let len = file.len();
+        Self { fs, path, file: Some(file), len }
+    }
+
+    /// A file whose size is already known and which is not opened until a read needs the server: a song whose chunks are
+    /// all in the disk cache never touches the network.
+    pub fn lazy(fs: std::sync::Arc<dyn RemoteFs>, path: String, len: u64) -> Self {
+        Self { fs, path, file: None, len }
+    }
+
+    fn open_now(&mut self) -> Result<&mut Box<dyn RemoteFile>, RemoteError> {
+        if self.file.is_none() {
+            let fresh = self.fs.open(&self.path)?;
+            if fresh.len() != self.len {
+                return Err(RemoteError::Protocol("the file changed on the server".to_owned()));
+            }
+            self.file = Some(fresh);
+        }
+        Ok(self.file.as_mut().expect("opened above"))
     }
 }
 
 impl RemoteFile for ReopeningFile {
     fn len(&self) -> u64 {
-        self.file.len()
+        self.len
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RemoteError> {
-        match self.file.read_at(offset, buf) {
+        match self.open_now()?.read_at(offset, buf) {
             Err(RemoteError::Network(_)) => {
-                let fresh = self.fs.open(&self.path)?;
-                if fresh.len() != self.file.len() {
-                    // The file changed on the server meanwhile: its bytes are not the ones already played.
-                    return Err(RemoteError::Protocol("the file changed on the server".to_owned()));
-                }
-                self.file = fresh;
-                self.file.read_at(offset, buf)
+                // The link broke under the open handle: open again (the file system connects again by itself).
+                self.file = None;
+                self.open_now()?.read_at(offset, buf)
             }
             other => other,
         }
@@ -547,6 +563,18 @@ mod reopening_tests {
         assert_eq!(server.opens.load(Ordering::SeqCst), 1);
         // Later reads use the new handle.
         assert_eq!(file.read_at(20, &mut buffer).unwrap(), 4);
+        assert_eq!(server.opens.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_lazy_file_opens_only_when_a_read_needs_the_server() {
+        let server = Arc::new(Server { opens: AtomicUsize::new(0), len: 100 });
+        let mut file = ReopeningFile::lazy(server.clone(), "a".to_owned(), 100);
+        assert_eq!(file.len(), 100);
+        assert_eq!(server.opens.load(Ordering::SeqCst), 0);
+        let mut buffer = [0_u8; 3];
+        assert_eq!(file.read_at(5, &mut buffer).unwrap(), 3);
+        assert_eq!(buffer, [5, 6, 7]);
         assert_eq!(server.opens.load(Ordering::SeqCst), 1);
     }
 
