@@ -3343,6 +3343,11 @@ input:focus-visible {
   font-weight: 500;
 }
 
+/* The section title is one step above the group titles inside it. */
+.cache-section-heading {
+  font-size: var(--font-body);
+}
+
 .source-action-card > p {
   margin: 7px 0 12px;
   color: var(--text-soft);
