@@ -610,7 +610,7 @@
   .sg-toolbar-items { position: relative; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .has-overflow .sg-toolbar-items { padding-right: 36px; }
   .sg-toolbar-items > :global(*) { flex-shrink: 0; white-space: nowrap; }
-  .sg-toolbar-toggle { position: absolute; top: 0; right: 0; width: 30px; padding-inline: 0; }
+  .sg-button.sg-toolbar-toggle { position: absolute; top: 0; right: 0; display: grid; place-items: center; width: 30px; padding: 4px 0; }
   .sg-button { background: var(--sg-surface); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
   .sg-button:hover { background: rgba(var(--accent-rgb, 138, 125, 255), 0.18); }
   .sg-button.is-active { border-color: #8a7dff; }
