@@ -63,10 +63,17 @@
       }
       const mimeType = detectArtworkMimeType(original);
       if (!mimeType) {
-        void markAlbumArtworkMissing(trackId).catch(() => undefined);
+        void markAlbumArtworkMissing(trackId, true).catch(() => undefined);
         return null;
       }
-      const processed = await createAlbumThumbnailInWorker(original, mimeType);
+      let processed;
+      try {
+        processed = await createAlbumThumbnailInWorker(original, mimeType);
+      } catch {
+        // The cover was read but cannot be turned into a thumbnail: it will not work the next time either.
+        void markAlbumArtworkMissing(trackId, true).catch(() => undefined);
+        return null;
+      }
       let thumbnail: Uint8Array;
       try { thumbnail = new Uint8Array(await getAlbumThumbnailBytesForTrack(trackId)); } catch { thumbnail = new Uint8Array(); }
       if (thumbnail.length <= 3) thumbnail = processed.bytes;

@@ -3772,7 +3772,7 @@ async fn album_artwork_cache_get_for_track(
         let cached = album_artwork_cache::get_for_track(&directory, &identity)?;
         // "Missing" remembered for a track on a server may be left from before such tracks were told apart from covers the
         // server failed to deliver: it is not trusted, the cover is read again.
-        if cached.as_slice() == [0] && track_is_on_a_server(state, &track_id) {
+        if cached.as_slice() == [0] && track_may_be_unreachable_on_a_server(state, &track_id) {
             return Ok(Response::new(Vec::new()));
         }
         Ok(Response::new(cached))
@@ -3780,15 +3780,13 @@ async fn album_artwork_cache_get_for_track(
     .await
 }
 
-fn track_is_on_a_server(state: &AppState, track_id: &str) -> bool {
+/// A track on a server whose file cannot be opened right now: an empty cover answer for it may only be a server that did
+/// not respond.
+fn track_may_be_unreachable_on_a_server(state: &AppState, track_id: &str) -> bool {
     TrackId::parse(track_id)
         .ok()
         .and_then(|id| state.database.as_ref()?.track_locators(id).ok())
-        .is_some_and(|locators| {
-            locators
-                .iter()
-                .any(|locator| matches!(locator, MediaLocator::Remote { .. }))
-        })
+        .is_some_and(|locators| remote_cover_lookup_may_have_failed(&locators))
 }
 
 #[tauri::command]
@@ -3814,6 +3812,7 @@ async fn album_artwork_cache_put_for_track(
 async fn album_artwork_cache_mark_missing_for_track(
     app: AppHandle,
     track_id: String,
+    definitive: Option<bool>,
 ) -> Result<(), String> {
     let app_for_directory = app.clone();
     run_database_work(app, move |state| {
@@ -3823,7 +3822,7 @@ async fn album_artwork_cache_mark_missing_for_track(
         };
         // A track on a server is never remembered as without a cover from here: the page cannot tell "no cover" from "the
         // server did not answer", and a wrong "missing" would hide a cover for good.
-        if track_is_on_a_server(state, &track_id) {
+        if !definitive.unwrap_or(false) && track_may_be_unreachable_on_a_server(state, &track_id) {
             return Ok(());
         }
         album_artwork_cache::put_track_reference(&directory, &identity, None)

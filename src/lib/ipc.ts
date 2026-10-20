@@ -1082,7 +1082,7 @@ interface IpcContract {
     result: void;
   };
   album_artwork_cache_mark_missing_for_track: {
-    args: { trackId: string };
+    args: { trackId: string; definitive?: boolean };
     result: void;
   };
   library_get_artist_page: {
@@ -1397,8 +1397,13 @@ export function putAlbumThumbnailBase64ForTrack(trackId: string, sha256: string,
   return invokeCommand('album_artwork_cache_put_for_track', { trackId, sha256, dataBase64 });
 }
 
-export function markAlbumArtworkMissing(trackId: string): Promise<void> {
-  return invokeCommand('album_artwork_cache_mark_missing_for_track', { trackId });
+/**
+ * Remember that a track has no usable cover. `definitive` says the cover bytes were read and cannot be used (an unknown image
+ * format, a picture that cannot be decoded): that is remembered for every track. Without it ("nothing came back") a track on a
+ * server is remembered only when the server was reachable, because an empty answer may be a server that did not respond.
+ */
+export function markAlbumArtworkMissing(trackId: string, definitive = false): Promise<void> {
+  return invokeCommand('album_artwork_cache_mark_missing_for_track', { trackId, definitive });
 }
 
 export function getMainBackgroundBytes(): Promise<ArrayBuffer> {
