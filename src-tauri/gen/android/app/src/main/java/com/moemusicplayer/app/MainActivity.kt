@@ -21,8 +21,19 @@ class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    enableEdgeToEdge()
+    // A process that already ran an activity whose window is gone cannot host a new one (see ProcessRestartActivity).
+    val restart = ProcessRestartPolicy.shouldRestart(processHadActivity, previousActivityDestroyedForReal)
+    if (!restart) {
+      processHadActivity = true
+      previousActivityDestroyedForReal = false
+      enableEdgeToEdge()
+    }
     super.onCreate(savedInstanceState)
+    LifecycleLog.write(this, "onCreate restart=$restart savedState=${savedInstanceState != null}")
+    if (restart) {
+      restartProcess()
+      return
+    }
     // Transparent navigation bar for 3-button and gesture navigation alike: content draws
     // behind it and pads by the native bottom inset (--android-safe-bottom).
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -85,6 +96,31 @@ class MainActivity : TauriActivity() {
     requestNotificationPermissionIfNeeded()
   }
 
+  /** Hand over to [ProcessRestartActivity] (another process) and end this one so the app starts clean. */
+  private fun restartProcess() {
+    val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+      addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+    }
+    if (launch == null) {
+      finish()
+      return
+    }
+    val restart = android.content.Intent(this, ProcessRestartActivity::class.java).apply {
+      addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+      putExtra(ProcessRestartActivity.EXTRA_TARGET, launch)
+    }
+    startActivity(restart)
+    finish()
+    Runtime.getRuntime().exit(0)
+  }
+
+  override fun onDestroy() {
+    // A configuration change keeps the Rust window; anything else destroys it.
+    if (!isChangingConfigurations) previousActivityDestroyedForReal = true
+    LifecycleLog.write(this, "onDestroy changingConfigurations=$isChangingConfigurations finishing=$isFinishing")
+    super.onDestroy()
+  }
+
   /** One system prompt per process start until granted; denial only hides the media notification. */
   private fun requestNotificationPermissionIfNeeded() {
     val granted = Build.VERSION.SDK_INT < NotificationPermissionPolicy.TIRAMISU ||
@@ -97,6 +133,10 @@ class MainActivity : TauriActivity() {
   private companion object {
     const val NOTIFICATION_PERMISSION_REQUEST = 4107
     @Volatile var notificationPermissionAsked = false
+    /** This process already created a MainActivity. */
+    @Volatile var processHadActivity = false
+    /** The previous MainActivity was destroyed and the Rust runtime dropped its window with it. */
+    @Volatile var previousActivityDestroyedForReal = false
   }
 
   override fun onWebViewCreate(webView: WebView) {
