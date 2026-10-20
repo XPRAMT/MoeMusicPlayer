@@ -2668,6 +2668,15 @@ input:focus-visible {
 .update-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .update-dialog .error-text { color: var(--status-danger); }
 
+.folder-browser-roots { display: flex; flex-wrap: wrap; gap: 8px; }
+.folder-browser-path { font-size: var(--font-caption, 0.85em); opacity: 0.75; overflow-wrap: anywhere; line-height: 1.4; }
+.folder-browser-list { display: flex; flex-direction: column; max-height: 45dvh; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--border, #fff2); border-radius: 8px; }
+.folder-browser-entry { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 12px; border: 0; border-bottom: 1px solid var(--border, #fff2); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.folder-browser-entry:last-child { border-bottom: 0; }
+.folder-browser-entry:active, .folder-browser-entry:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.folder-browser-entry > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.folder-browser-empty { padding: 16px 12px; opacity: 0.7; }
+
 @media (max-width: 520px) {
   .about-credits li { grid-template-columns: minmax(110px, 1fr) minmax(0, 1fr); gap: 4px 12px; }
   .about-credits li > span:last-child { grid-column: 2; }

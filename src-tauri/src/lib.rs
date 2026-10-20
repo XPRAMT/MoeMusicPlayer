@@ -73,6 +73,7 @@ mod album_artwork_cache;
 mod android_artwork;
 #[cfg(any(target_os = "android", test))]
 mod android_dsd;
+mod android_folder_browser;
 #[cfg(target_os = "android")]
 mod android_path_migration;
 #[cfg(any(target_os = "android", test))]
@@ -4649,7 +4650,7 @@ async fn favorites_create_my_love(
         // overwritten) and synced through its real path under All files access (ADR 0014).
         let picker_app = _app.clone();
         let picked = tauri::async_runtime::spawn_blocking(move || {
-            picker_app.media_index().pick_directory_path()
+            android_folder_browser::pick_directory(&picker_app)
         })
         .await
         .map_err(|error| format!("資料夾選擇工作失敗：{error}"))?
@@ -5724,11 +5725,7 @@ async fn appearance_pick_slideshow_folder(
     {
         let _ = (window, state);
         return tauri::async_runtime::spawn_blocking(move || -> Result<Option<bool>, String> {
-            let Some(folder) = app
-                .media_index()
-                .pick_directory_path()
-                .map_err(|error| error.to_string())?
-            else {
+            let Some(folder) = android_folder_browser::pick_directory(&app)? else {
                 return Ok(None);
             };
             let folder = std::path::PathBuf::from(folder);
@@ -6978,7 +6975,7 @@ async fn library_pick_excluded_folder(
         let _ = window;
         let picker_app = app.clone();
         let picked = tauri::async_runtime::spawn_blocking(move || {
-            picker_app.media_index().pick_directory_path()
+            android_folder_browser::pick_directory(&picker_app)
         })
         .await
         .map_err(|error| format!("資料夾選擇工作失敗：{error}"))?
@@ -7190,7 +7187,7 @@ async fn android_pick_folder_source(app: AppHandle) -> Result<Option<LibrarySour
     {
         let picker_app = app.clone();
         let picked = tauri::async_runtime::spawn_blocking(move || {
-            picker_app.media_index().pick_directory_path()
+            android_folder_browser::pick_directory(&picker_app)
         })
         .await
         .map_err(|error| format!("資料夾選擇工作失敗：{error}"))?
@@ -11262,6 +11259,8 @@ pub fn run() {
             library_set_source_enabled,
             library_remove_source,
             android_pick_folder_source,
+            android_folder_browser::android_list_directories,
+            android_folder_browser::android_folder_picker_result,
             library_sync,
             playback_get_snapshot,
             playback_refresh_current_track,

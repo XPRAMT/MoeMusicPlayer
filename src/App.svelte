@@ -11,6 +11,7 @@
   import { invoke as invokeTauri } from '@tauri-apps/api/core';
   import TrackDetailsDialog from './lib/TrackDetailsDialog.svelte';
   import SpectrogramView from './lib/SpectrogramView.svelte';
+  import FolderBrowserDialog from './lib/FolderBrowserDialog.svelte';
   import { getPopoverHorizontalShiftPx, getVolumePopoverLeftShiftPx } from './lib/volume-popover-position.js';
   import {
     IconAlertCircle,
@@ -297,6 +298,16 @@
     sleepTimerEndsAt = snapshot.endsAtMs ?? null;
     sleepTimerNow = Date.now();
   }
+
+  // Android: the backend asks for the in-app folder browser (the system picker refuses a storage root).
+  $effect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<number>('android-folder-picker-request', (event) => { folderPickerRequestId = event.payload; })
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
+  });
 
   // Another window changed the interface language: reload to apply it.
   $effect(() => {
@@ -847,6 +858,13 @@
   /** The panel that explains the permission is shown by itself once per app start; the button in Music Sources stays. */
   let allFilesAccessAutoPrompted = false;
   let allFilesPromptOpen = $state(false);
+  /** The backend's pending request for the in-app folder browser (Android), or null. */
+  let folderPickerRequestId = $state<number | null>(null);
+  function finishFolderPicker(path: string | null): void {
+    const requestId = folderPickerRequestId;
+    folderPickerRequestId = null;
+    if (requestId !== null) void invokeCommand('android_folder_picker_result', { requestId, path }).catch(() => {});
+  }
   let allFilesPromptDialog = $state<HTMLDialogElement>();
 
   function closeAllFilesPrompt(): void {
@@ -3180,6 +3198,7 @@
   });
 
   function handleAndroidBack(): boolean {
+    if (folderPickerRequestId !== null) { finishFolderPicker(null); return true; }
     if (allFilesPromptOpen) { allFilesPromptOpen = false; return true; }
     if (androidSpectrogramTrackId) { androidSpectrogramTrackId = null; return true; }
     if (trackDetailsTrackId) { window.dispatchEvent(new CustomEvent('moe:track-details-request-close')); return true; }
@@ -5168,6 +5187,11 @@
 </div>
 
 {#if runtimePlatform === 'android'}
+  <FolderBrowserDialog
+    open={folderPickerRequestId !== null}
+    style={`--quick-settings-opacity:${themePreferences.quickSettingsOpacityPercent}%;--quick-settings-blur:${themePreferences.quickSettingsBlurPx}px`}
+    onFinish={finishFolderPicker}
+  />
   <dialog
     bind:this={allFilesPromptDialog}
     class="update-dialog floating-surface"

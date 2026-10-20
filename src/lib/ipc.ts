@@ -739,6 +739,14 @@ interface IpcContract {
     args: Record<string, never>;
     result: void;
   };
+  android_list_directories: {
+    args: { path: string | null };
+    result: DirectoryListing;
+  };
+  android_folder_picker_result: {
+    args: { requestId: number; path: string | null };
+    result: boolean;
+  };
   appearance_set_android_wallpaper_backdrop: {
     args: { enabled: boolean; blurPx: number };
     result: AndroidWallpaperBackdropStatus | null;
@@ -1155,6 +1163,15 @@ interface IpcContract {
 }
 
 export type IpcCommand = keyof IpcContract;
+
+/** The sub-folders of a folder, for the Android folder dialog. */
+export type DirectoryListing = {
+  path: string;
+  /** Null at the top of a storage volume. */
+  parent: string | null;
+  roots: { label: string; path: string }[];
+  entries: { name: string; path: string }[];
+};
 
 /** Android MANAGE_EXTERNAL_STORAGE ("All files access") state (ADR 0014). */
 export type AndroidAllFilesAccessStatus = {
