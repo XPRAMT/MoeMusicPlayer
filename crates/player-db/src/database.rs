@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
@@ -566,6 +566,18 @@ CREATE TABLE music_collation_metadata (
 "#;
 
 /// A short name for the place a source is (the name of a remote server); sources without one are "本地".
+/// What reading the lyrics beside and inside a track on a remote server found (the `.lrc` next to it, the lyrics in its tags),
+/// kept with the size and modified time of the file it was read for: while the scan still sees the same file, the next play
+/// does not go back to the server for them.
+const SCHEMA_V17: &str = r#"
+CREATE TABLE remote_lyric_cache (
+    track_id TEXT PRIMARY KEY NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    modified_at_utc_ms INTEGER,
+    result_json TEXT NOT NULL
+);
+"#;
+
 const SCHEMA_V16: &str = r#"
 CREATE TABLE source_labels (
     source_id TEXT PRIMARY KEY NOT NULL,
@@ -1879,6 +1891,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V16)?;
             tx.pragma_update(None, "user_version", 16)?;
+            tx.commit()?;
+            version = 16;
+        }
+        if version == 16 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V17)?;
+            tx.pragma_update(None, "user_version", 17)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -4786,6 +4805,72 @@ impl Database {
 
     /// Return native locators for enabled mappings of a track, with filesystem paths first.
     /// Paths stay as `PathBuf` and are decoded using the platform-native representation.
+    /// The size and modified time of the track's file on a remote server, as the last scan saw them.
+    pub fn remote_file_fingerprint(
+        &self,
+        track_id: TrackId,
+    ) -> Result<Option<(u64, Option<i64>)>, DatabaseError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT m.size_bytes, m.modified_at_utc_ms
+                 FROM source_mappings m
+                 JOIN library_roots r ON r.source_id=m.source_id
+                 WHERE m.track_id=?1 AND r.enabled=1 AND m.locator_kind='remote'
+                 ORDER BY r.source_id, m.source_item_id LIMIT 1",
+                [track_id.to_string()],
+                |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// What was found beside and inside a remote track, when it was read for a file of this size and modified time.
+    pub fn get_remote_lyric_cache(
+        &self,
+        track_id: TrackId,
+        size_bytes: u64,
+        modified_at_utc_ms: Option<i64>,
+    ) -> Result<Option<String>, DatabaseError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT result_json FROM remote_lyric_cache
+                 WHERE track_id=?1 AND size_bytes=?2 AND modified_at_utc_ms IS ?3",
+                params![track_id.to_string(), size_bytes as i64, modified_at_utc_ms],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn save_remote_lyric_cache(
+        &self,
+        track_id: TrackId,
+        size_bytes: u64,
+        modified_at_utc_ms: Option<i64>,
+        result_json: &str,
+    ) -> Result<(), DatabaseError> {
+        let connection = self.lock()?;
+        connection.execute(
+            "INSERT INTO remote_lyric_cache (track_id, size_bytes, modified_at_utc_ms, result_json)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(track_id) DO UPDATE SET size_bytes=excluded.size_bytes,
+                 modified_at_utc_ms=excluded.modified_at_utc_ms, result_json=excluded.result_json",
+            params![track_id.to_string(), size_bytes as i64, modified_at_utc_ms, result_json],
+        )?;
+        Ok(())
+    }
+
+    /// Forget what was read for a remote track (a re-read is wanted).
+    pub fn clear_remote_lyric_cache(&self, track_id: TrackId) -> Result<(), DatabaseError> {
+        self.lock()?.execute(
+            "DELETE FROM remote_lyric_cache WHERE track_id=?1",
+            [track_id.to_string()],
+        )?;
+        Ok(())
+    }
+
     pub fn track_locators(&self, track_id: TrackId) -> Result<Vec<MediaLocator>, DatabaseError> {
         let connection = self.lock()?;
         let track_exists: bool = connection.query_row(
@@ -10259,6 +10344,24 @@ mod tests {
             ascending.labels,
             ["MP3", "WVL", "MP4", "FLAC", "WVLL", "WAV", "WVDSD", "DSD"]
         );
+    }
+
+    #[test]
+    fn remote_lyric_cache_is_valid_only_for_the_file_it_was_read_for() {
+        let db = Database::open_in_memory().expect("database");
+        let track = TrackId::new();
+        assert_eq!(db.get_remote_lyric_cache(track, 10, Some(5)).unwrap(), None);
+        db.save_remote_lyric_cache(track, 10, Some(5), "{\"state\":\"missing\"}").unwrap();
+        assert!(db.get_remote_lyric_cache(track, 10, Some(5)).unwrap().is_some());
+        // A different size or time is another file.
+        assert_eq!(db.get_remote_lyric_cache(track, 11, Some(5)).unwrap(), None);
+        assert_eq!(db.get_remote_lyric_cache(track, 10, Some(6)).unwrap(), None);
+        assert_eq!(db.get_remote_lyric_cache(track, 10, None).unwrap(), None);
+        // A file without a modified time matches itself.
+        db.save_remote_lyric_cache(track, 10, None, "{}").unwrap();
+        assert!(db.get_remote_lyric_cache(track, 10, None).unwrap().is_some());
+        db.clear_remote_lyric_cache(track).unwrap();
+        assert_eq!(db.get_remote_lyric_cache(track, 10, None).unwrap(), None);
     }
 
     #[test]

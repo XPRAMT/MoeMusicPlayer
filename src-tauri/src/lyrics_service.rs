@@ -1398,34 +1398,113 @@ enum LocalLyricsLookup {
     Oversized,
 }
 
+/// What the lookup of the local lyrics (beside and inside the audio file) found, before it becomes a DTO.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+enum RawLocalLyrics {
+    Found {
+        provider: LyricProvider,
+        lyrics: ParsedLyrics,
+    },
+    Missing,
+    Oversized,
+}
+
 #[cfg(target_os = "windows")]
-async fn local_lyrics_for_track(
+async fn raw_local_lyrics(
     _app: Option<&AppHandle>,
+    database: &Database,
+    track_id: TrackId,
+) -> Result<RawLocalLyrics, String> {
+    let locators = database
+        .track_locators(track_id)
+        .map_err(|error| error.to_string())?;
+    if locators.is_empty() {
+        return Ok(RawLocalLyrics::Missing);
+    }
+    let lookup = tauri::async_runtime::spawn_blocking(move || find_lyrics(&locators))
+        .await
+        .map_err(|error| format!("讀取本機歌詞工作失敗：{error}"))?;
+    Ok(match lookup {
+        LyricsLookup::Found(found) => RawLocalLyrics::Found {
+            provider: found.provider,
+            lyrics: found.lyrics,
+        },
+        LyricsLookup::Missing => RawLocalLyrics::Missing,
+        LyricsLookup::Oversized => RawLocalLyrics::Oversized,
+    })
+}
+
+/// The lyrics beside and inside the track's file. A track on a remote server is a network round trip or several (the `.lrc`
+/// beside it, then the tags in the file), so what was found is kept in the library database next to the size and modified
+/// time of the file it was read for; the next play of the same file reads it from there.
+async fn local_lyrics_for_track(
+    app: Option<&AppHandle>,
     _sources: &[super::settings::SourceEntry],
     database: &Database,
     track_id: TrackId,
     track: &TrackSummary,
 ) -> Result<LocalLyricsLookup, String> {
-    let locators = database
-        .track_locators(track_id)
+    let started = std::time::Instant::now();
+    let fingerprint = database
+        .remote_file_fingerprint(track_id)
         .map_err(|error| error.to_string())?;
-    if locators.is_empty() {
-        return Ok(LocalLyricsLookup::Missing);
+    let cached = match fingerprint {
+        Some((size, modified)) => database
+            .get_remote_lyric_cache(track_id, size, modified)
+            .map_err(|error| error.to_string())?
+            .and_then(|json| serde_json::from_str::<RawLocalLyrics>(&json).ok()),
+        None => None,
+    };
+    let from_database = cached.is_some();
+    let raw = match cached {
+        Some(raw) => raw,
+        None => {
+            let raw = raw_local_lyrics(app, database, track_id).await?;
+            if let (Some((size, modified)), Ok(json)) = (fingerprint, serde_json::to_string(&raw)) {
+                if remote_lookup_is_definitive(database, track_id, &raw).await {
+                    let _ = database.save_remote_lyric_cache(track_id, size, modified, &json);
+                }
+            }
+            raw
+        }
+    };
+    if fingerprint.is_some() {
+        eprintln!(
+            "[remote] lyrics lookup took {} ms (from the database: {})",
+            started.elapsed().as_millis(),
+            from_database
+        );
     }
-    let lookup = tauri::async_runtime::spawn_blocking(move || find_lyrics(&locators))
-        .await
-        .map_err(|error| format!("讀取本機歌詞工作失敗：{error}"))?;
-    match lookup {
-        LyricsLookup::Found(found) => Ok(LocalLyricsLookup::Found(track_lyrics_dto(
-            track.id,
-            track,
-            found.provider,
-            false,
-            &found.lyrics,
-        ))),
-        LyricsLookup::Missing => Ok(LocalLyricsLookup::Missing),
-        LyricsLookup::Oversized => Ok(LocalLyricsLookup::Oversized),
+    Ok(match raw {
+        RawLocalLyrics::Found { provider, lyrics } => {
+            LocalLyricsLookup::Found(track_lyrics_dto(track.id, track, provider, false, &lyrics))
+        }
+        RawLocalLyrics::Missing => LocalLyricsLookup::Missing,
+        RawLocalLyrics::Oversized => LocalLyricsLookup::Oversized,
+    })
+}
+
+/// Whether a lookup result may be remembered. A found result always may. "Missing" is the answer of a server that could not
+/// be reached just as much as of a file without lyrics, so it is remembered only when the audio file itself can be opened
+/// right now (the server is there, and the lyrics really are not).
+async fn remote_lookup_is_definitive(database: &Database, track_id: TrackId, raw: &RawLocalLyrics) -> bool {
+    if !matches!(raw, RawLocalLyrics::Missing) {
+        return true;
     }
+    let Some((source_id, path)) = database.track_locators(track_id).ok().and_then(|locators| {
+        locators.into_iter().find_map(|locator| match locator {
+            player_core::MediaLocator::Remote { source_id, path } => Some((source_id, path)),
+            _ => None,
+        })
+    }) else {
+        return false;
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        player_core::remote_content().is_some_and(|content| content.open(source_id, &path).is_ok())
+    })
+    .await
+    .unwrap_or(false)
 }
 
 async fn local_source_candidates(
@@ -1586,32 +1665,28 @@ fn read_local_lyric_source(
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "android")))]
-async fn local_lyrics_for_track(
+async fn raw_local_lyrics(
     _app: Option<&AppHandle>,
-    _sources: &[super::settings::SourceEntry],
     _database: &Database,
     _track_id: TrackId,
-    _track: &TrackSummary,
-) -> Result<LocalLyricsLookup, String> {
-    Ok(LocalLyricsLookup::Missing)
+) -> Result<RawLocalLyrics, String> {
+    Ok(RawLocalLyrics::Missing)
 }
 
 #[cfg(target_os = "android")]
-async fn local_lyrics_for_track(
+async fn raw_local_lyrics(
     app: Option<&AppHandle>,
-    _sources: &[super::settings::SourceEntry],
     database: &Database,
     track_id: TrackId,
-    track: &TrackSummary,
-) -> Result<LocalLyricsLookup, String> {
+) -> Result<RawLocalLyrics, String> {
     let Some(app) = app else {
-        return Ok(LocalLyricsLookup::Missing);
+        return Ok(RawLocalLyrics::Missing);
     };
     let locators = database
         .track_locators(track_id)
         .map_err(|error| error.to_string())?;
     if locators.is_empty() {
-        return Ok(LocalLyricsLookup::Missing);
+        return Ok(RawLocalLyrics::Missing);
     }
     let app = app.clone();
     let (found, oversized) = tauri::async_runtime::spawn_blocking(move || {
@@ -1620,17 +1695,14 @@ async fn local_lyrics_for_track(
     .await
     .map_err(|error| format!("讀取 Android 本機歌詞工作失敗：{error}"))?;
     // Same precedence as Windows `find_lyrics`: the LRC sidecar wins over embedded lyrics.
-    match found.into_iter().next() {
-        Some(item) => Ok(LocalLyricsLookup::Found(track_lyrics_dto(
-            track.id,
-            track,
-            item.provider,
-            false,
-            &item.lyrics,
-        ))),
-        None if oversized => Ok(LocalLyricsLookup::Oversized),
-        None => Ok(LocalLyricsLookup::Missing),
-    }
+    Ok(match found.into_iter().next() {
+        Some(item) => RawLocalLyrics::Found {
+            provider: item.provider,
+            lyrics: item.lyrics,
+        },
+        None if oversized => RawLocalLyrics::Oversized,
+        None => RawLocalLyrics::Missing,
+    })
 }
 
 #[cfg(target_os = "android")]
