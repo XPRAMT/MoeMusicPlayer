@@ -110,6 +110,37 @@ fn unix_ms(filetime: u64) -> Option<i64> {
     Some((filetime / 10_000) as i64 - EPOCH_DIFFERENCE_MS)
 }
 
+/// The shares a server offers to this account (administrative shares such as `C$` and `IPC$` are left out), so the
+/// user can pick one instead of typing its name.
+pub fn list_shares(
+    host: &str,
+    port: Option<u16>,
+    user: &str,
+    password: &str,
+) -> Result<Vec<String>, RemoteError> {
+    let client = Client::new(ClientConfig {
+        connection: ConnectionConfig {
+            port,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let ipc = UncPath::ipc_share(host).map_err(|error| RemoteError::Protocol(error.to_string()))?;
+    client
+        .share_connect(&ipc, user, password.to_owned())
+        .map_err(|error| classify(&error))?;
+    let shares = client.list_shares(host).map_err(|error| classify(&error))?;
+    let _ = client.close();
+    let mut names: Vec<String> = shares
+        .iter()
+        .filter_map(|share| share.netname.as_ref().map(|name| name.to_string()))
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty() && !name.ends_with('$'))
+        .collect();
+    names.sort_by_key(|name| name.to_lowercase());
+    Ok(names)
+}
+
 pub struct SmbFs {
     settings: SmbSettings,
     client: Mutex<std::sync::Arc<Client>>,

@@ -75,6 +75,8 @@ mod android_artwork;
 mod android_dsd;
 mod android_folder_browser;
 mod remote_accounts;
+mod remote_connections;
+mod remote_sources;
 #[cfg(target_os = "android")]
 mod android_path_migration;
 #[cfg(any(target_os = "android", test))]
@@ -485,6 +487,8 @@ struct AppState {
     #[cfg(target_os = "windows")]
     window_frame: std::sync::Mutex<WindowFrameMemory>,
     lyrics_service: lyrics_service::LyricsService,
+    /// Open connections to remote servers (ADR 0026), shared by scanning, tag reads and playback.
+    remote_connections: Arc<remote_connections::RemoteConnections>,
     #[cfg(target_os = "windows")]
     playback: Option<WindowsPlaybackService>,
     #[cfg(target_os = "windows")]
@@ -7114,7 +7118,9 @@ fn source_entry_summary(
     source: &SourceEntry,
 ) -> Result<LibrarySource, String> {
     let (kind, location) = match &source.kind {
-        SourceEntryKind::Folder { media_kind, path } => (
+        SourceEntryKind::Folder {
+            media_kind, path, ..
+        } => (
             source_kind_name(*media_kind).to_owned(),
             path.display_lossy(),
         ),
@@ -7376,6 +7382,13 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
         let excluded_folders = excluded_folder_paths(&source_settings);
         #[cfg(not(any(target_os = "windows", target_os = "android")))]
         let excluded_folders = Vec::new();
+        let remote_resolver = {
+            let state = sync_app.state::<AppState>();
+            let data_dir = user_data_directory(&state)?;
+            state
+                .remote_connections
+                .resolver(data_dir, &source_settings)
+        };
         sync_configured_sources(
             &sync_app,
             &mut database,
@@ -7383,6 +7396,7 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
             &excluded_folders,
             source_registry_authoritative,
             &cancellation,
+            remote_resolver,
             &mut on_progress,
         )
     })
@@ -7420,6 +7434,7 @@ fn sync_configured_sources<F>(
     excluded_folders: &[std::path::PathBuf],
     source_registry_authoritative: bool,
     cancellation: &SyncCancellation,
+    remote_resolver: Arc<dyn player_remote::index::RemoteResolver>,
     on_progress: &mut F,
 ) -> Result<LibrarySyncResult, String>
 where
@@ -7428,8 +7443,7 @@ where
     if !source_registry_authoritative {
         return Err("設定來源清單尚未確認；為保護現有曲庫，本次已略過所有來源同步。".to_owned());
     }
-    #[cfg(not(target_os = "windows"))]
-    let _ = cancellation;
+
     #[cfg(target_os = "windows")]
     {
         let _ = app;
@@ -7439,6 +7453,7 @@ where
             excluded_folders,
             source_registry_authoritative,
             cancellation,
+            remote_resolver,
             on_progress,
         )
     }
@@ -7460,9 +7475,12 @@ where
         let source_count = roots.len() + playlist_sources.len();
         let mut sources = Vec::new();
         let mut folder_roots = Vec::new();
+        let mut remote_roots = Vec::new();
         for root in roots {
             if root.kind == MediaSourceKind::AndroidFilesystem {
                 folder_roots.push(root);
+            } else if root.kind == MediaSourceKind::Remote {
+                remote_roots.push(root);
             } else {
                 // Legacy MediaStore/SAF: never scanned again; its mappings stay untouched until
                 // the path migration (needs All files access) converts it (ADR 0014).
@@ -7491,6 +7509,26 @@ where
                 Ok(())
             },
         )?;
+        let mut remote_index = player_remote::index::RemoteMediaIndex::new(remote_resolver);
+        for (remote_index_number, root) in remote_roots.iter().enumerate() {
+            let report = SyncEngine::sync_cancellable_with_progress(
+                root,
+                &mut remote_index,
+                database,
+                synced_at_utc_ms,
+                cancellation,
+                |progress| {
+                    on_progress(
+                        root,
+                        folder_roots.len() + remote_index_number,
+                        source_count,
+                        progress,
+                    );
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            sources.push(sync_summary(root, report));
+        }
         let mut reader = AndroidPlaylistReader { app };
         for source in playlist_sources {
             let root = source
@@ -7687,6 +7725,7 @@ where
         excluded_folders,
         source_registry_authoritative,
         &SyncCancellation::default(),
+        remote_connections::none(),
         on_progress,
     )
 }
@@ -7698,6 +7737,7 @@ fn sync_windows_configured_sources_cancellable<F>(
     excluded_folders: &[std::path::PathBuf],
     source_registry_authoritative: bool,
     cancellation: &SyncCancellation,
+    remote_resolver: Arc<dyn player_remote::index::RemoteResolver>,
     on_progress: &mut F,
 ) -> Result<LibrarySyncResult, String>
 where
@@ -7753,7 +7793,9 @@ where
         .filter(|source| match source.kind {
             SourceEntryKind::Folder { media_kind, .. } => matches!(
                 media_kind,
-                MediaSourceKind::WindowsFilesystem | MediaSourceKind::WindowsSystemIndex
+                MediaSourceKind::WindowsFilesystem
+                    | MediaSourceKind::WindowsSystemIndex
+                    | MediaSourceKind::Remote
             ),
             SourceEntryKind::PlaylistFile { .. } => true,
         })
@@ -7762,6 +7804,7 @@ where
     let source_count = sources.len();
     let mut results = Vec::new();
     let mut index = WindowsMediaIndex::with_excluded_folders(excluded_folders.iter().cloned());
+    let mut remote_index = player_remote::index::RemoteMediaIndex::new(remote_resolver);
     for (source_index, source) in sources.iter().enumerate() {
         // Closing the program stops the sync: the source being read saves what it has, the others are left for next time.
         if cancellation.is_cancelled() {
@@ -7776,14 +7819,25 @@ where
                 database
                     .save_library_root(&root)
                     .map_err(|error| error.to_string())?;
-                let report = SyncEngine::sync_cancellable_with_progress(
-                    &root,
-                    &mut index,
-                    database,
-                    synced_at_utc_ms,
-                    cancellation,
-                    |progress| on_progress(&root, source_index, source_count, progress),
-                )
+                let report = if root.kind == MediaSourceKind::Remote {
+                    SyncEngine::sync_cancellable_with_progress(
+                        &root,
+                        &mut remote_index,
+                        database,
+                        synced_at_utc_ms,
+                        cancellation,
+                        |progress| on_progress(&root, source_index, source_count, progress),
+                    )
+                } else {
+                    SyncEngine::sync_cancellable_with_progress(
+                        &root,
+                        &mut index,
+                        database,
+                        synced_at_utc_ms,
+                        cancellation,
+                        |progress| on_progress(&root, source_index, source_count, progress),
+                    )
+                }
                 .map_err(|error| error.to_string())?;
                 results.push(sync_summary(&root, report));
             }
@@ -11268,6 +11322,10 @@ pub fn run() {
             android_folder_browser::android_list_directories,
             remote_accounts::remote_accounts_list,
             remote_accounts::remote_account_save,
+            remote_sources::remote_account_test,
+            remote_sources::remote_smb_shares,
+            remote_sources::remote_browse,
+            remote_sources::remote_source_add,
             remote_accounts::remote_account_delete,
             remote_accounts::remote_accounts_export,
             remote_accounts::remote_accounts_import,
@@ -11514,6 +11572,7 @@ pub fn run() {
                         }),
                 }),
                 lyrics_service: lyrics_service::LyricsService::default(),
+                remote_connections: Arc::default(),
                 #[cfg(target_os = "windows")]
                 playback,
                 #[cfg(target_os = "windows")]

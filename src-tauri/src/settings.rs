@@ -1220,6 +1220,10 @@ pub enum SourceEntryKind {
     Folder {
         media_kind: MediaSourceKind,
         path: StoredPath,
+        /// A remote source (ADR 0026): the account (`remoteAccounts[].id`) whose server holds the folder. The
+        /// folder is `path`, a `moeremote://` text form of the library root's remote locator.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_account: Option<String>,
     },
     PlaylistFile {
         playlist_id: PlaylistId,
@@ -1258,13 +1262,16 @@ impl SourceEntry {
             kind: SourceEntryKind::Folder {
                 media_kind: root.kind,
                 path: StoredPath::from_locator(&root.locator)?,
+                remote_account: None,
             },
         })
     }
 
     pub fn library_root(&self) -> Result<Option<LibraryRoot>, SettingsError> {
         match &self.kind {
-            SourceEntryKind::Folder { media_kind, path } => Ok(Some(LibraryRoot {
+            SourceEntryKind::Folder {
+                media_kind, path, ..
+            } => Ok(Some(LibraryRoot {
                 id: self.id,
                 kind: *media_kind,
                 display_name: self.display_name.clone(),

@@ -78,7 +78,7 @@ pub(crate) struct RemoteAccountsImportResult {
     pub updated: usize,
 }
 
-fn vault(data_dir: &Path) -> Result<CredentialVault, String> {
+pub(crate) fn vault(data_dir: &Path) -> Result<CredentialVault, String> {
     CredentialVault::open(&data_dir.join(KEY_FILE_NAME)).map_err(|error| error.to_string())
 }
 
@@ -128,13 +128,13 @@ fn normalize_input(input: &RemoteAccountInput) -> Result<(String, String, String
     Ok((name, host, username, path))
 }
 
-/// Create or change an account in `settings`, sealing a new password with `vault`.
-pub(crate) fn save_account(
+/// The account a save would store (the password sealed, the fields checked), without storing it.
+pub(crate) fn account_from_input(
     settings: &SettingsStore,
     vault: &CredentialVault,
-    input: RemoteAccountInput,
-) -> Result<RemoteAccountView, String> {
-    let (name, host, username, path) = normalize_input(&input)?;
+    input: &RemoteAccountInput,
+) -> Result<RemoteAccount, String> {
+    let (name, host, username, path) = normalize_input(input)?;
     let current = settings.snapshot().map_err(|error| error.to_string())?.remote_accounts;
     let existing = match input.id.as_deref() {
         Some(id) => Some(
@@ -151,7 +151,7 @@ pub(crate) fn save_account(
         (None, None) => None,
         (Some(plaintext), _) => vault.seal_password(&id, plaintext).map_err(|error| error.to_string())?,
     };
-    let account = RemoteAccount {
+    Ok(RemoteAccount {
         id,
         name,
         protocol: input.protocol,
@@ -162,7 +162,16 @@ pub(crate) fn save_account(
         password,
         tls: input.tls.clone(),
         only_on_wifi: input.only_on_wifi,
-    };
+    })
+}
+
+/// Create or change an account in `settings`, sealing a new password with `vault`.
+pub(crate) fn save_account(
+    settings: &SettingsStore,
+    vault: &CredentialVault,
+    input: RemoteAccountInput,
+) -> Result<RemoteAccountView, String> {
+    let account = account_from_input(settings, vault, &input)?;
     let view = RemoteAccountView::from(&account);
     settings
         .update(|settings| {
@@ -177,6 +186,20 @@ pub(crate) fn save_account(
 }
 
 pub(crate) fn delete_account(settings: &SettingsStore, id: &str) -> Result<bool, String> {
+    let in_use = settings
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .sources
+        .iter()
+        .any(|source| {
+            matches!(
+                &source.kind,
+                crate::settings::SourceEntryKind::Folder { remote_account: Some(account), .. } if account == id
+            )
+        });
+    if in_use {
+        return Err("還有音樂來源使用這個帳號；請先移除那些來源。".to_owned());
+    }
     let mut removed = false;
     settings
         .update(|settings| {
@@ -249,12 +272,17 @@ pub(crate) fn remote_account_save(
     input: RemoteAccountInput,
 ) -> Result<RemoteAccountView, String> {
     let data_dir = crate::user_data_directory(&state)?;
-    save_account(&state.settings, &vault(&data_dir)?, input)
+    let view = save_account(&state.settings, &vault(&data_dir)?, input)?;
+    // A changed account must not keep using the old, signed-in connection.
+    state.remote_connections.forget(&view.id);
+    Ok(view)
 }
 
 #[tauri::command]
 pub(crate) fn remote_account_delete(state: tauri::State<'_, crate::AppState>, id: String) -> Result<bool, String> {
-    delete_account(&state.settings, &id)
+    let removed = delete_account(&state.settings, &id)?;
+    state.remote_connections.forget(&id);
+    Ok(removed)
 }
 
 /// Export every remote account into a file chosen with the system dialog, sealed under `passphrase`.
