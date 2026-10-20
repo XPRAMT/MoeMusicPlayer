@@ -20,6 +20,25 @@ class MainActivity : TauriActivity() {
   private val androidInsetsBridge = AndroidInsetsBridge()
   private var appWebView: WebView? = null
 
+  override fun onStart() {
+    super.onStart()
+    ensurePlaybackService()
+  }
+
+  /**
+   * The playback service is started once when the app boots, but `onTaskRemoved` (swiping the app away while paused)
+   * or the system can stop it while this process lives on; Rust keeps queueing commands nobody polls, so tapping a
+   * song does nothing. Starting an already running service is a no-op, so do it every time the app comes forward.
+   */
+  private fun ensurePlaybackService() {
+    try {
+      startService(android.content.Intent().setClassName(packageName, "com.moemusicplayer.mediaindex.PlaybackService"))
+      LifecycleLog.write(this, "ensurePlaybackService")
+    } catch (error: Exception) {
+      LifecycleLog.write(this, "ensurePlaybackService failed: ${error.message}")
+    }
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     // A process that already ran an activity whose window is gone cannot host a new one (see ProcessRestartActivity).
     val restart = ProcessRestartPolicy.shouldRestart(processHadActivity, previousActivityDestroyedForReal)
