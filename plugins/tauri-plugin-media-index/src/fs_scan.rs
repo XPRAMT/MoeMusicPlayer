@@ -1,6 +1,7 @@
 //! Real-path library scanning on Android under All files access (ADR 0014). Folder sources and
-//! playlist media are plain directories and files, like desktop folder sources: no MediaStore
-//! query and no SAF document tree. Item IDs and locator keys are `player_core::unix_path_key`.
+//! playlist media are plain directories and files, like desktop folder sources, with no SAF document tree and no
+//! permission other than All files access. The scan does not query MediaStore today (it may: All files access is enough
+//! to query it). Item IDs and locator keys are `player_core::unix_path_key`.
 
 use std::{
     collections::HashSet,

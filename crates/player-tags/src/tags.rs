@@ -143,11 +143,17 @@ fn file_meta(path: &Path) -> Result<(u64, Option<u64>, Option<u64>), String> {
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as u64);
-    let created = meta
-        .created()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64);
+    let created = match meta.created() {
+        Ok(time) => time
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as u64),
+        Err(error) => {
+            // Not every file system keeps a creation time (Android's user storage, a FUSE mount, reports none).
+            eprintln!("[details] no creation time for {}: {error}", path.display());
+            None
+        }
+    };
     Ok((meta.len(), modified, created))
 }
 

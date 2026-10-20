@@ -80,3 +80,12 @@ class of failure no longer exists.
 
 - One manual system toggle replaces per-file prompts. Revoking the toggle at any time silently returns to the fallback paths.
 - Direct writes bypass SAF grants. They are used only for files the library already indexes, and only through the tag-save path.
+
+## Clarification (2026-10-21): the rule is one authorization, not "no MediaStore"
+
+The goal of 2026-10-17 was that the user is asked for **one** permission only (All files access), so that several
+authorizations (`READ_MEDIA_AUDIO`, SAF trees, a prompt per file) do not confuse them. It was never a decision to stop
+using MediaStore. With All files access MediaStore can be queried without any further permission, and it may be used to
+speed up scanning or to add information the file system does not keep (for example `date_added`, which stands in for the
+creation time Android's storage does not record). The scan in `fs_scan.rs` does not query MediaStore today; that is the
+current state of the code, not a prohibition.
