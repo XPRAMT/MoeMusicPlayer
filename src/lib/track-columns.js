@@ -173,6 +173,8 @@ const LOSSLESS_CODECS = new Set([
   'APE',
   'WV',
   'WAVPACK',
+  'WVLL',
+  'WVDSD',
   'PCM',
   'TAK',
   'TTA',
@@ -392,11 +394,11 @@ export function isLosslessCodec(codec) {
 }
 
 /**
- * DSD64 / DSD128 / DSD256 / DSD512 (the codec label the DSF reader reports).
+ * DSD64 / DSD128 / DSD256 / DSD512 (the codec label the DSF reader reports) and WVDSD (DSD inside WavPack).
  * @param {unknown} codec
  */
 export function isDsdCodec(codec) {
-  return typeof codec === 'string' && /^DSD\d+$/i.test(codec.trim());
+  return typeof codec === 'string' && /^(DSD\d+|WVDSD)$/i.test(codec.trim());
 }
 
 /**

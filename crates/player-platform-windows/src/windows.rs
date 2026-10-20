@@ -520,6 +520,12 @@ impl MediaIndex for WindowsMediaIndex {
             })?;
             (tagged_file, format!("{file_type:?}"))
         };
+        let wavpack = if file_type == FileType::WavPack {
+            read_wavpack_summary(path)
+        } else {
+            None
+        };
+        let codec = wavpack.map_or(codec, |summary| summary.codec.to_owned());
         let tag = tagged_file
             .primary_tag()
             .or_else(|| tagged_file.first_tag());
@@ -550,13 +556,15 @@ impl MediaIndex for WindowsMediaIndex {
             bitrate_bps: properties
                 .audio_bitrate()
                 .map(|kbps| kbps.saturating_mul(1000)),
-            sample_rate_hz: properties.sample_rate(),
+            sample_rate_hz: wavpack
+                .map(|summary| summary.sample_rate_hz)
+                .or_else(|| properties.sample_rate()),
             release_date,
             year,
             bit_depth: if file_type == FileType::Wav {
                 read_lossless_wav_bit_depth(path)
             } else if file_type == FileType::WavPack {
-                read_wavpack_bit_depth(path)
+                wavpack.and_then(|summary| summary.bit_depth)
             } else {
                 reliable_source_bit_depth(file_type, properties.bit_depth())
             },
@@ -706,9 +714,9 @@ fn reliable_source_bit_depth(file_type: FileType, bit_depth: Option<u8>) -> Opti
     bit_depth.filter(|depth| (8..=32).contains(depth))
 }
 
-/// WavPack: lofty does not report a bit depth, so ask the decoder (lossless files and `.wv` + `.wvc` pairs only).
-fn read_wavpack_bit_depth(path: &Path) -> Option<u8> {
-    player_wavpack::lossless_bit_depth(path)
+/// WavPack: lofty reports neither a bit depth nor lossless or DSD, so the decoder is asked (ADR 0025).
+fn read_wavpack_summary(path: &Path) -> Option<player_wavpack::WavPackSummary> {
+    player_wavpack::summarize(path)
 }
 
 /// WAV is a container and may carry lossy codecs such as ADPCM or companded audio. Verify its
@@ -1066,7 +1074,7 @@ fn has_prefix(units: &[u16], prefix: &[u16]) -> bool {
 mod tests {
     use super::{
         is_supported_audio_file, mpeg_codec_name, read_lossless_wav_bit_depth,
-        read_wavpack_bit_depth, reliable_source_bit_depth, supported_audio_extensions,
+        read_wavpack_summary, reliable_source_bit_depth, supported_audio_extensions,
         to_extended_path, windows_locator_key, WindowsMediaIndex,
     };
     use lofty::file::FileType;
@@ -1329,7 +1337,11 @@ mod tests {
                     .is_some_and(|album| album.starts_with("WavPack ")),
                 "{name}"
             );
-            assert_eq!(track.codec.as_deref(), Some("WavPack"), "{name}");
+            assert_eq!(
+                track.codec.as_deref(),
+                Some(if cols[5] == "1" { "WVLL" } else { "WVL" }),
+                "{name}"
+            );
             assert_eq!(track.sample_rate_hz, Some(rate), "{name}");
             assert_eq!(track.bit_depth, expected_depth, "{name}: bit depth");
             assert!(track.duration_ms.unwrap_or_default() > 60_000, "{name}");
@@ -1342,6 +1354,20 @@ mod tests {
                 track.bit_depth,
                 track.duration_ms.unwrap_or(0) as f64 / 1000.0,
                 track.bitrate_bps
+            );
+        }
+        // DSD inside WavPack (made with `wavpack song.dsf`, in the `dsd` folder when it exists).
+        if let Some(track) = page
+            .items
+            .iter()
+            .find(|track| track.title.as_deref() == Some("dsd_lossless"))
+        {
+            assert_eq!(track.codec.as_deref(), Some("WVDSD"));
+            assert_eq!(track.sample_rate_hz, Some(11_289_600));
+            assert_eq!(track.bit_depth, Some(1));
+            println!(
+                "dsd_lossless: {:?} {:?} Hz {:?}-bit",
+                track.codec, track.sample_rate_hz, track.bit_depth
             );
         }
         // A second scan finds nothing to re-read.
@@ -1775,33 +1801,34 @@ mod tests {
 
     /// WavPack depths come from the decoder; a lossy hybrid file has none.
     #[test]
-    fn wavpack_bit_depth_comes_from_the_decoder() {
+    fn wavpack_labels_and_depths_come_from_the_decoder() {
         let reference = |name: &str| {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../player-wavpack/tests/reference")
                 .join(name)
         };
+        let summary = |name: &str| read_wavpack_summary(&reference(name));
+        let lossless = |depth: u8, rate: u32| {
+            Some(player_wavpack::WavPackSummary {
+                codec: "WVLL",
+                sample_rate_hz: rate,
+                bit_depth: Some(depth),
+            })
+        };
+        assert_eq!(summary("int16_stereo.wv"), lossless(16, 48_000));
+        assert_eq!(summary("int24_stereo.wv"), lossless(24, 48_000));
+        assert_eq!(summary("int32_stereo.wv"), lossless(32, 48_000));
+        assert_eq!(summary("f32_stereo.wv"), lossless(32, 48_000));
+        // A hybrid lossy file is `WVL` and has no depth.
         assert_eq!(
-            read_wavpack_bit_depth(&reference("int16_stereo.wv")),
-            Some(16)
+            summary("hybrid_lossy_int16_stereo.wv"),
+            Some(player_wavpack::WavPackSummary {
+                codec: "WVL",
+                sample_rate_hz: 48_000,
+                bit_depth: None
+            })
         );
-        assert_eq!(
-            read_wavpack_bit_depth(&reference("int24_stereo.wv")),
-            Some(24)
-        );
-        assert_eq!(
-            read_wavpack_bit_depth(&reference("int32_stereo.wv")),
-            Some(32)
-        );
-        assert_eq!(
-            read_wavpack_bit_depth(&reference("f32_stereo.wv")),
-            Some(32)
-        );
-        assert_eq!(
-            read_wavpack_bit_depth(&reference("hybrid_lossy_int16_stereo.wv")),
-            None
-        );
-        assert_eq!(read_wavpack_bit_depth(&reference("missing.wv")), None);
+        assert_eq!(summary("missing.wv"), None);
     }
 
     /// Whole songs from the official encoder (`MOE_WV_MANIFEST`, run by hand with `-- --ignored`).
@@ -1821,9 +1848,17 @@ mod tests {
             } else {
                 Some(24)
             };
-            let depth = read_wavpack_bit_depth(Path::new(cols[1]));
-            println!("{name}: bit depth {depth:?}");
-            assert_eq!(depth, expected, "{name}");
+            let summary = read_wavpack_summary(Path::new(cols[1])).unwrap();
+            println!(
+                "{name}: {} {} Hz, bit depth {:?}",
+                summary.codec, summary.sample_rate_hz, summary.bit_depth
+            );
+            assert_eq!(summary.bit_depth, expected, "{name}");
+            assert_eq!(
+                summary.codec,
+                if cols[5] == "1" { "WVLL" } else { "WVL" },
+                "{name}"
+            );
         }
     }
 

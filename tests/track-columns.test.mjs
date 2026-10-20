@@ -54,6 +54,21 @@ test('DSD tracks show the DSD rate name, MHz and 1 bit, hide the bitrate and alw
   assert.equal(isHiResTrack({ codec: 'FLAC', sampleRateHz: 44_100, bitDepth: 16 }), false);
 });
 
+test('WavPack labels: WVDSD is DSD, WVLL is lossless, WVL is lossy and shows its bitrate', () => {
+  const dsd = { codec: 'WVDSD', sampleRateHz: 2_822_400, bitDepth: 1, bitrateBps: 8_000_000 };
+  assert.equal(isDsdCodec('WVDSD'), true);
+  assert.equal(isLosslessCodec('WVDSD'), true);
+  assert.equal(isHiResTrack(dsd), true);
+  assert.equal(formatAudioFormat(dsd, { omitLosslessBitrate: true, omitDsdBitDepth: true }), 'WVDSD．2.8 MHz');
+  const lossless = { codec: 'WVLL', sampleRateHz: 44_100, bitDepth: 24, bitrateBps: 1_200_000 };
+  assert.equal(isLosslessCodec('WVLL'), true);
+  assert.equal(formatAudioFormat(lossless, { omitLosslessBitrate: true }), 'WVLL．44.1 kHz．24 bit');
+  const lossy = { codec: 'WVL', sampleRateHz: 96_000, bitDepth: null, bitrateBps: 512_000 };
+  assert.equal(isLosslessCodec('WVL'), false);
+  assert.equal(formatAudioFormat(lossy, { omitLosslessBitrate: true }), 'WVL．96 kHz．512 kbps');
+  assert.equal(isHiResTrack(lossy), false);
+});
+
 test('numeric list columns are centered while text columns keep their left alignment', async () => {
   assert.deepEqual(
     ['year', 'createdAt', 'duration', 'playCount', 'trackCount', 'albumCount', 'trackDuration', 'played']

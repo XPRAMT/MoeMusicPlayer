@@ -42,6 +42,7 @@ mod ffi {
     pub const MODE_LOSSLESS: c_int = 0x2;
     pub const MODE_HYBRID: c_int = 0x4;
     pub const MODE_FLOAT: c_int = 0x8;
+    pub const QMODE_DSD_AUDIO: c_int = 0x10 | 0x20;
 
     extern "C" {
         pub fn WavpackOpenFileInputEx64(
@@ -54,6 +55,8 @@ mod ffi {
         ) -> *mut WavpackContext;
         pub fn WavpackCloseFile(wpc: *mut WavpackContext) -> *mut WavpackContext;
         pub fn WavpackGetMode(wpc: *mut WavpackContext) -> c_int;
+        pub fn WavpackGetQualifyMode(wpc: *mut WavpackContext) -> c_int;
+        pub fn WavpackGetNativeSampleRate(wpc: *mut WavpackContext) -> u32;
         pub fn WavpackGetVersion(wpc: *mut WavpackContext) -> c_int;
         pub fn WavpackUnpackSamples(
             wpc: *mut WavpackContext,
@@ -105,6 +108,10 @@ pub struct WavPackInfo {
     /// Frames per channel; `None` when the file does not say (a streamed, truncated file).
     pub total_frames: Option<u64>,
     pub float: bool,
+    /// The file holds DSD (1-bit) audio; the reader hands out the library's 24-bit PCM decimation of it.
+    pub dsd: bool,
+    /// The sample rate of the source: the 1-bit rate (for example 2 822 400 Hz) of a DSD file, else `sample_rate`.
+    pub native_sample_rate: u32,
     /// Lossless (also true for a hybrid file played with its correction file).
     pub lossless: bool,
     pub hybrid: bool,
@@ -295,9 +302,11 @@ impl WavPackReader {
                 .collect::<String>();
             return Err(WavPackError::Open(message));
         }
-        let (mode, channels, sample_rate, bits, frames, version, bitrate) = unsafe {
+        let (mode, qualify, native_rate, channels, sample_rate, bits, frames, version, bitrate) = unsafe {
             (
                 ffi::WavpackGetMode(context),
+                ffi::WavpackGetQualifyMode(context),
+                ffi::WavpackGetNativeSampleRate(context),
                 ffi::WavpackGetNumChannels(context),
                 ffi::WavpackGetSampleRate(context),
                 ffi::WavpackGetBitsPerSample(context),
@@ -313,6 +322,12 @@ impl WavPackReader {
             bits_per_sample: u32::try_from(bits).unwrap_or(0),
             total_frames: u64::try_from(frames).ok(),
             float,
+            dsd: qualify & ffi::QMODE_DSD_AUDIO != 0,
+            native_sample_rate: if native_rate > 0 {
+                native_rate
+            } else {
+                sample_rate
+            },
             lossless: mode & ffi::MODE_LOSSLESS != 0,
             hybrid: mode & ffi::MODE_HYBRID != 0,
             correction_file: mode & ffi::MODE_WVC != 0,
@@ -412,14 +427,37 @@ impl Drop for WavPackReader {
     }
 }
 
-/// Bit depth of the encoded samples of a WavPack file on disk (32 for floating point), reported only when the file
-/// decodes losslessly (a hybrid `.wv` without its `.wvc` is lossy and has none that means anything).
-pub fn lossless_bit_depth(path: &std::path::Path) -> Option<u8> {
+/// What the library list shows of a WavPack file (the codec labels are short on purpose: `WVLL` lossless, `WVL`
+/// lossy, `WVDSD` DSD).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WavPackSummary {
+    pub codec: &'static str,
+    /// The source sample rate (the 1-bit rate of a DSD file).
+    pub sample_rate_hz: u32,
+    /// The bit depth of the encoded samples (32 for floating point, 1 for DSD), only for lossless files.
+    pub bit_depth: Option<u8>,
+}
+
+/// The codec label, source sample rate and bit depth of a WavPack file on disk (a `.wvc` next to it is used, which
+/// makes a hybrid file lossless). A hybrid file without its correction file is lossy and has no meaningful depth.
+pub fn summarize(path: &std::path::Path) -> Option<WavPackSummary> {
     let info = WavPackReader::open_path(path).ok()?.info();
+    if info.dsd {
+        return Some(WavPackSummary {
+            codec: "WVDSD",
+            sample_rate_hz: info.native_sample_rate,
+            bit_depth: Some(1),
+        });
+    }
     let depth = if info.float { 32 } else { info.bits_per_sample };
-    u8::try_from(depth)
+    let depth = u8::try_from(depth)
         .ok()
-        .filter(|depth| info.lossless && (8..=32).contains(depth))
+        .filter(|depth| info.lossless && (8..=32).contains(depth));
+    Some(WavPackSummary {
+        codec: if info.lossless { "WVLL" } else { "WVL" },
+        sample_rate_hz: info.sample_rate,
+        bit_depth: depth,
+    })
 }
 
 /// Whether `bytes` (the start of a file) is a WavPack block: `wvpk`.

@@ -119,9 +119,13 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         }
         match parse_lofty_metadata(path, None) {
             Ok(mut metadata) => {
-                // lofty gives no bit depth for WavPack; the decoder knows (lossless files and `.wv` + `.wvc` pairs).
+                // lofty gives no bit depth or lossless/DSD for WavPack; the decoder knows (ADR 0025).
                 if player_formats::decode_engine(path) == player_formats::DecodeEngine::WavPack {
-                    metadata.bit_depth = player_wavpack::lossless_bit_depth(path);
+                    if let Some(summary) = player_wavpack::summarize(path) {
+                        metadata.codec = Some(summary.codec.to_owned());
+                        metadata.sample_rate_hz = Some(summary.sample_rate_hz);
+                        metadata.bit_depth = summary.bit_depth;
+                    }
                 }
                 Ok(metadata)
             }

@@ -312,12 +312,13 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
     // Keep one quality ordering for library and playlist views. Normalize older codec labels.
     format!(
         "CASE TRIM(UPPER(COALESCE(t.codec, ''))) \
-         WHEN 'WAV' THEN 6 WHEN 'WAVE' THEN 6 WHEN 'FLAC' THEN 5 WHEN 'VORBIS' THEN 4 WHEN 'OGG VORBIS' THEN 4 \
-         WHEN 'OPUS' THEN 3 WHEN 'MP4' THEN 2 WHEN 'M4A' THEN 2 WHEN 'AAC' THEN 2 WHEN 'MP4A' THEN 2 WHEN 'MP3' THEN 1 \
+         WHEN 'WVDSD' THEN 6.5 WHEN 'WAV' THEN 6 WHEN 'WAVE' THEN 6 WHEN 'WVLL' THEN 5.5 WHEN 'FLAC' THEN 5 \
+         WHEN 'VORBIS' THEN 4 WHEN 'OGG VORBIS' THEN 4 WHEN 'OPUS' THEN 3 \
+         WHEN 'MP4' THEN 2 WHEN 'M4A' THEN 2 WHEN 'AAC' THEN 2 WHEN 'MP4A' THEN 2 WHEN 'WVL' THEN 1.5 WHEN 'MP3' THEN 1 \
          ELSE CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) LIKE 'DSD%' THEN 7 ELSE 0 END END {direction}, \
          {MUSIC_FORMAT_FUNCTION}(t.codec) {direction}, \
          COALESCE(t.sample_rate_hz, 0) {direction}, \
-         CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) IN ('WAV','WAVE','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','PCM','TAK','TTA') \
+         CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) IN ('WAV','WAVE','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','WVLL','WVDSD','PCM','TAK','TTA') \
               THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction}, \
          {tie_breaker} ASC"
     )
@@ -10108,6 +10109,46 @@ mod tests {
             };
             assert_eq!(years.first().map(String::as_str), Some(first));
         }
+    }
+
+    #[test]
+    fn wavpack_labels_sort_into_their_quality_tiers() {
+        // The owner's order, best first: DSD, WVDSD, WAV, WVLL, FLAC, (the other formats), WVL, MP3.
+        let codecs = [
+            Some("WVDSD"),
+            Some("WVLL"),
+            Some("DSD64"),
+            Some("WVL"),
+            Some("FLAC"),
+            Some("MP3"),
+            Some("WVLL"),
+            Some("WAV"),
+            Some("MP4"),
+        ];
+        let tracks: Vec<_> = codecs
+            .iter()
+            .map(|codec| (Some("2001"), Some(2001), *codec, None))
+            .collect();
+        let (db, _) = grouping_library("wavpack-format-groups", &tracks);
+        let ascending = db
+            .quick_index_for_tracks(
+                &ListTracksQuery {
+                    offset: 0,
+                    limit: 100,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::AudioFormat,
+                        direction: TrackSortDirection::Asc,
+                    },
+                },
+                &[],
+            )
+            .expect("ascending");
+        assert_eq!(
+            ascending.labels,
+            ["MP3", "WVL", "MP4", "FLAC", "WVLL", "WAV", "WVDSD", "DSD"]
+        );
     }
 
     #[test]

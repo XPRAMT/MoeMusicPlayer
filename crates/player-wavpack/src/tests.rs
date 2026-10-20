@@ -116,3 +116,63 @@ fn header_check_recognizes_wvpk() {
     ));
     assert!(!is_wavpack_header(b"RIFF"));
 }
+
+#[test]
+fn dsd_in_wavpack_is_detected_and_decimated_like_wvunpack() {
+    let mut reader = open("dsd64.wv");
+    let info = reader.info();
+    assert!(info.dsd && info.lossless && !info.float);
+    assert_eq!(info.native_sample_rate, 2_822_400, "the 1-bit rate");
+    assert_eq!(
+        (info.sample_rate, info.channels, info.bits_per_sample),
+        (352_800, 2, 24)
+    );
+    // `wvunpack --raw-pcm` writes the same 24-bit decimation (little-endian, packed).
+    let expected: Vec<f32> = std::fs::read(fixture("dsd64.raw24"))
+        .unwrap()
+        .chunks_exact(3)
+        .map(|b| (f64::from(i32::from_le_bytes([0, b[0], b[1], b[2]]) >> 8) / 8_388_608.0) as f32)
+        .collect();
+    assert_eq!(decode_all(&mut reader), expected);
+}
+
+#[test]
+fn summaries_label_lossless_lossy_and_dsd_files() {
+    use crate::{summarize, WavPackSummary};
+    let summary = |name: &str| summarize(&fixture(name));
+    assert_eq!(
+        summary("s16.wv"),
+        Some(WavPackSummary {
+            codec: "WVLL",
+            sample_rate_hz: 44_100,
+            bit_depth: Some(16)
+        })
+    );
+    assert_eq!(
+        summary("f32.wv"),
+        Some(WavPackSummary {
+            codec: "WVLL",
+            sample_rate_hz: 48_000,
+            bit_depth: Some(32)
+        })
+    );
+    assert_eq!(
+        summary("dsd64.wv"),
+        Some(WavPackSummary {
+            codec: "WVDSD",
+            sample_rate_hz: 2_822_400,
+            bit_depth: Some(1)
+        })
+    );
+    let lossy = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/reference/hybrid_lossy_int16_stereo.wv");
+    assert_eq!(
+        summarize(&lossy),
+        Some(WavPackSummary {
+            codec: "WVL",
+            sample_rate_hz: 48_000,
+            bit_depth: None
+        })
+    );
+    assert_eq!(summary("missing.wv"), None);
+}
