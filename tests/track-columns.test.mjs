@@ -514,3 +514,12 @@ test('Now Playing A and B keep artwork/lyrics order when stacked', () => {
   assert.deepEqual(nowPlayingLayoutOrder('b'), ['lyrics', 'artwork']);
   assert.deepEqual(nowPlayingLayoutOrder(undefined), ['artwork', 'lyrics']);
 });
+
+test('the source column is resizable, clamps, and older saved widths without it get the default', () => {
+  const widths = setTrackColumnWidth(DEFAULT_TRACK_COLUMN_WIDTHS, 'source', 12);
+  assert.equal(widths.source, 80);
+  assert.equal(setTrackColumnWidth(widths, 'source', 300).source, 300);
+  assert.equal(normalizeTrackColumnWidths({ title: 200, artist: 150, album: 260 }).source, DEFAULT_TRACK_COLUMN_WIDTHS.source);
+  const columns = DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column, visible: true }));
+  assert.match(trackListGridTemplate(columns, { ...DEFAULT_TRACK_COLUMN_WIDTHS, source: 222 }), /222px/);
+});

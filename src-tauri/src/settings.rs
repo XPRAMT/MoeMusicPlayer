@@ -367,6 +367,13 @@ pub struct TrackListFlexibleWidths {
     pub title: u32,
     pub artist: u32,
     pub album: u32,
+    /// The library "source" column; settings saved before it existed get the default.
+    #[serde(default = "default_source_column_width")]
+    pub source: u32,
+}
+
+fn default_source_column_width() -> u32 {
+    140
 }
 
 impl Default for TrackListFlexibleWidths {
@@ -375,6 +382,7 @@ impl Default for TrackListFlexibleWidths {
             title: 184,
             artist: 144,
             album: 257,
+            source: default_source_column_width(),
         }
     }
 }
@@ -387,6 +395,7 @@ impl TrackListFlexibleWidths {
             title: self.title.clamp(MIN, MAX),
             artist: self.artist.clamp(MIN, MAX),
             album: self.album.clamp(MIN, MAX),
+            source: self.source.clamp(MIN, MAX),
         }
     }
 }

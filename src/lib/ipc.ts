@@ -121,6 +121,7 @@ export interface TrackColumnWidths {
   title: number;
   artist: number;
   album: number;
+  source: number;
 }
 
 export type LibrarySortDirection = 'asc' | 'desc';

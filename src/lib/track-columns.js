@@ -2,7 +2,7 @@ import { tr } from './i18n.js';
 import { displayUnknown } from './unknown-label.js';
 /** @typedef {'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'audioFormat' | 'duration' | 'playCount' | 'source'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
-/** @typedef {{ title: number, artist: number, album: number }} TrackColumnWidths */
+/** @typedef {{ title: number, artist: number, album: number, source: number }} TrackColumnWidths */
 /** @typedef {'asc' | 'desc'} LibrarySortDirection */
 /** @typedef {{ field: TrackColumnId, direction: LibrarySortDirection }} LibraryListSort */
 /** @typedef {'position' | TrackColumnId} PlaylistSortField */
@@ -44,6 +44,7 @@ export const DEFAULT_TRACK_COLUMN_WIDTHS = Object.freeze({
   title: 184,
   artist: 144,
   album: 257,
+  source: 140,
 });
 
 export const DEFAULT_TRACK_ROW_HEIGHT_PX = 50;
@@ -60,7 +61,7 @@ export function normalizeTrackRowHeightPx(value) {
 export const DEFAULT_LIBRARY_SORT = Object.freeze({ field: 'createdAt', direction: 'asc' });
 
 /** @type {ReadonlySet<TrackColumnId>} */
-export const RESIZABLE_TRACK_COLUMN_IDS = Object.freeze(new Set(/** @type {TrackColumnId[]} */ (['title', 'artist', 'album'])));
+export const RESIZABLE_TRACK_COLUMN_IDS = Object.freeze(new Set(/** @type {TrackColumnId[]} */ (['title', 'artist', 'album', 'source'])));
 
 /** @type {Set<TrackColumnId>} */
 const COLUMN_IDS = new Set(TRACK_COLUMN_DEFINITIONS.map(({ id }) => id));
@@ -96,6 +97,9 @@ export function normalizeTrackColumnWidths(value) {
     album: typeof record.album === 'number' && Number.isFinite(record.album)
       ? clampFlexibleWidth(record.album)
       : DEFAULT_TRACK_COLUMN_WIDTHS.album,
+    source: typeof record.source === 'number' && Number.isFinite(record.source)
+      ? clampFlexibleWidth(record.source)
+      : DEFAULT_TRACK_COLUMN_WIDTHS.source,
   };
 }
 
@@ -247,7 +251,7 @@ export function trackListGridTemplate(preferences, widths) {
   const flexible = normalizeTrackColumnWidths(widths);
   const informationColumns = visibleTrackColumns(preferences).map(({ id }) => {
     if (RESIZABLE_TRACK_COLUMN_IDS.has(id)) {
-      return `${flexible[/** @type {'title' | 'artist' | 'album'} */ (id)]}px`;
+      return `${flexible[/** @type {'title' | 'artist' | 'album' | 'source'} */ (id)]}px`;
     }
     return COLUMN_DEFINITION_BY_ID.get(id)?.min ?? 'minmax(100px,1fr)';
   });
@@ -265,7 +269,7 @@ export function trackListMinWidthPx(preferences, widths) {
   const visible = visibleTrackColumns(preferences);
   const information = visible.reduce((sum, column) => {
     if (RESIZABLE_TRACK_COLUMN_IDS.has(column.id)) {
-      return sum + flexible[/** @type {'title' | 'artist' | 'album'} */ (column.id)];
+      return sum + flexible[/** @type {'title' | 'artist' | 'album' | 'source'} */ (column.id)];
     }
     return sum + (COLUMN_DEFINITION_BY_ID.get(column.id)?.minPx ?? 100);
   }, 0);

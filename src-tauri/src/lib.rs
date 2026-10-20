@@ -7623,7 +7623,7 @@ where
             sources.push(sync_summary(root, report));
         }
         let mut reader = AndroidPlaylistReader { app };
-        for source in playlist_sources {
+        for (playlist_index, source) in playlist_sources.into_iter().enumerate() {
             let root = source
                 .database_projection()
                 .map_err(|error| error.to_string())?;
@@ -7640,6 +7640,14 @@ where
                     configured_sources,
                     Arc::clone(&remote_resolver),
                     synced_at_utc_ms,
+                    &mut |progress| {
+                        on_progress(
+                            &root,
+                            folder_roots.len() + remote_roots.len() + playlist_index,
+                            source_count,
+                            progress,
+                        )
+                    },
                 ) {
                     Ok(Some(report)) => sources.push(sync_summary(&root, report)),
                     Ok(None) => sources.push(unavailable_source_summary(
@@ -7988,6 +7996,7 @@ where
                         configured_sources,
                         Arc::clone(&remote_resolver),
                         synced_at_utc_ms,
+                        &mut |progress| on_progress(&root, source_index, source_count, progress),
                     )?
                 } else {
                     playlist_source_sync::sync_playlist_file_source(

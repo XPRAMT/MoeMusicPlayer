@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use player_core::{
     FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaTrackRecord, MetadataReader,
-    Playlist, SourceId, SourceScan, SyncEngine, SyncReport, TrackMetadata, TrackMetadataError,
+    Playlist, SourceId, SourceScan, SyncEngine, SyncProgress, SyncProgressStage, SyncProgressUnit,
+    SyncReport, TrackMetadata, TrackMetadataError,
 };
 use player_db::{Database, PlaylistFileSyncState};
 use player_remote::fs::RemoteFs;
@@ -278,6 +279,7 @@ pub(crate) fn sync_remote_playlist_source(
     configured_sources: &[SourceEntry],
     resolver: Arc<dyn RemoteResolver>,
     synced_at_utc_ms: i64,
+    progress: &mut dyn FnMut(SyncProgress),
 ) -> Result<Option<SyncReport>, String> {
     let SourceEntryKind::PlaylistFile {
         playlist_id,
@@ -381,6 +383,19 @@ pub(crate) fn sync_remote_playlist_source(
             _ => None,
         })
         .collect();
+    // Looking the songs up on the server takes a while for a long list: the page is told at once that this source is busy.
+    progress(SyncProgress {
+        source_id: source.id,
+        stage: SyncProgressStage::Enumerating,
+        processed: 0,
+        total: Some(own_paths.len() as u64),
+        unit: SyncProgressUnit::Tracks,
+        observed: 0,
+        metadata_reads: 0,
+        unchanged: 0,
+        error_count: 0,
+        outcome: None,
+    });
     let reader = RemoteMediaIndex::new(Arc::clone(&resolver));
     let scan = reader.scan_paths(source.id, &own_paths);
     let mut index = PlaylistIndex {
@@ -388,7 +403,9 @@ pub(crate) fn sync_remote_playlist_source(
         reader,
     };
     let report =
-        SyncEngine::sync_with_progress(&root, &mut index, database, synced_at_utc_ms, |_| {})
+        SyncEngine::sync_with_progress(&root, &mut index, database, synced_at_utc_ms, |update| {
+            progress(update)
+        })
             .map_err(|error| error.to_string())?;
 
     // Attach the shared TrackId of every entry that now resolves; an entry that does not stays in the list and is tried
@@ -635,7 +652,7 @@ mod tests {
             let source = playlist_source(id, "Lists/mix.m3u8");
             let mut database = Database::open_in_memory().unwrap();
 
-            let report = sync_remote_playlist_source(&mut database, &source, &[], Arc::clone(&resolver), 1_000)
+            let report = sync_remote_playlist_source(&mut database, &source, &[], Arc::clone(&resolver), 1_000, &mut |_| {})
                 .unwrap()
                 .expect("the playlist is reachable");
             assert_eq!(report.observed, 2);
@@ -649,14 +666,14 @@ mod tests {
             assert_eq!(saved.entries.iter().filter(|entry| entry.track_id.is_some()).count(), 2);
 
             // The same file again changes nothing.
-            sync_remote_playlist_source(&mut database, &source, &[], Arc::clone(&resolver), 2_000)
+            sync_remote_playlist_source(&mut database, &source, &[], Arc::clone(&resolver), 2_000, &mut |_| {})
                 .unwrap()
                 .expect("second sync");
             assert_eq!(track_count(&database), 2);
 
             // A shorter list drops the song that is no longer named.
             fs::write(root.join("Lists/mix.m3u8"), "#EXTM3U\n../Other/f32.wv\n").unwrap();
-            sync_remote_playlist_source(&mut database, &source, &[], resolver, 3_000)
+            sync_remote_playlist_source(&mut database, &source, &[], resolver, 3_000, &mut |_| {})
                 .unwrap()
                 .expect("third sync");
             let saved = database.get_playlist(*playlist_id).unwrap().expect("playlist");
@@ -713,6 +730,7 @@ mod tests {
                 &[folder_entry, source.clone()],
                 resolver,
                 1_000,
+                &mut |_| {},
             )
             .unwrap()
             .expect("synced");
