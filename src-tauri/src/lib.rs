@@ -3582,7 +3582,24 @@ async fn album_artwork_selection_ensure(
     let (directory, cached, candidates, tree_uris) = run_database_work(app.clone(), move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         let cached = album_artwork_cache::get_selection(&directory, &selection_key)?;
+        // An album with no cover remembered from before remote tracks were told apart from missing ones may only have failed
+        // on the network: for an album that has tracks on a server the empty answer is not trusted and the covers are
+        // looked for again.
+        let empty_but_remote = cached.as_ref().is_some_and(|selection| selection.track_ids.is_empty())
+            && state.database.as_ref().is_some_and(|database| {
+                database
+                    .album_artwork_candidate_locators(&album_names)
+                    .map(|candidates| {
+                        candidates.iter().any(|(_, locators)| {
+                            locators
+                                .iter()
+                                .any(|locator| matches!(locator, MediaLocator::Remote { .. }))
+                        })
+                    })
+                    .unwrap_or(false)
+            });
         if !force_rebuild
+            && !empty_but_remote
             && cached.as_ref().is_some_and(|selection| {
                 selection.track_count == track_count
                     && (selection.track_ids.is_empty()
@@ -3612,20 +3629,25 @@ async fn album_artwork_selection_ensure(
 
     let candidate_list = candidates.unwrap_or_default();
     let app_for_scan = app.clone();
-    let selected_ids = tauri::async_runtime::spawn_blocking(move || {
+    let (selected_ids, may_have_failed) = tauri::async_runtime::spawn_blocking(move || {
+        let failed = std::cell::Cell::new(false);
         let artwork = candidate_list
             .into_iter()
             .filter_map(|(track_id, locators)| {
-                read_album_candidate_artwork(&app_for_scan, &locators, &tree_uris)
-                    .map(|bytes| (track_id, bytes))
+                let bytes = read_album_candidate_artwork(&app_for_scan, &locators, &tree_uris);
+                if bytes.is_none() && !failed.get() && remote_cover_lookup_may_have_failed(&locators) {
+                    failed.set(true);
+                }
+                bytes.map(|bytes| (track_id, bytes))
             });
-        if representative {
+        let selected = if representative {
             album_artwork_analysis::select_representative_artwork(artwork)
         } else {
             album_artwork_analysis::first_artwork(artwork)
                 .into_iter()
                 .collect()
-        }
+        };
+        (selected, failed.get())
     })
     .await
     .map_err(|error| format!("專輯封面候選分析工作失敗：{error}"))?;
@@ -3635,7 +3657,11 @@ async fn album_artwork_selection_ensure(
             track_ids: Vec::new(),
             representative,
         };
-        album_artwork_cache::put_selection(&directory, &key, &selection)?;
+        // No cover was found. Remember that only when it is certain: a track on a server that could not be read (the server was
+        // busy, the link was down) says nothing about the album, and the next look must try again.
+        if !may_have_failed {
+            album_artwork_cache::put_selection(&directory, &key, &selection)?;
+        }
         return Ok(Some(selection));
     }
     let selection = album_artwork_cache::AlbumArtworkSelection {
@@ -3645,6 +3671,24 @@ async fn album_artwork_selection_ensure(
     };
     album_artwork_cache::put_selection(&directory, &key, &selection)?;
     Ok(Some(selection))
+}
+
+/// Whether a lookup that found no cover for these locators may only have failed on the network: one of them is a track on a
+/// remote server whose file cannot be opened right now (for a reason other than "it is not there"). A cover that is not
+/// found then is not a cover that does not exist, and must not be remembered as missing.
+fn remote_cover_lookup_may_have_failed(locators: &[MediaLocator]) -> bool {
+    let Some(content) = player_core::remote_content() else {
+        // Remote tracks exist but nothing can read them yet (the app is still starting).
+        return locators
+            .iter()
+            .any(|locator| matches!(locator, MediaLocator::Remote { .. }));
+    };
+    locators.iter().any(|locator| match locator {
+        MediaLocator::Remote { source_id, path } => content
+            .open(*source_id, path)
+            .is_err_and(|error| error.kind() != std::io::ErrorKind::NotFound),
+        _ => false,
+    })
 }
 
 fn read_album_candidate_artwork(
@@ -3699,9 +3743,26 @@ async fn album_artwork_cache_get_for_track(
         let Some(identity) = album_artwork_track_identity(state, &track_id)? else {
             return Ok(Response::new(Vec::new()));
         };
-        album_artwork_cache::get_for_track(&directory, &identity).map(Response::new)
+        let cached = album_artwork_cache::get_for_track(&directory, &identity)?;
+        // "Missing" remembered for a track on a server may be left from before such tracks were told apart from covers the
+        // server failed to deliver: it is not trusted, the cover is read again.
+        if cached.as_slice() == [0] && track_is_on_a_server(state, &track_id) {
+            return Ok(Response::new(Vec::new()));
+        }
+        Ok(Response::new(cached))
     })
     .await
+}
+
+fn track_is_on_a_server(state: &AppState, track_id: &str) -> bool {
+    TrackId::parse(track_id)
+        .ok()
+        .and_then(|id| state.database.as_ref()?.track_locators(id).ok())
+        .is_some_and(|locators| {
+            locators
+                .iter()
+                .any(|locator| matches!(locator, MediaLocator::Remote { .. }))
+        })
 }
 
 #[tauri::command]
@@ -3734,6 +3795,11 @@ async fn album_artwork_cache_mark_missing_for_track(
         let Some(identity) = album_artwork_track_identity(state, &track_id)? else {
             return Ok(());
         };
+        // A track on a server is never remembered as without a cover from here: the page cannot tell "no cover" from "the
+        // server did not answer", and a wrong "missing" would hide a cover for good.
+        if track_is_on_a_server(state, &track_id) {
+            return Ok(());
+        }
         album_artwork_cache::put_track_reference(&directory, &identity, None)
     })
     .await
@@ -8525,12 +8591,18 @@ async fn library_get_track_artwork(
                 .track_locators(id)
                 .map_err(|error| error.to_string())?
         };
+        let locators_for_check = locators.clone();
         let artwork = tauri::async_runtime::spawn_blocking(move || find_artwork(&locators))
             .await
             .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
         match artwork {
             ArtworkLookup::Found(image) => Ok(Response::new(image.into_bytes())),
-            ArtworkLookup::Missing => Ok(Response::new(Vec::new())),
+            ArtworkLookup::Missing => {
+                if remote_cover_lookup_may_have_failed(&locators_for_check) {
+                    return Err("REMOTE_UNAVAILABLE".to_owned());
+                }
+                Ok(Response::new(Vec::new()))
+            }
             ArtworkLookup::Oversized => Err("ARTWORK_TOO_LARGE".to_owned()),
         }
     }
@@ -8547,6 +8619,7 @@ async fn library_get_track_artwork(
             .track_locators(id)
             .map_err(|error| error.to_string())?;
         let tree_uris: Vec<String> = Vec::new();
+        let locators_for_check = locators.clone();
         let artwork = tauri::async_runtime::spawn_blocking(move || {
             find_android_artwork(&app, &locators, &tree_uris)
         })
@@ -8554,7 +8627,12 @@ async fn library_get_track_artwork(
         .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
         match artwork {
             Ok(image) => Ok(Response::new(image.into_bytes())),
-            Err(android_artwork::ArtworkError::Missing) => Ok(Response::new(Vec::new())),
+            Err(android_artwork::ArtworkError::Missing) => {
+                if remote_cover_lookup_may_have_failed(&locators_for_check) {
+                    return Err("REMOTE_UNAVAILABLE".to_owned());
+                }
+                Ok(Response::new(Vec::new()))
+            }
             Err(android_artwork::ArtworkError::Oversized) => Err("ARTWORK_TOO_LARGE".to_owned()),
             Err(android_artwork::ArtworkError::Invalid) => Ok(Response::new(Vec::new())),
         }
