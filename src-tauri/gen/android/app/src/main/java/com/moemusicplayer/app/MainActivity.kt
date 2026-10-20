@@ -27,48 +27,12 @@ class MainActivity : TauriActivity() {
 
   override fun onWindowFocusChanged(hasFocus: Boolean) {
     super.onWindowFocusChanged(hasFocus)
-    if (hasFocus) ResumeDiagnostics.schedule(this, { appWebView }, "window focus")
+    if (hasFocus) ResumeDiagnostics.onWindowFocus(this) { appWebView }
   }
 
   override fun onResume() {
     super.onResume()
-    nudgeWebViewPaint()
-    ResumeDiagnostics.schedule(this, { appWebView }, "onResume")
-  }
-
-  /**
-   * After time in the background the WebView can come back with its page alive (the accessibility tree lists every
-   * element and frames keep being produced) but showing only the page background colour: the content layers were
-   * dropped and nothing asks to draw them again until the DOM changes (pressing Back does, so does reading the
-   * accessibility tree). Do the same from here: a throw-away style change on the root element forces the renderer to
-   * rebuild and raster its layers. Repeated a few times because the renderer can still be thawing right after resume.
-   */
-  private fun nudgeWebViewPaint() {
-    val webView = appWebView ?: return
-    webView.post {
-      webView.onResume()
-      webView.invalidate()
-    }
-    val resumedAt = android.os.SystemClock.elapsedRealtime()
-    for (delayMs in longArrayOf(0L, 250L, 1000L, 2500L)) {
-      webView.postDelayed({
-        webView.evaluateJavascript(
-          "(function(){var r=document.documentElement;r.style.willChange='transform';r.style.transform='translateZ(0)';" +
-            "void r.offsetHeight;requestAnimationFrame(function(){window.__moeRaf=Date.now();r.style.transform='';r.style.willChange='';});" +
-            "return document.visibilityState+' focus='+document.hasFocus();})()",
-        ) { result ->
-          // Diagnostic (logcat tag MoeResume, also in release builds): how long the renderer took to answer and what the
-          // page believes. A page stuck in "hidden" while the activity is resumed draws no frames at all.
-          val waited = android.os.SystemClock.elapsedRealtime() - resumedAt
-          ResumeDiagnostics.log(this, "resume+${waited}ms (nudge at ${delayMs}ms) page=$result")
-          if (result?.contains("hidden") == true) {
-            webView.visibility = View.INVISIBLE
-            webView.visibility = View.VISIBLE
-            webView.onResume()
-          }
-        }
-      }, delayMs)
-    }
+    ResumeDiagnostics.log(this, "onResume: window=${appWebView?.windowVisibility}")
   }
 
   /**
