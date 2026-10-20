@@ -77,6 +77,42 @@ pub trait RemoteFs: Send + Sync {
     }
 }
 
+/// A remote file that opens itself again when the link broke under it: a phone that changed network or slept leaves the
+/// open handle dead, and every later read on it fails. One failed read of the `Network` kind reconnects (the file system
+/// connects again by itself) and is tried once more on a fresh handle; any other error is passed on.
+pub struct ReopeningFile {
+    fs: std::sync::Arc<dyn RemoteFs>,
+    path: String,
+    file: Box<dyn RemoteFile>,
+}
+
+impl ReopeningFile {
+    pub fn new(fs: std::sync::Arc<dyn RemoteFs>, path: String, file: Box<dyn RemoteFile>) -> Self {
+        Self { fs, path, file }
+    }
+}
+
+impl RemoteFile for ReopeningFile {
+    fn len(&self) -> u64 {
+        self.file.len()
+    }
+
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RemoteError> {
+        match self.file.read_at(offset, buf) {
+            Err(RemoteError::Network(_)) => {
+                let fresh = self.fs.open(&self.path)?;
+                if fresh.len() != self.file.len() {
+                    // The file changed on the server meanwhile: its bytes are not the ones already played.
+                    return Err(RemoteError::Protocol("the file changed on the server".to_owned()));
+                }
+                self.file = fresh;
+                self.file.read_at(offset, buf)
+            }
+            other => other,
+        }
+    }
+}
+
 /// A cached `Read + Seek` over a remote file, with the read-ahead that suits the protocol.
 pub fn open_reader(fs: &dyn RemoteFs, path: &str) -> Result<RangeReader, RemoteError> {
     Ok(RangeReader::new(fs.open(path)?).with_read_ahead(fs.read_ahead_blocks()))
@@ -445,5 +481,83 @@ mod tests {
         assert!(reader.is_empty());
         let mut out = Vec::new();
         assert_eq!(reader.read_to_end(&mut out).unwrap(), 0);
+    }
+}
+
+#[cfg(test)]
+mod reopening_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct Bytes {
+        data: Vec<u8>,
+        /// Reads that still fail with a network error.
+        failures: Arc<AtomicUsize>,
+    }
+
+    impl RemoteFile for Bytes {
+        fn len(&self) -> u64 {
+            self.data.len() as u64
+        }
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RemoteError> {
+            if self.failures.load(Ordering::SeqCst) > 0 {
+                self.failures.fetch_sub(1, Ordering::SeqCst);
+                return Err(RemoteError::Network("broken".to_owned()));
+            }
+            let start = (offset as usize).min(self.data.len());
+            let count = buf.len().min(self.data.len() - start);
+            buf[..count].copy_from_slice(&self.data[start..start + count]);
+            Ok(count)
+        }
+    }
+
+    struct Server {
+        opens: AtomicUsize,
+        len: usize,
+    }
+
+    impl RemoteFs for Server {
+        fn list(&self, _: &str) -> Result<Vec<RemoteEntry>, RemoteError> {
+            Ok(Vec::new())
+        }
+        fn stat(&self, _: &str) -> Result<RemoteEntry, RemoteError> {
+            Err(RemoteError::NotFound)
+        }
+        fn open(&self, _: &str) -> Result<Box<dyn RemoteFile>, RemoteError> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(Bytes {
+                data: (0..self.len).map(|n| n as u8).collect(),
+                failures: Arc::new(AtomicUsize::new(0)),
+            }))
+        }
+    }
+
+    #[test]
+    fn a_broken_link_is_healed_by_opening_the_file_again() {
+        let server = Arc::new(Server { opens: AtomicUsize::new(0), len: 100 });
+        let dead = Box::new(Bytes {
+            data: (0..100).map(|n| n as u8).collect(),
+            failures: Arc::new(AtomicUsize::new(1)),
+        });
+        let mut file = ReopeningFile::new(server.clone(), "a".to_owned(), dead);
+        let mut buffer = [0_u8; 4];
+        assert_eq!(file.read_at(10, &mut buffer).unwrap(), 4);
+        assert_eq!(buffer, [10, 11, 12, 13]);
+        assert_eq!(server.opens.load(Ordering::SeqCst), 1);
+        // Later reads use the new handle.
+        assert_eq!(file.read_at(20, &mut buffer).unwrap(), 4);
+        assert_eq!(server.opens.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_file_that_changed_meanwhile_is_not_spliced() {
+        let server = Arc::new(Server { opens: AtomicUsize::new(0), len: 50 });
+        let dead = Box::new(Bytes {
+            data: vec![0; 100],
+            failures: Arc::new(AtomicUsize::new(1)),
+        });
+        let mut file = ReopeningFile::new(server, "a".to_owned(), dead);
+        assert!(file.read_at(0, &mut [0_u8; 4]).is_err());
     }
 }

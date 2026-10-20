@@ -227,7 +227,11 @@ impl player_core::RemoteContent for RemoteFiles {
         path: &str,
     ) -> std::io::Result<player_core::RemoteFileHandle> {
         let (fs, full) = self.locate(source_id, path)?;
-        let file = fs.open(&full)?;
+        let file: Box<dyn player_remote::fs::RemoteFile> = Box::new(player_remote::fs::ReopeningFile::new(
+            Arc::clone(&fs),
+            full.clone(),
+            fs.open(&full)?,
+        ));
         // Chunks that were played are kept on disk (first in, first out), so the same song played again does not go back
         // to the server. The key includes the size and modified time, so an edited file is not served stale.
         let file: Box<dyn player_remote::fs::RemoteFile> = match &self.cache {

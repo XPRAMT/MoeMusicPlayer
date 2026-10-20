@@ -40,6 +40,10 @@ struct Shared {
     /// A chunk arrived or the fetch failed: the reader may proceed.
     reader: Condvar,
     len: u64,
+    /// When the request now in flight began (`Instant` offset in ms from `born`); 0 while the fetch thread is not inside
+    /// a request. Read by a stalled reader to say what the fetch thread is doing.
+    in_flight_since_ms: std::sync::atomic::AtomicU64,
+    born: std::time::Instant,
 }
 
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -71,6 +75,8 @@ impl PrefetchReader {
             worker: Condvar::new(),
             reader: Condvar::new(),
             len,
+            in_flight_since_ms: std::sync::atomic::AtomicU64::new(0),
+            born: std::time::Instant::now(),
         });
         let thread_shared = Arc::clone(&shared);
         // Detached: it ends by itself once the reader is dropped (after the request in flight returns).
@@ -122,6 +128,10 @@ fn fetch_loop(shared: Arc<Shared>, mut file: Box<dyn RemoteFile>, chunk: usize, 
             }
         };
         let wanted = (shared.len - offset).min(chunk as u64) as usize;
+        shared.in_flight_since_ms.store(
+            shared.born.elapsed().as_millis() as u64 + 1,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let mut buffer = vec![0_u8; wanted];
         let mut filled = 0;
         let mut failure = None;
@@ -140,6 +150,9 @@ fn fetch_loop(shared: Arc<Shared>, mut file: Box<dyn RemoteFile>, chunk: usize, 
                 }
             }
         }
+        shared
+            .in_flight_since_ms
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         let mut state = lock(&shared.state);
         if state.stopped {
             return;
@@ -211,6 +224,8 @@ impl Read for PrefetchReader {
             return Ok(0);
         }
         let mut state = lock(&self.shared.state);
+        let waiting_since = std::time::Instant::now();
+        let mut next_report = Duration::from_secs(3);
         loop {
             if self.position >= state.start && self.position < state.end {
                 let count = state.copy_out(self.position, out);
@@ -229,6 +244,36 @@ impl Read for PrefetchReader {
             }
             if let Some(error) = state.error.clone() {
                 return Err(error.into());
+            }
+            let waited = waiting_since.elapsed();
+            if waited >= next_report {
+                let in_flight = self.shared.in_flight_since_ms.load(std::sync::atomic::Ordering::Relaxed);
+                let in_flight_for = if in_flight == 0 {
+                    None
+                } else {
+                    Some((self.shared.born.elapsed().as_millis() as u64 + 1).saturating_sub(in_flight))
+                };
+                eprintln!(
+                    "[remote] prefetch stall: waited {} ms at {} of {}; buffered {}..{}; request in flight for {:?} ms",
+                    waited.as_millis(),
+                    self.position,
+                    self.shared.len,
+                    state.start,
+                    state.end,
+                    in_flight_for,
+                );
+                next_report += Duration::from_secs(3);
+                // Nothing is being fetched although the reader waits: wake the fetch thread (a lost wake-up would
+                // otherwise wait for its own timeout forever).
+                if in_flight_for.is_none() {
+                    self.shared.worker.notify_all();
+                }
+            }
+            if waited >= Duration::from_secs(45) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the server did not deliver the next part of the file",
+                ));
             }
             state = self
                 .shared
