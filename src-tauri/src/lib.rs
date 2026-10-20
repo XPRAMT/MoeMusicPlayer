@@ -11971,6 +11971,7 @@ pub fn run() {
                 connections: Arc::clone(&remote_connections),
                 settings: Arc::clone(&settings),
                 cache: remote_cache.clone(),
+                streams: Default::default(),
             }));
             app.manage(AppState {
                 database,

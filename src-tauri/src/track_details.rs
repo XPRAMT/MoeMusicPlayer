@@ -314,7 +314,7 @@ fn with_remote_file<T>(
     }
 }
 
-fn read_remote_details(
+pub(crate) fn read_remote_details(
     source_id: player_core::SourceId,
     path: &str,
 ) -> Result<player_tags::TrackDetails, String> {
@@ -325,8 +325,41 @@ fn read_remote_details(
     details.created_unix_ms = None;
     details.file_name = remote_file_name(path);
     details.path = path.to_owned();
-    details.read_only = true;
-    details.read_only_reason = Some("遠端來源為唯讀，無法儲存修改。".to_owned());
+    details.remote = true;
+    Ok(details)
+}
+
+/// Save the edit of a song on a remote server. Nothing may be reading the file while the server replaces it, so first the
+/// player's open handle and its read-ahead are let go of; then the whole file is fetched, edited here exactly as a local
+/// file is, and sent back through a temporary file that takes the original's place only when it arrived whole. A file that
+/// was changed on the server meanwhile is not overwritten.
+pub(crate) fn save_remote(
+    source_id: player_core::SourceId,
+    path: &str,
+    edit: &player_tags::TagEdit,
+) -> Result<player_tags::TrackDetails, String> {
+    let content = player_core::remote_content().ok_or_else(|| "遠端來源尚未就緒。".to_owned())?;
+    content.release(source_id, path);
+    // A copy kept for the panel is of the file as it was.
+    *KEPT_SCRATCH
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    let stamp = content
+        .stat(source_id, path)
+        .map_err(|error| format!("無法讀取遠端檔案資訊：{error}"))?;
+    let (scratch, length) = fetch_remote(source_id, path, true)?;
+    if length != stamp.len {
+        return Err("檔案在讀取時被改動，請重新開啟歌曲資訊後再試。".to_owned());
+    }
+    let mut details = player_tags::write_edit(&scratch.file, edit)?;
+    let after = content
+        .replace_file(source_id, path, &scratch.file, Some(stamp))
+        .map_err(|error| format!("上傳到伺服器失敗（原檔未被改動）：{error}"))?;
+    details.file_size = after.len;
+    details.modified_unix_ms = after.modified_ms.and_then(|ms| u64::try_from(ms).ok());
+    details.created_unix_ms = None;
+    details.file_name = remote_file_name(path);
+    details.path = path.to_owned();
     details.remote = true;
     Ok(details)
 }
@@ -704,7 +737,7 @@ pub async fn track_details_save(
             cover_options: request.cover_options,
         };
         match &source {
-            TrackSource::Remote { .. } => Err("遠端來源為唯讀，無法儲存歌曲資訊。".to_owned()),
+            TrackSource::Remote { source_id, path } => save_remote(*source_id, path, &edit),
             TrackSource::File(path) => player_tags::write_edit(path, &edit),
             #[cfg(target_os = "android")]
             TrackSource::Content(uri) => {

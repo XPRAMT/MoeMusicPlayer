@@ -52,5 +52,5 @@ pub use windows_locator::windows_locator_key;
 
 pub use remote::{
     read_remote_file_capped, remote_content, remote_sibling, remote_with_extension,
-    set_remote_content, RemoteContent, RemoteFileHandle, RemoteStream,
+    set_remote_content, RemoteContent, RemoteFileHandle, RemoteStamp, RemoteStream,
 };

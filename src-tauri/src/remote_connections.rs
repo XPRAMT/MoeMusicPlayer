@@ -176,6 +176,28 @@ pub(crate) struct RemoteFiles {
     pub(crate) settings: Arc<crate::settings::SettingsStore>,
     /// The disk cache of played remote files (`None` when its folder could not be made).
     pub(crate) cache: Option<Arc<player_remote::cache::DiskCache>>,
+    /// The streams that are open for playback, so they can be let go of before their file is replaced.
+    pub(crate) streams: Mutex<Vec<OpenStream>>,
+}
+
+/// One file held open for playback: which one, and how to let go of it.
+pub(crate) struct OpenStream {
+    source_id: SourceId,
+    full_path: String,
+    release: player_remote::fs::FileRelease,
+}
+
+impl RemoteFiles {
+    /// Remember a stream that was opened (and forget the ones that are finished).
+    fn track_stream(&self, source_id: SourceId, full_path: &str, release: player_remote::fs::FileRelease) {
+        let mut streams = self.streams.lock().unwrap_or_else(PoisonError::into_inner);
+        streams.retain(|stream| !stream.release.is_finished());
+        streams.push(OpenStream {
+            source_id,
+            full_path: full_path.to_owned(),
+            release,
+        });
+    }
 }
 
 impl RemoteFiles {
@@ -263,19 +285,22 @@ impl player_core::RemoteContent for RemoteFiles {
                             }
                         }
                     });
-                let lazy: Box<dyn player_remote::fs::RemoteFile> = Box::new(
+                let (lazy, release) = player_remote::fs::releasable(Box::new(
                     player_remote::fs::ReopeningFile::lazy(Arc::clone(&fs), full.clone(), meta.len),
-                );
+                ));
+                self.track_stream(source_id, &full, release);
                 Box::new(player_remote::cache::CachedFile::new(
-                    lazy,
+                    Box::new(lazy),
                     Arc::clone(cache),
                     key,
                 ))
             }
             (Some(cache), None) => {
-                let opened: Box<dyn player_remote::fs::RemoteFile> = Box::new(
+                let (opened, release) = player_remote::fs::releasable(Box::new(
                     player_remote::fs::ReopeningFile::new(Arc::clone(&fs), full.clone(), fs.open(&full)?),
-                );
+                ));
+                self.track_stream(source_id, &full, release);
+                let opened: Box<dyn player_remote::fs::RemoteFile> = Box::new(opened);
                 // The key includes the size and modified time, so an edited file is not served stale.
                 let modified = fs.stat(&full).ok().and_then(|entry| entry.modified_ms);
                 let meta = player_remote::cache::FileMeta {
@@ -290,11 +315,13 @@ impl player_core::RemoteContent for RemoteFiles {
                     key,
                 ))
             }
-            (None, _) => Box::new(player_remote::fs::ReopeningFile::new(
-                Arc::clone(&fs),
-                full.clone(),
-                fs.open(&full)?,
-            )),
+            (None, _) => {
+                let (opened, release) = player_remote::fs::releasable(Box::new(
+                    player_remote::fs::ReopeningFile::new(Arc::clone(&fs), full.clone(), fs.open(&full)?),
+                ));
+                self.track_stream(source_id, &full, release);
+                Box::new(opened)
+            }
         };
         let reader = player_remote::prefetch::PrefetchReader::new(file);
         let len = reader.len();
@@ -302,6 +329,61 @@ impl player_core::RemoteContent for RemoteFiles {
             reader: Box::new(reader),
             len,
         })
+    }
+
+    fn stat(&self, source_id: SourceId, path: &str) -> std::io::Result<player_core::RemoteStamp> {
+        let (fs, full) = self.locate(source_id, path)?;
+        let entry = fs.stat(&full)?;
+        Ok(player_core::RemoteStamp {
+            len: entry.size,
+            modified_ms: entry.modified_ms,
+        })
+    }
+
+    fn replace_file(
+        &self,
+        source_id: SourceId,
+        path: &str,
+        local: &Path,
+        expected: Option<player_core::RemoteStamp>,
+    ) -> std::io::Result<player_core::RemoteStamp> {
+        let (fs, full) = self.locate(source_id, path)?;
+        let mut file = std::fs::File::open(local)?;
+        let len = file.metadata()?.len();
+        let expected = expected.map(|stamp| player_remote::fs::FileStamp {
+            len: stamp.len,
+            modified_ms: stamp.modified_ms,
+        });
+        let entry = fs.replace_file(&full, &mut file, len, expected)?;
+        // The song on the server is a new file now: what the cache holds of the old one is not served for it (its key
+        // names the size and time), and the next play learns the new ones at once.
+        if let Some(cache) = self.cache.as_ref() {
+            cache.put_meta(
+                &source_id.to_string(),
+                &full,
+                player_remote::cache::FileMeta {
+                    len: entry.size,
+                    modified_ms: entry.modified_ms,
+                },
+            );
+        }
+        Ok(player_core::RemoteStamp {
+            len: entry.size,
+            modified_ms: entry.modified_ms,
+        })
+    }
+
+    fn release(&self, source_id: SourceId, path: &str) {
+        let Ok((_, full)) = self.locate(source_id, path) else {
+            return;
+        };
+        let streams = self.streams.lock().unwrap_or_else(PoisonError::into_inner);
+        for stream in streams
+            .iter()
+            .filter(|stream| stream.source_id == source_id && stream.full_path == full)
+        {
+            stream.release.release();
+        }
     }
 }
 
@@ -418,7 +500,7 @@ mod real_server_tests {
         let path = database.resolve_playable_filesystem_locator(track.id).unwrap();
         let text = path.to_string_lossy().into_owned();
         assert!(text.starts_with("moeremote://"), "{text}");
-        let opener = RemoteFiles { connections: Arc::clone(&connections), settings: Arc::clone(&settings), cache: Some(Arc::new(player_remote::cache::DiskCache::open(data_dir.join("remote-cache"), 200_000_000).unwrap())) };
+        let opener = RemoteFiles { connections: Arc::clone(&connections), settings: Arc::clone(&settings), cache: Some(Arc::new(player_remote::cache::DiskCache::open(data_dir.join("remote-cache"), 200_000_000).unwrap())), streams: Default::default() };
         let Some(MediaLocator::Remote { source_id, path: relative }) =
             player_core::parse_remote_locator_uri(&text)
         else {
@@ -476,5 +558,138 @@ mod real_server_tests {
         println!("6 MiB again from the cache in {:?}", started.elapsed());
 
         let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// Edits a scratch song on a real server end to end (writes to it; set `MOE_SMB_WRITE_TEST=1`): a small MP3 is sent
+    /// to the server, a stream of it is open for playback, its title is changed through the same function the panel uses
+    /// (which lets go of the stream, fetches the file, edits it and sends it back), and the new title is read back from
+    /// the server. The scratch file is deleted at the end; no other file is touched.
+    #[test]
+    fn a_song_on_a_real_server_is_edited_while_a_stream_of_it_is_open() {
+        let (Ok(host), Ok(share), Ok(file)) = (
+            std::env::var("MOE_SMB_HOST"),
+            std::env::var("MOE_SMB_SHARE"),
+            std::env::var("MOE_SMB_FILE"),
+        ) else {
+            eprintln!("skipped: MOE_SMB_* is not set");
+            return;
+        };
+        if std::env::var("MOE_SMB_WRITE_TEST").as_deref() != Ok("1") {
+            eprintln!("skipped: MOE_SMB_WRITE_TEST is not 1 (the test writes to the server)");
+            return;
+        }
+        let credentials = std::fs::read_to_string(file).unwrap();
+        let mut lines = credentials.lines();
+        let user = lines.next().unwrap().trim().to_owned();
+        let password = lines.next().unwrap().trim().to_owned();
+        let base = std::env::var("MOE_SMB_DIR").unwrap_or_default();
+
+        let data_dir = std::env::temp_dir().join(format!("moe-remote-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data_dir);
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let settings = Arc::new(
+            SettingsStore::open(data_dir.join("settings.json"), AppSettings::default()).unwrap(),
+        );
+        let vault = vault(&data_dir).unwrap();
+        let view = save_account(
+            &settings,
+            &vault,
+            RemoteAccountInput {
+                id: None,
+                name: "test server".to_owned(),
+                protocol: RemoteProtocol::Smb,
+                host,
+                port: std::env::var("MOE_SMB_PORT").ok().and_then(|port| port.parse().ok()),
+                path: share,
+                username: user,
+                password: Some(password),
+                tls: TlsMode::Verify,
+                only_on_wifi: false,
+            },
+        )
+        .unwrap();
+        let id = SourceId::new();
+        let locator = MediaLocator::Remote { source_id: id, path: base };
+        settings
+            .upsert_source(SourceEntry {
+                id,
+                display_name: "remote".to_owned(),
+                enabled: true,
+                kind: SourceEntryKind::Folder {
+                    media_kind: MediaSourceKind::Remote,
+                    path: StoredPath::from_locator(&locator).unwrap(),
+                    remote_account: Some(view.id.clone()),
+                },
+            })
+            .unwrap();
+        let connections = Arc::new(RemoteConnections::default());
+        let opener = Arc::new(RemoteFiles {
+            connections,
+            settings,
+            cache: Some(Arc::new(
+                player_remote::cache::DiskCache::open(data_dir.join("remote-cache"), 200_000_000).unwrap(),
+            )),
+            streams: Default::default(),
+        });
+        player_core::set_remote_content(opener.clone());
+
+        let name = format!("moe-edit-test-{}.mp3", std::process::id());
+        let local = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../crates/player-audio-windows/tests/fixtures/seek-tone.mp3");
+        let original_size = std::fs::metadata(&local).unwrap().len();
+        let cleanup = || {
+            if let Ok((fs, full)) = opener.locate(id, &name) {
+                let _ = fs.remove_file(&full);
+            }
+        };
+        cleanup();
+        let result = std::panic::catch_unwind(|| {
+            opener.replace_file(id, &name, &local, None).expect("upload the scratch song");
+
+            // A stream of it is open, as playback would hold it, and has read-ahead running.
+            let mut playing = opener.open_streaming(id, &name).expect("open for playback");
+            let mut head = [0u8; 64];
+            playing.reader.read_exact(&mut head).unwrap();
+
+            // The title is changed the way the panel changes it.
+            let before = crate::track_details::read_remote_details(id, &name).expect("read the details");
+            assert_eq!(before.file_size, original_size);
+            assert!(before.remote);
+            assert!(!before.read_only);
+            let new_title = format!("edited {}", std::process::id());
+            let mut fields = before.fields.clone();
+            fields.title = new_title.clone();
+            let edit = player_tags::TagEdit {
+                fields,
+                replace_cover: None,
+                remove_cover: false,
+                cover_options: Default::default(),
+            };
+            let saved = crate::track_details::save_remote(id, &name, &edit).expect("save on the server");
+            assert_eq!(saved.fields.title, new_title);
+
+            // The handle of the stream that was open was closed (what it had already buffered is still its own).
+            assert!(
+                opener
+                    .streams
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|stream| stream.release.is_finished()),
+                "an open stream still holds the file"
+            );
+            drop(playing);
+
+            // The server's file holds the new title and the audio of the old one.
+            let after = crate::track_details::read_remote_details(id, &name).expect("read it back");
+            assert_eq!(after.fields.title, new_title);
+            assert_eq!(after.properties.duration_ms, before.properties.duration_ms);
+            assert_ne!(after.file_size, 0);
+        });
+        cleanup();
+        let _ = std::fs::remove_dir_all(&data_dir);
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
     }
 }

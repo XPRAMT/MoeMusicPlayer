@@ -136,6 +136,71 @@ pub trait RemoteFs: Send + Sync {
     }
 }
 
+/// A remote file that someone else can let go of: [`FileRelease::release`] closes the open handle at once, from any
+/// thread, and every later read fails. Playback holds such a file while it plays (with its read-ahead thread); the
+/// panel that edits the song releases it so the server can replace the file.
+pub struct ReleasableFile {
+    slot: std::sync::Arc<std::sync::Mutex<Option<Box<dyn RemoteFile>>>>,
+    len: u64,
+}
+
+/// The way to let go of a [`ReleasableFile`] (it does not keep the file alive).
+#[derive(Clone)]
+pub struct FileRelease {
+    slot: std::sync::Weak<std::sync::Mutex<Option<Box<dyn RemoteFile>>>>,
+}
+
+impl FileRelease {
+    /// Close the file's handle. A read that is in flight finishes first.
+    pub fn release(&self) {
+        if let Some(slot) = self.slot.upgrade() {
+            let taken = slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            drop(taken);
+        }
+    }
+
+    /// The file is gone or was released.
+    pub fn is_finished(&self) -> bool {
+        match self.slot.upgrade() {
+            None => true,
+            Some(slot) => slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none(),
+        }
+    }
+}
+
+/// Make `file` releasable.
+pub fn releasable(file: Box<dyn RemoteFile>) -> (ReleasableFile, FileRelease) {
+    let len = file.len();
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(file)));
+    let release = FileRelease {
+        slot: std::sync::Arc::downgrade(&slot),
+    };
+    (ReleasableFile { slot, len }, release)
+}
+
+impl RemoteFile for ReleasableFile {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RemoteError> {
+        let mut slot = self
+            .slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match slot.as_mut() {
+            Some(file) => file.read_at(offset, buf),
+            None => Err(RemoteError::Protocol("the file was released".to_owned())),
+        }
+    }
+}
+
 /// A remote file that opens itself again when the link broke under it: a phone that changed network or slept leaves the
 /// open handle dead, and every later read on it fails. One failed read of the `Network` kind reconnects (the file system
 /// connects again by itself) and is tried once more on a fresh handle; any other error is passed on.
@@ -646,5 +711,31 @@ mod reopening_tests {
         });
         let mut file = ReopeningFile::new(server, "a".to_owned(), dead);
         assert!(file.read_at(0, &mut [0_u8; 4]).is_err());
+    }
+
+    #[test]
+    fn a_released_file_closes_its_handle_and_every_later_read_fails() {
+        use super::testing::{pattern, MemoryFile};
+        let (file, _) = MemoryFile::new(pattern(1000));
+        let (mut file, release) = releasable(Box::new(file));
+        let mut buffer = [0u8; 10];
+        assert_eq!(file.read_at(0, &mut buffer).unwrap(), 10);
+        assert!(!release.is_finished());
+        release.release();
+        assert!(release.is_finished());
+        assert!(matches!(file.read_at(0, &mut buffer), Err(RemoteError::Protocol(_))));
+        // Releasing twice is harmless.
+        release.release();
+    }
+
+    #[test]
+    fn a_release_does_not_keep_the_file_alive() {
+        use super::testing::{pattern, MemoryFile};
+        let (file, _) = MemoryFile::new(pattern(10));
+        let (file, release) = releasable(Box::new(file));
+        assert!(!release.is_finished());
+        drop(file);
+        assert!(release.is_finished());
+        release.release();
     }
 }

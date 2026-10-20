@@ -18,6 +18,13 @@ pub struct RemoteFileHandle {
     pub len: u64,
 }
 
+/// What a remote file looked like at one moment: its size and the server's modified time (UTC Unix milliseconds).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RemoteStamp {
+    pub len: u64,
+    pub modified_ms: Option<i64>,
+}
+
 pub trait RemoteContent: Send + Sync {
     /// Open `path` (relative to the root of `source_id`, `/`-separated) for reading, cached and tuned for the
     /// protocol. `NotFound` when the file or the source does not exist.
@@ -27,6 +34,31 @@ pub trait RemoteContent: Send + Sync {
     /// keeps reading ahead in the background so the player never waits for the network. Defaults to `open`.
     fn open_streaming(&self, source_id: SourceId, path: &str) -> io::Result<RemoteFileHandle> {
         self.open(source_id, path)
+    }
+
+    /// Ask the server for a file's size and modified time.
+    fn stat(&self, source_id: SourceId, path: &str) -> io::Result<RemoteStamp> {
+        let _ = (source_id, path);
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+
+    /// Replace a file on the server with the local file `local`. Nothing is written when `expected` is given and the
+    /// file on the server is not as it was then; the original is untouched by a failure. Returns the new stamp.
+    fn replace_file(
+        &self,
+        source_id: SourceId,
+        path: &str,
+        local: &std::path::Path,
+        expected: Option<RemoteStamp>,
+    ) -> io::Result<RemoteStamp> {
+        let _ = (source_id, path, local, expected);
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+
+    /// Stop every reader that has this file open (the player's handle and read-ahead): the file is about to be replaced.
+    /// Whoever was reading must open it again.
+    fn release(&self, source_id: SourceId, path: &str) {
+        let _ = (source_id, path);
     }
 }
 

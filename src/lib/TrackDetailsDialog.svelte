@@ -4,6 +4,7 @@
   // 歌曲詳細資訊面板（ADR 0013 Phase 1）：單曲標籤檢視／暫存編輯，按「儲存」才寫檔。
   import { onDestroy, onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import type { PlaybackSnapshot } from './ipc';
   import { hasLyricsInUse, lyricsToText } from './lyrics-import.js';
   import {
     loadCoverEditOptions,
@@ -284,9 +285,35 @@
     node.focus();
   }
 
+  /**
+   * A song on a server that is playing right now: its file is let go of for the upload (the server cannot replace a file
+   * that is open), so playback is paused first and the song is loaded again at the same place afterwards, playing or paused
+   * as it was. Returns the step that puts playback back, or `null` when there is nothing to put back.
+   */
+  async function holdPlaybackForRemoteSave(): Promise<(() => Promise<void>) | null> {
+    if (!details?.remote) return null;
+    try {
+      const snapshot = await invoke<PlaybackSnapshot>('playback_get_snapshot');
+      if (snapshot.currentTrack?.id !== trackId) return null;
+      const position = snapshot.positionMs;
+      const wasPlaying = snapshot.isPlaying;
+      await invoke('playback_pause');
+      return async () => {
+        try {
+          await invoke('playback_play', { trackId });
+          await invoke('playback_seek', { positionMs: position });
+          if (!wasPlaying) await invoke('playback_pause');
+        } catch { /* the song stays wherever playback stopped */ }
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async function save() {
     if (!draft || saving) return;
     saving = true; error = null; notice = null;
+    const resumePlayback = await holdPlaybackForRemoteSave();
     try {
       const result = await invoke<TrackDetails>('track_details_save', {
         trackId,
@@ -309,6 +336,7 @@
       error = String(cause);
     } finally {
       saving = false;
+      await resumePlayback?.();
     }
   }
 
