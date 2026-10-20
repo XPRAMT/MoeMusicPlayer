@@ -2828,6 +2828,7 @@ mod playback_queue_ipc_tests {
                     played_ms: 0,
                     file_name: None,
                     source_name: None,
+                    modified_at_utc_ms: None,
                 })
                 .collect::<Vec<_>>();
             summaries.sort_by(|left, right| {
@@ -3165,6 +3166,13 @@ fn quick_index_key(
             QuickIndexKind::AddedYear,
             track
                 .and_then(|track| track.created_at_utc_ms)
+                .map(|milliseconds| milliseconds.to_string())
+                .unwrap_or_default(),
+        ),
+        TrackSortField::ModifiedAt => (
+            QuickIndexKind::AddedYear,
+            track
+                .and_then(|track| track.modified_at_utc_ms)
                 .map(|milliseconds| milliseconds.to_string())
                 .unwrap_or_default(),
         ),
@@ -4269,6 +4277,12 @@ fn compare_track_summaries(
             }
         }
         TrackSortField::CreatedAt => match (left.created_at_utc_ms, right.created_at_utc_ms) {
+            (Some(a), Some(b)) => compare_direction(a.cmp(&b)),
+            (Some(_), None) => compare_direction(Ordering::Greater),
+            (None, Some(_)) => compare_direction(Ordering::Less),
+            (None, None) => Ordering::Equal,
+        },
+        TrackSortField::ModifiedAt => match (left.modified_at_utc_ms, right.modified_at_utc_ms) {
             (Some(a), Some(b)) => compare_direction(a.cmp(&b)),
             (Some(_), None) => compare_direction(Ordering::Greater),
             (None, Some(_)) => compare_direction(Ordering::Less),
@@ -10056,6 +10070,7 @@ fn external_track_summary(path: &std::path::Path, id: TrackId) -> TrackSummary {
         file_name,
         // A file opened from outside the library has no library source.
         source_name: None,
+        modified_at_utc_ms: None,
     }
 }
 
@@ -13097,6 +13112,7 @@ mod windows_library_integration_tests {
             played_ms: 0,
             file_name: None,
             source_name: None,
+            modified_at_utc_ms: None,
         });
         let before_playback = serde_json::to_value(service.snapshot())
             .expect("serialize playback snapshot before query");
@@ -13215,6 +13231,7 @@ mod windows_library_integration_tests {
                 played_ms: 0,
                 file_name: None,
                 source_name: None,
+                modified_at_utc_ms: None,
             };
         let summaries = HashMap::from([
             (first_track, make_summary(first_track, "Zebra", Some(200))),
@@ -13318,6 +13335,7 @@ mod windows_library_integration_tests {
             played_ms: 0,
             file_name: None,
             source_name: None,
+            modified_at_utc_ms: None,
         };
         let summaries = HashMap::from([
             (ids[0], make_summary(ids[0], None)),

@@ -106,6 +106,9 @@ pub struct PlaylistEntrySummary {
     /// Creation time of the earliest enabled filesystem mapping, in UTC Unix milliseconds.
     #[serde(default)]
     pub created_at_utc_ms: Option<i64>,
+    /// The modified time of the file (the newest enabled mapping), in UTC Unix milliseconds.
+    #[serde(default)]
+    pub modified_at_utc_ms: Option<i64>,
     pub bit_depth: Option<u8>,
     /// Cumulative credited listening time; 0 when unmatched or never played.
     pub played_ms: u64,
@@ -135,6 +138,7 @@ pub enum PlaylistSortField {
     Album,
     Year,
     CreatedAt,
+    ModifiedAt,
     AudioFormat,
     Duration,
     PlayCount,

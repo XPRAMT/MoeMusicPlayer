@@ -1,5 +1,5 @@
 const ALBUM_DETAIL_SORT_FIELDS = new Set([
-  'position', 'title', 'artist', 'album', 'year', 'createdAt', 'audioFormat', 'duration', 'playCount',
+  'position', 'title', 'artist', 'album', 'year', 'createdAt', 'modifiedAt', 'audioFormat', 'duration', 'playCount',
 ]);
 
 export const DEFAULT_ALBUM_DETAIL_SORT = Object.freeze({ field: 'position', direction: 'asc' });

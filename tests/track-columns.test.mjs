@@ -140,8 +140,13 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
 
 test('default list columns are shared and keep the index as the only fixed column', () => {
   assert.deepEqual(DEFAULT_TRACK_COLUMN_PREFERENCES.map(({ id }) => id), [
-    'title', 'artist', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount', 'source',
+    'title', 'artist', 'album', 'year', 'createdAt', 'modifiedAt', 'duration', 'audioFormat', 'playCount', 'source',
   ]);
+  // On Windows the created column is on and the modified one is off (Android is the other way round).
+  assert.deepEqual(
+    DEFAULT_TRACK_COLUMN_PREFERENCES.filter(({ id }) => id === 'createdAt' || id === 'modifiedAt').map(({ id, visible }) => [id, visible]),
+    [['createdAt', true], ['modifiedAt', false]],
+  );
   assert.equal(trackListColumnCount(DEFAULT_TRACK_COLUMN_PREFERENCES), 9);
   assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES).split(' ').length, 9);
   assert.equal(trackListGridTemplate(DEFAULT_TRACK_COLUMN_PREFERENCES, DEFAULT_TRACK_COLUMN_WIDTHS).split(' ')[1], '184px');
@@ -167,7 +172,7 @@ test('date, duration, and play count columns use the requested fixed fullwidth-c
 test('settings columns can move directly to the long-press drag destination', () => {
   const moved = moveTrackColumnTo(DEFAULT_TRACK_COLUMN_PREFERENCES, 'year', 6);
   assert.deepEqual(moved.map(({ id }) => id), [
-    'title', 'artist', 'album', 'createdAt', 'duration', 'audioFormat', 'year', 'playCount', 'source',
+    'title', 'artist', 'album', 'createdAt', 'modifiedAt', 'duration', 'year', 'audioFormat', 'playCount', 'source',
   ]);
   assert.deepEqual(moveTrackColumnTo(moved, 'year', -1), moved);
 });
@@ -235,11 +240,11 @@ test('playlist sort includes the original entry position and toggles direction',
 test('column order can move the first and last information columns without moving the index', () => {
   const movedFirst = moveTrackColumn(DEFAULT_TRACK_COLUMN_PREFERENCES, 'title', 'down');
   assert.deepEqual(movedFirst.map(({ id }) => id), [
-    'artist', 'title', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount', 'source',
+    'artist', 'title', 'album', 'year', 'createdAt', 'modifiedAt', 'duration', 'audioFormat', 'playCount', 'source',
   ]);
   const movedLast = moveTrackColumn(movedFirst, 'playCount', 'up');
   assert.deepEqual(movedLast.map(({ id }) => id), [
-    'artist', 'title', 'album', 'year', 'createdAt', 'duration', 'playCount', 'audioFormat', 'source',
+    'artist', 'title', 'album', 'year', 'createdAt', 'modifiedAt', 'duration', 'playCount', 'audioFormat', 'source',
   ]);
   assert.deepEqual(moveTrackColumn(movedLast, 'artist', 'up'), movedLast);
   assert.deepEqual(moveTrackColumn(movedLast, 'source', 'down'), movedLast);
@@ -302,6 +307,8 @@ test('created date shows local YYYY-MM-DD only and legacy column preferences kee
     { id: 'album', visible: true },
     { id: 'year', visible: true },
     { id: 'createdAt', visible: true },
+    // Preferences saved before the modified column gain it right after the created one (off on Windows).
+    { id: 'modifiedAt', visible: false },
     { id: 'audioFormat', visible: false },
     { id: 'duration', visible: true },
     { id: 'playCount', visible: true },
@@ -522,4 +529,12 @@ test('the source column is resizable, clamps, and older saved widths without it 
   assert.equal(normalizeTrackColumnWidths({ title: 200, artist: 150, album: 260 }).source, DEFAULT_TRACK_COLUMN_WIDTHS.source);
   const columns = DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column, visible: true }));
   assert.match(trackListGridTemplate(columns, { ...DEFAULT_TRACK_COLUMN_WIDTHS, source: 222 }), /222px/);
+});
+
+test('the modified column shows the file date like the created one and is off by default outside Android', async () => {
+  const { formatTrackColumnValue, TRACK_COLUMN_DEFINITIONS: definitions } = await import('../src/lib/track-columns.js');
+  const timestamp = new Date(2026, 9, 14, 23, 59, 58).getTime();
+  assert.equal(formatTrackColumnValue('modifiedAt', { modifiedAtUtcMs: timestamp }, () => ''), '2026-10-14');
+  assert.equal(formatTrackColumnValue('modifiedAt', { modifiedAtUtcMs: null }, () => ''), '—');
+  assert.equal(definitions.find(({ id }) => id === 'modifiedAt')?.min, '6em');
 });

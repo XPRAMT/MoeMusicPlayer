@@ -1,6 +1,6 @@
 import { tr } from './i18n.js';
 import { displayUnknown } from './unknown-label.js';
-/** @typedef {'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'audioFormat' | 'duration' | 'playCount' | 'source'} TrackColumnId */
+/** @typedef {'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'modifiedAt' | 'audioFormat' | 'duration' | 'playCount' | 'source'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
 /** @typedef {{ title: number, artist: number, album: number, source: number }} TrackColumnWidths */
 /** @typedef {'asc' | 'desc'} LibrarySortDirection */
@@ -19,6 +19,7 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'album', label: tr('專輯'), min: 'minmax(120px,1.25fr)', minPx: 120 },
   { id: 'year', label: tr('發行時間'), min: '6em', minPx: 78 },
   { id: 'createdAt', label: tr('新增時間'), min: '6em', minPx: 78 },
+  { id: 'modifiedAt', label: tr('修改時間'), min: '6em', minPx: 78 },
   { id: 'audioFormat', label: tr('音訊格式'), min: '163px', minPx: 163 },
   { id: 'duration', label: tr('長度'), min: '4em', minPx: 52 },
   { id: 'playCount', label: tr('播放次數'), min: '5em', minPx: 65 },
@@ -27,7 +28,7 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
 
 /** Column values rendered as dates, counts, or durations use centered alignment. */
 const NUMERIC_LIST_COLUMN_IDS = new Set([
-  'year', 'createdAt', 'duration', 'playCount',
+  'year', 'createdAt', 'modifiedAt', 'duration', 'playCount',
   'trackCount', 'albumCount', 'trackDuration', 'played',
 ]);
 
@@ -36,8 +37,25 @@ export function isNumericListColumn(id) {
   return NUMERIC_LIST_COLUMN_IDS.has(id);
 }
 
+/**
+ * Whether this runs in the Android app (its WebView says so). Android's storage records no creation time, so there the
+ * "added" column (新增時間) is off by default and the modified time is on; on Windows it is the other way round. The
+ * backend (`settings.rs`, `default_created_column_visible`) makes the same choice for the saved settings.
+ */
+function isAndroidWebView() {
+  return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent ?? '');
+}
+
+/** @param {TrackColumnId} id */
+function defaultColumnVisible(id) {
+  if (id === 'source') return false;
+  if (id === 'createdAt') return !isAndroidWebView();
+  if (id === 'modifiedAt') return isAndroidWebView();
+  return true;
+}
+
 /** @type {TrackColumnPreference[]} */
-export const DEFAULT_TRACK_COLUMN_PREFERENCES = ['title', 'artist', 'album', 'year', 'createdAt', 'duration', 'audioFormat', 'playCount', 'source'].map((id) => ({ id: /** @type {TrackColumnId} */ (id), visible: id !== 'source' }));
+export const DEFAULT_TRACK_COLUMN_PREFERENCES = ['title', 'artist', 'album', 'year', 'createdAt', 'modifiedAt', 'duration', 'audioFormat', 'playCount', 'source'].map((id) => ({ id: /** @type {TrackColumnId} */ (id), visible: defaultColumnVisible(/** @type {TrackColumnId} */ (id)) }));
 
 /** @type {TrackColumnWidths} */
 export const DEFAULT_TRACK_COLUMN_WIDTHS = Object.freeze({
@@ -212,6 +230,12 @@ export function normalizeTrackColumnPreferences(value) {
   if (!seen.has('createdAt')) {
     const audioIndex = migrated.findIndex((column) => column.id === 'audioFormat');
     migrated.splice(audioIndex < 0 ? migrated.length : audioIndex, 0, { id: 'createdAt', visible: true });
+  }
+  // The modified column was added after the created one: preferences saved without it get it right after the created
+  // column, on by default on Android only.
+  if (!seen.has('modifiedAt')) {
+    const createdIndex = migrated.findIndex((column) => column.id === 'createdAt');
+    migrated.splice(createdIndex < 0 ? migrated.length : createdIndex + 1, 0, { id: 'modifiedAt', visible: defaultColumnVisible('modifiedAt') });
   }
   // The source column is the newest: preferences saved without it get it, hidden, at the end.
   if (!seen.has('source')) migrated.push({ id: 'source', visible: false });
@@ -483,7 +507,7 @@ export function displayTrackTitle(item, fallback = '') {
 
 /**
  * @param {TrackColumnId} id
- * @param {{ title?: string | null, fileName?: string | null, artist?: string | null, album?: string | null, releaseDate?: string | null, year?: number | string | null, createdAtUtcMs?: number | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null, sourceName?: string | null }} item
+ * @param {{ title?: string | null, fileName?: string | null, artist?: string | null, album?: string | null, releaseDate?: string | null, year?: number | string | null, createdAtUtcMs?: number | null, modifiedAtUtcMs?: number | null, codec?: string | null, sampleRateHz?: number | null, bitDepth?: number | null, bitrateBps?: number | null, durationMs?: number | null, playedMs?: number | null, sourceName?: string | null }} item
  * @param {(durationMs: number | null | undefined) => string} formatDuration
  * @param {string} titleFallback
  */
@@ -499,6 +523,8 @@ export function formatTrackColumnValue(id, item, formatDuration, titleFallback =
       return formatReleaseDate(item.releaseDate, item.year);
     case 'createdAt':
       return formatCreatedAt(item.createdAtUtcMs);
+    case 'modifiedAt':
+      return formatCreatedAt(item.modifiedAtUtcMs);
     case 'audioFormat':
       return formatAudioFormat(item, { omitLosslessBitrate: true, omitDsdBitDepth: true });
     case 'duration':

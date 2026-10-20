@@ -347,6 +347,8 @@ pub enum TrackListColumnId {
     Album,
     Year,
     CreatedAt,
+    /// The modified time of the file.
+    ModifiedAt,
     AudioFormat,
     Duration,
     PlayCount,
@@ -570,6 +572,16 @@ pub enum TrackTextOverflowMode {
     End,
 }
 
+/// Whether the "created" column (新增時間) is on by default: Android's storage records no creation time, so there it is
+/// off and the modified time is on instead (the other way round on Windows).
+fn default_created_column_visible() -> bool {
+    !cfg!(target_os = "android")
+}
+
+fn default_modified_column_visible() -> bool {
+    cfg!(target_os = "android")
+}
+
 impl Default for TrackListColumnSettings {
     fn default() -> Self {
         Self {
@@ -579,16 +591,22 @@ impl Default for TrackListColumnSettings {
                 TrackListColumnId::Album,
                 TrackListColumnId::Year,
                 TrackListColumnId::CreatedAt,
+                TrackListColumnId::ModifiedAt,
                 TrackListColumnId::Duration,
                 TrackListColumnId::AudioFormat,
                 TrackListColumnId::PlayCount,
+                TrackListColumnId::Source,
             ]
             .into_iter()
-            .map(|id| TrackListColumnPreference { id, visible: true })
-            .chain(std::iter::once(TrackListColumnPreference {
-                id: TrackListColumnId::Source,
-                visible: false,
-            }))
+            .map(|id| TrackListColumnPreference {
+                id,
+                visible: match id {
+                    TrackListColumnId::Source => false,
+                    TrackListColumnId::CreatedAt => default_created_column_visible(),
+                    TrackListColumnId::ModifiedAt => default_modified_column_visible(),
+                    _ => true,
+                },
+            })
             .collect(),
             widths: TrackListFlexibleWidths::default(),
             library_sort: LibraryListSort::default(),
@@ -634,15 +652,17 @@ impl TrackListColumnSettings {
 
     fn validate(&self) -> Result<(), SettingsError> {
         use TrackListColumnId::{
-            Album, Artist, AudioFormat, CreatedAt, Duration, PlayCount, Source, Title, Year,
+            Album, Artist, AudioFormat, CreatedAt, Duration, ModifiedAt, PlayCount, Source, Title,
+            Year,
         };
 
-        const REQUIRED: [TrackListColumnId; 9] = [
+        const REQUIRED: [TrackListColumnId; 10] = [
             Title,
             Artist,
             Album,
             Year,
             CreatedAt,
+            ModifiedAt,
             AudioFormat,
             Duration,
             PlayCount,
@@ -658,7 +678,7 @@ impl TrackListColumnSettings {
             || REQUIRED.iter().any(|id| !actual.contains(id))
         {
             return Err(SettingsError::InvalidData(
-                "track list columns must contain title, artist, album, year, createdAt, audioFormat, duration, playCount, and source exactly once".into(),
+                "track list columns must contain title, artist, album, year, createdAt, modifiedAt, audioFormat, duration, playCount, and source exactly once".into(),
             ));
         }
         Ok(())
@@ -672,25 +692,39 @@ impl TrackListColumnSettings {
     }
 }
 
-/// Accept persisted preferences that predate the createdAt column or the source column. The source column is the
-/// newest: a file without it gets it (hidden) at the end, and the rest is repaired exactly as before.
+/// Accept persisted preferences that predate the createdAt, modifiedAt or source columns. The newest columns are taken
+/// out first: a file without the modified column gets it (after the created column, on by default on Android only), one
+/// without the source column gets it (hidden) at the end, and the rest is repaired exactly as before.
 fn repair_track_list_columns(settings: TrackListColumnSettings) -> TrackListColumnSettings {
-    let source = settings
+    let find = |id: TrackListColumnId| {
+        settings
+            .columns
+            .iter()
+            .find(|column| column.id == id)
+            .cloned()
+    };
+    let source = find(TrackListColumnId::Source).unwrap_or(TrackListColumnPreference {
+        id: TrackListColumnId::Source,
+        visible: false,
+    });
+    let modified = find(TrackListColumnId::ModifiedAt).unwrap_or(TrackListColumnPreference {
+        id: TrackListColumnId::ModifiedAt,
+        visible: default_modified_column_visible(),
+    });
+    let mut core = settings;
+    core.columns.retain(|column| {
+        column.id != TrackListColumnId::Source && column.id != TrackListColumnId::ModifiedAt
+    });
+    let mut repaired = repair_core_track_list_columns(core);
+    repaired.columns.retain(|column| {
+        column.id != TrackListColumnId::Source && column.id != TrackListColumnId::ModifiedAt
+    });
+    let after_created = repaired
         .columns
         .iter()
-        .find(|column| column.id == TrackListColumnId::Source)
-        .cloned()
-        .unwrap_or(TrackListColumnPreference {
-            id: TrackListColumnId::Source,
-            visible: false,
-        });
-    let mut core = settings;
-    core.columns
-        .retain(|column| column.id != TrackListColumnId::Source);
-    let mut repaired = repair_core_track_list_columns(core);
-    repaired
-        .columns
-        .retain(|column| column.id != TrackListColumnId::Source);
+        .position(|column| column.id == TrackListColumnId::CreatedAt)
+        .map_or(repaired.columns.len(), |index| index + 1);
+    repaired.columns.insert(after_created, modified);
     repaired.columns.push(source);
     repaired.normalize()
 }
@@ -3622,11 +3656,22 @@ mod tests {
                 TrackListColumnId::Album,
                 TrackListColumnId::Year,
                 TrackListColumnId::CreatedAt,
+                TrackListColumnId::ModifiedAt,
                 TrackListColumnId::Duration,
                 TrackListColumnId::AudioFormat,
                 TrackListColumnId::PlayCount,
             ]
-            .map(|id| (id, true))
+            .map(|id| {
+                (
+                    id,
+                    match id {
+                        // Windows records a creation time and the modified time is off; Android is the other way round.
+                        TrackListColumnId::CreatedAt => !cfg!(target_os = "android"),
+                        TrackListColumnId::ModifiedAt => cfg!(target_os = "android"),
+                        _ => true,
+                    },
+                )
+            })
             .into_iter()
             // The source column exists but starts hidden, so the list looks the same until it is turned on.
             .chain([(TrackListColumnId::Source, false)])
@@ -3638,9 +3683,10 @@ mod tests {
         assert_eq!(value["nowPlayingLayout"], "a");
         assert_eq!(serde_json::to_value(NowPlayingLayout::B).unwrap(), "b");
         assert_eq!(value["trackListColumns"]["columns"][4]["id"], "createdAt");
-        assert_eq!(value["trackListColumns"]["columns"][5]["id"], "duration");
-        assert_eq!(value["trackListColumns"]["columns"][6]["id"], "audioFormat");
-        assert_eq!(value["trackListColumns"]["columns"][5]["visible"], true);
+        assert_eq!(value["trackListColumns"]["columns"][5]["id"], "modifiedAt");
+        assert_eq!(value["trackListColumns"]["columns"][6]["id"], "duration");
+        assert_eq!(value["trackListColumns"]["columns"][7]["id"], "audioFormat");
+        assert_eq!(value["trackListColumns"]["columns"][6]["visible"], true);
         assert_eq!(value["trackListColumns"]["rowHeightPx"], 50);
         assert_eq!(value["trackListColumns"]["groupingEnabled"], true);
         assert!(serde_json::from_value::<AppSettings>(value).is_ok());
@@ -3976,18 +4022,21 @@ mod tests {
             store.snapshot().unwrap().track_list_columns.row_height_px,
             50
         );
-        assert_eq!(columns.len(), 9);
-        assert_eq!(columns[8].id, TrackListColumnId::Source);
+        assert_eq!(columns.len(), 10);
+        assert_eq!(columns[9].id, TrackListColumnId::Source);
         assert!(
-            !columns[8].visible,
+            !columns[9].visible,
             "the source column is new and starts hidden"
         );
         assert_eq!(columns[1].id, TrackListColumnId::Artist);
         assert!(!columns[1].visible);
         assert_eq!(columns[4].id, TrackListColumnId::CreatedAt);
         assert!(columns[4].visible);
-        assert_eq!(columns[7].id, TrackListColumnId::PlayCount);
-        assert!(columns[7].visible);
+        // The modified column is new too: it goes after the created one, on by default on Android only.
+        assert_eq!(columns[5].id, TrackListColumnId::ModifiedAt);
+        assert_eq!(columns[5].visible, cfg!(target_os = "android"));
+        assert_eq!(columns[8].id, TrackListColumnId::PlayCount);
+        assert!(columns[8].visible);
         TrackListColumnSettings {
             columns: columns.clone(),
             ..TrackListColumnSettings::default()

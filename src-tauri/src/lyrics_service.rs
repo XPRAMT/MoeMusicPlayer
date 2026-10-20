@@ -2157,6 +2157,7 @@ mod tests {
             played_ms: 0,
             file_name: None,
             source_name: None,
+            modified_at_utc_ms: None,
         }
     }
 

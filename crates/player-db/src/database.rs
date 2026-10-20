@@ -270,7 +270,8 @@ SELECT e.position, e.track_id,
        ),
        COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0),
        (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1),
-       e.locator_kind, e.locator_encoding, e.locator_data
+       e.locator_kind, e.locator_encoding, e.locator_data,
+       (SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)
 FROM resolved_entries e
 LEFT JOIN tracks t ON t.track_id=e.track_id
 "#;
@@ -291,7 +292,7 @@ fn playlist_order_by(sort: PlaylistListSort, direction: &str) -> String {
             year_unknown_sql("t")
         );
     }
-    if sort.field == PlaylistSortField::CreatedAt {
+    if matches!(sort.field, PlaylistSortField::CreatedAt | PlaylistSortField::ModifiedAt) {
         return format!(
             "({expression} IS NULL) {unknown_direction}, {expression} {direction}, e.position ASC"
         );
@@ -324,6 +325,9 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
     )
 }
 
+/// The modified time of a track's file (the newest of its enabled mappings): the expression the sorts and groups use.
+const TRACK_MODIFIED_AT_SQL: &str = "(SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)";
+
 fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
     match field {
         PlaylistSortField::Position => "e.position",
@@ -332,6 +336,7 @@ fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
         PlaylistSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album, '') COLLATE MUSIC_LOCALE_NATURAL",
         PlaylistSortField::Year => "COALESCE(t.release_date, printf('%04d', t.year), '')",
         PlaylistSortField::CreatedAt => "(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
+        PlaylistSortField::ModifiedAt => "(SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
         PlaylistSortField::AudioFormat => unreachable!("audio format has a compound sort key"),
         PlaylistSortField::Duration => "COALESCE(e.entry_duration_ms, t.duration_ms, -1)",
         PlaylistSortField::PlayCount => "CASE WHEN COALESCE(e.entry_duration_ms, t.duration_ms, 0)>0 THEN COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0)*1.0/COALESCE(e.entry_duration_ms, t.duration_ms) ELSE -1 END",
@@ -2066,6 +2071,7 @@ impl Database {
                 release_date TEXT,
                 year INTEGER,
                 created_at_utc_ms INTEGER,
+                modified_at_utc_ms INTEGER,
                 codec TEXT,
                 bitrate_bps INTEGER,
                 sample_rate_hz INTEGER,
@@ -2204,10 +2210,10 @@ impl Database {
             let mut insert = tx.prepare(
                 "INSERT INTO queue_sort_values (
                     entry_index, stable_order, known, track_id, sort_title, artist, album,
-                    release_date, year, created_at_utc_ms, codec, bitrate_bps, sample_rate_hz,
-                    bit_depth, duration_ms, played_ms
+                    release_date, year, created_at_utc_ms, modified_at_utc_ms, codec, bitrate_bps,
+                    sample_rate_hz, bit_depth, duration_ms, played_ms
                  ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
                  )",
             )?;
             for (stable_order, candidate) in candidates.iter().enumerate() {
@@ -2231,6 +2237,7 @@ impl Database {
                     summary.and_then(|track| track.release_date.clone()),
                     summary.and_then(|track| track.year.map(i64::from)),
                     summary.and_then(|track| track.created_at_utc_ms),
+                    summary.and_then(|track| track.modified_at_utc_ms),
                     summary.and_then(|track| track.codec.clone()),
                     summary.and_then(|track| track.bitrate_bps.map(i64::from)),
                     summary.and_then(|track| track.sample_rate_hz.map(i64::from)),
@@ -2442,6 +2449,7 @@ impl Database {
                 | TrackSortField::Album
                 | TrackSortField::Year
                 | TrackSortField::CreatedAt
+                | TrackSortField::ModifiedAt
                 | TrackSortField::AudioFormat
                 | TrackSortField::Source
         ) {
@@ -2465,6 +2473,7 @@ impl Database {
             TrackSortField::Album => QuickIndexKind::Text.label_sql("COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')"),
             TrackSortField::Year => QuickIndexKind::Year.label_sql("COALESCE(NULLIF(trim(t.release_date), ''), CAST(t.year AS TEXT))"),
             TrackSortField::CreatedAt => added_year_label_sql("(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)"),
+            TrackSortField::ModifiedAt => added_year_label_sql(TRACK_MODIFIED_AT_SQL),
             TrackSortField::AudioFormat => QuickIndexKind::Format.label_sql("t.codec"),
             TrackSortField::Source => QuickIndexKind::Exact.label_sql(TRACK_SOURCE_NAME_SQL),
             _ => unreachable!("only grouped sorts reach here"),
@@ -3943,6 +3952,7 @@ impl Database {
                     row.get::<_, String>(15)?,
                     row.get::<_, String>(16)?,
                     row.get::<_, Vec<u8>>(17)?,
+                    row.get::<_, Option<i64>>(18)?,
                 ))
             },
         )?;
@@ -3967,6 +3977,7 @@ impl Database {
                     locator_kind,
                     locator_encoding,
                     locator_data,
+                    modified_at_utc_ms,
                 ) = row?;
                 let position = u64::try_from(position).map_err(|_| {
                     DatabaseError::CorruptData("negative playlist entry position".to_owned())
@@ -4011,6 +4022,7 @@ impl Database {
                     release_date,
                     year,
                     created_at_utc_ms,
+                    modified_at_utc_ms,
                     bit_depth: bit_depth
                         .and_then(|value| u8::try_from(value).ok())
                         .filter(|value| *value > 0),
@@ -4044,6 +4056,7 @@ impl Database {
                 | PlaylistSortField::Album
                 | PlaylistSortField::Year
                 | PlaylistSortField::CreatedAt
+                | PlaylistSortField::ModifiedAt
                 | PlaylistSortField::AudioFormat
         ) {
             return Ok(Some(QuickIndexSnapshot::default()));
@@ -4060,7 +4073,10 @@ impl Database {
         }
         if matches!(
             sort.field,
-            PlaylistSortField::Year | PlaylistSortField::CreatedAt | PlaylistSortField::AudioFormat
+            PlaylistSortField::Year
+                | PlaylistSortField::CreatedAt
+                | PlaylistSortField::ModifiedAt
+                | PlaylistSortField::AudioFormat
         ) {
             reconcile_unmatched_playlist_entries(&mut connection, playlist_id)?;
             return self
@@ -4136,8 +4152,11 @@ impl Database {
             PlaylistSortField::CreatedAt => added_year_label_sql(
                 "(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
             ),
+            PlaylistSortField::ModifiedAt => added_year_label_sql(
+                "(SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
+            ),
             PlaylistSortField::AudioFormat => QuickIndexKind::Format.label_sql("t.codec"),
-            _ => unreachable!("only year, added and format groups come here"),
+            _ => unreachable!("only year, added, modified and format groups come here"),
         };
         let (resolve, select_from) = PLAYLIST_PAGE_SQL
             .split_once("SELECT e.position, e.track_id,")
@@ -6295,6 +6314,16 @@ fn tracks_order_by_sql(sort: TrackListSort) -> String {
         (TrackSortField::CreatedAt, false) => {
             "((SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) IS NULL) ASC, (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1) DESC, t.track_id DESC"
         }
+        (TrackSortField::ModifiedAt, true) => {
+            return format!(
+                "({TRACK_MODIFIED_AT_SQL} IS NULL) DESC, {TRACK_MODIFIED_AT_SQL} ASC, t.track_id ASC"
+            );
+        }
+        (TrackSortField::ModifiedAt, false) => {
+            return format!(
+                "({TRACK_MODIFIED_AT_SQL} IS NULL) ASC, {TRACK_MODIFIED_AT_SQL} DESC, t.track_id DESC"
+            );
+        }
         (TrackSortField::Source, true) => {
             return format!(
                 "({TRACK_SOURCE_NAME_SQL} IS NULL) ASC, {TRACK_SOURCE_NAME_SQL} COLLATE MUSIC_LOCALE_NATURAL ASC, t.sort_title COLLATE MUSIC_LOCALE_NATURAL ASC, t.track_id ASC"
@@ -6366,6 +6395,9 @@ fn queue_sort_order_by(sort: TrackListSort) -> String {
         ),
         TrackSortField::CreatedAt => format!(
             "(t.created_at_utc_ms IS NULL) {unknown_direction}, t.created_at_utc_ms {direction}, t.track_id {direction}"
+        ),
+        TrackSortField::ModifiedAt => format!(
+            "(t.modified_at_utc_ms IS NULL) {unknown_direction}, t.modified_at_utc_ms {direction}, t.track_id {direction}"
         ),
         TrackSortField::Source => format!(
             "({TRACK_SOURCE_NAME_SQL} IS NULL) ASC, {TRACK_SOURCE_NAME_SQL} COLLATE MUSIC_LOCALE_NATURAL {direction},              t.sort_title COLLATE MUSIC_LOCALE_NATURAL {direction}, t.track_id {direction}"
@@ -6551,6 +6583,7 @@ fn row_to_track_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackSummar
         played_ms: row.get::<_, i64>(14)?.max(0) as u64,
         file_name: None,
         source_name: None,
+        modified_at_utc_ms: None,
     })
 }
 
@@ -6568,11 +6601,40 @@ fn attach_file_names(
     let ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
     let names = file_names_for_tracks(connection, &ids)?;
     let sources = source_names_for_tracks(connection, &ids)?;
+    let modified = modified_times_for_tracks(connection, &ids)?;
     for item in items {
         item.file_name = names.get(&item.id).cloned();
         item.source_name = sources.get(&item.id).cloned();
+        item.modified_at_utc_ms = modified.get(&item.id).copied();
     }
     Ok(())
+}
+
+/// The modified time of each track's file (the same one the modified sort and grouping use).
+fn modified_times_for_tracks(
+    connection: &Connection,
+    track_ids: &[TrackId],
+) -> Result<HashMap<TrackId, i64>, DatabaseError> {
+    if track_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let ids = track_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let ids_json = serde_json::to_string(&ids)
+        .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+    let mut times = HashMap::new();
+    let mut statement = connection.prepare(&format!(
+        "SELECT t.track_id, {TRACK_MODIFIED_AT_SQL}
+         FROM tracks t
+         WHERE t.track_id IN (SELECT value FROM json_each(?1))"
+    ))?;
+    let mut rows = statement.query([ids_json])?;
+    while let Some(row) = rows.next()? {
+        let id = parse_track_id(&row.get::<_, String>(0)?)?;
+        if let Some(time) = row.get::<_, Option<i64>>(1)? {
+            times.insert(id, time);
+        }
+    }
+    Ok(times)
 }
 
 /// The name of the place each track comes from (the same one the source sort and grouping use).
@@ -12974,6 +13036,45 @@ mod tests {
             .expect("album detail quick index");
         assert_eq!(artist_snapshot, snapshot);
         assert_eq!(album_snapshot, snapshot);
+    }
+
+    #[test]
+    fn modified_at_is_projected_from_file_fingerprints_and_sorted_with_unknown_first_ascending() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "modified-at-source");
+        let records = [
+            record(&root, "late", "path:late", "Late", 10, 3_000),
+            record(&root, "early", "path:early", "Early", 20, 1_000),
+            record(&root, "middle", "path:middle", "Middle", 30, 2_000),
+        ];
+        apply(&mut db, &root, SourceScanState::Complete, &records, &records, 9_000);
+        let page = |direction| {
+            db.list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 10,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort {
+                    field: TrackSortField::ModifiedAt,
+                    direction,
+                },
+            })
+            .expect("modified sort")
+        };
+        let ascending = page(TrackSortDirection::Asc);
+        assert_eq!(
+            ascending.items.iter().map(|track| track.title.as_deref()).collect::<Vec<_>>(),
+            [Some("Early"), Some("Middle"), Some("Late")],
+        );
+        assert_eq!(
+            ascending.items.iter().map(|track| track.modified_at_utc_ms).collect::<Vec<_>>(),
+            [Some(1_000), Some(2_000), Some(3_000)],
+        );
+        let descending = page(TrackSortDirection::Desc);
+        assert_eq!(
+            descending.items.iter().map(|track| track.title.as_deref()).collect::<Vec<_>>(),
+            [Some("Late"), Some("Middle"), Some("Early")],
+        );
     }
 
     #[test]

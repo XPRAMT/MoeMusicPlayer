@@ -442,6 +442,8 @@ pub enum TrackSortField {
     Album,
     Year,
     CreatedAt,
+    /// The modified time of the file (of the newest enabled mapping).
+    ModifiedAt,
     AudioFormat,
     Duration,
     PlayCount,
@@ -535,6 +537,10 @@ pub struct TrackSummary {
     /// one); filled by the database for lists.
     #[serde(default)]
     pub source_name: Option<String>,
+    /// The modified time of the file (the newest of the enabled mappings), in UTC Unix milliseconds; filled by the
+    /// database for lists.
+    #[serde(default)]
+    pub modified_at_utc_ms: Option<i64>,
 }
 
 /// Title shown in lists and playback chrome. A blank tag is missing; artist and album are not used.
