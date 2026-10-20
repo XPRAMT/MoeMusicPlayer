@@ -3627,9 +3627,20 @@ async fn album_artwork_selection_ensure(
         return Ok(Some(selection));
     }
 
-    let candidate_list = candidates.unwrap_or_default();
+    let mut candidate_list = candidates.unwrap_or_default();
+    // Picking the representative covers of an album reads the cover of every track. For tracks on a server that is a network
+    // read each, and an album of a hundred songs (or a page of albums) would be hundreds of covers of several MB; the first
+    // few songs are enough to choose from.
+    if candidate_list.iter().any(|(_, locators)| {
+        locators
+            .iter()
+            .any(|locator| matches!(locator, MediaLocator::Remote { .. }))
+    }) {
+        candidate_list.truncate(8);
+    }
     let app_for_scan = app.clone();
     let (selected_ids, may_have_failed) = tauri::async_runtime::spawn_blocking(move || {
+      run_as_bulk_cover_work(|| {
         let failed = std::cell::Cell::new(false);
         let artwork = candidate_list
             .into_iter()
@@ -3648,6 +3659,7 @@ async fn album_artwork_selection_ensure(
                 .collect()
         };
         (selected, failed.get())
+      })
     })
     .await
     .map_err(|error| format!("專輯封面候選分析工作失敗：{error}"))?;
@@ -3671,6 +3683,18 @@ async fn album_artwork_selection_ensure(
     };
     album_artwork_cache::put_selection(&directory, &key, &selection)?;
     Ok(Some(selection))
+}
+
+/// Run album-cover picking as bulk work (its remote lookups wait behind those a person is waiting for). Only Android reads
+/// covers of remote tracks through the shared lookup this applies to.
+#[cfg(target_os = "android")]
+fn run_as_bulk_cover_work<T>(work: impl FnOnce() -> T) -> T {
+    remote_media::as_bulk_cover_work(work)
+}
+
+#[cfg(not(target_os = "android"))]
+fn run_as_bulk_cover_work<T>(work: impl FnOnce() -> T) -> T {
+    work()
 }
 
 /// Whether a lookup that found no cover for these locators may only have failed on the network: one of them is a track on a

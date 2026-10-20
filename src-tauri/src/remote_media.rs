@@ -19,29 +19,50 @@ const SIDECAR_COVERS: [&str; 2] = ["cover.jpg", "folder.jpg"];
 /// The raw bytes of a cover for a remote track: the picture embedded in the file (the front cover first), else the
 /// `cover.jpg` / `folder.jpg` beside it. The caller checks that the bytes are a supported image.
 /// How many covers are looked up on servers at the same time. Many at once on one connection only make every one of them
-/// slow (a page of albums asks for dozens), so the rest wait their turn.
+/// slow (a page of albums asks for dozens), so the rest wait their turn. Two lines: what a person is waiting for (one
+/// track's cover, a notification) and the bulk work of picking album covers, which must not starve the first.
 const MAX_CONCURRENT_COVER_LOOKUPS: usize = 3;
+const MAX_CONCURRENT_BULK_COVER_LOOKUPS: usize = 2;
 
 static COVER_LOOKUPS: (std::sync::Mutex<usize>, std::sync::Condvar) =
     (std::sync::Mutex::new(0), std::sync::Condvar::new());
+static BULK_COVER_LOOKUPS: (std::sync::Mutex<usize>, std::sync::Condvar) =
+    (std::sync::Mutex::new(0), std::sync::Condvar::new());
 
-struct CoverLookupTurn;
+thread_local! {
+    static BULK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `work` (on the calling thread) as bulk cover work: its lookups wait in the bulk line.
+pub(crate) fn as_bulk_cover_work<T>(work: impl FnOnce() -> T) -> T {
+    BULK.with(|flag| flag.set(true));
+    let result = work();
+    BULK.with(|flag| flag.set(false));
+    result
+}
+
+struct CoverLookupTurn(&'static (std::sync::Mutex<usize>, std::sync::Condvar));
 
 impl CoverLookupTurn {
     fn wait() -> Self {
-        let (count, turn) = &COVER_LOOKUPS;
+        let (line, limit) = if BULK.with(std::cell::Cell::get) {
+            (&BULK_COVER_LOOKUPS, MAX_CONCURRENT_BULK_COVER_LOOKUPS)
+        } else {
+            (&COVER_LOOKUPS, MAX_CONCURRENT_COVER_LOOKUPS)
+        };
+        let (count, turn) = line;
         let mut running = count.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        while *running >= MAX_CONCURRENT_COVER_LOOKUPS {
+        while *running >= limit {
             running = turn.wait(running).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         *running += 1;
-        Self
+        Self(line)
     }
 }
 
 impl Drop for CoverLookupTurn {
     fn drop(&mut self) {
-        let (count, turn) = &COVER_LOOKUPS;
+        let (count, turn) = self.0;
         *count.lock().unwrap_or_else(std::sync::PoisonError::into_inner) -= 1;
         turn.notify_one();
     }
