@@ -556,7 +556,7 @@
       <label class="remote-field"><span>{tr("帳號")}</span><input type="text" bind:value={form.username} autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" /></label>
       <label class="remote-field">
         <span>{tr("密碼")}</span>
-        <input type="password" bind:value={form.password} autocomplete="new-password" placeholder={form.hasPassword && !form.clearPassword ? tr('已儲存；留空表示不變') : ''} disabled={form.clearPassword} />
+        <input type="text" class="secret-input" bind:value={form.password} autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder={form.hasPassword && !form.clearPassword ? tr('已儲存；留空表示不變') : ''} disabled={form.clearPassword} />
       </label>
       {#if form.hasPassword}
         <label class="remote-check"><input type="checkbox" bind:checked={form.clearPassword} /><span>{tr("移除已儲存的密碼")}</span></label>
@@ -642,7 +642,7 @@
       <p>{passMode === 'export'
         ? tr('帳號（含密碼）會用你設定的密碼加密成一個檔案，可帶到另一台裝置匯入。請記住這個密碼，忘記就無法開啟。')
         : tr('請輸入匯出檔案時設定的密碼。匯入後，密碼會改用這台裝置的金鑰加密。')}</p>
-      <label class="remote-field"><span>{tr("檔案密碼（至少 8 個字元）")}</span><input type="password" bind:value={passphrase} autocomplete="new-password" /></label>
+      <label class="remote-field"><span>{tr("檔案密碼（至少 8 個字元）")}</span><input type="text" class="secret-input" bind:value={passphrase} autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" /></label>
       {#if passError}<p class="error-text" role="alert">{passError}</p>{/if}
       <div class="update-dialog-actions">
         <button class="soft-button" type="button" onclick={closePassphrase}>{tr("取消")}</button>
@@ -659,7 +659,10 @@
   .remote-server-head { border-bottom: 0; padding-top: 0; }
   .remote-dialog .remote-field { display: grid; gap: 4px; font-size: 0.9em; }
   .remote-dialog .remote-field > span { opacity: 0.75; }
-  .remote-dialog input[type='text'], .remote-dialog input[type='password'] {
+  /* A plain text field drawn as dots: a real password field makes some Android keyboards and autofill services restart
+     their session on every key, which closes the keyboard after each character. */
+  .remote-dialog .secret-input { -webkit-text-security: disc; }
+  .remote-dialog input[type='text'], .remote-dialog input.secret-input {
     min-width: 0; width: 100%; box-sizing: border-box; font: inherit; padding: 7px 10px; border-radius: 8px;
     border: 1px solid rgb(127 127 127 / 0.4); background: rgb(127 127 127 / 0.1); color: inherit;
   }
