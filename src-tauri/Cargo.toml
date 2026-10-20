@@ -59,4 +59,5 @@ windows = { version = "=0.62.2", features = [
 jni = "0.21.1"
 
 [dev-dependencies]
+zeroize = "1"
 player-dsd = { path = "../crates/player-dsd", features = ["testing"] }
