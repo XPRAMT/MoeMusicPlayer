@@ -25,10 +25,15 @@ class MainActivity : TauriActivity() {
     ensurePlaybackService()
   }
 
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (hasFocus) ResumeDiagnostics.schedule(this, { appWebView }, "window focus")
+  }
+
   override fun onResume() {
     super.onResume()
     nudgeWebViewPaint()
-    ResumeDiagnostics.onResume(this, appWebView)
+    ResumeDiagnostics.schedule(this, { appWebView }, "onResume")
   }
 
   /**

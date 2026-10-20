@@ -49,13 +49,21 @@ object ResumeDiagnostics {
     }
   }
 
-  /** The activity came forward: check the screen a few seconds from now. */
-  fun onResume(activity: Activity, webView: WebView?) {
+  /**
+   * The activity came forward or its window got the focus. An activity is resumed while the screen is still off or under
+   * the lock screen, when its window is not visible yet; the window becomes visible later, and that is when the page can
+   * be left undrawn. So only a moment with a visible, focused window starts a check, and the resumes in between do not
+   * cancel a check that is running.
+   */
+  fun schedule(activity: Activity, webView: () -> WebView?, reason: String) {
+    val view = webView()
+    val visible = view != null && view.windowVisibility == View.VISIBLE && activity.hasWindowFocus()
+    log(activity, "$reason: ${viewState(activity, view)}${if (visible) "" else " (window not visible yet: no check)"}")
+    if (!visible) return
     val mine = ++generation
-    log(activity, "onResume: ${viewState(activity, webView)}")
     handler.postDelayed({
-      if (mine == generation) check(activity, webView, mine)
-    }, 3000L)
+      if (mine == generation) check(activity, webView(), mine)
+    }, 1500L)
   }
 
   private fun viewState(activity: Activity, webView: WebView?): String {
@@ -107,6 +115,20 @@ object ResumeDiagnostics {
       "WebView onPause + onResume" to {
         webView.onPause()
         webView.onResume()
+      },
+      "switch the layer type to software and back" to {
+        val type = webView.layerType
+        webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+        webView.post { webView.setLayerType(if (type == View.LAYER_TYPE_SOFTWARE) View.LAYER_TYPE_NONE else type, null) }
+      },
+      "take the WebView out of its parent and put it back" to {
+        val parent = webView.parent as? android.view.ViewGroup
+        if (parent != null) {
+          val index = parent.indexOfChild(webView)
+          val params = webView.layoutParams
+          parent.removeViewAt(index)
+          parent.addView(webView, index, params)
+        }
       },
       "resize by one pixel and back" to {
         val params = webView.layoutParams
