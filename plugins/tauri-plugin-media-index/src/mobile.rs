@@ -579,7 +579,19 @@ fn parse_lofty_metadata(
     let year = release_date
         .as_deref()
         .and_then(player_core::recording_date_year);
+    // The lyrics in the tags are kept by the sync, so playing a song never opens the file for them.
+    let embedded_lyrics = [ItemKey::Lyrics, ItemKey::UnsyncLyrics].into_iter().find_map(|key| {
+        tagged_file
+            .tags()
+            .iter()
+            .filter_map(|tag| tag.get_string(key))
+            .find(|raw| {
+                !raw.trim().is_empty() && raw.len() <= player_core::MAX_LYRIC_PAYLOAD_BYTES
+            })
+            .map(str::to_owned)
+    });
     Ok(TrackMetadata {
+        embedded_lyrics,
         title: tag.and_then(|tag| text(tag.title())),
         artist: tag.and_then(|tag| text(tag.artist())),
         album: tag.and_then(|tag| text(tag.album())),
@@ -688,6 +700,7 @@ fn read_dsf_metadata(path: &std::path::Path) -> std::result::Result<TrackMetadat
         .and_then(player_core::parse_recording_date);
     let year = release_date.as_deref().and_then(player_core::recording_date_year);
     Ok(TrackMetadata {
+        embedded_lyrics: None,
         title: tag
             .and_then(|tag| text(tag.title()))
             .filter(|value| !value.trim().is_empty()),
