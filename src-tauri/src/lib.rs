@@ -200,6 +200,7 @@ mod album_artwork_responsiveness_tests {
                 created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
+                embedded_lyrics: None,
                 title: Some("Synthetic Track".to_owned()),
                 artist: Some("Synthetic Artist".to_owned()),
                 album: Some("Synthetic Album".to_owned()),
@@ -9930,6 +9931,8 @@ fn open_external_audio_path(
                     }),
                 },
                 metadata: Some(TrackMetadata {
+                    // A track opened from outside the library keeps no lyrics of its own here.
+                    embedded_lyrics: None,
                     title: summary.title.clone(),
                     artist: summary.artist.clone(),
                     album: summary.album.clone(),

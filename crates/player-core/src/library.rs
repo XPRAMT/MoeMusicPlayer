@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// Increment when the metadata parser adds or changes persisted fields or extraction rules.
 /// Existing tracks below this version are eligible for bounded background backfill.
-pub const TRACK_METADATA_VERSION: u32 = 6;
+pub const TRACK_METADATA_VERSION: u32 = 7;
 use uuid::Uuid;
 
 /// Normalize a recording date to `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`.
@@ -208,6 +208,9 @@ pub struct TrackMetadata {
     pub year: Option<u16>,
     /// Source bits per sample, populated only for codecs known to be lossless.
     pub bit_depth: Option<u8>,
+    /// The lyrics embedded in the file's tags, as they are written there (not yet parsed), when the reader looked for them.
+    /// The sync keeps them with the file's fingerprint so playing a song never has to open the file for its lyrics.
+    pub embedded_lyrics: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

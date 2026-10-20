@@ -1078,13 +1078,16 @@ pub async fn lyrics_get_track(
         .settings
         .snapshot()
         .map_err(|error| error.to_string())?;
-    load_track_result_with_context(
+    let started = std::time::Instant::now();
+    let result = load_track_result_with_context(
         database.as_database(),
         track_id,
         Some(&app),
         &settings.sources,
     )
-    .await
+    .await;
+    eprintln!("[lyrics] lyrics_get_track took {} ms", started.elapsed().as_millis());
+    result
 }
 
 #[tauri::command]
@@ -1486,6 +1489,37 @@ async fn local_lyrics_for_track(
         player_db::LyricSidecarLookup::Present { text: None, oversized: false } => {}
         player_db::LyricSidecarLookup::Absent => embedded_only = true,
         player_db::LyricSidecarLookup::NotScanned => {}
+    }
+
+    // With the sidecar settled, the lyrics in the song's own tags come from the database too: the sync read the tags (and kept
+    // what they hold, or that they hold nothing), so the file is not opened.
+    if embedded_only {
+        if let Some(stored) = database
+            .track_embedded_lyrics(track_id)
+            .map_err(|error| error.to_string())?
+        {
+            let parsed = stored
+                .as_deref()
+                .and_then(|raw| {
+                    if looks_like_yrc(raw) {
+                        parse_yrc(raw).ok()
+                    } else {
+                        parse_lrc(raw).ok()
+                    }
+                })
+                .filter(|lyrics| !lyrics.lines.is_empty());
+            return Ok(match parsed {
+                Some(lyrics) => LocalLyricsLookup::Found(track_lyrics_dto(
+                    track.id,
+                    track,
+                    LyricProvider::Embedded,
+                    false,
+                    &lyrics,
+                )),
+                None if sidecar_oversized => LocalLyricsLookup::Oversized,
+                None => LocalLyricsLookup::Missing,
+            });
+        }
     }
 
     let fingerprint = database

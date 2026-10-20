@@ -29,6 +29,7 @@ pub(crate) fn into_core_metadata(metadata: crate::models::TrackMetadata) -> Trac
         release_date,
         year,
         bit_depth: metadata.bit_depth,
+        embedded_lyrics: None,
     }
 }
 

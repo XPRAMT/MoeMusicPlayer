@@ -382,6 +382,23 @@ fn the_sync_stores_the_lrc_beside_a_song_with_its_fingerprint_and_follows_change
         lookup(&db, "Artist/Album One/01 s16.wv"),
         LyricSidecarLookup::Present { text: Some("[00:01.00]hello again\n".to_owned()), oversized: false }
     );
+    // The lyrics in a song's own tags are kept from the sync that read the tags (or the fact that there are none).
+    let embedded = |db: &Database, path: &str| {
+        let id = db
+            .resolve_track_id_for_locator(&MediaLocator::Remote {
+                source_id: root.id,
+                path: path.to_owned(),
+            })
+            .expect("resolve")
+            .expect("the track is in the library");
+        db.track_embedded_lyrics(id).expect("embedded lookup")
+    };
+    assert!(
+        matches!(embedded(&db, "Artist/Album Two/03 lyrics.wv"), Some(Some(text)) if !text.trim().is_empty()),
+        "the APEv2 lyrics of the WavPack file"
+    );
+    assert_eq!(embedded(&db, "Artist/Album One/01 s16.wv"), Some(None), "read, and holds no lyrics");
+
     // A removed `.lrc` is forgotten at the next complete scan.
     fs::remove_file(tree.join("Artist/Album One/01 s16.lrc")).unwrap();
     SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_200_000).expect("sync a third time");

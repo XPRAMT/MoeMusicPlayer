@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 18;
+const SCHEMA_VERSION: i64 = 19;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
@@ -572,6 +572,15 @@ CREATE TABLE music_collation_metadata (
 /// The `.lrc` files beside the songs of a source, found by the sync and stored with their fingerprint (name, size, modified
 /// time) and text, so lyrics are never searched for in a folder (or on a server) at play time. `lyric_sidecar_sources` marks
 /// the sources whose sidecars were scanned completely: for them a song without a row has no sidecar.
+/// The lyrics written in each song's own tags, kept from the moment the sync read the tags: a row means "the tags were read",
+/// with the text or without it (no lyrics). A song with no row has not been read since this existed.
+const SCHEMA_V19: &str = r#"
+CREATE TABLE track_embedded_lyrics (
+    track_id TEXT PRIMARY KEY NOT NULL,
+    lyrics_text TEXT
+);
+"#;
+
 const SCHEMA_V18: &str = r#"
 CREATE TABLE track_lyric_sidecars (
     source_id TEXT NOT NULL,
@@ -1933,6 +1942,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V18)?;
             tx.pragma_update(None, "user_version", 18)?;
+            tx.commit()?;
+            version = 18;
+        }
+        if version == 18 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V19)?;
+            tx.pragma_update(None, "user_version", 19)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -4860,6 +4876,20 @@ impl Database {
             .map_err(Into::into)
     }
 
+    /// The lyrics the sync read from the song's tags: `None` when the tags were never read since this was kept (the caller
+    /// opens the file as before), `Some(None)` when they were read and hold no lyrics.
+    pub fn track_embedded_lyrics(&self, track_id: TrackId) -> Result<Option<Option<String>>, DatabaseError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT lyrics_text FROM track_embedded_lyrics WHERE track_id=?1",
+                [track_id.to_string()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     /// The `.lrc` the sync stored for a track: `NotScanned` when no source holding the track has been scanned for lyric
     /// sidecars yet (the caller looks in the folder, as before), `Absent` when a source holding it was scanned and none
     /// has one, `Present` with its text otherwise.
@@ -6668,6 +6698,12 @@ fn persist_metadata(
             metadata.bit_depth.map(i64::from),
             i64::from(TRACK_METADATA_VERSION),
         ])?;
+    // The lyrics in the file's tags were read together with the rest: keep them (or the fact that there are none).
+    tx.prepare_cached(
+        "INSERT INTO track_embedded_lyrics (track_id, lyrics_text) VALUES (?1, ?2)
+         ON CONFLICT(track_id) DO UPDATE SET lyrics_text=excluded.lyrics_text",
+    )?
+    .execute(params![track_id.to_string(), metadata.embedded_lyrics])?;
     Ok(())
 }
 
@@ -7212,6 +7248,7 @@ mod tests {
                 created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
+                embedded_lyrics: None,
                 title: Some(title.to_owned()),
                 artist: Some("artist".to_owned()),
                 album: Some("album".to_owned()),

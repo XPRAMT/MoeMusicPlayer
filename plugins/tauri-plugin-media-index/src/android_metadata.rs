@@ -89,6 +89,7 @@ fn read_symphonia(path: &Path) -> Result<TrackMetadata, TrackMetadataError> {
         .and_then(|duration| size_bytes.map(|size| size.saturating_mul(8_000) / duration))
         .and_then(|bitrate| u32::try_from(bitrate).ok());
     let metadata = TrackMetadata {
+        embedded_lyrics: None,
         title: value(StandardTagKey::TrackTitle),
         artist: value(StandardTagKey::Artist),
         album: value(StandardTagKey::Album),
@@ -260,6 +261,7 @@ fn read_mp4_properties(path: &Path) -> Result<TrackMetadata, TrackMetadataError>
         .filter(|duration| *duration > 0)
         .and_then(|duration| u32::try_from(media_bytes.saturating_mul(8_000) / duration).ok());
     Ok(TrackMetadata {
+        embedded_lyrics: None,
         title: None,
         artist: None,
         album: None,
