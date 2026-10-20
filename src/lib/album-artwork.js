@@ -142,6 +142,36 @@ export function rememberAlbumCardArtwork(key, value, bytes = 0) {
   };
 }
 
+/**
+ * How many cover lookups of album cards may be at the backend at once. Every lookup takes the one library connection for a
+ * short while; with the lookups of every card waiting there, the queries of the page the user opened (its tracks, its
+ * artists) wait behind all of them, for seconds. A few at a time keeps that wait to a few lookups.
+ */
+export const ALBUM_COVER_LOOKUP_LIMIT = 2;
+let activeCoverLookups = 0;
+/** @type {Array<() => void>} */
+const coverLookupQueue = [];
+
+/**
+ * Run a cover lookup of an album card when one of the few places is free. A lookup that waited and is no longer wanted (its
+ * card was scrolled away or removed) is not run at all: `null` is returned instead.
+ * @template T @param {() => Promise<T>} task @param {() => boolean} [stillWanted] @returns {Promise<T | null>}
+ */
+export function withAlbumCoverLookupSlot(task, stillWanted = () => true) {
+  return new Promise((resolve, reject) => {
+    const release = () => {
+      activeCoverLookups -= 1;
+      coverLookupQueue.shift()?.();
+    };
+    const run = async () => {
+      if (!stillWanted()) { release(); resolve(null); return; }
+      try { resolve(await task()); } catch (error) { reject(error); } finally { release(); }
+    };
+    if (activeCoverLookups < ALBUM_COVER_LOOKUP_LIMIT) { activeCoverLookups += 1; void run(); }
+    else coverLookupQueue.push(() => { activeCoverLookups += 1; void run(); });
+  });
+}
+
 /** @template T @param {() => Promise<T>} task @returns {Promise<T>} */
 export function withAlbumArtworkSlot(task) {
   return new Promise((resolve, reject) => {

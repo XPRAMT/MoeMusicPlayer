@@ -3,7 +3,7 @@
   import { displayUnknown } from './unknown-label.js';
   import { onDestroy, onMount, untrack } from 'svelte';
   import { getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBase64, putAlbumThumbnailBase64ForTrack } from './ipc';
-  import { acquireAlbumCardArtwork, albumCardArtworkMemoryKey, copyToArrayBuffer, createAlbumThumbnailInWorker, getAlbumArtworkSelectionRevision, getAlbumCardSelectionTrackIds, loadAlbumCardThumbnails, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
+  import { acquireAlbumCardArtwork, albumCardArtworkMemoryKey, copyToArrayBuffer, createAlbumThumbnailInWorker, getAlbumArtworkSelectionRevision, withAlbumCoverLookupSlot, getAlbumCardSelectionTrackIds, loadAlbumCardThumbnails, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
   import type { AlbumIndexSortField } from './ipc';
   import { formatDurationHours } from './format';
@@ -104,14 +104,16 @@
       if (!active || destroyed || revision !== requestRevision) return false;
       let selection;
       try {
-        selection = await invokeCommand('album_artwork_selection_ensure', {
+        // Only a few card lookups at the backend at once; one that waited and whose card is gone is not run.
+        selection = await withAlbumCoverLookupSlot(() => invokeCommand('album_artwork_selection_ensure', {
           key,
           albumNames: album.aliases,
           trackCount: album.trackCount,
           representative: false,
           forceRebuild: attempt > 0,
-        });
+        }), () => active && !destroyed && revision === requestRevision);
       } catch { return false; }
+      if (selection === null) return false;
       if (!selection || selection.trackCount !== album.trackCount || revision !== requestRevision) return false;
       const selectedTrackIds = getAlbumCardSelectionTrackIds(selection);
       if (selectedTrackIds.length === 0) {
