@@ -1390,6 +1390,77 @@ pub struct PlaybackStatisticsRuntime {
     pub registered_at_utc_ms: i64,
 }
 
+/// A connection use longer than this (waiting or holding) is recorded.
+const SLOW_LOCK_MS: u64 = 250;
+const SLOW_LOCK_KEEP: usize = 64;
+static SLOW_LOCKS: Mutex<Vec<SlowLockEvent>> = Mutex::new(Vec::new());
+
+/// One use of the library connection that waited or held for a long time.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlowLockEvent {
+    /// Unix milliseconds when the use ended.
+    pub at_ms: u64,
+    /// The source line that took the connection.
+    pub caller: String,
+    /// How long it waited for the connection.
+    pub wait_ms: u64,
+    /// How long it kept it.
+    pub held_ms: u64,
+}
+
+/// The slowest recent uses of the connection, newest last.
+pub fn slow_lock_events() -> Vec<SlowLockEvent> {
+    SLOW_LOCKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// The connection guard that times its own use.
+pub(crate) struct TimedConnection<'a> {
+    guard: MutexGuard<'a, Connection>,
+    caller: &'static std::panic::Location<'static>,
+    wait_ms: u64,
+    held_from: std::time::Instant,
+}
+
+impl std::ops::Deref for TimedConnection<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for TimedConnection<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.guard
+    }
+}
+
+impl Drop for TimedConnection<'_> {
+    fn drop(&mut self) {
+        let held_ms = self.held_from.elapsed().as_millis() as u64;
+        if self.wait_ms < SLOW_LOCK_MS && held_ms < SLOW_LOCK_MS {
+            return;
+        }
+        let mut events = SLOW_LOCKS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if events.len() >= SLOW_LOCK_KEEP {
+            events.remove(0);
+        }
+        events.push(SlowLockEvent {
+            at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis() as u64),
+            caller: format!("{}:{}", self.caller.file(), self.caller.line()),
+            wait_ms: self.wait_ms,
+            held_ms,
+        });
+    }
+}
+
 pub struct Database {
     connection: Mutex<Connection>,
     collation_spec: MusicCollationSpec,
@@ -5783,9 +5854,14 @@ impl Database {
         Ok(statistics)
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, Connection>, DatabaseError> {
-        match self.connection.lock() {
-            Ok(connection) => Ok(connection),
+    /// The one connection. Every use is timed: a caller that waits for the connection or keeps it longer than
+    /// `SLOW_LOCK_MS` is recorded (see [`slow_lock_events`]), so a stall of the library pages can be traced to its cause.
+    #[track_caller]
+    fn lock(&self) -> Result<TimedConnection<'_>, DatabaseError> {
+        let caller = std::panic::Location::caller();
+        let waited_from = std::time::Instant::now();
+        let guard = match self.connection.lock() {
+            Ok(connection) => connection,
             Err(poisoned) => {
                 let connection = poisoned.into_inner();
                 if !connection.is_autocommit() {
@@ -5793,9 +5869,15 @@ impl Database {
                 }
                 connection.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?;
                 self.connection.clear_poison();
-                Ok(connection)
+                connection
             }
-        }
+        };
+        Ok(TimedConnection {
+            guard,
+            caller,
+            wait_ms: waited_from.elapsed().as_millis() as u64,
+            held_from: std::time::Instant::now(),
+        })
     }
 }
 

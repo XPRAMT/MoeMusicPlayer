@@ -3833,6 +3833,12 @@ async fn album_artwork_cache_put_for_track(
     .await
 }
 
+/// The slowest recent uses of the library connection (waited or held longer than 250 ms): diagnoses a stall of the pages.
+#[tauri::command]
+fn db_slow_locks() -> Vec<player_db::SlowLockEvent> {
+    player_db::slow_lock_events()
+}
+
 /// The cover thumbnail cache as the page sees it (Settings → Music sources → Cache).
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -11676,6 +11682,7 @@ pub fn run() {
             album_artwork_cache_put_for_track,
             album_artwork_cache_mark_missing_for_track,
             album_artwork_cache_clear,
+            db_slow_locks,
             album_artwork_cache_stats,
             album_artwork_cache_set_limit,
             library_get_artist_page,
