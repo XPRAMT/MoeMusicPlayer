@@ -234,6 +234,19 @@ impl player_core::RemoteContent for RemoteFiles {
         source_id: SourceId,
         path: &str,
     ) -> std::io::Result<player_core::RemoteFileHandle> {
+        // A song whose size and time were learned when it was played: the disk cache answers what it holds, so a cover or a
+        // tag of a played song needs no network. What it lacks is fetched but not stored (the cache is for playing).
+        if let Some(cache) = self.cache.as_ref() {
+            let (_, known_full) = self.locate(source_id, path)?;
+            if cache.meta(&source_id.to_string(), &known_full).is_some() {
+                let reader = player_remote::fs::RangeReader::new(self.cached_file(source_id, path, false)?);
+                let len = reader.len();
+                return Ok(player_core::RemoteFileHandle {
+                    reader: Box::new(reader),
+                    len,
+                });
+            }
+        }
         let (fs, full) = self.locate(source_id, path)?;
         // Tags, covers and lyrics need the start of a file (and a little more): the default read-ahead of a few blocks is
         // plenty. The SMB-tuned read-ahead (8 MiB per request) is for playing a file from start to end; with it, a screenful of
@@ -251,6 +264,48 @@ impl player_core::RemoteContent for RemoteFiles {
         source_id: SourceId,
         path: &str,
     ) -> std::io::Result<player_core::RemoteFileHandle> {
+        let file = self.cached_file(source_id, path, true)?;
+        let reader = player_remote::prefetch::PrefetchReader::new(file);
+        let len = reader.len();
+        Ok(player_core::RemoteFileHandle {
+            reader: Box::new(reader),
+            len,
+        })
+    }
+
+    fn stat(&self, source_id: SourceId, path: &str) -> std::io::Result<player_core::RemoteStamp> {
+        let (fs, full) = self.locate(source_id, path)?;
+        let entry = fs.stat(&full)?;
+        Ok(player_core::RemoteStamp {
+            len: entry.size,
+            modified_ms: entry.modified_ms,
+        })
+    }
+
+    fn replace_file(
+        &self,
+        source_id: SourceId,
+        path: &str,
+        local: &Path,
+        expected: Option<player_core::RemoteStamp>,
+    ) -> std::io::Result<player_core::RemoteStamp> {
+        self.replace_remote_file(source_id, path, local, expected)
+    }
+
+    fn release(&self, source_id: SourceId, path: &str) {
+        self.release_streams(source_id, path);
+    }
+}
+
+impl RemoteFiles {
+    /// The file as playback reads it, without the read-ahead thread: the disk cache answers what it holds (a file whose
+    /// size and time were learned before is opened without asking the server anything), and what it fetches is kept.
+    fn cached_file(
+        &self,
+        source_id: SourceId,
+        path: &str,
+        store: bool,
+    ) -> std::io::Result<Box<dyn player_remote::fs::RemoteFile>> {
         let (fs, full) = self.locate(source_id, path)?;
         let account_key = source_id.to_string();
         // A file whose size and modified time were learned before (and whose chunks may be on disk) is opened without
@@ -289,11 +344,19 @@ impl player_core::RemoteContent for RemoteFiles {
                     player_remote::fs::ReopeningFile::lazy(Arc::clone(&fs), full.clone(), meta.len),
                 ));
                 self.track_stream(source_id, &full, release);
-                Box::new(player_remote::cache::CachedFile::new(
-                    Box::new(lazy),
-                    Arc::clone(cache),
-                    key,
-                ))
+                if store {
+                    Box::new(player_remote::cache::CachedFile::new(
+                        Box::new(lazy),
+                        Arc::clone(cache),
+                        key,
+                    ))
+                } else {
+                    Box::new(player_remote::cache::CachedFile::read_only(
+                        Box::new(lazy),
+                        Arc::clone(cache),
+                        key,
+                    ))
+                }
             }
             (Some(cache), None) => {
                 let (opened, release) = player_remote::fs::releasable(Box::new(
@@ -323,24 +386,10 @@ impl player_core::RemoteContent for RemoteFiles {
                 Box::new(opened)
             }
         };
-        let reader = player_remote::prefetch::PrefetchReader::new(file);
-        let len = reader.len();
-        Ok(player_core::RemoteFileHandle {
-            reader: Box::new(reader),
-            len,
-        })
+        Ok(file)
     }
 
-    fn stat(&self, source_id: SourceId, path: &str) -> std::io::Result<player_core::RemoteStamp> {
-        let (fs, full) = self.locate(source_id, path)?;
-        let entry = fs.stat(&full)?;
-        Ok(player_core::RemoteStamp {
-            len: entry.size,
-            modified_ms: entry.modified_ms,
-        })
-    }
-
-    fn replace_file(
+    fn replace_remote_file(
         &self,
         source_id: SourceId,
         path: &str,
@@ -373,7 +422,7 @@ impl player_core::RemoteContent for RemoteFiles {
         })
     }
 
-    fn release(&self, source_id: SourceId, path: &str) {
+    fn release_streams(&self, source_id: SourceId, path: &str) {
         let Ok((_, full)) = self.locate(source_id, path) else {
             return;
         };

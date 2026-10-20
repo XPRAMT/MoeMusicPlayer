@@ -229,6 +229,8 @@ pub struct CachedFile {
     key: String,
     hits: u32,
     misses: u32,
+    /// What is fetched is not stored (see [`CachedFile::read_only`]).
+    read_only: bool,
 }
 
 impl Drop for CachedFile {
@@ -252,7 +254,17 @@ impl CachedFile {
             key,
             hits: 0,
             misses: 0,
+            read_only: false,
         }
+    }
+
+    /// As [`new`](Self::new), but what the cache holds is used and what it lacks is fetched without being stored. For the
+    /// small reads of a cover or a tag: a song that was played needs no network for them, and the many covers of an album
+    /// page do not push the songs that were played out of the cache.
+    pub fn read_only(inner: Box<dyn RemoteFile>, cache: std::sync::Arc<DiskCache>, key: String) -> Self {
+        let mut file = Self::new(inner, cache, key);
+        file.read_only = true;
+        file
     }
 
     fn chunk(&mut self, index: u64) -> Result<Vec<u8>, RemoteError> {
@@ -277,7 +289,9 @@ impl CachedFile {
             }
             filled += read;
         }
-        self.cache.put(&self.key, index, &buffer);
+        if !self.read_only {
+            self.cache.put(&self.key, index, &buffer);
+        }
         Ok(buffer)
     }
 }
@@ -429,6 +443,42 @@ mod tests {
         assert!(cache.get("k", 0).is_none() && cache.get("k", 1).is_none());
         assert!(cache.get("k", 2).is_some() && cache.get("k", 3).is_some());
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_read_only_cached_file_uses_what_is_cached_and_stores_nothing_new() {
+        let dir = temp_dir("read-only");
+        let cache = Arc::new(DiskCache::open(&dir, 100_000_000).unwrap());
+        let requests = Arc::new(AtomicU64::new(0));
+        let len = 3 * CACHE_CHUNK as u64;
+        let key = cache_key("a", "x.flac", len, Some(1));
+        let counting = || {
+            Box::new(Counting {
+                len,
+                requests: Arc::clone(&requests),
+            })
+        };
+        // The song was played: its first chunk is in the cache.
+        let mut played = CachedFile::new(counting(), Arc::clone(&cache), key.clone());
+        let mut buffer = vec![0_u8; 1000];
+        played.read_at(0, &mut buffer).unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        let used_before = cache.used();
+
+        let mut reader = CachedFile::read_only(counting(), Arc::clone(&cache), key.clone());
+        // The cached chunk answers without the server.
+        reader.read_at(0, &mut buffer).unwrap();
+        assert_eq!(buffer, expected(0, 1000));
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        // A chunk the cache lacks is fetched, correctly, and not stored.
+        let at = CACHE_CHUNK as u64 + 10;
+        reader.read_at(at, &mut buffer).unwrap();
+        assert_eq!(buffer, expected(at, 1000));
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(cache.used(), used_before, "a read-only read stored a chunk");
+        reader.read_at(at, &mut buffer).unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 3, "it was fetched again");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
