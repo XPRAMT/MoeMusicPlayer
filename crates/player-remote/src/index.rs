@@ -21,7 +21,7 @@ use crate::fs::{RangeReader, RemoteError, RemoteFs};
 const LIST_WORKERS: usize = 4;
 
 /// Tracks whose tags are read at the same time. Each read is a few round trips, so many at once keep a long link busy.
-pub const METADATA_READ_THREADS: usize = 16;
+pub const METADATA_READ_THREADS: usize = if cfg!(target_os = "android") { 8 } else { 16 };
 
 /// A remote source's file tree and the folder inside it that the source is rooted at.
 #[derive(Clone)]
@@ -110,7 +110,15 @@ impl MetadataReader for RemoteMediaIndex {
             fs: resolved.fs,
             path: join_path(&resolved.base_path, path),
         };
-        player_track_metadata::read_track_metadata(&source)
+        // A read that fails on a slow or busy link is tried once more before it is reported (a timeout on a mobile
+        // connection is common when many tracks are read at once).
+        match player_track_metadata::read_track_metadata(&source) {
+            Ok(metadata) => Ok(metadata),
+            Err(_) => {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                player_track_metadata::read_track_metadata(&source)
+            }
+        }
     }
 }
 
