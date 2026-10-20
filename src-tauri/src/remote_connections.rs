@@ -206,3 +206,131 @@ impl player_audio_windows::remote_input::RemoteOpener for RemotePlayback {
         })
     }
 }
+
+/// The whole app-side chain against a real SMB server: an account saved with a sealed password, a source added under
+/// it, a library sync through the shared connection, the playback path of a scanned track, and the reader the audio
+/// engine would get for it. Skipped unless `MOE_SMB_HOST`, `MOE_SMB_SHARE`, `MOE_SMB_FILE` (user name, then password)
+/// and optionally `MOE_SMB_PORT` and `MOE_SMB_DIR` are set; Windows only because the engine's opener is.
+#[cfg(all(test, target_os = "windows"))]
+mod real_server_tests {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::sync::Arc;
+
+    use player_audio_windows::remote_input::RemoteOpener;
+    use player_core::{LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, SourceId, SyncEngine};
+    use player_db::Database;
+    use player_remote::account::{RemoteProtocol, TlsMode};
+    use player_remote::index::RemoteMediaIndex;
+
+    use super::{RemoteConnections, RemotePlayback};
+    use crate::remote_accounts::{save_account, vault, RemoteAccountInput};
+    use crate::settings::{AppSettings, SettingsStore, SourceEntry, SourceEntryKind, StoredPath};
+
+    #[test]
+    fn account_source_sync_and_playback_reader_work_against_a_real_server() {
+        let (Ok(host), Ok(share), Ok(file)) = (
+            std::env::var("MOE_SMB_HOST"),
+            std::env::var("MOE_SMB_SHARE"),
+            std::env::var("MOE_SMB_FILE"),
+        ) else {
+            eprintln!("skipped: MOE_SMB_* is not set");
+            return;
+        };
+        let credentials = std::fs::read_to_string(file).unwrap();
+        let mut lines = credentials.lines();
+        let user = lines.next().unwrap().trim().to_owned();
+        let password = lines.next().unwrap().trim().to_owned();
+        let base = std::env::var("MOE_SMB_DIR").unwrap_or_default();
+
+        let data_dir = std::env::temp_dir().join(format!("moe-remote-app-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data_dir);
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let settings = Arc::new(
+            SettingsStore::open(data_dir.join("settings.json"), AppSettings::default()).unwrap(),
+        );
+        let vault = vault(&data_dir).unwrap();
+
+        // 1. The account: the password is sealed, never plaintext, in settings.json.
+        let view = save_account(
+            &settings,
+            &vault,
+            RemoteAccountInput {
+                id: None,
+                name: "test server".to_owned(),
+                protocol: RemoteProtocol::Smb,
+                host,
+                port: std::env::var("MOE_SMB_PORT").ok().and_then(|port| port.parse().ok()),
+                path: share,
+                username: user,
+                password: Some(password.clone()),
+                tls: TlsMode::Verify,
+                only_on_wifi: false,
+            },
+        )
+        .unwrap();
+        assert!(view.has_password);
+        let saved = std::fs::read_to_string(data_dir.join("settings.json")).unwrap();
+        assert!(!saved.contains(&password), "the password is in settings.json in the clear");
+
+        // 2. The source under it.
+        let id = SourceId::new();
+        let root = LibraryRoot {
+            id,
+            kind: MediaSourceKind::Remote,
+            display_name: "remote".to_owned(),
+            locator: MediaLocator::Remote { source_id: id, path: base.clone() },
+            enabled: true,
+        };
+        settings
+            .upsert_source(SourceEntry {
+                id,
+                display_name: root.display_name.clone(),
+                enabled: true,
+                kind: SourceEntryKind::Folder {
+                    media_kind: MediaSourceKind::Remote,
+                    path: StoredPath::from_locator(&root.locator).unwrap(),
+                    remote_account: Some(view.id.clone()),
+                },
+            })
+            .unwrap();
+        let snapshot = settings.snapshot().unwrap();
+
+        // 3. The sync, through the app's resolver.
+        let connections = Arc::new(RemoteConnections::default());
+        let resolver = connections.resolver(data_dir.clone(), &snapshot);
+        let mut index = RemoteMediaIndex::new(resolver);
+        let mut database = Database::open_in_memory().unwrap();
+        database.save_library_root(&root).unwrap();
+        let report = SyncEngine::sync(&root, &mut index, &mut database, 1_800_000_000_000).unwrap();
+        println!("observed {} tracks, state {:?}", report.observed, report.state);
+        assert!(report.observed > 0);
+        assert!(report.metadata_errors.is_empty(), "{:?}", report.metadata_errors);
+
+        // 4. The playback path of a track, and the reader the engine gets for it.
+        let page = database
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 3,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            })
+            .unwrap();
+        let track = &page.items[0];
+        let path = database.resolve_playable_filesystem_locator(track.id).unwrap();
+        let text = path.to_string_lossy().into_owned();
+        assert!(text.starts_with("moeremote://"), "{text}");
+        let opener = RemotePlayback { connections: Arc::clone(&connections), settings: Arc::clone(&settings) };
+        let mut input = opener.open(&text).expect("the engine's opener");
+        assert!(input.len > 0);
+        let mut head = [0u8; 4];
+        input.main.read_exact(&mut head).unwrap();
+        input.main.seek(SeekFrom::End(-16)).unwrap();
+        let mut tail = Vec::new();
+        input.main.read_to_end(&mut tail).unwrap();
+        println!("{:?} {} bytes, head {:?}", track.title, input.len, head);
+        assert_eq!(tail.len(), 16);
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+}

@@ -29,6 +29,10 @@ fn make_tree(name: &str) -> PathBuf {
         ("Artist/Album One/02 s24.wv", "s24.wv"),
         ("Artist/Album Two/03 lyrics.wv", "s16_lyrics.wv"),
         ("Other/f32.wv", "f32.wv"),
+        (
+            "Other/Smoke.mka",
+            "../../../player-audio-windows/tests/fixtures/metadata-smoke.mka",
+        ),
         (".hidden/skipped.wv", "s16.wv"),
         ("Artist/Album One/notes.txt", "s16.raw"),
     ] {
@@ -93,6 +97,7 @@ fn scans_the_whole_tree_and_skips_hidden_and_non_audio() {
             "Artist/Album One/01 s16.wv",
             "Artist/Album One/02 s24.wv",
             "Artist/Album Two/03 lyrics.wv",
+            "Other/Smoke.mka",
             "Other/f32.wv",
         ]
     );
@@ -137,7 +142,7 @@ fn remote_tags_equal_the_tags_read_from_the_local_file() {
     let index = index_over(Arc::new(DirFs::new(&tree)), "");
     let mut scanner = index_over(Arc::new(DirFs::new(&tree)), "");
     let scan = scanner.scan(&root_for(""));
-    assert_eq!(scan.tracks.len(), 4);
+    assert_eq!(scan.tracks.len(), 5);
     for track in &scan.tracks {
         let MediaLocator::Remote { path, .. } = &track.locator else {
             panic!("a remote locator");
@@ -201,7 +206,7 @@ fn a_folder_that_cannot_be_listed_makes_the_scan_incomplete() {
     let mut index = index_over(Arc::new(Flaky(DirFs::new(&tree))), "");
     let scan = index.scan(&root_for(""));
     assert!(matches!(scan.state, SourceScanState::Incomplete { .. }));
-    assert_eq!(scan.tracks.len(), 3);
+    assert_eq!(scan.tracks.len(), 4);
     assert_eq!(scan.errors.len(), 1);
     assert_eq!(
         scan.errors[0].source_item_id.as_deref(),
@@ -232,7 +237,7 @@ fn the_sync_engine_stores_remote_tracks_and_leaves_them_when_the_server_is_down(
     let mut index = index_over(Arc::new(DirFs::new(&tree)), "");
     let report = SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_000_000).expect("sync");
     assert_eq!(report.state, Some(SourceScanState::Complete));
-    assert_eq!(report.observed, 4);
+    assert_eq!(report.observed, 5);
     assert!(
         report.metadata_errors.is_empty(),
         "{:?}",
@@ -250,7 +255,7 @@ fn the_sync_engine_stores_remote_tracks_and_leaves_them_when_the_server_is_down(
         .expect("page")
     };
     let first = page(&db);
-    assert_eq!(first.items.len(), 4);
+    assert_eq!(first.items.len(), 5);
     let locators = db.track_locators(first.items[0].id).expect("locators");
     assert!(matches!(
         locators.as_slice(),
@@ -260,7 +265,7 @@ fn the_sync_engine_stores_remote_tracks_and_leaves_them_when_the_server_is_down(
     // A second scan changes nothing: every track is unchanged by size and modified time.
     let again = SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_100_000).expect("again");
     assert_eq!(again.metadata_reads, 0);
-    assert_eq!(again.unchanged, 4);
+    assert_eq!(again.unchanged, 5);
 
     // The server goes away: the scan is unavailable and not one track is removed.
     struct Down;
@@ -275,7 +280,7 @@ fn the_sync_engine_stores_remote_tracks_and_leaves_them_when_the_server_is_down(
         report.state,
         Some(SourceScanState::Unavailable { .. })
     ));
-    assert_eq!(page(&db).items.len(), 4);
+    assert_eq!(page(&db).items.len(), 5);
 
     let _ = fs::remove_dir_all(tree);
     let _: HashMap<(), ()> = HashMap::new();

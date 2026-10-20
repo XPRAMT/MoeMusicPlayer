@@ -32,11 +32,6 @@ pub trait ByteSource {
     fn open_correction(&self) -> Option<Box<dyn ReadSeek>> {
         None
     }
-
-    /// The path of a plain local file. Matroska audio is only parsed from a local file.
-    fn local_path(&self) -> Option<&Path> {
-        None
-    }
 }
 
 /// A file on a local disk.
@@ -61,10 +56,6 @@ impl ByteSource for PathSource<'_> {
             .ok()
             .map(|file| Box::new(BufReader::new(file)) as Box<dyn ReadSeek>)
     }
-
-    fn local_path(&self) -> Option<&Path> {
-        Some(self.0)
-    }
 }
 
 /// Tags and audio properties of one track.
@@ -76,12 +67,7 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
         .and_then(std::ffi::OsStr::to_str)
         .is_some_and(|extension| extension.eq_ignore_ascii_case("mka"))
     {
-        return match source.local_path() {
-            Some(path) => read_matroska_audio_metadata(path),
-            None => Err(TrackMetadataError {
-                message: "Matroska audio is not supported on remote sources".to_owned(),
-            }),
-        };
+        return read_matroska_audio_metadata(source);
     }
     if player_formats::decode_engine(name_path) == player_formats::DecodeEngine::Dsd {
         let reader = source.open().map_err(|error| TrackMetadataError {
@@ -462,16 +448,67 @@ fn read_dsf_audio_metadata_from(
     })
 }
 
-fn read_matroska_audio_metadata(path: &Path) -> Result<TrackMetadata, TrackMetadataError> {
+/// A `Read + Seek + Send` stream as Symphonia's media source (which must also be `Sync`: every access takes a lock).
+struct SyncMedia {
+    reader: std::sync::Mutex<Box<dyn ReadSeek>>,
+    len: Option<u64>,
+}
+
+impl SyncMedia {
+    fn new(mut reader: Box<dyn ReadSeek>) -> Self {
+        // Symphonia's Matroska demuxer needs the length to seek.
+        let len = reader.seek(SeekFrom::End(0)).ok();
+        let _ = reader.seek(SeekFrom::Start(0));
+        Self {
+            reader: std::sync::Mutex::new(reader),
+            len,
+        }
+    }
+}
+
+impl Read for SyncMedia {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.reader
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .read(buf)
+    }
+}
+
+impl Seek for SyncMedia {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.reader
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .seek(position)
+    }
+}
+
+impl symphonia::core::io::MediaSource for SyncMedia {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        self.len
+    }
+}
+
+fn read_matroska_audio_metadata(
+    source: &dyn ByteSource,
+) -> Result<TrackMetadata, TrackMetadataError> {
     use symphonia::core::codecs::{
         CODEC_TYPE_AAC, CODEC_TYPE_ALAC, CODEC_TYPE_FLAC, CODEC_TYPE_MP3, CODEC_TYPE_OPUS,
         CODEC_TYPE_VORBIS,
     };
 
-    let file = std::fs::File::open(path).map_err(|error| TrackMetadataError {
-        message: format!("could not open Matroska audio file: {error}"),
-    })?;
-    let stream = MediaSourceStream::new(Box::new(file), Default::default());
+    let open = |what: &str| {
+        source.open().map_err(|error| TrackMetadataError {
+            message: format!("could not open Matroska audio file ({what}): {error}"),
+        })
+    };
+    let stream =
+        MediaSourceStream::new(Box::new(SyncMedia::new(open("audio")?)), Default::default());
     // Symphonia identifies Matroska from the EBML header; the supported demuxer advertises .mkv,
     // so use that container hint for audio-only .mka files as well.
     let mut hint = Hint::new();
@@ -503,20 +540,22 @@ fn read_matroska_audio_metadata(path: &Path) -> Result<TrackMetadata, TrackMetad
     // Symphonia demuxes Matroska audio but does not expose the container Info title
     // consistently. Read only Info and Tags elements separately; this avoids loading
     // large attached artwork while keeping audio probing on Symphonia.
-    let info =
-        matroska::get_from::<_, matroska::Info>(path).map_err(|error| TrackMetadataError {
+    let info = matroska::get::<_, matroska::Info>(std::io::BufReader::new(open("info")?)).map_err(
+        |error| TrackMetadataError {
             message: format!("could not read Matroska Info metadata: {error}"),
-        })?;
-    let container_tags = matroska::get_from::<_, matroska::Tag>(path)
+        },
+    )?;
+    let container_tags = matroska::get::<_, matroska::Tag>(std::io::BufReader::new(open("tags")?))
         .map_err(|error| TrackMetadataError {
             message: format!("could not read Matroska Tags metadata: {error}"),
         })?
         .unwrap_or_default();
-    let container_tracks = matroska::get_from::<_, matroska::Track>(path)
-        .map_err(|error| TrackMetadataError {
-            message: format!("could not read Matroska track metadata: {error}"),
-        })?
-        .unwrap_or_default();
+    let container_tracks =
+        matroska::get::<_, matroska::Track>(std::io::BufReader::new(open("tracks")?))
+            .map_err(|error| TrackMetadataError {
+                message: format!("could not read Matroska track metadata: {error}"),
+            })?
+            .unwrap_or_default();
     let matroska_tag_text = |keys: &[&str]| {
         container_tags
             .iter()
