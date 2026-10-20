@@ -55,6 +55,14 @@ fn official_files_have_readable_tags_and_covers() {
         assert_eq!(details.fields.title, name, "{name}");
         assert_eq!(details.fields.artist, "MoeTest", "{name}");
         assert!(details.fields.album.starts_with("WavPack "), "{name}");
+        assert!(
+            details
+                .fields
+                .lyrics
+                .starts_with("[00:01.00]第一行：官方編碼器"),
+            "{name}: the Lyrics item the encoder wrote: {:?}",
+            details.fields.lyrics
+        );
         let cover = details
             .cover
             .as_ref()

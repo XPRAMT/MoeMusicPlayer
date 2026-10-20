@@ -356,4 +356,103 @@ mod tests {
             LyricsLookup::Missing
         );
     }
+
+    fn wavpack_fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../player-wavpack/tests/fixtures")
+            .join(name)
+    }
+
+    /// A WavPack file whose APEv2 `Lyrics` item was written by the official `wvtag` (ADR 0025).
+    #[test]
+    fn embedded_apev2_lyrics_of_a_wavpack_file_are_found_and_the_sidecar_still_wins() {
+        let dir = TestDirectory::new();
+        let audio = dir.path().join("曲目.wv");
+        fs::copy(wavpack_fixture("s16_lyrics.wv"), &audio).expect("copy the WavPack fixture");
+        match find_lyrics(&only_path(audio.clone())) {
+            LyricsLookup::Found(found) => {
+                assert_eq!(found.provider, LyricProvider::Embedded);
+                assert!(found.lyrics.synced);
+                let texts: Vec<&str> = found
+                    .lyrics
+                    .lines
+                    .iter()
+                    .map(|line| line.text.as_str())
+                    .collect();
+                assert_eq!(texts, ["第一行歌詞", "Second line", "第三行 ♪"]);
+            }
+            other => panic!("expected embedded lyrics, got {other:?}"),
+        }
+        fs::write(dir.path().join("曲目.lrc"), "[00:01.00]同名歌詞").expect("write LRC sidecar");
+        let found = find_all_lyrics(&only_path(audio.clone()));
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].provider, LyricProvider::Sidecar);
+        assert_eq!(found[1].provider, LyricProvider::Embedded);
+        match find_lyrics(&only_path(audio)) {
+            LyricsLookup::Found(found) => assert_eq!(found.provider, LyricProvider::Sidecar),
+            other => panic!("playback lookup should keep the sidecar first, got {other:?}"),
+        }
+    }
+
+    /// What the song-details panel writes into a `.wv` is what the lyrics lookup reads back.
+    #[test]
+    fn lyrics_written_by_the_details_panel_into_a_wavpack_file_are_read_back() {
+        let dir = TestDirectory::new();
+        let audio = dir.path().join("edited.wv");
+        fs::copy(wavpack_fixture("s16.wv"), &audio).expect("copy the WavPack fixture");
+        assert_eq!(
+            find_lyrics(&only_path(audio.clone())),
+            LyricsLookup::Missing
+        );
+
+        let details = player_tags::read_details(&audio).expect("details");
+        let mut edit = player_tags::TagEdit {
+            fields: details.fields.clone(),
+            ..player_tags::TagEdit::default()
+        };
+        edit.fields.lyrics = "[00:02.00]編輯後的歌詞\n[00:05.00]Another line".to_owned();
+        player_tags::write_edit(&audio, &edit).expect("write the tag");
+        match find_lyrics(&only_path(audio.clone())) {
+            LyricsLookup::Found(found) => {
+                assert_eq!(found.provider, LyricProvider::Embedded);
+                assert_eq!(found.lyrics.lines[0].text, "編輯後的歌詞");
+                assert_eq!(found.lyrics.lines.len(), 2);
+            }
+            other => panic!("expected the lyrics written by the panel, got {other:?}"),
+        }
+
+        // Clearing the field removes the lyrics again.
+        let details = player_tags::read_details(&audio).expect("details");
+        let mut edit = player_tags::TagEdit {
+            fields: details.fields.clone(),
+            ..player_tags::TagEdit::default()
+        };
+        edit.fields.lyrics.clear();
+        player_tags::write_edit(&audio, &edit).expect("clear the lyrics");
+        assert_eq!(find_lyrics(&only_path(audio)), LyricsLookup::Missing);
+    }
+
+    /// Whole songs from the official encoder, each with an LRC in its `Lyrics` item (`MOE_WV_MANIFEST`; run by hand).
+    #[test]
+    #[ignore = "needs MOE_WV_MANIFEST"]
+    fn official_encoder_files_carry_readable_embedded_lyrics() {
+        let manifest = fs::read_to_string(std::env::var("MOE_WV_MANIFEST").unwrap()).unwrap();
+        let mut checked = 0;
+        for line in manifest.lines().filter(|line| !line.trim().is_empty()) {
+            let wv = PathBuf::from(line.split('\t').nth(1).unwrap().replace('/', "\\"));
+            match find_lyrics(&only_path(wv.clone())) {
+                LyricsLookup::Found(found) => {
+                    assert_eq!(found.provider, LyricProvider::Embedded, "{wv:?}");
+                    assert!(found.lyrics.synced, "{wv:?}");
+                    assert_eq!(found.lyrics.lines.len(), 4, "{wv:?}");
+                    assert_eq!(found.lyrics.lines[0].text, "第一行：官方編碼器", "{wv:?}");
+                    assert_eq!(found.lyrics.lines[3].text, "Fourth line ♪", "{wv:?}");
+                }
+                other => panic!("{wv:?}: expected embedded lyrics, got {other:?}"),
+            }
+            checked += 1;
+        }
+        println!("{checked} official-encoder files with readable embedded lyrics");
+        assert!(checked > 0);
+    }
 }

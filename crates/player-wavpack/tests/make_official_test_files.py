@@ -29,6 +29,9 @@ SONGS = {"cd16": sys.argv[2], "hires24_96k": sys.argv[3], "hires24_44k": sys.arg
 SRC, REF = OUT + "/src", OUT + "/ref"
 os.makedirs(SRC, exist_ok=True)
 os.makedirs(REF, exist_ok=True)
+LRC = OUT + "/lyrics.lrc"
+with open(LRC, "w", encoding="utf-8", newline="\n") as lrc:
+    lrc.write("[00:01.00]第一行：官方編碼器\n[00:02.50]Second line\n[00:04.00]第三行\n[00:06.00]Fourth line ♪\n")
 ALONE = tempfile.mkdtemp(prefix="wv-alone-")  # the lone .wv copies live outside OUT so a library scan sees no duplicates
 
 
@@ -79,7 +82,8 @@ for name, key, kind, options, lossless, two_file in JOBS:
         if os.path.exists(OUT + "/" + name + extension):
             os.remove(OUT + "/" + name + extension)
     args = ["wavpack", "-q", "-y", "-m", "--allow-huge-tags"] + options
-    args += ["-w", f"Title={name}", "-w", "Artist=MoeTest", "-w", f"Album=WavPack {key}", "-w", "Year=2026"]
+    args += ["--no-utf8-convert", "-w", f"Title={name}", "-w", "Artist=MoeTest", "-w", f"Album=WavPack {key}", "-w", "Year=2026"]
+    args += ["-w", f"Lyrics=@{LRC}"]  # an LRC in the APEv2 `Lyrics` item (the UTF-8 file is stored as it is)
     if covers[key]:
         args += ["--write-binary-tag", f"Cover Art (Front)=@{covers[key]}"]
     started = time.time()
