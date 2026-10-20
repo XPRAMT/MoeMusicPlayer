@@ -45,6 +45,43 @@
   let view = $state<View>({ ...FULL_VIEW });
   let hover = $state<{ x: number; y: number; wx: number; wy: number; host: HTMLElement } | null>(null);
   let dragOver = $state(false);
+  let toolbarExpanded = $state(false);
+  let toolbarOverflow = $state(false);
+  let toolbarFirstRowHeight = $state(32);
+
+  function measureToolbar(node: HTMLElement, _expanded: boolean) {
+    let frame = 0;
+    const observed = new Set<HTMLElement>();
+    function measure() {
+      frame = 0;
+      const items = Array.from(node.children).filter((item): item is HTMLElement => item instanceof HTMLElement);
+      const gap = parseFloat(getComputedStyle(node).columnGap) || 0;
+      const naturalWidth = items.reduce((sum, item) => sum + item.getBoundingClientRect().width, 0)
+        + Math.max(0, items.length - 1) * gap;
+      toolbarOverflow = naturalWidth > node.clientWidth + 0.5;
+      const firstCenter = items[0] ? items[0].offsetTop + items[0].offsetHeight / 2 : 0;
+      const inFirstRow = (item: HTMLElement) => Math.abs(item.offsetTop + item.offsetHeight / 2 - firstCenter) <= 1;
+      toolbarFirstRowHeight = Math.max(0, ...items.filter(inFirstRow)
+        .map((item) => item.offsetTop + item.offsetHeight));
+      for (const item of items) {
+        item.inert = !toolbarExpanded && !inFirstRow(item);
+        if (!observed.has(item)) { observed.add(item); resize.observe(item); }
+      }
+      for (const item of observed) {
+        if (!items.includes(item)) { resize.unobserve(item); observed.delete(item); }
+      }
+    }
+    function schedule() { if (!frame) frame = requestAnimationFrame(measure); }
+    const resize = new ResizeObserver(schedule);
+    resize.observe(node);
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(node, { childList: true, subtree: true, characterData: true });
+    schedule();
+    return {
+      update: schedule,
+      destroy() { resize.disconnect(); mutations.disconnect(); cancelAnimationFrame(frame); },
+    };
+  }
   let sizer = $state<HTMLDivElement | null>(null);
   let diffUrl = $state<string | null>(null);
   const serial: Record<Side, number> = { A: 0, B: 0 };
@@ -466,7 +503,9 @@
 {/snippet}
 
 <div class="spectrogram-page" class:is-drag-over={dragOver} use:portalToShell>
-  <header class="spectrogram-toolbar">
+  <header class="spectrogram-toolbar" class:has-overflow={toolbarOverflow}>
+    <div class="sg-toolbar-clip" style:max-height={!toolbarExpanded ? `${toolbarFirstRowHeight}px` : undefined}>
+    <div class="sg-toolbar-items" use:measureToolbar={toolbarExpanded}>
     <button type="button" class="sg-button" onclick={() => void pickFile('A')}>{tr("開啟 A")}</button>
     <button type="button" class="sg-button" onclick={() => void pickFile('B')}>{tr("開啟 B")}</button>
     {#if loaded.B}
@@ -506,6 +545,11 @@
         </select>
       </label>
     <label class="sg-inline">{tr("dB 下限")} <input type="number" step="5" min="-200" max="-1" value={settings.dbFloor} onchange={(e) => updateSettings({ dbFloor: Number(e.currentTarget.value) })} /></label>
+    </div>
+    </div>
+    {#if toolbarOverflow}
+      <button type="button" class="sg-button sg-toolbar-toggle" aria-label={tr('設定')} aria-expanded={toolbarExpanded} onclick={() => (toolbarExpanded = !toolbarExpanded)}>{toolbarExpanded ? '▲' : '▼'}</button>
+    {/if}
   </header>
 
   <div class="sg-info-row">
@@ -561,7 +605,12 @@
 <style>
   .spectrogram-page { color-scheme: var(--color-scheme, dark); --sg-surface: color-mix(in srgb, var(--text, #e8e8ee) 10%, transparent); --sg-field: color-mix(in srgb, var(--text, #e8e8ee) 6%, transparent); position: fixed; inset: 0; display: flex; flex-direction: column; gap: 6px; padding: calc(10px + var(--android-safe-top, 0px)) calc(14px + var(--android-safe-right, 0px)) calc(10px + var(--android-safe-bottom, 0px)) calc(14px + var(--android-safe-left, 0px)); background: var(--page, #0b0b10); color: var(--text, #e8e8ee); font-size: 13px; z-index: 1100; }
   .spectrogram-page.is-drag-over { outline: 3px dashed #8a7dff; outline-offset: -6px; }
-  .spectrogram-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .spectrogram-toolbar { position: relative; flex-shrink: 0; }
+  .sg-toolbar-clip { overflow: hidden; }
+  .sg-toolbar-items { position: relative; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .has-overflow .sg-toolbar-items { padding-right: 36px; }
+  .sg-toolbar-items > :global(*) { flex-shrink: 0; white-space: nowrap; }
+  .sg-toolbar-toggle { position: absolute; top: 0; right: 0; width: 30px; padding-inline: 0; }
   .sg-button { background: var(--sg-surface); color: inherit; border: 1px solid rgba(var(--text-rgb, 232, 232, 238), 0.22); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
   .sg-button:hover { background: rgba(var(--accent-rgb, 138, 125, 255), 0.18); }
   .sg-button.is-active { border-color: #8a7dff; }
