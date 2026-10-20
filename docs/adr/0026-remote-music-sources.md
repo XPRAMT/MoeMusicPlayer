@@ -17,9 +17,16 @@ The user wants SMB, WebDAV and FTP sources on Windows and Android: scan them int
 
 ## Decision
 
-### 1. A source describes a connection, never a secret
+### 1. Accounts and sources; passwords are ours, sealed, and portable
 
-`settings.json` gets a new source kind `remote` with `protocol` (`smb` | `webdav` | `ftp`), `host`, `port`, `tls` (`verify` | `pinned:<sha256>` | `off`), `username`, `basePath` (the share and folder, or the WebDAV / FTP directory), `onlyOnWifi` (Android) and a `credentialId`. The **password lives in the platform credential store** (Windows Credential Manager through the `keyring` crate; Android through a Keystore-wrapped file written by the plugin), never in `settings.json`, SQLite, logs or the backup zip. A restored backup shows the source as "needs password".
+A **remote account** is the connection (protocol, host, port, share or base path, user name, TLS mode, "only on Wi-Fi") and a **source** is a folder chosen under an account. `settings.json` gets a `remoteAccounts` list; sources will point at an account by id.
+
+**The operating system does not manage the passwords** (the owner's decision, 2026-10-20: no Windows Credential Manager, no Android Keystore). The app seals them itself (`crates/player-remote/src/secret.rs`, XChaCha20-Poly1305, a fresh random nonce per message):
+
+- **In `settings.json`** a password is only a *device-sealed secret* `v1.<nonce>.<ciphertext>`, keyed by a random 256-bit **device key** in the file `remote-credentials.key` beside the settings (created once, never overwritten, wiped from memory when dropped). The account id is bound in as associated data, so a sealed password cannot be pasted onto another account. A password that is not in sealed form (a hand edit) is dropped on load, never kept. The page never receives a password, only `hasPassword`.
+- **What this protects, and what it does not**: copying `settings.json` alone (a backup, a screenshot, a support request) reveals nothing. Anyone who copies the whole data folder (settings and key file) can read the passwords, because the key has to live somewhere without the operating system; the interface says so.
+- **Moving accounts to another device** is a *passphrase-sealed bundle* `p1.<salt>.<m>.<t>.<p>.<nonce>.<ciphertext>` (Argon2id, 64 MiB / 3 passes by default, costs capped when opening so a crafted file cannot exhaust memory) over the whole account list, passwords in the clear *inside* the bundle only: the **account export file** (`.moeremote`, minimum 8-character passphrase; the host names and user names are inside the sealed part too), and the same bundle as the entry `remote-accounts.moeremote` of a **full backup** when the user gives a passphrase at export. The `settings.json` in a backup never contains a password (not even a sealed one, which would mean nothing on another device). Importing opens the bundle with the passphrase and **re-seals every password with the new device's key**; accounts with the same id are replaced, others added. Without a passphrase the accounts of a backup are restored as "needs a password".
+- A backup or an export file that waits for its passphrase is kept sealed in `import-pending/`; a wrong passphrase changes nothing and can be retried.
 
 ### 2. A remote locator
 
@@ -67,7 +74,7 @@ Settings → Music sources → "Add remote source": protocol → host, port → 
 
 | Phase | Content | Done when |
 | --- | --- | --- |
-| P0 | `player-remote` trait, `RemoteReader` and cache, `MediaLocator::Remote`, registry and credential store, the wizard shell, loopback test servers | the reader serves a local test server byte for byte; the registry round-trips |
+| P0 | `player-remote` trait, `RemoteReader` and cache, `MediaLocator::Remote`, registry and the credential encryption, the wizard shell, loopback test servers | the reader serves a local test server byte for byte; the registry round-trips |
 | P1 | WebDAV and SMB scan + playback on Windows and Android (WebDAV first inside the phase, as it exercises the whole path with the simplest protocol) | a WebDAV folder and an SMB share of real songs scan, play, seek, show covers and lyrics on both platforms |
 | P2 | FTP / FTPS (later, by the owner's choice) | same acceptance |
 | P3 | Cache management UI, next-track prefetch, offline behaviour polish | decided later |
@@ -87,7 +94,7 @@ Real songs from the library are served by loopback servers (a WebDAV server, an 
 
 - A new crate with three protocol clients and their tests; the audio engine's `load(&Path)` becomes a source enum (the largest change, about 140 places in `player-audio-windows`).
 - Every place that assumes a local path must be revisited: tag editing, cover export, "open folder", file association, lyrics sidecars, the backup.
-- The Android plugin gains a credential store and the remote bridge; a metered-network option is needed.
+- The Android plugin gains the remote bridge; a metered-network option is needed. The credentials need no platform plugin (the app seals them itself).
 
 ## Decisions (the owner, 2026-10-20)
 
@@ -95,4 +102,9 @@ Real songs from the library are served by loopback servers (a WebDAV server, an 
 2. **Windows SMB**: the built-in SMB client, the same code as Android.
 3. **Tag editing of remote tracks**: read-only in the first release.
 4. **WebDAV authentication**: Basic and Digest; NTLM and Kerberos are not supported.
-5. **Cache** (default, not asked): a transient block cache bounded at 2 GiB and cleared by the user; remote tracks are not kept for offline listening in the first release.
+5. **Passwords**: managed by the app itself (no operating-system credential store), stored encrypted in `settings.json`, never in plaintext, and accounts can be exported and moved to another device (section 1).
+6. **Cache** (default, not asked): a transient block cache bounded at 2 GiB and cleared by the user; remote tracks are not kept for offline listening in the first release.
+
+## Progress
+
+- Done (2026-10-20): the credential encryption and the account model (`player-remote`), the `remoteAccounts` settings field with its lenient loader, the account commands (list, save, delete, export, import), the account export / import file and the backup integration, all with tests including a restore on a second device. Not done: the user interface, the protocol clients, the reader and cache, the locator and sources, scanning and playback.

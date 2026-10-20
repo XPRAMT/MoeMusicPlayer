@@ -1020,6 +1020,28 @@ pub fn normalize_output_devices(devices: Vec<OutputDeviceEntry>) -> Vec<OutputDe
 }
 
 /// Missing or malformed entries and fields fall back to the defaults one by one.
+/// Remote accounts from a possibly hand-edited file: an invalid entry or a repeated id is skipped, and a stored password
+/// that is not in sealed form is dropped (the account then asks for its password again; plaintext is never kept).
+fn lenient_remote_accounts(value: Option<serde_json::Value>) -> Vec<player_remote::account::RemoteAccount> {
+    let Some(items) = value.as_ref().and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let mut accounts: Vec<player_remote::account::RemoteAccount> = Vec::new();
+    for item in items {
+        let Ok(mut account) = serde_json::from_value::<player_remote::account::RemoteAccount>(item.clone()) else {
+            continue;
+        };
+        if account.id.trim().is_empty() || accounts.iter().any(|existing| existing.id == account.id) {
+            continue;
+        }
+        if account.password.as_deref().is_some_and(|password| !password.starts_with("v1.")) {
+            account.password = None;
+        }
+        accounts.push(account);
+    }
+    accounts
+}
+
 fn lenient_output_devices(value: Option<serde_json::Value>) -> Vec<OutputDeviceEntry> {
     let Some(items) = value.as_ref().and_then(serde_json::Value::as_array) else {
         return Vec::new();
@@ -1545,6 +1567,9 @@ pub struct AppSettings {
     /// Windows folders omitted from source walks. Missing values mean none excluded.
     #[serde(default)]
     pub excluded_folders: Vec<ExcludedFolderEntry>,
+    /// Remote accounts (SMB, WebDAV; ADR 0026). Passwords are stored only in sealed form, never as plaintext.
+    #[serde(default)]
+    pub remote_accounts: Vec<player_remote::account::RemoteAccount>,
     /// Last main-window outer position / inner size / maximized flag (desktop).
     #[serde(default)]
     pub window_geometry: Option<WindowGeometry>,
@@ -1605,6 +1630,7 @@ impl Default for AppSettings {
             source_registry_authoritative: true,
             sources: Vec::new(),
             excluded_folders: Vec::new(),
+            remote_accounts: Vec::new(),
             window_geometry: None,
             shortcuts: ShortcutSettings::default(),
             resume_playback: false,
@@ -2083,6 +2109,7 @@ struct RawSettings {
     source_registry_authoritative: Option<bool>,
     sources: Option<Vec<SourceEntry>>,
     excluded_folders: Option<Vec<ExcludedFolderEntry>>,
+    remote_accounts: Option<serde_json::Value>,
     window_geometry: Option<WindowGeometry>,
     shortcuts: Option<serde_json::Value>,
     resume_playback: Option<bool>,
@@ -2144,6 +2171,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         source_registry_authoritative: raw.source_registry_authoritative.unwrap_or(true),
         sources: raw.sources.unwrap_or_default(),
         excluded_folders: raw.excluded_folders.unwrap_or_default(),
+        remote_accounts: lenient_remote_accounts(raw.remote_accounts),
         window_geometry: raw.window_geometry,
         shortcuts: lenient_shortcuts(raw.shortcuts),
         resume_playback: raw.resume_playback.unwrap_or(false),

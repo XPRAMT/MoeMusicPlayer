@@ -67,6 +67,8 @@ export interface BackupExportResult {
 export interface BackupImportResult {
   imported: string[];
   pending: string[];
+  /** `needsPassphrase` when the file carried remote accounts that wait for their passphrase. */
+  remoteAccounts: 'needsPassphrase' | null;
 }
 
 export interface ThemePreferences {
@@ -687,7 +689,7 @@ interface IpcContract {
   update_get_state: { args: Record<string, never>; result: UpdateState };
   update_check: { args: { manual?: boolean }; result: UpdateState };
   update_ignore: { args: Record<string, never>; result: UpdateState };
-  backup_export: { args: Record<string, never>; result: BackupExportResult | null };
+  backup_export: { args: { remotePassphrase?: string | null }; result: BackupExportResult | null };
   backup_import: { args: Record<string, never>; result: BackupImportResult | null };
   backup_pending: { args: Record<string, never>; result: string[] };
   update_download: { args: { mode: UpdateInstallMode }; result: UpdateState };
@@ -736,6 +738,38 @@ interface IpcContract {
     result: AndroidAllFilesAccessStatus | null;
   };
   android_request_all_files_access: {
+    args: Record<string, never>;
+    result: void;
+  };
+  remote_accounts_list: {
+    args: Record<string, never>;
+    result: RemoteAccountView[];
+  };
+  remote_account_save: {
+    args: { input: RemoteAccountInput };
+    result: RemoteAccountView;
+  };
+  remote_account_delete: {
+    args: { id: string };
+    result: boolean;
+  };
+  remote_accounts_export: {
+    args: { passphrase: string };
+    result: string | null;
+  };
+  remote_accounts_import: {
+    args: { passphrase: string };
+    result: RemoteAccountsImportResult | null;
+  };
+  backup_remote_pending: {
+    args: Record<string, never>;
+    result: boolean;
+  };
+  backup_remote_accounts_import: {
+    args: { passphrase: string };
+    result: RemoteAccountsImportResult;
+  };
+  backup_remote_accounts_discard: {
     args: Record<string, never>;
     result: void;
   };
@@ -1163,6 +1197,39 @@ interface IpcContract {
 }
 
 export type IpcCommand = keyof IpcContract;
+
+export type RemoteTlsMode = { mode: 'verify' } | { mode: 'pinned'; sha256: string } | { mode: 'off' };
+
+/** A remote account as the page sees it: never the password, only whether one is stored (ADR 0026). */
+export type RemoteAccountView = {
+  id: string;
+  name: string;
+  protocol: 'webdav' | 'smb';
+  host: string;
+  port: number | null;
+  path: string;
+  username: string;
+  hasPassword: boolean;
+  tls: RemoteTlsMode;
+  onlyOnWifi: boolean;
+};
+
+export type RemoteAccountInput = {
+  /** Null creates a new account. */
+  id: string | null;
+  name: string;
+  protocol: 'webdav' | 'smb';
+  host: string;
+  port: number | null;
+  path: string;
+  username: string;
+  /** Null keeps the stored password, an empty string removes it, anything else replaces it. */
+  password: string | null;
+  tls: RemoteTlsMode;
+  onlyOnWifi: boolean;
+};
+
+export type RemoteAccountsImportResult = { added: number; updated: number };
 
 /** The sub-folders of a folder, for the Android folder dialog. */
 export type DirectoryListing = {

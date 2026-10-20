@@ -74,6 +74,7 @@ mod android_artwork;
 #[cfg(any(target_os = "android", test))]
 mod android_dsd;
 mod android_folder_browser;
+mod remote_accounts;
 #[cfg(target_os = "android")]
 mod android_path_migration;
 #[cfg(any(target_os = "android", test))]
@@ -11142,6 +11143,9 @@ pub fn run() {
             backup::backup_export,
             backup::backup_import,
             backup::backup_pending,
+            backup::backup_remote_pending,
+            backup::backup_remote_accounts_import,
+            backup::backup_remote_accounts_discard,
             track_details::track_details_get,
             track_details::track_details_cover,
             track_details::track_details_save,
@@ -11260,6 +11264,11 @@ pub fn run() {
             library_remove_source,
             android_pick_folder_source,
             android_folder_browser::android_list_directories,
+            remote_accounts::remote_accounts_list,
+            remote_accounts::remote_account_save,
+            remote_accounts::remote_account_delete,
+            remote_accounts::remote_accounts_export,
+            remote_accounts::remote_accounts_import,
             android_folder_browser::android_folder_picker_result,
             library_sync,
             playback_get_snapshot,

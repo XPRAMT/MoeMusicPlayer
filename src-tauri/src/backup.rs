@@ -26,6 +26,9 @@ const BACKGROUND_DIRECTORY: &str = "background";
 pub const IMPORT_DIRECTORY: &str = "import-pending";
 pub const BEFORE_IMPORT_DIRECTORY: &str = "before-import";
 const READY_NAME: &str = "READY.json";
+/// The passphrase-sealed remote accounts of a backup (also the extension of a stand-alone account export).
+const REMOTE_NAME: &str = "remote-accounts.moeremote";
+const MAX_REMOTE_BYTES: u64 = 1024 * 1024;
 
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_LIBRARY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -85,6 +88,9 @@ pub struct ImportResult {
     pub imported: Vec<String>,
     /// Everything waiting to be applied at the next start (this import and earlier ones).
     pub pending: Vec<String>,
+    /// `needsPassphrase` when the file carried remote accounts that wait for their passphrase (see
+    /// [`backup_remote_accounts_import`]).
+    pub remote_accounts: Option<String>,
 }
 
 pub fn platform_name() -> &'static str {
@@ -138,19 +144,36 @@ fn iso_stamp(epoch_seconds: u64) -> String {
 
 // ------------------------------------------------------------------------------------------------ export
 
+/// `settings.json` with the stored remote-account passwords removed (the accounts stay, as "needs a password").
+fn settings_without_passwords(settings: &Path) -> Result<Vec<u8>, String> {
+    let bytes = fs::read(settings).map_err(|error| format!("無法讀取 settings.json：{error}"))?;
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|error| format!("settings.json 無法讀取：{error}"))?;
+    if let Some(accounts) = json.get_mut("remoteAccounts").and_then(serde_json::Value::as_array_mut) {
+        for account in accounts {
+            if let Some(object) = account.as_object_mut() {
+                object.remove("password");
+            }
+        }
+    }
+    serde_json::to_vec_pretty(&json).map_err(|error| error.to_string())
+}
+
 /// Writes the backup zip. `library_snapshot` is a finished copy of the database (not the live file).
+/// `remote_export` is the text of an account export (passwords sealed under the user's passphrase), when there is one.
 pub fn write_backup_zip(
     data_dir: &Path,
     library_snapshot: &Path,
     output: &Path,
     build_version: &str,
     epoch_seconds: u64,
+    remote_export: Option<&str>,
 ) -> Result<u64, String> {
     let file = fs::File::create(output).map_err(|error| format!("無法建立備份檔：{error}"))?;
     let mut zip = zip::ZipWriter::new(file);
     let deflated = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
-    let mut add = |zip: &mut zip::ZipWriter<fs::File>, name: &str, source: &Path| -> Result<(), String> {
+    let add = |zip: &mut zip::ZipWriter<fs::File>, name: &str, source: &Path| -> Result<(), String> {
         zip.start_file(name, deflated).map_err(|error| error.to_string())?;
         let mut input = fs::File::open(source).map_err(|error| format!("無法讀取 {name}：{error}"))?;
         std::io::copy(&mut input, zip).map_err(|error| format!("寫入 {name} 失敗：{error}"))?;
@@ -173,7 +196,16 @@ pub fn write_backup_zip(
     if !settings.is_file() {
         return Err("找不到 settings.json。".to_owned());
     }
-    add(&mut zip, SETTINGS_NAME, &settings)?;
+    // The passwords in settings.json are sealed with this device's key and mean nothing elsewhere: the copy in the backup
+    // has none. The accounts' passwords travel in the passphrase-sealed entry below, when the user gave a passphrase.
+    zip.start_file(SETTINGS_NAME, deflated).map_err(|error| error.to_string())?;
+    zip.write_all(&settings_without_passwords(&settings)?)
+        .map_err(|error| format!("寫入 {SETTINGS_NAME} 失敗：{error}"))?;
+    if let Some(remote) = remote_export {
+        zip.start_file(REMOTE_NAME, deflated).map_err(|error| error.to_string())?;
+        zip.write_all(remote.as_bytes())
+            .map_err(|error| format!("寫入 {REMOTE_NAME} 失敗：{error}"))?;
+    }
     add(&mut zip, LIBRARY_NAME, library_snapshot)?;
     let favourites = data_dir.join(FAVOURITES_NAME);
     if favourites.is_file() {
@@ -311,7 +343,7 @@ fn background_file_name(entry: &str) -> Option<String> {
 }
 
 /// Stages a backup zip. Returns the parts it held.
-fn stage_zip(data_dir: &Path, archive: &Path, platform: &str) -> Result<Vec<Part>, String> {
+fn stage_zip(data_dir: &Path, archive: &Path, platform: &str) -> Result<(Vec<Part>, bool), String> {
     let file = fs::File::open(archive).map_err(|error| error.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|error| format!("不是有效的備份壓縮檔：{error}"))?;
     // Read the manifest first.
@@ -337,6 +369,7 @@ fn stage_zip(data_dir: &Path, archive: &Path, platform: &str) -> Result<Vec<Part
     }
     // Every entry must be one we know; anything else (or a path that tries to leave the folder) refuses the file.
     let mut plan: Vec<(usize, Part, Option<String>, u64)> = Vec::new();
+    let mut remote_entry: Option<usize> = None;
     let mut background_files = 0;
     for index in 0..zip.len() {
         let entry = zip.by_index(index).map_err(|error| error.to_string())?;
@@ -346,6 +379,10 @@ fn stage_zip(data_dir: &Path, archive: &Path, platform: &str) -> Result<Vec<Part
         }
         let (part, background, limit) = match name.as_str() {
             MANIFEST_NAME => continue,
+            REMOTE_NAME => {
+                remote_entry = Some(index);
+                continue;
+            }
             SETTINGS_NAME => (Part::Settings, None, MAX_SETTINGS_BYTES),
             LIBRARY_NAME => (Part::Library, None, MAX_LIBRARY_BYTES),
             FAVOURITES_NAME => (Part::Favourites, None, MAX_FAVOURITES_BYTES),
@@ -387,7 +424,17 @@ fn stage_zip(data_dir: &Path, archive: &Path, platform: &str) -> Result<Vec<Part
     })();
     let _ = fs::remove_dir_all(directory.join(".incoming"));
     result?;
-    Ok(parts)
+    // The accounts wait, sealed, for the passphrase the user is asked for next.
+    let mut has_remote = false;
+    if let Some(index) = remote_entry {
+        let mut entry = zip.by_index(index).map_err(|error| error.to_string())?;
+        if entry.size() > MAX_REMOTE_BYTES {
+            return Err("備份檔內的檔案超過大小上限。".to_owned());
+        }
+        copy_limited(&mut entry, &directory.join(REMOTE_NAME), MAX_REMOTE_BYTES)?;
+        has_remote = true;
+    }
+    Ok((parts, has_remote))
 }
 
 /// Stages one file the user picked: a backup zip, or `settings.json`, the library database or `MyLove.m3u8`.
@@ -409,8 +456,20 @@ pub fn stage_import(data_dir: &Path, source: &Path, platform: &str) -> Result<Im
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     fs::create_dir_all(pending_directory(data_dir)).map_err(|error| error.to_string())?;
+    let mut remote_waiting = false;
     let parts = if is_zip {
-        stage_zip(data_dir, source, platform)?
+        let (parts, has_remote) = stage_zip(data_dir, source, platform)?;
+        remote_waiting = has_remote;
+        parts
+    } else if extension == "moeremote" {
+        // A stand-alone account export: it only waits for its passphrase.
+        if size > MAX_REMOTE_BYTES {
+            return Err("檔案超過大小上限。".to_owned());
+        }
+        let mut input = fs::File::open(source).map_err(|error| error.to_string())?;
+        copy_limited(&mut input, &pending_directory(data_dir).join(REMOTE_NAME), MAX_REMOTE_BYTES)?;
+        remote_waiting = true;
+        Vec::new()
     } else {
         let (part, limit) = match extension.as_str() {
             "json" => (Part::Settings, MAX_SETTINGS_BYTES),
@@ -431,6 +490,7 @@ pub fn stage_import(data_dir: &Path, source: &Path, platform: &str) -> Result<Im
     Ok(ImportResult {
         imported: parts.iter().map(|part| part.id().to_owned()).collect(),
         pending,
+        remote_accounts: remote_waiting.then(|| "needsPassphrase".to_owned()),
     })
 }
 
@@ -554,8 +614,39 @@ pub async fn backup_export(
     app: AppHandle,
     window: tauri::WebviewWindow,
     state: tauri::State<'_, crate::AppState>,
+    remote_passphrase: Option<String>,
 ) -> Result<Option<ExportResult>, String> {
     let data_dir = crate::user_data_directory(&state)?;
+    // The remote accounts go into the backup, passwords included, only under a passphrase the user typed.
+    let remote_export = match remote_passphrase.filter(|passphrase| !passphrase.is_empty()) {
+        Some(passphrase) => {
+            if passphrase.chars().count() < 8 {
+                return Err("匯出密碼至少需要 8 個字元。".to_owned());
+            }
+            let has_accounts = !state
+                .settings
+                .snapshot()
+                .map_err(|error| error.to_string())?
+                .remote_accounts
+                .is_empty();
+            if has_accounts {
+                let (settings, data_dir) = (state.settings.clone(), data_dir.clone());
+                Some(
+                    blocking(move || {
+                        let vault = player_remote::account::CredentialVault::open(
+                            &data_dir.join(crate::remote_accounts::KEY_FILE_NAME),
+                        )
+                        .map_err(|error| error.to_string())?;
+                        crate::remote_accounts::export_text(&settings, &vault, &passphrase)
+                    })
+                    .await?,
+                )
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
     let _work = crate::enter_database_work(&state)?;
     let database = state
         .database
@@ -572,7 +663,11 @@ pub async fn backup_export(
         database
             .snapshot_to(&snapshot)
             .map_err(|error| format!("無法複製曲庫資料庫：{error}"))?;
-        blocking(move || write_backup_zip(&data_dir, &snapshot, &archive, env!("MOE_BUILD_VERSION"), epoch)).await
+        let remote_export = remote_export.clone();
+        blocking(move || {
+            write_backup_zip(&data_dir, &snapshot, &archive, env!("MOE_BUILD_VERSION"), epoch, remote_export.as_deref())
+        })
+        .await
     };
     let _ = fs::remove_file(&snapshot);
     let size = match build {
@@ -665,6 +760,7 @@ pub async fn backup_import(
     blocking(move || {
         let mut imported: Vec<String> = Vec::new();
         let mut pending: Vec<String> = Vec::new();
+        let mut remote_accounts: Option<String> = None;
         for (path, temporary) in &picked {
             let result = stage_import(&data_dir, path, platform_name());
             if *temporary {
@@ -677,10 +773,97 @@ pub async fn backup_import(
                 }
             }
             pending = result.pending;
+            remote_accounts = remote_accounts.or(result.remote_accounts);
         }
-        Ok(Some(ImportResult { imported, pending }))
+        Ok(Some(ImportResult { imported, pending, remote_accounts }))
     })
     .await
+}
+
+/// Whether remote accounts from an import still wait for their passphrase.
+#[tauri::command]
+pub fn backup_remote_pending(state: tauri::State<'_, crate::AppState>) -> bool {
+    crate::user_data_directory(&state)
+        .map(|data_dir| pending_directory(&data_dir).join(REMOTE_NAME).is_file())
+        .unwrap_or(false)
+}
+
+/// Opens the waiting remote accounts with `passphrase` and adds them: into the staged `settings.json` of a backup that
+/// waits for the next start, else into the current settings. A wrong passphrase leaves everything waiting.
+#[tauri::command]
+pub async fn backup_remote_accounts_import(
+    state: tauri::State<'_, crate::AppState>,
+    passphrase: String,
+) -> Result<crate::remote_accounts::RemoteAccountsImportResult, String> {
+    let data_dir = crate::user_data_directory(&state)?;
+    let settings = state.settings.clone();
+    blocking(move || {
+        let waiting = pending_directory(&data_dir).join(REMOTE_NAME);
+        let text = fs::read_to_string(&waiting).map_err(|_| "沒有等待輸入密碼的遠端帳號。".to_owned())?;
+        let vault = player_remote::account::CredentialVault::open(&data_dir.join(crate::remote_accounts::KEY_FILE_NAME))
+            .map_err(|error| error.to_string())?;
+        let staged_settings = pending_directory(&data_dir).join(SETTINGS_NAME);
+        let result = if read_pending(&data_dir).parts.iter().any(|part| part == "settings") && staged_settings.is_file() {
+            merge_into_staged_settings(&staged_settings, &vault, &text, &passphrase)?
+        } else {
+            crate::remote_accounts::import_text(&settings, &vault, &text, &passphrase)?
+        };
+        let _ = fs::remove_file(&waiting);
+        Ok(result)
+    })
+    .await
+}
+
+/// Forgets remote accounts that were waiting for a passphrase.
+#[tauri::command]
+pub fn backup_remote_accounts_discard(state: tauri::State<'_, crate::AppState>) -> Result<(), String> {
+    let data_dir = crate::user_data_directory(&state)?;
+    let _ = fs::remove_file(pending_directory(&data_dir).join(REMOTE_NAME));
+    Ok(())
+}
+
+/// Adds the accounts of an export to the `settings.json` that waits for the next start (same id: replaced).
+fn merge_into_staged_settings(
+    staged: &Path,
+    vault: &player_remote::account::CredentialVault,
+    text: &str,
+    passphrase: &str,
+) -> Result<crate::remote_accounts::RemoteAccountsImportResult, String> {
+    let accounts = vault.import(text, passphrase).map_err(|error| error.to_string())?;
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&fs::read(staged).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("settings.json 無法讀取：{error}"))?;
+    let object = json
+        .as_object_mut()
+        .ok_or_else(|| "settings.json 的格式不正確。".to_owned())?;
+    let list = object
+        .entry("remoteAccounts")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let list = list
+        .as_array_mut()
+        .ok_or_else(|| "settings.json 的遠端帳號格式不正確。".to_owned())?;
+    let (mut added, mut updated) = (0, 0);
+    for account in &accounts {
+        let value = serde_json::to_value(account).map_err(|error| error.to_string())?;
+        match list.iter().position(|item| item.get("id").and_then(serde_json::Value::as_str) == Some(account.id.as_str())) {
+            Some(index) => {
+                list[index] = value;
+                updated += 1;
+            }
+            None => {
+                list.push(value);
+                added += 1;
+            }
+        }
+    }
+    let temporary = staged.with_extension("json.merge");
+    fs::write(&temporary, serde_json::to_vec_pretty(&json).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    validate(Part::Settings, &temporary).inspect_err(|_| {
+        let _ = fs::remove_file(&temporary);
+    })?;
+    fs::rename(&temporary, staged).map_err(|error| error.to_string())?;
+    Ok(crate::remote_accounts::RemoteAccountsImportResult { added, updated })
 }
 
 /// The files to import with a flag telling whether the path is a temporary copy to delete afterwards.
@@ -696,7 +879,7 @@ async fn pick_import_files(
         .file()
         .set_parent(window)
         .set_title("匯入設定與曲庫")
-        .add_filter("備份壓縮檔或其中的檔案", &["zip", "json", "sqlite3", "m3u8"])
+        .add_filter("備份壓縮檔或其中的檔案", &["zip", "json", "sqlite3", "m3u8", "moeremote"])
         .blocking_pick_files();
     let mut files = Vec::new();
     for item in selected.unwrap_or_default() {
@@ -748,6 +931,141 @@ async fn pick_import_files(
     _work: &Path,
 ) -> Result<Vec<(PathBuf, bool)>, String> {
     Err("此平台尚未支援匯入。".to_owned())
+}
+
+/// The largest text file read through [`read_text_file`] (an account export is a few kilobytes).
+const MAX_TEXT_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Save `text` as a file chosen with the system dialog (a save dialog on Windows, the document picker on Android).
+/// Returns false when the dialog was cancelled.
+pub(crate) async fn save_text_file(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    text: &str,
+    file_name: &str,
+    title: &str,
+    extension: &str,
+) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        let selected = app
+            .dialog()
+            .file()
+            .set_parent(window)
+            .set_title(title)
+            .set_file_name(file_name)
+            .add_filter(title, &[extension])
+            .blocking_save_file();
+        let Some(selected) = selected else {
+            return Ok(false);
+        };
+        let target = selected
+            .into_path()
+            .map_err(|error| format!("無法取得檔案路徑：{error}"))?;
+        fs::write(&target, text).map_err(|error| format!("寫入失敗：{error}"))?;
+        Ok(true)
+    }
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_media_index::MediaIndexExt;
+        let _ = (window, title, extension);
+        let work = work_directory(app)?;
+        let (app, text, file_name) = (app.clone(), text.to_owned(), file_name.to_owned());
+        blocking(move || {
+            let temporary = work.join(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
+            fs::write(&temporary, &text).map_err(|error| format!("寫入失敗：{error}"))?;
+            let result = (|| {
+                let Some(uri) = app
+                    .media_index()
+                    .pick_create_document(&file_name, "application/octet-stream")
+                    .map_err(|error| error.to_string())?
+                else {
+                    return Ok(false);
+                };
+                app.media_index()
+                    .copy_file_to_uri(&temporary, &uri)
+                    .map_err(|error| format!("寫入失敗：{error}"))?;
+                Ok(true)
+            })();
+            let _ = fs::remove_file(&temporary);
+            result
+        })
+        .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = (app, window, text, file_name, title, extension);
+        Err("此平台尚未支援匯出。".to_owned())
+    }
+}
+
+/// Read a small text file chosen with the system dialog. `None` when the dialog was cancelled.
+pub(crate) async fn read_text_file(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    title: &str,
+    extension: &str,
+) -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        let selected = app
+            .dialog()
+            .file()
+            .set_parent(window)
+            .set_title(title)
+            .add_filter(title, &[extension])
+            .blocking_pick_file();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| format!("無法取得檔案路徑：{error}"))?;
+        read_limited_text(&path).map(Some)
+    }
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_media_index::MediaIndexExt;
+        let _ = (window, title, extension);
+        let work = work_directory(app)?;
+        let app = app.clone();
+        blocking(move || {
+            let Some((uri, _name)) = app
+                .media_index()
+                .pick_open_document(&["*/*"])
+                .map_err(|error| error.to_string())?
+            else {
+                return Ok(None);
+            };
+            let destination = work.join(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
+            let copied = app
+                .media_index()
+                .copy_uri_to_file(&uri, &destination, MAX_TEXT_FILE_BYTES)
+                .map_err(|error| format!("讀取檔案失敗：{error}"));
+            let text = copied.and_then(|_| read_limited_text(&destination));
+            let _ = fs::remove_file(&destination);
+            text.map(Some)
+        })
+        .await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = (app, window, title, extension);
+        Err("此平台尚未支援匯入。".to_owned())
+    }
+}
+
+fn read_limited_text(path: &Path) -> Result<String, String> {
+    let size = fs::metadata(path)
+        .map_err(|error| format!("無法讀取檔案：{error}"))?
+        .len();
+    if size == 0 || size > MAX_TEXT_FILE_BYTES {
+        return Err("檔案是空的或太大。".to_owned());
+    }
+    String::from_utf8(fs::read(path).map_err(|error| format!("無法讀取檔案：{error}"))?)
+        .map_err(|_| "檔案不是有效的文字。".to_owned())
 }
 
 /// The parts waiting for the next start (shown again when Settings → About is reopened).
@@ -804,7 +1122,7 @@ mod tests {
         let snapshot = scratch.0.join("snapshot.sqlite3");
         database.snapshot_to(&snapshot).unwrap();
         let archive = scratch.0.join("backup.zip");
-        write_backup_zip(data, &snapshot, &archive, "26.10.19", 1_792_400_000).unwrap();
+        write_backup_zip(data, &snapshot, &archive, "26.10.19", 1_792_400_000, None).unwrap();
         archive
     }
 
@@ -917,5 +1235,134 @@ mod tests {
             assert!(stage_import(&target, &path, platform_name()).is_err(), "{entry}");
         }
         assert!(pending_parts(&target).is_empty());
+    }
+
+    /// A data folder with two remote accounts (`pw-one`, `pw-two`) sealed under this machine's key; returns the vault.
+    fn data_with_accounts(scratch: &Scratch, marker: &str) -> (PathBuf, player_remote::account::CredentialVault) {
+        use crate::remote_accounts::{save_account, RemoteAccountInput};
+        use player_remote::account::{CredentialVault, RemoteProtocol, TlsMode};
+        let data = data_folder(scratch, marker);
+        let store = SettingsStore::open(data.join(SETTINGS_NAME), AppSettings::default()).unwrap();
+        let vault = CredentialVault::open(&data.join(crate::remote_accounts::KEY_FILE_NAME)).unwrap();
+        for (name, password) in [("NAS 一", "pw-one"), ("NAS 二", "pw-two")] {
+            save_account(
+                &store,
+                &vault,
+                RemoteAccountInput {
+                    id: None,
+                    name: name.to_owned(),
+                    protocol: RemoteProtocol::Webdav,
+                    host: "nas.local".to_owned(),
+                    port: None,
+                    path: "/music".to_owned(),
+                    username: "me".to_owned(),
+                    password: Some(password.to_owned()),
+                    tls: TlsMode::Verify,
+                    only_on_wifi: false,
+                },
+            )
+            .unwrap();
+        }
+        (data, vault)
+    }
+
+    fn export_with_remote(scratch: &Scratch, data: &Path, vault: &player_remote::account::CredentialVault, passphrase: Option<&str>) -> PathBuf {
+        let database = player_db::Database::open(data.join(LIBRARY_NAME)).unwrap();
+        let snapshot = scratch.0.join("snapshot-remote.sqlite3");
+        let _ = fs::remove_file(&snapshot);
+        database.snapshot_to(&snapshot).unwrap();
+        let archive = scratch.0.join("backup-remote.zip");
+        let remote = passphrase.map(|passphrase| {
+            let settings = SettingsStore::open(data.join(SETTINGS_NAME), AppSettings::default()).unwrap();
+            crate::remote_accounts::export_text(&settings, vault, passphrase).unwrap()
+        });
+        write_backup_zip(data, &snapshot, &archive, "26.10.19", 1_792_400_000, remote.as_deref()).unwrap();
+        archive
+    }
+
+    fn zip_text(archive: &Path, name: &str) -> String {
+        let mut zip = zip::ZipArchive::new(fs::File::open(archive).unwrap()).unwrap();
+        let mut text = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut text).unwrap();
+        text
+    }
+
+    #[test]
+    fn the_backup_carries_no_password_in_settings_and_the_accounts_only_under_a_passphrase() {
+        let scratch = Scratch::new("remote-export");
+        let (data, vault) = data_with_accounts(&scratch, "a");
+        let without = export_with_remote(&scratch, &data, &vault, None);
+        assert!(!zip_names(&without).contains(&REMOTE_NAME.to_owned()), "no passphrase, no account file");
+        let settings = zip_text(&without, SETTINGS_NAME);
+        assert!(settings.contains("nas.local"), "the accounts themselves stay in settings.json");
+        assert!(!settings.contains("\"password\""), "but never a password, not even a sealed one: {settings}");
+        // The live settings.json still has its sealed passwords.
+        assert!(fs::read_to_string(data.join(SETTINGS_NAME)).unwrap().contains("\"password\": \"v1."));
+
+        let with = export_with_remote(&scratch, &data, &vault, Some("backup passphrase"));
+        assert!(zip_names(&with).contains(&REMOTE_NAME.to_owned()));
+        let sealed = zip_text(&with, REMOTE_NAME);
+        for secret in ["pw-one", "pw-two", "nas.local", "NAS 一"] {
+            assert!(!sealed.contains(secret), "{secret} is readable in the account file");
+        }
+        assert!(!zip_text(&with, SETTINGS_NAME).contains("\"password\""));
+    }
+
+    #[test]
+    fn restoring_on_another_device_brings_the_accounts_back_after_the_passphrase() {
+        let scratch = Scratch::new("remote-restore");
+        let (data_a, vault_a) = data_with_accounts(&scratch, "a");
+        let archive = export_with_remote(&scratch, &data_a, &vault_a, Some("backup passphrase"));
+
+        // Another device: its own data folder and its own device key.
+        let data_b = data_folder(&scratch, "b");
+        let vault_b = player_remote::account::CredentialVault::open(&data_b.join(crate::remote_accounts::KEY_FILE_NAME)).unwrap();
+        let result = stage_import(&data_b, &archive, platform_name()).unwrap();
+        assert_eq!(result.remote_accounts.as_deref(), Some("needsPassphrase"));
+        let waiting = pending_directory(&data_b).join(REMOTE_NAME);
+        assert!(waiting.is_file());
+
+        // The staged settings already list the accounts, without passwords.
+        let staged = pending_directory(&data_b).join(SETTINGS_NAME);
+        let staged_text = fs::read_to_string(&staged).unwrap();
+        assert!(staged_text.contains("nas.local") && !staged_text.contains("\"password\""));
+
+        let text = fs::read_to_string(&waiting).unwrap();
+        assert!(merge_into_staged_settings(&staged, &vault_b, &text, "wrong passphrase").is_err());
+        assert!(!fs::read_to_string(&staged).unwrap().contains("\"password\""), "a wrong passphrase changes nothing");
+        let merged = merge_into_staged_settings(&staged, &vault_b, &text, "backup passphrase").unwrap();
+        assert_eq!(merged, crate::remote_accounts::RemoteAccountsImportResult { added: 0, updated: 2 });
+
+        // At the next start the staged settings are put in place; the passwords open with the new device's key only.
+        apply_pending_import(&data_b).unwrap();
+        let settings = SettingsStore::open(data_b.join(SETTINGS_NAME), AppSettings::default()).unwrap();
+        let accounts = settings.snapshot().unwrap().remote_accounts;
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(&*vault_b.password_of(&accounts[0]).unwrap().unwrap(), "pw-one");
+        assert_eq!(&*vault_b.password_of(&accounts[1]).unwrap().unwrap(), "pw-two");
+        assert!(vault_a.password_of(&accounts[0]).is_err(), "sealed for the new device, not the old one");
+        assert!(!fs::read_to_string(data_b.join(SETTINGS_NAME)).unwrap().contains("pw-"));
+    }
+
+    #[test]
+    fn a_stand_alone_account_export_waits_for_its_passphrase_like_the_one_in_a_backup() {
+        let scratch = Scratch::new("remote-file");
+        let (data_a, vault_a) = data_with_accounts(&scratch, "a");
+        let settings_a = SettingsStore::open(data_a.join(SETTINGS_NAME), AppSettings::default()).unwrap();
+        let text = crate::remote_accounts::export_text(&settings_a, &vault_a, "file passphrase").unwrap();
+        let file = scratch.0.join("accounts.moeremote");
+        fs::write(&file, &text).unwrap();
+
+        let data_b = data_folder(&scratch, "b");
+        let result = stage_import(&data_b, &file, platform_name()).unwrap();
+        assert!(result.imported.is_empty());
+        assert_eq!(result.remote_accounts.as_deref(), Some("needsPassphrase"));
+        assert!(pending_directory(&data_b).join(REMOTE_NAME).is_file());
+        // With no settings waiting for the next start the accounts go straight into the current settings.
+        let settings_b = SettingsStore::open(data_b.join(SETTINGS_NAME), AppSettings::default()).unwrap();
+        let vault_b = player_remote::account::CredentialVault::open(&data_b.join(crate::remote_accounts::KEY_FILE_NAME)).unwrap();
+        let added = crate::remote_accounts::import_text(&settings_b, &vault_b, &text, "file passphrase").unwrap();
+        assert_eq!(added.added, 2);
+        assert_eq!(settings_b.snapshot().unwrap().remote_accounts.len(), 2);
     }
 }
