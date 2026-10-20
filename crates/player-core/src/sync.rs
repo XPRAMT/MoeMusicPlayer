@@ -312,6 +312,7 @@ impl SyncEngine {
         I: MediaIndex + ?Sized,
         R: LibraryRepository,
     {
+        let timing = std::time::Instant::now();
         let mut scan = index.scan_with_progress(
             root,
             &mut |update: MediaScanProgress| {
@@ -334,6 +335,12 @@ impl SyncEngine {
                 );
             },
             cancellation,
+        );
+        eprintln!(
+            "[sync] {:?}: listed {} audio files in {} ms",
+            root.display_name,
+            scan.tracks.len(),
+            timing.elapsed().as_millis()
         );
         let lyric_sidecars = index.take_lyric_sidecars();
         let scans_lyric_sidecars = index.scans_lyric_sidecars();
@@ -450,6 +457,13 @@ impl SyncEngine {
             });
         }
 
+        eprintln!(
+            "[sync] {:?}: compared with the library at {} ms: {} unchanged, {} to read",
+            root.display_name,
+            timing.elapsed().as_millis(),
+            report.unchanged,
+            entries.iter().filter(|entry| entry.needs_read).count()
+        );
         // Pass 2: parse the tracks that need it, on METADATA_READ_THREADS threads when the adapter allows it.
         // Cancellation stops the reading; what is already parsed is kept.
         let todo: Vec<usize> = entries
@@ -523,6 +537,12 @@ impl SyncEngine {
             entries[entry_index].read = results[slot].take();
         }
 
+        eprintln!(
+            "[sync] {:?}: tags read at {} ms ({} files)",
+            root.display_name,
+            timing.elapsed().as_millis(),
+            report.metadata_reads
+        );
         // Pass 3: in track order, turn the results into the sets the repository applies. A track whose parsing was
         // stopped by cancellation is left out; it is read again by the next sync.
         for mut entry in entries {
@@ -636,6 +656,11 @@ impl SyncEngine {
             )
             .map_err(SyncError::Repository)?;
         report.applied = apply.stats;
+        eprintln!(
+            "[sync] {:?}: stored at {} ms",
+            root.display_name,
+            timing.elapsed().as_millis()
+        );
         report.cancelled = cancelled || apply.cancelled;
         if apply.cancelled {
             report.state = Some(SourceScanState::Incomplete {
