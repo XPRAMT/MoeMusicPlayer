@@ -243,7 +243,7 @@ impl ExclusiveBackend {
         position: Duration,
     ) -> Result<Option<Duration>, LoadError> {
         self.dop_fallback = None;
-        if self.config.dsd.settings().dop && crate::dsd::is_dsf_path(path) {
+        if self.config.dsd.settings().dop && crate::dsd::is_dsd_path(path) {
             if let Some(duration) = self.open_dop(path, position)? {
                 return Ok(duration);
             }
@@ -924,6 +924,57 @@ mod tests {
         );
     }
 
+    /// DSD inside WavPack (ADR 0025) reaches the device as DoP with exactly the bits of the DSF it was made from.
+    #[test]
+    fn dsd_inside_wavpack_reaches_the_device_as_dop_with_the_same_bits() {
+        use player_dsd::testing::{modulate, tone};
+        let rate = 2_822_400_u32;
+        let samples = rate as usize / 5 / 16 * 16;
+        let left = modulate(samples, tone(rate, 1_000.0, 0.25));
+        let right = modulate(samples, tone(rate, 2_000.0, 0.25));
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../player-wavpack/tests/fixtures/dsd64.wv");
+        let mut rig = rig(vec![format(176_400, 2, Container::Int24In32)]);
+        dop_on(&rig);
+        rig.backend.load(&path).unwrap();
+        rig.backend.play().unwrap();
+        wait_until("the track to end", || rig.backend.is_empty());
+        std::thread::sleep(Duration::from_millis(40));
+        let exclusive = rig
+            .backend
+            .resampling_info()
+            .expect("info")
+            .exclusive
+            .expect("exclusive info");
+        assert_eq!(exclusive.dop_dsd_rate, Some(2_822_400));
+        assert_eq!(exclusive.dop_fallback, None);
+        assert!(exclusive.bit_perfect && !exclusive.volume_applied);
+
+        let frames = dop_frames(&rig.capture.bytes.lock().unwrap());
+        for (index, frame) in frames.iter().enumerate() {
+            assert_eq!(
+                frame.0,
+                player_dsd::dop::DOP_MARKERS[index & 1],
+                "the marker breaks at frame {index}"
+            );
+        }
+        let first = u16::from_be_bytes([left[0], left[1]]);
+        let start = frames
+            .iter()
+            .position(|frame| frame.1 == first)
+            .expect("the first audio frame");
+        let audio_frames = left.len() / 2;
+        for index in 0..audio_frames {
+            let expected_left = u16::from_be_bytes([left[index * 2], left[index * 2 + 1]]);
+            let expected_right = u16::from_be_bytes([right[index * 2], right[index * 2 + 1]]);
+            assert_eq!(
+                (frames[start + index].1, frames[start + index].2),
+                (expected_left, expected_right),
+                "DSD bits at frame {index}"
+            );
+        }
+    }
+
     #[test]
     fn dop_ignores_the_player_volume() {
         let (path, left, _) = write_dsf("dop-volume", 4000);
@@ -1290,6 +1341,12 @@ mod tests {
             id: Some(device.id.clone()),
             ..OutputDeviceSetting::default()
         }]);
+        // `MOE_WV_DOP=1` plays DSD files as DoP (the device may refuse it and the track is then converted to PCM).
+        if std::env::var("MOE_WV_DOP").is_ok() {
+            let mut settings = config.dsd.settings();
+            settings.dop = true;
+            config.dsd.set(settings);
+        }
         let mut backend = ExclusiveBackend::new(Arc::clone(&config));
         backend.set_volume(0.0).unwrap();
         let files = std::env::var("MOE_WV_PLAY").expect("MOE_WV_PLAY");
@@ -1331,7 +1388,7 @@ mod tests {
             assert!(backend.is_empty(), "{path:?}: playback did not finish");
             let after = backend.resampling_info().unwrap().exclusive.unwrap();
             println!(
-                "{path:?}: exclusive {} bit {} ch at {} Hz (source {:?} Hz, {}), underruns {}",
+                "{path:?}: exclusive {} bit {} ch at {} Hz (source {:?} Hz, {}), DoP {:?} (fallback {:?}), underruns {}",
                 exclusive.bits,
                 exclusive.channels,
                 info.output_rate,
@@ -1341,6 +1398,8 @@ mod tests {
                 } else {
                     "converted"
                 },
+                exclusive.dop_dsd_rate,
+                exclusive.dop_fallback,
                 after.underruns
             );
             assert_eq!(after.underruns, 0, "{path:?}: underruns");

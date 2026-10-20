@@ -1,4 +1,4 @@
-//! The DoP source of the exclusive backend (ADR 0020 P2): a DSF file as a stream of DoP words, carried as `f32` through
+//! The DoP source of the exclusive backend (ADR 0020 P2): a DSF file or DSD inside WavPack as a stream of DoP words, carried as `f32` through
 //! the same sample ring PCM uses (a 24-bit integer is exact in an `f32`, and the render thread writes it back as the
 //! same integer without touching it).
 
@@ -8,7 +8,7 @@ use std::path::Path;
 
 use player_dsd::dop::DopStream;
 use player_dsd::dsf::DsfReader;
-use player_dsd::stream::DsdError;
+use player_dsd::stream::{DsdError, DsdStream};
 
 use super::format::dop_word_to_sample;
 use crate::AudioError;
@@ -16,7 +16,7 @@ use crate::AudioError;
 /// Frames converted per refill.
 const REFILL_FRAMES: usize = 4096;
 
-type FileStream = DopStream<DsfReader<BufReader<File>>>;
+type FileStream = DopStream<Box<dyn DsdStream>>;
 
 /// What a DoP track looks like before it is played.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,20 +62,34 @@ pub(crate) struct DopSource {
 impl DopSource {
     /// Open `path` and start at `frame`.
     pub(crate) fn open(path: &Path, frame: u64) -> Result<(Self, DopTrackInfo), DopOpenError> {
-        let file = File::open(path).map_err(|error| {
-            DopOpenError::Audio(AudioError::FileOpen {
-                path: path.to_path_buf(),
-                message: error.to_string(),
-            })
-        })?;
         let decode_error = |error: DsdError| {
             DopOpenError::Audio(AudioError::Decode {
                 path: path.to_path_buf(),
                 message: error.to_string(),
             })
         };
-        let reader =
-            DsfReader::open(BufReader::with_capacity(256 * 1024, file)).map_err(decode_error)?;
+        let reader: Box<dyn DsdStream> = if crate::dsd::is_dsf_path(path) {
+            let file = File::open(path).map_err(|error| {
+                DopOpenError::Audio(AudioError::FileOpen {
+                    path: path.to_path_buf(),
+                    message: error.to_string(),
+                })
+            })?;
+            Box::new(
+                DsfReader::open(BufReader::with_capacity(256 * 1024, file))
+                    .map_err(decode_error)?,
+            )
+        } else {
+            // DSD inside WavPack (ADR 0025): the same 1-bit stream, so the same DoP words.
+            Box::new(
+                player_wavpack::dsd::WavPackDsdStream::open_path(path).map_err(|error| {
+                    DopOpenError::Audio(AudioError::Decode {
+                        path: path.to_path_buf(),
+                        message: error.to_string(),
+                    })
+                })?,
+            )
+        };
         let mut stream = match DopStream::new(reader) {
             Ok(stream) => stream,
             Err(DsdError::Unsupported(reason)) => return Err(DopOpenError::Unsupported(reason)),

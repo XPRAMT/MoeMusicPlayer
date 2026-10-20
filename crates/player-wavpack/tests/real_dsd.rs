@@ -95,3 +95,45 @@ fn the_converted_pcm_and_seeks_equal_the_dsf() {
         println!("{fraction}: {} samples equal, peak {peak:.3}", common);
     }
 }
+
+#[test]
+#[ignore = "needs MOE_WV_DSD and MOE_WV_DSF"]
+fn the_dop_words_equal_the_dsf_over_the_whole_song_and_after_seeks() {
+    use player_dsd::dop::DopStream;
+    let mut from_wv =
+        DopStream::new(Box::new(WavPackDsdStream::open_path(&wv()).unwrap()) as Box<dyn DsdStream>)
+            .unwrap();
+    let mut from_dsf = DopStream::new(dsf()).unwrap();
+    assert_eq!(from_wv.transport_rate(), from_dsf.transport_rate());
+    assert_eq!(from_wv.total_frames(), from_dsf.total_frames());
+    let started = Instant::now();
+    let (mut a, mut b) = (Vec::new(), Vec::new());
+    let mut total = 0_u64;
+    loop {
+        a.clear();
+        b.clear();
+        let n = from_wv.read_frames(4_096, &mut a).unwrap();
+        let m = from_dsf.read_frames(4_096, &mut b).unwrap();
+        assert_eq!(n, m, "frames at {total}");
+        if n == 0 {
+            break;
+        }
+        assert_eq!(a, b, "DoP words differ near frame {total}");
+        total += n as u64;
+    }
+    println!(
+        "{total} DoP frames at {} Hz identical to the DSF's in {:.1}s",
+        from_wv.transport_rate(),
+        started.elapsed().as_secs_f64()
+    );
+    for fraction in [0.0, 0.123, 0.5, 0.9999] {
+        let frame = (from_dsf.total_frames() as f64 * fraction) as u64;
+        from_wv.seek_to_frame(frame).unwrap();
+        from_dsf.seek_to_frame(frame).unwrap();
+        a.clear();
+        b.clear();
+        from_wv.read_frames(4_096, &mut a).unwrap();
+        from_dsf.read_frames(4_096, &mut b).unwrap();
+        assert_eq!(a, b, "after a seek to frame {frame}");
+    }
+}
