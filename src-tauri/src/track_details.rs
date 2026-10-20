@@ -165,7 +165,7 @@ fn source_from_string(value: &str) -> Result<TrackSource, String> {
 /// Also returns the user-facing file name and location string.
 /// How much of each end of a remote file is fetched to read its tags (they sit at the start of most formats, at the end of
 /// some: ID3v1, APEv2, DSF). A file up to twice this is fetched whole.
-const REMOTE_END_BYTES: u64 = 16 * 1024 * 1024;
+const REMOTE_END_BYTES: u64 = 4 * 1024 * 1024;
 /// The largest remote file fetched whole when its two ends were not enough.
 const REMOTE_WHOLE_LIMIT: u64 = 1024 * 1024 * 1024;
 
@@ -202,8 +202,12 @@ fn fetch_remote(
     if whole && length > REMOTE_WHOLE_LIMIT {
         return Err("遠端檔案太大（超過 1 GiB），無法整首讀取。".to_owned());
     }
-    let directory =
-        std::env::temp_dir().join(format!("moemusicplayer-remote-{}", uuid::Uuid::new_v4()));
+    static CLEANED: std::sync::Once = std::sync::Once::new();
+    let root = std::env::temp_dir().join("moemusicplayer-remote-details");
+    CLEANED.call_once(|| {
+        let _ = std::fs::remove_dir_all(&root);
+    });
+    let directory = root.join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(&directory).map_err(|error| format!("建立暫存資料夾失敗：{error}"))?;
     let name: String = remote_file_name(path)
         .chars()
@@ -241,6 +245,54 @@ fn fetch_remote(
     Ok((scratch, length))
 }
 
+/// The last scratch copy, kept for a short while: the panel asks for the details, the cover (and later the export, the
+/// spectrogram) of the same song one after another, and each must not fetch the file from the server again.
+struct KeptScratch {
+    source_id: player_core::SourceId,
+    path: String,
+    /// The scratch holds the whole file (not only its two ends).
+    whole: bool,
+    length: u64,
+    at: std::time::Instant,
+    scratch: std::sync::Arc<RemoteScratch>,
+}
+
+static KEPT_SCRATCH: std::sync::Mutex<Option<KeptScratch>> = std::sync::Mutex::new(None);
+const KEPT_SCRATCH_FOR: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// A scratch copy of the remote file: the kept one when it is of the same file, recent and complete enough, otherwise a new
+/// one. The lock is held while fetching, so requests that arrive together wait for the first fetch instead of repeating it.
+fn scratch_for(
+    source_id: player_core::SourceId,
+    path: &str,
+    whole: bool,
+) -> Result<(std::sync::Arc<RemoteScratch>, u64), String> {
+    let mut slot = KEPT_SCRATCH
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(kept) = slot.as_ref() {
+        if kept.source_id == source_id
+            && kept.path == path
+            && (kept.whole || !whole)
+            && kept.at.elapsed() < KEPT_SCRATCH_FOR
+        {
+            return Ok((std::sync::Arc::clone(&kept.scratch), kept.length));
+        }
+    }
+    *slot = None;
+    let (scratch, length) = fetch_remote(source_id, path, whole)?;
+    let scratch = std::sync::Arc::new(scratch);
+    *slot = Some(KeptScratch {
+        source_id,
+        path: path.to_owned(),
+        whole: whole || length <= REMOTE_END_BYTES * 2,
+        length,
+        at: std::time::Instant::now(),
+        scratch: std::sync::Arc::clone(&scratch),
+    });
+    Ok((scratch, length))
+}
+
 /// Run `work` on a scratch copy of a remote file. The two ends are tried first; when the format cannot be read from them (a
 /// cover larger than an end, a layout that keeps its metadata in the middle) the whole file is fetched and `work` runs again.
 fn with_remote_file<T>(
@@ -248,12 +300,12 @@ fn with_remote_file<T>(
     path: &str,
     mut work: impl FnMut(&std::path::Path) -> Result<T, String>,
 ) -> Result<(T, u64), String> {
-    let (partial, length) = fetch_remote(source_id, path, false)?;
+    let (partial, length) = scratch_for(source_id, path, false)?;
     match work(&partial.file) {
         Ok(value) => Ok((value, length)),
         Err(first) if length > REMOTE_END_BYTES * 2 && length <= REMOTE_WHOLE_LIMIT => {
             drop(partial);
-            let (whole, length) = fetch_remote(source_id, path, true).map_err(|_| first)?;
+            let (whole, length) = scratch_for(source_id, path, true).map_err(|_| first)?;
             Ok((work(&whole.file)?, length))
         }
         Err(error) => Err(error),
@@ -1056,7 +1108,7 @@ fn spectrogram_dto(
     let (spectrogram, file_name, location) = match source {
         // The spectrogram decodes the whole song: a remote file is fetched whole (not only its two ends), and removed after.
         TrackSource::Remote { source_id, path } => {
-            let (scratch, _) = fetch_remote(*source_id, path, true)?;
+            let (scratch, _) = scratch_for(*source_id, path, true)?;
             let value = render(&scratch.file)?;
             (value, remote_file_name(path), path.clone())
         }
