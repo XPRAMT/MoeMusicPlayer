@@ -694,6 +694,9 @@ interface IpcContract {
   update_get_state: { args: Record<string, never>; result: UpdateState };
   update_check: { args: { manual?: boolean }; result: UpdateState };
   update_ignore: { args: Record<string, never>; result: UpdateState };
+  album_artwork_cache_stats: { args: Record<string, never>; result: RemoteCacheView };
+  album_artwork_cache_set_limit: { args: { limitMb: number }; result: RemoteCacheView };
+  album_artwork_cache_clear: { args: Record<string, never>; result: RemoteCacheView };
   backup_export: { args: { remotePassphrase?: string | null }; result: BackupExportResult | null };
   backup_import: { args: Record<string, never>; result: BackupImportResult | null };
   backup_pending: { args: Record<string, never>; result: string[] };

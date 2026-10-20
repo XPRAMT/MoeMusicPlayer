@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const MAX_THUMBNAIL_BYTES: usize = 2 * 1024 * 1024;
-const MAX_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+/// The most the thumbnail files may take (Settings → Music sources → Cache); set at start-up and when the page changes it.
+static LIMIT_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(500_000_000);
 const PRUNE_EVERY_WRITES: usize = 32;
 const CACHE_DATABASE_NAME: &str = "cache.sqlite3";
 const LEGACY_MIGRATION_KEY: &str = "legacy_index_files_migrated";
@@ -435,6 +436,58 @@ fn prune(directory: &Path, max_bytes: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Change the size limit and delete the oldest thumbnails at once when the folder is over it.
+pub(crate) fn set_limit_bytes(directory: Option<&Path>, bytes: u64) {
+    LIMIT_BYTES.store(bytes, Ordering::Relaxed);
+    if let Some(directory) = directory {
+        let _ = prune(directory, bytes);
+    }
+}
+
+/// What the thumbnail files take now.
+pub(crate) fn used_bytes(directory: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name();
+            name.to_str()
+                .and_then(|name| name.strip_suffix(".jpg"))
+                .is_some_and(valid_hash)
+        })
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.len())
+        .sum()
+}
+
+/// Forget every cached album cover: the selections, the per-track thumbnail references and the thumbnail files. The folder
+/// and the (open) database stay; the covers are made again when the pages ask for them.
+pub(crate) fn clear(directory: &Path) -> Result<u64, String> {
+    let removed = with_database(directory, |connection| {
+        connection
+            .execute_batch("DELETE FROM album_artwork_selections; DELETE FROM track_artwork_refs;")
+            .map_err(|error| format!("清除專輯封面快取索引失敗：{error}"))
+    });
+    removed?;
+    let mut files = 0_u64;
+    if let Ok(entries) = fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // The database and its journal files belong to the open connection.
+            if name.starts_with(CACHE_DATABASE_NAME) || !entry.path().is_file() {
+                continue;
+            }
+            if fs::remove_file(entry.path()).is_ok() {
+                files += 1;
+            }
+        }
+    }
+    Ok(files)
+}
+
 pub(crate) fn put(directory: &Path, sha256: &str, data_base64: &str) -> Result<(), String> {
     let bytes = STANDARD
         .decode(data_base64)
@@ -483,7 +536,7 @@ pub(crate) fn put(directory: &Path, sha256: &str, data_base64: &str) -> Result<(
         .fetch_add(1, Ordering::Relaxed)
         .is_multiple_of(PRUNE_EVERY_WRITES)
     {
-        let _ = prune(directory, MAX_CACHE_BYTES);
+        let _ = prune(directory, LIMIT_BYTES.load(Ordering::Relaxed));
     }
     Ok(())
 }

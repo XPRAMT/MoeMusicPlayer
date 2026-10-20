@@ -50,27 +50,36 @@
     if (tab !== 'local' && !accounts.some((account) => account.id === tab)) tab = 'local';
   });
 
-  // ---- the disk cache of played remote files ----
-  let cache = $state<RemoteCacheView | null>(null);
-  /** The slider while it is dragged (the setting is saved when it is released). */
-  let cacheLimitMb = $state(1000);
+  // ---- the disk caches: played remote files and album cover thumbnails ----
+  type CacheKind = 'remote' | 'cover';
+  const CACHE_COMMANDS = {
+    remote: { get: 'remote_cache_get', set: 'remote_cache_set_limit', clear: 'remote_cache_clear' },
+    cover: { get: 'album_artwork_cache_stats', set: 'album_artwork_cache_set_limit', clear: 'album_artwork_cache_clear' },
+  } as const;
+  let caches = $state<Record<CacheKind, RemoteCacheView | null>>({ remote: null, cover: null });
+  /** The sliders while they are dragged (the setting is saved when one is released). */
+  let cacheLimitsMb = $state<Record<CacheKind, number>>({ remote: 1000, cover: 500 });
   let cacheBusy = $state(false);
 
   async function loadCache(): Promise<void> {
-    try {
-      cache = await invokeCommand('remote_cache_get', {});
-      cacheLimitMb = cache.limitMb;
-    } catch (cause) {
-      error = getErrorText(cause);
+    for (const kind of ['remote', 'cover'] as const) {
+      try {
+        const view = await invokeCommand(CACHE_COMMANDS[kind].get, {});
+        caches[kind] = view;
+        cacheLimitsMb[kind] = view.limitMb;
+      } catch (cause) {
+        error = getErrorText(cause);
+      }
     }
   }
 
-  async function saveCacheLimit(): Promise<void> {
+  async function saveCacheLimit(kind: CacheKind): Promise<void> {
     if (cacheBusy) return;
     cacheBusy = true;
     try {
-      cache = await invokeCommand('remote_cache_set_limit', { limitMb: cacheLimitMb });
-      cacheLimitMb = cache.limitMb;
+      const view = await invokeCommand(CACHE_COMMANDS[kind].set, { limitMb: cacheLimitsMb[kind] });
+      caches[kind] = view;
+      cacheLimitsMb[kind] = view.limitMb;
     } catch (cause) {
       error = getErrorText(cause);
     } finally {
@@ -78,11 +87,13 @@
     }
   }
 
-  async function clearCache(): Promise<void> {
+  async function clearCache(kind: CacheKind): Promise<void> {
     if (cacheBusy) return;
     cacheBusy = true;
     try {
-      cache = await invokeCommand('remote_cache_clear', {});
+      caches[kind] = await invokeCommand(CACHE_COMMANDS[kind].clear, {});
+      // The pages hold the covers they already loaded; they are made again from the files after a reload.
+      if (kind === 'cover') setTimeout(() => window.location.reload(), 400);
     } catch (cause) {
       error = getErrorText(cause);
     } finally {
@@ -504,25 +515,33 @@
   </div>
 {/if}
 
-<section class="remote-sources remote-cache" aria-labelledby="remote-cache-heading">
-  <div class="configured-sources-heading"><strong id="remote-cache-heading">{tr("遠端快取")}</strong><span>{cache ? usedText(cache.usedBytes) : ''}</span></div>
-  <label class="lyrics-preference-range">
-    <span><strong>{tr("快取容量上限")}</strong><output>{gigabytes(cacheLimitMb)}</output></span>
-    <input
-      type="range"
-      min="100"
-      max="5000"
-      step="100"
-      value={cacheLimitMb}
-      aria-label={tr("快取容量上限")}
-      oninput={(event) => (cacheLimitMb = Number(event.currentTarget.value))}
-      onchange={() => void saveCacheLimit()}
-    />
-  </label>
-  <p class="source-muted-note">{tr("播放過的遠端歌曲會暫存在本機；同一首再播放或拖回播過的位置時，不必再向伺服器讀取。超過上限時，先刪除最早存入的內容（先進先出）。")}</p>
-  <div class="source-action-row source-action-buttons source-folder-picker">
-    <button class="soft-button" type="button" disabled={cacheBusy || !cache || cache.usedBytes === 0} onclick={() => void clearCache()}>{tr("清除快取")}</button>
-  </div>
+<section class="remote-sources remote-cache" aria-labelledby="cache-heading">
+  <div class="configured-sources-heading"><strong id="cache-heading">{tr("快取")}</strong></div>
+  {#each [
+    { kind: 'remote', title: tr("遠端快取"), note: tr("播放過的遠端歌曲會暫存在本機；同一首再播放或拖回播過的位置時，不必再向伺服器讀取。超過上限時，先刪除最早存入的內容（先進先出）。") },
+    { kind: 'cover', title: tr("專輯封面快取"), note: tr("專輯卡片與專輯頁的封面縮圖會暫存起來加快顯示。超過上限時，先刪除最早存入的內容；清除後，封面會在顯示時依檔案重新產生。") },
+  ] as item (item.kind)}
+    {@const kind = item.kind as CacheKind}
+    {@const view = caches[kind]}
+    <div class="configured-sources-heading"><strong>{item.title}</strong><span>{view ? usedText(view.usedBytes) : ''}</span></div>
+    <label class="lyrics-preference-range">
+      <span><strong>{tr("快取容量上限")}</strong><output>{gigabytes(cacheLimitsMb[kind])}</output></span>
+      <input
+        type="range"
+        min="100"
+        max="5000"
+        step="100"
+        value={cacheLimitsMb[kind]}
+        aria-label={item.title + ' ' + tr("快取容量上限")}
+        oninput={(event) => (cacheLimitsMb[kind] = Number(event.currentTarget.value))}
+        onchange={() => void saveCacheLimit(kind)}
+      />
+    </label>
+    <p class="source-muted-note">{item.note}</p>
+    <div class="source-action-row source-action-buttons source-folder-picker">
+      <button class="soft-button" type="button" disabled={cacheBusy || !view || view.usedBytes === 0} onclick={() => void clearCache(kind)}>{tr("清除快取")}</button>
+    </div>
+  {/each}
 </section>
 
 <dialog bind:this={formDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-form-title" oncancel={(event) => { event.preventDefault(); closeForm(); }}>

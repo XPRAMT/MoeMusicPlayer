@@ -846,5 +846,8 @@
   "尚未加入播放清單。可選擇 .m3u 或 .m3u8 檔案，清單內的歌曲會加入曲庫。": "No playlist added yet. Choose an .m3u or .m3u8 file; the songs it lists are added to the library.",
   "根目錄": "Root folder",
   "選擇根目錄": "Choose root folder",
-  "沒有可用的根目錄": "No root folder available"
+  "沒有可用的根目錄": "No root folder available",
+  "專輯封面快取": "Album cover cache",
+  "快取": "Cache",
+  "專輯卡片與專輯頁的封面縮圖會暫存起來加快顯示。超過上限時，先刪除最早存入的內容；清除後，封面會在顯示時依檔案重新產生。": "Cover thumbnails of album cards and album pages are kept to show them faster. Over the limit, the oldest are deleted first; after clearing, covers are made again from the files when they are shown."
 }

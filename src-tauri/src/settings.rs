@@ -607,7 +607,14 @@ impl TrackListColumnSettings {
             Album, Artist, AudioFormat, CreatedAt, Duration, PlayCount, Title, Year,
         };
         const REQUIRED: [TrackListColumnId; 8] = [
-            Title, Artist, Album, Year, CreatedAt, AudioFormat, Duration, PlayCount,
+            Title,
+            Artist,
+            Album,
+            Year,
+            CreatedAt,
+            AudioFormat,
+            Duration,
+            PlayCount,
         ];
         let actual = self
             .columns
@@ -618,7 +625,9 @@ impl TrackListColumnSettings {
             || actual.len() != REQUIRED.len()
             || REQUIRED.iter().any(|id| !actual.contains(id))
         {
-            return Err(SettingsError::InvalidData("track list columns are not the original eight".into()));
+            return Err(SettingsError::InvalidData(
+                "track list columns are not the original eight".into(),
+            ));
         }
         Ok(())
     }
@@ -1092,6 +1101,15 @@ pub fn clamp_remote_cache_limit_mb(value: u32) -> u32 {
     (value.clamp(REMOTE_CACHE_MIN_MB, REMOTE_CACHE_MAX_MB) + 50) / 100 * 100
 }
 
+pub fn default_cover_cache_limit_mb() -> u32 {
+    500
+}
+
+/// 100 to 5,000 MB, in steps of 100 (the same range as the remote cache).
+pub fn clamp_cover_cache_limit_mb(value: u32) -> u32 {
+    clamp_remote_cache_limit_mb(value)
+}
+
 /// A folder of a remote server that library scans skip (the remote counterpart of [`ExcludedFolderEntry`]).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1128,19 +1146,28 @@ fn lenient_remote_excluded(value: Option<serde_json::Value>) -> Vec<RemoteExclud
 /// Missing or malformed entries and fields fall back to the defaults one by one.
 /// Remote accounts from a possibly hand-edited file: an invalid entry or a repeated id is skipped, and a stored password
 /// that is not in sealed form is dropped (the account then asks for its password again; plaintext is never kept).
-fn lenient_remote_accounts(value: Option<serde_json::Value>) -> Vec<player_remote::account::RemoteAccount> {
+fn lenient_remote_accounts(
+    value: Option<serde_json::Value>,
+) -> Vec<player_remote::account::RemoteAccount> {
     let Some(items) = value.as_ref().and_then(serde_json::Value::as_array) else {
         return Vec::new();
     };
     let mut accounts: Vec<player_remote::account::RemoteAccount> = Vec::new();
     for item in items {
-        let Ok(mut account) = serde_json::from_value::<player_remote::account::RemoteAccount>(item.clone()) else {
+        let Ok(mut account) =
+            serde_json::from_value::<player_remote::account::RemoteAccount>(item.clone())
+        else {
             continue;
         };
-        if account.id.trim().is_empty() || accounts.iter().any(|existing| existing.id == account.id) {
+        if account.id.trim().is_empty() || accounts.iter().any(|existing| existing.id == account.id)
+        {
             continue;
         }
-        if account.password.as_deref().is_some_and(|password| !password.starts_with("v1.")) {
+        if account
+            .password
+            .as_deref()
+            .is_some_and(|password| !password.starts_with("v1."))
+        {
             account.password = None;
         }
         accounts.push(account);
@@ -1698,6 +1725,10 @@ pub struct AppSettings {
     /// first out. 100 to 5,000, in steps of 100; the default is 1 GB.
     #[serde(default = "default_remote_cache_limit_mb")]
     pub remote_cache_limit_mb: u32,
+    /// How much the disk cache of album cover thumbnails keeps, in MB (decimal). Oldest first. 100 to 5,000, in steps of 100;
+    /// the default is 0.5 GB.
+    #[serde(default = "default_cover_cache_limit_mb")]
+    pub cover_cache_limit_mb: u32,
     /// Last main-window outer position / inner size / maximized flag (desktop).
     #[serde(default)]
     pub window_geometry: Option<WindowGeometry>,
@@ -1761,6 +1792,7 @@ impl Default for AppSettings {
             remote_accounts: Vec::new(),
             remote_excluded_folders: Vec::new(),
             remote_cache_limit_mb: default_remote_cache_limit_mb(),
+            cover_cache_limit_mb: default_cover_cache_limit_mb(),
             window_geometry: None,
             shortcuts: ShortcutSettings::default(),
             resume_playback: false,
@@ -2243,6 +2275,7 @@ struct RawSettings {
     remote_accounts: Option<serde_json::Value>,
     remote_excluded_folders: Option<serde_json::Value>,
     remote_cache_limit_mb: Option<u32>,
+    cover_cache_limit_mb: Option<u32>,
     window_geometry: Option<WindowGeometry>,
     shortcuts: Option<serde_json::Value>,
     resume_playback: Option<bool>,
@@ -2309,6 +2342,10 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         remote_cache_limit_mb: clamp_remote_cache_limit_mb(
             raw.remote_cache_limit_mb
                 .unwrap_or_else(default_remote_cache_limit_mb),
+        ),
+        cover_cache_limit_mb: clamp_cover_cache_limit_mb(
+            raw.cover_cache_limit_mb
+                .unwrap_or_else(default_cover_cache_limit_mb),
         ),
         window_geometry: raw.window_geometry,
         shortcuts: lenient_shortcuts(raw.shortcuts),
@@ -3941,7 +3978,10 @@ mod tests {
         );
         assert_eq!(columns.len(), 9);
         assert_eq!(columns[8].id, TrackListColumnId::Source);
-        assert!(!columns[8].visible, "the source column is new and starts hidden");
+        assert!(
+            !columns[8].visible,
+            "the source column is new and starts hidden"
+        );
         assert_eq!(columns[1].id, TrackListColumnId::Artist);
         assert!(!columns[1].visible);
         assert_eq!(columns[4].id, TrackListColumnId::CreatedAt);
@@ -4739,6 +4779,14 @@ mod tests {
     }
 
     #[test]
+    fn cover_cache_limit_has_the_same_range_and_a_half_gigabyte_default() {
+        assert_eq!(AppSettings::default().cover_cache_limit_mb, 500);
+        assert_eq!(clamp_cover_cache_limit_mb(0), 100);
+        assert_eq!(clamp_cover_cache_limit_mb(60_000), 5_000);
+        assert_eq!(clamp_cover_cache_limit_mb(1_049), 1_000);
+    }
+
+    #[test]
     fn remote_cache_limit_is_a_tenth_of_a_gigabyte_step_between_0_1_and_5_gb() {
         assert_eq!(AppSettings::default().remote_cache_limit_mb, 1_000);
         assert_eq!(clamp_remote_cache_limit_mb(0), 100);
@@ -4748,7 +4796,8 @@ mod tests {
         assert_eq!(clamp_remote_cache_limit_mb(1_050), 1_100);
         // A settings file without the field gets the default; one with a wild value is clamped.
         let loaded: serde_json::Value = serde_json::json!({ "remoteCacheLimitMb": 99_999 });
-        let restored = clamp_remote_cache_limit_mb(loaded["remoteCacheLimitMb"].as_u64().unwrap() as u32);
+        let restored =
+            clamp_remote_cache_limit_mb(loaded["remoteCacheLimitMb"].as_u64().unwrap() as u32);
         assert_eq!(restored, 5_000);
     }
 }

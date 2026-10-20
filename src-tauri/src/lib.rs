@@ -24,8 +24,9 @@ use player_core::{
     MediaSourceError, MediaSourceKind, MediaTrackRecord, Page, PlaybackQueue, PlaybackQueueContext,
     PlaybackQueueEntry, PlaybackQueueSnapshot, PlaylistId, PlaylistListSort, PlaylistPage,
     PlaylistSummary, QueueRepeatMode, QueueTrackListeningStats, SourceId, SourceScanState,
-    SyncCancellation, SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
-    TrackMetadata, TrackMetadataError, TrackSortDirection, TrackSortField, TrackSummary,
+    SyncCancellation, SyncEngine, SyncProgress, SyncReport, TrackFieldFilter, TrackId,
+    TrackIdentity, TrackListSort, TrackMetadata, TrackMetadataError, TrackSortDirection,
+    TrackSortField, TrackSummary,
 };
 use player_db::natural_title_cmp;
 #[cfg(target_os = "windows")]
@@ -74,13 +75,6 @@ mod android_artwork;
 #[cfg(any(target_os = "android", test))]
 mod android_dsd;
 mod android_folder_browser;
-mod remote_accounts;
-mod remote_playlist_sync;
-mod remote_connections;
-#[cfg(any(target_os = "android", test))]
-#[cfg_attr(test, allow(dead_code))]
-mod remote_media;
-mod remote_sources;
 #[cfg(target_os = "android")]
 mod android_path_migration;
 #[cfg(any(target_os = "android", test))]
@@ -92,6 +86,13 @@ mod lyrics_service;
 mod main_background;
 #[cfg(any(target_os = "windows", target_os = "android", test))]
 mod playlist_source_sync;
+mod remote_accounts;
+mod remote_connections;
+#[cfg(any(target_os = "android", test))]
+#[cfg_attr(test, allow(dead_code))]
+mod remote_media;
+mod remote_playlist_sync;
+mod remote_sources;
 #[cfg(target_os = "windows")]
 mod windows_data_directory;
 
@@ -3585,7 +3586,9 @@ async fn album_artwork_selection_ensure(
         // An album with no cover remembered from before remote tracks were told apart from missing ones may only have failed
         // on the network: for an album that has tracks on a server the empty answer is not trusted and the covers are
         // looked for again.
-        let empty_but_remote = cached.as_ref().is_some_and(|selection| selection.track_ids.is_empty())
+        let empty_but_remote = cached
+            .as_ref()
+            .is_some_and(|selection| selection.track_ids.is_empty())
             && state.database.as_ref().is_some_and(|database| {
                 database
                     .album_artwork_candidate_locators(&album_names)
@@ -3642,26 +3645,29 @@ async fn album_artwork_selection_ensure(
     }
     let app_for_scan = app.clone();
     let (selected_ids, may_have_failed) = tauri::async_runtime::spawn_blocking(move || {
-      run_as_bulk_cover_work(|| {
-        let failed = std::cell::Cell::new(false);
-        let artwork = candidate_list
-            .into_iter()
-            .filter_map(|(track_id, locators)| {
-                let bytes = read_album_candidate_artwork(&app_for_scan, &locators, &tree_uris);
-                if bytes.is_none() && !failed.get() && remote_cover_lookup_may_have_failed(&locators) {
-                    failed.set(true);
-                }
-                bytes.map(|bytes| (track_id, bytes))
-            });
-        let selected = if representative {
-            album_artwork_analysis::select_representative_artwork(artwork)
-        } else {
-            album_artwork_analysis::first_artwork(artwork)
+        run_as_bulk_cover_work(|| {
+            let failed = std::cell::Cell::new(false);
+            let artwork = candidate_list
                 .into_iter()
-                .collect()
-        };
-        (selected, failed.get())
-      })
+                .filter_map(|(track_id, locators)| {
+                    let bytes = read_album_candidate_artwork(&app_for_scan, &locators, &tree_uris);
+                    if bytes.is_none()
+                        && !failed.get()
+                        && remote_cover_lookup_may_have_failed(&locators)
+                    {
+                        failed.set(true);
+                    }
+                    bytes.map(|bytes| (track_id, bytes))
+                });
+            let selected = if representative {
+                album_artwork_analysis::select_representative_artwork(artwork)
+            } else {
+                album_artwork_analysis::first_artwork(artwork)
+                    .into_iter()
+                    .collect()
+            };
+            (selected, failed.get())
+        })
     })
     .await
     .map_err(|error| format!("專輯封面候選分析工作失敗：{error}"))?;
@@ -3683,7 +3689,12 @@ async fn album_artwork_selection_ensure(
         track_ids: selected_ids,
         representative,
     };
-    eprintln!("[art] ensure {} representative={} -> {} covers (scanned)", &key[..key.len().min(8)], representative, selection.track_ids.len());
+    eprintln!(
+        "[art] ensure {} representative={} -> {} covers (scanned)",
+        &key[..key.len().min(8)],
+        representative,
+        selection.track_ids.len()
+    );
     album_artwork_cache::put_selection(&directory, &key, &selection)?;
     Ok(Some(selection))
 }
@@ -3771,7 +3782,11 @@ async fn album_artwork_cache_get_for_track(
             return Ok(Response::new(Vec::new()));
         };
         let cached = album_artwork_cache::get_for_track(&directory, &identity)?;
-        eprintln!("[art] get_for_track {} -> {} bytes", &track_id[..track_id.len().min(8)], cached.len());
+        eprintln!(
+            "[art] get_for_track {} -> {} bytes",
+            &track_id[..track_id.len().min(8)],
+            cached.len()
+        );
         // "Missing" remembered for a track on a server may be left from before such tracks were told apart from covers the
         // server failed to deliver: it is not trusted, the cover is read again.
         if cached.as_slice() == [0] && track_may_be_unreachable_on_a_server(state, &track_id) {
@@ -3802,12 +3817,79 @@ async fn album_artwork_cache_put_for_track(
     run_database_work(app, move |state| {
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         let Some(identity) = album_artwork_track_identity(state, &track_id)? else {
-            eprintln!("[art] put_for_track {} has no identity: nothing stored", &track_id[..track_id.len().min(8)]);
+            eprintln!(
+                "[art] put_for_track {} has no identity: nothing stored",
+                &track_id[..track_id.len().min(8)]
+            );
             return Ok(());
         };
-        eprintln!("[art] put_for_track {} stored", &track_id[..track_id.len().min(8)]);
+        eprintln!(
+            "[art] put_for_track {} stored",
+            &track_id[..track_id.len().min(8)]
+        );
         album_artwork_cache::put(&directory, &sha256, &data_base64)?;
         album_artwork_cache::put_track_reference(&directory, &identity, Some(&sha256))
+    })
+    .await
+}
+
+/// The cover thumbnail cache as the page sees it (Settings → Music sources → Cache).
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoverCacheView {
+    limit_mb: u32,
+    used_bytes: u64,
+}
+
+fn cover_cache_view(app: &AppHandle, state: &AppState) -> Result<CoverCacheView, String> {
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    let directory = album_artwork_cache_directory(app, state)?;
+    Ok(CoverCacheView {
+        limit_mb: settings.cover_cache_limit_mb,
+        used_bytes: album_artwork_cache::used_bytes(&directory),
+    })
+}
+
+#[tauri::command]
+async fn album_artwork_cache_stats(app: AppHandle) -> Result<CoverCacheView, String> {
+    let app_for_view = app.clone();
+    run_database_work(app, move |state| cover_cache_view(&app_for_view, state)).await
+}
+
+/// Change the size limit: stored in the settings, applied at once (a smaller limit deletes the oldest thumbnails).
+#[tauri::command]
+async fn album_artwork_cache_set_limit(
+    app: AppHandle,
+    limit_mb: u32,
+) -> Result<CoverCacheView, String> {
+    let limit_mb = settings::clamp_cover_cache_limit_mb(limit_mb);
+    let app_for_view = app.clone();
+    run_database_work(app, move |state| {
+        state
+            .settings
+            .update(|settings| {
+                settings.cover_cache_limit_mb = limit_mb;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+        let directory = album_artwork_cache_directory(&app_for_view, state)?;
+        album_artwork_cache::set_limit_bytes(Some(&directory), u64::from(limit_mb) * 1_000_000);
+        cover_cache_view(&app_for_view, state)
+    })
+    .await
+}
+
+/// Forget every cached album cover. The pages make them again from the files when they are shown.
+#[tauri::command]
+async fn album_artwork_cache_clear(app: AppHandle) -> Result<CoverCacheView, String> {
+    let app_for_view = app.clone();
+    run_database_work(app, move |state| {
+        let directory = album_artwork_cache_directory(&app_for_view, state)?;
+        album_artwork_cache::clear(&directory)?;
+        cover_cache_view(&app_for_view, state)
     })
     .await
 }
@@ -3827,10 +3909,17 @@ async fn album_artwork_cache_mark_missing_for_track(
         // A track on a server is never remembered as without a cover from here: the page cannot tell "no cover" from "the
         // server did not answer", and a wrong "missing" would hide a cover for good.
         if !definitive.unwrap_or(false) && track_may_be_unreachable_on_a_server(state, &track_id) {
-            eprintln!("[art] mark_missing {} skipped (server unreachable)", &track_id[..track_id.len().min(8)]);
+            eprintln!(
+                "[art] mark_missing {} skipped (server unreachable)",
+                &track_id[..track_id.len().min(8)]
+            );
             return Ok(());
         }
-        eprintln!("[art] mark_missing {} definitive={:?}", &track_id[..track_id.len().min(8)], definitive);
+        eprintln!(
+            "[art] mark_missing {} definitive={:?}",
+            &track_id[..track_id.len().min(8)],
+            definitive
+        );
         album_artwork_cache::put_track_reference(&directory, &identity, None)
     })
     .await
@@ -7700,7 +7789,7 @@ where
             },
         )?;
         let mut remote_index =
-        player_remote::index::RemoteMediaIndex::new(Arc::clone(&remote_resolver));
+            player_remote::index::RemoteMediaIndex::new(Arc::clone(&remote_resolver));
         for (remote_index_number, root) in remote_roots.iter().enumerate() {
             let report = SyncEngine::sync_cancellable_with_progress(
                 root,
@@ -8656,7 +8745,14 @@ async fn library_get_track_artwork(
         })
         .await
         .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
-        eprintln!("[art] track_artwork {} -> {}", &track_id[..track_id.len().min(8)], match &artwork { Ok(image) => format!("{} bytes", image.bytes().len()), Err(error) => format!("{error:?}") });
+        eprintln!(
+            "[art] track_artwork {} -> {}",
+            &track_id[..track_id.len().min(8)],
+            match &artwork {
+                Ok(image) => format!("{} bytes", image.bytes().len()),
+                Err(error) => format!("{error:?}"),
+            }
+        );
         match artwork {
             Ok(image) => Ok(Response::new(image.into_bytes())),
             Err(android_artwork::ArtworkError::Missing) => {
@@ -8724,7 +8820,10 @@ fn find_android_artwork(
             oversized = true;
             continue;
         }
-        match android_artwork::image_from_bytes(picture.data(), picture.mime_type().map(|mime| mime.as_str())) {
+        match android_artwork::image_from_bytes(
+            picture.data(),
+            picture.mime_type().map(|mime| mime.as_str()),
+        ) {
             Ok(image) => return Ok(image),
             Err(android_artwork::ArtworkError::Oversized) => oversized = true,
             Err(_) => {}
@@ -11576,6 +11675,9 @@ pub fn run() {
             album_artwork_cache_get_for_track,
             album_artwork_cache_put_for_track,
             album_artwork_cache_mark_missing_for_track,
+            album_artwork_cache_clear,
+            album_artwork_cache_stats,
+            album_artwork_cache_set_limit,
             library_get_artist_page,
             playlist_list,
             playlist_get_page,
@@ -11665,7 +11767,9 @@ pub fn run() {
                 .map_err(|error| error.to_string())?;
             // A backup imported in the last run is put in place now, before the settings and the database are opened.
             match backup::apply_pending_import(&app_data_dir) {
-                Ok(parts) if !parts.is_empty() => eprintln!("已套用匯入的備份：{}", parts.join("、")),
+                Ok(parts) if !parts.is_empty() => {
+                    eprintln!("已套用匯入的備份：{}", parts.join("、"))
+                }
                 Ok(_) => {}
                 Err(error) => eprintln!("無法套用匯入的備份，沿用目前的資料：{error}"),
             }
@@ -11835,6 +11939,10 @@ pub fn run() {
             app.manage(updater::UpdateService::default());
             app.manage(sleep_timer::SleepTimer::default());
             // Every reader of remote files (engine, covers, lyrics) goes through this one provider.
+            album_artwork_cache::set_limit_bytes(
+                None,
+                u64::from(initial_settings.cover_cache_limit_mb) * 1_000_000,
+            );
             let remote_cache = settings.data_directory().and_then(|dir| {
                 player_remote::cache::DiskCache::open(
                     dir.join("remote-cache"),
