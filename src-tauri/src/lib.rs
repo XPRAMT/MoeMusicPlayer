@@ -3628,14 +3628,16 @@ async fn album_artwork_selection_ensure(
     }
 
     let mut candidate_list = candidates.unwrap_or_default();
-    // Picking the representative covers of an album reads the cover of every track. For tracks on a server that is a network
-    // read each, and an album of a hundred songs (or a page of albums) would be hundreds of covers of several MB; the first
-    // few songs are enough to choose from.
-    if candidate_list.iter().any(|(_, locators)| {
-        locators
-            .iter()
-            .any(|locator| matches!(locator, MediaLocator::Remote { .. }))
-    }) {
+    // An album card takes the first cover that can be read and stops; the page of an album (representative) looks through every
+    // song to choose from. A card of an album none of whose songs has a cover would still go through all of them, which for
+    // songs on a server is a network read each: a card stops after the first few.
+    if !representative
+        && candidate_list.iter().any(|(_, locators)| {
+            locators
+                .iter()
+                .any(|locator| matches!(locator, MediaLocator::Remote { .. }))
+        })
+    {
         candidate_list.truncate(8);
     }
     let app_for_scan = app.clone();
