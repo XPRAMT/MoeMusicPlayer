@@ -48,20 +48,50 @@ object ResumeDiagnostics {
     }
   }
 
-  /** The window got the focus: pause and resume the WebView at once, and look at the screen 1.5 s later. */
+  /**
+   * The window got the focus. DIAGNOSIS PHASE (2026-10-21): the repair, pausing and resuming the WebView, waits
+   * [REPAIR_DELAY_MS] so that a base-colour screen stays long enough to be examined from outside (`adb shell dumpsys`
+   * on SurfaceFlinger and the window manager). The screen is sampled 1.5 s and 4.5 s after the focus, the repair is made at
+   * 5 s, and the screen is sampled again 1.5 s after it. Set the delay to 0 to repair at once.
+   */
   fun onWindowFocus(activity: Activity, webView: () -> WebView?) {
-    val view = webView()
-    view?.onPause()
-    view?.onResume()
     val mine = ++generation
-    log(activity, "window focus, WebView onPause + onResume: ${viewState(activity, view)}")
-    handler.postDelayed({
-      if (mine != generation) return@postDelayed
+    log(activity, "window focus: ${viewState(activity, webView())}")
+    fun look(label: String) {
       sample(activity) { result ->
         if (mine != generation) return@sample
-        log(activity, if (result.blank) "BLANK SCREEN: ${result.text}" else "screen ok: ${result.text}")
+        if (result.blank) {
+          log(activity, "BLANK SCREEN ($label): ${result.text}; ${webViewDetail(webView())}")
+        } else {
+          log(activity, "screen ok ($label): ${result.text}")
+        }
       }
-    }, 1500L)
+    }
+    handler.postDelayed({ if (mine == generation) look("focus+1.5s") }, 1500L)
+    handler.postDelayed({ if (mine == generation) look("focus+4.5s, before the repair") }, 4500L)
+    handler.postDelayed({
+      if (mine != generation) return@postDelayed
+      val view = webView()
+      if (view != null && activity.hasWindowFocus()) {
+        view.onPause()
+        view.onResume()
+        log(activity, "REPAIR: WebView onPause + onResume at focus+${REPAIR_DELAY_MS}ms")
+      }
+    }, REPAIR_DELAY_MS)
+    handler.postDelayed({ if (mine == generation) look("after the repair") }, REPAIR_DELAY_MS + 1500L)
+  }
+
+  /** How long after the focus the repair is made; 0 repairs at once. */
+  private const val REPAIR_DELAY_MS = 5000L
+
+  /** What the view and its window look like: for the log of a base-colour screen. */
+  private fun webViewDetail(webView: WebView?): String {
+    if (webView == null) return "no webview"
+    val visible = android.graphics.Rect()
+    val hasVisible = webView.getGlobalVisibleRect(visible)
+    return "attached=${webView.isAttachedToWindow} alpha=${webView.alpha} layerType=${webView.layerType} " +
+      "hardwareAccelerated=${webView.isHardwareAccelerated} globalVisibleRect=${if (hasVisible) visible.toShortString() else "none"} " +
+      "parent=${webView.parent?.javaClass?.simpleName} windowToken=${webView.windowToken != null}"
   }
 
   private fun viewState(activity: Activity, webView: WebView?): String {
