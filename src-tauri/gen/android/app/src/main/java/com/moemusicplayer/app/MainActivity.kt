@@ -43,13 +43,24 @@ class MainActivity : TauriActivity() {
       webView.onResume()
       webView.invalidate()
     }
+    val resumedAt = android.os.SystemClock.elapsedRealtime()
     for (delayMs in longArrayOf(0L, 250L, 1000L, 2500L)) {
       webView.postDelayed({
         webView.evaluateJavascript(
           "(function(){var r=document.documentElement;r.style.willChange='transform';r.style.transform='translateZ(0)';" +
-            "void r.offsetHeight;requestAnimationFrame(function(){r.style.transform='';r.style.willChange='';});})()",
-          null,
-        )
+            "void r.offsetHeight;requestAnimationFrame(function(){r.style.transform='';r.style.willChange='';});" +
+            "return document.visibilityState+' focus='+document.hasFocus();})()",
+        ) { result ->
+          // Diagnostic (logcat tag MoeResume, also in release builds): how long the renderer took to answer and what the
+          // page believes. A page stuck in "hidden" while the activity is resumed draws no frames at all.
+          val waited = android.os.SystemClock.elapsedRealtime() - resumedAt
+          android.util.Log.i("MoeResume", "resume+${waited}ms (nudge at ${delayMs}ms) page=$result")
+          if (result?.contains("hidden") == true) {
+            webView.visibility = View.INVISIBLE
+            webView.visibility = View.VISIBLE
+            webView.onResume()
+          }
+        }
       }, delayMs)
     }
   }
