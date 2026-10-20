@@ -34,11 +34,12 @@ pub fn find_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
         .iter()
         .filter_map(|locator| match locator {
             MediaLocator::FileSystem(path) => Some(path),
-            // Remote tracks read their cover and lyrics through the remote reader, not a local path.
+            // Remote tracks are read separately, through the remote content provider.
             MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
         })
         .collect::<Vec<_>>();
 
+    let remote = remote_tracks(locators);
     let mut oversized = false;
     for path in &paths {
         if let Some(lyrics) = sidecar_lyrics(path, &mut oversized) {
@@ -48,8 +49,24 @@ pub fn find_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
             });
         }
     }
+    for (source_id, path) in &remote {
+        if let Some(lyrics) = remote_sidecar_lyrics(*source_id, path, &mut oversized) {
+            return LyricsLookup::Found(FoundLyrics {
+                provider: LyricProvider::Sidecar,
+                lyrics,
+            });
+        }
+    }
     for path in &paths {
         if let Some(lyrics) = embedded_lyrics(path, &mut oversized) {
+            return LyricsLookup::Found(FoundLyrics {
+                provider: LyricProvider::Embedded,
+                lyrics,
+            });
+        }
+    }
+    for (source_id, path) in &remote {
+        if let Some(lyrics) = remote_embedded_lyrics(*source_id, path, &mut oversized) {
             return LyricsLookup::Found(FoundLyrics {
                 provider: LyricProvider::Embedded,
                 lyrics,
@@ -70,7 +87,7 @@ pub fn find_all_lyrics(locators: &[MediaLocator]) -> Vec<FoundLyrics> {
         .iter()
         .filter_map(|locator| match locator {
             MediaLocator::FileSystem(path) => Some(path),
-            // Remote tracks read their cover and lyrics through the remote reader, not a local path.
+            // Remote tracks are read separately, through the remote content provider.
             MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
         })
         .collect::<Vec<_>>();
@@ -102,7 +119,84 @@ pub fn find_all_lyrics(locators: &[MediaLocator]) -> Vec<FoundLyrics> {
             break;
         }
     }
+    for (source_id, path) in remote_tracks(locators) {
+        if saw_sidecar && saw_embedded {
+            break;
+        }
+        if !saw_sidecar {
+            if let Some(lyrics) = remote_sidecar_lyrics(source_id, path, &mut oversized) {
+                found.push(FoundLyrics {
+                    provider: LyricProvider::Sidecar,
+                    lyrics,
+                });
+                saw_sidecar = true;
+            }
+        }
+        if !saw_embedded {
+            if let Some(lyrics) = remote_embedded_lyrics(source_id, path, &mut oversized) {
+                found.push(FoundLyrics {
+                    provider: LyricProvider::Embedded,
+                    lyrics,
+                });
+                saw_embedded = true;
+            }
+        }
+    }
     found
+}
+
+/// The remote tracks among `locators`: the source and the path under its root.
+fn remote_tracks(locators: &[MediaLocator]) -> Vec<(player_core::SourceId, &str)> {
+    locators
+        .iter()
+        .filter_map(|locator| match locator {
+            MediaLocator::Remote { source_id, path } => Some((*source_id, path.as_str())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The `.lrc` beside a remote track.
+fn remote_sidecar_lyrics(
+    source_id: player_core::SourceId,
+    path: &str,
+    oversized: &mut bool,
+) -> Option<ParsedLyrics> {
+    let sidecar = player_core::remote_with_extension(path, "lrc");
+    let bytes = player_core::read_remote_file_capped(
+        source_id,
+        &sidecar,
+        MAX_LYRIC_PAYLOAD_BYTES as u64,
+    );
+    let Some(bytes) = bytes else {
+        // A present but oversized sidecar is reported like a local one.
+        if let Some(handle) = player_core::remote_content().and_then(|c| c.open(source_id, &sidecar).ok()) {
+            if handle.len > MAX_LYRIC_PAYLOAD_BYTES as u64 {
+                *oversized = true;
+            }
+        }
+        return None;
+    };
+    let text = std::str::from_utf8(&bytes).ok()?;
+    parse_lrc(text)
+        .ok()
+        .filter(|lyrics| !lyrics.lines.is_empty())
+}
+
+/// The lyrics embedded in a remote track's tags.
+fn remote_embedded_lyrics(
+    source_id: player_core::SourceId,
+    path: &str,
+    oversized: &mut bool,
+) -> Option<ParsedLyrics> {
+    let handle = player_core::remote_content()?.open(source_id, path).ok()?;
+    let tagged_file = Probe::new(std::io::BufReader::new(handle.reader))
+        .options(ParseOptions::new().read_properties(false))
+        .guess_file_type()
+        .ok()?
+        .read()
+        .ok()?;
+    lyrics_in_tags(tagged_file.tags(), oversized)
 }
 
 fn sidecar_lyrics(audio_path: &Path, oversized: &mut bool) -> Option<ParsedLyrics> {
@@ -150,8 +244,10 @@ fn embedded_lyrics(path: &Path, oversized: &mut bool) -> Option<ParsedLyrics> {
         .ok()?
         .read()
         .ok()?;
-    let tags = tagged_file.tags();
+    lyrics_in_tags(tagged_file.tags(), oversized)
+}
 
+fn lyrics_in_tags(tags: &[lofty::tag::Tag], oversized: &mut bool) -> Option<ParsedLyrics> {
     for key in [ItemKey::Lyrics, ItemKey::UnsyncLyrics] {
         for raw in tags.iter().filter_map(|tag| tag.get_string(key)) {
             if raw.len() > MAX_LYRIC_PAYLOAD_BYTES {

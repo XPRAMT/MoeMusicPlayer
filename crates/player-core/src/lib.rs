@@ -14,6 +14,7 @@ pub use artwork::{ArtworkImage, MAX_ARTWORK_BYTES, MAX_ARTWORK_DIMENSION, MAX_AR
 pub use filesystem_key::unix_path_from_key;
 #[cfg(unix)]
 pub use filesystem_key::{file_uri_for_path, unix_path_key};
+pub mod remote;
 pub use library::{
     display_track_title, locator_display_file_stem, parse_recording_date, parse_remote_locator_uri,
     recording_date_year, remote_locator_uri, FileFingerprint, LibraryRoot, ListTracksQuery,
@@ -47,3 +48,8 @@ pub use sync::{
 };
 #[cfg(windows)]
 pub use windows_locator::windows_locator_key;
+
+pub use remote::{
+    read_remote_file_capped, remote_content, remote_sibling, remote_with_extension,
+    set_remote_content, RemoteContent, RemoteFileHandle, RemoteStream,
+};

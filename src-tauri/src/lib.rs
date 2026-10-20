@@ -11550,13 +11550,11 @@ pub fn run() {
             let remote_connections: Arc<remote_connections::RemoteConnections> = Arc::default();
             app.manage(updater::UpdateService::default());
             app.manage(sleep_timer::SleepTimer::default());
-            #[cfg(target_os = "windows")]
-            player_audio_windows::remote_input::set_remote_opener(Arc::new(
-                remote_connections::RemotePlayback {
-                    connections: Arc::clone(&remote_connections),
-                    settings: Arc::clone(&settings),
-                },
-            ));
+            // Every reader of remote files (engine, covers, lyrics) goes through this one provider.
+            player_core::set_remote_content(Arc::new(remote_connections::RemoteFiles {
+                connections: Arc::clone(&remote_connections),
+                settings: Arc::clone(&settings),
+            }));
             app.manage(AppState {
                 database,
                 database_path: stored_path.clone(),

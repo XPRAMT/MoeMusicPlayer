@@ -1,18 +1,16 @@
 //! Playing files that are not on this machine (ADR 0026).
 //!
 //! The engine loads a [`Path`]. A remote track is handed over as a *pseudo path* (`moeremote://<source id>/<path>`, built
-//! by `player_core::remote_locator_uri`); every place that opens a file asks this module first, and the app supplies the
-//! [`RemoteOpener`] that turns the pseudo path into an open, cached reader. The engine knows nothing about servers.
+//! by `player_core::remote_locator_uri`); every place that opens a file asks this module first, which reads it through the
+//! provider the app installed with `player_core::set_remote_content`. The engine knows nothing about servers.
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Mutex, PoisonError};
 
 pub use player_wavpack::ReadSeek;
 
 use crate::AudioError;
-
-const REMOTE_PREFIX: &str = "moeremote://";
 
 /// One open remote file: its bytes, how long it is, and the WavPack correction file next to it when there is one.
 pub struct RemoteInput {
@@ -21,22 +19,25 @@ pub struct RemoteInput {
     pub correction: Option<Box<dyn ReadSeek>>,
 }
 
-/// Opens remote files for playback. `locator` is the whole pseudo path.
-pub trait RemoteOpener: Send + Sync {
-    fn open(&self, locator: &str) -> io::Result<RemoteInput>;
-}
-
-static OPENER: RwLock<Option<Arc<dyn RemoteOpener>>> = RwLock::new(None);
-
-/// Install the opener the app provides (once at start-up; a second call replaces it).
-pub fn set_remote_opener(opener: Arc<dyn RemoteOpener>) {
-    *OPENER.write().unwrap_or_else(PoisonError::into_inner) = Some(opener);
-}
-
 /// Whether `path` is a remote pseudo path.
 pub fn is_remote(path: &Path) -> bool {
     path.to_str()
-        .is_some_and(|text| text.starts_with(REMOTE_PREFIX))
+        .is_some_and(|text| text.starts_with("moeremote://"))
+}
+
+/// A shared remote stream as the engine's `Read + Seek + Send`.
+struct Stream(Box<dyn player_core::RemoteStream>);
+
+impl Read for Stream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl Seek for Stream {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.0.seek(position)
+    }
 }
 
 pub(crate) fn open(path: &Path) -> Result<RemoteInput, AudioError> {
@@ -44,15 +45,33 @@ pub(crate) fn open(path: &Path) -> Result<RemoteInput, AudioError> {
         path: path.to_path_buf(),
         message,
     };
-    let opener = OPENER
-        .read()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+    let content = player_core::remote_content()
         .ok_or_else(|| failed("remote playback is not available".to_owned()))?;
-    let locator = path
+    let text = path
         .to_str()
         .ok_or_else(|| failed("the remote location is not text".to_owned()))?;
-    opener.open(locator).map_err(|error| failed(error.to_string()))
+    let Some(player_core::MediaLocator::Remote { source_id, path: relative }) =
+        player_core::parse_remote_locator_uri(text)
+    else {
+        return Err(failed("not a remote location".to_owned()));
+    };
+    let main = content
+        .open(source_id, &relative)
+        .map_err(|error| failed(error.to_string()))?;
+    // A hybrid WavPack file is lossless with its `.wvc` correction file next to it.
+    let correction = if relative.to_ascii_lowercase().ends_with(".wv") {
+        content
+            .open(source_id, &format!("{relative}c"))
+            .ok()
+            .map(|file| Box::new(Stream(file.reader)) as Box<dyn ReadSeek>)
+    } else {
+        None
+    };
+    Ok(RemoteInput {
+        main: Box::new(Stream(main.reader)),
+        len: main.len,
+        correction,
+    })
 }
 
 /// What rodio's decoders read from: a local file or a remote one, `Sync` as rodio requires.
@@ -107,7 +126,7 @@ mod tests {
     }
 
     /// Serves fixtures by name, so a remote pseudo path decodes the same bytes a local path does.
-    struct FixtureOpener;
+    struct FixtureContent;
 
     fn fixture_path(name: &str) -> std::path::PathBuf {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -120,19 +139,31 @@ mod tests {
         }
     }
 
-    impl RemoteOpener for FixtureOpener {
-        fn open(&self, locator: &str) -> io::Result<RemoteInput> {
-            let name = locator
-                .strip_prefix("moeremote://fixtures/")
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown source"))?;
-            let file = std::fs::File::open(fixture_path(name))?;
+    /// The one source id the fixtures belong to.
+    fn fixtures_source() -> player_core::SourceId {
+        player_core::SourceId::parse("00000000-0000-4000-8000-000000000001").unwrap()
+    }
+
+    impl player_core::RemoteContent for FixtureContent {
+        fn open(
+            &self,
+            source_id: player_core::SourceId,
+            path: &str,
+        ) -> io::Result<player_core::RemoteFileHandle> {
+            if source_id != fixtures_source() {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "unknown source"));
+            }
+            let file = std::fs::File::open(fixture_path(path))?;
             let len = file.metadata()?.len();
-            Ok(RemoteInput {
-                main: Box::new(file),
+            Ok(player_core::RemoteFileHandle {
+                reader: Box::new(file),
                 len,
-                correction: None,
             })
         }
+    }
+
+    fn pseudo(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(player_core::remote_locator_uri(fixtures_source(), name))
     }
 
     #[test]
@@ -141,7 +172,7 @@ mod tests {
         use crate::rodio_backend::open_decoder_with;
         use rodio::Source;
 
-        set_remote_opener(Arc::new(FixtureOpener));
+        player_core::set_remote_content(std::sync::Arc::new(FixtureContent));
         // An Opus file and a DSF file written to the temporary folder.
         let opus = format!("moe-remote-{}.opus", std::process::id());
         std::fs::write(
@@ -178,7 +209,7 @@ mod tests {
         ] {
             let local = open_decoder_with(&fixture_path(name), &DsdOptions::default())
                 .unwrap_or_else(|error| panic!("local {name}: {error}"));
-            let remote_path = std::path::PathBuf::from(format!("moeremote://fixtures/{name}"));
+            let remote_path = pseudo(name);
             assert!(is_remote(&remote_path));
             let remote = open_decoder_with(&remote_path, &DsdOptions::default())
                 .unwrap_or_else(|error| panic!("remote {name}: {error}"));
@@ -199,19 +230,19 @@ mod tests {
         use crate::DsdOptions;
         use crate::rodio_backend::open_decoder_with;
 
-        set_remote_opener(Arc::new(FixtureOpener));
+        player_core::set_remote_content(std::sync::Arc::new(FixtureContent));
         let error = open_decoder_with(
-            Path::new("moeremote://fixtures/no-such-file.flac"),
+            &pseudo("no-such-file.flac"),
             &DsdOptions::default(),
         )
         .err()
         .expect("opening fails");
         assert!(matches!(error, AudioError::FileOpen { .. }), "{error}");
         // A pseudo path for a server that was never configured fails the same way, not with a panic.
-        assert!(open_decoder_with(
-            Path::new("moeremote://elsewhere/a.flac"),
-            &DsdOptions::default()
-        )
-        .is_err());
+        let elsewhere = std::path::PathBuf::from(player_core::remote_locator_uri(
+            player_core::SourceId::new(),
+            "a.flac",
+        ));
+        assert!(open_decoder_with(&elsewhere, &DsdOptions::default()).is_err());
     }
 }

@@ -151,30 +151,23 @@ pub(crate) fn none() -> Arc<dyn RemoteResolver> {
     Arc::new(NoRemote)
 }
 
-/// Opens remote files for the Windows audio engine (ADR 0026): the engine hands over `moeremote://<source id>/<path>`, this
+/// Opens remote files for everything that reads them (ADR 0026): the audio engine, the cover and lyrics lookups. It
 /// finds the source's account, reuses its open connection and returns a cached reader over the file.
-#[cfg(target_os = "windows")]
-pub(crate) struct RemotePlayback {
+pub(crate) struct RemoteFiles {
     pub(crate) connections: Arc<RemoteConnections>,
     pub(crate) settings: Arc<crate::settings::SettingsStore>,
 }
 
-#[cfg(target_os = "windows")]
-impl player_audio_windows::remote_input::RemoteOpener for RemotePlayback {
+impl player_core::RemoteContent for RemoteFiles {
     fn open(
         &self,
-        locator: &str,
-    ) -> std::io::Result<player_audio_windows::remote_input::RemoteInput> {
-        use player_audio_windows::remote_input::RemoteInput;
+        source_id: SourceId,
+        path: &str,
+    ) -> std::io::Result<player_core::RemoteFileHandle> {
         use player_remote::fs::open_reader;
         use player_remote::index::join_path;
         use std::io::{Error, ErrorKind};
 
-        let Some(MediaLocator::Remote { source_id, path }) =
-            player_core::parse_remote_locator_uri(locator)
-        else {
-            return Err(Error::new(ErrorKind::InvalidInput, "not a remote location"));
-        };
         let data_dir = self
             .settings
             .data_directory()
@@ -188,21 +181,11 @@ impl player_audio_windows::remote_input::RemoteOpener for RemotePlayback {
             .connections
             .resolver(data_dir, &settings)
             .resolve(source_id)?;
-        let full = join_path(&resolved.base_path, &path);
-        let main = open_reader(resolved.fs.as_ref(), &full)?;
-        let len = main.len();
-        // A hybrid WavPack file is lossless with its `.wvc` correction file next to it.
-        let correction = if full.to_ascii_lowercase().ends_with(".wv") {
-            open_reader(resolved.fs.as_ref(), &format!("{full}c"))
-                .ok()
-                .map(|reader| Box::new(reader) as Box<dyn player_audio_windows::remote_input::ReadSeek>)
-        } else {
-            None
-        };
-        Ok(RemoteInput {
-            main: Box::new(main),
+        let reader = open_reader(resolved.fs.as_ref(), &join_path(&resolved.base_path, path))?;
+        let len = reader.len();
+        Ok(player_core::RemoteFileHandle {
+            reader: Box::new(reader),
             len,
-            correction,
         })
     }
 }
@@ -211,18 +194,18 @@ impl player_audio_windows::remote_input::RemoteOpener for RemotePlayback {
 /// it, a library sync through the shared connection, the playback path of a scanned track, and the reader the audio
 /// engine would get for it. Skipped unless `MOE_SMB_HOST`, `MOE_SMB_SHARE`, `MOE_SMB_FILE` (user name, then password)
 /// and optionally `MOE_SMB_PORT` and `MOE_SMB_DIR` are set; Windows only because the engine's opener is.
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(test)]
 mod real_server_tests {
     use std::io::{Read, Seek, SeekFrom};
     use std::sync::Arc;
 
-    use player_audio_windows::remote_input::RemoteOpener;
+    use player_core::RemoteContent;
     use player_core::{LibraryRoot, ListTracksQuery, MediaLocator, MediaSourceKind, SourceId, SyncEngine};
     use player_db::Database;
     use player_remote::account::{RemoteProtocol, TlsMode};
     use player_remote::index::RemoteMediaIndex;
 
-    use super::{RemoteConnections, RemotePlayback};
+    use super::{RemoteConnections, RemoteFiles};
     use crate::remote_accounts::{save_account, vault, RemoteAccountInput};
     use crate::settings::{AppSettings, SettingsStore, SourceEntry, SourceEntryKind, StoredPath};
 
@@ -320,14 +303,19 @@ mod real_server_tests {
         let path = database.resolve_playable_filesystem_locator(track.id).unwrap();
         let text = path.to_string_lossy().into_owned();
         assert!(text.starts_with("moeremote://"), "{text}");
-        let opener = RemotePlayback { connections: Arc::clone(&connections), settings: Arc::clone(&settings) };
-        let mut input = opener.open(&text).expect("the engine's opener");
+        let opener = RemoteFiles { connections: Arc::clone(&connections), settings: Arc::clone(&settings) };
+        let Some(MediaLocator::Remote { source_id, path: relative }) =
+            player_core::parse_remote_locator_uri(&text)
+        else {
+            panic!("a remote pseudo path");
+        };
+        let mut input = opener.open(source_id, &relative).expect("the shared opener");
         assert!(input.len > 0);
         let mut head = [0u8; 4];
-        input.main.read_exact(&mut head).unwrap();
-        input.main.seek(SeekFrom::End(-16)).unwrap();
+        input.reader.read_exact(&mut head).unwrap();
+        input.reader.seek(SeekFrom::End(-16)).unwrap();
         let mut tail = Vec::new();
-        input.main.read_to_end(&mut tail).unwrap();
+        input.reader.read_to_end(&mut tail).unwrap();
         println!("{:?} {} bytes, head {:?}", track.title, input.len, head);
         assert_eq!(tail.len(), 16);
 

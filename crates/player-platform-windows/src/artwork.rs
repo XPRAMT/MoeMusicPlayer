@@ -47,10 +47,18 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
         .iter()
         .filter_map(|locator| match locator {
             MediaLocator::FileSystem(path) => Some(path),
-            // Remote tracks read their cover and lyrics through the remote reader, not a local path.
+            // Remote tracks are read separately, through the remote content provider.
             MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
         })
         .collect::<Vec<_>>();
+
+    let remote: Vec<(player_core::SourceId, &str)> = locators
+        .iter()
+        .filter_map(|locator| match locator {
+            MediaLocator::Remote { source_id, path } => Some((*source_id, path.as_str())),
+            _ => None,
+        })
+        .collect();
 
     let mut oversized = false;
     for path in &paths {
@@ -58,11 +66,35 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
             return ArtworkLookup::Found(image);
         }
     }
+    // Remote tracks (ADR 0026): the embedded cover through the remote reader, then the sidecars beside the track.
+    if let Some(content) = player_core::remote_content() {
+        for (source_id, path) in &remote {
+            if let Ok(handle) = content.open(*source_id, path) {
+                if let Some(image) =
+                    embedded_artwork_from(handle.reader, Path::new(path), &mut oversized)
+                {
+                    return ArtworkLookup::Found(image);
+                }
+            }
+        }
+    }
 
     for sidecar_name in SIDE_CAR_NAMES {
         for path in &paths {
             if let Some(image) = sidecar_artwork(path, sidecar_name, &mut oversized) {
                 return ArtworkLookup::Found(image);
+            }
+        }
+        for (source_id, path) in &remote {
+            let sidecar = player_core::remote_sibling(path, sidecar_name);
+            if let Some(bytes) = player_core::read_remote_file_capped(
+                *source_id,
+                &sidecar,
+                MAX_ARTWORK_BYTES as u64,
+            ) {
+                if let Some(image) = image_from_raw_bytes(&bytes, &mut oversized) {
+                    return ArtworkLookup::Found(image);
+                }
             }
         }
     }
@@ -75,9 +107,18 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
 }
 
 fn embedded_artwork(path: &Path, oversized: &mut bool) -> Option<ArtworkImage> {
-    use std::io::Seek;
     let native_path = to_extended_path(path).ok()?;
     let file = open_regular_file_without_following_reparse_points(&native_path)?;
+    embedded_artwork_from(file, path, oversized)
+}
+
+/// The cover embedded in a track's tags, read from any stream; `path` only names the file (its extension).
+fn embedded_artwork_from<R: Read + std::io::Seek + Send>(
+    file: R,
+    path: &Path,
+    oversized: &mut bool,
+) -> Option<ArtworkImage> {
+    use std::io::Seek;
     // DSF is not a lofty format: its cover lives in the ID3v2 tag at the end of the file.
     let dsd_tags;
     let tagged_file;

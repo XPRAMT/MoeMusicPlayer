@@ -5,6 +5,7 @@ edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
+player-core = { path = "../player-core" }
 player-dsd = { path = "../player-dsd" }
 player-formats = { path = "../player-formats" }
 player-wavpack = { path = "../player-wavpack" }
