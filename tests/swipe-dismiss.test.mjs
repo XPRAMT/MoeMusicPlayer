@@ -1,7 +1,7 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { getSwipeActions, resolveSwipeDirection, getSwipeOffset, getSwipeVelocity, isSwipeAxisForDirection, isSwipePointer, resolveSwipeAxis, shouldDismissSwipe, SWIPE_IGNORE_SELECTOR } from '../src/lib/swipe-dismiss.js';
+import { getSwipeActions, getSwipeActionsFor, isSwipeMouseStart, resolveSwipeDirection, getSwipeOffset, getSwipeVelocity, isSwipeAxisForDirection, isSwipePointer, resolveSwipeAxis, shouldDismissSwipe, SWIPE_IGNORE_SELECTOR } from '../src/lib/swipe-dismiss.js';
 
 test('axis lock waits for slop and picks the dominant axis', () => {
   assert.equal(resolveSwipeAxis(3, 4), null);
@@ -46,10 +46,26 @@ test('nav panel, quick settings and cover are wired with the shared helper', () 
   assert.match(app, /use:swipeDismiss=\{\{ direction: 'left'[^}]*closeNavPanel/);
   assert.match(app, /use:swipeDismiss=\{\{ direction: 'right'[^}]*closeQuickSettings/);
   // Cover: still image, left = next, right = previous (user-verified on device), down = close.
-  const cover = app.match(/use:swipeDismiss=\{\{ follow: false[^\n]*/)?.[0] ?? '';
+  const cover = app.match(/use:swipeDismiss=\{\{ follow: false[^\n]*down: \(\) => void closeNowPlaying\(\)[^\n]*/)?.[0] ?? '';
   assert.match(cover, /left: \(\) => void controlPlayback\('playback_next'\)/);
   assert.match(cover, /right: \(\) => void controlPlayback\('playback_previous'\)/);
   assert.match(cover, /down: \(\) => void closeNowPlaying\(\)/);
+  // Desktop mouse drag: the cover only closes on a downward drag; the whole page switches tracks on a horizontal one.
+  assert.match(cover, /mouseActions: \{ down: \(\) => void closeNowPlaying\(\) \}/);
+  const view = app.match(/<section class="now-playing-view"[^>]*\n\s*use:swipeDismiss=\{\{[^\n]*/)?.[0] ?? '';
+  assert.match(view, /mouseActions: \{ left: \(\) => void controlPlayback\('playback_next'\), right: \(\) => void controlPlayback\('playback_previous'\) \}/);
+  assert.doesNotMatch(view, /down:/);
+});
+
+test('a mouse drag only uses mouseActions and never starts on a zoomed cover or with another button', () => {
+  const options = { actions: { left() {}, down() {} }, mouseActions: { right() {} } };
+  assert.equal(getSwipeActionsFor(options, 'mouse'), options.mouseActions);
+  assert.equal(getSwipeActionsFor(options, 'touch'), options.actions);
+  assert.deepEqual(getSwipeActionsFor({ actions: { left() {} } }, 'mouse'), {});
+  assert.equal(isSwipeMouseStart({ pointerType: 'mouse', button: 0 }, false), true);
+  assert.equal(isSwipeMouseStart({ pointerType: 'mouse', button: 2 }, false), false);
+  assert.equal(isSwipeMouseStart({ pointerType: 'mouse', button: 0 }, true), false);
+  assert.equal(isSwipeMouseStart({ pointerType: 'touch', button: 0 }, false), false);
 });
 
 test('locked swipe resolves its direction from the locked axis sign', () => {

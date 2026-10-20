@@ -4950,7 +4950,9 @@
       </header>
       <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body" inert={isQuickSettingsOpen}>
         <div class="now-playing-overlay-content">
-          <section class="now-playing-view" aria-label={tr("正在播放")} style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}
+          <section class="now-playing-view" aria-label={tr("正在播放")}
+            use:swipeDismiss={{ follow: false, damped: true, feedbackTarget: () => coverStageElement ?? null, enabled: isNowPlayingOpen, actions: {}, mouseActions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous') } }}
+            style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}
             style:--np-cover-width={coverFrame ? `${coverFrame.width}px` : undefined}
             style:--np-cover-zoom={coverLayoutScale}
             style:--np-cover-reserve={coverLayoutScale === 1 ? 0 : coverLayoutScale}
@@ -4966,7 +4968,7 @@
                   bind:this={coverStageElement}
                   class="cover-stage"
                   use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: handleCoverZoom, initial: restoreCoverZoom, syncScale: coverZoomPersisted.scale }}
-                  use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() } }}
+                  use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() }, mouseActions: { down: () => void closeNowPlaying() } }}
                   class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
                   style:width={coverFrame ? `${coverFrame.width}px` : undefined}

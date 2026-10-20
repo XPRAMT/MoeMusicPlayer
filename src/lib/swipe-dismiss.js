@@ -1,5 +1,6 @@
 ﻿// Shared touch/pen swipe-to-dismiss gesture (Svelte action) plus pure decision helpers.
-// Mouse input is ignored entirely, so desktop behaviour is unchanged.
+// Mouse input is ignored unless the element opts in with `mouseActions` (the desktop now-playing page), and then only
+// those actions apply to a mouse drag with the primary button.
 
 export const SWIPE_AXIS_SLOP_PX = 10;
 export const SWIPE_DISMISS_DISTANCE_RATIO = 0.3;
@@ -12,8 +13,9 @@ export const SWIPE_IGNORE_SELECTOR = 'input, select, textarea, [role="slider"], 
 /**
  * Either one dismiss direction (`direction` + `onDismiss`) or several (`actions`). `follow: false` keeps the
  * element still: nothing moves while dragging and the action fires only on release. `feedbackTarget` makes the
- * `damped` rubber-band effect play on another element (the lyrics area swipe moves the cover).
- * @typedef {{ direction?: SwipeDirection, onDismiss?: () => void, actions?: Partial<Record<SwipeDirection, () => void>>, follow?: boolean, damped?: boolean, enabled?: boolean, feedbackTarget?: () => HTMLElement | null }} SwipeDismissOptions
+ * `damped` rubber-band effect play on another element (the lyrics area swipe moves the cover). `mouseActions` turns on
+ * mouse dragging with its own set of actions (touch and pen keep using `actions`).
+ * @typedef {{ direction?: SwipeDirection, onDismiss?: () => void, actions?: Partial<Record<SwipeDirection, () => void>>, mouseActions?: Partial<Record<SwipeDirection, () => void>>, follow?: boolean, damped?: boolean, enabled?: boolean, feedbackTarget?: () => HTMLElement | null }} SwipeDismissOptions
  */
 
 /** @type {Record<SwipeDirection, 'x' | 'y'>} */
@@ -68,6 +70,16 @@ export function getSwipeActions(options) {
   return options.direction && options.onDismiss ? { [options.direction]: options.onDismiss } : {};
 }
 
+/** The actions that apply to this kind of pointer: `mouseActions` for a mouse, the regular ones for touch and pen. @param {SwipeDismissOptions} options @param {string} pointerType */
+export function getSwipeActionsFor(options, pointerType) {
+  return pointerType === 'mouse' ? options.mouseActions ?? {} : getSwipeActions(options);
+}
+
+/** A mouse drag starts a swipe only with the primary button, and not on an element that uses the drag itself (the zoomed cover pans). @param {{ pointerType: string, button: number }} event @param {boolean} onDraggableTarget */
+export function isSwipeMouseStart(event, onDraggableTarget) {
+  return event.pointerType === 'mouse' && event.button === 0 && !onDraggableTarget;
+}
+
 /** @param {string} pointerType */
 export function isSwipePointer(pointerType) {
   return pointerType === 'touch' || pointerType === 'pen';
@@ -102,6 +114,7 @@ export function swipeDismiss(node, params) {
   let samples = [];
   /** @type {SwipeDirection | null} */
   let direction = null;
+  let pointerKind = 'touch';
   let suppressClick = false;
   const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const follows = () => options.follow !== false;
@@ -121,8 +134,13 @@ export function swipeDismiss(node, params) {
 
   /** @param {PointerEvent} event */
   function down(event) {
-    if (options.enabled === false || !isSwipePointer(event.pointerType) || !event.isPrimary) return;
-    if (event.target instanceof Element && event.target.closest(SWIPE_IGNORE_SELECTOR)) return;
+    if (options.enabled === false || !event.isPrimary) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (event.pointerType === 'mouse') {
+      if (!options.mouseActions || !isSwipeMouseStart(event, target?.closest('[data-cover-zoomed]') != null)) return;
+    } else if (!isSwipePointer(event.pointerType)) return;
+    if (target?.closest(SWIPE_IGNORE_SELECTOR)) return;
+    pointerKind = event.pointerType;
     start = { x: event.clientX, y: event.clientY, id: event.pointerId };
     axis = null;
     samples = [{ x: event.clientX, y: event.clientY, t: event.timeStamp }];
@@ -137,8 +155,10 @@ export function swipeDismiss(node, params) {
       axis = resolveSwipeAxis(dx, dy);
       if (!axis) return;
       const resolved = resolveSwipeDirection(axis, dx, dy);
-      if (!getSwipeActions(options)[resolved]) { start = null; return; }
+      if (!getSwipeActionsFor(options, pointerKind)[resolved]) { start = null; return; }
       direction = resolved;
+      // A mouse drag would otherwise select the text under it.
+      if (pointerKind === 'mouse') { try { getSelection()?.removeAllRanges(); } catch { /* no selection API */ } }
       try { node.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
       if (follows()) node.style.transition = 'none';
       else if (damped()) fxNode().style.transition = 'none';
@@ -172,7 +192,7 @@ export function swipeDismiss(node, params) {
     // Release capture right away so a dismiss that hides this node never keeps the next touch.
     try { if (node.hasPointerCapture?.(event.pointerId)) node.releasePointerCapture(event.pointerId); } catch { /* gone */ }
     if (!locked || !dir) return;
-    const action = getSwipeActions(options)[dir];
+    const action = getSwipeActionsFor(options, pointerKind)[dir];
     if (!action) { if (damped()) reset(true); return; }
     if (options.damped) reset(true);
     suppressClick = true;
