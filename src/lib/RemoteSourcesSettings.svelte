@@ -218,14 +218,16 @@
     }
   }
 
-  // ---- the root picker of the form: the shares of the server (the top level only; folders inside are chosen later, on the server's tab) ----
+  // ---- the root picker of the form: browse the shares of the server and the folders inside them; "use this folder" takes the one the picker is in ----
   let shareDialog = $state<HTMLDialogElement>();
+  /** Where the picker is: empty is the list of shares, otherwise `share/folder/...`. */
+  let pickPath = $state('');
   let pickFolders = $state<RemoteFolderView[]>([]);
   let pickError = $state<string | null>(null);
   let pickLoading = $state(false);
   let pickSerial = 0;
 
-  async function loadShares(): Promise<void> {
+  async function loadPick(path: string): Promise<void> {
     if (!form) return;
     const input = inputOf(form);
     if (typeof input === 'string') { pickError = input; return; }
@@ -233,9 +235,10 @@
     pickLoading = true;
     pickError = null;
     try {
-      const result = await invokeCommand('remote_browse_draft', { input, path: '' });
+      const result = await invokeCommand('remote_browse_draft', { input, path });
       if (serial !== pickSerial) return;
       pickFolders = result;
+      pickPath = path;
     } catch (cause) {
       if (serial === pickSerial) pickError = getErrorText(cause);
     } finally {
@@ -250,13 +253,15 @@
     formError = null;
     pickFolders = [];
     pickError = null;
+    pickPath = '';
     shareDialog?.showModal();
-    void loadShares();
+    void loadPick('');
   }
 
-  /** Choosing a share is the whole answer: it becomes the root of the account. */
-  function pickShare(share: RemoteFolderView): void {
-    if (form) form.path = share.path;
+  /** The folder the picker is in becomes the root of the account (not one of the folders listed in it). */
+  function usePickedFolder(): void {
+    if (!form || pickPath === '') return;
+    form.path = pickPath;
     shareDialog?.close();
   }
 
@@ -592,20 +597,26 @@
 <dialog bind:this={shareDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-share-title" oncancel={(event) => { event.preventDefault(); shareDialog?.close(); }}>
   <div class="update-dialog-content">
     <h2 id="remote-share-title">{tr("選擇根目錄")}</h2>
-    <div class="folder-browser-path" title={form?.host ?? ''}>{form?.host ?? ''}</div>
+    <div class="folder-browser-path" title={pickPath}>{form?.host ?? ''}{pickPath ? ` / ${pickPath}` : ''}</div>
     {#if pickError}<p class="error-text" role="alert">{pickError}</p>{/if}
     <div class="folder-browser-list" aria-busy={pickLoading}>
-      {#each pickFolders as share (share.path)}
-        <button class="folder-browser-entry" type="button" onclick={() => pickShare(share)}>
-          <span aria-hidden="true">📁</span><span>{share.name}</span>
+      {#if pickPath !== ''}
+        <button class="folder-browser-entry" type="button" onclick={() => void loadPick(parentOf(pickPath))}>
+          <span aria-hidden="true">⬆</span><span>{tr("上一層")}</span>
+        </button>
+      {/if}
+      {#each pickFolders as folder (folder.path)}
+        <button class="folder-browser-entry" type="button" onclick={() => void loadPick(folder.path)}>
+          <span aria-hidden="true">📁</span><span>{folder.name}</span>
         </button>
       {/each}
       {#if pickFolders.length === 0 && !pickLoading && !pickError}
-        <p class="folder-browser-empty">{tr("沒有可用的根目錄")}</p>
+        <p class="folder-browser-empty">{pickPath === '' ? tr("沒有可用的根目錄") : tr("這個資料夾沒有子資料夾")}</p>
       {/if}
     </div>
     <div class="update-dialog-actions">
       <button class="soft-button" type="button" onclick={() => shareDialog?.close()}>{tr("取消")}</button>
+      <button class="soft-button" type="button" disabled={pickLoading || pickPath === ''} onclick={usePickedFolder}>{tr("使用這個資料夾")}</button>
     </div>
   </div>
 </dialog>
