@@ -1,6 +1,6 @@
 # Remote music sources: SMB, WebDAV and FTP
 
-Status: Proposed (design only, nothing is implemented)
+Status: Accepted in principle on 2026-10-20 (the owner's answers are recorded under Decisions); design only, nothing is implemented
 
 Decision date: 2026-10-20, Asia/Taipei (UTC+08:00)
 
@@ -15,7 +15,7 @@ Every source today is a local path: a Windows folder (including a `\\server\shar
 
 The user wants SMB, WebDAV and FTP sources on Windows and Android: scan them into the library, play them, and keep the library usable when the server is off.
 
-## Decision (proposed)
+## Decision
 
 ### 1. A source describes a connection, never a secret
 
@@ -37,7 +37,7 @@ trait RemoteFs: Send + Sync {
 }
 ```
 
-Backends: **WebDAV** (`reqwest` + rustls, `PROPFIND` Depth 1 parsed with `quick-xml`, `GET` with `Range`, Basic and Digest authentication), **FTP / FTPS** (`suppaftp`, `MLSD` falling back to `LIST`, `REST` for offsets, a small connection pool), **SMB** (the pure-Rust `smb` crate, SMB2/3 with signing and encryption, on Android; on Windows see below). All are MIT / Apache-2.0 and compile for Android without C toolchains beyond what the project already needs.
+Backends: **WebDAV** (`reqwest` + rustls, `PROPFIND` Depth 1 parsed with `quick-xml`, `GET` with `Range`, Basic and Digest authentication), **FTP / FTPS** (`suppaftp`, `MLSD` falling back to `LIST`, `REST` for offsets, a small connection pool), **SMB** (the pure-Rust `smb` crate, SMB2/3 with signing and encryption, on both platforms). All are MIT / Apache-2.0 and compile for Android without C toolchains beyond what the project already needs.
 
 `RemoteReader` wraps a `RemoteFile` as `Read + Seek + Send` with a block cache (256 KiB blocks, read-ahead for sequential reads, an in-memory LRU, plus an on-disk cache folder with a size limit, default 2 GiB). Every consumer that is already generic over `Read + Seek` (lofty, our Opus / WavPack / DSD readers, the spectrogram, Symphonia through rodio) uses it as if it were a file, so no decoder is rewritten.
 
@@ -49,7 +49,7 @@ Backends: **WebDAV** (`reqwest` + rustls, `PROPFIND` Depth 1 parsed with `quick-
 
 - **Windows**: the engine takes a `PlaybackSource` (`Path` or `Remote`) instead of a bare `&Path`; `open_decoder_with` builds the decoder over the file or the `RemoteReader`. Extension-based decisions (`decode_engine`, DSD detection) use the remote file name. DoP and exclusive mode work over the same reader. The engine reports **Buffering**, pauses and retries when the network drops, and prefetches the head of the next track.
 - **Android**: the track is loaded as `moeremote:///<source id>/<path>`; the existing Kotlin data source bridge reads it through JNI from the Rust `RemoteReader`, so Media3 plays and seeks every format it supports, and the DSD and WavPack converters wrap the same reader (`Served` gets a remote variant). Media3 is not given the server address or the credentials.
-- **Windows SMB**: use the operating system. A `\\server\share` folder is already a Windows filesystem root; the new work is only a wizard that stores the credentials (`CredWrite` / `WNetAddConnection2`), checks the share and registers the UNC folder. No SMB client is shipped on Windows (faster than a user-mode client, uses the system's Kerberos / NTLM, signing, encryption and DFS).
+- **SMB on Windows too**: the owner chose the built-in client (the `smb` crate) on both platforms, so a remote SMB source behaves identically on Windows and Android and does not depend on the machine's mapped drives or stored Windows credentials. A \\server\share folder that the user adds as an ordinary folder still works as a local path; it is a separate, older feature.
 
 ### 6. Artwork, lyrics, tags
 
@@ -68,10 +68,9 @@ Settings → Music sources → "Add remote source": protocol → host, port → 
 | Phase | Content | Done when |
 | --- | --- | --- |
 | P0 | `player-remote` trait, `RemoteReader` and cache, `MediaLocator::Remote`, registry and credential store, the wizard shell, loopback test servers | the reader serves a local test server byte for byte; the registry round-trips |
-| P1 | WebDAV scan + playback on Windows and Android | a WebDAV folder of real songs scans, plays, seeks, shows covers and lyrics |
-| P2 | SMB: Windows through UNC + credentials; Android through the `smb` crate | same acceptance on both |
-| P3 | FTP / FTPS | same acceptance |
-| P4 | Cache management UI, next-track prefetch, offline behaviour polish, optional tag write-back (download, edit, upload) | decided later |
+| P1 | WebDAV and SMB scan + playback on Windows and Android (WebDAV first inside the phase, as it exercises the whole path with the simplest protocol) | a WebDAV folder and an SMB share of real songs scan, play, seek, show covers and lyrics on both platforms |
+| P2 | FTP / FTPS (later, by the owner's choice) | same acceptance |
+| P3 | Cache management UI, next-track prefetch, offline behaviour polish | decided later |
 
 ## Verification plan
 
@@ -90,10 +89,10 @@ Real songs from the library are served by loopback servers (a WebDAV server, an 
 - Every place that assumes a local path must be revisited: tag editing, cover export, "open folder", file association, lyrics sidecars, the backup.
 - The Android plugin gains a credential store and the remote bridge; a metered-network option is needed.
 
-## Open questions for the owner
+## Decisions (the owner, 2026-10-20)
 
-1. Which protocol first (WebDAV is proposed: best fit for streaming and both platforms)?
-2. Windows SMB through the operating system (proposed) or a built-in client for identical behaviour on both platforms?
-3. Remote tag editing: read-only (proposed) or download, edit, upload?
-4. Cache limit and whether remote tracks may be cached for offline listening.
-5. NTLM / Kerberos for WebDAV (Windows file servers), or Basic and Digest only?
+1. **Protocols**: SMB and WebDAV first; FTP later.
+2. **Windows SMB**: the built-in SMB client, the same code as Android.
+3. **Tag editing of remote tracks**: read-only in the first release.
+4. **WebDAV authentication**: Basic and Digest; NTLM and Kerberos are not supported.
+5. **Cache** (default, not asked): a transient block cache bounded at 2 GiB and cleared by the user; remote tracks are not kept for offline listening in the first release.
