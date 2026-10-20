@@ -761,6 +761,10 @@ interface IpcContract {
     args: { input: RemoteAccountInput };
     result: string[];
   };
+  remote_browse_draft: {
+    args: { input: RemoteAccountInput; path: string };
+    result: RemoteFolderView[];
+  };
   remote_browse: {
     args: { accountId: string; path: string };
     result: RemoteFolderView[];

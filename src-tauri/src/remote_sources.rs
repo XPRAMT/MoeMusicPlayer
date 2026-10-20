@@ -116,6 +116,65 @@ pub(crate) async fn remote_smb_shares(
     .map_err(|error| format!("無法取得共用資料夾：{error}"))?
 }
 
+/// Browse the server the form describes before anything is saved: at the top (`path` empty) the folders are the shares,
+/// below that they are the folders of a share (`path` is `share/folder/...`). Used by the folder picker of the form.
+#[tauri::command]
+pub(crate) async fn remote_browse_draft(
+    app: AppHandle,
+    input: RemoteAccountInput,
+    path: String,
+) -> Result<Vec<RemoteFolderView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let data_dir = crate::user_data_directory(&state)?;
+        let vault = vault(&data_dir)?;
+        let path = normalize_folder(&path);
+        let mut input = input;
+        if path.is_empty() {
+            // The shares of the server.
+            input.path = "x".to_owned();
+            let account = account_from_input(&state.settings, &vault, &input)?;
+            let password = vault
+                .password_of(&account)
+                .map_err(|error| error.to_string())?
+                .unwrap_or_default();
+            let mut shares = player_remote::smb::list_shares(
+                &account.host,
+                account.port,
+                &account.username,
+                password.as_str(),
+            )
+            .map_err(|error| error.to_string())?;
+            shares.sort_by(|left, right| natural_title_cmp(left, right));
+            return Ok(shares
+                .into_iter()
+                .map(|name| RemoteFolderView {
+                    path: name.clone(),
+                    name,
+                })
+                .collect());
+        }
+        // Inside a share: the first piece is the share, the rest the folder in it.
+        let (share, inner) = path
+            .split_once('/')
+            .map_or((path.as_str(), ""), |(share, rest)| (share, rest));
+        input.path = share.to_owned();
+        let account = account_from_input(&state.settings, &vault, &input)?;
+        let fs = crate::remote_connections::connect_account(&data_dir, &account)
+            .map_err(|error| error.to_string())?;
+        let folders = folders_of(fs.as_ref(), inner)?;
+        Ok(folders
+            .into_iter()
+            .map(|folder| RemoteFolderView {
+                path: format!("{share}/{}", folder.path),
+                name: folder.name,
+            })
+            .collect())
+    })
+    .await
+    .map_err(|error| format!("無法讀取遠端資料夾：{error}"))?
+}
+
 /// The sub-folders of `path` (relative to the account's root) on a saved account's server.
 #[tauri::command]
 pub(crate) async fn remote_browse(

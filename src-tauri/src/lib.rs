@@ -11384,6 +11384,7 @@ pub fn run() {
             remote_sources::remote_account_test,
             remote_sources::remote_smb_shares,
             remote_sources::remote_browse,
+            remote_sources::remote_browse_draft,
             remote_sources::remote_source_add,
             remote_accounts::remote_account_delete,
             remote_accounts::remote_accounts_export,

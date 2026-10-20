@@ -129,8 +129,9 @@ pub(crate) fn connect_account(
         RemoteProtocol::Smb => Ok(Arc::new(SmbFs::connect(SmbSettings {
             host: account.host.clone(),
             port: account.port,
-            share: account.path.clone(),
-            base_path: String::new(),
+            // The account's path is `share` or `share/folder/...`.
+            share: account.path.split('/').next().unwrap_or_default().to_owned(),
+            base_path: account.path.split_once('/').map(|(_, rest)| rest.to_owned()).unwrap_or_default(),
             user: account.username.clone(),
             password: password.unwrap_or_default(),
         })?)),
@@ -355,7 +356,7 @@ mod real_server_tests {
         let mut worst = std::time::Duration::ZERO;
         let mut total = 0usize;
         let started = std::time::Instant::now();
-        while total < 12 * 1024 * 1024 && total < stream.len as usize - chunk.len() {
+        while total < 12 * 1024 * 1024 && total + 2 * chunk.len() < stream.len as usize {
             std::thread::sleep(std::time::Duration::from_millis(8));
             let before = std::time::Instant::now();
             stream.reader.read_exact(&mut chunk).unwrap();

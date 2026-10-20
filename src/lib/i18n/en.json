@@ -803,7 +803,6 @@
   "正在讀取遠端伺服器…": "Loading remote servers…",
   "共用資料夾": "Shares",
   "名稱": "Name",
-  "伺服器沒有提供可用的共用資料夾。": "The server offers no shares this account can use.",
   "刪除": "Delete",
   "使用未加密的 http（不建議）": "Use unencrypted http (not recommended)",
   "例如：家用 NAS": "e.g. Home NAS",
@@ -833,7 +832,6 @@
   "請輸入匯出檔案時設定的密碼。匯入後，密碼會改用這台裝置的金鑰加密。": "Enter the password you set when exporting. After the import, the passwords are encrypted again with this device's key.",
   "選擇遠端資料夾": "Choose a remote folder",
   "檔案密碼（至少 8 個字元）": "File password (at least 8 characters)",
-  "讀取中": "Loading",
   "WebDAV 路徑": "WebDAV path",
   "選擇共用資料夾": "Choose a share",
   "尚未選擇": "Not chosen yet"

@@ -55,8 +55,6 @@
   let formError = $state<string | null>(null);
   let testing = $state(false);
   let testResult = $state<string | null>(null);
-  let shares = $state<string[] | null>(null);
-  let sharesBusy = $state(false);
   let saving = $state(false);
 
   function blankForm(): Form {
@@ -81,7 +79,7 @@
       : blankForm();
     formError = null;
     testResult = null;
-    shares = null;
+   
     formDialog?.showModal();
   }
 
@@ -129,30 +127,48 @@
     }
   }
 
-  // ---- the share picker (a folder picker whose folders are the server's shares) ----
+  // ---- the path picker of the form: the shares of the server, then the folders inside one ----
   let shareDialog = $state<HTMLDialogElement>();
+  let pickPath = $state('');
+  let pickFolders = $state<RemoteFolderView[]>([]);
+  let pickError = $state<string | null>(null);
+  let pickLoading = $state(false);
+  let pickSerial = 0;
 
-  async function openSharePicker(): Promise<void> {
-    if (!form || sharesBusy) return;
+  async function loadPick(path: string): Promise<void> {
+    if (!form) return;
     const input = inputOf(form);
-    if (typeof input === 'string') { formError = input; return; }
-    // The share is not known yet: a placeholder passes the form's own check, the server is asked for the real ones.
-    input.path = input.path || 'x';
-    sharesBusy = true;
-    formError = null;
+    if (typeof input === 'string') { pickError = input; return; }
+    const serial = ++pickSerial;
+    pickLoading = true;
+    pickError = null;
     try {
-      shares = await invokeCommand('remote_smb_shares', { input });
-      if (shares.length === 0) formError = tr('伺服器沒有提供可用的共用資料夾。');
-      else shareDialog?.showModal();
+      const result = await invokeCommand('remote_browse_draft', { input, path });
+      if (serial !== pickSerial) return;
+      pickFolders = result;
+      pickPath = path;
     } catch (cause) {
-      formError = getErrorText(cause);
+      if (serial === pickSerial) pickError = getErrorText(cause);
     } finally {
-      sharesBusy = false;
+      if (serial === pickSerial) pickLoading = false;
     }
   }
 
-  function pickShare(share: string): void {
-    if (form) form.path = share;
+  function openSharePicker(): void {
+    if (!form) return;
+    const input = inputOf(form);
+    if (typeof input === 'string') { formError = input; return; }
+    formError = null;
+    pickFolders = [];
+    pickPath = '';
+    pickError = null;
+    shareDialog?.showModal();
+    // Start where the form already points, else at the shares.
+    void loadPick(form.path);
+  }
+
+  function useCurrentPick(): void {
+    if (form && pickPath !== '') form.path = pickPath;
     shareDialog?.close();
   }
 
@@ -345,8 +361,8 @@
     <div class="update-dialog-content">
       <h2 id="remote-form-title">{form.id ? tr('編輯遠端伺服器') : tr('新增遠端伺服器')}</h2>
       <div class="remote-protocol" role="group" aria-label={tr("通訊協定")}>
-        <button class="soft-button" type="button" aria-pressed={form.protocol === 'smb'} disabled={Boolean(form.id)} onclick={() => { if (form) { form.protocol = 'smb'; form.path = ''; shares = null; } }}>SMB</button>
-        <button class="soft-button" type="button" aria-pressed={form.protocol === 'webdav'} disabled={Boolean(form.id)} onclick={() => { if (form) { form.protocol = 'webdav'; form.path = ''; shares = null; } }}>WebDAV</button>
+        <button class="soft-button" type="button" aria-pressed={form.protocol === 'smb'} disabled={Boolean(form.id)} onclick={() => { if (form) { form.protocol = 'smb'; form.path = ''; } }}>SMB</button>
+        <button class="soft-button" type="button" aria-pressed={form.protocol === 'webdav'} disabled={Boolean(form.id)} onclick={() => { if (form) { form.protocol = 'webdav'; form.path = ''; } }}>WebDAV</button>
       </div>
       <label class="remote-field"><span>{tr("名稱")}</span><input type="text" bind:value={form.name} placeholder={tr('例如：家用 NAS')} /></label>
       <div class="remote-row">
@@ -358,7 +374,7 @@
           <span>{tr("共用資料夾")}</span>
           <div class="remote-row">
             <div class="remote-picked" class:is-empty={form.path === ''} title={form.path}>{form.path || tr('尚未選擇')}</div>
-            <button class="soft-button" type="button" disabled={sharesBusy || form.host.trim() === ''} onclick={() => void openSharePicker()}>{sharesBusy ? tr('讀取中') : tr('選擇資料夾')}</button>
+            <button class="soft-button" type="button" disabled={form.host.trim() === ''} onclick={openSharePicker}>{tr('選擇資料夾')}</button>
           </div>
         </div>
       {:else}
@@ -387,16 +403,26 @@
 <dialog bind:this={shareDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-share-title" oncancel={(event) => { event.preventDefault(); shareDialog?.close(); }}>
   <div class="update-dialog-content">
     <h2 id="remote-share-title">{tr("選擇共用資料夾")}</h2>
-    <div class="folder-browser-path">{form?.host ?? ''}</div>
-    <div class="folder-browser-list">
-      {#each shares ?? [] as share (share)}
-        <button class="folder-browser-entry" type="button" onclick={() => pickShare(share)}>
-          <span aria-hidden="true">📁</span><span>{share}</span>
+    <div class="folder-browser-path" title={pickPath}>{form?.host ?? ''} / {pickPath || '…'}</div>
+    {#if pickError}<p class="error-text" role="alert">{pickError}</p>{/if}
+    <div class="folder-browser-list" aria-busy={pickLoading}>
+      {#if pickPath !== ''}
+        <button class="folder-browser-entry" type="button" onclick={() => void loadPick(parentOf(pickPath))}>
+          <span aria-hidden="true">⬆</span><span>{tr("上一層")}</span>
+        </button>
+      {/if}
+      {#each pickFolders as folder (folder.path)}
+        <button class="folder-browser-entry" type="button" onclick={() => void loadPick(folder.path)}>
+          <span aria-hidden="true">📁</span><span>{folder.name}</span>
         </button>
       {/each}
+      {#if pickFolders.length === 0 && !pickLoading && !pickError}
+        <p class="folder-browser-empty">{tr("這個資料夾沒有子資料夾")}</p>
+      {/if}
     </div>
     <div class="update-dialog-actions">
       <button class="soft-button" type="button" onclick={() => shareDialog?.close()}>{tr("取消")}</button>
+      <button class="soft-button" type="button" disabled={pickLoading || pickPath === ''} onclick={useCurrentPick}>{tr("使用這個資料夾")}</button>
     </div>
   </div>
 </dialog>

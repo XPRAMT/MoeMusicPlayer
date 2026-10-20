@@ -110,11 +110,15 @@ fn normalize_input(input: &RemoteAccountInput) -> Result<(String, String, String
     let path = input.path.trim();
     let path = match input.protocol {
         RemoteProtocol::Smb => {
-            let share = path.trim_matches(|c| c == '/' || c == '\\');
-            if share.is_empty() || share.contains(['/', '\\']) {
-                return Err("SMB 請輸入共用資料夾的名稱（不含斜線）。".to_owned());
+            // `share` or `share/folder/...`: the account is rooted in that folder of the share.
+            let pieces: Vec<&str> = path
+                .split(['/', '\\'])
+                .filter(|piece| !piece.is_empty() && *piece != ".")
+                .collect();
+            if pieces.is_empty() || pieces.contains(&"..") {
+                return Err("請選擇共用資料夾。".to_owned());
             }
-            share.to_owned()
+            pieces.join("/")
         }
         RemoteProtocol::Webdav => {
             let trimmed = path.trim_matches('/');
@@ -408,8 +412,13 @@ mod tests {
         }
         let mut smb = input("SMB", None);
         smb.protocol = RemoteProtocol::Smb;
-        smb.path = "share/sub".to_owned();
-        assert!(save_account(&settings, &vault, smb.clone()).is_err(), "an SMB share name has no slash");
+        // The path of an SMB account is `share` or `share/folder`; it may not leave the share or be empty.
+        smb.path = "share/../x".to_owned();
+        assert!(save_account(&settings, &vault, smb.clone()).is_err(), "no way out of the share");
+        smb.path = "/".to_owned();
+        assert!(save_account(&settings, &vault, smb.clone()).is_err(), "a share is required");
+        smb.path = "share//sub/".to_owned();
+        assert_eq!(save_account(&settings, &vault, smb.clone()).unwrap().path, "share/sub");
         smb.path = "\\music\\".to_owned();
         assert_eq!(save_account(&settings, &vault, smb).unwrap().path, "music");
         let mut port = input("p", None);
