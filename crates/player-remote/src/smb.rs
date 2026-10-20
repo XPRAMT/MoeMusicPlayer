@@ -213,7 +213,7 @@ impl SmbFs {
 impl SmbFs {
     /// A cached `Read + Seek` over a file, tuned for SMB (see [`SMB_READ_AHEAD_BLOCKS`]).
     pub fn open_reader(&self, path: &str) -> Result<RangeReader, RemoteError> {
-        Ok(RangeReader::new(self.open(path)?).with_read_ahead(SMB_READ_AHEAD_BLOCKS))
+        crate::fs::open_reader(self, path)
     }
 }
 
@@ -315,6 +315,10 @@ impl RemoteFs for SmbFs {
                 modified_ms: unix_ms(*basic.last_write_time),
             })
         })
+    }
+
+    fn read_ahead_blocks(&self) -> u64 {
+        SMB_READ_AHEAD_BLOCKS
     }
 
     fn open(&self, path: &str) -> Result<Box<dyn RemoteFile>, RemoteError> {

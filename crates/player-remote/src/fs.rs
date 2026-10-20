@@ -70,6 +70,16 @@ pub trait RemoteFs: Send + Sync {
     fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>, RemoteError>;
     fn stat(&self, path: &str) -> Result<RemoteEntry, RemoteError>;
     fn open(&self, path: &str) -> Result<Box<dyn RemoteFile>, RemoteError>;
+
+    /// Blocks a sequential reader should fetch per request on this protocol (see [`RangeReader::with_read_ahead`]).
+    fn read_ahead_blocks(&self) -> u64 {
+        READ_AHEAD_BLOCKS
+    }
+}
+
+/// A cached `Read + Seek` over a remote file, with the read-ahead that suits the protocol.
+pub fn open_reader(fs: &dyn RemoteFs, path: &str) -> Result<RangeReader, RemoteError> {
+    Ok(RangeReader::new(fs.open(path)?).with_read_ahead(fs.read_ahead_blocks()))
 }
 
 /// Block size of the range reader's cache.

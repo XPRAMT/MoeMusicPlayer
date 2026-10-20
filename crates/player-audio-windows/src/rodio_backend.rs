@@ -1511,7 +1511,7 @@ type FileDecoder = AudioDecoder;
 /// Whatever decodes the current file: rodio/Symphonia for most formats, the DSD→PCM converter for DSF and libopus for
 /// Opus (`player_formats::decode_engine`).
 pub(crate) enum AudioDecoder {
-    Rodio(Decoder<BufReader<File>>),
+    Rodio(Decoder<BufReader<Box<dyn crate::remote_input::MediaRead>>>),
     /// Boxed: the converter state is several times larger than a rodio decoder.
     Dsd(Box<crate::dsd::DsdFileSource>),
     Opus(Box<crate::opus::OpusFileSource>),
@@ -1680,7 +1680,7 @@ pub(crate) fn open_decoder_with(path: &Path, dsd: &DsdOptions) -> Result<AudioDe
         }
         player_formats::DecodeEngine::WavPack => {
             // DSD inside WavPack goes to the DSD converter like a DSF file (ADR 0025).
-            if player_wavpack::is_dsd(path) {
+            if crate::dsd::is_dsd_path(path) {
                 return crate::dsd::open_wavpack_dsd(path, dsd)
                     .map(|source| AudioDecoder::Dsd(Box::new(source)));
             }
@@ -1696,14 +1696,35 @@ pub(crate) fn open_decoder_with(path: &Path, dsd: &DsdOptions) -> Result<AudioDe
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case("ogg") || extension.eq_ignore_ascii_case("oga")
         });
-    if ogg_extension && player_opus::sniff_opus_file(path) {
+    let is_opus = ogg_extension
+        && if crate::remote_input::is_remote(path) {
+            crate::remote_input::open(path).is_ok_and(|input| player_opus::sniff_opus(input.main))
+        } else {
+            player_opus::sniff_opus_file(path)
+        };
+    if is_opus {
         return crate::opus::open_opus(path).map(|source| AudioDecoder::Opus(Box::new(source)));
     }
-    let file = File::open(path).map_err(|error| AudioError::FileOpen {
-        path: path.to_path_buf(),
-        message: error.to_string(),
-    })?;
-    Decoder::try_from(file)
+    let (reader, len): (Box<dyn crate::remote_input::MediaRead>, u64) =
+        if crate::remote_input::is_remote(path) {
+            let input = crate::remote_input::open(path)?;
+            (
+                Box::new(crate::remote_input::SyncReader::new(input.main)),
+                input.len,
+            )
+        } else {
+            let file = File::open(path).map_err(|error| AudioError::FileOpen {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            })?;
+            let len = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            (Box::new(file), len)
+        };
+    Decoder::builder()
+        .with_data(BufReader::new(reader))
+        .with_byte_len(len)
+        .with_seekable(true)
+        .build()
         .map(AudioDecoder::Rodio)
         .map_err(|error| match error {
             rodio::decoder::DecoderError::UnrecognizedFormat => AudioError::UnsupportedFormat {

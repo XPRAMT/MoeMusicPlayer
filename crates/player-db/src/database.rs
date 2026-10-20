@@ -4875,14 +4875,27 @@ impl Database {
         }
 
         let mut has_filesystem_locator = false;
+        let mut remote = None;
         for locator in locators {
-            let MediaLocator::FileSystem(path) = locator else {
-                continue;
+            let path = match locator {
+                MediaLocator::FileSystem(path) => path,
+                MediaLocator::Remote { source_id, path } => {
+                    // A remote file cannot be checked here; it is the fallback after every local file.
+                    remote.get_or_insert_with(|| {
+                        std::path::PathBuf::from(player_core::remote_locator_uri(source_id, &path))
+                    });
+                    continue;
+                }
+                MediaLocator::ContentUri(_) => continue,
             };
             has_filesystem_locator = true;
             if std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
                 return Ok(path);
             }
+        }
+        // The pseudo path `moeremote://<source id>/<path>` is opened by the audio engine's remote opener (ADR 0026).
+        if let Some(remote) = remote {
+            return Ok(remote);
         }
 
         if has_filesystem_locator {

@@ -29,6 +29,8 @@ pub mod output_devices;
 #[cfg(windows)]
 mod resample;
 #[cfg(windows)]
+pub mod remote_input;
+#[cfg(windows)]
 mod rodio_backend;
 #[cfg(windows)]
 mod wavpack;

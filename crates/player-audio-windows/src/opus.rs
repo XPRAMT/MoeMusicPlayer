@@ -85,14 +85,18 @@ impl<R: Read + Seek + Send> Source for OpusSource<R> {
 }
 
 /// The concrete Opus source the playback chain plays.
-pub(crate) type OpusFileSource = OpusSource<File>;
+pub(crate) type OpusFileSource = OpusSource<Box<dyn player_wavpack::ReadSeek>>;
 
 /// Open an Ogg Opus file for playback.
 pub(crate) fn open_opus(path: &Path) -> Result<OpusFileSource, AudioError> {
-    let file = File::open(path).map_err(|error| AudioError::FileOpen {
-        path: path.to_path_buf(),
-        message: error.to_string(),
-    })?;
+    let file: Box<dyn player_wavpack::ReadSeek> = if crate::remote_input::is_remote(path) {
+        crate::remote_input::open(path)?.main
+    } else {
+        Box::new(File::open(path).map_err(|error| AudioError::FileOpen {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?)
+    };
     let reader = OpusReader::open(file).map_err(|error: OpusError| AudioError::Decode {
         path: path.to_path_buf(),
         message: error.to_string(),

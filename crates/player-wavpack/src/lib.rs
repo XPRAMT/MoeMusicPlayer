@@ -284,7 +284,7 @@ impl WavPackReader {
 
     /// As [`open`](Self::open); with `native_dsd` a DSD file is read as its 1-bit stream (one byte per channel per
     /// "sample", see [`dsd::WavPackDsdStream`]) instead of the library's 24-bit PCM decimation.
-    fn open_with(
+    pub(crate) fn open_with(
         main: impl ReadSeek + 'static,
         correction: Option<Box<dyn ReadSeek>>,
         native_dsd: bool,
@@ -497,6 +497,11 @@ fn summarize_info(info: WavPackInfo) -> Option<WavPackSummary> {
 /// Whether the WavPack file on disk holds DSD audio.
 pub fn is_dsd(path: &std::path::Path) -> bool {
     WavPackReader::open_path(path).is_ok_and(|reader| reader.info().dsd)
+}
+
+/// As [`is_dsd`], for a stream that is not a file on disk.
+pub fn is_dsd_from(main: impl ReadSeek + 'static) -> bool {
+    WavPackReader::open(main, None).is_ok_and(|reader| reader.info().dsd)
 }
 
 /// Whether `bytes` (the start of a file) is a WavPack block: `wvpk`.

@@ -95,6 +95,16 @@ fn correction_path(path: &Path) -> PathBuf {
 
 /// Open a WavPack file for playback (with its `.wvc` correction file if present).
 pub(crate) fn open_wavpack(path: &Path) -> Result<WavPackSource, AudioError> {
+    if crate::remote_input::is_remote(path) {
+        let input = crate::remote_input::open(path)?;
+        let reader = WavPackReader::open(input.main, input.correction).map_err(
+            |error: WavPackError| AudioError::Decode {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            },
+        )?;
+        return Ok(WavPackSource::new(reader));
+    }
     let file = File::open(path).map_err(|error| AudioError::FileOpen {
         path: path.to_path_buf(),
         message: error.to_string(),

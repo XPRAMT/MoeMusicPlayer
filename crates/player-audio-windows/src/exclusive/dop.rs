@@ -68,7 +68,25 @@ impl DopSource {
                 message: error.to_string(),
             })
         };
-        let reader: Box<dyn DsdStream> = if crate::dsd::is_dsf_path(path) {
+        let reader: Box<dyn DsdStream> = if crate::remote_input::is_remote(path) {
+            let input = crate::remote_input::open(path).map_err(DopOpenError::Audio)?;
+            if crate::dsd::is_dsf_path(path) {
+                Box::new(
+                    DsfReader::open(BufReader::with_capacity(256 * 1024, input.main))
+                        .map_err(decode_error)?,
+                )
+            } else {
+                Box::new(
+                    player_wavpack::dsd::WavPackDsdStream::open(input.main, input.correction)
+                        .map_err(|error| {
+                            DopOpenError::Audio(AudioError::Decode {
+                                path: path.to_path_buf(),
+                                message: error.to_string(),
+                            })
+                        })?,
+                )
+            }
+        } else if crate::dsd::is_dsf_path(path) {
             let file = File::open(path).map_err(|error| {
                 DopOpenError::Audio(AudioError::FileOpen {
                     path: path.to_path_buf(),

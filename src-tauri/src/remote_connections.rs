@@ -150,3 +150,59 @@ pub(crate) fn none() -> Arc<dyn RemoteResolver> {
     }
     Arc::new(NoRemote)
 }
+
+/// Opens remote files for the Windows audio engine (ADR 0026): the engine hands over `moeremote://<source id>/<path>`, this
+/// finds the source's account, reuses its open connection and returns a cached reader over the file.
+#[cfg(target_os = "windows")]
+pub(crate) struct RemotePlayback {
+    pub(crate) connections: Arc<RemoteConnections>,
+    pub(crate) settings: Arc<crate::settings::SettingsStore>,
+}
+
+#[cfg(target_os = "windows")]
+impl player_audio_windows::remote_input::RemoteOpener for RemotePlayback {
+    fn open(
+        &self,
+        locator: &str,
+    ) -> std::io::Result<player_audio_windows::remote_input::RemoteInput> {
+        use player_audio_windows::remote_input::RemoteInput;
+        use player_remote::fs::open_reader;
+        use player_remote::index::join_path;
+        use std::io::{Error, ErrorKind};
+
+        let Some(MediaLocator::Remote { source_id, path }) =
+            player_core::parse_remote_locator_uri(locator)
+        else {
+            return Err(Error::new(ErrorKind::InvalidInput, "not a remote location"));
+        };
+        let data_dir = self
+            .settings
+            .data_directory()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| Error::new(ErrorKind::NotFound, "no UserData folder"))?;
+        let settings = self
+            .settings
+            .snapshot()
+            .map_err(|error| Error::other(error.to_string()))?;
+        let resolved = self
+            .connections
+            .resolver(data_dir, &settings)
+            .resolve(source_id)?;
+        let full = join_path(&resolved.base_path, &path);
+        let main = open_reader(resolved.fs.as_ref(), &full)?;
+        let len = main.len();
+        // A hybrid WavPack file is lossless with its `.wvc` correction file next to it.
+        let correction = if full.to_ascii_lowercase().ends_with(".wv") {
+            open_reader(resolved.fs.as_ref(), &format!("{full}c"))
+                .ok()
+                .map(|reader| Box::new(reader) as Box<dyn player_audio_windows::remote_input::ReadSeek>)
+        } else {
+            None
+        };
+        Ok(RemoteInput {
+            main: Box::new(main),
+            len,
+            correction,
+        })
+    }
+}

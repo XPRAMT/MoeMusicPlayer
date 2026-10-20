@@ -11547,8 +11547,16 @@ pub fn run() {
                 playback.is_some(),
                 playback_error.clone(),
             );
+            let remote_connections: Arc<remote_connections::RemoteConnections> = Arc::default();
             app.manage(updater::UpdateService::default());
             app.manage(sleep_timer::SleepTimer::default());
+            #[cfg(target_os = "windows")]
+            player_audio_windows::remote_input::set_remote_opener(Arc::new(
+                remote_connections::RemotePlayback {
+                    connections: Arc::clone(&remote_connections),
+                    settings: Arc::clone(&settings),
+                },
+            ));
             app.manage(AppState {
                 database,
                 database_path: stored_path.clone(),
@@ -11572,7 +11580,7 @@ pub fn run() {
                         }),
                 }),
                 lyrics_service: lyrics_service::LyricsService::default(),
-                remote_connections: Arc::default(),
+                remote_connections,
                 #[cfg(target_os = "windows")]
                 playback,
                 #[cfg(target_os = "windows")]

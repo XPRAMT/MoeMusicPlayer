@@ -101,11 +101,16 @@ fn parse_head(packet: &[u8]) -> Result<OpusHead, OpusError> {
 
 /// Whether the file starts with an Ogg page whose first packet is `OpusHead`.
 pub fn sniff_opus_file(path: &Path) -> bool {
-    let Ok(mut file) = std::fs::File::open(path) else {
+    let Ok(file) = std::fs::File::open(path) else {
         return false;
     };
+    sniff_opus(file)
+}
+
+/// As [`sniff_opus_file`], for any stream (a remote file).
+pub fn sniff_opus(mut stream: impl Read) -> bool {
     let mut buffer = [0_u8; 512];
-    let Ok(read) = file.read(&mut buffer) else {
+    let Ok(read) = stream.read(&mut buffer) else {
         return false;
     };
     let buffer = &buffer[..read];

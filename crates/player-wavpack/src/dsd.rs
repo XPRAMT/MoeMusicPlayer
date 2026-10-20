@@ -17,7 +17,19 @@ pub struct WavPackDsdStream {
 impl WavPackDsdStream {
     /// Open a WavPack file that holds DSD (a PCM file is refused).
     pub fn open_path(path: &Path) -> Result<Self, WavPackError> {
-        let reader = WavPackReader::open_path_with(path, true)?;
+        Self::from_reader(WavPackReader::open_path_with(path, true)?)
+    }
+
+    /// As [`open_path`](Self::open_path), for a stream that is not a file on disk (a remote file), with its `.wvc`
+    /// correction stream if there is one.
+    pub fn open(
+        main: impl crate::ReadSeek + 'static,
+        correction: Option<Box<dyn crate::ReadSeek>>,
+    ) -> Result<Self, WavPackError> {
+        Self::from_reader(WavPackReader::open_with(main, correction, true)?)
+    }
+
+    fn from_reader(reader: WavPackReader) -> Result<Self, WavPackError> {
         let info = reader.info();
         if !info.dsd {
             return Err(WavPackError::Open("這不是 DSD 的 WavPack 檔案".to_owned()));
