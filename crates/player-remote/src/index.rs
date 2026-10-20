@@ -176,6 +176,64 @@ impl RemoteMediaIndex {
     }
 }
 
+impl RemoteMediaIndex {
+    /// The `.lrc` files beside these songs (each folder is listed once): for a source that names its songs instead of
+    /// walking a tree, such as a playlist file.
+    pub fn lyric_sidecars_beside(
+        &self,
+        source_id: SourceId,
+        tracks: &[MediaTrackRecord],
+    ) -> Vec<LyricSidecar> {
+        let Ok(resolved) = self.resolver.resolve(source_id) else {
+            return Vec::new();
+        };
+        let mut by_folder: std::collections::HashMap<String, Vec<&MediaTrackRecord>> =
+            std::collections::HashMap::new();
+        for track in tracks {
+            if let MediaLocator::Remote { path, .. } = &track.locator {
+                let folder = path.rsplit_once('/').map_or("", |(folder, _)| folder);
+                by_folder.entry(folder.to_owned()).or_default().push(track);
+            }
+        }
+        let mut found = Vec::new();
+        for (folder, songs) in by_folder {
+            let Ok(entries) = resolved.fs.list(&join_path(&resolved.base_path, &folder)) else {
+                continue;
+            };
+            let lyrics: std::collections::HashMap<String, &crate::fs::RemoteEntry> = entries
+                .iter()
+                .filter(|entry| !entry.is_dir && entry.name.to_ascii_lowercase().ends_with(".lrc"))
+                .map(|entry| (entry.name[..entry.name.len() - 4].to_lowercase(), entry))
+                .collect();
+            for track in songs {
+                let MediaLocator::Remote { path, .. } = &track.locator else {
+                    continue;
+                };
+                let name = path.rsplit('/').next().unwrap_or(path);
+                let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem).to_lowercase();
+                let Some(entry) = lyrics.get(&stem) else {
+                    continue;
+                };
+                found.push(LyricSidecar {
+                    track_item_id: track.identity.source_item_id.clone(),
+                    locator: MediaLocator::Remote {
+                        source_id,
+                        path: if folder.is_empty() {
+                            entry.name.clone()
+                        } else {
+                            format!("{folder}/{}", entry.name)
+                        },
+                    },
+                    name: entry.name.clone(),
+                    size_bytes: entry.size,
+                    modified_at_utc_ms: entry.modified_ms,
+                });
+            }
+        }
+        found
+    }
+}
+
 /// One remote file as the tag reader's byte source.
 struct RemoteByteSource {
     fs: Arc<dyn RemoteFs>,

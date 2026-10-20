@@ -199,9 +199,11 @@ pub fn sync_playlist_file_source_with(
         })
         .collect::<Vec<_>>();
     let scan = reader.scan_paths(source.id, &media_paths);
+    let sidecars = lyric_sidecars_beside(&scan.tracks);
     let mut index = PlaylistMediaIndex {
         scan: Some(scan),
         reader,
+        sidecars,
     };
     let report =
         SyncEngine::sync_with_progress(&root, &mut index, database, synced_at_utc_ms, |_| {})
@@ -272,10 +274,81 @@ pub fn sync_playlist_file_source_with(
 struct PlaylistMediaIndex<'a> {
     scan: Option<SourceScan>,
     reader: &'a mut dyn PlaylistMediaReader,
+    /// The `.lrc` files beside the songs of the playlist, looked up with the scan.
+    sidecars: Vec<player_core::LyricSidecar>,
+}
+
+/// The `.lrc` files beside these songs (each folder is read once), paired by name without the extension.
+#[cfg(any(target_os = "windows", target_os = "android"))]
+fn lyric_sidecars_beside(tracks: &[MediaTrackRecord]) -> Vec<player_core::LyricSidecar> {
+    let mut by_folder: std::collections::HashMap<PathBuf, Vec<&MediaTrackRecord>> =
+        std::collections::HashMap::new();
+    for track in tracks {
+        if let MediaLocator::FileSystem(path) = &track.locator {
+            if let Some(folder) = path.parent() {
+                by_folder.entry(folder.to_path_buf()).or_default().push(track);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for (folder, songs) in by_folder {
+        let Ok(entries) = fs::read_dir(&folder) else {
+            continue;
+        };
+        let lyrics: std::collections::HashMap<String, PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("lrc"))
+            })
+            .filter_map(|path| {
+                let stem = path.file_stem()?.to_string_lossy().to_lowercase();
+                Some((stem, path))
+            })
+            .collect();
+        for track in songs {
+            let MediaLocator::FileSystem(path) = &track.locator else {
+                continue;
+            };
+            let Some(stem) = path.file_stem().map(|stem| stem.to_string_lossy().to_lowercase()) else {
+                continue;
+            };
+            let Some(lyric_path) = lyrics.get(&stem) else {
+                continue;
+            };
+            let Ok(metadata) = fs::metadata(lyric_path) else {
+                continue;
+            };
+            found.push(player_core::LyricSidecar {
+                track_item_id: track.identity.source_item_id.clone(),
+                locator: MediaLocator::FileSystem(lyric_path.clone()),
+                name: lyric_path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                size_bytes: metadata.len(),
+                modified_at_utc_ms: metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .and_then(|duration| i64::try_from(duration.as_millis()).ok()),
+            });
+        }
+    }
+    found
 }
 
 #[cfg(any(target_os = "windows", target_os = "android"))]
 impl MediaIndex for PlaylistMediaIndex<'_> {
+    fn take_lyric_sidecars(&mut self) -> Vec<player_core::LyricSidecar> {
+        std::mem::take(&mut self.sidecars)
+    }
+
+    fn scans_lyric_sidecars(&self) -> bool {
+        true
+    }
+
     fn scan(&mut self, _root: &LibraryRoot) -> SourceScan {
         self.scan.take().unwrap_or_else(|| SourceScan {
             source_id: SourceId::new(),

@@ -241,6 +241,8 @@ pub(crate) fn covering_folders(sources: &[SourceEntry], account_id: &str) -> Vec
 struct PlaylistIndex {
     scan: Option<SourceScan>,
     reader: RemoteMediaIndex,
+    /// The `.lrc` files beside the songs of the playlist, looked up with the scan.
+    sidecars: Vec<player_core::LyricSidecar>,
 }
 
 impl MediaIndex for PlaylistIndex {
@@ -250,6 +252,14 @@ impl MediaIndex for PlaylistIndex {
 
     fn metadata_read_threads(&self) -> usize {
         self.reader.metadata_read_threads()
+    }
+
+    fn take_lyric_sidecars(&mut self) -> Vec<player_core::LyricSidecar> {
+        std::mem::take(&mut self.sidecars)
+    }
+
+    fn scans_lyric_sidecars(&self) -> bool {
+        true
     }
 
     fn scan(&mut self, _root: &LibraryRoot) -> SourceScan {
@@ -398,9 +408,11 @@ pub(crate) fn sync_remote_playlist_source(
     });
     let reader = RemoteMediaIndex::new(Arc::clone(&resolver));
     let scan = reader.scan_paths(source.id, &own_paths);
+    let sidecars = reader.lyric_sidecars_beside(source.id, &scan.tracks);
     let mut index = PlaylistIndex {
         scan: Some(scan),
         reader,
+        sidecars,
     };
     let report =
         SyncEngine::sync_with_progress(&root, &mut index, database, synced_at_utc_ms, |update| {
