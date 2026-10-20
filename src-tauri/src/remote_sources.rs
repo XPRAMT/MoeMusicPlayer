@@ -359,6 +359,7 @@ pub(crate) async fn remote_source_add(
             .save_library_root(&root)
             .map_err(|error| error.to_string())?;
         let mut summary = crate::source_summary(database, &root)?;
+        summary.remote_account_id = Some(account.id.clone());
         summary.location = if base_for_summary.is_empty() {
             account.name.clone()
         } else {

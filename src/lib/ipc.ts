@@ -231,6 +231,8 @@ export type LyricsTextEffect = 'shadow' | 'stroke' | 'none';
 
 export interface LibrarySource {
   id: string;
+  /** For a remote folder: the server it is on. */
+  remoteAccountId?: string;
   kind: string;
   displayName: string;
   location: string;

@@ -2216,6 +2216,9 @@ struct RuntimeCapabilities {
 #[serde(rename_all = "camelCase")]
 struct LibrarySource {
     id: String,
+    /// For a remote folder: the server (`remoteAccounts[].id`) it is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote_account_id: Option<String>,
     kind: String,
     display_name: String,
     location: String,
@@ -2608,6 +2611,7 @@ mod playback_queue_ipc_tests {
     #[test]
     fn source_summary_serializes_renderer_camel_case_fields() {
         let source = LibrarySource {
+            remote_account_id: None,
             id: "source-id".to_owned(),
             kind: "playlistFile".to_owned(),
             display_name: "測試清單".to_owned(),
@@ -7152,6 +7156,10 @@ fn source_entry_summary_with(
     source: &SourceEntry,
     accounts: &[player_remote::account::RemoteAccount],
 ) -> Result<LibrarySource, String> {
+    let remote_account_id = match &source.kind {
+        SourceEntryKind::Folder { remote_account, .. } => remote_account.clone(),
+        SourceEntryKind::PlaylistFile { .. } => None,
+    };
     let (kind, location) = match &source.kind {
         SourceEntryKind::Folder {
             media_kind,
@@ -7177,6 +7185,7 @@ fn source_entry_summary_with(
         .map_err(|error| error.to_string())?
         .flatten();
     Ok(LibrarySource {
+        remote_account_id,
         id: source.id.to_string(),
         kind,
         display_name: source.display_name.clone(),
@@ -7333,6 +7342,7 @@ fn source_summary(database: &Database, root: &LibraryRoot) -> Result<LibrarySour
         .sync_state(root.id)
         .map_err(|error| error.to_string())?;
     Ok(LibrarySource {
+        remote_account_id: None,
         id: root.id.to_string(),
         kind: source_kind_name(root.kind).to_owned(),
         display_name: root.display_name.clone(),

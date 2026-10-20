@@ -4300,6 +4300,7 @@
                 {/if}
               </section>
             {/if}
+            {#snippet localPane()}
             {#if capabilities?.platform === 'windows'}
               <div class="source-action-row source-action-buttons source-folder-picker">
                 <button
@@ -4402,15 +4403,19 @@
                 {/if}
               </div>
             {/if}
+            {/snippet}
 
             {#if capabilities?.platform === 'windows' || capabilities?.platform === 'android'}
               <RemoteSourcesSettings
                 disabled={!sourceSyncReady || isUpdatingSource}
                 {remoteSources}
+                {localPane}
                 onSourceAdded={async () => { await loadSources(); await syncLibrary(); }}
                 onToggleSource={(source, enabled) => void setSourceEnabled(source, enabled)}
                 onRemoveSource={(source) => void removeSource(source)}
               />
+            {:else}
+              {@render localPane()}
             {/if}
                 </section>
               </div>
