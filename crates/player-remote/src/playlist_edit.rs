@@ -381,6 +381,11 @@ pub fn read_all(fs: &dyn RemoteFs, path: &str) -> Result<Vec<u8>, RemoteError> {
     Ok(bytes)
 }
 
+/// The name the previous version of a playlist file is kept under: the file's name plus `.bak` (`x.m3u8.bak`).
+pub fn backup_path(path: &str) -> String {
+    format!("{path}.bak")
+}
+
 /// The folder of a file path (`""` at the root).
 pub fn folder_of(path: &str) -> &str {
     path.trim_matches('/')
@@ -416,7 +421,7 @@ pub fn edit_playlist_file(
         return Ok(false);
     };
     let len = edited.len() as u64;
-    fs.replace_file(file_rel, &mut Cursor::new(edited), len, Some(stamp))
+    fs.replace_file_keeping_backup(file_rel, &mut Cursor::new(edited), len, Some(stamp), &backup_path(file_rel))
         .map_err(map)?;
     Ok(true)
 }
@@ -755,5 +760,119 @@ mod tests {
                 "{new}"
             );
         }
+    }
+
+    // ---- the single `.bak` backup ----
+
+    fn bytes_of(root: &std::path::Path, file: &str) -> Vec<u8> {
+        std::fs::read(root.join(file)).unwrap()
+    }
+
+    fn strays(root: &std::path::Path, folder: &str) -> Vec<String> {
+        std::fs::read_dir(root.join(folder))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".moetmp-"))
+            .collect()
+    }
+
+    #[test]
+    fn the_first_edit_keeps_the_previous_version_as_bak_and_a_second_edit_replaces_it() {
+        let root = tree(&["Music/A/one.flac", "Music/A/two.flac", "Music/A/three.flac"]);
+        let file = "Music/Playlists/p.m3u8";
+        let v1 = b"../A/one.flac\n";
+        let v2 = run(&root, file, v1, add("Music/A/two.flac")).unwrap();
+        assert_eq!(v2, b"../A/one.flac\n../A/two.flac\n");
+        assert_eq!(bytes_of(&root, "Music/Playlists/p.m3u8.bak"), v1);
+        // A second edit: the backup is the version right before it, and there is only one.
+        edit_playlist_file(&DirFs::new(&root), file, &add("Music/A/three.flac")).unwrap();
+        assert_eq!(bytes_of(&root, "Music/Playlists/p.m3u8.bak"), v2);
+        assert_eq!(bytes_of(&root, file), b"../A/one.flac\n../A/two.flac\n../A/three.flac\n");
+        assert!(strays(&root, "Music/Playlists").is_empty());
+        assert_eq!(std::fs::read_dir(root.join("Music/Playlists")).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn a_stale_bak_is_replaced_and_m3u_keeps_its_own_name() {
+        let root = tree(&["Music/a.flac", "Music/b.flac"]);
+        std::fs::write(root.join("Music/old.m3u.bak"), b"stale").unwrap();
+        let out = run(&root, "Music/old.m3u", b"a.flac\n", add("Music/b.flac")).unwrap();
+        assert_eq!(out, b"a.flac\nb.flac\n");
+        assert_eq!(bytes_of(&root, "Music/old.m3u.bak"), b"a.flac\n");
+    }
+
+    #[test]
+    fn a_refused_edit_or_a_no_op_creates_no_backup() {
+        let root = tree(&["Music/a.flac"]);
+        // Duplicate add: nothing is written.
+        run(&root, "Music/p.m3u8", b"a.flac\n", add("Music/a.flac")).unwrap();
+        assert!(!root.join("Music/p.m3u8.bak").exists());
+        // A non-UTF-8 file is refused.
+        run(&root, "Music/q.m3u8", &[b'a', 0xE9, b'\n'], add("Music/a.flac")).unwrap_err();
+        assert!(!root.join("Music/q.m3u8.bak").exists());
+    }
+
+    #[test]
+    fn a_changed_file_gets_no_backup_and_a_new_file_has_nothing_to_back_up() {
+        let root = tree(&["Music/a.flac"]);
+        let fs = DirFs::new(&root);
+        std::fs::write(root.join("Music/p.m3u8"), b"a.flac\n").unwrap();
+        let stamp = FileStamp::of(&fs.stat("Music/p.m3u8").unwrap());
+        std::fs::write(root.join("Music/p.m3u8"), b"someone else wrote this\n").unwrap();
+        let refused = fs.replace_file_keeping_backup("Music/p.m3u8", &mut &b"new"[..], 3, Some(stamp), "Music/p.m3u8.bak");
+        assert_eq!(refused, Err(RemoteError::Changed));
+        assert!(!root.join("Music/p.m3u8.bak").exists());
+        assert!(strays(&root, "Music").is_empty());
+        // A file that does not exist yet.
+        fs.replace_file_keeping_backup("Music/new.m3u8", &mut &b"fresh"[..], 5, None, "Music/new.m3u8.bak").unwrap();
+        assert_eq!(bytes_of(&root, "Music/new.m3u8"), b"fresh");
+        assert!(!root.join("Music/new.m3u8.bak").exists());
+    }
+
+    /// The last rename fails: the original is put back untouched, the old backup is gone (it was replaced by the
+    /// original and the original is back), and no temporary file stays.
+    #[test]
+    fn a_failing_final_rename_rolls_back_to_the_untouched_original() {
+        struct Failing(DirFs);
+        impl RemoteFs for Failing {
+            fn list(&self, dir: &str) -> Result<Vec<crate::fs::RemoteEntry>, RemoteError> {
+                self.0.list(dir)
+            }
+            fn stat(&self, path: &str) -> Result<crate::fs::RemoteEntry, RemoteError> {
+                self.0.stat(path)
+            }
+            fn open(&self, path: &str) -> Result<Box<dyn crate::fs::RemoteFile>, RemoteError> {
+                self.0.open(path)
+            }
+            fn replace_file(
+                &self,
+                path: &str,
+                source: &mut dyn std::io::Read,
+                len: u64,
+                expected: Option<FileStamp>,
+            ) -> Result<crate::fs::RemoteEntry, RemoteError> {
+                self.0.replace_file(path, source, len, expected)
+            }
+            fn remove_file(&self, path: &str) -> Result<(), RemoteError> {
+                self.0.remove_file(path)
+            }
+            fn rename_file(&self, from: &str, to: &str) -> Result<(), RemoteError> {
+                if from.contains(".moetmp-") {
+                    return Err(RemoteError::Network("link dropped".to_owned()));
+                }
+                self.0.rename_file(from, to)
+            }
+        }
+        let root = tree(&["Music/a.flac", "Music/b.flac"]);
+        let file = "Music/Playlists/p.m3u8";
+        std::fs::create_dir_all(root.join("Music/Playlists")).unwrap();
+        std::fs::write(root.join(file), b"../a.flac\n").unwrap();
+        let before = std::fs::metadata(root.join(file)).unwrap().modified().unwrap();
+        let error = edit_playlist_file(&Failing(DirFs::new(&root)), file, &add("Music/b.flac")).unwrap_err();
+        assert!(matches!(error, EditError::Failed(_)));
+        assert_eq!(bytes_of(&root, file), b"../a.flac\n");
+        assert_eq!(std::fs::metadata(root.join(file)).unwrap().modified().unwrap(), before);
+        assert!(strays(&root, "Music/Playlists").is_empty());
+        assert!(!root.join("Music/Playlists/p.m3u8.bak").exists());
     }
 }

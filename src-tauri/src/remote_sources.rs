@@ -374,8 +374,9 @@ pub(crate) struct RemotePlaylistBrowseView {
 }
 
 fn is_playlist_name(name: &str) -> bool {
+    // Temporary files (`.moetmp-…`) and backups (`….m3u8.bak`) are not playlists.
     let lower = name.to_ascii_lowercase();
-    lower.ends_with(".m3u") || lower.ends_with(".m3u8")
+    !name.starts_with('.') && (lower.ends_with(".m3u") || lower.ends_with(".m3u8"))
 }
 
 fn playlists_of(
@@ -610,7 +611,7 @@ pub(crate) async fn remote_source_add(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_folder;
+    use super::{is_playlist_name, normalize_folder};
 
     #[test]
     fn folder_paths_are_stored_without_slashes_at_the_ends() {
@@ -618,5 +619,14 @@ mod tests {
         assert_eq!(normalize_folder("Music\\Loss"), "Music/Loss");
         assert_eq!(normalize_folder("/"), "");
         assert_eq!(normalize_folder("./a/./b"), "a/b");
+    }
+
+    #[test]
+    fn a_backup_of_a_playlist_is_not_a_playlist() {
+        assert!(is_playlist_name("Mix.M3U8"));
+        assert!(is_playlist_name("old.m3u"));
+        assert!(!is_playlist_name("mix.m3u8.bak"));
+        assert!(!is_playlist_name("old.m3u.bak"));
+        assert!(!is_playlist_name(".moetmp-mix.m3u8"));
     }
 }

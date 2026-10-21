@@ -50,6 +50,65 @@ pub(crate) fn set_playlist_membership(
     }
 }
 
+/// Write a playlist file that already exists (or create one), keeping exactly one backup of the version before: the
+/// original becomes `<name>.bak` (an older `.bak` is deleted first) and the new bytes take its name. The order is safe:
+/// the new bytes go to `.moetmp-<name>` beside it and are checked first; if renaming the original or the temporary file
+/// fails, everything is put back and the original is untouched. `previous` is what was read before editing (`None`: the
+/// file did not exist); a file that no longer holds exactly that is refused (someone else wrote it meanwhile).
+#[cfg(any(target_os = "windows", target_os = "android", test))]
+pub(crate) fn write_keeping_backup(
+    path: &std::path::Path,
+    previous: Option<&[u8]>,
+    bytes: &[u8],
+) -> Result<(), String> {
+    const CHANGED: &str = "播放清單檔案在讀取後被其他程式改動，尚未寫入。請重新整理後再試一次。";
+    let exists = path.exists();
+    match (exists, previous) {
+        (true, Some(previous)) => {
+            let current = std::fs::read(path).map_err(|error| format!("無法重新讀取播放清單：{error}"))?;
+            if current != previous {
+                return Err(CHANGED.to_owned());
+            }
+        }
+        (false, None) => {}
+        _ => return Err(CHANGED.to_owned()),
+    }
+    let name = path
+        .file_name()
+        .ok_or_else(|| "播放清單檔案路徑無效。".to_owned())?
+        .to_os_string();
+    let mut temp_name = std::ffi::OsString::from(".moetmp-");
+    temp_name.push(&name);
+    let temp = path.with_file_name(temp_name);
+    let mut backup_name = name;
+    backup_name.push(".bak");
+    let backup = path.with_file_name(backup_name);
+
+    let drop_temp = |error: String| {
+        let _ = std::fs::remove_file(&temp);
+        error
+    };
+    std::fs::write(&temp, bytes).map_err(|error| drop_temp(format!("無法寫入播放清單暫存檔：{error}")))?;
+    let written = std::fs::metadata(&temp).map(|meta| meta.len()).unwrap_or(0);
+    if written != bytes.len() as u64 {
+        return Err(drop_temp("播放清單暫存檔的大小不符，尚未寫入。".to_owned()));
+    }
+    if exists {
+        // Windows refuses to rename over a file, so the older backup is deleted first.
+        if backup.exists() {
+            std::fs::remove_file(&backup).map_err(|error| drop_temp(format!("無法刪除舊的備份檔：{error}")))?;
+        }
+        std::fs::rename(path, &backup).map_err(|error| drop_temp(format!("無法備份原播放清單：{error}")))?;
+        if let Err(error) = std::fs::rename(&temp, path) {
+            let _ = std::fs::rename(&backup, path);
+            return Err(drop_temp(format!("無法原子更新播放清單：{error}")));
+        }
+    } else if let Err(error) = std::fs::rename(&temp, path) {
+        return Err(drop_temp(format!("無法原子更新播放清單：{error}")));
+    }
+    Ok(())
+}
+
 fn locator_sort_key(locator: &MediaLocator) -> String {
     match locator {
         MediaLocator::FileSystem(path) => windows_path_sort_key(path),
@@ -436,5 +495,79 @@ mod tests {
             true,
         ));
         assert_eq!(playlist.entries.len(), 1);
+    }
+
+    // ---- the single `.bak` backup of a local playlist file ----
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("moe-favorites-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn files_in(dir: &PathBuf) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn writing_keeps_one_backup_of_the_version_before_the_latest_change() {
+        for name in ["MyLove.m3u8", "mix.m3u"] {
+            let dir = scratch(&format!("bak-{name}"));
+            let file = dir.join(name);
+            std::fs::write(&file, b"v1").unwrap();
+            super::write_keeping_backup(&file, Some(b"v1"), b"v2").unwrap();
+            assert_eq!(std::fs::read(&file).unwrap(), b"v2");
+            assert_eq!(std::fs::read(dir.join(format!("{name}.bak"))).unwrap(), b"v1");
+            super::write_keeping_backup(&file, Some(b"v2"), b"v3").unwrap();
+            assert_eq!(std::fs::read(&file).unwrap(), b"v3");
+            assert_eq!(std::fs::read(dir.join(format!("{name}.bak"))).unwrap(), b"v2");
+            assert_eq!(files_in(&dir), vec![name.to_owned(), format!("{name}.bak")]);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_new_file_has_no_backup_and_a_changed_file_is_refused_untouched() {
+        let dir = scratch("bak-new");
+        let file = dir.join("MyLove.m3u8");
+        super::write_keeping_backup(&file, None, b"first").unwrap();
+        assert_eq!(files_in(&dir), vec!["MyLove.m3u8".to_owned()]);
+        std::fs::write(&file, b"edited elsewhere").unwrap();
+        assert!(super::write_keeping_backup(&file, Some(b"first"), b"second").is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), b"edited elsewhere");
+        assert_eq!(files_in(&dir), vec!["MyLove.m3u8".to_owned()]);
+        // A file created by someone else meanwhile is not overwritten either.
+        assert!(super::write_keeping_backup(&file, None, b"x").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_stale_backup_is_replaced() {
+        let dir = scratch("bak-stale");
+        let file = dir.join("mix.m3u8");
+        std::fs::write(&file, b"now").unwrap();
+        std::fs::write(dir.join("mix.m3u8.bak"), b"very old").unwrap();
+        super::write_keeping_backup(&file, Some(b"now"), b"next").unwrap();
+        assert_eq!(std::fs::read(dir.join("mix.m3u8.bak")).unwrap(), b"now");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_backup_that_cannot_be_replaced_leaves_the_original_and_no_temporary_file() {
+        let dir = scratch("bak-blocked");
+        let file = dir.join("mix.m3u8");
+        std::fs::write(&file, b"now").unwrap();
+        // A folder named like the backup cannot be deleted as a file: the sequence stops before touching the original.
+        std::fs::create_dir_all(dir.join("mix.m3u8.bak").join("inside")).unwrap();
+        assert!(super::write_keeping_backup(&file, Some(b"now"), b"next").is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), b"now");
+        assert_eq!(files_in(&dir), vec!["mix.m3u8".to_owned(), "mix.m3u8.bak".to_owned()]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

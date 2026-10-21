@@ -4921,7 +4921,7 @@ async fn favorites_set_membership(
                 )
             }
             .map_err(|error| error.to_string())?;
-            write_favorite_source(&app, source, file_path.as_deref(), &output)?;
+            write_favorite_source(&app, source, file_path.as_deref(), &bytes, &output)?;
             database
                 .save_playlist(&playlist)
                 .map_err(|error| format!("播放清單檔已更新，但資料庫投影保存失敗：{error}"))?;
@@ -5470,21 +5470,13 @@ fn write_favorite_source(
     _app: &AppHandle,
     source: &SourceEntry,
     path: Option<&std::path::Path>,
+    previous: &[u8],
     bytes: &[u8],
 ) -> Result<(), String> {
     let path = path.ok_or_else(|| "播放清單檔案路徑遺失。".to_owned())?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| "播放清單沒有父目錄。".to_owned())?;
-    let mut temp = path.as_os_str().to_os_string();
-    temp.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
-    let temp = std::path::PathBuf::from(temp);
-    std::fs::write(&temp, bytes).map_err(|error| format!("無法寫入播放清單暫存檔：{error}"))?;
-    if let Err(error) = std::fs::rename(&temp, path) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(format!("無法原子更新播放清單：{error}"));
-    }
-    let _ = (source, parent);
+    // The version before is kept as `<name>.bak` (one backup only), written in a safe order (favorites.rs).
+    favorites::write_keeping_backup(path, Some(previous), bytes)?;
+    let _ = source;
     Ok(())
 }
 

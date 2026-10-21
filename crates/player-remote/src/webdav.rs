@@ -478,8 +478,13 @@ impl RemoteFs for WebDavFs {
         // The most a song may be to be sent in one request from memory.
         const LARGEST: u64 = 512 * 1024 * 1024;
         // This also signs in, so the request that carries the file does not have to be answered with a challenge.
-        let current = self.stat(path)?;
-        if let Some(expected) = expected {
+        // A file that does not exist yet can be created (when nothing was expected of it).
+        let current = match self.stat(path) {
+            Ok(current) => Some(current),
+            Err(RemoteError::NotFound) if expected.is_none() => None,
+            Err(error) => return Err(error),
+        };
+        if let (Some(expected), Some(current)) = (expected, current) {
             if FileStamp::of(&current) != expected {
                 return Err(RemoteError::Changed);
             }
@@ -545,6 +550,25 @@ impl RemoteFs for WebDavFs {
             404 => Err(RemoteError::NotFound),
             401 | 403 => Err(RemoteError::Auth),
             status => Err(RemoteError::Protocol(format!("DELETE 回應 {status}"))),
+        }
+    }
+
+    fn rename_file(&self, from: &str, to: &str) -> Result<(), RemoteError> {
+        let method = Method::from_bytes(b"MOVE").expect("a valid method");
+        let moved = self.client.send(
+            method,
+            from.trim_matches('/'),
+            &[
+                ("Destination", self.client.destination(to)),
+                ("Overwrite", "F".to_owned()),
+            ],
+            None,
+        )?;
+        match moved.status().as_u16() {
+            200 | 201 | 204 => Ok(()),
+            401 | 403 => Err(RemoteError::Auth),
+            404 => Err(RemoteError::NotFound),
+            status => Err(RemoteError::Protocol(format!("MOVE 回應 {status}"))),
         }
     }
 
@@ -770,6 +794,30 @@ mod tests {
         // The file changed since it was read: it is not overwritten.
         let stale = fs.replace_file(path, &mut &b"x"[..], 1, Some(before));
         assert_eq!(stale, Err(RemoteError::Changed));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_replaced_file_is_kept_as_the_single_bak_backup_on_webdav() {
+        let dir = music_folder("backup");
+        let server = TestWebDav::serve(&dir, Auth::Digest { user: "me".into(), password: "s3cret".into() });
+        let fs = fs_for(&server, Some("s3cret"));
+        let path = "專輯 A/list.m3u8";
+        let folder = dir.join("專輯 A");
+        std::fs::write(folder.join("list.m3u8"), b"one\n").unwrap();
+        std::fs::write(folder.join("list.m3u8.bak"), b"stale").unwrap();
+        for (new, kept) in [(&b"two\n"[..], &b"one\n"[..]), (&b"three\n"[..], &b"two\n"[..])] {
+            let before = FileStamp::of(&fs.stat(path).unwrap());
+            fs.replace_file_keeping_backup(path, &mut &new[..], new.len() as u64, Some(before), "專輯 A/list.m3u8.bak")
+                .unwrap();
+            assert_eq!(std::fs::read(folder.join("list.m3u8")).unwrap(), new);
+            assert_eq!(std::fs::read(folder.join("list.m3u8.bak")).unwrap(), kept);
+        }
+        let strays = std::fs::read_dir(&folder)
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".moetmp-"))
+            .count();
+        assert_eq!(strays, 0);
         let _ = std::fs::remove_dir_all(dir);
     }
 

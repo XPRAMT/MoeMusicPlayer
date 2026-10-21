@@ -130,6 +130,73 @@ pub trait RemoteFs: Send + Sync {
         Err(RemoteError::Unsupported("這個協定目前不能刪除".to_owned()))
     }
 
+    /// Rename a file within the tree. The destination must not exist (nothing is replaced).
+    fn rename_file(&self, from: &str, to: &str) -> Result<(), RemoteError> {
+        let _ = (from, to);
+        Err(RemoteError::Unsupported("這個協定目前不能改名".to_owned()))
+    }
+
+    /// As [`replace_file`](Self::replace_file), but the version being replaced is kept as `backup` (beside it): at the
+    /// end `path` holds the new bytes and `backup` the old ones, and an older `backup` is gone, so there is only ever one.
+    /// The order is safe: the new bytes are sent to a temporary file first and checked, then the old backup is deleted, the
+    /// original is renamed to `backup`, and the temporary file takes the original's name; when one of the last renames
+    /// fails, everything is put back, so the original is never left missing. A file that does not exist yet has nothing
+    /// to back up.
+    fn replace_file_keeping_backup(
+        &self,
+        path: &str,
+        source: &mut dyn Read,
+        len: u64,
+        expected: Option<FileStamp>,
+        backup: &str,
+    ) -> Result<RemoteEntry, RemoteError> {
+        let original = match self.stat(path) {
+            Ok(entry) => Some(entry),
+            Err(RemoteError::NotFound) => None,
+            Err(error) => return Err(error),
+        };
+        let Some(original) = original else {
+            if expected.is_some() {
+                return Err(RemoteError::Changed);
+            }
+            return self.replace_file(path, source, len, None);
+        };
+        if let Some(expected) = expected {
+            if FileStamp::of(&original) != expected {
+                return Err(RemoteError::Changed);
+            }
+        }
+        // 1. The new bytes, in a file beside the original; `replace_file` checks that all of them arrived.
+        let temp = replacement_temp_path(path);
+        self.replace_file(&temp, source, len, None)?;
+        let result = (|| {
+            // Nothing may have happened to the original meanwhile.
+            let now = self.stat(path)?;
+            if FileStamp::of(&now) != FileStamp::of(&original) {
+                return Err(RemoteError::Changed);
+            }
+            // 2. The older backup goes.
+            match self.stat(backup) {
+                Ok(_) => self.remove_file(backup)?,
+                Err(RemoteError::NotFound) => {}
+                Err(error) => return Err(error),
+            }
+            // 3. The original becomes the backup.
+            self.rename_file(path, backup)?;
+            // 4. The new bytes take its name; on failure the original comes back.
+            if let Err(error) = self.rename_file(&temp, path) {
+                let _ = self.rename_file(backup, path);
+                return Err(error);
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = self.remove_file(&temp);
+        }
+        result?;
+        self.stat(path)
+    }
+
     /// Blocks a sequential reader should fetch per request on this protocol (see [`RangeReader::with_read_ahead`]).
     fn read_ahead_blocks(&self) -> u64 {
         READ_AHEAD_BLOCKS

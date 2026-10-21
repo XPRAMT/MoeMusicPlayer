@@ -112,6 +112,15 @@ impl RemoteFs for DirFs {
         std::fs::remove_file(self.resolve(path)?).map_err(map_io)
     }
 
+    fn rename_file(&self, from: &str, to: &str) -> Result<(), RemoteError> {
+        let (from, to) = (self.resolve(from)?, self.resolve(to)?);
+        // A rename never replaces on every platform (Windows refuses); keep that contract everywhere.
+        if to.exists() {
+            return Err(RemoteError::Protocol("the destination exists".to_owned()));
+        }
+        std::fs::rename(from, to).map_err(map_io)
+    }
+
     fn open(&self, path: &str) -> Result<Box<dyn RemoteFile>, RemoteError> {
         let file = File::open(self.resolve(path)?).map_err(map_io)?;
         let len = file.metadata().map_err(map_io)?.len();
