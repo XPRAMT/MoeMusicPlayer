@@ -31,7 +31,7 @@
 
 | | Windows（x64） | Android（arm64） |
 |---|---|---|
-| 格式 | WAV、MP3、FLAC、AAC/M4A、Ogg Vorbis、Ogg Opus、DSD（`.dsf`）、Matroska 音訊（`.mka`） | 依 Android 媒體框架可播放的格式：上述常見格式與 DSD（`.dsf`） |
+| 格式 | WAV、MP3、FLAC、AAC/M4A、Ogg Vorbis、Ogg Opus、WavPack（`.wv`，無損與 hybrid，可搭配 `.wvc`；也支援 DSD-in-WavPack）、DSD（`.dsf`）、Matroska 音訊（`.mka`） | 依 Android 媒體框架可播放的格式，另由程式自己的解碼器播放 WavPack 與 DSD（`.dsf`） |
 | 輸出 | 共享模式、**WASAPI 獨佔模式**（位元完美）、DSD 的 **DoP**、**同時輸出到多台裝置**（各自有音量、延遲與聲道映射） | 系統音訊輸出 |
 | DSEE HX 升頻 | 選用（需 Sony Music Center；本專案不含其濾鏡） | 無 |
 | 歌詞顯示 | 歌詞頁**與工作列歌詞** | 歌詞頁 |

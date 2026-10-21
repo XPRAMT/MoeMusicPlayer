@@ -31,7 +31,7 @@
 
 | | Windows (x64) | Android (arm64) |
 |---|---|---|
-| Formats | WAV, MP3, FLAC, AAC/M4A, Ogg Vorbis, Ogg Opus, DSD (`.dsf`), Matroska audio (`.mka`) | What Android's media framework plays: the common formats above and DSD (`.dsf`) |
+| Formats | WAV, MP3, FLAC, AAC/M4A, Ogg Vorbis, Ogg Opus, WavPack (`.wv`, lossless and hybrid, with a matching `.wvc`; also DSD-in-WavPack), DSD (`.dsf`), Matroska audio (`.mka`) | What Android's media framework plays: the common formats above, plus WavPack and DSD (`.dsf`) through the app's own decoders |
 | Output | Shared mode, **WASAPI exclusive mode** (bit-perfect), **DoP** for DSD, **several output devices at once** with per-device volume, delay and channel mapping | The system audio output |
 | DSEE HX upscaling | Optional (needs Sony Music Center; its filter is not included) | No |
 | Lyrics display | Lyrics page **and taskbar lyrics** | Lyrics page |
