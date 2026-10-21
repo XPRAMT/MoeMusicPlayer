@@ -51,6 +51,7 @@
   } from './queue-reorder.js';
   import { getGridTemplateMinWidthPx } from './grid-min-width.js';
   import { exceedsLongPressSlop, longPressDragGuard } from './long-press-reorder.js';
+  import { dragScroll } from './drag-scroll.js';
   import { getAlbumDetailNativeScrollTop, getAlbumDetailScrollerTop, getAlbumDetailScrollState } from './album-detail-collapse.js';
 
   interface Props<Item> {
@@ -800,6 +801,7 @@
     class:album-detail-scroll-timeline={hasLeadingOverlay && supportsScrollDrivenAlbumOverlay}
     class:is-reordering={dragFromIndex !== null}
     use:longPressDragGuard={() => dragFromIndex !== null}
+    use:dragScroll={() => dragFromIndex !== null}
     onscroll={handleViewportScroll}
     onkeydown={handleKeydown}
   >
@@ -938,6 +940,8 @@
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
     outline: none;
+    /* A drag scrolls the list (drag-scroll.js); it never selects the text of the rows it crosses. */
+    user-select: none;
   }
 
   .paged-virtual-frame.fill-available .paged-virtual-viewport {
