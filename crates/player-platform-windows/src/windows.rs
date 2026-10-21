@@ -64,6 +64,25 @@ impl WindowsMediaIndex {
         source_id: player_core::SourceId,
         paths: &[PathBuf],
     ) -> SourceScan {
+        self.scan_playlist_paths_with_progress(source_id, paths, &mut |_| {})
+    }
+
+    /// As [`scan_playlist_paths`](Self::scan_playlist_paths), reporting how many of the listed files are checked.
+    pub fn scan_playlist_paths_with_progress(
+        &mut self,
+        source_id: player_core::SourceId,
+        paths: &[PathBuf],
+        progress: &mut dyn FnMut(MediaScanProgress),
+    ) -> SourceScan {
+        let total = paths.len() as u64;
+        let mut report = |done: u64| {
+            progress(MediaScanProgress {
+                processed: done,
+                total: Some(total),
+                unit: MediaScanProgressUnit::Tracks,
+            });
+        };
+        report(0);
         let mut scan = SourceScan {
             source_id,
             state: SourceScanState::Complete,
@@ -71,7 +90,8 @@ impl WindowsMediaIndex {
             errors: Vec::new(),
         };
         let mut seen = HashSet::with_capacity(paths.len());
-        for path in paths {
+        for (index, path) in paths.iter().enumerate() {
+            report(index as u64);
             if !is_supported_audio_file(path) {
                 continue;
             }
@@ -148,6 +168,7 @@ impl WindowsMediaIndex {
                 metadata: None,
             });
         }
+        report(total);
         scan
     }
 }

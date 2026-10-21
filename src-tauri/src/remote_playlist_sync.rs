@@ -6,9 +6,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use player_core::{
-    FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MediaTrackRecord, MetadataReader,
-    Playlist, SourceId, SourceScan, SyncEngine, SyncProgress, SyncProgressStage, SyncProgressUnit,
-    SyncReport, TrackMetadata, TrackMetadataError,
+    FileFingerprint, LibraryRoot, MediaIndex, MediaLocator, MetadataReader, Playlist, SourceId, SyncEngine,
+    SyncProgress, SyncReport,
 };
 use player_db::{Database, PlaylistFileSyncState};
 use player_remote::fs::RemoteFs;
@@ -237,50 +236,6 @@ pub(crate) fn covering_folders(sources: &[SourceEntry], account_id: &str) -> Vec
         .collect()
 }
 
-/// The index of one playlist sync: the scan is made up front, the tags are read by the ordinary remote reader.
-struct PlaylistIndex {
-    scan: Option<SourceScan>,
-    reader: RemoteMediaIndex,
-    /// The `.lrc` files beside the songs of the playlist, looked up with the scan.
-    sidecars: Vec<player_core::LyricSidecar>,
-}
-
-impl MediaIndex for PlaylistIndex {
-    fn parallel_metadata_reader(&self) -> Option<&dyn MetadataReader> {
-        Some(&self.reader)
-    }
-
-    fn metadata_read_threads(&self) -> usize {
-        self.reader.metadata_read_threads()
-    }
-
-    fn take_lyric_sidecars(&mut self) -> Vec<player_core::LyricSidecar> {
-        std::mem::take(&mut self.sidecars)
-    }
-
-    fn scans_lyric_sidecars(&self) -> bool {
-        true
-    }
-
-    fn scan(&mut self, _root: &LibraryRoot) -> SourceScan {
-        self.scan.take().unwrap_or_else(|| SourceScan {
-            source_id: SourceId::new(),
-            state: player_core::SourceScanState::Incomplete {
-                reason: "playlist scan was already consumed".to_owned(),
-            },
-            tracks: Vec::new(),
-            errors: Vec::new(),
-        })
-    }
-
-    fn read_metadata(
-        &mut self,
-        track: &MediaTrackRecord,
-    ) -> Result<TrackMetadata, TrackMetadataError> {
-        MetadataReader::read(&self.reader, track)
-    }
-}
-
 /// Synchronize a registered playlist-file source that lives on a remote server. `None` means the file was unreachable
 /// or invalid: nothing is reconciled and a later sync tries again.
 pub(crate) fn sync_remote_playlist_source(
@@ -393,46 +348,22 @@ pub(crate) fn sync_remote_playlist_source(
             _ => None,
         })
         .collect();
-    // Looking the songs up on the server takes a while for a long list: the page is told at once that this source is busy.
-    progress(SyncProgress {
-        source_id: source.id,
-        stage: SyncProgressStage::Enumerating,
-        processed: 0,
-        total: Some(own_paths.len() as u64),
-        unit: SyncProgressUnit::Tracks,
-        observed: 0,
-        metadata_reads: 0,
-        unchanged: 0,
-        error_count: 0,
-        outcome: None,
-    });
+    // The lookup of the songs on the server runs inside the engine's scan: a playlist reports its progress the way a
+    // folder does, and the tags are read afterwards by the ordinary remote reader.
     let reader = RemoteMediaIndex::new(Arc::clone(&resolver));
-    // The lookup is the long part for a long list: the count moves as songs are found on the server.
-    let scan = reader.scan_paths_with_progress(source.id, &own_paths, &mut |done, total| {
-        progress(SyncProgress {
-            source_id: source.id,
-            stage: SyncProgressStage::Enumerating,
-            processed: done,
-            total: Some(total),
-            unit: SyncProgressUnit::Tracks,
-            observed: 0,
-            metadata_reads: 0,
-            unchanged: 0,
-            error_count: 0,
-            outcome: None,
-        });
-    });
-    let sidecars = reader.lyric_sidecars_beside(source.id, &scan.tracks);
-    let mut index = PlaylistIndex {
-        scan: Some(scan),
-        reader,
-        sidecars,
-    };
+    let source_id = source.id;
+    let mut index = crate::playlist_scan_index::PlaylistScanIndex::new(
+        Box::new(|report| reader.scan_paths_with_progress(source_id, &own_paths, report)),
+        Box::new(|tracks| reader.lyric_sidecars_beside(source_id, tracks)),
+        Box::new(|track| MetadataReader::read(&reader, track)),
+        Some((&reader, reader.metadata_read_threads())),
+    );
     let report =
         SyncEngine::sync_with_progress(&root, &mut index, database, synced_at_utc_ms, |update| {
             progress(update)
         })
-            .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?;
+    drop(index);
 
     // Attach the shared TrackId of every entry that now resolves; an entry that does not stays in the list and is tried
     // again at the next sync (the file may be back, or the folder source may not have been scanned yet).

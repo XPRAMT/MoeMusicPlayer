@@ -85,6 +85,7 @@ mod lyrics_provider;
 mod lyrics_service;
 mod main_background;
 #[cfg(any(target_os = "windows", target_os = "android", test))]
+mod playlist_scan_index;
 mod playlist_source_sync;
 mod remote_accounts;
 mod remote_connections;
@@ -7995,6 +7996,14 @@ where
                 &source,
                 synced_at_utc_ms,
                 &mut reader,
+                &mut |progress| {
+                    on_progress(
+                        &root,
+                        folder_roots.len() + remote_roots.len() + playlist_index,
+                        source_count,
+                        progress,
+                    )
+                },
             ) {
                 Ok(Some(report)) => sources.push(sync_summary(&root, report)),
                 Ok(None) => sources.push(unavailable_source_summary(
@@ -8029,8 +8038,9 @@ impl playlist_source_sync::PlaylistMediaReader for AndroidPlaylistReader<'_> {
         &mut self,
         source_id: SourceId,
         paths: &[std::path::PathBuf],
+        progress: &mut dyn FnMut(player_core::MediaScanProgress),
     ) -> player_core::SourceScan {
-        tauri_plugin_media_index::fs_scan::scan_paths(source_id, paths)
+        tauri_plugin_media_index::fs_scan::scan_paths_with_progress(source_id, paths, progress)
     }
 
     fn read_metadata(
@@ -8326,6 +8336,7 @@ where
                         source,
                         excluded_folders,
                         synced_at_utc_ms,
+                        &mut |progress| on_progress(&root, source_index, source_count, progress),
                     )?
                 };
                 if let Some(report) = report {
@@ -12499,6 +12510,7 @@ mod windows_library_integration_tests {
             &source,
             &[],
             1_800_000_000_000,
+            &mut |_| {},
         )
         .expect("create playlist projection")
         .expect("playlist source is readable");
@@ -12555,6 +12567,7 @@ mod windows_library_integration_tests {
             &source,
             &[],
             1_800_000_000_000,
+            &mut |_| {},
         )
         .expect("create playlist projection")
         .expect("playlist source is readable");
@@ -12627,6 +12640,7 @@ mod windows_library_integration_tests {
             &source,
             &[],
             1_800_000_000_000,
+            &mut |_| {},
         )
         .expect("create an existing playlist projection")
         .expect("playlist source is readable");

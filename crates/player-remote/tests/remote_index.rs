@@ -138,11 +138,12 @@ fn looking_songs_up_by_path_reports_how_far_it_got_and_ends_complete() {
     .map(|path| (*path).to_owned())
     .collect();
     let mut reports = Vec::new();
-    let scan = index.scan_paths_with_progress(SourceId::new(), &wanted, &mut |done, total| {
-        reports.push((done, total));
+    let scan = index.scan_paths_with_progress(SourceId::new(), &wanted, &mut |progress| {
+        reports.push((progress.processed, progress.total.unwrap_or(0)));
     });
     assert_eq!(scan.tracks.len(), 4);
     // Only the audio files are looked up; the count never goes backwards and finishes at the total.
+    assert_eq!(reports.first(), Some(&(0, 4)), "{reports:?}");
     assert_eq!(reports.last(), Some(&(4, 4)), "{reports:?}");
     assert!(reports.windows(2).all(|pair| pair[0].0 <= pair[1].0), "{reports:?}");
     assert!(reports.iter().all(|(_, total)| *total == 4), "{reports:?}");

@@ -91,16 +91,17 @@ impl RemoteMediaIndex {
     /// Scan the files a playlist names instead of a folder tree. `paths` are relative to the source's base folder; the
     /// result keeps the order of `paths`. A file that cannot be reached is an error of the scan, not of the playlist.
     pub fn scan_paths(&self, source_id: SourceId, paths: &[String]) -> SourceScan {
-        self.scan_paths_with_progress(source_id, paths, &mut |_, _| {})
+        self.scan_paths_with_progress(source_id, paths, &mut |_| {})
     }
 
-    /// As [`scan_paths`](Self::scan_paths), reporting `(looked up, to look up)` about every 100 ms while the songs are
-    /// looked up on the server (on the calling thread, so the callback needs no `Sync`).
+    /// As [`scan_paths`](Self::scan_paths), reporting how many of the songs are looked up on the server about every
+    /// 100 ms (on the calling thread, so the callback needs no `Sync`). The sync engine turns the reports into the
+    /// same banner progress a folder scan gives.
     pub fn scan_paths_with_progress(
         &self,
         source_id: SourceId,
         paths: &[String],
-        on_progress: &mut dyn FnMut(u64, u64),
+        on_progress: &mut dyn FnMut(MediaScanProgress),
     ) -> SourceScan {
         let mut scan = SourceScan {
             source_id,
@@ -130,6 +131,14 @@ impl RemoteMediaIndex {
         let next = AtomicUsize::new(0);
         let finished = AtomicUsize::new(0);
         let total = wanted.len() as u64;
+        let mut report = |done: u64| {
+            on_progress(MediaScanProgress {
+                processed: done.min(total),
+                total: Some(total),
+                unit: MediaScanProgressUnit::Tracks,
+            });
+        };
+        report(0);
         std::thread::scope(|scope| {
             let workers: Vec<_> = (0..LIST_WORKERS.min(wanted.len()))
                 .map(|_| {
@@ -154,11 +163,11 @@ impl RemoteMediaIndex {
                 let done = finished.load(Ordering::SeqCst) as u64;
                 if done != reported {
                     reported = done;
-                    on_progress(done.min(total), total);
+                    report(done);
                 }
             }
         });
-        on_progress(total, total);
+        report(total);
         let results = results.into_inner().unwrap_or_else(PoisonError::into_inner);
         let mut seen = std::collections::HashSet::new();
         for (path, outcome) in wanted.into_iter().zip(results) {

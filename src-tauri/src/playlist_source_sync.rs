@@ -48,7 +48,13 @@ fn is_video_mp4(path: &std::path::Path) -> bool {
 /// Platform media access used while syncing one playlist file.
 #[cfg(any(target_os = "windows", target_os = "android"))]
 pub trait PlaylistMediaReader {
-    fn scan_paths(&mut self, source_id: SourceId, paths: &[PathBuf]) -> SourceScan;
+    /// Look the listed files up, reporting how many are checked.
+    fn scan_paths(
+        &mut self,
+        source_id: SourceId,
+        paths: &[PathBuf],
+        progress: &mut dyn FnMut(player_core::MediaScanProgress),
+    ) -> SourceScan;
     fn read_metadata(
         &mut self,
         track: &MediaTrackRecord,
@@ -60,8 +66,14 @@ struct WindowsPlaylistReader(WindowsMediaIndex);
 
 #[cfg(target_os = "windows")]
 impl PlaylistMediaReader for WindowsPlaylistReader {
-    fn scan_paths(&mut self, source_id: SourceId, paths: &[PathBuf]) -> SourceScan {
-        self.0.scan_playlist_paths(source_id, paths)
+    fn scan_paths(
+        &mut self,
+        source_id: SourceId,
+        paths: &[PathBuf],
+        progress: &mut dyn FnMut(player_core::MediaScanProgress),
+    ) -> SourceScan {
+        self.0
+            .scan_playlist_paths_with_progress(source_id, paths, progress)
     }
 
     fn read_metadata(
@@ -107,11 +119,12 @@ pub fn sync_playlist_file_source(
     source: &SourceEntry,
     excluded_folders: &[PathBuf],
     synced_at_utc_ms: i64,
+    progress: &mut dyn FnMut(player_core::SyncProgress),
 ) -> Result<Option<SyncReport>, String> {
     let mut reader = WindowsPlaylistReader(WindowsMediaIndex::with_excluded_folders(
         excluded_folders.iter().cloned(),
     ));
-    sync_playlist_file_source_with(database, source, synced_at_utc_ms, &mut reader)
+    sync_playlist_file_source_with(database, source, synced_at_utc_ms, &mut reader, progress)
 }
 
 /// Same as the Windows entry point, with the platform's media reader (Android: real paths).
@@ -121,6 +134,7 @@ pub fn sync_playlist_file_source_with(
     source: &SourceEntry,
     synced_at_utc_ms: i64,
     reader: &mut dyn PlaylistMediaReader,
+    progress: &mut dyn FnMut(player_core::SyncProgress),
 ) -> Result<Option<SyncReport>, String> {
     let SourceEntryKind::PlaylistFile {
         playlist_id, path, ..
@@ -198,16 +212,21 @@ pub fn sync_playlist_file_source_with(
             MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
         })
         .collect::<Vec<_>>();
-    let scan = reader.scan_paths(source.id, &media_paths);
-    let sidecars = lyric_sidecars_beside(&scan.tracks);
-    let mut index = PlaylistMediaIndex {
-        scan: Some(scan),
-        reader,
-        sidecars,
-    };
-    let report =
-        SyncEngine::sync_with_progress(&root, &mut index, database, synced_at_utc_ms, |_| {})
-            .map_err(|error| error.to_string())?;
+    // The lookup of the listed files runs inside the engine's scan, so a playlist reports its progress the way a folder
+    // does (and the tags are read afterwards by the same reader).
+    let reader = std::cell::RefCell::new(reader);
+    let source_id = source.id;
+    let mut index = crate::playlist_scan_index::PlaylistScanIndex::new(
+        Box::new(|report| reader.borrow_mut().scan_paths(source_id, &media_paths, report)),
+        Box::new(lyric_sidecars_beside),
+        Box::new(|track| reader.borrow_mut().read_metadata(track)),
+        None,
+    );
+    let report = SyncEngine::sync_with_progress(&root, &mut index, database, synced_at_utc_ms, |update| {
+        progress(update)
+    })
+    .map_err(|error| error.to_string())?;
+    drop(index);
 
     // Canonical paths are used only to attach the shared TrackId. Keep imported locators intact
     // for lossless export and relinking after a temporarily missing file returns. Persist only
@@ -268,14 +287,6 @@ pub fn sync_playlist_file_source_with(
             .map_err(|error| error.to_string())?;
     }
     Ok(Some(report))
-}
-
-#[cfg(any(target_os = "windows", target_os = "android"))]
-struct PlaylistMediaIndex<'a> {
-    scan: Option<SourceScan>,
-    reader: &'a mut dyn PlaylistMediaReader,
-    /// The `.lrc` files beside the songs of the playlist, looked up with the scan.
-    sidecars: Vec<player_core::LyricSidecar>,
 }
 
 /// The `.lrc` files beside these songs (each folder is read once), paired by name without the extension.
@@ -339,41 +350,13 @@ fn lyric_sidecars_beside(tracks: &[MediaTrackRecord]) -> Vec<player_core::LyricS
     found
 }
 
-#[cfg(any(target_os = "windows", target_os = "android"))]
-impl MediaIndex for PlaylistMediaIndex<'_> {
-    fn take_lyric_sidecars(&mut self) -> Vec<player_core::LyricSidecar> {
-        std::mem::take(&mut self.sidecars)
-    }
-
-    fn scans_lyric_sidecars(&self) -> bool {
-        true
-    }
-
-    fn scan(&mut self, _root: &LibraryRoot) -> SourceScan {
-        self.scan.take().unwrap_or_else(|| SourceScan {
-            source_id: SourceId::new(),
-            state: player_core::SourceScanState::Incomplete {
-                reason: "playlist scan was already consumed".to_owned(),
-            },
-            tracks: Vec::new(),
-            errors: Vec::new(),
-        })
-    }
-
-    fn read_metadata(
-        &mut self,
-        track: &MediaTrackRecord,
-    ) -> Result<TrackMetadata, TrackMetadataError> {
-        self.reader.read_metadata(track)
-    }
-}
-
 #[cfg(not(any(target_os = "windows", target_os = "android")))]
 pub fn sync_playlist_file_source(
     _database: &mut Database,
     _source: &SourceEntry,
     _excluded_folders: &[std::path::PathBuf],
     _synced_at_utc_ms: i64,
+    _progress: &mut dyn FnMut(player_core::SyncProgress),
 ) -> Result<Option<SyncReport>, String> {
     Ok(None)
 }
@@ -490,7 +473,7 @@ mod tests {
         let source = playlist_source(&playlist_path, source_id, playlist_id);
         let mut database = Database::open_in_memory().expect("database");
 
-        let first = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_000)
+        let first = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_000, &mut |_| {})
             .expect("initial sync")
             .expect("playlist is readable");
         assert_eq!(
@@ -573,7 +556,7 @@ mod tests {
             .expect("seed stale MP4 playlist link");
 
         write_tagged_mp3(&song, "第二版・中繼資料已更新");
-        let second = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_001)
+        let second = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_001, &mut |_| {})
             .expect("unchanged playlist media check")
             .expect("playlist remains readable");
         assert_eq!(second.metadata_reads, 1, "changed audio tags are refreshed");
@@ -616,7 +599,7 @@ mod tests {
 
         fs::remove_file(&playlist_path).expect("take playlist source offline");
         assert!(
-            sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_002)
+            sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_002, &mut |_| {})
                 .expect("offline source is recoverable")
                 .is_none()
         );
@@ -627,7 +610,7 @@ mod tests {
 
         fs::write(&playlist_path, "#EXTM3U\n../夜の音樂 東京/暫時缺席.mp3\n")
             .expect("write changed playlist without previous song");
-        let changed = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_003)
+        let changed = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_003, &mut |_| {})
             .expect("reconcile changed playlist")
             .expect("changed playlist is readable");
         assert_eq!(changed.observed, 0);
@@ -649,7 +632,7 @@ mod tests {
 
         let recovered = music.join("暫時缺席.mp3");
         write_tagged_mp3(&recovered, "恢復的曲目");
-        let recovery = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_004)
+        let recovery = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_004, &mut |_| {})
             .expect("rescan restored entry")
             .expect("playlist readable");
         assert_eq!(recovery.observed, 1);
@@ -699,7 +682,7 @@ mod tests {
             .expect("initial mtime");
         let source = playlist_source(&playlist_path, SourceId::new(), PlaylistId::new());
         let mut database = Database::open_in_memory().expect("database");
-        sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_000)
+        sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_000, &mut |_| {})
             .expect("initial source sync");
 
         let changed = b"#EXTM3U\nsong-b.mp3\n";
@@ -712,7 +695,7 @@ mod tests {
             .set_times(std::fs::FileTimes::new().set_modified(original_modified))
             .expect("restore original mtime");
 
-        let report = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_001)
+        let report = sync_playlist_file_source(&mut database, &source, &[], 1_800_000_000_001, &mut |_| {})
             .expect("digest check")
             .expect("valid changed M3U8");
         assert_eq!(report.observed, 0);
