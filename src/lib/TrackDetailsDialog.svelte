@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatDetailsBitrate, formatDetailsSampleRate } from './track-details-format.js';
+  import { formatDetailsBitrate, formatDetailsDuration, formatDetailsSampleRate } from './track-details-format.js';
   import { tr } from './i18n.js';
   import { formatAudioFormat } from './track-columns.js';
   // 歌曲詳細資訊面板（ADR 0013 Phase 1）：單曲標籤檢視／暫存編輯，按「儲存」才寫檔。
@@ -359,7 +359,6 @@
   }
 
   const formatBytes = (bytes: number) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : `${Math.round(bytes / 1024)} KB`;
-  const formatDuration = (ms: number) => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
   const pad = (value: number) => String(value).padStart(2, '0');
   /** Local time with zone, e.g. 2026-10-16 23:54 (UTC+8). */
   const formatDate = (ms: number | null) => {
@@ -404,7 +403,7 @@
       <dl class="track-details-props">
         <dt>{tr("格式")}</dt><dd>{details.format}</dd>
         <dt>{tr("標籤")}</dt><dd>{details.tagFormat || '—'}</dd>
-        <dt>{tr("時長")}</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
+        <dt>{tr("時長")}</dt><dd>{formatDetailsDuration(details.properties.durationMs)}</dd>
         <dt>{tr("位元率")}</dt><dd>{formatDetailsBitrate(details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps)}</dd>
         <dt>{tr("取樣率")}</dt><dd>{formatDetailsSampleRate(details.properties.sampleRate)}</dd>
         <dt>{tr("位元深度")}</dt><dd>{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}</dd>

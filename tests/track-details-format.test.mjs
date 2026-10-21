@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import './helpers/untr-fs.mjs';
-import { formatDetailsBitrate, formatDetailsSampleRate } from '../src/lib/track-details-format.js';
+import { formatDetailsBitrate, formatDetailsDuration, formatDetailsSampleRate } from '../src/lib/track-details-format.js';
 
 test('bitrate shows kbps up to 1024 and Mbps above it', () => {
   assert.equal(formatDetailsBitrate(320), '320 kbps');
@@ -29,4 +29,14 @@ test('the details panel uses both helpers', () => {
   const dialog = readFileSync(new URL('../src/lib/TrackDetailsDialog.svelte', import.meta.url), 'utf8');
   assert.match(dialog, /formatDetailsBitrate\(/);
   assert.match(dialog, /formatDetailsSampleRate\(/);
+});
+
+test('duration shows a tenth of a second', () => {
+  assert.equal(formatDetailsDuration(200), '0:00.2');
+  assert.equal(formatDetailsDuration(211_400), '3:31.4');
+  assert.equal(formatDetailsDuration(211_960), '3:32.0');
+  assert.equal(formatDetailsDuration(59_950), '1:00.0');
+  assert.equal(formatDetailsDuration(0), '0:00.0');
+  assert.equal(formatDetailsDuration(3_723_456), '1:02:03.5');
+  assert.equal(formatDetailsDuration(undefined), '—');
 });
