@@ -208,5 +208,96 @@
     "license": "BSD-3-Clause",
     "repositoryUrl": "https://www.wavpack.com",
     "purpose": "WavPack 解碼器（原始碼隨專案附上、靜態連結；Copyright (c) 1998 - 2022 David Bryant）"
+  },
+  {
+    "name": "smb-rs (smb)",
+    "version": "0.12.1",
+    "license": "MIT",
+    "repositoryUrl": "https://github.com/afiffon/smb-rs",
+    "purpose": "SMB 2/3 遠端伺服器用戶端"
+  },
+  {
+    "name": "sspi-rs (sspi)",
+    "version": "0.21.3",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/devolutions/sspi-rs",
+    "purpose": "SMB 驗證（NTLM 握手）"
+  },
+  {
+    "name": "wasapi",
+    "version": "0.26.0",
+    "license": "MIT",
+    "repositoryUrl": "https://github.com/HEnquist/wasapi-rs",
+    "purpose": "Windows WASAPI 獨佔模式輸出"
+  },
+  {
+    "name": "Wry / Tao",
+    "version": "0.57.0 / 0.37.1",
+    "license": "Apache-2.0 OR MIT",
+    "repositoryUrl": "https://github.com/tauri-apps/wry",
+    "purpose": "Tauri 的 WebView 與視窗層"
+  },
+  {
+    "name": "webview2-com",
+    "version": "0.39.1",
+    "license": "MIT",
+    "repositoryUrl": "https://github.com/wravery/webview2-rs",
+    "purpose": "Windows WebView2 綁定"
+  },
+  {
+    "name": "RustFFT / RealFFT",
+    "version": "6.4.1 / 3.5.0",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/HEnquist/realfft",
+    "purpose": "頻譜圖與取樣率轉換的 FFT"
+  },
+  {
+    "name": "image / image-webp / zune-jpeg",
+    "version": "0.25.10 / 0.2.4 / 0.5.15",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/image-rs/image",
+    "purpose": "封面圖片解碼與縮圖"
+  },
+  {
+    "name": "zip",
+    "version": "2.6.1",
+    "license": "MIT",
+    "repositoryUrl": "https://github.com/zip-rs/zip2",
+    "purpose": "更新與備份的 ZIP 讀寫"
+  },
+  {
+    "name": "RustCrypto (chacha20poly1305、argon2、zeroize…)",
+    "version": "chacha20poly1305 0.10.1; argon2 0.5.3; zeroize 1.9.0",
+    "license": "MIT OR Apache-2.0",
+    "repositoryUrl": "https://github.com/RustCrypto",
+    "purpose": "遠端帳號密碼加密與備份密語"
+  },
+  {
+    "name": "ring",
+    "version": "0.17.14",
+    "license": "Apache-2.0 AND ISC",
+    "repositoryUrl": "https://github.com/briansmith/ring",
+    "purpose": "TLS 與驗證的加密原語"
+  },
+  {
+    "name": "rustls-webpki / webpki-roots",
+    "version": "0.103.13 / 1.0.9",
+    "license": "ISC / CDLA-Permissive-2.0",
+    "repositoryUrl": "https://github.com/rustls/webpki-roots",
+    "purpose": "HTTPS 憑證驗證與 Mozilla 根憑證資料"
+  },
+  {
+    "name": "ogg (Rust)",
+    "version": "0.9.2",
+    "license": "BSD-3-Clause",
+    "repositoryUrl": "https://github.com/RustAudio/ogg",
+    "purpose": "Ogg 容器讀寫"
+  },
+  {
+    "name": "Kotlin standard library",
+    "version": "Gradle 傳遞相依",
+    "license": "Apache-2.0",
+    "repositoryUrl": "https://github.com/JetBrains/kotlin",
+    "purpose": "Android 原生程式碼執行環境"
   }
 ]

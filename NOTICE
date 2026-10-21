@@ -29,3 +29,20 @@ This project depends on third-party packages under their own licenses (mostly MI
 Unicode, and MPL-2.0 for the Symphonia audio decoders and a few others). They are listed with their versions,
 licenses and links in Settings > About and in licenses/credits.json. The MPL-2.0 packages remain under MPL-2.0;
 their source is available from the links given there.
+
+Bundled native code (BSD-3-Clause notices)
+------------------------------------------
+- libwavpack 5.6.0 (decoder half, statically linked; source in crates/player-wavpack/vendor, full text in
+  crates/player-wavpack/vendor/COPYING):
+  Copyright (c) 1998 - 2022 David Bryant. All rights reserved. Neither the name of Conifer Software nor the names of
+  its contributors may be used to endorse or promote products derived from this software without specific prior
+  written permission. THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND (see COPYING for the complete
+  BSD-3-Clause conditions and disclaimer).
+- libopus (built from source by the opusic-sys crate and statically linked, Windows only): Copyright (c) 2001-2023
+  Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding,
+  Erik de Castro Lopo, Microsoft Corporation and Broadcom, under the BSD-3-Clause license
+  (https://opus-codec.org/license/).
+- SQLite (bundled by rusqlite) is in the public domain.
+- Other Rust and Android dependencies (Tauri, rustls, ring, smb-rs, Media3 ...) keep their own MIT, Apache-2.0, BSD,
+  ISC or Zlib licenses; Apache-2.0 components (e.g. AndroidX Media3) carry no additional NOTICE requirement beyond
+  this attribution.
