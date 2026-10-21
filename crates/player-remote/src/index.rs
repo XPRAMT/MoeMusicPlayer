@@ -22,8 +22,9 @@ use crate::fs::{
 /// faster on a distant server without loading it.
 const LIST_WORKERS: usize = 4;
 
-/// Tracks whose tags are read at the same time. Each read is a few round trips, so many at once keep a long link busy.
-pub const METADATA_READ_THREADS: usize = if cfg!(target_os = "android") { 8 } else { 16 };
+/// Tracks whose tags are read at the same time (16 on every platform, Windows and Android alike). Each read is a few
+/// round trips, so many at once keep a long link busy.
+pub const METADATA_READ_THREADS: usize = 16;
 
 /// A remote source's file tree and the folder inside it that the source is rooted at.
 #[derive(Clone)]
