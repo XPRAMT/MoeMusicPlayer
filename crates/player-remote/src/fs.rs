@@ -291,6 +291,10 @@ pub struct RangeReader {
     requests: u64,
     /// Blocks fetched per request by a sequential reader.
     read_ahead: u64,
+    /// Upper bound of the growing read-ahead (see [`RangeReader::with_growing_read_ahead`]); 0 = fixed read-ahead.
+    growth_limit: u64,
+    /// Sequential fetches in a row since the last jump.
+    sequential_run: u32,
 }
 
 impl RangeReader {
@@ -311,6 +315,8 @@ impl RangeReader {
             next_sequential: 0,
             requests: 0,
             read_ahead: READ_AHEAD_BLOCKS,
+            growth_limit: 0,
+            sequential_run: 0,
         }
     }
 
@@ -319,6 +325,16 @@ impl RangeReader {
     pub fn with_read_ahead(mut self, blocks: u64) -> Self {
         self.read_ahead = blocks.max(1);
         self.capacity = self.capacity.max(self.read_ahead as usize * 2);
+        self
+    }
+
+    /// A long sequential run (a tag that holds a megabyte-sized picture the parser has to read through) fetches more
+    /// and more per request: the first sequential fetch is the normal read-ahead, every further one in the same run
+    /// doubles, up to `max_blocks`. A reader that only jumps around, or reads one short stretch, never grows, so a
+    /// tag-sized read stays as small as it was. A fetch also stops where the cache already holds the next block.
+    pub fn with_growing_read_ahead(mut self, max_blocks: u64) -> Self {
+        self.growth_limit = max_blocks.max(self.read_ahead);
+        self.capacity = self.capacity.max(self.growth_limit as usize * 2);
         self
     }
 
@@ -346,8 +362,19 @@ impl RangeReader {
         }
         let last_block = self.len.saturating_sub(1) / self.block_size as u64;
         let sequential = block * self.block_size as u64 == self.next_sequential && block > 0;
-        let count = if sequential { self.read_ahead } else { 1 };
-        let count = count.min(last_block + 1 - block);
+        self.sequential_run = if sequential { self.sequential_run.saturating_add(1) } else { 0 };
+        let mut count = if sequential { self.read_ahead } else { 1 };
+        if self.growth_limit > 0 && self.sequential_run > 1 {
+            let doublings = (self.sequential_run - 1).min(16);
+            count = (self.read_ahead << doublings).min(self.growth_limit);
+        }
+        let mut count = count.min(last_block + 1 - block);
+        if self.growth_limit > 0 {
+            // Do not fetch again what is already in the cache.
+            if let Some(cached) = (1..count).find(|index| self.blocks.contains_key(&(block + index))) {
+                count = cached;
+            }
+        }
         let start = block * self.block_size as u64;
         let wanted = (0..count)
             .map(|index| self.block_len(block + index))
@@ -551,6 +578,75 @@ mod tests {
         // 8 MiB = 32 blocks; the first request is one block, the rest are four blocks each: about 9 requests.
         let made = requests.load(std::sync::atomic::Ordering::SeqCst);
         assert!(made <= 12, "{made} requests for 8 MiB");
+    }
+
+    fn metadata_like(data: &[u8]) -> (RangeReader, std::sync::Arc<std::sync::atomic::AtomicU64>) {
+        let (file, requests) = MemoryFile::new(data.to_vec());
+        let reader = RangeReader::with_geometry(Box::new(file), 16 * 1024, 64)
+            .with_read_ahead(2)
+            .with_growing_read_ahead(64);
+        (reader, requests)
+    }
+
+    #[test]
+    fn a_long_sequential_run_of_a_tag_read_grows_its_requests() {
+        // A 2.9 MiB comment packet read from the start: 16 KiB blocks, 2 per request would be about 92 requests.
+        let data = pattern(6 * 1024 * 1024);
+        let (mut reader, requests) = metadata_like(&data);
+        let mut out = vec![0u8; 3_000_000];
+        reader.read_exact(&mut out).unwrap();
+        assert_eq!(out[..], data[..3_000_000]);
+        let made = requests.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(made <= 10, "{made} requests for 3 MB");
+    }
+
+    #[test]
+    fn the_common_tag_read_is_not_changed_by_the_growth() {
+        // Head block, then one block after a skipped picture: two requests of one block each.
+        let data = pattern(1024 * 1024);
+        let (mut reader, requests) = metadata_like(&data);
+        let mut head = vec![0u8; 4096];
+        reader.read_exact(&mut head).unwrap();
+        reader.seek(SeekFrom::Start(65_536)).unwrap();
+        reader.read_exact(&mut head).unwrap();
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+        // A short sequential stretch (a 40 KiB tag): the first sequential fetch is still the 2-block read-ahead.
+        let (mut reader, requests) = metadata_like(&data);
+        let mut tag = vec![0u8; 40 * 1024];
+        reader.read_exact(&mut tag).unwrap();
+        assert_eq!(tag[..], data[..40 * 1024]);
+        // blocks 0 (1), 1-2 (2): 2 requests, 48 KiB, exactly as before.
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn growth_stops_at_blocks_already_cached_and_resets_after_a_jump() {
+        let data = pattern(4 * 1024 * 1024);
+        let (mut reader, requests) = metadata_like(&data);
+        // Cache a block far ahead first (the audio frame after a tag), then read the tag through.
+        reader.seek(SeekFrom::Start(400 * 1024)).unwrap();
+        let mut one = [0u8; 8];
+        reader.read_exact(&mut one).unwrap();
+        let mut out = vec![0u8; 420 * 1024];
+        reader.seek(SeekFrom::Start(0)).unwrap();
+        reader.read_exact(&mut out).unwrap();
+        assert_eq!(out[..], data[..420 * 1024]);
+        // Everything up to the cached block was fetched once: no byte is requested twice.
+        let fetched_blocks_bound = 420 * 1024 / (16 * 1024) + 1;
+        let made = requests.load(std::sync::atomic::Ordering::SeqCst) as usize;
+        assert!(made <= 8, "{made} requests, {fetched_blocks_bound} blocks");
+        // A jump resets the run: the next sequential fetch is the plain read-ahead again.
+        reader.seek(SeekFrom::Start(3 * 1024 * 1024)).unwrap();
+        let before = requests.load(std::sync::atomic::Ordering::SeqCst);
+        reader.read_exact(&mut one).unwrap();
+        reader
+            .seek(SeekFrom::Start(3 * 1024 * 1024 + 16 * 1024))
+            .unwrap();
+        reader.read_exact(&mut one).unwrap();
+        assert_eq!(
+            requests.load(std::sync::atomic::Ordering::SeqCst) - before,
+            2
+        );
     }
 
     #[test]

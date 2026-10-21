@@ -282,9 +282,16 @@ struct RemoteByteSource {
     shared: std::sync::Mutex<Option<SharedRangeReader>>,
 }
 
-/// A reader tuned for tags: small blocks, nothing read ahead.
+/// The most blocks (1 MiB) one request of a tag read may grow to.
+const METADATA_GROWTH_LIMIT_BLOCKS: u64 = 64;
+
+/// A reader tuned for tags: small blocks, a short read-ahead. A tag with a megabyte-sized picture in it is read
+/// through by the parser (MP3 and DSF `APIC`, MP4 `ilst`, the Ogg/Opus comment packet): the read-ahead then grows with
+/// the run, so that is a few big requests instead of one per 32 KiB. Ordinary files never reach the growth.
 fn metadata_reader(file: Box<dyn RemoteFile>) -> RangeReader {
-    RangeReader::with_geometry(file, METADATA_BLOCK_SIZE, 64).with_read_ahead(2)
+    RangeReader::with_geometry(file, METADATA_BLOCK_SIZE, 64)
+        .with_read_ahead(2)
+        .with_growing_read_ahead(METADATA_GROWTH_LIMIT_BLOCKS)
 }
 
 impl ByteSource for RemoteByteSource {
