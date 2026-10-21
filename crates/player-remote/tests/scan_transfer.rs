@@ -31,6 +31,9 @@ impl RemoteFile for CountingFile {
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RemoteError> {
         let read = self.inner.read_at(offset, buf)?;
+        if std::env::var_os("MOE_SCAN_TRACE").is_some() {
+            println!("  request: offset {offset:>10}  asked {:>6}  got {read:>6}  (file {} bytes)", buf.len(), self.inner.len());
+        }
         self.counters.bytes.fetch_add(read as u64, Ordering::Relaxed);
         self.counters.requests.fetch_add(1, Ordering::Relaxed);
         Ok(read)
