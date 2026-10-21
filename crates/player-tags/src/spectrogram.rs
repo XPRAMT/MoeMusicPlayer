@@ -397,6 +397,45 @@ mod wavpack_input {
     }
 }
 
+/// DSF input (ADR 0016): the project's own DSD converter turns the 1-bit stream into 352.8 kHz PCM, so the spectrogram
+/// reaches 176.4 kHz and shows the rise of the DSD noise floor; the same rate on every platform keeps the pictures of
+/// different files (and of DSD in WavPack, which is also 352.8 kHz) comparable. The converter's playback gain is not
+/// applied: the levels are the file's own.
+mod dsd_input {
+    use std::fs::File;
+    use std::io::BufReader;
+    use std::path::Path;
+    use std::sync::atomic::AtomicU32;
+    use std::sync::Arc;
+
+    use player_dsd::dsf::DsfReader;
+    use player_dsd::reader::DsdPcmReader;
+
+    /// The PCM rate of a DSD spectrogram.
+    pub const SPECTROGRAM_RATE_HZ: u32 = 352_800;
+
+    pub type Reader = DsdPcmReader<DsfReader<BufReader<File>>>;
+
+    pub fn is_dsd(path: &Path) -> bool {
+        player_formats::decode_engine(path) == player_formats::DecodeEngine::Dsd
+    }
+
+    /// The reader with its sample rate, channel count and exact length in frames.
+    pub fn open(file: File) -> Result<(Reader, u32, usize, Option<u64>), String> {
+        let stream = DsfReader::open(BufReader::with_capacity(256 * 1024, file)).map_err(|e| e.to_string())?;
+        // Zero dB: the converter's gain is for listening, not for measuring.
+        let reader = DsdPcmReader::new(stream, SPECTROGRAM_RATE_HZ, Arc::new(AtomicU32::new(0.0_f32.to_bits())))
+            .map_err(|e| e.to_string())?;
+        let channels = reader.channels().max(1);
+        let frames = reader.total_frames();
+        Ok((reader, SPECTROGRAM_RATE_HZ, channels, Some(frames)))
+    }
+
+    pub fn read(reader: &mut Reader, out: &mut Vec<f32>) -> Result<usize, String> {
+        reader.read_frames(out).map_err(|e| e.to_string())
+    }
+}
+
 /// Render a spectrogram PNG for `path`.
 pub fn render_spectrogram(
     path: &Path,
@@ -414,8 +453,10 @@ pub fn render_spectrogram(
     // Opus has its own decoder (ADR 0017); everything else goes through Symphonia.
     let use_opus = opus_input::is_opus(path);
     let use_wavpack = !use_opus && wavpack_input::is_wavpack(path);
+    let use_dsd = !use_opus && !use_wavpack && dsd_input::is_dsd(path);
     let mut opus_reader = None;
     let mut wavpack_reader = None;
+    let mut dsd_reader = None;
     let mut symphonia_input = None;
     let (sample_rate, channel_count, known_frames, channel_layout) = if use_opus {
         let (reader, rate, channels, frames) = opus_input::open(file)?;
@@ -424,6 +465,10 @@ pub fn render_spectrogram(
     } else if use_wavpack {
         let (reader, rate, channels, frames) = wavpack_input::open(path, file)?;
         wavpack_reader = Some(reader);
+        (rate, channels, frames, None)
+    } else if use_dsd {
+        let (reader, rate, channels, frames) = dsd_input::open(file)?;
+        dsd_reader = Some(reader);
         (rate, channels, frames, None)
     } else {
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -565,6 +610,21 @@ pub fn render_spectrogram(
             }
             buffer.clear();
             let frames = wavpack_input::read(&mut reader, &mut buffer)?;
+            if frames == 0 {
+                break;
+            }
+            for frame in buffer.chunks(channel_count) {
+                feed(frame);
+            }
+        }
+    } else if let Some(mut reader) = dsd_reader {
+        let mut buffer = Vec::new();
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("已取消".into());
+            }
+            buffer.clear();
+            let frames = dsd_input::read(&mut reader, &mut buffer)?;
             if frames == 0 {
                 break;
             }

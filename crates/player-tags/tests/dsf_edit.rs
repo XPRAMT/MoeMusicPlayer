@@ -149,3 +149,28 @@ fn dff_stays_read_only() {
     assert!(details.read_only);
     let _ = std::fs::remove_dir_all(directory);
 }
+
+#[test]
+fn a_dsf_spectrogram_is_made_from_352_8_khz_pcm() {
+    let directory = temp_dir("dsf-spectrogram");
+    let path = directory.join("tone.dsf");
+    write_tagged_dsf(&path);
+    let spectrogram = player_tags::render_spectrogram(
+        &path,
+        player_tags::SpectrogramOptions::default(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(spectrogram.sample_rate, 352_800);
+    assert!(spectrogram.png.starts_with(&[0x89, b'P', b'N', b'G']));
+    // DFF still has none.
+    let dff = directory.join("a.dff");
+    std::fs::write(&dff, b"FRM8").unwrap();
+    assert!(player_tags::render_spectrogram(
+        &dff,
+        player_tags::SpectrogramOptions::default(),
+        &std::sync::atomic::AtomicBool::new(false)
+    )
+    .is_err());
+    let _ = std::fs::remove_dir_all(directory);
+}

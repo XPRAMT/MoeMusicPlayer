@@ -151,7 +151,7 @@ const FORMATS: &[FormatInfo] = &[
         FormatId::Dsf,
         "DSF",
         true,
-        false,
+        true,
         &["audio/x-dsf", "audio/dsf"],
     ),
     info(FormatId::Dff, "DFF", false, false, &[]),
@@ -447,12 +447,11 @@ mod tests {
     }
 
     #[test]
-    fn dsf_is_writable_dff_is_read_only_and_neither_has_a_spectrogram() {
+    fn dsf_is_writable_and_has_a_spectrogram_dff_is_read_only_and_has_none() {
         assert!(tag_write_supported(Path::new("a.dsf")));
         assert!(!tag_write_supported(Path::new("a.DFF")));
-        for name in ["a.dsf", "a.DFF"] {
-            assert!(!spectrogram_supported(Path::new(name)), "{name}");
-        }
+        assert!(spectrogram_supported(Path::new("a.dsf")));
+        assert!(!spectrogram_supported(Path::new("a.DFF")));
         assert!(tag_write_supported(Path::new("a.flac")));
         assert!(tag_write_supported(Path::new("a.unknown")));
         assert!(spectrogram_supported(Path::new("a.opus")));
