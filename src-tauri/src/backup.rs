@@ -1,11 +1,13 @@
 //! Backup and restore of the settings and the library (Settings → About).
 //!
-//! **Export** writes one zip: `manifest.json`, `settings.json`, the library database (a consistent snapshot made with
-//! `VACUUM INTO`, so the running player is not disturbed), `MyLove.m3u8` (the favourites playlist) and the main
-//! background image. Album covers are not included: they are a cache that is rebuilt from the music files.
+//! **Export** writes one zip holding only what the user ticked (see [`ExportSelection`]): `manifest.json` (which lists
+//! the parts), `settings.json` (without any password), the library database (a consistent snapshot made with
+//! `VACUUM INTO`, so the running player is not disturbed), `MyLove.m3u8` (the favourites playlist) and the remote
+//! accounts sealed under a passphrase. Album covers and the main background image are not included.
 //!
 //! **Import** takes that zip, or any single file from it (`settings.json`, the database, `MyLove.m3u8`), and only
-//! replaces the parts it is given. Nothing is replaced while the player runs: the file is checked and unpacked into
+//! replaces the parts it is given. Entries of the old layout that are no longer exported (`background/…`) are ignored.
+//! Nothing is replaced while the player runs: the file is checked and unpacked into
 //! `import-pending`, and the next start (before the settings and the database are opened) moves the current files into
 //! `before-import` and the imported ones into place. Several files can be imported one after the other.
 use serde::{Deserialize, Serialize};
@@ -22,20 +24,23 @@ const MANIFEST_NAME: &str = "manifest.json";
 const SETTINGS_NAME: &str = "settings.json";
 const LIBRARY_NAME: &str = "moemusicplayer.sqlite3";
 const FAVOURITES_NAME: &str = "MyLove.m3u8";
-const BACKGROUND_DIRECTORY: &str = "background";
+/// Old backups carried the main background image under this prefix; it is ignored on import.
+const LEGACY_BACKGROUND_DIRECTORY: &str = "background";
 pub const IMPORT_DIRECTORY: &str = "import-pending";
 pub const BEFORE_IMPORT_DIRECTORY: &str = "before-import";
 const READY_NAME: &str = "READY.json";
-/// The passphrase-sealed remote accounts of a backup (also the extension of a stand-alone account export).
-const REMOTE_NAME: &str = "remote-accounts.moeremote";
+/// The passphrase-sealed remote accounts of a backup (an entry inside the zip, never a stand-alone file).
+const REMOTE_NAME: &str = "remote-accounts.sealed";
+/// The name earlier builds gave that entry; still accepted on import.
+const LEGACY_REMOTE_NAME: &str = "remote-accounts.moeremote";
+/// The id of the remote accounts in the manifest (they are not staged like the other parts).
+const ACCOUNTS_ID: &str = "accounts";
 const MAX_REMOTE_BYTES: u64 = 1024 * 1024;
 
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_LIBRARY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SETTINGS_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_FAVOURITES_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_BACKGROUND_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_BACKGROUND_FILES: usize = 16;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 /// The parts of the data that can be exported and imported.
@@ -44,7 +49,6 @@ pub enum Part {
     Settings,
     Library,
     Favourites,
-    Background,
 }
 
 impl Part {
@@ -53,7 +57,6 @@ impl Part {
             Part::Settings => "settings",
             Part::Library => "library",
             Part::Favourites => "favourites",
-            Part::Background => "background",
         }
     }
 }
@@ -66,6 +69,49 @@ struct Manifest {
     platform: String,
     build_version: String,
     created_at_utc: String,
+    /// What the zip holds: `settings`, `library`, `accounts`, `favourites`. Absent in older backups.
+    #[serde(default)]
+    parts: Vec<String>,
+}
+
+/// What the user ticked in the export panel.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportSelection {
+    #[serde(default)]
+    pub library: bool,
+    #[serde(default)]
+    pub settings: bool,
+    /// The remote accounts, passwords included, sealed under `passphrase`.
+    #[serde(default)]
+    pub accounts: bool,
+    #[serde(default)]
+    pub favourites: bool,
+    #[serde(default)]
+    pub passphrase: Option<String>,
+}
+
+impl ExportSelection {
+    /// Nothing ticked, or accounts without a usable passphrase, is refused.
+    pub fn validate(&self) -> Result<(), String> {
+        if !(self.library || self.settings || self.accounts || self.favourites) {
+            return Err("請至少選擇一項要匯出的內容。".to_owned());
+        }
+        if self.accounts && self.passphrase.as_deref().map_or(0, |text| text.chars().count()) < 8 {
+            return Err("匯出密碼至少需要 8 個字元。".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// The finished pieces [`write_backup_zip`] puts into the zip.
+pub struct ZipContents<'a> {
+    /// A finished copy of the database (not the live file).
+    pub library_snapshot: Option<&'a Path>,
+    pub settings: bool,
+    pub favourites: bool,
+    /// The text of an account export (passwords sealed under the user's passphrase).
+    pub remote_export: Option<&'a str>,
 }
 
 /// What is waiting for the next start.
@@ -159,16 +205,44 @@ fn settings_without_passwords(settings: &Path) -> Result<Vec<u8>, String> {
     serde_json::to_vec_pretty(&json).map_err(|error| error.to_string())
 }
 
-/// Writes the backup zip. `library_snapshot` is a finished copy of the database (not the live file).
-/// `remote_export` is the text of an account export (passwords sealed under the user's passphrase), when there is one.
+/// Writes the backup zip with the parts in `contents`.
 pub fn write_backup_zip(
     data_dir: &Path,
-    library_snapshot: &Path,
+    contents: &ZipContents,
     output: &Path,
     build_version: &str,
     epoch_seconds: u64,
-    remote_export: Option<&str>,
 ) -> Result<u64, String> {
+    // The passwords in settings.json are sealed with this device's key and mean nothing elsewhere: the copy in the backup
+    // has none. The accounts' passwords travel in the passphrase-sealed entry, when the user gave a passphrase.
+    let settings_bytes = if contents.settings {
+        let settings = data_dir.join(SETTINGS_NAME);
+        if !settings.is_file() {
+            return Err("找不到 settings.json。".to_owned());
+        }
+        Some(settings_without_passwords(&settings)?)
+    } else {
+        None
+    };
+    let favourites = data_dir.join(FAVOURITES_NAME);
+    let favourites = (contents.favourites && favourites.is_file()).then_some(favourites);
+    let mut parts: Vec<String> = Vec::new();
+    if settings_bytes.is_some() {
+        parts.push(Part::Settings.id().to_owned());
+    }
+    if contents.library_snapshot.is_some() {
+        parts.push(Part::Library.id().to_owned());
+    }
+    if contents.remote_export.is_some() {
+        parts.push(ACCOUNTS_ID.to_owned());
+    }
+    if favourites.is_some() {
+        parts.push(Part::Favourites.id().to_owned());
+    }
+    if parts.is_empty() {
+        return Err("沒有可匯出的內容。".to_owned());
+    }
+
     let file = fs::File::create(output).map_err(|error| format!("無法建立備份檔：{error}"))?;
     let mut zip = zip::ZipWriter::new(file);
     let deflated = zip::write::SimpleFileOptions::default()
@@ -186,44 +260,27 @@ pub fn write_backup_zip(
         platform: platform_name().to_owned(),
         build_version: build_version.to_owned(),
         created_at_utc: iso_stamp(epoch_seconds),
+        parts,
     };
     zip.start_file(MANIFEST_NAME, deflated)
         .map_err(|error| error.to_string())?;
     zip.write_all(&serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
-
-    let settings = data_dir.join(SETTINGS_NAME);
-    if !settings.is_file() {
-        return Err("找不到 settings.json。".to_owned());
+    if let Some(bytes) = settings_bytes {
+        zip.start_file(SETTINGS_NAME, deflated).map_err(|error| error.to_string())?;
+        zip.write_all(&bytes)
+            .map_err(|error| format!("寫入 {SETTINGS_NAME} 失敗：{error}"))?;
     }
-    // The passwords in settings.json are sealed with this device's key and mean nothing elsewhere: the copy in the backup
-    // has none. The accounts' passwords travel in the passphrase-sealed entry below, when the user gave a passphrase.
-    zip.start_file(SETTINGS_NAME, deflated).map_err(|error| error.to_string())?;
-    zip.write_all(&settings_without_passwords(&settings)?)
-        .map_err(|error| format!("寫入 {SETTINGS_NAME} 失敗：{error}"))?;
-    if let Some(remote) = remote_export {
+    if let Some(remote) = contents.remote_export {
         zip.start_file(REMOTE_NAME, deflated).map_err(|error| error.to_string())?;
         zip.write_all(remote.as_bytes())
             .map_err(|error| format!("寫入 {REMOTE_NAME} 失敗：{error}"))?;
     }
-    add(&mut zip, LIBRARY_NAME, library_snapshot)?;
-    let favourites = data_dir.join(FAVOURITES_NAME);
-    if favourites.is_file() {
-        add(&mut zip, FAVOURITES_NAME, &favourites)?;
+    if let Some(snapshot) = contents.library_snapshot {
+        add(&mut zip, LIBRARY_NAME, snapshot)?;
     }
-    // The main background image (the settings point at it). Album covers are deliberately left out.
-    if let Ok(entries) = fs::read_dir(data_dir.join(BACKGROUND_DIRECTORY)) {
-        let mut files: Vec<_> = entries
-            .flatten()
-            .filter(|entry| entry.path().is_file())
-            .collect();
-        files.sort_by_key(|entry| entry.file_name());
-        for entry in files.into_iter().take(MAX_BACKGROUND_FILES) {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if entry.metadata().map(|meta| meta.len()).unwrap_or(u64::MAX) <= MAX_BACKGROUND_BYTES {
-                add(&mut zip, &format!("{BACKGROUND_DIRECTORY}/{name}"), &entry.path())?;
-            }
-        }
+    if let Some(favourites) = favourites {
+        add(&mut zip, FAVOURITES_NAME, &favourites)?;
     }
     let file = zip.finish().map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
@@ -278,15 +335,12 @@ fn copy_limited(input: &mut impl Read, output: &Path, limit: u64) -> Result<u64,
     Ok(copied)
 }
 
-fn stage_path(data_dir: &Path, part: Part, background_name: Option<&str>) -> PathBuf {
+fn stage_path(data_dir: &Path, part: Part) -> PathBuf {
     let directory = pending_directory(data_dir);
     match part {
         Part::Settings => directory.join(SETTINGS_NAME),
         Part::Library => directory.join(LIBRARY_NAME),
         Part::Favourites => directory.join(FAVOURITES_NAME),
-        Part::Background => directory
-            .join(BACKGROUND_DIRECTORY)
-            .join(background_name.unwrap_or("background")),
     }
 }
 
@@ -314,16 +368,15 @@ fn validate(part: Part, path: &Path) -> Result<(), String> {
             }
             Ok(())
         }
-        Part::Background => Ok(()),
     }
 }
 
 /// Validates the file at `staged` and, when it is good, keeps it as the staged `part`.
-fn accept(data_dir: &Path, part: Part, staged: &Path, name: Option<&str>) -> Result<(), String> {
+fn accept(data_dir: &Path, part: Part, staged: &Path) -> Result<(), String> {
     validate(part, staged).inspect_err(|_| {
         let _ = fs::remove_file(staged);
     })?;
-    let target = stage_path(data_dir, part, name);
+    let target = stage_path(data_dir, part);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -331,15 +384,17 @@ fn accept(data_dir: &Path, part: Part, staged: &Path, name: Option<&str>) -> Res
     fs::rename(staged, &target).map_err(|error| error.to_string())
 }
 
-fn background_file_name(entry: &str) -> Option<String> {
-    let name = entry.strip_prefix(&format!("{BACKGROUND_DIRECTORY}/"))?;
-    let safe = !name.is_empty()
+/// An entry of the old layout (`background/<file>`) that is ignored; unsafe names are not recognised and refuse the file.
+fn is_legacy_background_entry(entry: &str) -> bool {
+    let Some(name) = entry.strip_prefix(&format!("{LEGACY_BACKGROUND_DIRECTORY}/")) else {
+        return false;
+    };
+    !name.is_empty()
         && name.len() <= 128
         && !name.contains(['/', '\\', ':'])
         && name != "."
         && name != ".."
-        && !name.starts_with('.');
-    safe.then(|| name.to_owned())
+        && !name.starts_with('.')
 }
 
 /// Stages a backup zip. Returns the parts it held.
@@ -368,54 +423,43 @@ fn stage_zip(data_dir: &Path, archive: &Path, platform: &str) -> Result<(Vec<Par
         ));
     }
     // Every entry must be one we know; anything else (or a path that tries to leave the folder) refuses the file.
-    let mut plan: Vec<(usize, Part, Option<String>, u64)> = Vec::new();
+    let mut plan: Vec<(usize, Part, u64)> = Vec::new();
     let mut remote_entry: Option<usize> = None;
-    let mut background_files = 0;
     for index in 0..zip.len() {
         let entry = zip.by_index(index).map_err(|error| error.to_string())?;
         let name = entry.name().to_owned();
         if entry.is_dir() {
             continue;
         }
-        let (part, background, limit) = match name.as_str() {
+        let (part, limit) = match name.as_str() {
             MANIFEST_NAME => continue,
-            REMOTE_NAME => {
+            REMOTE_NAME | LEGACY_REMOTE_NAME => {
                 remote_entry = Some(index);
                 continue;
             }
-            SETTINGS_NAME => (Part::Settings, None, MAX_SETTINGS_BYTES),
-            LIBRARY_NAME => (Part::Library, None, MAX_LIBRARY_BYTES),
-            FAVOURITES_NAME => (Part::Favourites, None, MAX_FAVOURITES_BYTES),
-            _ => match background_file_name(&name) {
-                Some(file_name) => {
-                    background_files += 1;
-                    if background_files > MAX_BACKGROUND_FILES {
-                        return Err("備份檔含有過多背景圖片。".to_owned());
-                    }
-                    (Part::Background, Some(file_name), MAX_BACKGROUND_BYTES)
-                }
-                None => return Err(format!("備份檔含有不認得的項目：{name}")),
-            },
+            SETTINGS_NAME => (Part::Settings, MAX_SETTINGS_BYTES),
+            LIBRARY_NAME => (Part::Library, MAX_LIBRARY_BYTES),
+            FAVOURITES_NAME => (Part::Favourites, MAX_FAVOURITES_BYTES),
+            _ if is_legacy_background_entry(&name) => continue,
+            _ => return Err(format!("備份檔含有不認得的項目：{name}")),
         };
-        plan.push((index, part, background, limit));
+        plan.push((index, part, limit));
     }
-    if !plan.iter().any(|(_, part, _, _)| *part == Part::Settings)
-        || !plan.iter().any(|(_, part, _, _)| *part == Part::Library)
-    {
-        return Err("備份檔缺少 settings.json 或曲庫資料庫。".to_owned());
+    if plan.is_empty() && remote_entry.is_none() {
+        return Err("備份檔沒有任何可匯入的內容。".to_owned());
     }
     let directory = pending_directory(data_dir);
     fs::create_dir_all(directory.join(".incoming")).map_err(|error| error.to_string())?;
     let mut parts: Vec<Part> = Vec::new();
     let result = (|| -> Result<(), String> {
-        for (index, part, background, limit) in &plan {
+        for (index, part, limit) in &plan {
             let mut entry = zip.by_index(*index).map_err(|error| error.to_string())?;
             if entry.size() > *limit {
                 return Err("備份檔內的檔案超過大小上限。".to_owned());
             }
             let staged = directory.join(".incoming").join(format!("{index}.part"));
             copy_limited(&mut entry, &staged, *limit)?;
-            accept(data_dir, *part, &staged, background.as_deref())?;
+            accept(data_dir, *part, &staged)?;
             if !parts.contains(part) {
                 parts.push(*part);
             }
@@ -461,15 +505,6 @@ pub fn stage_import(data_dir: &Path, source: &Path, platform: &str) -> Result<Im
         let (parts, has_remote) = stage_zip(data_dir, source, platform)?;
         remote_waiting = has_remote;
         parts
-    } else if extension == "moeremote" {
-        // A stand-alone account export: it only waits for its passphrase.
-        if size > MAX_REMOTE_BYTES {
-            return Err("檔案超過大小上限。".to_owned());
-        }
-        let mut input = fs::File::open(source).map_err(|error| error.to_string())?;
-        copy_limited(&mut input, &pending_directory(data_dir).join(REMOTE_NAME), MAX_REMOTE_BYTES)?;
-        remote_waiting = true;
-        Vec::new()
     } else {
         let (part, limit) = match extension.as_str() {
             "json" => (Part::Settings, MAX_SETTINGS_BYTES),
@@ -483,7 +518,7 @@ pub fn stage_import(data_dir: &Path, source: &Path, platform: &str) -> Result<Im
         let staged = pending_directory(data_dir).join(".incoming-file");
         let mut input = fs::File::open(source).map_err(|error| error.to_string())?;
         copy_limited(&mut input, &staged, limit)?;
-        accept(data_dir, part, &staged, None)?;
+        accept(data_dir, part, &staged)?;
         vec![part]
     };
     let pending = mark_pending(data_dir, &parts)?;
@@ -538,10 +573,6 @@ pub fn apply_pending_import(data_dir: &Path) -> Result<Vec<String>, String> {
                 "favourites" => {
                     move_aside(data_dir, &backup, FAVOURITES_NAME, &mut moved)?;
                     place(&staging, data_dir, FAVOURITES_NAME, &mut placed)?;
-                }
-                "background" => {
-                    move_aside(data_dir, &backup, BACKGROUND_DIRECTORY, &mut moved)?;
-                    place(&staging, data_dir, BACKGROUND_DIRECTORY, &mut placed)?;
                 }
                 _ => {}
             }
@@ -608,64 +639,72 @@ fn work_directory(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
-/// Exports the settings and the library into one zip chosen with the system file dialog.
+/// Exports the parts the user ticked into one zip chosen with the system file dialog.
 #[tauri::command]
 pub async fn backup_export(
     app: AppHandle,
     window: tauri::WebviewWindow,
     state: tauri::State<'_, crate::AppState>,
-    remote_passphrase: Option<String>,
+    selection: ExportSelection,
 ) -> Result<Option<ExportResult>, String> {
+    selection.validate()?;
     let data_dir = crate::user_data_directory(&state)?;
-    // The remote accounts go into the backup, passwords included, only under a passphrase the user typed.
-    let remote_export = match remote_passphrase.filter(|passphrase| !passphrase.is_empty()) {
-        Some(passphrase) => {
-            if passphrase.chars().count() < 8 {
-                return Err("匯出密碼至少需要 8 個字元。".to_owned());
-            }
-            let has_accounts = !state
-                .settings
-                .snapshot()
-                .map_err(|error| error.to_string())?
-                .remote_accounts
-                .is_empty();
-            if has_accounts {
-                let (settings, data_dir) = (state.settings.clone(), data_dir.clone());
-                Some(
-                    blocking(move || {
-                        let vault = player_remote::account::CredentialVault::open(
-                            &data_dir.join(crate::remote_accounts::KEY_FILE_NAME),
-                        )
-                        .map_err(|error| error.to_string())?;
-                        crate::remote_accounts::export_text(&settings, &vault, &passphrase)
-                    })
-                    .await?,
+    // The remote accounts go into the backup, passwords included, only under the passphrase the user typed.
+    let remote_export = if selection.accounts {
+        let passphrase = selection.passphrase.clone().unwrap_or_default();
+        let (settings, data_dir) = (state.settings.clone(), data_dir.clone());
+        Some(
+            blocking(move || {
+                let vault = player_remote::account::CredentialVault::open(
+                    &data_dir.join(crate::remote_accounts::KEY_FILE_NAME),
                 )
-            } else {
-                None
-            }
-        }
-        None => None,
+                .map_err(|error| error.to_string())?;
+                crate::remote_accounts::export_text(&settings, &vault, &passphrase)
+            })
+            .await?,
+        )
+    } else {
+        None
     };
-    let _work = crate::enter_database_work(&state)?;
-    let database = state
-        .database
-        .as_ref()
-        .ok_or_else(|| "曲庫資料庫尚未開啟。".to_owned())?;
+    let _work = if selection.library {
+        Some(crate::enter_database_work(&state)?)
+    } else {
+        None
+    };
     let work = work_directory(&app)?;
     let token = uuid::Uuid::new_v4().simple().to_string();
     let snapshot = work.join(format!("{token}.sqlite3"));
     let archive = work.join(format!("{token}.zip"));
     let epoch = now_seconds();
     let file_name = backup_file_name(epoch);
-    let build = {
-        let (data_dir, snapshot, archive) = (data_dir.clone(), snapshot.clone(), archive.clone());
+    let snapshot_made = if selection.library {
+        let database = state
+            .database
+            .as_ref()
+            .ok_or_else(|| "曲庫資料庫尚未開啟。".to_owned())?;
         database
             .snapshot_to(&snapshot)
             .map_err(|error| format!("無法複製曲庫資料庫：{error}"))?;
-        let remote_export = remote_export.clone();
+        true
+    } else {
+        false
+    };
+    let build = {
+        let (data_dir, snapshot, archive) = (data_dir.clone(), snapshot.clone(), archive.clone());
+        let selection = selection.clone();
         blocking(move || {
-            write_backup_zip(&data_dir, &snapshot, &archive, env!("MOE_BUILD_VERSION"), epoch, remote_export.as_deref())
+            write_backup_zip(
+                &data_dir,
+                &ZipContents {
+                    library_snapshot: snapshot_made.then_some(snapshot.as_path()),
+                    settings: selection.settings,
+                    favourites: selection.favourites,
+                    remote_export: remote_export.as_deref(),
+                },
+                &archive,
+                env!("MOE_BUILD_VERSION"),
+                epoch,
+            )
         })
         .await
     };
@@ -694,7 +733,7 @@ async fn deliver_export(
         .dialog()
         .file()
         .set_parent(window)
-        .set_title("匯出設定與曲庫")
+        .set_title("匯出備份")
         .set_file_name(file_name)
         .add_filter("備份壓縮檔", &["zip"])
         .blocking_save_file();
@@ -878,8 +917,8 @@ async fn pick_import_files(
         .dialog()
         .file()
         .set_parent(window)
-        .set_title("匯入設定與曲庫")
-        .add_filter("備份壓縮檔或其中的檔案", &["zip", "json", "sqlite3", "m3u8", "moeremote"])
+        .set_title("匯入備份")
+        .add_filter("備份壓縮檔或其中的檔案", &["zip", "json", "sqlite3", "m3u8"])
         .blocking_pick_files();
     let mut files = Vec::new();
     for item in selected.unwrap_or_default() {
@@ -933,141 +972,6 @@ async fn pick_import_files(
     Err("此平台尚未支援匯入。".to_owned())
 }
 
-/// The largest text file read through [`read_text_file`] (an account export is a few kilobytes).
-const MAX_TEXT_FILE_BYTES: u64 = 4 * 1024 * 1024;
-
-/// Save `text` as a file chosen with the system dialog (a save dialog on Windows, the document picker on Android).
-/// Returns false when the dialog was cancelled.
-pub(crate) async fn save_text_file(
-    app: &AppHandle,
-    window: &tauri::WebviewWindow,
-    text: &str,
-    file_name: &str,
-    title: &str,
-    extension: &str,
-) -> Result<bool, String> {
-    #[cfg(target_os = "windows")]
-    {
-        use tauri_plugin_dialog::DialogExt;
-        let selected = app
-            .dialog()
-            .file()
-            .set_parent(window)
-            .set_title(title)
-            .set_file_name(file_name)
-            .add_filter(title, &[extension])
-            .blocking_save_file();
-        let Some(selected) = selected else {
-            return Ok(false);
-        };
-        let target = selected
-            .into_path()
-            .map_err(|error| format!("無法取得檔案路徑：{error}"))?;
-        fs::write(&target, text).map_err(|error| format!("寫入失敗：{error}"))?;
-        Ok(true)
-    }
-    #[cfg(target_os = "android")]
-    {
-        use tauri_plugin_media_index::MediaIndexExt;
-        let _ = (window, title, extension);
-        let work = work_directory(app)?;
-        let (app, text, file_name) = (app.clone(), text.to_owned(), file_name.to_owned());
-        blocking(move || {
-            let temporary = work.join(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
-            fs::write(&temporary, &text).map_err(|error| format!("寫入失敗：{error}"))?;
-            let result = (|| {
-                let Some(uri) = app
-                    .media_index()
-                    .pick_create_document(&file_name, "application/octet-stream")
-                    .map_err(|error| error.to_string())?
-                else {
-                    return Ok(false);
-                };
-                app.media_index()
-                    .copy_file_to_uri(&temporary, &uri)
-                    .map_err(|error| format!("寫入失敗：{error}"))?;
-                Ok(true)
-            })();
-            let _ = fs::remove_file(&temporary);
-            result
-        })
-        .await
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
-    {
-        let _ = (app, window, text, file_name, title, extension);
-        Err("此平台尚未支援匯出。".to_owned())
-    }
-}
-
-/// Read a small text file chosen with the system dialog. `None` when the dialog was cancelled.
-pub(crate) async fn read_text_file(
-    app: &AppHandle,
-    window: &tauri::WebviewWindow,
-    title: &str,
-    extension: &str,
-) -> Result<Option<String>, String> {
-    #[cfg(target_os = "windows")]
-    {
-        use tauri_plugin_dialog::DialogExt;
-        let selected = app
-            .dialog()
-            .file()
-            .set_parent(window)
-            .set_title(title)
-            .add_filter(title, &[extension])
-            .blocking_pick_file();
-        let Some(selected) = selected else {
-            return Ok(None);
-        };
-        let path = selected
-            .into_path()
-            .map_err(|error| format!("無法取得檔案路徑：{error}"))?;
-        read_limited_text(&path).map(Some)
-    }
-    #[cfg(target_os = "android")]
-    {
-        use tauri_plugin_media_index::MediaIndexExt;
-        let _ = (window, title, extension);
-        let work = work_directory(app)?;
-        let app = app.clone();
-        blocking(move || {
-            let Some((uri, _name)) = app
-                .media_index()
-                .pick_open_document(&["*/*"])
-                .map_err(|error| error.to_string())?
-            else {
-                return Ok(None);
-            };
-            let destination = work.join(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
-            let copied = app
-                .media_index()
-                .copy_uri_to_file(&uri, &destination, MAX_TEXT_FILE_BYTES)
-                .map_err(|error| format!("讀取檔案失敗：{error}"));
-            let text = copied.and_then(|_| read_limited_text(&destination));
-            let _ = fs::remove_file(&destination);
-            text.map(Some)
-        })
-        .await
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
-    {
-        let _ = (app, window, title, extension);
-        Err("此平台尚未支援匯入。".to_owned())
-    }
-}
-
-fn read_limited_text(path: &Path) -> Result<String, String> {
-    let size = fs::metadata(path)
-        .map_err(|error| format!("無法讀取檔案：{error}"))?
-        .len();
-    if size == 0 || size > MAX_TEXT_FILE_BYTES {
-        return Err("檔案是空的或太大。".to_owned());
-    }
-    String::from_utf8(fs::read(path).map_err(|error| format!("無法讀取檔案：{error}"))?)
-        .map_err(|_| "檔案不是有效的文字。".to_owned())
-}
-
 /// The parts waiting for the next start (shown again when Settings → About is reopened).
 #[tauri::command]
 pub fn backup_pending(state: tauri::State<'_, crate::AppState>) -> Vec<String> {
@@ -1117,13 +1021,55 @@ mod tests {
         data
     }
 
-    fn export(scratch: &Scratch, data: &Path) -> PathBuf {
-        let database = player_db::Database::open(data.join(LIBRARY_NAME)).unwrap();
+    fn selection(library: bool, settings: bool, accounts: bool, favourites: bool) -> ExportSelection {
+        ExportSelection {
+            library,
+            settings,
+            accounts,
+            favourites,
+            passphrase: accounts.then(|| "backup passphrase".to_owned()),
+        }
+    }
+
+    /// Exports `data` the way the command does for `selection`; `vault` seals the accounts when they are ticked.
+    fn export_selected(
+        scratch: &Scratch,
+        data: &Path,
+        selection: &ExportSelection,
+        vault: Option<&player_remote::account::CredentialVault>,
+    ) -> Result<PathBuf, String> {
+        selection.validate()?;
         let snapshot = scratch.0.join("snapshot.sqlite3");
-        database.snapshot_to(&snapshot).unwrap();
+        let _ = fs::remove_file(&snapshot);
+        if selection.library {
+            let database = player_db::Database::open(data.join(LIBRARY_NAME)).unwrap();
+            database.snapshot_to(&snapshot).unwrap();
+        }
+        let remote = if selection.accounts {
+            let settings = SettingsStore::open(data.join(SETTINGS_NAME), AppSettings::default()).unwrap();
+            Some(crate::remote_accounts::export_text(&settings, vault.unwrap(), selection.passphrase.as_deref().unwrap())?)
+        } else {
+            None
+        };
         let archive = scratch.0.join("backup.zip");
-        write_backup_zip(data, &snapshot, &archive, "26.10.19", 1_792_400_000, None).unwrap();
-        archive
+        let _ = fs::remove_file(&archive);
+        write_backup_zip(
+            data,
+            &ZipContents {
+                library_snapshot: selection.library.then_some(snapshot.as_path()),
+                settings: selection.settings,
+                favourites: selection.favourites,
+                remote_export: remote.as_deref(),
+            },
+            &archive,
+            "26.10.19",
+            1_792_400_000,
+        )?;
+        Ok(archive)
+    }
+
+    fn export(scratch: &Scratch, data: &Path) -> PathBuf {
+        export_selected(scratch, data, &selection(true, true, false, true), None).unwrap()
     }
 
     fn zip_names(archive: &Path) -> Vec<String> {
@@ -1133,16 +1079,72 @@ mod tests {
         names
     }
 
+    fn zip_text(archive: &Path, name: &str) -> String {
+        let mut zip = zip::ZipArchive::new(fs::File::open(archive).unwrap()).unwrap();
+        let mut text = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut text).unwrap();
+        text
+    }
+
+    fn manifest_parts(archive: &Path) -> Vec<String> {
+        serde_json::from_str::<Manifest>(&zip_text(archive, MANIFEST_NAME)).unwrap().parts
+    }
+
+    /// Every entry of the zip, decompressed.
+    fn all_entry_bytes(archive: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut zip = zip::ZipArchive::new(fs::File::open(archive).unwrap()).unwrap();
+        (0..zip.len())
+            .map(|index| {
+                let mut entry = zip.by_index(index).unwrap();
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes).unwrap();
+                (entry.name().to_owned(), bytes)
+            })
+            .collect()
+    }
+
+    fn contains(haystack: &[u8], needle: &str) -> bool {
+        haystack.windows(needle.len()).any(|window| window == needle.as_bytes())
+    }
+
     #[test]
-    fn the_export_is_one_zip_without_covers_logs_or_caches() {
+    fn the_export_holds_only_what_was_ticked_and_the_manifest_lists_it() {
         let scratch = Scratch::new("export");
         let data = data_folder(&scratch, "a");
-        let archive = export(&scratch, &data);
+        let all = export(&scratch, &data);
         assert_eq!(
-            zip_names(&archive),
-            ["MyLove.m3u8", "background/wall.jpg", "manifest.json", "moemusicplayer.sqlite3", "settings.json"]
+            zip_names(&all),
+            ["MyLove.m3u8", "manifest.json", "moemusicplayer.sqlite3", "settings.json"],
+            "no covers, logs or background image"
         );
+        assert_eq!(manifest_parts(&all), ["settings", "library", "favourites"]);
         assert_eq!(backup_file_name(1_792_400_000), "MoeMusicPlayer-backup-20261019-085320.zip");
+
+        let only_library = export_selected(&scratch, &data, &selection(true, false, false, false), None).unwrap();
+        assert_eq!(zip_names(&only_library), ["manifest.json", "moemusicplayer.sqlite3"]);
+        assert_eq!(manifest_parts(&only_library), ["library"]);
+
+        let only_settings = export_selected(&scratch, &data, &selection(false, true, false, false), None).unwrap();
+        assert_eq!(zip_names(&only_settings), ["manifest.json", "settings.json"]);
+        assert_eq!(manifest_parts(&only_settings), ["settings"]);
+
+        let only_favourites = export_selected(&scratch, &data, &selection(false, false, false, true), None).unwrap();
+        assert_eq!(zip_names(&only_favourites), ["MyLove.m3u8", "manifest.json"]);
+    }
+
+    #[test]
+    fn nothing_ticked_or_a_short_passphrase_is_refused() {
+        let scratch = Scratch::new("refused");
+        let data = data_folder(&scratch, "a");
+        assert!(export_selected(&scratch, &data, &selection(false, false, false, false), None).is_err());
+        let mut short = selection(false, true, true, false);
+        short.passphrase = Some("1234567".to_owned());
+        assert!(short.validate().unwrap_err().contains('8'));
+        short.passphrase = None;
+        assert!(short.validate().is_err());
+        // A missing favourites file leaves nothing to export.
+        fs::remove_file(data.join(FAVOURITES_NAME)).unwrap();
+        assert!(export_selected(&scratch, &data, &selection(false, false, false, true), None).is_err());
     }
 
     #[test]
@@ -1152,19 +1154,33 @@ mod tests {
         let archive = export(&scratch, &source);
         let target = data_folder(&scratch, "target");
         let result = stage_import(&target, &archive, platform_name()).unwrap();
-        assert_eq!(result.imported, ["settings", "library", "favourites", "background"]);
+        assert_eq!(result.imported, ["settings", "library", "favourites"]);
         // Nothing is touched while the player runs.
         assert!(fs::read_to_string(target.join(FAVOURITES_NAME)).unwrap().contains("target"));
         assert_eq!(pending_parts(&target), result.pending);
         let applied = apply_pending_import(&target).unwrap();
-        assert_eq!(applied.len(), 4);
+        assert_eq!(applied.len(), 3);
         assert!(fs::read_to_string(target.join(FAVOURITES_NAME)).unwrap().contains("source"));
-        assert_eq!(fs::read_to_string(target.join("background").join("wall.jpg")).unwrap(), "jpg-source");
+        assert_eq!(fs::read_to_string(target.join("background").join("wall.jpg")).unwrap(), "jpg-target", "the background is never touched");
         assert!(fs::read_to_string(target.join(BEFORE_IMPORT_DIRECTORY).join(FAVOURITES_NAME)).unwrap().contains("target"));
         assert!(target.join("album-cover").join("abc.jpg").is_file(), "covers are never replaced");
         assert!(!target.join(IMPORT_DIRECTORY).exists());
         player_db::Database::open_checked(target.join(LIBRARY_NAME)).expect("the imported library opens");
         assert!(apply_pending_import(&target).unwrap().is_empty(), "nothing is applied twice");
+    }
+
+    #[test]
+    fn a_zip_with_only_one_part_replaces_only_that_part() {
+        let scratch = Scratch::new("partial");
+        let source = data_folder(&scratch, "source");
+        let archive = export_selected(&scratch, &source, &selection(false, false, false, true), None).unwrap();
+        let target = data_folder(&scratch, "target");
+        let target_settings = fs::read(target.join(SETTINGS_NAME)).unwrap();
+        let result = stage_import(&target, &archive, platform_name()).unwrap();
+        assert_eq!(result.imported, ["favourites"]);
+        apply_pending_import(&target).unwrap();
+        assert!(fs::read_to_string(target.join(FAVOURITES_NAME)).unwrap().contains("source"));
+        assert_eq!(fs::read(target.join(SETTINGS_NAME)).unwrap(), target_settings, "the settings stay");
     }
 
     #[test]
@@ -1179,7 +1195,6 @@ mod tests {
         assert_eq!(second.pending, ["favourites", "settings"]);
         apply_pending_import(&target).unwrap();
         assert!(fs::read_to_string(target.join(FAVOURITES_NAME)).unwrap().contains("source"));
-        assert_eq!(fs::read_to_string(target.join("background").join("wall.jpg")).unwrap(), "jpg-target", "the background stays");
         assert!(target.join(BEFORE_IMPORT_DIRECTORY).join(SETTINGS_NAME).is_file());
     }
 
@@ -1196,9 +1211,26 @@ mod tests {
         let unknown = scratch.0.join("notes.txt");
         fs::write(&unknown, b"hello").unwrap();
         assert!(stage_import(&target, &unknown, platform_name()).is_err());
+        // A stand-alone account export is no longer recognised.
+        let old_accounts = scratch.0.join("accounts.moeremote");
+        fs::write(&old_accounts, b"sealed text").unwrap();
+        assert!(stage_import(&target, &old_accounts, platform_name()).is_err());
         assert!(pending_parts(&target).is_empty());
+        assert!(!pending_directory(&target).join(REMOTE_NAME).exists());
         assert!(apply_pending_import(&target).unwrap().is_empty());
         assert!(fs::read_to_string(target.join(FAVOURITES_NAME)).unwrap().contains("target"));
+    }
+
+    fn manifest_json(parts: Vec<String>) -> String {
+        serde_json::to_string(&Manifest {
+            app: APP_NAME.to_owned(),
+            format_version: FORMAT_VERSION,
+            platform: platform_name().to_owned(),
+            build_version: "x".to_owned(),
+            created_at_utc: "x".to_owned(),
+            parts,
+        })
+        .unwrap()
     }
 
     #[test]
@@ -1216,25 +1248,47 @@ mod tests {
                 let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
                 let options = zip::write::SimpleFileOptions::default();
                 zip.start_file(MANIFEST_NAME, options).unwrap();
-                zip.write_all(
-                    serde_json::to_string(&Manifest {
-                        app: APP_NAME.to_owned(),
-                        format_version: FORMAT_VERSION,
-                        platform: platform_name().to_owned(),
-                        build_version: "x".to_owned(),
-                        created_at_utc: "x".to_owned(),
-                    })
-                    .unwrap()
-                    .as_bytes(),
-                )
-                .unwrap();
+                zip.write_all(manifest_json(Vec::new()).as_bytes()).unwrap();
                 zip.start_file(entry, options).unwrap();
                 zip.write_all(b"x").unwrap();
                 zip.finish().unwrap();
             }
             assert!(stage_import(&target, &path, platform_name()).is_err(), "{entry}");
         }
+        // A zip with a manifest and nothing else has nothing to import.
+        let empty = scratch.0.join("empty.zip");
+        {
+            let mut zip = zip::ZipWriter::new(fs::File::create(&empty).unwrap());
+            zip.start_file(MANIFEST_NAME, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(manifest_json(Vec::new()).as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+        assert!(stage_import(&target, &empty, platform_name()).is_err());
         assert!(pending_parts(&target).is_empty());
+    }
+
+    #[test]
+    fn an_old_backup_with_the_background_image_is_still_accepted_and_the_image_is_ignored() {
+        let scratch = Scratch::new("legacy-background");
+        let source = data_folder(&scratch, "source");
+        let new_archive = export(&scratch, &source);
+        let old = scratch.0.join("old.zip");
+        {
+            let mut zip = zip::ZipWriter::new(fs::File::create(&old).unwrap());
+            let options = zip::write::SimpleFileOptions::default();
+            for (name, bytes) in all_entry_bytes(&new_archive) {
+                zip.start_file(name, options).unwrap();
+                zip.write_all(&bytes).unwrap();
+            }
+            zip.start_file("background/wall.jpg", options).unwrap();
+            zip.write_all(b"jpg-old-backup").unwrap();
+            zip.finish().unwrap();
+        }
+        let target = data_folder(&scratch, "target");
+        let result = stage_import(&target, &old, platform_name()).unwrap();
+        assert_eq!(result.imported, ["settings", "library", "favourites"]);
+        apply_pending_import(&target).unwrap();
+        assert_eq!(fs::read_to_string(target.join("background").join("wall.jpg")).unwrap(), "jpg-target");
     }
 
     /// A data folder with two remote accounts (`pw-one`, `pw-two`) sealed under this machine's key; returns the vault.
@@ -1266,53 +1320,68 @@ mod tests {
         (data, vault)
     }
 
-    fn export_with_remote(scratch: &Scratch, data: &Path, vault: &player_remote::account::CredentialVault, passphrase: Option<&str>) -> PathBuf {
-        let database = player_db::Database::open(data.join(LIBRARY_NAME)).unwrap();
-        let snapshot = scratch.0.join("snapshot-remote.sqlite3");
-        let _ = fs::remove_file(&snapshot);
-        database.snapshot_to(&snapshot).unwrap();
-        let archive = scratch.0.join("backup-remote.zip");
-        let remote = passphrase.map(|passphrase| {
-            let settings = SettingsStore::open(data.join(SETTINGS_NAME), AppSettings::default()).unwrap();
-            crate::remote_accounts::export_text(&settings, vault, passphrase).unwrap()
-        });
-        write_backup_zip(data, &snapshot, &archive, "26.10.19", 1_792_400_000, remote.as_deref()).unwrap();
-        archive
-    }
-
-    fn zip_text(archive: &Path, name: &str) -> String {
-        let mut zip = zip::ZipArchive::new(fs::File::open(archive).unwrap()).unwrap();
-        let mut text = String::new();
-        zip.by_name(name).unwrap().read_to_string(&mut text).unwrap();
-        text
-    }
-
     #[test]
-    fn the_backup_carries_no_password_in_settings_and_the_accounts_only_under_a_passphrase() {
+    fn no_password_is_readable_in_any_entry_and_the_accounts_only_travel_under_a_passphrase() {
         let scratch = Scratch::new("remote-export");
         let (data, vault) = data_with_accounts(&scratch, "a");
-        let without = export_with_remote(&scratch, &data, &vault, None);
-        assert!(!zip_names(&without).contains(&REMOTE_NAME.to_owned()), "no passphrase, no account file");
+        let without = export_selected(&scratch, &data, &selection(true, true, false, true), Some(&vault)).unwrap();
+        assert!(!zip_names(&without).contains(&REMOTE_NAME.to_owned()), "accounts not ticked, no account entry");
+        assert_eq!(manifest_parts(&without), ["settings", "library", "favourites"]);
         let settings = zip_text(&without, SETTINGS_NAME);
         assert!(settings.contains("nas.local"), "the accounts themselves stay in settings.json");
         assert!(!settings.contains("\"password\""), "but never a password, not even a sealed one: {settings}");
         // The live settings.json still has its sealed passwords.
         assert!(fs::read_to_string(data.join(SETTINGS_NAME)).unwrap().contains("\"password\": \"v1."));
 
-        let with = export_with_remote(&scratch, &data, &vault, Some("backup passphrase"));
+        let with = export_selected(&scratch, &data, &selection(true, true, true, true), Some(&vault)).unwrap();
         assert!(zip_names(&with).contains(&REMOTE_NAME.to_owned()));
+        assert_eq!(manifest_parts(&with), ["settings", "library", "accounts", "favourites"]);
         let sealed = zip_text(&with, REMOTE_NAME);
         for secret in ["pw-one", "pw-two", "nas.local", "NAS 一"] {
-            assert!(!sealed.contains(secret), "{secret} is readable in the account file");
+            assert!(!sealed.contains(secret), "{secret} is readable in the account entry");
         }
         assert!(!zip_text(&with, SETTINGS_NAME).contains("\"password\""));
+        // Neither the entries nor the raw zip bytes show a password.
+        for archive in [&without, &with] {
+            for (name, bytes) in all_entry_bytes(archive) {
+                for secret in ["pw-one", "pw-two"] {
+                    assert!(!contains(&bytes, secret), "{secret} is readable in {name}");
+                }
+            }
+            let raw = fs::read(archive).unwrap();
+            assert!(!contains(&raw, "pw-one") && !contains(&raw, "pw-two"));
+        }
+    }
+
+    #[test]
+    fn the_accounts_alone_can_be_exported_and_come_back_into_the_current_settings() {
+        let scratch = Scratch::new("accounts-only");
+        let (data_a, vault_a) = data_with_accounts(&scratch, "a");
+        let archive = export_selected(&scratch, &data_a, &selection(false, false, true, false), Some(&vault_a)).unwrap();
+        assert_eq!(zip_names(&archive), ["manifest.json", REMOTE_NAME]);
+        assert_eq!(manifest_parts(&archive), ["accounts"]);
+
+        let data_b = data_folder(&scratch, "b");
+        let result = stage_import(&data_b, &archive, platform_name()).unwrap();
+        assert!(result.imported.is_empty());
+        assert_eq!(result.remote_accounts.as_deref(), Some("needsPassphrase"));
+        // No settings wait for the next start, so the accounts go straight into the current settings.
+        let settings_b = SettingsStore::open(data_b.join(SETTINGS_NAME), AppSettings::default()).unwrap();
+        let vault_b = player_remote::account::CredentialVault::open(&data_b.join(crate::remote_accounts::KEY_FILE_NAME)).unwrap();
+        let text = fs::read_to_string(pending_directory(&data_b).join(REMOTE_NAME)).unwrap();
+        assert!(crate::remote_accounts::import_text(&settings_b, &vault_b, &text, "wrong passphrase").is_err());
+        assert!(pending_directory(&data_b).join(REMOTE_NAME).is_file(), "a wrong passphrase leaves them waiting");
+        let added = crate::remote_accounts::import_text(&settings_b, &vault_b, &text, "backup passphrase").unwrap();
+        assert_eq!(added.added, 2);
+        let accounts = settings_b.snapshot().unwrap().remote_accounts;
+        assert_eq!(&*vault_b.password_of(&accounts[0]).unwrap().unwrap(), "pw-one");
     }
 
     #[test]
     fn restoring_on_another_device_brings_the_accounts_back_after_the_passphrase() {
         let scratch = Scratch::new("remote-restore");
         let (data_a, vault_a) = data_with_accounts(&scratch, "a");
-        let archive = export_with_remote(&scratch, &data_a, &vault_a, Some("backup passphrase"));
+        let archive = export_selected(&scratch, &data_a, &selection(true, true, true, true), Some(&vault_a)).unwrap();
 
         // Another device: its own data folder and its own device key.
         let data_b = data_folder(&scratch, "b");
@@ -1328,7 +1397,8 @@ mod tests {
         assert!(staged_text.contains("nas.local") && !staged_text.contains("\"password\""));
 
         let text = fs::read_to_string(&waiting).unwrap();
-        assert!(merge_into_staged_settings(&staged, &vault_b, &text, "wrong passphrase").is_err());
+        let wrong = merge_into_staged_settings(&staged, &vault_b, &text, "wrong passphrase").unwrap_err();
+        assert!(wrong.contains("密碼錯誤"), "{wrong}");
         assert!(!fs::read_to_string(&staged).unwrap().contains("\"password\""), "a wrong passphrase changes nothing");
         let merged = merge_into_staged_settings(&staged, &vault_b, &text, "backup passphrase").unwrap();
         assert_eq!(merged, crate::remote_accounts::RemoteAccountsImportResult { added: 0, updated: 2 });
@@ -1342,27 +1412,5 @@ mod tests {
         assert_eq!(&*vault_b.password_of(&accounts[1]).unwrap().unwrap(), "pw-two");
         assert!(vault_a.password_of(&accounts[0]).is_err(), "sealed for the new device, not the old one");
         assert!(!fs::read_to_string(data_b.join(SETTINGS_NAME)).unwrap().contains("pw-"));
-    }
-
-    #[test]
-    fn a_stand_alone_account_export_waits_for_its_passphrase_like_the_one_in_a_backup() {
-        let scratch = Scratch::new("remote-file");
-        let (data_a, vault_a) = data_with_accounts(&scratch, "a");
-        let settings_a = SettingsStore::open(data_a.join(SETTINGS_NAME), AppSettings::default()).unwrap();
-        let text = crate::remote_accounts::export_text(&settings_a, &vault_a, "file passphrase").unwrap();
-        let file = scratch.0.join("accounts.moeremote");
-        fs::write(&file, &text).unwrap();
-
-        let data_b = data_folder(&scratch, "b");
-        let result = stage_import(&data_b, &file, platform_name()).unwrap();
-        assert!(result.imported.is_empty());
-        assert_eq!(result.remote_accounts.as_deref(), Some("needsPassphrase"));
-        assert!(pending_directory(&data_b).join(REMOTE_NAME).is_file());
-        // With no settings waiting for the next start the accounts go straight into the current settings.
-        let settings_b = SettingsStore::open(data_b.join(SETTINGS_NAME), AppSettings::default()).unwrap();
-        let vault_b = player_remote::account::CredentialVault::open(&data_b.join(crate::remote_accounts::KEY_FILE_NAME)).unwrap();
-        let added = crate::remote_accounts::import_text(&settings_b, &vault_b, &text, "file passphrase").unwrap();
-        assert_eq!(added.added, 2);
-        assert_eq!(settings_b.snapshot().unwrap().remote_accounts.len(), 2);
     }
 }

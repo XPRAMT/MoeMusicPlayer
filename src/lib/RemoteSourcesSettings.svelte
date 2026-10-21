@@ -405,50 +405,6 @@
     }
   }
 
-  // ---- export and import ----
-  let passDialog = $state<HTMLDialogElement>();
-  let passMode = $state<'export' | 'import' | null>(null);
-  let passphrase = $state('');
-  let passError = $state<string | null>(null);
-  let passBusy = $state(false);
-
-  function openPassphrase(mode: 'export' | 'import'): void {
-    passMode = mode;
-    passphrase = '';
-    passError = null;
-    passDialog?.showModal();
-  }
-
-  function closePassphrase(): void {
-    passDialog?.close();
-    passMode = null;
-    passphrase = '';
-  }
-
-  async function confirmPassphrase(): Promise<void> {
-    if (!passMode || passBusy) return;
-    if (passphrase.length < 8) { passError = tr('密碼至少需要 8 個字元。'); return; }
-    passBusy = true;
-    passError = null;
-    try {
-      if (passMode === 'export') {
-        const name = await invokeCommand('remote_accounts_export', { passphrase });
-        if (name) message = tr('已匯出遠端帳號：{0}', [name]);
-      } else {
-        const result = await invokeCommand('remote_accounts_import', { passphrase });
-        if (result) {
-          message = tr('已匯入遠端帳號：新增 {0}、更新 {1}。', [result.added, result.updated]);
-          await loadAccounts();
-        }
-      }
-      closePassphrase();
-    } catch (cause) {
-      passError = getErrorText(cause);
-    } finally {
-      passBusy = false;
-    }
-  }
-
   function protocolLabel(account: RemoteAccountView): string {
     return account.protocol === 'smb' ? 'SMB' : 'WebDAV';
   }
@@ -476,10 +432,6 @@
     {:else if accounts.length === 0}
       <p class="source-muted-note">{WEBDAV_ENTRY_VISIBLE ? tr("可加入 SMB（網路芳鄰）與 WebDAV 伺服器上的音樂資料夾：按上方的「＋」新增遠端伺服器。") : tr("可加入 SMB（網路芳鄰）伺服器上的音樂資料夾：按上方的「＋」新增遠端伺服器。")}</p>
     {/if}
-    <div class="source-action-row source-action-buttons source-folder-picker">
-      <button class="soft-button" type="button" disabled={disabled || accounts.length === 0} onclick={() => openPassphrase('export')}>{tr("匯出帳號")}</button>
-      <button class="soft-button" type="button" {disabled} onclick={() => openPassphrase('import')}>{tr("匯入帳號")}</button>
-    </div>
     {#if error}<div class="source-error-message" role="status">{error}</div>{/if}
     {#if message}<div class="source-result-message" role="status">{message}</div>{/if}
   </div>
@@ -661,23 +613,6 @@
       </div>
     {/if}
   </div>
-</dialog>
-
-<dialog bind:this={passDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-pass-title" oncancel={(event) => { event.preventDefault(); closePassphrase(); }}>
-  {#if passMode}
-    <div class="update-dialog-content">
-      <h2 id="remote-pass-title">{passMode === 'export' ? tr('匯出遠端帳號') : tr('匯入遠端帳號')}</h2>
-      <p>{passMode === 'export'
-        ? tr('帳號（含密碼）會用你設定的密碼加密成一個檔案，可帶到另一台裝置匯入。請記住這個密碼，忘記就無法開啟。')
-        : tr('請輸入匯出檔案時設定的密碼。匯入後，密碼會改用這台裝置的金鑰加密。')}</p>
-      <label class="remote-field"><span>{tr("檔案密碼（至少 8 個字元）")}</span><input type="text" class="secret-input" bind:value={passphrase} autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" /></label>
-      {#if passError}<p class="error-text" role="alert">{passError}</p>{/if}
-      <div class="update-dialog-actions">
-        <button class="soft-button" type="button" onclick={closePassphrase}>{tr("取消")}</button>
-        <button class="soft-button" type="button" disabled={passBusy} onclick={() => void confirmPassphrase()}>{passMode === 'export' ? tr('匯出') : tr('匯入')}</button>
-      </div>
-    </div>
-  {/if}
 </dialog>
 
 <style>

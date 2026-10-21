@@ -53,6 +53,7 @@ mod windows_file_associations;
 use playlist_exchange::{export_playlist_file, PlaylistExportResult, PlaylistImportResult};
 #[cfg(any(target_os = "windows", target_os = "android"))]
 use playlist_exchange::{import_playlist_file_with_id, read_playlist_file};
+mod background_fallback;
 mod backup;
 mod settings;
 mod sleep_timer;
@@ -6111,7 +6112,11 @@ fn main_background_bytes(app: &AppHandle, state: &AppState) -> Result<Vec<u8>, S
     let image = match theme.main_background_mode {
         MainBackgroundMode::Solid | MainBackgroundMode::AlbumCover => None,
         MainBackgroundMode::SingleImage => {
-            Some(user_data_directory(&state)?.join(MAIN_BACKGROUND_FILE_NAME))
+            // A restored settings file may name an image this device lacks: the background stays plain, no error.
+            match background_fallback::single_image_path(&user_data_directory(state)?, MAIN_BACKGROUND_FILE_NAME) {
+                Some(path) => Some(path),
+                None => return Ok(Vec::new()),
+            }
         }
         MainBackgroundMode::Slideshow => return next_slideshow_bytes(app, state, &theme),
         MainBackgroundMode::SystemWallpaper => {
@@ -6201,6 +6206,10 @@ fn next_slideshow_bytes(
     }
     let _ = app;
     let folder = folder.to_path_buf().map_err(|error| error.to_string())?;
+    // A restored settings file may name a folder this device lacks: the background stays plain, no error.
+    if !background_fallback::slideshow_folder_exists(&folder) {
+        return Ok(Vec::new());
+    }
     let path = state
         .main_background
         .next_slideshow_image(&folder, theme.slideshow_order)?;

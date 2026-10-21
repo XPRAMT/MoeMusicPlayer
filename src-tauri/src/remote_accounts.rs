@@ -1,20 +1,17 @@
-//! Remote accounts (ADR 0026): the commands that create, change, delete, export and import them.
+//! Remote accounts (ADR 0026): the commands that create, change and delete them, and the sealing used by the backup.
 //!
 //! Passwords are managed by the app itself, not by an operating-system credential store: a typed password is sealed with
-//! the device key (`player_remote::secret`) before it is written to `settings.json`, and an export seals the accounts
-//! under a passphrase so they can be restored on another device.
+//! the device key (`player_remote::secret`) before it is written to `settings.json`; the backup export (Settings → About)
+//! seals the accounts under a passphrase so they can be restored on another device.
 
 use std::path::Path;
 
 use player_remote::account::{new_account_id, CredentialVault, RemoteAccount, RemoteProtocol, TlsMode};
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
 
 use crate::settings::SettingsStore;
 
 pub(crate) const KEY_FILE_NAME: &str = "remote-credentials.key";
-/// The extension of an account export file.
-pub(crate) const EXPORT_EXTENSION: &str = "moeremote";
 
 /// What the page sees of an account: everything but the password (only whether one is stored).
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -292,50 +289,6 @@ pub(crate) fn remote_account_delete(state: tauri::State<'_, crate::AppState>, id
     let removed = delete_account(&state.settings, &id)?;
     state.remote_connections.forget(&id);
     Ok(removed)
-}
-
-/// Export every remote account into a file chosen with the system dialog, sealed under `passphrase`.
-/// Returns the file name, or `None` when the dialog was cancelled.
-#[tauri::command]
-pub(crate) async fn remote_accounts_export(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, crate::AppState>,
-    passphrase: String,
-) -> Result<Option<String>, String> {
-    if passphrase.chars().count() < 8 {
-        return Err("匯出密碼至少需要 8 個字元。".to_owned());
-    }
-    let data_dir = crate::user_data_directory(&state)?;
-    let text = {
-        let settings = state.settings.clone();
-        tauri::async_runtime::spawn_blocking(move || export_text(&settings, &vault(&data_dir)?, &passphrase))
-            .await
-            .map_err(|error| error.to_string())??
-    };
-    let file_name = format!("MoeMusicPlayer-remote-accounts.{EXPORT_EXTENSION}");
-    crate::backup::save_text_file(&app, &window, &text, &file_name, "匯出遠端帳號", EXPORT_EXTENSION)
-        .await
-        .map(|saved| saved.then_some(file_name))
-}
-
-/// Import accounts from an export file chosen with the system dialog, opened with `passphrase`.
-#[tauri::command]
-pub(crate) async fn remote_accounts_import(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, crate::AppState>,
-    passphrase: String,
-) -> Result<Option<RemoteAccountsImportResult>, String> {
-    let data_dir = crate::user_data_directory(&state)?;
-    let Some(text) = crate::backup::read_text_file(&app, &window, "匯入遠端帳號", EXPORT_EXTENSION).await? else {
-        return Ok(None);
-    };
-    let settings = state.settings.clone();
-    tauri::async_runtime::spawn_blocking(move || import_text(&settings, &vault(&data_dir)?, &text, &passphrase))
-        .await
-        .map_err(|error| error.to_string())?
-        .map(Some)
 }
 
 #[cfg(test)]
