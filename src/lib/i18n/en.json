@@ -875,5 +875,10 @@
   "選擇要匯出的內容（曲庫、設定、遠端帳號、我的最愛）成一個壓縮檔，不含專輯封面與背景圖片；匯入時可以選這個壓縮檔，或其中的單一檔案，只會替換備份裡有的部分。匯入會在重新啟動後套用，原本的資料會保留在 before-import 資料夾。": "Exports the parts you choose (library, settings, remote accounts, favourites) into one zip, without album covers and background images. To import, choose that zip or a single file from it; only the parts it contains are replaced. An import is applied after a restart, and the previous data is kept in the before-import folder.",
   "還原帳號": "Restore accounts",
   "還原遠端帳號": "Restore remote accounts",
-  "請允許 Android 的「本機網路」權限，MoeMusicPlayer 才能連線到區域網路伺服器。若已拒絕，請到 Android 設定中的應用程式權限開啟本機網路存取。": "Allow the Android local network permission so MoeMusicPlayer can connect to servers on your local network. If you denied it, enable local network access in MoeMusicPlayer's app permissions in Android Settings."
+  "請允許 Android 的「本機網路」權限，MoeMusicPlayer 才能連線到區域網路伺服器。若已拒絕，請到 Android 設定中的應用程式權限開啟本機網路存取。": "Allow the Android local network permission so MoeMusicPlayer can connect to servers on your local network. If you denied it, enable local network access in MoeMusicPlayer's app permissions in Android Settings.",
+  "需要「本機網路」權限": "Local network access is required",
+  "MoeMusicPlayer 需要「本機網路」權限，才能搜尋區域網路中的伺服器並連線到遠端 SMB 伺服器。": "MoeMusicPlayer needs local network access to find servers on your network and connect to remote SMB servers.",
+  "按下「前往授權」後，Android 會詢問是否允許。允許後會接著開啟新增遠端伺服器表單；拒絕時不會連線。": "After you choose “Go to permission”, Android will ask to allow access. If allowed, the add remote server form opens; if denied, no connection is made.",
+  "尚未授予本機網路權限；允許後才能新增遠端伺服器。": "Local network access was not granted. Allow it before adding a remote server.",
+  "授權中": "Requesting permission"
 }

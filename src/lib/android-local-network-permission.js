@@ -4,6 +4,19 @@ let pendingRequest = null;
 
 /** @typedef {{ hasLocalNetworkAccess: () => boolean, requestLocalNetworkPermission: (requestId: string) => void }} AndroidInsetsBridge */
 
+/** Whether this Android install needs the in-app explanation before adding a remote server. */
+export function shouldShowAndroidLocalNetworkAuthorizationPanel() {
+  /** @type {Window & typeof globalThis & { MoeAndroidInsets?: AndroidInsetsBridge }} */
+  const appWindow = globalThis.window;
+  const bridge = appWindow?.MoeAndroidInsets;
+  if (!bridge || typeof bridge.hasLocalNetworkAccess !== 'function') return false;
+  try {
+    return !bridge.hasLocalNetworkAccess();
+  } catch {
+    return true;
+  }
+}
+
 /** Ask Android 17 for local-network access only when a remote source is about to connect. */
 export function ensureAndroidLocalNetworkAccess() {
   /** @type {Window & typeof globalThis & { MoeAndroidInsets?: AndroidInsetsBridge }} */

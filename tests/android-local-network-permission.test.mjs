@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureAndroidLocalNetworkAccess } from '../src/lib/android-local-network-permission.js';
+import {
+  ensureAndroidLocalNetworkAccess,
+  shouldShowAndroidLocalNetworkAuthorizationPanel,
+} from '../src/lib/android-local-network-permission.js';
 
 function withWindow(windowValue, callback) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -14,6 +17,21 @@ function withWindow(windowValue, callback) {
 test('non-Android runtime does not request local-network permission', async () => {
   await withWindow(undefined, async () => {
     assert.equal(await ensureAndroidLocalNetworkAccess(), true);
+    assert.equal(shouldShowAndroidLocalNetworkAuthorizationPanel(), false);
+  });
+});
+
+test('authorization panel is shown only when Android reports local-network access missing', async () => {
+  const windowValue = new EventTarget();
+  let hasPermission = true;
+  windowValue.MoeAndroidInsets = {
+    hasLocalNetworkAccess: () => hasPermission,
+    requestLocalNetworkPermission: () => assert.fail('the panel check must not request permission'),
+  };
+  await withWindow(windowValue, async () => {
+    assert.equal(shouldShowAndroidLocalNetworkAuthorizationPanel(), false);
+    hasPermission = false;
+    assert.equal(shouldShowAndroidLocalNetworkAuthorizationPanel(), true);
   });
 });
 

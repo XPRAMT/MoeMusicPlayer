@@ -1,7 +1,7 @@
 <script lang="ts">
   // Remote music sources (ADR 0026): the servers (accounts) and the folders of them that join the library.
   // A password is only ever typed here and sent to the backend, which seals it; the page never gets it back.
-  import { onMount, type Snippet } from 'svelte';
+  import { onMount, tick, type Snippet } from 'svelte';
   import {
     getErrorText,
     invokeCommand,
@@ -12,7 +12,10 @@
     type RemoteExcludedView,
     type RemoteFolderView,
   } from './ipc';
-  import { ensureAndroidLocalNetworkAccess } from './android-local-network-permission.js';
+  import {
+    ensureAndroidLocalNetworkAccess,
+    shouldShowAndroidLocalNetworkAuthorizationPanel,
+  } from './android-local-network-permission.js';
   import { tr } from './i18n.js';
   import { WEBDAV_ENTRY_VISIBLE } from './remote-protocols.js';
   import SourceSections from './SourceSections.svelte';
@@ -147,6 +150,10 @@
   let form = $state<Form | null>(null);
   let formError = $state<string | null>(null);
   let testing = $state(false);
+  let localNetworkPermissionDialog = $state<HTMLDialogElement>();
+  let localNetworkPermissionPanelOpen = $state(false);
+  let localNetworkPermissionBusy = $state(false);
+  let localNetworkPermissionDeniedMessage = $state<string | null>(null);
   let testResult = $state<string | null>(null);
   let saving = $state(false);
 
@@ -179,6 +186,43 @@
    
     formDialog?.showModal();
   }
+
+  function requestAddRemoteServer(): void {
+    if (!shouldShowAndroidLocalNetworkAuthorizationPanel()) {
+      openForm(null);
+      return;
+    }
+    localNetworkPermissionDeniedMessage = null;
+    localNetworkPermissionPanelOpen = true;
+  }
+
+  function closeLocalNetworkPermissionPanel(): void {
+    localNetworkPermissionPanelOpen = false;
+    localNetworkPermissionDeniedMessage = null;
+  }
+
+  async function authorizeLocalNetworkAndAddServer(): Promise<void> {
+    if (localNetworkPermissionBusy) return;
+    localNetworkPermissionBusy = true;
+    localNetworkPermissionDeniedMessage = null;
+    try {
+      if (await ensureAndroidLocalNetworkAccess()) {
+        localNetworkPermissionPanelOpen = false;
+        openForm(null);
+      } else {
+        localNetworkPermissionDeniedMessage = tr('尚未授予本機網路權限；允許後才能新增遠端伺服器。');
+      }
+    } finally {
+      localNetworkPermissionBusy = false;
+    }
+  }
+
+  $effect(() => {
+    const dialog = localNetworkPermissionDialog;
+    if (!dialog) return;
+    if (localNetworkPermissionPanelOpen && !dialog.open) dialog.showModal();
+    else if (!localNetworkPermissionPanelOpen && dialog.open) dialog.close();
+  });
 
   function closeForm(): void {
     formDialog?.close();
@@ -438,7 +482,7 @@
   {#each accounts as account (account.id)}
     <button class="soft-button settings-tab" type="button" role="tab" aria-selected={tab === account.id} title={locationOf(account)} onclick={() => (tab = account.id)}>{account.name}</button>
   {/each}
-  <button class="soft-button settings-tab" type="button" aria-label={tr("新增遠端伺服器")} title={tr("新增遠端伺服器")} {disabled} onclick={() => openForm(null)}>＋</button>
+  <button class="soft-button settings-tab" type="button" aria-label={tr("新增遠端伺服器")} title={tr("新增遠端伺服器")} {disabled} onclick={requestAddRemoteServer}>＋</button>
 </div>
 
 {#if tab === 'local'}
@@ -518,6 +562,25 @@
     </div>
   {/each}
 </section>
+
+<dialog
+  bind:this={localNetworkPermissionDialog}
+  class="update-dialog remote-dialog floating-surface"
+  aria-labelledby="remote-network-permission-title"
+  aria-describedby="remote-network-permission-description"
+  oncancel={(event) => { event.preventDefault(); closeLocalNetworkPermissionPanel(); }}
+>
+  <div class="update-dialog-content">
+    <h2 id="remote-network-permission-title">{tr('需要「本機網路」權限')}</h2>
+    <p id="remote-network-permission-description">{tr('MoeMusicPlayer 需要「本機網路」權限，才能搜尋區域網路中的伺服器並連線到遠端 SMB 伺服器。')}</p>
+    <p>{tr('按下「前往授權」後，Android 會詢問是否允許。允許後會接著開啟新增遠端伺服器表單；拒絕時不會連線。')}</p>
+    {#if localNetworkPermissionDeniedMessage}<p class="error-text" role="alert">{localNetworkPermissionDeniedMessage}</p>{/if}
+    <div class="update-dialog-actions">
+      <button class="soft-button" type="button" disabled={localNetworkPermissionBusy} onclick={closeLocalNetworkPermissionPanel}>{tr('取消')}</button>
+      <button class="soft-button" type="button" disabled={localNetworkPermissionBusy} onclick={() => void authorizeLocalNetworkAndAddServer()}>{localNetworkPermissionBusy ? tr('授權中') : tr('前往授權')}</button>
+    </div>
+  </div>
+</dialog>
 
 <dialog bind:this={formDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-form-title" oncancel={(event) => { event.preventDefault(); closeForm(); }}>
   {#if form}
