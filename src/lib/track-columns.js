@@ -137,6 +137,14 @@ export function normalizeLibrarySort(value) {
   return { field, direction };
 }
 
+/** Columns whose first click sorts from the largest to the smallest: the dates, the length, the play count and the quality. */
+const DESCENDING_FIRST_COLUMNS = new Set(['year', 'createdAt', 'modifiedAt', 'duration', 'playCount', 'audioFormat']);
+
+/** The direction the first click on a column sorts in. @param {string} field @returns {'asc' | 'desc'} */
+export function getFirstSortDirection(field) {
+  return DESCENDING_FIRST_COLUMNS.has(field) ? 'desc' : 'asc';
+}
+
 /**
  * @param {LibraryListSort} current
  * @param {TrackColumnId} field
@@ -147,7 +155,7 @@ export function toggleLibrarySort(current, field) {
   if (normalized.field === field) {
     return { field, direction: normalized.direction === 'asc' ? 'desc' : 'asc' };
   }
-  return { field, direction: 'asc' };
+  return { field, direction: getFirstSortDirection(field) };
 }
 
 /** @type {PlaylistListSort} */
@@ -168,7 +176,7 @@ export function togglePlaylistSort(current, field) {
   const normalized = normalizePlaylistSort(current);
   return normalized.field === field
     ? { field, direction: normalized.direction === 'asc' ? 'desc' : 'asc' }
-    : { field, direction: 'asc' };
+    : { field, direction: getFirstSortDirection(field) };
 }
 
 /**

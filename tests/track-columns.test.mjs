@@ -31,6 +31,7 @@ import {
   setTrackColumnVisibility,
   setTrackColumnWidth,
   toggleLibrarySort,
+  getFirstSortDirection,
   togglePlaylistSort,
   trackColumnDropIndexFromPointer,
   trackListColumnCount,
@@ -220,6 +221,19 @@ test('library sort toggles direction on the same field and resets on a new field
     field: 'album',
     direction: 'asc',
   });
+});
+
+test('the dates, length, play count and quality sort from the largest on the first click', () => {
+  for (const field of ['year', 'createdAt', 'modifiedAt', 'duration', 'playCount', 'audioFormat']) {
+    assert.equal(getFirstSortDirection(field), 'desc', field);
+    const first = toggleLibrarySort(DEFAULT_LIBRARY_SORT, field);
+    assert.deepEqual(first, { field, direction: 'desc' }, field);
+    assert.deepEqual(toggleLibrarySort(first, field), { field, direction: 'asc' }, field);
+    assert.deepEqual(togglePlaylistSort(DEFAULT_PLAYLIST_SORT, field), { field, direction: 'desc' }, field);
+  }
+  for (const field of ['title', 'artist', 'album', 'source']) {
+    assert.equal(getFirstSortDirection(field), 'asc', field);
+  }
 });
 
 test('playlist sort includes the original entry position and toggles direction', () => {

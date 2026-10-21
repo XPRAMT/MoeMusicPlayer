@@ -115,6 +115,7 @@
     setTrackColumnVisibility,
     setTrackColumnWidth,
     toggleLibrarySort,
+    getFirstSortDirection,
     trackColumnDropIndexFromPointer,
     withoutSourceColumn,
   } from './lib/track-columns.js';
@@ -2005,7 +2006,7 @@
     const previousSort = queueSort;
     const nextSort: LibraryListSort = queueSort?.field === id
       ? toggleLibrarySort(queueSort, id)
-      : { field: id, direction: 'asc' };
+      : { field: id, direction: getFirstSortDirection(id) };
     queueSort = nextSort;
     queueSortBusy = true;
     try {
