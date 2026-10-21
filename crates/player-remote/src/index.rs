@@ -52,6 +52,19 @@ pub fn is_excluded(path: &str, excluded: &[String]) -> bool {
 /// Finds the file tree of a source. The app implements it over the accounts it holds; tests over a folder.
 pub trait RemoteResolver: Send + Sync {
     fn resolve(&self, source_id: SourceId) -> Result<ResolvedSource, RemoteError>;
+
+    /// The account (server) the source belongs to. Every source of one account that reaches the same file identifies it
+    /// with the same locator key ([`remote_locator_key`]), so the file is one track however many sources hold it. The
+    /// default (each source is its own account) suits resolvers that know a single source.
+    fn account_id(&self, source_id: SourceId) -> String {
+        source_id.to_string()
+    }
+}
+
+/// The identity key of a remote file, shared by every source of the account: the account and the file's path from the
+/// account's root (not the path inside one source, and not the source's id).
+pub fn remote_locator_key(account_id: &str, account_path: &str) -> String {
+    format!("remote-acct:{account_id}:{}", join_path("", account_path))
 }
 
 /// `a` + `b` as one `/`-separated path without empty pieces.
@@ -182,7 +195,10 @@ impl RemoteMediaIndex {
                     identity: TrackIdentity {
                         source_id,
                         source_item_id: path.clone(),
-                        locator_key: Some(format!("remote:{source_id}:{path}")),
+                        locator_key: Some(remote_locator_key(
+                            &self.resolver.account_id(source_id),
+                            &join_path(&resolved.base_path, path),
+                        )),
                     },
                     locator: MediaLocator::Remote {
                         source_id,
@@ -427,6 +443,7 @@ impl MediaIndex for RemoteMediaIndex {
         };
 
         let base = resolved.base_path.clone();
+        let account = self.resolver.account_id(root.id);
         if is_excluded(&base, &resolved.excluded) {
             // The whole source lies in an excluded folder: nothing to scan, nothing of it stays.
             scan.state = SourceScanState::Complete;
@@ -451,7 +468,7 @@ impl MediaIndex for RemoteMediaIndex {
             seen: AtomicU64::new(0),
             sidecars: Mutex::new(Vec::new()),
         };
-        handle_entries(&walk, root.id, "", first, &base, &resolved.excluded);
+        handle_entries(&walk, root.id, "", first, &base, &account, &resolved.excluded);
 
         std::thread::scope(|scope| {
             let workers: Vec<_> = (0..LIST_WORKERS)
@@ -462,6 +479,7 @@ impl MediaIndex for RemoteMediaIndex {
                             root.id,
                             resolved.fs.as_ref(),
                             &base,
+                            &account,
                             &resolved.excluded,
                             cancellation,
                         )
@@ -536,6 +554,7 @@ fn list_worker(
     source_id: SourceId,
     fs: &dyn RemoteFs,
     base: &str,
+    account: &str,
     excluded: &[String],
     cancellation: &SyncCancellation,
 ) {
@@ -562,7 +581,7 @@ fn list_worker(
             continue;
         };
         match fs.list(&join_path(base, &directory)) {
-            Ok(entries) => handle_entries(walk, source_id, &directory, entries, base, excluded),
+            Ok(entries) => handle_entries(walk, source_id, &directory, entries, base, account, excluded),
             Err(error) => {
                 walk.incomplete.store(true, Ordering::Relaxed);
                 walk.errors
@@ -585,6 +604,7 @@ fn handle_entries(
     directory: &str,
     entries: Vec<crate::fs::RemoteEntry>,
     base: &str,
+    account: &str,
     excluded: &[String],
 ) {
     walk.seen.fetch_add(entries.len() as u64, Ordering::Relaxed);
@@ -621,7 +641,7 @@ fn handle_entries(
                 identity: TrackIdentity {
                     source_id,
                     source_item_id: relative.clone(),
-                    locator_key: Some(format!("remote:{source_id}:{relative}")),
+                    locator_key: Some(remote_locator_key(account, &join_path(base, &relative))),
                 },
                 locator: MediaLocator::Remote {
                     source_id,

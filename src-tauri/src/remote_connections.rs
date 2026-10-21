@@ -130,6 +130,12 @@ impl RemoteResolver for SourceResolver {
             excluded: excluded.clone(),
         })
     }
+
+    fn account_id(&self, source_id: SourceId) -> String {
+        self.sources
+            .get(&source_id)
+            .map_or_else(|| source_id.to_string(), |(account, _, _)| account.id.clone())
+    }
 }
 
 /// Connect to an account's server and sign in.

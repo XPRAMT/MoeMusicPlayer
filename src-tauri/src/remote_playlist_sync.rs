@@ -21,42 +21,6 @@ use crate::settings::{SourceEntry, SourceEntryKind};
 /// Where relative entries of a remote playlist are resolved while parsing (the parser works on local paths).
 const PSEUDO_ROOT: &str = "/__moeremote__";
 
-/// A remote folder source of the same account: tracks under it already belong to that source.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CoveringFolder {
-    pub source_id: SourceId,
-    /// Relative to the account's root, `/`-separated, no outer slashes.
-    pub base: String,
-}
-
-/// The locator an entry of a remote playlist is stored under: the folder source of the account that already holds the
-/// song when there is one (so a song is one track however many places list it), otherwise the playlist's own source.
-fn locator_for(rel: &str, playlist_source: SourceId, covering: &[CoveringFolder]) -> MediaLocator {
-    let best = covering
-        .iter()
-        .filter(|folder| {
-            folder.base.is_empty()
-                || rel
-                    .strip_prefix(folder.base.as_str())
-                    .is_some_and(|rest| rest.starts_with('/'))
-        })
-        .max_by_key(|folder| folder.base.len());
-    match best {
-        Some(folder) => MediaLocator::Remote {
-            source_id: folder.source_id,
-            path: rel
-                .strip_prefix(folder.base.as_str())
-                .unwrap_or(rel)
-                .trim_start_matches('/')
-                .to_owned(),
-        },
-        None => MediaLocator::Remote {
-            source_id: playlist_source,
-            path: rel.to_owned(),
-        },
-    }
-}
-
 /// Read the playlist file `file_rel` (relative to the account's root): the structure (name, `#EXTINF`) comes from the
 /// ordinary M3U parser, and every entry that names a place on the server is mapped by the style of the file itself
 /// ([`PlaylistStyle`], the same conversion the favorites writer uses in the other direction). `exists` says whether a
@@ -67,7 +31,6 @@ pub(crate) fn read_remote_playlist(
     bytes: &[u8],
     file_rel: &str,
     playlist_source: SourceId,
-    covering: &[CoveringFolder],
     exists: &dyn Fn(&str) -> bool,
 ) -> Result<Playlist, String> {
     let pseudo = PathBuf::from(PSEUDO_ROOT).join(file_rel);
@@ -84,7 +47,10 @@ pub(crate) fn read_remote_playlist(
     let style = PlaylistStyle::detect(&raws, folder, exists);
     for (entry, raw) in playlist.entries.iter_mut().zip(raws) {
         if let Some(rel) = style.to_server_path(raw, folder) {
-            entry.locator = locator_for(&rel, playlist_source, covering);
+            entry.locator = MediaLocator::Remote {
+                source_id: playlist_source,
+                path: rel,
+            };
         }
     }
     Ok(playlist)
@@ -95,40 +61,12 @@ fn read_all(fs: &dyn RemoteFs, path: &str) -> Result<Vec<u8>, String> {
     player_remote::playlist_edit::read_all(fs, path).map_err(|error| error.to_string())
 }
 
-/// The remote folder sources of `account_id` (enabled ones), for [`locator_for`].
-pub(crate) fn covering_folders(sources: &[SourceEntry], account_id: &str) -> Vec<CoveringFolder> {
-    sources
-        .iter()
-        .filter(|source| source.enabled)
-        .filter_map(|source| {
-            let SourceEntryKind::Folder {
-                path,
-                remote_account: Some(account),
-                ..
-            } = &source.kind
-            else {
-                return None;
-            };
-            if account != account_id {
-                return None;
-            }
-            match path.to_media_locator() {
-                Ok(MediaLocator::Remote { path, .. }) => Some(CoveringFolder {
-                    source_id: source.id,
-                    base: path.trim_matches('/').to_owned(),
-                }),
-                _ => None,
-            }
-        })
-        .collect()
-}
-
 /// Synchronize a registered playlist-file source that lives on a remote server. `None` means the file was unreachable
 /// or invalid: nothing is reconciled and a later sync tries again.
 pub(crate) fn sync_remote_playlist_source(
     database: &mut Database,
     source: &SourceEntry,
-    configured_sources: &[SourceEntry],
+    _configured_sources: &[SourceEntry],
     resolver: Arc<dyn RemoteResolver>,
     synced_at_utc_ms: i64,
     progress: &mut dyn FnMut(SyncProgress),
@@ -136,7 +74,7 @@ pub(crate) fn sync_remote_playlist_source(
     let SourceEntryKind::PlaylistFile {
         playlist_id,
         path,
-        remote_account: Some(account_id),
+        remote_account: Some(_),
         ..
     } = &source.kind
     else {
@@ -183,7 +121,7 @@ pub(crate) fn sync_remote_playlist_source(
         let saved = database
             .get_playlist(*playlist_id)
             .map_err(|error| error.to_string())?;
-        if saved.is_some_and(|saved| {
+        if saved.as_ref().is_some_and(|saved| {
             saved
                 .entries
                 .iter()
@@ -191,12 +129,20 @@ pub(crate) fn sync_remote_playlist_source(
         }) {
             changed = true;
         }
+        // An earlier version pointed the entries of songs a folder source held at that source. The list maps every song
+        // itself now (see below), so a list saved that way is read again.
+        if saved.as_ref().is_some_and(|saved| {
+            saved.entries.iter().any(|entry| {
+                matches!(&entry.locator, MediaLocator::Remote { source_id, .. } if *source_id != source.id)
+            })
+        }) {
+            changed = true;
+        }
     }
     let mut playlist = if changed {
-        let covering = covering_folders(configured_sources, account_id);
         let fs = Arc::clone(&resolved.fs);
         let Ok(mut playlist) =
-            read_remote_playlist(&bytes, file_rel, source.id, &covering, &|path| {
+            read_remote_playlist(&bytes, file_rel, source.id, &|path| {
                 fs.stat(path).is_ok_and(|entry| !entry.is_dir)
             })
         else {
@@ -224,7 +170,9 @@ pub(crate) fn sync_remote_playlist_source(
         .save_library_root(&root)
         .map_err(|error| error.to_string())?;
 
-    // Only the songs no folder source of the account holds are scanned into this source.
+    // Every song of the list is mapped by this source too, whatever other source of the account reaches the file: the
+    // locator key names the file by account and path, so the song is still one track (the scan finds the existing one),
+    // and the track keeps a mapping when the other source is disabled or removed.
     let own_paths: Vec<String> = playlist
         .entries
         .iter()
@@ -300,13 +248,6 @@ pub(crate) fn sync_remote_playlist_source(
 mod tests {
     use super::*;
 
-    fn covering(id: SourceId, base: &str) -> CoveringFolder {
-        CoveringFolder {
-            source_id: id,
-            base: base.to_owned(),
-        }
-    }
-
     fn remote(playlist: &Playlist, index: usize) -> (SourceId, String) {
         match &playlist.entries[index].locator {
             MediaLocator::Remote { source_id, path } => (*source_id, path.clone()),
@@ -319,7 +260,7 @@ mod tests {
         let own = SourceId::new();
         let text = "#EXTM3U\n#EXTINF:10,A\nsong a.flac\n../Other/b.flac\nsub/./c.flac\nsub\\d.flac\n";
         let playlist =
-            read_remote_playlist(text.as_bytes(), "Music/Lists/best.m3u8", own, &[], &|_| false).unwrap();
+            read_remote_playlist(text.as_bytes(), "Music/Lists/best.m3u8", own, &|_| false).unwrap();
         assert_eq!(playlist.name, "best");
         assert_eq!(remote(&playlist, 0), (own, "Music/Lists/song a.flac".to_owned()));
         assert_eq!(remote(&playlist, 1), (own, "Music/Other/b.flac".to_owned()));
@@ -330,7 +271,6 @@ mod tests {
     #[test]
     fn absolute_windows_paths_are_found_on_the_server() {
         let own = SourceId::new();
-        let music = SourceId::new();
         let text = "#EXTM3U\nD:\\Music\\Loss\\[a]\\x (1).flac\nD:\\Music\\Loss\\[a]\\y.flac\nD:\\Elsewhere\\z.flac\nrtsp://cam/stream\n";
         // The server shows the drive's `Music` folder as `Music` at its top.
         let files = ["Music/Loss/[a]/x (1).flac", "Music/Loss/[a]/y.flac"];
@@ -338,12 +278,11 @@ mod tests {
             text.as_bytes(),
             "Music/Playlists/p.m3u8",
             own,
-            &[covering(music, "Music")],
             &|path| files.contains(&path),
         )
         .unwrap();
-        assert_eq!(remote(&playlist, 0), (music, "Loss/[a]/x (1).flac".to_owned()));
-        assert_eq!(remote(&playlist, 1), (music, "Loss/[a]/y.flac".to_owned()));
+        assert_eq!(remote(&playlist, 0), (own, "Music/Loss/[a]/x (1).flac".to_owned()));
+        assert_eq!(remote(&playlist, 1), (own, "Music/Loss/[a]/y.flac".to_owned()));
         // The same rule is applied to the rest (the scan reports the ones that are missing); a web address is left alone.
         assert_eq!(remote(&playlist, 2), (own, "Elsewhere/z.flac".to_owned()));
         assert!(matches!(playlist.entries[3].locator, MediaLocator::ContentUri(_)));
@@ -356,7 +295,6 @@ mod tests {
             b"E:\\Songs\\a.flac\n",
             "Share/Lists/p.m3u8",
             own,
-            &[],
             &|path| path == "Share/Songs/a.flac",
         )
         .unwrap();
@@ -368,24 +306,9 @@ mod tests {
         let own = SourceId::new();
         let text = "../../../up.flac\nhttp://example.com/x.mp3\n";
         let playlist =
-            read_remote_playlist(text.as_bytes(), "a/list.m3u8", own, &[], &|_| false).unwrap();
+            read_remote_playlist(text.as_bytes(), "a/list.m3u8", own, &|_| false).unwrap();
         assert!(matches!(playlist.entries[0].locator, MediaLocator::FileSystem(_)));
         assert!(matches!(playlist.entries[1].locator, MediaLocator::ContentUri(_)));
-    }
-
-    #[test]
-    fn songs_under_a_folder_source_of_the_account_use_that_source() {
-        let own = SourceId::new();
-        let music = SourceId::new();
-        let deep = SourceId::new();
-        let folders = [covering(music, "Music"), covering(deep, "Music/Hi-Res")];
-        let text = "../Hi-Res/x.flac\n../Loss/y.flac\n../../Other/z.flac\n";
-        let playlist =
-            read_remote_playlist(text.as_bytes(), "Music/Lists/p.m3u8", own, &folders, &|_| false).unwrap();
-        // The deepest folder source wins; the path is relative to that source's folder.
-        assert_eq!(remote(&playlist, 0), (deep, "x.flac".to_owned()));
-        assert_eq!(remote(&playlist, 1), (music, "Loss/y.flac".to_owned()));
-        assert_eq!(remote(&playlist, 2), (own, "Other/z.flac".to_owned()));
     }
 
     mod sync {
@@ -419,6 +342,10 @@ mod tests {
                     base_path: base.clone(),
                     excluded: Vec::new(),
                 })
+            }
+
+            fn account_id(&self, _: SourceId) -> String {
+                "acc".to_owned()
             }
         }
 
@@ -523,12 +450,163 @@ mod tests {
             let _ = fs::remove_dir_all(root);
         }
 
+        fn folder_root(id: SourceId, base: &str) -> LibraryRoot {
+            LibraryRoot {
+                id,
+                kind: MediaSourceKind::Remote,
+                display_name: format!("folder {base}"),
+                locator: MediaLocator::Remote {
+                    source_id: id,
+                    path: base.to_owned(),
+                },
+                enabled: true,
+            }
+        }
+
+        fn sync_folder(
+            database: &mut Database,
+            resolver: &Arc<dyn RemoteResolver>,
+            root: &LibraryRoot,
+            at: i64,
+        ) {
+            database.save_library_root(root).unwrap();
+            let mut index = RemoteMediaIndex::new(Arc::clone(resolver));
+            SyncEngine::sync_with_progress(root, &mut index, database, at, |_| {}).unwrap();
+        }
+
+        fn sync_list(
+            database: &mut Database,
+            resolver: &Arc<dyn RemoteResolver>,
+            source: &SourceEntry,
+            at: i64,
+        ) {
+            sync_remote_playlist_source(database, source, &[], Arc::clone(resolver), at, &mut |_| {})
+                .unwrap()
+                .expect("the playlist is reachable");
+        }
+
+        fn all_ids(database: &Database) -> Vec<player_core::TrackId> {
+            let mut ids: Vec<_> = database
+                .list_tracks_page(ListTracksQuery {
+                    offset: 0,
+                    limit: 100,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::Title,
+                        direction: TrackSortDirection::Asc,
+                    },
+                })
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|item| item.id)
+                .collect();
+            ids.sort_by_key(|id| id.to_string());
+            ids
+        }
+
+        /// Whatever the sources are and in whatever order they are synchronized (any number of times), a file of the
+        /// server is one track, and a track that exists keeps its id when another source starts to hold it too.
         #[test]
-        fn a_song_the_account_already_holds_is_not_a_second_track() {
-            let root = tree("covered");
+        fn a_file_is_one_track_however_many_sources_reach_it() {
+            // The list names its songs three ways: with a drive letter (the drive is the account's root), climbing out of
+            // `Lists`, and with `..` pieces.
+            let lists = [
+                "D:\\Artist\\Album\\01 s16.wv\nD:\\Artist\\Album\\02 s24.wv\nD:\\Other\\f32.wv\n",
+                "../Artist/Album/01 s16.wv\n../Artist/Album/02 s24.wv\n../Other/f32.wv\n",
+                "../Lists/../Artist/Album/01 s16.wv\n../Artist/Album/02 s24.wv\n../Other/f32.wv\n",
+            ];
+            // Which sources there are: folder bases, and how many playlist sources.
+            let folder_sets: [&[&str]; 4] = [&["Artist"], &["Artist", "Artist/Album"], &["", "Artist"], &["Artist", "Other"]];
+            for text in lists {
+                for folders in folder_sets {
+                    for playlists_first in [false, true] {
+                        for two_lists in [false, true] {
+                            let root = tree("matrix");
+                            fs::write(root.join("Lists/mix.m3u8"), format!("#EXTM3U\n{text}")).unwrap();
+                            fs::write(root.join("Lists/other.m3u8"), format!("#EXTM3U\n{text}")).unwrap();
+                            let folder_ids: Vec<SourceId> = folders.iter().map(|_| SourceId::new()).collect();
+                            let list_a = SourceId::new();
+                            let list_b = SourceId::new();
+                            let mut bases: HashMap<SourceId, String> = folder_ids
+                                .iter()
+                                .zip(folders)
+                                .map(|(id, base)| (*id, (*base).to_owned()))
+                                .collect();
+                            bases.insert(list_a, String::new());
+                            bases.insert(list_b, String::new());
+                            let resolver: Arc<dyn RemoteResolver> = Arc::new(Resolver {
+                                fs: Arc::new(DirFs::new(&root)),
+                                bases,
+                            });
+                            let mut database = Database::open_in_memory().unwrap();
+                            let roots: Vec<_> = folder_ids
+                                .iter()
+                                .zip(folders)
+                                .map(|(id, base)| folder_root(*id, base))
+                                .collect();
+                            let mut sources = vec![playlist_source(list_a, "Lists/mix.m3u8")];
+                            if two_lists {
+                                sources.push(playlist_source(list_b, "Lists/other.m3u8"));
+                            }
+                            let label = format!("{text:?} {folders:?} playlists_first={playlists_first} two={two_lists}");
+
+                            let sync_all = |database: &mut Database, at: i64| {
+                                if playlists_first {
+                                    for source in &sources {
+                                        sync_list(database, resolver_ref(&resolver), source, at);
+                                    }
+                                    for folder in &roots {
+                                        sync_folder(database, resolver_ref(&resolver), folder, at + 1);
+                                    }
+                                } else {
+                                    for folder in &roots {
+                                        sync_folder(database, resolver_ref(&resolver), folder, at);
+                                    }
+                                    for source in &sources {
+                                        sync_list(database, resolver_ref(&resolver), source, at + 1);
+                                    }
+                                }
+                            };
+                            sync_all(&mut database, 1_000);
+                            let ids = all_ids(&database);
+                            assert_eq!(ids.len(), 3, "{label}");
+                            // Again and again: nothing changes.
+                            sync_all(&mut database, 2_000);
+                            sync_all(&mut database, 3_000);
+                            assert_eq!(all_ids(&database), ids, "{label}");
+                            // Every list entry resolves, and to one of those tracks.
+                            for source in &sources {
+                                let SourceEntryKind::PlaylistFile { playlist_id, .. } = &source.kind else {
+                                    unreachable!()
+                                };
+                                let saved = database.get_playlist(*playlist_id).unwrap().expect("playlist");
+                                assert_eq!(saved.entries.len(), 3, "{label}");
+                                assert!(
+                                    saved.entries.iter().all(|entry| entry.track_id.is_some_and(|id| ids.contains(&id))),
+                                    "{label}"
+                                );
+                            }
+                            let _ = fs::remove_dir_all(root);
+                        }
+                    }
+                }
+            }
+        }
+
+        fn resolver_ref(resolver: &Arc<dyn RemoteResolver>) -> &Arc<dyn RemoteResolver> {
+            resolver
+        }
+
+        /// The user's case: the playlist source was synchronized first (and its file never changed), the folder source
+        /// came later. Track ids that already exist are kept, and removing a source never loses the song.
+        #[test]
+        fn a_folder_added_after_a_playlist_gets_the_playlists_tracks_and_either_can_leave() {
+            let root = tree("later");
             fs::write(
                 root.join("Lists/mix.m3u8"),
-                "../Artist/Album/01 s16.wv\n../Other/f32.wv\n",
+                "#EXTM3U\n../Artist/Album/01 s16.wv\n../Other/f32.wv\n",
             )
             .unwrap();
             let folder = SourceId::new();
@@ -538,68 +616,28 @@ mod tests {
                 bases: HashMap::from([(folder, "Artist".to_owned()), (list, String::new())]),
             });
             let mut database = Database::open_in_memory().unwrap();
-            // The folder source `Artist` was scanned before.
-            let folder_root = LibraryRoot {
-                id: folder,
-                kind: MediaSourceKind::Remote,
-                display_name: "Artist".to_owned(),
-                locator: MediaLocator::Remote {
-                    source_id: folder,
-                    path: "Artist".to_owned(),
-                },
-                enabled: true,
-            };
-            database.save_library_root(&folder_root).unwrap();
-            let mut index = RemoteMediaIndex::new(Arc::clone(&resolver));
-            SyncEngine::sync_with_progress(&folder_root, &mut index, &mut database, 500, |_| {})
-                .unwrap();
-            assert_eq!(track_count(&database), 2);
-
-            let folder_entry = SourceEntry {
-                id: folder,
-                display_name: "Artist".to_owned(),
-                enabled: true,
-                kind: SourceEntryKind::Folder {
-                    media_kind: MediaSourceKind::Remote,
-                    path: StoredPath::from_locator(&folder_root.locator).unwrap(),
-                    remote_account: Some("acc".to_owned()),
-                },
-            };
             let source = playlist_source(list, "Lists/mix.m3u8");
-            sync_remote_playlist_source(
-                &mut database,
-                &source,
-                &[folder_entry, source.clone()],
-                resolver,
-                1_000,
-                &mut |_| {},
-            )
-            .unwrap()
-            .expect("synced");
-            // Only the song outside the folder source is new.
-            assert_eq!(track_count(&database), 3);
-            let SourceEntryKind::PlaylistFile { playlist_id, .. } = &source.kind else {
-                unreachable!()
-            };
-            let saved = database.get_playlist(*playlist_id).unwrap().expect("playlist");
-            assert!(saved.entries.iter().all(|entry| entry.track_id.is_some()));
+            sync_list(&mut database, &resolver, &source, 1_000);
+            let first = all_ids(&database);
+            assert_eq!(first.len(), 2);
+
+            let folder_root = folder_root(folder, "Artist");
+            sync_folder(&mut database, &resolver, &folder_root, 2_000);
+            sync_list(&mut database, &resolver, &source, 3_000);
+            // Two files in the folder (one of them in the list): three files, three tracks, the old ones kept.
+            let both = all_ids(&database);
+            assert_eq!(both.len(), 3);
+            assert!(first.iter().all(|id| both.contains(id)));
+
+            // The folder source is removed: its mappings go, the list keeps the songs it names.
+            database
+                .remove_playlist_file_source(folder)
+                .unwrap();
+            sync_list(&mut database, &resolver, &source, 4_000);
+            let after = all_ids(&database);
+            assert!(first.iter().all(|id| after.contains(id)));
             let _ = fs::remove_dir_all(root);
         }
-    }
-
-    #[test]
-    fn a_source_of_the_whole_account_holds_everything() {
-        let own = SourceId::new();
-        let all = SourceId::new();
-        let playlist = read_remote_playlist(
-            b"x/y.flac\n",
-            "p.m3u8",
-            own,
-            &[covering(all, "")],
-            &|_| false,
-        )
-        .unwrap();
-        assert_eq!(remote(&playlist, 0), (all, "x/y.flac".to_owned()));
     }
 
     /// Against the real server (skipped without `MOE_SMB_HOST`, `MOE_SMB_SHARE`, `MOE_SMB_FILE`, `MOE_SMB_PLAYLIST`): the
@@ -629,7 +667,7 @@ mod tests {
         let bytes = read_all(&fs, &playlist_path).unwrap();
         let own = SourceId::new();
         let total = bytes.iter().filter(|byte| **byte == b'\n').count();
-        let playlist = read_remote_playlist(&bytes, &playlist_path, own, &[], &|path| {
+        let playlist = read_remote_playlist(&bytes, &playlist_path, own, &|path| {
             fs.stat(path).is_ok_and(|entry| !entry.is_dir)
         })
         .unwrap();

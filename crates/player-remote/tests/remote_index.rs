@@ -118,7 +118,7 @@ fn scans_the_whole_tree_and_skips_hidden_and_non_audio() {
     assert!(first.fingerprint.modified_at_utc_ms.is_some());
     assert_eq!(
         first.identity.locator_key.as_deref(),
-        Some(format!("remote:{}:Artist/Album One/01 s16.wv", scan.source_id).as_str())
+        Some(format!("remote-acct:{}:Artist/Album One/01 s16.wv", scan.source_id).as_str())
     );
     let _ = fs::remove_dir_all(tree);
 }

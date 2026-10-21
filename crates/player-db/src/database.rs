@@ -3579,6 +3579,17 @@ impl Database {
         .collect()
     }
 
+    /// Make every remote file one track: tracks whose mappings share a locator key (the same file of the same account
+    /// reached through different sources) are merged. Runs inside every scan of a remote or playlist source (see
+    /// [`unify_remote_tracks`]); exposed for callers and tests that want it on its own. Returns the merged track count.
+    pub fn unify_remote_tracks(&self) -> Result<usize, DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let merged = unify_remote_tracks(&tx)?;
+        tx.commit()?;
+        Ok(merged)
+    }
+
     /// Rewrite one source in place onto filesystem paths (Android content URI -> real path,
     /// ADR 0014). The library root becomes `root`; each `(old item ID, new item ID, path)` mapping
     /// keeps its TrackId, so play statistics, lyrics, overrides, playlist entries, and the saved
@@ -6305,6 +6316,13 @@ fn apply_source_scan_transaction(
             ..SyncApplyOutcome::default()
         });
     }
+    if matches!(
+        root.kind,
+        MediaSourceKind::Remote | MediaSourceKind::PlaylistFile
+    ) {
+        // Another source of the same account may already hold the files this one just mapped.
+        unify_remote_tracks(&tx)?;
+    }
     tx.commit()?;
     Ok(SyncApplyOutcome {
         stats: SyncApplyStats {
@@ -6807,6 +6825,103 @@ fn file_names_for_tracks(
         }
     }
     Ok(names)
+}
+
+/// Prefix of the locator keys that identify a remote file by account and path (`player_remote::index::remote_locator_key`).
+const REMOTE_ACCOUNT_KEY_LIKE: &str = "remote-acct:%";
+
+/// Merge the tracks that hold mappings with the same remote-file key. Which one survives: the one with the most play
+/// statistics (history is the thing that cannot be recreated), then the one a folder source (not a playlist file) maps,
+/// then the smallest TrackId. Everything that referenced the other one is carried over ([`merge_tracks`]).
+fn unify_remote_tracks(tx: &Transaction<'_>) -> Result<usize, DatabaseError> {
+    let keys: Vec<String> = {
+        let mut statement = tx.prepare_cached(
+            "SELECT locator_key FROM source_mappings
+             WHERE locator_key LIKE ?1
+             GROUP BY locator_key HAVING COUNT(DISTINCT track_id) > 1",
+        )?;
+        let rows = statement.query_map([REMOTE_ACCOUNT_KEY_LIKE], |row| row.get(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    let mut merged = 0;
+    for key in keys {
+        let mut candidates: Vec<(String, i64, bool)> = {
+            let mut statement = tx.prepare_cached(
+                "SELECT DISTINCT m.track_id,
+                        COALESCE((SELECT played_ms FROM track_playback_statistics s WHERE s.track_id=m.track_id), 0),
+                        EXISTS(SELECT 1 FROM source_mappings f JOIN library_roots r ON r.source_id=f.source_id
+                               WHERE f.track_id=m.track_id AND r.source_kind <> 'playlist_file')
+                 FROM source_mappings m WHERE m.locator_key=?1",
+            )?;
+            let rows = statement.query_map([&key], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+            rows.collect::<Result<_, _>>()?
+        };
+        candidates.sort_by(|left, right| {
+            right
+                .1
+                .cmp(&left.1)
+                .then(right.2.cmp(&left.2))
+                .then(left.0.cmp(&right.0))
+        });
+        let Some((survivor, _, _)) = candidates.first().cloned() else {
+            continue;
+        };
+        for (loser, _, _) in candidates.iter().skip(1) {
+            merge_tracks(tx, loser, &survivor)?;
+            merged += 1;
+        }
+    }
+    Ok(merged)
+}
+
+/// Fold `loser` into `survivor`: every mapping, playlist entry, saved-session entry, override, lyric record and the play
+/// statistics move to the survivor (where both have a value the survivor's wins, except play time, which adds up), and the
+/// loser's track row goes.
+fn merge_tracks(tx: &Transaction<'_>, loser: &str, survivor: &str) -> Result<(), DatabaseError> {
+    let ids = params![survivor, loser];
+    tx.execute("UPDATE source_mappings SET track_id=?1 WHERE track_id=?2", ids)?;
+    tx.execute("UPDATE playlist_entries SET track_id=?1 WHERE track_id=?2", ids)?;
+    tx.execute("UPDATE playback_session_entries SET track_id=?1 WHERE track_id=?2", ids)?;
+    // A lyric the user picked by hand beats an automatic one.
+    tx.execute(
+        "DELETE FROM track_lyrics WHERE track_id=?1 AND manually_selected=0
+           AND EXISTS (SELECT 1 FROM track_lyrics WHERE track_id=?2 AND manually_selected=1)",
+        ids,
+    )?;
+    // The saved lyrics carry their TrackId inside the JSON as well.
+    tx.execute(
+        "UPDATE OR IGNORE track_lyrics
+            SET track_id=?1, lyrics_json=json_set(lyrics_json, '$.trackId', ?1)
+          WHERE track_id=?2",
+        ids,
+    )?;
+    tx.execute("DELETE FROM track_lyrics WHERE track_id=?1", [loser])?;
+    for table in [
+        "track_overrides",
+        "lyric_candidates",
+        "remote_lyric_cache",
+        "track_embedded_lyrics",
+        "playback_statistics_checkpoints",
+    ] {
+        tx.execute(
+            &format!("UPDATE OR IGNORE {table} SET track_id=?1 WHERE track_id=?2"),
+            ids,
+        )?;
+        tx.execute(&format!("DELETE FROM {table} WHERE track_id=?1"), [loser])?;
+    }
+    tx.execute(
+        "INSERT INTO track_playback_statistics (track_id, played_ms, observed_duration_ms)
+         SELECT ?1, played_ms, observed_duration_ms FROM track_playback_statistics WHERE track_id=?2
+         ON CONFLICT(track_id) DO UPDATE SET
+            played_ms=track_playback_statistics.played_ms + excluded.played_ms,
+            observed_duration_ms=COALESCE(track_playback_statistics.observed_duration_ms, excluded.observed_duration_ms)",
+        ids,
+    )?;
+    tx.execute("DELETE FROM track_playback_statistics WHERE track_id=?1", [loser])?;
+    tx.execute("DELETE FROM tracks WHERE track_id=?1", [loser])?;
+    Ok(())
 }
 
 fn resolve_track_id(
@@ -15313,5 +15428,200 @@ mod tests {
             )
             .expect("checkpoint count");
         assert_eq!(watermark_count, 0);
+    }
+
+    fn listen(db: &Database, track_id: TrackId, played_ms: u64) {
+        let runtime_id = uuid::Uuid::new_v4();
+        db.register_playback_statistics_runtime(runtime_id, None, None)
+            .expect("register runtime");
+        db.record_playback_checkpoints(
+            runtime_id,
+            &[PlaybackCheckpoint {
+                track_id,
+                played_ms,
+                duration_ms: Some(200_000),
+            }],
+        )
+        .expect("record listening");
+    }
+
+    fn lyrics_of(track_id: TrackId, text: &str, manual: bool) -> TrackLyrics {
+        TrackLyrics {
+            track_id,
+            provider: if manual { LyricProvider::Qq } else { LyricProvider::NetEase },
+            candidate_id: Some(text.to_owned()),
+            lyrics: parse_lrc(&format!("[00:01.00]{text}")).expect("LRC"),
+            manually_selected: manual,
+            updated_at_utc_ms: 10,
+        }
+    }
+
+    fn all_visible_tracks(db: &Database) -> Vec<player_core::TrackSummary> {
+        db.list_tracks_page(ListTracksQuery {
+            offset: 0,
+            limit: 100,
+            query: None,
+            field_filter: None,
+            sort: Default::default(),
+        })
+        .expect("list")
+        .items
+    }
+
+    fn track_of_item(db: &Database, root: &LibraryRoot, item: &str) -> TrackId {
+        let connection = db.lock().expect("connection");
+        let id: String = connection
+            .query_row(
+                "SELECT track_id FROM source_mappings WHERE source_id=?1 AND source_item_id=?2",
+                params![root.id.to_string(), item],
+                |row| row.get(0),
+            )
+            .expect("mapped item");
+        super::parse_track_id(&id).expect("track id")
+    }
+
+    /// The state an older version left: a playlist source and a folder source of one server hold the same files as two
+    /// tracks each (their keys named the source). The next scans of both name the file by account and path, which merges
+    /// the pairs with everything the user had on either of them.
+    #[test]
+    fn tracks_of_one_remote_file_under_two_sources_are_merged_with_all_their_data() {
+        let mut db = Database::open_in_memory().expect("database");
+        let folder = add_root(&db, MediaSourceKind::Remote, "folder");
+        let list = add_root(&db, MediaSourceKind::PlaylistFile, "list");
+        let new_key = |path: &str| format!("remote-acct:acc:{path}");
+        // Song one: both tracks listened to, the playlist's has automatic lyrics, the folder's manual ones.
+        // Song two: only the folder's was listened to, only the playlist's has lyrics.
+        for (source, items) in [(&list, ["Music/one", "Music/two"]), (&folder, ["one", "two"])] {
+            let records: Vec<_> = items
+                .iter()
+                .zip(["One", "Two"])
+                .map(|(item, title)| {
+                    record(source, item, &format!("remote:{}:{item}", source.id), title, 10, 1)
+                })
+                .collect();
+            apply(&mut db, source, SourceScanState::Complete, &records, &records, 1);
+        }
+        assert_eq!(all_visible_tracks(&db).len(), 4);
+        let (list_one, folder_one) = (
+            track_of_item(&db, &list, "Music/one"),
+            track_of_item(&db, &folder, "one"),
+        );
+        let (list_two, folder_two) = (
+            track_of_item(&db, &list, "Music/two"),
+            track_of_item(&db, &folder, "two"),
+        );
+        assert_ne!(list_one, folder_one);
+        listen(&db, list_one, 1_000);
+        listen(&db, folder_one, 500);
+        listen(&db, folder_two, 700);
+        db.save_automatic_track_lyrics(&lyrics_of(list_one, "auto one", false)).unwrap();
+        db.save_manual_track_lyrics(&lyrics_of(folder_one, "manual one", true)).unwrap();
+        db.save_automatic_track_lyrics(&lyrics_of(list_two, "only two", false)).unwrap();
+        let mut playlist = Playlist::new("mix");
+        for track in [list_one, list_two] {
+            playlist.entries.push(PlaylistEntry {
+                track_id: Some(track),
+                locator: MediaLocator::FileSystem(PathBuf::from("x")),
+                title: None,
+                duration_ms: None,
+            });
+        }
+        db.save_playlist(&playlist).expect("save playlist");
+
+        // Next sync: the playlist source first, then the folder source (the other order gives the same result).
+        let list_records: Vec<_> = [("Music/one", "One"), ("Music/two", "Two")]
+            .iter()
+            .map(|(item, title)| record(&list, item, &new_key(item), title, 10, 1))
+            .collect();
+        apply(&mut db, &list, SourceScanState::Complete, &list_records, &[], 2);
+        assert_eq!(
+            all_visible_tracks(&db).len(),
+            4,
+            "nothing to merge until the second source names the file the same way"
+        );
+        let folder_records: Vec<_> = [("one", "One"), ("two", "Two")]
+            .iter()
+            .map(|(item, title)| {
+                record(&folder, item, &new_key(&format!("Music/{item}")), title, 10, 1)
+            })
+            .collect();
+        apply(&mut db, &folder, SourceScanState::Complete, &folder_records, &[], 3);
+        assert_eq!(all_visible_tracks(&db).len(), 2);
+
+        // The survivor of song one is the one with more listening; song two's is the folder's (the only one heard).
+        let one = track_of_item(&db, &folder, "one");
+        let two = track_of_item(&db, &folder, "two");
+        assert_eq!(one, list_one);
+        assert_eq!(two, folder_two);
+        assert_eq!(track_of_item(&db, &list, "Music/one"), one);
+        assert_eq!(track_of_item(&db, &list, "Music/two"), two);
+        let stats = db.playback_statistics_for(&[one, two]).unwrap();
+        assert_eq!(stats[&one].played_ms, 1_500, "listening time is added up");
+        assert_eq!(stats[&two].played_ms, 700);
+        let lyrics_one = db.get_track_lyrics(one).unwrap().expect("lyrics of one");
+        assert!(lyrics_one.manually_selected, "the hand-picked lyrics beat the automatic ones");
+        assert_eq!(lyrics_one.lyrics.lines[0].text, "manual one");
+        assert_eq!(lyrics_one.track_id, one);
+        let lyrics_two = db.get_track_lyrics(two).unwrap().expect("lyrics only the other track had");
+        assert_eq!(lyrics_two.lyrics.lines[0].text, "only two");
+        assert_eq!(lyrics_two.track_id, two);
+        let saved = db.get_playlist(playlist.id).unwrap().expect("playlist");
+        assert_eq!(
+            saved.entries.iter().map(|entry| entry.track_id).collect::<Vec<_>>(),
+            vec![Some(one), Some(two)]
+        );
+
+        // Nothing is left to do on the next syncs, whichever source comes first.
+        apply(&mut db, &folder, SourceScanState::Complete, &folder_records, &[], 4);
+        apply(&mut db, &list, SourceScanState::Complete, &list_records, &[], 5);
+        assert_eq!(db.unify_remote_tracks().unwrap(), 0);
+        assert_eq!(all_visible_tracks(&db).len(), 2);
+        assert_eq!(db.playback_statistics_for(&[one]).unwrap()[&one].played_ms, 1_500);
+    }
+
+    /// The same file reached by a folder source and a playlist source is one track from the start, in either order, and
+    /// it stays (with its listening history) when either source is removed or disabled.
+    #[test]
+    fn one_remote_file_is_one_track_in_any_order_and_survives_losing_a_source() {
+        for folder_first in [true, false] {
+            let mut db = Database::open_in_memory().expect("database");
+            let folder = add_root(&db, MediaSourceKind::Remote, "folder");
+            let list = add_root(&db, MediaSourceKind::PlaylistFile, "list");
+            let key = "remote-acct:acc:Music/song";
+            let in_folder = record(&folder, "song", key, "Song", 10, 1);
+            let in_list = record(&list, "Music/song", key, "Song", 10, 1);
+            let sync_folder = |db: &mut Database, at| {
+                apply(db, &folder, SourceScanState::Complete, std::slice::from_ref(&in_folder), std::slice::from_ref(&in_folder), at)
+            };
+            let sync_list = |db: &mut Database, at| {
+                apply(db, &list, SourceScanState::Complete, std::slice::from_ref(&in_list), std::slice::from_ref(&in_list), at)
+            };
+            if folder_first {
+                sync_folder(&mut db, 1);
+                sync_list(&mut db, 2);
+            } else {
+                sync_list(&mut db, 1);
+                sync_folder(&mut db, 2);
+            }
+            assert_eq!(all_visible_tracks(&db).len(), 1, "folder_first={folder_first}");
+            let track = track_of_item(&db, &folder, "song");
+            assert_eq!(track_of_item(&db, &list, "Music/song"), track);
+            listen(&db, track, 900);
+
+            // The folder source goes away: its mappings are removed, the playlist source still maps the song.
+            apply(&mut db, &folder, SourceScanState::Complete, &[], &[], 3);
+            assert_eq!(all_visible_tracks(&db).len(), 1);
+            assert_eq!(track_of_item(&db, &list, "Music/song"), track);
+            // Later the folder source comes back: same track, same history.
+            sync_folder(&mut db, 4);
+            assert_eq!(track_of_item(&db, &folder, "song"), track);
+            assert_eq!(all_visible_tracks(&db).len(), 1);
+            assert_eq!(db.playback_statistics_for(&[track]).unwrap()[&track].played_ms, 900);
+
+            // The playlist source goes away instead.
+            apply(&mut db, &list, SourceScanState::Complete, &[], &[], 5);
+            assert_eq!(all_visible_tracks(&db).len(), 1);
+            assert_eq!(track_of_item(&db, &folder, "song"), track);
+        }
     }
 }
