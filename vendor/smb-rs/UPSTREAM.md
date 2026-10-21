@@ -1,0 +1,7 @@
+# Vendored smb-rs crates
+
+`smb` and `smb-rpc` are based on upstream `afiffon/smb-rs` version 0.12.1, commit `7c7d4a60c930e3780e95208967aa13b6346eaa25` (MIT; see [LICENSE.md](LICENSE.md)). Both crates came from the same upstream commit. Other `smb-rs` crates remain resolved from crates.io.
+
+The local changes add NDR32 support for SRVSVC share enumeration and transfer-syntax negotiation. Upstream 0.12.1 offers only NDR64 for this operation. `smb-rpc` now marshals and parses the NetrShareEnum stub using the syntax accepted in the bind acknowledgment; `smb` offers NDR64 and NDR32 in separate presentation contexts and uses the first accepted context. Other RPC interfaces retain their original NDR64 default. Guest session setup succeeds only when `allow_unsigned_guest_access` is explicitly enabled and the server marks the successful session as guest/null; authenticated sessions still require signing. MoeMusicPlayer's existing `list_shares` leaves this opt-in disabled, while `list_shares_with_guest_access` exposes it explicitly.
+
+To update the fork, compare the selected upstream `smb` and `smb-rpc` sources with the recorded commit, reapply the NDR32 and negotiation changes, then run both vendored crate unit-test suites and the MoeMusicPlayer Samba integration test. Keep the crate versions in their manifests and workspace patch entries aligned. Do not replace this with a UUID-only change: NDR32 uses 32-bit pointers, counts, and alignment in the share-enumeration stub.

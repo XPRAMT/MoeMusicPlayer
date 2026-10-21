@@ -27,12 +27,13 @@ player-core = { path = "../player-core" }
 player-formats = { path = "../player-formats" }
 player-track-metadata = { path = "../player-track-metadata" }
 # SMB 2/3 client, pure Rust, blocking API (ADR 0026).
-smb = { version = "0.12.1", default-features = false, features = ["multi_threaded", "sign", "encrypt", "compress"] }
+smb = { version = "=0.12.1", default-features = false, features = ["multi_threaded", "sign", "encrypt", "compress"] }
 sspi = { version = "=0.21.3", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
 lofty = "0.25.4"
 player-db = { path = "../player-db" }
+smb-rpc = "=0.12.1"
 
 [[test]]
 name = "real_music"

@@ -17,6 +17,12 @@ members = [
 default-members = ["src-tauri"]
 resolver = "2"
 
+[patch.crates-io]
+# Upstream smb-rs 0.12.1 is NDR64-only for SRVSVC share enumeration. Keep this narrow local fork
+# until upstream adds NDR32 marshalling and transfer-syntax negotiation (see vendor/smb-rs/UPSTREAM.md).
+smb = { path = "vendor/smb-rs/smb" }
+smb-rpc = { path = "vendor/smb-rs/smb-rpc" }
+
 # The Android APK is a dev-profile build: without this its native library carries ~380 MB of Rust debug info.
 [profile.dev]
 debug = false

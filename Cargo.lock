@@ -4224,6 +4224,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "smb",
+ "smb-rpc",
  "sspi",
  "zeroize",
 ]
@@ -5595,8 +5596,6 @@ checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 [[package]]
 name = "smb"
 version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b60b8c4d8566c3cf19d17837958e67acc0534e68f331e898a642f4f57e9ecc4c"
 dependencies = [
  "aead 0.6.1",
  "aes",
@@ -5695,8 +5694,6 @@ dependencies = [
 [[package]]
 name = "smb-rpc"
 version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a98946409c5803cb728189023303c9bc3a2379864f6aed7a36d2b79d3d7607d"
 dependencies = [
  "binrw",
  "maybe-async",
