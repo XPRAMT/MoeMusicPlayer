@@ -101,7 +101,8 @@
     grid-template-columns: repeat(3, 1fr);
     border: 1px solid var(--line);
     border-radius: 999px;
-    background: rgba(var(--text-rgb), 0.06);
+    /* Transparent: only the outline shows; the knob takes the accent colour from the theme. */
+    background: transparent;
     user-select: none;
     -webkit-app-region: no-drag;
   }
