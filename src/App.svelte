@@ -649,6 +649,8 @@
       librarySourceScope = normalizeSourceScope(await invokeCommand('settings_set_library_source_scope', { scope: next }));
       // Every list, count and grouping is read again under the new scope.
       libraryListRevision += 1;
+      playlistListRevision += 1;
+      playbackQueueResetKey += 1;
     } catch (error) {
       librarySourceScope = previous;
       console.warn('source scope', error);

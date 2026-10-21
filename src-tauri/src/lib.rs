@@ -8798,10 +8798,17 @@ fn playback_get_queue_quick_index_groupings(
                 .or_insert_with(|| external.summary.clone());
         }
     }
+    let visible_positions = queue_visible_positions(Some(database), &queue)?;
     let keys = queue
         .play_order
         .iter()
-        .filter_map(|entry_index| queue.entries.get(*entry_index))
+        .enumerate()
+        .filter(|(position, _)| {
+            visible_positions
+                .as_ref()
+                .is_none_or(|positions| positions.binary_search(position).is_ok())
+        })
+        .filter_map(|(_, entry_index)| queue.entries.get(*entry_index))
         .map(|entry| {
             quick_index_key(field, summaries.get(&entry.track_id))
                 .map(|(_, key)| key)
@@ -9395,11 +9402,13 @@ async fn playback_reorder_queue(
             let Some(queue) = queue.as_mut() else {
                 return Err("目前沒有播放佇列可調整順序。".to_owned());
             };
+            let before = queue.snapshot();
+            let (from_index, to_index) =
+                queue_rows_to_positions(state.database.as_ref(), &before, from_index, to_index)?;
             let length = queue.len();
             if from_index >= length || to_index >= length {
                 return Err("播放佇列位置超出範圍。".to_owned());
             }
-            let before = queue.snapshot();
             queue
                 .move_traversal(from_index, to_index)
                 .map_err(|_| "播放佇列位置超出範圍。".to_owned())?;
@@ -9415,13 +9424,17 @@ async fn playback_reorder_queue(
     }
     #[cfg(target_os = "android")]
     {
-        if let Some((_, queue)) = android_playback_service(&state)?.queue_snapshot()? {
-            if from_index >= queue.play_order.len() || to_index >= queue.play_order.len() {
-                return Err("播放佇列位置超出範圍。".to_owned());
-            }
-        } else {
-            return Err("目前沒有播放佇列可調整順序。".to_owned());
-        }
+        let (from_index, to_index) =
+            if let Some((_, queue)) = android_playback_service(&state)?.queue_snapshot()? {
+                let (from_index, to_index) =
+                    queue_rows_to_positions(state.database.as_ref(), &queue, from_index, to_index)?;
+                if from_index >= queue.play_order.len() || to_index >= queue.play_order.len() {
+                    return Err("播放佇列位置超出範圍。".to_owned());
+                }
+                (from_index, to_index)
+            } else {
+                return Err("目前沒有播放佇列可調整順序。".to_owned());
+            };
         let snapshot = android_playback_service(&state)?
             .execute(android_playback::PlaybackAction::ReorderQueue {
                 from: from_index,
@@ -9811,6 +9824,59 @@ fn sort_queue_entry_order_sql(
         .map_err(|error| error.to_string())
 }
 
+/// The traversal positions the source scope shows, or `None` when it shows everything. The queue keeps its full
+/// order; the page only lists the visible rows, each carrying its real traversal position.
+fn queue_visible_positions(
+    database: Option<&Database>,
+    queue: &PlaybackQueueSnapshot,
+) -> Result<Option<Vec<usize>>, String> {
+    let Some(database) = database else {
+        return Ok(None);
+    };
+    if database.source_scope() == player_db::LibrarySourceScope::All {
+        return Ok(None);
+    }
+    let track_ids = queue
+        .entries
+        .iter()
+        .map(|entry| entry.track_id)
+        .collect::<Vec<_>>();
+    let visible = database
+        .track_ids_in_source_scope(&track_ids)
+        .map_err(|error| error.to_string())?;
+    Ok(Some(
+        queue
+            .play_order
+            .iter()
+            .enumerate()
+            .filter(|(_, entry_index)| {
+                queue
+                    .entries
+                    .get(**entry_index)
+                    .is_some_and(|entry| visible.contains(&entry.track_id))
+            })
+            .map(|(position, _)| position)
+            .collect(),
+    ))
+}
+
+/// Rows of a queue list narrowed by the source scope are not traversal positions: this turns the row numbers a drag
+/// reports into the real positions (identical when the scope shows everything).
+fn queue_rows_to_positions(
+    database: Option<&Database>,
+    queue: &PlaybackQueueSnapshot,
+    from_row: usize,
+    to_row: usize,
+) -> Result<(usize, usize), String> {
+    match queue_visible_positions(database, queue)? {
+        None => Ok((from_row, to_row)),
+        Some(positions) => match (positions.get(from_row), positions.get(to_row)) {
+            (Some(from), Some(to)) => Ok((*from, *to)),
+            _ => Err("播放佇列位置超出範圍。".to_owned()),
+        },
+    }
+}
+
 fn build_playback_queue_page(
     database: Option<&Database>,
     revision: u64,
@@ -9829,8 +9895,13 @@ fn build_playback_queue_page(
         });
     };
 
-    let total = u64::try_from(queue.play_order.len())
-        .map_err(|_| "播放佇列項目數量超出支援範圍。".to_owned())?;
+    let visible_positions = queue_visible_positions(database, &queue)?;
+    let total = u64::try_from(
+        visible_positions
+            .as_ref()
+            .map_or(queue.play_order.len(), Vec::len),
+    )
+    .map_err(|_| "播放佇列項目數量超出支援範圍。".to_owned())?;
     let queue_cursor =
         u64::try_from(queue.cursor).map_err(|_| "播放佇列游標超出支援範圍。".to_owned())?;
     let current_entry_position = queue
@@ -9846,18 +9917,35 @@ fn build_playback_queue_page(
         .position(|entry_index| Some(*entry_index as u64) == current_entry_position)
         .map(|index| index as u64)
         .unwrap_or(queue_cursor);
+    // The row the list shows the current song on: its place among the visible rows when a scope narrows the queue
+    // (None while the current song is outside the scope).
+    let cursor_row = match visible_positions.as_ref() {
+        None => Some(cursor),
+        Some(positions) => positions
+            .iter()
+            .position(|position| *position as u64 == cursor)
+            .map(|row| row as u64),
+    };
     let offset_index = usize::try_from(offset.min(total)).unwrap_or(usize::MAX);
     let limit = requested_limit.clamp(1, PLAYBACK_QUEUE_PAGE_MAX_LIMIT) as usize;
-    let page_entries = queue
-        .play_order
-        .iter()
-        .skip(offset_index)
-        .take(limit)
-        .enumerate()
-        .map(|(page_index, entry_index)| {
-            let traversal_position = offset
-                .checked_add(page_index as u64)
-                .ok_or_else(|| "播放佇列分頁位置超出支援範圍。".to_owned())?;
+    let page_positions: Vec<usize> = match visible_positions.as_ref() {
+        None => (offset_index..queue.play_order.len()).take(limit).collect(),
+        Some(positions) => positions
+            .iter()
+            .copied()
+            .skip(offset_index)
+            .take(limit)
+            .collect(),
+    };
+    let page_entries = page_positions
+        .into_iter()
+        .map(|position| {
+            let entry_index = queue
+                .play_order
+                .get(position)
+                .ok_or_else(|| "播放佇列 traversal 指向無效項目。".to_owned())?;
+            let traversal_position = u64::try_from(position)
+                .map_err(|_| "播放佇列分頁位置超出支援範圍。".to_owned())?;
             let entry_position = u64::try_from(*entry_index)
                 .map_err(|_| "播放佇列項目位置超出支援範圍。".to_owned())?;
             let entry = queue
@@ -9897,7 +9985,7 @@ fn build_playback_queue_page(
         revision,
         total,
         offset,
-        cursor: Some(cursor),
+        cursor: cursor_row,
         current_entry_position,
         items,
     })

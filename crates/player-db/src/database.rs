@@ -305,6 +305,15 @@ SELECT e.position, e.track_id,
        (SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))
 FROM resolved_entries e
 LEFT JOIN tracks t ON t.track_id=e.track_id
+-- The source scope: an entry stays when its track has an enabled source in scope, or (with no enabled source at all)
+-- when the place it points at is in scope.
+WHERE (moe_in_scope('remote') AND moe_in_scope('local'))
+   OR EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+              ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind)
+              WHERE m.track_id=e.track_id)
+   OR (NOT EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                   ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=e.track_id)
+       AND moe_in_scope(CASE WHEN e.locator_kind='remote' THEN 'remote' ELSE 'local' END))
 "#;
 
 fn playlist_order_by(sort: PlaylistListSort, direction: &str) -> String {
@@ -1863,6 +1872,35 @@ impl Database {
             });
         }
         Ok(())
+    }
+
+    /// Which of these tracks the current source scope shows. A track that no source maps at all (an opened external
+    /// file) counts as local.
+    pub fn track_ids_in_source_scope(
+        &self,
+        track_ids: &[TrackId],
+    ) -> Result<std::collections::HashSet<TrackId>, DatabaseError> {
+        if track_ids.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+        let ids = track_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let ids_json = serde_json::to_string(&ids)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT j.value FROM json_each(?1) j
+             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                           ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind)
+                           WHERE m.track_id=j.value)
+                OR (NOT EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=j.value)
+                    AND moe_in_scope('local'))",
+        )?;
+        let rows = statement.query_map([ids_json], |row| row.get::<_, String>(0))?;
+        let mut visible = std::collections::HashSet::new();
+        for row in rows {
+            visible.insert(parse_track_id(&row?)?);
+        }
+        Ok(visible)
     }
 
     /// Narrow every list, count and grouping to local or remote sources (or both). Playback still resolves all sources.
@@ -3971,7 +4009,7 @@ impl Database {
         let limit = query_limit(limit);
         reconcile_unmatched_playlist_entries(&mut connection, playlist_id)?;
         let total_count: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM playlist_entries WHERE playlist_id=?1",
+            &format!("SELECT COUNT(*) FROM ({PLAYLIST_PAGE_SQL})"),
             [playlist_id.to_string()],
             |row| row.get(0),
         )?;
@@ -10785,6 +10823,69 @@ mod tests {
         assert_eq!(db.list_tracks_page(query.clone()).expect("page").total_count, 2);
         db.set_source_scope(LibrarySourceScope::All);
         assert_eq!(titles(&db).len(), 5);
+    }
+
+    #[test]
+    fn the_source_scope_narrows_playlists_and_tells_which_queue_tracks_are_visible() {
+        use crate::LibrarySourceScope;
+        let mut db = Database::open_in_memory().expect("database");
+        let nas = add_root(&db, MediaSourceKind::Remote, "NAS / Music");
+        let local = add_root(&db, MediaSourceKind::WindowsFilesystem, "Music");
+        for (root, count, base) in [(&nas, 2_usize, "n"), (&local, 3, "l")] {
+            let records: Vec<_> = (0..count)
+                .map(|index| record(root, &format!("{base}-{index}"), &format!("{base}-{index}"), &format!("{base} title {index}"), 100, 1_000))
+                .collect();
+            apply(&mut db, root, SourceScanState::Complete, &records, &records, 2_000);
+        }
+        let all_tracks = db
+            .list_tracks_page(ListTracksQuery {
+                offset: 0,
+                limit: 100,
+                query: None,
+                field_filter: None,
+                sort: TrackListSort { field: TrackSortField::Title, direction: TrackSortDirection::Asc },
+            })
+            .expect("tracks")
+            .items;
+        let mut playlist = Playlist::new("mixed");
+        playlist.entries = all_tracks
+            .iter()
+            .map(|track| PlaylistEntry {
+                track_id: Some(track.id),
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\{}.flac", track.title.clone().unwrap_or_default()))),
+                title: None,
+                duration_ms: None,
+            })
+            .collect();
+        db.save_playlist(&playlist).expect("save playlist");
+        let page_titles = |db: &Database| -> (u64, Vec<String>) {
+            let page = db
+                .get_playlist_page_sorted(playlist.id, 0, 100, PlaylistListSort::default())
+                .expect("page")
+                .expect("playlist");
+            (page.total_count, page.items.iter().map(|item| item.title.clone().unwrap_or_default()).collect())
+        };
+        assert_eq!(page_titles(&db).0, 5);
+        db.set_source_scope(LibrarySourceScope::Remote);
+        let (total, titles) = page_titles(&db);
+        assert_eq!(total, 2, "{titles:?}");
+        assert!(titles.iter().all(|title| title.starts_with("n title")), "{titles:?}");
+        db.set_source_scope(LibrarySourceScope::Local);
+        let (total, titles) = page_titles(&db);
+        assert_eq!(total, 3, "{titles:?}");
+        assert!(titles.iter().all(|title| title.starts_with("l title")), "{titles:?}");
+        // Queue rows: the same tracks are the visible ones, and an unknown (external) track counts as local.
+        let ids: Vec<_> = all_tracks.iter().map(|track| track.id).collect();
+        let stranger = TrackId::new();
+        let mut with_stranger = ids.clone();
+        with_stranger.push(stranger);
+        let visible = db.track_ids_in_source_scope(&with_stranger).expect("visible");
+        assert_eq!(visible.len(), 4);
+        assert!(visible.contains(&stranger));
+        db.set_source_scope(LibrarySourceScope::Remote);
+        let visible = db.track_ids_in_source_scope(&with_stranger).expect("visible");
+        assert_eq!(visible.len(), 2);
+        assert!(!visible.contains(&stranger));
     }
 
     #[test]
