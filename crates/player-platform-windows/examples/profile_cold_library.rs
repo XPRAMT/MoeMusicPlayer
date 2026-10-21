@@ -113,6 +113,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         field("db_bytes", size("")),
         field("wal_bytes", size("-wal")),
     ];
+    let mut ready_fields = ready_fields;
+    if let Some((read, write)) = process_io_bytes() {
+        ready_fields.push(field("process_read_bytes", read));
+        ready_fields.push(field("process_write_bytes", write));
+    }
     profile::event("library_ready", &ready_fields);
     let marker = format!("{{{}}}\n", ready_fields.join(","));
     fs::write(out_dir.join("library_ready.json"), marker)?;
@@ -127,4 +132,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err(format!("scan state {:?}", report.state).into());
     }
     Ok(())
+}
+
+/// The process's own I/O byte counters (all files, including the database and WAL).
+#[cfg(windows)]
+fn process_io_bytes() -> Option<(u64, u64)> {
+    #[repr(C)]
+    #[derive(Default)]
+    struct IoCounters {
+        read_operations: u64,
+        write_operations: u64,
+        other_operations: u64,
+        read_bytes: u64,
+        write_bytes: u64,
+        other_bytes: u64,
+    }
+    extern "system" {
+        fn GetCurrentProcess() -> *mut core::ffi::c_void;
+        fn GetProcessIoCounters(process: *mut core::ffi::c_void, counters: *mut IoCounters) -> i32;
+    }
+    let mut counters = IoCounters::default();
+    // SAFETY: the pseudo handle needs no closing and `counters` is a valid IO_COUNTERS-sized buffer.
+    let ok = unsafe { GetProcessIoCounters(GetCurrentProcess(), &mut counters) };
+    (ok != 0).then_some((counters.read_bytes, counters.write_bytes))
+}
+
+#[cfg(not(windows))]
+fn process_io_bytes() -> Option<(u64, u64)> {
+    None
 }

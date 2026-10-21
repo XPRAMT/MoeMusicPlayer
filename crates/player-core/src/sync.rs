@@ -518,7 +518,10 @@ impl SyncEngine {
                 Some(reader) => {
                     let next = AtomicUsize::new(0);
                     let (sender, receiver) = std::sync::mpsc::channel();
-                    read_threads = index.metadata_read_threads().max(1).min(tracks.len());
+                    read_threads = metadata_read_threads_override()
+                        .unwrap_or_else(|| index.metadata_read_threads())
+                        .max(1)
+                        .min(tracks.len());
                     std::thread::scope(|scope| {
                         for _ in 0..read_threads {
                             let sender = sender.clone();
@@ -948,6 +951,14 @@ fn locator_text(track: &MediaTrackRecord) -> String {
         crate::library::MediaLocator::FileSystem(path) => path.display().to_string(),
         other => format!("{other:?}"),
     }
+}
+
+/// `MOE_METADATA_READ_THREADS` replaces the adapter's tag-reading thread count (measurement and tuning).
+fn metadata_read_threads_override() -> Option<usize> {
+    std::env::var("MOE_METADATA_READ_THREADS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|threads| (1..=64).contains(threads))
 }
 
 /// How many tracks are parsed at once when the adapter offers a parallel reader.

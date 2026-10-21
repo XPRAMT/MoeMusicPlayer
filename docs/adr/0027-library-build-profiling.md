@@ -1,6 +1,6 @@
 ﻿# In-process profiling of the cold library build
 
-Status: Accepted and implemented on 2026-10-22; first measurement on `D:\Music` recorded below
+Status: Accepted and implemented on 2026-10-22; measurement and the cold-build optimization on `D:\Music` recorded below
 
 Decision date: 2026-10-22, Asia/Taipei (UTC+08:00)
 
@@ -66,4 +66,48 @@ Other figures:
 ## Consequences
 
 - To profile a GUI cold build, launch the player with `MOE_LIBRARY_PROFILE` set. The file then gets `app_start`, the `SyncEngine` and DB events, and `library_ready` when the sync finishes. That is a normal single launch, never a second instance.
-- Optimizations are proposed in AGENTS.md and the commit report, and are not implemented by this ADR. Each one should be re-measured with the script before and after.
+- Every optimization is measured with the script before and after; the cold-build bulk mode below is the first.
+
+## Optimization of the cached cold build (2026-10-22 02:10–02:20 +08:00)
+
+Every step was measured as the median of 5 fresh builds of `D:\Music` with the OS file cache warm. Settings were switched per run with `MOE_LIBRARY_BULK` and `MOE_METADATA_READ_THREADS`. The before and after columns come from 2 interleaved rounds in one session.
+
+| Phase (ms, median) | Before | After | Change |
+|---|---|---|---|
+| Enumerate | 110 | 109 | 0 |
+| Tag read (4 threads) | 675 | 671 | 0 |
+| Persist (one transaction) | 792 | 276 | −516 (−65%) |
+| …`persist_mapping` | 507 | 39 | −468 |
+| …`persist_metadata` | 119 | 34 | −85 |
+| …`sync_seen_items` | 39 | 31 | −8 |
+| …index rebuild + `foreign_key_check` | 0 | 51 | +51 |
+| …commit | 87 | 88 | 0 |
+| First page | 77 | 71 | −6 |
+| **Total until `library_ready`** | **1,776** | **1,243** | **−533 (−30%)** |
+| Process write bytes | 288 MB | 37 MB | −87% |
+| DB + WAL | 32.5 MB | 31.4 MB | −3% (indexes built once are denser) |
+
+Each setting was also measured on its own; the figure is the persist time, with 809 ms for none:
+
+| Setting | Persist | Written |
+|---|---|---|
+| `fk` | 411 ms | 39 MB |
+| `defer` | 732 ms | 207 MB |
+| `cache` | 778 ms | |
+| `sync` | 829 ms (no gain) | |
+| `fk,defer` | 376 ms | |
+| `fk,cache` | 361 ms | |
+| `fk,defer,cache` | 261 ms | |
+| `fk,defer,cache,sync` | 268 ms | |
+
+### Decisions
+
+- **Bulk build mode, in `BulkBuild` in `player-db`.** It applies when `source_mappings` is empty and the scan stores at least 256 rows, which is a cold build. Warm and partial syncs are unchanged. It does three things:
+  - **Foreign keys.** It turns `foreign_keys` off for the one transaction, which can only be done outside a transaction. Before commit it runs `pragma_foreign_key_check` and rolls back if this build added violations. Violations already present in an old database are counted first and do not block the build.
+  - **Deferred indexes.** It drops `source_mappings_track_id`, `source_mappings_locator_exact` and `tracks_sort_title` inside the transaction, and recreates them before commit from their own `sqlite_master` text. No per-row statement reads these three indexes. `source_mappings_locator_key` and the primary keys stay, because `resolve_track_id` reads them on every row.
+  - **Page cache.** It sets `cache_size` to 64 MiB.
+  - Everything is restored after the transaction on every path, success, error or cancel.
+- **`synchronous=NORMAL` is rejected.** It gave no measurable gain (commit 97–99 ms either way), so the WAL keeps full durability.
+- **No schema change, so no migration.** Slimming `source_mappings` was rejected. `source_item_id` and `locator_key` both hold the same hex-encoded UTF-16 path, about 300 bytes, and a standalone insert test put the gain from dropping one copy at about 56 ms, before deferral and FK-off. After them `persist_mapping` is only 39 ms. A change touching the 64 queries that use `locator_key`, plus an upgrade migration, is not worth at most a few tens of ms.
+- **Tag thread count stays 4. `MOE_METADATA_READ_THREADS` (1–64) overrides it for tuning.** Per-file parse time grows with threads: about 0.43 ms at 4, 0.55 ms at 6, 0.73 ms at 8 and 1.2 ms at 16. So wall time improves little. Over 3 measurement sets (5 runs each), 6 and 8 threads were 0–25% faster than 4, and in the interleaved round within noise (4: 650–691 ms, 6: 613–661 ms, 8: 597–677 ms). A gain that does not reproduce, plus more concurrent seeks on an uncached HDD, does not justify a new default. Re-measure after a reboot on the HDD.
+- **Correctness.** Compared with the build from before the change, all 5,412 `source_mappings` + `tracks` rows are equal on every column except the random ids. The schema text, the row counts of every table and `quick_check` are also equal, with 0 FK violations. A `player-db` test builds 300 rows each way and checks the same rows and order, that the indexes are back, `foreign_keys=1` and the original `cache_size`.

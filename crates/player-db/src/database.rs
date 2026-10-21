@@ -6118,8 +6118,21 @@ fn apply_source_scan_transaction(
     let mut timer = ApplyTimer::new(profiling);
     let mut connection = database.lock()?;
     timer.lap(0);
+    let bulk = BulkBuild::prepare(&connection, observed.len())?;
+    let outcome = (|| -> Result<SyncApplyOutcome, DatabaseError> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute("DELETE FROM sync_seen_items", [])?;
+    let deferred_indexes = if bulk.defer_indexes {
+        drop_deferred_indexes(&tx)?
+    } else {
+        Vec::new()
+    };
+    // Violations already in an old database are not this build's; only new ones roll it back.
+    let foreign_key_violations_before: i64 = if bulk.foreign_keys_off {
+        tx.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| row.get(0))?
+    } else {
+        0
+    };
     timer.lap(1);
     let mut seen_statement = tx.prepare_cached(
         "INSERT OR IGNORE INTO sync_seen_items (source_id, source_item_id) VALUES (?1, ?2)",
@@ -6236,6 +6249,20 @@ fn apply_source_scan_transaction(
         unify_remote_tracks(&tx)?;
     }
     timer.lap(6);
+    for sql in &deferred_indexes {
+        tx.execute_batch(sql)?;
+    }
+    if bulk.foreign_keys_off {
+        let violations: i64 =
+            tx.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| row.get(0))?;
+        if violations > foreign_key_violations_before {
+            return Err(DatabaseError::CorruptData(format!(
+                "bulk library build added {} foreign key violations; rolled back",
+                violations - foreign_key_violations_before
+            )));
+        }
+    }
+    timer.lap(8);
     let database_file = tx.path().filter(|p| !p.is_empty()).map(std::path::PathBuf::from);
     tx.commit()?;
     timer.lap(7);
@@ -6244,6 +6271,7 @@ fn apply_source_scan_transaction(
         fields.push(player_core::profile::field("rows", observed.len()));
         fields.push(player_core::profile::field("changed", changed_items.len()));
         fields.push(player_core::profile::field("transactions", 1));
+        fields.push(player_core::profile::str_field("bulk", &bulk.describe()));
         let wal_bytes = database_wal_bytes(&database_file);
         fields.push(player_core::profile::field("wal_bytes", wal_bytes));
         player_core::profile::event("db_apply", &fields);
@@ -6255,6 +6283,122 @@ fn apply_source_scan_transaction(
         },
         cancelled: false,
     })
+    })();
+    bulk.restore(&connection);
+    outcome
+}
+
+/// Settings for building a library into an empty `source_mappings` (a cold build), ADR 0027. Secondary indexes the
+/// per-row statements never read are dropped and rebuilt once before commit, foreign keys are checked once with
+/// `foreign_key_check` instead of per row, and the page cache / WAL sync level are relaxed for the one transaction.
+/// `MOE_LIBRARY_BULK` (comma list of `defer`, `fk`, `cache`, `sync`, or `none`) overrides the default for measurement.
+#[derive(Default)]
+struct BulkBuild {
+    active: bool,
+    defer_indexes: bool,
+    foreign_keys_off: bool,
+    cache: bool,
+    sync_normal: bool,
+    previous_cache_size: i64,
+    previous_synchronous: i64,
+}
+
+const BULK_BUILD_MIN_ROWS: usize = 256;
+const BULK_BUILD_CACHE_KIB: i64 = 65_536;
+/// Read by no per-row statement of the scan transaction; `source_mappings_locator_key` and the primary keys are.
+const DEFERRED_INDEXES: [&str; 3] = [
+    "source_mappings_track_id",
+    "source_mappings_locator_exact",
+    "tracks_sort_title",
+];
+
+impl BulkBuild {
+    fn prepare(connection: &Connection, rows: usize) -> Result<Self, DatabaseError> {
+        let empty: bool = connection.query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM source_mappings)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !empty || rows < BULK_BUILD_MIN_ROWS {
+            return Ok(Self::default());
+        }
+        let flags = std::env::var("MOE_LIBRARY_BULK").ok();
+        let on = |name: &str| match flags.as_deref() {
+            None => BULK_BUILD_DEFAULT.contains(&name),
+            Some(list) => list.split(',').any(|flag| flag.trim() == name),
+        };
+        let mut bulk = Self {
+            active: true,
+            defer_indexes: on("defer"),
+            foreign_keys_off: on("fk"),
+            cache: on("cache"),
+            sync_normal: on("sync"),
+            previous_cache_size: connection.pragma_query_value(None, "cache_size", |row| row.get(0))?,
+            previous_synchronous: connection.pragma_query_value(None, "synchronous", |row| row.get(0))?,
+        };
+        if bulk.foreign_keys_off {
+            connection.pragma_update(None, "foreign_keys", "OFF")?;
+        }
+        if bulk.cache {
+            connection.pragma_update(None, "cache_size", -BULK_BUILD_CACHE_KIB)?;
+        }
+        if bulk.sync_normal {
+            connection.pragma_update(None, "synchronous", "NORMAL")?;
+        }
+        bulk.active = bulk.defer_indexes || bulk.foreign_keys_off || bulk.cache || bulk.sync_normal;
+        Ok(bulk)
+    }
+
+    fn restore(&self, connection: &Connection) {
+        if self.foreign_keys_off {
+            let _ = connection.pragma_update(None, "foreign_keys", "ON");
+        }
+        if self.cache {
+            let _ = connection.pragma_update(None, "cache_size", self.previous_cache_size);
+        }
+        if self.sync_normal {
+            let _ = connection.pragma_update(None, "synchronous", self.previous_synchronous);
+        }
+    }
+
+    fn describe(&self) -> String {
+        if !self.active {
+            return "off".to_owned();
+        }
+        [
+            ("defer", self.defer_indexes),
+            ("fk", self.foreign_keys_off),
+            ("cache", self.cache),
+            ("sync", self.sync_normal),
+        ]
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join(",")
+    }
+}
+
+/// `sync` (WAL `synchronous=NORMAL`) measured no gain on the build (commit 97–99 ms either way), so durability stays.
+const BULK_BUILD_DEFAULT: [&str; 3] = ["defer", "fk", "cache"];
+
+/// Drop the deferred indexes inside the transaction and return their exact `CREATE INDEX` text to replay.
+fn drop_deferred_indexes(tx: &Transaction<'_>) -> Result<Vec<String>, DatabaseError> {
+    let mut sqls = Vec::new();
+    for name in DEFERRED_INDEXES {
+        let sql: Option<String> = tx
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name=?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(sql) = sql {
+            tx.execute_batch(&format!("DROP INDEX \"{name}\""))?;
+            sqls.push(sql);
+        }
+    }
+    Ok(sqls)
 }
 
 /// Accumulated time per step of the scan transaction, only measured while profiling.
@@ -6272,7 +6416,7 @@ const APPLY_TIMER_STEPS: [&str; 10] = [
     "persist_mapping_ms",
     "reconcile_state_ms",
     "commit_ms",
-    "unused_ms",
+    "index_rebuild_fk_check_ms",
     "loop_overhead_ms",
 ];
 
@@ -6297,9 +6441,7 @@ impl ApplyTimer {
         let total: std::time::Duration = self.sums.iter().sum();
         let mut fields = vec![player_core::profile::field("ms", player_core::profile::ms(total))];
         for (name, sum) in APPLY_TIMER_STEPS.iter().zip(self.sums) {
-            if *name != "unused_ms" {
-                fields.push(player_core::profile::field(name, player_core::profile::ms(sum)));
-            }
+            fields.push(player_core::profile::field(name, player_core::profile::ms(sum)));
         }
         fields
     }
@@ -15527,5 +15669,102 @@ mod tests {
             assert_eq!(all_visible_tracks(&db).len(), 1);
             assert_eq!(track_of_item(&db, &folder, "song"), track);
         }
+    }
+}
+
+#[cfg(test)]
+mod bulk_build_tests {
+    use super::*;
+    use player_core::{FileFingerprint, MediaLocator, MediaSourceKind, MediaTrackRecord, TrackIdentity, TrackMetadata};
+    use std::path::PathBuf;
+
+    fn records(root: &player_core::LibraryRoot, count: usize) -> Vec<MediaTrackRecord> {
+        (0..count)
+            .map(|index| MediaTrackRecord {
+                identity: TrackIdentity {
+                    source_id: root.id,
+                    source_item_id: format!("item-{index}"),
+                    locator_key: Some(format!("win-path:c:\\bulk\\{index:05}.flac")),
+                },
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Bulk\{index:05}.flac"))),
+                fingerprint: FileFingerprint {
+                    size_bytes: 1_000 + index as u64,
+                    modified_at_utc_ms: Some(1_800_000_000_000),
+                    created_at_utc_ms: None,
+                },
+                metadata: Some(TrackMetadata {
+                    title: Some(format!("Song {}", count - index)),
+                    artist: Some(format!("Artist {}", index % 7)),
+                    ..TrackMetadata::default()
+                }),
+            })
+            .collect()
+    }
+
+    fn snapshot(database: &Database) -> (Vec<String>, Vec<(String, String)>, i64, i64) {
+        let connection = database.lock().unwrap();
+        let indexes = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<String>, _>>()
+            .unwrap();
+        let rows = connection
+            .prepare(
+                "SELECT m.source_item_id, t.title FROM source_mappings m JOIN tracks t ON t.track_id=m.track_id
+                 ORDER BY t.sort_title COLLATE MUSIC_LOCALE_NATURAL, m.source_item_id",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get::<_, Option<String>>(1)?.unwrap_or_default())))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let foreign_keys = connection.pragma_query_value(None, "foreign_keys", |row| row.get(0)).unwrap();
+        let cache_size = connection.pragma_query_value(None, "cache_size", |row| row.get(0)).unwrap();
+        (indexes, rows, foreign_keys, cache_size)
+    }
+
+    #[test]
+    fn cold_bulk_build_matches_row_by_row_build_and_restores_settings() {
+        let build = |count: usize| {
+            let mut database = Database::open_in_memory().unwrap();
+            let root = database
+                .add_library_root(MediaSourceKind::WindowsFilesystem, "bulk", MediaLocator::FileSystem(PathBuf::from(r"C:\Bulk")))
+                .unwrap();
+            let before = snapshot(&database);
+            let records = records(&root, count);
+            database
+                .apply_source_scan(&root, &SourceScanState::Complete, &records, &records, &[], 1_800_000_000_000)
+                .unwrap();
+            // A second, warm sync over the filled table takes the normal path.
+            database
+                .apply_source_scan(&root, &SourceScanState::Complete, &records, &records, &[], 1_800_000_000_001)
+                .unwrap();
+            (before, snapshot(&database))
+        };
+        let count = BULK_BUILD_MIN_ROWS + 44;
+        let (before, after) = build(count);
+        assert_eq!(before.0, after.0, "every deferred index is rebuilt");
+        assert!(after.0.iter().any(|name| name == "tracks_sort_title"));
+        assert_eq!(after.1.len(), count);
+        assert_eq!(after.2, 1, "foreign keys are back on");
+        assert_eq!(after.3, before.3, "page cache size is restored");
+        let connection_check = {
+            let mut database = Database::open_in_memory().unwrap();
+            let root = database
+                .add_library_root(MediaSourceKind::WindowsFilesystem, "bulk", MediaLocator::FileSystem(PathBuf::from(r"C:\Bulk")))
+                .unwrap();
+            // Below the bulk threshold: one row at a time, then the rest; same content and order expected.
+            let records = records(&root, count);
+            database
+                .apply_source_scan(&root, &SourceScanState::Incomplete { reason: "part".into() }, &records[..1], &records[..1], &[], 1)
+                .unwrap();
+            database
+                .apply_source_scan(&root, &SourceScanState::Complete, &records, &records, &[], 2)
+                .unwrap();
+            snapshot(&database)
+        };
+        assert_eq!(after.1, connection_check.1, "bulk and row-by-row builds store the same rows in the same order");
     }
 }

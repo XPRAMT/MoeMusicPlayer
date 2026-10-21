@@ -91,6 +91,7 @@ for ($run = 1; $run -le $Runs; $run++) {
         first_page_ms    = [double](& $get 'first_page').ms
         peak_ws_mb       = [math]::Round($peakWs / 1MB, 1)
         read_mb          = if ($lastSample) { [math]::Round([double]$lastSample.read_bytes / 1MB, 1) } else { 0 }
+        write_mb         = [math]::Round([double]$ready.process_write_bytes / 1MB, 1)
         cpu_ms           = if ($lastSample) { [double]$lastSample.cpu_ms } else { 0 }
         apply            = $apply
         tags             = $tags
@@ -102,7 +103,7 @@ for ($run = 1; $run -le $Runs; $run++) {
 }
 
 $summaries | Format-Table run, kind, tracks, total_ms, db_open_ms, enumerate_ms, compare_ms, tags_ms, tags_parallelism,
-    file_p50_ms, file_p99_ms, assemble_ms, persist_ms, lyrics_ms, first_page_ms, peak_ws_mb, read_mb, cpu_ms -AutoSize
+    file_p50_ms, file_p99_ms, assemble_ms, persist_ms, lyrics_ms, first_page_ms, peak_ws_mb, read_mb, write_mb, cpu_ms -AutoSize
 
 foreach ($s in $summaries) {
     $t = $s.total_ms
@@ -111,9 +112,9 @@ foreach ($s in $summaries) {
         Write-Host ("{0,-14} {1,10:N1} ms {2,6:N1}%" -f $phase, $s.$phase, (100 * $s.$phase / [math]::Max($t, 1)))
     }
     if ($s.apply) {
-        Write-Host ("db_apply: resolve={0} metadata={1} mapping={2} seen={3} commit={4} wal={5:N1} MB" -f `
+        Write-Host ("db_apply: bulk={6} resolve={0} metadata={1} mapping={2} seen={3} index+fk={7} commit={4} wal={5:N1} MB" -f `
             $s.apply.resolve_track_id_ms, $s.apply.persist_metadata_ms, $s.apply.persist_mapping_ms, $s.apply.seen_insert_ms,
-            $s.apply.commit_ms, ($s.apply.wal_bytes / 1MB))
+            $s.apply.commit_ms, ($s.apply.wal_bytes / 1MB), $s.apply.bulk, $s.apply.index_rebuild_fk_check_ms)
     }
 }
 $last = $summaries[-1]
