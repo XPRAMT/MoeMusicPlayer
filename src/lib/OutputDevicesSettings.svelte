@@ -10,14 +10,11 @@
 
   /** Where the volume-link switch used to be kept (now `settings.json`; read once to carry the choice over). */
   const LEGACY_SYNC_KEY = 'moe.outputVolumeSync';
-  const ANDROID_WEBVIEW = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
   const PRESET_SLOTS = 5;
 
   const s = $state({
     /** "音量同步", kept and applied by the backend (it works with no settings UI open). */
     volumeSync: true,
-    androidFloatOutput: false,
-    floatOutputSaving: false,
     devices: [] as AudioOutputDevice[],
     entries: [] as OutputDeviceEntry[],
     statuses: [] as AudioOutputDeviceStatus[],
@@ -154,24 +151,6 @@
     }
   }
 
-  async function setAndroidFloatOutput(on: boolean): Promise<void> {
-    s.androidFloatOutput = on;
-    s.floatOutputSaving = true;
-    if (!isTauri()) {
-      s.floatOutputSaving = false;
-      return;
-    }
-    try {
-      s.androidFloatOutput = await invokeCommand('settings_set_android_float_output', { enabled: on });
-      s.failure = null;
-    } catch (error) {
-      s.androidFloatOutput = !on;
-      s.failure = getErrorText(error);
-    } finally {
-      s.floatOutputSaving = false;
-    }
-  }
-
   /** The switch used to live in the browser's storage; carry a choice made there over, once. */
   async function adoptLegacySyncChoice(saved: boolean): Promise<boolean> {
     let legacy: string | null = null;
@@ -262,19 +241,17 @@
       return;
     }
     try {
-      const [saved, listed, savedPresets, savedExclusive, savedSync, savedFloatOutput] = await Promise.all([
+      const [saved, listed, savedPresets, savedExclusive, savedSync] = await Promise.all([
         invokeCommand('settings_get_output_devices', {}),
         invokeCommand('audio_list_output_devices', {}),
         invokeCommand('settings_get_output_presets', {}),
         invokeCommand('settings_get_output_exclusive', {}),
         invokeCommand('settings_get_output_volume_sync', {}),
-        ANDROID_WEBVIEW ? invokeCommand('settings_get_android_float_output', {}) : Promise.resolve(false),
       ]);
       const volumeSync = await adoptLegacySyncChoice(savedSync);
       if (disposed) return;
       s.exclusive = savedExclusive;
       s.volumeSync = volumeSync;
-      s.androidFloatOutput = savedFloatOutput;
       s.entries = saved;
       s.devices = listed;
       s.presets = savedPresets;
@@ -598,21 +575,6 @@
   </div>
 </div>
 
-{#if ANDROID_WEBVIEW}
-  <div class="output-float-setting">
-    <label class="output-sync">
-      <input
-        type="checkbox"
-        checked={s.androidFloatOutput}
-        disabled={s.loading || s.floatOutputSaving}
-        onchange={(event) => void setAndroidFloatOutput(event.currentTarget.checked)}
-      />
-      <span>{tr('一律以 float32 輸出')}</span>
-    </label>
-    <p>{tr('切換時會保留目前播放位置與播放狀態，並立即重新載入目前歌曲。')}</p>
-  </div>
-{/if}
-
 <div class="output-mode" role="group" aria-label={tr('輸出模式')}>
   <button
     type="button"
@@ -809,18 +771,6 @@
 {/if}
 
 <style>
-  .output-float-setting {
-    display: grid;
-    gap: 4px;
-    margin: 0 0 12px;
-  }
-
-  .output-float-setting p {
-    margin: 0;
-    color: var(--text-soft);
-    font-size: var(--font-caption);
-  }
-
   .output-mode {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));

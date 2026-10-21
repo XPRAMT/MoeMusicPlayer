@@ -7006,58 +7006,6 @@ fn settings_get_output_volume_sync(state: State<'_, AppState>) -> Result<bool, S
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-fn settings_get_android_float_output(state: State<'_, AppState>) -> Result<bool, String> {
-    state
-        .settings
-        .snapshot()
-        .map(|settings| settings.android_float_output)
-        .map_err(|error| error.to_string())
-}
-
-/// Android only: change the Media3 float-output path and reload the current item at its current position.
-#[tauri::command]
-async fn settings_set_android_float_output(
-    state: State<'_, AppState>,
-    enabled: bool,
-) -> Result<bool, String> {
-    let previous = state
-        .settings
-        .snapshot()
-        .map_err(|error| error.to_string())?
-        .android_float_output;
-    #[cfg(target_os = "android")]
-    let service = android_playback_service(&state)?;
-    let saved = state
-        .settings
-        .update(|settings| {
-            settings.android_float_output = enabled;
-            Ok(())
-        })
-        .map_err(|error| error.to_string())?;
-    #[cfg(target_os = "android")]
-    if previous != saved.android_float_output {
-        if let Err(error) = service
-            .execute(android_playback::PlaybackAction::SetFloatOutput(
-                saved.android_float_output,
-            ))
-            .await
-        {
-            let _ = state.settings.update(|settings| {
-                settings.android_float_output = previous;
-                Ok(())
-            });
-            let _ = service
-                .execute(android_playback::PlaybackAction::SetFloatOutput(previous))
-                .await;
-            return Err(error);
-        }
-    }
-    #[cfg(not(target_os = "android"))]
-    let _ = previous;
-    Ok(saved.android_float_output)
-}
-
 /// Switch "音量同步" on or off. It takes effect at once and keeps working with no settings UI open.
 #[tauri::command]
 fn settings_set_output_volume_sync(
@@ -12045,9 +11993,7 @@ pub fn run() {
             settings_get_library_source_scope,
             settings_set_library_source_scope,
             settings_get_output_volume_sync,
-            settings_get_android_float_output,
             settings_set_output_volume_sync,
-            settings_set_android_float_output,
             settings_set_output_exclusive,
             settings_get_output_presets,
             settings_save_output_preset,
@@ -12311,7 +12257,6 @@ pub fn run() {
                     path,
                     initial_settings.shuffle,
                     initial_settings.repeat_mode,
-                    initial_settings.android_float_output,
                     android_playback::ResumeHook {
                         initial: initial_settings.resume_playback,
                         sink: Some({

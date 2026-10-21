@@ -366,8 +366,6 @@
   "音訊輸出尚未開啟。": "The audio output is not open yet.",
   "音量": "Volume",
   "音量同步": "Link volumes",
-  "一律以 float32 輸出": "Always output float32",
-  "切換時會保留目前播放位置與播放狀態，並立即重新載入目前歌曲。": "Changing this setting keeps the current position and play or pause state, then reloads the current track immediately.",
   "音量控制": "Volume control",
   "音量滑桿": "Volume slider",
   "音樂來源": "Music sources",
