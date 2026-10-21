@@ -3,6 +3,8 @@ pub mod cache;
 pub mod fs;
 pub mod index;
 pub mod local;
+pub mod playlist_edit;
+pub mod playlist_style;
 pub mod prefetch;
 pub mod secret;
 pub mod smb;

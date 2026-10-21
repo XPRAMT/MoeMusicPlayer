@@ -89,6 +89,7 @@ mod playlist_scan_index;
 mod playlist_source_sync;
 mod remote_accounts;
 mod remote_connections;
+mod remote_favorites;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod remote_media;
@@ -4691,6 +4692,9 @@ struct FavoritePlaylistDto {
     selected: bool,
     is_my_love: bool,
     writable: bool,
+    /// Why the playlist cannot be written (a code the page translates): `notOnServer`, `noAccount`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -4736,12 +4740,8 @@ fn favorites_get_playlists(
         else {
             continue;
         };
-        if remote_account.is_some() {
-            // A playlist on a remote server is read-only here: nothing is written back to it.
-            continue;
-        }
-        let _ = (path, tree_uri);
-        let is_my_love = source.display_name == "我的最愛" || is_my_love_path(path);
+        let is_my_love = remote_account.is_none()
+            && (source.display_name == "我的最愛" || is_my_love_path(path));
         let favorite = database
             .get_playlist(*playlist_id)
             .map_err(|error| error.to_string())?;
@@ -4753,11 +4753,20 @@ fn favorites_get_playlists(
                         .any(|locator| same_favorite_locator(locator, &entry.locator))
             })
         });
+        // A playlist on a remote server is rewritten on the server; it can name only a song of the same account.
+        let remote_reason = remote_account.as_deref().and_then(|account| {
+            remote_favorites::unavailable_reason(&settings, account, &locators)
+        });
         // Android writes favorites through the real path under All files access (ADR 0014).
         #[cfg(any(target_os = "windows", target_os = "android"))]
-        let writable = path.to_path_buf().is_ok();
+        let writable = if remote_account.is_some() {
+            remote_reason.is_none()
+        } else {
+            path.to_path_buf().is_ok()
+        };
         #[cfg(not(any(target_os = "windows", target_os = "android")))]
         let writable = false;
+        let _ = tree_uri;
         playlists.push(FavoritePlaylistDto {
             source_id: source.id.to_string(),
             display_name: if is_my_love {
@@ -4768,6 +4777,7 @@ fn favorites_get_playlists(
             selected,
             is_my_love,
             writable,
+            reason: remote_reason.map(str::to_owned),
         });
     }
     Ok(FavoritePlaylistsDto {
@@ -4813,11 +4823,50 @@ async fn favorites_set_membership(
         else {
             return Err("只能收藏到播放清單檔案來源。".to_owned());
         };
-        if remote_account.is_some() {
-            return Err("遠端伺服器上的播放清單是唯讀的，無法收藏到其中。".to_owned());
-        }
         let _ = (path, tree_uri);
         let target_locators = favorite_track_locators(&state, database, track_id)?;
+        if let Some(account_id) = remote_account {
+            // The playlist file lives on a server: it is rewritten there (read fresh, only this song's lines touched,
+            // in the style of the file's own entries) and the source is synchronized again.
+            let server_path =
+                remote_favorites::server_path_of_track(&settings, account_id, &target_locators)
+                    .ok_or_else(|| "這首歌不在這台伺服器上，無法加入這份播放清單。".to_owned())?;
+            let summary = database
+                .get_track_summary(track_id)
+                .map_err(|error| error.to_string())?;
+            let title = summary.as_ref().and_then(|summary| {
+                let title = summary.title.clone().or_else(|| summary.file_name.clone())?;
+                Some(match summary.artist.as_deref().filter(|artist| !artist.is_empty()) {
+                    Some(artist) => format!("{artist} - {title}"),
+                    None => title,
+                })
+            });
+            let job = remote_favorites::Job {
+                database_path: state.database_path.clone().ok_or_else(|| {
+                    state
+                        .database_error
+                        .clone()
+                        .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+                })?,
+                resolver: state
+                    .remote_connections
+                    .resolver(user_data_directory(&state)?, &settings),
+                settings: settings.clone(),
+                source: source.clone(),
+                server_path,
+                title,
+                duration_ms: summary.as_ref().and_then(|summary| summary.duration_ms),
+                selected,
+                synced_at_utc_ms: now_utc_epoch_ms()?,
+            };
+            let guard = _database_work;
+            return tauri::async_runtime::spawn_blocking(move || {
+                let _database_work = guard;
+                remote_favorites::run(job)
+            })
+            .await
+            .map_err(|error| format!("收藏工作失敗：{error}"))?;
+        }
         let target_locator = target_locators
             .first()
             .cloned()
@@ -5294,6 +5343,15 @@ fn normalize_windows_my_love_source(source: &mut SourceEntry) -> bool {
 }
 
 fn is_my_love_source(source: &SourceEntry) -> bool {
+    if matches!(
+        &source.kind,
+        SourceEntryKind::PlaylistFile {
+            remote_account: Some(_),
+            ..
+        }
+    ) {
+        return false;
+    }
     source.display_name == "我的最愛" || is_my_love_path(source.path())
 }
 
@@ -11954,8 +12012,6 @@ pub fn run() {
             remote_sources::remote_browse_draft,
             remote_sources::remote_source_add,
             remote_accounts::remote_account_delete,
-            remote_accounts::remote_accounts_export,
-            remote_accounts::remote_accounts_import,
             android_folder_browser::android_folder_picker_result,
             library_sync,
             playback_get_snapshot,

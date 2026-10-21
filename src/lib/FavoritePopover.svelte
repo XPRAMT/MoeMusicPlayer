@@ -245,7 +245,15 @@
                 />
                 <span>{playlist.displayName}</span>
                 {#if !playlist.writable}
-                  <small>{tr("請到「設定 → 音樂來源」重新加入，以授予寫入權限")}</small>
+                  <small>
+                    {#if playlist.reason === 'notOnServer'}
+                      {tr("這首歌不在這台伺服器上")}
+                    {:else if playlist.reason === 'noAccount'}
+                      {tr("找不到這台伺服器的帳號設定")}
+                    {:else}
+                      {tr("請到「設定 → 音樂來源」重新加入，以授予寫入權限")}
+                    {/if}
+                  </small>
                 {/if}
               </label>
             </li>

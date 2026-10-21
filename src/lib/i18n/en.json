@@ -858,5 +858,7 @@
   "{0}；{1}個項目錯誤。": "{0}; {1} item errors.",
   "{0}；新增{1}個項目，移除{2}個項目，{3}個項目錯誤。": "{0}; {1} items added, {2} removed, {3} item errors.",
   "{0}；新增{1}個項目，移除{2}個項目。": "{0}; {1} items added, {2} removed.",
-  "{0}。": "{0}."
+  "{0}。": "{0}.",
+  "這首歌不在這台伺服器上": "This song is not on this server",
+  "找不到這台伺服器的帳號設定": "This server's account settings were not found"
 }

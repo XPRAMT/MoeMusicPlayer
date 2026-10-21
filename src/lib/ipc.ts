@@ -58,12 +58,21 @@ export interface UpdateState {
 
 export type UpdateInstallMode = 'restartNow' | 'nextLaunch';
 
+/** What the export panel ticked; `passphrase` seals the remote accounts and is only sent with `accounts`. */
+export interface BackupExportSelection {
+  library: boolean;
+  settings: boolean;
+  accounts: boolean;
+  favourites: boolean;
+  passphrase: string | null;
+}
+
 export interface BackupExportResult {
   fileName: string;
   sizeBytes: number;
 }
 
-/** The parts of a backup: settings, library (database), favourites (MyLove.m3u8), main background image. */
+/** The parts of a backup: settings, library (database), favourites (MyLove.m3u8). */
 export interface BackupImportResult {
   imported: string[];
   pending: string[];
@@ -514,6 +523,8 @@ export interface FavoritePlaylist {
   selected: boolean;
   isMyLove: boolean;
   writable: boolean;
+  /** Why a playlist on a remote server cannot take this song: `notOnServer` or `noAccount`. */
+  reason?: 'notOnServer' | 'noAccount';
 }
 
 export interface FavoritePlaylists {
@@ -699,7 +710,7 @@ interface IpcContract {
   album_artwork_cache_stats: { args: Record<string, never>; result: RemoteCacheView };
   album_artwork_cache_set_limit: { args: { limitMb: number }; result: RemoteCacheView };
   album_artwork_cache_clear: { args: Record<string, never>; result: RemoteCacheView };
-  backup_export: { args: { remotePassphrase?: string | null }; result: BackupExportResult | null };
+  backup_export: { args: { selection: BackupExportSelection }; result: BackupExportResult | null };
   backup_import: { args: Record<string, never>; result: BackupImportResult | null };
   backup_pending: { args: Record<string, never>; result: string[] };
   update_download: { args: { mode: UpdateInstallMode }; result: UpdateState };
@@ -826,14 +837,6 @@ interface IpcContract {
   remote_source_add: {
     args: { accountId: string; path: string; displayName: string | null };
     result: LibrarySource;
-  };
-  remote_accounts_export: {
-    args: { passphrase: string };
-    result: string | null;
-  };
-  remote_accounts_import: {
-    args: { passphrase: string };
-    result: RemoteAccountsImportResult | null;
   };
   backup_remote_pending: {
     args: Record<string, never>;

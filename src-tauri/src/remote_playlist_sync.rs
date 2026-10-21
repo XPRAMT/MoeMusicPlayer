@@ -2,7 +2,7 @@
 //! songs. Everything is relative to the account's root, so one playlist source needs only its account and the path of
 //! the file.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use player_core::{
@@ -12,13 +12,11 @@ use player_core::{
 use player_db::{Database, PlaylistFileSyncState};
 use player_remote::fs::RemoteFs;
 use player_remote::index::{is_excluded, RemoteMediaIndex, RemoteResolver};
+use player_remote::playlist_style::PlaylistStyle;
 use sha2::{Digest, Sha256};
 
 use crate::playlist_exchange::read_playlist_bytes;
 use crate::settings::{SourceEntry, SourceEntryKind};
-
-/// A playlist file larger than this is not a playlist.
-const MAX_PLAYLIST_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Where relative entries of a remote playlist are resolved while parsing (the parser works on local paths).
 const PSEUDO_ROOT: &str = "/__moeremote__";
@@ -29,21 +27,6 @@ pub(crate) struct CoveringFolder {
     pub source_id: SourceId,
     /// Relative to the account's root, `/`-separated, no outer slashes.
     pub base: String,
-}
-
-/// `a/b/../c` → `a/c`; `None` when the path climbs out of the root.
-fn normalize_relative(path: &Path) -> Option<String> {
-    let mut pieces: Vec<String> = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(piece) => pieces.push(piece.to_string_lossy().into_owned()),
-            Component::ParentDir => {
-                pieces.pop()?;
-            }
-            Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
-        }
-    }
-    Some(pieces.join("/"))
 }
 
 /// The locator an entry of a remote playlist is stored under: the folder source of the account that already holds the
@@ -74,138 +57,42 @@ fn locator_for(rel: &str, playlist_source: SourceId, covering: &[CoveringFolder]
     }
 }
 
-/// Parse the bytes of the playlist file `file_rel` (relative to the account's root). Relative entries become remote
-/// locators; entries that are not on the server (a drive path, a web address) stay what they are and stay unresolved.
-pub(crate) fn parse_remote_playlist(
+/// Read the playlist file `file_rel` (relative to the account's root): the structure (name, `#EXTINF`) comes from the
+/// ordinary M3U parser, and every entry that names a place on the server is mapped by the style of the file itself
+/// ([`PlaylistStyle`], the same conversion the favorites writer uses in the other direction). `exists` says whether a
+/// path relative to the account's root is a file on the server (used once, to learn how absolute entries map). Entries
+/// that are not on the server (a web address, a path that climbs out of the root, an absolute path nothing matches) stay
+/// what the parser made them and stay unresolved.
+pub(crate) fn read_remote_playlist(
     bytes: &[u8],
     file_rel: &str,
     playlist_source: SourceId,
     covering: &[CoveringFolder],
+    exists: &dyn Fn(&str) -> bool,
 ) -> Result<Playlist, String> {
     let pseudo = PathBuf::from(PSEUDO_ROOT).join(file_rel);
     let mut playlist = read_playlist_bytes(bytes, &pseudo)?;
-    let root = Path::new(PSEUDO_ROOT);
-    for entry in &mut playlist.entries {
-        let MediaLocator::FileSystem(path) = &entry.locator else {
-            continue;
-        };
-        let Ok(inside) = path.strip_prefix(root) else {
-            continue;
-        };
-        let Some(rel) = normalize_relative(inside) else {
-            continue;
-        };
-        entry.locator = locator_for(&rel, playlist_source, covering);
+    let allow_utf16 = file_rel.to_ascii_lowercase().ends_with(".m3u");
+    let Ok(text) = player_remote::playlist_edit::decode_text(bytes, allow_utf16) else {
+        return Ok(playlist);
+    };
+    let raws = player_remote::playlist_edit::entry_texts(&text);
+    if raws.len() != playlist.entries.len() {
+        return Ok(playlist);
+    }
+    let folder = player_remote::playlist_edit::folder_of(file_rel);
+    let style = PlaylistStyle::detect(&raws, folder, exists);
+    for (entry, raw) in playlist.entries.iter_mut().zip(raws) {
+        if let Some(rel) = style.to_server_path(raw, folder) {
+            entry.locator = locator_for(&rel, playlist_source, covering);
+        }
     }
     Ok(playlist)
 }
 
-/// The folder pieces of an absolute entry (`D:\\Music\\a.flac`, `/srv/Music/a.flac`) without the drive.
-fn absolute_pieces(path: &Path) -> Option<Vec<String>> {
-    let text = path.to_string_lossy();
-    let drive = text.len() >= 2 && text.as_bytes()[1] == b':' && text.as_bytes()[0].is_ascii_alphabetic();
-    if !(drive || text.starts_with('/') || text.starts_with('\\')) {
-        return None;
-    }
-    let mut pieces: Vec<String> = text
-        .split(['/', '\\'])
-        .filter(|piece| !piece.is_empty() && *piece != ".")
-        .map(str::to_owned)
-        .collect();
-    if drive && !pieces.is_empty() {
-        pieces.remove(0);
-    }
-    Some(pieces)
-}
-
-/// A playlist made on another computer names its songs by absolute path (`D:\Music\Loss\a.flac`), but the server shows
-/// the same tree from some other root. The way back is found once: how many leading folders to drop and which folder
-/// above the playlist to put in front, tried until a file really exists; every other entry then uses the same rule.
-/// `exists` says whether a path (relative to the account's root) is a file on the server.
-pub(crate) fn map_absolute_entries(
-    playlist: &mut Playlist,
-    file_rel: &str,
-    playlist_source: SourceId,
-    covering: &[CoveringFolder],
-    exists: &dyn Fn(&str) -> bool,
-) {
-    // The folders the playlist sits in, from the root down: the candidates for "the folder the drive maps to".
-    let mut prefixes = vec![String::new()];
-    let mut walked = String::new();
-    for piece in file_rel.split('/').filter(|piece| !piece.is_empty()).rev().skip(1).collect::<Vec<_>>().into_iter().rev() {
-        walked = if walked.is_empty() { piece.to_owned() } else { format!("{walked}/{piece}") };
-        prefixes.push(walked.clone());
-    }
-    let mut rule: Option<(usize, String)> = None;
-    // Entries that matched nowhere before any rule was found; a playlist of songs that are not on this server gives up
-    // after a few instead of probing for every entry.
-    let mut misses = 0_u32;
-    for entry in &mut playlist.entries {
-        let MediaLocator::FileSystem(path) = &entry.locator else {
-            continue;
-        };
-        if path.starts_with(PSEUDO_ROOT) {
-            continue;
-        }
-        let Some(pieces) = absolute_pieces(path) else {
-            continue;
-        };
-        let join = |prefix: &str, drop: usize| -> Option<String> {
-            let rest = pieces.get(drop..).filter(|rest| !rest.is_empty())?;
-            Some(if prefix.is_empty() {
-                rest.join("/")
-            } else {
-                format!("{prefix}/{}", rest.join("/"))
-            })
-        };
-        let rel = match &rule {
-            Some((drop, prefix)) => join(prefix, *drop),
-            None if misses >= 3 => None,
-            None => {
-                let mut found = None;
-                'search: for drop in 0..pieces.len() {
-                    for prefix in &prefixes {
-                        if let Some(candidate) = join(prefix, drop) {
-                            if exists(&candidate) {
-                                rule = Some((drop, prefix.clone()));
-                                found = Some(candidate);
-                                break 'search;
-                            }
-                        }
-                    }
-                }
-                if found.is_none() {
-                    misses += 1;
-                }
-                found
-            }
-        };
-        if let Some(rel) = rel {
-            entry.locator = locator_for(&rel, playlist_source, covering);
-        }
-    }
-}
-
 /// Read a whole (small) remote file.
 fn read_all(fs: &dyn RemoteFs, path: &str) -> Result<Vec<u8>, String> {
-    let mut file = fs.open(path).map_err(|error| error.to_string())?;
-    if file.len() > MAX_PLAYLIST_BYTES {
-        return Err("播放清單檔案過大。".to_owned());
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(file.len()).unwrap_or(0));
-    let mut offset = 0_u64;
-    let mut buffer = vec![0_u8; 64 * 1024];
-    while offset < file.len() {
-        let read = file
-            .read_at(offset, &mut buffer)
-            .map_err(|error| error.to_string())?;
-        if read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&buffer[..read]);
-        offset += read as u64;
-    }
-    Ok(bytes)
+    player_remote::playlist_edit::read_all(fs, path).map_err(|error| error.to_string())
 }
 
 /// The remote folder sources of `account_id` (enabled ones), for [`locator_for`].
@@ -307,15 +194,15 @@ pub(crate) fn sync_remote_playlist_source(
     }
     let mut playlist = if changed {
         let covering = covering_folders(configured_sources, account_id);
-        let Ok(mut playlist) = parse_remote_playlist(&bytes, file_rel, source.id, &covering)
+        let fs = Arc::clone(&resolved.fs);
+        let Ok(mut playlist) =
+            read_remote_playlist(&bytes, file_rel, source.id, &covering, &|path| {
+                fs.stat(path).is_ok_and(|entry| !entry.is_dir)
+            })
         else {
             return Ok(None);
         };
         playlist.id = *playlist_id;
-        let fs = Arc::clone(&resolved.fs);
-        map_absolute_entries(&mut playlist, file_rel, source.id, &covering, &|path| {
-            fs.stat(path).is_ok_and(|entry| !entry.is_dir)
-        });
         playlist
     } else {
         database
@@ -432,7 +319,7 @@ mod tests {
         let own = SourceId::new();
         let text = "#EXTM3U\n#EXTINF:10,A\nsong a.flac\n../Other/b.flac\nsub/./c.flac\nsub\\d.flac\n";
         let playlist =
-            parse_remote_playlist(text.as_bytes(), "Music/Lists/best.m3u8", own, &[]).unwrap();
+            read_remote_playlist(text.as_bytes(), "Music/Lists/best.m3u8", own, &[], &|_| false).unwrap();
         assert_eq!(playlist.name, "best");
         assert_eq!(remote(&playlist, 0), (own, "Music/Lists/song a.flac".to_owned()));
         assert_eq!(remote(&playlist, 1), (own, "Music/Other/b.flac".to_owned()));
@@ -445,17 +332,16 @@ mod tests {
         let own = SourceId::new();
         let music = SourceId::new();
         let text = "#EXTM3U\nD:\\Music\\Loss\\[a]\\x (1).flac\nD:\\Music\\Loss\\[a]\\y.flac\nD:\\Elsewhere\\z.flac\nrtsp://cam/stream\n";
-        let mut playlist =
-            parse_remote_playlist(text.as_bytes(), "Music/Playlists/p.m3u8", own, &[]).unwrap();
         // The server shows the drive's `Music` folder as `Music` at its top.
         let files = ["Music/Loss/[a]/x (1).flac", "Music/Loss/[a]/y.flac"];
-        map_absolute_entries(
-            &mut playlist,
+        let playlist = read_remote_playlist(
+            text.as_bytes(),
             "Music/Playlists/p.m3u8",
             own,
             &[covering(music, "Music")],
             &|path| files.contains(&path),
-        );
+        )
+        .unwrap();
         assert_eq!(remote(&playlist, 0), (music, "Loss/[a]/x (1).flac".to_owned()));
         assert_eq!(remote(&playlist, 1), (music, "Loss/[a]/y.flac".to_owned()));
         // The same rule is applied to the rest (the scan reports the ones that are missing); a web address is left alone.
@@ -466,16 +352,14 @@ mod tests {
     #[test]
     fn a_drive_that_is_a_folder_above_the_playlist_is_found() {
         let own = SourceId::new();
-        let mut playlist = parse_remote_playlist(
+        let playlist = read_remote_playlist(
             b"E:\\Songs\\a.flac\n",
             "Share/Lists/p.m3u8",
             own,
             &[],
+            &|path| path == "Share/Songs/a.flac",
         )
         .unwrap();
-        map_absolute_entries(&mut playlist, "Share/Lists/p.m3u8", own, &[], &|path| {
-            path == "Share/Songs/a.flac"
-        });
         assert_eq!(remote(&playlist, 0), (own, "Share/Songs/a.flac".to_owned()));
     }
 
@@ -483,7 +367,8 @@ mod tests {
     fn entries_that_leave_the_server_stay_unresolved() {
         let own = SourceId::new();
         let text = "../../../up.flac\nhttp://example.com/x.mp3\n";
-        let playlist = parse_remote_playlist(text.as_bytes(), "a/list.m3u8", own, &[]).unwrap();
+        let playlist =
+            read_remote_playlist(text.as_bytes(), "a/list.m3u8", own, &[], &|_| false).unwrap();
         assert!(matches!(playlist.entries[0].locator, MediaLocator::FileSystem(_)));
         assert!(matches!(playlist.entries[1].locator, MediaLocator::ContentUri(_)));
     }
@@ -496,7 +381,7 @@ mod tests {
         let folders = [covering(music, "Music"), covering(deep, "Music/Hi-Res")];
         let text = "../Hi-Res/x.flac\n../Loss/y.flac\n../../Other/z.flac\n";
         let playlist =
-            parse_remote_playlist(text.as_bytes(), "Music/Lists/p.m3u8", own, &folders).unwrap();
+            read_remote_playlist(text.as_bytes(), "Music/Lists/p.m3u8", own, &folders, &|_| false).unwrap();
         // The deepest folder source wins; the path is relative to that source's folder.
         assert_eq!(remote(&playlist, 0), (deep, "x.flac".to_owned()));
         assert_eq!(remote(&playlist, 1), (music, "Loss/y.flac".to_owned()));
@@ -706,11 +591,12 @@ mod tests {
     fn a_source_of_the_whole_account_holds_everything() {
         let own = SourceId::new();
         let all = SourceId::new();
-        let playlist = parse_remote_playlist(
+        let playlist = read_remote_playlist(
             b"x/y.flac\n",
             "p.m3u8",
             own,
             &[covering(all, "")],
+            &|_| false,
         )
         .unwrap();
         assert_eq!(remote(&playlist, 0), (all, "x/y.flac".to_owned()));
@@ -742,11 +628,25 @@ mod tests {
         .unwrap();
         let bytes = read_all(&fs, &playlist_path).unwrap();
         let own = SourceId::new();
-        let mut playlist = parse_remote_playlist(&bytes, &playlist_path, own, &[]).unwrap();
-        let total = playlist.entries.len();
-        map_absolute_entries(&mut playlist, &playlist_path, own, &[], &|path| {
+        let total = bytes.iter().filter(|byte| **byte == b'\n').count();
+        let playlist = read_remote_playlist(&bytes, &playlist_path, own, &[], &|path| {
             fs.stat(path).is_ok_and(|entry| !entry.is_dir)
-        });
+        })
+        .unwrap();
+        // Writing is the inverse of reading: every entry of the real file comes back as the same text.
+        let text = player_remote::playlist_edit::decode_text(&bytes, false).unwrap();
+        let raws = player_remote::playlist_edit::entry_texts(&text);
+        let folder = player_remote::playlist_edit::folder_of(&playlist_path);
+        let style = PlaylistStyle::detect(&raws, folder, &|path| fs.stat(path).is_ok_and(|entry| !entry.is_dir));
+        println!("style: {style:?}");
+        let mut round_tripped = 0;
+        for raw in &raws {
+            if let Some(server) = style.to_server_path(raw, folder) {
+                assert_eq!(&style.to_entry_text(&server, folder), raw);
+                round_tripped += 1;
+            }
+        }
+        println!("{round_tripped} of {} entries round-trip", raws.len());
         let mapped: Vec<_> = playlist
             .entries
             .iter()
