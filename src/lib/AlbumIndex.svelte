@@ -1,12 +1,15 @@
 <script lang="ts">
   import { tr } from './i18n.js';
   import { displayUnknown } from './unknown-label.js';
-  import { onDestroy, tick } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
   import { getAlbumIndexScrollTop, setAlbumIndexScrollTop } from './album-index-scroll.js';
   import { getErrorText, invokeCommand } from './ipc';
   import type { AlbumIndexEntry, AlbumIndexSort, AlbumIndexSortField } from './ipc';
   import TrackColumnCells from './TrackColumnCells.svelte';
   import AlbumCard from './AlbumCard.svelte';
+  import { albumCardArtworkMemoryKey, getAlbumArtworkSelectionRevision } from './album-artwork.js';
+  import { createAlbumCoverPrefetcher } from './album-card-cover';
+  import { getAlbumPrefetchIndices } from './album-cover-prefetch.js';
   import { PagedListController } from './track-list-data.js';
   import { buildAlbumIndexRenderRows, buildAlbumIndexRows, DEFAULT_ALBUM_CARD_MAX_WIDTH_PX, findVisibleAlbumIndexRows, getAlbumCardGrid, getAlbumCardTextHeight, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from './album-index-layout.js';
   import { getQuickIndexAvailableWidth, getQuickIndexCellSizePx, getQuickIndexColumnCount, getQuickIndexDisplayLabel } from './quick-index.js';
@@ -118,6 +121,18 @@
       end: Math.max(...cardRows.map((row) => row.end)),
     };
   });
+  // Cards actually in the viewport (no overscan): their start/end (primitives, so the effect below only reruns when they move)
+  // define "one page" of cards for the cover prefetch.
+  const viewCardRange = $derived.by(() => {
+    const cardRows = findVisibleAlbumIndexRows(rowLayout.rows, scrollTop, viewportHeight, 0).filter((row) => row.kind === 'cards');
+    if (cardRows.length === 0) return { start: -1, end: -1 };
+    return { start: cardRows[0].start, end: cardRows[cardRows.length - 1].end };
+  });
+  const viewCardStart = $derived(viewCardRange.start);
+  const viewCardEnd = $derived(viewCardRange.end);
+  const coverPrefetcher = createAlbumCoverPrefetcher();
+  let prefetchLastStart = -1;
+  let prefetchDirection = 1;
   const availableQuickIndexLabels = $derived(new Set(groups.map(({ label }) => label)));
 
   async function load(): Promise<void> {
@@ -208,6 +223,27 @@
     if (pageSnapshot.scope !== null && range && range.end > range.start) {
       void listData.ensureRange(range.start, range.end);
     }
+  });
+
+  // Warm the covers of one page before and one page after the visible cards (low priority, after the scroll has been quiet).
+  $effect(() => {
+    const start = viewCardStart;
+    const end = viewCardEnd;
+    const revision = pageSnapshot.revision; // a page that arrives later makes more cards known
+    const key = refreshKey;
+    const ready = active && !loading && scrollPositionRestored && pageSnapshot.scope !== null && start >= 0;
+    untrack(() => {
+      if (!ready) { coverPrefetcher.cancel(); prefetchLastStart = -1; return; }
+      if (prefetchLastStart >= 0 && start !== prefetchLastStart) prefetchDirection = start > prefetchLastStart ? 1 : -1;
+      prefetchLastStart = start;
+      void revision;
+      const items = [];
+      for (const index of getAlbumPrefetchIndices({ start, end, total: totalCount, direction: prefetchDirection })) {
+        const album = listData.itemAt(index);
+        if (album) items.push({ album, memoryKey: albumCardArtworkMemoryKey(key, album.key, getAlbumArtworkSelectionRevision(album.key)) });
+      }
+      coverPrefetcher.schedule(items);
+    });
   });
 
   function openQuickIndex(event: MouseEvent): void {
@@ -333,6 +369,7 @@
   });
   onDestroy(() => {
     requestRevision += 1;
+    coverPrefetcher.cancel();
     if (restoreFrame !== null) cancelAnimationFrame(restoreFrame);
   });
 </script>

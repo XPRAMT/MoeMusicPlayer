@@ -2,12 +2,11 @@
   import { tr } from './i18n.js';
   import { displayUnknown } from './unknown-label.js';
   import { onDestroy, onMount, untrack } from 'svelte';
-  import { getAlbumThumbnailBytesForTrack, getTrackArtworkBytes, invokeCommand, markAlbumArtworkMissing, putAlbumThumbnailBase64, putAlbumThumbnailBase64ForTrack } from './ipc';
-  import { acquireAlbumCardArtwork, albumCardArtworkMemoryKey, copyToArrayBuffer, createAlbumThumbnailInWorker, getAlbumArtworkSelectionRevision, withAlbumCoverLookupSlot, getAlbumCardSelectionTrackIds, loadAlbumCardThumbnails, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources, withAlbumArtworkSlot } from './album-artwork.js';
+  import { acquireAlbumCardArtwork, albumCardArtworkMemoryKey, getAlbumArtworkSelectionRevision, rememberAlbumCardArtwork, resolveAlbumArtworkDisplaySources } from './album-artwork.js';
+  import { loadAlbumCardCover } from './album-card-cover';
   import type { AlbumIndexEntry as AlbumEntry } from './ipc';
   import type { AlbumIndexSortField } from './ipc';
   import { formatDurationHours } from './format';
-  import { detectArtworkMimeType } from './active-track-artwork';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import MiddleEllipsis from './MiddleEllipsis.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
@@ -38,56 +37,6 @@
     return trackCount;
   });
 
-  async function persistentSelectionKey(): Promise<string> {
-    const bytes = new TextEncoder().encode(`${album.key}\0${album.trackCount}`);
-    return [...new Uint8Array(await crypto.subtle.digest('SHA-256', copyToArrayBuffer(bytes)))]
-      .map((byte) => byte.toString(16).padStart(2, '0')).join('');
-  }
-
-  async function loadTrackThumbnail(trackId: string): Promise<{ url: string; bytes: number } | null> {
-    return withAlbumArtworkSlot(async () => {
-      let indexed = new Uint8Array();
-      try { indexed = new Uint8Array(await getAlbumThumbnailBytesForTrack(trackId)); } catch { /* rebuild a missing or damaged cache entry */ }
-      if (indexed.length === 1 && indexed[0] === 0) return null;
-      if (indexed.length > 3) {
-        return {
-          url: URL.createObjectURL(new Blob([copyToArrayBuffer(indexed)], { type: 'image/jpeg' })),
-          bytes: indexed.byteLength,
-        };
-      }
-
-      const original = await getTrackArtworkBytes(trackId);
-      if (original.byteLength === 0) {
-        void markAlbumArtworkMissing(trackId).catch(() => undefined);
-        return null;
-      }
-      const mimeType = detectArtworkMimeType(original);
-      if (!mimeType) {
-        void markAlbumArtworkMissing(trackId, true).catch(() => undefined);
-        return null;
-      }
-      let processed;
-      try {
-        processed = await createAlbumThumbnailInWorker(original, mimeType);
-      } catch {
-        // The cover was read but cannot be turned into a thumbnail: it will not work the next time either.
-        void markAlbumArtworkMissing(trackId, true).catch(() => undefined);
-        return null;
-      }
-      let thumbnail: Uint8Array;
-      try { thumbnail = new Uint8Array(await getAlbumThumbnailBytesForTrack(trackId)); } catch { thumbnail = new Uint8Array(); }
-      if (thumbnail.length <= 3) thumbnail = processed.bytes;
-      await putAlbumThumbnailBase64ForTrack(trackId, processed.sha256, processed.dataBase64).catch((error) => {
-        console.warn(tr('無法保存專輯卡片縮圖快取'), error);
-        return putAlbumThumbnailBase64(processed.sha256, processed.dataBase64).catch(() => undefined);
-      });
-      return {
-        url: URL.createObjectURL(new Blob([copyToArrayBuffer(thumbnail)], { type: 'image/jpeg' })),
-        bytes: thumbnail.byteLength,
-      };
-    });
-  }
-
   function remember(urls: string[], bytes: number): void {
     const previousLease = releaseArtworkCacheLease;
     const cachedArtwork = rememberAlbumCardArtwork(memoryCacheKey, urls.length ? urls : null, bytes);
@@ -96,44 +45,6 @@
     imageUrls = Array.isArray(value) ? value : value ? [value] : [];
     cacheResolved = true;
     previousLease?.();
-  }
-
-  async function restorePersistentSelection(revision: number): Promise<boolean> {
-    const key = await persistentSelectionKey();
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (!active || destroyed || revision !== requestRevision) return false;
-      let selection;
-      try {
-        // Only a few card lookups at the backend at once; one that waited and whose card is gone is not run.
-        selection = await withAlbumCoverLookupSlot(() => invokeCommand('album_artwork_selection_ensure', {
-          key,
-          albumNames: album.aliases,
-          trackCount: album.trackCount,
-          representative: false,
-          forceRebuild: attempt > 0,
-        }), () => active && !destroyed && revision === requestRevision);
-      } catch { return false; }
-      if (selection === null) return false;
-      if (!selection || selection.trackCount !== album.trackCount || revision !== requestRevision) return false;
-      const selectedTrackIds = getAlbumCardSelectionTrackIds(selection);
-      if (selectedTrackIds.length === 0) {
-        // Empty selections are persisted negative-cache entries: this album has no readable cover.
-        remember([], 0);
-        return true;
-      }
-      const loaded = await loadAlbumCardThumbnails(selectedTrackIds, loadTrackThumbnail);
-      if (!active || destroyed || revision !== requestRevision) {
-        loaded.urls.forEach((url) => URL.revokeObjectURL(url));
-        return false;
-      }
-      if (loaded.urls.length > 0) {
-        // Do not replace the current mosaic until every selected thumbnail has been read.
-        remember(loaded.urls, loaded.bytes);
-        return true;
-      }
-      // Rebuild the selection once if every representative thumbnail has gone stale.
-    }
-    return false;
   }
 
   async function loadCover(): Promise<void> {
@@ -150,18 +61,16 @@
     }
     const revision = ++requestRevision;
     busy = true;
-    const urls: string[] = [];
-    let bytes = 0;
+    const wanted = () => active && !destroyed && revision === requestRevision;
     try {
-      await restorePersistentSelection(revision);
-      if (cacheResolved) return;
-      if (!active || destroyed || revision !== requestRevision) {
-        urls.forEach((url) => URL.revokeObjectURL(url));
+      const result = await loadAlbumCardCover(album, wanted);
+      if (!wanted()) {
+        result?.urls.forEach((url) => URL.revokeObjectURL(url));
         return;
       }
-      if (!cacheResolved) remember(urls, bytes);
+      // Nothing loaded now (a failed lookup) is remembered like no cover for this list, as before.
+      remember(result?.urls ?? [], result?.bytes ?? 0);
     } catch (error) {
-      urls.forEach((url) => URL.revokeObjectURL(url));
       console.warn(tr("無法載入專輯「{0}」封面", [album.displayName]), error);
     } finally {
       busy = false;

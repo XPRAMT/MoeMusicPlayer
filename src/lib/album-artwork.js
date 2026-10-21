@@ -8,9 +8,6 @@ const DCT_BASIS_32 = Array.from({ length: DCT_LOW_FREQUENCY_COUNT }, (_, frequen
     Math.cos(((2 * sample + 1) * frequency * Math.PI) / (2 * ALBUM_ART_HASH_SIZE))),
 );
 const ARTWORK_WORKER_LIMIT = 2;
-let activeArtworkWorkers = 0;
-/** @type {(() => void)[]} */
-const artworkWorkerQueue = [];
 
 /** @typedef {{ worker: Worker, busy: boolean, job: { bytes: ArrayBuffer, mimeType: string, size: number, resolve: (value: { sha256: string, bytes: Uint8Array, dataBase64: string }) => void, reject: (reason: unknown) => void } | null }} ThumbnailWorkerSlot */
 /** @type {ThumbnailWorkerSlot[]} */
@@ -97,6 +94,12 @@ function trimAlbumCardMemoryCache() {
   }
 }
 
+/** True when the memory cache holds a result (a cover or a confirmed no-cover) for the key; takes no lease and keeps the order. */
+/** @param {string} key */
+export function hasAlbumCardArtwork(key) {
+  return albumCardMemoryCache.has(key);
+}
+
 /** Acquire an in-memory card thumbnail. A null value is a cached no-cover result. */
 /** @param {string} key */
 export function acquireAlbumCardArtwork(key) {
@@ -143,50 +146,61 @@ export function rememberAlbumCardArtwork(key, value, bytes = 0) {
 }
 
 /**
+ * A small limiter with two priorities. Visible cards ("high") are served first; prefetch work ("low") only runs while no
+ * high job waits and takes at most `lowLimit` of the `limit` places, so it can never keep a visible card out. A job that
+ * waited and is no longer wanted is not run (it resolves `null`) and does not use a place.
+ * @param {number} limit @param {number} lowLimit
+ */
+function createPriorityLimiter(limit, lowLimit) {
+  let active = 0;
+  let activeLow = 0;
+  /** @type {{ high: Array<any>, low: Array<any> }} */
+  const queues = { high: [], low: [] };
+  const pump = () => {
+    while (active < limit) {
+      let job = queues.high.shift();
+      if (!job && activeLow < lowLimit) job = queues.low.shift();
+      if (!job) return;
+      if (!job.stillWanted()) { job.resolve(null); continue; }
+      active += 1;
+      if (job.low) activeLow += 1;
+      void (async () => {
+        try { job.resolve(await job.task()); } catch (error) { job.reject(error); } finally {
+          active -= 1;
+          if (job.low) activeLow -= 1;
+          pump();
+        }
+      })();
+    }
+  };
+  /** @template T @param {() => Promise<T>} task @param {() => boolean} [stillWanted] @param {'high' | 'low'} [priority] @returns {Promise<T | null>} */
+  return (task, stillWanted = () => true, priority = 'high') => new Promise((resolve, reject) => {
+    const low = priority === 'low';
+    queues[low ? 'low' : 'high'].push({ task, stillWanted, resolve, reject, low });
+    pump();
+  });
+}
+
+/**
  * How many cover lookups of album cards may be at the backend at once. Every lookup takes the one library connection for a
  * short while; with the lookups of every card waiting there, the queries of the page the user opened (its tracks, its
- * artists) wait behind all of them, for seconds. A few at a time keeps that wait to a few lookups.
+ * artists) wait behind all of them, for seconds. A few at a time keeps that wait to a few lookups. Prefetch ("low")
+ * lookups use at most one of those places.
  */
 export const ALBUM_COVER_LOOKUP_LIMIT = 2;
-let activeCoverLookups = 0;
-/** @type {Array<() => void>} */
-const coverLookupQueue = [];
 
 /**
  * Run a cover lookup of an album card when one of the few places is free. A lookup that waited and is no longer wanted (its
  * card was scrolled away or removed) is not run at all: `null` is returned instead.
- * @template T @param {() => Promise<T>} task @param {() => boolean} [stillWanted] @returns {Promise<T | null>}
+ * @template T @param {() => Promise<T>} task @param {() => boolean} [stillWanted] @param {'high' | 'low'} [priority] @returns {Promise<T | null>}
  */
-export function withAlbumCoverLookupSlot(task, stillWanted = () => true) {
-  return new Promise((resolve, reject) => {
-    const release = () => {
-      activeCoverLookups -= 1;
-      coverLookupQueue.shift()?.();
-    };
-    const run = async () => {
-      if (!stillWanted()) { release(); resolve(null); return; }
-      try { resolve(await task()); } catch (error) { reject(error); } finally { release(); }
-    };
-    if (activeCoverLookups < ALBUM_COVER_LOOKUP_LIMIT) { activeCoverLookups += 1; void run(); }
-    else coverLookupQueue.push(() => { activeCoverLookups += 1; void run(); });
-  });
-}
+export const withAlbumCoverLookupSlot = createPriorityLimiter(ALBUM_COVER_LOOKUP_LIMIT, 1);
 
-/** @template T @param {() => Promise<T>} task @returns {Promise<T>} */
-export function withAlbumArtworkSlot(task) {
-  return new Promise((resolve, reject) => {
-    const run = async () => {
-      activeArtworkWorkers += 1;
-      try { resolve(await task()); } catch (error) { reject(error); }
-      finally {
-        activeArtworkWorkers -= 1;
-        artworkWorkerQueue.shift()?.();
-      }
-    };
-    if (activeArtworkWorkers < ARTWORK_WORKER_LIMIT) void run();
-    else artworkWorkerQueue.push(() => { void run(); });
-  });
-}
+/**
+ * Thumbnail reading and building for album cards (two at a time; prefetch uses at most one). Same waiting rules as the lookups.
+ * @template T @param {() => Promise<T>} task @param {() => boolean} [stillWanted] @param {'high' | 'low'} [priority] @returns {Promise<T | null>}
+ */
+export const withAlbumArtworkSlot = createPriorityLimiter(ARTWORK_WORKER_LIMIT, 1);
 
 /** @param {Uint8Array} bytes @returns {ArrayBuffer} */
 export function copyToArrayBuffer(bytes) {
