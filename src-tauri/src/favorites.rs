@@ -77,59 +77,18 @@ fn locator_insertion_position(entries: &[PlaylistEntry], locator: &MediaLocator)
 }
 
 fn filesystem_insertion_position(entries: &[PlaylistEntry], path: &std::path::Path) -> usize {
-    let Some(mut directory) = filesystem_parent_sort_key(path) else {
-        return entries.len();
-    };
-
-    loop {
-        if let Some(position) = entries
-            .iter()
-            .enumerate()
-            .filter_map(|(position, entry)| {
-                let MediaLocator::FileSystem(existing_path) = &entry.locator else {
-                    return None;
-                };
-                let existing_directory = filesystem_parent_sort_key(existing_path)?;
-                (natural_title_cmp(&existing_directory, &directory) == Ordering::Equal)
-                    .then_some(position)
-            })
-            .next_back()
-        {
-            return position + 1;
-        }
-
-        let Some(parent) = parent_directory_sort_key(&directory) else {
-            return entries.len();
-        };
-        directory = parent;
-    }
-}
-
-fn filesystem_parent_sort_key(path: &std::path::Path) -> Option<String> {
-    let path = windows_path_sort_key(path);
-    parent_path_key(&path)
-}
-
-fn parent_directory_sort_key(path: &str) -> Option<String> {
-    parent_path_key(path)
-}
-
-fn parent_path_key(path: &str) -> Option<String> {
-    let path = path.trim_end_matches('/');
-    let separator = path.rfind('/')?;
-
-    // Preserve a drive root as `D:/` instead of reducing it to `D:`.
-    if separator == 2
-        && path.as_bytes().get(1) == Some(&b':')
-        && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
-    {
-        return Some(path[..=separator].to_owned());
-    }
-    // Preserve the POSIX root when the parent is `/`.
-    if separator == 0 {
-        return Some("/".to_owned());
-    }
-    Some(path[..separator].to_owned())
+    let keys: Vec<Option<String>> = entries
+        .iter()
+        .map(|entry| match &entry.locator {
+            MediaLocator::FileSystem(existing) => Some(windows_path_sort_key(existing)),
+            _ => None,
+        })
+        .collect();
+    player_core::playlist::favorite_insertion_index(
+        &keys,
+        &windows_path_sort_key(path),
+        &natural_title_cmp,
+    )
 }
 
 fn windows_path_sort_key(path: &std::path::Path) -> String {

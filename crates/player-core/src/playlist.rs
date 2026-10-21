@@ -465,6 +465,59 @@ fn parse_m3u_text(text: &str, playlist_file: &Path) -> Result<Playlist, Playlist
     Ok(playlist)
 }
 
+/// The folder part of a `/`-separated path key (`D:/Music/a.flac` -> `D:/Music`, `/a.flac` -> `/`), `None` when the key
+/// has no folder.
+pub fn parent_path_key(path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    let separator = path.rfind('/')?;
+
+    // Preserve a drive root as `D:/` instead of reducing it to `D:`.
+    if separator == 2
+        && path.as_bytes().get(1) == Some(&b':')
+        && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+    {
+        return Some(path[..=separator].to_owned());
+    }
+    // Preserve the POSIX root when the parent is `/`.
+    if separator == 0 {
+        return Some("/".to_owned());
+    }
+    Some(path[..separator].to_owned())
+}
+
+/// Where a song goes in a playlist when it is added by the favorite button, the one rule local and remote playlists
+/// share: after the last existing entry in the same folder; when the folder has none, after the last entry of the
+/// nearest parent folder that has one; otherwise at the end. Existing entries keep their relative order.
+/// `existing` holds the `/`-separated path key of every entry in order (`None` for an entry that has no usable path),
+/// `new_key` is the key of the song, and `compare` is the natural order folders are compared with.
+pub fn favorite_insertion_index(
+    existing: &[Option<String>],
+    new_key: &str,
+    compare: &dyn Fn(&str, &str) -> std::cmp::Ordering,
+) -> usize {
+    let Some(mut directory) = parent_path_key(new_key) else {
+        return existing.len();
+    };
+    loop {
+        if let Some(position) = existing
+            .iter()
+            .enumerate()
+            .filter_map(|(position, key)| {
+                let existing_directory = parent_path_key(key.as_deref()?)?;
+                (compare(&existing_directory, &directory) == std::cmp::Ordering::Equal)
+                    .then_some(position)
+            })
+            .next_back()
+        {
+            return position + 1;
+        }
+        let Some(parent) = parent_path_key(&directory) else {
+            return existing.len();
+        };
+        directory = parent;
+    }
+}
+
 fn parse_locator(value: &str, base_dir: &Path) -> MediaLocator {
     if let Some(remote) = crate::library::parse_remote_locator_uri(value) {
         return remote;

@@ -106,6 +106,7 @@ pub(crate) fn run(job: Job) -> Result<(), String> {
     let edit = if job.selected {
         Edit::Add {
             server_path: &job.server_path,
+            compare: &player_db::natural_title_cmp,
             title: job.title.as_deref(),
             duration_ms: job.duration_ms,
         }

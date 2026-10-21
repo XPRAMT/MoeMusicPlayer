@@ -14,10 +14,12 @@ use crate::playlist_style::PlaylistStyle;
 pub const MAX_PLAYLIST_BYTES: u64 = 16 * 1024 * 1024;
 
 /// What to do to the file. Paths are relative to the account's root, `/`-separated.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub enum Edit<'a> {
     Add {
         server_path: &'a str,
+        /// The natural order folders are compared with (the same one local favorites use).
+        compare: &'a dyn Fn(&str, &str) -> std::cmp::Ordering,
         /// Written as `#EXTINF` only when the file already uses them (or is new).
         title: Option<&'a str>,
         duration_ms: Option<u64>,
@@ -216,6 +218,7 @@ fn edit_text(
     match *edit {
         Edit::Add {
             server_path,
+            compare,
             title,
             duration_ms,
         } => {
@@ -267,19 +270,57 @@ fn edit_text(
             if blank_file {
                 return Ok(Some(format!("#EXTM3U{eol}{addition}")));
             }
-            let last = all
+            // Where it goes is the favorites rule local playlists use (`favorite_insertion_index`), fed with the
+            // server paths of the entries; an entry that names no place on the server is not an anchor.
+            let entry_lines: Vec<usize> = all
                 .iter()
-                .rev()
-                .find(|line| line.content_end > line.start)
-                .copied()
-                .expect("a file with text has a non-empty line");
+                .enumerate()
+                .filter(|(_, line)| is_entry(&text[line.start..line.content_end]))
+                .map(|(index, _)| index)
+                .collect();
+            let keys: Vec<Option<String>> = entry_lines
+                .iter()
+                .map(|index| {
+                    let line = all[*index];
+                    style
+                        .to_server_path(&text[line.start..line.content_end], folder)
+                        .map(|path| format!("/{path}"))
+                })
+                .collect();
+            let (offset, eol_first) = if keys.iter().all(Option::is_none) {
+                // Nothing to anchor to: after the last non-blank line.
+                let last = all
+                    .iter()
+                    .rev()
+                    .find(|line| line.content_end > line.start)
+                    .copied()
+                    .expect("a file with text has a non-empty line");
+                (last.end, last.end == last.content_end)
+            } else {
+                let index = player_core::playlist::favorite_insertion_index(
+                    &keys,
+                    &format!("/{}", server_path.trim_matches('/')),
+                    compare,
+                );
+                if index == 0 {
+                    // Before the first entry (and before the `#EXTINF` line that belongs to it).
+                    let first = entry_lines[0];
+                    let owns_extinf = first > 0
+                        && text[all[first - 1].start..all[first - 1].content_end].starts_with("#EXTINF:");
+                    (all[if owns_extinf { first - 1 } else { first }].start, false)
+                } else {
+                    // Directly after the path line of the entry it follows.
+                    let anchor = all[entry_lines[index - 1]];
+                    (anchor.end, anchor.end == anchor.content_end)
+                }
+            };
             let mut result = String::with_capacity(text.len() + addition.len() + 2);
-            result.push_str(&text[..last.end]);
-            if last.end == last.content_end {
+            result.push_str(&text[..offset]);
+            if eol_first {
                 result.push_str(eol);
             }
             result.push_str(&addition);
-            result.push_str(&text[last.end..]);
+            result.push_str(&text[offset..]);
             Ok(Some(result))
         }
         Edit::Remove { server_path } => {
@@ -384,6 +425,7 @@ pub fn edit_playlist_file(
 mod tests {
     use super::*;
     use crate::local::DirFs;
+    const B: &str = "\\";
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -403,9 +445,14 @@ mod tests {
         root
     }
 
+    fn natural(left: &str, right: &str) -> std::cmp::Ordering {
+        player_db::natural_title_cmp(left, right)
+    }
+
     fn add(path: &str) -> Edit<'_> {
         Edit::Add {
             server_path: path,
+            compare: &natural,
             title: Some("Artist - Song"),
             duration_ms: Some(215_500),
         }
@@ -618,5 +665,95 @@ mod tests {
         let root = tree(&["a.flac", "b.flac"]);
         let out = run(&root, "p.m3u8", b"a.flac\n\n\n", add("b.flac")).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "a.flac\nb.flac\n\n\n");
+    }
+
+    // ---- where a new song goes: the same rule as local favorites ----
+
+    #[test]
+    fn a_song_goes_after_the_last_entry_of_its_folder_and_other_lines_stay() {
+        let root = tree(&["Music/A/new.flac"]);
+        let original = "#EXTM3U\n#EXTINF:1,x\n../A/one.flac\n; note\n#EXTINF:2,y\n../B/one.flac\n\n../A/two.flac\n; tail\n";
+        let out = run(&root, "Music/Playlists/p.m3u8", original.as_bytes(), add("Music/A/new.flac")).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "#EXTM3U\n#EXTINF:1,x\n../A/one.flac\n; note\n#EXTINF:2,y\n../B/one.flac\n\n../A/two.flac\n#EXTINF:215.5,Artist - Song\n../A/new.flac\n; tail\n"
+        );
+    }
+
+    #[test]
+    fn a_new_folder_goes_next_to_the_nearest_parent_folder_group() {
+        let root = tree(&[]);
+        let original = "../A/x/one.flac\n../B/one.flac\n../A/two.flac\n";
+        // `A/y/` has no entry yet: the nearest group is `A/`, whose last entry is `two.flac`.
+        let out = run(&root, "Music/Playlists/p.m3u8", original.as_bytes(), add("Music/A/y/new.flac")).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "../A/x/one.flac\n../B/one.flac\n../A/two.flac\n../A/y/new.flac\n");
+    }
+
+    #[test]
+    fn a_song_in_no_known_group_goes_to_the_end() {
+        let root = tree(&[]);
+        let out = run(&root, "Music/Playlists/p.m3u8", b"../A/one.flac\n../B/one.flac\n", add("Other/new.flac")).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "../A/one.flac\n../B/one.flac\n../../Other/new.flac\n");
+    }
+
+    #[test]
+    fn unmappable_entries_are_not_anchors() {
+        let root = tree(&[]);
+        // The web address and the path that leaves the server are skipped; `A/` is the only group.
+        let original = "../A/one.flac\nhttp://example.com/x.mp3\n../../../../up.flac\n";
+        let out = run(&root, "Music/Playlists/p.m3u8", original.as_bytes(), add("Music/A/new.flac")).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "../A/one.flac\n../A/new.flac\nhttp://example.com/x.mp3\n../../../../up.flac\n"
+        );
+    }
+
+    #[test]
+    fn index_zero_goes_before_the_first_entry_and_its_extinf() {
+        // `Music/A/x` has no entry; the nearest group is the root of the account, which is found at `/a.flac`.
+        let keys = [Some("/Z/a.flac".to_owned()), Some("/Z/b.flac".to_owned())];
+        assert_eq!(player_core::playlist::favorite_insertion_index(&keys, "/Z/c.flac", &natural), 2);
+        // No group at all: the end.
+        assert_eq!(player_core::playlist::favorite_insertion_index(&keys, "/Y/c.flac", &natural), 2);
+        // Index 0 comes only from an empty list of anchors in front: a group whose entry is the first one.
+        let keys = [None, Some("/Z/a.flac".to_owned())];
+        assert_eq!(player_core::playlist::favorite_insertion_index(&keys, "/Z/c.flac", &natural), 2);
+    }
+
+    #[test]
+    fn a_crlf_bom_file_with_extinf_is_extended_byte_for_byte() {
+        let root = tree(&[]);
+        let original = "\u{feff}#EXTM3U" .to_owned() + "\r\n#EXTINF:1,x\r\nD:" + B + "Music" + B + "A" + B + "one.flac\r\n; c\r\nD:" + B + "Music" + B + "B" + B + "one.flac\r\n";
+        let files = ["Music/A/one.flac", "Music/B/one.flac"];
+        for f in files {
+            std::fs::create_dir_all(root.join(f).parent().unwrap()).unwrap();
+            std::fs::write(root.join(f), b"x").unwrap();
+        }
+        let out = run(&root, "Music/Playlists/p.m3u8", original.as_bytes(), add("Music/A/new.flac")).unwrap();
+        let expected = "\u{feff}#EXTM3U".to_owned() + "\r\n#EXTINF:1,x\r\nD:" + B + "Music" + B + "A" + B + "one.flac\r\n#EXTINF:215.5,Artist - Song\r\nD:" + B + "Music" + B + "A" + B + "new.flac\r\n; c\r\nD:" + B + "Music" + B + "B" + B + "one.flac\r\n";
+        assert_eq!(String::from_utf8(out).unwrap(), expected);
+    }
+
+    #[test]
+    fn a_song_whose_folder_group_starts_the_list_still_follows_the_group() {
+        let root = tree(&[]);
+        let out = run(&root, "Music/Playlists/p.m3u8", b"../A/one.flac\n../B/one.flac\n", add("Music/A/new.flac")).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "../A/one.flac\n../A/new.flac\n../B/one.flac\n");
+    }
+
+    #[test]
+    fn local_and_remote_decide_the_same_index_for_the_same_paths() {
+        let paths = ["D:/Music/A/one.flac", "D:/Music/B/one.flac", "D:/Music/A/two.flac", "D:/Other/x.flac"];
+        let keys: Vec<Option<String>> = paths.iter().map(|p| Some((*p).to_owned())).collect();
+        // The remote side feeds the same paths with a leading slash instead of the drive.
+        let remote: Vec<Option<String>> = paths.iter().map(|p| Some(format!("/{}", &p[3..]))).collect();
+        for new in ["D:/Music/A/n.flac", "D:/Music/C/n.flac", "D:/Music/A/sub/n.flac", "D:/Other/n.flac", "D:/Else/n.flac"] {
+            let remote_new = format!("/{}", &new[3..]);
+            assert_eq!(
+                player_core::playlist::favorite_insertion_index(&keys, new, &natural),
+                player_core::playlist::favorite_insertion_index(&remote, &remote_new, &natural),
+                "{new}"
+            );
+        }
     }
 }
