@@ -130,6 +130,8 @@
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
   import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
   import { appTooltip } from './lib/app-tooltip.js';
+  import SourceScopeSwitch from './lib/SourceScopeSwitch.svelte';
+  import { normalizeSourceScope, shouldShowSourceScopeSwitch } from './lib/source-scope.js';
   import SourceSections from './lib/SourceSections.svelte';
   import { TRACK_TEXT_OVERFLOW_CONTEXT, type TrackTextOverflowMode } from './lib/track-text-overflow-context';
   import { QUEUE_REORDER_LONG_PRESS_MS, QUEUE_REORDER_MOVE_CANCEL_PX } from './lib/queue-reorder.js';
@@ -631,6 +633,31 @@
   let playlistTrackCount = $state<number | null>(null);
   let queueTrackCount = $state<number | null>(null);
   let libraryListRevision = $state(0);
+  /** The top-bar switch: only local songs, everything, or only remote songs (kept in settings.json). */
+  let librarySourceScope = $state<'local' | 'all' | 'remote'>('all');
+  async function loadLibrarySourceScope(): Promise<void> {
+    try {
+      librarySourceScope = normalizeSourceScope(await invokeCommand('settings_get_library_source_scope', {}));
+    } catch (error) {
+      console.warn('source scope', error);
+    }
+  }
+  async function changeLibrarySourceScope(next: 'local' | 'all' | 'remote'): Promise<void> {
+    const previous = librarySourceScope;
+    librarySourceScope = next;
+    try {
+      librarySourceScope = normalizeSourceScope(await invokeCommand('settings_set_library_source_scope', { scope: next }));
+      // Every list, count and grouping is read again under the new scope.
+      libraryListRevision += 1;
+    } catch (error) {
+      librarySourceScope = previous;
+      console.warn('source scope', error);
+    }
+  }
+  // Without both kinds of source there is no switch, so nothing may stay filtered by it.
+  $effect(() => {
+    if (!showSourceScopeSwitch && librarySourceScope !== 'all' && sourcesLoadedOnce) void changeLibrarySourceScope('all');
+  });
   let playbackError = $state<string | null>(null);
   let playback = $state<PlaybackSnapshot | null>(null);
   let playbackQueueResetKey = $state(0);
@@ -654,6 +681,8 @@
   // 1 at original size or larger, fading to 0 as the cover shrinks to the minimum: the artwork pane's fr share.
   let coverShrinkShare = $derived(Math.min(1, Math.max(0, (coverLayoutScale - COVER_ZOOM_MIN) / (1 - COVER_ZOOM_MIN))));
   let sources = $state<LibrarySource[]>([]);
+  let sourcesLoadedOnce = $state(false);
+  const showSourceScopeSwitch = $derived(shouldShowSourceScopeSwitch(sources));
   /** Folders and playlists on this device; remote folders and playlists are listed with the remote servers. */
   const localSources = $derived(sources.filter((source) => !source.remoteAccountId));
   const localFolderSources = $derived(localSources.filter((source) => source.kind !== 'playlist_file'));
@@ -2646,6 +2675,7 @@
     try {
       capabilities = await invokeCommand('get_runtime_capabilities', {});
       if (isReady(capabilities.library)) void loadPlaylists();
+      if (isReady(capabilities.library)) void loadLibrarySourceScope();
       if (isReady(capabilities.sourceSync)) void loadSources();
       if (isReady(capabilities.playback)) void loadPlaybackSnapshot();
     } catch (error) {
@@ -2708,6 +2738,7 @@
     sourceError = null;
     try {
       sources = await invokeCommand('library_list_sources', {});
+      sourcesLoadedOnce = true;
       if (capabilities?.platform === 'windows' || capabilities?.platform === 'android') {
         excludedFolders = await invokeCommand('library_list_excluded_folders', {});
       } else {
@@ -2832,6 +2863,7 @@
     sourceError = null;
     try {
       sources = await invokeCommand('library_set_source_enabled', { sourceId: source.id, enabled });
+      sourcesLoadedOnce = true;
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
       libraryTrackCount = null;
       libraryListRevision += 1;
@@ -2851,6 +2883,7 @@
     sourceError = null;
     try {
       sources = await invokeCommand('library_remove_source', { sourceId: source.id });
+      sourcesLoadedOnce = true;
       sourceSyncResults = sourceSyncResults.filter((result) => result.sourceId !== source.id);
       libraryTrackCount = null;
       libraryListRevision += 1;
@@ -4535,7 +4568,7 @@
   </aside>
 
   <main class="workspace" inert={isNowPlayingOpen}>
-    <header class="topbar">
+    <header class="topbar" class:has-source-scope-switch={showSourceScopeSwitch}>
       <button
         bind:this={navPanelToggle}
         class="nav-panel-toggle"
@@ -4561,6 +4594,11 @@
           <p class="page-title-count">{pageTrackCountLabel}</p>
         {/if}
       </div>
+      {#if showSourceScopeSwitch}
+        <div class="topbar-source-scope">
+          <SourceScopeSwitch value={librarySourceScope} onChange={(next) => void changeLibrarySourceScope(next)} />
+        </div>
+      {/if}
       <div class="topbar-actions">
         <button
           class="soft-button topbar-refresh-button"

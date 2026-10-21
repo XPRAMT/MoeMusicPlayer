@@ -6849,6 +6849,38 @@ async fn settings_apply_output_preset(
     store_and_apply_output_devices(&state, preset).await
 }
 
+/// The library source switch (all / local only / remote only).
+#[tauri::command]
+fn settings_get_library_source_scope(
+    state: State<'_, AppState>,
+) -> Result<player_db::LibrarySourceScope, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.library_source_scope)
+        .map_err(|error| error.to_string())
+}
+
+/// Switch the library lists between all songs, only local songs and only remote songs. Every list, count and grouping
+/// follows at once (the page reloads its lists); playback is not affected.
+#[tauri::command]
+fn settings_set_library_source_scope(
+    state: State<'_, AppState>,
+    scope: player_db::LibrarySourceScope,
+) -> Result<player_db::LibrarySourceScope, String> {
+    let saved = state
+        .settings
+        .update(|settings| {
+            settings.library_source_scope = scope;
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
+    if let Some(database) = state.database.as_ref() {
+        database.set_source_scope(saved.library_source_scope);
+    }
+    Ok(saved.library_source_scope)
+}
+
 #[tauri::command]
 fn settings_get_output_volume_sync(state: State<'_, AppState>) -> Result<bool, String> {
     state
@@ -11740,6 +11772,8 @@ pub fn run() {
             settings_get_output_devices,
             settings_set_output_devices,
             settings_get_output_exclusive,
+            settings_get_library_source_scope,
+            settings_set_library_source_scope,
             settings_get_output_volume_sync,
             settings_set_output_volume_sync,
             settings_set_output_exclusive,
@@ -11940,6 +11974,9 @@ pub fn run() {
             let initial_settings = settings
                 .snapshot()
                 .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
+            if let Some(database) = database.as_ref() {
+                database.set_source_scope(initial_settings.library_source_scope);
+            }
             #[cfg(target_os = "android")]
             android_dsd::set_gain_db(initial_settings.dsd.gain_db);
             #[cfg(target_os = "windows")]

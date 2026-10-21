@@ -41,6 +41,37 @@ const SCHEMA_VERSION: i64 = 19;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
+const SOURCE_SCOPE_FUNCTION: &str = "moe_in_scope";
+
+/// Which sources the library lists show: everything, only the local ones, or only the remote ones. It narrows every
+/// list, count and grouping (a track is visible when one of its enabled sources is in scope); playback still resolves
+/// every enabled source, so a queued track keeps playing when the scope changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LibrarySourceScope {
+    #[default]
+    All,
+    Local,
+    Remote,
+}
+
+impl LibrarySourceScope {
+    fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Local,
+            2 => Self::Remote,
+            _ => Self::All,
+        }
+    }
+
+    fn admits(self, source_kind: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Local => source_kind != "remote",
+            Self::Remote => source_kind == "remote",
+        }
+    }
+}
 const MUSIC_FORMAT_FUNCTION: &str = "music_format_label";
 /// The group of items whose key is missing (the same label the text groups use).
 const UNKNOWN_GROUP_LABEL: &str = "未知";
@@ -102,9 +133,9 @@ fn repair_provider_lrc_cache(provider: LyricProvider, lyrics: &mut player_core::
 }
 
 const COUNT_LIBRARY_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
-    JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1";
+    JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind)";
 const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_mappings m
-    JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1
+    JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind)
     JOIN tracks t ON t.track_id=m.track_id
     WHERE EXISTS (SELECT 1 FROM json_each(?1) term
        WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
@@ -113,7 +144,7 @@ const COUNT_SEARCH_SQL: &str = "SELECT COUNT(DISTINCT m.track_id) FROM source_ma
           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE)";
 const COUNT_FIELD_FILTER_SQL: &str = "SELECT COUNT(DISTINCT t.track_id) FROM tracks t
     WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                  ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                  ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
       AND (?1 IS NULL OR EXISTS (SELECT 1 FROM json_each(?1) term
            WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
               OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
@@ -132,10 +163,10 @@ const TRACKS_PAGE_SELECT_SQL: &str = "SELECT t.track_id,
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
     t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0),
-    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)
+    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+               ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
    AND (?1 IS NULL OR EXISTS (SELECT 1 FROM json_each(?1) term
         WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
@@ -157,10 +188,10 @@ const TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
     t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0),
-    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)
+    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+               ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
    AND (?1 IS NULL OR EXISTS (SELECT 1 FROM json_each(?1) term
         WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
@@ -179,7 +210,7 @@ const TRACK_SUMMARY_SQL: &str = "SELECT t.track_id,
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
     t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0),
-    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)
+    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))
  FROM tracks t WHERE t.track_id=?1";
 const ARTIST_TRACKS_PREFIX_SQL: &str = "SELECT t.track_id,
     COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title),
@@ -189,10 +220,10 @@ const ARTIST_TRACKS_PREFIX_SQL: &str = "SELECT t.track_id,
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
     t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0),
-    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)
+    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))
  FROM tracks t
  WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+               ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
    AND (?1 IS NULL OR EXISTS (SELECT 1 FROM json_each(?1) term
         WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
            OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
@@ -219,18 +250,18 @@ const ALBUM_TRACKS_PAGE_SQL: &str = "SELECT t.track_id,
     t.track_number, t.disc_number, t.duration_ms, t.codec, t.bitrate_bps, t.sample_rate_hz,
     t.year, t.release_date, t.bit_depth,
     COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=t.track_id), 0),
-    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)
+    (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))
  FROM tracks t
  WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
        IN (SELECT value FROM json_each(?1))
    AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)";
+               ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)";
 const ALBUM_ARTWORK_CANDIDATES_SQL: &str = "SELECT t.track_id
  FROM tracks t
  WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
        IN (SELECT value FROM json_each(?1))
    AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-               ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+               ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
  ORDER BY COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647),
           COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL,
           t.track_id
@@ -266,12 +297,12 @@ SELECT e.position, e.track_id,
        EXISTS (
            SELECT 1 FROM source_mappings m
            JOIN library_roots r ON r.source_id=m.source_id
-           WHERE m.track_id=e.track_id AND r.enabled=1
+           WHERE m.track_id=e.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind)
        ),
        COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0),
-       (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1),
+       (SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind)),
        e.locator_kind, e.locator_encoding, e.locator_data,
-       (SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)
+       (SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))
 FROM resolved_entries e
 LEFT JOIN tracks t ON t.track_id=e.track_id
 "#;
@@ -326,7 +357,7 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
 }
 
 /// The modified time of a track's file (the newest of its enabled mappings): the expression the sorts and groups use.
-const TRACK_MODIFIED_AT_SQL: &str = "(SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)";
+const TRACK_MODIFIED_AT_SQL: &str = "(SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))";
 
 fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
     match field {
@@ -335,8 +366,8 @@ fn playlist_sort_expression(field: PlaylistSortField) -> &'static str {
         PlaylistSortField::Artist => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='artist'), t.artist, '') COLLATE MUSIC_LOCALE_NATURAL",
         PlaylistSortField::Album => "COALESCE((SELECT value FROM track_overrides WHERE track_id=e.track_id AND field='album'), t.album, '') COLLATE MUSIC_LOCALE_NATURAL",
         PlaylistSortField::Year => "COALESCE(t.release_date, printf('%04d', t.year), '')",
-        PlaylistSortField::CreatedAt => "(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
-        PlaylistSortField::ModifiedAt => "(SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
+        PlaylistSortField::CreatedAt => "(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))",
+        PlaylistSortField::ModifiedAt => "(SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))",
         PlaylistSortField::AudioFormat => unreachable!("audio format has a compound sort key"),
         PlaylistSortField::Duration => "COALESCE(e.entry_duration_ms, t.duration_ms, -1)",
         PlaylistSortField::PlayCount => "CASE WHEN COALESCE(e.entry_duration_ms, t.duration_ms, 0)>0 THEN COALESCE((SELECT s.played_ms FROM track_playback_statistics s WHERE s.track_id=e.track_id), 0)*1.0/COALESCE(e.entry_duration_ms, t.duration_ms) ELSE -1 END",
@@ -1039,7 +1070,7 @@ impl QuickIndexKind {
 
 /// SQL for the name of the place a track of the table `t` comes from: the label of its source (a remote server's name) or
 /// "本地" for folders on this device.
-const TRACK_SOURCE_NAME_SQL: &str = "(SELECT COALESCE(sl.label, CASE WHEN r.source_kind = 'remote' THEN r.display_name ELSE '本地' END) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id LEFT JOIN source_labels sl ON sl.source_id=r.source_id WHERE m.track_id=t.track_id AND r.enabled=1 ORDER BY 1 LIMIT 1)";
+const TRACK_SOURCE_NAME_SQL: &str = "(SELECT COALESCE(sl.label, CASE WHEN r.source_kind = 'remote' THEN r.display_name ELSE '本地' END) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id LEFT JOIN source_labels sl ON sl.source_id=r.source_id WHERE m.track_id=t.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind) ORDER BY 1 LIMIT 1)";
 
 /// SQL that is true for a track with no usable year (the unknown group), from the columns of the table `alias`. The
 /// unknown group counts as the smallest value: first when the list runs from old to new (ascending), last when it runs
@@ -1187,6 +1218,7 @@ fn register_natural_title_collation(connection: &Connection) -> rusqlite::Result
 fn register_music_collation(
     connection: &Connection,
     collation_spec: &MusicCollationSpec,
+    source_scope: Arc<std::sync::atomic::AtomicU8>,
 ) -> rusqlite::Result<()> {
     let collators = collation_spec.build_collators();
     let opencc = Arc::new(
@@ -1213,6 +1245,17 @@ fn register_music_collation(
         |context| {
             let value = context.get::<Option<String>>(0)?;
             Ok(year_group_label(value.as_deref()))
+        },
+    )?;
+    // Not deterministic: the answer follows the scope switch.
+    connection.create_scalar_function(
+        SOURCE_SCOPE_FUNCTION,
+        1,
+        FunctionFlags::SQLITE_UTF8,
+        move |context| {
+            let kind = context.get::<String>(0)?;
+            let scope = LibrarySourceScope::from_code(source_scope.load(std::sync::atomic::Ordering::Relaxed));
+            Ok(scope.admits(&kind))
         },
     )?;
     connection.create_scalar_function(
@@ -1470,6 +1513,8 @@ pub struct Database {
     connection: Mutex<Connection>,
     collation_spec: MusicCollationSpec,
     collators: MusicCollators,
+    /// See `LibrarySourceScope`; shared with the SQL function that narrows the lists.
+    source_scope: Arc<std::sync::atomic::AtomicU8>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1737,7 +1782,7 @@ impl Database {
                 .as_deref()
                 .and_then(MusicCollationSpec::from_signature)
                 .unwrap_or_else(|| collation_spec.clone());
-            register_music_collation(&validation_connection, &validation_spec)?;
+            register_music_collation(&validation_connection, &validation_spec, Arc::default())?;
         }
         validation_connection.busy_timeout(Duration::from_secs(5))?;
         let check: String = validation_connection
@@ -1820,12 +1865,22 @@ impl Database {
         Ok(())
     }
 
+    /// Narrow every list, count and grouping to local or remote sources (or both). Playback still resolves all sources.
+    pub fn set_source_scope(&self, scope: LibrarySourceScope) {
+        self.source_scope.store(scope as u8, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn source_scope(&self) -> LibrarySourceScope {
+        LibrarySourceScope::from_code(self.source_scope.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
     fn from_connection_with_collation(
         connection: Connection,
         collation_spec: MusicCollationSpec,
     ) -> Result<Self, DatabaseError> {
         register_natural_title_collation(&connection)?;
-        register_music_collation(&connection, &collation_spec)?;
+        let source_scope = Arc::<std::sync::atomic::AtomicU8>::default();
+        register_music_collation(&connection, &collation_spec, Arc::clone(&source_scope))?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -1833,6 +1888,7 @@ impl Database {
             connection: Mutex::new(connection),
             collators: collation_spec.build_collators(),
             collation_spec,
+            source_scope,
         };
         database.migrate()?;
         database.backfill_missing_title_sort_keys()?;
@@ -2472,7 +2528,7 @@ impl Database {
             TrackSortField::Artist => QuickIndexKind::Text.label_sql("COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '')"),
             TrackSortField::Album => QuickIndexKind::Text.label_sql("COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')"),
             TrackSortField::Year => QuickIndexKind::Year.label_sql("COALESCE(NULLIF(trim(t.release_date), ''), CAST(t.year AS TEXT))"),
-            TrackSortField::CreatedAt => added_year_label_sql("(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1)"),
+            TrackSortField::CreatedAt => added_year_label_sql("(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=t.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))"),
             TrackSortField::ModifiedAt => added_year_label_sql(TRACK_MODIFIED_AT_SQL),
             TrackSortField::AudioFormat => QuickIndexKind::Format.label_sql("t.codec"),
             TrackSortField::Source => QuickIndexKind::Exact.label_sql(TRACK_SOURCE_NAME_SQL),
@@ -2485,7 +2541,7 @@ impl Database {
                        COUNT(*) OVER () AS total_count
                 FROM tracks t
                 WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                              ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                              ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
                   AND (?1 IS NULL OR EXISTS (SELECT 1 FROM json_each(?1) term
                        WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
                           OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
@@ -2743,7 +2799,7 @@ impl Database {
                     WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
                           IN (SELECT value FROM json_each(?1))
                       AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                                  ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                                  ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
                 ), disc_counts AS (
                     SELECT disc_number, COUNT(*) AS count
                     FROM visible WHERE disc_number IS NOT NULL GROUP BY disc_number
@@ -2835,7 +2891,7 @@ impl Database {
                     WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
                           IN (SELECT value FROM json_each(?1))
                       AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                                  ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                                  ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
                 ), variants AS (
                     SELECT DISTINCT v.track_id, trim(a.value) AS name
                     FROM visible v JOIN json_each(music_split_artists_json(v.artist)) a
@@ -2917,7 +2973,7 @@ impl Database {
                 FROM tracks t
                 LEFT JOIN track_playback_statistics s ON s.track_id=t.track_id
                 WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                              ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                              ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
                 GROUP BY COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '')
              ), mapped AS (
                 SELECT f.original, f.album_name,
@@ -3101,7 +3157,7 @@ impl Database {
              WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
                    IN (SELECT value FROM json_each(?1))
                AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)",
+                           ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)",
             [&names_json],
             |row| row.get::<_, i64>(0),
         )?.max(0) as u64;
@@ -3115,7 +3171,7 @@ impl Database {
                            IN (SELECT value FROM json_each(?1))
                        AND t.disc_number >= 2
                        AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                                   ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                                   ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
                  )",
                 [&names_json],
                 |row| row.get::<_, bool>(0),
@@ -3207,7 +3263,7 @@ impl Database {
             "SELECT t.track_id, m.locator_kind, m.locator_encoding, m.locator_data
              FROM tracks t
              JOIN source_mappings m ON m.track_id=t.track_id
-             JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1
+             JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind)
              WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
                    IN (SELECT value FROM json_each(?1))
              ORDER BY COALESCE(t.disc_number, 2147483647),
@@ -3295,7 +3351,7 @@ impl Database {
                        COALESCE(t.duration_ms, 0) AS duration_ms
                 FROM tracks t
                 WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                              ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                              ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
              ), expanded AS (
                 SELECT v.track_id, COALESCE(a.value, '') AS artist_name,
                        CASE WHEN a.value IS NULL THEN 'artist:unmarked'
@@ -4150,10 +4206,10 @@ impl Database {
             PlaylistSortField::Year => QuickIndexKind::Year
                 .label_sql("COALESCE(NULLIF(trim(t.release_date), ''), CAST(t.year AS TEXT))"),
             PlaylistSortField::CreatedAt => added_year_label_sql(
-                "(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
+                "(SELECT MIN(m.created_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))",
             ),
             PlaylistSortField::ModifiedAt => added_year_label_sql(
-                "(SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1)",
+                "(SELECT MAX(m.modified_at_utc_ms) FROM source_mappings m JOIN library_roots r ON r.source_id=m.source_id WHERE m.track_id=e.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind))",
             ),
             PlaylistSortField::AudioFormat => QuickIndexKind::Format.label_sql("t.codec"),
             _ => unreachable!("only year, added, modified and format groups come here"),
@@ -4504,7 +4560,7 @@ impl Database {
             "SELECT t.track_id
              FROM tracks t
              WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                           ON r.source_id=m.source_id AND r.enabled=1 WHERE m.track_id=t.track_id)
+                           ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind) WHERE m.track_id=t.track_id)
                AND (?1 IS NULL OR EXISTS (
                     SELECT 1 FROM json_each(?1) term
                     WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
@@ -4572,7 +4628,7 @@ impl Database {
                AND EXISTS (
                    SELECT 1 FROM source_mappings m
                    JOIN library_roots r ON r.source_id=m.source_id
-                   WHERE m.track_id=e.track_id AND r.enabled=1
+                   WHERE m.track_id=e.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind)
                )
              ORDER BY e.position",
         )?;
@@ -10696,6 +10752,39 @@ mod tests {
         assert!(db.get_remote_lyric_cache(track, 10, None).unwrap().is_some());
         db.clear_remote_lyric_cache(track).unwrap();
         assert_eq!(db.get_remote_lyric_cache(track, 10, None).unwrap(), None);
+    }
+
+    #[test]
+    fn the_source_scope_narrows_lists_counts_and_groups_to_local_or_remote_songs() {
+        let mut db = Database::open_in_memory().expect("database");
+        let nas = add_root(&db, MediaSourceKind::Remote, "NAS / Music");
+        let local = add_root(&db, MediaSourceKind::WindowsFilesystem, "Music");
+        for (root, count, base) in [(&nas, 2_usize, "n"), (&local, 3, "l")] {
+            let records: Vec<_> = (0..count)
+                .map(|index| record(root, &format!("{base}-{index}"), &format!("{base}-{index}"), &format!("{base} title {index}"), 100, 1_000))
+                .collect();
+            apply(&mut db, root, SourceScanState::Complete, &records, &records, 2_000);
+        }
+        let query = ListTracksQuery {
+            offset: 0,
+            limit: 100,
+            query: None,
+            field_filter: None,
+            sort: TrackListSort { field: TrackSortField::Title, direction: TrackSortDirection::Asc },
+        };
+        let titles = |db: &Database| -> Vec<String> {
+            db.list_tracks_page(query.clone()).expect("page").items.iter().map(|t| t.title.clone().unwrap_or_default()).collect()
+        };
+        use crate::LibrarySourceScope;
+        assert_eq!(db.source_scope(), LibrarySourceScope::All);
+        assert_eq!(titles(&db).len(), 5);
+        db.set_source_scope(LibrarySourceScope::Local);
+        assert_eq!(titles(&db), ["l title 0", "l title 1", "l title 2"]);
+        db.set_source_scope(LibrarySourceScope::Remote);
+        assert_eq!(titles(&db), ["n title 0", "n title 1"]);
+        assert_eq!(db.list_tracks_page(query.clone()).expect("page").total_count, 2);
+        db.set_source_scope(LibrarySourceScope::All);
+        assert_eq!(titles(&db).len(), 5);
     }
 
     #[test]

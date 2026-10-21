@@ -1793,6 +1793,10 @@ pub struct AppSettings {
     /// "音量同步": the chosen playback devices' real volumes move together in proportion (works all the time, in the
     /// backend, whether or not a settings UI is open).
     pub output_volume_sync: bool,
+    /// The top-bar switch that narrows the library lists to local songs, remote songs or both (kept across restarts;
+    /// the page shows the switch only while there are both kinds of source).
+    #[serde(default)]
+    pub library_source_scope: player_db::LibrarySourceScope,
     /// Now Playing cover size remembered across restarts (shrunk only; see `CoverZoomSettings`).
     #[serde(default)]
     pub cover_zoom: CoverZoomSettings,
@@ -1836,6 +1840,7 @@ impl Default for AppSettings {
             output_presets: default_output_presets(),
             output_exclusive: false,
             output_volume_sync: true,
+            library_source_scope: player_db::LibrarySourceScope::All,
             cover_zoom: CoverZoomSettings::default(),
             taskbar_lyrics: TaskbarLyricsSettings::default(),
             language: UiLanguage::default(),
@@ -2319,6 +2324,7 @@ struct RawSettings {
     output_presets: Option<serde_json::Value>,
     output_exclusive: Option<bool>,
     output_volume_sync: Option<bool>,
+    library_source_scope: Option<serde_json::Value>,
     cover_zoom: Option<serde_json::Value>,
     taskbar_lyrics: Option<serde_json::Value>,
     language: Option<serde_json::Value>,
@@ -2392,6 +2398,10 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         output_presets: lenient_output_presets(raw.output_presets),
         output_exclusive: raw.output_exclusive.unwrap_or(false),
         output_volume_sync: raw.output_volume_sync.unwrap_or(true),
+        library_source_scope: raw
+            .library_source_scope
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default(),
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
         language: lenient_language(raw.language),

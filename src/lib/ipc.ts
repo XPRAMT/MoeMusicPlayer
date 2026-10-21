@@ -1106,6 +1106,14 @@ interface IpcContract {
     args: { query: string | null; queryAlternates: string[]; sort: LibraryListSort; offset: number; limit: number; artistNames: string[] };
     result: TrackPage;
   };
+  settings_get_library_source_scope: {
+    args: Record<string, never>;
+    result: 'local' | 'all' | 'remote';
+  };
+  settings_set_library_source_scope: {
+    args: { scope: 'local' | 'all' | 'remote' };
+    result: 'local' | 'all' | 'remote';
+  };
   library_list_sources: {
     args: Record<string, never>;
     result: LibrarySource[];

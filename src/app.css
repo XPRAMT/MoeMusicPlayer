@@ -1309,6 +1309,21 @@ input:focus-visible {
   gap: 14px;
 }
 
+/* The song-source switch sits in the middle of the top bar; the title gives way before it reaches it. */
+.topbar { position: relative; }
+.topbar-source-scope {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+.topbar.has-source-scope-switch .topbar-title-block { max-width: calc(50% - 74px - var(--topbar-gap)); }
+@media (max-width: 700px) {
+  /* Too narrow to centre it: it sits between the title and the buttons. */
+  .topbar-source-scope { position: static; flex: 0 0 auto; transform: none; margin-left: auto; }
+  .topbar.has-source-scope-switch .topbar-title-block { max-width: none; }
+}
+
 .soft-button.topbar-refresh-button {
   gap: 6px;
   padding: 0 12px;
