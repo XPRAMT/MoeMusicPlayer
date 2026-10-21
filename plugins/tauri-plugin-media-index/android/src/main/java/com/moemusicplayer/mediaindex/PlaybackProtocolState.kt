@@ -51,6 +51,7 @@ internal object PlaybackEventEnvelope {
         positionMs: Long,
         durationMs: Long?,
         volume: Double,
+        playWhenReady: Boolean,
         error: String?,
     ): JSONObject = JSONObject().apply {
         put("serviceGeneration", serviceGeneration)
@@ -61,6 +62,7 @@ internal object PlaybackEventEnvelope {
         put("positionMs", positionMs)
         put("durationMs", durationMs ?: JSONObject.NULL)
         put("volume", volume)
+        put("playWhenReady", playWhenReady)
         put("error", error ?: JSONObject.NULL)
     }
 }

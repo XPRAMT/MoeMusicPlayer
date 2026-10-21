@@ -86,6 +86,7 @@ pub(crate) enum PlaybackAction {
     Previous,
     Seek(u64),
     SetVolume(f64),
+    SetFloatOutput(bool),
     SetRepeat(RepeatMode),
     SetShuffle(bool),
     ReorderQueue {
@@ -109,6 +110,8 @@ struct NativePlaybackSnapshot {
     track_id: Option<String>,
     media_key: Option<String>,
     state: String,
+    #[serde(default)]
+    play_when_ready: bool,
     position_ms: u64,
     duration_ms: Option<u64>,
     volume: f64,
@@ -123,6 +126,7 @@ impl Default for NativePlaybackSnapshot {
             track_id: None,
             media_key: None,
             state: "empty".into(),
+            play_when_ready: false,
             position_ms: 0,
             duration_ms: None,
             volume: 1.0,
@@ -155,6 +159,7 @@ struct NativeCommand {
     can_next: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     can_previous: Option<bool>,
+    float_output: bool,
 }
 
 /// Covers larger than this are not sent to the service (the notification shows a small picture anyway).
@@ -243,6 +248,7 @@ impl AndroidPlaybackService {
         database_path: &Path,
         shuffle: bool,
         repeat_mode: RepeatMode,
+        float_output: bool,
         resume: ResumeHook,
     ) -> Result<Self, String> {
         if let Some(existing) = PROCESS_SERVICE.get() {
@@ -293,6 +299,7 @@ impl AndroidPlaybackService {
                     runtime_id,
                     shuffle,
                     repeat_mode,
+                    float_output,
                 );
                 actor.resume_on_restore = resume.initial;
                 actor.resume_reported.set(resume.initial);
@@ -388,6 +395,7 @@ struct AndroidActor {
     runtime_id: uuid::Uuid,
     shuffle: bool,
     repeat_mode: RepeatMode,
+    float_output: bool,
     current_track: Option<TrackSummary>,
     restored_position_ms: Option<u64>,
     queue: Option<PlaybackQueue>,
@@ -415,6 +423,7 @@ impl AndroidActor {
         runtime_id: uuid::Uuid,
         shuffle: bool,
         repeat_mode: RepeatMode,
+        float_output: bool,
     ) -> Self {
         Self {
             database,
@@ -425,6 +434,7 @@ impl AndroidActor {
             runtime_id,
             shuffle,
             repeat_mode,
+            float_output,
             current_track: None,
             restored_position_ms: None,
             queue: None,
@@ -507,6 +517,7 @@ impl AndroidActor {
                 }
                 self.native_command(request_id, "set_volume", None, None, Some(volume))
             }
+            PlaybackAction::SetFloatOutput(enabled) => self.set_float_output(request_id, enabled),
             PlaybackAction::Next { natural } => self.navigate(request_id, true, natural),
             PlaybackAction::Previous => self.navigate(request_id, false, false),
             PlaybackAction::SetRepeat(mode) => {
@@ -895,6 +906,52 @@ impl AndroidActor {
         self.publish_snapshot_checked(false)
     }
 
+    fn set_float_output(
+        &mut self,
+        request_id: &str,
+        enabled: bool,
+    ) -> Result<PlaybackSnapshot, String> {
+        if self.float_output == enabled {
+            return Ok(self.publish_snapshot());
+        }
+        self.float_output = enabled;
+        let Some(track_id) = self
+            .native
+            .track_id
+            .as_deref()
+            .and_then(|id| TrackId::parse(id).ok())
+        else {
+            return Ok(self.publish_snapshot());
+        };
+        let Some(track) = self.current_track.clone() else {
+            return Ok(self.publish_snapshot());
+        };
+        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
+            .map_err(|error| error.to_string())?;
+        let position_ms = self.native.position_ms;
+        let play_when_ready = self.native.play_when_ready;
+        self.meter.seal_segment(&self.native, Instant::now());
+        self.flush_statistics()?;
+        let command = self.new_command(
+            request_id,
+            "load",
+            Some(track_id.to_string()),
+            Some(uri),
+            Some(self.native_metadata(&track)),
+            Some(position_ms),
+            None,
+            Some(play_when_ready),
+            None,
+            None,
+        );
+        self.native = self.transact(command)?;
+        self.current_track = Some(track);
+        self.meter.reset_segment(&self.native, Instant::now());
+        self.checkpoint_position(true)?;
+        self.last_flush = Instant::now();
+        self.publish_snapshot_checked(false)
+    }
+
     fn update_capabilities(&mut self, request_id: &str) -> Result<(), String> {
         let can_next = self.queue.as_ref().is_some_and(PlaybackQueue::can_next);
         let can_previous = self.queue.as_ref().is_some_and(PlaybackQueue::can_previous);
@@ -947,6 +1004,7 @@ impl AndroidActor {
             play_when_ready,
             can_next,
             can_previous,
+            float_output: self.float_output,
         }
     }
 
@@ -1114,6 +1172,7 @@ impl AndroidActor {
             position_ms: 0,
             duration_ms: None,
             volume: self.native.volume,
+            play_when_ready: false,
             error: Some(error.to_owned()),
         };
         self.meter.reset_segment(&self.native, Instant::now());
@@ -1854,6 +1913,7 @@ mod tests {
             play_when_ready: Some(false),
             can_next: None,
             can_previous: None,
+            float_output: false,
         };
         let json = serde_json::to_value(command).expect("serialize command");
         assert_eq!(
@@ -1862,6 +1922,7 @@ mod tests {
         );
         assert_eq!(json["trackId"], "track-id");
         assert_eq!(json["playWhenReady"], false);
+        assert_eq!(json["floatOutput"], false);
         assert_eq!(json["positionMs"], 400);
         assert_eq!(
             json["metadata"]["artworkUri"],
@@ -1873,8 +1934,8 @@ mod tests {
     fn parses_kotlin_service_ready_ack_snapshot_and_ended_json_fixtures() {
         let fixtures = [
             r#"{"v":1,"kind":"service_ready","eventId":"1","serviceGeneration":2,"snapshot":{"serviceGeneration":2,"loadInstance":0,"trackId":null,"mediaKey":null,"state":"empty","positionMs":0,"durationMs":null,"volume":1.0,"error":null}}"#,
-            r#"{"v":1,"kind":"ack","eventId":"3","commandId":"load-9","requestId":"8","serviceGeneration":2,"snapshot":{"serviceGeneration":2,"loadInstance":1,"trackId":"track-1","mediaKey":"load-9","state":"paused","positionMs":1200,"durationMs":5000,"volume":1.0,"error":null}}"#,
-            r#"{"v":1,"kind":"snapshot","eventId":"4","serviceGeneration":2,"snapshot":{"serviceGeneration":2,"loadInstance":1,"trackId":"track-1","mediaKey":"load-9","state":"playing","positionMs":1450,"durationMs":5000,"volume":1.0,"error":null}}"#,
+            r#"{"v":1,"kind":"ack","eventId":"3","commandId":"load-9","requestId":"8","serviceGeneration":2,"snapshot":{"serviceGeneration":2,"loadInstance":1,"trackId":"track-1","mediaKey":"load-9","state":"paused","positionMs":1200,"durationMs":5000,"volume":1.0,"playWhenReady":false,"error":null}}"#,
+            r#"{"v":1,"kind":"snapshot","eventId":"4","serviceGeneration":2,"snapshot":{"serviceGeneration":2,"loadInstance":1,"trackId":"track-1","mediaKey":"load-9","state":"playing","positionMs":1450,"durationMs":5000,"volume":1.0,"playWhenReady":true,"error":null}}"#,
             r#"{"v":1,"kind":"ended","eventId":"5","serviceGeneration":2,"trackId":"track-1","mediaKey":"load-9","loadInstance":1}"#,
         ];
         let ready: NativeEvent =
@@ -1898,6 +1959,11 @@ mod tests {
         let ended: NativeEvent = serde_json::from_str(fixtures[3]).expect("Kotlin ended fixture");
         assert_eq!(ended.load_instance, Some(1));
         assert_eq!(ended.media_key.as_deref(), Some("load-9"));
+        assert!(serde_json::from_str::<NativeEvent>(fixtures[2])
+            .unwrap()
+            .snapshot
+            .unwrap()
+            .play_when_ready);
     }
 
     #[test]
@@ -1909,6 +1975,7 @@ mod tests {
             track_id: Some(track_id.clone()),
             media_key: Some("load-4".into()),
             state: "playing".into(),
+            play_when_ready: true,
             position_ms: 1_000,
             duration_ms: Some(5_000),
             volume: 1.0,
@@ -1962,6 +2029,7 @@ mod tests {
             track_id: Some("track-a".into()),
             media_key: Some("load-7".into()),
             state: "playing".into(),
+            play_when_ready: true,
             position_ms: 900,
             duration_ms: Some(4000),
             volume: 1.0,
@@ -1981,6 +2049,7 @@ mod tests {
             play_when_ready: Some(false),
             can_next: None,
             can_previous: None,
+            float_output: false,
         };
         let delayed_old_slot = NativePlaybackSnapshot {
             media_key: Some("load-7".into()),
@@ -2040,6 +2109,7 @@ mod tests {
             track_id: Some(track_id.to_string()),
             media_key: Some("load-1".into()),
             state: "playing".into(),
+            play_when_ready: true,
             position_ms,
             duration_ms: Some(10_000),
             volume: 1.0,
@@ -2065,6 +2135,7 @@ mod tests {
             track_id: Some(track_id.to_string()),
             media_key: Some("load-1".into()),
             state: state.into(),
+            play_when_ready: state == "playing",
             position_ms,
             duration_ms: Some(10_000),
             volume: 1.0,

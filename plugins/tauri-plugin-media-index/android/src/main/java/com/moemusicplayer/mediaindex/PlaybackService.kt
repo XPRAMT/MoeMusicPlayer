@@ -65,6 +65,7 @@ class PlaybackService : MediaSessionService() {
     private var artworkPreparationCommandId: String? = null
     private var artworkPreparationFuture: java.util.concurrent.Future<*>? = null
     @Volatile private var playbackActive = false
+    private var floatOutputPolicy = false
     private val loadAckTimeout = Runnable {
         val ack = pendingLoadAck ?: return@Runnable
         if (!loadFence.cancel(expectedLoadCommandId)) return@Runnable
@@ -103,7 +104,20 @@ class PlaybackService : MediaSessionService() {
         // DSD (.dsf) tracks arrive as moedsd:// URIs and WavPack (.wv) tracks as moewv:// URIs; both are served as
         // 32-bit float WAV by the Rust converters (ADR 0016, ADR 0025), so float PCM output is enabled for them.
         val dataSources = DsdAwareDataSourceFactory(DefaultDataSource.Factory(this))
-        val renderers = DefaultRenderersFactory(this).setEnableAudioFloatOutput(true)
+        // Media3 keeps its existing native float path for 24/32-bit integer and float PCM. The optional chain
+        // converter covers the remaining PCM encodings without bypassing the normal 16-bit playback processing.
+        val renderers = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: android.content.Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
+            ): androidx.media3.exoplayer.audio.AudioSink =
+                androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .setAudioProcessorChain(FloatAwareAudioProcessorChain())
+                    .build()
+        }.setEnableAudioFloatOutput(true)
         val player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources, extractors))
             .setAudioAttributes(
@@ -271,6 +285,22 @@ class PlaybackService : MediaSessionService() {
         }
         val commandId = command.optString("commandId")
         val requestId = command.optString("requestId")
+        // Rust sends the stored "always float32" setting with every command. The sink reads it while configuring a
+        // new stream, so the settings action reloads the current item to rebuild its output format.
+        val floatOutput = command.optBoolean("floatOutput", false)
+        FloatOutputSwitch.enabled = floatOutput
+        val policyChanged = floatOutput != floatOutputPolicy
+        if (shouldPreservePositionForFloatOutputChange(
+                command.optString("op"),
+                policyChanged,
+                player.currentMediaItem?.mediaId,
+                command.optString("trackId").takeIf { command.has("trackId") },
+            )
+        ) {
+            command.put("positionMs", player.currentPosition.coerceAtLeast(0L))
+            command.put("playWhenReady", player.playWhenReady)
+        }
+        floatOutputPolicy = floatOutput
         val ack = JSONObject().apply {
             put("v", 1)
             put("kind", "ack")
@@ -614,6 +644,7 @@ class PlaybackService : MediaSessionService() {
             positionMs = current.currentPosition.coerceAtLeast(0L),
             durationMs = current.duration.takeIf { it >= 0L },
             volume = current.volume.toDouble(),
+            playWhenReady = current.playWhenReady,
             error = current.playerError?.message,
         )
     }
@@ -627,6 +658,7 @@ class PlaybackService : MediaSessionService() {
         positionMs = 0L,
         durationMs = null,
         volume = 1.0,
+        playWhenReady = false,
         error = null,
     )
 

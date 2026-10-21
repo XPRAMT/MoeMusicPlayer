@@ -49,6 +49,7 @@ class PlaybackProtocolStateTest {
             positionMs = 1234L,
             durationMs = 9000L,
             volume = 0.75,
+            playWhenReady = false,
             error = null,
         )
         val ack = PlaybackEventEnvelope.sequence(
@@ -74,6 +75,7 @@ class PlaybackProtocolStateTest {
         assertEquals(7L, decodedSnapshot.getLong("serviceGeneration"))
         assertEquals("track-7", decodedSnapshot.getString("trackId"))
         assertEquals("command-12", decodedSnapshot.getString("mediaKey"))
+        assertFalse(decodedSnapshot.getBoolean("playWhenReady"))
         assertTrue(decoded.get("eventId") is String)
         assertTrue(decoded.get("serviceGeneration") is Number)
         assertTrue(decodedSnapshot.get("loadInstance") is Number)

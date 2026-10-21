@@ -944,6 +944,14 @@ interface IpcContract {
     args: Record<string, never>;
     result: boolean;
   };
+  settings_get_android_float_output: {
+    args: Record<string, never>;
+    result: boolean;
+  };
+  settings_set_android_float_output: {
+    args: { enabled: boolean };
+    result: boolean;
+  };
   settings_set_output_volume_sync: {
     args: { enabled: boolean };
     result: boolean;

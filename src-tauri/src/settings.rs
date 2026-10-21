@@ -1808,6 +1808,10 @@ pub struct AppSettings {
     /// Interface language (Settings → main).
     #[serde(default)]
     pub language: UiLanguage,
+    /// Android: convert all PCM to float32 before it reaches the audio track ("一律以 float32 輸出"). Off by default;
+    /// changing it reloads the current track at its current position and play/pause intent.
+    #[serde(default)]
+    pub android_float_output: bool,
 }
 
 impl Default for AppSettings {
@@ -1846,6 +1850,7 @@ impl Default for AppSettings {
             cover_zoom: CoverZoomSettings::default(),
             taskbar_lyrics: TaskbarLyricsSettings::default(),
             language: UiLanguage::default(),
+            android_float_output: false,
         }
     }
 }
@@ -2330,6 +2335,7 @@ struct RawSettings {
     cover_zoom: Option<serde_json::Value>,
     taskbar_lyrics: Option<serde_json::Value>,
     language: Option<serde_json::Value>,
+    android_float_output: Option<bool>,
 }
 
 /// Whether a settings file can be read as it is (the backup import checks a file before it is ever used).
@@ -2407,6 +2413,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
         language: lenient_language(raw.language),
+        android_float_output: raw.android_float_output.unwrap_or(false),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -2912,6 +2919,30 @@ mod tests {
         let persisted: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(persisted["outputVolumeSync"], false);
+    }
+
+    #[test]
+    fn android_float_output_is_off_by_default_and_survives_restart() {
+        assert!(!AppSettings::default().android_float_output);
+        let directory = test_directory("android-float-output");
+        let path = directory.join("settings.json");
+        std::fs::write(&path, br#"{"schemaVersion":25}"#).expect("write legacy settings");
+        let legacy = SettingsStore::open(&path, AppSettings::default()).expect("load legacy settings");
+        assert!(!legacy.snapshot().unwrap().android_float_output);
+        drop(legacy);
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        assert!(!store.snapshot().unwrap().android_float_output);
+        store
+            .update(|settings| {
+                settings.android_float_output = true;
+                Ok(())
+            })
+            .expect("persist");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert!(reopened.snapshot().unwrap().android_float_output);
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["androidFloatOutput"], true);
     }
 
     #[test]
