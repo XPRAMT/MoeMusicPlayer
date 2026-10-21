@@ -1,4 +1,4 @@
-//! Opt-in live integration check for NDR32 SRVSVC share enumeration against Samba.
+//! Opt-in live integration check for the production SMB share-listing path and NDR32 SRVSVC against Samba.
 //! Credentials are read only from the process environment and are never printed.
 
 #[test]
@@ -18,22 +18,18 @@ fn samba_accepts_ndr32_and_enumerates_share_names() {
     };
     let password = zeroize::Zeroizing::new(password);
 
-    let names = player_remote::smb::list_shares_with_guest_access(
-        &host,
-        Some(port),
-        &user,
-        password.as_str(),
-        true,
-    )
-    .expect("MoeMusicPlayer share listing should succeed over NDR32");
-    eprintln!("MoeMusicPlayer list_shares status=success shares={names:?}");
+    // Exercise the same entry point used by Tauri's `remote_smb_shares` command.
+    // Guest access stays disabled for this authenticated-account integration test.
+    let names = player_remote::smb::list_shares(&host, Some(port), &user, password.as_str())
+        .expect("production MoeMusicPlayer list_shares should succeed over NDR32");
+    eprintln!("production list_shares status=success shares={names:?}");
     assert!(names.iter().any(|name| name == &expected_share));
 
     let client = smb::Client::new(smb::ClientConfig {
         connection: smb::ConnectionConfig {
             port: Some(port),
             timeout: Some(std::time::Duration::from_secs(15)),
-            allow_unsigned_guest_access: true,
+            allow_unsigned_guest_access: false,
             ..Default::default()
         },
         ..Default::default()
