@@ -91,6 +91,17 @@ impl RemoteMediaIndex {
     /// Scan the files a playlist names instead of a folder tree. `paths` are relative to the source's base folder; the
     /// result keeps the order of `paths`. A file that cannot be reached is an error of the scan, not of the playlist.
     pub fn scan_paths(&self, source_id: SourceId, paths: &[String]) -> SourceScan {
+        self.scan_paths_with_progress(source_id, paths, &mut |_, _| {})
+    }
+
+    /// As [`scan_paths`](Self::scan_paths), reporting `(looked up, to look up)` about every 100 ms while the songs are
+    /// looked up on the server (on the calling thread, so the callback needs no `Sync`).
+    pub fn scan_paths_with_progress(
+        &self,
+        source_id: SourceId,
+        paths: &[String],
+        on_progress: &mut dyn FnMut(u64, u64),
+    ) -> SourceScan {
         let mut scan = SourceScan {
             source_id,
             state: SourceScanState::Unavailable {
@@ -117,21 +128,37 @@ impl RemoteMediaIndex {
             .collect();
         let results = Mutex::new(vec![None; wanted.len()]);
         let next = AtomicUsize::new(0);
+        let finished = AtomicUsize::new(0);
+        let total = wanted.len() as u64;
         std::thread::scope(|scope| {
-            for _ in 0..LIST_WORKERS.min(wanted.len()) {
-                scope.spawn(|| loop {
-                    let index = next.fetch_add(1, Ordering::SeqCst);
-                    let Some(path) = wanted.get(index) else {
-                        return;
-                    };
-                    let outcome = resolved
-                        .fs
-                        .stat(&join_path(&resolved.base_path, path));
-                    results.lock().unwrap_or_else(PoisonError::into_inner)[index] =
-                        Some(outcome);
-                });
+            let workers: Vec<_> = (0..LIST_WORKERS.min(wanted.len()))
+                .map(|_| {
+                    scope.spawn(|| loop {
+                        let index = next.fetch_add(1, Ordering::SeqCst);
+                        let Some(path) = wanted.get(index) else {
+                            return;
+                        };
+                        let outcome = resolved
+                            .fs
+                            .stat(&join_path(&resolved.base_path, path));
+                        results.lock().unwrap_or_else(PoisonError::into_inner)[index] =
+                            Some(outcome);
+                        finished.fetch_add(1, Ordering::SeqCst);
+                    })
+                })
+                .collect();
+            // Report while the workers run: the server is slow, so a long list would otherwise sit at zero until done.
+            let mut reported = 0;
+            while workers.iter().any(|worker| !worker.is_finished()) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let done = finished.load(Ordering::SeqCst) as u64;
+                if done != reported {
+                    reported = done;
+                    on_progress(done.min(total), total);
+                }
             }
         });
+        on_progress(total, total);
         let results = results.into_inner().unwrap_or_else(PoisonError::into_inner);
         let mut seen = std::collections::HashSet::new();
         for (path, outcome) in wanted.into_iter().zip(results) {

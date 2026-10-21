@@ -407,7 +407,21 @@ pub(crate) fn sync_remote_playlist_source(
         outcome: None,
     });
     let reader = RemoteMediaIndex::new(Arc::clone(&resolver));
-    let scan = reader.scan_paths(source.id, &own_paths);
+    // The lookup is the long part for a long list: the count moves as songs are found on the server.
+    let scan = reader.scan_paths_with_progress(source.id, &own_paths, &mut |done, total| {
+        progress(SyncProgress {
+            source_id: source.id,
+            stage: SyncProgressStage::Enumerating,
+            processed: done,
+            total: Some(total),
+            unit: SyncProgressUnit::Tracks,
+            observed: 0,
+            metadata_reads: 0,
+            unchanged: 0,
+            error_count: 0,
+            outcome: None,
+        });
+    });
     let sidecars = reader.lyric_sidecars_beside(source.id, &scan.tracks);
     let mut index = PlaylistIndex {
         scan: Some(scan),

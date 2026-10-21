@@ -124,6 +124,32 @@ fn scans_the_whole_tree_and_skips_hidden_and_non_audio() {
 }
 
 #[test]
+fn looking_songs_up_by_path_reports_how_far_it_got_and_ends_complete() {
+    let tree = make_tree("progress");
+    let index = index_over(Arc::new(DirFs::new(&tree)), "");
+    let wanted: Vec<String> = [
+        "Artist/Album One/01 s16.wv",
+        "Artist/Album One/02 s24.wv",
+        "Artist/Album Two/03 lyrics.wv",
+        "Other/f32.wv",
+        "notes/not-audio.txt",
+    ]
+    .iter()
+    .map(|path| (*path).to_owned())
+    .collect();
+    let mut reports = Vec::new();
+    let scan = index.scan_paths_with_progress(SourceId::new(), &wanted, &mut |done, total| {
+        reports.push((done, total));
+    });
+    assert_eq!(scan.tracks.len(), 4);
+    // Only the audio files are looked up; the count never goes backwards and finishes at the total.
+    assert_eq!(reports.last(), Some(&(4, 4)), "{reports:?}");
+    assert!(reports.windows(2).all(|pair| pair[0].0 <= pair[1].0), "{reports:?}");
+    assert!(reports.iter().all(|(_, total)| *total == 4), "{reports:?}");
+    let _ = fs::remove_dir_all(tree);
+}
+
+#[test]
 fn a_source_rooted_in_a_folder_lists_paths_relative_to_it() {
     let tree = make_tree("base");
     let mut index = index_over(Arc::new(DirFs::new(&tree)), "Artist");
