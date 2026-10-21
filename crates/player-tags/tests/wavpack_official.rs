@@ -50,7 +50,7 @@ fn decode(wv: &Path) -> Vec<f32> {
 fn official_files_have_readable_tags_and_covers() {
     for (name, wv, _, _) in rows() {
         let details = read_details(&wv).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!(details.format, "WV", "{name}");
+        assert!(details.format.starts_with("WavPack "), "{name}: {}", details.format);
         assert_eq!(details.tag_format, "APEv2", "{name}");
         assert_eq!(details.fields.title, name, "{name}");
         assert_eq!(details.fields.artist, "MoeTest", "{name}");

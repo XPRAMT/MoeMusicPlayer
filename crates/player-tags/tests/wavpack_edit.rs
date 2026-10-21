@@ -48,7 +48,7 @@ fn wavpack_details_are_editable_and_the_audio_survives_an_edit() {
 
     let details = read_details(&path).unwrap();
     assert!(!details.read_only);
-    assert_eq!(details.format, "WV");
+    assert_eq!(details.format, "WavPack Lossless");
     assert_eq!(details.properties.channels, Some(2));
     assert_eq!(details.properties.sample_rate, Some(44_100));
 
@@ -108,4 +108,13 @@ fn wavpack_spectrogram_shows_the_tone() {
         render_spectrogram(&fixture("s16.wv"), options, &AtomicBool::new(false)).unwrap();
     assert_eq!(spectrogram.sample_rate, 44_100);
     assert!(spectrogram.png.starts_with(&[0x89, b'P', b'N', b'G']));
+}
+
+#[test]
+fn the_details_panel_names_the_kind_of_wavpack_file_in_full() {
+    let reference = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../player-wavpack/tests/reference/hybrid_lossy_int16_stereo.wv");
+    assert_eq!(read_details(&fixture("dsd64.wv")).unwrap().format, "WavPack DSD");
+    assert_eq!(read_details(&fixture("s16.wv")).unwrap().format, "WavPack Lossless");
+    assert_eq!(read_details(&reference).unwrap().format, "WavPack Loss");
 }

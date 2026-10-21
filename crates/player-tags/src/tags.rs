@@ -278,6 +278,17 @@ fn fill_dsf_details(details: &mut TrackDetails, path: &Path) -> Result<(), Strin
     Ok(())
 }
 
+/// The full name of a WavPack file's kind (the library lists use the short labels WVDSD, WVLL and WVL): DSD, lossless,
+/// or lossy (a hybrid file without its correction file). A file that cannot be read keeps the plain `WV`.
+fn wavpack_format_name(path: &Path) -> String {
+    match player_wavpack::summarize(path).map(|summary| summary.codec) {
+        Some("WVDSD") => "WavPack DSD".to_owned(),
+        Some("WVLL") => "WavPack Lossless".to_owned(),
+        Some("WVL") => "WavPack Loss".to_owned(),
+        _ => "WV".to_owned(),
+    }
+}
+
 /// Short uppercase container name shown in the details panel (matches the app's codec labels:
 /// MP3, FLAC, WAV, ...). MP4 audio keeps its file extension (M4A / MP4 / M4B).
 fn format_name(file_type: FileType, path: &Path) -> String {
@@ -295,7 +306,7 @@ fn format_name(file_type: FileType, path: &Path) -> String {
         FileType::Opus => "OPUS".to_owned(),
         FileType::Vorbis => "OGG".to_owned(),
         FileType::Speex => "SPEEX".to_owned(),
-        FileType::WavPack => "WV".to_owned(),
+        FileType::WavPack => wavpack_format_name(path),
         FileType::Mpc => "MPC".to_owned(),
         FileType::Mp4 if !extension.is_empty() => extension,
         FileType::Mp4 => "MP4".to_owned(),
