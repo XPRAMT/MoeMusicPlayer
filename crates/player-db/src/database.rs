@@ -3216,7 +3216,9 @@ impl Database {
         )?.max(0) as u64;
         let limit = query_limit(requested_limit);
         let database_offset = i64::try_from(offset).unwrap_or(i64::MAX);
-        let has_numbered_discs = if sort.is_none() && index_sort.is_some() {
+        // The same rule as the disc groups of `album_detail_facets`: only an album with a disc numbered 2 or more is
+        // multi-disc. Discs 0, 1 and blank are one disc, so its order (and grouping) ignores the disc number entirely.
+        let has_numbered_discs = if sort.is_none() {
             connection.query_row(
                 "SELECT EXISTS(
                      SELECT 1 FROM tracks t
@@ -3233,7 +3235,8 @@ impl Database {
             false
         };
         let order_by = sort.map(tracks_order_by_sql).unwrap_or_else(|| match index_sort {
-            Some(direction) if has_numbered_discs => {
+            index_sort if has_numbered_discs => {
+                let direction = index_sort.unwrap_or(TrackSortDirection::Asc);
                 let disc_direction = if direction == TrackSortDirection::Desc { "DESC" } else { "ASC" };
                 let track_direction = disc_direction;
                 let title_direction = disc_direction;
@@ -3245,10 +3248,9 @@ impl Database {
                      t.track_id {title_direction}"
                 )
             }
-            Some(TrackSortDirection::Desc) => "(t.disc_number IS NULL) ASC, t.disc_number DESC, \
-                (t.track_number IS NULL) ASC, t.track_number DESC, \
+            Some(TrackSortDirection::Desc) => "(t.track_number IS NULL) ASC, t.track_number DESC, \
                 COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL DESC, t.track_id DESC".to_owned(),
-            Some(TrackSortDirection::Asc) | None => "COALESCE(t.disc_number, 2147483647), COALESCE(t.track_number, 2147483647), \
+            Some(TrackSortDirection::Asc) | None => "COALESCE(t.track_number, 2147483647), \
                 COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL, t.track_id".to_owned(),
         });
         let sql = format!("{ALBUM_TRACKS_PAGE_SQL} ORDER BY {order_by} LIMIT ?2 OFFSET ?3");
@@ -8453,6 +8455,41 @@ mod tests {
             sorted_keys("played", "desc"),
             vec!["album:alpha", "album:unmarked", "album:beta"]
         );
+    }
+
+    #[test]
+    fn album_with_only_disc_zero_one_or_blank_sorts_by_track_number_alone() {
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "mixed-disc");
+        let records = [(1, Some(1)), (2, None), (3, Some(0)), (10, None), (11, Some(1)), (12, Some(0))]
+            .iter()
+            .enumerate()
+            .map(|(index, (track, disc))| {
+                let name = format!("t{track}");
+                let mut item = record(&root, &name, &name, &name, 1, index as i64 + 1);
+                let metadata = item.metadata.as_mut().unwrap();
+                metadata.album = Some("Mixed".to_owned());
+                metadata.track_number = Some(*track);
+                metadata.disc_number = *disc;
+                item
+            })
+            .collect::<Vec<_>>();
+        apply(&mut db, &root, SourceScanState::Complete, &records, &records, 5);
+        for (direction, expected) in [
+            (TrackSortDirection::Asc, vec![1, 2, 3, 10, 11, 12]),
+            (TrackSortDirection::Desc, vec![12, 11, 10, 3, 2, 1]),
+        ] {
+            let page = db
+                .list_album_tracks_page_with_index_sort(&["Mixed".into()], None, Some(direction), 0, 10)
+                .expect("album page");
+            let order = page.items.iter().map(|item| item.track_number.unwrap()).collect::<Vec<_>>();
+            assert_eq!(order, expected);
+        }
+        let plain = db.list_album_tracks_page(&["Mixed".into()], 0, 10).expect("default album page");
+        let order = plain.items.iter().map(|item| item.track_number.unwrap()).collect::<Vec<_>>();
+        assert_eq!(order, vec![1, 2, 3, 10, 11, 12]);
+        let facets = db.album_detail_facets(&["Mixed".into()]).expect("disc groups");
+        assert!(facets.quick_index_ascending.groups.is_empty() && facets.quick_index_descending.groups.is_empty());
     }
 
     #[test]
