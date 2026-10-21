@@ -132,6 +132,7 @@
   import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
   import { appTooltip } from './lib/app-tooltip.js';
   import SourceScopeSwitch from './lib/SourceScopeSwitch.svelte';
+  import { formatSyncResultLine } from './lib/sync-result-line.js';
   import { normalizeSourceScope, shouldShowSourceScopeSwitch } from './lib/source-scope.js';
   import SourceSections from './lib/SourceSections.svelte';
   import { TRACK_TEXT_OVERFLOW_CONTEXT, type TrackTextOverflowMode } from './lib/track-text-overflow-context';
@@ -2566,17 +2567,16 @@
     const sources = { ...current.sources, [event.sourceId]: event };
     const completedSources = Object.values(sources).filter((source) => source.outcome !== null);
     const isComplete = event.sourceCount > 0 && completedSources.length >= event.sourceCount;
-    const summary = isComplete ? formatProgressSummary(completedSources) : null;
+    // The result of each source is its own line; there is no summary sentence above them.
     syncProgress = {
       ...current,
       sourceCount: event.sourceCount,
       sources,
       active: !isComplete,
-      summary,
+      summary: null,
       error: null,
     };
     isSyncing = !isComplete;
-    if (summary) sourceSyncSummary = summary;
   }
 
   function handleLibrarySyncFinished(event: LibrarySyncFinishedEvent): void {
@@ -2624,7 +2624,7 @@
       ? tr("同步失敗：{0}", [event.error])
       : event.sources.length === 0
         ? tr('尚未加入可同步的音樂來源。')
-        : formatProgressSummary(Object.values(sources));
+        : null;
     syncProgress = {
       ...current,
       sourceCount: event.sourceCount,
@@ -2636,15 +2636,6 @@
     sourceSyncSummary = summary;
     if (event.error) sourceError = event.error;
     isSyncing = false;
-  }
-
-  function formatProgressSummary(sources: LibrarySyncProgressEvent[]): string {
-    const complete = sources.filter((source) => source.outcome === 'complete').length;
-    const attention = sources.filter(
-      (source) => source.outcome !== 'complete' || source.errorCount > 0,
-    ).length;
-    const errorCount = sources.reduce((sum, source) => sum + source.errorCount, 0);
-    return tr("{0} 個來源已檢查；{1} 個掃描完整，{2} 個需要留意；{3} 個項目錯誤。", [sources.length, complete, attention, errorCount]);
   }
 
   function syncProgressLine(progress: LibrarySyncProgressEvent): string {
@@ -2660,7 +2651,10 @@
               : progress.outcome === 'failed'
                 ? tr('同步失敗')
                 : tr('掃描未完成');
-      return tr("{0}；{1} 個項目錯誤", [outcome, progress.errorCount.toLocaleString()]);
+      // "同步完成；新增 n 個項目，移除 n 個項目" (the errors only when there are some). The counts arrive with the
+      // finished event; until then only the outcome shows.
+      const result = sourceSyncResults.find((source) => source.sourceId === progress.sourceId);
+      return formatSyncResultLine(outcome, result?.addedOrUpdated ?? null, result?.removedMappings ?? null, progress.errorCount);
     }
     if (progress.stage === 'enumerating') {
       const count = progress.processed.toLocaleString();
@@ -2717,14 +2711,7 @@
     try {
       const result = await invokeCommand('library_sync', {});
       sourceSyncResults = result.sources;
-      const completed = result.sources.filter((source) => source.state === 'complete').length;
-      const attention = result.sources.filter(
-        (source) => source.state !== 'complete' || source.errorCount > 0,
-      ).length;
-      const errorCount = result.sources.reduce((sum, source) => sum + source.errorCount, 0);
-      sourceSyncSummary = result.sources.length === 0
-        ? tr('尚未加入可同步的音樂來源。')
-        : tr("{0} 個來源已檢查；{1} 個掃描完整，{2} 個需要留意；{3} 個項目錯誤。", [result.sources.length, completed, attention, errorCount]);
+      sourceSyncSummary = result.sources.length === 0 ? tr('尚未加入可同步的音樂來源。') : null;
       await loadSources();
       // Playlist-file orphan cleanup may delete sidebar projections during sync.
       if (libraryReady) await loadPlaylists(undefined, true);

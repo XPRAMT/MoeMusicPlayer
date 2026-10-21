@@ -16,12 +16,10 @@
   "{0} 封面拼貼": "{0} cover mosaic",
   "{0} 秒": "{0} s",
   "{0} 首曲目": "{0} tracks",
-  "{0} 個來源已檢查；{1} 個掃描完整，{2} 個需要留意；{3} 個項目錯誤。": "{0} sources checked; {1} scanned completely, {2} need attention; {3} item errors.",
   "{0} 階段進度": "{0} stage progress",
   "{0} 聲道": "{0} ch",
   "{0}，{1} / {2} 首曲目": "{0}, {1} / {2} tracks",
   "{0}，再交由 Windows 轉換為 {1}": "{0}, then converted to {1} by Windows",
-  "{0}；{1} 個項目錯誤": "{0}; {1} item errors",
   "{0}：點一下恢復自動（依聲道數混縮或補齊）": "{0}: click to go back to automatic (mix down or fill in to match the channel count)",
   "{0}（交由 Windows 轉換為 {1}）": "{0} (converted to {1} by Windows)",
   "{0}分頁資料格式不符，請重新載入。": "The {0} page data has an unexpected format. Please reload.",
@@ -855,5 +853,9 @@
   "歌曲來源篩選": "Song source filter",
   "只顯示本地歌曲": "Local songs only",
   "混合顯示全部歌曲": "All songs",
-  "只顯示遠端歌曲": "Remote songs only"
+  "只顯示遠端歌曲": "Remote songs only",
+  "{0}；{1}個項目錯誤。": "{0}; {1} item errors.",
+  "{0}；新增{1}個項目，移除{2}個項目，{3}個項目錯誤。": "{0}; {1} items added, {2} removed, {3} item errors.",
+  "{0}；新增{1}個項目，移除{2}個項目。": "{0}; {1} items added, {2} removed.",
+  "{0}。": "{0}."
 }
