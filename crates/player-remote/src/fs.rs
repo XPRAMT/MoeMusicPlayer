@@ -260,6 +260,10 @@ pub fn open_reader(fs: &dyn RemoteFs, path: &str) -> Result<RangeReader, RemoteE
 
 /// Block size of the range reader's cache.
 pub const BLOCK_SIZE: usize = 256 * 1024;
+
+/// Reading a song's tags in a scan: the tags are in the first few tens of kilobytes (or the last), so a scan reads in small
+/// pieces: a library of thousands of songs would otherwise pull a megabyte from the server for each.
+pub const METADATA_BLOCK_SIZE: usize = 16 * 1024;
 /// Blocks kept in memory (16 MiB).
 const DEFAULT_CACHED_BLOCKS: usize = 64;
 /// A sequential reader fetches this many blocks per request, so a long track is a few big requests, not thousands of
@@ -505,6 +509,31 @@ mod tests {
     }
 
     #[test]
+    fn handles_of_a_shared_reader_have_their_own_position_and_fetch_a_block_only_once() {
+        let data = pattern(200_000);
+        let (file, requests) = MemoryFile::new(data.clone());
+        let shared = SharedRangeReader::new(RangeReader::with_geometry(Box::new(file), 16 * 1024, 64).with_read_ahead(1));
+        let mut first = shared.handle();
+        let mut second = shared.handle();
+        let mut head = [0u8; 100];
+        first.read_exact(&mut head).unwrap();
+        assert_eq!(&head[..], &data[..100]);
+        // The second handle starts at the beginning again, and its read comes from the cache.
+        let mut again = [0u8; 100];
+        second.read_exact(&mut again).unwrap();
+        assert_eq!(&again[..], &data[..100]);
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Moving one handle does not move the other.
+        first.seek(SeekFrom::End(-50)).unwrap();
+        let mut tail = [0u8; 50];
+        first.read_exact(&mut tail).unwrap();
+        assert_eq!(&tail[..], &data[data.len() - 50..]);
+        let mut next = [0u8; 100];
+        second.read_exact(&mut next).unwrap();
+        assert_eq!(&next[..], &data[100..200]);
+    }
+
+    #[test]
     fn a_sequential_read_is_a_few_big_requests_not_one_per_block() {
         let data = pattern(8 * 1024 * 1024);
         let (file, requests) = MemoryFile::new(data.clone());
@@ -737,5 +766,50 @@ mod reopening_tests {
         drop(file);
         assert!(release.is_finished());
         release.release();
+    }
+}
+
+/// One remote file read by several readers one after another (the type probe, the tag parser, a second look at one frame):
+/// they share the open file and its cached blocks, so the file is opened once and no block is fetched twice. Each handle
+/// has its own position.
+#[derive(Clone)]
+pub struct SharedRangeReader {
+    inner: std::sync::Arc<std::sync::Mutex<RangeReader>>,
+    position: u64,
+}
+
+impl SharedRangeReader {
+    pub fn new(reader: RangeReader) -> Self {
+        Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(reader)),
+            position: 0,
+        }
+    }
+
+    /// A handle on the same file and cache, positioned at the start.
+    pub fn handle(&self) -> Self {
+        Self {
+            inner: std::sync::Arc::clone(&self.inner),
+            position: 0,
+        }
+    }
+}
+
+impl Read for SharedRangeReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut reader = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        reader.seek(SeekFrom::Start(self.position))?;
+        let read = reader.read(buf)?;
+        self.position += read as u64;
+        Ok(read)
+    }
+}
+
+impl Seek for SharedRangeReader {
+    fn seek(&mut self, target: SeekFrom) -> std::io::Result<u64> {
+        let mut reader = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        reader.seek(SeekFrom::Start(self.position))?;
+        self.position = reader.seek(target)?;
+        Ok(self.position)
     }
 }

@@ -58,6 +58,11 @@ impl ByteSource for PathSource<'_> {
     }
 }
 
+/// What a library scan parses: everything but the embedded pictures.
+fn scan_parse_options() -> ParseOptions {
+    ParseOptions::new().read_cover_art(false)
+}
+
 /// Tags and audio properties of one track.
 pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, TrackMetadataError> {
     let name = source.file_name();
@@ -84,7 +89,10 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
     if let Some(file_type) = FileType::from_path(name_path) {
         probe = probe.set_file_type(file_type);
     }
+    // A scan needs the tags and the audio properties, never the pictures: a cover is megabytes, and over a network it is
+    // megabytes that cross the link for nothing (the artwork is read on its own when it is shown).
     let probe = probe
+        .options(scan_parse_options())
         .guess_file_type()
         .map_err(|error| TrackMetadataError {
             message: format!("could not identify audio file type: {error}"),
@@ -107,7 +115,7 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
             .map_err(|error| TrackMetadataError {
                 message: format!("could not rewind MPEG audio file: {error}"),
             })?;
-        let mpeg_file = MpegFile::read_from(&mut reader, ParseOptions::new()).map_err(|error| {
+        let mpeg_file = MpegFile::read_from(&mut reader, scan_parse_options()).map_err(|error| {
             TrackMetadataError {
                 message: format!("could not parse MPEG audio properties: {error}"),
             }

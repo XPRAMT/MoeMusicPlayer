@@ -14,7 +14,9 @@ use player_core::{
 };
 use player_track_metadata::{ByteSource, ReadSeek};
 
-use crate::fs::{RangeReader, RemoteError, RemoteFs};
+use crate::fs::{
+    RangeReader, RemoteError, RemoteFile, RemoteFs, SharedRangeReader, METADATA_BLOCK_SIZE,
+};
 
 /// Directories listed at the same time. A listing costs a round trip, so a few at once make a scan several times
 /// faster on a distant server without loading it.
@@ -275,6 +277,13 @@ struct RemoteByteSource {
     fs: Arc<dyn RemoteFs>,
     /// Relative to the account's root.
     path: String,
+    /// The song's open file, made at the first `open` and shared by the next ones.
+    shared: std::sync::Mutex<Option<SharedRangeReader>>,
+}
+
+/// A reader tuned for tags: small blocks, nothing read ahead.
+fn metadata_reader(file: Box<dyn RemoteFile>) -> RangeReader {
+    RangeReader::with_geometry(file, METADATA_BLOCK_SIZE, 64).with_read_ahead(2)
 }
 
 impl ByteSource for RemoteByteSource {
@@ -283,16 +292,23 @@ impl ByteSource for RemoteByteSource {
     }
 
     fn open(&self) -> std::io::Result<Box<dyn ReadSeek>> {
-        let file = self.fs.open(&self.path)?;
-        // Tags are at the start (or the end) of a file; a small read-ahead keeps a scan from pulling megabytes per
-        // track.
-        Ok(Box::new(RangeReader::new(file)))
+        // The tag readers open the song several times (the type probe, the parser, one frame again): they share one
+        // open file and one cache, and the pieces are small, because the tags are at the start (or the end) of a file.
+        let mut shared = self
+            .shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if shared.is_none() {
+            let file = self.fs.open(&self.path)?;
+            *shared = Some(SharedRangeReader::new(metadata_reader(file)));
+        }
+        Ok(Box::new(shared.as_ref().map(SharedRangeReader::handle).expect("opened above")))
     }
 
     fn open_correction(&self) -> Option<Box<dyn ReadSeek>> {
         let correction = format!("{}c", self.path);
         let file = self.fs.open(&correction).ok()?;
-        Some(Box::new(RangeReader::new(file)))
+        Some(Box::new(metadata_reader(file)))
     }
 }
 
@@ -312,6 +328,7 @@ impl MetadataReader for RemoteMediaIndex {
         let source = RemoteByteSource {
             fs: resolved.fs,
             path: join_path(&resolved.base_path, path),
+            shared: std::sync::Mutex::new(None),
         };
         // A read that fails on a slow or busy link is tried once more before it is reported (a timeout on a mobile
         // connection is common when many tracks are read at once).
