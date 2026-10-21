@@ -505,7 +505,8 @@
 <dialog bind:this={formDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-form-title" oncancel={(event) => { event.preventDefault(); closeForm(); }}>
   {#if form}
     <div class="update-dialog-content">
-      <h2 id="remote-form-title">{form.id ? tr('編輯遠端伺服器') : tr('新增遠端伺服器')}</h2>
+      <!-- While the protocol selector is hidden (flag off), the title names the only protocol: SMB. -->
+      <h2 id="remote-form-title">{WEBDAV_ENTRY_VISIBLE || form.protocol === 'webdav' ? (form.id ? tr('編輯遠端伺服器') : tr('新增遠端伺服器')) : (form.id ? tr('編輯 SMB 伺服器') : tr('新增 SMB 伺服器'))}</h2>
       <!-- New WebDAV servers are hidden while WEBDAV_ENTRY_VISIBLE is false; an existing WebDAV account still shows its (read-only) protocol. -->
       {#if WEBDAV_ENTRY_VISIBLE || form.protocol === 'webdav'}
       <div class="remote-protocol" role="group" aria-label={tr("通訊協定")}>

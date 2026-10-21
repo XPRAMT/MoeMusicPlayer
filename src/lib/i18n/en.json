@@ -810,6 +810,8 @@
   "遠端資料夾（SMB／WebDAV）": "Remote folder (SMB / WebDAV)",
   "編輯": "Edit",
   "編輯遠端伺服器": "Edit remote server",
+  "新增 SMB 伺服器": "Add SMB server",
+  "編輯 SMB 伺服器": "Edit SMB server",
   "WebDAV 路徑": "WebDAV path",
   "尚未選擇": "Not chosen yet",
   "已排除這個遠端資料夾；下次同步會略過它，並從曲庫移除其中的曲目。": "Remote folder excluded. The next sync skips it and removes its tracks from the library.",
