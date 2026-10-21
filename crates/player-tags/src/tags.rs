@@ -278,6 +278,24 @@ fn fill_dsf_details(details: &mut TrackDetails, path: &Path) -> Result<(), Strin
     Ok(())
 }
 
+/// lofty reports a DSD-in-WavPack file the way the container stores it: a tenth of the 1-bit rate (352.8 kHz for DSD64)
+/// and 8 bits per sample. The panel shows what the audio is, like it does for a DSF: the 1-bit rate, 1 bit, and the
+/// raw bit stream's rate as the bitrate.
+fn fill_wavpack_dsd_properties(properties: &mut AudioProperties, path: &Path) {
+    let Ok(reader) = player_wavpack::WavPackReader::open_path(path) else {
+        return;
+    };
+    let info = reader.info();
+    if !info.dsd {
+        return;
+    }
+    let bit_rate_kbps = info.native_sample_rate.saturating_mul(u32::from(info.channels)) / 1000;
+    properties.sample_rate = Some(info.native_sample_rate);
+    properties.bit_depth = Some(1);
+    properties.overall_bitrate_kbps = Some(bit_rate_kbps);
+    properties.audio_bitrate_kbps = Some(bit_rate_kbps);
+}
+
 /// The full name of a WavPack file's kind (the library lists use the short labels WVDSD, WVLL and WVL): DSD, lossless,
 /// or lossy (a hybrid file without its correction file). A file that cannot be read keeps the plain `WV`.
 fn wavpack_format_name(path: &Path) -> String {
@@ -358,6 +376,9 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
         bit_depth: p.bit_depth(),
         channels: p.channels(),
     };
+    if file.file_type() == FileType::WavPack {
+        fill_wavpack_dsd_properties(&mut details.properties, path);
+    }
     let target = target_tag_type(&file);
     if let Some(tag) = file
         .tag(target)

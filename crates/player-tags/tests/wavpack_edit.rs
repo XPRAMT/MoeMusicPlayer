@@ -115,6 +115,12 @@ fn the_details_panel_names_the_kind_of_wavpack_file_in_full() {
     let reference = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../player-wavpack/tests/reference/hybrid_lossy_int16_stereo.wv");
     assert_eq!(read_details(&fixture("dsd64.wv")).unwrap().format, "WavPack DSD");
+    // A DSD file shows the audio's own numbers, not the container's (352.8 kHz and 8 bit).
+    let dsd = read_details(&fixture("dsd64.wv")).unwrap().properties;
+    assert_eq!(dsd.sample_rate, Some(2_822_400));
+    assert_eq!(dsd.bit_depth, Some(1));
+    assert_eq!(dsd.audio_bitrate_kbps, Some(5_644));
+    assert_eq!(dsd.channels, Some(2));
     assert_eq!(read_details(&fixture("s16.wv")).unwrap().format, "WavPack Lossless");
     assert_eq!(read_details(&reference).unwrap().format, "WavPack Loss");
 }
