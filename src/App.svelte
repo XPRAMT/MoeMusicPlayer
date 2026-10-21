@@ -4570,7 +4570,7 @@
   </aside>
 
   <main class="workspace" inert={isNowPlayingOpen}>
-    <header class="topbar" class:has-source-scope-switch={showSourceScopeSwitch}>
+    <header class="topbar">
       <button
         bind:this={navPanelToggle}
         class="nav-panel-toggle"
@@ -4596,12 +4596,10 @@
           <p class="page-title-count">{pageTrackCountLabel}</p>
         {/if}
       </div>
-      {#if showSourceScopeSwitch}
-        <div class="topbar-source-scope">
-          <SourceScopeSwitch value={librarySourceScope} onChange={(next) => void changeLibrarySourceScope(next)} />
-        </div>
-      {/if}
       <div class="topbar-actions">
+        {#if showSourceScopeSwitch}
+          <SourceScopeSwitch value={librarySourceScope} onChange={(next) => void changeLibrarySourceScope(next)} />
+        {/if}
         <button
           class="soft-button topbar-refresh-button"
           type="button"

@@ -30,12 +30,14 @@
     return box ? getScopeIndexFromPosition(event.clientX - box.left, box.width) : 1;
   }
 
+  // The knob itself captures the pointer, so it is the one that hears the moves and the release (capturing on the track
+  // while listening on the knob left the drag unfinished and the knob stuck).
   function startDrag(event: PointerEvent): void {
-    if (event.button !== 0 || !track) return;
+    if (event.button !== 0) return;
     dragStartX = event.clientX;
     moved = false;
     dragIndex = SOURCE_SCOPES.indexOf(value);
-    try { track.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
+    try { (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
     event.preventDefault();
   }
 
@@ -49,8 +51,13 @@
     if (dragIndex === null) return;
     const target = dragIndex;
     dragIndex = null;
-    try { track?.releasePointerCapture(event.pointerId); } catch { /* gone */ }
+    try { (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId); } catch { /* gone */ }
     if (moved && event.type === 'pointerup') commit(SOURCE_SCOPES[target]);
+  }
+
+  /** A drag that lost its pointer (the system took the touch) must not leave the knob frozen. */
+  function lostCapture(): void {
+    dragIndex = null;
   }
 </script>
 
@@ -84,6 +91,7 @@
     onpointermove={moveDrag}
     onpointerup={endDrag}
     onpointercancel={endDrag}
+    onlostpointercapture={lostCapture}
   ></span>
 </div>
 
