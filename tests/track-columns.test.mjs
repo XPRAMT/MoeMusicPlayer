@@ -552,3 +552,13 @@ test('the modified column shows the file date like the created one and is off by
   assert.equal(formatTrackColumnValue('modifiedAt', { modifiedAtUtcMs: null }, () => ''), '—');
   assert.equal(definitions.find(({ id }) => id === 'modifiedAt')?.min, '6em');
 });
+
+test('every list shows the source column and playlist rows format their source name', async () => {
+  const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  assert.doesNotMatch(app, /withoutSourceColumn/);
+  assert.equal((app.match(/columns=\{trackColumnPreferences\}/g) ?? []).length >= 4, true);
+  assert.equal(normalizePlaylistSort({ field: 'source', direction: 'desc' }).field, 'source');
+  const row = { sourceName: 'smb1', modifiedAtUtcMs: 1_700_000_000_000 };
+  assert.equal(formatTrackColumnValue('source', row, () => ''), 'smb1');
+  assert.notEqual(formatTrackColumnValue('modifiedAt', row, () => ''), '—');
+});

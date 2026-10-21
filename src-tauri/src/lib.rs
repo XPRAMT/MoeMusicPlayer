@@ -181,6 +181,62 @@ mod album_artwork_responsiveness_tests {
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
+    #[test]
+    fn queue_page_rows_carry_source_name_and_modified_time() {
+        let mut database = Database::open_in_memory().expect("isolated synthetic database");
+        let root = database
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "queue-fields-test",
+                MediaLocator::FileSystem(PathBuf::from(r"C:\synthetic\queue")),
+            )
+            .expect("synthetic library root");
+        let record = MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: root.id,
+                source_item_id: "queue-track".to_owned(),
+                locator_key: Some("synthetic-queue-track".to_owned()),
+            },
+            locator: MediaLocator::FileSystem(PathBuf::from(r"C:\synthetic\queue	rack.flac")),
+            fingerprint: FileFingerprint {
+                size_bytes: 128,
+                modified_at_utc_ms: Some(4_242),
+                created_at_utc_ms: None,
+            },
+            metadata: None,
+        };
+        database
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Complete,
+                std::slice::from_ref(&record),
+                std::slice::from_ref(&record),
+                &[],
+                2_000,
+            )
+            .expect("insert synthetic track");
+        let track_id = database
+            .resolve_track_id_for_locator(&record.locator)
+            .expect("resolve")
+            .expect("track exists");
+        let queue = PlaybackQueue::with_entries(
+            vec![PlaybackQueueEntry {
+                track_id,
+                source_position: Some(0),
+            }],
+            PlaybackQueueContext::Playlist {
+                playlist_id: "queue-fields".to_owned(),
+            },
+            0,
+        )
+        .expect("queue");
+        let page = build_playback_queue_page(Some(&database), 1, Some(queue.snapshot()), 0, 10)
+            .expect("queue page");
+        let track = page.items[0].track.as_ref().expect("track summary");
+        assert_eq!(track.modified_at_utc_ms, Some(4_242));
+        assert_eq!(track.source_name.as_deref(), Some("本地"));
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn cold_and_warm_disk_thumbnail_lookup_keeps_async_caller_responsive() {
         let mut database = Database::open_in_memory().expect("isolated synthetic database");
@@ -10332,9 +10388,13 @@ fn external_track_summary(path: &std::path::Path, id: TrackId) -> TrackSummary {
         bit_depth: metadata.bit_depth,
         played_ms: 0,
         file_name,
-        // A file opened from outside the library has no library source.
-        source_name: None,
-        modified_at_utc_ms: None,
+        // A file opened from outside the library is a local file (the same name the library gives local tracks).
+        source_name: Some("本地".to_owned()),
+        modified_at_utc_ms: std::fs::metadata(path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|duration| i64::try_from(duration.as_millis()).ok()),
     }
 }
 

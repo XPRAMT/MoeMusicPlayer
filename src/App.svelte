@@ -117,7 +117,6 @@
     toggleLibrarySort,
     getFirstSortDirection,
     trackColumnDropIndexFromPointer,
-    withoutSourceColumn,
   } from './lib/track-columns.js';
   import { DEFAULT_ALBUM_CARD_MAX_WIDTH_PX, MAX_ALBUM_CARD_MAX_WIDTH_PX, MIN_ALBUM_CARD_MAX_WIDTH_PX, normalizeAlbumCardMaxWidthPx } from './lib/album-index-layout.js';
   import {
@@ -4721,7 +4720,7 @@
                   selectedTrackId={selectedTrackId}
                   playbackReady={playbackReady}
                   isSendingPlaybackCommand={isSendingPlaybackCommand}
-                  columns={withoutSourceColumn(trackColumnPreferences)}
+                  columns={trackColumnPreferences}
                   columnWidths={trackColumnWidths}
                   rowHeightPx={trackRowHeightPx}
                   groupingEnabled={groupingEnabled}
@@ -4766,7 +4765,7 @@
                     resetKey={playlistListRevision}
                     {playbackReady}
                     {isSendingPlaybackCommand}
-                    columns={withoutSourceColumn(trackColumnPreferences)}
+                    columns={trackColumnPreferences}
                     columnWidths={trackColumnWidths}
                     rowHeightPx={trackRowHeightPx}
                     groupingEnabled={groupingEnabled}
@@ -4797,7 +4796,7 @@
               <PlaybackQueueList
                 resetKey={playbackQueueResetKey}
                 cursorChangeKey={playbackQueueCursorChangeKey}
-                columns={withoutSourceColumn(trackColumnPreferences)}
+                columns={trackColumnPreferences}
                 columnWidths={trackColumnWidths}
                 rowHeightPx={trackRowHeightPx}
                 groupingEnabled={groupingEnabled && playback?.shuffle !== true}

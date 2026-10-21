@@ -509,6 +509,8 @@ pub enum AlbumDetailSortField {
     Album,
     Year,
     CreatedAt,
+    ModifiedAt,
+    Source,
     AudioFormat,
     Duration,
     PlayCount,

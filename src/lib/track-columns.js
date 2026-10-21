@@ -253,15 +253,6 @@ export function normalizeTrackColumnPreferences(value) {
   return migrated;
 }
 
-/**
- * The source column belongs to the library lists; playlists, the queue and album pages do not carry the source of a
- * track, so they show the other columns only.
- * @param {TrackColumnPreference[]} preferences
- */
-export function withoutSourceColumn(preferences) {
-  return preferences.filter((column) => column.id !== 'source');
-}
-
 /** @param {TrackColumnPreference[]} preferences */
 export function visibleTrackColumns(preferences) {
   return preferences.filter((column) => column.visible);

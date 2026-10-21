@@ -474,6 +474,8 @@ export interface PlaylistEntrySummary {
   playedMs?: number | null;
   /** File stem from the playlist locator when the entry has no title. */
   fileName?: string | null;
+  /** The server name (or the local label) of the entry's track; null when unmatched. */
+  sourceName?: string | null;
 }
 
 export interface PlaylistPage {

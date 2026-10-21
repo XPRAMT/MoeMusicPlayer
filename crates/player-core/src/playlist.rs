@@ -115,6 +115,9 @@ pub struct PlaylistEntrySummary {
     /// File stem from this entry's locator. Never a directory, full path, or URI query.
     #[serde(default)]
     pub file_name: Option<String>,
+    /// The place the entry's track comes from (a server name, or the local label); `None` when unmatched.
+    #[serde(default)]
+    pub source_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -139,6 +142,7 @@ pub enum PlaylistSortField {
     Year,
     CreatedAt,
     ModifiedAt,
+    Source,
     AudioFormat,
     Duration,
     PlayCount,
