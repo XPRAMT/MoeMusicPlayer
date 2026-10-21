@@ -12,6 +12,7 @@
     type RemoteExcludedView,
     type RemoteFolderView,
   } from './ipc';
+  import { ensureAndroidLocalNetworkAccess } from './android-local-network-permission.js';
   import { tr } from './i18n.js';
   import { WEBDAV_ENTRY_VISIBLE } from './remote-protocols.js';
   import SourceSections from './SourceSections.svelte';
@@ -149,6 +150,10 @@
   let testResult = $state<string | null>(null);
   let saving = $state(false);
 
+  function localNetworkPermissionError(): string {
+    return tr('請允許 Android 的「本機網路」權限，MoeMusicPlayer 才能連線到區域網路伺服器。若已拒絕，請到 Android 設定中的應用程式權限開啟本機網路存取。');
+  }
+
   function blankForm(): Form {
     return { id: null, name: '', protocol: 'smb', host: '', port: '', path: '', username: '', password: '', hasPassword: false, clearPassword: false, useHttp: false };
   }
@@ -208,6 +213,10 @@
     formError = null;
     testResult = null;
     try {
+      if (!await ensureAndroidLocalNetworkAccess()) {
+        formError = localNetworkPermissionError();
+        return;
+      }
       const result = await invokeCommand('remote_account_test', { input });
       testResult = result.folders.length === 0
         ? tr('連線成功，但這個位置沒有資料夾。')
@@ -236,6 +245,10 @@
     pickLoading = true;
     pickError = null;
     try {
+      if (!await ensureAndroidLocalNetworkAccess()) {
+        if (serial === pickSerial) pickError = localNetworkPermissionError();
+        return;
+      }
       const result = await invokeCommand('remote_browse_draft', { input, path });
       if (serial !== pickSerial) return;
       pickFolders = result;
@@ -315,6 +328,10 @@
     browseLoading = true;
     browseError = null;
     try {
+      if (!await ensureAndroidLocalNetworkAccess()) {
+        if (serial === browseSerial) browseError = localNetworkPermissionError();
+        return;
+      }
       if (browseMode === 'playlist') {
         const result = await invokeCommand('remote_browse_playlists', { accountId: account.id, path });
         if (serial !== browseSerial) return;

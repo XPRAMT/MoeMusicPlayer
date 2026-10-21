@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <!-- Optional "All files access" (ADR 0014): direct tag edits without per-file write prompts and system wallpaper reading. -->
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"

@@ -874,5 +874,6 @@
   "選擇要放進備份壓縮檔的內容。": "Choose what to put into the backup zip.",
   "選擇要匯出的內容（曲庫、設定、遠端帳號、我的最愛）成一個壓縮檔，不含專輯封面與背景圖片；匯入時可以選這個壓縮檔，或其中的單一檔案，只會替換備份裡有的部分。匯入會在重新啟動後套用，原本的資料會保留在 before-import 資料夾。": "Exports the parts you choose (library, settings, remote accounts, favourites) into one zip, without album covers and background images. To import, choose that zip or a single file from it; only the parts it contains are replaced. An import is applied after a restart, and the previous data is kept in the before-import folder.",
   "還原帳號": "Restore accounts",
-  "還原遠端帳號": "Restore remote accounts"
+  "還原遠端帳號": "Restore remote accounts",
+  "請允許 Android 的「本機網路」權限，MoeMusicPlayer 才能連線到區域網路伺服器。若已拒絕，請到 Android 設定中的應用程式權限開啟本機網路存取。": "Allow the Android local network permission so MoeMusicPlayer can connect to servers on your local network. If you denied it, enable local network access in MoeMusicPlayer's app permissions in Android Settings."
 }

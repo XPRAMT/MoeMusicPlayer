@@ -19,6 +19,7 @@ import org.json.JSONObject
 class MainActivity : TauriActivity() {
   private val androidInsetsBridge = AndroidInsetsBridge()
   private var appWebView: WebView? = null
+  private var localNetworkPermissionRequestId: String? = null
 
   override fun onStart() {
     super.onStart()
@@ -128,6 +129,18 @@ class MainActivity : TauriActivity() {
     super.onDestroy()
   }
 
+  override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (requestCode != LOCAL_NETWORK_PERMISSION_REQUEST) return
+
+    val requestId = localNetworkPermissionRequestId ?: return
+    localNetworkPermissionRequestId = null
+    val granted = hasLocalNetworkAccess()
+    val requestIdJson = JSONObject.quote(requestId)
+    val script = "window.dispatchEvent(new CustomEvent('moe:android-local-network-permission-result',{detail:{requestId:$requestIdJson,granted:$granted}}));"
+    appWebView?.let { webView -> webView.post { webView.evaluateJavascript(script, null) } }
+  }
+
   /** One system prompt per process start until granted; denial only hides the media notification. */
   private fun requestNotificationPermissionIfNeeded() {
     val granted = Build.VERSION.SDK_INT < NotificationPermissionPolicy.TIRAMISU ||
@@ -137,8 +150,13 @@ class MainActivity : TauriActivity() {
     ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
   }
 
+  private fun hasLocalNetworkAccess(): Boolean =
+    !LocalNetworkPermissionPolicy.requiresRuntimePermission(Build.VERSION.SDK_INT) ||
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
+
   private companion object {
     const val NOTIFICATION_PERMISSION_REQUEST = 4107
+    const val LOCAL_NETWORK_PERMISSION_REQUEST = 4108
     @Volatile var notificationPermissionAsked = false
   }
 
@@ -175,6 +193,28 @@ class MainActivity : TauriActivity() {
 
     @JavascriptInterface
     fun currentInsetsJson(): String = currentJson
+
+    @JavascriptInterface
+    fun hasLocalNetworkAccess(): Boolean = this@MainActivity.hasLocalNetworkAccess()
+
+    @JavascriptInterface
+    fun requestLocalNetworkPermission(requestId: String) {
+      runOnUiThread {
+        if (hasLocalNetworkAccess()) {
+          val requestIdJson = JSONObject.quote(requestId)
+          val script = "window.dispatchEvent(new CustomEvent('moe:android-local-network-permission-result',{detail:{requestId:$requestIdJson,granted:true}}));"
+          appWebView?.let { webView -> webView.post { webView.evaluateJavascript(script, null) } }
+          return@runOnUiThread
+        }
+        if (localNetworkPermissionRequestId != null) return@runOnUiThread
+        localNetworkPermissionRequestId = requestId
+        ActivityCompat.requestPermissions(
+          this@MainActivity,
+          arrayOf(Manifest.permission.ACCESS_LOCAL_NETWORK),
+          LOCAL_NETWORK_PERMISSION_REQUEST,
+        )
+      }
+    }
 
     fun update(
       insets: AndroidInsetsPolicy.LayoutInsets,
