@@ -342,6 +342,22 @@ impl SyncEngine {
             scan.tracks.len(),
             timing.elapsed().as_millis()
         );
+        let profiling = crate::profile::enabled();
+        if profiling {
+            crate::profile::event(
+                "enumerate_done",
+                &[
+                    crate::profile::str_field("root", &root.display_name),
+                    crate::profile::field("ms", crate::profile::ms(timing.elapsed())),
+                    crate::profile::field("tracks", scan.tracks.len()),
+                    crate::profile::field(
+                        "bytes",
+                        scan.tracks.iter().map(|t| t.fingerprint.size_bytes).sum::<u64>(),
+                    ),
+                    crate::profile::field("errors", scan.errors.len()),
+                ],
+            );
+        }
         let lyric_sidecars = index.take_lyric_sidecars();
         let scans_lyric_sidecars = index.scans_lyric_sidecars();
         let lyric_threads = index.metadata_read_threads().max(1);
@@ -464,6 +480,20 @@ impl SyncEngine {
             report.unchanged,
             entries.iter().filter(|entry| entry.needs_read).count()
         );
+        let compare_done = timing.elapsed();
+        if profiling {
+            crate::profile::event(
+                "compare_done",
+                &[
+                    crate::profile::field("ms", crate::profile::ms(compare_done)),
+                    crate::profile::field("unchanged", report.unchanged),
+                    crate::profile::field(
+                        "to_read",
+                        entries.iter().filter(|entry| entry.needs_read).count(),
+                    ),
+                ],
+            );
+        }
         // Pass 2: parse the tracks that need it, on METADATA_READ_THREADS threads when the adapter allows it.
         // Cancellation stops the reading; what is already parsed is kept.
         let todo: Vec<usize> = entries
@@ -474,6 +504,10 @@ impl SyncEngine {
             .collect();
         let mut results: Vec<Option<Result<TrackMetadata, TrackMetadataError>>> =
             (0..todo.len()).map(|_| None).collect();
+        // Per-file parse time in microseconds, only filled while profiling.
+        let mut read_us: Vec<u64> = if profiling { vec![0; todo.len()] } else { Vec::new() };
+        let mut read_threads = 0usize;
+        let tags_started = std::time::Instant::now();
         if !todo.is_empty() && !cancellation.is_cancelled() {
             let tracks: Vec<&MediaTrackRecord> =
                 todo.iter().map(|&index| &entries[index].track).collect();
@@ -484,8 +518,9 @@ impl SyncEngine {
                 Some(reader) => {
                     let next = AtomicUsize::new(0);
                     let (sender, receiver) = std::sync::mpsc::channel();
+                    read_threads = index.metadata_read_threads().max(1).min(tracks.len());
                     std::thread::scope(|scope| {
-                        for _ in 0..index.metadata_read_threads().max(1).min(tracks.len()) {
+                        for _ in 0..read_threads {
                             let sender = sender.clone();
                             let (next, tracks) = (&next, &tracks);
                             scope.spawn(move || loop {
@@ -496,14 +531,22 @@ impl SyncEngine {
                                 let Some(track) = tracks.get(n) else {
                                     break;
                                 };
-                                if sender.send((n, read_guarded(reader, track))).is_err() {
+                                let started = profiling.then(std::time::Instant::now);
+                                let result = read_guarded(reader, track);
+                                let us = started
+                                    .map(|started| started.elapsed().as_micros() as u64)
+                                    .unwrap_or(0);
+                                if sender.send((n, result, us)).is_err() {
                                     break;
                                 }
                             });
                         }
                         drop(sender);
-                        for (n, result) in receiver {
+                        for (n, result, us) in receiver {
                             results[n] = Some(result);
+                            if profiling {
+                                read_us[n] = us;
+                            }
                             report.metadata_reads += 1;
                             metadata_processed += 1;
                             emit_metadata_progress(
@@ -516,11 +559,16 @@ impl SyncEngine {
                     });
                 }
                 None => {
+                    read_threads = 1;
                     for (n, track) in tracks.iter().enumerate() {
                         if cancellation.is_cancelled() {
                             break;
                         }
+                        let started = profiling.then(std::time::Instant::now);
                         results[n] = Some(index.read_metadata(track));
+                        if let Some(started) = started {
+                            read_us[n] = started.elapsed().as_micros() as u64;
+                        }
                         report.metadata_reads += 1;
                         metadata_processed += 1;
                         emit_metadata_progress(
@@ -533,9 +581,13 @@ impl SyncEngine {
                 }
             }
         }
+        if profiling {
+            profile_tag_reads(&entries, &todo, &results, &read_us, read_threads, tags_started.elapsed());
+        }
         for (slot, &entry_index) in todo.iter().enumerate() {
             entries[entry_index].read = results[slot].take();
         }
+        let assemble_started = std::time::Instant::now();
 
         eprintln!(
             "[sync] {:?}: tags read at {} ms ({} files)",
@@ -616,6 +668,17 @@ impl SyncEngine {
             cancellation
         };
 
+        if profiling {
+            crate::profile::event(
+                "assemble_done",
+                &[
+                    crate::profile::field("ms", crate::profile::ms(assemble_started.elapsed())),
+                    crate::profile::field("observed", seen.len()),
+                    crate::profile::field("changed", changed.len()),
+                ],
+            );
+        }
+        let persist_started = std::time::Instant::now();
         progress.emit(
             SyncProgressStage::Persisting,
             0,
@@ -656,6 +719,16 @@ impl SyncEngine {
             )
             .map_err(SyncError::Repository)?;
         report.applied = apply.stats;
+        if profiling {
+            crate::profile::event(
+                "persist_done",
+                &[
+                    crate::profile::field("ms", crate::profile::ms(persist_started.elapsed())),
+                    crate::profile::field("rows", seen.len()),
+                    crate::profile::field("changed", changed.len()),
+                ],
+            );
+        }
         eprintln!(
             "[sync] {:?}: stored at {} ms",
             root.display_name,
@@ -676,6 +749,8 @@ impl SyncEngine {
         {
             // The lyrics beside the songs are part of the library: read when new or changed, never searched for at play
             // time. A failure here costs the lyrics, not the sync.
+            let lyrics_started = std::time::Instant::now();
+            let sidecar_count = lyric_sidecars.len();
             let _ = sync_lyric_sidecars(
                 root,
                 repository,
@@ -683,6 +758,29 @@ impl SyncEngine {
                 lyric_threads,
                 matches!(effective_state, SourceScanState::Complete),
                 cancellation,
+            );
+            if profiling {
+                crate::profile::event(
+                    "lyric_sidecars_done",
+                    &[
+                        crate::profile::field("ms", crate::profile::ms(lyrics_started.elapsed())),
+                        crate::profile::field("sidecars", sidecar_count),
+                    ],
+                );
+            }
+        }
+        if profiling {
+            crate::profile::event(
+                "sync_done",
+                &[
+                    crate::profile::str_field("root", &root.display_name),
+                    crate::profile::field("ms", crate::profile::ms(timing.elapsed())),
+                    crate::profile::field("observed", report.observed),
+                    crate::profile::field("metadata_reads", report.metadata_reads),
+                    crate::profile::field("metadata_errors", report.metadata_errors.len()),
+                    crate::profile::field("source_errors", report.source_errors.len()),
+                    crate::profile::field("cancelled", report.cancelled),
+                ],
             );
         }
         Ok(report)
@@ -761,6 +859,95 @@ fn sync_lyric_sidecars<R: LibraryRepository>(
     }
     let writes: Vec<LyricSidecarWrite> = writes.into_iter().flatten().collect();
     repository.save_lyric_sidecars(root.id, &writes, complete)
+}
+
+/// Profile summary of the tag-reading pass: wall time, summed per-file time (their ratio is the effective
+/// parallelism), percentiles, per-extension totals and the slowest files.
+fn profile_tag_reads(
+    entries: &[Entry],
+    todo: &[usize],
+    results: &[Option<Result<TrackMetadata, TrackMetadataError>>],
+    read_us: &[u64],
+    threads: usize,
+    wall: Duration,
+) {
+    use crate::profile::{field, json_string, ms, str_field};
+    let mut per_ext: HashMap<String, (u64, u64, u64)> = HashMap::new();
+    let mut slowest: Vec<(u64, usize)> = Vec::new();
+    let mut bytes = 0u64;
+    let mut errors = 0usize;
+    for (slot, &entry_index) in todo.iter().enumerate() {
+        let track = &entries[entry_index].track;
+        let us = read_us.get(slot).copied().unwrap_or(0);
+        bytes += track.fingerprint.size_bytes;
+        if matches!(results.get(slot), Some(Some(Err(_)))) {
+            errors += 1;
+        }
+        let ext = locator_text(track)
+            .rsplit_once('.')
+            .map(|(_, ext)| ext.to_ascii_lowercase())
+            .filter(|ext| ext.len() <= 5)
+            .unwrap_or_default();
+        let slot_ext = per_ext.entry(ext).or_default();
+        slot_ext.0 += 1;
+        slot_ext.1 += us;
+        slot_ext.2 += track.fingerprint.size_bytes;
+        slowest.push((us, entry_index));
+    }
+    slowest.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    slowest.truncate(15);
+    let mut durations = read_us.to_vec();
+    let sum_us: u64 = durations.iter().sum();
+    let mut fields = vec![
+        field("ms", ms(wall)),
+        field("threads", threads),
+        field("files", todo.len()),
+        field("errors", errors),
+        field("bytes", bytes),
+        field(
+            "effective_parallelism",
+            format!("{:.2}", sum_us as f64 / 1000.0 / (wall.as_secs_f64() * 1000.0).max(0.001)),
+        ),
+    ];
+    fields.extend(crate::profile::distribution_fields("file", &mut durations));
+    let mut exts: Vec<_> = per_ext.into_iter().collect();
+    exts.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+    let ext_json = exts
+        .iter()
+        .map(|(ext, (count, us, bytes))| {
+            format!(
+                "{{\"ext\":{},\"files\":{count},\"sum_ms\":{:.3},\"mean_ms\":{:.3},\"bytes\":{bytes}}}",
+                json_string(ext),
+                *us as f64 / 1000.0,
+                *us as f64 / 1000.0 / (*count).max(1) as f64,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    fields.push(format!("\"by_ext\":[{ext_json}]"));
+    let slow_json = slowest
+        .iter()
+        .map(|(us, entry_index)| {
+            let track = &entries[*entry_index].track;
+            format!(
+                "{{\"ms\":{:.3},\"bytes\":{},\"path\":{}}}",
+                *us as f64 / 1000.0,
+                track.fingerprint.size_bytes,
+                json_string(&locator_text(track)),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    fields.push(format!("\"slowest\":[{slow_json}]"));
+    let _ = str_field;
+    crate::profile::event("tags_done", &fields);
+}
+
+fn locator_text(track: &MediaTrackRecord) -> String {
+    match &track.locator {
+        crate::library::MediaLocator::FileSystem(path) => path.display().to_string(),
+        other => format!("{other:?}"),
+    }
 }
 
 /// How many tracks are parsed at once when the adapter offers a parallel reader.

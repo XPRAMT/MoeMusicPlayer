@@ -7877,6 +7877,11 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
         .active_sync
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cancellation.clone());
+    let profile_started = std::time::Instant::now();
+    player_core::profile::event(
+        "app_library_sync_start",
+        &[player_core::profile::field("sources", source_settings.sources.len())],
+    );
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _database_work = database_work;
         let mut database = Database::open(database_path).map_err(|error| error.to_string())?;
@@ -7926,6 +7931,13 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     let finished = library_sync_finished_event(run_id, &result);
     let _ = event_app.emit(LIBRARY_SYNC_FINISHED_EVENT, finished);
+    if player_core::profile::enabled() {
+        player_core::profile::mark_ready(&[
+            player_core::profile::field("ms", player_core::profile::ms(profile_started.elapsed())),
+            player_core::profile::field("ok", result.is_ok()),
+            player_core::profile::str_field("scope", "app_library_sync"),
+        ]);
+    }
     result
 }
 
@@ -11847,6 +11859,7 @@ pub fn diagnostics_json() -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    player_core::profile::event("app_start", &[]);
     #[cfg(target_os = "windows")]
     let initial_audio_path = {
         let working_directory = std::env::current_dir().ok();

@@ -5,6 +5,7 @@ pub mod lyrics;
 pub mod playback_queue;
 pub mod playback_statistics;
 pub mod playlist;
+pub mod profile;
 pub mod sync;
 #[cfg(windows)]
 mod windows_locator;

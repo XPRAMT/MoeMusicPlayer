@@ -1864,8 +1864,20 @@ impl Database {
                 std::fs::create_dir_all(parent)?;
             }
         }
+        let started = std::time::Instant::now();
+        let existed = path != Path::new(":memory:") && path.exists();
         let connection = Connection::open(path)?;
-        Self::from_connection_with_collation(connection, collation_spec)
+        let database = Self::from_connection_with_collation(connection, collation_spec)?;
+        if player_core::profile::enabled() {
+            player_core::profile::event(
+                "db_open",
+                &[
+                    player_core::profile::field("ms", player_core::profile::ms(started.elapsed())),
+                    player_core::profile::field("existed", existed),
+                ],
+            );
+        }
+        Ok(database)
     }
 
     pub fn open_in_memory() -> Result<Self, DatabaseError> {
@@ -6102,9 +6114,13 @@ fn apply_source_scan_transaction(
         .iter()
         .map(|record| record.identity.source_item_id.as_str())
         .collect::<HashSet<_>>();
+    let profiling = player_core::profile::enabled();
+    let mut timer = ApplyTimer::new(profiling);
     let mut connection = database.lock()?;
+    timer.lap(0);
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute("DELETE FROM sync_seen_items", [])?;
+    timer.lap(1);
     let mut seen_statement = tx.prepare_cached(
         "INSERT OR IGNORE INTO sync_seen_items (source_id, source_item_id) VALUES (?1, ?2)",
     )?;
@@ -6119,9 +6135,12 @@ fn apply_source_scan_transaction(
         if record.identity.source_id != root.id {
             return Err(DatabaseError::SourceMismatch);
         }
+        timer.lap(9);
         seen_statement.execute(params![root.id.to_string(), record.identity.source_item_id])?;
+        timer.lap(2);
 
         let track_id = resolve_track_id(&tx, record)?;
+        timer.lap(3);
         if changed_items.contains(record.identity.source_item_id.as_str()) {
             let file_name = player_core::locator_display_file_stem(&record.locator);
             persist_metadata(
@@ -6136,9 +6155,12 @@ fn apply_source_scan_transaction(
                 [track_id.to_string()],
             )?;
         }
+        timer.lap(4);
         persist_mapping(&tx, root.id, track_id, record)?;
+        timer.lap(5);
         progress((index + 1) as u64);
     }
+    timer.lap(9);
     if state.allows_reconciliation() {
         for source_item_id in errors
             .iter()
@@ -6213,7 +6235,19 @@ fn apply_source_scan_transaction(
         // Another source of the same account may already hold the files this one just mapped.
         unify_remote_tracks(&tx)?;
     }
+    timer.lap(6);
+    let database_file = tx.path().filter(|p| !p.is_empty()).map(std::path::PathBuf::from);
     tx.commit()?;
+    timer.lap(7);
+    if profiling {
+        let mut fields = timer.fields();
+        fields.push(player_core::profile::field("rows", observed.len()));
+        fields.push(player_core::profile::field("changed", changed_items.len()));
+        fields.push(player_core::profile::field("transactions", 1));
+        let wal_bytes = database_wal_bytes(&database_file);
+        fields.push(player_core::profile::field("wal_bytes", wal_bytes));
+        player_core::profile::event("db_apply", &fields);
+    }
     Ok(SyncApplyOutcome {
         stats: SyncApplyStats {
             inserted_or_updated: changed_items.len() as u64,
@@ -6221,6 +6255,61 @@ fn apply_source_scan_transaction(
         },
         cancelled: false,
     })
+}
+
+/// Accumulated time per step of the scan transaction, only measured while profiling.
+struct ApplyTimer {
+    last: Option<std::time::Instant>,
+    sums: [std::time::Duration; 10],
+}
+
+const APPLY_TIMER_STEPS: [&str; 10] = [
+    "lock_ms",
+    "begin_clear_ms",
+    "seen_insert_ms",
+    "resolve_track_id_ms",
+    "persist_metadata_ms",
+    "persist_mapping_ms",
+    "reconcile_state_ms",
+    "commit_ms",
+    "unused_ms",
+    "loop_overhead_ms",
+];
+
+impl ApplyTimer {
+    fn new(enabled: bool) -> Self {
+        Self {
+            last: enabled.then(std::time::Instant::now),
+            sums: Default::default(),
+        }
+    }
+
+    /// Charge the time since the previous lap to `step`.
+    fn lap(&mut self, step: usize) {
+        if let Some(last) = self.last {
+            let now = std::time::Instant::now();
+            self.sums[step] += now - last;
+            self.last = Some(now);
+        }
+    }
+
+    fn fields(&self) -> Vec<String> {
+        let total: std::time::Duration = self.sums.iter().sum();
+        let mut fields = vec![player_core::profile::field("ms", player_core::profile::ms(total))];
+        for (name, sum) in APPLY_TIMER_STEPS.iter().zip(self.sums) {
+            if *name != "unused_ms" {
+                fields.push(player_core::profile::field(name, player_core::profile::ms(sum)));
+            }
+        }
+        fields
+    }
+}
+
+fn database_wal_bytes(path: &Option<std::path::PathBuf>) -> u64 {
+    let Some(path) = path else { return 0 };
+    let mut wal = path.as_os_str().to_os_string();
+    wal.push("-wal");
+    std::fs::metadata(wal).map(|m| m.len()).unwrap_or(0)
 }
 
 fn count_tracks_in(
