@@ -13,6 +13,11 @@ test('the switch needs both a local and a remote source that are enabled', () =>
   assert.equal(shouldShowSourceScopeSwitch([]), false);
   assert.equal(shouldShowSourceScopeSwitch([local, { ...remote, enabled: false }]), false);
   assert.equal(shouldShowSourceScopeSwitch([{ ...local, enabled: false }, remote]), false);
+  // A playlist file kept on a server is a remote source too (its kind is a playlist file, the account marks it).
+  const remotePlaylist = { kind: 'playlist_file', remoteAccountId: 'acct', enabled: true };
+  assert.equal(shouldShowSourceScopeSwitch([local, remotePlaylist]), true);
+  assert.equal(shouldShowSourceScopeSwitch([remotePlaylist]), false);
+  assert.equal(shouldShowSourceScopeSwitch([{ kind: 'playlist_file', enabled: true }, remote]), true);
 });
 
 test('the stops run local, all, remote from left to right and a position picks the nearest third', () => {
