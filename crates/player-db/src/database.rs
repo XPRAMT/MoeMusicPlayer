@@ -355,7 +355,7 @@ fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
     // Keep one quality ordering for library and playlist views. Normalize older codec labels.
     format!(
         "CASE TRIM(UPPER(COALESCE(t.codec, ''))) \
-         WHEN 'WVDSD' THEN 6.5 WHEN 'WAV' THEN 6 WHEN 'WAVE' THEN 6 WHEN 'WVLL' THEN 5.5 WHEN 'FLAC' THEN 5 WHEN 'WVL' THEN 4.5 \
+         WHEN 'WVDSD' THEN 6.5 WHEN 'WAV' THEN 6 WHEN 'WAVE' THEN 6 WHEN 'FLAC' THEN 5 WHEN 'WVLL' THEN 4.8 WHEN 'WVL' THEN 4.5 \
          WHEN 'VORBIS' THEN 4 WHEN 'OGG VORBIS' THEN 4 WHEN 'OPUS' THEN 3 \
          WHEN 'MP4' THEN 2 WHEN 'M4A' THEN 2 WHEN 'AAC' THEN 2 WHEN 'MP4A' THEN 2 WHEN 'MP3' THEN 1 \
          ELSE CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) LIKE 'DSD%' THEN 7 ELSE 0 END END {direction}, \
@@ -10739,7 +10739,7 @@ mod tests {
 
     #[test]
     fn wavpack_labels_sort_into_their_quality_tiers() {
-        // The owner's order, best first: DSD, WVDSD, WAV, WVLL, FLAC, WVL, (the other formats), MP3.
+        // The owner's order, best first: DSD, WVDSD, WAV, FLAC, WVLL, WVL, (the other formats), MP3.
         let codecs = [
             Some("WVDSD"),
             Some("WVLL"),
@@ -10773,7 +10773,7 @@ mod tests {
             .expect("ascending");
         assert_eq!(
             ascending.labels,
-            ["MP3", "MP4", "WVL", "FLAC", "WVLL", "WAV", "WVDSD", "DSD"]
+            ["MP3", "MP4", "WVL", "WVLL", "FLAC", "WAV", "WVDSD", "DSD"]
         );
     }
 
