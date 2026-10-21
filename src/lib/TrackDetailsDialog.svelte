@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatDetailsBitrate, formatDetailsSampleRate } from './track-details-format.js';
   import { tr } from './i18n.js';
   import { formatAudioFormat } from './track-columns.js';
   // 歌曲詳細資訊面板（ADR 0013 Phase 1）：單曲標籤檢視／暫存編輯，按「儲存」才寫檔。
@@ -404,8 +405,8 @@
         <dt>{tr("格式")}</dt><dd>{details.format}</dd>
         <dt>{tr("標籤")}</dt><dd>{details.tagFormat || '—'}</dd>
         <dt>{tr("時長")}</dt><dd>{formatDuration(details.properties.durationMs)}</dd>
-        <dt>{tr("位元率")}</dt><dd>{details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps ?? '—'} kbps</dd>
-        <dt>{tr("取樣率")}</dt><dd>{details.properties.sampleRate ? `${details.properties.sampleRate} Hz` : '—'}</dd>
+        <dt>{tr("位元率")}</dt><dd>{formatDetailsBitrate(details.properties.audioBitrateKbps ?? details.properties.overallBitrateKbps)}</dd>
+        <dt>{tr("取樣率")}</dt><dd>{formatDetailsSampleRate(details.properties.sampleRate)}</dd>
         <dt>{tr("位元深度")}</dt><dd>{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}</dd>
         <dt>{tr("聲道")}</dt><dd>{details.properties.channels ?? '—'}</dd>
         <dt>{tr("修改時間")}</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
