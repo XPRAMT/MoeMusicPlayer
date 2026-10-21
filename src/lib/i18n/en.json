@@ -832,6 +832,7 @@
   "音樂來源分頁": "Music source tabs",
   "本地": "Local",
   "可加入 SMB（網路芳鄰）與 WebDAV 伺服器上的音樂資料夾：按上方的「＋」新增遠端伺服器。": "Add music folders from SMB (network share) and WebDAV servers: press \"＋\" above to add a remote server.",
+  "可加入 SMB（網路芳鄰）伺服器上的音樂資料夾：按上方的「＋」新增遠端伺服器。": "Add music folders from SMB (network share) servers: press \"＋\" above to add a remote server.",
   "來源": "Source",
   "遠端快取": "Remote cache",
   "快取容量上限": "Cache size limit",

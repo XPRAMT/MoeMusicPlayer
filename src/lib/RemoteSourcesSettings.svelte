@@ -13,6 +13,7 @@
     type RemoteFolderView,
   } from './ipc';
   import { tr } from './i18n.js';
+  import { WEBDAV_ENTRY_VISIBLE } from './remote-protocols.js';
   import SourceSections from './SourceSections.svelte';
 
   let { disabled = false, remoteSources = [], localPane, onSourceAdded, onToggleSource, onRemoveSource }: {
@@ -473,7 +474,7 @@
     {#if loading}
       <p class="source-muted-note">{tr("正在讀取遠端伺服器…")}</p>
     {:else if accounts.length === 0}
-      <p class="source-muted-note">{tr("可加入 SMB（網路芳鄰）與 WebDAV 伺服器上的音樂資料夾：按上方的「＋」新增遠端伺服器。")}</p>
+      <p class="source-muted-note">{WEBDAV_ENTRY_VISIBLE ? tr("可加入 SMB（網路芳鄰）與 WebDAV 伺服器上的音樂資料夾：按上方的「＋」新增遠端伺服器。") : tr("可加入 SMB（網路芳鄰）伺服器上的音樂資料夾：按上方的「＋」新增遠端伺服器。")}</p>
     {/if}
     <div class="source-action-row source-action-buttons source-folder-picker">
       <button class="soft-button" type="button" disabled={disabled || accounts.length === 0} onclick={() => openPassphrase('export')}>{tr("匯出帳號")}</button>
@@ -553,10 +554,13 @@
   {#if form}
     <div class="update-dialog-content">
       <h2 id="remote-form-title">{form.id ? tr('編輯遠端伺服器') : tr('新增遠端伺服器')}</h2>
+      <!-- New WebDAV servers are hidden while WEBDAV_ENTRY_VISIBLE is false; an existing WebDAV account still shows its (read-only) protocol. -->
+      {#if WEBDAV_ENTRY_VISIBLE || form.protocol === 'webdav'}
       <div class="remote-protocol" role="group" aria-label={tr("通訊協定")}>
         <button class="soft-button" type="button" aria-pressed={form.protocol === 'smb'} disabled={Boolean(form.id)} onclick={() => { if (form) { form.protocol = 'smb'; form.path = ''; } }}>SMB</button>
         <button class="soft-button" type="button" aria-pressed={form.protocol === 'webdav'} disabled={Boolean(form.id)} onclick={() => { if (form) { form.protocol = 'webdav'; form.path = ''; } }}>WebDAV</button>
       </div>
+      {/if}
       <label class="remote-field"><span>{tr("名稱")}</span><input type="text" bind:value={form.name} placeholder={tr('例如：家用 NAS')} /></label>
       <div class="remote-row">
         <label class="remote-field remote-grow"><span>{tr("主機")}</span><input type="text" bind:value={form.host} placeholder="192.168.0.10" autocapitalize="off" autocorrect="off" spellcheck="false" /></label>
