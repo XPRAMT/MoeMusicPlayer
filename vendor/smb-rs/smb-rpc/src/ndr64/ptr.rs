@@ -65,10 +65,8 @@ where
                 );
                 let ref_id = NdrAlign::<u64>::read_options(reader, endian, ())?;
                 let value = if *ref_id != NULL_PTR_REF_ID {
-                    debug_assert!(
-                        *ref_id == REF_ID_UNIQUE_DEFAULT,
-                        "Reference ID must be unique when read_mode is NoArraySupport"
-                    );
+                    // Referent IDs are opaque wire values. Writers may use the default
+                    // ID, but a decoder must accept any non-null ID supplied by a peer.
                     Some(NdrAlign::<T>::read_options(reader, endian, align_args)?)
                 } else {
                     None
@@ -89,10 +87,8 @@ where
                     };
 
                     let value = if ref_id != NULL_PTR_REF_ID {
-                        debug_assert!(
-                            ref_id == REF_ID_UNIQUE_DEFAULT,
-                            "Reference ID must be unique when read_mode is NoArraySupport"
-                        );
+                        // The ID is supplied by the peer; for a unique pointer only
+                        // null versus non-null controls whether a referent follows.
                         Some(NdrAlign::<T>::read_options(reader, endian, align_args)?)
                     } else {
                         None
@@ -238,7 +234,6 @@ where
 }
 
 #[cfg(test)]
-
 mod tests {
     use smb_tests::*;
 
