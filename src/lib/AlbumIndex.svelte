@@ -417,7 +417,7 @@
   .album-index-sort-row :global(.column-sort-label) { grid-column:2; }
   .album-index-sort-row :global(.column-sort-indicator) { grid-column:3; justify-self:start; }
   :global(.album-index-sort-row.track-list-header) { box-sizing:border-box; height:var(--paged-header-height,37px); min-height:var(--paged-header-height,37px); }
-  .album-grid-viewport { min-width:0; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; padding:16px clamp(18px,2vw,34px) var(--album-vertical-gap); scrollbar-color:rgba(var(--text-rgb),0.2) transparent; scrollbar-width:thin; }
+  .album-grid-viewport { min-width:0; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:none; padding:16px clamp(18px,2vw,34px) var(--album-vertical-gap); scrollbar-color:rgba(var(--text-rgb),0.2) transparent; scrollbar-width:thin; }
   .album-grid-canvas { position:relative; min-width:0; }
   .album-index-group-row, .album-index-card-row { position:absolute; top:0; right:0; left:0; box-sizing:border-box; }
   .album-index-group-row { display:flex; align-items:center; }

@@ -935,7 +935,7 @@
     width: 100%;
     max-height: min(65vh, 680px);
     overflow: auto;
-    overscroll-behavior: contain;
+    overscroll-behavior: none;
     scrollbar-gutter: stable;
     outline: none;
   }

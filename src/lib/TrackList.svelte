@@ -413,7 +413,7 @@
     position: relative;
     width: 100%;
     overflow: auto;
-    overscroll-behavior: contain;
+    overscroll-behavior: none;
     scrollbar-gutter: stable;
     outline: none;
   }
