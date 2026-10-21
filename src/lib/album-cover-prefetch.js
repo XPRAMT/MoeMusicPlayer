@@ -3,7 +3,7 @@ export const ALBUM_PREFETCH_PAGES_PER_SIDE = 1;
 /** Hard cap on the whole prefetch window, however large the viewport. */
 export const ALBUM_PREFETCH_MAX_CARDS = 120;
 /** Quiet time after the visible range last changed before any prefetch work starts. */
-export const ALBUM_PREFETCH_QUIET_MS = 200;
+export const ALBUM_PREFETCH_QUIET_MS = 10;
 
 /**
  * Which cards (list indexes) to prefetch around the visible cards `[start, end)`, nearest first, the side the user is
