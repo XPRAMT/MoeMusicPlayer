@@ -123,7 +123,7 @@ Windows 自動更新（ADR 0022 版本辨識與驗證、ADR 0021 安裝方式）
 
 SMB SRVSVC share enumeration：`smb-rs` 0.12.1 的 `smb`／`smb-rpc` 是 MIT 授權 vendored fork（上游與更新方式見 `vendor/smb-rs/UPSTREAM.md`）；Bind 提出 NDR64、NDR32 presentation context，依 BindAck 選擇語法。TrueNAS 相容性問題定位在伺服器選用 NDR32；沒有 NDR64 互通故障的實測證據。NetrShareEnum 兩種語法都保留回傳狀態並支援 `ERROR_MORE_DATA` 續頁，第一個 request 傳非空 resume handle（初始值 0），續頁沿用伺服器回傳值；其他 RPC 的編碼不變。NDR32 使用專用解析器，檢查層級、union、指標、計數、UTF-16 長度／終止符與完整封包邊界；NDR64 在通用陣列配置前檢查筆數，referent ID 視為伺服器提供的不透明非零值（本地編碼器仍以 `0x20000` 作為輸出值）。續頁拒絕非成功狀態、空的 `ERROR_MORE_DATA`、缺少／零／重複游標、超量項目與超過 1,024 頁；每次最多 65,536 首、字串合計最多 4,194,304 個 UTF-16 code unit。
 
-NDR64 規範只要求 embedded reference pointer 在線上為 8-byte 非空值，沒有要求等於本地 writer 的固定 ID；因此 decoder 只按 null／non-null 判斷。此為依 Microsoft NDR64 規格推導的 parser 修正，不代表已發現 NDR64 伺服器相容性故障。Ubuntu 24.04 Samba credentialed live test 曾驗證 NDR32 協商及分享列舉；本次續頁與邊界變更的 `MOE_NDR32_SMB_*` 測試環境變數未設定，因此本輪只跑離線測試，尚未重跑 live server。
+NDR64 規範只要求 embedded reference pointer 在線上為 8-byte 非空值，沒有要求等於本地 writer 的固定 ID；因此 decoder 只按 null／non-null 判斷。此為依 Microsoft NDR64 規格推導的 parser 修正，不代表已發現 NDR64 伺服器相容性故障。最新續頁與邊界版本已用 Ubuntu 24.04 Samba 做認證式 live test：正式 `list_shares` 成功列出 `moemusic-test`，直接 `NetrShareEnum` 協商並確認選到 NDR32，回傳 `moemusic-test`、`IPC$`；這次只有兩個分享，未觸發多頁續傳，續頁分支仍由離線測試覆蓋。測試使用暫時帳號，測後已移除；原 `moe_test` 帳號與測試分享設定保留，臨時 Samba 服務已停止。
 
 區網測試分享（2026-10-21T23:30:00+08:00）：Ubuntu 24.04 WSL mirrored 網路使用隔離設定 `/etc/samba/moemusic-test.conf`，唯讀分享 `moemusic-test` 位於 `/srv/moemusic-test`，帳號 `moe_test`、TCP 1445、只允許 `192.168.1.0/24`、停用 guest；目錄含三首本機測試音樂，複製 SHA-256 與原檔相同。Ubuntu `smbclient` 帳密登入與列檔成功；使用者已從實際用戶端確認分享內音樂可正常讀取，完成端到端區網連線、帳密驗證與檔案讀取驗收。測試密碼只交付使用者，不存於文件、日誌或版本庫。
 
