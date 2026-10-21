@@ -111,3 +111,51 @@ Each setting was also measured on its own; the figure is the persist time, with 
 - **No schema change, so no migration.** Slimming `source_mappings` was rejected. `source_item_id` and `locator_key` both hold the same hex-encoded UTF-16 path, about 300 bytes, and a standalone insert test put the gain from dropping one copy at about 56 ms, before deferral and FK-off. After them `persist_mapping` is only 39 ms. A change touching the 64 queries that use `locator_key`, plus an upgrade migration, is not worth at most a few tens of ms.
 - **Tag thread count stays 4. `MOE_METADATA_READ_THREADS` (1–64) overrides it for tuning.** Per-file parse time grows with threads: about 0.43 ms at 4, 0.55 ms at 6, 0.73 ms at 8 and 1.2 ms at 16. So wall time improves little. Over 3 measurement sets (5 runs each), 6 and 8 threads were 0–25% faster than 4, and in the interleaved round within noise (4: 650–691 ms, 6: 613–661 ms, 8: 597–677 ms). A gain that does not reproduce, plus more concurrent seeks on an uncached HDD, does not justify a new default. Re-measure after a reboot on the HDD.
 - **Correctness.** Compared with the build from before the change, all 5,412 `source_mappings` + `tracks` rows are equal on every column except the random ids. The schema text, the row counts of every table and `quick_check` are also equal, with 0 FK violations. A `player-db` test builds 300 rows each way and checks the same rows and order, that the indexes are back, `foreign_keys=1` and the original `cache_size`.
+
+## Truly cold HDD build (2026-10-22 03:27 +08:00, first access after a reboot)
+
+The run used the release example with 4 threads and bulk mode. `typeperf` sampled `PhysicalDisk(1 D:)` every second, in `%TEMP%\moe-cold-profile\reboot-20261022`.
+
+| Phase | Cold | Warm (median of 3) |
+|---|---|---|
+| Enumerate | 5,851 ms | 100 ms |
+| Tag read: per-file p50 / p90 / p99 / max 53 / 114 / 250 / 1,053 ms | 89,052 ms (93%) | 525 ms |
+| Persist | 268 ms | 257 ms |
+| **Total until `library_ready`** | **95,400 ms** | **1,060 ms** |
+
+During tag reading the disk was 0.2% idle, with a queue of 3.5. It did 228 reads/s at 17.5 ms each but moved only 10.7 MB/s. The cold build is seek-bound: about 3.7 disk reads per track, not bytes.
+
+## Where the reads go (trace of every file, warm cache)
+
+`crates/player-track-metadata/examples/trace_tag_reads.rs` wraps the production `PathSource` and records every read and seek the parser makes. Set `TRACE_RANGES=1` to print the merged byte ranges per file.
+
+| Format (files) | Opens | Read calls | Bytes | Distinct regions | Second region |
+|---|---|---|---|---|---|
+| FLAC (5,012) | 1 | 4.8 | 41 KB (19 KB unique) | 1.99 | Metadata after the skipped PICTURE block |
+| MP3 (169) | 2 | 77 | 529 KB | 2.0 | ID3v1/APE probe at the file end, in 100% of files |
+| M4A (92) | 1 | 58 | 1,050 KB | 2.47 | `moov` including `covr` |
+| DSF (99) | 1 | 2 | 621 KB | 2.0 | ID3 at the end, including its picture |
+| Opus (5) | 1 | 95 | 2.9 MB | 2.0 | OpusTags with a base64 picture, then the last page |
+| WAV (28) | 2 | 8 | 31 KB | 2.8 | Trailing chunks |
+
+- `scan_parse_options()` already sets `read_cover_art(false)`. FLAC pictures are seeked over, never read. For ID3v2, MP4 and OpusTags, lofty still reads the tag bytes, but skips decoding the picture.
+- The process total of about 95 KB per track comes from the 365 non-FLAC files reading their tag area. A FLAC reads only about 19 KB.
+- Every format already touches the disk in about 2 places. Fewer bytes therefore cannot remove seeks; only fewer regions or better I/O ordering can.
+
+## A shared block cache was tested and rejected
+
+`BlockCachedPathSource` was tried as the local tag source: one file handle per track and a 64 KiB block cache shared by every `open`, with reads of a block or more passed straight through. It was compared on the 40-files-per-format sample, on block counts for all files, and on warm runs.
+
+- **Read calls** dropped (FLAC 4.8 → 2.1, MP3 77 → 8.7, M4A 58 → 15).
+- **Distinct regions** were unchanged (FLAC 1.99 → 1.96). Those are what cost a seek.
+- **Bytes read** rose from 513 MB to 962 MB.
+- **Warm tag reading** was unchanged (514–524 ms against 508–541 ms).
+
+It was removed. Reading through the FLAC picture to save the second seek would need the merge gap raised to 1 MiB. That only drops regions to 1.35 per file, adds about 400 KB per track, and on a queued HDD the transfer costs about as much as the seek it saves.
+
+The second FLAC region is needed for the audio offset that the bitrate is computed from. The MP3 tail probe is needed for ID3v1-only files. Dropping either would change stored tags.
+
+## Next levers (not implemented)
+
+- **Order reads by physical location.** Use `FSCTL_GET_RETRIEVAL_POINTERS` for each file's first extent, falling back to the path.
+- **Queue depth for an HDD.** Measure 4, 8 and 16 threads cold. Each truly cold run needs a reboot, or one disjoint subfolder set per setting after a single reboot. Flushing the standby list (RAMMap / EmptyStandbyList) needs administrator rights and the user's approval.
