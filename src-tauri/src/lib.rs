@@ -76,8 +76,8 @@ mod android_artwork;
 #[cfg(any(target_os = "android", test))]
 mod android_dsd;
 mod android_folder_browser;
-#[cfg(target_os = "android")]
-mod android_path_migration;
+#[cfg(any(target_os = "android", test))]
+mod android_legacy_backup_cleanup;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod android_playback;
@@ -7881,20 +7881,6 @@ async fn library_sync(app: AppHandle) -> Result<LibrarySyncResult, String> {
         let _database_work = database_work;
         let mut database = Database::open(database_path).map_err(|error| error.to_string())?;
         let _ = remote_sources::refresh_source_labels(&database, &source_settings);
-        // Legacy MediaStore/SAF sources become real-path sources before syncing (ADR 0014).
-        #[cfg(target_os = "android")]
-        let source_settings = {
-            let report = android_path_migration::migrate_legacy_sources(&sync_app, &database)?;
-            if report.backup_directory.is_some() {
-                sync_app
-                    .state::<AppState>()
-                    .settings
-                    .snapshot()
-                    .map_err(|error| error.to_string())?
-            } else {
-                source_settings
-            }
-        };
         let mut on_progress = |root: &LibraryRoot,
                                source_index: usize,
                                source_count: usize,
@@ -8012,11 +7998,11 @@ where
             } else if root.kind == MediaSourceKind::Remote {
                 remote_roots.push(root);
             } else {
-                // Legacy MediaStore/SAF: never scanned again; its mappings stay untouched until
-                // the path migration (needs All files access) converts it (ADR 0014).
+                // Legacy MediaStore/SAF roots remain untouched and unavailable. Their mappings
+                // are preserved until the user adds the same location as a filesystem source.
                 sources.push(unavailable_source_summary(
                     &root,
-                    "舊版 MediaStore/SAF 來源：請開啟「所有檔案存取權」，MoeMusicPlayer 會自動改為資料夾路徑來源。",
+                    "舊版 MediaStore／SAF 來源不再自動轉換；既有曲庫對應已保留。請重新以資料夾來源新增同一位置。",
                 ));
             }
         }
@@ -12123,6 +12109,19 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|error| error.to_string())?;
+            #[cfg(target_os = "android")]
+            match android_legacy_backup_cleanup::remove_legacy_source_migration_backups(
+                &app_data_dir,
+            ) {
+                Ok(report) => eprintln!(
+                    "Android 舊來源備份清理：啟動前 {} 個目錄，內容 {} bytes；啟動後 {} 個目錄，內容 {} bytes。",
+                    report.directories_before,
+                    report.file_bytes_before,
+                    report.directories_after,
+                    report.file_bytes_after,
+                ),
+                Err(error) => eprintln!("無法清除舊 Android 來源遷移備份：{error}"),
+            }
             // A backup imported in the last run is put in place now, before the settings and the database are opened.
             match backup::apply_pending_import(&app_data_dir) {
                 Ok(parts) if !parts.is_empty() => {

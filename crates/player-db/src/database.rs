@@ -3551,34 +3551,6 @@ impl Database {
         Ok(())
     }
 
-    /// Remove only mappings owned by a playlist-file source. Other source mappings and the
-    /// shared Track rows remain intact, so a track referenced by a folder or another playlist
-    /// keeps its identity and library visibility.
-    /// Every `(source_item_id, locator)` mapped under one source, for path migration.
-    pub fn source_item_locators(
-        &self,
-        source_id: SourceId,
-    ) -> Result<Vec<(String, MediaLocator)>, DatabaseError> {
-        let connection = self.lock()?;
-        let mut statement = connection.prepare(
-            "SELECT source_item_id, locator_kind, locator_encoding, locator_data
-             FROM source_mappings WHERE source_id=?1 ORDER BY source_item_id",
-        )?;
-        let rows = statement.query_map([source_id.to_string()], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Vec<u8>>(3)?,
-            ))
-        })?;
-        rows.map(|row| {
-            let (item_id, kind, encoding, data) = row?;
-            Ok((item_id, locator::decode(&kind, &encoding, &data)?))
-        })
-        .collect()
-    }
-
     /// Make every remote file one track: tracks whose mappings share a locator key (the same file of the same account
     /// reached through different sources) are merged. Runs inside every scan of a remote or playlist source (see
     /// [`unify_remote_tracks`]); exposed for callers and tests that want it on its own. Returns the merged track count.
@@ -3588,88 +3560,6 @@ impl Database {
         let merged = unify_remote_tracks(&tx)?;
         tx.commit()?;
         Ok(merged)
-    }
-
-    /// Rewrite one source in place onto filesystem paths (Android content URI -> real path,
-    /// ADR 0014). The library root becomes `root`; each `(old item ID, new item ID, path)` mapping
-    /// keeps its TrackId, so play statistics, lyrics, overrides, playlist entries, and the saved
-    /// session stay attached. Items without a rewrite (or whose new ID already exists) are left
-    /// untouched for the next scan to reconcile as usual. The playlist-file fingerprint is cleared
-    /// so a migrated playlist source is re-read from its new path. Returns the rewritten count.
-    pub fn migrate_source_to_filesystem(
-        &self,
-        root: &LibraryRoot,
-        rewrites: &[(String, String, std::path::PathBuf)],
-    ) -> Result<usize, DatabaseError> {
-        let stored_root = locator::encode(&root.locator);
-        let mut connection = self.lock()?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let source_id = root.id.to_string();
-        let updated_root = tx.execute(
-            "UPDATE library_roots
-                SET source_kind=?2, display_name=?3, locator_kind=?4, locator_encoding=?5,
-                    locator_data=?6, enabled=?7
-              WHERE source_id=?1",
-            params![
-                source_id,
-                source_kind_name(root.kind),
-                root.display_name,
-                stored_root.kind,
-                stored_root.encoding,
-                stored_root.data,
-                i64::from(root.enabled),
-            ],
-        )?;
-        if updated_root != 1 {
-            return Err(DatabaseError::CorruptData(
-                "migrated library root does not exist".to_owned(),
-            ));
-        }
-        let mut rewritten = 0;
-        for (old_item_id, new_item_id, path) in rewrites {
-            if old_item_id == new_item_id {
-                continue;
-            }
-            let stored = locator::encode(&MediaLocator::FileSystem(path.clone()));
-            let taken: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM source_mappings WHERE source_id=?1 AND source_item_id=?2)",
-                params![source_id, new_item_id],
-                |row| row.get(0),
-            )?;
-            if taken {
-                continue;
-            }
-            rewritten += tx.execute(
-                "UPDATE source_mappings
-                    SET source_item_id=?3, locator_key=?3, locator_kind=?4,
-                        locator_encoding=?5, locator_data=?6
-                  WHERE source_id=?1 AND source_item_id=?2",
-                params![
-                    source_id,
-                    old_item_id,
-                    new_item_id,
-                    stored.kind,
-                    stored.encoding,
-                    stored.data,
-                ],
-            )?;
-        }
-        tx.execute(
-            "DELETE FROM playlist_file_sync_state WHERE source_id=?1",
-            [&source_id],
-        )?;
-        tx.commit()?;
-        Ok(rewritten)
-    }
-
-    /// Write a consistent standalone copy of the database (used before source migrations).
-    pub fn backup_into(&self, destination: &std::path::Path) -> Result<(), DatabaseError> {
-        let destination = destination.to_str().ok_or_else(|| {
-            DatabaseError::CorruptData("backup path is not valid UTF-8".to_owned())
-        })?;
-        let connection = self.lock()?;
-        connection.execute("VACUUM INTO ?1", [destination])?;
-        Ok(())
     }
 
     pub fn remove_playlist_file_source(&self, source_id: SourceId) -> Result<(), DatabaseError> {
@@ -7641,81 +7531,6 @@ mod tests {
     ) {
         db.apply_source_scan(root, &state, observed, changed, &[], at)
             .expect("apply source scan");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn android_source_migration_to_paths_keeps_track_ids_and_rescans_onto_them() {
-        let mut db = Database::open_in_memory().expect("database");
-        let mut root = db
-            .add_library_root(
-                MediaSourceKind::AndroidMediaStore,
-                "共用儲存空間",
-                MediaLocator::ContentUri("content://media/external_primary/audio/media".into()),
-            )
-            .expect("add MediaStore root");
-        let mut legacy = record(&root, "external_primary:7", "unused", "Song", 10, 1_000);
-        legacy.identity.locator_key = None;
-        legacy.locator =
-            MediaLocator::ContentUri("content://media/external_primary/audio/media/7".into());
-        let mut collision = record(&root, "external_primary:8", "unused", "Dup", 10, 1_000);
-        collision.identity.locator_key = None;
-        collision.locator =
-            MediaLocator::ContentUri("content://media/external_primary/audio/media/8".into());
-        apply(
-            &mut db,
-            &root,
-            SourceScanState::Complete,
-            &[legacy.clone(), collision.clone()],
-            &[legacy.clone(), collision.clone()],
-            1,
-        );
-        let track_id = db
-            .resolve_track_id_for_locator(&legacy.locator)
-            .unwrap()
-            .expect("legacy track");
-
-        let path = PathBuf::from("/storage/emulated/0/Music/Song.flac");
-        let key = player_core::unix_path_key(&path);
-        root.kind = MediaSourceKind::AndroidFilesystem;
-        root.locator = MediaLocator::FileSystem(PathBuf::from("/storage/emulated/0/Music"));
-        let rewritten = db
-            .migrate_source_to_filesystem(
-                &root,
-                &[
-                    ("external_primary:7".into(), key.clone(), path.clone()),
-                    // Same target path: must not steal or merge the first mapping.
-                    ("external_primary:8".into(), key.clone(), path.clone()),
-                ],
-            )
-            .expect("migrate");
-        assert_eq!(rewritten, 1);
-        let roots = db.library_roots().unwrap();
-        let migrated = roots.iter().find(|item| item.id == root.id).unwrap();
-        assert_eq!(migrated.kind, MediaSourceKind::AndroidFilesystem);
-        assert_eq!(
-            db.resolve_track_id_for_locator(&MediaLocator::FileSystem(path.clone()))
-                .unwrap(),
-            Some(track_id)
-        );
-
-        // A path scan of the same file updates that mapping instead of creating a new TrackId.
-        let mut rescanned = record(&root, &key, &key, "Song", 11, 2_000);
-        rescanned.locator = MediaLocator::FileSystem(path.clone());
-        apply(
-            &mut db,
-            &root,
-            SourceScanState::Complete,
-            std::slice::from_ref(&rescanned),
-            std::slice::from_ref(&rescanned),
-            2,
-        );
-        assert_eq!(
-            db.resolve_track_id_for_locator(&MediaLocator::FileSystem(path))
-                .unwrap(),
-            Some(track_id)
-        );
-        assert!(db.get_track_summary(track_id).unwrap().is_some());
     }
 
     #[test]

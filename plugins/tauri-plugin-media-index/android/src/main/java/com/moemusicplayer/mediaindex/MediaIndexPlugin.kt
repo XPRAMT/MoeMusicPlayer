@@ -90,11 +90,6 @@ class FilePathArgs {
 }
 
 @InvokeArg
-class UriListArgs {
-    var uris: List<String>? = null
-}
-
-@InvokeArg
 class CacheLeaseArgs {
     var token: String? = null
 }
@@ -815,25 +810,6 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             return directPathFor(android.content.ContentUris.withAppendedId(collection, id64))
         }
         return null
-    }
-
-    /** Real paths for many MediaStore / ExternalStorageProvider URIs, in order (source migration). */
-    @Command
-    fun resolveDirectPaths(invoke: Invoke) {
-        val args = invoke.parseArgs(UriListArgs::class.java)
-        val uris = args.uris.orEmpty()
-        io.execute {
-            val paths = org.json.JSONArray()
-            for (raw in uris) {
-                val path = try {
-                    if (hasStorageAccess()) directPathFor(Uri.parse(raw)) else null
-                } catch (_: Exception) {
-                    null
-                }
-                paths.put(path ?: JSONObject.NULL)
-            }
-            invoke.resolve(JSObject().put("paths", paths))
-        }
     }
 
     /**

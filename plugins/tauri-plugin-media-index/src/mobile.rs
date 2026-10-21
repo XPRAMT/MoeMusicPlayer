@@ -203,23 +203,6 @@ impl<R: Runtime> PlatformMediaIndex<R> {
             .path)
     }
 
-    /// Real paths for many MediaStore / ExternalStorageProvider URIs (source migration).
-    pub(crate) fn resolve_direct_paths(&self, uris: &[String]) -> Result<Vec<Option<String>>> {
-        #[derive(serde::Deserialize)]
-        struct DirectPathsResponse {
-            paths: Vec<Option<String>>,
-        }
-        let response = self
-            .0
-            .run_mobile_plugin::<DirectPathsResponse>("resolveDirectPaths", json!({ "uris": uris }))?;
-        if response.paths.len() != uris.len() {
-            return Err(crate::Error::Response(
-                "Android returned a different number of resolved paths".to_owned(),
-            ));
-        }
-        Ok(response.paths)
-    }
-
     /// Folder picker that only yields a real path; no persisted SAF grant is kept (ADR 0014).
     pub(crate) fn clipboard_has_image(&self) -> Result<bool> {
         let value: serde_json::Value = self.0.run_mobile_plugin("clipboardImageStatus", json!({}))?;

@@ -17,7 +17,6 @@ pub mod fs_scan;
 #[cfg(target_os = "android")]
 mod mobile;
 mod models;
-pub mod storage_paths;
 
 pub use error::{Error, Result};
 
@@ -199,12 +198,6 @@ impl<R: Runtime> MediaIndex<R> {
     #[cfg(target_os = "android")]
     pub fn resolve_direct_path(&self, uri: &str) -> Result<Option<String>> {
         self.platform.resolve_direct_path(uri)
-    }
-
-    /// Real paths for many MediaStore / ExternalStorageProvider URIs, in order (source migration).
-    #[cfg(target_os = "android")]
-    pub fn resolve_direct_paths(&self, uris: &[String]) -> Result<Vec<Option<String>>> {
-        self.platform.resolve_direct_paths(uris)
     }
 
     /// Whether the clipboard holds an image (clip description only; no data is read).
