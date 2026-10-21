@@ -6,6 +6,7 @@ pub mod local;
 pub mod prefetch;
 pub mod secret;
 pub mod smb;
+pub mod smb_transport;
 #[cfg(any(test, feature = "testing"))]
 pub mod test_server;
 pub mod tls;
