@@ -128,6 +128,13 @@
     withLivePlayedMs,
   } from './lib/live-play-count.js';
   import { effectivePlaybackDurationMs } from './lib/playback-duration';
+  import {
+    correctPlaybackClock,
+    estimatePlaybackPosition,
+    msUntilPlaybackPosition,
+    type PlaybackClock,
+    type TaskbarLyricsPlayback,
+  } from './lib/playback-clock';
   import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
   import { appTooltip } from './lib/app-tooltip.js';
   import SourceScopeSwitch from './lib/SourceScopeSwitch.svelte';
@@ -664,6 +671,9 @@
   });
   let playbackError = $state<string | null>(null);
   let playback = $state<PlaybackSnapshot | null>(null);
+  // Playback clock (ADR 0028): the progress bar and the lyrics advance from it between the 500 ms samples.
+  let playbackClock = $state<PlaybackClock | null>(null);
+  let lastTaskbarLyricsPlayback: TaskbarLyricsPlayback | null = null;
   let playbackQueueResetKey = $state(0);
   let playbackQueueCursorChangeKey = $state(0);
   let volumeDraft = $state<number | null>(null);
@@ -736,6 +746,7 @@
   let nowPlayingLayoutQueue: Promise<void> = Promise.resolve();
   let lyricsPreferencesQueue: Promise<void> = Promise.resolve();
   let lyricsPreferencesSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  const PLAYBACK_POLL_MS = 500;
   let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
   let livePlayCountTimer: ReturnType<typeof setInterval> | undefined;
   let livePlayCountTracker = createLivePlayCountState();
@@ -1418,11 +1429,13 @@
     updateTrackHeaderTextOffset();
     applyAndroidInsets();
     if (isTauri()) {
+      // Backstop sample (ADR 0028): the clock advances the bar between samples; commands, focus, visibility and
+      // device changes take a sample at once. It keeps running while minimized so the taskbar lyrics stay fed.
       playbackPollTimer = setInterval(() => {
         if (playbackReady && !isSendingPlaybackCommand) {
           void loadPlaybackSnapshot(false);
         }
-      }, 100);
+      }, PLAYBACK_POLL_MS);
       livePlayCountTimer = setInterval(() => {
         publishLivePlayCount();
       }, 1000);
@@ -2136,7 +2149,7 @@
     }
     const delta = action === 'seekBack' ? -5_000 : 5_000;
     const duration = playback?.durationMs;
-    const next = Math.max(0, (playback?.positionMs ?? 0) + delta);
+    const next = Math.max(0, currentPlaybackPositionMs() + delta);
     void commitPlaybackSeek(duration == null ? next : Math.min(next, duration));
   }
 
@@ -3448,7 +3461,7 @@
     command: 'playback_pause' | 'playback_next' | 'playback_previous',
   ): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand) return;
-    if (command === 'playback_previous' && (playback?.positionMs ?? 0) > 3000) {
+    if (command === 'playback_previous' && currentPlaybackPositionMs() > 3000) {
       await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs: 0 }));
       return;
     }
@@ -3495,6 +3508,7 @@
       && previous.positionMs > resolved.positionMs + 50
       && resolved.positionMs < 1500;
     playback = resolved;
+    updatePlaybackClock(resolved);
     if (Object.hasOwn(resolved, 'queueSort')) queueSort = resolved.queueSort ?? null;
     confirmedVolume = resolved.volume;
     if (trackChanged || positionReset || forceQueueCursorProbe) playbackQueueCursorChangeKey += 1;
@@ -3508,6 +3522,73 @@
       publishLivePlayCount();
     }
   }
+
+  function updatePlaybackClock(snapshot: PlaybackSnapshot): void {
+    const sample: TaskbarLyricsPlayback = {
+      trackId: snapshot.currentTrack?.id ?? null,
+      positionMs: snapshot.positionMs,
+      durationMs: effectivePlaybackDurationMs(snapshot.durationMs, snapshot.currentTrack?.durationMs),
+      state: snapshot.state,
+      playing: snapshot.isPlaying && snapshot.state === 'playing',
+    };
+    playbackClock = correctPlaybackClock(untrack(() => playbackClock), sample, performance.now());
+    lastTaskbarLyricsPlayback = sample;
+    untrack(forwardTaskbarLyricsPlayback);
+  }
+
+  function forwardTaskbarLyricsPlayback(): void {
+    const sample = lastTaskbarLyricsPlayback;
+    if (!sample || !isTauri() || capabilities?.platform !== 'windows' || !taskbarLyricsSettings.enabled) return;
+    void emitTo('taskbar-lyrics', 'taskbar-lyrics-playback', sample).catch(() => {});
+  }
+
+  /** The position now, from the clock (falls back to the last sample). */
+  function currentPlaybackPositionMs(): number {
+    return playbackClock ? estimatePlaybackPosition(playbackClock, performance.now()) : (playback?.positionMs ?? 0);
+  }
+
+  function requestPlaybackSample(): void {
+    if (playbackReady && !isSendingPlaybackCommand) void loadPlaybackSnapshot(false);
+  }
+
+  // A playing clock that reaches the end of the track: the shell has most likely moved on, so sample at once.
+  $effect(() => {
+    const clock = playbackClock;
+    if (!clock?.playing || clock.durationMs == null || clock.durationMs <= 0) return;
+    const wait = msUntilPlaybackPosition(clock, performance.now(), clock.durationMs);
+    if (wait === null) return;
+    const timer = setTimeout(() => untrack(requestPlaybackSample), wait + 20);
+    return () => clearTimeout(timer);
+  });
+
+  $effect(() => {
+    if (!isTauri()) return;
+    const onVisible = () => { if (document.visibilityState === 'visible') requestPlaybackSample(); };
+    const onFocus = () => requestPlaybackSample();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen('audio-devices-changed', () => requestPlaybackSample())
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+    };
+  });
+
+  $effect(() => {
+    if (!isTauri() || capabilities?.platform !== 'windows') return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen('taskbar-lyrics-playback-request', () => untrack(forwardTaskbarLyricsPlayback))
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
+  });
 
   function setPlaybackVolume(event: Event): void {
     if (!playbackReady) return;
@@ -3638,6 +3719,8 @@
     } finally {
       isSendingPlaybackCommand = false;
     }
+    // The command's own snapshot can precede the change taking effect (a seek settling); sample once more now.
+    requestPlaybackSample();
   }
 
   function capabilityLabel(capability: FeatureCapability | undefined): string {
@@ -5023,6 +5106,7 @@
                   trackTitle={playback?.currentTrack?.title ?? null}
                   trackArtist={playback?.currentTrack?.artist ?? null}
                   positionMs={playback?.positionMs ?? 0}
+                  {playbackClock}
                   isPlaying={playback?.isPlaying ?? false}
                   playbackState={playback?.state ?? 'empty'}
                   {lyricsPreferences}
@@ -5207,6 +5291,7 @@
         canControl={playbackReady}
         isSending={isSendingPlaybackCommand}
         timelineStyle={nowPlayingAppearancePreferences.timelineStyle}
+        clock={playbackClock}
         onSeek={commitPlaybackSeek}
       />
       {#if playbackError || playback?.lastError}<span class="dock-error" role="status">{playbackError ?? playback?.lastError}</span>{/if}

@@ -4116,8 +4116,19 @@ input:focus-visible {
   background-size: 100% 3px;
 }
 
+/* The bar runs as a linear CSS animation of this registered number (ADR 0028): both the gradient and the painted
+   thumb read it, and both are placed in percentages, so a width change needs no recalculation. */
+@property --progress-ratio {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
+@keyframes playback-progress-run-a { to { --progress-ratio: 1; } }
+@keyframes playback-progress-run-b { to { --progress-ratio: 1; } }
+
 .progress-hit {
-  --progress-pct: 0%;
+  --progress-ratio: 0;
   --progress-glow: color-mix(in srgb, var(--accent) 72%, var(--accent-bright));
   --progress-thumb: 10px;
   position: relative;
@@ -4137,6 +4148,7 @@ input:focus-visible {
   border-radius: 99px;
   pointer-events: none;
   transform: translateY(-50%);
+  --progress-pct: calc(var(--progress-ratio) * 100%);
   background: linear-gradient(
     90deg,
     rgba(var(--accent-rgb), 0.32) 0%,
@@ -4769,6 +4781,11 @@ input:focus-visible {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  /* The progress bar run is a clock, not decorative motion: it keeps its real length (ADR 0028). */
+  .progress-hit.progress-hit {
+    animation-duration: var(--progress-run-ms, 0ms) !important;
   }
 }
 

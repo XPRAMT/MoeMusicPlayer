@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { tr } from './i18n.js';
   import { formatDuration } from './format';
   import {
@@ -8,6 +9,12 @@
     shouldReleasePlaybackSeekDraft,
   } from './playback-scrubber';
   import type { TimelineStyle } from './ipc';
+  import {
+    estimatePlaybackPosition,
+    msUntilPlaybackPosition,
+    playbackProgressRun,
+    type PlaybackClock,
+  } from './playback-clock';
 
   let {
     positionMs = 0,
@@ -16,6 +23,7 @@
     canControl = false,
     isSending = false,
     timelineStyle = 'edge',
+    clock = null,
     onSeek,
   }: {
     positionMs: number;
@@ -24,6 +32,8 @@
     canControl: boolean;
     isSending: boolean;
     timelineStyle?: TimelineStyle;
+    /** Playback clock (ADR 0028). Without it the bar shows `positionMs` as is. */
+    clock?: PlaybackClock | null;
     onSeek: (positionMs: number) => boolean | void | Promise<boolean | void>;
   } = $props();
 
@@ -34,9 +44,26 @@
   let pointerActive = false;
   let seekInFlight = false;
 
+  // The elapsed time text is re-read once per whole second (secondTick); the bar itself runs as a CSS animation.
+  let secondTick = $state(0);
+  const clockPositionMs = $derived.by(() => {
+    secondTick;
+    return clock ? estimatePlaybackPosition(clock, performance.now()) : positionMs;
+  });
+  $effect(() => {
+    secondTick;
+    const current = clock;
+    if (!current?.playing) return;
+    const now = performance.now();
+    const wait = msUntilPlaybackPosition(current, now, (Math.floor(estimatePlaybackPosition(current, now) / 1000) + 1) * 1000);
+    if (wait === null) return;
+    const timer = setTimeout(() => { secondTick += 1; }, wait + 5);
+    return () => clearTimeout(timer);
+  });
+  const hasDraft = $derived(draftTrackId === trackId && draftPositionMs !== null);
   const displayedPositionMs = $derived(
     playbackSeekDisplayPosition(
-      positionMs,
+      clockPositionMs,
       durationMs,
       draftTrackId === trackId ? draftPositionMs : null,
     ),
@@ -46,6 +73,27 @@
       ? Math.min(100, Math.max(0, (displayedPositionMs / durationMs) * 100))
       : 0,
   );
+  // CSS run of the bar: from the current ratio to 1 in the remaining time, linear. It restarts only when the clock
+  // jumps (seek, new track, play/pause, deviation > 250 ms) or a drag ends; smooth corrections leave it running.
+  // Two identical keyframe names alternate so that a restart is a change of animation-name.
+  let run = $state<{ ratio: number; remainingMs: number | null; name: string }>({ ratio: 0, remainingMs: null, name: 'playback-progress-run-a' });
+  $effect(() => {
+    const current = clock;
+    current?.jumpId;
+    current?.playing;
+    if (hasDraft) return;
+    const next = playbackProgressRun(current, performance.now());
+    const name = untrack(() => run.name) === 'playback-progress-run-a' ? 'playback-progress-run-b' : 'playback-progress-run-a';
+    run = { ...next, name };
+  });
+  const progressStyle = $derived.by(() => {
+    if (hasDraft || !clock || durationMs == null || durationMs <= 0 || durationMs !== clock.durationMs) {
+      return `--progress-ratio: ${progressPercent / 100}; animation: none`;
+    }
+    return run.remainingMs === null
+      ? `--progress-ratio: ${run.ratio}; animation: none`
+      : `--progress-ratio: ${run.ratio}; --progress-run-ms: ${Math.round(run.remainingMs)}ms; animation: ${run.name} ${Math.round(run.remainingMs)}ms linear forwards`;
+  });
   const seekEnabled = $derived(canControl && trackId !== null && isPlaybackSeekableDuration(durationMs));
   // Keep the range input enabled while non-seek commands are busy so :disabled opacity does not flash the timeline.
 
@@ -129,7 +177,7 @@
 
 <div class="progress-row" data-timeline-style={timelineStyle}>
   <span class="progress-time progress-time-elapsed">{formatDuration(displayedPositionMs)}</span>
-  <div class="progress-hit" style={`--progress-pct: ${progressPercent}%; --progress-ratio: ${progressPercent / 100}`}>
+  <div class="progress-hit" style={progressStyle}>
     <input
       class="progress-slider"
       type="range"

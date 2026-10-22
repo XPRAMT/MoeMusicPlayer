@@ -13,6 +13,7 @@
   } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
   import { convertTrackLyrics } from './lyrics-traditional.js';
+  import { estimatePlaybackPosition, msUntilPlaybackPosition, nextCuePosition, type PlaybackClock } from './playback-clock';
   import { effectiveCandidateFilter, filterLyricsCandidates, getCandidatePresentation } from './lyrics-candidate-preview.js';
   import {
     DEFAULT_LYRICS_PREFERENCES,
@@ -76,6 +77,9 @@
     trackTitle?: string | null;
     trackArtist?: string | null;
     positionMs: number;
+    /** The shell's playback clock. When given, the active line follows it: the view wakes once when the next line
+     *  starts (and again when the clock is corrected), instead of recomputing on every position sample. */
+    playbackClock?: PlaybackClock | null;
     isPlaying: boolean;
     playbackState?: PlaybackState;
     lyricsPreferences?: LyricsPreferences;
@@ -94,6 +98,7 @@
     trackTitle = null,
     trackArtist = null,
     positionMs = 0,
+    playbackClock = null,
     isPlaying = false,
     playbackState,
     lyricsPreferences = DEFAULT_LYRICS_PREFERENCES,
@@ -225,13 +230,27 @@
   let timedLines = $derived(
     viewState.lyrics?.synced ? buildTimedLyricTimeline(lines) : [],
   );
-  let activeTimedIndex = $derived(
-    findActiveLyricIndex(
-      timedLines,
-      positionMs,
-      (viewState.lyrics?.offsetMs ?? 0) + lyricsTimingDelaySecToOffsetMs(timingOffsetSec),
-    ),
-  );
+  let timedOffsetMs = $derived((viewState.lyrics?.offsetMs ?? 0) + lyricsTimingDelaySecToOffsetMs(timingOffsetSec));
+  // Bumped by the cue timer below; the clock estimate is read again only then (or when the clock itself changes).
+  let cueTick = $state(0);
+  let cuePositionMs = $derived.by(() => {
+    cueTick;
+    return playbackClock ? estimatePlaybackPosition(playbackClock, performance.now()) : positionMs;
+  });
+  $effect(() => {
+    const clock = playbackClock;
+    const starts = timedLines.map((entry) => entry.startMs);
+    const offset = timedOffsetMs;
+    cueTick;
+    if (!clock || !clock.playing || starts.length === 0) return;
+    const now = performance.now();
+    const next = nextCuePosition(starts, offset, estimatePlaybackPosition(clock, now));
+    const wait = next === null ? null : msUntilPlaybackPosition(clock, now, next);
+    if (wait === null) return;
+    const timer = setTimeout(() => { cueTick += 1; }, wait + 2);
+    return () => clearTimeout(timer);
+  });
+  let activeTimedIndex = $derived(findActiveLyricIndex(timedLines, cuePositionMs, timedOffsetMs));
   let displayActiveTimedIndex = $derived(
     getDisplayActiveLyricIndex(activeTimedIndex, effectivePlaybackState),
   );

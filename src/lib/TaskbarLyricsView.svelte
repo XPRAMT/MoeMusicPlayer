@@ -2,11 +2,19 @@
   // 工作列歌詞視窗（ADR 0018）：透明、可穿透滑鼠、置頂的獨立視窗，由 Rust 的監看執行緒擺在工作列空白處。
   // 歌詞不在這裡載入：主程式層載入一次（和播放頁同一份、已套用簡轉繁），整理好後推送過來（`taskbar-lyrics-data`）。
   // 這個頁面只輪詢播放位置，並畫出目前這一行，所以不會和播放頁的歌詞不一致。
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
   import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { fade } from 'svelte/transition';
   import { followLanguageChange } from './language-sync.js';
   import { invokeCommand } from './ipc';
+  import {
+    correctPlaybackClock,
+    estimatePlaybackPosition,
+    msUntilPlaybackPosition,
+    nextCuePosition,
+    type PlaybackClock,
+    type TaskbarLyricsPlayback,
+  } from './playback-clock';
   import type { PlaybackSnapshot, TaskbarLyricsSettings } from './ipc';
   import { getDisplayActiveLyricIndex } from './lyrics-preferences.js';
   import { buildTimedLyricTimeline, findActiveLyricIndex } from './lyrics-window.js';
@@ -21,9 +29,9 @@
     normalizeTaskbarLyricsSettings,
   } from './taskbar-lyrics-settings.js';
 
-  // The Now Playing page reads the playback snapshot every 100 ms; so does this window, so a line changes at the same
-  // moment in both.
-  const SNAPSHOT_POLL_MS = 100;
+  // This window does not poll the player (ADR 0028): the main window forwards every playback sample it takes
+  // (`taskbar-lyrics-playback`, every 500 ms and right after a command) and both run the same playback clock, so a
+  // line changes at the same moment in both. A timer wakes the view when the next line starts.
   /** How long the last line of a track is assumed to stay when the track length is unknown. */
   const LAST_LINE_FALLBACK_MS = 5000;
 
@@ -32,7 +40,12 @@
   let data = $state<TaskbarLyricsData | null>(null);
   let playbackState = $state<PlaybackSnapshot['state']>('stopped');
   let trackId = $state<string | null>(null);
-  let positionMs = $state(0);
+  let clock = $state<PlaybackClock | null>(null);
+  let cueTick = $state(0);
+  let positionMs = $derived.by(() => {
+    cueTick;
+    return clock ? estimatePlaybackPosition(clock, performance.now()) : 0;
+  });
   let durationMs = $state<number | null>(null);
   let viewportHeight = $state(typeof window === 'undefined' ? 0 : window.innerHeight);
   let viewportWidth = $state(typeof window === 'undefined' ? 0 : window.innerWidth);
@@ -51,11 +64,40 @@
   let activeIndex = $derived(getDisplayActiveLyricIndex(findActiveLyricIndex(timeline, positionMs, timingOffsetMs), playbackState));
   // A line scrolls over the time it is shown: from its own start to the start of the next line (the end of the track
   // for the last one).
-  let scrollProgress = $derived.by(() => {
-    if (activeIndex < 0) return 0;
+  // The scroll runs as a linear CSS animation from where the line is now to its end position (reached at 90% of the
+  // line's time); it restarts when the line changes or the clock is corrected, never per frame.
+  let scrollRun = $derived.by(() => {
+    if (activeIndex < 0) return { from: 0, remainingMs: null as number | null };
     const start = timeline[activeIndex].startMs;
     const next = timeline[activeIndex + 1]?.startMs ?? (durationMs !== null ? durationMs - timingOffsetMs : start + LAST_LINE_FALLBACK_MS);
-    return getLyricScrollProgress(positionMs + timingOffsetMs - start, Math.max(1000, next - start));
+    const lineMs = Math.max(1000, next - start);
+    const from = getLyricScrollProgress(positionMs + timingOffsetMs - start, lineMs);
+    const wait = from < 1 ? msUntilPlaybackPosition(clock, performance.now(), start - timingOffsetMs + lineMs * 0.9) : null;
+    return { from, remainingMs: wait !== null && wait > 0 ? wait : null };
+  });
+  let scrollName = $state('taskbar-lyrics-scroll-a');
+  $effect(() => {
+    scrollRun;
+    scrollName = untrack(() => scrollName) === 'taskbar-lyrics-scroll-a' ? 'taskbar-lyrics-scroll-b' : 'taskbar-lyrics-scroll-a';
+  });
+  function scrollStyle(overflow: number): string {
+    const shift = `--scroll-shift: ${-overflow}px; --scroll-from: ${scrollRun.from};`;
+    return scrollRun.remainingMs === null || overflow <= 0
+      ? `${shift} transform: translateX(${-overflow * scrollRun.from}px)`
+      : `${shift} animation: ${scrollName} ${Math.round(scrollRun.remainingMs)}ms linear forwards`;
+  }
+  $effect(() => {
+    const current = clock;
+    const starts = timeline.map((entry) => entry.startMs);
+    const offset = timingOffsetMs;
+    cueTick;
+    if (!current?.playing || starts.length === 0) return;
+    const now = performance.now();
+    const next = nextCuePosition(starts, offset, estimatePlaybackPosition(current, now));
+    const wait = next === null ? null : msUntilPlaybackPosition(current, now, next);
+    if (wait === null) return;
+    const timer = setTimeout(() => { cueTick += 1; }, wait + 2);
+    return () => clearTimeout(timer);
   });
   let activeLine = $derived(activeIndex >= 0 ? timeline[activeIndex]?.line : undefined);
   let text = $derived(activeLine?.text?.trim() ?? '');
@@ -80,24 +122,18 @@
     });
   });
 
-  let snapshotBusy = false;
-  async function pollSnapshot(): Promise<void> {
-    if (snapshotBusy) return;
-    snapshotBusy = true;
-    try {
-      const snapshot = await invokeCommand('playback_get_snapshot', {});
-      positionMs = snapshot.positionMs;
-      durationMs = snapshot.durationMs;
-      playbackState = snapshot.state;
-      trackId = snapshot.currentTrack?.id ?? null;
-    } catch {
-      // The player is shutting down or not ready yet; the next poll tries again.
-    } finally {
-      snapshotBusy = false;
-    }
+  function applyPlayback(sample: TaskbarLyricsPlayback): void {
+    clock = correctPlaybackClock(clock, {
+      trackId: sample.trackId,
+      positionMs: sample.positionMs,
+      playing: sample.playing,
+      durationMs: sample.durationMs,
+    }, performance.now());
+    durationMs = sample.durationMs;
+    playbackState = sample.state;
+    trackId = sample.trackId;
   }
 
-  const timers: ReturnType<typeof setInterval>[] = [];
   const unlisteners: UnlistenFn[] = [];
   const onResize = () => {
     viewportHeight = window.innerHeight;
@@ -128,13 +164,15 @@
     void listen<boolean>('taskbar-lyrics-theme', (event) => {
       taskbarIsLight = event.payload;
     }).then((unlisten) => unlisteners.push(unlisten));
-    void pollSnapshot();
-    timers.push(setInterval(pollSnapshot, SNAPSHOT_POLL_MS));
+    void listen<TaskbarLyricsPlayback>('taskbar-lyrics-playback', (event) => applyPlayback(event.payload)).then((unlisten) => {
+      unlisteners.push(unlisten);
+      // Opened before (or after) the main window: ask it for the current playback now that this window listens.
+      void emit('taskbar-lyrics-playback-request');
+    });
   });
 
   onDestroy(() => {
     window.removeEventListener('resize', onResize);
-    for (const timer of timers) clearInterval(timer);
     for (const unlisten of unlisteners) unlisten();
   });
 </script>
@@ -153,11 +191,11 @@
     {#if text}
       <div class="taskbar-lyrics-line" in:fade={{ duration: 120 }}>
         <span class="taskbar-lyrics-main" bind:this={mainClip}>
-          <span class="taskbar-lyrics-track" bind:this={mainTrack} style:transform={`translateX(${-mainOverflow * scrollProgress}px)`}>{text}</span>
+          <span class="taskbar-lyrics-track" bind:this={mainTrack} style={scrollStyle(mainOverflow)}>{text}</span>
         </span>
         {#if translation}
           <span class="taskbar-lyrics-translation" bind:this={translationClip}>
-            <span class="taskbar-lyrics-track" bind:this={translationTrack} style:transform={`translateX(${-translationOverflow * scrollProgress}px)`}>{translation}</span>
+            <span class="taskbar-lyrics-track" bind:this={translationTrack} style={scrollStyle(translationOverflow)}>{translation}</span>
           </span>
         {/if}
       </div>
@@ -166,6 +204,14 @@
 </div>
 
 <style>
+  @keyframes -global-taskbar-lyrics-scroll-a {
+    from { transform: translateX(calc(var(--scroll-shift) * var(--scroll-from))); }
+    to { transform: translateX(var(--scroll-shift)); }
+  }
+  @keyframes -global-taskbar-lyrics-scroll-b {
+    from { transform: translateX(calc(var(--scroll-shift) * var(--scroll-from))); }
+    to { transform: translateX(var(--scroll-shift)); }
+  }
   :global(html.taskbar-lyrics-window),
   :global(html.taskbar-lyrics-window body),
   :global(html.taskbar-lyrics-window #app) {
