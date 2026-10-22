@@ -221,8 +221,10 @@ export function getQuickIndexCellWidthEm(labels) {
 /** @param {string} label */
 export function getQuickIndexDisplayLabel(label) {
   if (label === '未知') return '？';
+  // Disc groups read DISC 1, DISC 2, ... (English, as the user chose; not translated). The cell grows with the text
+  // (getQuickIndexCellWidthEm), the same way 2024 or FLAC labels fit.
   const discNumber = /^DISC\s+(\d+)$/i.exec(label)?.[1];
-  return discNumber ?? label;
+  return discNumber === undefined ? label : `DISC ${discNumber}`;
 }
 
 /** @param {string} key */

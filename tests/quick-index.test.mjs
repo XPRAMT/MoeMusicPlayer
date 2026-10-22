@@ -12,6 +12,7 @@ import {
   dataIndexToVisualIndex,
   getQuickIndexAvailableWidth,
   estimateQuickIndexTextWidthEm,
+  QUICK_INDEX_LABEL_PADDING_EM,
   getQuickIndexCellSizePx,
   getQuickIndexCellWidthEm,
   getQuickIndexColumnCount,
@@ -61,10 +62,13 @@ test('quick find displays the Unknown category as a full-width question mark', (
   assert.equal(getQuickIndexDisplayLabel('ㄅ'), 'ㄅ');
 });
 
-test('quick find displays Disc groups as track-free numeric labels', () => {
-  assert.equal(getQuickIndexDisplayLabel('DISC 1'), '1');
-  assert.equal(getQuickIndexDisplayLabel('DISC 12'), '12');
-  assert.equal(getQuickIndexDisplayLabel('DISC 0'), '0');
+test('quick find displays Disc groups as DISC n, and widens its cells to fit them', () => {
+  assert.equal(getQuickIndexDisplayLabel('DISC 1'), 'DISC 1');
+  assert.equal(getQuickIndexDisplayLabel('disc  12'), 'DISC 12');
+  assert.equal(getQuickIndexDisplayLabel('DISC 0'), 'DISC 0');
+  assert.equal(getQuickIndexDisplayLabel('A'), 'A', 'other groups are unchanged');
+  const width = getQuickIndexCellWidthEm(['DISC 1', 'DISC 12'].map(getQuickIndexDisplayLabel));
+  assert.ok(width >= estimateQuickIndexTextWidthEm('DISC 12') + QUICK_INDEX_LABEL_PADDING_EM, 'the widest label fits without clipping');
 });
 
 test('complete grouping renders its group and track rows without waiting for a second state echo', () => {
