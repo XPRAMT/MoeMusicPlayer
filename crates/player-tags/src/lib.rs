@@ -8,7 +8,7 @@ pub mod cover;
 pub mod spectrogram;
 pub mod tags;
 
-pub use cover::{prepare_cover, CoverOptions, PreparedCover};
+pub use cover::{plan_cover, prepare_cover, CoverOptions, CoverPlan, PreparedCover};
 pub use spectrogram::{
     colormap_lut, render_spectrogram, ChannelSelect, Colormap, Spectrogram, SpectrogramOptions,
     WindowFunction,

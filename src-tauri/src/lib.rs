@@ -11970,6 +11970,7 @@ pub fn run() {
             track_details::track_details_get,
             track_details::track_details_cover,
             track_details::track_details_save,
+            track_details::track_details_cover_plan,
             track_details::track_details_pick_cover,
             track_details::track_details_read_image,
             track_details::track_details_export_cover,

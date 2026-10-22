@@ -96,19 +96,6 @@
     } catch { /* undecodable: Save will report the error */ }
   }
 
-  /** Mirrors player_tags::cover::prepare_cover: JPEG kept as-is unless resized; otherwise
-   *  re-encoded to JPEG; auto-resize only shrinks to the short edge, keeping aspect ratio. */
-  function savedCoverPlan(info: CoverInfo, options: CoverEditOptions): { width: number; height: number; reencode: boolean } {
-    let { width, height } = info;
-    const short = Math.min(width, height);
-    if (options.autoResize && short > options.shortEdgePx) {
-      const scale = options.shortEdgePx / short;
-      width = Math.max(1, Math.round(width * scale));
-      height = Math.max(1, Math.round(height * scale));
-    }
-    const resized = width !== info.width || height !== info.height;
-    return { width, height, reencode: resized || info.mime !== 'image/jpeg' };
-  }
   let removeCover = $state(false);
   let onlineLyricsText = $state<string | null>(null);
   let coverOptions = $state<CoverEditOptions>(loadCoverEditOptions());
@@ -116,7 +103,30 @@
   const isDirty = (key: keyof TagFields) => !!draft && !!original && draft[key] !== original[key];
   // Cover facts shown next to the preview follow the staged state, not the loaded file.
   const shownCover = $derived(removeCover ? null : pendingCoverPath ? stagedCoverInfo : details?.cover ?? null);
-  const savedPlan = $derived(pendingCoverPath && stagedCoverInfo ? savedCoverPlan(stagedCoverInfo, coverOptions) : null);
+  /** How Save will write the staged cover: Rust's player_tags::plan_cover, the same rule Save uses
+   *  (JPG unless the image has an alpha channel, then PNG; unscaled JPG / alpha PNG keep their bytes). */
+  type CoverPlan = { width: number; height: number; mime: string; reencode: boolean };
+  let savedPlan = $state<CoverPlan | null>(null);
+  let coverPlanRequest = 0;
+  $effect(() => {
+    const path = pendingCoverPath;
+    const base64 = pendingCoverBase64;
+    const options = { ...coverOptions };
+    const request = ++coverPlanRequest;
+    savedPlan = null;
+    if (!path) return;
+    const clipboard = path === CLIPBOARD_COVER;
+    if (clipboard && !base64) return;
+    invoke<CoverPlan>('track_details_cover_plan', { coverPath: clipboard ? null : path, coverBase64: clipboard ? base64 : null, coverOptions: options })
+      .then((plan) => { if (request === coverPlanRequest) savedPlan = plan; })
+      .catch(() => { /* undecodable: Save will report the error */ });
+  });
+  function coverPlanText(plan: CoverPlan): string {
+    const kind = plan.mime === 'image/png' ? 'PNG' : 'JPG';
+    if (!plan.reencode) return tr("儲存時：{0}×{1} {2}（原檔寫入，不重新編碼）", [plan.width, plan.height, kind]);
+    if (kind === 'PNG') return tr("儲存時：{0}×{1} PNG（保留透明）", [plan.width, plan.height]);
+    return tr("儲存時：{0}×{1} JPG（品質 {2}%）", [plan.width, plan.height, coverOptions.jpegQuality]);
+  }
   const coverDirty = $derived(pendingCoverPath !== null || removeCover);
   const anyDirty = $derived(!!draft && !!original && (Object.keys(original) as (keyof TagFields)[]).some((key) => draft![key] !== original![key]) || coverDirty);
 
@@ -441,7 +451,7 @@
           <label>{tr("短邊")} <input type="number" min="64" max="10000" step="10" disabled={!coverOptions.autoResize} value={coverOptions.shortEdgePx} onchange={(event) => updateCoverOptions({ shortEdgePx: Math.max(64, Number(event.currentTarget.value) || 2160) })} /> {tr("px（保持長寬比）")}</label>
           {#if shownCover}
             <p>{shownCover.width}×{shownCover.height} · {shownCover.mime.replace('image/', '').toUpperCase()} · {formatBytes(shownCover.bytes)}{#if pendingCoverPath}{tr("（未儲存）")}{/if}</p>
-            {#if pendingCoverPath && savedPlan?.reencode}<p class="track-details-cover-plan">{tr("儲存時：{0}×{1} JPG（品質 {2}%）", [savedPlan.width, savedPlan.height, coverOptions.jpegQuality])}</p>{/if}
+            {#if pendingCoverPath && savedPlan}<p class="track-details-cover-plan">{coverPlanText(savedPlan)}</p>{/if}
           {/if}
         </div>
       </section>

@@ -754,6 +754,28 @@ pub async fn track_details_save(
     .await
 }
 
+/// How Save would write the staged cover (size, JPG or PNG, re-encoded or original bytes), for the
+/// details page's 「儲存時：…」 line. Same rule as `player_tags::prepare_cover`.
+#[tauri::command]
+pub async fn track_details_cover_plan(
+    app: AppHandle,
+    cover_path: Option<String>,
+    cover_base64: Option<String>,
+    cover_options: player_tags::CoverOptions,
+) -> Result<player_tags::CoverPlan, String> {
+    blocking(move || {
+        let bytes = match (&cover_path, &cover_base64) {
+            (Some(image), _) => read_image_source(&app, image)?,
+            (None, Some(data)) => base64::engine::general_purpose::STANDARD
+                .decode(data.as_bytes())
+                .map_err(|error| format!("剪貼簿圖片格式錯誤：{error}"))?,
+            (None, None) => return Err("沒有暫存的封面".into()),
+        };
+        player_tags::plan_cover(&bytes, cover_options)
+    })
+    .await
+}
+
 /// Pick a replacement cover image; returns its path (staged until Save).
 #[tauri::command]
 pub async fn track_details_pick_cover(

@@ -682,6 +682,8 @@
   "儲存": "Save",
   "儲存中…": "Saving…",
   "儲存時：{0}×{1} JPG（品質 {2}%）": "When saved: {0}×{1} JPG (quality {2}%)",
+  "儲存時：{0}×{1} {2}（原檔寫入，不重新編碼）": "When saved: {0}×{1} {2} (original file, not re-encoded)",
+  "儲存時：{0}×{1} PNG（保留透明）": "When saved: {0}×{1} PNG (transparency kept)",
   "檔案大小": "File size",
   "檢查更新": "Check for updates",
   "縱向是來源聲道（input），橫向是這個裝置的輸出聲道（output）": "Rows are source channels (input), columns are this device's output channels (output)",
