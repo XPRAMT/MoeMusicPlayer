@@ -137,6 +137,7 @@
   } from './lib/playback-clock';
   import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
   import { appTooltip } from './lib/app-tooltip.js';
+  import { dockMarquee } from './lib/dock-marquee.js';
   import SourceScopeSwitch from './lib/SourceScopeSwitch.svelte';
   import { formatSyncResultLine } from './lib/sync-result-line.js';
   import { normalizeSourceScope, shouldShowSourceScopeSwitch } from './lib/source-scope.js';
@@ -3644,27 +3645,6 @@
     const target = event.target;
     if (target instanceof Node && volumePanelElement.contains(target)) return;
     volumeExpanded = false;
-  }
-
-  /** Mark title/artist for CSS marquee only when the text overflows its slot. */
-  function dockMarquee(node: HTMLElement): { destroy: () => void } {
-    const update = (): void => {
-      const parent = node.parentElement;
-      const visible = parent?.clientWidth ?? node.clientWidth;
-      const distance = Math.min(0, visible - node.scrollWidth - 8);
-      const overflowing = distance < -1;
-      node.classList.toggle('is-overflowing', overflowing);
-      node.style.setProperty('--dock-marquee-distance', `${distance}px`);
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(node);
-    if (node.parentElement) observer.observe(node.parentElement);
-    return {
-      destroy() {
-        observer.disconnect();
-      },
-    };
   }
 
   async function sendPlaybackVolumeCommand(volume: number): Promise<void> {

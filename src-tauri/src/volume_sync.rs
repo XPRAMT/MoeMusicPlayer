@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 /// Ratios within this band of 1 snap to exactly 1 (two devices set to "about the same" move together).
 const SNAP_LOW: f64 = 0.9;
 const SNAP_HIGH: f64 = 1.1;
-/// A device the player just wrote to is not taken to have been changed from outside for this long: the write comes
-/// back as a change notification, and the player's own sync writes must not start another round.
+/// A change notification that repeats a value the player wrote to that device within this long is the echo of that
+/// write (Windows reports every write back) and is ignored: it must neither start another round nor overwrite what
+/// the player knows. A different value in that time is a real change from outside.
 pub(crate) const ECHO_HOLD: Duration = Duration::from_millis(1500);
 
 #[derive(Default)]
@@ -23,8 +24,8 @@ pub(crate) struct VolumeSync {
     known: HashMap<String, u8>,
     /// `"{reference}>{id}"` is id's volume divided by the reference's, learned the first time and remembered.
     scales: HashMap<String, f64>,
-    /// When the player last wrote each device.
-    written: HashMap<String, Instant>,
+    /// What the player wrote to each device within the last [`ECHO_HOLD`], and when (several during a drag).
+    written: HashMap<String, Vec<(Instant, u8)>>,
     /// The devices that took part in the last round (the ratios are forgotten when this changes).
     participants: Vec<String>,
 }
@@ -71,8 +72,26 @@ impl VolumeSync {
         ratio
     }
 
-    /// A device's volume is now `percent`. `local` means the player itself set it (the settings UI): that is never
-    /// an echo. Returns the volumes the other devices should be set to now (and records them as written).
+    /// Note that the player writes `percent` to `id` now (its echo will be recognised).
+    fn record_write(&mut self, id: &str, percent: u8, now: Instant) {
+        let writes = self.written.entry(id.to_owned()).or_default();
+        writes.retain(|(at, _)| now.saturating_duration_since(*at) < ECHO_HOLD);
+        writes.push((now, percent));
+    }
+
+    /// Whether a reported `percent` for `id` is the echo of one of the player's own recent writes.
+    fn is_echo(&self, id: &str, percent: u8, now: Instant) -> bool {
+        self.written.get(id).is_some_and(|writes| {
+            writes
+                .iter()
+                .any(|(at, value)| *value == percent && now.saturating_duration_since(*at) < ECHO_HOLD)
+        })
+    }
+
+    /// A device's volume is now `percent`. `local` means the player itself sets it (the settings UI; the caller then
+    /// writes it): that is never an echo and is recorded as written. A reported change (`local` false) that repeats a
+    /// recent write is an echo: ignored, `known` untouched. Returns the volumes the other devices should be set to now
+    /// (only those that differ from what is known; they are recorded as written).
     pub(crate) fn changed(
         &mut self,
         id: &str,
@@ -81,16 +100,13 @@ impl VolumeSync {
         now: Instant,
         participants: &[String],
     ) -> Vec<(String, u8)> {
-        let held = !local
-            && self
-                .written
-                .get(id)
-                .is_some_and(|at| now.duration_since(*at) < ECHO_HOLD);
         if local {
-            self.written.insert(id.to_owned(), now);
+            self.record_write(id, percent, now);
+        } else if self.is_echo(id, percent, now) {
+            return Vec::new();
         }
         let previous = self.known.insert(id.to_owned(), percent);
-        if held || !self.enabled {
+        if !self.enabled {
             return Vec::new();
         }
         let Some(previous) = previous.filter(|previous| *previous != percent) else {
@@ -113,11 +129,14 @@ impl VolumeSync {
             };
             let ratio = self.ratio_to(other, id, other_volume, previous);
             let next = (f64::from(percent) * ratio).round().clamp(0.0, 100.0) as u8;
-            updates.push((other.clone(), next));
+            // Already there: writing it again would only bring another notification.
+            if next != other_volume {
+                updates.push((other.clone(), next));
+            }
         }
         for (other, next) in &updates {
             self.known.insert(other.clone(), *next);
-            self.written.insert(other.clone(), now);
+            self.record_write(other, *next, now);
         }
         updates
     }
@@ -153,8 +172,14 @@ pub(crate) mod service {
     enum Job {
         /// Windows reported a change (the settings UI, the mixer, a headset button, or an echo of our own write).
         Changed { id: String, percent: u8 },
-        /// The settings UI set this device through the player.
-        Local { id: String, percent: u8 },
+        /// The settings UI sets this device through the player: this thread writes it (then the others), so the write
+        /// and the sync happen in order, before Windows' notification of the write is looked at. The result of writing
+        /// this device goes back to the caller.
+        Local {
+            id: String,
+            percent: u8,
+            reply: mpsc::Sender<Result<(), String>>,
+        },
         /// The list of devices changed (or at start): watch them all and read their volumes.
         Refresh,
     }
@@ -194,11 +219,12 @@ pub(crate) mod service {
         ids
     }
 
-    fn write(id: &str, percent: u8) {
+    /// Set a device's real volume. Like the reference mapper, volume 0 also mutes and anything above unmutes.
+    pub(crate) fn write(id: &str, percent: u8) -> Result<(), String> {
         let volume = f32::from(percent) / 100.0;
-        let _ = set_endpoint_volume(Some(id), volume);
-        // Like the reference mapper: volume 0 also mutes, anything above unmutes.
-        let _ = set_endpoint_muted(Some(id), percent == 0);
+        set_endpoint_volume(Some(id), volume)?;
+        set_endpoint_muted(Some(id), percent == 0)?;
+        Ok(())
     }
 
     /// Start watching. `enabled` is the saved state of the "音量同步" switch.
@@ -241,20 +267,31 @@ pub(crate) mod service {
                             let volumes: Vec<(String, u8)> = volumes.collect();
                             with_sync(|sync| sync.learn(volumes));
                         }
-                        Job::Changed { id, percent } => handle(&settings, &id, percent, false),
-                        Job::Local { id, percent } => handle(&settings, &id, percent, true),
+                        Job::Changed { id, percent } => {
+                            // Nothing to answer: errors writing the followers are already logged.
+                            let _ = handle(&settings, &id, percent, false);
+                        }
+                        Job::Local { id, percent, reply } => {
+                            let _ = reply.send(handle(&settings, &id, percent, true));
+                        }
                     }
                 }
             });
         let _ = jobs.send(Job::Refresh);
     }
 
-    fn handle(settings: &SettingsStore, id: &str, percent: u8, local: bool) {
+    /// One change, in order: a local one writes its own device first (its error is the result), then the devices
+    /// that follow it.
+    fn handle(settings: &SettingsStore, id: &str, percent: u8, local: bool) -> Result<(), String> {
         let participants = participants(settings);
         let writes = with_sync(|sync| sync.changed(id, percent, local, Instant::now(), &participants));
+        let own = if local { write(id, percent) } else { Ok(()) };
         for (other, value) in writes {
-            write(&other, value);
+            if let Err(error) = write(&other, value) {
+                eprintln!("[volume-sync] could not set {other} to {value}%: {error}");
+            }
         }
+        own
     }
 
     /// The device list changed: watch the new devices and read their volumes.
@@ -264,11 +301,22 @@ pub(crate) mod service {
         }
     }
 
-    /// The settings UI set this device's volume through the player.
-    pub(crate) fn local_change(id: String, percent: u8) {
-        if let Some(jobs) = JOBS.get() {
-            let _ = jobs.send(Job::Local { id, percent });
-        }
+    /// The settings UI sets this device's volume: written (with the sync) on the sync thread, in order with the
+    /// notifications. Blocks until it is written; without the sync thread the device is written here.
+    pub(crate) fn set_local(id: String, percent: u8) -> Result<(), String> {
+        let Some(jobs) = JOBS.get() else {
+            return write(&id, percent);
+        };
+        let (reply, answer) = mpsc::channel();
+        jobs.send(Job::Local {
+            id: id.clone(),
+            percent,
+            reply,
+        })
+        .map_err(|_| "音量同步服務已停止".to_owned())?;
+        answer
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| "設定音量逾時".to_owned())?
     }
 }
 
@@ -290,7 +338,7 @@ mod tests {
     fn other_devices_keep_their_ratio_to_the_one_that_moved() {
         let mut sync = sync_with(&[("a", 50), ("b", 25), ("c", 100)]);
         let updates = sync.changed("a", 80, true, Instant::now(), &ids(&["a", "b", "c"]));
-        assert_eq!(updates, [("b".to_owned(), 40), ("c".to_owned(), 100)], "b stays half of a, c is clamped to 100");
+        assert_eq!(updates, [("b".to_owned(), 40)], "b stays half of a; c, clamped to 100, is already there");
     }
 
     #[test]
@@ -350,6 +398,77 @@ mod tests {
         // A change from outside after the hold moves the other device.
         let later = start + ECHO_HOLD + Duration::from_millis(10);
         assert_eq!(sync.changed("b", 30, false, later, &both), [("a".to_owned(), 30)]);
+    }
+
+    #[test]
+    fn a_drag_keeps_the_others_in_step_even_with_echoes_of_earlier_steps_in_between() {
+        let mut sync = sync_with(&[("a", 50), ("b", 25)]);
+        let both = ids(&["a", "b"]);
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        assert_eq!(sync.changed("a", 52, true, at(0), &both), [("b".to_owned(), 26)]);
+        // Windows reports the writes back (the dragged device and the follower) between the steps.
+        assert!(sync.changed("a", 52, false, at(20), &both).is_empty());
+        assert!(sync.changed("b", 26, false, at(25), &both).is_empty());
+        assert_eq!(sync.changed("a", 56, true, at(60), &both), [("b".to_owned(), 28)]);
+        // An echo of an older step arriving late is still an echo, and does not undo the newer value.
+        assert!(sync.changed("a", 52, false, at(80), &both).is_empty());
+        assert_eq!(sync.changed("a", 60, true, at(120), &both), [("b".to_owned(), 30)]);
+        assert_eq!(sync.known.get("a"), Some(&60));
+    }
+
+    #[test]
+    fn an_echo_does_not_change_what_is_known() {
+        let mut sync = sync_with(&[("a", 50), ("b", 50)]);
+        let both = ids(&["a", "b"]);
+        let now = Instant::now();
+        sync.changed("a", 70, true, now, &both);
+        sync.changed("a", 70, false, now + Duration::from_millis(10), &both);
+        assert_eq!(sync.known.get("a"), Some(&70));
+        assert_eq!(sync.known.get("b"), Some(&70));
+    }
+
+    #[test]
+    fn a_different_value_right_after_a_write_is_a_change_from_outside() {
+        let mut sync = sync_with(&[("a", 50), ("b", 50)]);
+        let both = ids(&["a", "b"]);
+        let now = Instant::now();
+        sync.changed("a", 60, true, now, &both);
+        // A headset button moved a within the hold: not the value written, so it is followed.
+        assert_eq!(sync.changed("a", 40, false, now + Duration::from_millis(100), &both), [("b".to_owned(), 40)]);
+    }
+
+    #[test]
+    fn several_devices_settle_after_one_round_without_writing_each_other_back_and_forth() {
+        let mut sync = sync_with(&[("a", 50), ("b", 25), ("c", 100)]);
+        let all = ids(&["a", "b", "c"]);
+        let start = Instant::now();
+        let mut pending: Vec<(String, u8)> = sync.changed("a", 80, true, start, &all);
+        let mut writes = pending.len();
+        // Feed every write back as Windows would (each one a notification), several times over.
+        for round in 1..5 {
+            let echoes = std::mem::take(&mut pending);
+            for (id, percent) in echoes.iter().chain([("a".to_owned(), 80)].iter()) {
+                let more = sync.changed(id, *percent, false, start + Duration::from_millis(10 * round), &all);
+                writes += more.len();
+                pending.extend(more);
+            }
+        }
+        assert_eq!(writes, 1, "only b moves (c is already at 100); the echoes start nothing");
+        assert_eq!(sync.known.get("b"), Some(&40));
+        assert_eq!(sync.known.get("c"), Some(&100));
+    }
+
+    #[test]
+    fn a_device_already_at_its_target_is_not_written_again() {
+        let mut sync = sync_with(&[("a", 50), ("b", 50)]);
+        let both = ids(&["a", "b"]);
+        let now = Instant::now();
+        assert_eq!(sync.changed("a", 60, true, now, &both), [("b".to_owned(), 60)]);
+        // b is moved to 60 from outside; a then follows to 60 — and b, already at a's level, is left alone.
+        let later = now + ECHO_HOLD * 2;
+        assert_eq!(sync.changed("b", 61, false, later, &both), [("a".to_owned(), 61)]);
+        assert!(sync.changed("a", 61, true, later + ECHO_HOLD * 2, &both).is_empty());
     }
 
     #[test]

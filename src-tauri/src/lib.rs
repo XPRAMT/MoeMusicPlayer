@@ -6808,15 +6808,10 @@ async fn audio_set_device_volume(id: String, volume_percent: f32) -> Result<(), 
     #[cfg(target_os = "windows")]
     {
         tauri::async_runtime::spawn_blocking(move || {
-            use player_platform_windows::endpoint_volume::{
-                set_endpoint_muted, set_endpoint_volume,
-            };
-            let volume = (volume_percent / 100.0).clamp(0.0, 1.0);
-            set_endpoint_volume(Some(&id), volume)?;
-            set_endpoint_muted(Some(&id), volume <= 0.0)?;
-            // With the volume link on, the other chosen devices follow (the backend keeps their proportions).
-            volume_sync::service::local_change(id, (volume * 100.0).round() as u8);
-            Ok(())
+            let percent = volume_percent.clamp(0.0, 100.0).round() as u8;
+            // Written on the volume-sync thread, in order with Windows' notifications: this device, then (with the
+            // volume link on) the other chosen devices in proportion. An error writing this device comes back here.
+            volume_sync::service::set_local(id, percent)
         })
         .await
         .map_err(|error| error.to_string())?

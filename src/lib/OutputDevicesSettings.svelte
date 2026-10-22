@@ -40,6 +40,7 @@
   import { isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { appTooltip } from './app-tooltip.js';
+  import { dockMarquee } from './dock-marquee.js';
   import { getErrorText, invokeCommand } from './ipc';
   import { tr } from './i18n.js';
   import type { DeviceVolumeChanged, PlaybackOutputFormat } from './ipc';
@@ -733,7 +734,7 @@
             style="grid-column: span {channelCount(index)};"
             use:appTooltip={currentMap(index) ? tr('{0}：點一下恢復自動（依聲道數混縮或補齊）', [deviceLabel(index)]) : deviceLabel(index)}
             onclick={() => update(index, { channelMap: null }, true)}
-          >{shortDeviceName(deviceLabel(index))}</button>
+          ><span class="dock-marquee"><span class="dock-marquee-text" use:dockMarquee>{shortDeviceName(deviceLabel(index))}</span></span></button>
         {/each}
         <span class="channel-matrix-corner" use:appTooltip={tr('縱向是來源聲道（input），橫向是這個裝置的輸出聲道（output）')}>i＼o</span>
         {#each playingRows as { index }, position (index)}
@@ -813,9 +814,17 @@
     cursor: pointer;
   }
 
+  /* Many devices scroll inside the list (at most half the window, on the settings page and in the quick-settings
+     drawer alike) instead of stretching the whole panel; dvh follows the window as it is resized. */
   .output-device-list {
     display: grid;
     gap: 8px;
+    align-content: start;
+    max-height: 50vh;
+    max-height: 50dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 4px;
   }
 
   .output-device {
