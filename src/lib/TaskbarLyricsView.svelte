@@ -447,18 +447,15 @@
     font-size: calc(var(--taskbar-lyrics-translation-scale, 0.75) * 1em);
   }
 
-  /* The same two looks as the Now Playing lyrics (a tight shadow plus a wider glow, or a thin outline), in the colour
+  /* The same two looks as the Now Playing lyrics (a soft shadow, drawn as ONE filter layer because every extra layer costs a repaint per frame of the glide, or a thin outline), in the colour
      opposite to the text. The clipped lines get the shadow as a filter: a text-shadow would be cut by the clip. */
   .taskbar-lyrics {
-    --taskbar-lyrics-shadow-blur: 0.19em;
-    --taskbar-lyrics-glow-blur: 0.5em;
+    --taskbar-lyrics-shadow-blur: 0.3em;
   }
 
   .taskbar-lyrics[data-text-effect='shadow'] .taskbar-lyrics-main,
   .taskbar-lyrics[data-text-effect='shadow'] .taskbar-lyrics-translation {
-    filter:
-      drop-shadow(0 0 var(--taskbar-lyrics-shadow-blur) rgba(var(--taskbar-lyrics-effect-rgb), 0.6))
-      drop-shadow(0 0 var(--taskbar-lyrics-glow-blur) rgba(var(--taskbar-lyrics-effect-rgb), 0.38));
+    filter: drop-shadow(0 0 var(--taskbar-lyrics-shadow-blur) rgba(var(--taskbar-lyrics-effect-rgb), 0.75));
   }
 
   /* The lines are clipped (for the scrolling); the outline reaches 0.04em past the glyphs, so give the clip room above and
