@@ -3182,6 +3182,32 @@ impl Database {
         Ok(snapshot)
     }
 
+    /// Every track id of an album, in exactly the order the album detail page shows it: it pages through
+    /// `list_album_tracks_page_with_index_sort`, so the page and the playback queue share one query and one ordering.
+    pub fn list_album_track_ids(
+        &self,
+        album_names: &[String],
+        sort: Option<TrackListSort>,
+        index_sort: Option<TrackSortDirection>,
+    ) -> Result<Vec<TrackId>, DatabaseError> {
+        let mut ids = Vec::new();
+        loop {
+            let page = self.list_album_tracks_page_with_index_sort(
+                album_names,
+                sort,
+                index_sort,
+                ids.len() as u64,
+                MAX_PAGE_SIZE,
+            )?;
+            let fetched = page.items.len();
+            ids.extend(page.items.into_iter().map(|track| track.id));
+            if fetched == 0 || ids.len() as u64 >= page.total_count {
+                break;
+            }
+        }
+        Ok(ids)
+    }
+
     pub fn list_album_tracks_page_with_index_sort(
         &self,
         album_names: &[String],

@@ -439,6 +439,12 @@ export interface AlbumIndexSort {
 }
 
 export type AlbumDetailSortField = 'position' | TrackListColumnId;
+/** The album page ordering: `library_get_album_page` arguments, reused by the album queue source. */
+export interface AlbumTrackOrder {
+  sort: LibraryListSort | null;
+  indexSort: LibrarySortDirection | null;
+}
+
 export interface AlbumDetailSort {
   field: AlbumDetailSortField;
   direction: LibrarySortDirection;
@@ -539,6 +545,8 @@ export type RepeatMode = 'off' | 'one' | 'all';
 export type PlaybackQueueSource =
   | { kind: 'library'; query: string | null; queryAlternates?: string[]; fieldFilter?: TrackFieldFilter | null; sort?: LibraryListSort | null }
   | { kind: 'playlist'; playlistId: string; entryPosition: number }
+  /** Album detail page: the same arguments as `library_get_album_page`, so the queue follows the page order. */
+  | { kind: 'album'; albumNames: string[]; sort: LibraryListSort | null; indexSort: LibrarySortDirection | null }
   | { kind: 'queue'; traversalPosition: number };
 export type PlaybackState =
   | 'initializing'

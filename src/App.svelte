@@ -159,6 +159,7 @@
   import PlaylistTree from './lib/PlaylistTree.svelte';
   import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, splitSleepTimerClock, beginSleepTimerEdit, getSleepTimerEditMinutes, stepSleepTimerEdit, SLEEP_TIMER_EDIT_IDLE_MS, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
   import type { SleepTimerSnapshot } from './lib/ipc';
+  import type { AlbumTrackOrder } from './lib/ipc';
   import type { AndroidAllFilesAccessStatus, AndroidWallpaperBackdropStatus } from './lib/ipc';
   import { formatSlideshowFolderLabel } from './lib/background-source-label.js';
   import { swipeDismiss } from './lib/swipe-dismiss.js';
@@ -3250,15 +3251,15 @@
     );
   }
 
-  async function playAlbumTrack(track: TrackSummary): Promise<void> {
+  async function playAlbumTrack(track: TrackSummary, order: AlbumTrackOrder): Promise<void> {
     if (!selectedAlbum || !playbackReady || isSendingPlaybackCommand) return;
     selectedTrackId = track.id;
+    // The queue is built by the album page's own query and ordering (not the library list sort).
     const queueSource: PlaybackQueueSource = {
-      kind: 'library',
-      query: null,
-      queryAlternates: [],
-      fieldFilter: { field: 'album', value: selectedAlbum.aliases.join('|') },
-      sort: librarySort,
+      kind: 'album',
+      albumNames: [...selectedAlbum.aliases],
+      sort: order.sort,
+      indexSort: order.indexSort,
     };
     await sendPlaybackCommand(
       () => invokeCommand('playback_play', { trackId: track.id, queueSource }),

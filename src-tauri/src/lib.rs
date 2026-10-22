@@ -2369,6 +2369,17 @@ enum PlaybackQueueSource {
         #[serde(rename = "entryPosition")]
         entry_position: u64,
     },
+    /// The album detail page. Same arguments as `library_get_album_page`, so the queue is
+    /// built by the very query and ordering the page displays. `album_names` is a list (not a
+    /// `|`-joined filter value), so an album whose name contains `|` matches only itself.
+    Album {
+        #[serde(rename = "albumNames")]
+        album_names: Vec<String>,
+        #[serde(default)]
+        sort: Option<TrackListSort>,
+        #[serde(default, rename = "indexSort")]
+        index_sort: Option<TrackSortDirection>,
+    },
     /// Jump within the active queue. `traversal_position` is the cursor index
     /// shown by the queue page, not the source entry index.
     Queue {
@@ -10294,6 +10305,37 @@ fn queue_for_track(
                 selected,
             )
         }
+        Some(PlaybackQueueSource::Album {
+            album_names,
+            sort,
+            index_sort,
+        }) => {
+            let track_ids = database
+                .list_album_track_ids(&album_names, sort, index_sort)
+                .map_err(|error| error.to_string())?;
+            let selected = track_ids
+                .iter()
+                .position(|candidate| *candidate == track_id)
+                .ok_or_else(|| "所選曲目已不在這張專輯中。".to_owned())?;
+            let entries = track_ids
+                .into_iter()
+                .map(|track_id| PlaybackQueueEntry {
+                    track_id,
+                    source_position: None,
+                })
+                .collect();
+            // Persisted like a library queue: the session stores the ordered entries
+            // themselves, so restoring never re-queries or re-sorts.
+            (
+                entries,
+                PlaybackQueueContext::Library {
+                    query: None,
+                    field_filter: None,
+                    sort: sort.unwrap_or_default(),
+                },
+                selected,
+            )
+        }
         Some(PlaybackQueueSource::Playlist {
             playlist_id,
             entry_position,
@@ -13113,6 +13155,236 @@ mod windows_library_integration_tests {
         assert_eq!(
             reopened_page.items[0].album.as_deref(),
             Some("Acceptance Album")
+        );
+    }
+
+    fn album_queue_fixture(
+        tracks: &[(&str, &str, Option<u32>, Option<u32>)],
+    ) -> Database {
+        let mut database = Database::open_in_memory().expect("isolated database");
+        let root = database
+            .add_library_root(
+                MediaSourceKind::WindowsFilesystem,
+                "album queue fixture",
+                MediaLocator::FileSystem(PathBuf::from(r"C:\Music\album-queue")),
+            )
+            .expect("add fixture root");
+        // Records are inserted in this order, so "added order" differs from track numbers.
+        let records = tracks
+            .iter()
+            .map(|(item, album, disc, track)| MediaTrackRecord {
+                identity: TrackIdentity {
+                    source_id: root.id,
+                    source_item_id: (*item).to_owned(),
+                    locator_key: Some(format!("album-queue:{item}")),
+                },
+                locator: MediaLocator::FileSystem(PathBuf::from(format!(
+                    r"C:\Music\album-queue\{item}.flac"
+                ))),
+                fingerprint: FileFingerprint {
+                    size_bytes: 1,
+                    modified_at_utc_ms: Some(1),
+                    created_at_utc_ms: None,
+                },
+                metadata: Some(TrackMetadata {
+                    title: Some(format!("Title {item}")),
+                    album: Some((*album).to_owned()),
+                    disc_number: *disc,
+                    track_number: *track,
+                    ..TrackMetadata::default()
+                }),
+            })
+            .collect::<Vec<_>>();
+        database
+            .apply_source_scan(
+                &root,
+                &SourceScanState::Complete,
+                &records,
+                &records,
+                &[],
+                1,
+            )
+            .expect("persist fixture tracks");
+        database
+    }
+
+    fn album_page_ids(
+        database: &Database,
+        names: &[String],
+        sort: Option<TrackListSort>,
+        index_sort: Option<TrackSortDirection>,
+    ) -> Vec<TrackId> {
+        database
+            .list_album_tracks_page_with_index_sort(names, sort, index_sort, 0, 500)
+            .expect("album page")
+            .items
+            .into_iter()
+            .map(|track| track.id)
+            .collect()
+    }
+
+    fn queue_ids(queue: &PlaybackQueue) -> Vec<TrackId> {
+        queue
+            .snapshot()
+            .entries
+            .iter()
+            .map(|entry| entry.track_id)
+            .collect()
+    }
+
+    #[test]
+    fn album_queue_matches_the_album_page_order_for_every_sort() {
+        // Discs only 1 or blank (like 花生與蔥花 LIVE): the page orders by track number alone.
+        let database = album_queue_fixture(&[
+            ("c", "Live", Some(1), Some(3)),
+            ("a", "Live", None, Some(1)),
+            ("e", "Live", Some(1), None),
+            ("d", "Live", None, Some(4)),
+            ("b", "Live", Some(1), Some(2)),
+        ]);
+        let names = vec!["Live".to_owned()];
+        let sorts: [(Option<TrackListSort>, Option<TrackSortDirection>); 4] = [
+            (None, None),
+            (None, Some(TrackSortDirection::Desc)),
+            (
+                Some(TrackListSort {
+                    field: player_core::TrackSortField::Title,
+                    direction: TrackSortDirection::Desc,
+                }),
+                None,
+            ),
+            (Some(TrackListSort::default()), None),
+        ];
+        for (sort, index_sort) in sorts {
+            let page = album_page_ids(&database, &names, sort, index_sort);
+            assert_eq!(page.len(), 5);
+            for selected in &page {
+                let queue = queue_for_track(
+                    &database,
+                    *selected,
+                    Some(PlaybackQueueSource::Album {
+                        album_names: names.clone(),
+                        sort,
+                        index_sort,
+                    }),
+                )
+                .expect("album queue");
+                assert_eq!(queue_ids(&queue), page, "sort {sort:?} index {index_sort:?}");
+                assert_eq!(queue.current(), *selected);
+            }
+        }
+        // Default `#` order is track number, never the added order.
+        let titles = database
+            .list_album_tracks_page_with_index_sort(&names, None, None, 0, 10)
+            .expect("page")
+            .items
+            .into_iter()
+            .map(|track| track.title)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            titles,
+            ["Title a", "Title b", "Title c", "Title d", "Title e"]
+                .map(|title| Some(title.to_owned()))
+                .to_vec()
+        );
+    }
+
+    #[test]
+    fn album_queue_keeps_multi_disc_order() {
+        let database = album_queue_fixture(&[
+            ("d2t1", "Box", Some(2), Some(1)),
+            ("d1t2", "Box", Some(1), Some(2)),
+            ("d2t2", "Box", Some(2), Some(2)),
+            ("d1t1", "Box", Some(1), Some(1)),
+        ]);
+        let names = vec!["Box".to_owned()];
+        for index_sort in [None, Some(TrackSortDirection::Desc)] {
+            let page = album_page_ids(&database, &names, None, index_sort);
+            let queue = queue_for_track(
+                &database,
+                page[1],
+                Some(PlaybackQueueSource::Album {
+                    album_names: names.clone(),
+                    sort: None,
+                    index_sort,
+                }),
+            )
+            .expect("album queue");
+            assert_eq!(queue_ids(&queue), page);
+        }
+    }
+
+    #[test]
+    fn album_queue_with_shuffle_off_keeps_the_page_order() {
+        let database = album_queue_fixture(&[
+            ("c", "Live", Some(1), Some(3)),
+            ("a", "Live", None, Some(1)),
+            ("b", "Live", Some(1), Some(2)),
+        ]);
+        let names = vec!["Live".to_owned()];
+        let page = album_page_ids(&database, &names, None, None);
+        let mut queue = queue_for_track(
+            &database,
+            page[0],
+            Some(PlaybackQueueSource::Album {
+                album_names: names.clone(),
+                sort: None,
+                index_sort: None,
+            }),
+        )
+        .expect("album queue");
+        set_queue_shuffle_with_latest_stats(&database, &mut queue, true).expect("shuffle on");
+        set_queue_shuffle_with_latest_stats(&database, &mut queue, false).expect("shuffle off");
+        assert_eq!(queue_ids(&queue), page);
+        let mut traversal = vec![queue.current()];
+        while traversal.len() < page.len() {
+            match queue.next(false) {
+                Some(next) => traversal.push(next),
+                None => break,
+            }
+        }
+        assert_eq!(traversal, page);
+    }
+
+    #[test]
+    fn album_queue_names_are_exact_not_pipe_split() {
+        let database = album_queue_fixture(&[
+            ("x1", "A|B", None, Some(1)),
+            ("x2", "A", None, Some(1)),
+            ("x3", "B", None, Some(1)),
+        ]);
+        let names = vec!["A|B".to_owned()];
+        let page = album_page_ids(&database, &names, None, None);
+        assert_eq!(page.len(), 1);
+        let queue = queue_for_track(
+            &database,
+            page[0],
+            Some(PlaybackQueueSource::Album {
+                album_names: names,
+                sort: None,
+                index_sort: None,
+            }),
+        )
+        .expect("album queue");
+        assert_eq!(queue_ids(&queue), page);
+    }
+
+    #[test]
+    fn album_queue_source_deserializes_renderer_contract() {
+        let source: PlaybackQueueSource = serde_json::from_value(serde_json::json!({
+            "kind": "album",
+            "albumNames": ["Live", "LIVE"],
+            "sort": null,
+            "indexSort": "desc"
+        }))
+        .expect("deserialize album source");
+        assert_eq!(
+            source,
+            PlaybackQueueSource::Album {
+                album_names: vec!["Live".to_owned(), "LIVE".to_owned()],
+                sort: None,
+                index_sort: Some(TrackSortDirection::Desc),
+            }
         );
     }
 

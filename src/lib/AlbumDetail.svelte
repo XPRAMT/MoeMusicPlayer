@@ -2,7 +2,7 @@
   import { tr } from './i18n.js';
   import { onDestroy, onMount } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type QuickIndexSnapshot, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
-  import type { AlbumIndexEntry as AlbumEntry } from './ipc';
+  import type { AlbumIndexEntry as AlbumEntry, AlbumTrackOrder } from './ipc';
   import { advanceAlbumArtworkSelectionRevision, albumCoverSourcesHaveSameContent, copyToArrayBuffer, createAlbumThumbnail, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import { detectArtworkMimeType } from './active-track-artwork';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
@@ -24,7 +24,8 @@
     groupingEnabled: boolean;
     livePlayCount: { trackId: string; playedMs: number }[];
     refreshKey: number;
-    onPlay: (track: TrackSummary) => void | Promise<void>;
+    /** `order` is the page's current ordering (the `library_get_album_page` arguments), so the queue matches it. */
+    onPlay: (track: TrackSummary, order: AlbumTrackOrder) => void | Promise<void>;
     onColumnResize: (columnId: import('./ipc').TrackListColumnPreference['id'], widthPx: number) => void;
     onTotalCount: (count: number | null) => void;
   }
@@ -68,14 +69,24 @@
     resolved: !scanning && !scanError,
   }));
   let revision = 0;
+  function currentOrder(): AlbumTrackOrder {
+    return {
+      sort: detailSort.field === 'position' ? null : { field: detailSort.field, direction: detailSort.direction },
+      indexSort: albumIndexSortActive ? detailSort.direction : null,
+    };
+  }
+
   async function fetchPage(request: TrackPageRequest): Promise<TrackPage> {
     return invokeCommand('library_get_album_page', {
       albumNames: album.aliases,
-      sort: detailSort.field === 'position' ? null : { field: detailSort.field, direction: detailSort.direction },
-      indexSort: albumIndexSortActive ? detailSort.direction : null,
+      ...currentOrder(),
       offset: request.offset,
       limit: request.limit,
     });
+  }
+
+  function playTrack(track: TrackSummary): void | Promise<void> {
+    return onPlay(track, currentOrder());
   }
 
   function handleColumnSort(columnId: import('./ipc').TrackListColumnPreference['id']): void {
@@ -280,7 +291,7 @@
         resetKey={`${album.key}:${refreshKey}:${detailSort.field}-${detailSort.direction}`}
         listId={`album-detail-${album.key}`}
         {selectedTrackId} {playbackReady} {isSendingPlaybackCommand} {columns} {columnWidths} {rowHeightPx} sort={detailTrackSort} {livePlayCount}
-        fetchPage={fetchPage} {onPlay} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
+        fetchPage={fetchPage} onPlay={playTrack} onSort={handleColumnSort} {onColumnResize} {onTotalCount} sortable={true}
         sortableIndex={true} sortIndicator={albumSortIndicator} indexSortLabel={tr("依專輯曲目編號排序")} onIndexSort={handleIndexSort}
         quickIndexOverride={albumDiscQuickIndex}
         quickIndexAlbumNames={album.aliases}
