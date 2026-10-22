@@ -563,6 +563,26 @@
     };
   });
 
+  // The per-track delay was changed elsewhere (the song details page resets it after saving imported lyrics
+  // that already have it baked in): read it again for the shown track.
+  $effect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<{ trackId: string; delaySec: number }>(LYRICS_TIMING_OFFSET_EVENT, (event) => {
+      const shown = untrack(() => trackId);
+      if (shown && event.payload?.trackId === shown) timingOffsetSec = loadLyricsTimingOffsetSec(shown);
+    })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  });
+
   // Tags were saved for the playing track: read its (possibly embedded) lyrics again.
   $effect(() => {
     // With the shell's controller the shell reloads it.

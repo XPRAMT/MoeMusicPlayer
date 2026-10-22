@@ -8,7 +8,9 @@
   import { invoke } from '@tauri-apps/api/core';
   import type { PlaybackSnapshot } from './ipc';
   import { seekPlayback } from './ipc';
-  import { hasLyricsInUse, lyricsToText } from './lyrics-import.js';
+  import { hasLyricsInUse, importTimestampShiftMs, lyricsToText } from './lyrics-import.js';
+  import { emit } from '@tauri-apps/api/event';
+  import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, saveLyricsTimingOffsetSec } from './lyrics-timing-offset.js';
   import {
     loadCoverEditOptions,
     saveCoverEditOptions,
@@ -98,7 +100,14 @@
   }
 
   let removeCover = $state(false);
-  let onlineLyricsText = $state<string | null>(null);
+  type InUseLyrics = { provider?: string; source: string; synced: boolean; offsetMs?: number | null; lines: { startMs: number | null; text: string; translation: string | null }[] };
+  let lyricsInUse = $state<InUseLyrics | null>(null);
+  // The track's lyrics delay (playback page timing panel), re-read on focus so a change made meanwhile counts.
+  let timingDelaySec = $state(0);
+  // 導入使用中歌詞 writes the lyrics as they are shown now: the delay (and the lyrics' own offset) is baked into
+  // every timestamp, same sign as lyricsDisplayOffsetMs, negatives clamp to 0 (user decision 2026-10-22).
+  let onlineLyricsText = $derived(lyricsInUse ? lyricsToText(lyricsInUse, importTimestampShiftMs(lyricsInUse.offsetMs, timingDelaySec)) : null);
+  let importedLyrics: { text: string; delaySec: number } | null = null;
   let coverOptions = $state<CoverEditOptions>(loadCoverEditOptions());
 
   const isDirty = (key: keyof TagFields) => !!draft && !!original && draft[key] !== original[key];
@@ -152,15 +161,29 @@
       error = String(cause);
     }
     try {
-      const lyrics = await invoke<{ lyrics: { provider?: string; source: string; synced: boolean; lines: { startMs: number | null; text: string; translation: string | null }[] } | null }>('lyrics_get_track', { trackId });
-      onlineLyricsText = hasLyricsInUse(lyrics.lyrics) ? lyricsToText(lyrics.lyrics!) : null;
+      const lyrics = await invoke<{ lyrics: InUseLyrics | null }>('lyrics_get_track', { trackId });
+      lyricsInUse = hasLyricsInUse(lyrics.lyrics) ? lyrics.lyrics : null;
     } catch {
-      onlineLyricsText = null;
+      lyricsInUse = null;
     }
+    timingDelaySec = loadLyricsTimingOffsetSec(trackId);
   }
 
   function importOnlineLyrics() {
-    if (draft && onlineLyricsText !== null) draft.lyrics = onlineLyricsText;
+    if (draft && onlineLyricsText !== null) {
+      draft.lyrics = onlineLyricsText;
+      importedLyrics = { text: onlineLyricsText, delaySec: timingDelaySec };
+    }
+  }
+
+  /** After a Save that wrote imported lyrics with the track's delay baked in, the delay goes back to 0 (the
+   * playback page and taskbar lyrics follow LYRICS_TIMING_OFFSET_EVENT), so it is not applied twice. */
+  function resetDelayBakedIntoSavedLyrics(savedLyrics: string) {
+    const imported = importedLyrics;
+    importedLyrics = null;
+    if (!imported || imported.delaySec === 0 || imported.text !== savedLyrics) return;
+    timingDelaySec = saveLyricsTimingOffsetSec(trackId, 0);
+    void Promise.resolve().then(() => emit(LYRICS_TIMING_OFFSET_EVENT, { trackId, delaySec: 0 })).catch(() => {});
   }
 
   /** Empties the lyrics field; like every other field it reaches the file only when 儲存 is pressed. */
@@ -198,6 +221,7 @@
   }
 
   async function refreshClipboard() {
+    timingDelaySec = loadLyricsTimingOffsetSec(trackId);
     if (isAndroid) {
       // Only the clip description is checked here (a hint: Android hides the clip while the app is
       // unfocused); 貼上 stays enabled on Android and reads the clipboard when pressed.
@@ -363,6 +387,7 @@
           coverOptions,
         },
       });
+      if (isDirty('lyrics')) resetDelayBakedIntoSavedLyrics(draft.lyrics);
       details = result;
       original = { ...result.fields };
       draft = { ...result.fields };

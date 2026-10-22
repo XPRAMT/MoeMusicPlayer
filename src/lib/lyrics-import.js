@@ -7,6 +7,19 @@ export function hasLyricsInUse(lyrics) {
   return !!lyrics && Array.isArray(lyrics.lines) && lyrics.lines.length > 0;
 }
 
+import { lyricsDisplayOffsetMs } from './lyrics-timing-offset.js';
+
+/**
+ * How far to move every timestamp when importing, so the written LRC plays exactly as the lyrics are shown now:
+ * a line is shown once `position + lyricsDisplayOffsetMs(...) >= startMs`, i.e. at `startMs - offset`.
+ * @param {number | null | undefined} lyricsOffsetMs the lyrics' own offsetMs @param {number} delaySec the per-track delay
+ * @returns {number}
+ */
+export function importTimestampShiftMs(lyricsOffsetMs, delaySec) {
+  const shift = -lyricsDisplayOffsetMs(lyricsOffsetMs, delaySec);
+  return Object.is(shift, -0) ? 0 : shift;
+}
+
 /** @param {number} ms */
 export function formatLrcTimestamp(ms) {
   const total = Math.max(0, Math.round(ms / 10));
@@ -21,12 +34,16 @@ export function formatLrcTimestamp(ms) {
  * Serialize parsed lyrics to text. Synced lines become LRC (offsets are already applied
  * by the backend parser). Translation and romanization, when present, follow the original
  * line as extra lines with the same timestamp (the bilingual LRC convention the parser reads).
+ * `shiftMs` (see importTimestampShiftMs) is added to every timestamp; one that would go below 0 is written as 0.
+ * Only line timestamps are written (no word-level timing), so there is nothing else to shift.
  * @param {{ synced: boolean, lines: { startMs: number | null, text: string, translation?: string | null, romanization?: string | null }[] }} lyrics
+ * @param {number} [shiftMs]
  */
-export function lyricsToText(lyrics) {
+export function lyricsToText(lyrics, shiftMs = 0) {
   const out = [];
+  const shift = Number.isFinite(shiftMs) ? shiftMs : 0;
   for (const line of lyrics.lines) {
-    const stamp = lyrics.synced && line.startMs != null ? formatLrcTimestamp(line.startMs) : '';
+    const stamp = lyrics.synced && line.startMs != null ? formatLrcTimestamp(Math.max(0, line.startMs + shift)) : '';
     out.push(`${stamp}${line.text}`);
     if (line.translation) out.push(`${stamp}${line.translation}`);
     if (line.romanization) out.push(`${stamp}${line.romanization}`);
