@@ -128,7 +128,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - Rust：`crates/player-tags`（`read_details`／`write_edit`／`prepare_cover`／`render_spectrogram`），`src-tauri/src/track_details.rs` 提供 IPC 與頻譜圖視窗（label `spectrogram`，載入 `index.html?view=spectrogram&track=<id>`，已加入 capability `default.json`）。
 - 前端：`src/lib/TrackDetailsDialog.svelte`、`src/lib/SpectrogramView.svelte`（`main.ts` 依 `view=spectrogram` 掛載）、`lyrics-import.js`（導入判斷與 LRC 序列化）、`cover-edit-options.js`。
 - lofty 驗證（樣本複本）：MP3（含 v2.3→v2.4 升級）、FLAC、M4A、Opus、WAV（寫 ID3v2 chunk）皆可往返；ID3v2 不接受 `ItemKey::Lyrics`，改寫 USLT（`UnsyncLyrics`）。該 Ogg Vorbis 樣本 lofty 讀取失敗（與既有掃描一致），未處理。
-- 偏離／暫定：封面設定（JPG 品質、自動縮放短邊）暫存於前端 localStorage（每裝置），尚未進 `settings.json`；儲存後以既有增量 `library_sync` 更新曲庫投影（會走訪來源目錄，尚非單曲投影更新）；封面寫入格式（2026-10-22 修訂）：一律 JPG，來源有 alpha 通道時改寫 PNG 並保留透明；不需縮放的 JPG 與有 alpha 的 PNG 原樣寫入；重新編碼時方向套到像素並保留 ICC 與 EXIF（方向設為 1）。Android 標籤讀寫與頻譜圖尚未接上（`track_path` 只支援 Windows 檔案路徑），Android 全螢幕頻譜頁的 UI 已就緒。
+- 偏離／暫定：封面設定（JPG 品質、自動縮放短邊）暫存於前端 localStorage（每裝置），尚未進 `settings.json`；儲存後以既有增量 `library_sync` 更新曲庫投影（會走訪來源目錄，尚非單曲投影更新）；封面寫入格式（2026-10-22 修訂）：一律 JPG，來源至少有一個像素 alpha < 255 時改寫 PNG 並保留透明（有 alpha 通道但全不透明者仍轉 JPG）；不需縮放的 JPG 與有透明像素的 PNG 原樣寫入；重新編碼時方向套到像素並保留 ICC 與 EXIF（方向設為 1）。Android 標籤讀寫與頻譜圖尚未接上（`track_path` 只支援 Windows 檔案路徑），Android 全螢幕頻譜頁的 UI 已就緒。
 
 ## 「導入使用中歌詞」（2026-10-17 使用者修訂）
 

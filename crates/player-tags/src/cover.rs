@@ -97,8 +97,21 @@ fn oriented_size(image: &DynamicImage, orientation: Orientation) -> (u32, u32) {
     }
 }
 
-/// The rule (user decision 2026-10-22): every cover is written as JPG, except an image with an
-/// alpha channel, which is written as PNG with its transparency. An unscaled JPG — and an unscaled
+/// True when at least one pixel has alpha < max (an alpha channel that is fully opaque does not count).
+fn has_transparency(image: &DynamicImage) -> bool {
+    match image {
+        DynamicImage::ImageLumaA8(i) => i.pixels().any(|p| p[1] < u8::MAX),
+        DynamicImage::ImageRgba8(i) => i.pixels().any(|p| p[3] < u8::MAX),
+        DynamicImage::ImageLumaA16(i) => i.pixels().any(|p| p[1] < u16::MAX),
+        DynamicImage::ImageRgba16(i) => i.pixels().any(|p| p[3] < u16::MAX),
+        DynamicImage::ImageRgba32F(i) => i.pixels().any(|p| p[3] < 1.0),
+        other if other.color().has_alpha() => other.to_rgba8().pixels().any(|p| p[3] < u8::MAX),
+        _ => false,
+    }
+}
+
+/// The rule (user decision 2026-10-22): every cover is written as JPG, except an image with at
+/// least one transparent pixel (alpha < 255), which is written as PNG with its transparency. An unscaled JPG — and an unscaled
 /// PNG with alpha — keeps its original bytes.
 fn plan_for(decoded: &Decoded, options: CoverOptions) -> CoverPlan {
     let (w, h) = oriented_size(&decoded.image, decoded.orientation);
@@ -108,7 +121,7 @@ fn plan_for(decoded: &Decoded, options: CoverOptions) -> CoverPlan {
         (w, h)
     };
     let resized = (tw, th) != (w, h);
-    let alpha = decoded.image.color().has_alpha();
+    let alpha = has_transparency(&decoded.image);
     let mime = if alpha { "image/png" } else { "image/jpeg" };
     let keep = !resized
         && match decoded.format {
@@ -294,15 +307,28 @@ mod tests {
         for format in [ImageFormat::Png, ImageFormat::WebP, ImageFormat::Bmp, ImageFormat::Gif] {
             let src = encode(&opaque(120, 80), format, None, None);
             let out = prepare_cover(&src, OPTS_KEEP).unwrap();
-            if format == ImageFormat::Gif {
-                // GIF decodes as RGBA, so it has an alpha channel and is written as PNG.
-                assert_eq!(out.mime, "image/png", "{format:?}");
-                continue;
-            }
             assert_eq!(out.mime, "image/jpeg", "{format:?}");
             assert_eq!(image::guess_format(&out.data).unwrap(), ImageFormat::Jpeg, "{format:?}");
             assert_eq!((out.width, out.height), (120, 80));
         }
+    }
+
+    #[test]
+    fn fully_opaque_alpha_channel_becomes_jpg_with_metadata() {
+        let rgba = DynamicImage::ImageRgba8(RgbaImage::from_pixel(60, 40, Rgba([10, 20, 30, 255])));
+        for format in [ImageFormat::Png, ImageFormat::WebP] {
+            let src = encode(&rgba, format, Some(fake_icc()), Some(exif_chunk(1)));
+            assert!(image::load_from_memory(&src).unwrap().color().has_alpha());
+            let out = prepare_cover(&src, OPTS_KEEP).unwrap();
+            assert_eq!(out.mime, "image/jpeg", "{format:?}");
+            let (icc, exif, _) = metadata_of(&out.data);
+            assert_eq!(icc.as_deref(), Some(fake_icc().as_slice()), "{format:?}");
+            assert!(exif.unwrap().windows(3).any(|w| w == b"Moe"), "{format:?}");
+        }
+        assert!(!has_transparency(&rgba));
+        let mut one = rgba.to_rgba8();
+        one.put_pixel(59, 39, Rgba([0, 0, 0, 254]));
+        assert!(has_transparency(&DynamicImage::ImageRgba8(one)));
     }
 
     #[test]

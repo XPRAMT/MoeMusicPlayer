@@ -1,5 +1,5 @@
-//! Cover writing per container × source format (user rule 2026-10-22): JPG unless the source has an
-//! alpha channel (then PNG, transparency kept); unscaled JPG / alpha PNG keep their original bytes.
+//! Cover writing per container × source format (user rule 2026-10-22): JPG unless the source has a
+//! pixel with alpha < 255 (then PNG, transparency kept); unscaled JPG / alpha PNG keep their original bytes.
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,11 @@ fn sources() -> Vec<(&'static str, Vec<u8>, bool)> {
     let alpha = DynamicImage::ImageRgba8(RgbaImage::from_fn(80, 60, |x, _| {
         if x < 40 { Rgba([0, 255, 0, 0]) } else { Rgba([255, 0, 0, 255]) }
     }));
+    let opaque_rgba = DynamicImage::ImageRgba8(RgbaImage::from_fn(80, 60, |x, _| Rgba([x as u8, 90, 160, 255])));
     vec![
+        ("png-rgba-opaque", encode(&opaque_rgba, ImageFormat::Png), false),
+        ("webp-rgba-opaque", encode(&opaque_rgba, ImageFormat::WebP), false),
+        ("gif", encode(&opaque, ImageFormat::Gif), false),
         ("jpg", encode(&opaque, ImageFormat::Jpeg), false),
         ("png-opaque", encode(&opaque, ImageFormat::Png), false),
         ("png-alpha", encode(&alpha, ImageFormat::Png), true),

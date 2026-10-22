@@ -104,7 +104,7 @@
   // Cover facts shown next to the preview follow the staged state, not the loaded file.
   const shownCover = $derived(removeCover ? null : pendingCoverPath ? stagedCoverInfo : details?.cover ?? null);
   /** How Save will write the staged cover: Rust's player_tags::plan_cover, the same rule Save uses
-   *  (JPG unless the image has an alpha channel, then PNG; unscaled JPG / alpha PNG keep their bytes). */
+   *  (JPG unless a pixel has alpha < 255, then PNG; unscaled JPG / transparent PNG keep their bytes). */
   type CoverPlan = { width: number; height: number; mime: string; reencode: boolean };
   let savedPlan = $state<CoverPlan | null>(null);
   let coverPlanRequest = 0;
