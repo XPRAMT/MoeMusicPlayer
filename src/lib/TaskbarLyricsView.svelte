@@ -14,7 +14,8 @@
     type PlaybackClock,
     type TaskbarLyricsPlayback,
   } from './playback-clock';
-  import type { PlaybackSnapshot, TaskbarLyricsSettings } from './ipc';
+  import type { LyricsLookSettings, PlaybackSnapshot } from './ipc';
+  import { FLOATING_LYRICS_LAYOUT, normalizeFloatingLyricsSettings } from './floating-lyrics-settings.js';
   import { getDisplayActiveLyricIndex } from './lyrics-preferences.js';
   import { buildTimedLyricTimeline, findActiveLyricIndex } from './lyrics-window.js';
   import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs } from './lyrics-timing-offset.js';
@@ -34,7 +35,15 @@
   /** How long the last line of a track is assumed to stay when the track length is unknown. */
   const LAST_LINE_FALLBACK_MS = 5000;
 
-  let settings = $state<TaskbarLyricsSettings>({ ...DEFAULT_TASKBAR_LYRICS_SETTINGS });
+  // The floating lyrics window (ADR 0032) draws with this same component: only where its settings come from, the
+  // theme (the taskbar's light/dark one does not apply) and the room around the text differ.
+  let { variant = 'taskbar' }: { variant?: 'taskbar' | 'floating' } = $props();
+  const floating = untrack(() => variant) === 'floating';
+  const normalizeSettings = (value: unknown): LyricsLookSettings => (floating ? normalizeFloatingLyricsSettings(value) : normalizeTaskbarLyricsSettings(value));
+  const reservedHeight = floating ? FLOATING_LYRICS_LAYOUT.paddingPx * 2 : 0;
+  const sidePadding = floating ? FLOATING_LYRICS_LAYOUT.buttonPx + FLOATING_LYRICS_LAYOUT.buttonInsetPx * 2 : 4;
+
+  let settings = $state<LyricsLookSettings>(normalizeSettings(floating ? {} : DEFAULT_TASKBAR_LYRICS_SETTINGS));
   let taskbarIsLight = $state(false);
   let data = $state<TaskbarLyricsData | null>(null);
   let playbackState = $state<PlaybackSnapshot['state']>('stopped');
@@ -107,7 +116,7 @@
   let activeLine = $derived(activeIndex >= 0 ? timeline[activeIndex]?.line : undefined);
   let text = $derived(activeLine?.text?.trim() ?? '');
   let translation = $derived(settings.showTranslation ? (activeLine?.translation?.trim() ?? '') : '');
-  let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, viewportHeight, translation !== '' ? settings.translationScalePercent : 0));
+  let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, viewportHeight - reservedHeight, translation !== '' ? settings.translationScalePercent : 0));
   let color = $derived(getTaskbarLyricsColor(settings, taskbarIsLight));
   let effectRgb = $derived(getTaskbarLyricsEffectRgb(settings, taskbarIsLight));
   let alignItems = $derived(settings.align === 'center' ? 'center' : settings.align === 'right' ? 'flex-end' : 'flex-start');
@@ -156,14 +165,16 @@
     void listen<{ trackId: string; delaySec: number }>(LYRICS_TIMING_OFFSET_EVENT, (event) => {
       if (event.payload?.trackId === trackId) timingDelaySec = loadLyricsTimingOffsetSec(trackId);
     }).then((unlisten) => unlisteners.push(unlisten));
-    void invokeCommand('settings_get_taskbar_lyrics', {}).then((stored) => {
-      settings = normalizeTaskbarLyricsSettings(stored);
+    void invokeCommand(floating ? 'settings_get_floating_lyrics' : 'settings_get_taskbar_lyrics', {}).then((stored) => {
+      settings = normalizeSettings(stored);
     });
-    void invokeCommand('taskbar_lyrics_theme', {}).then((light) => {
-      taskbarIsLight = light;
-    });
-    void listen<TaskbarLyricsSettings>('taskbar-lyrics-settings', (event) => {
-      settings = normalizeTaskbarLyricsSettings(event.payload);
+    if (!floating) {
+      void invokeCommand('taskbar_lyrics_theme', {}).then((light) => {
+        taskbarIsLight = light;
+      });
+    }
+    void listen<unknown>(floating ? 'floating-lyrics-settings' : 'taskbar-lyrics-settings', (event) => {
+      settings = normalizeSettings(event.payload);
     }).then((unlisten) => unlisteners.push(unlisten));
     void listen<TaskbarLyricsData>('taskbar-lyrics-data', (event) => {
       data = event.payload;
@@ -173,9 +184,11 @@
       void emit('taskbar-lyrics-request');
     });
     void listen<string>('app-language-changed', (event) => followLanguageChange(event.payload)).then((unlisten) => unlisteners.push(unlisten));
-    void listen<boolean>('taskbar-lyrics-theme', (event) => {
-      taskbarIsLight = event.payload;
-    }).then((unlisten) => unlisteners.push(unlisten));
+    if (!floating) {
+      void listen<boolean>('taskbar-lyrics-theme', (event) => {
+        taskbarIsLight = event.payload;
+      }).then((unlisten) => unlisteners.push(unlisten));
+    }
     void listen<TaskbarLyricsPlayback>('taskbar-lyrics-playback', (event) => applyPlayback(event.payload)).then((unlisten) => {
       unlisteners.push(unlisten);
       // Opened before (or after) the main window: ask it for the current playback now that this window listens.
@@ -199,6 +212,7 @@
   style:--taskbar-lyrics-effect-rgb={effectRgb}
   style:--taskbar-lyrics-size={`${fontPx}px`}
   style:--taskbar-lyrics-translation-scale={settings.translationScalePercent / 100}
+  style:padding={`${reservedHeight / 2}px ${sidePadding}px`}
 >
   {#key activeIndex}
     {#if text}

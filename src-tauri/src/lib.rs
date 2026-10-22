@@ -59,6 +59,8 @@ mod settings;
 mod sleep_timer;
 #[cfg(target_os = "windows")]
 mod taskbar_lyrics;
+#[cfg(target_os = "windows")]
+mod floating_lyrics;
 mod track_details;
 pub mod updater;
 mod volume_sync;
@@ -7157,6 +7159,124 @@ async fn settings_set_taskbar_lyrics(
     Ok(saved)
 }
 
+#[tauri::command]
+fn settings_get_floating_lyrics(
+    state: State<'_, AppState>,
+) -> Result<settings::FloatingLyricsSettings, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.floating_lyrics)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the floating-lyrics settings (ADR 0032) and apply them on Windows. The window position is owned by the
+/// window itself (saved when it moves), so the stored one is kept whatever the page sends.
+#[tauri::command]
+async fn settings_set_floating_lyrics(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: settings::FloatingLyricsSettings,
+) -> Result<settings::FloatingLyricsSettings, String> {
+    let requested = settings.normalized();
+    let saved = state
+        .settings
+        .update(|stored| {
+            let position = stored.floating_lyrics.position;
+            stored.floating_lyrics = settings::FloatingLyricsSettings {
+                position,
+                ..requested.clone()
+            };
+            Ok(())
+        })
+        .map(|stored| stored.floating_lyrics)
+        .map_err(|error| error.to_string())?;
+    apply_floating_lyrics(&app, &saved).await?;
+    Ok(saved)
+}
+
+/// The lock/unlock button of the floating window: switch between move mode and fixed (click-through) mode.
+#[tauri::command]
+async fn floating_lyrics_set_locked(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    locked: bool,
+) -> Result<settings::FloatingLyricsSettings, String> {
+    let saved = state
+        .settings
+        .update(|stored| {
+            stored.floating_lyrics.locked = locked;
+            Ok(())
+        })
+        .map(|stored| stored.floating_lyrics)
+        .map_err(|error| error.to_string())?;
+    apply_floating_lyrics(&app, &saved).await?;
+    Ok(saved)
+}
+
+/// Forget the saved position: the window goes back to its default place on the primary monitor.
+#[tauri::command]
+async fn floating_lyrics_reset_position(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<settings::FloatingLyricsSettings, String> {
+    let saved = state
+        .settings
+        .update(|stored| {
+            stored.floating_lyrics.position = None;
+            Ok(())
+        })
+        .map(|stored| stored.floating_lyrics)
+        .map_err(|error| error.to_string())?;
+    apply_floating_lyrics(&app, &saved).await?;
+    Ok(saved)
+}
+
+async fn apply_floating_lyrics(
+    app: &AppHandle,
+    saved: &settings::FloatingLyricsSettings,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    return floating_lyrics::apply(app, saved).await;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app.emit("floating-lyrics-settings", saved);
+        Ok(())
+    }
+}
+
+/// The Android floating-lyrics overlay (ADR 0032): push settings / lyric data, read the overlay permission and lock
+/// state, or open the system "display over other apps" page. Null on other platforms.
+#[tauri::command]
+async fn floating_lyrics_android(
+    app: AppHandle,
+    command: String,
+    payload: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    if !matches!(
+        command.as_str(),
+        "floatingLyricsUpdate" | "floatingLyricsStatus" | "openOverlayPermissionSettings"
+    ) {
+        return Err(format!("unknown floating lyrics command: {command}"));
+    }
+    #[cfg(target_os = "android")]
+    {
+        let payload = payload.unwrap_or_else(|| serde_json::json!({}));
+        return tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .floating_lyrics(&command, payload)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, payload);
+        Ok(serde_json::Value::Null)
+    }
+}
+
 /// Whether the Windows taskbar is in its light theme (the taskbar lyrics colour themselves from this).
 #[tauri::command]
 fn taskbar_lyrics_theme() -> bool {
@@ -11949,6 +12069,21 @@ pub fn run() {
                 }
             }
             #[cfg(target_os = "windows")]
+            if floating_lyrics::is_window_label(window.label()) {
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        if let Some(main) = window.app_handle().get_webview_window("main") {
+                            let _ = main.close();
+                        }
+                    }
+                    tauri::WindowEvent::Moved(position) => {
+                        floating_lyrics::remember_position(window.app_handle(), *position);
+                    }
+                    _ => {}
+                }
+            }
+            #[cfg(target_os = "windows")]
             if window.label() == "main" {
                 match event {
                     tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
@@ -11956,6 +12091,7 @@ pub fn run() {
                     }
                     tauri::WindowEvent::Destroyed => {
                         taskbar_lyrics::shutdown(window.app_handle());
+                        floating_lyrics::shutdown(window.app_handle());
                     }
                     tauri::WindowEvent::CloseRequested { api, .. } => {
                         persist_main_window_geometry(window);
@@ -12053,6 +12189,11 @@ pub fn run() {
             settings_set_language,
             settings_get_taskbar_lyrics,
             settings_set_taskbar_lyrics,
+            settings_get_floating_lyrics,
+            settings_set_floating_lyrics,
+            floating_lyrics_set_locked,
+            floating_lyrics_reset_position,
+            floating_lyrics_android,
             taskbar_lyrics_theme,
             taskbar_lyrics_monitors,
             settings_set_dsd,
@@ -12454,6 +12595,16 @@ pub fn run() {
                 let taskbar_lyrics = initial_settings.taskbar_lyrics.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) = taskbar_lyrics::apply(&handle, &taskbar_lyrics).await {
+                        eprintln!("{error}");
+                    }
+                });
+            }
+            #[cfg(target_os = "windows")]
+            if initial_settings.floating_lyrics.enabled {
+                let handle = app.handle().clone();
+                let floating = initial_settings.floating_lyrics.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = floating_lyrics::apply(&handle, &floating).await {
                         eprintln!("{error}");
                     }
                 });

@@ -188,6 +188,13 @@ impl<R: Runtime> MediaIndex<R> {
         self.platform.request_media_images_permission()
     }
 
+    /// Floating lyrics overlay (ADR 0032): `floatingLyricsUpdate`, `floatingLyricsStatus` or
+    /// `openOverlayPermissionSettings`, answered by the Kotlin plugin.
+    #[cfg(target_os = "android")]
+    pub fn floating_lyrics(&self, command: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
+        self.platform.floating_lyrics(command, payload)
+    }
+
     /// Open the system All files access page for this app.
     #[cfg(target_os = "android")]
     pub fn request_all_files_access(&self) -> Result<()> {

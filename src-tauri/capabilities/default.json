@@ -6,7 +6,8 @@
     "main",
     "spectrogram",
     "taskbar-lyrics",
-    "taskbar-lyrics-*"
+    "taskbar-lyrics-*",
+    "floating-lyrics"
   ],
   "permissions": [
     "core:default",

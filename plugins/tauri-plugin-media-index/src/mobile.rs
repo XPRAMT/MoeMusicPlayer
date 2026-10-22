@@ -187,6 +187,10 @@ impl<R: Runtime> PlatformMediaIndex<R> {
             .run_mobile_plugin::<crate::MediaImagesPermission>("requestMediaImagesPermission", json!({}))?)
     }
 
+    pub(crate) fn floating_lyrics(&self, command: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
+        Ok(self.0.run_mobile_plugin::<serde_json::Value>(command, payload)?)
+    }
+
     pub(crate) fn request_all_files_access(&self) -> Result<()> {
         self.0.run_mobile_plugin::<serde_json::Value>("requestAllFilesAccess", json!({}))?;
         Ok(())
