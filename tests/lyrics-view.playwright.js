@@ -163,25 +163,25 @@
       scrollTop: document.querySelector('[data-testid="timed-lyrics"]').scrollTop,
     };
   });
-  // Cue lead (ADR 0029): line 91 starts at 91 000 ms, so it is shown — and its 300 ms scroll starts — at 90 700 ms.
+  // Cue lead (ADR 0029): line 91 starts at 91 000 ms, so it is shown — and its 200 ms scroll starts — at 90 800 ms.
   const scrollStart = await page.evaluate(() => document.querySelector('[data-testid="timed-lyrics"]').scrollTop);
-  await page.evaluate(() => window.lyricsViewHarness.setPosition(90_699));
+  await page.evaluate(() => window.lyricsViewHarness.setPosition(90_799));
   assert.equal((await cueState()).shown, 90, 'the next line is not shown before its lead');
-  await page.evaluate(() => window.lyricsViewHarness.setPosition(90_700));
+  await page.evaluate(() => window.lyricsViewHarness.setPosition(90_800));
   await page.waitForTimeout(80);
   const midflight = await cueState();
   assert.equal(midflight.shown, 91, 'the next line is shown LYRIC_CUE_LEAD_MS early');
   assert.equal(midflight.current, 90, 'the line really playing is still the previous one');
-  assert.equal(midflight.cueMs, '300ms', 'the CSS transitions share the cue animation length');
+  assert.equal(midflight.cueMs, '200ms', 'the CSS transitions share the cue animation length');
   assert.ok(midflight.scrollTop > scrollStart + 1, 'normal cue navigation has a visible in-flight scroll position');
   await page.evaluate(() => window.lyricsViewHarness.setPosition(90_950));
   await page.waitForTimeout(300);
   await page.waitForFunction(centered);
-  await page.evaluate(() => window.lyricsViewHarness.setPosition(91_700));
+  await page.evaluate(() => window.lyricsViewHarness.setPosition(91_800));
   await page.waitForFunction(centered);
   assert.equal((await cueState()).shown, 92, 'the latest cue wins after rapid updates');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.evaluate(() => window.lyricsViewHarness.setPosition(92_700));
+  await page.evaluate(() => window.lyricsViewHarness.setPosition(92_800));
   await page.waitForTimeout(50);
   assert.ok(await page.evaluate(centered), 'reduced-motion preference disables cue animation');
   await page.evaluate(() => window.lyricsViewHarness.setPosition(93_000));

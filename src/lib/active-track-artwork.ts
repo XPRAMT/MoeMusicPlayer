@@ -27,6 +27,15 @@ interface ActiveTrackArtworkOptions {
   maxBytes?: number;
 }
 
+/**
+ * The object URL the Now Playing page shows as its large cover. While the next track's cover loads, the controller keeps
+ * the previous track's URL (released only after the decoded replacement is published), so the page keeps showing it and
+ * keeps its with-cover layout; only a settled "no cover" (missing, too large, unreadable) or no track hides it.
+ */
+export function nowPlayingArtworkObjectUrl(state: ActiveArtworkState): string | null {
+  return state.status === 'ready' || state.status === 'loading' ? state.objectUrl : null;
+}
+
 export function detectArtworkMimeType(bytes: ArrayBuffer): string | null {
   const data = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 16));
   if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {

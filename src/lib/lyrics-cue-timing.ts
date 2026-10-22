@@ -2,7 +2,7 @@
 // early, so the animation ends exactly when the line starts. The same constant drives the scroll tween in JS and the
 // colour/opacity transitions in CSS (`--lyric-cue-ms`).
 
-export const LYRIC_CUE_LEAD_MS = 300;
+export const LYRIC_CUE_LEAD_MS = 200;
 
 /**
  * Playback positions at which each line is shown (`startMs - offsetMs - lead`). The lead is LYRIC_CUE_LEAD_MS, shortened

@@ -202,7 +202,7 @@
   import UpdateCenter from './lib/UpdateCenter.svelte';
   import { EMPTY_UPDATE_STATE } from './lib/update-controller';
   import type { UpdateState } from './lib/ipc';
-  import { detectArtworkMimeType } from './lib/active-track-artwork';
+  import { detectArtworkMimeType, nowPlayingArtworkObjectUrl } from './lib/active-track-artwork';
   import { APP_WINDOW_TITLE } from './lib/app-version';
   import brandIcon from '../icon/SilverWolfIcon.png';
   import {
@@ -678,6 +678,8 @@
   let playbackQueueCursorChangeKey = $state(0);
   let volumeDraft = $state<number | null>(null);
   let activeArtwork = $state<ActiveArtworkState>({ trackId: null, status: 'empty', objectUrl: null });
+  // Now Playing large cover: keeps the previous cover (and the with-cover layout) until the next one has decoded.
+  const nowPlayingArtworkUrl = $derived(nowPlayingArtworkObjectUrl(activeArtwork));
   let coverStageElement = $state<HTMLDivElement | null>(null);
   let coverFrame = $state<{ width: number; height: number } | null>(null);
   // The top bar shows the recording date only when the track has one (no "—" placeholder).
@@ -5071,20 +5073,20 @@
             style:--np-lyr-col-a={`${(1 + 1 * (1 - coverShrinkShare)).toFixed(4)}fr`}
             style:--np-lyr-col-b={`${(1 + 1 * (1 - coverShrinkShare)).toFixed(4)}fr`}
             style:--np-lyr-row={`${(0.9 + 1.1 * (1 - coverShrinkShare)).toFixed(4)}fr`}>
-            <NowPlayingArrangement lyricsSwipe={{ follow: false, damped: true, feedbackTarget: () => coverStageElement ?? null, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous') } }} layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved} artworkVisible={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}>
+            <NowPlayingArrangement lyricsSwipe={{ follow: false, damped: true, feedbackTarget: () => coverStageElement ?? null, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous') } }} layout={nowPlayingLayout} lyricsVisible={!nowPlayingLyricsRemoved} artworkVisible={nowPlayingArtworkUrl !== null}>
               {#snippet artwork()}
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
                   use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: handleCoverZoom, initial: restoreCoverZoom, syncScale: coverZoomPersisted.scale }}
                   use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() }, mouseActions: { down: () => void closeNowPlaying() } }}
-                  class:has-artwork={activeArtwork.status === 'ready' && activeArtwork.objectUrl !== null}
+                  class:has-artwork={nowPlayingArtworkUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
                   style:width={coverFrame ? `${coverFrame.width}px` : undefined}
                   style:height={coverFrame ? `${coverFrame.height}px` : undefined}
                 >
-                  {#if activeArtwork.status === 'ready' && activeArtwork.objectUrl}
-                    <img class="cover-stage-image" draggable="false" src={activeArtwork.objectUrl} alt={tr("{0} 封面", [currentTrackTitle(playback?.currentTrack)])} onerror={() => artworkController.imageFailed(activeArtwork.objectUrl!)} />
+                  {#if nowPlayingArtworkUrl}
+                    <img class="cover-stage-image" draggable="false" src={nowPlayingArtworkUrl} alt={tr("{0} 封面", [currentTrackTitle(playback?.currentTrack)])} onerror={() => artworkController.imageFailed(nowPlayingArtworkUrl!)} />
                   {:else}
                     <div class="cover-orbit cover-orbit-a"></div>
                     <div class="cover-orbit cover-orbit-b"></div>

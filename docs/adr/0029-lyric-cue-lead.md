@@ -12,9 +12,9 @@ The smooth scroll's length was chosen by the browser, so it could not be made to
 
 ## Decision
 
-- One constant, `LYRIC_CUE_LEAD_MS` = 300 ms in `src/lib/lyrics-cue-timing.ts`, is both the lead and the animation
+- One constant, `LYRIC_CUE_LEAD_MS` = 200 ms (first set to 300 ms, shortened the same day) in `src/lib/lyrics-cue-timing.ts`, is both the lead and the animation
   length; CSS reads it through `--lyric-cue-ms`. Not user-adjustable.
-- While playing, a line is shown `lead` before its start: lead = min(300 ms, gap to the previous line); the first line
+- While playing, a line is shown `lead` before its start: lead = min(200 ms, gap to the previous line); the first line
   is never shown before position 0. The user's lyric delay still applies on top. The animation runs for the time left
   until the line really starts, so a shortened lead or resuming inside the lead animates for what remains.
 - The scroll is a fixed-length ease-out rAF tween (only while it runs) instead of `scrollTo({ behavior: 'smooth' })`.
@@ -25,5 +25,5 @@ The smooth scroll's length was chosen by the browser, so it could not be made to
 
 ## Consequences
 
-- The highlighted line on the Now Playing page changes up to 300 ms before the line's timestamp, by design.
+- The highlighted line on the Now Playing page changes up to 200 ms before the line's timestamp, by design.
 - Playback-clock corrections can still move a change by up to the clock's convergence error (< 250 ms, ADR 0028).
