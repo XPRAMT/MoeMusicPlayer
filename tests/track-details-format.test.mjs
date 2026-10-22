@@ -2,14 +2,27 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import './helpers/untr-fs.mjs';
-import { formatDetailsBitrate, formatDetailsDuration, formatDetailsSampleRate } from '../src/lib/track-details-format.js';
+import { formatBitrateKbps, formatDetailsBitrate, formatDetailsDuration, formatDetailsSampleRate } from '../src/lib/track-details-format.js';
 
-test('bitrate shows kbps up to 1024 and Mbps above it', () => {
+test('shared bitrate rule: whole kbps below 1000, Mbps (/1000, trailing zeros trimmed) from 1000 up', () => {
+  assert.equal(formatBitrateKbps(320, 1), '320 kbps');
+  assert.equal(formatBitrateKbps(999.4, 1), '999 kbps');
+  assert.equal(formatBitrateKbps(1000, 1), '1 Mbps');
+  assert.equal(formatBitrateKbps(1000, 3), '1 Mbps');
+  assert.equal(formatBitrateKbps(1411.2, 1), '1.4 Mbps');
+  assert.equal(formatBitrateKbps(1411.2, 3), '1.411 Mbps');
+  assert.equal(formatBitrateKbps(5644.8, 1), '5.6 Mbps');
+  assert.equal(formatBitrateKbps(2000, 1), '2 Mbps');
+  for (const bad of [null, undefined, 0, -5, Number.NaN, Number.POSITIVE_INFINITY]) assert.equal(formatBitrateKbps(bad, 1), '—');
+});
+
+test('details panel bitrate uses the shared rule with up to three Mbps decimals', () => {
   assert.equal(formatDetailsBitrate(320), '320 kbps');
-  assert.equal(formatDetailsBitrate(1024), '1024 kbps');
+  assert.equal(formatDetailsBitrate(1000), '1 Mbps');
+  assert.equal(formatDetailsBitrate(1024), '1.024 Mbps');
   assert.equal(formatDetailsBitrate(1030), '1.03 Mbps');
-  assert.equal(formatDetailsBitrate(1411), '1.41 Mbps');
-  assert.equal(formatDetailsBitrate(4608), '4.61 Mbps');
+  assert.equal(formatDetailsBitrate(1411.2), '1.411 Mbps');
+  assert.equal(formatDetailsBitrate(4608), '4.608 Mbps');
   assert.equal(formatDetailsBitrate(null), '—');
   assert.equal(formatDetailsBitrate(0), '—');
 });

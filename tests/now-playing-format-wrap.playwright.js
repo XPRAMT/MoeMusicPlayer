@@ -38,7 +38,7 @@ async page => {
     const quality = document.querySelector('.now-playing-audio-quality > span');
     const releaseDate = document.querySelector('.now-playing-release-date-block');
     const playCount = document.querySelector('.now-playing-play-count-block');
-    quality.textContent = 'FLAC．384 kHz．32 bit．22579 kbps';
+    quality.textContent = 'FLAC．384 kHz．32 bit．22.6 Mbps';
     releaseDate.textContent = '2025-08-15';
     const rect = element => {
       const value = element.getBoundingClientRect();
@@ -51,7 +51,7 @@ async page => {
     };
   });
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  if (!wrapped.quality.text.endsWith('22579 kbps') || wrapped.quality.height >= 24) {
+  if (!wrapped.quality.text.endsWith('22.6 Mbps') || wrapped.quality.height >= 24) {
     throw new Error('360px: long quality summary split internally instead of wrapping as one block');
   }
   if (wrapped.releaseDate.height >= 24 || wrapped.playCount.height >= 24) {

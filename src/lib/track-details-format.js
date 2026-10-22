@@ -5,10 +5,21 @@ function trimmed(value, digits) {
   return String(Number(value.toFixed(digits)));
 }
 
-/** Bitrate in kbps, or in Mbps once it is above 1024 kbps. Nothing known shows a dash. @param {number | null | undefined} kbps */
-export function formatDetailsBitrate(kbps) {
+/**
+ * The one bitrate rule for the whole app (details panel, Now Playing top bar, track list):
+ * whole kbps below 1000 kbps; from 1000 kbps up, Mbps = kbps / 1000 with at most `mbpsDigits` decimals and no trailing zeros.
+ * Nothing known shows a dash.
+ * @param {number | null | undefined} kbps
+ * @param {number} mbpsDigits
+ */
+export function formatBitrateKbps(kbps, mbpsDigits) {
   if (typeof kbps !== 'number' || !Number.isFinite(kbps) || kbps <= 0) return '—';
-  return kbps > 1024 ? `${trimmed(kbps / 1000, 2)} Mbps` : `${trimmed(kbps, 0)} kbps`;
+  return kbps >= 1000 ? `${trimmed(kbps / 1000, mbpsDigits)} Mbps` : `${trimmed(kbps, 0)} kbps`;
+}
+
+/** Details panel bitrate: the shared rule with up to three Mbps decimals. @param {number | null | undefined} kbps */
+export function formatDetailsBitrate(kbps) {
+  return formatBitrateKbps(kbps, 3);
 }
 
 /** Sample rate in kHz, or in MHz from 1 MHz up (DSD). Nothing known shows a dash. @param {number | null | undefined} hz */

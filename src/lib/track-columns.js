@@ -1,5 +1,6 @@
 import { tr } from './i18n.js';
 import { displayUnknown } from './unknown-label.js';
+import { formatBitrateKbps } from './track-details-format.js';
 /** @typedef {'title' | 'artist' | 'album' | 'year' | 'createdAt' | 'modifiedAt' | 'audioFormat' | 'duration' | 'playCount' | 'source'} TrackColumnId */
 /** @typedef {{ id: TrackColumnId, visible: boolean }} TrackColumnPreference */
 /** @typedef {{ title: number, artist: number, album: number, source: number }} TrackColumnWidths */
@@ -474,7 +475,8 @@ export function formatAudioFormat(item, options = {}) {
     && Number.isFinite(item.bitrateBps)
     && item.bitrateBps > 0
   ) {
-    parts.push(`${Math.round(item.bitrateBps / 1000)} kbps`);
+    // Same rule as the details panel; the compact top bar and list keep one Mbps decimal.
+    parts.push(formatBitrateKbps(item.bitrateBps / 1000, 1));
   }
   return parts.length > 0 ? parts.join('．') : '—';
 }

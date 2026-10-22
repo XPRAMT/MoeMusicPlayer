@@ -43,8 +43,8 @@ const formatDuration = (value) => `${Math.floor(value / 60_000)}:${String(Math.f
 
 test('DSD tracks show the DSD rate name, MHz and 1 bit, hide the bitrate and always get the Hi-Res badge', () => {
   const dsd64 = { codec: 'DSD64', sampleRateHz: 2_822_400, bitDepth: 1, bitrateBps: 5_644_800 };
-  assert.equal(formatAudioFormat(dsd64), 'DSD64．2.8 MHz．1 bit．5645 kbps');
-  assert.equal(formatAudioFormat(dsd64, { omitDsdBitDepth: true }), 'DSD64．2.8 MHz．5645 kbps');
+  assert.equal(formatAudioFormat(dsd64), 'DSD64．2.8 MHz．1 bit．5.6 Mbps');
+  assert.equal(formatAudioFormat(dsd64, { omitDsdBitDepth: true }), 'DSD64．2.8 MHz．5.6 Mbps');
   assert.equal(formatAudioFormat(dsd64, { omitLosslessBitrate: true }), 'DSD64．2.8 MHz．1 bit');
   assert.equal(formatAudioFormat({ codec: 'DSD256', sampleRateHz: 11_289_600, bitDepth: 1, bitrateBps: null }), 'DSD256．11.3 MHz．1 bit');
   assert.equal(isDsdCodec('dsd128'), true);
@@ -441,7 +441,10 @@ test('audio format uses only supplied source fields and formats nullable values'
   assert.equal(isLosslessCodec('mp3'), false);
   assert.equal(formatAudioFormat({
     codec: 'flac', sampleRateHz: 48_000, bitDepth: 16, bitrateBps: 1_024_000,
-  }), 'FLAC．48 kHz．16 bit．1024 kbps');
+  }), 'FLAC．48 kHz．16 bit．1 Mbps');
+  assert.equal(formatAudioFormat({ codec: 'flac', sampleRateHz: 44_100, bitDepth: 16, bitrateBps: 1_411_200 }), 'FLAC．44.1 kHz．16 bit．1.4 Mbps');
+  assert.equal(formatAudioFormat({ codec: 'mp3', sampleRateHz: 44_100, bitDepth: null, bitrateBps: 999_400 }), 'MP3．44.1 kHz．999 kbps');
+  assert.equal(formatAudioFormat({ codec: 'mp3', sampleRateHz: 44_100, bitDepth: null, bitrateBps: 1_000_000 }), 'MP3．44.1 kHz．1 Mbps');
   assert.equal(formatAudioFormat({
     codec: 'flac', sampleRateHz: 48_000, bitDepth: 24, bitrateBps: 1_989_000,
   }, { omitLosslessBitrate: true }), 'FLAC．48 kHz．24 bit');
