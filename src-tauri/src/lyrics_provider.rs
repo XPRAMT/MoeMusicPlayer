@@ -263,7 +263,7 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
             LyricProvider::NetEase => HttpRequest {
                 method: HttpMethod::Get,
                 url: format!(
-                    "{NETEASE_LYRIC_URL}?id={}&lv=1&kv=1&tv=1&yv=1&rv=1",
+                    "{NETEASE_LYRIC_URL}?id={}&lv=-1&kv=-1&tv=-1&yv=-1&rv=-1",
                     form_component(&candidate.provider_track_id)
                 ),
                 body: None,
@@ -963,13 +963,36 @@ mod tests {
         let requests = transport.requests.lock().unwrap();
         assert!(requests
             .iter()
-            .all(|request| request.url.contains("lv=1&kv=1&tv=1&yv=1&rv=1")));
+            .all(|request| request.url.contains("lv=-1&kv=-1&tv=-1&yv=-1&rv=-1")));
         assert!(requests.iter().all(|request| request
             .headers
             .iter()
             .any(|(name, value)| name == "Referer" && value == "https://music.163.com/")));
     }
 
+    /// lv/kv/tv/yv/rv mean "only versions newer than this": with 1, a song whose lyric is still at
+    /// version 1 (e.g. NetEase id 3448681406, 小夜子 中文 ver.) comes back with an empty lrc. -1 asks
+    /// for every version.
+    #[tokio::test]
+    async fn netease_requests_every_lyric_version_so_version_one_lyrics_are_returned() {
+        let transport = MockTransport::with_responses([response(
+            r#"{"code":200,"lrc":{"version":1,"lyric":"[00:00.000]v1 line"},"tlyric":{"version":0,"lyric":""}}"#,
+        )]);
+        let client = LyricsProviderClient::new(transport.clone());
+        let lyrics = client
+            .fetch_lyrics(&candidate(LyricProvider::NetEase), &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(lyrics.synced_lyrics.as_deref(), Some("[00:00.000]v1 line"));
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let url = &requests[0].url;
+        assert!(url.starts_with(NETEASE_LYRIC_URL));
+        for key in ["lv", "kv", "tv", "yv", "rv"] {
+            assert!(url.contains(&format!("&{key}=-1")), "{key} must be -1 in {url}");
+            assert!(!url.contains(&format!("&{key}=1")), "{key}=1 drops version-1 lyrics: {url}");
+        }
+    }
     #[test]
     fn netease_recognizes_colon_centisecond_lrc_as_synced_content() {
         let lyric = (0..43)
