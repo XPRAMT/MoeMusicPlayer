@@ -233,6 +233,7 @@ test('plain, stopped, and cue-less lyrics stay fully opaque; playing and paused 
   const dimOpacity = 0.35;
   assert.equal(getDisplayActiveLyricIndex(2, 'playing'), 2);
   assert.equal(getDisplayActiveLyricIndex(2, 'paused'), 2);
+  assert.equal(getDisplayActiveLyricIndex(2, 'buffering'), 2, 'a seek while playing keeps the highlight');
   assert.equal(getDisplayActiveLyricIndex(2, 'stopped'), -1);
   assert.equal(getDisplayActiveLyricIndex(-1, 'playing'), -1);
   assert.equal(getLyricLineOpacity(1, 2, 35), dimOpacity);

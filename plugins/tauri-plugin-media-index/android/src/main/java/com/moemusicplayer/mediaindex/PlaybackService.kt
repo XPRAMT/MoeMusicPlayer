@@ -597,7 +597,7 @@ class PlaybackService : MediaSessionService() {
     private fun reportSnapshot() {
         val player = exoPlayer ?: return
         val now = android.os.SystemClock.elapsedRealtime()
-        if (now - lastSnapshotSentAt < SNAPSHOT_MIN_INTERVAL_MS && player.isPlaying) return
+        if (now - lastSnapshotSentAt < SNAPSHOT_MIN_INTERVAL_MS && player.playWhenReady) return
         lastSnapshotSentAt = now
         reportEvent(JSONObject().apply {
             put("v", 1)
@@ -609,15 +609,16 @@ class PlaybackService : MediaSessionService() {
 
     private fun snapshot(player: Player?): JSONObject {
         val current = player ?: return snapshotEmpty()
-        val state = when {
-            current.playerError != null -> "error"
-            current.playbackState == Player.STATE_ENDED -> "ended"
-            current.isPlaying -> "playing"
-            stopped -> "stopped"
-            current.playbackState == Player.STATE_READY && current.currentMediaItem != null -> "paused"
-            current.currentMediaItem != null -> "ready"
-            else -> "empty"
-        }
+        val state = playbackStateName(
+            hasError = current.playerError != null,
+            ended = current.playbackState == Player.STATE_ENDED,
+            isPlaying = current.isPlaying,
+            playWhenReady = current.playWhenReady,
+            buffering = current.playbackState == Player.STATE_BUFFERING,
+            stopped = stopped,
+            ready = current.playbackState == Player.STATE_READY,
+            hasItem = current.currentMediaItem != null,
+        )
         return PlaybackEventEnvelope.snapshot(
             serviceGeneration = serviceGeneration,
             loadInstance = loadInstance,
@@ -774,4 +775,29 @@ class PlaybackService : MediaSessionService() {
         private val SERVICE_GENERATIONS = AtomicLong(0L)
         private val EVENT_IDS = AtomicLong(0L)
     }
+}
+
+/**
+ * The state name a snapshot reports. Told to play but still filling (a seek, a slow remote read) is "buffering",
+ * not a pause: the app keeps the controls in "playing" and only stops counting listening time, so a seek no longer
+ * flashes the play button.
+ */
+internal fun playbackStateName(
+    hasError: Boolean,
+    ended: Boolean,
+    isPlaying: Boolean,
+    playWhenReady: Boolean,
+    buffering: Boolean,
+    stopped: Boolean,
+    ready: Boolean,
+    hasItem: Boolean,
+): String = when {
+    hasError -> "error"
+    ended -> "ended"
+    isPlaying -> "playing"
+    playWhenReady && buffering && hasItem -> "buffering"
+    stopped -> "stopped"
+    ready && hasItem -> "paused"
+    hasItem -> "ready"
+    else -> "empty"
 }

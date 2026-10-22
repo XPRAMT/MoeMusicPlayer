@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 
 use std::{
     fs,
@@ -737,4 +737,45 @@ fn unavailable_restore_stays_ready_then_reloads_at_saved_position_without_autopl
     assert!(result.is_ok(), "Play result: {:?}", result.err());
     harness.actor = Some(actor);
     assert_eq!(harness.actor().native.state, "playing");
+}
+
+#[test]
+fn a_seek_buffering_snapshot_keeps_playing_without_flipping_resume_or_counting_time() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    let native = playing_snapshot(fixture.first, 7, "playing", 1_000);
+    let mut harness = ActorFixture::with_snapshot(temporary.open(), native.clone());
+    let reports = Arc::new(Mutex::new(Vec::<bool>::new()));
+    let sink_reports = Arc::clone(&reports);
+    harness.actor_mut().resume_reported.set(true);
+    harness.actor_mut().resume_sink = Some(Arc::new(move |playing| sink_reports.lock().unwrap().push(playing)));
+    let start = Instant::now();
+    harness.actor_mut().meter.observe(&native, start);
+
+    // What Kotlin sends right after seekTo while playing (playWhenReady, STATE_BUFFERING).
+    let event: NativeEvent = serde_json::from_str(&format!(
+        r#"{{"v":1,"kind":"snapshot","eventId":"9","serviceGeneration":1,"snapshot":{{"serviceGeneration":1,"loadInstance":7,"trackId":"{}","mediaKey":"load-7","state":"buffering","positionMs":4000,"durationMs":8000,"volume":1.0,"error":null}}}}"#,
+        fixture.first
+    ))
+    .expect("Kotlin buffering snapshot fixture");
+    let buffering = event.snapshot.expect("snapshot");
+    assert_eq!(buffering.state, "buffering");
+    harness.actor_mut().observe_snapshot(buffering.clone(), start + Duration::from_millis(100));
+    let published = harness.actor().publish_snapshot();
+    assert!(published.is_playing, "buffering after a seek keeps the play button on pause");
+    assert_eq!(published.state, "buffering");
+    assert!(reports.lock().unwrap().is_empty(), "resumePlayback must not flip during a seek");
+
+    // Buffering for a second, then playing again from 4000.
+    let resumed = NativePlaybackSnapshot { state: "playing".into(), ..buffering.clone() };
+    harness.actor_mut().observe_snapshot(resumed.clone(), start + Duration::from_millis(1_100));
+    harness.actor_mut().observe_snapshot(
+        NativePlaybackSnapshot { position_ms: 4_200, ..resumed },
+        start + Duration::from_millis(1_300),
+    );
+    let counted = harness.actor().meter.totals.get(&fixture.first).map_or(0, |total| total.played_ms);
+    // 100 ms playing before the seek + 200 ms after it; the 1000 ms of buffering in between is not counted.
+    assert_eq!(counted, 300, "buffering time is not listening time");
+    assert!(reports.lock().unwrap().is_empty(), "still playing: nothing to record");
 }

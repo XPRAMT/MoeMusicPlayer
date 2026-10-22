@@ -786,7 +786,7 @@ impl AndroidActor {
             .ok_or_else(|| "佇列中的曲目暫時不在曲庫中。".to_owned())?;
         let uri = crate::android_dsd::playable_uri(&self.database, track_id)
             .map_err(|error| error.to_string())?;
-        let play_when_ready = natural || self.native.state == "playing";
+        let play_when_ready = natural || counts_as_playing(&self.native.state);
         self.meter.seal_segment(&self.native, Instant::now());
         self.flush_statistics()?;
         let command = self.new_command(
@@ -1342,7 +1342,7 @@ impl AndroidActor {
 
     /// Record playing/paused in settings.json whenever it changes (not on every snapshot).
     fn report_resume_state(&self) {
-        let playing = self.native.state == "playing";
+        let playing = counts_as_playing(&self.native.state);
         if self.resume_reported.replace(playing) != playing {
             if let Some(sink) = self.resume_sink.as_ref() {
                 sink(playing);
@@ -1361,7 +1361,7 @@ impl AndroidActor {
         let snapshot = PlaybackSnapshot {
             current_track: self.current_track.clone(),
             state: self.native.state.clone(),
-            is_playing: self.native.state == "playing",
+            is_playing: counts_as_playing(&self.native.state),
             position_ms: if self.native.track_id.is_some() {
                 self.native.position_ms
             } else {
@@ -2086,6 +2086,13 @@ mod tests {
         assert_eq!(meter.totals[&first].played_ms, 250);
         assert!(!meter.totals.contains_key(&second));
     }
+}
+
+/// Whether the native state counts as playing for the controls and the resume flag. "buffering" is Media3 told to
+/// play but still filling (right after a seek): the play button stays on pause and `resumePlayback` does not flip.
+/// The listening meter still credits only "playing", so buffering time is not counted.
+fn counts_as_playing(state: &str) -> bool {
+    matches!(state, "playing" | "buffering")
 }
 
 #[cfg(test)]

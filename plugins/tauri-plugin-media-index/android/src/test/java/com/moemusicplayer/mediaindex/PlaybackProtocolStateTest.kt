@@ -80,4 +80,23 @@ class PlaybackProtocolStateTest {
         assertTrue(decodedSnapshot.get("serviceGeneration") is Number)
         assertTrue(decodedSnapshot.isNull("error"))
     }
-}
+
+    @Test
+    fun aSeekWhilePlayingIsBufferingNotAPause() {
+        fun name(isPlaying: Boolean, playWhenReady: Boolean, buffering: Boolean, ready: Boolean = false) =
+            playbackStateName(
+                hasError = false, ended = false, isPlaying = isPlaying, playWhenReady = playWhenReady,
+                buffering = buffering, stopped = false, ready = ready, hasItem = true,
+            )
+        // seekTo while playing: Media3 drops to STATE_BUFFERING with isPlaying false but playWhenReady still true.
+        assertEquals("buffering", name(isPlaying = false, playWhenReady = true, buffering = true))
+        assertEquals("playing", name(isPlaying = true, playWhenReady = true, buffering = false, ready = true))
+        // A seek while paused stays paused/ready, never buffering.
+        assertEquals("ready", name(isPlaying = false, playWhenReady = false, buffering = true))
+        assertEquals("paused", name(isPlaying = false, playWhenReady = false, buffering = false, ready = true))
+        assertEquals(
+            "error",
+            playbackStateName(true, false, false, true, true, false, false, true),
+        )
+        assertEquals("empty", playbackStateName(false, false, false, true, true, false, false, false))
+    }}

@@ -724,6 +724,9 @@
   let isPlaylistOperation = $state(false);
   let isLoadingPlaybackSnapshot = false;
   let isSendingPlaybackCommand = $state(false);
+  /** A seek in flight. It locks the transport like any other command, but only in the click handlers: the buttons
+   * keep their look (no disabled, no grey), so dragging the progress bar does not flash the controls. */
+  let isSeeking = $state(false);
   let playbackSnapshotRequestVersion = 0;
   let playbackSnapshotFence = 0;
   let isVolumePointerActive = false;
@@ -1435,7 +1438,7 @@
       // Backstop sample (ADR 0028): the clock advances the bar between samples; commands, focus, visibility and
       // device changes take a sample at once. It keeps running while minimized so the taskbar lyrics stay fed.
       playbackPollTimer = setInterval(() => {
-        if (playbackReady && !isSendingPlaybackCommand) {
+        if (playbackReady && !isSendingPlaybackCommand && !isSeeking) {
           void loadPlaybackSnapshot(false);
         }
       }, PLAYBACK_POLL_MS);
@@ -2804,7 +2807,7 @@
   }
 
   async function playPlaylistEntry(entry: PlaylistEntrySummary, playlistId: string): Promise<void> {
-    if (!entry.trackId || !entry.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand) return;
+    if (!entry.trackId || !entry.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand || isSeeking) return;
     const queueSource: PlaybackQueueSource = {
       kind: 'playlist',
       playlistId,
@@ -2817,7 +2820,7 @@
   }
 
   async function playQueueEntry(entry: PlaybackQueuePageItem): Promise<void> {
-    if (!playbackReady || isSendingPlaybackCommand) return;
+    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     selectedTrackId = entry.trackId;
     const queueSource: PlaybackQueueSource = {
       kind: 'queue',
@@ -2994,7 +2997,7 @@
   }
 
   async function playTrack(track: TrackSummary): Promise<void> {
-    if (!playbackReady || isSendingPlaybackCommand) return;
+    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     const searchQuery = query.trim();
     let queryAlternates: string[] = [];
     try {
@@ -3002,7 +3005,7 @@
     } catch {
       // Search conversion must never prevent playback of an already selected track.
     }
-    if (!playbackReady || isSendingPlaybackCommand) return;
+    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     selectedTrackId = track.id;
     const queueSource: PlaybackQueueSource = {
       kind: 'library',
@@ -3252,7 +3255,7 @@
   }
 
   async function playArtistTrack(track: TrackSummary): Promise<void> {
-    if (!selectedArtist || !playbackReady || isSendingPlaybackCommand) return;
+    if (!selectedArtist || !playbackReady || isSendingPlaybackCommand || isSeeking) return;
     selectedTrackId = track.id;
     const queueSource: PlaybackQueueSource = {
       kind: 'library',
@@ -3268,7 +3271,7 @@
   }
 
   async function playAlbumTrack(track: TrackSummary, order: AlbumTrackOrder): Promise<void> {
-    if (!selectedAlbum || !playbackReady || isSendingPlaybackCommand) return;
+    if (!selectedAlbum || !playbackReady || isSendingPlaybackCommand || isSeeking) return;
     selectedTrackId = track.id;
     // The queue is built by the album page's own query and ordering (not the library list sort).
     const queueSource: PlaybackQueueSource = {
@@ -3449,7 +3452,7 @@
   }
 
   async function togglePlayback(): Promise<void> {
-    if (!playbackReady || isSendingPlaybackCommand) return;
+    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     if (playback?.isPlaying) {
       await sendPlaybackCommand(() => invokeCommand('playback_pause', {}));
     } else if (playback?.currentTrack?.id) {
@@ -3463,7 +3466,7 @@
   async function controlPlayback(
     command: 'playback_pause' | 'playback_next' | 'playback_previous',
   ): Promise<void> {
-    if (!playbackReady || isSendingPlaybackCommand) return;
+    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     if (command === 'playback_previous' && currentPlaybackPositionMs() > 3000) {
       await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs: 0 }));
       return;
@@ -3474,8 +3477,8 @@
   }
 
   async function commitPlaybackSeek(positionMs: number): Promise<boolean> {
-    if (!playbackReady || isSendingPlaybackCommand) return false;
-    await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs }));
+    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return false;
+    await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs }), { seek: true });
     return playbackError === null;
   }
 
@@ -3551,7 +3554,7 @@
   }
 
   function requestPlaybackSample(): void {
-    if (playbackReady && !isSendingPlaybackCommand) void loadPlaybackSnapshot(false);
+    if (playbackReady && !isSendingPlaybackCommand && !isSeeking) void loadPlaybackSnapshot(false);
   }
 
   // A playing clock that reaches the end of the track: the shell has most likely moved on, so sample at once.
@@ -3666,7 +3669,7 @@
   }
 
   async function setRepeatMode(): Promise<void> {
-    if (!playbackReady || isSendingPlaybackCommand) return;
+    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     const modes = ['off', 'all', 'one'] as const;
     const current = playback?.repeatMode ?? 'off';
     const next = modes[(modes.indexOf(current) + 1) % modes.length];
@@ -3674,7 +3677,7 @@
   }
 
   async function toggleShuffle(): Promise<void> {
-    if (!playbackReady || isSendingPlaybackCommand) return;
+    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     await sendPlaybackCommand(
       () => invokeCommand('playback_set_shuffle', { enabled: !playback?.shuffle }),
       { refreshQueueList: true },
@@ -3684,6 +3687,8 @@
   interface PlaybackCommandOptions {
     refreshQueueList?: boolean;
     forceQueueCursorProbe?: boolean;
+    /** Hold the transport through `isSeeking` instead of `isSendingPlaybackCommand` (see `isSeeking`). */
+    seek?: boolean;
   }
 
   async function sendPlaybackCommand(
@@ -3691,7 +3696,7 @@
     options: PlaybackCommandOptions = {},
   ): Promise<void> {
     playbackSnapshotFence = ++playbackSnapshotRequestVersion;
-    isSendingPlaybackCommand = true;
+    if (options.seek) isSeeking = true; else isSendingPlaybackCommand = true;
     playbackError = null;
     try {
       applyPlaybackSnapshot(await request(), undefined, undefined, options.forceQueueCursorProbe);
@@ -3699,7 +3704,7 @@
     } catch (error) {
       playbackError = getErrorText(error);
     } finally {
-      isSendingPlaybackCommand = false;
+      if (options.seek) isSeeking = false; else isSendingPlaybackCommand = false;
     }
     // The command's own snapshot can precede the change taking effect (a seek settling); sample once more now.
     requestPlaybackSample();
@@ -5193,7 +5198,7 @@
             <IconArrowsRight size={23} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
-        <button class="control-button navigation-control" type="button" aria-label={tr("上一首")} use:appTooltip={playbackControlTooltips.previous} disabled={!playbackNavigationReady || (!playback?.canPrevious && (playback?.positionMs ?? 0) <= 3000) || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_previous')}>
+        <button class="control-button navigation-control" type="button" aria-label={tr("上一首")} use:appTooltip={playbackControlTooltips.previous} disabled={!playbackNavigationReady || (!playback?.canPrevious && (playback?.positionMs ?? 0) <= 3000)} onclick={() => void controlPlayback('playback_previous')}>
           <IconPlayerTrackPrev size={23} stroke={1.7} aria-hidden="true" />
         </button>
         <button class="play-button" type="button" aria-label={playback?.isPlaying ? tr('暫停') : tr('播放')} use:appTooltip={playbackControlTooltips.playPause} disabled={!playbackReady || isSendingPlaybackCommand} onclick={togglePlayback}>
@@ -5203,7 +5208,7 @@
             <IconPlayerPlay size={26} stroke={1.7} aria-hidden="true" />
           {/if}
         </button>
-        <button class="control-button navigation-control" type="button" aria-label={tr("下一首")} use:appTooltip={playbackControlTooltips.next} disabled={!playbackNavigationReady || !playback?.canNext || isSendingPlaybackCommand} onclick={() => void controlPlayback('playback_next')}>
+        <button class="control-button navigation-control" type="button" aria-label={tr("下一首")} use:appTooltip={playbackControlTooltips.next} disabled={!playbackNavigationReady || !playback?.canNext} onclick={() => void controlPlayback('playback_next')}>
           <IconPlayerTrackNext size={23} stroke={1.7} aria-hidden="true" />
         </button>
         <button class="control-button secondary-control" type="button" aria-label={tr("循環播放")} use:appTooltip={playbackControlTooltips.repeat} disabled={!playbackModesReady || isSendingPlaybackCommand} class:control-active={playback?.repeatMode !== 'off' && playback?.repeatMode !== undefined} onclick={setRepeatMode}>

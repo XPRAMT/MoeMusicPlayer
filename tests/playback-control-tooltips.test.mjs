@@ -22,7 +22,7 @@ test('playback tooltips describe the control action instead of service diagnosti
 test('previous and next tooltips follow their available action', () => {
   assert.match(controls, /use:appTooltip=\{playbackControlTooltips\.previous\}/);
   assert.match(controls, /use:appTooltip=\{playbackControlTooltips\.next\}/);
-  assert.match(controls, /disabled=\{!playbackNavigationReady \|\| \(!playback\?\.canPrevious && \(playback\?\.positionMs \?\? 0\) <= 3000\) \|\| isSendingPlaybackCommand\}/);
+  assert.match(controls, /disabled=\{!playbackNavigationReady \|\| \(!playback\?\.canPrevious && \(playback\?\.positionMs \?\? 0\) <= 3000\)\}/);
   assert.doesNotMatch(controls, /use:appTooltip=\{playback\?\.canPrevious \? '播放佇列上一首'/);
 });
 

@@ -74,7 +74,7 @@ export function normalizeLyricsPreferences(value) {
  * @param {string} playbackState
  */
 export function getDisplayActiveLyricIndex(activeIndex, playbackState) {
-  if ((playbackState !== 'playing' && playbackState !== 'paused')
+  if ((playbackState !== 'playing' && playbackState !== 'paused' && playbackState !== 'buffering')
     || !Number.isInteger(activeIndex)
     || activeIndex < 0) {
     return -1;

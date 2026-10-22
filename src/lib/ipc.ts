@@ -554,6 +554,8 @@ export type PlaybackState =
   | 'loading'
   | 'ready'
   | 'playing'
+  /** Android: told to play but still buffering (right after a seek); counts as playing for the controls. */
+  | 'buffering'
   | 'paused'
   | 'stopped'
   | 'ended'
