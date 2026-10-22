@@ -759,13 +759,49 @@ pub async fn track_details_save(
     })
     .await?;
     let id = player_core::TrackId::parse(&track_id).map_err(|error| error.to_string())?;
+    let album_before = album_index_key(&state, id);
     // Only this file is read again (no library sync): its tags go into the library the way a sync stores them.
     reread_saved_track(&app_for_reread, &state, &track_id, id).await?;
     if lyrics_changed {
         let database = super::lyrics_database_for_track(&state, id)?;
         crate::lyrics_service::link_embedded_lyrics(database.as_database(), id, super::now_utc_epoch_ms()?)?;
     }
+    forget_saved_album_covers(&app_for_reread, &state, album_before, album_index_key(&state, id));
     Ok(details)
+}
+
+/// Event with the album index keys whose cover caches were cleared after a save; the page drops their memory entries.
+const ALBUM_ARTWORK_INVALIDATED_EVENT: &str = "album-artwork-invalidated";
+
+fn album_index_key(state: &AppState, id: player_core::TrackId) -> Option<(String, u64)> {
+    state.database.as_ref()?.album_index_key_for_track(id).ok().flatten()
+}
+
+/// Only the saved track's album (before and after the save, when its album tag changed) loses its chosen covers, in
+/// the backend selection cache and, through the event, the page's album card memory cache; other albums keep theirs.
+fn forget_saved_album_covers(
+    app: &AppHandle,
+    state: &AppState,
+    before: Option<(String, u64)>,
+    after: Option<(String, u64)>,
+) {
+    use tauri::Emitter;
+    let mut albums = Vec::new();
+    for album in [before, after].into_iter().flatten() {
+        if !albums.iter().any(|(key, _): &(String, u64)| *key == album.0) {
+            albums.push(album);
+        }
+    }
+    if albums.is_empty() {
+        return;
+    }
+    if let Ok(directory) = super::album_artwork_cache_directory(app, state) {
+        for (key, count) in &albums {
+            let _ = crate::album_artwork_cache::forget_album_selections(&directory, key, *count);
+        }
+    }
+    let keys: Vec<String> = albums.into_iter().map(|(key, _)| key).collect();
+    let _ = app.emit(ALBUM_ARTWORK_INVALIDATED_EVENT, keys);
 }
 
 /// Read the saved file's tags with the reader the sync uses and store them for the track (the library database, or the

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { LANGUAGE_CHOICES, getLanguageChoice, tr } from './lib/i18n.js';
   import { displayUnknown } from './lib/unknown-label.js';
+  import { forgetAlbumCardArtwork } from './lib/album-artwork.js';
   import { createLyricsController } from './lib/lyrics-controller.js';
   import { defaultLyricsApi } from './lib/lyrics-api';
   import { lyricsForDisplay } from './lib/lyrics-traditional.js';
@@ -644,6 +645,10 @@
   let playlistTrackCount = $state<number | null>(null);
   let queueTrackCount = $state<number | null>(null);
   let libraryListRevision = $state(0);
+  // List refreshes made by song details saves; the album card cover cache is keyed without them, so a save only
+  // looks up the covers of the album it touched (see album-artwork-invalidated).
+  let trackDetailsListRefreshes = $state(0);
+  let albumArtworkEpoch = $derived(libraryListRevision - trackDetailsListRefreshes);
   /** The top-bar switch: only local songs, everything, or only remote songs (kept in settings.json). */
   let librarySourceScope = $state<'local' | 'all' | 'remote'>('all');
   async function loadLibrarySourceScope(): Promise<void> {
@@ -1463,6 +1468,9 @@
         unlistenProgress = await listen<LibrarySyncProgressEvent>('library-sync-progress', (event) => {
           handleLibrarySyncProgress(event.payload);
         });
+        void listen<string[]>('album-artwork-invalidated', (event) => {
+          for (const albumKey of event.payload ?? []) forgetAlbumCardArtwork(albumKey);
+        });
         unlistenFinished = await listen<LibrarySyncFinishedEvent>('library-sync-finished', (event) => {
           handleLibrarySyncFinished(event.payload);
           libraryListRevision += 1;
@@ -1774,6 +1782,7 @@
    * cover caches), the queue and playback snapshot, and, when it is the playing track, its cover and lyrics (the
    * taskbar lyrics follow the shell's controller). */
   async function reloadAfterTrackDetailsSaved(savedTrackId: string | null): Promise<void> {
+    trackDetailsListRefreshes += 1;
     libraryListRevision += 1;
     if (libraryReady) void loadPlaylists(undefined, true);
     try {
@@ -4754,6 +4763,7 @@
             {:else}
               <AlbumIndex
                 refreshKey={libraryListRevision}
+                artworkKey={albumArtworkEpoch}
                 active={activeView === 'albums'}
                 rowHeightPx={trackRowHeightPx}
                 {albumCardMaxWidthPx}

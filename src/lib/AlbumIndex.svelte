@@ -18,6 +18,9 @@
 
   interface Props {
     refreshKey: number;
+    /** Keys the album card cover memory cache (defaults to refreshKey). A song details save refreshes the list but
+     * keeps this, so only the edited album's covers are looked up again. */
+    artworkKey?: number;
     active: boolean;
     rowHeightPx?: number;
     albumCardMaxWidthPx?: number;
@@ -25,7 +28,7 @@
     onCountChange: (count: number | null) => void;
     onSelect: (album: AlbumIndexEntry, coverSources: string[]) => void;
   }
-  let { refreshKey, active, rowHeightPx = 50, albumCardMaxWidthPx = DEFAULT_ALBUM_CARD_MAX_WIDTH_PX, groupingEnabled = true, onCountChange, onSelect }: Props = $props();
+  let { refreshKey, artworkKey, active, rowHeightPx = 50, albumCardMaxWidthPx = DEFAULT_ALBUM_CARD_MAX_WIDTH_PX, groupingEnabled = true, onCountChange, onSelect }: Props = $props();
   let sortField = $state<AlbumIndexSortField>('title');
   let sortDirection = $state<AlbumIndexSortDirection>('asc');
   let loading = $state(false);
@@ -230,7 +233,7 @@
     const start = viewCardStart;
     const end = viewCardEnd;
     const revision = pageSnapshot.revision; // a page that arrives later makes more cards known
-    const key = refreshKey;
+    const key = artworkKey ?? refreshKey;
     const ready = active && !loading && scrollPositionRestored && pageSnapshot.scope !== null && start >= 0;
     untrack(() => {
       if (!ready) { coverPrefetcher.cancel(); prefetchLastStart = -1; return; }
@@ -418,7 +421,7 @@
             <div class="album-index-card-row" style={`height:${row.height}px;transform:translateY(${row.top}px);grid-template-columns:repeat(${columns},minmax(0,1fr));column-gap:${gap}px`}>
               {#each row.items ?? [] as item (item.key)}
                 {#if item.album}
-                  <AlbumCard album={item.album} {active} {refreshKey} {sortField} {onSelect} />
+                  <AlbumCard album={item.album} {active} refreshKey={artworkKey ?? refreshKey} {sortField} {onSelect} />
                 {:else}
                   <div class="album-card-placeholder" aria-hidden="true"></div>
                 {/if}

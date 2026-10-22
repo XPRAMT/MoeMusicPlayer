@@ -4966,6 +4966,37 @@ impl Database {
             .map_err(Into::into)
     }
 
+    /// The album a track is grouped under in the album index (its `identity_key`: `album:unmarked` or
+    /// `album:<identity key>`, user album override first) and how many tracks of the library that album has, as the
+    /// album list counts them. `None` for a track that is not in the library.
+    pub fn album_index_key_for_track(
+        &self,
+        track_id: TrackId,
+    ) -> Result<Option<(String, u64)>, DatabaseError> {
+        const KEY_SQL: &str = "CASE WHEN music_trim_whitespace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, ''))=''
+                 THEN 'album:unmarked'
+                 ELSE 'album:' || music_identity_key(music_trim_whitespace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, ''))) END";
+        const IN_LIBRARY_SQL: &str = "EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
+                 ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind, r.locator_kind) WHERE m.track_id=t.track_id)";
+        let connection = self.lock()?;
+        let key: Option<String> = connection
+            .query_row(
+                &format!("SELECT {KEY_SQL} FROM tracks t WHERE t.track_id=?1 AND {IN_LIBRARY_SQL}"),
+                [track_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        let count: i64 = connection.query_row(
+            &format!("SELECT COUNT(*) FROM tracks t WHERE {IN_LIBRARY_SQL} AND {KEY_SQL}=?1"),
+            [&key],
+            |row| row.get(0),
+        )?;
+        Ok(Some((key, count.max(0) as u64)))
+    }
+
     /// Store one track's freshly read tags (the song details page just wrote the file), the same way a sync stores a
     /// changed file: the track row and its embedded lyrics. Mappings, fingerprints and the sources' sync state are left
     /// alone, so the next sync still sees the new modification time and reads the file once more (ADR 0013, 2026-10-22).

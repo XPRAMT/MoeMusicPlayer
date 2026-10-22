@@ -318,6 +318,34 @@ pub(crate) fn put_selection(
     })
 }
 
+/// The selection key the album pages use: SHA-256 of `<album key>\0<track count>` (album-card-cover.ts).
+pub(crate) fn album_selection_key(album_key: &str, track_count: u64) -> String {
+    let digest = Sha256::digest(format!("{album_key}\0{track_count}").as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Forget the chosen covers of one album (a song of it was saved): the entries for its track count and the counts next
+/// to it, since a song that moved album changes both albums' counts by one. Other albums keep theirs.
+pub(crate) fn forget_album_selections(
+    directory: &Path,
+    album_key: &str,
+    track_count: u64,
+) -> Result<(), String> {
+    let keys = [track_count.saturating_sub(1), track_count, track_count + 1]
+        .map(|count| album_selection_key(album_key, count));
+    with_database(directory, |connection| {
+        for key in &keys {
+            connection
+                .execute(
+                    "DELETE FROM album_artwork_selections WHERE selection_key = ?1",
+                    [key],
+                )
+                .map_err(|error| format!("清除專輯封面選擇失敗：{error}"))?;
+        }
+        Ok(())
+    })
+}
+
 fn cache_path(directory: &Path, sha256: &str) -> Result<PathBuf, String> {
     if !valid_hash(sha256) {
         return Err("專輯圖片快取索引無效。".to_owned());
@@ -662,6 +690,34 @@ mod tests {
         )
         .is_err());
         cleanup(&directory);
+    }
+
+    #[test]
+    fn forgetting_one_album_keeps_the_other_albums_selections() {
+        let directory = temp_dir();
+        let selection = AlbumArtworkSelection {
+            track_count: 3,
+            track_ids: vec!["track-a".to_owned()],
+            representative: true,
+        };
+        let edited = album_selection_key("album:edited", 3);
+        let neighbour = album_selection_key("album:edited", 4);
+        let other = album_selection_key("album:other", 3);
+        for key in [&edited, &neighbour, &other] {
+            put_selection(&directory, key, &selection).expect("save selection");
+        }
+        forget_album_selections(&directory, "album:edited", 3).expect("forget one album");
+        assert_eq!(get_selection(&directory, &edited).expect("read"), None);
+        assert_eq!(get_selection(&directory, &neighbour).expect("read"), None);
+        assert_eq!(get_selection(&directory, &other).expect("read"), Some(selection));
+        cleanup(&directory);
+    }
+
+    #[test]
+    fn selection_key_matches_the_frontend_hash() {
+        // sha256("album:x\03") as computed by album-card-cover.ts persistentSelectionKey.
+        assert_eq!(album_selection_key("album:x", 3), "7c2cc5c296d283b8a6a4f58dab82f51fc30d8b1f06459f8f0f8b290123aa4ac7");
+        assert_ne!(album_selection_key("album:x", 3), album_selection_key("album:x", 4));
     }
 
     #[test]

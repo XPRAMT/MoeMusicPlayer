@@ -505,3 +505,15 @@ export function rankAlbumArtwork(candidates, maxDistance = ALBUM_ART_SIMILARITY_
   });
   return groups.sort((left, right) => right.count - left.count || left.firstIndex - right.firstIndex);
 }
+
+/**
+ * Drop one album's card covers (a song of it was saved): its selection revision moves on, so the memory entry under the
+ * old key is no longer used, and its cards look the covers up again. Other albums keep their cached covers.
+ * @param {string} albumKey
+ */
+export function forgetAlbumCardArtwork(albumKey) {
+  advanceAlbumArtworkSelectionRevision(albumKey);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('album-artwork-selection-updated', { detail: { albumKey } }));
+  }
+}

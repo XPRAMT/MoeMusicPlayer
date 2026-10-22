@@ -3413,6 +3413,28 @@ mod tests {
     }
 
     #[test]
+    fn album_index_key_follows_an_edited_album_tag() {
+        let fixture = EmbeddedFixture::new(None);
+        assert_eq!(
+            fixture.database.album_index_key_for_track(fixture.track_id).expect("album key"),
+            Some(("album:unmarked".to_owned(), 1))
+        );
+        let mut metadata = fixture.record.metadata.clone().expect("fixture metadata");
+        metadata.album = Some("新專輯".to_owned());
+        fixture
+            .database
+            .refresh_track_metadata(fixture.track_id, &metadata, &fixture.record.locator)
+            .expect("refresh one track");
+        let (key, count) = fixture
+            .database
+            .album_index_key_for_track(fixture.track_id)
+            .expect("album key")
+            .expect("track in the library");
+        assert!(key.starts_with("album:") && key != "album:unmarked", "{key}");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
     fn legacy_cached_lrc_rows_with_shared_timestamps_are_folded_on_read() {
         use player_core::{LyricLine, TrackLyrics};
 
