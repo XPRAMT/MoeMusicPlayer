@@ -166,6 +166,7 @@
   import PlaylistTree from './lib/PlaylistTree.svelte';
   import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, splitSleepTimerClock, beginSleepTimerEdit, getSleepTimerEditMinutes, stepSleepTimerEdit, SLEEP_TIMER_EDIT_IDLE_MS, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
   import type { SleepTimerSnapshot } from './lib/ipc';
+  import { seekPlayback } from './lib/ipc';
   import type { AlbumTrackOrder } from './lib/ipc';
   import type { AndroidAllFilesAccessStatus, AndroidWallpaperBackdropStatus } from './lib/ipc';
   import { formatSlideshowFolderLabel } from './lib/background-source-label.js';
@@ -2140,7 +2141,7 @@
     const delta = action === 'seekBack' ? -5_000 : 5_000;
     const duration = playback?.durationMs;
     const next = Math.max(0, currentPlaybackPositionMs() + delta);
-    void commitPlaybackSeek(duration == null ? next : Math.min(next, duration));
+    void commitPlaybackSeek(duration == null ? next : Math.min(next, duration)); // seekPlayback rounds and clamps
   }
 
   function shortcutEventShouldRun(target: EventTarget | null): boolean {
@@ -3442,7 +3443,7 @@
   ): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     if (command === 'playback_previous' && currentPlaybackPositionMs() > 3000) {
-      await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs: 0 }));
+      await sendPlaybackCommand(() => seekPlayback(0));
       return;
     }
     await sendPlaybackCommand(() => invokeCommand(command, {}), {
@@ -3452,7 +3453,7 @@
 
   async function commitPlaybackSeek(positionMs: number): Promise<boolean> {
     if (!playbackReady || isSendingPlaybackCommand || isSeeking) return false;
-    await sendPlaybackCommand(() => invokeCommand('playback_seek', { positionMs }), { seek: true });
+    await sendPlaybackCommand(() => seekPlayback(positionMs, playback?.durationMs), { seek: true });
     return playbackError === null;
   }
 

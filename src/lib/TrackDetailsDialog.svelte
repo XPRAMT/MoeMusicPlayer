@@ -6,6 +6,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { PlaybackSnapshot } from './ipc';
+  import { seekPlayback } from './ipc';
   import { hasLyricsInUse, lyricsToText } from './lyrics-import.js';
   import {
     loadCoverEditOptions,
@@ -302,7 +303,7 @@
       return async () => {
         try {
           await invoke('playback_play', { trackId });
-          await invoke('playback_seek', { positionMs: position });
+          await seekPlayback(position);
           if (!wasPlaying) await invoke('playback_pause');
         } catch { /* the song stays wherever playback stopped */ }
       };

@@ -1,3 +1,4 @@
+import { normalizeSeekPositionMs } from './seek-position.js';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { tr } from './i18n.js';
 
@@ -1390,6 +1391,14 @@ export function invokeCommand<Command extends IpcCommand>(
     command,
     args as Record<string, unknown>,
   );
+}
+
+/**
+ * Every `playback_seek` goes through here: the position is rounded to whole milliseconds and kept inside 0..duration
+ * (`normalizeSeekPositionMs`), so a clock estimate with a fraction can never be rejected by the command.
+ */
+export function seekPlayback(positionMs: number, durationMs?: number | null): Promise<PlaybackSnapshot> {
+  return invokeCommand('playback_seek', { positionMs: normalizeSeekPositionMs(positionMs, durationMs) });
 }
 
 /** Fetch one active track's raw binary cover payload without JSON/base64 conversion. */

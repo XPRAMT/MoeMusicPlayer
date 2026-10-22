@@ -13,7 +13,7 @@ function fn(name) {
 
 test('a seek holds the transport through isSeeking, not the disabled busy flag', () => {
   assert.match(app, /let isSeeking = \$state\(false\);/);
-  assert.match(fn('commitPlaybackSeek'), /invokeCommand\('playback_seek', \{ positionMs \}\), \{ seek: true \}\)/);
+  assert.match(fn('commitPlaybackSeek'), /seekPlayback\(positionMs, playback\?\.durationMs\), \{ seek: true \}\)/);
   const send = fn('sendPlaybackCommand');
   assert.match(send, /if \(options\.seek\) isSeeking = true; else isSendingPlaybackCommand = true;/);
   assert.match(send, /if \(options\.seek\) isSeeking = false; else isSendingPlaybackCommand = false;/);

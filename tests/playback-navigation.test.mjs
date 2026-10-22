@@ -27,7 +27,7 @@ function functionSource(startText, endText) {
 test('previous button seeks to the start after three seconds and navigates before that', () => {
   const handler = functionSource('async function controlPlayback(', 'async function commitPlaybackSeek(');
   assert.match(handler, /command === 'playback_previous' && currentPlaybackPositionMs\(\) > 3000/);
-  assert.match(handler, /invokeCommand\('playback_seek', \{ positionMs: 0 \}\)/);
+  assert.match(handler, /seekPlayback\(0\)/);
   assert.match(handler, /return;[\s\S]*invokeCommand\(command, \{\}\)/);
 });
 
