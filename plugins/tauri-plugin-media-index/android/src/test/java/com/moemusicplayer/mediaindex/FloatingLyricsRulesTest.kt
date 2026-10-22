@@ -2,6 +2,7 @@ package com.moemusicplayer.mediaindex
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FloatingLyricsRulesTest {
@@ -117,6 +118,17 @@ class FloatingLyricsRulesTest {
         assertEquals(0.5f, FloatingLyricsRules.scrollProgress(450, 1_000), 0.0001f)
         assertEquals(1f, FloatingLyricsRules.scrollProgress(950, 1_000), 0.0001f)
         assertEquals(0f, FloatingLyricsRules.scrollProgress(-5, 1_000), 0.0001f)
+    }
+
+    @Test
+    fun stripWindowDrawsOnlyNearbyCells() {
+        val starts = FloatArray(100) { it * 110f }
+        val widths = FloatArray(100) { 100f }
+        // Cell 50 right-anchored in a 300 px view: shift 300 - 5600.
+        val range = FloatingLyricsRules.stripWindow(starts, widths, 300f - 5600f, 300f, 300f)
+        assertEquals(45, range.first)
+        assertEquals(53, range.last)
+        assertTrue(FloatingLyricsRules.stripWindow(FloatArray(0), FloatArray(0), 0f, 300f, 300f).isEmpty())
     }
 
     @Test

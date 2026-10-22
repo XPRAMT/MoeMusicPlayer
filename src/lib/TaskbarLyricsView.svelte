@@ -28,10 +28,10 @@
   import type { TaskbarLyricsData } from './taskbar-lyrics-data.js';
   import {
     LYRICS_STRIP_ALIGN,
-    LYRICS_STRIP_SEPARATOR,
     buildLyricsStripLines,
     layoutLyricsStrip,
     lyricsStripOffset,
+    lyricsStripWindow,
     nextLyricsStripBreak,
   } from './lyrics-strip.js';
   import {
@@ -172,10 +172,21 @@
     stripName = untrack(() => stripName) === 'taskbar-lyrics-strip-a' ? 'taskbar-lyrics-strip-b' : 'taskbar-lyrics-strip-a';
   });
   let stripStyle = $derived(
-    `--strip-from: ${stripRun.from}px; --strip-to: ${stripRun.to}px; `
+    `height: ${lineHeight}em; --strip-from: ${stripRun.from}px; --strip-to: ${stripRun.to}px; `
       + (stripRun.ms === null ? `transform: translateX(${stripRun.from}px)` : `animation: ${stripName} ${Math.round(stripRun.ms)}ms linear forwards`),
   );
-  // Measure each line's text (not its cell, which is widened to the layout) after the lines, sizes or window changed.
+  // Only the lines that can show during this glide, plus one lyric area on each side, are in the DOM: a strip of the
+  // whole song made every frame of the glide (and its shadow filter) cost the whole song, slowing the main window too
+  // (one GPU process for all WebView2 windows). Each cell sits at its layout place, so the swap at a line change is
+  // invisible.
+  let stripCells = $derived.by(() => {
+    const { first, last } = lyricsStripWindow(stripLayout, stripRun.from, stripRun.to, stripViewWidth, stripViewWidth);
+    const cells = [];
+    for (let index = first; index <= last; index += 1) cells.push({ index, line: stripLines[index] });
+    return cells;
+  });
+  // Measure each line's text off-screen (a canvas with the strip's font), so lines out of the window need no element.
+  let stripMeasure: CanvasRenderingContext2D | null = null;
   $effect(() => {
     stripLines;
     stripVisible;
@@ -184,12 +195,17 @@
     viewportWidth;
     const main = stripMain;
     const second = stripTranslation;
+    const lines = stripLines;
     const frame = requestAnimationFrame(() => {
-      const widths = (root: HTMLElement | null) => (root
-        ? Array.from(root.querySelectorAll<HTMLElement>('.taskbar-lyrics-strip-text'), (element) => element.getBoundingClientRect().width)
-        : []);
-      stripMainWidths = widths(main);
-      stripTranslationWidths = widths(second);
+      stripMeasure ??= document.createElement('canvas').getContext('2d');
+      const context = stripMeasure;
+      const widths = (root: HTMLElement | null, pick: (line: (typeof lines)[number]) => string) => {
+        if (!root || !context) return [];
+        context.font = getComputedStyle(root).font;
+        return lines.map((line) => (pick(line) === '' ? 0 : Math.ceil(context.measureText(pick(line)).width)));
+      };
+      stripMainWidths = widths(main, (line) => line.text);
+      stripTranslationWidths = widths(second, (line) => line.translation);
       stripViewWidth = main?.parentElement?.clientWidth ?? 0;
     });
     return () => cancelAnimationFrame(frame);
@@ -301,18 +317,16 @@
       <div class="taskbar-lyrics-line taskbar-lyrics-continuous">
         <span class="taskbar-lyrics-main">
           <span class="taskbar-lyrics-strip" bind:this={stripMain} style={stripStyle}>
-            {#each stripLines as line, index (index)}
-              {#if index > 0}<span class="taskbar-lyrics-strip-gap" style:width={`${fontPx}px`}>{LYRICS_STRIP_SEPARATOR}</span>{/if}
-              <span class="taskbar-lyrics-strip-cell" style:min-width={`${stripLayout.widths[index] ?? 0}px`}><span class="taskbar-lyrics-strip-text">{line.text}</span></span>
+            {#each stripCells as cell (cell.index)}
+              <span class="taskbar-lyrics-strip-cell" style:left={`${stripLayout.starts[cell.index]}px`} style:width={`${stripLayout.widths[cell.index]}px`}><span class="taskbar-lyrics-strip-text">{cell.line.text}</span></span>
             {/each}
           </span>
         </span>
         {#if stripHasTranslation}
           <span class="taskbar-lyrics-translation">
             <span class="taskbar-lyrics-strip" bind:this={stripTranslation} style={stripStyle}>
-              {#each stripLines as line, index (index)}
-                {#if index > 0}<span class="taskbar-lyrics-strip-gap" style:width={`${fontPx}px`}></span>{/if}
-                <span class="taskbar-lyrics-strip-cell" style:min-width={`${stripLayout.widths[index] ?? 0}px`}><span class="taskbar-lyrics-strip-text">{line.translation}</span></span>
+              {#each stripCells as cell (cell.index)}
+                <span class="taskbar-lyrics-strip-cell" style:left={`${stripLayout.starts[cell.index]}px`} style:width={`${stripLayout.widths[cell.index]}px`}><span class="taskbar-lyrics-strip-text">{cell.line.translation}</span></span>
               {/each}
             </span>
           </span>
@@ -412,21 +426,20 @@
   }
 
   /* The strip is always right-anchored (LYRICS_STRIP_ALIGN); the text alignment setting does not apply to it. */
+  /* Only a window of lines is drawn (lyricsStripWindow); each cell is placed at its layout offset, one U+3000 apart. */
   .taskbar-lyrics-strip {
-    display: flex;
+    display: block;
+    position: relative;
     text-align: right;
-    width: max-content;
+    width: 0;
     white-space: nowrap;
     will-change: transform;
   }
 
   .taskbar-lyrics-strip-cell {
-    flex: none;
-  }
-
-  .taskbar-lyrics-strip-gap {
-    flex: none;
-    overflow: hidden;
+    position: absolute;
+    top: 0;
+    text-align: right;
   }
 
   .taskbar-lyrics-translation {

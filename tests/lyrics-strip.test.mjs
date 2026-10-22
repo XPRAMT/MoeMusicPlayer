@@ -7,6 +7,7 @@ import {
   layoutLyricsStrip,
   lyricsStripAnchor,
   lyricsStripOffset,
+  lyricsStripWindow,
   nextLyricsStripBreak,
   normalizeLyricsAnimation,
 } from '../src/lib/lyrics-strip.js';
@@ -82,4 +83,20 @@ test('the views anchor the continuous strip on the right whatever the alignment 
   assert.doesNotMatch(view, /lyricsStripOffset\([^)]*settings\.align/);
   const kotlin = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/FloatingLyricsOverlay.kt', import.meta.url), 'utf8');
   assert.match(kotlin, /FloatingLyricsRules\.STRIP_ALIGN, lyricsMs/);
+});
+
+test('the strip holds only the lines near the lyric area, never the whole song', () => {
+  const layout = { starts: Array.from({ length: 100 }, (_, i) => i * 110), widths: Array(100).fill(100) };
+  // Gliding from cell 50 to cell 51 right-anchored in a 300 px area, with one area of margin per side.
+  assert.deepEqual(lyricsStripWindow(layout, 300 - 5600, 300 - 5710, 300, 300), { first: 45, last: 54 });
+  assert.deepEqual(lyricsStripWindow({ starts: [], widths: [] }, 0, 0, 300, 300), { first: 0, last: -1 });
+});
+
+test('the view draws the strip window at layout offsets, measured off-screen', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
+  assert.match(source, /lyricsStripWindow\(/);
+  assert.match(source, /#each stripCells as cell/);
+  assert.doesNotMatch(source, /#each stripLines as/);
+  assert.match(source, /measureText/);
 });

@@ -110,8 +110,10 @@ internal class LyricLineView(context: Context) : View(context) {
         canvas.save()
         // The strip is cut at the area's sides; above and below the shadow may reach into the panel's room.
         canvas.clipRect(0, -height, width, 2 * height)
-        for (index in texts.indices) {
-            val value = texts[index]
+        // Only the cells near the view (one view of margin on each side), not every line of the song.
+        val cells = FloatingLyricsRules.stripWindow(stripCells, stripWidths, stripOffset + paddingLeft, width.toFloat(), width.toFloat())
+        for (index in cells) {
+            val value = texts.getOrNull(index) ?: continue
             if (value.isEmpty()) continue
             val cell = stripCells.getOrElse(index) { 0f } + stripOffset + paddingLeft
             val cellWidth = stripWidths.getOrElse(index) { 0f }

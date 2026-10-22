@@ -86,6 +86,26 @@ export function lyricsStripOffset(startTimesMs, layout, align, positionMs, viewW
 }
 
 /**
+ * The cells to draw (ADR 0032): only the lines that can show while the strip glides from `fromOffsetPx` to
+ * `toOffsetPx`, plus `marginPx` on both sides, so the strip never holds the whole song. Cells keep their place in the
+ * layout, so swapping the window at a line change moves nothing on screen. Returns an empty range (last < first) when
+ * there is nothing to draw.
+ * @param {{ starts: number[], widths: number[] }} layout cells in order
+ * @param {number} fromOffsetPx @param {number} toOffsetPx @param {number} viewWidthPx @param {number} marginPx
+ * @returns {{ first: number, last: number }}
+ */
+export function lyricsStripWindow(layout, fromOffsetPx, toOffsetPx, viewWidthPx, marginPx) {
+  const count = layout.starts.length;
+  const left = -Math.max(fromOffsetPx, toOffsetPx) - Math.max(0, marginPx);
+  const right = -Math.min(fromOffsetPx, toOffsetPx) + Math.max(0, viewWidthPx) + Math.max(0, marginPx);
+  let first = 0;
+  while (first < count && layout.starts[first] + (layout.widths[first] ?? 0) < left) first += 1;
+  let last = first - 1;
+  while (last + 1 < count && layout.starts[last + 1] <= right) last += 1;
+  return { first, last };
+}
+
+/**
  * The next lyrics time at which the glide changes direction (the next line's start), or null when the strip rests.
  * @param {readonly number[]} startTimesMs @param {number} positionMs
  */

@@ -150,5 +150,10 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   文字排版 setting, whose buttons stay enabled and apply to 「無」; before the first line it rests on the first, after the
   last on the last (`lyrics-strip.js` `lyricsStripOffset`, Kotlin `FloatingLyricsRules.stripOffset`). The shift is
   a pure function of the lyrics time (position + offsets), so seek and pause follow the playback clock at once.
+  Amended (2026-10-23, measured): only the cells that can show during the current glide plus one lyric area of margin
+  on each side are drawn (`lyricsStripWindow`, Kotlin `FloatingLyricsRules.stripWindow`); each keeps its layout offset
+  (absolutely placed on Windows, widths measured with a canvas), so the swap at a line change moves nothing. A strip of
+  the whole song cost about 20x the CPU/GPU per frame (Edge test: 120 lines ~2.5 s CPU/s vs 9 lines ~0.13 s/s) and,
+  since all WebView2 windows share one GPU process, slowed the main window, more so with a taskbar window per monitor.
   Windows runs each glide as a linear CSS animation re-planned at every line start and clock correction; Android
   redraws the strip in `LyricLineView` every display frame while playing. The strip is cut at the lyric area's sides.

@@ -52,6 +52,24 @@ object FloatingLyricsRules {
         return Pair(starts, widths)
     }
 
+    /**
+     * The cells to draw (port of lyricsStripWindow): those reaching into the view widened by `marginPx` on both sides
+     * at shift `offset`, found by binary search on the sorted cells, so a frame never walks the whole song.
+     */
+    fun stripWindow(cellStarts: FloatArray, cellWidths: FloatArray, offset: Float, viewWidth: Float, marginPx: Float): IntRange {
+        val left = -offset - maxOf(0f, marginPx)
+        val right = -offset + maxOf(0f, viewWidth) + maxOf(0f, marginPx)
+        var lo = 0
+        var hi = cellStarts.size
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (cellStarts[mid] + cellWidths.getOrElse(mid) { 0f } < left) lo = mid + 1 else hi = mid
+        }
+        var last = lo - 1
+        while (last + 1 < cellStarts.size && cellStarts[last + 1] <= right) last++
+        return lo..last
+    }
+
     /** The point of a cell that sits on the view's alignment point. */
     fun stripAnchor(cellStarts: FloatArray, cellWidths: FloatArray, index: Int, align: String): Float {
         val start = cellStarts.getOrElse(index) { 0f }
