@@ -17,6 +17,28 @@ class FloatingLyricsRulesTest {
     }
 
     @Test
+    fun opacityAndCentre() {
+        assertEquals(1f, FloatingLyricsRules.windowAlpha(100, null), 0.0001f)
+        assertEquals(0.5f, FloatingLyricsRules.windowAlpha(50, null), 0.0001f)
+        assertEquals(0.1f, FloatingLyricsRules.windowAlpha(0, null), 0.0001f)
+        assertEquals(0.8f, FloatingLyricsRules.windowAlpha(100, 0.8f), 0.0001f)
+        assertEquals(0.6f, FloatingLyricsRules.windowAlpha(60, 0.8f), 0.0001f)
+        assertEquals(100, FloatingLyricsRules.opacityPercent(250))
+        assertEquals(400, FloatingLyricsRules.centredStart(1080, 280))
+        assertEquals(0, FloatingLyricsRules.centredStart(100, 300))
+    }
+
+    @Test
+    fun shortLinesFollowTheAlignmentAndLongOnesSlide() {
+        assertEquals(0f, FloatingLyricsRules.lineStartX(300f, 100f, "left", 0.7f), 0.001f)
+        assertEquals(100f, FloatingLyricsRules.lineStartX(300f, 100f, "center", 0.7f), 0.001f)
+        assertEquals(200f, FloatingLyricsRules.lineStartX(300f, 100f, "right", 0.7f), 0.001f)
+        assertEquals(0f, FloatingLyricsRules.lineStartX(300f, 500f, "right", 0f), 0.001f)
+        assertEquals(-100f, FloatingLyricsRules.lineStartX(300f, 500f, "center", 0.5f), 0.001f)
+        assertEquals(-200f, FloatingLyricsRules.lineStartX(300f, 500f, "left", 2f), 0.001f)
+    }
+
+    @Test
     fun lineDurationAndScroll() {
         assertEquals(1_000L, FloatingLyricsRules.lineDurationMs(starts, 0, null, 0))
         assertEquals(6_000L, FloatingLyricsRules.lineDurationMs(starts, 2, 10_500, 500))

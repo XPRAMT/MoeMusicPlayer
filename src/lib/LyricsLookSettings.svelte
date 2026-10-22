@@ -3,7 +3,7 @@
   // 兩邊各自保存，這裡只畫控制項並把變更交回呼叫端。
   import { tr } from './i18n.js';
   import type { LyricsLookSettings } from './ipc';
-  import { TASKBAR_LYRICS_FONT_SIZE_PX, TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT } from './taskbar-lyrics-settings.js';
+  import { LYRICS_OPACITY_PERCENT, TASKBAR_LYRICS_FONT_SIZE_PX, TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT } from './taskbar-lyrics-settings.js';
 
   let {
     settings,
@@ -88,5 +88,17 @@
     disabled={!settings.showTranslation}
     aria-label={tr("譯文大小（相對原文）")}
     oninput={(event) => onChange({ translationScalePercent: Number(event.currentTarget.value) })}
+  />
+</label>
+<label class="lyrics-preference-range">
+  <span><strong>{tr("透明度")}</strong><output>{settings.opacityPercent}%</output></span>
+  <input
+    type="range"
+    min={LYRICS_OPACITY_PERCENT.min}
+    max={LYRICS_OPACITY_PERCENT.max}
+    step="1"
+    value={settings.opacityPercent}
+    aria-label={tr("透明度")}
+    oninput={(event) => onChange({ opacityPercent: Number(event.currentTarget.value) })}
   />
 </label>

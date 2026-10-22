@@ -14,12 +14,17 @@ test('taskbar lyrics settings are repaired field by field', () => {
   assert.deepEqual(normalizeTaskbarLyricsSettings(null), DEFAULT_TASKBAR_LYRICS_SETTINGS);
   assert.deepEqual(normalizeTaskbarLyricsSettings({
     enabled: true, align: 'center', fontSizePx: 20.4, translationScalePercent: 60.4, useCustomColor: true, customColor: '#ABCDEF', showTranslation: true,
-  }), { enabled: true, align: 'center', fontSizePx: 20, translationScalePercent: 60, useCustomColor: true, customColor: '#abcdef', showTranslation: true, textEffect: 'shadow', displayMode: 'all', customMonitors: [] });
+  }), { enabled: true, align: 'center', fontSizePx: 20, translationScalePercent: 60, useCustomColor: true, customColor: '#abcdef', showTranslation: true, textEffect: 'shadow', displayMode: 'all', customMonitors: [], opacityPercent: 100 });
   const repaired = normalizeTaskbarLyricsSettings({ enabled: 'yes', area: 'up', align: 3, fontSizePx: 99, customColor: 'red', showTranslation: 1 });
   assert.deepEqual(repaired, { ...DEFAULT_TASKBAR_LYRICS_SETTINGS, fontSizePx: 50 });
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 1 }).fontSizePx, 1);
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 0 }).fontSizePx, 1, 'the font starts at 1 px');
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 50 }).fontSizePx, 50);
+  assert.equal(normalizeTaskbarLyricsSettings({}).opacityPercent, 100);
+  assert.equal(normalizeTaskbarLyricsSettings({ opacityPercent: 0 }).opacityPercent, 10);
+  assert.equal(normalizeTaskbarLyricsSettings({ opacityPercent: 64.6 }).opacityPercent, 65);
+  assert.equal(normalizeTaskbarLyricsSettings({ opacityPercent: 500 }).opacityPercent, 100);
+  assert.equal(normalizeTaskbarLyricsSettings({ opacityPercent: 'x' }).opacityPercent, 100);
   assert.equal(normalizeTaskbarLyricsSettings({ translationScalePercent: 0 }).translationScalePercent, 1);
   assert.equal(normalizeTaskbarLyricsSettings({ translationScalePercent: 100 }).translationScalePercent, 100);
   assert.equal(normalizeTaskbarLyricsSettings({ translationScalePercent: 400 }).translationScalePercent, 100);

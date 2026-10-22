@@ -2514,6 +2514,11 @@
 
   async function resetFloatingLyricsPosition(): Promise<void> {
     try {
+      if (capabilities?.platform === 'android') {
+        // The phone keeps the overlay position itself: clear it and move the overlay to the screen centre.
+        await invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload: { resetPosition: true } });
+        return;
+      }
       floatingLyricsSettings = normalizeFloatingLyricsSettings(await invokeCommand('floating_lyrics_reset_position', {}));
     } catch (error) {
       floatingLyricsError = getErrorText(error);
@@ -4549,10 +4554,8 @@
                             onclick={() => void setFloatingLyricsLocked(value as boolean)}
                           >{label}</button>
                         {/each}
+                        <button class="floating-lyrics-reset" type="button" disabled={!floatingLyricsSettings.enabled} onclick={() => void resetFloatingLyricsPosition()}>{tr("重設位置")}</button>
                       </div>
-                      {#if capabilities?.platform !== 'android'}
-                        <button class="soft-button floating-lyrics-reset" type="button" disabled={!floatingLyricsSettings.enabled} onclick={() => void resetFloatingLyricsPosition()}>{tr("重設位置")}</button>
-                      {/if}
                     </div>
                     <LyricsLookSettings
                       settings={floatingLyricsSettings}

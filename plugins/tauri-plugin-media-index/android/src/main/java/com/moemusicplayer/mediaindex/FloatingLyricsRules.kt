@@ -9,6 +9,32 @@ object FloatingLyricsRules {
     /** How long the last line of a track is assumed to stay when the track length is unknown. */
     const val LAST_LINE_FALLBACK_MS = 5_000L
 
+    /** Same range as settings.rs `OPACITY_RANGE_PERCENT`. */
+    fun opacityPercent(value: Int): Int = value.coerceIn(10, 100)
+
+    /** Window alpha from the opacity setting, capped by the system's touch-through limit when there is one. */
+    fun windowAlpha(opacityPercent: Int, systemLimit: Float?): Float {
+        val wanted = opacityPercent(opacityPercent) / 100f
+        return if (systemLimit == null) wanted else minOf(wanted, systemLimit)
+    }
+
+    /**
+     * Left edge of a line `textWidth` wide in `available`: by the alignment when it fits, otherwise starting at the left
+     * and sliding left by `progress` of the overflow (the web marquee rule).
+     */
+    fun lineStartX(available: Float, textWidth: Float, align: String, progress: Float): Float {
+        val overflow = textWidth - available
+        if (overflow > 0f) return -overflow * progress.coerceIn(0f, 1f)
+        return when (align) {
+            "left" -> 0f
+            "right" -> available - textWidth
+            else -> (available - textWidth) / 2f
+        }
+    }
+
+    /** Start coordinate that centres `size` in `available` (never negative). */
+    fun centredStart(available: Int, size: Int): Int = maxOf(0, (available - size) / 2)
+
     /** Index of the last line starting at or before `positionMs + offsetMs`; -1 before the first. */
     fun activeIndex(starts: LongArray, positionMs: Long, offsetMs: Long): Int {
         if (starts.isEmpty()) return -1

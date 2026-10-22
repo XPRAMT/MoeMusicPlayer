@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.TypedValue
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -19,7 +20,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
-import android.widget.TextView
+
 import org.json.JSONObject
 
 /**
@@ -39,7 +40,7 @@ object FloatingLyricsOverlay {
 
     private const val PREFS = "moe_floating_lyrics"
     private const val TICK_MS = 100L
-    private const val TOUCH_PASS_ALPHA = 0.8f
+
     private const val BUTTON_DP = 32
     private const val PADDING_DP = 8
 
@@ -54,6 +55,7 @@ object FloatingLyricsOverlay {
     private var customColor = "#00e1ff"
     private var showTranslation = true
     private var textEffect = "shadow"
+    private var opacityPercent = 100
 
     private var trackId: String? = null
     private var offsetMs = 0L
@@ -63,14 +65,38 @@ object FloatingLyricsOverlay {
 
     private var root: FrameLayout? = null
     private var params: WindowManager.LayoutParams? = null
-    private var mainText: TextView? = null
-    private var translationText: TextView? = null
+    private var mainText: LyricLineView? = null
+    private var translationText: LyricLineView? = null
     private var lockButton: ImageButton? = null
 
-    private val tick = object : Runnable {
-        override fun run() {
-            render()
-            if (root != null) main.postDelayed(this, TICK_MS)
+    /** Every display frame while a line slides during playback, otherwise every 100 ms (line changes, pauses). */
+    private var frameScheduled = false
+    private val frame = Choreographer.FrameCallback {
+        frameScheduled = false
+        tickOnce()
+    }
+    private val tick = Runnable { tickOnce() }
+
+    private fun tickOnce() {
+        main.removeCallbacks(tick)
+        if (root == null) return
+        val sliding = render()
+        if (root == null) return
+        if (sliding) {
+            if (!frameScheduled) {
+                frameScheduled = true
+                Choreographer.getInstance().postFrameCallback(frame)
+            }
+        } else {
+            main.postDelayed(tick, TICK_MS)
+        }
+    }
+
+    private fun stopTicking() {
+        main.removeCallbacks(tick)
+        if (frameScheduled) {
+            Choreographer.getInstance().removeFrameCallback(frame)
+            frameScheduled = false
         }
     }
 
@@ -83,7 +109,7 @@ object FloatingLyricsOverlay {
         .put("canDrawOverlays", canDrawOverlays(context))
         .put("locked", isLocked(context))
 
-    /** `{ settings?, data?, setLocked? }` from the page. */
+    /** `{ settings?, data?, setLocked?, resetPosition? }` from the page. */
     fun update(context: Context, args: JSONObject) {
         appContext = context.applicationContext
         args.optJSONObject("settings")?.let(::applySettings)
@@ -91,7 +117,26 @@ object FloatingLyricsOverlay {
         if (args.has("setLocked") && !args.isNull("setLocked")) {
             prefs(context).edit().putBoolean("locked", args.optBoolean("setLocked")).apply()
         }
+        if (args.optBoolean("resetPosition", false)) {
+            prefs(context).edit().remove("x").remove("y").apply()
+            centre()
+        }
         refresh()
+    }
+
+    /** Move the overlay to the middle of the screen (the saved position was cleared by the caller). */
+    private fun centre() {
+        val view = root ?: return
+        val layout = params ?: return
+        val context = appContext ?: return
+        val (screenWidth, screenHeight) = screenSize(context)
+        val height = if (view.height > 0) view.height else view.measuredHeight
+        layout.x = FloatingLyricsRules.centredStart(screenWidth, layout.width)
+        layout.y = FloatingLyricsRules.centredStart(screenHeight, height)
+        try {
+            (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
+        } catch (_: Exception) {
+        }
     }
 
     /** Show, restyle or remove the overlay (also after the permission was granted). */
@@ -118,6 +163,7 @@ object FloatingLyricsOverlay {
         customColor = settings.optString("customColor", "#00e1ff")
         showTranslation = settings.optBoolean("showTranslation", true)
         textEffect = settings.optString("textEffect", "shadow")
+        opacityPercent = FloatingLyricsRules.opacityPercent(settings.optInt("opacityPercent", 100))
     }
 
     private fun applyData(data: JSONObject) {
@@ -153,14 +199,10 @@ object FloatingLyricsOverlay {
         val button = dp(context, BUTTON_DP)
         val frame = FrameLayout(context).apply { setPadding(padding, padding, padding, padding) }
         val column = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        fun line(): TextView = TextView(context).apply {
-            setSingleLine(true)
-            setHorizontallyScrolling(true)
-            ellipsize = null
-            includeFontPadding = true
-        }
+        fun line(): LyricLineView = LyricLineView(context)
         val first = line()
-        val second = line().apply { alpha = 0.8f }
+        // Same opacity as the main line: only the whole overlay is dimmed (fixed mode, Android 12+ limit).
+        val second = line()
         column.addView(first, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         column.addView(second, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         frame.addView(column, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_VERTICAL).apply {
@@ -191,17 +233,18 @@ object FloatingLyricsOverlay {
         }
         frame.setOnTouchListener(DragListener(context))
         windowManager.addView(frame, layout)
+        if (!prefs.contains("y")) frame.post { if (root === frame && !prefs.contains("y")) centre() }
         root = frame
         params = layout
         mainText = first
         translationText = second
         lockButton = lock
-        main.removeCallbacks(tick)
+        stopTicking()
         main.postDelayed(tick, TICK_MS)
     }
 
     private fun remove() {
-        main.removeCallbacks(tick)
+        stopTicking()
         val view = root ?: return
         val context = appContext
         root = null
@@ -224,25 +267,18 @@ object FloatingLyricsOverlay {
     }
 
     private fun applyLook() {
+        val context = appContext ?: return
         val color = if (useCustomColor) FloatingLyricsRules.parseHexColor(customColor) ?: 0xffffff else 0xffffff
         val effect = FloatingLyricsRules.effectRgb(color)
-        val gravity = when (align) {
-            "left" -> Gravity.START
-            "right" -> Gravity.END
-            else -> Gravity.CENTER_HORIZONTAL
-        } or Gravity.CENTER_VERTICAL
         for ((view, scale) in listOf(mainText to 100, translationText to translationScalePercent)) {
             view ?: continue
-            val size = fontSizePx * scale / 100f
-            view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, size)
-            view.setTextColor(0xff000000.toInt() or color)
-            view.gravity = gravity
-            val px = view.textSize
-            when (textEffect) {
-                "shadow" -> view.setShadowLayer(maxOf(1f, px * 0.25f), 0f, 0f, 0x99000000.toInt() or effect)
-                "stroke" -> view.setShadowLayer(maxOf(1f, px * 0.08f), 0f, 0f, 0xE6000000.toInt() or effect)
-                else -> view.setShadowLayer(0f, 0f, 0f, 0)
+            val px = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, fontSizePx * scale / 100f, context.resources.displayMetrics)
+            val (radius, shadow) = when (textEffect) {
+                "shadow" -> maxOf(1f, px * 0.25f) to (0x99000000.toInt() or effect)
+                "stroke" -> maxOf(1f, px * 0.08f) to (0xE6000000.toInt() or effect)
+                else -> 0f to 0
             }
+            view.setLook(px, 0xff000000.toInt() or color, align, radius, shadow)
         }
     }
 
@@ -256,12 +292,14 @@ object FloatingLyricsOverlay {
         } else {
             layout.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         }
-        layout.alpha = if (locked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val input = context.getSystemService(Context.INPUT_SERVICE) as InputManager
-            minOf(TOUCH_PASS_ALPHA, input.maximumObscuringOpacityForTouch)
+        // The user's opacity for both lines. Android 12+ only lets touches pass through an overlay up to the system's
+        // maximum obscuring opacity (normally 0.8), so fixed mode cannot go above that limit.
+        val systemLimit = if (locked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (context.getSystemService(Context.INPUT_SERVICE) as InputManager).maximumObscuringOpacityForTouch
         } else {
-            1f
+            null
         }
+        layout.alpha = FloatingLyricsRules.windowAlpha(opacityPercent, systemLimit)
         view.background = if (locked) null else GradientDrawable().apply {
             cornerRadius = dp(context, 10).toFloat()
             setColor(0x47000000)
@@ -273,9 +311,10 @@ object FloatingLyricsOverlay {
         }
     }
 
-    private fun render() {
-        val view = root ?: return
-        val context = appContext ?: return
+    /** Draw the current line; true while a line slides during playback (then the next frame is wanted). */
+    private fun render(): Boolean {
+        val view = root ?: return false
+        val context = appContext ?: return false
         val sample = PlaybackService.floatingLyricsSample()
         val index = if (sample != null && sample.active && sample.trackId == trackId) {
             FloatingLyricsRules.activeIndex(starts, sample.positionMs, offsetMs)
@@ -294,30 +333,17 @@ object FloatingLyricsOverlay {
         } else {
             0f
         }
-        mainText?.let { show(it, shown, progress) }
+        var sliding = false
+        mainText?.let {
+            it.setLine(shown, progress)
+            sliding = it.overflows()
+        }
         translationText?.let {
             it.visibility = if (translation.isEmpty()) View.GONE else View.VISIBLE
-            show(it, translation, progress)
+            it.setLine(translation, progress)
+            if (translation.isNotEmpty() && it.overflows()) sliding = true
         }
-    }
-
-    /** Set the text; a line wider than the view starts at the left and scrolls by the progress. */
-    private fun show(view: TextView, text: String, progress: Float) {
-        if (view.text.toString() != text) view.text = text
-        val available = view.width - view.paddingLeft - view.paddingRight
-        val overflow = if (available > 0) view.paint.measureText(text) - available else 0f
-        if (overflow > 0f) {
-            view.gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            view.scrollTo((overflow * progress).toInt(), 0)
-        } else {
-            val wanted = when (align) {
-                "left" -> Gravity.START
-                "right" -> Gravity.END
-                else -> Gravity.CENTER_HORIZONTAL
-            }
-            view.gravity = wanted or Gravity.CENTER_VERTICAL
-            if (view.scrollX != 0) view.scrollTo(0, 0)
-        }
+        return sliding && sample?.active == true && view.visibility == View.VISIBLE
     }
 
     private class DragListener(private val context: Context) : View.OnTouchListener {

@@ -912,5 +912,6 @@
   "顯示浮動歌詞": "Show floating lyrics",
   "從播放清單移除": "Remove from playlist",
   "正在移除…": "Removing…",
-  "無法從播放清單移除：{0}": "Could not remove from the playlist: {0}"
+  "無法從播放清單移除：{0}": "Could not remove from the playlist: {0}",
+  "透明度": "Opacity"
 }

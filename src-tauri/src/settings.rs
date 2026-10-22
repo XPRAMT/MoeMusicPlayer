@@ -926,6 +926,13 @@ pub struct TaskbarLyricsSettings {
     /// Stable monitor ids (`DisplayMonitor::id`) chosen in `Custom` mode; kept while a monitor is unplugged.
     #[serde(default)]
     pub custom_monitors: Vec<String>,
+    /// Opacity of the lyrics (main line and translation alike), 10–100. Older files without it are fully opaque.
+    #[serde(default = "default_lyrics_opacity_percent")]
+    pub opacity_percent: u8,
+}
+
+fn default_lyrics_opacity_percent() -> u8 {
+    100
 }
 
 impl TaskbarLyricsSettings {
@@ -935,11 +942,15 @@ impl TaskbarLyricsSettings {
     pub const TRANSLATION_SCALE_RANGE_PERCENT: (u8, u8) = (1, 100);
     pub const DEFAULT_TRANSLATION_SCALE_PERCENT: u8 = 100;
     pub const DEFAULT_CUSTOM_COLOR: &'static str = "#00e1ff";
+    pub const OPACITY_RANGE_PERCENT: (u8, u8) = (10, 100);
 
     pub fn normalized(mut self) -> Self {
         self.font_size_px = self
             .font_size_px
             .clamp(Self::FONT_SIZE_RANGE_PX.0, Self::FONT_SIZE_RANGE_PX.1);
+        self.opacity_percent = self
+            .opacity_percent
+            .clamp(Self::OPACITY_RANGE_PERCENT.0, Self::OPACITY_RANGE_PERCENT.1);
         self.translation_scale_percent = self.translation_scale_percent.clamp(
             Self::TRANSLATION_SCALE_RANGE_PERCENT.0,
             Self::TRANSLATION_SCALE_RANGE_PERCENT.1,
@@ -974,6 +985,7 @@ impl Default for TaskbarLyricsSettings {
             text_effect: default_taskbar_lyrics_text_effect(),
             display_mode: TaskbarLyricsDisplayMode::default(),
             custom_monitors: Vec::new(),
+            opacity_percent: default_lyrics_opacity_percent(),
         }
     }
 }
@@ -1008,6 +1020,9 @@ pub struct FloatingLyricsSettings {
     pub custom_color: String,
     pub show_translation: bool,
     pub text_effect: LyricsTextEffect,
+    /// Opacity of the lyrics (main line and translation alike), 10–100; saved apart from the taskbar lyrics'.
+    #[serde(default = "default_lyrics_opacity_percent")]
+    pub opacity_percent: u8,
     /// Fixed mode: click-through, only the unlock button reacts. False: move mode (draggable).
     pub locked: bool,
     /// None: the default place on the primary monitor.
@@ -1025,10 +1040,12 @@ impl FloatingLyricsSettings {
             font_size_px: self.font_size_px,
             translation_scale_percent: self.translation_scale_percent,
             custom_color: std::mem::take(&mut self.custom_color),
+            opacity_percent: self.opacity_percent,
             ..TaskbarLyricsSettings::default()
         }
         .normalized();
         self.font_size_px = look.font_size_px;
+        self.opacity_percent = look.opacity_percent;
         self.translation_scale_percent = look.translation_scale_percent;
         self.custom_color = look.custom_color;
         if self.position.is_some_and(|position| {
@@ -1051,6 +1068,7 @@ impl Default for FloatingLyricsSettings {
             custom_color: TaskbarLyricsSettings::DEFAULT_CUSTOM_COLOR.to_owned(),
             show_translation: true,
             text_effect: LyricsTextEffect::Shadow,
+            opacity_percent: default_lyrics_opacity_percent(),
             locked: false,
             position: None,
         }
@@ -1085,6 +1103,7 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
         text_effect: field("textEffect")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.text_effect),
+        opacity_percent: byte("opacityPercent", defaults.opacity_percent),
         locked: flag("locked", defaults.locked),
         position: field("position").and_then(|value| serde_json::from_value(value).ok()),
     }
@@ -1128,6 +1147,9 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
         display_mode: field("displayMode")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.display_mode),
+        opacity_percent: field("opacityPercent")
+            .and_then(|value| value.as_u64())
+            .map_or(defaults.opacity_percent, |value| value.min(255) as u8),
         custom_monitors: field("customMonitors")
             .and_then(|value| value.as_array().cloned())
             .map(|ids| {
@@ -3468,6 +3490,15 @@ mod tests {
         assert_eq!((tiny.font_size_px, tiny.translation_scale_percent), (1, 1));
         let big = lenient_taskbar_lyrics(Some(serde_json::json!({"translationScalePercent": 250})));
         assert_eq!(big.translation_scale_percent, 100);
+        assert_eq!(defaults.opacity_percent, 100, "fully opaque until changed");
+        let faint = lenient_taskbar_lyrics(Some(serde_json::json!({"opacityPercent": 0})));
+        assert_eq!(faint.opacity_percent, 10, "never invisible");
+        let over = lenient_taskbar_lyrics(Some(serde_json::json!({"opacityPercent": 300})));
+        assert_eq!(over.opacity_percent, 100);
+        let floating = lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 55})));
+        assert_eq!(floating.opacity_percent, 55);
+        assert_eq!(lenient_floating_lyrics(None).opacity_percent, 100);
+        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 3}))).opacity_percent, 10);
         assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!(7))), defaults);
         assert_eq!(lenient_taskbar_lyrics(None), defaults);
 
@@ -3485,6 +3516,7 @@ mod tests {
             text_effect: LyricsTextEffect::Stroke,
             display_mode: TaskbarLyricsDisplayMode::Custom,
             custom_monitors: vec![r"\\?\DISPLAY#AUS28A0#1".into()],
+            opacity_percent: 70,
         };
         store
             .update(|settings| {

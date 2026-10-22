@@ -4,6 +4,8 @@
 export const TASKBAR_LYRICS_FONT_SIZE_PX = Object.freeze({ min: 1, max: 50, default: 20 });
 /** The translation line as a percentage of the main line (100 = the same size). */
 export const TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT = Object.freeze({ min: 1, max: 100, default: 100 });
+/** Opacity of the whole lyric (main line and translation alike); never fully invisible. */
+export const LYRICS_OPACITY_PERCENT = Object.freeze({ min: 10, max: 100, default: 100 });
 export const TASKBAR_LYRICS_ALIGNMENTS = Object.freeze(['left', 'center', 'right']);
 export const TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR = '#00e1ff';
 
@@ -13,7 +15,7 @@ export const TASKBAR_LYRICS_DISPLAY_MODES = Object.freeze(['all', 'playerMonitor
 /** Same cap as settings.rs `MAX_CUSTOM_MONITORS`. */
 export const TASKBAR_LYRICS_MAX_CUSTOM_MONITORS = 32;
 
-/** @typedef {{ enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none', displayMode: 'all'|'playerMonitor'|'custom', customMonitors: string[] }} TaskbarLyricsSettings */
+/** @typedef {{ enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none', displayMode: 'all'|'playerMonitor'|'custom', customMonitors: string[], opacityPercent: number }} TaskbarLyricsSettings */
 
 /** @type {Readonly<TaskbarLyricsSettings>} */
 export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
@@ -27,6 +29,7 @@ export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
   textEffect: 'shadow',
   displayMode: 'all',
   customMonitors: /** @type {string[]} */ (/** @type {unknown} */ (Object.freeze([]))),
+  opacityPercent: LYRICS_OPACITY_PERCENT.default,
 });
 
 /**
@@ -76,6 +79,9 @@ export function normalizeTaskbarLyricsSettings(value) {
   const scale = typeof source.translationScalePercent === 'number' && Number.isFinite(source.translationScalePercent)
     ? Math.min(TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT.max, Math.max(TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT.min, Math.round(source.translationScalePercent)))
     : defaults.translationScalePercent;
+  const opacity = typeof source.opacityPercent === 'number' && Number.isFinite(source.opacityPercent)
+    ? Math.min(LYRICS_OPACITY_PERCENT.max, Math.max(LYRICS_OPACITY_PERCENT.min, Math.round(source.opacityPercent)))
+    : defaults.opacityPercent;
   return {
     enabled: typeof source.enabled === 'boolean' ? source.enabled : defaults.enabled,
     align: TASKBAR_LYRICS_ALIGNMENTS.includes(/** @type {string} */ (source.align))
@@ -93,6 +99,7 @@ export function normalizeTaskbarLyricsSettings(value) {
       ? /** @type {'all'|'playerMonitor'|'custom'} */ (source.displayMode)
       : defaults.displayMode,
     customMonitors: normalizeTaskbarLyricsMonitorIds(source.customMonitors),
+    opacityPercent: opacity,
   };
 }
 

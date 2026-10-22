@@ -212,6 +212,7 @@
   style:--taskbar-lyrics-effect-rgb={effectRgb}
   style:--taskbar-lyrics-size={`${fontPx}px`}
   style:--taskbar-lyrics-translation-scale={settings.translationScalePercent / 100}
+  style:opacity={(settings.opacityPercent ?? 100) / 100}
   style:padding={`${reservedHeight / 2}px ${sidePadding}px`}
 >
   {#key activeIndex}
@@ -288,7 +289,6 @@
 
   .taskbar-lyrics-translation {
     font-size: calc(var(--taskbar-lyrics-translation-scale, 0.75) * 1em);
-    opacity: 0.8;
   }
 
   /* The same two looks as the Now Playing lyrics (a tight shadow plus a wider glow, or a thin outline), in the colour

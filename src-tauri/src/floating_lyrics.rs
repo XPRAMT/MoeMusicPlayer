@@ -111,7 +111,7 @@ pub fn unlock_button_rect(window: Rect, scale: f64) -> Rect {
 }
 
 /// Where the window goes: the saved position moved fully inside the work area it overlaps most, or, with no saved
-/// position or one on no monitor any more, centred near the bottom of the first (primary) work area.
+/// position or one on no monitor any more, at the centre of the first (primary) work area.
 pub fn place_on_monitors(
     position: Option<FloatingLyricsPosition>,
     size: (i32, i32),
@@ -141,11 +141,16 @@ pub fn place_on_monitors(
             return clamp_into(best, saved.x, saved.y);
         }
     }
-    clamp_into(
-        primary,
-        primary.left + (primary.width() - width) / 2,
-        primary.bottom - height - primary.height() / 8,
-    )
+    let centre = centre_on(primary, size);
+    clamp_into(primary, centre.x, centre.y)
+}
+
+/// The position that puts a window of `size` at the exact centre of `bounds`.
+pub fn centre_on(bounds: Rect, size: (i32, i32)) -> FloatingLyricsPosition {
+    FloatingLyricsPosition {
+        x: bounds.left + (bounds.width() - size.0) / 2,
+        y: bounds.top + (bounds.height() - size.1) / 2,
+    }
 }
 
 pub fn is_window_label(label: &str) -> bool {
@@ -295,7 +300,19 @@ fn place(window: &WebviewWindow, wanted: Option<FloatingLyricsPosition>) {
     let Some(rect) = window_rect(window) else {
         return;
     };
-    let target = place_on_monitors(wanted, (rect.width(), rect.height()), &work_areas(window));
+    let size = (rect.width(), rect.height());
+    // No saved position (first open, or 重設位置): the exact centre of the primary monitor.
+    let wanted = wanted.or_else(|| {
+        let monitor = window.primary_monitor().ok().flatten()?;
+        let bounds = Rect {
+            left: monitor.position().x,
+            top: monitor.position().y,
+            right: monitor.position().x + monitor.size().width as i32,
+            bottom: monitor.position().y + monitor.size().height as i32,
+        };
+        (bounds.width() > 0 && bounds.height() > 0).then(|| centre_on(bounds, size))
+    });
+    let target = place_on_monitors(wanted, size, &work_areas(window));
     if target.x != rect.left || target.y != rect.top {
         let _ = window.set_position(PhysicalPosition::new(target.x, target.y));
     }
@@ -431,8 +448,16 @@ mod tests {
             default,
             FloatingLyricsPosition {
                 x: 1120,
-                y: 2100 - 120 - 262
+                y: (2100 - 120) / 2
             }
+        );
+        assert_eq!(
+            centre_on(rect(0, 0, 2560, 1440), size),
+            FloatingLyricsPosition { x: 480, y: 660 }
+        );
+        assert_eq!(
+            centre_on(rect(-1920, 0, 0, 1080), (200, 100)),
+            FloatingLyricsPosition { x: -1060, y: 490 }
         );
         let inside = FloatingLyricsPosition { x: 4000, y: 1000 };
         assert_eq!(place_on_monitors(Some(inside), size, &areas), inside);

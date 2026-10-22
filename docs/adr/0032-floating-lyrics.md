@@ -42,3 +42,20 @@ configured separately, and a way to make it ignore the mouse or finger once it i
 - Android: if the track changes while the WebView is suspended, the new track's lines arrive when the page runs again;
   until then the overlay shows nothing for the new track (it never shows the old track's lines).
 - Android stroke is approximated with a tight shadow.
+## Amendment (2026-10-23): reset, opacity, translation, Android drawing
+
+- Reset position: Windows puts the window at the exact centre of the primary monitor (its full bounds, then clamped
+  to the work area); the first placement without a saved position is the same. Android clears the saved overlay
+  position (`floatingLyricsUpdate { resetPosition: true }`) and centres the overlay on the screen; a first overlay
+  without a saved position is centred too. The mode buttons and "Reset position" share one row on both platforms.
+- The translation line is no longer faded: the 80% opacity of `.taskbar-lyrics-translation` (shared by the taskbar
+  and Windows floating lyrics) and the `alpha = 0.8` of the Android translation view were removed.
+- `opacityPercent` (10–100, default 100) is saved separately in `taskbarLyrics` and `floatingLyrics` and applies to
+  the main line and the translation alike (Windows: opacity of the lyric container; Android: window alpha). It
+  replaces the fixed 80% of Android fixed mode. Android 12+ still blocks touches through an overlay above the
+  system's maximum obscuring opacity (normally 0.8), so in fixed mode the window alpha is the setting capped at that
+  limit; in move mode it is the setting as is.
+- Android lines are drawn by `LyricLineView` instead of a single-line `TextView` (whose horizontally scrolling layout
+  put short centred or right-aligned lines outside the view, so nothing was shown). A line that fits follows the
+  alignment; a longer one slides with a fractional offset updated every display frame (`Choreographer`) while it
+  slides during playback, otherwise every 100 ms.

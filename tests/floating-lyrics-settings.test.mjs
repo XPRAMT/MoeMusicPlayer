@@ -22,6 +22,9 @@ test('floating lyrics settings repair field by field with their own defaults', (
   assert.equal(repaired.enabled, true);
   assert.equal(repaired.fontSizePx, 28);
   assert.equal(repaired.translationScalePercent, 100);
+  assert.equal(repaired.opacityPercent, 100, 'missing opacity is fully opaque');
+  assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 40 }).opacityPercent, 40);
+  assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 1 }).opacityPercent, 10);
   assert.equal(repaired.customColor, '#abcdef');
   assert.equal(repaired.align, 'center');
   assert.equal(repaired.textEffect, 'stroke');
