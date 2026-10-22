@@ -13,7 +13,13 @@ import {
  * Keep in step with floating_lyrics.rs (padding, line box, lock button). The window is as tall as the lines it draws:
  * each line box is the text's own height (1.25 em) with a 10% buffer.
  */
-export const FLOATING_LYRICS_LAYOUT = Object.freeze({ lineHeight: 1.375 });
+export const FLOATING_LYRICS_LAYOUT = Object.freeze({
+  lineHeight: 1.375,
+  // The window is text height x 1.5 (= the lyric area x 1.5 / 1.1); the area is centred and the room around it is
+  // transparent, for the shadow / glow. floating_lyrics.rs PANEL_LINE_HEIGHT / SIDE_MARGIN_EM.
+  panelLineHeight: 1.875,
+  sideMarginEm: 0.25,
+});
 /**
  * Lyric area width (the panel is this plus the lock gutter on its right): CSS px on Windows, dp on Android. Stored
  * within settings.rs `FloatingLyricsSettings::WIDTH_RANGE_PX`; the slider's maximum is the current screen's width.
@@ -27,11 +33,25 @@ export function floatingLyricsLockPx(fontSizePx) {
   return Math.max(1, Math.ceil(font * FLOATING_LYRICS_LAYOUT.lineHeight));
 }
 
+/** Transparent side margin (CSS px) left of the lyric area and right of the lock (floating_lyrics.rs `side_margin_css`). @param {unknown} fontSizePx */
+export function floatingLyricsMarginPx(fontSizePx) {
+  const font = typeof fontSizePx === 'number' && Number.isFinite(fontSizePx) && fontSizePx > 0 ? fontSizePx : 1;
+  return Math.max(1, Math.ceil(font * FLOATING_LYRICS_LAYOUT.sideMarginEm));
+}
+
+/** Share of the window height that is the lyric area (1.1 / 1.5); the rest is split above and below it. */
+export const FLOATING_LYRICS_AREA_SHARE = FLOATING_LYRICS_LAYOUT.lineHeight / FLOATING_LYRICS_LAYOUT.panelLineHeight;
+
 /** The width slider's maximum: the current screen's width (Windows: the monitor holding the panel), never below min. */
-/** @param {unknown} screenWidth */
-export function floatingLyricsWidthMax(screenWidth) {
+/**
+ * The width is the lyric area: with `fontSizePx`, the lock gutter and both side margins are taken off the screen width
+ * (the whole window has to fit; floating_lyrics.rs `lyric_width_css`).
+ * @param {unknown} screenWidth @param {unknown} [fontSizePx]
+ */
+export function floatingLyricsWidthMax(screenWidth, fontSizePx) {
   if (typeof screenWidth !== 'number' || !Number.isFinite(screenWidth) || screenWidth <= 0) return FLOATING_LYRICS_WIDTH_PX.max;
-  return Math.max(FLOATING_LYRICS_WIDTH_PX.min, Math.min(FLOATING_LYRICS_WIDTH_PX.max, Math.floor(screenWidth)));
+  const chrome = fontSizePx === undefined ? 0 : floatingLyricsLockPx(fontSizePx) + 2 * floatingLyricsMarginPx(fontSizePx);
+  return Math.max(FLOATING_LYRICS_WIDTH_PX.min, Math.min(FLOATING_LYRICS_WIDTH_PX.max, Math.floor(screenWidth - chrome)));
 }
 
 /** D-pad timing: a tap moves 1 px; held past `delayMs` it repeats every `intervalMs` until released. */

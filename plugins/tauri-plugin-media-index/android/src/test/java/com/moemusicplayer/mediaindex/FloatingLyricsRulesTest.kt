@@ -62,6 +62,16 @@ class FloatingLyricsRulesTest {
         assertEquals(1_080, FloatingLyricsRules.overlayWidth(3_000, 1_080, 60))
         // Only the 900 px lyric area is centred: (1080 - 900) / 2.
         assertEquals(90, FloatingLyricsRules.lyricCentredStart(1_080, 960, 60))
+        // With 10 px side margins (gutter 60 + 20) the window starts 10 px left of the centred area.
+        assertEquals(80, FloatingLyricsRules.lyricCentredStart(1_080, 980, 80, 10))
+        assertEquals(8, FloatingLyricsRules.sideMarginPx(32f))
+        assertEquals(1, FloatingLyricsRules.sideMarginPx(0f))
+        // Area 110 px tall: 20 px above and below make the panel 150 (text height x 1.5).
+        assertEquals(20, FloatingLyricsRules.panelRoomPx(110))
+        assertEquals(0, FloatingLyricsRules.panelRoomPx(0))
+        // 移動到狀態列: the panel's centre on the bar's, whatever the font (the same on every tap).
+        assertEquals(-28, FloatingLyricsRules.centredOnBar(64, 120))
+        assertEquals(10, FloatingLyricsRules.centredOnBar(64, 44))
         // 40 px of text plus 10%.
         assertEquals(44, FloatingLyricsRules.lineHeightPx(-30f, 10f))
         // The status bar area (y = 0) is reachable.

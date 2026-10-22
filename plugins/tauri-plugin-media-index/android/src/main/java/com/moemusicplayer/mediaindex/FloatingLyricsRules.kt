@@ -45,8 +45,17 @@ object FloatingLyricsRules {
     }
 
     /** Left edge that puts the lyric area (the overlay less its lock gutter) at the centre of `available`. */
-    fun lyricCentredStart(available: Int, overlayWidth: Int, gutterPx: Int): Int =
-        centredStart(available, maxOf(0, overlayWidth - maxOf(0, gutterPx)))
+    fun lyricCentredStart(available: Int, overlayWidth: Int, gutterPx: Int, leadPx: Int = 0): Int =
+        centredStart(available, maxOf(0, overlayWidth - maxOf(0, gutterPx))) - maxOf(0, leadPx)
+
+    /** Transparent side margin (px) for the shadow / glow: a quarter of the main font, at least 1. */
+    fun sideMarginPx(fontPx: Float): Int = maxOf(1, kotlin.math.ceil(fontPx * 0.25f).toInt())
+
+    /** Room above and below a lyric area `areaPx` tall (text height × 1.1) so the panel is text height × 1.5. */
+    fun panelRoomPx(areaPx: Int): Int = if (areaPx <= 0) 0 else kotlin.math.ceil(areaPx * 2.0 / 11.0).toInt()
+
+    /** Top of a panel `heightPx` tall whose vertical centre is the status bar's (can be above the screen top). */
+    fun centredOnBar(barHeightPx: Int, heightPx: Int): Int = (barHeightPx - heightPx) / 2
 
     /**
      * The playback position for this display frame. ExoPlayer's reported position only advances in coarse steps (it

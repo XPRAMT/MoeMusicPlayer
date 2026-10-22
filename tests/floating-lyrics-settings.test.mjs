@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   FLOATING_LYRICS_NUDGE_REPEAT,
   floatingLyricsLockPx,
+  floatingLyricsMarginPx,
+  FLOATING_LYRICS_AREA_SHARE,
   floatingLyricsWidthMax,
   pressFloatingLyricsNudge,
   floatingLyricsWidthField,
@@ -91,6 +93,11 @@ test('floating lyrics lock follows the main line height and the width slider sto
   assert.equal(floatingLyricsWidthMax(1366.6), 1366);
   assert.equal(floatingLyricsWidthMax(50), 100);
   assert.equal(floatingLyricsWidthMax(null), 8192);
+  // 32 px font: lock 44 + two 8 px margins come off the screen.
+  assert.equal(floatingLyricsMarginPx(32), 8);
+  assert.equal(floatingLyricsWidthMax(1920, 32), 1920 - 60);
+  // Lyric area 1.1 of the 1.5 text heights.
+  assert.ok(Math.abs(FLOATING_LYRICS_AREA_SHARE - 1.1 / 1.5) < 1e-9);
 });
 
 test('floating lyrics D-pad taps once, repeats when held and saves once on release', () => {

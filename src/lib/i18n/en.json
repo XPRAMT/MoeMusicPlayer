@@ -915,7 +915,6 @@
   "浮動歌詞寬度": "Floating lyrics width",
   "寬度（橫向）": "Width (landscape)",
   "寬度（直向）": "Width (portrait)",
-  "字體與高度剛好放進狀態列，並移到狀態列（避開鏡頭）；直向與橫向分開保存": "Size the text to fit the status bar and move it there (beside the camera); saved separately for portrait and landscape",
   "向左移動 1 像素": "Move left 1 px",
   "向右移動 1 像素": "Move right 1 px",
   "文字排版": "Text alignment",
@@ -927,5 +926,6 @@
   "移動模式（點一下鎖定）": "Move mode (tap to lock)",
   "水平置中": "Centre horizontally",
   "垂直置中": "Centre vertically",
-  "移動到狀態列": "Move to status bar"
+  "移動到狀態列": "Move to status bar",
+  "移到狀態列：歌詞區的垂直中心對齊狀態列（避開鏡頭），字級與面板大小不變；直向與橫向分開儲存": "Move to the status bar: the lyric area is vertically centred on the status bar (avoiding the camera cutout); font size and panel size stay as set. Saved separately for portrait and landscape"
 }

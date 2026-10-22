@@ -15,7 +15,13 @@
     type TaskbarLyricsPlayback,
   } from './playback-clock';
   import type { LyricsLookSettings, PlaybackSnapshot } from './ipc';
-  import { FLOATING_LYRICS_LAYOUT, floatingLyricsLockPx, normalizeFloatingLyricsSettings } from './floating-lyrics-settings.js';
+  import {
+  FLOATING_LYRICS_AREA_SHARE,
+  FLOATING_LYRICS_LAYOUT,
+  floatingLyricsLockPx,
+  floatingLyricsMarginPx,
+  normalizeFloatingLyricsSettings,
+} from './floating-lyrics-settings.js';
   import { getDisplayActiveLyricIndex } from './lyrics-preferences.js';
   import { buildTimedLyricTimeline, findActiveLyricIndex } from './lyrics-window.js';
   import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs } from './lyrics-timing-offset.js';
@@ -40,12 +46,15 @@
   let { variant = 'taskbar' }: { variant?: 'taskbar' | 'floating' } = $props();
   const floating = untrack(() => variant) === 'floating';
   const normalizeSettings = (value: unknown): LyricsLookSettings => (floating ? normalizeFloatingLyricsSettings(value) : normalizeTaskbarLyricsSettings(value));
-  // Floating: the window is only the lines (no padding); the lyric area starts at the left edge and the lock gutter
-  // (as wide as the main line is tall) is on the right.
-  const reservedHeight = 0;
-
   let settings = $state<LyricsLookSettings>(normalizeSettings(floating ? {} : DEFAULT_TASKBAR_LYRICS_SETTINGS));
-  let sidePadding = $derived(floating ? `0 ${floatingLyricsLockPx(settings.fontSizePx)}px 0 0` : '0 4px');
+  // Floating: the text is fitted to and aligned in the lyric area (text height x 1.1, the middle 1.1 / 1.5 of the
+  // window); the side margin is left of it, the lock gutter and the margin right of it. The room around the area is
+  // padding, which the clip keeps, so the shadow / glow draws into it.
+  let sidePadding = $derived.by(() => {
+    if (!floating) return '0 4px';
+    const margin = floatingLyricsMarginPx(settings.fontSizePx);
+    return `0 ${floatingLyricsLockPx(settings.fontSizePx) + margin}px 0 ${margin}px`;
+  });
   let taskbarIsLight = $state(false);
   let data = $state<TaskbarLyricsData | null>(null);
   let playbackState = $state<PlaybackSnapshot['state']>('stopped');
@@ -119,7 +128,8 @@
   let text = $derived(activeLine?.text?.trim() ?? '');
   let translation = $derived(settings.showTranslation ? (activeLine?.translation?.trim() ?? '') : '');
   const lineHeight = floating ? FLOATING_LYRICS_LAYOUT.lineHeight : 1.4;
-  let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, viewportHeight - reservedHeight, translation !== '' ? settings.translationScalePercent : 0, lineHeight));
+  let fitHeight = $derived(floating ? viewportHeight * FLOATING_LYRICS_AREA_SHARE : viewportHeight);
+  let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, fitHeight, translation !== '' ? settings.translationScalePercent : 0, lineHeight));
   // The floating window is only as tall as the lines it draws: tell it when the translation line comes or goes.
   let hasTranslation = $derived(translation !== '');
   $effect(() => {

@@ -256,8 +256,6 @@ export interface FloatingLyricsSettings extends LyricsLookSettings {
 export interface FloatingLyricsAndroidStatus {
   canDrawOverlays: boolean;
   locked: boolean;
-  /** 狀態列 for the current orientation. */
-  statusBar: boolean;
   /** Screen width in dp in the current orientation: the width slider's maximum. */
   screenWidthDp?: number;
 }

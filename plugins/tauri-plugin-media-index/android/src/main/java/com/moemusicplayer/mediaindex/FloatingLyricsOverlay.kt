@@ -121,7 +121,6 @@ object FloatingLyricsOverlay {
     fun status(context: Context): JSONObject = JSONObject()
         .put("canDrawOverlays", canDrawOverlays(context))
         .put("locked", isLocked(context))
-        .put("statusBar", isStatusBarMode(context))
         .put("screenWidthDp", Math.round(screenSize(context).first / context.resources.displayMetrics.density))
 
     /** `{ settings?, data?, setLocked?, resetPosition? }` from the page. */
@@ -132,9 +131,7 @@ object FloatingLyricsOverlay {
         if (args.has("setLocked") && !args.isNull("setLocked")) {
             prefs(context).edit().putBoolean("locked", args.optBoolean("setLocked")).apply()
         }
-        if (args.has("statusBar") && !args.isNull("statusBar")) {
-            setStatusBarMode(context, args.optBoolean("statusBar"))
-        }
+        if (args.optBoolean("moveToStatusBar", false)) moveToStatusBar(context)
         if (args.has("centreAxis") && !args.isNull("centreAxis")) {
             centreAxis(context, args.optString("centreAxis") == "horizontal")
         }
@@ -160,7 +157,7 @@ object FloatingLyricsOverlay {
         val (screenWidth, screenHeight) = screenSize(context)
         val height = if (view.height > 0) view.height else view.measuredHeight
         // The lyric area (not the lock gutter) at the centre.
-        layout.x = FloatingLyricsRules.lyricCentredStart(screenWidth, layout.width, lockPx(context))
+        layout.x = FloatingLyricsRules.lyricCentredStart(screenWidth, layout.width, lockPx(context) + 2 * marginPx(context), marginPx(context))
         layout.y = FloatingLyricsRules.centredStart(screenHeight, height)
         try {
             (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
@@ -229,11 +226,6 @@ object FloatingLyricsOverlay {
         return Pair(metrics.widthPixels, metrics.heightPixels)
     }
 
-    private fun statusBarKey(context: Context) = "statusbar_" + FloatingLyricsRules.orientationKey(isLandscape(context))
-
-    /** 「狀態列」 for the current orientation: one line sized to the status bar, placed in the status bar strip. */
-    private fun isStatusBarMode(context: Context): Boolean = prefs(context).getBoolean(statusBarKey(context), false)
-
     private fun statusBarHeight(context: Context): Int {
         val id = context.resources.getIdentifier("status_bar_height", "dimen", "android")
         return if (id > 0) context.resources.getDimensionPixelSize(id) else dp(context, 24)
@@ -246,19 +238,24 @@ object FloatingLyricsOverlay {
         return Pair(rect.left, rect.right)
     }
 
-    private fun setStatusBarMode(context: Context, on: Boolean) {
-        prefs(context).edit().putBoolean(statusBarKey(context), on).apply()
-        applyLook()
-        if (!on) return
+    /**
+     * 「移動到狀態列」: only a move, never a different look. The font, translation line and panel sizing stay the user's;
+     * the panel goes where the lyric area's vertical centre (the panel's, as the area is centred in it) is the status
+     * bar's, beside the cutout. Depends only on the current size, so every tap lands the same. Saved per orientation.
+     */
+    private fun moveToStatusBar(context: Context) {
         val view = root ?: return
-        val layout = params ?: return
-        val (screenWidth, _) = screenSize(context)
-        layout.x = FloatingLyricsRules.statusBarX(screenWidth, layout.width, topCutout(), dp(context, 4))
-        layout.y = 0
-        savePosition(context, layout)
-        try {
-            (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
-        } catch (_: Exception) {
+        view.post {
+            val layout = params ?: return@post
+            if (root !== view) return@post
+            val (screenWidth, _) = screenSize(context)
+            layout.x = FloatingLyricsRules.statusBarX(screenWidth, layout.width, topCutout(), dp(context, 4))
+            layout.y = FloatingLyricsRules.centredOnBar(statusBarHeight(context), view.height)
+            savePosition(context, layout)
+            try {
+                (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -285,7 +282,7 @@ object FloatingLyricsOverlay {
         val view = root ?: return
         val layout = params ?: return
         val (screenWidth, screenHeight) = screenSize(context)
-        if (horizontal) layout.x = FloatingLyricsRules.lyricCentredStart(screenWidth, layout.width, lockPx(context))
+        if (horizontal) layout.x = FloatingLyricsRules.lyricCentredStart(screenWidth, layout.width, lockPx(context) + 2 * marginPx(context), marginPx(context))
         else layout.y = FloatingLyricsRules.centredStart(screenHeight, view.height)
         savePosition(context, layout)
         try {
@@ -314,24 +311,22 @@ object FloatingLyricsOverlay {
     private fun overlayWidth(context: Context): Int = FloatingLyricsRules.overlayWidth(
         dp(context, if (isLandscape(context)) landscapeWidthDp else widthDp),
         screenSize(context).first,
-        lockPx(context),
+        lockPx(context) + 2 * marginPx(context),
     )
 
-    /** Main line font size in px (狀態列: fitted to the bar). */
+    /** Transparent side margin for the shadow / glow, left of the lyric area and right of the lock. */
+    private fun marginPx(context: Context): Int = FloatingLyricsRules.sideMarginPx(mainFontPx(context))
+
+    /** Main line font size in px: always the user's. */
     private fun mainFontPx(context: Context): Float {
-        if (isStatusBarMode(context)) {
-            val probe = android.graphics.Paint().apply { textSize = 100f }.fontMetrics
-            return FloatingLyricsRules.fontForLineHeight(statusBarHeight(context), (probe.descent - probe.ascent) / 100f)
-        }
         return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, fontSizePx.toFloat(), context.resources.displayMetrics)
     }
 
     /**
      * The lock button, and the transparent gutter right of the lyric area that holds it: as tall as the main line
-     * (the status bar in 狀態列), so it scales with the font and never props the overlay open.
+     * so it scales with the font and never props the overlay open.
      */
     private fun lockPx(context: Context): Int {
-        if (isStatusBarMode(context)) return maxOf(1, statusBarHeight(context))
         val metrics = android.graphics.Paint().apply { textSize = mainFontPx(context) }.fontMetrics
         return maxOf(1, FloatingLyricsRules.lineHeightPx(metrics.ascent, metrics.descent))
     }
@@ -370,8 +365,17 @@ object FloatingLyricsOverlay {
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val (screenWidth, screenHeight) = screenSize(context)
         val button = lockPx(context)
-        val frame = FrameLayout(context)
-        val column = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        // The shadow / glow may draw past the lyric area into the transparent room around it.
+        val frame = FrameLayout(context).apply { clipChildren = false; clipToPadding = false }
+        val column = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
+        // The panel is text height x 1.5: the room above and below the area (text height x 1.1) tracks its height
+        // (the translation line comes and goes).
+        column.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            val room = FloatingLyricsRules.panelRoomPx(bottom - top)
+            if (frame.paddingTop != room || frame.paddingBottom != room) {
+                frame.post { frame.setPadding(frame.paddingLeft, room, frame.paddingRight, room) }
+            }
+        }
         fun line(): LyricLineView = LyricLineView(context)
         val first = line()
         // Same opacity as the main line: only the whole overlay is dimmed (fixed mode, Android 12+ limit).
@@ -407,7 +411,10 @@ object FloatingLyricsOverlay {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
-            x = prefs.getInt(positionKeys(context).first, FloatingLyricsRules.lyricCentredStart(screenWidth, width, button))
+            x = prefs.getInt(
+                positionKeys(context).first,
+                FloatingLyricsRules.lyricCentredStart(screenWidth, width, button + 2 * marginPx(context), marginPx(context)),
+            )
             y = prefs.getInt(positionKeys(context).second, (screenHeight * 0.15f).toInt())
         }
         frame.setOnTouchListener(DragListener(context))
@@ -480,12 +487,9 @@ object FloatingLyricsOverlay {
         }
         val color = if (useCustomColor) FloatingLyricsRules.parseHexColor(customColor) ?: 0xffffff else 0xffffff
         val effect = FloatingLyricsRules.effectRgb(color)
-        // 狀態列: no padding, the lock button as tall as the bar, and the main line's font sized so its line (text
-        // height × 1.1) is the status bar height.
-        val statusBar = isStatusBarMode(context)
-        val barHeight = statusBarHeight(context)
-        // No padding: the overlay is only the lines (text height × 1.1). The lyric area starts at the left edge; the
-        // lock gutter on the right is as wide as the main line is tall (the bar in 狀態列) and stays transparent.
+
+        // The lyric area (text height × 1.1) sits in a panel text height × 1.5 tall with transparent side margins;
+        // the lock gutter right of it is as wide as the main line is tall and stays transparent.
         val button = lockPx(context)
         lockButton?.let { lock ->
             val inset = maxOf(0, button / 6)
@@ -500,12 +504,11 @@ object FloatingLyricsOverlay {
                 column.layoutParams = it
             }
         }
-        val probe = android.graphics.Paint().apply { textSize = 100f }.fontMetrics
-        val statusBarPx = FloatingLyricsRules.fontForLineHeight(barHeight, (probe.descent - probe.ascent) / 100f)
+        // Side margins; the room above and below follows the lyric area's height (the column's layout listener).
+        root?.let { frame -> frame.setPadding(marginPx(context), frame.paddingTop, marginPx(context), frame.paddingBottom) }
         for ((view, scale) in listOf(mainText to 100, translationText to translationScalePercent)) {
             view ?: continue
-            val px = if (statusBar) statusBarPx * scale / 100f
-            else TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, fontSizePx * scale / 100f, context.resources.displayMetrics)
+            val px = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, fontSizePx * scale / 100f, context.resources.displayMetrics)
             val (radius, shadow) = when (textEffect) {
                 "shadow" -> maxOf(1f, px * 0.25f) to (0x99000000.toInt() or effect)
                 "stroke" -> maxOf(1f, px * 0.08f) to (0xE6000000.toInt() or effect)
@@ -569,8 +572,7 @@ object FloatingLyricsOverlay {
         }
         val line = lines.getOrNull(index)
         val text = line?.text?.trim().orEmpty()
-        // 狀態列 holds one line: no translation there.
-        val translation = if (showTranslation && !isStatusBarMode(context)) line?.translation?.trim().orEmpty() else ""
+        val translation = if (showTranslation) line?.translation?.trim().orEmpty() else ""
         val locked = isLocked(context)
         val shown = if (text.isEmpty() && !locked) "♪" else text
         view.visibility = if (shown.isEmpty()) View.INVISIBLE else View.VISIBLE

@@ -120,3 +120,22 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   overlay carries the position on from the last report by the elapsed `uptimeMillis` while playing
   (`FloatingLyricsRules.smoothPositionMs`; a report slightly behind is held so the text never steps back, a jump of
   more than 250 ms resyncs), so every Choreographer frame has new progress and is drawn.
+
+## Amendment (2026-10-23): shadow room, 「移動到狀態列」 is a move only
+
+- Text shadow / glow was clipped by the tight panel. The lyric area (move-mode background; where the text is drawn
+  and aligned) stays text height × 1.1 (main line plus the translation line when drawn). The whole window / overlay
+  is text height × 1.5 (Windows `PANEL_LINE_HEIGHT` 1.875 em of the line font sizes; Android `panelRoomPx` = area ×
+  2 / 11 above and below) with the area vertically centred; the room around it is transparent. A transparent side
+  margin of 0.25 em (`SIDE_MARGIN_EM`, at least 1 px) sits left of the area and right of the lock gutter.
+  The window is margin + area + lock + margin. `widthPx` / `landscapeWidthPx` are still the lyric area width;
+  centring, reset and first use still centre the lyric area; the screen clamp and the slider maximum take the lock
+  and both margins off the screen width. The lock keeps the main line height. Android lets the shadow draw past
+  the line views (`clipChildren = false`; a line only clips its sides while it slides).
+- 「移動到狀態列」 (Android) is no longer a mode. The old per-orientation status bar mode fitted the font to the bar,
+  dropped the translation and set y = 0, so the first tap filled the bar regardless of the font size and the next
+  tap behaved differently. Now the tap only moves the panel: the user's font size, translation line and the panel
+  rules above are unchanged; y puts the panel's (hence the lyric area's) vertical centre on the status bar's
+  (`centredOnBar`, may be above the screen top), x as before beside the cutout (`statusBarX`). It depends only on
+  the current size, so every tap lands the same; the position is saved for the current orientation. The old
+  `statusbar_<orientation>` preference and `floatingLyricsStatus.statusBar` are gone.

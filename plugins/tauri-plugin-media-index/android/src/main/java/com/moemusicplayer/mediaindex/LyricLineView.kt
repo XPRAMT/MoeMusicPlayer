@@ -66,7 +66,10 @@ internal class LyricLineView(context: Context) : View(context) {
         val metrics = paint.fontMetrics
         val baseline = (height - (metrics.descent - metrics.ascent)) / 2f - metrics.ascent
         canvas.save()
-        canvas.clipRect(0, 0, width, height)
+        // A sliding line is cut at the area's sides; the shadow / glow may reach past it otherwise, and above and below
+        // always (the panel's transparent room; the parents do not clip).
+        val sides = if (textWidth > available) 0 else width
+        canvas.clipRect(-sides, -height, width + sides, 2 * height)
         canvas.drawText(text, x, baseline, paint)
         canvas.restore()
     }

@@ -8,7 +8,12 @@
   import TaskbarLyricsView from './TaskbarLyricsView.svelte';
   import { invokeCommand } from './ipc';
   import { tr } from './i18n.js';
-  import { floatingLyricsLockPx, normalizeFloatingLyricsSettings } from './floating-lyrics-settings.js';
+  import {
+    FLOATING_LYRICS_AREA_SHARE,
+    floatingLyricsLockPx,
+    floatingLyricsMarginPx,
+    normalizeFloatingLyricsSettings,
+  } from './floating-lyrics-settings.js';
 
   let locked = $state(false);
   let fontSizePx = $state(32);
@@ -55,6 +60,9 @@
   let showButton = $derived(locked ? fixedHover : hover);
   // The lock gutter on the right (floating_lyrics.rs `lock_css`); only the lyric area left of it gets a background.
   let lockPx = $derived(floatingLyricsLockPx(fontSizePx));
+  // Transparent room for the shadow / glow: a side margin, and (1 - 1.1 / 1.5) / 2 of the height above and below.
+  let marginPx = $derived(floatingLyricsMarginPx(fontSizePx));
+  const areaInsetPercent = ((1 - FLOATING_LYRICS_AREA_SHARE) / 2) * 100;
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -66,6 +74,8 @@
   onpointerenter={() => { hover = true; }}
   onpointerleave={() => { hover = false; }}
   style:--floating-button-size={`${lockPx}px`}
+  style:--floating-margin={`${marginPx}px`}
+  style:--floating-area-inset={`${areaInsetPercent}%`}
 >
   <div class="floating-lyrics-area"></div>
   <TaskbarLyricsView variant="floating" />
@@ -102,7 +112,8 @@
   /* The lyric area only: the lock gutter on the right stays transparent. */
   .floating-lyrics-area {
     position: absolute;
-    inset: 0 var(--floating-button-size) 0 0;
+    inset: var(--floating-area-inset) calc(var(--floating-button-size) + var(--floating-margin)) var(--floating-area-inset)
+      var(--floating-margin);
     border-radius: 10px;
     transition: background-color 120ms ease;
   }
@@ -114,7 +125,7 @@
   .floating-lyrics-lock {
     position: absolute;
     top: 50%;
-    right: 0;
+    right: var(--floating-margin);
     box-sizing: border-box;
     width: var(--floating-button-size);
     height: var(--floating-button-size);

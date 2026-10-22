@@ -628,7 +628,7 @@
   let floatingLyricsAndroidStatus = $state<FloatingLyricsAndroidStatus | null>(null);
   // Width in px (Windows: CSS px of the monitor holding the panel; Android: dp in the current orientation).
   let floatingLyricsScreenWidth = $state<number | null>(null);
-  let floatingLyricsWidthMaxPx = $derived(floatingLyricsWidthMax(floatingLyricsScreenWidth ?? undefined));
+  let floatingLyricsWidthMaxPx = $derived(floatingLyricsWidthMax(floatingLyricsScreenWidth ?? undefined, floatingLyricsSettings.fontSizePx));
   /** Bumped when the per-track lyrics delay changes, so the Android overlay gets the new offset. */
   let lyricsDelayRevision = $state(0);
   let lyricsSettingsTab = $state<'general' | 'taskbar' | 'floating'>(
@@ -2552,7 +2552,7 @@
     if (!isTauri() || capabilities?.platform !== 'android') return;
     try {
       const status = await invokeCommand('floating_lyrics_android', { command: 'floatingLyricsStatus' }) as Partial<FloatingLyricsAndroidStatus> | null;
-      floatingLyricsAndroidStatus = { canDrawOverlays: status?.canDrawOverlays === true, locked: status?.locked === true, statusBar: status?.statusBar === true, screenWidthDp: typeof status?.screenWidthDp === 'number' ? status.screenWidthDp : undefined };
+      floatingLyricsAndroidStatus = { canDrawOverlays: status?.canDrawOverlays === true, locked: status?.locked === true, screenWidthDp: typeof status?.screenWidthDp === 'number' ? status.screenWidthDp : undefined };
       if (typeof status?.screenWidthDp === 'number') floatingLyricsScreenWidth = status.screenWidthDp;
     } catch (error) {
       floatingLyricsError = getErrorText(error);
@@ -2580,13 +2580,13 @@
     }
   }
 
-  async function sendFloatingLyricsAndroid(payload: { statusBar?: boolean; nudgeX?: number; nudgeY?: number; save?: boolean; savePosition?: boolean; centreAxis?: 'horizontal' | 'vertical' }): Promise<void> {
+  async function sendFloatingLyricsAndroid(payload: { moveToStatusBar?: boolean; nudgeX?: number; nudgeY?: number; save?: boolean; savePosition?: boolean; centreAxis?: 'horizontal' | 'vertical' }): Promise<void> {
     try {
       await invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload });
     } catch (error) {
       floatingLyricsError = getErrorText(error);
     }
-    if (payload.statusBar !== undefined) await refreshFloatingLyricsAndroidStatus();
+    
   }
 
   /** ← / → of 面板: 1 px sideways (Android: the current orientation's saved position). */
@@ -4651,11 +4651,9 @@
                         {#if capabilities?.platform === 'android'}
                           <button
                             type="button"
-                            aria-pressed={floatingLyricsAndroidStatus?.statusBar === true}
-                            class:chosen={floatingLyricsAndroidStatus?.statusBar === true}
-                            disabled={!floatingLyricsSettings.enabled}
-                            title={tr("字體與高度剛好放進狀態列，並移到狀態列（避開鏡頭）；直向與橫向分開保存")}
-                            onclick={() => void sendFloatingLyricsAndroid({ statusBar: floatingLyricsAndroidStatus?.statusBar !== true })}
+                                                        disabled={!floatingLyricsSettings.enabled}
+                            title={tr("移到狀態列：歌詞區的垂直中心對齊狀態列（避開鏡頭），字級與面板大小不變；直向與橫向分開儲存")}
+                            onclick={() => void sendFloatingLyricsAndroid({ moveToStatusBar: true })}
                           >{tr("移動到狀態列")}</button>
                         {/if}
                         <div class="floating-lyrics-move-row">
