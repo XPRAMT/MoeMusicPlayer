@@ -78,3 +78,19 @@ test('a wheel step is split between the list and the outer scroller', async () =
   assert.equal(wheelDeltaPx(57, 0, 400), 57);
   assert.equal(wheelDeltaPx(Number.NaN, 0, 400), 0);
 });
+test('handed-on wheel steps scroll smoothly and add up on the pending target', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('../src/lib/scroll-chain.js', import.meta.url), 'utf8');
+  const { nextSmoothTarget, SMOOTH_TARGET_TTL_MS } = await import('../src/lib/scroll-chain.js');
+  assert.doesNotMatch(src, /behavior: 'auto' \}/);
+  assert.match(src, /prefers-reduced-motion: reduce\)'\)\.matches \? 'auto' : 'smooth'/);
+  assert.match(src, /element\.scrollTo\(\{ top: target, behavior: scrollBehavior\(\) \}\)/);
+  assert.match(src, /if \(inner !== 0\) smoothScrollBy\(node, inner, now\)/); // the list's own share is smooth too
+  assert.equal(nextSmoothTarget(null, 100, 50, 1000, 0), 150);
+  assert.equal(nextSmoothTarget({ target: 150, at: 0 }, 120, 50, 1000, 100), 200, 'adds to the pending target');
+  assert.equal(nextSmoothTarget({ target: 150, at: 0 }, 120, -50, 1000, 100), 70, 'turning around starts from here');
+  assert.equal(nextSmoothTarget({ target: 150, at: 0 }, 150, 50, 1000, 100), 200, 'reached: from here');
+  assert.equal(nextSmoothTarget({ target: 900, at: 0 }, 120, 50, 1000, SMOOTH_TARGET_TTL_MS), 170, 'stale target dropped');
+  assert.equal(nextSmoothTarget({ target: 980, at: 0 }, 900, 50, 1000, 10), 1000, 'clamped to the end');
+  assert.equal(nextSmoothTarget(null, 10, -50, 1000, 0), 0, 'clamped to the top');
+});
