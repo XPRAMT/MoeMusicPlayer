@@ -17,7 +17,7 @@
   import type { PlaybackSnapshot, TaskbarLyricsSettings } from './ipc';
   import { getDisplayActiveLyricIndex } from './lyrics-preferences.js';
   import { buildTimedLyricTimeline, findActiveLyricIndex } from './lyrics-window.js';
-  import { loadLyricsTimingOffsetSec, lyricsTimingDelaySecToOffsetMs } from './lyrics-timing-offset.js';
+  import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs } from './lyrics-timing-offset.js';
   import type { TaskbarLyricsData } from './taskbar-lyrics-data.js';
   import {
     DEFAULT_TASKBAR_LYRICS_SETTINGS,
@@ -58,8 +58,14 @@
 
   // Lines of another track (the data arrives a moment after a track change) are never drawn.
   let timeline = $derived(data && data.trackId === trackId ? buildTimedLyricTimeline(data.lines) : []);
-  // The per-track delay lives in localStorage, shared with the Now Playing page, and is read live.
-  let timingOffsetMs = $derived((data?.offsetMs ?? 0) + lyricsTimingDelaySecToOffsetMs(loadLyricsTimingOffsetSec(trackId)));
+  // The per-track delay lives in localStorage, shared with the Now Playing page. It is loaded when the track changes and
+  // updated from LYRICS_TIMING_OFFSET_EVENT (and the storage event) when the user changes it; the offset itself is the
+  // same lyricsDisplayOffsetMs the page uses, so the cue timer and the scroll below re-plan at once.
+  let timingDelaySec = $state(0);
+  $effect(() => {
+    timingDelaySec = loadLyricsTimingOffsetSec(trackId);
+  });
+  let timingOffsetMs = $derived(lyricsDisplayOffsetMs(data?.offsetMs, timingDelaySec));
   let activeIndex = $derived(getDisplayActiveLyricIndex(findActiveLyricIndex(timeline, positionMs, timingOffsetMs), playbackState));
   // A line scrolls over the time it is shown: from its own start to the start of the next line (the end of the track
   // for the last one).
@@ -134,6 +140,9 @@
   }
 
   const unlisteners: UnlistenFn[] = [];
+  const onStorage = () => {
+    timingDelaySec = loadLyricsTimingOffsetSec(trackId);
+  };
   const onResize = () => {
     viewportHeight = window.innerHeight;
     viewportWidth = window.innerWidth;
@@ -142,7 +151,11 @@
   onMount(() => {
     document.documentElement.classList.add('taskbar-lyrics-window');
     window.addEventListener('resize', onResize);
+    window.addEventListener('storage', onStorage);
     onResize();
+    void listen<{ trackId: string; delaySec: number }>(LYRICS_TIMING_OFFSET_EVENT, (event) => {
+      if (event.payload?.trackId === trackId) timingDelaySec = loadLyricsTimingOffsetSec(trackId);
+    }).then((unlisten) => unlisteners.push(unlisten));
     void invokeCommand('settings_get_taskbar_lyrics', {}).then((stored) => {
       settings = normalizeTaskbarLyricsSettings(stored);
     });
@@ -172,6 +185,7 @@
 
   onDestroy(() => {
     window.removeEventListener('resize', onResize);
+    window.removeEventListener('storage', onStorage);
     for (const unlisten of unlisteners) unlisten();
   });
 </script>

@@ -28,6 +28,22 @@ export function lyricsTimingDelaySecToOffsetMs(delaySec) {
   return Object.is(offsetMs, -0) ? 0 : offsetMs;
 }
 
+/** Event (Tauri, app-wide) sent when the per-track delay changes: `{ trackId, delaySec }`. Other lyric surfaces
+ * (Windows taskbar lyrics, later the Android status-bar lyrics) follow it at once. */
+export const LYRICS_TIMING_OFFSET_EVENT = 'lyrics-timing-offset-changed';
+
+/**
+ * The one offset every lyric surface uses: the lyrics' own `offsetMs` (LRC [offset:]) plus the user's per-track
+ * delay. Pass it to findActiveLyricIndex / nextCuePosition. The Now Playing page's LYRIC_CUE_LEAD_MS is added on top
+ * by displayCuePositions only (it exists for the page's line-change animation).
+ * @param {number | null | undefined} lyricsOffsetMs @param {number} delaySec @returns {number}
+ */
+export function lyricsDisplayOffsetMs(lyricsOffsetMs, delaySec) {
+  const own = typeof lyricsOffsetMs === 'number' && Number.isFinite(lyricsOffsetMs) ? lyricsOffsetMs : 0;
+  const total = own + lyricsTimingDelaySecToOffsetMs(delaySec);
+  return Object.is(total, -0) ? 0 : total;
+}
+
 /** @param {string | null | undefined} trackId @returns {number} */
 export function loadLyricsTimingOffsetSec(trackId) {
   if (!trackId || typeof localStorage === 'undefined') return 0;

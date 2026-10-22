@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tr } from './i18n.js';
   import { onDestroy, tick, untrack } from 'svelte';
-  import { listen } from '@tauri-apps/api/event';
+  import { emit, listen } from '@tauri-apps/api/event';
   import { defaultLyricsApi, type LyricsApi } from './lyrics-api';
   import type {
     LyricLine,
@@ -51,7 +51,8 @@
     clampLyricsTimingOffsetSec,
     formatLyricsTimingOffsetSec,
     loadLyricsTimingOffsetSec,
-    lyricsTimingDelaySecToOffsetMs,
+    LYRICS_TIMING_OFFSET_EVENT,
+    lyricsDisplayOffsetMs,
     saveLyricsTimingOffsetSec,
   } from './lyrics-timing-offset.js';
 
@@ -241,7 +242,7 @@
   let timedLines = $derived(
     viewState.lyrics?.synced ? buildTimedLyricTimeline(lines) : [],
   );
-  let timedOffsetMs = $derived((viewState.lyrics?.offsetMs ?? 0) + lyricsTimingDelaySecToOffsetMs(timingOffsetSec));
+  let timedOffsetMs = $derived(lyricsDisplayOffsetMs(viewState.lyrics?.offsetMs, timingOffsetSec));
   // Bumped by the cue timer below; the clock estimate is read again only then (or when the clock itself changes).
   let cueTick = $state(0);
   let cuePositionMs = $derived.by(() => {
@@ -658,6 +659,8 @@
 
   function setTimingOffsetSec(next: number): void {
     timingOffsetSec = saveLyricsTimingOffsetSec(trackId, next);
+    // Other lyric windows (taskbar lyrics) follow the change at once; outside Tauri there is nobody to tell.
+    if (trackId) void Promise.resolve().then(() => emit(LYRICS_TIMING_OFFSET_EVENT, { trackId, delaySec: timingOffsetSec })).catch(() => {});
   }
 
   function onTimingOffsetInput(event: Event): void {

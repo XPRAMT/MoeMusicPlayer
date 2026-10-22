@@ -7,6 +7,8 @@ import {
   formatLyricsTimingOffsetSec,
   loadLyricsTimingOffsetSec,
   lyricsTimingDelaySecToOffsetMs,
+  lyricsDisplayOffsetMs,
+  LYRICS_TIMING_OFFSET_EVENT,
   saveLyricsTimingOffsetSec,
 } from '../src/lib/lyrics-timing-offset.js';
 
@@ -62,4 +64,28 @@ test('save/load persists per track in localStorage', () => {
   assert.equal(saveLyricsTimingOffsetSec('track-b', -2), -2);
   assert.equal(loadLyricsTimingOffsetSec('track-b'), -2);
   assert.equal(loadLyricsTimingOffsetSec('track-a'), 0);
+});
+
+test('every lyric surface uses lyricsDisplayOffsetMs (LRC offset + per-track delay)', async () => {
+  assert.equal(lyricsDisplayOffsetMs(0, 0), 0);
+  assert.equal(lyricsDisplayOffsetMs(0, 0.5), -500, 'delay +0.5 s shows lyrics later');
+  assert.equal(lyricsDisplayOffsetMs(300, -1.2), 1500);
+  assert.equal(lyricsDisplayOffsetMs(undefined, 1), -1000);
+  assert.equal(lyricsDisplayOffsetMs(Number.NaN, 0), 0);
+  assert.ok(!Object.is(lyricsDisplayOffsetMs(500, 0.5), -0));
+  const page = await readFile(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
+  const taskbar = await readFile(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
+  assert.match(page, /timedOffsetMs = \$derived\(lyricsDisplayOffsetMs\(viewState\.lyrics\?\.offsetMs, timingOffsetSec\)\)/);
+  assert.match(taskbar, /timingOffsetMs = \$derived\(lyricsDisplayOffsetMs\(data\?\.offsetMs, timingDelaySec\)\)/);
+  assert.doesNotMatch(page + taskbar, /\+ lyricsTimingDelaySecToOffsetMs\(/, 'no second hand-made sum');
+  // The page tells the other windows at once; the taskbar follows the event (and storage) and re-plans its timers.
+  assert.equal(LYRICS_TIMING_OFFSET_EVENT, 'lyrics-timing-offset-changed');
+  assert.match(page, /emit\(LYRICS_TIMING_OFFSET_EVENT, \{ trackId, delaySec: timingOffsetSec \}\)/);
+  assert.match(taskbar, /listen<\{ trackId: string; delaySec: number \}>\(LYRICS_TIMING_OFFSET_EVENT/);
+  assert.match(taskbar, /addEventListener\('storage', onStorage\)/);
+  assert.match(taskbar, /nextCuePosition\(starts, offset,/);
+  assert.match(taskbar, /const offset = timingOffsetMs;/);
+  // The cue lead is the page's animation lead only, added on top of the same offset.
+  assert.doesNotMatch(taskbar, /LYRIC_CUE_LEAD_MS/);
+  assert.match(page, /displayCuePositions\(timedStartTimes, timedOffsetMs, cueLeading\)/);
 });
